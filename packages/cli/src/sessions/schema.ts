@@ -30,6 +30,8 @@
 // reads, not moved ones. A Copilot CLI session with rotated `events.N.jsonl` archives is now read as one session, so its `prompts`, `tools`, `lines`, and skeleton move; one
 // with no archives is unchanged. EXTRACTOR stays 11. A version-16 store's next deposit captures every transcript again from the harness or `raw/`.
 //
+// Version 24 (CAPTURE 24, t903) changes three stored values and no field name: a step identity's skill-run name, host, and pull's package name are kept as they are after the operator's redaction (`redactDomains`, the secret and email patterns, the name shape, and the 128-character cap still apply; the operator's exclusion terms are applied at the deposit's gate, not at capture), where before each was `<literal>` unless a public list held it. A store opened at version 23 or older keeps its `<literal>` values until its next deposit captures every transcript again from the harness or `raw/`; the tool record's `steps` moves from class P to class A because those names can be private.
+//
 // Version 23 (CAPTURE 23) keeps a `git checkout` step's target class, `target` `path` or `word` (never the target's text), so the `revert` rule can tell `git checkout -- src/a.ts` and `git checkout --ours src/a.ts` (a
 // path) from `git checkout feature/x` (a branch or a path). It also writes a Codex `turn_aborted` with reason `interrupted` as the interrupt marker user line, so that prompt record exists and the session's
 // `prompts`, `tsLast` (the marker is a line), and skeleton move; a Codex session with no such turn is unchanged. A `git checkout` step captured before reads as it did (no `target`). EXTRACTOR 15 reads a Codex or Gemini decline in its fixed text as `user-stop`.
@@ -92,7 +94,7 @@ import type { RepoSize } from './public-vocabulary.js';
 import type { SessionFunnel, SessionSetup, SessionTrust } from './session-shape.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '23';
+export const CAPTURE_VERSION = '24';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
@@ -143,7 +145,7 @@ export type UsageField = (typeof USAGE_FIELDS)[number];
 /** Whether a stored session or prompt recorded `field`. A record with no `usageObserved` was captured before version 20, when every category read as observed. */
 export const observesUsage = (record: { usageObserved?: readonly UsageField[] }, field: UsageField): boolean => record.usageObserved === undefined || record.usageObserved.includes(field);
 
-export type Harness = 'claude-code' | 'cursor' | 'codex' | 'copilot' | 'gemini' | 'grok' | 'opencode' | 'pi' | 'vscode-copilot';
+export type Harness = 'claude-code' | 'cursor' | 'codex' | 'copilot' | 'gemini' | 'grok' | 'opencode' | 'pi' | 'vscode-copilot' | 'otel';
 
 /** The harness a session record came from; a record that does not name one is Claude Code's. */
 export const harnessOf = (session: { harness?: Harness }): Harness => session.harness ?? 'claude-code';
@@ -397,7 +399,7 @@ export interface ErrorObservation {
 
 export type ToolStatus = 'ok' | 'error' | 'none';
 
-/** A package a shell step pulled, in public names (`<literal>` outside the allowlist). */
+/** A package a shell step pulled. The package name is kept as it is after redaction (`<literal>` when redaction changes it, it is not a name, or it is over 128 characters); the registry is a public name. */
 export interface PullIdentity {
   registry: string;
   name: string;
@@ -449,7 +451,7 @@ export interface StepObservation {
   action: CanonicalAction;
   /** The harness's own name for the tool when the action table lists it or every name it holds is public, else `<literal>` (the tool record keeps it, class A). */
   native: string;
-  /** What the step acted on, in public names only; null for an action that has none (a file's path never appears here). */
+  /** What the step acted on; a skill-run name, host, and pull name are kept as they are after redaction (`<literal>` when redaction changes them, they are not names, or they are over 128 characters), and every other name is public or `<literal>`. Null for an action that has none (a file's path never appears here). */
   identity: StepIdentity;
   /** The call's status when it reports this segment; `none` for a segment it does not, such as one a pipe hides. */
   status: ToolStatus;
@@ -514,7 +516,7 @@ export interface ToolObservation {
   side: boolean;
   /** The prompt index the call ran under; null before the first prompt. */
   prompt: number | null;
-  /** What the call was in the canonical vocabulary; absent on a record captured before this field existed. Class P. */
+  /** What the call was in the canonical vocabulary; absent on a record captured before this field existed. Class A since CAPTURE 24: a step identity's skill-run name, host, and pull name are kept as they are after redaction and can be private; class P before. */
   steps?: StepObservation[];
   /** Each command of a shell call, in order (CAPTURE 6); on every shell call and no other. Absent on a record captured earlier. */
   segments?: ShellSegment[];

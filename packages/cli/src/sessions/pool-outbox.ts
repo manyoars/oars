@@ -86,7 +86,7 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   frameworks: 'The frameworks of the project, each from a closed public list; never a path or a name of yours.',
   harness: 'Which harness wrote the session, one of a closed list.',
   harnessVersion: 'The harness version: the name as it is after redaction; `private` when redaction changes it, an exclusion term matches it, it is not a name, or it is over 128 characters. A transcript or prompt frame carries the value capture closed it to (the public name, else `<literal>`), sent as it is; the version of a call, which capture keeps as its line names it, goes as the string after the gate.',
-  host: 'The host of a web fetch or search, the name as it is after redaction; `private` when redaction changes it, an exclusion term matches it, it is not a name, or it is over 128 characters; null when the step names no host. The pool replaces a host with a keyed hash on arrival and serves it only once enough accounts report it.',
+  host: 'The host of a web fetch or search, the name as it is after redaction; `private` when redaction changes it, an exclusion term matches it, it is not a name, or it is over 128 characters; null when the step names no host. Capture keeps the host as the address names it, without credentials, path, or query. The pool replaces a host with a keyed hash on arrival and serves it only once enough accounts report it.',
   hour: 'The UTC hour of day, 0 to 23, beside the day; never a minute, a second, or an offset.',
   id: "A hash the client computes per account from the account and the session, so a redeposit replaces and two accounts' sessions cannot be joined. Never the session id.",
   identity: 'What a step called: a shell program with its subcommand and flags, an MCP server and tool, a skill, or a web host, each a name after redaction or `private`; null for an action with none.',
@@ -104,7 +104,7 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   metric: 'What a delta measures, calls per session or thinking tokens, one of a closed list the field fixes.',
   model: 'The model name: the name as it is after redaction; `private` when redaction changes it, an exclusion term matches it, it is not a name, or it is over 128 characters. A transcript or prompt frame carries the value capture closed it to (the public name, else `<literal>`), sent as it is; the model of a call, which capture keeps as its line names it, goes as the string after the gate.',
   ms: 'A bucket of the milliseconds a step took (a lower bound), a number or null; never the exact time.',
-  name: 'The name of a package a shell command pulled or a delta removed: the name as it is after redaction; `private` when redaction changes it, an exclusion term matches it, it is not a name, or it is over 128 characters. A plugin in a delta is always private, and null when a delta names its field alone.',
+  name: 'The name of a package a shell command pulled or a delta removed, as capture kept it: the name as it is after redaction; `private` when redaction changes it, an exclusion term matches it, it is not a name, or it is over 128 characters. A plugin in a delta is always private, and null when a delta names its field alone.',
   native: 'The name the harness gave the tool: the name as it is after redaction; `private` when redaction changes it, an exclusion term matches it, it is not a name, or it is over 128 characters.',
   next: 'The actions of up to the next 5 calls of the same prompt after a failed call, each one of the closed list of canonical actions: what followed, never a fix; no command, path, or text.',
   output: 'A bucket of the output tokens in a prompt, a number, or null when the source never recorded it.',
@@ -128,7 +128,7 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   reach: 'The MCP servers, skills, and plugins in reach of a session, and whether the harness recorded them; every name is the name as it is after redaction; `private` when redaction changes it, an exclusion term matches it, it is not a name, or it is over 128 characters (a plugin is always private).',
   repoKey: "A hash of the repository salted with this store's salt: one store's sessions in one repository share it; one account on two machines gets two keys until the account salt lands. 16 hex characters; never a path, a remote, or a name.",
   repoVisibility: 'Whether the repository is public or private, or unknown; set by the operator on this machine, never looked up.',
-  skill: 'The skill a step ran, or the skill whose run the step\'s call sat in, the name as it is after redaction; `private` when redaction changes it, an exclusion term matches it, it is not a name, or it is over 128 characters. Absent on a step outside a skill\'s run.',
+  skill: 'The skill a step ran (a skill-run name capture keeps as it is after redaction), or the skill whose run the step\'s call sat in, the name as it is after redaction; `private` when redaction changes it, an exclusion term matches it, it is not a name, or it is over 128 characters. Absent on a step outside a skill\'s run.',
   skills: 'The skills in reach of a session (called in it), each the name as it is after redaction; `private` when redaction changes it, an exclusion term matches it, it is not a name, or it is over 128 characters, sorted.',
   stack: 'The languages, frameworks, and size class of the project.',
   status: 'Whether a tool call or a step succeeded: ok, error, or none.',
@@ -268,12 +268,15 @@ const wasShown = async (outbox: string, hash: string): Promise<boolean> => {
 
 export type LockRefusal = 'batch_unknown' | 'batch_not_shown' | 'batch_changed';
 
-/** The lock on `deposit --send`: a batch goes only if it is in the outbox, its hash was printed, and its file still hashes to that hash. The first check that fails names why. */
-export const lockedBatch = async (outbox: string, hash: string, stamp: string = currentStamp()): Promise<{ ok: true; file: string; bytes: string } | { ok: false; code: LockRefusal }> => {
-  const folder = join(outbox, stamp);
+/**
+ * The lock on a send: a batch goes only if it is in the outbox, its hash was printed, and its file still hashes to that hash. The first check that fails names why. The nightly task sends with `requireShown: false`,
+ * because covenant acceptance is its consent and it prints nothing; the other two checks still hold.
+ */
+export const lockedBatch = async (outbox: string, hash: string, options: { stamp?: string; requireShown?: boolean } = {}): Promise<{ ok: true; file: string; bytes: string } | { ok: false; code: LockRefusal }> => {
+  const folder = join(outbox, options.stamp ?? currentStamp());
   const name = (await namesIn(folder)).find((entry) => BATCH_FILE.exec(entry)?.[2] === hash);
   if (name === undefined) return { ok: false, code: 'batch_unknown' };
-  if (!(await wasShown(outbox, hash))) return { ok: false, code: 'batch_not_shown' };
+  if (options.requireShown !== false && !(await wasShown(outbox, hash))) return { ok: false, code: 'batch_not_shown' };
   const file = join(folder, name);
   const bytes = await unchangedBytes(file, hash);
   return bytes === undefined ? { ok: false, code: 'batch_changed' } : { ok: true, file, bytes };

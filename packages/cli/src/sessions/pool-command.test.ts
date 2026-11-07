@@ -10,7 +10,10 @@ import { ExitCode } from '../errors.js';
 import { readSpool } from '../telemetry/spool.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
 import { DEFAULT_POOL_URL, networkSender, poolCoverage, poolDeposit, poolServer, type Reply, type Sender } from './pool-command.js';
-import { batchHash, canonicalBytes, FIELD_ROWS, fieldsOf, writeBatch } from './pool-outbox.js';
+import { localNames } from './redact.js';
+import { batchHash, canonicalBytes, FIELD_ROWS, fieldsOf, outboxFolder, writeBatch } from './pool-outbox.js';
+import { markSent, sentHashes } from './pool-sent.js';
+import { withSendLock } from './pool-send-lock.js';
 import type { Outgoing } from './pool-print.js';
 import { REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
 import type * as PoolWire from './pool-wire.js';
@@ -18,7 +21,7 @@ import { session as sessionRow } from './pool-fixture.js';
 import { slugOf } from './allow.js';
 import { parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey, type SkeletonFrame } from './pool-wire.js';
 import { contentHash } from './read.js';
-import { deposit } from './store.js';
+import { deposit, updatePoolChoices } from './store.js';
 import { spoolEvents } from '../telemetry/read-events.js';
 import { addProject, cleanup, NOW, settledClock, stage, TEST_FLOOR, type Staged } from './test-support.js';
 
@@ -514,6 +517,12 @@ const outboxFiles = (scene: Scene): string[] => {
   return existsSync(root) ? readdirSync(root, { recursive: true, encoding: 'utf8' }).filter((name) => name.endsWith('.jsonl')).sort() : [];
 };
 
+/** Empties every `sent.log` under the outbox, for a test that posts one batch again to read how the second post ends; the skip of a sent hash is tested on its own. */
+const forgetSent = (scene: Scene): void => {
+  const root = join(scene.staged.storeDir, 'pool-outbox');
+  for (const name of readdirSync(root, { recursive: true, encoding: 'utf8' })) if (name.endsWith('sent.log')) rmSync(join(root, name));
+};
+
 const batchBytes = (scene: Scene): string[] => outboxFiles(scene).map((name) => readFileSync(join(scene.staged.storeDir, 'pool-outbox', name), 'utf8'));
 
 /** The hash `oars pool outbox` printed for each batch, in the order printed. */
@@ -622,7 +631,7 @@ describe('oars pool deposit', () => {
     expect(outboxFiles(scene)).toEqual(first);
   });
 
-  // t881 fix rounds 1 and 2: the deposit's own gate (the operator's redact domains) decides what the outbox holds, so this goes through the command and reads the written batch. The host is on the public list, so capture keeps it and only the gate can turn it into `private`.
+  // t881 fix rounds 1 and 2: the deposit's own gate (the operator's redact domains) decides what the outbox holds, so this goes through the command and reads the written batch. The host is on the public list, so capture kept it even before t903 and only the gate can turn it into `private`.
   it('writes private for a name the operator redacts, an off-list program in clear, and a public-list host the operator redacts, as private', async () => {
     const SESSION = '66666666-6666-4666-8666-666666666666';
     const folder = 'gate-repo';
@@ -649,6 +658,32 @@ describe('oars pool deposit', () => {
     expect(written).toContain('"host":"private"');
     expect(written).toContain('"server":"private"');
     expect(written).toContain('"program":"acme-deploy"');
+  });
+
+  // t903: capture keeps a skill-run, host, and pull name as it is after redaction, so the one gate sends an off-list one in clear (the pool hashes the host on arrival); there is no second projection.
+  it('writes an off-list host, skill-run name, and pull name in clear, and the command takes the batch', async () => {
+    const SESSION = '77777777-7777-4777-8777-777777777777';
+    const folder = 'long-tail-repo';
+    const stamp = (n: number): string => `2026-06-01T00:00:0${String(n)}.000Z`;
+    const call = (n: number, name: string, input: object): string =>
+      JSON.stringify({ type: 'assistant', uuid: `l-${String(n)}`, parentUuid: n === 1 ? null : `l-${String(n - 1)}`, isSidechain: false, sessionId: SESSION, timestamp: stamp(n), version: '2.1.300', message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: `t${String(n)}`, name, input }] } });
+    const scene = setting();
+    rmSync(join(scene.staged.projectsRoot, 'proj'), { recursive: true, force: true });
+    addProject(scene.staged, folder, SESSION, [
+      JSON.stringify({ type: 'user', uuid: 'l-0', parentUuid: null, isSidechain: false, sessionId: SESSION, cwd: '/w', timestamp: stamp(0), version: '2.1.300', message: { role: 'user', content: 'go' } }),
+      call(1, 'WebFetch', { url: 'https://wiki.longtail-example.dev/page?token=abc123' }),
+      call(2, 'Skill', { skill: 'longtail-release' }),
+      call(3, 'Bash', { command: 'npm install longtail-widget@1.2.3' }),
+    ]);
+    await deposit(scene.staged.runtime, { allow: [folder], redactDomains: [], now: () => NOW });
+    await signIn(scene);
+    expect(await scene.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
+    const written = batchBytes(scene).join('\n');
+    expect(written).toContain('"host":"wiki.longtail-example.dev"');
+    expect(written).toContain('"skill":"longtail-release"');
+    expect(written).toContain('"name":"longtail-widget"');
+    expect(written).not.toContain('abc123');
+    for (const bytes of batchBytes(scene)) expect(parseSkeleton(JSON.parse(bytes)).ok).toBe(true);
   });
 
   describe('the session gates run before any projection', () => {
@@ -1113,10 +1148,12 @@ describe('oars pool deposit --send', () => {
     }
     expect(posts.map((request) => request.body).join('')).toBe(bytes);
     // A part answered 201 means the deposit finished already, so the parts after it are not sent.
+    forgetSent(scene);
     const finished = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201, { ok: true }) });
     await poolDeposit(scene.h.deps, sendOptions(hash, finished.via));
     expect(finished.requests.filter((request) => request.method === 'POST')).toHaveLength(1);
     // A last part that is not 201, and a middle part that is neither 202 nor 201, are refusals.
+    forgetSent(scene);
     const refused = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': [answer(202, { ok: true }), answer(202, { ok: true }), answer(400, { error: 'part_mismatch', message: 'no' })] });
     await expect(poolDeposit(scene.h.deps, sendOptions(hash, refused.via))).rejects.toMatchObject({ problem: { status: 400 } });
     const early = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(500, { error: 'boom', message: 'no' }) });
@@ -1204,6 +1241,18 @@ describe('oars pool deposit --send', () => {
     expect(scene.seen.map((entry) => new URL(entry.url).pathname)).toEqual(['/v1/covenant', '/v1/covenant/accept', '/v1/deposits']);
   });
 
+  it('skips a hash already in sent.log, as the nightly does: one line, exit 0, one POST over two runs', async () => {
+    const scene = await batched();
+    const hash = await printedAndHash(scene);
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201, { ok: true }) });
+    const first = await poolDeposit(scene.h.deps, sendOptions(hash, pool.via));
+    expect(first.document).toMatchObject({ ok: true, sent: true, hash });
+    const second = await poolDeposit(scene.h.deps, sendOptions(hash, pool.via));
+    expect(second.document).toMatchObject({ ok: true, sent: false, hash });
+    expect(second.text).toMatch(new RegExp(`^already sent ${hash} at \\d{4}-\\d{2}-\\d{2}T[\\d:.]+Z$`));
+    expect(pool.requests.filter((request) => request.method === 'POST')).toHaveLength(1);
+  });
+
   it('sends a deposit again when the pool answers deposit_conflict, and does not count it as a refusal', async () => {
     const scene = await batched();
     const hash = await printedAndHash(scene);
@@ -1251,6 +1300,7 @@ describe('oars pool deposit --send', () => {
     expect(accepting.requests.find((request) => request.url.pathname === '/v1/covenant/accept')?.body).toBe(JSON.stringify({ version: 'v1' }));
     expect(accepting.requests.at(-1)?.url.pathname).toBe('/v1/deposits');
 
+    forgetSent(scene);
     const stale = wire({ 'GET /v1/covenant': answer(200, { version: 'v2', accepted: false }), 'POST /v1/covenant/accept': answer(409, { error: 'covenant_version', message: 'The current covenant is v2.' }) });
     await expect(poolDeposit(scene.h.deps, { ...sendOptions(hash, stale.via), acceptCovenant: 'v1' })).rejects.toMatchObject({ exitCode: ExitCode.UNEXPECTED });
     expect(stale.requests.map((request) => request.url.pathname)).toEqual(['/v1/covenant', '/v1/covenant/accept']);
@@ -1524,7 +1574,7 @@ describe('oars pool fetch', () => {
     const serve = async (scene: Scene, sign: (text: string) => Promise<string>, harness: string, version = '2.1.314', etag: string | null = null): Promise<Array<{ headers: Headers; printedBefore: string }>> => bundleRoute(scene, version, [await signedReply(sign, version, etag, 2, harness)], harness);
 
     /** A store that holds `count` sessions of each harness, written as the capture log holds them (the fixture's rows, no transcripts). */
-    const holding = (scene: Scene, counts: ReadonlyArray<readonly ['claude-code' | 'cursor' | 'codex', number]>): void => {
+    const holding = (scene: Scene, counts: ReadonlyArray<readonly ['claude-code' | 'cursor' | 'codex' | 'otel', number]>): void => {
       const rows = counts.flatMap(([name, count]) => Array.from({ length: count }, (_, index) => JSON.stringify(sessionRow(`${name}-${String(index)}`, name === 'claude-code' ? {} : { harness: name }))));
       writeFileSync(join(scene.staged.storeDir, 'observations.jsonl'), `${rows.join('\n')}\n`);
     };
@@ -1593,6 +1643,37 @@ describe('oars pool fetch', () => {
       expect(await tied.scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
       expect(tied.scene.seen[0]?.url).toBe(`${POOL}/bundle/claude-code/2.1.314/${VOCAB_VERSION}`);
       expect(tied.scene.h.err.join('')).toContain('No --harness given: fetching claude-code, no one harness leads your local store, so Claude Code is the default. Pass --harness <name> to fetch another (');
+    });
+
+    it('refuses otel before asking: the pool serves no OpenTelemetry bundle', async () => {
+      const { scene } = await signedScene();
+      expect(await scene.cli('pool', 'fetch', '--harness', 'otel', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.USAGE);
+      expect(scene.h.err.join('')).toContain('otel has no pool bundle.');
+      expect(scene.h.err.join('')).toContain('Choose one of claude-code, cursor, codex, copilot, gemini, grok, opencode, pi, vscode-copilot.');
+      expect(scene.seen).toEqual([]);
+    });
+
+    it('leaves otel sessions out of the default: an otel-majority store asks for the next harness, or claude-code on a tie', async () => {
+      const next = await signedScene();
+      holding(next.scene, [['otel', 5], ['cursor', 2], ['codex', 1]]);
+      await serve(next.scene, next.sign, 'cursor');
+      expect(await next.scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
+      expect(next.scene.seen[0]?.url).toBe(`${POOL}/bundle/cursor/2.1.314/${VOCAB_VERSION}`);
+      expect(next.scene.h.err.join('')).toContain('No --harness given: fetching cursor, the harness your local store holds the most sessions of (2 of 3).');
+
+      const tied = await signedScene();
+      holding(tied.scene, [['otel', 5], ['cursor', 1], ['codex', 1]]);
+      await serve(tied.scene, tied.sign, 'claude-code');
+      expect(await tied.scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
+      expect(tied.scene.seen[0]?.url).toBe(`${POOL}/bundle/claude-code/2.1.314/${VOCAB_VERSION}`);
+      expect(tied.scene.h.err.join('')).toContain('no one harness leads your local store, so Claude Code is the default');
+
+      const only = await signedScene();
+      holding(only.scene, [['otel', 4]]);
+      await serve(only.scene, only.sign, 'claude-code');
+      expect(await only.scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
+      expect(only.scene.seen[0]?.url).toBe(`${POOL}/bundle/claude-code/2.1.314/${VOCAB_VERSION}`);
+      expect(only.scene.h.err.join('')).toContain('your local store holds no session of a harness the pool serves, so Claude Code is the default');
     });
 
     it('keeps one bundle per harness: two fetches of one version, then a read for each', async () => {
@@ -2193,6 +2274,7 @@ describe('wire policing in telemetry', () => {
     const hash = await printedAndHash(scene);
     const taken = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201, { ok: true }) });
     await poolDeposit(scene.h.deps, sendOptions(hash, taken.via));
+    forgetSent(scene);
     const refused = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(429, { error: 'rate_limited', message: 'Slow down.' }) });
     await expect(poolDeposit(scene.h.deps, sendOptions(hash, refused.via))).rejects.toMatchObject({ problem: { code: 'rate_limited' } });
     const bytes = Buffer.byteLength(batchBytes(scene)[0] ?? '');
@@ -2217,6 +2299,7 @@ describe('wire policing in telemetry', () => {
     // Not one event per part: three would triple the weekly sent bytes the health report reads.
     expect(spooled(dir, 'wire-send').map((event) => event.data)).toEqual([{ sent: 1, status: 201, bytes: Buffer.byteLength(bytes) }]);
     // A first part that is refused ends the batch there: one event, with that status.
+    forgetSent(scene);
     const refused = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(500, { error: 'boom', message: 'no' }) });
     await expect(poolDeposit(scene.h.deps, sendOptions(hash, refused.via))).rejects.toMatchObject({ problem: { status: 500 } });
     expect(refused.requests.filter((request) => request.method === 'POST')).toHaveLength(1);
@@ -2231,5 +2314,253 @@ describe('wire policing in telemetry', () => {
     const hash = await printedAndHash(scene);
     const refused = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(500, {}) });
     await expect(poolDeposit(scene.h.deps, sendOptions(hash, refused.via))).rejects.toMatchObject({ problem: { status: 500 } });
+  });
+});
+
+describe('oars pool deposit: the raw copy (t884)', () => {
+  const rawFiles = (scene: Scene): string[] => {
+    const root = join(scene.staged.storeDir, 'pool-outbox');
+    return existsSync(root) ? readdirSync(root, { recursive: true, encoding: 'utf8' }).filter((name) => name.endsWith('.redacted')).sort() : [];
+  };
+  const ready = async (consent: 'granted' | 'declined' | null, folders: { [entry: string]: 'skeleton' | 'off' } = {}): Promise<Scene> => {
+    const scene = setting();
+    await capture(scene);
+    await signIn(scene);
+    await updatePoolChoices(scene.staged.storeDir, (choices) => {
+      choices.rawConsent = consent;
+      Object.assign(choices.folders, folders);
+    });
+    return scene;
+  };
+
+  it('writes a redacted copy of each transcript beside each skeleton once raw consent is granted', async () => {
+    const scene = await ready('granted');
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    const copies = rawFiles(scene);
+    expect(copies.length).toBeGreaterThanOrEqual(outboxFiles(scene).length);
+    for (const name of copies) {
+      const body = readFileSync(join(scene.staged.storeDir, 'pool-outbox', name), 'utf8');
+      expect(createHash('sha256').update(body).digest('hex')).toBe(name.split('.').at(-2));
+    }
+  });
+
+  it('writes no raw copy before an answer, after a no, or with the folder at skeleton only or off, and still writes the skeletons unless the folder is off', async () => {
+    for (const [consent, folders, skeletons] of [
+      [null, {}, true],
+      ['declined', {}, true],
+      ['granted', { proj: 'skeleton' }, true],
+      ['granted', { proj: 'off' }, false],
+    ] as const) {
+      const scene = await ready(consent, folders);
+      expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+      expect(rawFiles(scene)).toEqual([]);
+      expect(outboxFiles(scene).length > 0).toBe(skeletons);
+    }
+  });
+
+  it('turning a folder off removes what was queued and sends nothing more of it', async () => {
+    const scene = await ready('granted');
+    await scene.cli('pool', 'deposit', '--server', POOL);
+    expect(rawFiles(scene).length).toBeGreaterThan(0);
+    await updatePoolChoices(scene.staged.storeDir, (choices) => {
+      choices.folders.proj = 'off';
+    });
+    await scene.cli('pool', 'deposit', '--server', POOL);
+    expect(rawFiles(scene)).toEqual([]);
+    expect(outboxFiles(scene)).toEqual([]);
+  });
+
+  it('masks the local account and home folder name in the queued copy, wherever it stands', async () => {
+    const scene = await ready('granted');
+    const [name] = localNames();
+    if (name === undefined) throw new Error('this machine has no usable account name');
+    writeFileSync(join(scene.staged.projectsRoot, 'proj', 'who.jsonl'), `${JSON.stringify({ type: 'user', message: { content: `see /x/.claude/projects/-Users-${name}-app and ${name}@box:~/app$` } })}\n`, { flag: 'a' });
+    await scene.cli('pool', 'deposit', '--server', POOL);
+    const bodies = rawFiles(scene).map((file) => readFileSync(join(scene.staged.storeDir, 'pool-outbox', file), 'utf8'));
+    expect(bodies.length).toBeGreaterThan(0);
+    for (const body of bodies) expect(body.toLowerCase()).not.toContain(name.toLowerCase());
+  });
+
+  it('says a no to the raw prompt was heard and how to change it, and asks only when there was no answer', async () => {
+    const declined = await ready('declined');
+    await declined.cli('pool', 'deposit', '--server', POOL);
+    expect(declined.h.out.join('')).toContain('You answered no to the raw prompt; oars pool raw --consent yes changes it.');
+    expect(declined.h.out.join('')).not.toContain('until you answer the raw prompt');
+  });
+
+  it('writes no raw copy for a session the exclusion gate stops', async () => {
+    const scene = await ready('granted');
+    writeFileSync(join(scene.staged.projectsRoot, 'proj', 'tldr.jsonl'), `${TERM} appears here\n`, { flag: 'a' });
+    await scene.cli('pool', 'deposit', '--server', POOL);
+    expect(rawFiles(scene).filter((name) => name.includes('tldr'))).toEqual([]);
+    expect(scene.sent()).not.toContain(TERM);
+  });
+
+  it('names the real command for the raw prompt in the deposit summary until it is answered yes', async () => {
+    const asked = await ready(null);
+    await asked.cli('pool', 'deposit', '--server', POOL);
+    expect(asked.h.out.join('')).toContain('until you answer the raw prompt with oars pool raw --consent yes.');
+    expect(asked.h.out.join('')).not.toContain('raw consent yes');
+    const granted = await ready('granted');
+    await granted.cli('pool', 'deposit', '--server', POOL);
+    expect(granted.h.out.join('')).not.toContain('--consent yes');
+  });
+
+  it('lists each raw copy in the outbox with its hash and bytes, and prints the body only with --explain', async () => {
+    const scene = await ready('granted');
+    await scene.cli('pool', 'deposit', '--server', POOL);
+    scene.h.out.length = 0;
+    await scene.cli('pool', 'outbox', '--server', POOL);
+    const listing = scene.h.out.join('');
+    expect(listing).toMatch(/raw part 1\/1 sha256: [0-9a-f]{64} bytes: \d+/);
+    const name = rawFiles(scene)[0] ?? '';
+    const body = readFileSync(join(scene.staged.storeDir, 'pool-outbox', name), 'utf8');
+    expect(listing).not.toContain(body.slice(0, 200));
+    scene.h.out.length = 0;
+    await scene.cli('pool', 'outbox', '--explain', '--server', POOL);
+    expect(scene.h.out.join('')).toContain(body.slice(0, 200));
+  });
+});
+
+describe('oars pool deposit --send holds the send lock (t884 fix round)', () => {
+  it('waits while another run holds the lock, sends once it is released, and gives up with send_locked when the lock stays held', async () => {
+    const scene = await batched();
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    const hash = printedHashes(scene)[0] ?? '';
+    const outbox = outboxFolder(scene.staged.storeDir, POOL);
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201, { ok: true }) });
+    let release: () => void = () => undefined;
+    let taken: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      taken = resolve;
+    });
+    const holder = withSendLock(outbox, () => new Promise<void>((resolve) => {
+      release = resolve;
+      taken();
+    }));
+    await held;
+    const sending = poolDeposit(scene.h.deps, sendOptions(hash, pool.via));
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(pool.requests).toEqual([]);
+    release();
+    await holder;
+    expect(await sending).toMatchObject({ document: { ok: true, hash, sent: true } });
+    expect(pool.requests.filter((request) => request.method === 'POST')).toHaveLength(1);
+  });
+
+  it('refuses with send_locked when a fresh lock stays held past the wait', async () => {
+    const scene = await batched();
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    const hash = printedHashes(scene)[0] ?? '';
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const outbox = outboxFolder(scene.staged.storeDir, POOL);
+      mkdirSync(outbox, { recursive: true });
+      writeFileSync(join(outbox, 'send.lock'), '');
+      const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201, { ok: true }) });
+      const sending = poolDeposit(scene.h.deps, sendOptions(hash, pool.via));
+      // The lock waits on the wall clock, so the test moves a clock that only Date reads, a minute at a time, until the wait is over.
+      const clock = setInterval(() => {
+        vi.setSystemTime(Date.now() + 60_000);
+      }, 10);
+      const failed = await sending.catch((error: unknown) => error).finally(() => {
+        clearInterval(clock);
+      });
+      expect(failed).toMatchObject({ exitCode: ExitCode.CONFLICT, problem: { code: 'send_locked' } });
+      expect(pool.requests).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('oars pool outbox after the nightly send (t884 fix round)', () => {
+  const grant = async (scene: Scene): Promise<void> => {
+    await capture(scene);
+    await signIn(scene);
+    await updatePoolChoices(scene.staged.storeDir, (choices) => {
+      choices.rawConsent = 'granted';
+    });
+    await scene.cli('pool', 'deposit', '--server', POOL);
+  };
+  const sentAt = '2026-11-07T03:04:05.000Z';
+  const listed = (scene: Scene): { batches: { hash: string; sent?: string }[]; raw: { hash: string; sent?: string }[] } => {
+    const document = scene.document();
+    if (!isListing(document)) throw new Error('not an outbox document');
+    return document;
+  };
+  const isListing = (value: unknown): value is { batches: { hash: string; sent?: string }[]; raw: { hash: string; sent?: string }[] } => typeof value === 'object' && value !== null && 'batches' in value && 'raw' in value;
+
+  it('marks a batch and a raw copy the nightly task sent as sent, in the text and the document, and leaves the unsent ones plain', async () => {
+    const scene = setting();
+    await grant(scene);
+    const outbox = outboxFolder(scene.staged.storeDir, POOL);
+    scene.h.out.length = 0;
+    await scene.cli('pool', 'outbox', '--server', POOL, '--json');
+    const before = listed(scene);
+    expect(before.batches.length).toBeGreaterThan(0);
+    expect(before.raw.length).toBeGreaterThan(0);
+    expect(before.batches.concat(before.raw).some((entry) => entry.sent !== undefined)).toBe(false);
+    const [firstBatch, firstRaw] = [before.batches[0]?.hash ?? '', before.raw[0]?.hash ?? ''];
+    await markSent(outbox, firstBatch, Date.parse(sentAt));
+    await markSent(outbox, firstRaw, Date.parse(sentAt));
+    scene.h.out.length = 0;
+    await scene.cli('pool', 'outbox', '--server', POOL, '--json');
+    const after = listed(scene);
+    expect(after.batches[0]).toMatchObject({ hash: firstBatch, sent: sentAt });
+    expect(after.raw[0]).toMatchObject({ hash: firstRaw, sent: sentAt });
+    scene.h.out.length = 0;
+    await scene.cli('pool', 'outbox', '--server', POOL);
+    const text = scene.h.out.join('');
+    expect(text).toContain(`sha256: ${firstBatch}\nsent: ${sentAt}`);
+    expect(text).toMatch(new RegExp(`raw part 1/1 sha256: ${firstRaw} bytes: \\d+ sent: ${sentAt}`));
+  });
+
+  it('prints no sent mark for what was never sent', async () => {
+    const scene = setting();
+    await grant(scene);
+    scene.h.out.length = 0;
+    await scene.cli('pool', 'outbox', '--server', POOL);
+    expect(scene.h.out.join('')).not.toContain('sent:');
+  });
+
+  it('marks a batch sent by `deposit --send` the same way, so the nightly task does not send it again', async () => {
+    const scene = await batched();
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    const hash = printedHashes(scene)[0] ?? '';
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201, { ok: true }) });
+    await poolDeposit(scene.h.deps, sendOptions(hash, pool.via));
+    expect((await sentHashes(outboxFolder(scene.staged.storeDir, POOL))).has(hash)).toBe(true);
+  });
+});
+
+describe('oars pool raw (t884)', () => {
+  it('shows the prompt until it is answered, records the answer, and can change it', async () => {
+    const scene = setting();
+    expect(await scene.cli('pool', 'raw')).toBe(ExitCode.OK);
+    const shown = scene.h.out.join('');
+    expect(shown).toContain('best effort');
+    for (const unsafe of ['a host with no dot', 'quoted file contents and command output', 'a secret split across lines', 'images and attachments', 'a JSON env value', 'a common-word account name is masked everywhere', 'a public host name outside a link', 'your username written another way', 'an IPv6 address with a zone or inside a longer word', "another person's hyphenated name in a project folder path"]) expect(shown).toContain(unsafe);
+    expect(shown).toContain('not answered yet');
+    scene.h.out.length = 0;
+    expect(await scene.cli('pool', 'raw', '--consent', 'yes')).toBe(ExitCode.OK);
+    expect(scene.h.out.join('')).toContain('yes: redacted raw copies leave');
+    expect(scene.h.out.join('')).not.toContain('best effort');
+    expect(await scene.cli('pool', 'raw', '--consent', 'no')).toBe(ExitCode.OK);
+    expect(scene.h.out.join('')).toContain('no: only skeletons leave');
+  });
+
+  it('sets and clears a folder switch, and refuses a half-given or unknown option', async () => {
+    const scene = setting();
+    expect(await scene.cli('pool', 'raw', '--folder', 'proj', '--mode', 'off')).toBe(ExitCode.OK);
+    expect(scene.h.out.join('')).toContain('proj: nothing leaves');
+    expect(await scene.cli('pool', 'raw', '--folder', 'proj', '--mode', 'skeleton')).toBe(ExitCode.OK);
+    expect(scene.h.out.join('')).toContain('proj: skeletons only');
+    scene.h.out.length = 0;
+    expect(await scene.cli('pool', 'raw', '--folder', 'proj', '--mode', 'all')).toBe(ExitCode.OK);
+    expect(scene.h.out.join('')).not.toContain('proj:');
+    expect(await scene.cli('pool', 'raw', '--folder', 'proj')).toBe(ExitCode.USAGE);
+    expect(await scene.cli('pool', 'raw', '--consent', 'maybe')).toBe(ExitCode.USAGE);
+    expect(await scene.cli('pool', 'raw', '--folder', 'proj', '--mode', 'some')).toBe(ExitCode.USAGE);
   });
 });
