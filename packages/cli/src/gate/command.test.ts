@@ -137,7 +137,7 @@ describe('oars gate install, at the moment of opting in', () => {
   it('tells the operator what the hook does: records, notes by default, denies only on block, never allows or changes', async () => {
     const staged = stage();
     const userSettings = join(staged.storeDir, '..', 'claude', 'settings.json');
-    const install = { nodePath: 'node', hookBin: 'hook-bin.js', userSettings, cwd: tmpdir(), platform: 'linux', schtasks: () => Promise.resolve({ code: 0, output: '' }) };
+    const install = { nodePath: 'node', hookBin: 'hook-bin.js', userSettings, cwd: tmpdir(), platform: 'linux' as const, schtasks: () => Promise.resolve({ code: 0, output: '' }) };
     const outcome = await gateInstall({ sessions: staged.runtime, install, now: () => 0 });
     expect(outcome.text).toContain(
       'It records each crossing in crossings.jsonl, adds a note about a young or missing name by default, and denies a call only if you write `block` in gate-policy.json; it never allows or changes a call.',
