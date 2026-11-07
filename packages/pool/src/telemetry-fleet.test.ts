@@ -127,6 +127,22 @@ describe('the fleet read, from the nightly rollup, on the Worker', () => {
     expect(latency?.p95).toBe(LATENCY_EDGES.find((edge) => edge >= 1000));
   }, 60_000);
 
+  it('serves two windows that differ by one install as percentiles only, so neither shows the install between them', async () => {
+    // K_CELL installs report 3 days ago (in both windows); one more reported 20 days ago (in the 30 only).
+    await report(K_CELL, daysAgo(3), 100, '2.1.5', 1);
+    await keep(pool, daysAgo(20), uuid(K_CELL + 1), [hook(100)]);
+    await rollupDayFor(pool, daysAgo(3));
+    await rollupDayFor(pool, daysAgo(20));
+    const answered = await pool.get('/v1/telemetry/fleet');
+    const seven = cellsOf(answered.json, 7);
+    const thirty = cellsOf(answered.json, 30);
+    expect(seven.map((cell) => cell.metric).sort()).toEqual(['hook.pre-tool.hit', 'hook.pre-tool.latency']);
+    expect(thirty.map((cell) => cell.metric).sort()).toEqual(['hook.pre-tool.hit', 'hook.pre-tool.latency']);
+    // Each cell holds the percentile and nothing else (a rate holds p50 alone), so there is no count to subtract between the windows.
+    for (const cell of seven) expect(keysOf(cell).sort()).toEqual(cell.kind === 'rate' ? ['dimension', 'kind', 'metric', 'p50', 'value'] : ['dimension', 'kind', 'metric', 'p50', 'p95', 'value']);
+    expect(thirty.map((cell) => keysOf(cell).sort())).toEqual(seven.map((cell) => keysOf(cell).sort()));
+  }, 60_000);
+
   it('counts a batch that arrives twice once, and rolls a day again to the same rows', async () => {
     const events = [hook(100), hook(200), hook(100)];
     await keep(pool, daysAgo(1), uuid(1), events);
@@ -183,6 +199,36 @@ describe('the fleet read, from the nightly rollup, on the Worker', () => {
       expect(outliers).toEqual([{ entity: 'install', id: uuid(10), basis: 'events', count: 2000, median: 19, direction: 'high' }]);
       expect(String(fieldOf(answered.json, 'note'))).toContain('Nothing here is flagged, limited, or acted on automatically');
       expect((await (await pool.db()).prepare('SELECT * FROM telemetry_install_days ORDER BY install').all()).results).toEqual(before);
+    }, 60_000);
+
+    it('reads the thirty day window for anomalies and counts installs in the database, so it never loads the whole table', async () => {
+      // Install 1 sent 2,000 events 45 days ago: far outside the window, so it is no outlier. Five installs report ten events each 10 days ago, and two of them one more 3 days ago.
+      await keep(pool, daysAgo(45), uuid(1), Array.from({ length: 2000 }, () => hook(50)));
+      for (const at of [2, 3, 4]) await keep(pool, daysAgo(45), uuid(at), [hook(50)]);
+      for (let at = 1; at <= K_CELL; at += 1) await keep(pool, daysAgo(10), uuid(at), Array.from({ length: 10 }, () => hook(50)));
+      for (const at of [1, 2]) await keep(pool, daysAgo(3), uuid(at), [hook(50)]);
+      for (const day of [45, 10, 3]) await rollupDayFor(pool, daysAgo(day));
+      const real = await pool.db();
+      const asked: string[] = [];
+      const recording: PoolDb = {
+        prepare: (sql) => ({
+          bind: (...values) => {
+            asked.push(`${sql} <- ${values.join(',')}`);
+            return real.prepare(sql).bind(...values);
+          },
+        }),
+        batch: (statements) => real.batch(statements),
+      };
+      const answered = await operator(new Request('http://pool.test/v1/telemetry/operator', { headers: { authorization: 'Bearer operator-secret' } }), { DB: recording, OPERATOR_TOKEN: 'operator-secret' }, Date.now());
+      const json: unknown = await answered.json();
+      expect(answered.status).toBe(200);
+      expect(fieldOf(json, 'outliers')).toEqual([]);
+      // Five installs ever, two in the last 7 days, and the first day the fleet read was served is the day five installs report together.
+      expect(fieldOf(json, 'measurables')).toEqual({ reporting: { installsEver: K_CELL, installsLast7Days: 2, share: 2 / K_CELL }, firstFleetRead: daysAgo(10) });
+      expect(asked.some((sql) => sql.includes('COUNT(DISTINCT install)'))).toBe(true);
+      expect(asked.some((sql) => sql.includes('MIN(day)'))).toBe(true);
+      // No read of the rows starts at the beginning of time.
+      expect(asked.filter((sql) => sql.includes('SELECT day, install') && sql.includes('0000-00-00'))).toEqual([]);
     }, 60_000);
   });
 });
