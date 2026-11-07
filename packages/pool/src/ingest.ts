@@ -84,7 +84,7 @@ const GUARD = 'EXISTS (SELECT 1 FROM deposits WHERE account = ? AND id = ? AND i
 
 /**
  * The statements that write one batch's increments, to run after the deposit's own row in the same transaction. Each carries the guard, so none takes effect unless that row did.
- * A session sent again replaces its earlier batch: only the difference is added. A cell's cluster count rises only for an account with no record for it, on any day.
+ * A session sent again replaces its earlier batch: only the difference is added.
  */
 export const incrementStatements = (env: Env, account: string, id: string, ingest: string, today: string, next: Increments, previous: Increments | undefined): Bound[] => {
   const cells = netOf(next.cells, previous?.cells ?? new Map<string, CellRow>(), CELL_FIELDS);
@@ -102,10 +102,9 @@ export const incrementStatements = (env: Env, account: string, id: string, inges
   for (const chunk of chunksOf(next.motifs)) {
     statements.push(env.DB.prepare(`INSERT OR IGNORE INTO motifs (motif_id, motif) SELECT json_extract(value, '$.motifId'), value FROM json_each(?) WHERE ${GUARD}`).bind(chunk, ...guard));
   }
-  // A chunk's keys are its own: the cluster count of a key reads the record before this chunk writes it, and no other chunk writes that key's record.
+  // A cell's `clusters` is not written here: it is the clustered count of the accounts that hold it, which `recount` (`cluster-store.ts`) takes from these contributor records once the batch has landed.
   for (const keys of chunksOf([...next.cells.keys()])) {
     statements.push(
-      env.DB.prepare(`UPDATE cells SET clusters = clusters + 1 WHERE key IN (SELECT value FROM json_each(?)) AND NOT EXISTS (SELECT 1 FROM contributors WHERE contributors.kind = 'cell' AND contributors.key = cells.key AND contributors.account = ?) AND ${GUARD}`).bind(keys, account, ...guard),
       env.DB.prepare(`INSERT OR IGNORE INTO contributors (kind, key, account, day) SELECT 'cell', value, ?, ? FROM json_each(?) WHERE ${GUARD}`).bind(account, today, keys, ...guard),
     );
   }
@@ -116,7 +115,6 @@ export const incrementStatements = (env: Env, account: string, id: string, inges
   }
   for (const keys of chunksOf([...next.strata.keys()])) {
     statements.push(
-      env.DB.prepare(`UPDATE strata SET clusters = clusters + 1 WHERE key IN (SELECT value FROM json_each(?)) AND NOT EXISTS (SELECT 1 FROM contributors WHERE contributors.kind = 'stratum' AND contributors.key = strata.key AND contributors.account = ?) AND ${GUARD}`).bind(keys, account, ...guard),
       env.DB.prepare(`INSERT OR IGNORE INTO contributors (kind, key, account, day) SELECT 'stratum', value, ?, ? FROM json_each(?) WHERE ${GUARD}`).bind(account, today, keys, ...guard),
     );
   }

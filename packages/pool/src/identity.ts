@@ -8,6 +8,8 @@ const TOKEN_LIFETIME_MS = 90 * 24 * 60 * 60 * 1000;
 interface Provider {
   userUrl: string;
   userIdOf: (user: unknown) => string | undefined;
+  /** When the provider made the account (epoch ms), if its profile says. Google's does not, so a Google account's age is its first-seen time at the pool. */
+  createdOf: (user: unknown) => number | undefined;
 }
 
 const PROVIDERS = new Map<string, Provider>([
@@ -19,6 +21,10 @@ const PROVIDERS = new Map<string, Provider>([
         const id = fieldOf(user, 'id');
         return typeof id === 'number' ? String(id) : undefined;
       },
+      createdOf: (user) => {
+        const created = Date.parse(textField(user, 'created_at') ?? '');
+        return Number.isNaN(created) ? undefined : created;
+      },
     },
   ],
   [
@@ -26,6 +32,7 @@ const PROVIDERS = new Map<string, Provider>([
     {
       userUrl: 'https://openidconnect.googleapis.com/v1/userinfo',
       userIdOf: (user) => textField(user, 'sub'),
+      createdOf: () => undefined,
     },
   ],
 ]);
@@ -85,7 +92,10 @@ export const login = async (request: Request, env: Env): Promise<Response> => {
   const token = randomBytes(32).toString('hex');
   const now = Date.now();
   const expiresAt = now + TOKEN_LIFETIME_MS;
-  await env.DB.prepare('INSERT INTO accounts (id) VALUES (?) ON CONFLICT (id) DO NOTHING').bind(account).run();
+  // The two ages the cluster rule reads (t937): the pool's first sight of the account stays the first one, and the provider's creation time is refreshed, since a later login may be the first to carry it.
+  await env.DB.prepare('INSERT INTO accounts (id, first_seen, provider_created) VALUES (?, ?, ?) ON CONFLICT (id) DO UPDATE SET first_seen = COALESCE(accounts.first_seen, excluded.first_seen), provider_created = COALESCE(excluded.provider_created, accounts.provider_created)')
+    .bind(account, now, provider.createdOf(profile.body) ?? null)
+    .run();
   // A row past its expiry signs nobody in, so a login is also when the table sheds them.
   await env.DB.prepare('DELETE FROM tokens WHERE expires_at <= ?').bind(now).run();
   await env.DB.prepare('INSERT INTO tokens (hash, account, expires_at) VALUES (?, ?, ?)').bind(hashToken(token), account, expiresAt).run();
