@@ -18,6 +18,8 @@ import { poolDeposit, poolFetch, poolLogin, poolOutbox } from './sessions/pool-c
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 import { telemetryOff, telemetryOn, telemetryReport, telemetryShow, telemetryStatus } from './telemetry/command.js';
+import { recordCrash } from './telemetry/crash.js';
+import { emitOf } from './telemetry/emit.js';
 import { finishTelemetry, observeCommand, type Observed } from './telemetry/observe.js';
 import type { TelemetryRuntime } from './telemetry/record.js';
 
@@ -97,7 +99,7 @@ const printFailure = (deps: RunDeps, json: boolean, error: CliError): void => {
   deps.io.stderr(`${[title ?? error.message, detail, actionUrl].filter((line) => line !== undefined && line !== '').join('\n')}\n`);
 };
 
-const sessionDeps = (deps: RunDeps): SessionsDeps => ({ sessions: deps.sessions, install: deps.install, now: deps.now });
+const sessionDeps = (deps: RunDeps): SessionsDeps => ({ sessions: deps.sessions, install: deps.install, now: deps.now, telemetry: emitOf(deps) });
 
 const buildProgram = (deps: RunDeps, observed: Observed): Command => {
   const program = new Command('oars')
@@ -516,7 +518,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .command('fetch')
     .description('fetch the signed bundle for one harness version, verify it against the key pinned at login, and keep it locally')
     .option('--harness <name>', 'the harness whose bundle to fetch (default: the one your local store holds the most sessions of, claude-code when none leads)')
-    .requiredOption('--harness-version <version>', 'the public harness version whose bundle to fetch')
+    .requiredOption('--harness-version <version>', 'the public harness version whose bundle to fetch, or unknown for a session that recorded none (Cursor, Gemini, Grok Build, or a VS Code Copilot Chat session whose requests name no agent version)')
     .option(serverOption, serverHelp)
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
@@ -577,6 +579,8 @@ const execute = async (argv: string[], deps: RunDeps, observed: Observed): Promi
   } catch (error) {
     // --help and --version end the parse through exitOverride with exit code 0; commander has already printed them.
     if (error instanceof CommanderError && error.exitCode === 0) return ExitCode.OK;
+    // A failure the program did not mean (not a CliError, not commander's own): its class and a hash of its stack are recorded, then it is handled as before.
+    if (!(error instanceof CliError) && !(error instanceof CommanderError)) recordCrash(deps, error);
     const failure = asCliError(error);
     // Commander wrote its own usage message to stderr; a CliError is ours to print.
     if (!(error instanceof CommanderError) || argv.includes('--json')) printFailure(deps, argv.includes('--json'), failure);

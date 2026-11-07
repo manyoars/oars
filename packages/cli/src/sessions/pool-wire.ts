@@ -17,7 +17,7 @@ export const SKELETON_FORMAT = 3;
  * The version of the field list: every field name a batch can hold (`BATCH_FIELDS` in `pool-outbox.ts`). It moves with any field added, so a server told the version knows which names a batch may carry,
  * and a test pins the list to it (`pool-wire-additive.test.ts`). A field is deprecated and left on the list, never removed (conclusion section 17, rule 3).
  */
-export const FIELD_LIST_VERSION = 3;
+export const FIELD_LIST_VERSION = 4;
 export const BUNDLE_FORMAT = 1;
 /** One constant: the pool serves only the vocabulary version the client holds. */
 export { VOCAB_VERSION };
@@ -69,6 +69,8 @@ export type SkeletonStep = Omit<StepObservation, 'n' | 'seg' | 'frameId' | 'cost
   tokens: number | null;
   /** An `ms` bucket of the step's time. */
   ms: number | null;
+  /** True when `tokens` was divided among the calls of one response, not measured for this step; absent otherwise. */
+  allocated?: true;
   /** A `tokens` bucket of the tokens the run spent after this step (spec Section 1.2): the bucket of the exact sum, never a sum of buckets. */
   remainingTokens: number;
   /** The projected type of the subagent whose run holds the step, a built-in or `custom`; null on a main-run step. */
@@ -437,6 +439,7 @@ const transcriptOf = (
       status: reported,
       tokens: cost.tokens === null ? null : bucketOf('tokens', cost.tokens),
       ms: cost.durationMs === null ? null : bucketOf('ms', cost.durationMs),
+      ...(cost.allocated === true ? { allocated: true as const } : {}),
       remainingTokens: 0,
       agentType,
       parent: parent === null || spawner === null ? null : (spawner.places.calls.get(parent) ?? null),
@@ -507,8 +510,14 @@ export const skeletonOf = (records: SessionRecords, id: string, read: ShellReade
   return { format: SKELETON_FORMAT, vocabVersion: VOCAB_VERSION, fieldsVersion: FIELD_LIST_VERSION, id, transcripts, timingPrint: durations.length < MIN_TIMED_CALLS ? null : print(durations), deltas: [...deltas] };
 };
 
-/** A harness version a bundle can be asked for: public, so the request carries nothing private. The admitted list replaces this shape rule when it ships. */
-export const isBundleVersion = (version: string): boolean => version !== LITERAL && publicVersion(version) === version;
+/**
+ * The version bucket of a session that recorded none: Cursor, Gemini, and Grok Build keep no harness version in their local files, and neither does a VS Code Copilot Chat session whose requests carry no `agent.extensionVersion`, so their cells are
+ * `<harness>/unknown/<model>`. It is the one non-numeric word a bundle can be asked for, so those harnesses are served the cells they have.
+ */
+export const UNKNOWN_VERSION = 'unknown';
+
+/** A harness version a bundle can be asked for: public, so the request carries nothing private, or `unknown` for a harness with none on record. The admitted list replaces this shape rule when it ships. */
+export const isBundleVersion = (version: string): boolean => version === UNKNOWN_VERSION || (version !== LITERAL && publicVersion(version) === version);
 
 /** Whether `name` is a harness the schema names. */
 export const isHarness = (name: string): name is Harness => HARNESSES.some((harness) => harness === name);
@@ -585,7 +594,7 @@ export const OPTIONAL = {
   stack: ['size', 'languageShares'],
   prompt: ['wallSec', 'explore'],
   tool: ['prompt', 'durationMs', 'errorCode', 'recoveryCalls'],
-  step: ['tokens', 'ms', 'parent', 'skill', 'edges'],
+  step: ['tokens', 'ms', 'allocated', 'parent', 'skill', 'edges'],
   transcript: ['spawnedIn'],
 } as const satisfies { readonly [level: string]: readonly string[] };
 
@@ -630,6 +639,12 @@ const textOf = (value: unknown, at: string): string => {
 const countOf = (value: unknown, at: string): number => {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw new Refused(at, 'not a count');
   return value;
+};
+
+/** The allocation marker is `true` or absent: a depositor cannot say `false`, since an unmarked step is the measured one. */
+const allocatedOf = (value: unknown, at: string): true => {
+  if (value !== true) throw new Refused(at, 'not true');
+  return true;
 };
 
 /** An absent field reads as null: an optional field is absent or null alike. */
@@ -863,6 +878,7 @@ const parseStep = (held: Collected, harness: WireHarness, value: unknown, at: st
     status: oneOf(held, STATUSES, raw.status, under(at, 'status')),
     tokens: orNull(raw.tokens, under(at, 'tokens'), (entry, entryAt) => bucketIn('tokens', entry, entryAt)),
     ms: orNull(raw.ms, under(at, 'ms'), (entry, entryAt) => bucketIn('ms', entry, entryAt)),
+    ...(raw.allocated === undefined ? {} : { allocated: allocatedOf(raw.allocated, under(at, 'allocated')) }),
     remainingTokens: bucketIn('tokens', raw.remainingTokens, under(at, 'remainingTokens')),
     agentType: orNull(raw.agentType, under(at, 'agentType'), (entry, entryAt) => parseAgentType(held, entry, entryAt)),
     parent: orNull(raw.parent, under(at, 'parent'), countOf),
