@@ -8,7 +8,7 @@ import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../err
 import { compileAllow } from './allow.js';
 import { makeCoverage, readCoverageSetting, writeCoverageSetting } from './coverage.js';
 import { checkSession, exclusionPaths, lastWritten, loadTerms, transcriptFilesOf, type Reason } from './exclusion.js';
-import { makeRedactor, REDACTION_VERSION, redactTranscript } from './redact.js';
+import { localNames, makeRedactor, REDACTION_VERSION, redactTranscript } from './redact.js';
 import { recordSend, recordWire, newTally, tallyBatch } from '../telemetry/wire.js';
 import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, isMissing, lockedBatch, markShown, outboxFolder, partsOf, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
 import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type PinnedKey, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
@@ -429,6 +429,9 @@ export const postRaw = async (deps: RunDeps, options: { server: string; token: s
   if (done.status !== 200 && done.status !== 201) throw refusal(DEPOSIT, done);
 };
 
+const rawNote = (consent: string | null): string =>
+  consent === 'granted' ? '' : consent === 'declined' ? 'You answered no to the raw prompt; oars pool raw --consent yes changes it.' : 'None is queued until you answer the raw prompt with oars pool raw --consent yes.';
+
 /** `deposit --send <hash>`: the send lock the nightly task takes too, then the batch lock, then the covenant (accepted here or before, or nothing is sent), then the request. The body is read and hashed again just before the request. */
 const sendBatch = async (deps: RunDeps, options: { outbox: string; server: string; token: string; hash: string; acceptCovenant: string | undefined; via: Sender | undefined }): Promise<Outcome> => {
   const { outbox, server, token, hash } = options;
@@ -470,6 +473,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   if (options.send !== undefined) return sendBatch(deps, { outbox, server, token, hash: options.send, acceptCovenant: options.acceptCovenant, via: options.via });
   const { terms } = exclusionPaths(runtime.projectsRoot, deps.env);
   const saved = await readState(runtime.storeDir);
+  const names = localNames();
   const allow = compileAllow(saved.allow);
   const discarded = await discardStale(outbox);
   const counts: DepositCounts = { sessions: 0, batched: 0, excluded: { folder: 0, term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, off: 0, raw: { copies: 0, bytes: 0, masked: 0 }, uncaptured: 0, notEnded: 0, refused: 0, refusedFields: [], discarded, withdrawn: 0 };
@@ -545,7 +549,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
     if (rawAllowed(saved.pool, records.main.project)) {
       let place = 0;
       for (const file of await transcriptFilesOf(runtime, records.main.project, records.main.session)) {
-        const redacted = redactTranscript(await readFile(file.path, 'utf8'), saved.redactDomains);
+        const redacted = redactTranscript(await readFile(file.path, 'utf8'), saved.redactDomains, names);
         counts.raw.bytes += (await writeRaw(outbox, key, place, redacted.text)).bytes;
         counts.raw.copies += 1;
         counts.raw.masked += redacted.masked;
@@ -572,7 +576,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
     `Not built: ${String(counts.uncaptured)} captured before steps and frames or with no root, ${String(counts.notEnded)} not ended (a transcript gained a line within ${String(SESSION_IDLE_HOURS)} hours), ${String(counts.refused)} refused by the vocabulary${counts.refusedFields.length === 0 ? '' : ` (${counts.refusedFields.join(', ')})`}.`,
     ...(counts.withdrawn === 0 ? [] : [`Removed ${String(counts.withdrawn)} ${counts.withdrawn === 1 ? 'batch' : 'batches'} of sessions that no longer pass the gates, have not ended, or are no longer in the store.`]),
     ...(discarded === 0 ? [] : [`Discarded ${String(discarded)} ${discarded === 1 ? 'batch' : 'batches'} built under an older vocabulary, field list, or skeleton format.`]),
-    `Raw copies queued: ${String(counts.raw.copies)} (${String(counts.raw.bytes)} bytes, ${String(counts.raw.masked)} values masked). ${saved.pool.rawConsent === 'granted' ? '' : 'None is queued until you answer the raw prompt with oars pool raw --consent yes.'}`.trim(),
+    `Raw copies queued: ${String(counts.raw.copies)} (${String(counts.raw.bytes)} bytes, ${String(counts.raw.masked)} values masked). ${rawNote(saved.pool.rawConsent)}`.trim(),
     ...(counts.off === 0 ? [] : [`${String(counts.off)} ${counts.off === 1 ? 'session' : 'sessions'} in a folder switched off: nothing of them is queued.`]),
     'Run oars pool outbox to print exactly what would be sent.',
   ];
