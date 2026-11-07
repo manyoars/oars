@@ -396,7 +396,7 @@ describe('parseSkeleton refuses, and names the field', () => {
 
   // The harness list is the schema's `Harness` union: a skeleton from a harness missing from it is refused whole, so each name needs a pass here.
   it('accepts a skeleton from every harness the schema names', () => {
-    const natives: [Harness, string][] = [['claude-code', 'Bash'], ['cursor', 'run_terminal_cmd'], ['codex', 'exec_command'], ['copilot', 'bash'], ['gemini', 'run_shell_command'], ['grok', 'run_terminal_cmd'], ['opencode', 'shell'], ['vscode-copilot', 'run_in_terminal']];
+    const natives: [Harness, string][] = [['claude-code', 'Bash'], ['cursor', 'run_terminal_cmd'], ['codex', 'exec_command'], ['copilot', 'bash'], ['gemini', 'run_shell_command'], ['grok', 'run_terminal_cmd'], ['opencode', 'shell'], ['vscode-copilot', 'run_in_terminal'], ['otel', 'exec_command']];
     for (const [harness, native] of natives) {
       const raw = withStep({ native });
       if (!isHolder(raw)) throw new Error('the sample is not an object');

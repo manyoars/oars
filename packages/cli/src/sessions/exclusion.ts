@@ -179,6 +179,13 @@ const filesOf = async (runtime: SessionsRuntime, project: string, session: strin
   return { files, unreadable: unreadable || first || second };
 };
 
+/** The transcript files of one session, the main one first, one per path under the project folder (the harness's copy before oars' raw archive's): what a raw copy is built from, after the gate has cleared them. */
+export const transcriptFilesOf = async (runtime: SessionsRuntime, project: string, session: string): Promise<{ key: string; path: string; main: boolean }[]> => {
+  const seen = new Map<string, { key: string; path: string; main: boolean }>();
+  for (const { key, path, main } of (await filesOf(runtime, project, session)).files) if (!seen.has(key)) seen.set(key, { key, path, main });
+  return [...seen.values()].sort((a, b) => (a.main === b.main ? (a.key < b.key ? -1 : 1) : a.main ? -1 : 1));
+};
+
 /** Whether any line of the file holds a term. Streamed, so a large transcript is never held whole. */
 const holdsTerm = async (path: string, terms: readonly string[]): Promise<boolean> => {
   const stream = createReadStream(path, { encoding: 'utf8' });
