@@ -118,7 +118,7 @@ const WIRE_LENGTH = WIRE_NAMES.size;
 /** One line per event type. */
 const EVENTS: ReadonlyMap<string, FieldRules> = new Map([
   ['command', rules({ path: tokens(4), flags: tokens(40), durationMs: whole(DAY_MS), exitCode: whole(255), errorClass: oneOf(ERROR_CLASSES) })],
-  ['hook', rules({ name: oneOf(HOOK_NAMES), latencyMs: whole(DAY_MS), outcome: oneOf(HOOK_OUTCOMES), bytes: whole(BYTES), harnessVersion: MODEL_OR_VERSION(versionWord), model: MODEL_OR_VERSION(modelWord) })],
+  ['hook', rules({ name: oneOf(HOOK_NAMES), latencyMs: whole(DAY_MS), outcome: oneOf(HOOK_OUTCOMES), bytes: whole(BYTES), harness: oneOf(WIRE_HARNESSES), harnessVersion: MODEL_OR_VERSION(versionWord), model: MODEL_OR_VERSION(modelWord) })],
   [
     'recall',
     rules({ form: oneOf(RECALL_FORMS), mode: oneOf(RECALL_MODES), families: listOf(RECALL_FAMILY_NAMES, 16), kind: oneOf(['hit', 'miss']), reads: whole(COUNT), evidence: whole(COUNT), tokens: whole(COUNT), arm: oneOf(RECALL_ARMS) }),
@@ -226,7 +226,8 @@ const PARALLEL_LISTS = ['fields', 'present', 'fieldBytes'];
 const alignParallel = (sent: object, data: Sanitized['data'], dropped: number): Sanitized => {
   const given = PARALLEL_LISTS.filter((name) => name in sent);
   const kept = given.filter((name) => data[name] !== undefined);
-  const lengths = new Set(kept.map((name) => (Array.isArray(data[name]) ? data[name].length : -1)));
+  // Every rule for these three names returns a list, so `flat` of the one-element wrapper is that list's length.
+  const lengths = new Set(kept.map((name) => [data[name]].flat().length));
   if (kept.length === given.length && lengths.size <= 1) return { data, dropped };
   for (const name of kept) Reflect.deleteProperty(data, name);
   return { data, dropped: dropped + kept.length };

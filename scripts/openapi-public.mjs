@@ -145,16 +145,14 @@ const neutralize = (node) => {
 const reachedNames = (node, sourceComponents) => {
   const pending = new Set();
   collect(node, pending, new Set());
-  const seen = new Set();
+  // A Set iterates the refs it gains while looping, so each ref is visited once.
   for (const ref of pending) {
-    if (seen.has(ref)) continue;
-    seen.add(ref);
     const { section, name } = parseRef(ref);
     const sourceSection = sourceComponents[section];
     const component = isObject(sourceSection) ? sourceSection[name] : undefined;
     if (component !== undefined) collect(component, pending, new Set());
   }
-  return [...seen].map((ref) => parseRef(ref).name);
+  return [...pending].map((ref) => parseRef(ref).name);
 };
 
 /**
@@ -178,8 +176,10 @@ const filterSpec = (source, operationIds) => {
   const found = new Set();
   /** @type {JsonObject} */
   const paths = {};
-  const sourcePaths = source['paths'];
-  const sourceComponents = isObject(source['components']) ? source['components'] : {};
+  // Neutralize first, so a 402 or a withheld property no longer counts as reaching a schema: that schema is neither an orphan nor a reason to drop the operation.
+  const neutralSource = /** @type {JsonObject} */ (neutralize(source));
+  const sourcePaths = neutralSource['paths'];
+  const sourceComponents = isObject(neutralSource['components']) ? neutralSource['components'] : {};
   for (const [path, item] of Object.entries(isObject(sourcePaths) ? sourcePaths : {})) {
     if (!isObject(item)) continue;
     /** @type {JsonObject} */
