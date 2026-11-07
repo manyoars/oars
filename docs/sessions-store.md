@@ -668,15 +668,14 @@ carry `harness: "cursor"`; a record with no `harness` is Claude Code's (`harness
   `fileHashes`, and the per-account `sid` salt are the Claude Code code path, not a copy.
 - **Idempotent.** `state.json` keeps one entry per composer (`cursor/<composerId>`) whose cursor is the message count and `lastUpdatedAt`;
   a second deposit adds nothing, and a composer that gained messages is captured again.
-- **Absent fields.** The store has no cache read or write tokens, thinking tokens, subagents, hooks, cost-state, git branch, or Cursor
-  version, so they take the empty value (0, `[]`, or null; `env.harness` is null).
-  The version census of t872 found nothing to read: no field of the composer, its headers, or a bubble carries the Cursor build, so `harnessVersion`
-  stays null, the session's cells are `cursor/unknown/<model>`, and a bundle for them is asked for as `unknown` (`pool.md`, "What a bundle serves").
-  A bubble's time is its `createdAt`, else
-  `timingInfo.clientStartTime` when that is an epoch time at or after the composer's start (a smaller value is a relative clock and is
-  ignored); a user bubble with neither takes the next assistant bubble's, and any other takes the previous one's, so wall time per prompt is coarse.
-  A shell command Cursor records as `completed` with a nonzero `exitCodeV2` is a failed `Bash` call, and a tool `error` is read from its JSON
-  wrapper (the model-visible message, else the client-visible one). Nothing goes to `raw/` (there is no transcript file), and the Stop hook does not read Cursor.
+- **Absent fields.** The store has no cache read or write tokens, thinking tokens, subagents, hooks, cost-state, git branch, or Cursor version, so
+  they take the empty value (0, `[]`, or null; `env.harness` is null). A census of the stored versions found nothing to read: no field of the composer, its
+  headers, or a bubble carries the Cursor build, so `harnessVersion` stays null, the session's cells are `cursor/unknown/<model>`, and a bundle for
+  them is asked for as `unknown` (`pool.md`, "What a bundle serves"). A bubble's time is its `createdAt`, else `timingInfo.clientStartTime` when that
+  is an epoch time at or after the composer's start (a smaller value is a relative clock and is ignored); a user bubble with neither takes the next
+  assistant bubble's, and any other takes the previous one's, so wall time per prompt is coarse. A shell command Cursor records as `completed` with a
+  nonzero `exitCodeV2` is a failed `Bash` call, and a tool `error` is read from its JSON wrapper (the model-visible message, else the client-visible
+  one). Nothing goes to `raw/` (there is no transcript file), and the Stop hook does not read Cursor.
 - **Not read.** `aiService.prompts` (only `text` and `commandType`) and `aiService.generations` are not read: they carry no session id and no
   time, so they cannot be joined to a composer. On the 2026-11-02 copy, 183 of 788 distinct prompt texts match no captured prompt; that is a
   stated gap, not a silent one. The `session` record carries `harness: cursor`; the skeleton does not (`Skeleton` has no such field), and
@@ -804,15 +803,15 @@ It is settled only if the session count is nonzero, there are zero violations, t
   A refusal is `isConfirmed` `{type:5, source:'user'}` (the Skip button, which is a confirmation's decline button), `{type:0, source:'user'}` (an explicit cancel), or the boolean `false` (before VS Code 1.104): all store `user-rejected`.
   `{type:0}` or `{type:5}` with `source` `hook` or `riskAssessment` reads as a permission denial, and a `Denied` with no `source` claims neither actor (`chatService.ts:910`: "absence does not identify an actor"), so it is a plain denial.
   A `{type:5}` with no `source` is the skip after approval and has no outcome. Timestamps are epoch milliseconds; a missing or implausible one is never made up, the time carries forward.
-- **Absent.** Cost and working-directory changes have no equivalent: the file holds none, and the editor's version is nowhere in it.
-  The `version: 3` above is the chat-session schema's, not the extension's. The Copilot Chat extension's own version is the one version the file
-  carries: each request holds the agent VS Code serialized beside it, `agent` (`ISerializableChatRequestData.agent`, `UriDto<IChatAgentData>`,
-  `chatModel.ts:2196,2243`, written from the response's agent at `chatModel.ts:3849-3870`), and `IChatAgentData.extensionVersion` (`chatAgents.ts:71`)
-  is that version, so `harnessVersion` is the newest request's `agent.extensionVersion` (t872's census), read only when `agent.extensionId.value` is `GitHub.copilot-chat`, compared
-  case-insensitively as `ExtensionIdentifier` does: a third-party chat participant (another extension's `@name`) is serialized the same way with its own extension's
-  version, which is not Copilot Chat's and is never read. A request whose agent has none, or a session of an older build with no `agent`, leaves it unset. The cells are `vscode-copilot/<extension
-  version>/<model>`, or `vscode-copilot/unknown/<model>` for a session that names none, which a bundle asks for as `unknown` (`pool.md`, "What a
-  bundle serves").
+- **Absent.** Cost and working-directory changes have no equivalent: the file holds none, and the editor's version is nowhere in it. The `version: 3`
+  above is the chat-session schema's, not the extension's. The Copilot Chat extension's own version is the one version the file carries: each request
+  holds the agent VS Code serialized beside it, `agent` (`ISerializableChatRequestData.agent`, `UriDto<IChatAgentData>`, `chatModel.ts:2196,2243`,
+  written from the response's agent at `chatModel.ts:3849-3870`), and `IChatAgentData.extensionVersion` (`chatAgents.ts:71`) is that version, so
+  `harnessVersion` is the newest request's `agent.extensionVersion` (t872's census), read only when `agent.extensionId.value` is
+  `GitHub.copilot-chat`, compared case-insensitively as `ExtensionIdentifier` does: a third-party chat participant (another extension's `@name`) is
+  serialized the same way with its own extension's version, which is not Copilot Chat's and is never read. A request whose agent has none, or a
+  session of an older build with no `agent`, leaves it unset. The cells are `vscode-copilot/<extension version>/<model>`, or
+  `vscode-copilot/unknown/<model>` for a session that names none, which a bundle asks for as `unknown` (`pool.md`, "What a bundle serves").
   `completionTokens` on the request is the whole turn's output; `modelTotals[{model, inputTokens, cachedTokens, outputTokens}]`, also on the request (`chatModel.ts:2086,2093`), is the only per-model figure
   (`chatService.ts:176-188`); neither sits under a `usage` key in the file, and a turn that used several models has them summed on its one assistant line, subagent-model tokens attributed to the request model. `promptTokens` is the last model call alone, so it is not read as consumption.
   **Input 0 means not known.** A normal Copilot Chat session, written by the extension, carries no `modelTotals`: the extension API bridge passes the editor only `promptTokens`, `completionTokens`, `outputBuffer`, `copilotCredits`, and
