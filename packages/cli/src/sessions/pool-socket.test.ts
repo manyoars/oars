@@ -2,7 +2,7 @@ import { createHash, webcrypto } from 'node:crypto';
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness } from '../test-support.js';
@@ -16,7 +16,7 @@ import { cleanup, NOW, settledClock, stage, TEST_FLOOR } from './test-support.js
 
 afterEach(cleanup);
 
-const PROVIDER_TOKEN = 'provider-access-token';
+const HANDLE = 'sealed-login-handle';
 const POOL_TOKEN = 'a-pool-token';
 
 interface Arrival {
@@ -103,32 +103,19 @@ const expectPrinted = (arrival: Arrival, secret: string | undefined): void => {
 
 describe('what is printed is what goes over the socket', () => {
   let loop: Loopback;
-  const real = globalThis.fetch;
-
-  beforeEach(() => {
-    // The GitHub host is the only request that would leave the loopback in this file, so it is sent to the loopback here, with the request as built.
-    vi.stubGlobal('fetch', (input: URL | string | Request, init?: RequestInit): Promise<Response> => {
-      const url = new URL(input instanceof Request ? input.url : input);
-      if (url.hostname !== 'github.com') return real(input, init);
-      return real(`${loop.origin}${url.pathname}`, init);
-    });
-  });
-
   afterEach(async () => {
-    vi.unstubAllGlobals();
     await loop.stop();
   });
 
   it('a plain fetch, a conditional fetch answered 304, and the login each print every header they send', async () => {
     const staged = stage();
-    const h = harness({ OARS_GITHUB_CLIENT_ID: 'gh-client' });
+    const h = harness();
     h.deps.sessions = staged.runtime;
     loop = await listen(h.err);
     const { x, sign } = await signer();
     const payload = JSON.stringify({ format: 1, harness: 'claude-code', harnessVersion: '2.1.314', vocabVersion: VOCAB_VERSION, floor: TEST_FLOOR, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}], strata: [] });
-    loop.answers.set('POST /login/device/code', [json(200, { device_code: 'device-code-1', user_code: 'USER-1', verification_uri: 'https://provider.test/device', interval: 1, expires_in: 10 })]);
-    loop.answers.set('POST /login/oauth/access_token', [json(200, { access_token: PROVIDER_TOKEN })]);
-    loop.answers.set('POST /v1/login', [json(200, { token: POOL_TOKEN, account: 'acct_one', expiresAt: Date.parse('2099-01-01T00:00:00Z'), signingKey: { kty: 'OKP', crv: 'Ed25519', x } })]);
+    loop.answers.set('POST /v1/login/start', [json(200, { handle: HANDLE, userCode: 'USER-1', verificationUrl: 'https://provider.test/device', interval: 1, expiresIn: 10 })]);
+    loop.answers.set('POST /v1/login/poll', [json(200, { status: 'authorized', token: POOL_TOKEN, account: 'acct_one', expiresAt: Date.parse('2099-01-01T00:00:00Z'), signingKey: { kty: 'OKP', crv: 'Ed25519', x } })]);
     loop.answers.set(`GET /bundle/claude-code/2.1.314/${VOCAB_VERSION}`, [json(200, { payload, signature: await sign(payload) }, { etag: '"e1"' }), (response) => { response.writeHead(304, { etag: '"e1"' }); response.end(); }]);
     const cli = (...args: string[]): Promise<ExitCode> => run(args, h.deps);
 
@@ -136,7 +123,7 @@ describe('what is printed is what goes over the socket', () => {
     expect(await cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', loop.origin)).toBe(ExitCode.OK);
     expect(await cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', loop.origin)).toBe(ExitCode.OK);
 
-    const poolLogin = loop.arrivals.find((arrival) => arrival.url === '/v1/login');
+    const poolLogin = loop.arrivals.find((arrival) => arrival.url === '/v1/login/poll');
     const [plain, conditional] = loop.arrivals.filter((arrival) => arrival.url.startsWith('/bundle/'));
     expect(poolLogin).toBeDefined();
     expect(plain).toBeDefined();
@@ -150,16 +137,15 @@ describe('what is printed is what goes over the socket', () => {
     const staged = stage();
     const termsFile = join(staged.root, 'terms.txt');
     writeFileSync(termsFile, 'zorblax\n');
-    const h = harness({ OARS_GITHUB_CLIENT_ID: 'gh-client', OARS_EXCLUSION_TERMS: termsFile });
+    const h = harness({ OARS_EXCLUSION_TERMS: termsFile });
     h.deps.sessions = staged.runtime;
     h.deps.now = settledClock;
     // `outbox` prints to stdout, so what counts as printed before the request is what stdout held when it arrived.
     const shown: string[] = [];
     loop = await listen(shown);
     const { x } = await signer();
-    loop.answers.set('POST /login/device/code', [json(200, { device_code: 'device-code-1', user_code: 'USER-1', verification_uri: 'https://provider.test/device', interval: 1, expires_in: 10 })]);
-    loop.answers.set('POST /login/oauth/access_token', [json(200, { access_token: PROVIDER_TOKEN })]);
-    loop.answers.set('POST /v1/login', [json(200, { token: POOL_TOKEN, account: 'acct_one', expiresAt: Date.parse('2099-01-01T00:00:00Z'), signingKey: { kty: 'OKP', crv: 'Ed25519', x } })]);
+    loop.answers.set('POST /v1/login/start', [json(200, { handle: HANDLE, userCode: 'USER-1', verificationUrl: 'https://provider.test/device', interval: 1, expiresIn: 10 })]);
+    loop.answers.set('POST /v1/login/poll', [json(200, { status: 'authorized', token: POOL_TOKEN, account: 'acct_one', expiresAt: Date.parse('2099-01-01T00:00:00Z'), signingKey: { kty: 'OKP', crv: 'Ed25519', x } })]);
     loop.answers.set('GET /v1/covenant', [json(200, { version: 'v1', accepted: true })]);
     loop.answers.set('POST /v1/deposits', [json(201, { ok: true })]);
     await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
@@ -199,14 +185,13 @@ describe('what is printed is what goes over the socket', () => {
       const staged = stage();
       const termsFile = join(staged.root, 'terms.txt');
       writeFileSync(termsFile, 'zorblax\n');
-      const h = harness({ OARS_GITHUB_CLIENT_ID: 'gh-client', OARS_EXCLUSION_TERMS: termsFile });
+      const h = harness({ OARS_EXCLUSION_TERMS: termsFile });
       h.deps.sessions = staged.runtime;
       h.deps.now = settledClock;
       loop = await listen([]);
       const { x } = await signer();
-      loop.answers.set('POST /login/device/code', [json(200, { device_code: 'device-code-1', user_code: 'USER-1', verification_uri: 'https://provider.test/device', interval: 1, expires_in: 10 })]);
-      loop.answers.set('POST /login/oauth/access_token', [json(200, { access_token: PROVIDER_TOKEN })]);
-      loop.answers.set('POST /v1/login', [json(200, { token: POOL_TOKEN, account: 'acct_one', expiresAt: Date.parse('2099-01-01T00:00:00Z'), signingKey: { kty: 'OKP', crv: 'Ed25519', x } })]);
+      loop.answers.set('POST /v1/login/start', [json(200, { handle: HANDLE, userCode: 'USER-1', verificationUrl: 'https://provider.test/device', interval: 1, expiresIn: 10 })]);
+      loop.answers.set('POST /v1/login/poll', [json(200, { status: 'authorized', token: POOL_TOKEN, account: 'acct_one', expiresAt: Date.parse('2099-01-01T00:00:00Z'), signingKey: { kty: 'OKP', crv: 'Ed25519', x } })]);
       loop.answers.set('GET /v1/covenant', [json(200, { version: 'v1', accepted: true })]);
       loop.answers.set('POST /v1/deposits', [json(201, { ok: true })]);
       await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
