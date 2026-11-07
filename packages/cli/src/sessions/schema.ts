@@ -89,7 +89,7 @@ export const CAPTURE_VERSION = '19';
 export const OLDEST_READABLE_CAPTURE = 3;
 
 /** Stamped `v` on every derived record. A bump re-derives from the log; no transcript is read. */
-export const EXTRACTOR_VERSION = '12';
+export const EXTRACTOR_VERSION = '13';
 
 export const PROMPT_HEAD_CHARS = 300;
 export const ERROR_EXAMPLE_CHARS = 160;
@@ -99,6 +99,13 @@ export const SIGNATURE_CHARS = 110;
 export const ERROR_LINE_CHARS = 1000;
 /** Per-session cap on `files` and `fileHashes` (L3): the hand run on the copy store had p99 61 and max 209 files per session; 100 is the round number above p99. */
 export const FILES_PER_SESSION_MAX = 100;
+
+/**
+ * What the next human prompt did to a prompt's work (t882, `docs/sessions-store.md` "Prompt intervention"): a closed list, not a grade. `unknown` is a prompt the records cannot say anything about (the last of its
+ * transcript, one the user stopped, or one whose next prompt ran a shell call captured before `segments`); a prompt derived before EXTRACTOR 13 has no value at all, which is a different thing.
+ */
+export const PROMPT_INTERVENTIONS = ['none', 'after-error', 'redo', 'revert', 'unknown'] as const;
+export type PromptIntervention = (typeof PROMPT_INTERVENTIONS)[number];
 
 export const PROMPT_CLASSES = ['no-tools', 'orchestration', 'research', 'edit-verify', 'edit-only', 'explore-only', 'shell-only', 'mixed'] as const;
 export type PromptClass = (typeof PROMPT_CLASSES)[number];
@@ -279,7 +286,7 @@ export type PromptStop = 'interrupt' | 'rejected';
 /**
  * One per user prompt: the `prompt_graphs.py` and `cost_per_class.py` records joined. Derived. Classes: `session`,
  * `contextFingerprint`, `frame`, `head`, `ts`, `skills`, `verify`, `stopped`, `commits`, and `redo` (A); `kind`, `v`, `rev`, `index`, `wallSec`, `cls`, `tools`,
- * `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `usage`, `recovery`, `explore`, `act`, and `bigrams` (P).
+ * `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `usage`, `recovery`, `explore`, `act`, `bigrams`, and `intervention` (P).
  */
 export interface PromptObservation {
   kind: 'prompt';
@@ -325,6 +332,8 @@ export interface PromptObservation {
   commits?: number;
   /** A later prompt edited a path this one edited, within `REDO_WINDOW` prompts, with no commit `commits` can see between them. */
   redo?: boolean;
+  /** Whether a human stepped in after this prompt's work, and how (EXTRACTOR 13): what the next prompt did, never a grade. Absent on a prompt derived earlier. Class P: a member of a closed list. */
+  intervention?: PromptIntervention;
 }
 
 /**

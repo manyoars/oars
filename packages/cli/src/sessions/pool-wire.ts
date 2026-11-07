@@ -10,7 +10,7 @@ import type { Motif } from './motif.js';
 import type { Read, ReadAsOf } from './read.js';
 import { recoveryCallsOf, RECOVERY_CALLS, type RecoveryCalls } from './recovery-calls.js';
 import { projectLanguage, projectLanguageShare } from './strata.js';
-import { ERROR_CODES, LANGUAGE_SHARES, type Frame, type FrameStack, type Harness, type LanguageShare, type PromptClass, type PromptObservation, type PullIdentity, type SessionObservation, type ShellIdentity, type StepIdentity, type StepEdge, type StepObservation, type Strata, type ToolObservation, type ToolStatus, type Usage } from './schema.js';
+import { ERROR_CODES, LANGUAGE_SHARES, PROMPT_INTERVENTIONS, type PromptIntervention, type Frame, type FrameStack, type Harness, type LanguageShare, type PromptClass, type PromptObservation, type PullIdentity, type SessionObservation, type ShellIdentity, type StepIdentity, type StepEdge, type StepObservation, type Strata, type ToolObservation, type ToolStatus, type Usage } from './schema.js';
 
 // Format 3 (step 1 of the wire): a tool carries its `errorCode` and, for a failed call, what followed it (`recoveryCalls`). Formats 1 and 2 are refused by name; nothing is deployed, so nothing is migrated.
 export const SKELETON_FORMAT = 3;
@@ -18,7 +18,7 @@ export const SKELETON_FORMAT = 3;
  * The version of the field list: every field name a batch can hold (`BATCH_FIELDS` in `pool-outbox.ts`). It moves with any field added, so a server told the version knows which names a batch may carry,
  * and a test pins the list to it (`pool-wire-additive.test.ts`). A field is deprecated and left on the list, never removed (conclusion section 17, rule 3).
  */
-export const FIELD_LIST_VERSION = 5;
+export const FIELD_LIST_VERSION = 6;
 export const BUNDLE_FORMAT = 1;
 /** One constant: the pool serves only the vocabulary version the client holds. */
 export { VOCAB_VERSION };
@@ -160,6 +160,8 @@ export interface SkeletonPrompt {
   usage: SkeletonUsage;
   /** A `calls` bucket of the prompt's steps that only look (`file.read`, `file.search`, `web.search`, `web.fetch`); null when the record holds no count. */
   explore: number | null;
+  /** Whether a human stepped in after this prompt's work and how, one of the closed list (t882; docs/sessions-store.md "Prompt intervention"). Absent when the stored prompt predates the signal: absent means not computed, `unknown` means computed and not sayable. An outcome row, never a grade. */
+  intervention?: PromptIntervention | typeof OTHER;
   frame: SkeletonFrame;
 }
 
@@ -463,7 +465,7 @@ const transcriptOf = (
   const harness = session.harness ?? 'claude-code';
   const framedPrompts: SkeletonPrompt[] = [];
   const promptAt = new Map<number, number>();
-  for (const { index, cls, errors, wallSec, usage, frame, strata, ts } of [...prompts].sort((a, b) => a.index - b.index)) {
+  for (const { index, cls, errors, wallSec, usage, frame, strata, ts, intervention } of [...prompts].sort((a, b) => a.index - b.index)) {
     if (frame === undefined) return null;
     promptAt.set(index, framedPrompts.length);
     framedPrompts.push({
@@ -472,6 +474,7 @@ const transcriptOf = (
       wallSec: wallSec === null ? null : bucketOf('seconds', wallSec),
       usage: { input: bucketOf('tokens', usage.input), cacheWrite: bucketOf('tokens', usage.cacheWrite), cacheRead: bucketOf('tokens', usage.cacheRead), output: bucketOf('tokens', usage.output), thinking: bucketOf('tokens', usage.thinking) },
       explore: projectExplore(strata?.explore),
+      ...(intervention === undefined ? {} : { intervention }),
       frame: wireFrame(frame, strata, gate, ts),
     });
   }
@@ -673,7 +676,7 @@ const unknownValue = (held: Collected, at: string, sent: string): typeof OTHER =
 };
 
 /** The fields a client may send a literal beside (`<field>Literal`) when the field itself says `other`: the enumerated fields, whose values a closed list holds. */
-export const ENUMERATED_FIELDS: ReadonlySet<string> = new Set(['harness', 'harnessVersion', 'model', 'effort', 'platform', 'shell', 'size', 'languages', 'frameworks', 'language', 'languageShare', 'cls', 'status', 'action', 'native', 'agentType', 'program', 'sub', 'flags', 'registry', 'name', 'version', 'server', 'tool', 'skill', 'host', 'deltaKind', 'field', 'metric']);
+export const ENUMERATED_FIELDS: ReadonlySet<string> = new Set(['harness', 'harnessVersion', 'model', 'effort', 'platform', 'shell', 'size', 'languages', 'frameworks', 'language', 'languageShare', 'cls', 'status', 'action', 'native', 'agentType', 'program', 'sub', 'flags', 'registry', 'name', 'version', 'server', 'tool', 'skill', 'host', 'deltaKind', 'field', 'metric', 'intervention']);
 /**
  * The fields that may be absent at format 3, by the level of the batch that holds them. An absent one reads as null, or as empty for a list, exactly as a sent null does, so a batch with all of them left out is
  * served from what remains. A field the cells need to be sound (a harness, a status, a bucket of tokens) is never here.
@@ -682,7 +685,7 @@ export const OPTIONAL = {
   batch: ['timingPrint', 'deltas'],
   frame: ['harnessVersion', 'model', 'effort', 'day', 'shell', 'reach', 'repoKey', 'orgSize', 'team', 'repoVisibility', 'hour'],
   stack: ['size', 'languageShares'],
-  prompt: ['wallSec', 'explore'],
+  prompt: ['wallSec', 'explore', 'intervention'],
   tool: ['prompt', 'durationMs', 'errorCode', 'recoveryCalls'],
   step: ['tokens', 'ms', 'allocated', 'parent', 'skill', 'edges'],
   transcript: ['spawnedIn'],
@@ -1048,6 +1051,8 @@ const parsePrompt = (held: Collected, value: unknown, at: string): SkeletonPromp
     wallSec: orNull(raw.wallSec, under(at, 'wallSec'), (entry, entryAt) => bucketIn('seconds', entry, entryAt)),
     usage: parseUsage(held, raw.usage, under(at, 'usage')),
     explore: orNull(raw.explore, under(at, 'explore'), (entry, entryAt) => bucketIn('calls', entry, entryAt)),
+    // A sent null reads as an absent field, the way every optional field does.
+    ...(raw.intervention === undefined || raw.intervention === null ? {} : { intervention: oneOf(held, PROMPT_INTERVENTIONS, raw.intervention, under(at, 'intervention')) }),
     frame: parseFrame(held, raw.frame, under(at, 'frame')),
   };
 };

@@ -204,7 +204,7 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | | `packages` (each package an install or runner call resolves: `<ecosystem>:<name>`, `packageVersion`, and `first`), `manifest` (the dependency names a call read, wrote, or edited in a manifest) | A |
 | `error-line` (one per failed result) | `harnessVersion`, `side`, `prompt`, `after` | P |
 | | `session`, `toolUseId`, `tool` (the native name), `ts`, `line` (the first informative line, redacted, not normalized, cut to 1,000 characters) | A |
-| `prompt` (derived, one per prompt) | `kind`, `v`, `rev`, `index`, `wallSec`, class (`cls`), `tools`, `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `usage`, `recovery`, `explore`, `act`, and `bigrams` (the motif vector) | P |
+| `prompt` (derived, one per prompt) | `kind`, `v`, `rev`, `index`, `wallSec`, class (`cls`), `tools`, `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `usage`, `recovery`, `explore`, `act`, `bigrams` (the motif vector), and `intervention` (below) | P |
 | | `session`, `frame` (the joined frame; its fields pool only as cells), `head` (the first 300 characters, redacted), `ts`, `promptFingerprint` (`contextFingerprint` on this derived record), `skills`, and the outcome signals `verify`, `stopped`, `commits`, and `redo` (below) | A |
 | | `strata` (the prompt's own `explore` and the session's languages, `repoFiles`, and `frameworks`; absent before version 14) | A |
 | `error` (derived, one per error) | `kind`, `v`, `rev`, `tool`, `harnessVersion`, `editFollowed`, `cls`, `prompt`, `next` (tool names), episode `outcome` and `calls`. Only `next` (at most five canonical actions) and `editFollowed` reach the wire, as a failed call's `recoveryCalls`; the rest stays local | P |
@@ -298,7 +298,7 @@ The strata sit beside `frame`, not inside `frame.stack`: the wire refuses any ex
 
 ### Prompt outcome signals
 
-Each derived `prompt` record (`EXTRACTOR_VERSION` 6) carries four deterministic signals, kept separate: no composite, no score. A version-2
+Each derived `prompt` record (`EXTRACTOR_VERSION` 6) carries four deterministic signals, kept separate: no composite, no score (a fifth, `intervention`, is described after the table). A version-2
 line, read as written, has none of them. They read the main line only, with a resumed session's repeated calls dropped; a subagent
 transcript's calls are not read.
 
@@ -311,6 +311,34 @@ transcript's calls are not read.
 
 The interrupt marker is a user line, so capture keeps it as a prompt record of its own, with no tools. It counts toward `REDO_WINDOW`'s
 distance and in a share of prompts; its own `stopped` is null and its `verify` is `na`.
+
+### Prompt intervention
+
+A fifth signal, `intervention` (`EXTRACTOR_VERSION` 13), says whether a human stepped in after the prompt's work and how. It is one member of a closed list, computed on the machine from the records
+the other four signals read, so a transcript re-derives to the same value. It is a record of what the next human prompt did, **not a grade**: `none` does not say the work was good, and a bucket
+other than `none` does not say it was bad. Prompt text never reaches the wire; the local rule below reads a prompt's `head` (the first 300 characters, redacted) for one case, and only the bucket leaves.
+
+"The next prompt" is the next prompt record of the same transcript, `Q`, for a prompt `P`. A prompt derived before `EXTRACTOR_VERSION` 13 has no `intervention`; a wire batch carries the field only
+for a prompt that holds it, so **absent means not computed** and `unknown` means computed and not sayable.
+
+| Value | Rule (first match, in this order) | Limit |
+|-------|-----------------------------------|-------|
+| `unknown` | `P` is the interrupt marker's own record, or `P` has `stopped` set (`rejected` or `interrupt`), or `P` has no `Q` (the last prompt of its transcript). | A stop is a human step the closed list has no word for, so it reads `unknown`, not `none`. The last prompt of every transcript reads `unknown`, so a transcript never reads fully known. `unknown` is not a failure of the work. |
+| `revert` | `P` made an edit that did not fail (status `ok`, or `none` when no result was recorded), and either (a) `Q` has a clean (`ok`) shell call that undoes work in git: a segment that reads `git revert <commit>` (a bare `git revert` is `--abort`, `--continue`, or `--quit`, which undo no work, and reads `none`), `git restore`, `git checkout .`, or a bare `git checkout` whose step holds none of the flags `<literal>` (a `-`, or any flag off the public list), `-b`, `-B`, `--orphan`, and `--detach` (what `git checkout -- <path>` and `git checkout -f` leave, since a segment drops flags and paths), or a step that reads `git reset` with the `--hard` flag; or (b) `Q`'s `head` begins with `revert`, `undo`, `roll back`, or `rollback` (case-insensitive, after an optional `please`). | A git undo `Q` ran for other work (a branch cleanup) reads the same, and an undo the person does by hand outside the harness is not seen. Rule (b) reads English only. `git stash`, `git clean`, `git reset` without `--hard`, a checkout of a branch or a revision that is a plain word (the segment keeps its name, so `git checkout main` and `git checkout abc1234 -- <path>` are not seen), a `Write` of the old text, and an undo in a prompt later than `Q` are not read. `git restore --staged` reads as an undo, since a segment drops the flag. **A checkout that switches branches reads as an undo when its target is a word the segment drops**: the segment drops a word that holds `/` or `\`, or is quoted, and leaves no flag, so `git checkout feature/x`, `git checkout origin/main`, and `git checkout "main"` leave the same bare `git checkout` as `git checkout -- <path>`. `git checkout -b feature/x` and `git checkout -` read `none`, since the step keeps their flag. **A checkout with a flag off the public list, such as `--theirs` or `--patch`, also reads `none`** (the step turns an unlisted flag into `<literal>`, so `git checkout --theirs -- src/a.ts` is not seen as an undo, while `-p` is); a plain switch to `feature/x` leaves no flag, the stored records cannot tell it from a path restore, and a narrower rule would lose the path restore (`intervention.test.ts` pins both). |
+| `redo` | `Q` makes an edit that did not fail (status `ok`, or `none` when no result was recorded) to a path hash `P` also edited that way, with no commit that `commits` can see between the two edits. This is the `redo` signal above narrowed to the very next prompt, so it is a reply to the work and not a later task. | A planned second edit of one file reads the same as rework, and a commit a script made does not end the window. The edit is matched by path hash, so a rename is not seen. |
+| `after-error` | The last main-line call of `P` failed (`status` `error`). | The next prompt need not be about the failure: it may open an unrelated task. A prompt whose last call failed and whose agent then answered in words reads the same as one left broken. |
+| `unknown` (second case) | Nothing above matched, and `Q` made a shell call captured before `segments` (CAPTURE 6): it could have been a git undo. | An older capture leaves the value `unknown` until the transcript is captured again. |
+| `none` | Everything else: `Q` exists and none of the above matched. | `none` is silence in the records, not approval. A person who fixed the work in their editor, or who steered with a prompt that edits another file, reads `none`. |
+
+The precedence is `unknown` (first case), `revert`, `redo`, `after-error`, `unknown` (second case), `none`: a positive record stands even where a later record is unreadable. The rule reads
+the normalized records every harness writes (`Bash`, `PowerShell`, `Edit`, `Write`, `MultiEdit`, the call's `status`, its `target` hash, and its `segments`), so a harness supports a bucket as far as its
+adapter fills those records. Commit survival stays in "Commit survival" and no bucket here reads it.
+
+**Harness support.** `intervention-harness.test.ts` writes the same six scenarios (a next prompt that touches other work, a last call that failed, a repeated edit, a git undo, a request to undo, and a
+single prompt) in each harness's own form and runs it through the adapter. Claude Code, Cursor, Codex, Copilot CLI, VS Code Copilot Chat, Gemini CLI, and Grok Build all read every bucket, with
+one exception that the test pins: **Codex's `revert` by a git command is not seen when the command is the `bash -lc <command>` form its CLI sends**, because the adapter joins the argv with spaces
+and the shell reader then takes `bash -lc git` as the command, so the segment is `git` and not `git revert`. A Codex session reads `none` there; its `revert` by a request in the next prompt, and
+by an unwrapped argv, is read. No harness is guessed at: a bucket that needs a record the adapter does not fill reads `none` or `unknown` by the table above.
 
 ### Hashing
 
