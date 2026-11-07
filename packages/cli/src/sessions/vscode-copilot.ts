@@ -330,13 +330,15 @@ export const chatLines = (data: Obj, fallbackId: string, folder: string | null):
     // `inputTokens` is taken whole: the source does not say whether it includes `cachedTokens`. A zero `inputTokens` means unknown (the extension API bridge never reports one,
     // so the zero is a default), so it is left out rather than written as a measured zero. `cachedTokens` and `outputTokens` are values: a zero is kept when a total carried the
     // field, since a request with no cache hit is a measured zero, and only a field no total carried is left out. When no category is left, the request has no usage.
+    // An all-zero `outputTokens` beside a positive `completionTokens` is the bridge's default beside the real count, so the completion count wins over that zero.
     const carried = (field: string): boolean => totals.some((entry) => num(entry[field]) !== undefined);
+    const fromCompletion: Obj = completion !== undefined && completion > 0 ? { output_tokens: completion } : {};
     const fromTotals: Obj = {
       ...(sum('inputTokens') > 0 ? { input_tokens: sum('inputTokens') } : {}),
       ...(carried('cachedTokens') ? { cache_read_input_tokens: sum('cachedTokens') } : {}),
       ...(carried('outputTokens') ? { output_tokens: sum('outputTokens') } : {}),
+      ...(sum('outputTokens') === 0 ? fromCompletion : {}),
     };
-    const fromCompletion: Obj = completion !== undefined && completion > 0 ? { output_tokens: completion } : {};
     const counted = totals.length > 0 && Object.keys(fromTotals).length > 0 ? fromTotals : fromCompletion;
     const usage: Obj | undefined = Object.keys(counted).length > 0 ? counted : undefined;
     if (content.length > 0 || usage !== undefined) {
