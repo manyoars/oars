@@ -249,13 +249,16 @@ export interface WireGate {
 /** No redaction and no terms: the name shape and the length limit still apply. A local read, which sends nothing, uses it. */
 export const OPEN_GATE: WireGate = { redact: (text) => text, terms: [] };
 
+/** The redactor leaves the name and each of its underscore-delimited parts as they are: `_` is a word character to it, so a host inside `mcp__git.acme.internal__run` is invisible to a pass over the whole name. */
+const unchanged = (gate: WireGate, name: string): boolean => gate.redact(name) === name && name.split(/_+/).every((part) => gate.redact(part) === part);
+
 /**
  * A name as the wire holds it: the value itself, or `private` when it counts as redacted. A value counts as redacted when the redactor changes it, it holds an exclusion term, it fails the name shape, or it is over
  * `NAME_MAX` characters, because a secret, an employer's name, or a mis-parsed command is not a name and nothing downstream can take it back. `keys` (t870) sends its names through this same function.
  */
 export const wireName = (gate: WireGate, name: string): string => {
   const lower = name.toLowerCase();
-  return isWireName(name) && gate.redact(name) === name && !gate.terms.some((term) => term !== '' && lower.includes(term.toLowerCase())) ? name : PRIVATE;
+  return isWireName(name) && unchanged(gate, name) && !gate.terms.some((term) => term !== '' && lower.includes(term.toLowerCase())) ? name : PRIVATE;
 };
 
 /** The basename of a program as capture read it: a path never goes on the wire. */
