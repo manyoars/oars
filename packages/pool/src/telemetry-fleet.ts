@@ -124,7 +124,7 @@ export const fleet = async (env: Env, now: number, anonymous = true): Promise<Re
   const floor = publicFloorOf(env);
   const rows = await rowsBetween(env, shiftDay(asOf, 1 - Math.max(...WINDOWS)), asOf);
   const windows = WINDOWS.map((days) => ({ days, cells: fleetCells(rows.filter((row) => row.day >= shiftDay(asOf, 1 - days)), floor) }));
-  return answer(200, { asOf, floor, windows }, { 'cache-control': anonymous ? `public, max-age=${FLEET_MAX_AGE_SECONDS}` : 'private, no-store' });
+  return answer(200, { asOf, floor, windows }, { 'cache-control': anonymous ? `public, max-age=${String(FLEET_MAX_AGE_SECONDS)}` : 'private, no-store' });
 };
 
 // The measurables (conclusion section 15): are installs reporting, and since when has the fleet read been served.
