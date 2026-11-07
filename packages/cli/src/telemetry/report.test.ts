@@ -20,7 +20,7 @@ const edge = (ms: number): number => LATENCY_EDGES.find((one) => one >= ms) ?? 0
 const ago = (days: number): string => new Date(NOW - days * DAY).toISOString();
 
 const hook = (daysAgo: number, latencyMs: number, outcome: string, harnessVersion = '2.1.5', name = 'pre-tool'): string =>
-  JSON.stringify({ v: 1, id: 'i', at: ago(daysAgo), type: 'hook', cli: '0.4.0', os: 'linux', data: { name, latencyMs, outcome, harnessVersion } });
+  JSON.stringify({ v: 1, id: 'i', at: ago(daysAgo), type: 'hook', cli: '0.4.0', os: 'linux', data: { name, latencyMs, outcome, harness: 'claude-code', harnessVersion } });
 const command = (daysAgo: number, durationMs: number, exitCode: number): string =>
   JSON.stringify({ v: 1, id: 'i', at: ago(daysAgo), type: 'command', cli: '0.4.0', os: 'linux', data: { path: ['pool', 'fetch'], flags: [], durationMs, exitCode } });
 const store = (daysAgo: number, data: object): string => JSON.stringify({ v: 1, id: 'i', at: ago(daysAgo), type: 'store-health', cli: '0.4.0', os: 'linux', data });
@@ -38,7 +38,7 @@ const fixture = (): string[] => [
   JSON.stringify({ type: 'hook', at: 'yesterday', data: { name: 'pre-tool', latencyMs: 5, outcome: 'hit' } }),
 ];
 
-const cell = (cells: ReturnType<typeof ownCells>, metric: string, value = '2.1.5'): ReturnType<typeof ownCells>[number] => {
+const cell = (cells: ReturnType<typeof ownCells>, metric: string, value = 'claude-code/2.1.5'): ReturnType<typeof ownCells>[number] => {
   const found = cells.find((one) => one.metric === metric && one.value === value);
   if (found === undefined) throw new Error(`no cell ${metric} ${value}`);
   return found;
@@ -78,8 +78,8 @@ describe('the user’s own numbers', () => {
 
 describe('beside the fleet', () => {
   const fleet: FleetCell[] = [
-    { metric: 'hook.pre-tool.latency', dimension: 'harnessVersion', value: '2.1.5', kind: 'latency', p50: 40, p95: 89 },
-    { metric: 'hook.pre-tool.hit', dimension: 'harnessVersion', value: '2.1.5', kind: 'rate', p50: 0.55 },
+    { metric: 'hook.pre-tool.latency', dimension: 'harnessVersion', value: 'claude-code/2.1.5', kind: 'latency', p50: 40, p95: 89 },
+    { metric: 'hook.pre-tool.hit', dimension: 'harnessVersion', value: 'claude-code/2.1.5', kind: 'rate', p50: 0.55 },
   ];
 
   it('puts the fleet’s percentile on the cell it matches and leaves a cell with no match plainly without one', () => {
@@ -95,20 +95,20 @@ describe('beside the fleet', () => {
       server: 'https://pool.test',
       asOf: '2026-11-06',
       floor: 5,
-      windows: [{ days: 7, cells: [{ metric: 'hook.pre-tool.latency', dimension: 'harnessVersion', value: '2.1.5', kind: 'latency', p50: edge(50), p95: edge(100) }] }, { days: 30, cells: [] }],
+      windows: [{ days: 7, cells: [{ metric: 'hook.pre-tool.latency', dimension: 'harnessVersion', value: 'claude-code/2.1.5', kind: 'latency', p50: edge(50), p95: edge(100) }] }, { days: 30, cells: [] }],
     };
     const text = textOf(reportOf(fixture(), NOW, answered), 'dir');
     const numbers = `p50 ${String(edge(50))} ms, p95 ${String(edge(100))} ms`;
-    expect(text).toMatch(new RegExp(`hook\\.pre-tool\\.latency.*n=10  ${numbers}\\n    fleet ${numbers}\\n`));
+    expect(text).toMatch(new RegExp(`hook\\.pre-tool\\.latency \\(harness/version claude-code/2\\.1\\.5\\).*n=10  ${numbers}\\n    fleet ${numbers}\\n`));
   });
 
   it('ends the user’s window with the day the fleet is as of, so a cell reported only today is not read against a window that cannot hold it', () => {
-    const today = JSON.stringify({ v: 1, id: 'i', at: new Date(NOW + 3_600_000).toISOString(), type: 'hook', cli: '0.4.0', os: 'linux', data: { name: 'stop', latencyMs: 5, outcome: 'hit', harnessVersion: '2.1.5' } });
+    const today = JSON.stringify({ v: 1, id: 'i', at: new Date(NOW + 3_600_000).toISOString(), type: 'hook', cli: '0.4.0', os: 'linux', data: { name: 'stop', latencyMs: 5, outcome: 'hit', harness: 'claude-code', harnessVersion: '2.1.5' } });
     expect(ownCells([today], NOW, 7).map((one) => one.metric)).toContain('hook.stop.latency');
     expect(ownCells([today], NOW, 7, '2026-11-06')).toEqual([]);
     // The window is `days` whole UTC days ending with asOf: the day it starts on is in, the day before is out.
-    const first = JSON.stringify({ v: 1, id: 'i', at: '2026-10-31T00:00:00.000Z', type: 'hook', cli: '0.4.0', os: 'linux', data: { name: 'stop', latencyMs: 5, outcome: 'hit', harnessVersion: '2.1.5' } });
-    const before = JSON.stringify({ v: 1, id: 'i', at: '2026-10-30T23:59:59.000Z', type: 'hook', cli: '0.4.0', os: 'linux', data: { name: 'stop', latencyMs: 5, outcome: 'hit', harnessVersion: '2.1.5' } });
+    const first = JSON.stringify({ v: 1, id: 'i', at: '2026-10-31T00:00:00.000Z', type: 'hook', cli: '0.4.0', os: 'linux', data: { name: 'stop', latencyMs: 5, outcome: 'hit', harness: 'claude-code', harnessVersion: '2.1.5' } });
+    const before = JSON.stringify({ v: 1, id: 'i', at: '2026-10-30T23:59:59.000Z', type: 'hook', cli: '0.4.0', os: 'linux', data: { name: 'stop', latencyMs: 5, outcome: 'hit', harness: 'claude-code', harnessVersion: '2.1.5' } });
     expect(ownCells([first, before], NOW, 7, '2026-11-06').map((one) => one.n)).toEqual([1, 1]);
     expect(ownCells([first, before], NOW, 7, 'not-a-day')).toEqual([]);
   });
@@ -164,7 +164,7 @@ describe('oars telemetry report', () => {
           asOf: '2026-11-06',
           floor: 5,
           windows: [
-            { days: 7, cells: [{ metric: 'hook.pre-tool.latency', dimension: 'harnessVersion', value: '2.1.5', kind: 'latency', p50: 34, p95: 89 }] },
+            { days: 7, cells: [{ metric: 'hook.pre-tool.latency', dimension: 'harnessVersion', value: 'claude-code/2.1.5', kind: 'latency', p50: 34, p95: 89 }] },
             { days: 30, cells: [] },
           ],
         });
