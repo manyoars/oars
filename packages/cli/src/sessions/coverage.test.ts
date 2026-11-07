@@ -1,6 +1,6 @@
 // The coverage a deposit states (t871): the operator's two settings, read from one file on this machine, and the team band counted from the local git log. A real repository proves the count, because a fake git would only prove the fake.
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -10,13 +10,18 @@ import { session } from './pool-fixture.js';
 import { runGit } from './survival.js';
 
 const dirs: string[] = [];
+let template = '';
 const saved = { dir: process.env.GIT_DIR, tree: process.env.GIT_WORK_TREE, index: process.env.GIT_INDEX_FILE };
 beforeAll(() => {
   delete process.env.GIT_DIR;
   delete process.env.GIT_WORK_TREE;
   delete process.env.GIT_INDEX_FILE;
+  // One empty repository, copied for each fixture, so no fixture starts a `git init` of its own.
+  template = mkdtempSync(join(tmpdir(), 'oars-coverage-template-'));
+  execFileSync('git', ['-C', template, 'init', '-q', '-b', 'main'], { stdio: 'ignore' });
 });
 afterAll(() => {
+  rmSync(template, { recursive: true, force: true });
   if (saved.dir !== undefined) process.env.GIT_DIR = saved.dir;
   if (saved.tree !== undefined) process.env.GIT_WORK_TREE = saved.tree;
   if (saved.index !== undefined) process.env.GIT_INDEX_FILE = saved.index;
@@ -34,15 +39,17 @@ const temp = (): string => {
 const gitIn = (dir: string, author: string, ...args: string[]): string =>
   execFileSync('git', ['-C', dir, '-c', `user.name=${author}`, '-c', `user.email=${author}@example.com`, '-c', 'commit.gpgsign=false', ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
 
-/** A repository with one commit by each named author, in order. */
+/** A repository with one commit by each named author, in order. One `fast-import` writes them all: a spawn per commit made the slowest case here cost dozens of git processes, and a loaded runner starts each process slowly. */
 const repoBy = (...authors: string[]): string => {
   const dir = temp();
-  gitIn(dir, 'init', 'init', '-q', '-b', 'main');
-  for (const [index, author] of authors.entries()) {
-    writeFileSync(join(dir, `f${String(index)}`), author);
-    gitIn(dir, author, 'add', '.');
-    gitIn(dir, author, 'commit', '-q', '-m', `by ${author}`);
-  }
+  cpSync(template, dir, { recursive: true });
+  const stream = authors
+    .map((author, index) => {
+      const message = `by ${author}`;
+      return `commit refs/heads/main\ncommitter ${author} <${author}@example.com> ${String(1_700_000_000 + index)} +0000\ndata ${String(message.length)}\n${message}\n`;
+    })
+    .join('\n');
+  execFileSync('git', ['-C', dir, 'fast-import', '--quiet'], { input: stream, encoding: 'utf8', stdio: ['pipe', 'ignore', 'ignore'] });
   return dir;
 };
 
