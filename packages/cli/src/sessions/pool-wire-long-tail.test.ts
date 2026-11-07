@@ -2,7 +2,7 @@
 // characters counts as redacted, and only that case sends `private`. The class of the name (clear, thresholded, hashed) is the pool's to assign (packages/pool/src/field-classes.ts).
 import { describe, expect, it } from 'vitest';
 import { frame, printOf, prompt, session, sessionsFrom, step, store, tool } from './pool-fixture.js';
-import { isWireName, NAME_MAX, parseSkeleton, skeletonOf, type SessionSkeleton, type WireGate } from './pool-wire.js';
+import { isWireName, NAME_MAX, parseSkeleton, skeletonOf, wireName, type SessionSkeleton, type WireGate } from './pool-wire.js';
 import { shellReader } from './projection.js';
 import { LITERAL, PRIVATE } from './public-vocabulary.js';
 import { makeRedactor } from './redact.js';
@@ -35,6 +35,14 @@ describe('the wire name shape', () => {
     for (const name of ['kubectl', 'g++', 'python3.11', '@scope/pkg', 'github.com', 'mcp__acme__get_issue', 'a-b_c']) expect(isWireName(name), name).toBe(true);
     for (const name of ['', 'rm -rf x', '/usr/bin/x', 'C:\\x', 'a@b.co', '$(whoami)', 'FOO=bar', 'x'.repeat(NAME_MAX + 1)]) expect(isWireName(name), name).toBe(false);
     expect(isWireName('x'.repeat(NAME_MAX))).toBe(true);
+  });
+});
+
+describe('a redacted part inside a name', () => {
+  it('counts the name as redacted when a part between underscores is, because the redactor reads an underscore as part of a word', () => {
+    const domains: WireGate = { redact: makeRedactor(['acme.internal']), terms: [] };
+    expect(wireName(domains, 'mcp__git.acme.internal__run')).toBe(PRIVATE);
+    expect(wireName(domains, 'mcp__github__run')).toBe('mcp__github__run');
   });
 });
 

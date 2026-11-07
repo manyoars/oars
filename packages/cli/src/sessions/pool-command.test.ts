@@ -615,6 +615,34 @@ describe('oars pool deposit', () => {
     expect(outboxFiles(scene)).toEqual(first);
   });
 
+  // t881 fix round 1: the deposit's own gate (the operator's redact domains and exclusion terms) decides what the outbox holds, so this goes through the command and reads the written batch.
+  it('writes private for a name the operator redacts, an off-list program in clear, and the redacted host nowhere', async () => {
+    const SESSION = '66666666-6666-4666-8666-666666666666';
+    const folder = 'gate-repo';
+    const stamp = (n: number): string => `2026-06-01T00:00:0${String(n)}.000Z`;
+    const call = (n: number, name: string, input: object): string =>
+      JSON.stringify({ type: 'assistant', uuid: `g-${String(n)}`, parentUuid: n === 1 ? null : `g-${String(n - 1)}`, isSidechain: false, sessionId: SESSION, timestamp: stamp(n), version: '2.1.300', message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: `t${String(n)}`, name, input }] } });
+    const scene = setting();
+    rmSync(join(scene.staged.projectsRoot, 'proj'), { recursive: true, force: true });
+    addProject(scene.staged, folder, SESSION, [
+      JSON.stringify({ type: 'user', uuid: 'g-0', parentUuid: null, isSidechain: false, sessionId: SESSION, cwd: '/w', timestamp: stamp(0), version: '2.1.300', message: { role: 'user', content: 'deploy it' } }),
+      call(1, 'WebFetch', { url: 'https://git.acme.internal/docs' }),
+      call(2, 'Bash', { command: 'acme-deploy --prod' }),
+      call(3, 'mcp__git.acme.internal__run', {}),
+    ]);
+    // Captured with nothing redacted, then the operator names a domain: the store holds the clear host, and only the deposit's gate can keep it off the wire.
+    await deposit(scene.staged.runtime, { allow: [folder], redactDomains: [], now: () => NOW });
+    const state = join(scene.staged.storeDir, 'state.json');
+    writeFileSync(state, JSON.stringify({ ...JSON.parse(readFileSync(state, 'utf8')), redactDomains: ['acme.internal'] }));
+    await signIn(scene);
+    expect(await scene.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
+    const written = batchBytes(scene).join('\n');
+    expect(written).not.toContain('acme.internal');
+    expect(written).toContain('"host":"private"');
+    expect(written).toContain('"server":"private"');
+    expect(written).toContain('"program":"acme-deploy"');
+  });
+
   describe('the session gates run before any projection', () => {
     const OTHER_FOLDER = 'zz-private-repo';
     const SESSION = '55555555-5555-4555-8555-555555555555';
