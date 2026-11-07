@@ -114,6 +114,24 @@ describe('a transcript over the 1 MB request cap', () => {
     expect(await keysIn(`staging/${account}/`)).toEqual([]);
   });
 
+  it('refuses a streamed part over 1 MB for an object that already stands', async () => {
+    const { token } = await member();
+    const whole = transcript(Math.round(1.5 * MEGABYTE), 12);
+    const hash = await hex(whole);
+    const parts = await sendParts(hash, whole, token);
+    expect((await complete(hash, parts, whole.length, token)).status).toBe(201);
+    const oversized = transcript(MEGABYTE + 1, 13);
+    const stream = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        controller.enqueue(oversized);
+        controller.close();
+      },
+    });
+    const sent = await pool.miniflare.dispatchFetch(`http://pool.test${partPath(hash, 1)}`, { method: 'PUT', body: stream, duplex: 'half', headers: { authorization: `Bearer ${token}`, ...grant } });
+    expect(sent.status).toBe(413);
+    expect(fieldOf(JSON.parse(await sent.text()), 'error')).toBe('too_large');
+  });
+
   it('refuses an empty part', async () => {
     const { token } = await member();
     const sent = await pool.send(partPath('a'.repeat(64), 1), { method: 'PUT', body: new Uint8Array(0) }, token, grant);
