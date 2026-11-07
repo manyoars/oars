@@ -7,13 +7,16 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { run, type RunDeps } from '../cli.js';
 import { defaultConfigDir } from '../credentials.js';
 import { harness, server, useServer } from '../test-support.js';
-import { besideFleet, latestStore, ownCells, type FleetCell } from './report.js';
+import { LATENCY_EDGES } from './measures.js';
+import { besideFleet, latestStore, ownCells, reportOf, textOf, type FleetCell, type FleetRead } from './report.js';
 import { appendLine } from './spool.js';
 
 useServer();
 
 const NOW = Date.parse('2026-11-07T00:00:00Z');
 const DAY = 86_400_000;
+/** The bucket edge a latency reads as: the fleet's number and the user's are both counted in these buckets. */
+const edge = (ms: number): number => LATENCY_EDGES.find((one) => one >= ms) ?? 0;
 const ago = (days: number): string => new Date(NOW - days * DAY).toISOString();
 
 const hook = (daysAgo: number, latencyMs: number, outcome: string, harnessVersion = '2.1.5', name = 'pre-tool'): string =>
@@ -44,21 +47,21 @@ const cell = (cells: ReturnType<typeof ownCells>, metric: string, value = '2.1.5
 describe('the user’s own numbers', () => {
   it('reads latency percentiles and a hit rate over the last 7 days from a fixture spool', () => {
     const cells = ownCells(fixture(), NOW, 7);
-    expect(cell(cells, 'hook.pre-tool.latency')).toMatchObject({ kind: 'latency', n: 10, p50: 50, p95: 100 });
+    expect(cell(cells, 'hook.pre-tool.latency')).toMatchObject({ kind: 'latency', n: 10, p50: edge(50), p95: edge(100) });
     expect(cell(cells, 'hook.pre-tool.hit')).toMatchObject({ kind: 'rate', n: 10, rate: 0.7 });
   });
 
   it('reads the last 30 days with the older fire counted, and leaves out what is older than the window', () => {
     const wide = ownCells(fixture(), NOW, 30);
-    expect(cell(wide, 'hook.pre-tool.latency')).toMatchObject({ n: 11, p50: 60, p95: 1000 });
+    expect(cell(wide, 'hook.pre-tool.latency')).toMatchObject({ n: 11, p50: edge(60), p95: edge(1000) });
     expect(ownCells(fixture(), NOW, 7).some((one) => one.n === 11)).toBe(false);
   });
 
   it('counts a failed hook in no hit rate, and groups commands by their first name and the oars version', () => {
     const cells = ownCells(fixture(), NOW, 7);
     expect(cells.some((one) => one.metric === 'hook.stop.hit')).toBe(false);
-    expect(cell(cells, 'hook.stop.latency')).toMatchObject({ n: 1, p50: 5 });
-    expect(cell(cells, 'command.pool.latency', '0.4.0')).toMatchObject({ n: 2, p50: 400, p95: 800 });
+    expect(cell(cells, 'hook.stop.latency')).toMatchObject({ n: 1, p50: edge(5) });
+    expect(cell(cells, 'command.pool.latency', '0.4.0')).toMatchObject({ n: 2, p50: edge(400), p95: edge(800) });
     expect(cell(cells, 'command.pool.failure', '0.4.0')).toMatchObject({ n: 2, rate: 0.5 });
   });
 
@@ -84,6 +87,30 @@ describe('beside the fleet', () => {
     expect(beside.find((one) => one.metric === 'hook.pre-tool.latency')?.fleet).toEqual({ p50: 40, p95: 89 });
     expect(beside.find((one) => one.metric === 'hook.pre-tool.hit')?.fleet).toEqual({ p50: 0.55 });
     expect(beside.find((one) => one.metric === 'hook.stop.latency')?.fleet).toBeUndefined();
+  });
+
+  it('prints the same numbers for a spool that is identical to a fleet cell', () => {
+    const answered: FleetRead = {
+      status: 'answered',
+      server: 'https://pool.test',
+      asOf: '2026-11-06',
+      floor: 5,
+      windows: [{ days: 7, cells: [{ metric: 'hook.pre-tool.latency', dimension: 'harnessVersion', value: '2.1.5', kind: 'latency', p50: edge(50), p95: edge(100) }] }, { days: 30, cells: [] }],
+    };
+    const text = textOf(reportOf(fixture(), NOW, answered), 'dir');
+    const numbers = `p50 ${String(edge(50))} ms, p95 ${String(edge(100))} ms`;
+    expect(text).toMatch(new RegExp(`hook\\.pre-tool\\.latency.*n=10  ${numbers}\\n    fleet ${numbers}\\n`));
+  });
+
+  it('ends the user’s window with the day the fleet is as of, so a cell reported only today is not read against a window that cannot hold it', () => {
+    const today = JSON.stringify({ v: 1, id: 'i', at: new Date(NOW + 3_600_000).toISOString(), type: 'hook', cli: '0.4.0', os: 'linux', data: { name: 'stop', latencyMs: 5, outcome: 'hit', harnessVersion: '2.1.5' } });
+    expect(ownCells([today], NOW, 7).map((one) => one.metric)).toContain('hook.stop.latency');
+    expect(ownCells([today], NOW, 7, '2026-11-06')).toEqual([]);
+    // The window is `days` whole UTC days ending with asOf: the day it starts on is in, the day before is out.
+    const first = JSON.stringify({ v: 1, id: 'i', at: '2026-10-31T00:00:00.000Z', type: 'hook', cli: '0.4.0', os: 'linux', data: { name: 'stop', latencyMs: 5, outcome: 'hit', harnessVersion: '2.1.5' } });
+    const before = JSON.stringify({ v: 1, id: 'i', at: '2026-10-30T23:59:59.000Z', type: 'hook', cli: '0.4.0', os: 'linux', data: { name: 'stop', latencyMs: 5, outcome: 'hit', harnessVersion: '2.1.5' } });
+    expect(ownCells([first, before], NOW, 7, '2026-11-06').map((one) => one.n)).toEqual([1, 1]);
+    expect(ownCells([first, before], NOW, 7, 'not-a-day')).toEqual([]);
   });
 
   it('puts nothing beside a cell when no fleet read answered', () => {
@@ -113,7 +140,7 @@ describe('oars telemetry report', () => {
     expect(await run(['telemetry', 'report'], made.deps)).toBe(0);
     const text = made.out.join('');
     expect(text).toContain('hook.pre-tool.latency');
-    expect(text).toMatch(/p50 50 ms/);
+    expect(text).toContain(`p50 ${String(edge(50))} ms`);
     expect(text).toMatch(/70%/);
     expect(text).toContain('No pool server is configured (OARS_POOL_URL), so these are your numbers only.');
     expect(text).not.toContain('fleet p50');
@@ -124,7 +151,7 @@ describe('oars telemetry report', () => {
     expect(await run(['telemetry', 'report', '--json'], made.deps)).toBe(0);
     const document: unknown = JSON.parse(made.out.join(''));
     expect(document).toMatchObject({ ok: true, step: 'telemetry', fleet: { status: 'not-configured' } });
-    expect(JSON.stringify(document)).toContain('"p50":50');
+    expect(JSON.stringify(document)).toContain(`"p50":${String(edge(50))}`);
   });
 
   it('prints the fleet’s percentile beside the user’s own when the server answers, and says when a cell has no fleet number', async () => {
@@ -158,7 +185,7 @@ describe('oars telemetry report', () => {
     expect(await run(['telemetry', 'report'], made.deps)).toBe(0);
     const text = made.out.join('');
     expect(text).toContain('The pool server at https://pool.test did not give a fleet read (HTTP 404), so these are your numbers only.');
-    expect(text).toMatch(/p50 50 ms/);
+    expect(text).toContain(`p50 ${String(edge(50))} ms`);
   });
 
   it('says so when the answer is not a fleet read, the server cannot be reached, or the setting is not a server', async () => {

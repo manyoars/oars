@@ -1,7 +1,7 @@
 // `oars telemetry report`: what telemetry measured about the user's own use, from the spool on this machine, beside the fleet's number for the same cell when a pool server is configured and answers.
 // The own numbers need no server and no account. The fleet read is a plain GET that carries nothing of the user's: no credential, no install id, no event. Nothing here writes the spool.
 import { CliError } from '../errors.js';
-import { cellKey, measuresOf, percentile, WINDOWS, type Kind, type Measure } from './measures.js';
+import { bucketOf, cellKey, histogramPercentile, measuresOf, WINDOWS, type Kind, type Measure } from './measures.js';
 
 const DAY_MS = 86_400_000;
 const FLEET_TIMEOUT_MS = 10_000;
@@ -69,10 +69,20 @@ const eventsOf = (lines: readonly string[]): Parsed[] =>
 
 const within = (parsed: readonly Parsed[], now: number, days: number): Parsed[] => parsed.filter(({ at }) => at >= now - days * DAY_MS && at <= now + DAY_MS);
 
-/** The user's own cells over the last `days`, ordered by metric and then value. */
-export const ownCells = (lines: readonly string[], now: number, days: number): OwnCell[] => {
+/** The fleet's window ends with the day it is as of, a whole UTC day: the user's own window must end there too, or a cell reported only today reads as one the fleet does not serve. */
+const upToDay = (parsed: readonly Parsed[], days: number, asOf: string): Parsed[] => {
+  const end = Date.parse(`${asOf}T00:00:00Z`) + DAY_MS;
+  return Number.isNaN(end) ? [] : parsed.filter(({ at }) => at >= end - days * DAY_MS && at < end);
+};
+
+/**
+ * The user's own cells over the last `days`, ordered by metric and then value; with `asOf`, over the `days` ending with that day instead. A latency is counted in the same buckets the fleet's is,
+ * so the user's p50 and the fleet's are the same kind of number (the bucket's upper edge) and a spool identical to a fleet cell reads equal to it.
+ */
+export const ownCells = (lines: readonly string[], now: number, days: number, asOf?: string): OwnCell[] => {
   const groups = new Map<string, { head: Measure; xs: number[] }>();
-  for (const { event } of within(eventsOf(lines), now, days)) {
+  const parsed = eventsOf(lines);
+  for (const { event } of asOf === undefined ? within(parsed, now, days) : upToDay(parsed, days, asOf)) {
     for (const measure of measuresOf(event)) {
       const key = cellKey(measure);
       const group = groups.get(key) ?? { head: measure, xs: [] };
@@ -84,7 +94,9 @@ export const ownCells = (lines: readonly string[], now: number, days: number): O
     .map(({ head, xs }): OwnCell => {
       const { metric, dimension, value, kind } = head;
       if (kind === 'rate') return { metric, dimension, value, kind, n: xs.length, rate: xs.reduce((sum, x) => sum + x, 0) / xs.length };
-      return { metric, dimension, value, kind, n: xs.length, p50: percentile(xs, 0.5), p95: percentile(xs, 0.95) };
+      const buckets = new Map<number, number>();
+      for (const x of xs) buckets.set(bucketOf(x), (buckets.get(bucketOf(x)) ?? 0) + 1);
+      return { metric, dimension, value, kind, n: xs.length, p50: histogramPercentile([...buckets], 0.5), p95: histogramPercentile([...buckets], 0.95) };
     })
     .sort((a, b) => a.metric.localeCompare(b.metric) || a.value.localeCompare(b.value));
 };
@@ -207,7 +219,7 @@ export interface Report {
 export const reportOf = (lines: readonly string[], now: number, fleet: FleetRead): Report => ({
   windows: WINDOWS.map((days) => {
     const window = fleet.status === 'answered' ? fleet.windows.find((one) => one.days === days) : undefined;
-    return { days, cells: besideFleet(ownCells(lines, now, days), window?.cells) };
+    return { days, cells: besideFleet(ownCells(lines, now, days, fleet.status === 'answered' ? fleet.asOf : undefined), window?.cells) };
   }),
   store: latestStore(lines, now, Math.max(...WINDOWS)),
   fleet,
