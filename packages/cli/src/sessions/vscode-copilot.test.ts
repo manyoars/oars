@@ -72,6 +72,27 @@ const extractOf = (data: object, folder: string | null = '/work/app') => {
   );
 };
 
+describe('the VS Code Copilot Chat reader: a total the source never recorded', () => {
+  it('leaves a request with no modelTotals and no completionTokens unobserved, not a measured zero', () => {
+    const out = extractOf(chat([request(1, 'fix the build', [md('done')])]));
+    expect(out.session.usageObserved).toEqual([]);
+    expect(out.session.usageResponses).toBe(0);
+    expect(out.prompts[0]?.usageObserved).toEqual([]);
+  });
+
+  it('reports completionTokens alone as an output-only partial total', () => {
+    const out = extractOf(chat([request(1, 'fix the build', [md('done')], { completionTokens: 7 })]));
+    expect(out.session.usage).toMatchObject({ output: 7 });
+    expect(out.session.usageObserved).toEqual(['output']);
+    expect(out.session.usageResponses).toBe(1);
+  });
+
+  it('reads a zero inputTokens in modelTotals as unknown, not as a measured zero', () => {
+    const out = extractOf(chat([request(1, 'x', [md('done')], { modelTotals: [{ model: 'm', inputTokens: 0, cachedTokens: 0, outputTokens: 5 }] })]));
+    expect(out.session.usageObserved).toEqual(['output']);
+  });
+});
+
 describe('the VS Code Copilot Chat reader', () => {
   it('turns a normal session into a prompt, calls with outcomes, whole-turn usage, the model, and the cwd, with the vendor version unset', () => {
     const out = extractOf(
