@@ -36,6 +36,7 @@ export const batchHash = (bytes: string): string => createHash('sha256').update(
 export const FIELD_ROWS: { readonly [field: string]: string } = {
   action: 'The canonical action of a step, one of a closed list this client holds; never the harness tool text.',
   agentType: 'The type of the subagent whose run holds a step: a built-in type of the harness, else the word custom; null on a step of the main run.',
+  allocated: 'Whether the step\'s token figure was divided among the calls of one model response (true) rather than measured for the call alone; absent when measured. A flag only, never a count.',
   cacheRead: 'A bucket of the tokens read from the cache in a prompt, a number.',
   cacheWrite: 'A bucket of the tokens written to the cache in a prompt, a number.',
   change: 'How far a delta moved, a signed bucket of its metric (a lower bound) in a number from -7 to 7 for calls per session and from -11 to 11 for thinking tokens; never the exact count.',
