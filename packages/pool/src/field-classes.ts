@@ -97,6 +97,7 @@ export const FIELD_CLASSES: { readonly [field: string]: FieldRow } = {
   tools: { class: 'clear' },
   transcripts: { class: 'clear' },
   usage: { class: 'clear' },
+  usageResponses: { class: 'clear' },
   version: { class: 'clear', longTail: 'thresholded' },
   vocabVersion: { class: 'clear' },
   wallSec: { class: 'clear' },

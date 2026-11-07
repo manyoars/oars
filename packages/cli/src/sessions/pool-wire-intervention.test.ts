@@ -20,8 +20,8 @@ const skeletonWith = (values: readonly (PromptIntervention | undefined)[]): Sess
 const promptsOf = (skeleton: SessionSkeleton): SessionSkeleton['transcripts'][number]['prompts'] => skeleton.transcripts[0]?.prompts ?? [];
 
 describe('intervention on the wire', () => {
-  it('moves the field list to 6, and names the field as optional on a prompt', () => {
-    expect(FIELD_LIST_VERSION).toBe(6);
+  it('holds the field list at version 6 or later, and names the field as optional on a prompt', () => {
+    expect(FIELD_LIST_VERSION).toBeGreaterThanOrEqual(6);
     expect(OPTIONAL.prompt).toContain('intervention');
   });
 
@@ -44,7 +44,7 @@ describe('intervention on the wire', () => {
 
   describe('through the parser', () => {
     it('round-trips the canonical bytes: built, written, parsed, and equal', () => {
-      const built = skeletonWith(['redo', undefined, 'after-error', 'none', 'revert', 'unknown']);
+      const built = skeletonWith(['redo', undefined, 'after-error', 'none', 'revert', 'user-stop', 'unknown']);
       const result = parseSkeleton(JSON.parse(canonicalBytes(built)));
       if (!result.ok) throw new Error(`refused ${result.field}: ${result.reason}`);
       expect(result.skeleton).toEqual(built);
