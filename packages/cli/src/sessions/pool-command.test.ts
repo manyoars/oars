@@ -1842,6 +1842,30 @@ describe('wire policing in telemetry', () => {
     ]);
   });
 
+  it('records one send for a batch sent in parts, on the reply that ends it, with the whole batch\'s bytes', async () => {
+    const scene = await batched();
+    const dir = watched(scene);
+    const file = join(scene.staged.storeDir, 'pool-outbox', outboxFiles(scene)[0] ?? '');
+    const bytes = canonicalBytes({ ...JSON.parse(readFileSync(file, 'utf8')), pad: 'é'.repeat(700_000) });
+    const hash = batchHash(bytes);
+    rmSync(file);
+    writeFileSync(join(file, '..', `${outboxFiles(scene)[0]?.split(/[\\/]/).at(-1)?.split('.')[0] ?? ''}.${hash}.jsonl`), bytes);
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    const whole = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': [answer(202, { ok: true, pending: 2 }), answer(202, { ok: true, pending: 1 }), answer(201, { ok: true })] });
+    await poolDeposit(scene.h.deps, sendOptions(hash, whole.via));
+    expect(whole.requests.filter((request) => request.method === 'POST')).toHaveLength(3);
+    // Not one event per part: three would triple the weekly sent bytes the health report reads.
+    expect(spooled(dir, 'wire-send').map((event) => event.data)).toEqual([{ sent: 1, status: 201, bytes: Buffer.byteLength(bytes) }]);
+    // A first part that is refused ends the batch there: one event, with that status.
+    const refused = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(500, { error: 'boom', message: 'no' }) });
+    await expect(poolDeposit(scene.h.deps, sendOptions(hash, refused.via))).rejects.toMatchObject({ problem: { status: 500 } });
+    expect(refused.requests.filter((request) => request.method === 'POST')).toHaveLength(1);
+    expect(spooled(dir, 'wire-send').map((event) => event.data)).toEqual([
+      { sent: 1, status: 201, bytes: Buffer.byteLength(bytes) },
+      { sent: 0, status: 500, code: 'boom', bytes: Buffer.byteLength(bytes) },
+    ]);
+  });
+
   it('records nothing without a telemetry folder, and a send still raises what it did', async () => {
     const scene = await batched();
     const hash = await printedAndHash(scene);
