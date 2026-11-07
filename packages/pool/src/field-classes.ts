@@ -3,7 +3,7 @@
 import { isPublicMcpTool, PUBLIC_FLAGS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SKILLS, PUBLIC_SUBCOMMANDS, publicModel, publicVersion } from '../../cli/src/sessions/public-vocabulary.js';
 
 /**
- * `clear`: a closed list or an opaque client hash, served at `CLEAR_FLOOR` (`derive.ts`), today the same as `K_CELL`. `thresholded`: held always and served only once `K_CELL` distinct accounts report the same value (`PUBLIC_FLOOR` replaces it when t888 lands).
+ * `clear`: a closed list or an opaque client hash, served at the clear floor (`Floors.clear`, `floors.ts`), today the public floor. `thresholded`: held always and served only once `PUBLIC_FLOOR` distinct accounts report the same value (5 by default).
  * `hashed at ingest`: replaced by an HMAC-SHA-256 under `INGEST_HASH_KEY` before anything is written. `raw tier`: stored, never served.
  */
 export type FieldClass = 'clear' | 'thresholded' | 'hashed at ingest' | 'raw tier';

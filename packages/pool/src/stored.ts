@@ -3,7 +3,8 @@
 import { ENVIRONMENT_BUCKET, harnessBucket, NO_AXES, type Cell, type Grain } from '../../cli/src/sessions/cells.js';
 import type { Motif, MotifLevel, WindowStep } from '../../cli/src/sessions/motif.js';
 import type { StrataCell } from '../../cli/src/sessions/pool-wire.js';
-import { bucketPrefix, K_CELL } from './derive.js';
+import { bucketPrefix } from './derive.js';
+import { floorFor, type Floors } from './floors.js';
 import { fieldOf, type Env } from './http.js';
 
 /** What a bundle is derived from: one version's cells, the version-free cells that are safe beside them, the motifs they name, and the strata that clear the floor. */
@@ -97,15 +98,20 @@ const cellOf = (row: unknown): Cell => ({
   exposed: numberField(row, 'exposed') === 1,
 });
 
-export const storedOf = async (env: Env, harness: string, harnessVersion: string, now: number): Promise<StoredPool> => {
+/**
+ * The rows a bundle is derived from. The cells come with their held counts, whatever they are, so a floor is applied when the bundle is served (`bundleOf`) and never decided here. The queries that do compare a count to a floor
+ * (the environment cells, the motifs they name, and the strata) take the floor of the family that reads them, to fetch fewer rows: the environment cells are the `fit` family's, and a stratum is a bundle-level count at the public floor.
+ */
+export const storedOf = async (env: Env, harness: string, harnessVersion: string, floors: Floors, now: number): Promise<StoredPool> => {
+  const environmentFloor = floorFor(floors, 'fit');
   const bucket = harnessBucket(harnessVersion);
   const prefix = bucketPrefix(harness, harnessVersion);
   const modelPrefix = `${harness}/${NO_AXES}/`;
   const [cells, environment, motifs, strata, panel] = await Promise.all([
     env.DB.prepare('SELECT motif_id, frame_bucket, grain, day, exposed, sessions, clusters, ok, failed, tokens, duration_ms FROM cells WHERE ((harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?) OR (harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?)) AND sessions > 0').bind(bucket, prefix.length, prefix, NO_AXES, modelPrefix.length, modelPrefix).all(),
-    env.DB.prepare(ENVIRONMENT_CELLS).bind(ENVIRONMENT_BUCKET, K_CELL, K_CELL).all(),
-    env.DB.prepare('SELECT motif FROM motifs WHERE motif_id IN (SELECT motif_id FROM cells WHERE ((harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?) OR (harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?)) AND sessions > 0) OR motif_id IN (SELECT motif_id FROM cells WHERE harness_bucket = ? AND sessions > 0 AND clusters >= ?)').bind(bucket, prefix.length, prefix, NO_AXES, modelPrefix.length, modelPrefix, ENVIRONMENT_BUCKET, K_CELL).all(),
-    env.DB.prepare('SELECT dimension, value, sessions, clusters FROM strata WHERE clusters >= ? AND sessions > 0').bind(K_CELL).all(),
+    env.DB.prepare(ENVIRONMENT_CELLS).bind(ENVIRONMENT_BUCKET, environmentFloor, environmentFloor).all(),
+    env.DB.prepare('SELECT motif FROM motifs WHERE motif_id IN (SELECT motif_id FROM cells WHERE ((harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?) OR (harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?)) AND sessions > 0) OR motif_id IN (SELECT motif_id FROM cells WHERE harness_bucket = ? AND sessions > 0 AND clusters >= ?)').bind(bucket, prefix.length, prefix, NO_AXES, modelPrefix.length, modelPrefix, ENVIRONMENT_BUCKET, environmentFloor).all(),
+    env.DB.prepare('SELECT dimension, value, sessions, clusters FROM strata WHERE clusters >= ? AND sessions > 0').bind(floors.public).all(),
     panelOf(env, now),
   ]);
   return {
