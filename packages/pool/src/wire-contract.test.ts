@@ -5,7 +5,9 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { frame, printOf, prompt, session, sessionsFrom, step, storedNames, store, tool } from '../../cli/src/sessions/pool-fixture.js';
-import { FIELD_LIST_VERSION, OPTIONAL, skeletonOf, SKELETON_FORMAT } from '../../cli/src/sessions/pool-wire.js';
+import { poolOf } from '../../cli/src/sessions/cells.js';
+import { deriveCost } from '../../cli/src/sessions/read-cost.js';
+import { FIELD_LIST_VERSION, OPTIONAL, skeletonOf, SKELETON_FORMAT, verifyBundle } from '../../cli/src/sessions/pool-wire.js';
 import { VOCAB_VERSION } from '../../cli/src/sessions/public-vocabulary.js';
 import { startPool, type Answer, type TestPool } from './test-pool.js';
 
@@ -263,4 +265,38 @@ describe('the bag', () => {
     const plane = JSON.stringify(await servedPlane());
     expect(plane).not.toContain('a-string-no-bundle-may-carry');
   });
+});
+
+describe('a bundle from a pool older than the coverage fields (t921)', () => {
+  it('verifies, and its cost read says coverage is unknown instead of guessing every prompt recorded input', async () => {
+    // An earlier test in this file may have seeded the peers already; the pool is shared.
+    if (servedCells((await bundleOf()).json) === 0) {
+      await seedPeers();
+      await post(baseline());
+    }
+    const served = await bundleOf();
+    const payload = isWire(served.json) ? served.json.payload : undefined;
+    const bundle: unknown = typeof payload === 'string' ? JSON.parse(payload) : undefined;
+    if (!isWire(bundle) || !Array.isArray(bundle.cells)) throw new Error('a served bundle has cells');
+    // An old pool's cells: the same rows with neither coverage field.
+    const cells = bundle.cells.filter(isWire).map((cell) => {
+      const old = { ...cell };
+      Reflect.deleteProperty(old, 'tokenSessions');
+      Reflect.deleteProperty(old, 'tokenPrompts');
+      return old;
+    });
+    expect(cells.length).toBeGreaterThan(0);
+    const old = JSON.stringify({ ...bundle, cells, reads: [] });
+    // The test signs with a key of its own: the pool's private key never leaves the Worker.
+    const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify']);
+    if (!('privateKey' in pair)) throw new Error('an Ed25519 key pair');
+    const signature = Buffer.from(await crypto.subtle.sign('Ed25519', pair.privateKey, new TextEncoder().encode(old))).toString('base64');
+    const exported = await crypto.subtle.exportKey('jwk', pair.publicKey);
+    const verified = await verifyBundle({ payload: old, signature }, { kty: exported.kty ?? '', crv: exported.crv ?? '', x: exported.x ?? '' }, 'claude-code', '2.1.314');
+    if (!verified.ok) throw new Error(verified.reason);
+    expect(verified.bundle.cells.every((cell) => cell.tokenSessions === undefined && cell.tokenPrompts === undefined)).toBe(true);
+    const reads = deriveCost({ pool: poolOf({ cells: verified.bundle.cells, motifs: verified.bundle.motifs }, []), store: store({}) });
+    expect(reads.length).toBeGreaterThan(0);
+    expect(reads.every((read) => isWire(read.value) && read.value.tokenCoverage === 'unknown')).toBe(true);
+  }, 60_000);
 });
