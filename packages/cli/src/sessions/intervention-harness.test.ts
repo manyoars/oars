@@ -9,11 +9,12 @@ import { deriveSession } from './derive.js';
 import { captureSession } from './extract.js';
 import { chatLines } from './gemini.js';
 import { grokLines } from './grok.js';
+import { openOpencodeStore } from './opencode.js';
 import { makeRedactor } from './redact.js';
 import { makeRepoIdentity, makeRepoRoot } from './repo-root.js';
 import type { Harness, PromptIntervention } from './schema.js';
 import { chatData, chatLines as vscodeChatLines } from './vscode-copilot.js';
-import { cleanup, copilotEvent, geminiHead, grokUpdate, rolloutLine, stage, stageCursor, type FixtureBubble } from './test-support.js';
+import { cleanup, copilotEvent, geminiHead, grokUpdate, ocAssistant, ocShellDone, ocTool, ocUser, rolloutLine, stage, stageCursor, stageOpencode, type FixtureBubble, type OpencodeMessageFixture } from './test-support.js';
 
 afterEach(cleanup);
 
@@ -196,6 +197,41 @@ const cursor = async (turns: readonly Turn[]): Promise<string> => {
   }
 };
 
+/** An OpenCode session lives in a sqlite store (`session_v2` and `session_message`, sst/opencode @ 21bf6b4 core/src/session/sql.ts), so this stages one and reads its transcript back through the adapter. */
+const opencode = async (turns: readonly Turn[]): Promise<string> => {
+  const t0 = Date.parse('2026-06-01T10:00:00Z');
+  const messages: OpencodeMessageFixture[] = [];
+  let seq = 0;
+  let call = 0;
+  for (const turn of turns) {
+    seq += 1;
+    messages.push(ocUser(`msg_${String(seq)}`, seq, t0 + next() * 1000, turn.text));
+    if (turn.acts.length === 0) continue;
+    const content = turn.acts.map((act) => {
+      call += 1;
+      return isEdit(act)
+        ? ocTool(`call_${String(call)}`, 'edit', { status: 'completed', input: { path: `/work/app/${act.edit}` }, content: [{ type: 'text', text: 'edited' }] })
+        : ocTool(`call_${String(call)}`, 'shell', ocShellDone(act.run, 'out', act.exit));
+    });
+    seq += 1;
+    messages.push(ocAssistant(`msg_${String(seq)}`, seq, t0 + next() * 1000, content));
+  }
+  const staged = stage();
+  const store = await openOpencodeStore(await stageOpencode(staged.root, [{ id: 'ses_1', directory: '/work/app', created: t0, updated: t0 + 30 * 60_000, messages }]));
+  const session = store?.sessions[0];
+  if (store === undefined) throw new Error('the fixture store did not open');
+  if (session === undefined) {
+    store.close();
+    throw new Error('the fixture store held no session');
+  }
+  // The sqlite handle must close before the afterEach removes the folder: Windows will not delete a database file that is still open.
+  try {
+    return store.transcript(session);
+  } finally {
+    store.close();
+  }
+};
+
 const BUILDERS: readonly (readonly [Harness, (turns: readonly Turn[]) => string | Promise<string>])[] = [
   ['claude-code', claudeCode],
   ['codex', codex],
@@ -204,6 +240,7 @@ const BUILDERS: readonly (readonly [Harness, (turns: readonly Turn[]) => string 
   ['grok', grok],
   ['vscode-copilot', vscode],
   ['cursor', cursor],
+  ['opencode', opencode],
 ];
 
 const interventions = async (harness: Harness, build: (turns: readonly Turn[]) => string | Promise<string>, turns: readonly Turn[]): Promise<(PromptIntervention | undefined)[]> => {
