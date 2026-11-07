@@ -229,6 +229,11 @@ export interface SessionObservation {
    * the Claude Code path's records and CAPTURE_VERSION are unchanged and an older oars reads a Cursor session as a session with no harness version.
    */
   harness?: Harness;
+  /**
+   * Set on a session a later read of its source folded into another (an OpenTelemetry trace deposited before its `gen_ai.conversation.id` arrived): the id of the session that
+   * holds its turns now. The record is a later rev of the early session with no turns, so the log stays append-only; a reader skips a session that carries it. Class P.
+   */
+  supersededBy?: string;
   /** CAPTURE_VERSION (a version-2 line has `v` instead). Class P. */
   cv: string;
   /** The first 8 hex characters of SHA-256 of the salt this record's hashes used; null on a record captured before version 4. Class P. */
