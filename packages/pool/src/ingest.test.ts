@@ -31,7 +31,7 @@ const oracleOf = (byAccount: readonly (readonly SessionSkeleton[])[]): Held[] =>
     for (const cell of deriveCells(storeOf(skeletons)).cells) {
       const key = `${cell.motifId}/${cell.frameBucket}/${cell.grain}/${cell.day}/${cell.exposed ? '1' : '0'}`;
       const held = merged.get(key) ?? { key, sessions: 0, clusters: 0, ok: 0, failed: 0, tokens: 0, durationMs: 0 };
-      merged.set(key, { key, sessions: held.sessions + cell.sessions, clusters: 0, ok: held.ok + cell.ok, failed: held.failed + cell.failed, tokens: held.tokens + cell.tokens, durationMs: held.durationMs + cell.durationMs });
+      merged.set(key, { key, sessions: held.sessions + cell.sessions, clusters: 0, ok: held.ok + cell.ok, failed: held.failed + cell.failed, tokens: held.tokens + (cell.tokens ?? 0), durationMs: held.durationMs + cell.durationMs });
       accounts.set(key, (accounts.get(key) ?? new Set<number>()).add(account));
     }
   });

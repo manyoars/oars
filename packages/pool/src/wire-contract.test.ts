@@ -175,14 +175,14 @@ describe('a field this server does not know', () => {
 describe('a value this server does not know', () => {
   it('is read as other and counted, stored as other, and kept as sent in the bag', async () => {
     const sent = baseline();
-    holder(sent, 'transcripts', 0, 'frame').model = 'a-model-from-the-future';
+    holder(sent, 'transcripts', 0, 'frame').model = 'a model from the future';
     holder(sent, 'transcripts', 0, 'prompts', 0).cls = 'a-class-from-the-future';
     expect((await post(sent)).status).toBe(201);
     const row = await rowOf();
     expect(row.other_values).toBe(2);
     expect(row.skeleton).not.toContain('from-the-future');
     expect(JSON.parse(row.extensions)).toEqual([
-      { at: 'transcripts[0].frame.model', kind: 'value', value: 'a-model-from-the-future' },
+      { at: 'transcripts[0].frame.model', kind: 'value', value: 'a model from the future' },
       { at: 'transcripts[0].prompts[0].cls', kind: 'value', value: 'a-class-from-the-future' },
     ]);
     expect(JSON.parse(row.skeleton)).toMatchObject({ transcripts: [{ frame: { model: 'other' }, prompts: [{ cls: 'other' }] }] });
