@@ -13,7 +13,11 @@ describe('help text states what the code does', () => {
   it('sessions hook install names all four hooks it writes and the nightly task that sends', async () => {
     const text = await helpOf('sessions', 'hook', 'install');
     expect(text).toContain('merge the SessionStart, PreToolUse, PostToolUseFailure, and SessionEnd hooks into a settings file');
-    expect(text).toContain('on Windows register the nightly task (which sends to the pool after you accept its covenant)');
+    expect(text).toContain('on Windows register the nightly task (which sends telemetry while telemetry is on, and pool batches only after you accept a pool covenant)');
+  });
+
+  it('pool raw --mode says off sends nothing from that folder to the pool', async () => {
+    expect(await helpOf('pool', 'raw')).toContain('off sends nothing from that folder to the pool from now on');
   });
 
   it('sessions deposit says a raw transcript is hard-linked or copied', async () => {

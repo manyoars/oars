@@ -2549,13 +2549,13 @@ describe('oars pool raw (t884)', () => {
     const shown = scene.h.out.join('');
     expect(shown).toContain('best effort');
     for (const unsafe of ['a host with no dot', 'quoted file contents and command output', 'a secret split across lines', 'images and attachments', 'a JSON env value', 'a common-word account name is masked everywhere', 'a public host name outside a link', 'your username written another way', 'an IPv6 address with a zone or inside a longer word', "another person's hyphenated name in a project folder path"]) expect(shown).toContain(unsafe);
-    expect(shown).toContain('not answered yet');
+    expect(shown).toContain('not answered yet: only skeletons go to the pool');
     scene.h.out.length = 0;
     expect(await scene.cli('pool', 'raw', '--consent', 'yes')).toBe(ExitCode.OK);
     expect(scene.h.out.join('')).toContain('yes: redacted raw copies leave');
     expect(scene.h.out.join('')).not.toContain('best effort');
     expect(await scene.cli('pool', 'raw', '--consent', 'no')).toBe(ExitCode.OK);
-    expect(scene.h.out.join('')).toContain('no: only skeletons leave');
+    expect(scene.h.out.join('')).toContain('no: only skeletons go to the pool');
   });
 
   it('sets and clears a folder switch, and refuses a half-given or unknown option', async () => {
