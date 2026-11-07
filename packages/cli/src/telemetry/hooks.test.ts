@@ -233,6 +233,27 @@ describe('oars gate hook records one event per fire, after the answer', () => {
     expect(hooks(dir)[0]?.data).toMatchObject({ name: 'gate', outcome: 'error', bytes: 0 });
   });
 
+  it('a hook ended by the deadline records one error event with no bytes, and exits 0 once', async () => {
+    const dir = spoolFolder();
+    const emit = emitterAt(dir);
+    const exits: number[] = [];
+    // stdin never resolves, so only the deadline timer can end this fire; the run promise never settles and is not awaited.
+    const ended = new Promise<void>((done) => {
+      void runHookProcess({
+        stdin: () => new Promise<string>(() => undefined),
+        deps: (staging) => ({ storeDir: seeded('block'), now: () => Date.now(), clock: () => 0, deadlineMs: 800, stage: staging }),
+        exit: (code) => { exits.push(code); done(); },
+        write: () => Promise.resolve(),
+        deadlineMs: 10,
+        record: (one) => { emit('hook', { name: 'gate', ...one }); },
+      });
+    });
+    await ended;
+    expect(exits).toEqual([0]);
+    expect(hooks(dir)).toHaveLength(1);
+    expect(hooks(dir)[0]?.data).toMatchObject({ name: 'gate', outcome: 'error', bytes: 0 });
+  });
+
   it('a throw in the recording changes neither the output nor the exit code', async () => {
     const store = seeded('block');
     const printed: string[] = [];
