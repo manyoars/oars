@@ -29,7 +29,10 @@ describe('a real Pydantic AI trace deposited with --allow otel', () => {
     const { result, store } = await imported();
     expect(result).toMatchObject({ sessions: 2, badLines: 0, sources: { otel: { read: 2, unreadable: [], rejected: 0 } } });
     expect(store.sessions.map((entry) => entry.session).sort()).toEqual([`otel-${FAILED}`, `otel-${OK}`].sort());
-    for (const entry of store.sessions) expect(entry).toMatchObject({ harness: 'otel', project: 'otel', versions: ['pydantic-ai'], models: { 'stub-support-1': expect.any(Number) }, tools: { lookup_policy: 1 } });
+    for (const entry of store.sessions) {
+      expect(entry).toMatchObject({ harness: 'otel', project: 'otel', versions: ['pydantic-ai'], tools: { lookup_policy: 1 } });
+      expect(Object.keys(entry.models)).toEqual(['stub-support-1']);
+    }
   });
 
   it('holds every verify invariant, including --strict', async () => {
