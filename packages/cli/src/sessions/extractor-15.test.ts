@@ -90,8 +90,8 @@ interface LogRecord {
 }
 const isLogRecord = (value: unknown): value is LogRecord => typeof value === 'object' && value !== null && 'kind' in value && typeof value.kind === 'string';
 /**
- * The store totals (20 prompts) over the staged store with the capture log as main left it (CAPTURE 21), read by EXTRACTOR 15: measured by running this test. Main's own EXTRACTOR 14 reads the two
- * declines as `after-error` (none 5, after-error 2, revert 3, unknown 10, as the review expected), not run here because the old extractor is not in this tree.
+ * The store totals (20 prompts) over the staged store with the capture log as main left it (CAPTURE 21), read by EXTRACTOR 15: measured by running this test.
+ * The two declines read `user-stop` here; main's own EXTRACTOR 14 reading of them was not run, because the old extractor is not in this tree.
  */
 const MAIN_ERA: { [bucket in PromptIntervention]: number } = { none: 5, 'after-error': 0, redo: 0, revert: 3, 'user-stop': 2, unknown: 10 };
 
