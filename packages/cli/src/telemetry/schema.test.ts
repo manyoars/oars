@@ -41,8 +41,8 @@ const spoolOf = (feed: (record: (type: string, fields: object) => void) => void)
 };
 
 describe('the closed schema', () => {
-  it('knows the command type, one line per type', () => {
-    expect(EVENT_TYPES).toEqual(['command']);
+  it('knows each event type, one line per type', () => {
+    expect(EVENT_TYPES).toEqual(['command', 'store-health', 'run-cost', 'crash', 'wire', 'wire-send']);
   });
 
   it.each(EVENT_TYPES)('%s: a home path, command text, a prompt, and a URL fed to every field never reach the spool', (type) => {
