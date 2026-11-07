@@ -119,7 +119,7 @@ describe('a session hook records one event per fire', () => {
     const held = await runHook('pre-tool', monitor(sessionOn('held')), staged.runtime, () => NOW, undefined, emitterAt(dir));
     expect(held).toBeUndefined();
     const [one, two] = hooks(dir);
-    expect(one?.data).toMatchObject({ name: 'pre-tool', outcome: 'hit', bytes: Buffer.byteLength(shown ?? ''), harnessVersion: '2.1.300', model: 'claude-opus-4-5' });
+    expect(one?.data).toMatchObject({ name: 'pre-tool', outcome: 'hit', bytes: Buffer.byteLength(shown ?? ''), harness: 'claude-code', harnessVersion: '2.1.300', model: 'claude-opus-4-5' });
     expect(two?.data).toMatchObject({ name: 'pre-tool', outcome: 'held', bytes: 0 });
     expect(logged(dir).filter((event) => event.type === 'recall').map((event) => event.data.arm)).toEqual(['shown', 'held']);
   });
@@ -136,7 +136,7 @@ describe('a session hook records one event per fire', () => {
     writeFileSync(private_, `${JSON.stringify({ version: '9.9.9-internal', message: { model: 'acme-internal-finetune-7' } })}\n`);
     await runHook('post-tool', JSON.stringify({ session_id: 'p', tool_name: 'Bash', tool_response: 'ok', transcript_path: private_ }), runtime, () => NOW, undefined, emitterAt(dir));
     const [post, stopped, miss, other] = hooks(dir);
-    for (const event of [post, stopped, miss]) expect(event?.data).toMatchObject({ harnessVersion: '2.1.300', model: 'claude-opus-4-5' });
+    for (const event of [post, stopped, miss]) expect(event?.data).toMatchObject({ harness: 'claude-code', harnessVersion: '2.1.300', model: 'claude-opus-4-5' });
     expect(other?.data.model).toBe('other');
     expect(readSpool(dir).join('')).not.toContain('acme-internal');
     expect(readSpool(dir).join('')).not.toContain('frame-transcript');
@@ -271,7 +271,7 @@ describe('oars gate hook records one event per fire, after the answer', () => {
     await fire(withPath('ls'), store, emitterAt(dir), {}, true);
     await fire(withPath('npm install ghost-lib'), store, emitterAt(dir), {}, true);
     expect(hooks(dir).map((event) => event.data.outcome)).toEqual(['miss', 'hit']);
-    for (const event of hooks(dir)) expect(event.data).toMatchObject({ harnessVersion: '2.1.300', model: 'claude-opus-4-5' });
+    for (const event of hooks(dir)) expect(event.data).toMatchObject({ harness: 'claude-code', harnessVersion: '2.1.300', model: 'claude-opus-4-5' });
     expect(readSpool(dir).join('')).not.toContain('bare-transcript');
   });
 
@@ -299,6 +299,7 @@ describe('oars gate hook records one event per fire, after the answer', () => {
     expect(hooks(dir)).toHaveLength(1);
     expect(hooks(dir)[0]?.data).toMatchObject({ name: 'gate', outcome: 'error', bytes: 0 });
     expect(hooks(dir)[0]?.data).not.toHaveProperty('harnessVersion');
+    expect(hooks(dir)[0]?.data).toMatchObject({ harness: 'claude-code' });
   });
 
   it('a transcript read that never resolves still spools the fire when the deadline arrives', async () => {
