@@ -17,7 +17,7 @@
 //   session_part     :108  message_id, ordinal, type, data: an assistant's content as rows, written only when `experimental.part_rows` is on (projector.ts:316-320). Upstream
 //                          reads the parts first and any inline content after them (session/history.ts:90-125), and so does this reader.
 // A content block is `text`, `reasoning` (not read), or `tool {id, name, state, time}`; `state.status` is streaming, running, completed, or error. A tool that is still
-// streaming or running has no outcome. The shell tool completes whatever the exit code and records it in `state.metadata.exit` (core/src/shell/result.ts:41-47), with a notice
+// streaming or running has no outcome. The shell tool completes whatever the exit code and records it in `state.metadata.exit` (core/src/shell/result.ts:20-28, :36-43; written by core/src/tool/plugin/shell.ts:85-88), with a notice
 // line appended to the text (:30-35), so the exit code decides, not the status; a thrown failure is `state.error {type, message}`.
 // A fork copies its parent's messages as `msg_<event id>_<seq>` (projector.ts:198, :226); those are the parent's and are skipped. A subagent is its own session with `parent_id`.
 

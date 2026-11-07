@@ -440,7 +440,7 @@ export const ocAssistant = (id: string, seq: number, created: number, content: r
   data: { agent: 'build', model: { id: 'claude-sonnet-5-5', providerID: 'anthropic' }, content, time: { created }, ...extra },
 });
 
-/** A shell tool state that completed: the shell tool records the exit in `metadata` (core/src/shell/result.ts:41-47), whatever the code. */
+/** A shell tool state that completed: the shell tool records the exit in `metadata` (core/src/shell/result.ts:20-28, :36-43; written by core/src/tool/plugin/shell.ts:85-88), whatever the code. */
 export const ocShellDone = (command: string, text: string, exit?: number, extra: object = {}): object => ({
   status: 'completed',
   input: { command },
