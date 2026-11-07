@@ -27,3 +27,7 @@ export const emitFor =
 
 /** An emitter that records nothing, for a caller built without telemetry. */
 export const noEmit: Emit = () => undefined;
+
+/** The emitter for a CLI run: the run's environment, telemetry folder, version, and clock. */
+export const emitOf = (deps: { env: NodeJS.ProcessEnv; telemetry?: TelemetryRuntime | undefined; version: string; now: () => number }): Emit =>
+  emitFor({ env: deps.env, telemetry: deps.telemetry, version: () => deps.version, now: deps.now });
