@@ -534,9 +534,9 @@ export const pathKey = (path: string, cwd: string | undefined, root: string | nu
 };
 
 /** The per-account salted hash of a file path (16 hex characters, class A). */
-export const hashPath = (path: string, cwd: string | undefined, root: string | null, salt: string): { hash: string; base: TargetBase } => {
+export const hashPath = (path: string, cwd: string | undefined, root: string | null, salt: string): { hash: string; base: TargetBase; key: string } => {
   const { key, base } = pathKey(path, cwd, root);
-  return { hash: sha256(`${salt}\n${key}`).slice(0, 16), base };
+  return { hash: sha256(`${salt}\n${key}`).slice(0, 16), base, key };
 };
 
 /** A leading `cd <dir> &&` or `cd <dir>;` hop: the target is the command that ran after it. */
@@ -1340,10 +1340,7 @@ const draftsOf = (table: ActionTable, named: { action: CanonicalAction; native: 
   return [{ action, ...callIdentity(table, action, native, named.native, { skill, url }), read: true, rawKey: `${native}\n${target ?? url ?? skill ?? ''}` }];
 };
 
-/** The path `targetOf` hashes: the first of `PATH_KEYS` that holds text. Read for its class and gone, never stored. */
-const pathOf = (input: Obj): string | undefined => PATH_KEYS.map((key) => str(input[key])).find((value) => value !== undefined && value !== '');
-
-/** The `target` of a tool call (see {@link ToolObservation.target}). */
+/** The `target` of a tool call (see {@link ToolObservation.target}). A path target also returns the `key` it was hashed on, read for its class and then dropped, never stored. */
 export const targetOf = (
   tool: string,
   input: Obj,
@@ -1351,12 +1348,12 @@ export const targetOf = (
   salt: string,
   redact: Redactor,
   root: string | null = null,
-): { target: string | null; base: TargetBase | null } => {
+): { target: string | null; base: TargetBase | null; key?: string } => {
   for (const key of PATH_KEYS) {
     const value = str(input[key]);
     if (value !== undefined && value !== '') {
-      const { hash, base } = hashPath(value, cwd, root, salt);
-      return { target: hash, base };
+      const { hash, base, key: hashedKey } = hashPath(value, cwd, root, salt);
+      return { target: hash, base, key: hashedKey };
     }
   }
   if (!SHELL.has(tool)) return { target: null, base: null };
@@ -1715,8 +1712,6 @@ export const captureSession = (input: ExtractInput): Capture => {
         else if (SHELL.has(name)) session.bashCmds += 1;
         const aimed = targetOf(name, toolInput, lineCwd, salt, redact, lineRoot);
         // The class reads the key the target is hashed on (relative to the repository or the cwd), never the absolute path: the folders above a repository say nothing about the file.
-        const targetPath = pathOf(toolInput);
-        const classedPath = targetPath === undefined ? undefined : pathKey(targetPath, lineCwd, lineRoot).key;
         const shell = SHELL.has(name) || named.action === 'shell.exec' ? readShell(str(toolInput.command) ?? '', redact) : undefined;
         for (const held of shell?.steps ?? []) framePrograms.add(held.identity.program);
         drafts.push(draftsOf(actions, named, native, shell, aimed.target, toolInput));
@@ -1745,7 +1740,7 @@ export const captureSession = (input: ExtractInput): Capture => {
           target: aimed.target,
           targetBase: aimed.base,
           keys: Object.keys(toolInput).sort(),
-          targetClass: targetClassOf(classedPath, aimed.base),
+          targetClass: targetClassOf(aimed.key, aimed.base),
           argClass: argClassOf(toolInput),
           durationMs: null,
           toolUseId: id ?? null,
