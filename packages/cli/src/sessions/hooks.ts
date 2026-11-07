@@ -13,7 +13,7 @@ import { errorCodeOf, signatureOf } from './extract.js';
 import { appendHookCall } from './hook-calls.js';
 import { contextBlock, readIndex, type HookIndex } from './hook-index.js';
 import type { Recall } from './recall-object.js';
-import { bundleNext, lastTable, mergePositions, positionsRecall, recoveryDecision, recoveryRecall, signatureRecall, isSignatureRetry, type Asker, type NextInput, type NextReads } from './recall-next.js';
+import { bundleNext, frameKeyOf, lastTable, mergePositions, positionsRecall, recoveryDecision, recoveryRecall, signatureRecall, isSignatureRetry, type Asker, type NextInput, type NextReads } from './recall-next.js';
 import { pushRecall, tailOf } from './recall-push.js';
 import { statedAt, statedOf } from './transcript-tail.js';
 import { toolShapeId } from './recall-reads.js';
@@ -82,7 +82,7 @@ const positionsTable = async (runtime: SessionsRuntime, input: Input, now: () =>
   const prepared = await nextInputOf(runtime, input, now);
   if (prepared === undefined) return undefined;
   const bundle = await bundleNext(runtime.storeDir, prepared.asker);
-  const positions = mergePositions(bundle?.positions ?? [], index?.positions ?? []);
+  const positions = mergePositions(bundle?.positions ?? [], index?.positionsByFrame?.[frameKeyOf(prepared.asker)] ?? []);
   if (positions.length === 0) return undefined;
   const previous = repeat ? await lastTable(runtime.storeDir, prepared.next.sid) : undefined;
   return positionsRecall(prepared.next, prepared.asker, positions, bundle?.poolVersion ?? index?.at ?? '', previous);
@@ -139,7 +139,7 @@ const failureText = (input: Input): string | undefined => {
 
 /**
  * The recovery edge (Item 2): what followed a failure of this action and error class, from the kept bundle for the session's setup and then the local pool, held to A33's
- * holdback like every next-node read. A same-step retry or a local edge under the floor says nothing; the signature line keeps its own lookup for a failure no cell covers.
+ * holdback like every next-node read. A same-step retry or a local edge under the floor says nothing, signature line included; the signature line answers only a failure no cell covers.
  */
 const postTool = async (runtime: SessionsRuntime, input: Input, now: () => number): Promise<Outcome> => {
   const tool = str(input.tool_name);
@@ -151,13 +151,14 @@ const postTool = async (runtime: SessionsRuntime, input: Input, now: () => numbe
   if (index === undefined && bundle === undefined) return { hit: false, queried: false };
   const action = actionOf(ACTION_TABLES['claude-code'], tool).action;
   const code = errorCodeOf(text);
-  const decision = recoveryDecision(bundle, index === undefined ? undefined : { recovery: index.recovery ?? {}, poolVersion: index.at }, action, code);
+  const decision = recoveryDecision(bundle, index === undefined ? undefined : { recovery: index.recoveryByFrame?.[frameKeyOf(prepared.asker)] ?? {}, poolVersion: index.at }, action, code);
   const event = str(input.hook_event_name) ?? 'PostToolUseFailure';
   if (decision.kind === 'serve') {
     const recall = await recoveryRecall(prepared.next, prepared.asker, action, code, decision);
     return recall.arm === 'shown' ? { output: additional(event, recall.answer.rendered), hit: true, queried: true, recall } : { hit: true, queried: true, recall };
   }
-  if (decision.kind === 'retry') return { hit: false, queried: true };
+  // A same-step retry and a local cell too thin to serve both end the lookup: a cell that exists but says nothing is not a reason to fall back to a signature count.
+  if (decision.kind === 'retry' || decision.kind === 'floor') return { hit: false, queried: true };
   const sig = signatureOf(tool, text, makeRedactor(index?.redactDomains ?? []));
   const found = index?.signatures[sig];
   if (index === undefined || found === undefined || isSignatureRetry(tool, found)) return { hit: false, queried: true };

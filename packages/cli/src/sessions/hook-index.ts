@@ -5,7 +5,8 @@ import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { Read } from './read.js';
 import { resolveReads } from './recall-pool.js';
-import { RECOVERY_FLOOR, positionsOf, recoveryEdgesOf, type Position, type RecoveryEdges } from './recall-next.js';
+import type { Position, RecoveryEdges } from './recall-next.js';
+import type { NextByFrame } from './recall-frames.js';
 import { aboveBaseRate, fitReads, PUSH_FLOORS, toolShapeId, type RecallRead } from './recall-reads.js';
 import type { SessionObservation } from './schema.js';
 import { expandHome } from './allow.js';
@@ -40,12 +41,12 @@ export interface HookIndex {
   /** The call shapes over the fit floors and `PUSH_MIN_LIFT`, by read ID. An index a version before this wrote has none, and a pre-tool hook then pushes nothing. */
   fit?: { [readId: string]: RecallRead };
   /**
-   * The local pool's recovery edges by `action/errorCode`, only for a failure whose top next step reaches `RECOVERY_FLOOR` (a hook reads this file on every call, so a key it would stay silent on
-   * is not carried). An index a version before this wrote has none, and `PostToolUseFailure` then falls back to `signatures`.
+   * The local pool's recovery edges, by the asker's frame key (`frameKeyOf`: harness and version bucket) and then `action/errorCode`. Every key is kept, one under `RECOVERY_FLOOR` too,
+   * so `PostToolUseFailure` can tell a cell too thin to serve (silent) from no cell (the signature line may answer). An index a version before this wrote has none.
    */
-  recovery?: RecoveryEdges;
-  /** The local pool's split positions (t782's rule), most observed first. */
-  positions?: Position[];
+  recoveryByFrame?: { [frame: string]: RecoveryEdges };
+  /** The local pool's split positions (t782's rule) by the asker's frame key, most observed first. */
+  positionsByFrame?: { [frame: string]: Position[] };
 }
 
 const topFollowed = (following: { [tool: string]: number }): Array<[string, number]> =>
@@ -80,7 +81,7 @@ const repositoryOf = (projects: readonly string[]): ((project: string) => string
   };
 };
 
-export const buildIndex = (store: Store, redactDomains: readonly string[], at: string, reads: readonly Read[] = []): HookIndex => {
+export const buildIndex = (store: Store, redactDomains: readonly string[], at: string, reads: readonly Read[] = [], next?: NextByFrame): HookIndex => {
   const projectOf = new Map(store.sessions.map((session) => [session.session, session.project]));
   // The latest 300 of each repository, not of the whole store: another repository's deposits must not move this one's ranking.
   const family = repositoryOf([...new Set(store.sessions.map((session) => session.project))]);
@@ -138,8 +139,7 @@ export const buildIndex = (store: Store, redactDomains: readonly string[], at: s
     projects,
     signatures,
     fit: Object.fromEntries(resolveReads(aboveBaseRate(store, fitReads(store, PUSH_FLOORS)), reads).map((read) => [toolShapeId(read.tool, read.keys), read])),
-    recovery: recoveryEdgesOf(reads, (followed) => followed >= RECOVERY_FLOOR),
-    positions: positionsOf(reads),
+    ...(next === undefined ? {} : { recoveryByFrame: next.recovery, positionsByFrame: next.positions }),
   };
 };
 
