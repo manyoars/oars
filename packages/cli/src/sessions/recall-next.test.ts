@@ -1,5 +1,5 @@
 // Item 3 of t926: the split-positions table at SessionStart and UserPromptSubmit. The 13 qualifying cells of t782 are the fixture (shares from its section 4), not shipped data.
-import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { slugOf } from './allow.js';
 import { indexPath, readIndex } from './hook-index.js';
@@ -8,6 +8,7 @@ import { armOf, readRecalls } from './recall-object.js';
 import { lastTable, mergePositions, positionsOf, positionsRecall, renderPositions, POSITION_MIN_N, TABLE_CAP_BYTES, type Position } from './recall-next.js';
 import type { Read } from './read.js';
 import { deposit } from './store.js';
+import { contextOf, indexAtOf, readOf } from './next-fixtures.js';
 import { cleanup, NOW, stage, type Staged } from './test-support.js';
 
 afterEach(cleanup);
@@ -19,7 +20,7 @@ const SECOND = 'file.read';
 
 const cell = (prefix: string, n: number, share: number): Read => {
   const top = Math.round(n * share);
-  return { readId: `read:${prefix}`, family: 'next-step', slice: { prefix, length: '1' }, value: { next: { [FIRST]: top, [SECOND]: n - top }, top: FIRST, topShare: share }, n, clusters: 1, asOf: { pool: 'p', day: '2026-11-01' } } as unknown as Read;
+  return readOf({ readId: `read:${prefix}`, family: 'next-step', slice: { prefix, length: '1' }, value: { next: { [FIRST]: top, [SECOND]: n - top }, top: FIRST, topShare: share }, n, clusters: 1, asOf: { pool: 'p', day: '2026-11-01' } });
 };
 
 /** Thirteen distinct closed prefixes of one to three canonical actions. */
@@ -59,17 +60,17 @@ describe('positionsOf', () => {
   });
 
   it('ignores other families, a prefix that is not a closed action chain, a missing slice, and a next map that is not usable', () => {
-    const other = { ...cell('file.edit', 20, 0.6), family: 'recovery' } as Read;
+    const other = { ...cell('file.edit', 20, 0.6), family: 'recovery' };
     const literal = cell('file.edit>some private name', 20, 0.6);
-    const noPrefix = { ...cell('file.edit', 20, 0.6), slice: {} } as unknown as Read;
-    const noNext = { ...cell('file.read', 20, 0.6), value: { topShare: 0.6, next: null } } as unknown as Read;
-    const badShare = { ...cell('file.read', 20, 0.6), value: { topShare: 'x', next: {} } } as unknown as Read;
-    const oneOption = { ...cell('file.read', 20, 0.6), value: { topShare: 0.6, next: { [FIRST]: 20, 'not an action': 5 } } } as unknown as Read;
+    const noPrefix = { ...cell('file.edit', 20, 0.6), slice: {} };
+    const noNext = { ...cell('file.read', 20, 0.6), value: { topShare: 0.6, next: null } };
+    const badShare = { ...cell('file.read', 20, 0.6), value: { topShare: 'x', next: {} } };
+    const oneOption = { ...cell('file.read', 20, 0.6), value: { topShare: 0.6, next: { [FIRST]: 20, 'not an action': 5 } } };
     expect(positionsOf([other, literal, noPrefix, noNext, badShare, oneOption])).toEqual([]);
   });
 
   it('keeps the three most common next steps, and orders positions by observations then prefix', () => {
-    const wide = { ...cell('file.edit', 30, 0.5), value: { topShare: 0.5, next: { 'file.read': 15, 'shell.exec': 9, 'file.edit': 5, 'file.write': 1 } } } as unknown as Read;
+    const wide = { ...cell('file.edit', 30, 0.5), value: { topShare: 0.5, next: { 'file.read': 15, 'shell.exec': 9, 'file.edit': 5, 'file.write': 1 } } };
     const [only] = positionsOf([wide]);
     expect(only?.next).toEqual([
       ['file.read', 15],
@@ -146,14 +147,14 @@ const staged = async (positions: Position[]): Promise<Staged> => {
 };
 
 const sessionOn = (made: Staged, arm: 'shown' | 'held'): string => {
-  const at = JSON.parse(readFileSync(indexPath(made.storeDir), 'utf8')).at as string;
+  const at = indexAtOf(made.storeDir);
   for (let i = 0; i < 1000; i++) if (armOf(`s${String(i)}`, ['positions'], at) === arm) return `s${String(i)}`;
   throw new Error('no session found');
 };
 
 const start = (session: string): string => JSON.stringify({ hook_event_name: 'SessionStart', session_id: session, cwd: REPO });
 const submit = (session: string): string => JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: session, cwd: REPO, prompt: 'go' });
-const text = (output: string | undefined): string => String(JSON.parse(output ?? '{}')?.hookSpecificOutput?.additionalContext ?? '');
+const text = contextOf;
 
 describe('the table at SessionStart and UserPromptSubmit', () => {
   it('lists a split position at session start, with one row', async () => {

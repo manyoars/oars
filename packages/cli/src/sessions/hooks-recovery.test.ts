@@ -1,5 +1,5 @@
 // Item 2 of t926: the recovery edge at PostToolUseFailure. A retry cell and a below-floor cell stay silent, a served cell is shown with one row, a held cell is held with one row.
-import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { slugOf } from './allow.js';
 import { indexPath, readIndex } from './hook-index.js';
@@ -8,6 +8,7 @@ import { armOf, readRecalls } from './recall-object.js';
 import { recoveryDecision, recoveryEdgesOf, RECOVERY_FLOOR, type RecoveryEdge } from './recall-next.js';
 import type { Read } from './read.js';
 import { deposit } from './store.js';
+import { contextOf, indexAtOf, readOf } from './next-fixtures.js';
 import { cleanup, NOW, stage, type Staged } from './test-support.js';
 
 afterEach(cleanup);
@@ -25,21 +26,21 @@ const staged = async (recovery: { [key: string]: RecoveryEdge[] }): Promise<Stag
 };
 
 /** A session id whose arm is the one asked for, for the index's pool version. */
-const sessionOn = async (made: Staged, arm: 'shown' | 'held', key: string): Promise<string> => {
-  const at = JSON.parse(readFileSync(indexPath(made.storeDir), 'utf8')).at as string;
+const sessionOn = (made: Staged, arm: 'shown' | 'held', key: string): string => {
+  const at = indexAtOf(made.storeDir);
   for (let i = 0; i < 1000; i++) if (armOf(`s${String(i)}`, [key], at) === arm) return `s${String(i)}`;
   throw new Error('no session found');
 };
 
 const fail = (session: string, error = 'Exit code 1\nnothing seen before'): string => JSON.stringify({ hook_event_name: 'PostToolUseFailure', session_id: session, tool_name: 'Bash', error });
-const text = (output: string | undefined): string => String(JSON.parse(output ?? '{}')?.hookSpecificOutput?.additionalContext ?? '');
+const text = contextOf;
 
 describe('the recovery edge at PostToolUseFailure', () => {
   const KEY = 'shell.exec/1';
 
   it('shows a served cell once, with one recalls row', async () => {
     const made = await staged({ [KEY]: [edge('file.read', 12), edge('file.edit', 6)] });
-    const session = await sessionOn(made, 'shown', KEY);
+    const session = sessionOn(made, 'shown', KEY);
     const output = await runHook('post-tool', fail(session), made.runtime, () => NOW);
     expect(text(output)).toContain('after a failed shell.exec (1)');
     expect(text(output)).toContain('file.read x12');
@@ -50,7 +51,7 @@ describe('the recovery edge at PostToolUseFailure', () => {
 
   it('holds a served cell back for the held arm: nothing printed, one row that keeps what it would have shown', async () => {
     const made = await staged({ [KEY]: [edge('file.read', 12)] });
-    const session = await sessionOn(made, 'held', KEY);
+    const session = sessionOn(made, 'held', KEY);
     expect(await runHook('post-tool', fail(session), made.runtime, () => NOW)).toBeUndefined();
     const rows = await readRecalls(made.storeDir);
     expect(rows).toHaveLength(1);
@@ -60,13 +61,13 @@ describe('the recovery edge at PostToolUseFailure', () => {
 
   it('stays silent, with no row, when the top next step is a same-step retry', async () => {
     const made = await staged({ [KEY]: [edge('shell.exec', 14), edge('file.read', 3)] });
-    expect(await runHook('post-tool', fail(await sessionOn(made, 'shown', KEY)), made.runtime, () => NOW)).toBeUndefined();
+    expect(await runHook('post-tool', fail(sessionOn(made, 'shown', KEY)), made.runtime, () => NOW)).toBeUndefined();
     expect(await readRecalls(made.storeDir)).toEqual([]);
   });
 
   it('stays silent, with no row, when a local cell is under the floor', async () => {
     const made = await staged({ [KEY]: [edge('file.read', RECOVERY_FLOOR - 1)] });
-    expect(await runHook('post-tool', fail(await sessionOn(made, 'shown', KEY)), made.runtime, () => NOW)).toBeUndefined();
+    expect(await runHook('post-tool', fail(sessionOn(made, 'shown', KEY)), made.runtime, () => NOW)).toBeUndefined();
     expect(await readRecalls(made.storeDir)).toEqual([]);
   });
 
@@ -102,10 +103,10 @@ describe('recoveryDecision', () => {
 
 describe('recoveryEdgesOf', () => {
   const read = (next: string, followed: number, week: string, readId: string): Read =>
-    ({ readId, family: 'recovery', slice: { action: 'shell.exec', errorCode: '1', next, week }, value: { followed, of: 10, share: followed / 10 }, n: followed, clusters: 1, asOf: { pool: 'p', day: week } }) as unknown as Read;
+    readOf({ readId, family: 'recovery', slice: { action: 'shell.exec', errorCode: '1', next, week }, value: { followed, of: 10, share: followed / 10 }, n: followed, clusters: 1, asOf: { pool: 'p', day: week } });
 
   it('sums weeks per next step, cites the heaviest week, ignores other families and names that are not actions, and applies the keep rule to the top', () => {
-    const reads = [read('file.read', 3, '2026-10-26', 'read:a'), read('file.read', 5, '2026-11-02', 'read:b'), read('not an action', 9, '2026-11-02', 'read:c'), { ...read('file.edit', 1, '2026-11-02', 'read:d'), family: 'fit' } as Read];
+    const reads = [read('file.read', 3, '2026-10-26', 'read:a'), read('file.read', 5, '2026-11-02', 'read:b'), read('not an action', 9, '2026-11-02', 'read:c'), { ...read('file.edit', 1, '2026-11-02', 'read:d'), family: 'fit' }];
     expect(recoveryEdgesOf(reads)['shell.exec/1']).toEqual([{ next: 'file.read', followed: 8, of: 20, clusters: 1, readId: 'read:b', day: '2026-11-02' }]);
     expect(recoveryEdgesOf(reads, (followed) => followed >= 9)).toEqual({});
   });
