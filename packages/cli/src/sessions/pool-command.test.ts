@@ -10,6 +10,7 @@ import { ExitCode } from '../errors.js';
 import { readSpool } from '../telemetry/spool.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
 import { DEFAULT_POOL_URL, networkSender, poolCoverage, poolDeposit, poolServer, type Reply, type Sender } from './pool-command.js';
+import { localNames } from './redact.js';
 import { batchHash, canonicalBytes, FIELD_ROWS, fieldsOf, outboxFolder, writeBatch } from './pool-outbox.js';
 import { markSent, sentHashes } from './pool-sent.js';
 import { withSendLock } from './pool-send-lock.js';
@@ -2227,6 +2228,24 @@ describe('oars pool deposit: the raw copy (t884)', () => {
     await scene.cli('pool', 'deposit', '--server', POOL);
     expect(rawFiles(scene)).toEqual([]);
     expect(outboxFiles(scene)).toEqual([]);
+  });
+
+  it('masks the local account and home folder name in the queued copy, wherever it stands', async () => {
+    const scene = await ready('granted');
+    const [name] = localNames();
+    if (name === undefined) throw new Error('this machine has no usable account name');
+    writeFileSync(join(scene.staged.projectsRoot, 'proj', 'who.jsonl'), `${JSON.stringify({ type: 'user', message: { content: `see /x/.claude/projects/-Users-${name}-app and ${name}@box:~/app$` } })}\n`, { flag: 'a' });
+    await scene.cli('pool', 'deposit', '--server', POOL);
+    const bodies = rawFiles(scene).map((file) => readFileSync(join(scene.staged.storeDir, 'pool-outbox', file), 'utf8'));
+    expect(bodies.length).toBeGreaterThan(0);
+    for (const body of bodies) expect(body.toLowerCase()).not.toContain(name.toLowerCase());
+  });
+
+  it('says a no to the raw prompt was heard and how to change it, and asks only when there was no answer', async () => {
+    const declined = await ready('declined');
+    await declined.cli('pool', 'deposit', '--server', POOL);
+    expect(declined.h.out.join('')).toContain('You answered no to the raw prompt; oars pool raw --consent yes changes it.');
+    expect(declined.h.out.join('')).not.toContain('until you answer the raw prompt');
   });
 
   it('writes no raw copy for a session the exclusion gate stops', async () => {

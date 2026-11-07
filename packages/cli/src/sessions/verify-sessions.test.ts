@@ -248,7 +248,7 @@ describe('sessionsVerify, what was sent and what was masked (t884)', () => {
     const masked = await sessionsVerify(deps, { session: undefined });
     expect(masked.report).toMatchObject({ rawCopies: 2, rawMasked: 6 });
     expect(masked.document).toMatchObject({ rawCopies: 2, rawMasked: 6 });
-    expect(masked.text).toContain('2 queued raw copies hold 6 masked values');
+    expect(masked.text).toContain('2 queued raw copies hold 6 placeholders (masked values, plus any a transcript already held as text)');
     expect(masked.failed).toEqual([]);
   });
 
