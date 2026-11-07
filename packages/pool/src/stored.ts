@@ -1,6 +1,6 @@
 // Reading the pool for a bundle: the stored `index` cells of one harness version, the version-free environment cells, the motifs, and the strata, four statements whose rows grow with the cells and never with deposits. The
 // ledger plane (`deposits`) and the `contributor` records are not read here, so a write to them cannot change what is served.
-import { ENVIRONMENT_BUCKET, harnessBucket, type Cell, type Grain } from '../../cli/src/sessions/cells.js';
+import { ENVIRONMENT_BUCKET, harnessBucket, NO_AXES, type Cell, type Grain } from '../../cli/src/sessions/cells.js';
 import type { Motif, MotifLevel, WindowStep } from '../../cli/src/sessions/motif.js';
 import type { StrataCell } from '../../cli/src/sessions/pool-wire.js';
 import { bucketPrefix, K_CELL } from './derive.js';
@@ -77,10 +77,11 @@ const cellOf = (row: unknown): Cell => ({
 export const storedOf = async (env: Env, harness: string, harnessVersion: string): Promise<StoredPool> => {
   const bucket = harnessBucket(harnessVersion);
   const prefix = bucketPrefix(harness, harnessVersion);
+  const modelPrefix = `${harness}/${NO_AXES}/`;
   const [cells, environment, motifs, strata] = await Promise.all([
-    env.DB.prepare('SELECT motif_id, frame_bucket, grain, day, exposed, sessions, clusters, ok, failed, tokens, duration_ms FROM cells WHERE harness_bucket = ? AND substr(frame_bucket, 1, ?) = ? AND sessions > 0').bind(bucket, prefix.length, prefix).all(),
+    env.DB.prepare('SELECT motif_id, frame_bucket, grain, day, exposed, sessions, clusters, ok, failed, tokens, duration_ms FROM cells WHERE ((harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?) OR (harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?)) AND sessions > 0').bind(bucket, prefix.length, prefix, NO_AXES, modelPrefix.length, modelPrefix).all(),
     env.DB.prepare(ENVIRONMENT_CELLS).bind(ENVIRONMENT_BUCKET, K_CELL, K_CELL).all(),
-    env.DB.prepare('SELECT motif FROM motifs WHERE motif_id IN (SELECT motif_id FROM cells WHERE harness_bucket = ? AND substr(frame_bucket, 1, ?) = ? AND sessions > 0) OR motif_id IN (SELECT motif_id FROM cells WHERE harness_bucket = ? AND sessions > 0 AND clusters >= ?)').bind(bucket, prefix.length, prefix, ENVIRONMENT_BUCKET, K_CELL).all(),
+    env.DB.prepare('SELECT motif FROM motifs WHERE motif_id IN (SELECT motif_id FROM cells WHERE ((harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?) OR (harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?)) AND sessions > 0) OR motif_id IN (SELECT motif_id FROM cells WHERE harness_bucket = ? AND sessions > 0 AND clusters >= ?)').bind(bucket, prefix.length, prefix, NO_AXES, modelPrefix.length, modelPrefix, ENVIRONMENT_BUCKET, K_CELL).all(),
     env.DB.prepare('SELECT dimension, value, sessions, clusters FROM strata WHERE clusters >= ? AND sessions > 0').bind(K_CELL).all(),
   ]);
   return {

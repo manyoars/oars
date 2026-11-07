@@ -200,7 +200,7 @@ const promptRecords = (id: string, { harness, prompts }: KnownTranscript): Promp
   }));
 
 const toolRecords = (id: string, main: string, { tools }: KnownTranscript): ToolObservation[] =>
-  tools.map(({ side, prompt, status, durationMs, steps }, n) => ({
+  tools.map(({ side, prompt, status, durationMs, errorCode, steps }, n) => ({
     kind: 'tool',
     cv: '',
     sid: '',
@@ -220,6 +220,7 @@ const toolRecords = (id: string, main: string, { tools }: KnownTranscript): Tool
     harnessVersion: null,
     side,
     prompt,
+    ...(errorCode === null ? {} : { errorCode }),
     steps: steps.map(({ action, native, identity, status: reported, parent, tokens, ms }, seg) => ({
       action,
       native,
