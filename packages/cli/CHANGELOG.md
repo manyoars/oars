@@ -6,7 +6,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 
 ## 0.4.0 (2026-11-07)
 
-Changes since 0.3.0. The next-node read (`hook install` adds `UserPromptSubmit`, and recall reads the kept pool bundle for the session's own harness), the raw-log consent prompt, the nightly send, and quoting of a Codex argv word that holds a space.
+Changes since 0.3.0. The next-node read (`hook install` adds `UserPromptSubmit`, and recall reads the kept pool bundle for the session's own harness), the raw-log consent prompt, the nightly send, Pi coding agent sessions (`--allow pi`), and quoting of a Codex argv word that holds a space.
 
 - `oars sessions deposit --allow pi` reads Pi coding agent session files (`~/.pi/agent/sessions`, or `$PI_CODING_AGENT_DIR`) into the same store as the other harnesses: `harness: pi`, the active branch of its entry tree, the real exit code of a failed shell call, and usage that Pi already reports net of cache reads. The reader is written from Pi's public docs and source and has never run against a live store (`docs/sessions-store.md`, "The Pi source", names the hand run that would settle it); `pool fetch --harness pi` and the closed telemetry list accept the new harness name.
 - A Codex shell call sent as an argv keeps a word that holds a space or quote as one quoted word (`bash -lc 'git revert HEAD'`), so a git undo run through the wrapper reads as `revert` the way it does on the other harnesses (`CAPTURE_VERSION` 25, so the next deposit re-reads every transcript).
