@@ -367,6 +367,12 @@ const lockMessages: { [code in LockRefusal]: string } = {
   batch_changed: 'That batch changed on disk after it was printed, or since it was written, so it was not sent. Run oars pool deposit to build it again, then oars pool outbox to print it.',
 };
 
+/** The calls one batch takes, in order: one, or one per part when it is past a request's bytes. `outbox` prints these and `deposit --send` sends these, so what is printed is what is sent. */
+const callsOf = (token: string, bytes: string, hash: string): Call[] => {
+  const parts = partsOf(bytes);
+  return parts.map((piece, at) => ({ token, bytes: piece, ...(parts.length === 1 ? {} : { part: { index: at + 1, count: parts.length, batch: hash } }) }));
+};
+
 /** `deposit --send <hash>`: the lock, then (only when a sender is given) the covenant and the request. The body is read and hashed again just before the request. */
 const sendBatch = async (deps: RunDeps, options: { outbox: string; server: string; token: string; hash: string; acceptCovenant: string | undefined; via: Sender | undefined }): Promise<Outcome> => {
   const { outbox, server, token, hash, via } = options;
@@ -387,16 +393,15 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
     throw new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code: 'batch_changed', title, status: 409 });
   }
   // A batch past one request's bytes goes in parts, in order, each answered 202 until the last completes the deposit with 201. A part sent again is harmless, so the retry below covers every part alike.
-  const parts = partsOf(bytes);
-  for (const [at, piece] of parts.entries()) {
-    const call: Call = { token, bytes: piece, ...(parts.length === 1 ? {} : { part: { index: at + 1, count: parts.length, batch: hash } }) };
+  const calls = callsOf(token, bytes, hash);
+  for (const [at, call] of calls.entries()) {
     let reply = await ask(deps, DEPOSIT, server, POOL_DEPOSITS, call, via);
     for (let attempt = 1; attempt < SEND_ATTEMPTS && reply.status === 409 && isObject(reply.body) && textIn(reply.body, 'error') === DEPOSIT_CONFLICT; attempt += 1) {
       reply = await ask(deps, DEPOSIT, server, POOL_DEPOSITS, call, via);
     }
     // 201 on any part means the deposit already finished (this part is a retry), so the rest need not be sent.
     if (reply.status === 201) break;
-    if (reply.status !== 202 || at === parts.length - 1) throw refusal(DEPOSIT, reply);
+    if (reply.status !== 202 || at === calls.length - 1) throw refusal(DEPOSIT, reply);
   }
   return { document: { ok: true, server, hash, sent: true }, text: `Sent batch ${hash} to ${server}.` };
 };
@@ -507,7 +512,7 @@ const explained = (bytes: string): { [field: string]: string } => {
   return rows;
 };
 
-/** `oars pool outbox`: prints each batch as it would be sent, the request line and every header included, with the bearer credential as its size and nothing else masked, then its SHA-256, and records that it was shown. `--explain` adds each field's rule. */
+/** `oars pool outbox`: prints each batch as it would be sent (a batch past one request prints each part's request, in order), the request line and every header included, with the bearer credential as its size and nothing else masked, then its SHA-256, and records that it was shown. `--explain` adds each field's rule. */
 export const poolOutbox = async (deps: RunDeps, options: { server?: string | undefined; explain?: boolean | undefined }): Promise<Outcome> => {
   const runtime = runtimeOf(deps);
   const server = poolServer(deps.env, OUTBOX, options.server);
@@ -519,7 +524,9 @@ export const poolOutbox = async (deps: RunDeps, options: { server?: string | und
   const shown: Array<{ hash: string; request: string; fields?: { [field: string]: string } }> = [];
   for (const batch of batches) {
     const fields = options.explain === true ? explained(batch.bytes) : undefined;
-    shown.push({ hash: batch.hash, request: printed(outgoing(deps, server, POOL_DEPOSITS, { token, bytes: batch.bytes }), masker), ...(fields === undefined ? {} : { fields }) });
+    // A batch past one request prints every part's request, in the order they are sent.
+    const request = callsOf(token, batch.bytes, batch.hash).map((call) => printed(outgoing(deps, server, POOL_DEPOSITS, call), masker)).join('\n');
+    shown.push({ hash: batch.hash, request, ...(fields === undefined ? {} : { fields }) });
   }
   for (const { hash } of shown) await markShown(outbox, hash, deps.now());
   const stale = await staleBatches(outbox);

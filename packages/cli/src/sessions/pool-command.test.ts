@@ -990,6 +990,35 @@ describe('oars pool outbox', () => {
     expect(scene.seen).toEqual([]);
   });
 
+  it('prints every part of a batch past one request, in order under the one hash, and the wire sender then receives those same requests', async () => {
+    const scene = await batched();
+    const file = join(scene.staged.storeDir, 'pool-outbox', outboxFiles(scene)[0] ?? '');
+    const bytes = canonicalBytes({ ...JSON.parse(readFileSync(file, 'utf8')), pad: 'é'.repeat(700_000) });
+    const hash = batchHash(bytes);
+    const folder = join(file, '..');
+    rmSync(file);
+    writeFileSync(join(folder, `${outboxFiles(scene)[0]?.split(/[\\/]/).at(-1)?.split('.')[0] ?? ''}.${hash}.jsonl`), bytes);
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    const shown = scene.h.out.join('');
+    expect(printedHashes(scene)).toContain(hash);
+    // The scene holds other batches too; this one's three requests are the last three before its hash line.
+    const requests = shown.slice(0, shown.indexOf(`\nsha256: ${hash}`)).split(/\n(?=POST \/v1\/deposits HTTP\/1\.1\n)/).slice(-3);
+    expect(requests).toHaveLength(3);
+    // Each print: the part header pair, then the body after the blank line, and together the bodies are the batch.
+    const printedBodies = requests.map((request, at) => {
+      const lines = request.split('\n');
+      expect(lines).toContain(`oars-part: ${String(at + 1)}/3`);
+      expect(lines).toContain(`oars-batch: ${hash}`);
+      return request.slice(request.indexOf('\n\n') + 2).replace(/\n$/, '');
+    });
+    expect(printedBodies.join('')).toBe(bytes);
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': [answer(202, { ok: true, pending: 2 }), answer(202, { ok: true, pending: 1 }), answer(201, { ok: true })] });
+    await poolDeposit(scene.h.deps, sendOptions(hash, pool.via));
+    const posts = pool.requests.filter((request) => request.method === 'POST');
+    expect(posts.map((request) => request.body)).toEqual(printedBodies);
+    expect(posts.map((request) => request.headers.find(([name]) => name === 'oars-part')?.[1])).toEqual(['1/3', '2/3', '3/3']);
+  });
+
   it('records that each batch was shown, one line for each print, and only for what printed', async () => {
     const scene = await batched();
     const outbox = join(scene.staged.storeDir, 'pool-outbox');
