@@ -7,7 +7,9 @@ import { codexRoot, openCodexStore, rolloutBadLines, rolloutLines } from './code
 import { captureSession } from './extract.js';
 import { makeRedactor } from './redact.js';
 import { makeRepoIdentity, makeRepoRoot } from './repo-root.js';
-import { cleanup, rolloutLine as line, stage, stageCodex } from './test-support.js';
+import { deposit, loadStore, readSkeletons } from './store.js';
+import { cleanup, NOW, rolloutLine as line, stage, stageCodex } from './test-support.js';
+import { verifyAll, verifyCaptured } from './verify.js';
 
 afterEach(cleanup);
 
@@ -663,6 +665,22 @@ describe('Paginated rollouts', () => {
     expect(out.errorLines.map((entry) => entry.line)).toEqual(['server unavailable', 'no such note']);
   });
 
+  it('settles a declared dynamic tool from its DynamicToolCall item (items.rs:301-322, dynamic.rs:246-262), and leaves one with no item unsettled', () => {
+    begin();
+    const dynamic = (second: number, id: string, rest: object) => done(second, { type: 'DynamicToolCall', id, tool: 'lookup', arguments: {}, ...rest });
+    const out = extractOf([
+      pmeta({ dynamic_tools: [{ name: 'lookup' }] }),
+      call(2, 'd1', 'lookup'),
+      dynamic(3, 'd1', { status: 'failed', success: false, error: { message: 'lookup backend down' } }),
+      call(4, 'd2', 'lookup'),
+      dynamic(5, 'd2', { status: 'completed', success: true }),
+      call(6, 'd3', 'lookup'),
+      ord(line(T(7), 'response_item', { type: 'function_call_output', call_id: 'd3', output: 'text' })),
+    ]);
+    expect(out.tools.map((tool) => tool.status)).toEqual(['error', 'ok', 'none']);
+    expect(out.errorLines.map((entry) => entry.line)).toEqual(['lookup backend down']);
+  });
+
   it('ignores an item_completed item it has no use for (a Plan) without failing', () => {
     begin();
     const lines = rolloutLines(asText([pmeta(), done(2, { type: 'Plan', id: 'x', text: 'steps' })]), 's');
@@ -719,7 +737,7 @@ describe('Paginated rollouts', () => {
       expect(outputFirst.errorLines.map((entry) => entry.line)).toEqual(['boom']);
     });
 
-    it('reads a Declined item (exit code -1, events.rs:552-554) as the user rejecting the call, and leaves an item with no exit_code (an Option, skipped when None, items.rs:284-286) and an item for a call it never saw unsettled', () => {
+    it('reads a Declined item (exit code -1, events.rs:552-554) as the user rejecting the call, and leaves an item with no exit_code (an Option, skipped when None, items.rs:284-286) and, with an item no call owns, a third Bash record of its own (a code-mode cell\'s command)', () => {
       begin();
       const out = extractOf([
         pmeta(),
@@ -731,8 +749,171 @@ describe('Paginated rollouts', () => {
         exited(7, 'u2', { status: 'failed' }),
         exited(8, 'nope', { status: 'failed', exit_code: 1, aggregated_output: 'x' }),
       ]);
-      expect(out.tools.map((tool) => [tool.status, tool.errorCode ?? null])).toEqual([['error', 'user-rejected'], ['none', null]]);
-      expect(out.errorLines.map((entry) => entry.line)).toEqual(['exec command rejected by user']);
+      // An item no call owns is its own Bash record (a code-mode cell's command), so 'nope' is a third, failed one.
+      expect(out.tools.map((tool) => [tool.status, tool.errorCode ?? null])).toEqual([['error', 'user-rejected'], ['none', null], ['error', '1']]);
+      expect(out.errorLines.map((entry) => entry.line)).toEqual(['exec command rejected by user', 'x']);
+    });
+
+    // Codex 0.166+ runs its shell inside a code-mode cell: a `custom_tool_call` named `exec` whose input is JavaScript, answered by a `custom_tool_call_output`
+    // whose first part's header is `Script completed`, `Script failed`, or `Script running with cell ID <id>`; `wait` polls a cell. Each command the cell ran
+    // persists its own CommandExecution item, `exec-<uuid>`, which no call owns (live store, 2026-11-06).
+    describe('code-mode cells (Codex 0.166+)', () => {
+      const cell = (second: number, id: string, js: string) => ord(line(T(second), 'response_item', { type: 'custom_tool_call', name: 'exec', call_id: id, input: js, status: 'completed' }));
+      const cellOut = (second: number, id: string, parts: string[]) =>
+        ord(line(T(second), 'response_item', { type: 'custom_tool_call_output', call_id: id, output: parts.map((text) => ({ type: 'input_text', text })) }));
+      const item = (second: number, id: string, text: string, rest: object) =>
+        done(second, {
+          type: 'CommandExecution',
+          id,
+          process_id: '75375',
+          command: ['C:\\Program Files\\PowerShell\\7\\pwsh.exe', '-Command', text],
+          cwd: 'file:///C:/work/app',
+          parsed_cmd: [{ type: 'unknown', cmd: text }],
+          source: 'unified_exec_startup',
+          duration: { secs: 0, nanos: 500000000 },
+          ...rest,
+        });
+      const fixture = () => {
+        begin();
+        return [
+          pmeta({ cli_version: '0.167.0' }),
+          done(1, { type: 'UserMessage', id: 'u1', content: [{ type: 'text', text: 'look around', text_elements: [] }] }),
+          cell(2, 'c1', 'text(await tools.exec_command({cmd:"ls /nonexistent"}));\n'),
+          item(3, 'exec-1', 'echo hi', { status: 'completed', exit_code: 0, aggregated_output: 'hi' }),
+          item(4, 'exec-2', 'ls /nonexistent', { status: 'failed', exit_code: 1, aggregated_output: "ls: cannot access '/nonexistent': No such file or directory" }),
+          cellOut(5, 'c1', ['Script completed\nWall time 0.4 seconds\nOutput:\nhi']),
+          cell(6, 'c2', 'text(await tools.exec_command({cmd:"sleep 30"}));\n'),
+          cellOut(7, 'c2', ['Script running with cell ID 14\nWall time 1 seconds\nOutput:\n']),
+          item(8, 'exec-3', 'sleep 30', { status: 'completed', exit_code: 0, aggregated_output: '' }),
+          call(9, 'w1', 'wait', { arguments: JSON.stringify({ cell_id: 14, max_tokens: 1000, yield_time_ms: 1000 }) }),
+          ord(shellOut(10, 'w1', [{ type: 'input_text', text: 'Script completed\nWall time 30 seconds\nOutput:\ndone' }])),
+          cell(11, 'c3', 'text(await tools.nope());\n'),
+          cellOut(12, 'c3', ['Script failed\nWall time 0.1 seconds\nOutput:\n', 'Script error:\nexec_command failed: no such tool']),
+        ];
+      };
+
+      it('records each command a cell ran as its own Bash record, with its exit code, output, and duration', () => {
+        const out = extractOf(fixture(), 'codex');
+        type Block = { type?: unknown; native?: unknown; input?: unknown };
+        const blocks = (entry: { message?: unknown }): Block[] => {
+          const message = entry.message;
+          const content = typeof message === 'object' && message !== null && 'content' in message ? message.content : [];
+          return Array.isArray(content) ? content.filter((block): block is Block => typeof block === 'object' && block !== null) : [];
+        };
+        const uses = rolloutLines(asText(fixture()), 's').flatMap((entry) => (entry.type === 'assistant' ? blocks(entry) : [])).filter((block) => block.type === 'tool_use');
+        expect(uses.filter((block) => block.native === 'exec_command').map((block) => block.input)).toEqual([{ command: 'echo hi' }, { command: 'ls /nonexistent' }, { command: 'sleep 30' }]);
+        expect(uses.filter((block) => block.native === 'exec' || block.native === 'wait').map((block) => [block.native, block.input])).toEqual([['exec', {}], ['exec', {}], ['wait', {}], ['exec', {}]]);
+        // Only the item-owned records have a native name the action table reads; a cell's `exec` and `wait` are not listed there, so a step stores them as `<literal>`.
+        const shell = out.tools.filter((tool) => tool.steps?.[0]?.native === 'exec_command');
+        expect(shell.map((tool) => [tool.status, tool.durationMs])).toEqual([['ok', 500], ['error', 500], ['ok', 500]]);
+        expect(out.errorLines.map((entry) => entry.line)).toContain("ls: cannot access '/nonexistent': No such file or directory");
+      });
+
+      it('settles a cell from its own header: completed ok, running then waited ok, failed with the Script error text', () => {
+        const out = extractOf(fixture(), 'codex');
+        const cells = out.tools.filter((tool) => tool.steps?.[0]?.native !== 'exec_command');
+        expect(cells.map((tool) => tool.status)).toEqual(['ok', 'ok', 'ok', 'error']);
+        expect(out.errorLines.map((entry) => entry.line)).toContain('exec_command failed: no such tool');
+      });
+
+      it('settles a failed wait only itself: the cell it polled stays unsettled', () => {
+        begin();
+        const out = extractOf(
+          [
+            pmeta({ cli_version: '0.167.0' }),
+            cell(2, 'c1', 'text(await tools.exec_command({cmd:"sleep 30"}));\n'),
+            cellOut(3, 'c1', ['Script running with cell ID 14\nWall time 1 seconds\nOutput:\n']),
+            call(4, 'w1', 'wait', { arguments: JSON.stringify({ cell_id: 14, max_tokens: 1000, yield_time_ms: 1000 }) }),
+            ord(shellOut(5, 'w1', [{ type: 'input_text', text: 'wait failed: no such cell' }])),
+          ],
+          'codex',
+        );
+        expect(out.tools.map((tool) => tool.status)).toEqual(['none', 'error']);
+      });
+
+      it('starts an item no earlier than the line before it: a duration longer than the gap reads as the gap', () => {
+        begin();
+        const out = extractOf(
+          [
+            pmeta({ cli_version: '0.167.0' }),
+            cell(2, 'c1', 'text(await tools.exec_command({cmd:"echo hi"}));\n'),
+            item(3, 'exec-1', 'echo hi', { status: 'completed', exit_code: 0, aggregated_output: 'hi', duration: { secs: 5, nanos: 0 } }),
+            cellOut(4, 'c1', ['Script completed\nWall time 0.4 seconds\nOutput:\nhi']),
+          ],
+          'codex',
+        );
+        expect(out.tools.find((tool) => tool.steps?.[0]?.native === 'exec_command')?.durationMs).toBe(1000);
+      });
+
+      it('settles the cell as an error when its wait reads Script failed', () => {
+        begin();
+        const out = extractOf(
+          [
+            pmeta({ cli_version: '0.167.0' }),
+            cell(2, 'c1', 'text(await tools.exec_command({cmd:"boom"}));\n'),
+            cellOut(3, 'c1', ['Script running with cell ID 14\nWall time 1 seconds\nOutput:\n']),
+            call(4, 'w1', 'wait', { arguments: JSON.stringify({ cell_id: 14, max_tokens: 1000, yield_time_ms: 1000 }) }),
+            ord(shellOut(5, 'w1', [{ type: 'input_text', text: 'Script failed\nWall time 1 seconds\nOutput:\n' }, { type: 'input_text', text: 'Script error:\nexec_command failed: boom' }])),
+          ],
+          'codex',
+        );
+        expect(out.tools.map((tool) => tool.status)).toEqual(['error', 'error']);
+        expect(out.errorLines.map((entry) => entry.line)).toEqual(expect.arrayContaining(['exec_command failed: boom']));
+      });
+
+      it('reads a Script failed output with no Script error part as the literal Script failed', () => {
+        begin();
+        const out = extractOf([pmeta({ cli_version: '0.167.0' }), cell(2, 'c1', 'oops();\n'), cellOut(3, 'c1', ['Script failed\nWall time 0.1 seconds\nOutput:\n'])], 'codex');
+        expect(out.tools.map((tool) => tool.status)).toEqual(['error']);
+        expect(out.errorLines.map((entry) => entry.line)).toEqual(['Script failed']);
+      });
+
+      it('keeps an item no call owns that has no exit_code as a Bash call with no outcome', () => {
+        begin();
+        const out = extractOf([pmeta({ cli_version: '0.167.0' }), item(2, 'exec-9', 'sleep 100', { status: 'completed' })], 'codex');
+        expect(out.tools.map((tool) => [tool.status, tool.steps?.[0]?.native])).toEqual([['none', 'exec_command']]);
+      });
+
+      it('keeps cell ids and unified-exec session ids apart: a wait on cell 9 does not settle exec_command session 9', () => {
+        begin();
+        const out = extractOf(
+          [
+            pmeta({ cli_version: '0.167.0' }),
+            cell(2, 'c1', 'text(await tools.exec_command({cmd:"sleep 30"}));\n'),
+            cellOut(3, 'c1', ['Script running with cell ID 9\nWall time 1 seconds\nOutput:\n']),
+            call(4, 'u1', 'exec_command', { arguments: JSON.stringify({ cmd: 'sleep 100' }) }),
+            ord(shellOut(5, 'u1', 'Chunk ID: ab12\nWall time: 0.0100 seconds\nProcess running with session ID 9\nOriginal token count: 3\nOutput:\n')),
+            call(6, 'w1', 'wait', { arguments: JSON.stringify({ cell_id: 9, max_tokens: 1000, yield_time_ms: 1000 }) }),
+            ord(shellOut(7, 'w1', [{ type: 'input_text', text: 'Script completed\nWall time 1 seconds\nOutput:\ndone' }])),
+          ],
+          'codex',
+        );
+        expect(out.tools.map((tool) => tool.status)).toEqual(['ok', 'none', 'ok']);
+      });
+
+      it('reads a Script line below the first as ordinary shell output, not a cell outcome', () => {
+        begin();
+        const out = extractOf(
+          [
+            pmeta({ cli_version: '0.167.0' }),
+            call(2, 'u1', 'exec_command', { arguments: JSON.stringify({ cmd: 'x' }) }),
+            ord(shellOut(3, 'u1', 'Chunk ID: ab12\nScript completed\nProcess exited with code 1\nOutput:\nboom')),
+          ],
+          'codex',
+        );
+        expect(out.tools.map((tool) => tool.status)).toEqual(['error']);
+        expect(out.errorLines.map((entry) => entry.line)).toEqual(['boom']);
+      });
+
+      it('holds every verify invariant, including --strict, for the deposited fixture', async () => {
+        const s = stage();
+        const home = stageCodex(s.root, [{ id: 'aaaaaaaa-0000-4000-8000-000000000001', lines: fixture() }]);
+        const result = await deposit({ ...s.runtime, sourceRoots: { codex: home } }, { allow: ['codex'], redactDomains: [], now: () => NOW });
+        expect(result).toMatchObject({ sessions: 1 });
+        const { skeletons } = await readSkeletons(s.storeDir);
+        const store = await loadStore(s.storeDir);
+        expect([...verifyAll(skeletons), ...verifyCaptured(store.sessions, store.tools)].filter((entry) => entry.violations > 0)).toEqual([]);
+      });
     });
 
     it('leaves a Declined item unsettled when its output is a setup failure, not the user refusal text (events.rs:448-458)', () => {

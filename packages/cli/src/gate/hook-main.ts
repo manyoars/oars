@@ -7,8 +7,10 @@ import { performance } from 'node:perf_hooks';
 import { defaultConfigDir } from '../credentials.js';
 import { DEADLINE_MS, type GateHookDeps } from './hook.js';
 import { isLocked, startFill, startHelper } from './hook-fill.js';
+import { fireRecorder } from './hook-record.js';
 import { runHookProcess } from './hook-process.js';
 import { managerReader } from './registry.js';
+import { hookEmitter } from '../telemetry/hook-emit.js';
 
 /** The process itself ends this long after `DEADLINE_MS`. */
 const GRACE_MS = 100;
@@ -35,4 +37,15 @@ const depsFor = (stage: NonNullable<GateHookDeps['stage']>): GateHookDeps => {
   };
 };
 
-await runHookProcess({ stdin: readStdin, deps: depsFor, exit: (code) => process.exit(code), write: (text) => new Promise<void>((done) => process.stdout.write(text, () => { done(); })), deadlineMs: DEADLINE_MS + GRACE_MS - performance.now() });
+// One event per fire, recorded after the answer is written (`runHookProcess`), so it is never in front of the tool call. The version is read from `dist/gate/../../package.json`.
+const emit = hookEmitter(process.env, process.platform, homedir(), new URL('../../package.json', import.meta.url), Date.now);
+
+await runHookProcess({
+  stdin: readStdin,
+  deps: depsFor,
+  exit: (code) => process.exit(code),
+  write: (text) => new Promise<void>((done) => process.stdout.write(text, () => { done(); })),
+  deadlineMs: DEADLINE_MS + GRACE_MS - performance.now(),
+  clock: () => performance.now(),
+  record: fireRecorder(emit),
+});

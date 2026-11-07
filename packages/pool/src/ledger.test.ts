@@ -1,5 +1,6 @@
 // The ledger plane has no expiry: the database refuses a delete of a `deposits` row or a `contributors` record, and a guard over the pool's own source fails
 // when a delete path or a scheduled trigger appears. The one scheduled trigger allowed is the telemetry rollup (worker.ts calls `rollupRecent`), whose files name no ledger table. A legally required erasure would be one new migration that drops the two `*_no_delete` triggers.
+import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -46,6 +47,22 @@ describe('the server refuses a ledger delete', () => {
     expect(await count('contributors')).toBe(contributors);
   }, 60_000);
 
+  it('aborts a DELETE of a raw_objects row too: the raw tier\'s ledger row is never deleted', async () => {
+    const { token, account } = await pool.signIn('github', stubUser('8603'));
+    await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+    const grant = { 'oars-redaction-version': '1', 'oars-capture-version': 'cap-1', 'oars-raw-consent': 'granted' };
+    // The pool checks the hash, so the path carries the SHA-256 of the three bytes.
+    const hash = createHash('sha256').update(new Uint8Array([1, 2, 3])).digest('hex');
+    expect((await pool.send(`/v1/raw/${hash}/parts/1`, { method: 'PUT', body: new Uint8Array([1, 2, 3]) }, token, grant)).status).toBe(200);
+    expect((await pool.send(`/v1/raw/${hash}/complete`, { method: 'POST', body: '{"parts":1,"bytes":3}' }, token, grant)).status).toBe(201);
+    const db = await pool.db();
+    const held = async (): Promise<unknown> => fieldOf(await db.prepare('SELECT COUNT(*) AS held FROM raw_objects WHERE account = ?').bind(account).first(), 'held');
+    expect(await held()).toBe(1);
+    await expect(db.prepare('DELETE FROM raw_objects').run()).rejects.toThrow(/ledger rows are never deleted/);
+    await expect(db.prepare('DELETE FROM raw_objects WHERE sha256 = ?').bind(hash).run()).rejects.toThrow(/ledger rows are never deleted/);
+    expect(await held()).toBe(1);
+  }, 60_000);
+
   // SQLite runs a delete trigger for the row a REPLACE conflict removes only when `recursive_triggers` is on. Pinned for the test runtime (Miniflare's D1);
   // production D1's setting is unverified, so the source guard below keeps its REPLACE rule either way.
   it('does not run the delete trigger for a row an INSERT OR REPLACE removes', async () => {
@@ -70,7 +87,7 @@ const code = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').rep
 // A table name as SQL writes it: bare, quoted with a double quote, single quote, or backtick, or in brackets, and optionally qualified with `main.`.
 const OPEN = '["\'`\\[]?';
 const CLOSE = '["\'`\\]]?';
-const LEDGER_TABLE = `(?:${OPEN}main${CLOSE}\\.)?${OPEN}(?:deposits|contributors)\\b`;
+const LEDGER_TABLE = `(?:${OPEN}main${CLOSE}\\.)?${OPEN}(?:deposits|contributors|raw_objects)\\b`;
 const LEDGER_DELETE = new RegExp(`\\bDELETE\\s+FROM\\s+${LEDGER_TABLE}`, 'i');
 // `REPLACE` as a conflict clause deletes the row it replaces without running the delete trigger (the test above pins that for the test runtime, not for production D1, so the guard keeps the rule either way), and so does `DROP TABLE`.
 const LEDGER_REPLACE = new RegExp(
@@ -153,6 +170,7 @@ describe('the pool has no path that deletes the ledger', () => {
   // One row per planted case, so each fails on its own when its regex is missing.
   it.each([
     ['DELETE FROM deposits', 'await env.DB.prepare("DELETE FROM deposits WHERE account = ?")', 'DELETE FROM the ledger'],
+    ['DELETE FROM raw_objects', 'DELETE FROM raw_objects WHERE sha256 = ?', 'DELETE FROM the ledger'],
     ['delete from Contributors', 'delete  from  Contributors', 'DELETE FROM the ledger'],
     ['INSERT OR REPLACE INTO deposits', 'INSERT OR REPLACE INTO deposits (id) VALUES (1)', 'a REPLACE that deletes a ledger row'],
     ['REPLACE INTO deposits', 'REPLACE INTO deposits (id) VALUES (1)', 'a REPLACE that deletes a ledger row'],
