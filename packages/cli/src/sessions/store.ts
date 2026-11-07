@@ -805,13 +805,14 @@ export const withLock = async <T>(storeDir: string, work: (held: LockHold) => Pr
 
 export const deposit = (runtime: SessionsRuntime, options: DepositOptions, trace?: DepositTrace): Promise<DepositResult> => withLock(runtime.storeDir, (holds) => depositLocked(runtime, options, holds, trace));
 
-/** Writes `state.json` only while this run holds the lock; a run that lost it throws before the write, so the holder that took over keeps its entries. */
+/** Throws `StoreLockLostError` when this run's token no longer stands. */
 const requireHold = async (held: LockHold): Promise<void> => {
   if (!(await held())) throw new StoreLockLostError();
 };
 
+/** Writes `state.json` only while this run holds the lock; a run that lost it throws before the write, so the holder that took over keeps its entries. */
 const writeStateHeld = async (runtime: SessionsRuntime, state: State, held: LockHold): Promise<void> => {
-  if (!(await held())) throw new StoreLockLostError();
+  await requireHold(held);
   await writeAtomic(paths(runtime.storeDir).state, JSON.stringify(state));
 };
 
@@ -1504,6 +1505,8 @@ const writeLive = async (file: string, temp: string, latest: ReadonlyMap<string,
  */
 export const compactLog = async (storeDir: string, renameWaitMs = LOG_RENAME_WAIT_MS, held: LockHold = () => Promise.resolve(true)): Promise<void> => {
   const file = paths(storeDir).observations;
+  // A run that lost the lock must not sweep a temp file the later holder is writing.
+  await requireHold(held);
   // Under the lock no other compaction is running, so any temp file here is one a crash left.
   for (const entry of await listDir(storeDir)) {
     if (entry.name.startsWith(`${basename(file)}.`) && entry.name.endsWith('.tmp')) await rm(join(storeDir, entry.name), { force: true });
@@ -1517,7 +1520,7 @@ export const compactLog = async (storeDir: string, renameWaitMs = LOG_RENAME_WAI
     // The lock holds appends off, so this fires only when a waiter broke the lock (say across a sleeping laptop): the temp file lacks what it wrote.
     if ((await stat(file)).size !== size) throw new Error('the log changed while it was being rewritten');
     // The size check cannot see a run that took a broken lock and has not appended yet; its token can.
-    if (!(await held())) throw new StoreLockLostError();
+    await requireHold(held);
     await renameWhenFree(temp, file, renameWaitMs);
   } finally {
     await rm(temp, { force: true });
