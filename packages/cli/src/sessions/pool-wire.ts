@@ -1014,6 +1014,8 @@ export interface Books {
   served: { total: number; byWeek: { week: string; cells: number }[]; byTuple: { tuple: string; weeks: number }[] };
   backlog: number;
   panel: Sourced;
+  /** The UTC day the panel was counted: the pool reads its deposits once a day. */
+  panelDay: string | null;
   demand: { comparisonReadOwners: Sourced; paidReads: Sourced };
   goal: { readRevenue: Sourced; costPerServedCell: Sourced; revenuePerServedCell: Sourced };
 }
