@@ -119,7 +119,7 @@ describe('redactTranscript', () => {
       expect(localNames('/home/xavier', throwing)).toEqual(['envuser', 'xavier']);
       vi.stubEnv('USER', '');
       vi.stubEnv('USERNAME', 'winuser');
-      expect(localNames('/home/xavier', throwing)).toEqual(['xavier']);
+      expect(localNames('/home/xavier', throwing)).toEqual(['winuser', 'xavier']);
     } finally {
       vi.unstubAllEnvs();
     }
