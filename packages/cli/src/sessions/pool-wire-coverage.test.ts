@@ -164,13 +164,17 @@ describe('coverage bands', () => {
     expect(REPO_VISIBILITIES).toEqual(['public', 'private', 'unknown']);
   });
 
-  it('refuse a value outside its list', () => {
+  it('read a value outside its list as other, and keep the text in the extensions bag', () => {
     for (const [field, bad] of [['orgSize', '5000'], ['team', 'duo'], ['repoVisibility', 'internal']] as const) {
       const skeleton = skeletonFrom(stored(KEY_A));
       const first = skeleton.transcripts[0];
       if (first === undefined) throw new Error('no transcript');
       Reflect.set(first.frame, field, bad);
-      expect(parseSkeleton(skeleton)).toEqual({ ok: false, field: `transcripts[0].frame.${field}`, reason: 'outside the vocabulary' });
+      const result = parseSkeleton(skeleton);
+      expect(result).toMatchObject({ ok: true });
+      if (!result.ok) throw new Error('refused');
+      expect(result.skeleton.transcripts[0]?.frame).toMatchObject({ [field]: 'other' });
+      expect(result.extensions).toContainEqual({ at: `transcripts[0].frame.${field}`, kind: 'value', value: bad });
     }
   });
 
@@ -260,7 +264,7 @@ describe('bytes on a fixture that carries a repo key and timestamps', () => {
     const keyOnly = bytesOf(KEY_A, false);
     const hourOnly = bytesOf(null, true);
     const both = bytesOf(KEY_A, true);
-    expect({ bare, keyOnly: keyOnly - bare, hourOnly: hourOnly - bare, both: both - bare }).toEqual({ bare: 3345, keyOnly: 58, hourOnly: 755, both: 871 });
+    expect({ bare, keyOnly: keyOnly - bare, hourOnly: hourOnly - bare, both: both - bare }).toEqual({ bare: 3484, keyOnly: 58, hourOnly: 755, both: 871 });
     // The key is 29 bytes (`,"repoKey":"` and 16 hex) on each of 2 frames bare of timestamps and 4 with three prompt hours; the hour is what splits the call frames, one more full frame per distinct hour.
   });
 });
