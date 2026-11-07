@@ -205,7 +205,7 @@ const stepPlaces = ({ tools }: SkeletonTranscript): { n: number; seg: number }[]
 const toolRecords = (id: string, main: string, transcript: KnownTranscript, spawner: SkeletonTranscript | null): ToolObservation[] => {
   const own = stepPlaces(transcript);
   const spawning = spawner === null ? [] : stepPlaces(spawner);
-  return transcript.tools.map(({ side, prompt, status, durationMs, steps }, n) => ({
+  return transcript.tools.map(({ side, prompt, status, durationMs, errorCode, steps }, n) => ({
     kind: 'tool',
     cv: '',
     sid: '',
@@ -225,6 +225,7 @@ const toolRecords = (id: string, main: string, transcript: KnownTranscript, spaw
     harnessVersion: null,
     side,
     prompt,
+    ...(errorCode === null ? {} : { errorCode }),
     steps: steps.map(({ action, native, identity, status: reported, parent, tokens, ms, edges }, seg) => ({
       action,
       native,

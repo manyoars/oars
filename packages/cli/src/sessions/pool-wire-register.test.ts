@@ -95,6 +95,15 @@ export const REGISTER_FIXTURE = {
         {
           side: false,
           prompt: 0,
+          status: 'error',
+          durationMs: 7,
+          errorCode: '429',
+          recoveryCalls: { next: ['shell.exec'], editFollowed: false },
+          steps: [{ ...STEP, status: 'error', action: 'file.read', native: 'Read', identity: null }],
+        },
+        {
+          side: false,
+          prompt: 0,
           status: 'ok',
           durationMs: 7,
           steps: [
@@ -157,7 +166,7 @@ describe('the wire field register', () => {
     const total = [...fieldBytes(REGISTER_FIXTURE).values()].reduce((sum, bytes) => sum + bytes, 0);
     expect(total + envelopeBytes(REGISTER_FIXTURE)).toBe(Buffer.byteLength(canonicalBytes(REGISTER_FIXTURE), 'utf8'));
     expect(envelopeBytes(REGISTER_FIXTURE)).toBe(9);
-    expect(Buffer.byteLength(canonicalBytes(REGISTER_FIXTURE), 'utf8')).toBe(2_639);
+    expect(Buffer.byteLength(canonicalBytes(REGISTER_FIXTURE), 'utf8')).toBe(2_937);
     expect(fieldBytes({ a: [1, 2], b: { c: 'x' }, d: undefined }).get('a')).toBe(4 + 5);
     expect(fieldBytes({ a: [1, 2], b: { c: 'x' }, d: undefined }).get('b')).toBe(4 + 2);
     expect(fieldBytes({ a: [1, 2], b: { c: 'x' }, d: undefined }).get('c')).toBe(7);

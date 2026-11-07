@@ -99,8 +99,10 @@ const REAL = {
         {
           side: false,
           prompt: 0,
-          status: 'ok',
+          status: 'error',
           durationMs: 7,
+          errorCode: '1',
+          recoveryCalls: { next: [], editFollowed: false },
           steps: [
             { ...STEP, action: 'shell.exec', native: 'Bash', identity: { program: 'npm', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] } },
             { ...STEP, action: 'mcp.call', native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' }, edges: [{ kind: 'next', target: 0 }] },
