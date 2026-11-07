@@ -11,14 +11,8 @@ describe('frameWords', () => {
     expect(frameWords(undefined, '2.1.300', null)).toEqual({ harnessVersion: '2.1.300' });
   });
 
-  it('always carries the harness, and the version and model only when seen', () => {
-    expect(frameWords('claude-code', undefined, null)).toEqual({
-      harness: 'claude-code',
-    });
-    expect(frameWords('codex', '2.1.300', 'claude-opus-4-5')).toEqual({
-      harness: 'codex',
-      harnessVersion: '2.1.300',
-      model: 'claude-opus-4-5',
-    });
+  it('always carries a named harness, and the version and model only when seen', () => {
+    expect(frameWords('claude-code', undefined, null)).toEqual({ harness: 'claude-code' });
+    expect(frameWords('codex', '2.1.300', 'claude-opus-4-5')).toEqual({ harness: 'codex', harnessVersion: '2.1.300', model: 'claude-opus-4-5' });
   });
 });
