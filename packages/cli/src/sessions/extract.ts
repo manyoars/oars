@@ -1351,7 +1351,7 @@ interface StepDraft {
 }
 
 /** A call's steps: one per command of a shell call, else one. */
-const draftsOf = (table: ActionTable, named: { action: CanonicalAction; native: string }, native: string, shell: ShellRead | undefined, target: string | null, input: Obj): StepDraft[] => {
+const draftsOf = (table: ActionTable, named: { action: CanonicalAction; native: string }, native: string, shell: ShellRead | undefined, target: string | null, input: Obj, redact: Redactor): StepDraft[] => {
   const { action } = named;
   if (action === 'shell.exec') {
     const read = shell?.steps ?? [];
@@ -1360,7 +1360,7 @@ const draftsOf = (table: ActionTable, named: { action: CanonicalAction; native: 
   }
   const url = str(input.url);
   const skill = str(input.skill);
-  return [{ action, ...callIdentity(table, action, native, named.native, { skill, url }), read: true, rawKey: `${native}\n${target ?? url ?? skill ?? ''}` }];
+  return [{ action, ...callIdentity(table, action, native, named.native, { skill, url, redact }), read: true, rawKey: `${native}\n${target ?? url ?? skill ?? ''}` }];
 };
 
 /** The `target` of a tool call (see {@link ToolObservation.target}). */
@@ -1745,7 +1745,7 @@ export const captureSession = (input: ExtractInput): Capture => {
         const aimed = targetOf(name, toolInput, lineCwd, salt, redact, lineRoot);
         const shell = SHELL.has(name) || named.action === 'shell.exec' ? readShell(str(toolInput.command) ?? '', redact) : undefined;
         for (const held of shell?.steps ?? []) framePrograms.add(held.identity.program);
-        drafts.push(draftsOf(actions, named, native, shell, aimed.target, toolInput));
+        drafts.push(draftsOf(actions, named, native, shell, aimed.target, toolInput, redact));
         responseOfCall.push(response);
         callsPerResponse.set(response, (callsPerResponse.get(response) ?? 0) + 1);
         const manifestFile = PATH_TOOLS.has(name) && filePath !== undefined ? manifestFileOf(filePath) : null;
