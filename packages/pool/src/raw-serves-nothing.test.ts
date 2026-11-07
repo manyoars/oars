@@ -118,11 +118,15 @@ describe('no route serves a raw byte, a hash, or a count', () => {
     for (const path of paths) {
       for (const method of ['GET', 'HEAD', 'PUT', 'POST', 'DELETE', 'PATCH', 'OPTIONS']) {
         if (uploads.has(`${method} ${path}`)) continue;
-        const sent = await pool.send(path, { method, ...(method === 'GET' || method === 'HEAD' ? {} : { body: '{}' }) }, token, headers).catch(() => undefined);
-        // HEAD has no body to parse; the harness reads text, so a failure there is not an answer.
-        if (sent === undefined) continue;
+        // Read the body as text and never parse it: a route that served the stored bytes as plain text must fail here, not throw and be skipped. HEAD answers an empty body, so it reads too.
+        const sent = await pool.miniflare.dispatchFetch(`http://pool.test${path}`, {
+          method,
+          headers: { authorization: `Bearer ${token}`, ...headers },
+          ...(method === 'GET' || method === 'HEAD' ? {} : { body: '{}' }),
+        });
+        const text = await sent.text();
         expect(sent.status, `${method} ${path}`).toBe(404);
-        expect(JSON.stringify(sent.json), `${method} ${path}`).not.toContain(marker);
+        expect(text, `${method} ${path}`).not.toContain(marker);
       }
     }
     // The routes that do answer carry no raw figure: the covenant status is its two fields.
