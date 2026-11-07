@@ -119,9 +119,12 @@ export interface Measurables {
   firstFleetRead: string | null;
 }
 
-/** The first of `days` (oldest first) on which the fleet read, as of that day, served any cell from `rows`; `rows` holds the six days before the first of them too. */
+/** Days of rollup before a day that can decide whether the fleet read served a cell on it: the widest served window, less the day itself. A 7 day cell implies a 30 day cell, so the widest is enough. */
+const LOOKBACK = Math.max(...WINDOWS) - 1;
+
+/** The first of `days` (oldest first) on which the fleet read, as of that day, served any cell in any window from `rows`; `rows` holds the `LOOKBACK` days before the first of them too. */
 const firstServed = (rows: readonly InstallDay[], days: readonly string[]): string | null =>
-  days.find((day) => fleetCells(rows.filter((row) => row.day >= shiftDay(day, -6) && row.day <= day)).length > 0) ?? null;
+  days.find((day) => fleetCells(rows.filter((row) => row.day >= shiftDay(day, -LOOKBACK) && row.day <= day)).length > 0) ?? null;
 
 export const measurablesOf = (rows: readonly InstallDay[], asOf: string): Measurables => {
   const ever = new Set(rows.map((row) => row.install));
@@ -149,7 +152,7 @@ export const measurablesFrom = async (env: Env, asOf: string): Promise<Measurabl
   let first: string | null = null;
   for (let start = typeof oldest === 'string' ? oldest : asOf; first === null && start <= asOf; start = shiftDay(start, SCAN_DAYS)) {
     const end = shiftDay(start, SCAN_DAYS - 1) < asOf ? shiftDay(start, SCAN_DAYS - 1) : asOf;
-    const rows = await rowsBetween(env, shiftDay(start, -6), end);
+    const rows = await rowsBetween(env, shiftDay(start, -LOOKBACK), end);
     first = firstServed(rows, [...new Set(rows.filter((row) => row.day >= start).map((row) => row.day))].sort());
   }
   return { reporting: { installsEver: ever, installsLast7Days: recent, share: ever === 0 ? 0 : recent / ever }, firstFleetRead: first };

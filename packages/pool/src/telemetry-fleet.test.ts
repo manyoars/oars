@@ -230,6 +230,16 @@ describe('the fleet read, from the nightly rollup, on the Worker', () => {
       // No read of the rows starts at the beginning of time.
       expect(asked.filter((sql) => sql.includes('SELECT day, install') && sql.includes('0000-00-00'))).toEqual([]);
     }, 60_000);
+
+    it('finds the first fleet read across a week-apart cohort: five installs report a week apart and the fleet read is first served on the day the fifth reports', async () => {
+      for (const [at, ago] of [29, 22, 15, 8, 1].entries()) {
+        await keep(pool, daysAgo(ago), uuid(at + 1), [hook(50)]);
+        await rollupDayFor(pool, daysAgo(ago));
+      }
+      const answered = await operatorGet('operator-secret');
+      expect(answered.status).toBe(200);
+      expect(fieldOf(fieldOf(answered.json, 'measurables'), 'firstFleetRead')).toBe(daysAgo(1));
+    }, 60_000);
   });
 });
 
@@ -290,7 +300,16 @@ describe('the counting rules', () => {
     expect(measured.reporting).toEqual({ installsEver: 6, installsLast7Days: 3, share: 0.5 });
     expect(measured.firstFleetRead).toBe(daysAgo(30));
     expect(measurablesOf([], daysAgo(1))).toEqual({ reporting: { installsEver: 0, installsLast7Days: 0, share: 0 }, firstFleetRead: null });
-    expect(measurablesOf(rows.filter((one) => one.install !== uuid(5)), daysAgo(1)).firstFleetRead).toBeNull();
+    // Four installs never make a cell; install 6 joining install 1 to 4 would, inside the 30 day window.
+    expect(measurablesOf(rows.filter((one) => one.install !== uuid(5) && one.install !== uuid(6)), daysAgo(1)).firstFleetRead).toBeNull();
+  });
+
+  it('finds the first fleet read against the widest served window: five installs a week apart serve a 30 day cell on the day the fifth reports', () => {
+    const entries = [entry('2.1.5', 3, 3)];
+    const rows = [28, 21, 14, 7, 0].map((ago, at) => row(daysAgo(ago), uuid(at + 1), { entries }));
+    expect(fleetCells(rows)).toHaveLength(1);
+    expect(measurablesOf(rows, daysAgo(0)).firstFleetRead).toBe(daysAgo(0));
+    expect(measurablesOf(rows.slice(0, 4), daysAgo(0)).firstFleetRead).toBeNull();
   });
 
   it('lists a far count among installs and among accounts, and lists none without a baseline of K_CELL', () => {
