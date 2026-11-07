@@ -61,13 +61,13 @@ describe('skippedFolders', () => {
     expect(await skippedFolders(staged.runtime)).toEqual({ folders: 1, transcripts: 0, names: ['delta-app'] });
   });
 
-  it('names every folder holding transcripts when state.json is gone, since the saved allowlist is gone with it', async () => {
+  it('names no folder when state.json is gone, since an allowlist that is gone is every folder', async () => {
     const staged = stage();
     addProject(staged, 'beta-app', 'one', [LINE]);
     await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
     expect(await skippedFolders(staged.runtime)).toMatchObject({ names: ['beta-app'] });
     rmSync(paths(staged.storeDir).state);
-    expect(await skippedFolders(staged.runtime)).toMatchObject({ names: ['beta-app', 'proj'] });
+    expect(await skippedFolders(staged.runtime)).toMatchObject({ folders: 0, names: [] });
   });
 
   it('is empty when the projects root is missing', async () => {

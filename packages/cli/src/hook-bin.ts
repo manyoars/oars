@@ -39,7 +39,7 @@ try {
       hookEmitter(process.env, process.platform, homedir(), new URL('../package.json', import.meta.url), Date.now),
     );
     if (output !== undefined) process.stdout.write(output);
-    // The nightly task is where telemetry is sent from; it never throws, and it sends nothing unless telemetry is on, the notice was shown, and OARS_POOL_URL names a server.
+    // The nightly task is where telemetry is sent from; it never throws, and it sends nothing unless telemetry is on and the notice was shown (the server is OARS_POOL_URL, else the Many Oars pool).
     if (event === 'nightly') await sendNightly(process.env, process.platform, homedir(), Date.now);
   }
 } catch {

@@ -87,10 +87,16 @@ describe('oars sessions with a Cursor store', () => {
 });
 
 describe('oars sessions', () => {
-  it('deposit refuses without --allow (exit 2) and reads nothing', async () => {
-    const { deps, err } = setup();
-    expect(await run(['sessions', 'deposit'], deps)).toBe(ExitCode.USAGE);
-    expect(err.join('')).toContain('--allow');
+  it('deposit reads every folder without --allow, and none that --deny names', async () => {
+    const { deps, out } = setup();
+    expect(await run(['sessions', 'deposit', '--deny', 'proj'], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain('Deposited 0 sessions');
+    out.length = 0;
+    expect(await run(['sessions', 'deposit', '--allow', 'proj'], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).not.toContain('Deposited 0 sessions');
+    out.length = 0;
+    expect(await run(['--json', 'sessions', 'deposit'], deps)).toBe(ExitCode.OK);
+    expect(JSON.parse(out.join(''))).toMatchObject({ ok: true, skippedFolders: 0 });
   });
 
   it('runs deposit, books, recall, measure, and verify end to end, as text and as JSON', async () => {

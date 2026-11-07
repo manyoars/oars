@@ -1,4 +1,4 @@
-// `oars pool`: the only part of the sessions code that talks to a remote. The server is always named, by flag or environment, so nothing leaves on a default. Sign-in runs the provider's device flow here and reads no harness token; a session leaves only as a closed-vocabulary skeleton, and only after the exclusion check found it clean. Local capture, recall,
+// `oars pool`: the only part of the sessions code that talks to a remote. The server is always named, by flag or environment, so nothing leaves on a default. Sign-in runs the provider's device flow here and reads no harness token; a session leaves only as a skeleton of a closed list of fields, each value redacted first, and only after the exclusion check found it clean. Local capture, recall,
 // and reads never come through here.
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -6,17 +6,18 @@ import type { Outcome, RunDeps } from '../cli.js';
 import { emitOf } from '../telemetry/emit.js';
 import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../errors.js';
 import { compileAllow } from './allow.js';
-import { checkSession, exclusionPaths, lastWritten, type Reason } from './exclusion.js';
+import { checkSession, exclusionPaths, lastWritten, loadTerms, type Reason } from './exclusion.js';
+import { makeRedactor } from './redact.js';
 import { recordSend, recordWire, newTally, tallyBatch } from '../telemetry/wire.js';
 import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, isMissing, lockedBatch, markShown, outboxFolder, partsOf, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
-import { HARNESSES, hasEnded, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type PinnedKey, type SessionRecords, type TranscriptRoot } from './pool-wire.js';
+import { HARNESSES, hasEnded, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type PinnedKey, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
 import { carriedDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { shellReader } from './projection.js';
 import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
 import { contentHash } from './read.js';
 import { harnessOf as sessionHarness, type Harness } from './schema.js';
-import { loadStore, readSaved, readSkeletons, type SessionsRuntime } from './store.js';
+import { loadStore, readRedactDomains, readSaved, readSkeletons, type SessionsRuntime } from './store.js';
 import { vocabulary } from './vocab-load.js';
 
 const LOGIN = 'pool-login';
@@ -33,10 +34,12 @@ const SLOW_DOWN_MS = 5000;
 
 const usage = (message: string, step: string): CliError => new CliError(message, ExitCode.USAGE, step);
 
-/** `--server`, else `OARS_POOL_URL`; never a default. A token and a session's shape cross this connection, so plain http goes only to this machine. */
+/** The Many Oars pool, used when neither `--server` nor `OARS_POOL_URL` names another. */
+export const DEFAULT_POOL_URL = 'https://pool.manyoars.com';
+
+/** `--server`, else `OARS_POOL_URL`, else the Many Oars pool. A token and a session's shape cross this connection, so plain http goes only to this machine. */
 export const poolServer = (env: NodeJS.ProcessEnv, step: string, named?: string): string => {
-  const given = named ?? env.OARS_POOL_URL;
-  if (given === undefined || given === '') throw usage('Name the pool server with --server or OARS_POOL_URL; there is no default.', step);
+  const given = named ?? (env.OARS_POOL_URL === undefined || env.OARS_POOL_URL === '' ? DEFAULT_POOL_URL : env.OARS_POOL_URL);
   let url: URL;
   try {
     url = new URL(given);
@@ -142,7 +145,7 @@ interface Call {
   show?: Masker;
 }
 
-/** How a request leaves this machine. The command line passes none and so sends no batch; the lock in `deposit --send` is tested with one. */
+/** How a request leaves this machine. The command line passes none, so a send goes over the network (`networkSender`); a test passes one to read what would leave. */
 export type Sender = (request: Outgoing) => Promise<Reply>;
 
 /** The request exactly as it will be sent: `outbox` prints it, and `ask` hands the same value to `fetch`. */
@@ -183,7 +186,7 @@ const send = async (deps: RunDeps, step: string, request: Outgoing, show: Masker
   return { status: response.status, body, headers: response.headers };
 };
 
-/** The sender a real send would use: the request goes out over the network as built. The command line does not pass it (sending waits on the covenant); the loopback test does, to read what reaches the socket. */
+/** The sender `deposit --send` uses when none is given: the request goes out over the network as built. The loopback test passes it to read what reaches the socket. */
 export const networkSender = (deps: RunDeps, step: string): Sender => (request) => send(deps, step, request, undefined);
 
 /** The server's named refusal, as a failure: its `error` is the problem's code in `--json`. */
@@ -375,18 +378,15 @@ const callsOf = (token: string, bytes: string, hash: string): Call[] => {
   return parts.map((piece, at) => ({ token, bytes: piece, ...(parts.length === 1 ? {} : { part: { index: at + 1, count: parts.length, batch: hash } }) }));
 };
 
-/** `deposit --send <hash>`: the lock, then (only when a sender is given) the covenant and the request. The body is read and hashed again just before the request. */
+/** `deposit --send <hash>`: the lock, then the covenant (accepted here or before, or nothing is sent), then the request. The body is read and hashed again just before the request. */
 const sendBatch = async (deps: RunDeps, options: { outbox: string; server: string; token: string; hash: string; acceptCovenant: string | undefined; via: Sender | undefined }): Promise<Outcome> => {
-  const { outbox, server, token, hash, via } = options;
+  const { outbox, server, token, hash } = options;
+  const via = options.via ?? networkSender(deps, DEPOSIT);
   if (!/^[0-9a-f]{64}$/.test(hash)) throw usage('--send takes the SHA-256 that oars pool outbox printed: 64 hexadecimal characters.', DEPOSIT);
   const locked = await lockedBatch(outbox, hash);
   if (!locked.ok) {
     const title = lockMessages[locked.code];
     throw new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code: locked.code, title, status: 409 });
-  }
-  if (via === undefined) {
-    const title = 'Sending a batch waits on the pool covenant: this oars does not send one yet. Nothing was sent.';
-    throw new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code: 'sending_disabled', title, status: 409 });
   }
   await openCovenant(deps, server, token, options.acceptCovenant, via);
   const bytes = await unchangedBytes(locked.file, hash);
@@ -424,14 +424,16 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   // A client past `registry_max_age` builds no batch (spec Section 1.3): its sessions wait in `A` and nothing is lost. This comes before anything is written or sent.
   const expired = vocabularyExpired(deps);
   if (expired !== undefined) throw expired;
-  // Accepting the covenant is a step of sending, which is disabled in this release: say so rather than exit 0 as though it was accepted.
-  if (options.send === undefined && options.acceptCovenant !== undefined) throw usage('--accept-covenant belongs to --send, and sending is disabled in this release. Nothing was accepted.', DEPOSIT);
+  // Accepting the covenant is a step of sending a batch: alone it would exit 0 as though something had been sent under it.
+  if (options.send === undefined && options.acceptCovenant !== undefined) throw usage('--accept-covenant belongs to --send: it is accepted as a step of sending a batch. Nothing was accepted.', DEPOSIT);
   const outbox = outboxFolder(runtime.storeDir, server);
   if (options.send !== undefined) return sendBatch(deps, { outbox, server, token, hash: options.send, acceptCovenant: options.acceptCovenant, via: options.via });
   const { terms } = exclusionPaths(runtime.projectsRoot, deps.env);
   const allow = compileAllow((await readSaved(runtime.storeDir)).allow);
   const discarded = await discardStale(outbox);
   const counts: DepositCounts = { sessions: 0, batched: 0, excluded: { folder: 0, term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, uncaptured: 0, notEnded: 0, refused: 0, refusedFields: [], discarded, withdrawn: 0 };
+  // The one gate on a name: the operator's redactor and exclusion terms (t881). Everything else the pool classes itself.
+  const gate: WireGate = { redact: makeRedactor(await readRedactDomains(runtime.storeDir)), terms: await loadTerms(terms) };
   const built = new Set<string>();
   // The bytes of the batches written in this pass: telemetry counts them, and the command's own document does not carry them.
   let builtBytes = 0;
@@ -472,7 +474,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   const carried = carriedDeltas(account, placed, await sentDeltas(outbox));
   for (const { records, key } of ready) {
     const delta = carried.get(records.main.session);
-    const skeleton = skeletonOf(records, key, shellReader(vocabulary()), contentHash, delta?.entries);
+    const skeleton = skeletonOf(records, key, shellReader(vocabulary()), contentHash, delta?.entries, gate);
     if (skeleton === null) {
       counts.uncaptured += 1;
       await withdraw(key);
