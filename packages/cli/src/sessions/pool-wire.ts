@@ -57,6 +57,8 @@ export type SkeletonStep = Omit<StepObservation, 'n' | 'seg' | 'frameId' | 'cost
   tokens: number | null;
   /** An `ms` bucket of the step's time. */
   ms: number | null;
+  /** True when `tokens` was divided among the calls of one response, not measured for this step; absent otherwise. */
+  allocated?: true;
   /** A `tokens` bucket of the tokens the run spent after this step (spec Section 1.2): the bucket of the exact sum, never a sum of buckets. */
   remainingTokens: number;
   /** The projected type of the subagent whose run holds the step, a built-in or `custom`; null on a main-run step. */
@@ -400,6 +402,7 @@ const transcriptOf = (
       status: reported,
       tokens: cost.tokens === null ? null : bucketOf('tokens', cost.tokens),
       ms: cost.durationMs === null ? null : bucketOf('ms', cost.durationMs),
+      ...(cost.allocated === true ? { allocated: true as const } : {}),
       remainingTokens: 0,
       agentType,
       parent: parent === null || spawners === null ? null : (spawners.get(parent) ?? null),
@@ -535,7 +538,7 @@ export const OPTIONAL = {
   stack: ['size', 'languageShares'],
   prompt: ['wallSec', 'explore'],
   tool: ['prompt', 'durationMs', 'errorCode', 'recoveryCalls'],
-  step: ['tokens', 'ms', 'parent', 'skill'],
+  step: ['tokens', 'ms', 'allocated', 'parent', 'skill'],
 } as const satisfies { readonly [level: string]: readonly string[] };
 
 /** The most bytes (as JSON) one field this reader does not know, or one literal, may hold: an enumerated value or a literal never needs more, and a newer client's larger structure belongs in a new format version. The deposit's own cap is no part of this. */
@@ -579,6 +582,12 @@ const textOf = (value: unknown, at: string): string => {
 const countOf = (value: unknown, at: string): number => {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw new Refused(at, 'not a count');
   return value;
+};
+
+/** The allocation marker is `true` or absent: a depositor cannot say `false`, since an unmarked step is the measured one. */
+const allocatedOf = (value: unknown, at: string): true => {
+  if (value !== true) throw new Refused(at, 'not true');
+  return true;
 };
 
 /** An absent field reads as null: an optional field is absent or null alike. */
@@ -807,6 +816,7 @@ const parseStep = (held: Collected, harness: WireHarness, value: unknown, at: st
     status: oneOf(held, STATUSES, raw.status, under(at, 'status')),
     tokens: orNull(raw.tokens, under(at, 'tokens'), (entry, entryAt) => bucketIn('tokens', entry, entryAt)),
     ms: orNull(raw.ms, under(at, 'ms'), (entry, entryAt) => bucketIn('ms', entry, entryAt)),
+    ...(raw.allocated === undefined ? {} : { allocated: allocatedOf(raw.allocated, under(at, 'allocated')) }),
     remainingTokens: bucketIn('tokens', raw.remainingTokens, under(at, 'remainingTokens')),
     agentType: orNull(raw.agentType, under(at, 'agentType'), (entry, entryAt) => parseAgentType(held, entry, entryAt)),
     parent: orNull(raw.parent, under(at, 'parent'), countOf),

@@ -384,6 +384,8 @@ export interface StepCost {
   /** The output tokens of the call's response, shared evenly among that response's calls; null when it reported none. */
   tokens: number | null;
   durationMs: number | null;
+  /** True when `tokens` was divided among the response's calls, not measured for this call; absent when the response made one call. */
+  allocated?: true;
 }
 
 /**
