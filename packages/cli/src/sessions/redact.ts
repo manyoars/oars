@@ -115,11 +115,13 @@ const SECRET_NAME = /password|passwd|secret|token|api[_-]?key|private[_-]?key|cr
 const SECRET_NUMBER_NAME = /password|passwd|secret|api[_-]?key|private[_-]?key|credential/i;
 const CONTAINER = /^\s*[{[]/;
 
+const isContainer = (value: unknown): value is Json[] | JsonObject => typeof value === 'object' && value !== null;
+
 const parseContainer = (text: string): Json[] | JsonObject | undefined => {
   if (!CONTAINER.test(text)) return undefined;
   try {
-    const parsed = JSON.parse(text) as Json;
-    return typeof parsed === 'object' && parsed !== null ? parsed : undefined;
+    const parsed: unknown = JSON.parse(text);
+    return isContainer(parsed) ? parsed : undefined;
   } catch {
     return undefined;
   }

@@ -83,6 +83,8 @@ describe('the raw copy over the census shape table', () => {
   });
 });
 
+const hasContent = (value: unknown): value is { content: string } => typeof value === 'object' && value !== null && typeof Reflect.get(value, 'content') === 'string';
+
 describe('the decoded-value rule', () => {
   it('keeps the exact bytes of a line it does not change, escapes and spacing included', () => {
     const bs = String.fromCharCode(92);
@@ -110,7 +112,9 @@ describe('the decoded-value rule', () => {
     const { text } = redactTranscript(`${JSON.stringify({ content: inner })}\n`, []);
     expect(text).not.toContain('hunter2pass');
     expect(text).not.toContain(AWS_SECRET);
-    const content = (JSON.parse(text.trim()) as { content: string }).content;
+    const outer: unknown = JSON.parse(text.trim());
+    if (!hasContent(outer)) throw new Error('no content');
+    const content = outer.content;
     expect(JSON.parse(content)).toEqual({ SecretAccessKey: '<secret>', nested: '[{"password":"<secret>"}]' });
   });
 
@@ -127,7 +131,7 @@ describe('the decoded-value rule', () => {
   });
 
   it('is valid JSON afterward when a rule used to eat the n of a newline', () => {
-    const token = `${B62(10, 43)}${'q8z7x6c5v4b3n2m1'}`;
+    const token = `${B62(10, 43)}q8z7x6c5v4b3n2m1`;
     const line = JSON.stringify({ out: `first\nMAPBOX_SK=${token}\nlast` });
     const { text } = redactTranscript(`${line}\n`, []);
     expect(JSON.parse(text.trim())).toEqual({ out: 'first\n<secret>\nlast' });
