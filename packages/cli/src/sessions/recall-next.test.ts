@@ -60,7 +60,7 @@ describe('positionsOf', () => {
   });
 
   it('ignores other families, a prefix that is not a closed action chain, a missing slice, and a next map that is not usable', () => {
-    const other = { ...cell('file.edit', 20, 0.6), family: 'recovery' };
+    const other: Read = { ...cell('file.edit', 20, 0.6), family: 'recovery' };
     const literal = cell('file.edit>some private name', 20, 0.6);
     const noPrefix = { ...cell('file.edit', 20, 0.6), slice: {} };
     const noNext = { ...cell('file.read', 20, 0.6), value: { topShare: 0.6, next: null } };
