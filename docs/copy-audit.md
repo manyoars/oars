@@ -56,6 +56,9 @@ rather than read row by row.
 | C56 | `cli.ts:393` (`sessions hook install`) | install merges the SessionStart, PostToolUseFailure, and SessionEnd hooks | `sessions/install.ts:40-46` writes four hooks (PreToolUse too) and, on Windows, registers the nightly task, which sends | false (fixed; pinned in `help.test.ts`) |
 | C57 | `cli.ts:488` (`oars pool`) | the group deposits session skeletons only | after a yes to the raw prompt, `deposit` also queues redacted raw copies | misleading (fixed; pinned) |
 | C58 | `cli.ts:184` (`sessions deposit`) | each raw transcript is hard-linked | the store keeps a hard link or a copy (`README.md:20`, `:70`) | false as worded (fixed; pinned) |
+| C59 | `packages/cli/README.md:115` | the names that leave in pool skeletons are skill, model, harness version, tool, and MCP server names | the wire also carries effort, a shell call's program, subcommand, and flag names, and tool-input key names (`sessions/pool-wire.ts:746`, `:753`, `:928`; `CHANGELOG.md:21`, `:24`) | misleading (understates; fixed) |
+| C60 | `CHANGELOG.md:16` (t903 bullet) | the names leave only through `pool deposit`'s gate, and `pool outbox` prints every byte | the nightly task sends batches it built in the same run without printing them (as C6) | false (fixed) |
+| C61 | `CHANGELOG.md:52` (format 3 bullet) | "Nothing is sent" | the same release ships the nightly send | false (cut) |
 | C39 | `docs/pool.md:7` | the default pool is not deployed yet; a command that reaches it exits 8; a redirect is refused | `errors.ts:91` (unreachable is exit 8), `pool-command.ts:188` `redirect: 'error'` | true |
 | C40 | `docs/sessions-store.md:186` | the store uploads nothing, and telemetry carries nothing from the store | `store-health` carries counts and sizes of the store (`docs/telemetry.md` "store-health"); the pool commands and the nightly send skeletons built from it | false |
 | C41 | `docs/gate.md:134-144` | "Measured": figures from one run over one Windows machine's harness folder | figures from one person's machine; not reproducible from the repository | cannot back |
@@ -108,3 +111,6 @@ stated wherever the default pool or `login.manyoars.com` is named as a destinati
 | C56 | `cli.ts:393`: "merge the SessionStart, PreToolUse, PostToolUseFailure, and SessionEnd hooks ..., and on Windows register the nightly task (which sends to the pool after you accept its covenant)" |
 | C57 | `cli.ts:488`: "... and, after a yes to the raw prompt, redacted raw copies" |
 | C58 | `cli.ts:184`: "hard-linked or copied" |
+| C59 | `packages/cli/README.md:115` lists every name class the wire carries |
+| C60 | `CHANGELOG.md:16`: "... only in pool batches built through `pool deposit`'s one gate ..., sent by `deposit --send` or the nightly task, and `pool outbox` prints what is queued when you run it" |
+| C61 | `CHANGELOG.md:52`: "Nothing is sent: " cut |
