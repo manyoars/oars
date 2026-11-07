@@ -23,6 +23,9 @@ import { ensureSchedule, hookStatus, installHooks, recordSchedule, SCHEDULE_LEFT
 import { serve } from './mcp.js';
 import { refreshPool, servedPool } from './pool.js';
 import { booksLines, lastFetchedBundle } from './pool-books.js';
+import { formatPackageBooks, packageBooks } from './package-books.js';
+import { scanStore } from './exclusion.js';
+import { vocabulary } from './vocab-load.js';
 import { FAMILIES } from './read.js';
 import { formatNotReadable, notReadable } from './read-readable.js';
 import { formatReads, isFamily, parseSlice, selectReads } from './read-rows.js';
@@ -224,7 +227,23 @@ const inRepositoryStore = (store: Store, repo: string): Store => {
   };
 };
 
-export const sessionsBooks = async (deps: SessionsDeps, options: { by: BooksBy; sinceDays: number | undefined; repo?: string }): Promise<Outcome> => {
+/**
+ * `books --by package`: the store's tool calls per public package, after the A38 scan `oars sessions exclusions` runs (a missing term file excludes everything).
+ * The scan reads the transcripts and writes nothing; the store is only read.
+ */
+const packageBooksOutcome = async (deps: SessionsDeps, options: { sinceDays: number | undefined; termsFile: string }): Promise<Outcome> => {
+  const runtime = runtimeOf(deps);
+  const [{ excluded }, store] = await Promise.all([scanStore(runtime, options.termsFile), loadStore(runtime.storeDir)]);
+  const cutoff = options.sinceDays === undefined ? undefined : new Date(deps.now() - options.sinceDays * 86_400_000).toISOString();
+  const result = packageBooks(store, new Set(excluded.map((entry) => entry.session)), vocabulary(), cutoff);
+  return { document: { ok: true, by: 'package', ...result, newerCaptures: store.newerCaptures }, text: [formatPackageBooks(result), ...newerNotice(store)].join('\n') };
+};
+
+export const sessionsBooks = async (deps: SessionsDeps, options: { by: BooksBy | 'package'; sinceDays: number | undefined; repo?: string; termsFile?: string }): Promise<Outcome> => {
+  if (options.by === 'package') {
+    if (options.repo !== undefined) throw new CliError('--repo does not apply to --by package: its rows are public package names across the whole store.', ExitCode.USAGE, 'usage');
+    return packageBooksOutcome(deps, { sinceDays: options.sinceDays, termsFile: options.termsFile ?? '' });
+  }
   const runtime = runtimeOf(deps);
   const { storeDir } = runtime;
   const loaded = await loadStore(storeDir);
