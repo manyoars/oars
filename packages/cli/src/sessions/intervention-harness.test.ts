@@ -215,8 +215,9 @@ const pi = (turns: readonly Turn[]): string => {
       const args = isEdit(act) ? { path: `/work/app/${act.edit}`, edits: [{ oldText: 'a', newText: 'b' }] } : { command: act.run };
       const name = isEdit(act) ? 'edit' : 'bash';
       add({ role: 'assistant', content: [{ type: 'toolCall', id: call, name, arguments: args }], api: 'anthropic-messages', provider: 'anthropic', model: 'claude-sonnet-4-5', stopReason: 'toolUse' });
-      const failed = !isEdit(act) && act.exit !== 0;
-      add({ role: 'toolResult', toolCallId: call, toolName: name, content: [{ type: 'text', text: failed ? `failed\n\nCommand exited with code ${String(isEdit(act) ? 0 : act.exit)}` : 'ok' }], isError: failed });
+      const exit = isEdit(act) ? 0 : act.exit;
+      const failed = exit !== 0;
+      add({ role: 'toolResult', toolCallId: call, toolName: name, content: [{ type: 'text', text: failed ? `failed\n\nCommand exited with code ${String(exit)}` : 'ok' }], isError: failed });
     }
   }
   return piLines(asText(entries), 'sess').map((entry) => JSON.stringify(entry)).join('\n');
