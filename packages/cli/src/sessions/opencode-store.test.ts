@@ -120,7 +120,9 @@ describe('depositing the OpenCode source', () => {
   it('is read by default and not when denied, and an allowed name reports nothing missing while a typo does', async () => {
     const s = await staged();
     // With nothing named every source is read; a denial keeps this one out.
-    expect((await deposit(s.runtime, options([]))).missing).toEqual([]);
+    const byDefault = await deposit(s.runtime, options([]));
+    expect(byDefault.missing).toEqual([]);
+    expect(byDefault.sources.opencode?.read).toBe(2);
     expect((await deposit(s.runtime, options(['!opencode']))).sources['opencode']).toBeUndefined();
     expect((await deposit(s.runtime, options(['opencode']))).missing).toEqual([]);
     expect((await deposit(s.runtime, options(['opencod']))).missing).toEqual(['opencod']);
