@@ -605,7 +605,10 @@ carry `harness: "cursor"`; a record with no `harness` is Claude Code's (`harness
 - **Idempotent.** `state.json` keeps one entry per composer (`cursor/<composerId>`) whose cursor is the message count and `lastUpdatedAt`;
   a second deposit adds nothing, and a composer that gained messages is captured again.
 - **Absent fields.** The store has no cache read or write tokens, thinking tokens, subagents, hooks, cost-state, git branch, or Cursor
-  version, so they take the empty value (0, `[]`, or null; `env.harness` is null). A bubble's time is its `createdAt`, else
+  version, so they take the empty value (0, `[]`, or null; `env.harness` is null).
+  The version census of t872 found nothing to read: no field of the composer, its headers, or a bubble carries the Cursor build, so `harnessVersion`
+  stays null, the session's cells are `cursor/unknown/<model>`, and a bundle for them is asked for as `unknown` (`pool.md`, "What a bundle serves").
+  A bubble's time is its `createdAt`, else
   `timingInfo.clientStartTime` when that is an epoch time at or after the composer's start (a smaller value is a relative clock and is
   ignored); a user bubble with neither takes the next assistant bubble's, and any other takes the previous one's, so wall time per prompt is coarse.
   A shell command Cursor records as `completed` with a nonzero `exitCodeV2` is a failed `Bash` call, and a tool `error` is read from its JSON
@@ -721,7 +724,7 @@ format: the log form is behind `chat.useLogSessionStorage` with a "remove after 
 `chatModel.ts:2593`). An unreadable session is warned about by name and skipped, never fatal. The one hand run that would settle it: on a machine with VS Code Stable and Copilot Chat,
 open one chat that runs a terminal command and has one tool call refused (press Skip on the confirmation), copy the `Code` folder under `%APPDATA%` (or the platform's equivalent) to a temp
 folder, set `APPDATA` and `HOME` to a temp folder with that copy inside, confirm `oars sessions` points at it, then `oars sessions deposit --allow vscode-copilot` and `oars sessions verify --strict`.
-It is settled only if the session count is nonzero, there are zero violations, the command's `Bash` record carries its real exit code, the refused call reads `user-rejected`, and usage is nonzero; also check whether the request holds `modelTotals` at all (if it does not, `input` 0 is expected and means not known, and the `inputTokens` comparison cannot be made).
+It is settled only if the session count is nonzero, there are zero violations, the command's `Bash` record carries its real exit code, the refused call reads `user-rejected`, and usage is nonzero; also check that the request's `agent.extensionVersion` is present (it fills `harnessVersion`) and whether the request holds `modelTotals` at all (if it does not, `input` 0 is expected and means not known, and the `inputTokens` comparison cannot be made).
 
 - **Where.** The folder that holds one folder per VS Code build: `%APPDATA%` on Windows, `~/Library/Application Support` on macOS, `$XDG_CONFIG_HOME` (else `~/.config`) on Linux; `VSCODE_APPDATA` replaces it.
   The builds read are `Code` (Stable), `Code - Insiders`, and `Code - OSS`; a build with another `nameShort`, a portable install, or `--user-data-dir` is not discovered. Inside a build's `User` folder: `workspaceStorage/<hash>/chatSessions/<id>.json` or `.jsonl`,
@@ -736,7 +739,16 @@ It is settled only if the session count is nonzero, there are zero violations, t
   A refusal is `isConfirmed` `{type:5, source:'user'}` (the Skip button, which is a confirmation's decline button), `{type:0, source:'user'}` (an explicit cancel), or the boolean `false` (before VS Code 1.104): all store `user-rejected`.
   `{type:0}` or `{type:5}` with `source` `hook` or `riskAssessment` reads as a permission denial, and a `Denied` with no `source` claims neither actor (`chatService.ts:910`: "absence does not identify an actor"), so it is a plain denial.
   A `{type:5}` with no `source` is the skip after approval and has no outcome. Timestamps are epoch milliseconds; a missing or implausible one is never made up, the time carries forward.
-- **Absent.** Cost, a harness version, and working-directory changes have no equivalent: the file holds none. `completionTokens` on the request is the whole turn's output; `modelTotals[{model, inputTokens, cachedTokens, outputTokens}]`, also on the request (`chatModel.ts:2086,2093`), is the only per-model figure
+- **Absent.** Cost and working-directory changes have no equivalent: the file holds none, and the editor's version is nowhere in it.
+  The `version: 3` above is the chat-session schema's, not the extension's. The Copilot Chat extension's own version is the one version the file
+  carries: each request holds the agent VS Code serialized beside it, `agent` (`ISerializableChatRequestData.agent`, `UriDto<IChatAgentData>`,
+  `chatModel.ts:2196,2243`, written from the response's agent at `chatModel.ts:3849-3870`), and `IChatAgentData.extensionVersion` (`chatAgents.ts:71`)
+  is that version, so `harnessVersion` is the newest request's `agent.extensionVersion` (t872's census), read only when `agent.extensionId.value` is `GitHub.copilot-chat`, compared
+  case-insensitively as `ExtensionIdentifier` does: a third-party chat participant (another extension's `@name`) is serialized the same way with its own extension's
+  version, which is not Copilot Chat's and is never read. A request whose agent has none, or a session of an older build with no `agent`, leaves it unset. The cells are `vscode-copilot/<extension
+  version>/<model>`, or `vscode-copilot/unknown/<model>` for a session that names none, which a bundle asks for as `unknown` (`pool.md`, "What a
+  bundle serves").
+  `completionTokens` on the request is the whole turn's output; `modelTotals[{model, inputTokens, cachedTokens, outputTokens}]`, also on the request (`chatModel.ts:2086,2093`), is the only per-model figure
   (`chatService.ts:176-188`); neither sits under a `usage` key in the file, and a turn that used several models has them summed on its one assistant line, subagent-model tokens attributed to the request model. `promptTokens` is the last model call alone, so it is not read as consumption.
   **Input 0 means not known.** A normal Copilot Chat session, written by the extension, carries no `modelTotals`: the extension API bridge passes the editor only `promptTokens`, `completionTokens`, `outputBuffer`, `copilotCredits`, and
   `promptTokenDetails` (`extHostChatAgents2.ts:463-468`), and a public code search found `modelTotals` written only by the agent-host adapter (`stateToProgressAdapter.ts:936`). On such a session the reader stores
@@ -795,7 +807,10 @@ with the file, and usage is nonzero with `input_tokens` equal to the model's pro
   resume and each message is taken as it stands. `tokens.input` is the prompt count and includes the cache (`uiTelemetry.ts:317-320` computes the uncached part as
   `input - cached`), so the stored `input_tokens` is `input - cached` with the cache read kept apart, as capture's fields are disjoint. The vendor counts `thoughts` apart from `output` (candidates; `chatRecordingTypes.ts:21-25`), so `output_tokens` is `output + thoughts` and `thoughts` is also
   `output_tokens_details.thinking_tokens`, which keeps thinking within output as `verify` holds; `tool` (the tool-use prompt) is not mapped. A message with no `tokens` has no usage and is not an error.
-- **Absent.** `info`, `warning`, and `error` messages (`chatRecordingTypes.ts:74`) are not read: they are the CLI talking to the operator, not a prompt or a response. Cost has no equivalent. The CLI version is not in the record and is left unset. A call's duration is not recorded. `setup`, `funnel`, and `trust` other than `unattendedRun` are absent, as for Copilot (`session-shape.ts`).
+- **Absent.** `info`, `warning`, and `error` messages (`chatRecordingTypes.ts:74`) are not read: they are the CLI talking to the operator, not a prompt or a response. Cost has no equivalent.
+  The CLI version is not in the record and is left unset (t872's census found no other field of the recorded session that carries it), so the cells
+  are `gemini/unknown/<model>` and a bundle for them is asked for as `unknown` (`pool.md`, "What a bundle serves").
+  A call's duration is not recorded. `setup`, `funnel`, and `trust` other than `unattendedRun` are absent, as for Copilot (`session-shape.ts`).
 
 **Known gaps.**
 
@@ -860,7 +875,9 @@ that a deposit counts only the child's own prompts.
 - **Absent.** There is no cost field in the skeleton (`usage.json` has `costUsdTicks`, 1e10 per USD, which is not read), no reasoning text, no per-call model, and no
   per-response usage: usage is per turn. Each turn's totals land on the last response before its `endedAt`, else the first (turn numbers are not used, since a rewind
   renumbers them), and that turn's `primaryModelId` becomes the response's model; other responses carry `summary.current_model_id`, the model the session ended on. No
-  file records the Grok Build version, so the skeleton's harness version is empty. `inputTokens` is the full prompt, cache reads and writes included
+  file records the Grok Build version (t872's census, from the fixtures and the cited source), so the skeleton's harness version is empty, the cells
+  are `grok/unknown/<model>`, and a bundle for them is asked for as `unknown` (`pool.md`, "What a bundle serves").
+  `inputTokens` is the full prompt, cache reads and writes included
   (`xai-grok-sampling-types/src/conversation.rs:771-773`: "`prompt_tokens` is always the FULL prompt size (uncached + cache reads + cache writes)", mapped to `inputTokens` at
   `xai-chat-state/src/usage.rs:53` and `usage_file.rs:80`), so the stored input is `inputTokens - cachedReadTokens - cacheCreationTokens` (never below 0) and the cache fields are kept apart, as capture's are.
 - **Totals.** `usage.json` `turns[]` are per-turn deltas and `session` is their sum (`usage_file.rs:230-300`), so every turn is added once; there is no cumulative first

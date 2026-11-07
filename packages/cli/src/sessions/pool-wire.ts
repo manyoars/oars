@@ -507,8 +507,14 @@ export const skeletonOf = (records: SessionRecords, id: string, read: ShellReade
   return { format: SKELETON_FORMAT, vocabVersion: VOCAB_VERSION, fieldsVersion: FIELD_LIST_VERSION, id, transcripts, timingPrint: durations.length < MIN_TIMED_CALLS ? null : print(durations), deltas: [...deltas] };
 };
 
-/** A harness version a bundle can be asked for: public, so the request carries nothing private. The admitted list replaces this shape rule when it ships. */
-export const isBundleVersion = (version: string): boolean => version !== LITERAL && publicVersion(version) === version;
+/**
+ * The version bucket of a session that recorded none: Cursor, Gemini, and Grok Build keep no harness version in their local files, and neither does a VS Code Copilot Chat session whose requests carry no `agent.extensionVersion`, so their cells are
+ * `<harness>/unknown/<model>`. It is the one non-numeric word a bundle can be asked for, so those harnesses are served the cells they have.
+ */
+export const UNKNOWN_VERSION = 'unknown';
+
+/** A harness version a bundle can be asked for: public, so the request carries nothing private, or `unknown` for a harness with none on record. The admitted list replaces this shape rule when it ships. */
+export const isBundleVersion = (version: string): boolean => version === UNKNOWN_VERSION || (version !== LITERAL && publicVersion(version) === version);
 
 /** Whether `name` is a harness the schema names. */
 export const isHarness = (name: string): name is Harness => HARNESSES.some((harness) => harness === name);
