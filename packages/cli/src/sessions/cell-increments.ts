@@ -148,7 +148,8 @@ const sessionRecord = (id: string, parent: string | null, spawnedIn: string | nu
   tools: {},
   files: [],
   fileHashes: [],
-  repo: null,
+  // The store's salted key, so a read that groups by repo works on pooled data from one store (one machine). It joins no cell.
+  repo: frame.repoKey ?? null,
   urls: [],
   searches: [],
   bashCmds: 0,
