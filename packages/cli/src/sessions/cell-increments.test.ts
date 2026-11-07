@@ -67,6 +67,19 @@ describe('rule 5: a bucket and no exact number', () => {
     expect(cell?.failed).toBe(1);
   });
 
+  it('reads a usage category the wire sent as null as a placeholder zero that is left out of usageObserved, with the coverage the prompt sent', () => {
+    const skeleton = skeletonOfLocal(localStore());
+    const [main] = skeleton.transcripts;
+    const first = main?.prompts[0];
+    if (main === undefined || first === undefined) throw new Error('the skeleton has no prompt');
+    const sent = { ...first, usage: { ...first.usage, input: null }, usageResponses: 3 };
+    const rebuilt = storeOf([{ ...skeleton, transcripts: [{ ...main, prompts: [sent] }] }]).prompts[0];
+    expect(rebuilt?.usage.input).toBe(0);
+    expect(rebuilt?.usageObserved).toEqual(['cacheWrite', 'cacheRead', 'output', 'thinking']);
+    expect(rebuilt?.usage.output).toBe(floorOf('tokens', first.usage.output ?? 0));
+    expect(rebuilt?.usageResponses).toBe(floorOf('count', 3));
+  });
+
   it('reads a lower bound of what the local store derives exactly, and equal when every value sits on a floor', () => {
     const exact = deriveCells(localStore());
     const floored = incrementsOf(skeletonOfLocal(localStore()));

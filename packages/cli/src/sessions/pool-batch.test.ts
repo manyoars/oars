@@ -64,10 +64,12 @@ describe('the fold and the envelope', () => {
     });
   };
 
-  it('is one batch of the main run then each subagent run, each step tagged, a nested run linked to nothing, an orphan folded into nothing', () => {
+  it('is one batch of the main run then each subagent run, each step tagged, a nested run linked to the subagent that spawned it, an orphan folded into nothing', () => {
     const skeleton = built(withSubagent(9));
     expect(skeleton.transcripts).toHaveLength(3);
-    expect(skeleton.transcripts[2]?.tools.every(({ steps }) => steps.every(({ agentType, parent }) => agentType === 'Plan' && parent === null))).toBe(true);
+    expect(skeleton.transcripts[2]?.tools.every(({ steps }) => steps.every(({ agentType, parent }) => agentType === 'Plan' && parent === 0))).toBe(true);
+    // The nested run names the first subagent's call 0, not the main run's.
+    expect(skeleton.transcripts.map(({ spawnedIn }) => spawnedIn)).toEqual([null, 0, 1]);
     expect(skeleton.transcripts[0]?.tools.every(({ steps }) => steps.every(({ agentType }) => agentType === null))).toBe(true);
     expect(skeleton.transcripts[1]?.tools.every(({ steps }) => steps.every(({ agentType, parent }) => agentType === 'Explore' && parent === MIN_TIMED_CALLS))).toBe(true);
     expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toMatchObject({ ok: true });
@@ -142,6 +144,14 @@ describe('a usage total the source never recorded', () => {
 
   it('sends a number only for the categories a partial total observed', () => {
     expect(usageOf(['output'])).toEqual({ input: null, cacheWrite: null, cacheRead: null, output: bucketOf('tokens', 700), thinking: null });
+  });
+
+  it('sends the responses a partial total covers as a count bucket, and none for a record that carries no coverage', () => {
+    const covered = (responses: number | undefined) =>
+      built(store({ sessions: [session('m', { frame: framed })], prompts: [prompt('m', 0, { frame: framed, usageObserved: ['output'], ...(responses === undefined ? {} : { usageResponses: responses }) })], tools: [] })).transcripts[0]?.prompts[0];
+    expect(covered(37)?.usageResponses).toBe(bucketOf('count', 37));
+    expect(covered(0)?.usageResponses).toBe(bucketOf('count', 0));
+    expect(covered(undefined)).not.toHaveProperty('usageResponses');
   });
 
   it('reads a record that predates usageObserved as fully observed', () => {

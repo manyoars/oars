@@ -55,6 +55,11 @@ describe('depositing the Cursor source', () => {
     expect(loose?.usageObserved).toEqual([]);
     expect(loose?.usageResponses).toBe(0);
     expect(store.sessions.find((session) => session.session === 'cursor-chat')?.usageObserved).toEqual(['input', 'output']);
+    // The derived prompts carry the same labels as their session.
+    const promptOf = (id: string) => store.prompts.find((held) => held.session === id);
+    expect(promptOf('cursor-loose')?.usageObserved).toEqual([]);
+    expect(promptOf('cursor-loose')?.usageResponses).toBe(0);
+    expect(promptOf('cursor-chat')?.usageObserved).toEqual(['input', 'output']);
   });
 
   it('reads a Cursor call by its own table and frames its session as Cursor, from the deposit down', async () => {
