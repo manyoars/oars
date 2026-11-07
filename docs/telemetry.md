@@ -47,6 +47,19 @@ One per fire of a hook: the bare `oars gate hook` (recorded by its own process, 
 | `bytes` | The size of what the hook printed to stdout; 0 when nothing. |
 | `harnessVersion`, `model` | When the hook saw them (the hook input's `model`, or the transcript a push reads): a public version or model name as the pool's vocabulary lists it, else `other`. Absent when the hook did not see one. |
 
+### `recall`
+
+One per recall: `oars sessions recall` (every form), the `oars_recall` MCP tool an agent calls, and the push a `pre-tool` hook makes. Counts and closed words only: the query's text, an entity or pattern it named, and the answer it rendered are never recorded.
+
+| Field | What it holds |
+|---|---|
+| `form` | How it was asked: `pattern`, `entity`, `question`, `text`, or `legacy` (`--error`, `--path`, `--class`). |
+| `mode` | `pull` (someone asked) or `push` (a hook offered it). |
+| `families` | The read families the answer served, from the closed list (`recovery`, `fit`, `cost`, `change`, `live`, `adoption`, `method`, `next-step`, `tool-day`, `version-boundary`, `substitution`, `interaction`, `day-move`, `entity`). |
+| `kind` | `hit` or `miss`. |
+| `reads`, `evidence`, `tokens` | How many reads and evidence rows the answer cites, and its size in tokens (a count for comparing arms, not a bill). |
+| `arm` | The exposure record the recall also keeps on this machine: `shown`, or `held` (a push the holdback arm kept from the agent). A pull is always `shown`. |
+
 Later releases add event types here, one section each.
 
 ## What is never recorded or sent
