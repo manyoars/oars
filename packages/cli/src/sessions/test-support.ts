@@ -68,7 +68,7 @@ export const addProject = (staged: Staged, project: string, name: string, lines:
 
 export const NOW = Date.parse('2026-06-10T00:00:00Z');
 
-/** The `floor` a test bundle states. The client reads the floor from the bundle and applies none of its own, so any count would do; the pool's own is `K_CELL` (`packages/pool/src/derive.ts`). */
+/** The `floor` a test bundle states. The client reads the floor from the bundle and applies none of its own, so any count would do; the pool's own default is `DEFAULT_PUBLIC_FLOOR` (`packages/pool/src/floors.ts`). */
 export const TEST_FLOOR = 3;
 
 /** A clock past the ideal end of every file a test writes: the deposit command reads a session whose files are newer than six hours as still in progress. */
