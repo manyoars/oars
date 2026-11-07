@@ -7,8 +7,8 @@ import { slugOf } from '../sessions/allow.js';
 import { runHook } from '../sessions/hooks.js';
 import { readHookCalls } from '../sessions/hook-calls.js';
 import { appendStep } from '../sessions/steps.js';
-import { CAPTURE_VERSION } from '../sessions/schema.js';
 import { deposit, loadStore } from '../sessions/store.js';
+import { CAPTURE_VERSION, EXTRACTOR_VERSION } from '../sessions/schema.js';
 import { cleanup, NOW, stage } from '../sessions/test-support.js';
 import { closedList, recordStoreHealth, type NightlyTelemetry } from './health.js';
 import { spoolEvents, type SpoolEvent } from './read-events.js';
@@ -51,7 +51,7 @@ describe('store health at the nightly run', () => {
       skeletons: readdirSync(join(staged.storeDir, 'skeletons')).length,
       rawBytes: bytesUnder(join(staged.storeDir, 'raw')),
       captureVersions: [Number(CAPTURE_VERSION)],
-      extractorVersions: [12],
+      extractorVersions: [Number(EXTRACTOR_VERSION)],
       unparseable: [...store.sessions, ...store.subagents].reduce((sum, session) => sum + session.badLines, 0),
     });
     expect(store.sessions.length).toBeGreaterThan(0);
@@ -70,17 +70,19 @@ describe('store health at the nightly run', () => {
     // One session captured by an older oars, and a step an older extractor ran: the capture half holds two versions here; the extractor half is the next test.
     const log = join(staged.storeDir, 'observations.jsonl');
     const lines = readFileSync(log, 'utf8').split('\n');
-    const index = lines.findIndex((line) => line.includes('"kind":"session"') && line.includes(`"cv":"${CAPTURE_VERSION}"`));
+    const current = `"cv":"${CAPTURE_VERSION}"`;
+    const older = `"cv":"${String(Number(CAPTURE_VERSION) - 1)}"`;
+    const index = lines.findIndex((line) => line.includes('"kind":"session"') && line.includes(current));
     expect(index).toBeGreaterThanOrEqual(0);
-    lines[index] = (lines[index] ?? '').replace(`"cv":"${CAPTURE_VERSION}"`, '"cv":"17"');
+    lines[index] = (lines[index] ?? '').replace(current, older);
     writeFileSync(log, lines.join('\n'));
-    await appendStep(staged.storeDir, { at: new Date(NOW).toISOString(), run: 'r', trigger: 'nightly', step: 'deposit', status: 'ok', ms: 1, in: {}, out: {}, cv: '17', ev: '11', key: null, error: null });
+    await appendStep(staged.storeDir, { at: new Date(NOW).toISOString(), run: 'r', trigger: 'nightly', step: 'deposit', status: 'ok', ms: 1, in: {}, out: {}, cv: String(Number(CAPTURE_VERSION) - 1), ev: '11', key: null, error: null });
     const { dir, telemetry } = emitter();
     await recordStoreHealth(telemetry, staged.runtime);
 
     const [health] = events(dir, 'store-health');
     expect(health?.data.readFailed).toBeUndefined();
-    expect(health?.data.captureVersions).toEqual([17, Number(CAPTURE_VERSION)]);
+    expect(health?.data.captureVersions).toEqual([Number(CAPTURE_VERSION) - 1, Number(CAPTURE_VERSION)]);
     expect(health?.data.extractorVersions).toEqual([11]);
     expect(health?.data.captureVersion).toBeUndefined();
     expect(health?.data.extractorVersion).toBeUndefined();
