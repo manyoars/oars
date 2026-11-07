@@ -60,11 +60,13 @@ describe('cost', () => {
     expect(read?.value).toMatchObject({ tokensPerPrompt: null });
   });
 
-  it('falls back to every settled prompt for cells that carry no coverage count', () => {
+  it('says coverage is unknown, with no figure, for cells that carry no coverage count, and never guesses full coverage', () => {
     const from = store({ sessions: [session('s1')], prompts: [prompt('s1', 0, { usage: usage(100, 50) }), prompt('s1', 1, { usage: usage(100, 50) })] });
-    const bare = deriveCells(from).cells.map((cell) => ({ ...cell, tokenPrompts: undefined }));
+    const bare = deriveCells(from).cells.map((cell) => ({ ...cell, tokenPrompts: undefined, tokenSessions: undefined }));
     const [read] = deriveCost({ pool: poolOf({ cells: bare, motifs: deriveCells(from).motifs }, from.errors), store: from });
-    expect(read?.value).toMatchObject({ tokensPerPrompt: 150 });
+    expect(read?.value).toMatchObject({ tokensPerPrompt: null, tokenCoverage: 'unknown' });
+    // A known group names no coverage key.
+    expect(cost(from)[0]?.value).not.toHaveProperty('tokenCoverage');
   });
 
   it('reads no tool windows', () => {
