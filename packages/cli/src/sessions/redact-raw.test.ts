@@ -85,6 +85,7 @@ describe('redactTranscript', () => {
     ['a hyphenated name in an encoded Windows folder', 'C--Users-mary-jane-work', ['mary-jane'], 'C--Users-<user>-work'],
     ['a spaced name in a Windows path', String.raw`C:\Users\John Smith\repo`, ['John Smith'], String.raw`C:\Users\<user>\repo`],
     ['a spaced name in an encoded Windows folder', 'C--Users-John-Smith-repo', ['John Smith'], 'C--Users-<user>-repo'],
+    ['a hyphenated name in a Windows path', String.raw`C:\Users\mary-jane\work`, ['mary-jane'], String.raw`C:\Users\<user>\work`],
     ['a hyphenated name in a unix path', '/home/mary-jane/work', ['mary-jane'], '/home/<user>/work'],
   ])('masks the whole of %s', (_label, input, names, expected) => {
     expect(redactTranscript(input, [], names).text).toBe(expected);

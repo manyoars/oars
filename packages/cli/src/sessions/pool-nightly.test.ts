@@ -327,6 +327,8 @@ describe('withSendLock', () => {
     mkdirSync(outbox, { recursive: true });
     const lock = join(outbox, 'send.lock');
     writeFileSync(lock, 'dead-run');
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
     let inside = 0;
     let overlapped = false;
     // Both waiters' first look at the lock reports it stale, but the second look comes only after the first waiter has taken the lock and is running: a takeover that removes the file by path
