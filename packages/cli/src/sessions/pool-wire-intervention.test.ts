@@ -21,7 +21,7 @@ const promptsOf = (skeleton: SessionSkeleton): SessionSkeleton['transcripts'][nu
 
 describe('intervention on the wire', () => {
   it('moves the field list to 4, and names the field as optional on a prompt', () => {
-    expect(FIELD_LIST_VERSION).toBe(4);
+    expect(FIELD_LIST_VERSION).toBe(5);
     expect(OPTIONAL.prompt).toContain('intervention');
   });
 
