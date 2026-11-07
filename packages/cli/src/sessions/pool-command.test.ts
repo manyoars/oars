@@ -10,7 +10,8 @@ import { ExitCode } from '../errors.js';
 import { readSpool } from '../telemetry/spool.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
 import { DEFAULT_POOL_URL, networkSender, poolDeposit, poolServer, type Reply, type Sender } from './pool-command.js';
-import { batchHash, canonicalBytes, FIELD_ROWS, fieldsOf, writeBatch } from './pool-outbox.js';
+import { batchHash, canonicalBytes, FIELD_ROWS, fieldsOf, outboxFolder, writeBatch } from './pool-outbox.js';
+import { markSent, sentHashes } from './pool-sent.js';
 import type { Outgoing } from './pool-print.js';
 import { REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
 import type * as PoolWire from './pool-wire.js';
@@ -2162,6 +2163,66 @@ describe('oars pool deposit: the raw copy (t884)', () => {
     scene.h.out.length = 0;
     await scene.cli('pool', 'outbox', '--explain', '--server', POOL);
     expect(scene.h.out.join('')).toContain(body.slice(0, 200));
+  });
+});
+
+describe('oars pool outbox after the nightly send (t884 fix round)', () => {
+  const grant = async (scene: Scene): Promise<void> => {
+    await capture(scene);
+    await signIn(scene);
+    await updatePoolChoices(scene.staged.storeDir, (choices) => {
+      choices.rawConsent = 'granted';
+    });
+    await scene.cli('pool', 'deposit', '--server', POOL);
+  };
+  const sentAt = '2026-11-07T03:04:05.000Z';
+  const listed = (scene: Scene): { batches: { hash: string; sent?: string }[]; raw: { hash: string; sent?: string }[] } => {
+    const document = scene.document();
+    if (!isListing(document)) throw new Error('not an outbox document');
+    return document;
+  };
+  const isListing = (value: unknown): value is { batches: { hash: string; sent?: string }[]; raw: { hash: string; sent?: string }[] } => typeof value === 'object' && value !== null && 'batches' in value && 'raw' in value;
+
+  it('marks a batch and a raw copy the nightly task sent as sent, in the text and the document, and leaves the unsent ones plain', async () => {
+    const scene = setting();
+    await grant(scene);
+    const outbox = outboxFolder(scene.staged.storeDir, POOL);
+    scene.h.out.length = 0;
+    await scene.cli('pool', 'outbox', '--server', POOL, '--json');
+    const before = listed(scene);
+    expect(before.batches.length).toBeGreaterThan(0);
+    expect(before.raw.length).toBeGreaterThan(0);
+    expect(before.batches.concat(before.raw).some((entry) => entry.sent !== undefined)).toBe(false);
+    const [firstBatch, firstRaw] = [before.batches[0]?.hash ?? '', before.raw[0]?.hash ?? ''];
+    await markSent(outbox, firstBatch, Date.parse(sentAt));
+    await markSent(outbox, firstRaw, Date.parse(sentAt));
+    scene.h.out.length = 0;
+    await scene.cli('pool', 'outbox', '--server', POOL, '--json');
+    const after = listed(scene);
+    expect(after.batches[0]).toMatchObject({ hash: firstBatch, sent: sentAt });
+    expect(after.raw[0]).toMatchObject({ hash: firstRaw, sent: sentAt });
+    scene.h.out.length = 0;
+    await scene.cli('pool', 'outbox', '--server', POOL);
+    const text = scene.h.out.join('');
+    expect(text).toContain(`sha256: ${firstBatch}\nsent: ${sentAt}`);
+    expect(text).toMatch(new RegExp(`raw part 1/1 sha256: ${firstRaw} bytes: \\d+ sent: ${sentAt}`));
+  });
+
+  it('prints no sent mark for what was never sent', async () => {
+    const scene = setting();
+    await grant(scene);
+    scene.h.out.length = 0;
+    await scene.cli('pool', 'outbox', '--server', POOL);
+    expect(scene.h.out.join('')).not.toContain('sent:');
+  });
+
+  it('marks a batch sent by `deposit --send` the same way, so the nightly task does not send it again', async () => {
+    const scene = await batched();
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    const hash = printedHashes(scene)[0] ?? '';
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201, { ok: true }) });
+    await poolDeposit(scene.h.deps, sendOptions(hash, pool.via));
+    expect((await sentHashes(outboxFolder(scene.staged.storeDir, POOL))).has(hash)).toBe(true);
   });
 });
 

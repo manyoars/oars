@@ -15,6 +15,7 @@ import { carriedDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delt
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { rawAllowed, sendsOf } from './pool-choices.js';
 import { heldRaw, rawParts, removeRawExcept, writeRaw } from './pool-raw.js';
+import { markSent, sentLog } from './pool-sent.js';
 import { shellReader } from './projection.js';
 import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
 import { contentHash } from './read.js';
@@ -442,6 +443,7 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
     throw new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code: 'batch_changed', title, status: 409 });
   }
   await postBatch(deps, { server, token, bytes, hash, via });
+  await markSent(outbox, hash, deps.now());
   return { document: { ok: true, server, hash, sent: true }, text: `Sent batch ${hash} to ${server}.` };
 };
 
@@ -593,26 +595,27 @@ export const poolOutbox = async (deps: RunDeps, options: { server?: string | und
   const { batches, edited } = await heldBatches(outbox);
   const masker = new Masker();
   masker.add(token);
-  const shown: Array<{ hash: string; request: string; fields?: { [field: string]: string } }> = [];
+  const sent = await sentLog(outbox);
+  const shown: Array<{ hash: string; request: string; sent?: string; fields?: { [field: string]: string } }> = [];
   for (const batch of batches) {
     const fields = options.explain === true ? explained(batch.bytes) : undefined;
     // A batch past one request prints every part's request, in the order they are sent.
     const request = callsOf(token, batch.bytes, batch.hash).map((call) => printed(outgoing(deps, server, POOL_DEPOSITS, call), masker)).join('\n');
-    shown.push({ hash: batch.hash, request, ...(fields === undefined ? {} : { fields }) });
+    shown.push({ hash: batch.hash, request, ...(sent.has(batch.hash) ? { sent: sent.get(batch.hash) ?? '' } : {}), ...(fields === undefined ? {} : { fields }) });
   }
   const { copies } = await heldRaw(outbox);
   const rawBlocks = copies.flatMap((copy) =>
-    rawParts(copy.body).map((part, at, all) => [`raw part ${String(at + 1)}/${String(all.length)} sha256: ${copy.hash} bytes: ${String(Buffer.byteLength(part))}`, ...(options.explain === true ? [part] : [])].join('\n')),
+    rawParts(copy.body).map((part, at, all) => [`raw part ${String(at + 1)}/${String(all.length)} sha256: ${copy.hash} bytes: ${String(Buffer.byteLength(part))}${sent.has(copy.hash) ? ` sent: ${sent.get(copy.hash) ?? ''}` : ''}`, ...(options.explain === true ? [part] : [])].join('\n')),
   );
   for (const { hash } of shown) await markShown(outbox, hash, deps.now());
   const stale = await staleBatches(outbox);
-  const blocks = shown.map(({ hash, request, fields }) => [request, `sha256: ${hash}`, ...Object.entries(fields ?? {}).map(([field, row]) => `  ${field}: ${row}`)].join('\n'));
+  const blocks = shown.map(({ hash, request, sent: at, fields }) => [request, `sha256: ${hash}`, ...(at === undefined ? [] : [`sent: ${at}`]), ...Object.entries(fields ?? {}).map(([field, row]) => `  ${field}: ${row}`)].join('\n'));
   const notes = [
     ...(edited === 0 ? [] : [`${String(edited)} ${edited === 1 ? 'batch was' : 'batches were'} edited on disk since ${edited === 1 ? 'it was' : 'they were'} written and ${edited === 1 ? 'is' : 'are'} not printed or sent. Run oars pool deposit to build ${edited === 1 ? 'it' : 'them'} again.`]),
     ...(stale === 0 ? [] : [`${String(stale)} ${stale === 1 ? 'batch was' : 'batches were'} built under an older vocabulary, field list, or skeleton format and will never be sent.`]),
   ];
   const text = shown.length === 0 && rawBlocks.length === 0 ? ['The outbox is empty. Run oars pool deposit first.', ...notes].join('\n') : [...blocks, ...rawBlocks, ...notes].join('\n\n');
-  return { document: { ok: true, server, batches: shown, raw: copies.map(({ hash, bytes }) => ({ hash, bytes })), edited, stale }, text };
+  return { document: { ok: true, server, batches: shown, raw: copies.map(({ hash, bytes }) => ({ hash, bytes, ...(sent.has(hash) ? { sent: sent.get(hash) ?? '' } : {}) })), edited, stale }, text };
 };
 
 /** One folder per harness under the server's, so a fetch for one harness never overwrites another's bundle of the same version. */
