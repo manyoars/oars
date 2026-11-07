@@ -66,7 +66,7 @@ export interface SessionsRuntime {
   projectsRoot: string;
   /** Cursor's `User` folder (`cursorRoot` in cursor.ts), kept as the alias of `sourceRoots.cursor`; absent means no Cursor source. */
   cursorRoot?: string;
-  /** Where each non-Claude source's store lives, by `Source.name` (sources.ts); a source with no root is not read. `deposit` reads one only when `--allow` names it. */
+  /** Where each non-Claude source's store lives, by `Source.name` (sources.ts); a source with no root is not read; one with a root is read unless the allowlist names other entries only or denies it. */
   sourceRoots?: { [source: string]: string };
   /** The source table; absent means `SOURCES`. The seam a test uses to prove an entry needs no other wiring. */
   sources?: readonly Source[];

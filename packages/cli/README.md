@@ -2,7 +2,7 @@
 
 The `oars` command line for Many Oars: sign in, manage API keys, and keep a local memory of your own Claude Code sessions (`oars sessions`).
 
-Accounts are not open yet: `oars login` uses the Many Oars issuer by default, and until the pool at `pool.manyoars.com` deploys it exits 2 with an error that names it.
+Accounts are not open yet: `oars login` uses the Many Oars issuer by default, and until Many Oars sign-in at `login.manyoars.com` (and its pool at `pool.manyoars.com`) is deployed it exits 2 with an error that names `login.manyoars.com`.
 
 Node 24 or later. ESM only.
 
@@ -34,7 +34,7 @@ These flags work on every command:
 Signs in with your browser (RFC 8628 device flow) and stores the login.
 
 - `--no-browser` prints the link and code without opening a browser.
-- `--issuer-url <url>` is the Keycloak realm URL. The default is `OARS_ISSUER_URL`. With neither, `login` uses the built-in Many Oars issuer, `https://login.manyoars.com/realms/aor`; nothing has to be switched on first. When the built-in issuer does not answer discovery (the pool at `pool.manyoars.com` may not be deployed yet), with no `--issuer-url` or `OARS_ISSUER_URL`, the command prints "Cannot reach Many Oars sign-in for the pool at pool.manyoars.com (it may not be deployed yet). Pass --issuer-url or set OARS_ISSUER_URL to use another issuer." and exits 2.
+- `--issuer-url <url>` is the Keycloak realm URL. The default is `OARS_ISSUER_URL`. With neither, `login` uses the built-in Many Oars issuer, `https://login.manyoars.com/realms/aor`; nothing has to be switched on first. When the built-in issuer does not answer discovery (Many Oars and its pool at `pool.manyoars.com` may not be deployed yet), with no `--issuer-url` or `OARS_ISSUER_URL`, the command prints "Cannot reach Many Oars sign-in at login.manyoars.com (Many Oars and its pool at pool.manyoars.com may not be deployed yet). Pass --issuer-url or set OARS_ISSUER_URL to use another issuer." and exits 2.
 
 ### logout
 
