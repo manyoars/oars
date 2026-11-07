@@ -157,18 +157,25 @@ const redonePrompts = (calls: readonly ToolObservation[], nextOf: ReadonlyMap<nu
 };
 
 /**
- * A segment that undoes work in git: a revert that names a commit (a bare `git revert` is `--abort`, `--continue`, or `--quit`, whose flag the segment drops), a restore, or a checkout that names no plain branch or revision
- * (the segment drops a path, a flag, and a word with a slash or quotes, so `git checkout -- <path>` and `git checkout feature/x` are the same bare word pair).
+ * A segment that undoes work in git: a revert that names a commit (a bare `git revert` is `--abort`, `--continue`, or `--quit`, whose flag the segment drops), a restore, or a bare checkout
+ * (the segment drops a path, a flag, and a word with a slash or quotes, so `git checkout -- <path>` and `git checkout feature/x` are the same bare word pair; `isGitUndo` narrows it by the step's flags).
  */
 const GIT_UNDO = /^git (?:revert .|restore(?: |$))|^git checkout(?: \.)?$/;
+const BARE_CHECKOUT = /^git checkout$/;
+/** Flags of a `git checkout` that move to or create a branch, or leave one with a literal `-`: none of them undoes work. */
+const CHECKOUT_MOVES = new Set(['<literal>', '-b', '-B', '--orphan', '--detach']);
 /** A prompt that begins by asking for the undo, in English: `revert that`, `please undo`, `rollback`. */
 const ASKS_UNDO = /^(?:please )?(?:revert|undo|roll ?back)\b/i;
+
+/** Whether the segment at index `at` is a checkout that moves to a branch: the step with the same `seg` holds the flags that the segment drops (the stored step no longer holds `run`). */
+const movesBranch = (tool: ToolObservation, at: number): boolean =>
+  tool.steps?.some(({ seg, identity }) => seg === at && identity !== null && 'program' in identity && identity.flags.some((flag) => CHECKOUT_MOVES.has(flag))) === true;
 
 /** A clean shell call that undid work in git. `git reset --hard` is read from the step, since a segment keeps no flag. */
 const isGitUndo = (tool: ToolObservation): boolean =>
   SHELL.has(tool.tool) &&
   tool.status === 'ok' &&
-  (tool.segments?.some(({ run }) => GIT_UNDO.test(run)) === true ||
+  (tool.segments?.some(({ run }, at) => GIT_UNDO.test(run) && !(BARE_CHECKOUT.test(run) && movesBranch(tool, at))) === true ||
     tool.steps?.some(({ identity }) => identity !== null && 'program' in identity && identity.program === 'git' && identity.sub === 'reset' && identity.flags.includes('--hard')) === true);
 
 /**
