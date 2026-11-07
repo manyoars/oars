@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { brake } from './http.js';
 import { sampleSkeleton } from './sample.js';
-import { startPool, stubUser, type Answer, type TestPool } from './test-pool.js';
+import { fieldOf, startPool, stubUser, textOf, type Answer, type TestPool } from './test-pool.js';
 
 const signedIn = async (pool: TestPool, id: string): Promise<string> => {
   const { token } = await pool.signIn('github', stubUser(id));
@@ -13,7 +13,7 @@ const signedIn = async (pool: TestPool, id: string): Promise<string> => {
 /** Rows written straight to the ledger, so a test need not post twenty thousand deposits: the count and the stored bytes are what the limits read. */
 const seed = async (pool: TestPool, rows: number, bytesEach: number): Promise<void> => {
   const db = await pool.db();
-  const account = await db.prepare('SELECT id FROM accounts ORDER BY rowid DESC LIMIT 1').first('id');
+  const account = textOf(await db.prepare('SELECT id FROM accounts ORDER BY rowid DESC LIMIT 1').first(), 'id');
   await db
     .prepare("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?) INSERT INTO deposits (account, id, skeleton) SELECT ?, printf('f%015x', i), substr(hex(zeroblob(?)), 1, ?) FROM n")
     .bind(rows, account, bytesEach, bytesEach)
@@ -28,7 +28,7 @@ describe('the per-account limits', () => {
       await seed(pool, 20_001, 3_400);
       const held = await (await pool.db()).prepare('SELECT COUNT(*) AS rows, SUM(LENGTH(skeleton)) AS bytes FROM deposits').first();
       expect(held).toMatchObject({ rows: 20_001 });
-      expect(Number(Reflect.get(held as object, 'bytes'))).toBeGreaterThan(64 * 1024 * 1024);
+      expect(Number(fieldOf(held, 'bytes'))).toBeGreaterThan(64 * 1024 * 1024);
       const sent = (id: string): Promise<Answer> => pool.post('/v1/deposits', sampleSkeleton(id), token);
       expect((await sent('0000000000000001')).status).toBe(201);
       expect((await sent('0000000000000001')).status).toBe(201);

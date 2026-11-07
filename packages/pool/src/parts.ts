@@ -1,7 +1,7 @@
 // A deposit past the request cap arrives in parts, each under it, and the server keeps them as one deposit (t880). The parts wait in `deposit_parts`; the last to arrive completes the batch, and the join is stored by the same path as a deposit sent whole.
-import { answer, refuse, textField, bodyOf, type Env } from './http.js';
+import { answer, bodyOf, fieldOf, refuse, textField, type Env } from './http.js';
 
-/** What one stored row can hold: D1 caps a row at 2,000,000 bytes, and the skeleton and its extensions bag share the row with a few small columns. A batch past this is refused whole, whatever its parts. */
+/** What one stored row can hold: D1 caps a row at 2,000,000 bytes, and the stored skeleton shares the row with its other columns. A batch past this is refused whole, whatever its parts. */
 export const MAX_ASSEMBLED_BYTES = 1_800_000;
 /** How many parts one batch may have, so the staging rows of one batch stay bounded. */
 const MAX_PARTS = 64;
@@ -20,8 +20,10 @@ interface Held {
   deposit: string | null;
 }
 
-const heldParts = async (env: Env, account: string, batch: string): Promise<Held[]> =>
-  (await env.DB.prepare('SELECT part, count, body, deposit FROM deposit_parts WHERE account = ? AND batch = ? ORDER BY part').bind(account, batch).all()).results as Held[];
+const heldParts = async (env: Env, account: string, batch: string): Promise<Held[]> => {
+  const { results } = await env.DB.prepare('SELECT part, count, body, deposit FROM deposit_parts WHERE account = ? AND batch = ? ORDER BY part').bind(account, batch).all();
+  return results.map((row) => ({ part: Number(fieldOf(row, 'part')), count: Number(fieldOf(row, 'count')), body: textField(row, 'body') ?? '', deposit: textField(row, 'deposit') ?? null }));
+};
 
 const forget = (env: Env, account: string, batch: string): Promise<unknown> => env.DB.prepare('DELETE FROM deposit_parts WHERE account = ? AND batch = ?').bind(account, batch).run();
 
