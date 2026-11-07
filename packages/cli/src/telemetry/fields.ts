@@ -4,6 +4,9 @@ import type { Recall } from '../sessions/recall-object.js';
 import { HARNESSES, OTHER } from '../sessions/pool-wire.js';
 import { modelWord, versionWord } from './schema.js';
 
+/** The harness every hook oars installs runs under (Claude Code); one spelling for the session hooks and the gate hook, so the two emitters cannot drift. */
+export const HOOK_HARNESS = 'claude-code';
+
 /** The harness a hook ran under, as the closed list names it, else `other`. */
 export const harnessWord = (harness: string): string => (HARNESSES.some((known) => known === harness) ? harness : OTHER);
 
