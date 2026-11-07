@@ -1,6 +1,6 @@
 // One cell computation for a deposit and a local read (pool vocabulary spec Section 4, rules 1 to 6).
 import { describe, expect, it } from 'vitest';
-import { cellsOf, incrementsOf, projectedStore, storeOf, type Increments } from './cell-increments.js';
+import { cellsOf, incrementsOf, projectedStore, storeOf, type CellRow, type Increments } from './cell-increments.js';
 import { deriveCells, effortClass, ENVIRONMENT_BUCKET, isEnvironmentCell, NO_AXES } from './cells.js';
 import { classMotif } from './motif.js';
 import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from './pool-fixture.js';
@@ -96,6 +96,17 @@ describe('rule 5: a bucket and no exact number', () => {
     expect(classTokens({ ...first.usage, cacheRead: null })).toBe(whole - floorOf('tokens', first.usage.cacheRead ?? 0));
     // No input recorded: the prompt has no whole usage, so the served sum gains nothing from it (the column is a running sum, so 0 adds nothing).
     expect(classTokens({ ...first.usage, input: null })).toBe(0);
+  });
+
+  it('carries the coverage of the served sum: the sessions and the prompts that recorded input', () => {
+    const skeleton = skeletonOfLocal(localStore());
+    const [main] = skeleton.transcripts;
+    const first = main?.prompts[0];
+    if (main === undefined || first === undefined) throw new Error('the skeleton has no prompt');
+    const motifId = classMotif(first.cls).motifId;
+    const classRow = (usage: typeof first.usage): CellRow | undefined => [...incrementsOf({ ...skeleton, transcripts: [{ ...main, prompts: [{ ...first, usage, usageResponses: 1 }] }] }).cells.values()].find((cell) => cell.motifId === motifId && cell.grain === 'week');
+    expect(classRow(first.usage)).toMatchObject({ tokenSessions: 1, tokenPrompts: 1 });
+    expect(classRow({ ...first.usage, input: null })).toMatchObject({ tokens: 0, tokenSessions: 0, tokenPrompts: 0 });
   });
 
   it('reads a lower bound of what the local store derives exactly, and equal when every value sits on a floor', () => {

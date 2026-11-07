@@ -21,6 +21,7 @@ interface Call {
   commits?: Array<string | null>;
   steps?: StepObservation[];
   side?: boolean;
+  cv?: string;
 }
 
 const edit = (prompt: number, target = 'hash-a', status: ToolStatus = 'ok'): Call => ({ prompt, tool: 'Edit', target, status });
@@ -35,7 +36,7 @@ const resetHard = (prompt: number): Call => ({
 
 const derived = (heads: readonly string[], calls: readonly Call[], failures: readonly { prompt: number; line: string }[] = []) => {
   const tools = calls.map((call, n): ToolObservation => ({
-    kind: 'tool', cv: CAPTURE_VERSION, sid: null, session: 's', rev: 1, parent: 's', agentType: null, n, ts: null, tool: call.tool, status: call.status ?? 'ok', target: call.target ?? null, targetBase: null,
+    kind: 'tool', cv: call.cv ?? CAPTURE_VERSION, sid: null, session: 's', rev: 1, parent: 's', agentType: null, n, ts: null, tool: call.tool, status: call.status ?? 'ok', target: call.target ?? null, targetBase: null,
     keys: [], durationMs: null, toolUseId: `c${String(n)}`, harnessVersion: null, side: call.side ?? false, prompt: call.prompt,
     ...(call.segments === undefined ? {} : { segments: call.segments }), ...(call.commits === undefined ? {} : { commits: call.commits }), ...(call.steps === undefined ? {} : { steps: call.steps }),
   }));
@@ -235,6 +236,27 @@ const fromCommandLine = (command: string): PromptIntervention | undefined => {
   return deriveSession(capture, redact).prompts[0]?.intervention;
 };
 
+const checkoutStep = (prompt: number, flags: string[], cv?: string, target?: 'path' | 'word'): Call => ({
+  ...shell(prompt, 'git checkout'),
+  ...(cv === undefined ? {} : { cv }),
+  steps: [{ n: 0, seg: 0, action: 'shell.exec', native: 'Bash', identity: { program: 'git', sub: 'checkout', flags, ...(target === undefined ? {} : { target }) }, status: 'ok', cost: { tokens: null, durationMs: null }, parent: null, edges: [], frameId: 'f' }],
+});
+
+describe('a checkout captured before CAPTURE 23 keeps its old reading', () => {
+  it('reads a bare checkout with no flag as revert, a branch switch included: the step has no target to say otherwise', () => {
+    expect(derived(['a', 'b'], [edit(0), checkoutStep(1, [], '20')])[0]).toBe('revert');
+  });
+
+  it('reads an unlisted flag as none, as it did', () => {
+    expect(derived(['a', 'b'], [edit(0), checkoutStep(1, ['<literal>'], '20')])[0]).toBe('none');
+  });
+
+  it('reads the target class from CAPTURE 23: word is none, path is revert even beside an unlisted flag', () => {
+    expect(derived(['a', 'b'], [edit(0), checkoutStep(1, [], '23', 'word')])[0]).toBe('none');
+    expect(derived(['a', 'b'], [edit(0), checkoutStep(1, ['<literal>'], '23', 'path')])[0]).toBe('revert');
+  });
+});
+
 describe('a git undo read from a real command line', () => {
   it.each(['git revert --abort', 'git revert --continue', 'git revert --quit'])('`%s` ends a revert in progress and undoes no work: none', (command) => {
     expect(fromCommandLine(command)).toBe('none');
@@ -244,18 +266,18 @@ describe('a git undo read from a real command line', () => {
     expect(fromCommandLine(command)).toBe('revert');
   });
 
-  // The segment drops a flag, so `git checkout -b feature/x` and `git checkout -` leave the bare pair that `git checkout -- <path>` leaves; the step's flags tell them apart (`<literal>` for `-`, `-b` for a create). `--patch` stands for any flag off the public list, which the step also turns into `<literal>`: those read `none` as a limit.
+  // The segment drops a flag, so `git checkout -b feature/x` and `git checkout -` leave the bare pair that `git checkout -- <path>` leaves; the step's flags tell them apart (`<literal>` for `-`, `-b` for a create). Any other flag off the public list is also `<literal>` and reads `none`; a path-only flag (`--ours`, `--patch`) is a path from CAPTURE 23.
   it.each(['git checkout -', 'git checkout -b feature/x', 'git checkout -B feature/x', 'git checkout --detach'])('`%s` moves to a branch and undoes no work: none', (command) => {
     expect(fromCommandLine(command)).toBe('none');
   });
 
-  it('`git checkout --patch` reads none, a known limit: the step turns a flag off the public list into `<literal>`', () => {
-    expect(fromCommandLine('git checkout --patch')).toBe('none');
+  // CAPTURE 23 keeps the target class: `--` or a path-only flag proves a path; a dropped word (a slash, quotes) with no proof is a `word`, which is never an undo.
+  it.each(['git checkout -- src/a.ts', 'git checkout --ours src/a.ts', 'git checkout --theirs -- src/a.ts', 'git checkout --patch src/a.ts', 'git checkout --patch', 'git checkout -p src/a.ts'])('`%s` names a path: revert', (command) => {
+    expect(fromCommandLine(command)).toBe('revert');
   });
 
-  // A word with a slash or quotes is dropped from the segment and leaves no flag, so these checkouts read as the bare pair too (docs/sessions-store.md, `revert` limit); the rows pin the limit so a change to it is seen.
-  it.each(['git checkout feature/x', 'git checkout origin/main', 'git checkout "main"'])('`%s` reads as revert, a known limit of the segment', (command) => {
-    expect(fromCommandLine(command)).toBe('revert');
+  it.each(['git checkout feature/x', 'git checkout origin/main', 'git checkout "main"', 'git checkout "fix-1"', 'git checkout -f feature/x'])('`%s` names a branch or a path the line cannot tell apart: none', (command) => {
+    expect(fromCommandLine(command)).toBe('none');
   });
 
   it('reads a checkout of a plain branch name as none, since the segment keeps the name', () => {
