@@ -100,6 +100,8 @@ export interface Read {
   interval: ReadInterval | null;
   asOf: ReadAsOf;
   basis: ReadBasis;
+  /** The public floor this read cleared: every cell it counts had at least this many clusters. Stated by a pool that serves the read, and absent from a read computed on one operator's own store, which applies no public floor. */
+  floor?: number;
 }
 
 /** A read before its inputs are checked and its ID and order are computed. */
@@ -121,8 +123,9 @@ export const orderResolver = (reads: readonly Read[]): OrderResolver => {
 };
 
 export const readIdOf = (read: Omit<Read, 'readId'>): string => {
-  const { family, method, methodVersion, inputs, order, slice, value, n, clusters, interval, asOf, basis } = read;
-  return `${READ_PREFIX}${contentHash({ family, method, methodVersion, inputs, order, slice, value, n, clusters, interval, asOf, basis })}`;
+  const { family, method, methodVersion, inputs, order, slice, value, n, clusters, interval, asOf, basis, floor } = read;
+  // The floor joins the hash only when stated, so a read with none keeps the ID it always had.
+  return `${READ_PREFIX}${contentHash({ family, method, methodVersion, inputs, order, slice, value, n, clusters, interval, asOf, basis, ...(floor === undefined ? {} : { floor }) })}`;
 };
 
 const deepFreeze = (value: unknown): void => {

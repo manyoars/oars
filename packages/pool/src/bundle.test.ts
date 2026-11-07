@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { HARNESSES, verifyBundle, VOCAB_VERSION, type Bundle } from '../../cli/src/sessions/pool-wire.js';
 import type { Harness } from '../../cli/src/sessions/schema.js';
 import { etagOf } from './bundle.js';
+import { DEFAULT_FLOORS } from './floors.js';
 import { SERVED } from './derive.js';
 import { sampleSkeleton, withPairs } from './sample.js';
 import { containing, fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
@@ -512,9 +513,9 @@ describe('the ETag', () => {
   // A bundle is derived by the families it lists, so a client holding a tag from before a family was added must not be told its bundle is current.
   it('names the families a bundle derives, so a changed list is a changed tag', () => {
     const served = ['fit', 'cost'];
-    expect(etagOf('claude-code', VERSION, 1, served)).toBe(etagOf('claude-code', VERSION, 1, [...served]));
-    expect(etagOf('claude-code', VERSION, 1, [...served, 'tool-day'])).not.toBe(etagOf('claude-code', VERSION, 1, served));
-    expect(etagOf('claude-code', VERSION, 1, ['cost', 'fit'])).not.toBe(etagOf('claude-code', VERSION, 1, served));
+    expect(etagOf('claude-code', VERSION, 1, served, DEFAULT_FLOORS)).toBe(etagOf('claude-code', VERSION, 1, [...served], DEFAULT_FLOORS));
+    expect(etagOf('claude-code', VERSION, 1, [...served, 'tool-day'], DEFAULT_FLOORS)).not.toBe(etagOf('claude-code', VERSION, 1, served, DEFAULT_FLOORS));
+    expect(etagOf('claude-code', VERSION, 1, ['cost', 'fit'], DEFAULT_FLOORS)).not.toBe(etagOf('claude-code', VERSION, 1, served, DEFAULT_FLOORS));
   });
 });
 
@@ -526,7 +527,7 @@ describe('the ETag of a fetch', () => {
     const db = await pool.db();
     const generation = Number(await db.prepare('SELECT generation FROM pool_generation WHERE id = 1').first('generation'));
     expect(generation).toBeGreaterThan(0);
-    expect(answer.headers.get('etag')).toBe(etagOf('claude-code', VERSION, generation, SERVED.map(({ name }) => name)));
+    expect(answer.headers.get('etag')).toBe(etagOf('claude-code', VERSION, generation, SERVED.map(({ name }) => name), DEFAULT_FLOORS));
   });
 });
 
