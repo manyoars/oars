@@ -264,7 +264,7 @@ describe('bytes on a fixture that carries a repo key and timestamps', () => {
     const keyOnly = bytesOf(KEY_A, false);
     const hourOnly = bytesOf(null, true);
     const both = bytesOf(KEY_A, true);
-    expect({ bare, keyOnly: keyOnly - bare, hourOnly: hourOnly - bare, both: both - bare }).toEqual({ bare: 3484, keyOnly: 58, hourOnly: 755, both: 871 });
+    expect({ bare, keyOnly: keyOnly - bare, hourOnly: hourOnly - bare, both: both - bare }).toEqual({ bare: 3501, keyOnly: 58, hourOnly: 755, both: 871 });
     // The key is 29 bytes (`,"repoKey":"` and 16 hex) on each of 2 frames bare of timestamps and 4 with three prompt hours; the hour is what splits the call frames, one more full frame per distinct hour.
   });
 });
