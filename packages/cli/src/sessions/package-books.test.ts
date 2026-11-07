@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
@@ -49,6 +48,48 @@ describe('packageBooks', () => {
     expect(vitest).toMatchObject({ calls: 1, failed: 0, sessions: 1 });
     expect(result.notPublic).toEqual({ names: 1, calls: 1 });
     expect(JSON.stringify(result)).not.toContain('internal-acme-tool');
+  });
+
+  it('counts a call that pulls two non-public names as one call, and the same name in two calls as one name', () => {
+    const from = store({
+      sessions: [session('s1')],
+      tools: [pulling('s1', 0, ['internal-acme-tool', 'internal-acme-other']), pulling('s1', 1, ['internal-acme-tool'])],
+    });
+    expect(packageBooks(from, NONE, vocabulary()).notPublic).toEqual({ names: 2, calls: 2 });
+  });
+
+  it('counts only the calls inside the --since window in the exclusion line', () => {
+    const from = store({
+      sessions: [session('s1'), session('gone')],
+      tools: [pulling('s1', 0, ['prettier']), pulling('gone', 0, ['prettier'], { ts: '2026-10-01T10:00:00.000Z' }), pulling('gone', 1, ['prettier'])],
+    });
+    expect(packageBooks(from, new Set(['gone']), vocabulary()).excluded.calls).toBe(2);
+    expect(packageBooks(from, new Set(['gone']), vocabulary(), '2026-11-01T00:00:00.000Z').excluded.calls).toBe(1);
+  });
+
+  it('reads a subagent call with no model of its own as no model, since only a main session\'s prompts are stored', () => {
+    const from = store({
+      sessions: [session('s1')],
+      prompts: [prompt('s1', 0, { model: 'claude-sonnet-5-5' })],
+      subagents: [session('sub1', { parent: 's1', agentType: 'general-purpose' })],
+      tools: [pulling('sub1', 0, ['prettier'], { parent: 's1', agentType: 'general-purpose', prompt: 0 })],
+    });
+    expect(packageBooks(from, NONE, vocabulary()).rows[0]?.harnessModels.map((cell) => cell.model)).toEqual(['no model']);
+  });
+
+  it('groups mcp pulls under the mcp ecosystem by server name, counting a private server without naming it', () => {
+    const mcp = (id: string, n: number, name: string, over: Partial<ToolObservation> = {}): ToolObservation =>
+      tool(id, n, `mcp__${name}__do_it`, { pulls: [{ ecosystem: 'mcp', name, version: null }], ts: '2026-11-02T10:00:00.000Z', ...over });
+    const from = store({
+      sessions: [session('s1')],
+      tools: [mcp('s1', 0, 'playwright'), mcp('s1', 1, 'playwright', { status: 'error', cv: '19', errorCode: '1' }), mcp('s1', 2, 'acme-internal'), pulling('s1', 3, ['prettier'])],
+    });
+    const result = packageBooks(from, NONE, vocabulary());
+    expect(result.rows.map((row) => row.package)).toEqual(['mcp:playwright', 'npm:prettier']);
+    expect(result.rows[0]).toMatchObject({ calls: 2, failed: 1, sessions: 1 });
+    expect(result.notPublic).toEqual({ names: 1, calls: 1 });
+    expect(JSON.stringify(result)).not.toContain('acme-internal');
+    expect(formatPackageBooks(result)).toContain('mcp:playwright: 2 calls, 1 failed');
   });
 
   it('takes the model from the prompt when the call names none, and reads a name outside the model snapshot as another model', () => {
@@ -101,10 +142,8 @@ describe('packageBooks', () => {
 });
 
 describe('oars sessions books --by package', () => {
-  const termsFile = (terms: string): string => {
-    const dir = mkdtempSync(join(tmpdir(), 'oars-terms-'));
-    mkdirSync(dir, { recursive: true });
-    const file = join(dir, 'terms.txt');
+  const termsFile = (root: string, terms: string): string => {
+    const file = join(root, 'terms.txt');
     writeFileSync(file, terms);
     return file;
   };
@@ -120,7 +159,7 @@ describe('oars sessions books --by package', () => {
     expect(field(all, 'by')).toBe('package');
     expect(Number(field(field(all, 'excluded'), 'transcripts'))).toBeGreaterThan(0);
 
-    const open = harness({ OARS_EXCLUSION_TERMS: termsFile('zz-no-such-term-zz\n') });
+    const open = harness({ OARS_EXCLUSION_TERMS: termsFile(staged.root, 'zz-no-such-term-zz\n') });
     open.deps.sessions = staged.runtime;
     expect(await run(['--json', 'sessions', 'books', '--by', 'package'], open.deps)).toBe(ExitCode.OK);
     expect(field(field(JSON.parse(open.out.join('')), 'excluded'), 'transcripts')).toBe(0);
