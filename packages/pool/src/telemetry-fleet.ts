@@ -119,12 +119,40 @@ export interface Measurables {
   firstFleetRead: string | null;
 }
 
+/** The first of `days` (oldest first) on which the fleet read, as of that day, served any cell from `rows`; `rows` holds the six days before the first of them too. */
+const firstServed = (rows: readonly InstallDay[], days: readonly string[]): string | null =>
+  days.find((day) => fleetCells(rows.filter((row) => row.day >= shiftDay(day, -6) && row.day <= day)).length > 0) ?? null;
+
 export const measurablesOf = (rows: readonly InstallDay[], asOf: string): Measurables => {
   const ever = new Set(rows.map((row) => row.install));
   const recent = new Set(rows.filter((row) => row.day >= shiftDay(asOf, -6) && row.day <= asOf).map((row) => row.install));
-  const days = [...new Set(rows.map((row) => row.day))].sort();
-  const first = days.find((day) => fleetCells(rows.filter((row) => row.day >= shiftDay(day, -6) && row.day <= day)).length > 0);
-  return { reporting: { installsEver: ever.size, installsLast7Days: recent.size, share: ever.size === 0 ? 0 : recent.size / ever.size }, firstFleetRead: first ?? null };
+  return {
+    reporting: { installsEver: ever.size, installsLast7Days: recent.size, share: ever.size === 0 ? 0 : recent.size / ever.size },
+    firstFleetRead: firstServed(rows, [...new Set(rows.map((row) => row.day))].sort()),
+  };
+};
+
+const installsBetween = async (env: Env, from: string, to: string): Promise<number> =>
+  numberIn(await env.DB.prepare('SELECT COUNT(DISTINCT install) AS installs FROM telemetry_install_days WHERE day >= ? AND day <= ?').bind(from, to).first(), 'installs');
+
+/** The days of rollup read at a time while looking for the first fleet read. */
+const SCAN_DAYS = 30;
+
+/**
+ * `measurablesOf` without loading the table: the install counts are `COUNT(DISTINCT install)` queries, and the first fleet read is found by reading the rollup from its oldest day, a month at a time,
+ * and stopping at the month that serves a cell. Once the fleet read has been served the scan ends early; until then it reads only the days that served nothing.
+ */
+export const measurablesFrom = async (env: Env, asOf: string): Promise<Measurables> => {
+  const ever = await installsBetween(env, '0000-00-00', asOf);
+  const recent = await installsBetween(env, shiftDay(asOf, -6), asOf);
+  const oldest = fieldOf(await env.DB.prepare('SELECT MIN(day) AS oldest FROM telemetry_install_days WHERE day <= ?').bind(asOf).first(), 'oldest');
+  let first: string | null = null;
+  for (let start = typeof oldest === 'string' ? oldest : asOf; first === null && start <= asOf; start = shiftDay(start, SCAN_DAYS)) {
+    const end = shiftDay(start, SCAN_DAYS - 1) < asOf ? shiftDay(start, SCAN_DAYS - 1) : asOf;
+    const rows = await rowsBetween(env, shiftDay(start, -6), end);
+    first = firstServed(rows, [...new Set(rows.filter((row) => row.day >= start).map((row) => row.day))].sort());
+  }
+  return { reporting: { installsEver: ever, installsLast7Days: recent, share: ever === 0 ? 0 : recent / ever }, firstFleetRead: first };
 };
 
 // The operator's anomaly read: entities whose counts sit far from the fleet's, for a person to read.
@@ -194,13 +222,12 @@ export const operator = async (request: Request, env: Env & OperatorEnv, now: nu
   // Compared as digests, so the comparison does not depend on how much of the secret a guess matched.
   if (sent === undefined || (await digest(sent)) !== (await digest(secret))) return refuse(401, 'unauthorized', 'This read is for the pool operator.');
   const asOf = asOfDay(now);
-  const all = await rowsBetween(env, '0000-00-00', asOf);
-  const window = all.filter((row) => row.day >= shiftDay(asOf, 1 - Math.max(...WINDOWS)));
+  const window = await rowsBetween(env, shiftDay(asOf, 1 - Math.max(...WINDOWS)), asOf);
   return answer(200, {
     asOf,
     windowDays: Math.max(...WINDOWS),
     note: 'For a person to read. Nothing here is flagged, limited, or acted on automatically: a count far from the fleet is a question, not a finding.',
     ...anomaliesOf(window),
-    measurables: measurablesOf(all, asOf),
+    measurables: await measurablesFrom(env, asOf),
   });
 };
