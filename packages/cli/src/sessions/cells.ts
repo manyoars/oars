@@ -7,7 +7,7 @@ import { bucketOf } from './pool-wire.js';
 import { CALL_SHAPE_METHOD, cellRef, contentHash, METHODS, RECOVERY_EDGE_METHOD } from './read.js';
 import { recoveryCallsOf } from './recovery-calls.js';
 import { NO_RECALLS, type RecallGraph } from './recall-consequence.js';
-import { ERROR_CODES, EXTRACTOR_VERSION, harnessOf, type ErrorObservation, type Frame, type Harness, type PromptObservation, type SessionObservation, type ToolObservation } from './schema.js';
+import { ERROR_CODES, EXTRACTOR_VERSION, harnessOf, observesUsage, type ErrorObservation, type Frame, type Harness, type PromptObservation, type SessionObservation, type ToolObservation } from './schema.js';
 import type { Store } from './store.js';
 
 /** Rule 6: an `index` cell is weekly, except a live cell, which stays at the UTC day. */
@@ -29,8 +29,15 @@ export interface Cell {
   ok: number;
   /** Windows whose last step failed; a `class` cell: prompts with an error. A step with no result is in neither. */
   failed: number;
-  /** Summed over each window's steps; a `class` cell: the prompts' whole usage. */
-  tokens: number;
+  /**
+   * Summed over each window's steps; a `class` cell: the whole usage of the prompts that recorded input, counting only the categories each recorded (a placeholder zero beside
+   * `usageObserved` is not a measurement). Null when no session recorded any: absent, never a measured 0.
+   */
+  tokens: number | null;
+  /** On a `class` cell, how many of `sessions` recorded input, which is the coverage the `tokens` figure has (a session that recorded input but not every category still counts as covered, so the figure can be partial by category); less than `sessions` makes it a partial sum. Absent on a cell read back from the pool's stored sums, which carry no coverage count. A step cell does not honor it yet: it counts every session as recorded and reads a null step cost as 0 (`motif.ts:61`), which t921 Item 5 fixes. */
+  tokenSessions?: number;
+  /** How many of the cell's prompts the `tokens` figure covers (a step cell counts steps): the divisor of a per-prompt mean, since `tokens` holds only prompts that recorded input. Absent like `tokenSessions`. */
+  tokenPrompts?: number;
   durationMs: number;
   /** Whether these counts sit inside a shown recall's consequence window, wholly or in part. It is part of the cell's key, so a motif's exposed and unexposed counts stay apart. */
   exposed: boolean;
@@ -154,11 +161,18 @@ interface Tally {
   ok: number;
   failed: number;
   tokens: number;
+  /** The sessions whose tokens `tokens` holds: a step's are measured, a prompt's count only when it recorded input. */
+  recorded: Set<string>;
+  /** The prompts (or steps) behind `tokens`, counted where `recorded` gains a session. */
+  recordedUnits: number;
   durationMs: number;
   exposed: boolean;
 }
 
-const newTally = (motifId: string, frameBucket: string, grain: Grain, day: string, exposed: boolean): Tally => ({ motifId, frameBucket, grain, day, sessions: new Set(), ok: 0, failed: 0, tokens: 0, durationMs: 0, exposed });
+/** The usage categories a prompt's tokens add up: thinking is part of the output already billed, so it is not summed. */
+const TOKEN_FIELDS = ['input', 'cacheWrite', 'cacheRead', 'output'] as const;
+
+const newTally = (motifId: string, frameBucket: string, grain: Grain, day: string, exposed: boolean): Tally => ({ motifId, frameBucket, grain, day, sessions: new Set(), ok: 0, failed: 0, tokens: 0, recorded: new Set(), recordedUnits: 0, durationMs: 0, exposed });
 
 const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -238,6 +252,8 @@ export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): Cell
         if (status === 'error') tally.failed += 1;
         for (const step of window) {
           tally.tokens += step.tokens;
+          tally.recorded.add(first.parent);
+          tally.recordedUnits += 1;
           tally.durationMs += step.durationMs;
         }
       }
@@ -273,6 +289,8 @@ export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): Cell
             tally.sessions.add(first.parent);
             tally.failed += 1;
             tally.tokens += counted.tokens;
+            tally.recorded.add(first.parent);
+            tally.recordedUnits += 1;
             tally.durationMs += counted.durationMs;
           }
         }
@@ -289,15 +307,19 @@ export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): Cell
       tally.sessions.add(prompt.session);
       if (prompt.errors > 0) tally.failed += 1;
       else tally.ok += 1;
-      const { input, cacheWrite, cacheRead, output } = prompt.usage;
-      tally.tokens += input + cacheWrite + cacheRead + output;
+      // A prompt that recorded no input has no whole usage to count, and a category it never recorded is a placeholder zero, so neither enters the sum.
+      if (observesUsage(prompt, 'input')) {
+        tally.recorded.add(prompt.session);
+        tally.recordedUnits += 1;
+        for (const field of TOKEN_FIELDS) if (observesUsage(prompt, field)) tally.tokens += prompt.usage[field];
+      }
       tally.durationMs += (prompt.wallSec ?? 0) * 1000;
     }
   }
 
   const cells = [...tallies.values()]
     .sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.grain, b.grain) || compare(a.day, b.day) || Number(a.exposed) - Number(b.exposed))
-    .map((tally): Cell => ({ motifId: tally.motifId, frameBucket: tally.frameBucket, grain: tally.grain, day: tally.day, sessions: tally.sessions.size, clusters: ONE_OPERATOR, ok: tally.ok, failed: tally.failed, tokens: tally.tokens, durationMs: tally.durationMs, exposed: tally.exposed }));
+    .map((tally): Cell => ({ motifId: tally.motifId, frameBucket: tally.frameBucket, grain: tally.grain, day: tally.day, sessions: tally.sessions.size, clusters: ONE_OPERATOR, ok: tally.ok, failed: tally.failed, tokens: tally.recorded.size === 0 ? null : tally.tokens, tokenSessions: tally.recorded.size, tokenPrompts: tally.recordedUnits, durationMs: tally.durationMs, exposed: tally.exposed }));
   return { cells, motifs: [...motifs.values()].sort((a, b) => compare(a.motifId, b.motifId)) };
 };
 
