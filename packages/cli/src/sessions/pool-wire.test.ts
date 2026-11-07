@@ -224,6 +224,14 @@ describe('parseSkeleton refuses, and names the field', () => {
     expect(refusedField(sent(['transcripts', 0, 'prompts', 0, 'wallSec'], 1.5))).toBe('transcripts[0].prompts[0].wallSec');
   });
 
+  it('accepts a usage category and a remaining-token count sent as null or left out: the source never recorded it', () => {
+    const prompt = ['transcripts', 0, 'prompts', 0];
+    expect(refusedField(sent([...prompt, 'usage', 'cacheRead'], null))).toBe('accepted');
+    expect(refusedField(sent([...prompt, 'usage'], {}))).toBe('accepted');
+    expect(refusedField(sent([...prompt, 'usage', 'cacheRead'], 'x'))).toBe('transcripts[0].prompts[0].usage.cacheRead');
+    expect(refusedField(sent(['transcripts', 0, 'tools', 0, 'steps', 0, 'remainingTokens'], null))).toBe('accepted');
+  });
+
   it('holds every bucketed field to its own edges', () => {
     const prompt = ['transcripts', 0, 'prompts', 0];
     expect(refusedField(sent([...prompt, 'usage', 'input'], 11))).toBe('accepted');

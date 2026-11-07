@@ -9,7 +9,7 @@ import type { Motif } from './motif.js';
 import type { Read, ReadAsOf } from './read.js';
 import { recoveryCallsOf, RECOVERY_CALLS, type RecoveryCalls } from './recovery-calls.js';
 import { projectLanguage, projectLanguageShare } from './strata.js';
-import { ERROR_CODES, LANGUAGE_SHARES, type Frame, type FrameStack, type Harness, type LanguageShare, type PromptClass, type PromptObservation, type PullIdentity, type SessionObservation, type ShellIdentity, type StepIdentity, type StepObservation, type Strata, type ToolObservation, type ToolStatus, type Usage } from './schema.js';
+import { ERROR_CODES, LANGUAGE_SHARES, type Frame, type FrameStack, type Harness, type LanguageShare, type PromptClass, type PromptObservation, type PullIdentity, type SessionObservation, type ShellIdentity, type StepIdentity, type StepObservation, type Strata, type ToolObservation, type ToolStatus, type Usage, type UsageField } from './schema.js';
 
 // Format 3 (step 1 of the wire): a tool carries its `errorCode` and, for a failed call, what followed it (`recoveryCalls`). Formats 1 and 2 are refused by name; nothing is deployed, so nothing is migrated.
 export const SKELETON_FORMAT = 3;
@@ -57,8 +57,8 @@ export type SkeletonStep = Omit<StepObservation, 'n' | 'seg' | 'frameId' | 'cost
   tokens: number | null;
   /** An `ms` bucket of the step's time. */
   ms: number | null;
-  /** A `tokens` bucket of the tokens the run spent after this step (spec Section 1.2): the bucket of the exact sum, never a sum of buckets. */
-  remainingTokens: number;
+  /** A `tokens` bucket of the tokens the run spent after this step (spec Section 1.2): the bucket of the exact sum, never a sum of buckets, summed over the later steps that reported tokens (a lower bound). Null when steps follow and none reported tokens; 0 only when nothing follows or the later steps reported zero. */
+  remainingTokens: number | null;
   /** The projected type of the subagent whose run holds the step, a built-in or `custom`; null on a main-run step. */
   agentType: string | null;
   /** The step's frame: a position in its transcript's `frames`, the frame of the call that made it, with that call's own model and harness version (t867). The parser refuses a position outside the list. */
@@ -81,8 +81,11 @@ export interface SkeletonTool {
   steps: SkeletonStep[];
 }
 
-/** A prompt's usage as `tokens` buckets: `thinking` is a token count (the thinking tokens of the output), so it takes the same edges as the rest. */
-export type SkeletonUsage = { [field in keyof Usage]: number };
+/**
+ * A prompt's usage as `tokens` buckets: `thinking` is a token count (the thinking tokens of the output), so it takes the same edges as the rest. A category the source
+ * never recorded is null, never the bucket of zero: a prompt with no counts at all sends five nulls, and a partial total sends a number only for the categories it observed.
+ */
+export type SkeletonUsage = { [field in keyof Usage]: number | null };
 
 /** A language of the stack with its share of the touched files (spec Section 7): one of four buckets, never a count. */
 export interface LanguageShareEntry {
@@ -162,6 +165,9 @@ export interface SessionSkeleton {
   /** The batch's client-built delta entries (Section 2, "Deltas"): changes between the client's own before and after windows, each carried once, by the batch of the session that filled the after window. */
   deltas: DeltaEntry[];
 }
+
+/** A usage category's `tokens` bucket, or null when the record says the source never recorded it. A record that predates `usageObserved` reads every category as observed. */
+const observedBucket = (value: number, observed: readonly UsageField[] | undefined, field: UsageField): number | null => (observed === undefined || observed.includes(field) ? bucketOf('tokens', value) : null);
 
 /** One main session and the subagents it spawned, as the local store holds them. */
 export interface SessionRecords {
@@ -343,14 +349,20 @@ const transcriptOf = (
   const harness = session.harness ?? 'claude-code';
   const framedPrompts: SkeletonPrompt[] = [];
   const promptAt = new Map<number, number>();
-  for (const { index, cls, errors, wallSec, usage, frame, strata } of [...prompts].sort((a, b) => a.index - b.index)) {
+  for (const { index, cls, errors, wallSec, usage, usageObserved, frame, strata } of [...prompts].sort((a, b) => a.index - b.index)) {
     if (frame === undefined) return null;
     promptAt.set(index, framedPrompts.length);
     framedPrompts.push({
       cls,
       errors: bucketOf('count', errors),
       wallSec: wallSec === null ? null : bucketOf('seconds', wallSec),
-      usage: { input: bucketOf('tokens', usage.input), cacheWrite: bucketOf('tokens', usage.cacheWrite), cacheRead: bucketOf('tokens', usage.cacheRead), output: bucketOf('tokens', usage.output), thinking: bucketOf('tokens', usage.thinking) },
+      usage: {
+        input: observedBucket(usage.input, usageObserved, 'input'),
+        cacheWrite: observedBucket(usage.cacheWrite, usageObserved, 'cacheWrite'),
+        cacheRead: observedBucket(usage.cacheRead, usageObserved, 'cacheRead'),
+        output: observedBucket(usage.output, usageObserved, 'output'),
+        thinking: observedBucket(usage.thinking, usageObserved, 'thinking'),
+      },
       explore: projectExplore(strata?.explore),
       frame: wireFrame(frame, strata),
     });
@@ -378,7 +390,7 @@ const transcriptOf = (
   };
   const steppedTools: SkeletonTool[] = [];
   // The exact tokens of every step, by call and step, which the `remainingTokens` buckets below are computed from: a bucket of a sum is not a sum of buckets.
-  const exact: number[][] = [];
+  const exact: Array<Array<number | null>> = [];
   let unrecorded = 0;
   const ordered = byCall(tools);
   for (const [at, tool] of ordered.entries()) {
@@ -391,7 +403,7 @@ const transcriptOf = (
     if (prompt !== null && !promptAt.has(prompt)) promptAt.set(prompt, framedPrompts.length + unrecorded++);
     const promptPosition = prompt === null ? null : (promptAt.get(prompt) ?? null);
     const projected = projectedSteps(tool, read, harness);
-    exact.push(projected.map(({ cost }) => cost.tokens ?? 0));
+    exact.push(projected.map(({ cost }) => cost.tokens));
     const frame = frameOfCall(tool, promptPosition);
     const steps = projected.map(({ action, native, identity, status: reported, cost, parent }): SkeletonStep => ({
       action,
@@ -409,15 +421,22 @@ const transcriptOf = (
     steppedTools.push({ side, prompt: promptPosition, status, durationMs, errorCode, ...(recoveryCalls === null ? {} : { recoveryCalls }), steps });
   }
   // A step's remaining tokens are those of the steps after it in its own run; a main-run step also counts the subagent runs its later steps spawned (a run belongs to the spawning call's carrier step).
+  // `later` sums the steps that reported tokens; `laterKnown` is how many did, so a run whose later steps all reported nothing stays null instead of reading as zero.
   let later = 0;
+  let laterSteps = 0;
+  let laterKnown = 0;
   for (let call = steppedTools.length - 1; call >= 0; call -= 1) {
     const steps = steppedTools[call]?.steps ?? [];
     const held = carrier(steps);
     for (let at = steps.length - 1; at >= 0; at -= 1) {
       const step = steps[at];
       if (step === undefined) continue;
-      step.remainingTokens = bucketOf('tokens', later);
-      later += (exact[call]?.[at] ?? 0) + (at === held ? (spawned.get(call) ?? 0) : 0);
+      step.remainingTokens = laterSteps > 0 && laterKnown === 0 ? null : bucketOf('tokens', later);
+      const own = exact[call]?.[at] ?? null;
+      const spawnedTokens = at === held ? (spawned.get(call) ?? 0) : 0;
+      later += (own ?? 0) + spawnedTokens;
+      laterSteps += 1;
+      if (own !== null || spawnedTokens > 0) laterKnown += 1;
     }
   }
   return { merkleRoot: root.merkleRoot, leaves: root.leaves, harness, frame: transcriptFrame, frames, prompts: framedPrompts, tools: steppedTools };
@@ -534,8 +553,9 @@ export const OPTIONAL = {
   frame: ['harnessVersion', 'model', 'effort', 'day', 'shell', 'reach'],
   stack: ['size', 'languageShares'],
   prompt: ['wallSec', 'explore'],
+  usage: ['input', 'cacheWrite', 'cacheRead', 'output', 'thinking'],
   tool: ['prompt', 'durationMs', 'errorCode', 'recoveryCalls'],
-  step: ['tokens', 'ms', 'parent', 'skill'],
+  step: ['tokens', 'ms', 'parent', 'skill', 'remainingTokens'],
 } as const satisfies { readonly [level: string]: readonly string[] };
 
 /** The most bytes (as JSON) one field this reader does not know, or one literal, may hold: an enumerated value or a literal never needs more, and a newer client's larger structure belongs in a new format version. The deposit's own cap is no part of this. */
@@ -690,14 +710,9 @@ const bucketIn = (kind: BucketKind, value: unknown, at: string): number => {
 };
 
 const parseUsage = (held: Collected, value: unknown, at: string): SkeletonUsage => {
-  const raw = fieldsOf(held, value, at, ['input', 'cacheWrite', 'cacheRead', 'output', 'thinking']);
-  return {
-    input: bucketIn('tokens', raw.input, under(at, 'input')),
-    cacheWrite: bucketIn('tokens', raw.cacheWrite, under(at, 'cacheWrite')),
-    cacheRead: bucketIn('tokens', raw.cacheRead, under(at, 'cacheRead')),
-    output: bucketIn('tokens', raw.output, under(at, 'output')),
-    thinking: bucketIn('tokens', raw.thinking, under(at, 'thinking')),
-  };
+  const raw = fieldsOf(held, value, at, [], OPTIONAL.usage);
+  const bucket = (field: keyof SkeletonUsage): number | null => orNull(raw[field], under(at, field), (entry, entryAt) => bucketIn('tokens', entry, entryAt));
+  return { input: bucket('input'), cacheWrite: bucket('cacheWrite'), cacheRead: bucket('cacheRead'), output: bucket('output'), thinking: bucket('thinking') };
 };
 
 const parsePull = (held: Collected, value: unknown, at: string): PullIdentity => {
@@ -798,7 +813,7 @@ const parseAgentType = (held: Collected, value: unknown, at: string): string => 
 };
 
 const parseStep = (held: Collected, harness: WireHarness, value: unknown, at: string): SkeletonStep => {
-  const raw = fieldsOf(held, value, at, ['action', 'native', 'identity', 'status', 'remainingTokens', 'agentType', 'frame'], OPTIONAL.step);
+  const raw = fieldsOf(held, value, at, ['action', 'native', 'identity', 'status', 'agentType', 'frame'], OPTIONAL.step);
   const action = oneOf(held, CANONICAL_ACTIONS, raw.action, under(at, 'action'));
   return {
     action,
@@ -807,7 +822,7 @@ const parseStep = (held: Collected, harness: WireHarness, value: unknown, at: st
     status: oneOf(held, STATUSES, raw.status, under(at, 'status')),
     tokens: orNull(raw.tokens, under(at, 'tokens'), (entry, entryAt) => bucketIn('tokens', entry, entryAt)),
     ms: orNull(raw.ms, under(at, 'ms'), (entry, entryAt) => bucketIn('ms', entry, entryAt)),
-    remainingTokens: bucketIn('tokens', raw.remainingTokens, under(at, 'remainingTokens')),
+    remainingTokens: orNull(raw.remainingTokens, under(at, 'remainingTokens'), (entry, entryAt) => bucketIn('tokens', entry, entryAt)),
     agentType: orNull(raw.agentType, under(at, 'agentType'), (entry, entryAt) => parseAgentType(held, entry, entryAt)),
     parent: orNull(raw.parent, under(at, 'parent'), countOf),
     frame: countOf(raw.frame, under(at, 'frame')),

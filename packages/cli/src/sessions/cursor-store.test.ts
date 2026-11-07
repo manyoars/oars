@@ -47,6 +47,16 @@ describe('depositing the Cursor source', () => {
     expect(tracked['cursor/agent']).toMatchObject({ size: 5, mtimeMs: Date.parse('2025-03-02T09:30:00Z') });
   });
 
+  it('deposits a composer that recorded no token counts as unobserved usage, not a measured zero, and keeps the counted ones labeled', async () => {
+    const s = await staged();
+    await deposit(s.runtime, options(['cursor']));
+    const store = await loadStore(s.storeDir);
+    const loose = store.sessions.find((session) => session.session === 'cursor-loose');
+    expect(loose?.usageObserved).toEqual([]);
+    expect(loose?.usageResponses).toBe(0);
+    expect(store.sessions.find((session) => session.session === 'cursor-chat')?.usageObserved).toEqual(['input', 'output']);
+  });
+
   it('reads a Cursor call by its own table and frames its session as Cursor, from the deposit down', async () => {
     const s = await staged();
     await deposit(s.runtime, options(['cursor']));
