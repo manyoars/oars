@@ -9,8 +9,8 @@ import { cleanup, NOW, stage } from './test-support.js';
 afterEach(cleanup);
 
 describe('EXTRACTOR_VERSION 12', () => {
-  it('is 12, the version that gives a derived prompt its strata', () => {
-    expect(EXTRACTOR_VERSION).toBe('12');
+  it('is 12 or later, 12 being the version that gives a derived prompt its strata', () => {
+    expect(Number(EXTRACTOR_VERSION)).toBeGreaterThanOrEqual(12);
   });
 
   it('re-derives a store written at 11 from its log alone, and each derived prompt holds its strata', async () => {

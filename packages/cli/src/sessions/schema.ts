@@ -83,13 +83,13 @@ import type { RepoSize } from './public-vocabulary.js';
 import type { SessionFunnel, SessionSetup, SessionTrust } from './session-shape.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '19';
+export const CAPTURE_VERSION = '20';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
 
 /** Stamped `v` on every derived record. A bump re-derives from the log; no transcript is read. */
-export const EXTRACTOR_VERSION = '12';
+export const EXTRACTOR_VERSION = '14';
 
 export const PROMPT_HEAD_CHARS = 300;
 export const ERROR_EXAMPLE_CHARS = 160;
@@ -99,6 +99,13 @@ export const SIGNATURE_CHARS = 110;
 export const ERROR_LINE_CHARS = 1000;
 /** Per-session cap on `files` and `fileHashes` (L3): the hand run on the copy store had p99 61 and max 209 files per session; 100 is the round number above p99. */
 export const FILES_PER_SESSION_MAX = 100;
+
+/**
+ * What the next human prompt did to a prompt's work (t882, `docs/sessions-store.md` "Prompt intervention"): a closed list, not a grade. `user-stop` (EXTRACTOR 14) is a prompt the human stopped: a rejected call, or an interrupt. `unknown` is a prompt the records cannot say anything about (the last of its
+ * transcript, or one whose next prompt ran a shell call captured before `segments`); a prompt derived before EXTRACTOR 13 has no value at all, which is a different thing, and one derived at 13 read a stop as `unknown`.
+ */
+export const PROMPT_INTERVENTIONS = ['none', 'after-error', 'redo', 'revert', 'user-stop', 'unknown'] as const;
+export type PromptIntervention = (typeof PROMPT_INTERVENTIONS)[number];
 
 export const PROMPT_CLASSES = ['no-tools', 'orchestration', 'research', 'edit-verify', 'edit-only', 'explore-only', 'shell-only', 'mixed'] as const;
 export type PromptClass = (typeof PROMPT_CLASSES)[number];
@@ -119,6 +126,10 @@ export interface Usage {
   output: number;
   thinking: number;
 }
+
+/** The five usage categories, in the order a record lists the ones it observed. */
+export const USAGE_FIELDS = ['input', 'cacheWrite', 'cacheRead', 'output', 'thinking'] as const;
+export type UsageField = (typeof USAGE_FIELDS)[number];
 
 export type Harness = 'claude-code' | 'cursor' | 'codex' | 'copilot' | 'gemini' | 'grok' | 'vscode-copilot';
 
@@ -259,6 +270,14 @@ export interface SessionObservation {
   costUsd: number | null;
   /** Summed assistant usage of the file's own line (a main transcript's sidechain lines are not counted; a subagent transcript is its own line). */
   usage: Usage;
+  /**
+   * Which `usage` categories at least one counted response reported (class P). A category not listed was never recorded by the source, so its `usage` number is a
+   * placeholder zero and not a measurement; a listed one is a sum over `usageResponses` responses, which a partial sum covers only in part. Absent on a record captured
+   * before version 20: every category reads as observed there.
+   */
+  usageObserved?: UsageField[];
+  /** How many responses reported any usage (class P); compare with `assistantTurns` or `turns` for the share a sum covers. Same absence rule as `usageObserved`. */
+  usageResponses?: number;
   /** What the transcript shows of the setup the session ran with (class A); absent when it shows none, and on a record captured before version 12. */
   setup?: SessionSetup;
   /** The tool names at each funnel stage the transcript shows (class A); same absence rules. */
@@ -279,7 +298,7 @@ export type PromptStop = 'interrupt' | 'rejected';
 /**
  * One per user prompt: the `prompt_graphs.py` and `cost_per_class.py` records joined. Derived. Classes: `session`,
  * `contextFingerprint`, `frame`, `head`, `ts`, `skills`, `verify`, `stopped`, `commits`, and `redo` (A); `kind`, `v`, `rev`, `index`, `wallSec`, `cls`, `tools`,
- * `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `usage`, `recovery`, `explore`, `act`, and `bigrams` (P).
+ * `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `usage`, `recovery`, `explore`, `act`, `bigrams`, and `intervention` (P).
  */
 export interface PromptObservation {
   kind: 'prompt';
@@ -307,6 +326,9 @@ export interface PromptObservation {
   efforts: string[];
   skills: string[];
   usage: Usage;
+  /** Carried from the capture record: the categories and response count the prompt's `usage` rests on (see `UserPromptObservation`). */
+  usageObserved?: UsageField[];
+  usageResponses?: number;
   /** The two tools after the first error of each error run (the recovery pair); empty when no error. */
   recovery: string[];
   explore: number;
@@ -325,6 +347,8 @@ export interface PromptObservation {
   commits?: number;
   /** A later prompt edited a path this one edited, within `REDO_WINDOW` prompts, with no commit `commits` can see between them. */
   redo?: boolean;
+  /** Whether a human stepped in after this prompt's work, and how (EXTRACTOR 13): what the next prompt did, never a grade. Absent on a prompt derived earlier. Class P: a member of a closed list. */
+  intervention?: PromptIntervention;
 }
 
 /**
@@ -563,6 +587,14 @@ export interface UserPromptObservation {
   efforts: string[];
   skills: string[];
   usage: Usage;
+  /**
+   * Which `usage` categories at least one counted response reported (class P). A category not listed was never recorded by the source, so its `usage` number is a
+   * placeholder zero and not a measurement; a listed one is a sum over `usageResponses` responses, which a partial sum covers only in part. Absent on a record captured
+   * before version 20: every category reads as observed there.
+   */
+  usageObserved?: UsageField[];
+  /** How many responses reported any usage (class P); compare with `assistantTurns` or `turns` for the share a sum covers. Same absence rule as `usageObserved`. */
+  usageResponses?: number;
   /** Class A: the session's prompt fingerprint at the time of the prompt, when one had been seen. */
   promptFingerprint: string | null;
   /** Where and when this prompt ran; absent on a record captured before this field existed. Class A (EXTRACTOR 11): its fields pool only as cells. */

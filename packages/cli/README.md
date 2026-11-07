@@ -58,6 +58,7 @@ oars records how it is used, on this machine, and says so: on the first run that
 - `oars telemetry status` says whether it is on, which switch decided that, whether the notice was shown, and how large the spool is.
 - `oars telemetry off` stops recording and sending; `oars telemetry on` resumes it and prints the notice again.
 - `oars telemetry show` prints the spool exactly as stored, oldest first.
+- `oars telemetry report` prints your own numbers from the spool (hook latency percentiles, hit rates, and store health over the last 7 and 30 days) with no server and no account, and the fleet's percentile beside each when `OARS_POOL_URL` names a server that serves it.
 - `OARS_TELEMETRY=0` or `DO_NOT_TRACK=1` turns it off for the process, and wins over `oars telemetry on`.
 
 Every event type, with an example, is in [docs/telemetry.md](https://github.com/manyoars/oars/blob/main/docs/telemetry.md).
