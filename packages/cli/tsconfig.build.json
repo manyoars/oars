@@ -7,5 +7,5 @@
     "declaration": true
   },
   "include": ["src"],
-  "exclude": ["src/**/*.test.ts", "src/test-support.ts", "src/sessions/test-support.ts", "src/sessions/pool-fixture.ts", "src/sessions/order-fixture.ts", "src/**/*.live.ts", "src/live-page.ts"]
+  "exclude": ["src/**/*.test.ts", "src/test-support.ts", "src/sessions/test-support.ts", "src/sessions/pool-fixture.ts", "src/sessions/pool-books-fixture.ts", "src/sessions/order-fixture.ts", "src/**/*.live.ts", "src/live-page.ts"]
 }

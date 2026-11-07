@@ -1192,6 +1192,27 @@ export interface StrataCell {
   clusters: number;
 }
 
+/** A number the pool can state, or the plain statement that nothing measures it yet. `no source yet` is never a zero: a measured nothing and an unmeasured one must not read alike. */
+export type Sourced = { state: 'value'; value: number } | { state: 'no source yet'; reason: string };
+
+/**
+ * The set of four (direction conclusion, section 20 rule 1), as totals. Served cells and the below-floor backlog are totals over the cells this bundle derived from; the backlog is one number and names no
+ * tuple, week, or value. The panel is one account count and names no account. `demand` and `goal` hold a place each for a source a later brief adds. `floor`, the versions, and `asOf` are its lineage (section 17 rule 6).
+ */
+export interface Books {
+  floor: number;
+  format: typeof BUNDLE_FORMAT;
+  vocabVersion: string;
+  asOf: ReadAsOf;
+  served: { total: number; byWeek: { week: string; cells: number }[]; byTuple: { tuple: string; cells: number }[] };
+  backlog: number;
+  panel: Sourced;
+  /** The UTC day the panel was counted: the pool reads its deposits once a day. */
+  panelDay: string | null;
+  demand: { comparisonReadOwners: Sourced; followOnReads: Sourced };
+  goal: { readYield: Sourced; costPerServedCell: Sourced; yieldPerServedCell: Sourced };
+}
+
 /** One harness version's replica, as the server signs it. It names its harness, which the signature covers, so a bundle for one harness cannot stand in for another's. Nothing in it is keyed by stack. */
 export interface Bundle {
   format: typeof BUNDLE_FORMAT;
@@ -1205,6 +1226,8 @@ export interface Bundle {
   motifs: Motif[];
   reads: Read[];
   strata: StrataCell[];
+  /** Absent in a bundle signed before the set of four existed, which `oars sessions books` reads as no pool books. */
+  books?: Books;
 }
 
 /** The signature covers these exact bytes, so nothing has to be canonicalized on either side. */
