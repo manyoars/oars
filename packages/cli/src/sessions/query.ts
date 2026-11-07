@@ -3,7 +3,7 @@ import { firstCopies } from './derive.js';
 import { errorKey } from './extract.js';
 import { makeRedactor } from './redact.js';
 import { SOURCES } from './sources.js';
-import { harnessOf, type ErrorObservation, type HookCall, type PromptObservation, type RecallCall, type SessionObservation, type SignatureRecord } from './schema.js';
+import { harnessOf, observesUsage, type ErrorObservation, type HookCall, type PromptObservation, type RecallCall, type SessionObservation, type SignatureRecord } from './schema.js';
 import { signatureRecord, type Store } from './store.js';
 import type { SurvivalState } from './survival.js';
 
@@ -101,13 +101,25 @@ export interface BooksShare {
   share: number | null;
 }
 
-export interface BooksRow {
-  key: string;
-  prompts: number;
+/** The usage columns of a row. Each sums only the prompts that recorded the category, and is null when none did: absent, never a measured 0. */
+export const BOOKS_USAGE_FIELDS = ['cacheRead', 'cacheWrite', 'output', 'thinking'] as const;
+
+export interface BooksUsageCoverage {
   cacheRead: number;
   cacheWrite: number;
   output: number;
   thinking: number;
+}
+
+export interface BooksRow {
+  key: string;
+  prompts: number;
+  cacheRead: number | null;
+  cacheWrite: number | null;
+  output: number | null;
+  thinking: number | null;
+  /** How many of `prompts` recorded each usage category; below `prompts` the column is a partial sum. */
+  usageRecorded: BooksUsageCoverage;
   wallSec: number;
   turns: number;
   errors: number;
@@ -181,6 +193,12 @@ const callsByPrompt = (store: Store): Map<string, PromptCalls> => {
   return calls;
 };
 
+const recordedBy = (list: readonly PromptObservation[], field: (typeof BOOKS_USAGE_FIELDS)[number]): number => list.filter((prompt) => observesUsage(prompt, field)).length;
+
+/** The sum of one usage category over the prompts that recorded it, or null when none did. */
+const usageSum = (list: readonly PromptObservation[], field: (typeof BOOKS_USAGE_FIELDS)[number]): number | null =>
+  recordedBy(list, field) === 0 ? null : list.reduce((total, prompt) => total + (observesUsage(prompt, field) ? prompt.usage[field] : 0), 0);
+
 export const books = (store: Store, by: BooksBy, now: number, sinceDays?: number, survival: ReadonlyMap<string, SurvivalState> = new Map()): BooksRow[] => {
   const cutoff = sinceCutoff(now, sinceDays);
   const groups = new Map<string, PromptObservation[]>();
@@ -212,10 +230,11 @@ export const books = (store: Store, by: BooksBy, now: number, sinceDays?: number
       return {
         key,
         prompts: list.length,
-        cacheRead: sum(list, (prompt) => prompt.usage.cacheRead),
-        cacheWrite: sum(list, (prompt) => prompt.usage.cacheWrite),
-        output: sum(list, (prompt) => prompt.usage.output),
-        thinking: sum(list, (prompt) => prompt.usage.thinking),
+        cacheRead: usageSum(list, 'cacheRead'),
+        cacheWrite: usageSum(list, 'cacheWrite'),
+        output: usageSum(list, 'output'),
+        thinking: usageSum(list, 'thinking'),
+        usageRecorded: { cacheRead: recordedBy(list, 'cacheRead'), cacheWrite: recordedBy(list, 'cacheWrite'), output: recordedBy(list, 'output'), thinking: recordedBy(list, 'thinking') },
         wallSec: Math.round(sum(list, (prompt) => prompt.wallSec ?? 0)),
         turns: sum(list, (prompt) => prompt.turns),
         errors: sum(list, (prompt) => prompt.errors),
@@ -237,16 +256,21 @@ export const BOOKS_CAVEAT = "These are associations in one operator's logs, not 
 
 const shareCell = (cell: BooksShare): string => (cell.share === null ? 'too few' : `${String(Math.round(cell.share * 100))}%`);
 
+const USAGE_LABELS = { cacheRead: 'cache read', cacheWrite: 'cache write', output: 'output', thinking: 'thinking' } as const;
+
 export const formatBooks = (rows: readonly BooksRow[], by: BooksBy): string => {
   if (rows.length === 0) return by === 'pull' ? 'No pulls in the store.' : 'No prompts in the store.';
   // A pull name, unlike a class, has no length it stays under.
   const width = Math.max(14, ...rows.map((row) => row.key.length));
+  const usage = (row: BooksRow, field: (typeof BOOKS_USAGE_FIELDS)[number]): string => (row[field] === null ? 'n/a' : String(row[field]));
   const header = `${by.padEnd(width)} ${'prompts'.padStart(8)} ${'cache read'.padStart(14)} ${'cache write'.padStart(13)} ${'output'.padStart(11)} ${'thinking'.padStart(10)} ${'wall s'.padStart(9)} ${'turns'.padStart(7)} ${'errors'.padStart(7)} ${'verify'.padStart(7)} ${'delegated'.padStart(13)} ${'passed'.padStart(8)} ${'stop'.padStart(8)} ${'redo'.padStart(8)} ${'commits'.padStart(8)} ${'settled'.padStart(8)} ${'survived'.padStart(8)}`;
   const lines = rows.map(
     (row) =>
-      `${row.key.padEnd(width)} ${String(row.prompts).padStart(8)} ${String(row.cacheRead).padStart(14)} ${String(row.cacheWrite).padStart(13)} ${String(row.output).padStart(11)} ${String(row.thinking).padStart(10)} ${String(row.wallSec).padStart(9)} ${String(row.turns).padStart(7)} ${String(row.errors).padStart(7)} ${(row.verifyAfterEdit === null ? '-' : `${String(Math.round(row.verifyAfterEdit * 100))}%`).padStart(7)} ${String(row.delegated).padStart(13)} ${shareCell(row.verifyPassed).padStart(8)} ${shareCell(row.stopped).padStart(8)} ${shareCell(row.redone).padStart(8)} ${String(row.commits).padStart(8)} ${String(row.settled).padStart(8)} ${shareCell(row.survived).padStart(8)}`,
+      `${row.key.padEnd(width)} ${String(row.prompts).padStart(8)} ${usage(row, 'cacheRead').padStart(14)} ${usage(row, 'cacheWrite').padStart(13)} ${usage(row, 'output').padStart(11)} ${usage(row, 'thinking').padStart(10)} ${String(row.wallSec).padStart(9)} ${String(row.turns).padStart(7)} ${String(row.errors).padStart(7)} ${(row.verifyAfterEdit === null ? '-' : `${String(Math.round(row.verifyAfterEdit * 100))}%`).padStart(7)} ${String(row.delegated).padStart(13)} ${shareCell(row.verifyPassed).padStart(8)} ${shareCell(row.stopped).padStart(8)} ${shareCell(row.redone).padStart(8)} ${String(row.commits).padStart(8)} ${String(row.settled).padStart(8)} ${shareCell(row.survived).padStart(8)}`,
   );
-  return [header, ...lines].join('\n');
+  // A column some prompts did not record is a partial sum (or, at 0, absent): say how many did in a line under the table, so the table's columns stay aligned.
+  const coverage = rows.flatMap((row) => BOOKS_USAGE_FIELDS.filter((field) => row.usageRecorded[field] < row.prompts).map((field) => `${row.key} ${USAGE_LABELS[field]}: ${String(row.usageRecorded[field])} of ${String(row.prompts)} prompts recorded`));
+  return [header, ...lines, ...coverage].join('\n');
 };
 
 export interface Signal {
@@ -255,8 +279,10 @@ export interface Signal {
   recurringPer100: number | null;
   /** Distinct signatures among those recurring errors in the window. */
   recurringSignatures: number | null;
-  /** Mean cache-write tokens of a session in the window. */
+  /** Mean cache-write tokens of the window's sessions that recorded them; null when none did. */
   cacheWritePerSession: number | null;
+  /** How many of `sessions` recorded cache-write tokens, the sessions `cacheWritePerSession` is a mean over. */
+  cacheWriteSessions: number;
   /** MCP recall calls made during the window, per session. */
   recallPerSession: number | null;
   /** Hook lookups (SessionStart injection and PostToolUse recall) made in the window's sessions, per session. */
@@ -295,7 +321,7 @@ export const measure = (store: Store, calls: readonly RecallCall[], hookCalls: r
     if (position !== undefined) firstSeen.set(error.sig, Math.min(firstSeen.get(error.sig) ?? position, position));
   }
   const signal = (slice: readonly SessionObservation[]): Signal => {
-    if (slice.length === 0) return { sessions: 0, cursorSessions: 0, recurringPer100: null, recurringSignatures: null, cacheWritePerSession: null, recallPerSession: null, hookRecallPerSession: null, hookHitsPerSession: null, hookDepositsPerSession: null };
+    if (slice.length === 0) return { sessions: 0, cursorSessions: 0, recurringPer100: null, recurringSignatures: null, cacheWritePerSession: null, cacheWriteSessions: 0, recallPerSession: null, hookRecallPerSession: null, hookHitsPerSession: null, hookDepositsPerSession: null };
     const names = new Set(slice.map((session) => session.session));
     const recurringErrors = store.errors.filter((error) => names.has(error.session) && (index.get(error.session) ?? 0) > (firstSeen.get(error.sig) ?? 0));
     const recurring = recurringErrors.length;
@@ -303,6 +329,8 @@ export const measure = (store: Store, calls: readonly RecallCall[], hookCalls: r
     const to = slice.map((session) => session.tsLast).filter((ts): ts is string => ts !== null).sort().reverse()[0];
     const inWindow = from === undefined || to === undefined ? 0 : calls.filter((call) => call.at >= from && call.at <= to).length;
     const round = (value: number): number => Math.round(value * 100) / 100;
+    // A session that never recorded cache writes holds a placeholder zero there, which would pull the mean down.
+    const recorded = slice.filter((session) => observesUsage(session, 'cacheWrite'));
     const lookups = hookCalls.filter((call) => call.session !== null && names.has(call.session) && (call.event === 'session-start' || call.event === 'post-tool'));
     return {
       sessions: slice.length,
@@ -310,7 +338,8 @@ export const measure = (store: Store, calls: readonly RecallCall[], hookCalls: r
       otherSessions: Object.fromEntries(SOURCES.filter((source) => source.harness !== 'cursor').map((source) => [source.harness, slice.filter((session) => harnessOf(session) === source.harness).length])),
       recurringPer100: round((recurring * 100) / slice.length),
       recurringSignatures: new Set(recurringErrors.map((error) => error.sig)).size,
-      cacheWritePerSession: Math.round(slice.reduce((total, session) => total + session.usage.cacheWrite, 0) / slice.length),
+      cacheWritePerSession: recorded.length === 0 ? null : Math.round(recorded.reduce((total, session) => total + session.usage.cacheWrite, 0) / recorded.length),
+      cacheWriteSessions: recorded.length,
       recallPerSession: round(inWindow / slice.length),
       hookRecallPerSession: round(lookups.length / slice.length),
       hookHitsPerSession: round(lookups.filter((call) => call.hit).length / slice.length),
@@ -324,6 +353,10 @@ export const measure = (store: Store, calls: readonly RecallCall[], hookCalls: r
 
 export const formatMeasure = (result: Measure): string => {
   const cell = (value: number | null): string => (value === null ? '-' : String(value));
+  const cacheWrite = (signal: Signal): string => {
+    if (signal.cacheWritePerSession === null) return signal.sessions === 0 ? '-' : 'n/a';
+    return signal.cacheWriteSessions < signal.sessions ? `${String(signal.cacheWritePerSession)} (${String(signal.cacheWriteSessions)} of ${String(signal.sessions)})` : String(signal.cacheWritePerSession);
+  };
   const row = (label: string, pick: (signal: Signal) => number | null): string => `${label.padEnd(36)} ${cell(pick(result.last)).padStart(12)} ${cell(pick(result.before)).padStart(12)}`;
   return [
     `${(result.since === null ? `G1 signals, last ${String(result.window)} sessions and the ${String(result.window)} before` : `G1 signals, ${String(result.window)} sessions from ${result.since} and the ${String(result.window)} before`).padEnd(36)} ${(result.since === null ? 'last' : 'from').padStart(12)} ${'before'.padStart(12)}`,
@@ -332,7 +365,8 @@ export const formatMeasure = (result: Measure): string => {
     ...SOURCES.filter((source) => source.harness !== 'cursor' && ((result.last.otherSessions?.[source.harness] ?? 0) > 0 || (result.before.otherSessions?.[source.harness] ?? 0) > 0)).map((source) => row(`  of which ${source.label}`, (signal) => signal.otherSessions?.[source.harness] ?? 0)),
     row('recurring errors per 100 sessions', (signal) => signal.recurringPer100),
     row('distinct recurring signatures', (signal) => signal.recurringSignatures),
-    row('cache-write tokens per session', (signal) => signal.cacheWritePerSession),
+    // `-` is an empty window; `n/a` is sessions in it that never recorded cache writes; a partial mean says how many sessions it covers.
+    `${'cache-write tokens per session'.padEnd(36)} ${cacheWrite(result.last).padStart(12)} ${cacheWrite(result.before).padStart(12)}`,
     row('recall calls per session', (signal) => signal.recallPerSession),
     row('hook recall calls per session', (signal) => signal.hookRecallPerSession),
     row('hook hits per session', (signal) => signal.hookHitsPerSession),

@@ -32,7 +32,7 @@ const skeletonOfLocal = (local: Store): SessionSkeleton => {
   return skeleton;
 };
 
-const keyed = (cells: readonly { motifId: string; frameBucket: string; grain: string; day: string; exposed: boolean | number; sessions: number; ok: number; failed: number; tokens: number; durationMs: number }[]) =>
+const keyed = (cells: readonly { motifId: string; frameBucket: string; grain: string; day: string; exposed: boolean | number; sessions: number; ok: number; failed: number; tokens: number | null; durationMs: number }[]) =>
   cells.map(({ motifId, frameBucket, grain, day, exposed, sessions, ok, failed, tokens, durationMs }) => `${motifId}/${frameBucket}/${grain}/${day}/${String(Number(exposed))} ${String(sessions)} ${String(ok)} ${String(failed)} ${String(tokens)} ${String(durationMs)}`).sort();
 
 describe('storeOf', () => {
@@ -83,7 +83,7 @@ describe('rule 5: a bucket and no exact number', () => {
   it('reads a lower bound of what the local store derives exactly, and equal when every value sits on a floor', () => {
     const exact = deriveCells(localStore());
     const floored = incrementsOf(skeletonOfLocal(localStore()));
-    const sum = (rows: readonly { tokens: number; durationMs: number }[], field: 'tokens' | 'durationMs'): number => rows.reduce((total, row) => total + row[field], 0);
+    const sum = (rows: readonly { tokens: number | null; durationMs: number }[], field: 'tokens' | 'durationMs'): number => rows.reduce((total, row) => total + (row[field] ?? 0), 0);
     expect(sum([...floored.cells.values()], 'tokens')).toBeLessThan(sum(exact.cells, 'tokens'));
     expect(sum([...floored.cells.values()], 'durationMs')).toBeLessThan(sum(exact.cells, 'durationMs'));
     const onFloors = store({

@@ -1,6 +1,6 @@
 // Layer 2's self-baseline (spec 2.2): a session's week against the operator's own other weeks on the same harness. Local only: no pooled field,
 // no network, no account step. The peer baseline waits for T2.
-import { harnessOf, type Harness, type PromptObservation, type SessionObservation, type ToolObservation } from './schema.js';
+import { harnessOf, observesUsage, type Harness, type PromptObservation, type SessionObservation, type ToolObservation } from './schema.js';
 
 /** A week needs this many tool calls to be a unit or a baseline week (spec 5.4 item 1). */
 export const BASELINE_MIN_CALLS = 1000;
@@ -28,7 +28,7 @@ export type Dimension = (typeof DIMENSIONS)[number];
 /** The fields each record needs, so a caller passes the store's records and a test passes small ones. */
 export type BaselineSession = Pick<SessionObservation, 'session' | 'tsFirst' | 'tools' | 'harness'>;
 export type BaselineTool = Pick<ToolObservation, 'session' | 'status' | 'durationMs'>;
-export type BaselinePrompt = Pick<PromptObservation, 'session' | 'wallSec' | 'cls' | 'turns' | 'usage'>;
+export type BaselinePrompt = Pick<PromptObservation, 'session' | 'wallSec' | 'cls' | 'turns' | 'usage' | 'usageObserved'>;
 
 export interface DimensionDistance {
   dimension: Dimension;
@@ -192,9 +192,11 @@ export const selfBaseline = (sessions: readonly BaselineSession[], tools: readon
     for (const prompt of promptsOf.get(session.session) ?? []) {
       add(histogramOf(group.histograms, 'prompt class'), prompt.cls);
       if (prompt.wallSec !== null) add(histogramOf(group.histograms, 'wallSec'), binOf(prompt.wallSec, WALL_EDGES_SEC));
-      const input = prompt.usage.input + prompt.usage.cacheWrite + prompt.usage.cacheRead;
-      if (input > 0) add(histogramOf(group.histograms, 'cache-read share'), binOf(prompt.usage.cacheRead * 10, CACHE_SHARE_TENTHS, input));
-      if (prompt.turns > 0) add(histogramOf(group.histograms, 'output per turn'), binOf(prompt.usage.output, OUTPUT_PER_TURN_EDGES, prompt.turns));
+      // A category the source never recorded is a placeholder zero, not a measurement: the share needs input and cacheRead, and counts only the input-side categories recorded;
+      // output per turn needs output. A prompt missing what a dimension needs adds no count to it, so its denominator holds only the prompts that recorded the category.
+      const input = (['input', 'cacheWrite', 'cacheRead'] as const).reduce((sum, field) => sum + (observesUsage(prompt, field) ? prompt.usage[field] : 0), 0);
+      if (observesUsage(prompt, 'input') && observesUsage(prompt, 'cacheRead') && input > 0) add(histogramOf(group.histograms, 'cache-read share'), binOf(prompt.usage.cacheRead * 10, CACHE_SHARE_TENTHS, input));
+      if (observesUsage(prompt, 'output') && prompt.turns > 0) add(histogramOf(group.histograms, 'output per turn'), binOf(prompt.usage.output, OUTPUT_PER_TURN_EDGES, prompt.turns));
     }
   }
 
