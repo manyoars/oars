@@ -13,6 +13,7 @@ import { appendHookCall } from './hook-calls.js';
 import { contextBlock, readIndex } from './hook-index.js';
 import type { Recall } from './recall-object.js';
 import { pushRecall } from './recall-push.js';
+import { statedAt } from './transcript-tail.js';
 import { toolShapeId } from './recall-reads.js';
 import { makeRedactor } from './redact.js';
 import type { HookCall } from './schema.js';
@@ -171,8 +172,10 @@ export const runHook = async (event: HookEvent, stdin: string, runtime: Sessions
   let failed = false;
   let failure: unknown;
   let key: string | null = null;
+  let transcript: string | undefined;
   try {
     const input = parse(stdin);
+    transcript = str(input.transcript_path);
     key = lookupKey(event, input);
     session = str(input.session_id) ?? null;
     if (event === 'session-start') outcome = await sessionStart(runtime, input);
@@ -194,14 +197,16 @@ export const runHook = async (event: HookEvent, stdin: string, runtime: Sessions
     const report: StepReport = { in: { query: 1 }, out: failed ? {} : { matches: outcome.hit ? 1 : 0 }, key };
     await tryLog(() => logStep(newContext(runtime.storeDir, now, event), 'recall', failed ? 'error' : 'ok', ms, report, line));
   }
-  // After the answer is settled and the local rows are written, so telemetry is never in front of the context the session gets; `emit` never throws.
+  // After the answer is settled and the local rows are written; it runs before hook-bin prints, at the cost measured in t876 item 5. `emit` never throws. A push states its own frame;
+  // every other fire reads the transcript's tail the way a push does, so the version and model are there on a miss, a post-tool, a stop, and a nightly run too.
   const { recall } = outcome;
+  const stated = recall?.frame !== undefined || transcript === undefined ? undefined : await statedAt(transcript);
   emit('hook', {
     name: event,
     latencyMs: ms,
     outcome: failed ? 'error' : recall?.arm === 'held' ? 'held' : outcome.hit ? 'hit' : 'miss',
     bytes: Buffer.byteLength(outcome.output ?? ''),
-    ...frameWords(recall?.frame?.harnessVersion, recall?.frame?.model ?? outcome.model),
+    ...frameWords(recall?.frame?.harnessVersion ?? stated?.harnessVersion, recall?.frame?.model ?? outcome.model ?? stated?.model),
   });
   // A push is a recall: its read is the `fit` family, and its arm is the exposure record, as a count of one.
   if (recall !== undefined) emit('recall', recallFields(recall, ['fit']));

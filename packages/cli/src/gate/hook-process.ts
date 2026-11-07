@@ -22,8 +22,8 @@ export interface HookProcess {
   write?: (text: string) => Promise<void>;
   /** Milliseconds from now until the process ends itself. */
   deadlineMs: number;
-  /** Told once how the fire went, after its output is written so recording is never in front of the answer. A throw here is swallowed: the exit code and stdout do not depend on it. */
-  record?: (fire: HookFire) => void;
+  /** Told once how the fire went, with the transcript path the harness named (to read the frame from, never to record), after its output is written so recording is never in front of the answer. A throw here is swallowed: the exit code and stdout do not depend on it. */
+  record?: (fire: HookFire, transcript: string | undefined) => void | Promise<void>;
   /** Milliseconds, only compared with itself: the latency in a fire is the difference across the handler. Absent: `Date.now`. */
   clock?: () => number;
 }
@@ -33,6 +33,17 @@ const unprinted = (text: string): string =>
   parseRows(text)
     .map((row) => `${JSON.stringify(row.kind === 'crossing' ? { ...row, arm: 'none', lineShown: 'none', lineHeld: 'none' } : row)}\n`)
     .join('');
+
+/** The transcript path the harness put in the hook input, when there is one; anything else, including input that is not JSON, names none. */
+const transcriptOf = (input: string): string | undefined => {
+  try {
+    const parsed: unknown = JSON.parse(input);
+    const path: unknown = typeof parsed === 'object' && parsed !== null ? Reflect.get(parsed, 'transcript_path') : undefined;
+    return typeof path === 'string' && path !== '' ? path : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 const sizeOf = (file: string): number => {
   try {
@@ -57,13 +68,14 @@ export const runHookProcess = async ({ stdin, deps, exit, write, deadlineMs, rec
   // `held` and `error` are what the output cannot say; the callback reaches the hook through `deps`.
   const how: { ended: HookFire['outcome'] | null } = { ended: null };
   let fired: Pick<HookFire, 'outcome' | 'bytes'>;
+  let transcript: string | undefined;
   // Telemetry hears of a fire once: the deadline timer records the fire it cuts short (the slowest ones), and the main path skips a fire the timer has already told.
   let recorded = false;
-  const tell = (result: Pick<HookFire, 'outcome' | 'bytes'>): void => {
+  const tell = async (result: Pick<HookFire, 'outcome' | 'bytes'>, transcript?: string): Promise<void> => {
     if (recorded) return;
     recorded = true;
     try {
-      record?.({ latencyMs: Math.max(0, Math.round(clock() - started)), ...result });
+      await record?.({ latencyMs: Math.max(0, Math.round(clock() - started)), ...result }, transcript);
     } catch {
       // Telemetry never changes what the hook did.
     }
@@ -80,7 +92,7 @@ export const runHookProcess = async ({ stdin, deps, exit, write, deadlineMs, rec
         // Fail-open.
       }
       // The fire the deadline cut short is still a fire: recorded as an error with nothing printed, after the row and before the stop so a slow stop cannot lose it.
-      tell({ outcome: 'error', bytes: 0 });
+      void tell({ outcome: 'error', bytes: 0 });
       // A registry ask still running is then stopped, so the manager the hook started does not outlive it; a stop that throws must not cost the exit.
       try {
         staged?.stop?.();
@@ -95,14 +107,16 @@ export const runHookProcess = async ({ stdin, deps, exit, write, deadlineMs, rec
     const built = deps((pending) => {
       staged = pending === null ? null : { ...pending, size: sizeOf(pending.file) };
     });
-    const output = await gateHook(await stdin(), { ...built, ended: (result) => { how.ended = result; built.ended?.(result); } });
+    const input = await stdin();
+    transcript = transcriptOf(input);
+    const output = await gateHook(input, { ...built, ended: (result) => { how.ended = result; built.ended?.(result); } });
     if (output !== '') await write?.(output);
     fired = { outcome: how.ended ?? (output === '' ? 'miss' : 'hit'), bytes: Buffer.byteLength(output) };
   } catch {
     // Fail-open: a throw anywhere above is a record not written, never an exit code.
     fired = { outcome: 'error', bytes: 0 };
   }
-  tell(fired);
+  await tell(fired, transcript);
   // A manager the registry ask started can outlive the ask; leaving by `exit` rather than waiting for it is what keeps the call under a second.
   exit(0);
 };
