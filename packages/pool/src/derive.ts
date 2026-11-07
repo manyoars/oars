@@ -1,6 +1,6 @@
 // Cells and reads (recall spec Sections 2.5 and 2.6), with the same code a local store runs. A deposit's skeleton becomes cells in `cell-increments.ts`, which ingest adds to the stored
 // ones; a bundle is derived from the stored cells, whose `clusters` is the held count of accounts. Recovery is served from cells alone (what others did next after a failed call, `read-recovery-edge.ts`); the signature record and the call-shape method are left out: a skeleton holds no signature or tool input keys (`docs/pool.md`, "What a bundle serves").
-import { cellIdOf, harnessBucket, NO_AXES, poolOf, type Pool } from '../../cli/src/sessions/cells.js';
+import { harnessBucket, NO_AXES, poolOf, type Pool } from '../../cli/src/sessions/cells.js';
 import { motifName } from '../../cli/src/sessions/motif.js';
 import { BUNDLE_FORMAT, type Bundle, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
 import { makeRead, orderResolver, type Read } from '../../cli/src/sessions/read.js';
