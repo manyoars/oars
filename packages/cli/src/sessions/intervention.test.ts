@@ -221,8 +221,12 @@ describe('a git undo read from a real command line', () => {
   });
 
   // The segment drops a flag, so `git checkout -b feature/x` and `git checkout -` leave the bare pair that `git checkout -- <path>` leaves; the step's flags tell them apart (`<literal>` for `-`, `-b` for a create). `--patch` stands for any flag off the public list, which the step also turns into `<literal>`: those read `none` as a limit.
-  it.each(['git checkout -', 'git checkout -b feature/x', 'git checkout -B feature/x', 'git checkout --detach', 'git checkout --patch'])('`%s` moves to a branch and undoes no work: none', (command) => {
+  it.each(['git checkout -', 'git checkout -b feature/x', 'git checkout -B feature/x', 'git checkout --detach'])('`%s` moves to a branch and undoes no work: none', (command) => {
     expect(fromCommandLine(command)).toBe('none');
+  });
+
+  it('`git checkout --patch` reads none, a known limit: the step turns a flag off the public list into `<literal>`', () => {
+    expect(fromCommandLine('git checkout --patch')).toBe('none');
   });
 
   // A word with a slash or quotes is dropped from the segment and leaves no flag, so these checkouts read as the bare pair too (docs/sessions-store.md, `revert` limit); the rows pin the limit so a change to it is seen.
