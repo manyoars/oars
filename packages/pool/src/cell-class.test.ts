@@ -1,6 +1,6 @@
 // t900 Item 3: the pool reads the class table. A value on the public list is `clear`, one off it takes the field's `longTail` class, and a served read takes the class of the cell it counts.
 import { describe, expect, it } from 'vitest';
-import type { Cell } from '../../cli/src/sessions/cells.js';
+import { NO_AXES, type Cell } from '../../cli/src/sessions/cells.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
 import type { StepIdentity } from '../../cli/src/sessions/schema.js';
 import { cellClassOf } from './cell-class.js';
@@ -39,9 +39,12 @@ describe('the class of a cell', () => {
   it('is clear when the model, version, and every name are on the lists', () => {
     expect(cellClassOf(cellOf('m', frame, 1), motifOf('m', git(['--force'])))).toBe('clear');
     expect(cellClassOf(cellOf('m', 'claude-code/unknown/unknown', 1), motifOf('m', null))).toBe('clear');
+    // The version-free model cell that `bundleOf` serves beside the bucket's: no version axis, so only the model decides.
+    expect(cellClassOf(cellOf('m', `claude-code/${NO_AXES}/claude-sonnet-4-5`, 1), motifOf('m', git(['--force'])))).toBe('clear');
   });
 
   it('is thresholded when any one part is off a list', () => {
+    expect(cellClassOf(cellOf('m', `claude-code/${NO_AXES}/acme-private-finetune-v7`, 1), motifOf('m', git()))).toBe('thresholded');
     expect(cellClassOf(cellOf('m', 'claude-code/2.1.31x/acme-private-finetune-v7', 1), motifOf('m', git()))).toBe('thresholded');
     expect(cellClassOf(cellOf('m', 'claude-code/2.1.31x-acme/claude-sonnet-4-5', 1), motifOf('m', git()))).toBe('thresholded');
     expect(cellClassOf(cellOf('m', frame, 1), motifOf('m', { program: 'acme-deploy', sub: null, flags: [] }))).toBe('thresholded');
