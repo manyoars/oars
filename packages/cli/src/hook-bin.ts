@@ -3,10 +3,7 @@
 // always exits 0 with no output on any failure: a hook must never fail or block a session.
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { defaultConfigDir } from './credentials.js';
-import type { NightlyTelemetry } from './telemetry/health.js';
-import { HOOK_EVENTS, hookRuntime, runHook, type HookEvent } from './sessions/hooks.js';
+import { HOOK_EVENTS, hookRuntime, nightlyTelemetry, runHook, type HookEvent } from './sessions/hooks.js';
 
 const readStdin = async (): Promise<string> => {
   process.stdin.setEncoding('utf8');
@@ -26,12 +23,6 @@ const versionOf = (): string => {
   }
 };
 
-/** Only the nightly run records anything: the health of the store and what the run cost. The per-tool hooks stay as they were. */
-const telemetryOf = (event: HookEvent): NightlyTelemetry | undefined =>
-  event === 'nightly'
-    ? { env: process.env, telemetry: { dir: join(defaultConfigDir(process.env, process.platform, homedir()), 'oars', 'telemetry'), platform: process.platform }, version: versionOf(), now: Date.now }
-    : undefined;
-
 const eventOf = (name: string | undefined): HookEvent | undefined => HOOK_EVENTS.find((event) => event === name);
 
 try {
@@ -42,7 +33,7 @@ try {
       event === 'nightly' ? '' : await readStdin(),
       hookRuntime(event, process.env, process.platform, homedir(), { stdin: process.stdin, stdout: process.stdout }),
       Date.now,
-      telemetryOf(event),
+      nightlyTelemetry(event, process.env, process.platform, homedir(), versionOf, Date.now),
     );
     if (output !== undefined) process.stdout.write(output);
   }
