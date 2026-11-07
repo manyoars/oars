@@ -250,6 +250,33 @@ describe('the Pi reader', () => {
     expect(times).toEqual([at(10), at(11), at(30)]);
   });
 
+  it('ends the path at a parent that is gone, a cycle, or an entry with no id, rather than failing', () => {
+    const entry = (id: string | undefined, parent: string | null, second: number, text: string): Obj => ({ type: 'message', ...(id === undefined ? {} : { id }), parentId: parent, timestamp: at(second), message: { role: 'user', content: text, timestamp: BASE + second * 1000 } });
+    const texts = (events: readonly Obj[]): string[] =>
+      linesOf(events)
+        .filter((line) => line.type === 'user')
+        .map((line) => JSON.stringify(line.message));
+    // e2's parent was never written: the path starts at e2.
+    expect(texts([entry('e1', null, 1, 'lost'), entry('e2', 'gone', 2, 'kept 1'), entry('e3', 'e2', 3, 'kept 2')]).join('')).not.toContain('lost');
+    expect(texts([entry('e1', null, 1, 'lost'), entry('e2', 'gone', 2, 'kept 1'), entry('e3', 'e2', 3, 'kept 2')])).toHaveLength(2);
+    // Two entries that name each other as parent: each is read once.
+    expect(texts([entry('a', 'b', 1, 'one'), entry('b', 'a', 2, 'two')])).toHaveLength(2);
+    // An entry with no id cannot be the leaf or a parent: the last entry that has one is the leaf.
+    expect(texts([entry('e1', null, 1, 'one'), entry('e2', 'e1', 2, 'two'), entry(undefined, 'e2', 3, 'no id')])).toHaveLength(2);
+  });
+
+  it('puts no time on a line when the session has none anywhere, rather than the epoch', () => {
+    const header = { type: 'session', version: 3, id: 'sess', cwd: '/work/app' };
+    const events = [
+      { type: 'message', id: 'e1', parentId: null, message: { role: 'user', content: 'hello' } },
+      { type: 'message', id: 'e2', parentId: 'e1', message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }], model: 'm', stopReason: 'stop' } },
+    ];
+    const lines = linesOf(events, header);
+    expect(lines).toHaveLength(2);
+    expect(lines.some((line) => 'timestamp' in line)).toBe(false);
+    expect(capture(lines.map((line) => JSON.stringify(line)).join('\n')).session.tsFirst).toBeNull();
+  });
+
   it('does not read an extension’s or a summary’s text as a prompt, and does not count a tool’s nested model work as the session’s responses', () => {
     const events = chain(
       (id, parent) => piEntry('model_change', id, parent, at(1), { provider: 'openai', modelId: 'gpt-4o' }),
