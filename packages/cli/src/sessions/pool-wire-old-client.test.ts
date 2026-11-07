@@ -25,4 +25,12 @@ describe('a skeleton the client before t900 built', () => {
     expect(parsed.ok).toBe(true);
     expect(parsed.ok && parsed.extensions).toEqual([]);
   });
+
+  it('parses a main-era step that holds a public multi-letter single-dash flag, with nothing set aside', () => {
+    const wire: unknown = JSON.parse(JSON.stringify(skeletons[0]).replace('"program":"acme-deploy","sub":null,"flags":[]', '"program":"pwsh","sub":null,"flags":["-NoProfile"]'));
+    expect(JSON.stringify(wire)).toContain('"program":"pwsh","sub":null,"flags":["-NoProfile"]');
+    const parsed = parseSkeleton(wire);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.ok && parsed.extensions).toEqual([]);
+  });
 });

@@ -64,6 +64,12 @@ describe('subcommands and flags of every program', () => {
     expect(JSON.stringify(identity)).not.toMatch(/abc|acmecorp|token|secret123|user:pass|hunter2|password|alice/);
   });
 
+  it('sends a public multi-letter single-dash flag as it is, because the public flag list holds it', () => {
+    const read: ShellReader = () => [{ program: 'pwsh', subcommand: null, flags: ['-NoProfile', '-Command', '-psecret123'] }];
+    const identity = skeletonFor(frame({ shell: 'bash' }), read)?.transcripts[0]?.tools[0]?.steps[0]?.identity;
+    expect(identity).toEqual({ program: 'pwsh', sub: null, flags: ['-NoProfile', '-Command', PRIVATE] });
+  });
+
   it('sends a private program with no subcommand or flag, because the parser refuses a private program that holds one', () => {
     const skeleton = skeletonFor(frame({ shell: 'bash' }), () => [{ program: 'acmecorp-tool', subcommand: 'rollout', flags: ['--prod'] }]);
     expect(skeleton?.transcripts[0]?.tools[0]?.steps[0]?.identity).toEqual({ program: PRIVATE, sub: null, flags: [] });
