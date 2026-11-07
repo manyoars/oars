@@ -6,7 +6,7 @@ import { ACTION_TABLES, CANONICAL_ACTIONS, mcpOf, type CanonicalAction } from '.
 import { CUSTOM_AGENT, FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRIVATE, publicEffort, publicModel, publicVersion, PUBLIC_FLAGS, PUBLIC_HOSTS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SKILLS, projectedAgentType, PUBLIC_SUBCOMMANDS, REPO_SIZES, VOCAB_VERSION, type RepoSize } from './public-vocabulary.js';
 import type { Cell } from './cells.js';
 import type { Motif } from './motif.js';
-import { FIRST_ORDER_FAMILIES, type FirstOrderFamily, type Read, type ReadAsOf } from './read.js';
+import type { Read, ReadAsOf } from './read.js';
 import { recoveryCallsOf, RECOVERY_CALLS, type RecoveryCalls } from './recovery-calls.js';
 import { projectLanguage, projectLanguageShare } from './strata.js';
 import { ERROR_CODES, LANGUAGE_SHARES, type Frame, type FrameStack, type Harness, type LanguageShare, type PromptClass, type PromptObservation, type PullIdentity, type SessionObservation, type ShellIdentity, type StepIdentity, type StepObservation, type Strata, type ToolObservation, type ToolStatus, type Usage } from './schema.js';
@@ -1006,7 +1006,12 @@ export interface StrataCell {
 export interface BundleFloors {
   public: number;
   disclosure: number;
-  families?: Partial<Record<FirstOrderFamily, number>>;
+  families?: FamilyFloors;
+}
+
+/** A floor per read family, keyed by the family's name as the pool states it. A client prints what it finds and applies none, so a name this version has never heard of (a family a later pool adds) is carried as stated and not refused. */
+export interface FamilyFloors {
+  [family: string]: number;
 }
 
 /** One harness version's replica, as the server signs it. It names its harness, which the signature covers, so a bundle for one harness cannot stand in for another's. Nothing in it is keyed by stack. */
@@ -1042,9 +1047,9 @@ const isSignedBundle = (value: unknown): value is SignedBundle => isFields(value
 
 const isFloor = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
 
-/** The floors a bundle states, or none: a client prints what is here, so a value that is not a whole number of at least 1, or a family it does not know, is refused and not shown. */
+/** The floors a bundle states, or none: a client prints what is here, so a value that is not a whole number of at least 1 is refused and not shown, while a family this client does not know is carried and printed as the pool states it (additive, section 17 rule 3). */
 const isFloors = (value: unknown): value is BundleFloors =>
-  isFields(value) && isFloor(value.public) && isFloor(value.disclosure) && (value.families === undefined || (isFields(value.families) && Object.entries(value.families).every(([family, floor]) => FIRST_ORDER_FAMILIES.some((name) => name === family) && isFloor(floor))));
+  isFields(value) && isFloor(value.public) && isFloor(value.disclosure) && (value.families === undefined || (isFields(value.families) && Object.values(value.families).every(isFloor)));
 
 const isBundle = (value: unknown): value is Bundle =>
   isFields(value) && value.format === BUNDLE_FORMAT && typeof value.harness === 'string' && isHarness(value.harness) && typeof value.harnessVersion === 'string' && typeof value.vocabVersion === 'string' && isFields(value.asOf) && Array.isArray(value.cells) && Array.isArray(value.motifs) && Array.isArray(value.reads) && Array.isArray(value.strata) && (value.floors === undefined || isFloors(value.floors));
