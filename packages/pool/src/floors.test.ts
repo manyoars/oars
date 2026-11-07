@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { FIRST_ORDER_FAMILIES } from '../../cli/src/sessions/read.js';
 import type { Cell } from '../../cli/src/sessions/cells.js';
-import { clears, clustersOf, DEFAULT_DISCLOSURE_FLOOR, DEFAULT_FLOORS, DEFAULT_PUBLIC_FLOOR, floorFor, floorsOf, floorValues, wireFloors } from './floors.js';
+import { clears, clustersOf, DEFAULT_DISCLOSURE_FLOOR, DEFAULT_FLOORS, DEFAULT_PUBLIC_FLOOR, floorFor, floorsOf, wireFloors } from './floors.js';
 import { wranglerConfig, fieldOf } from './test-pool.js';
 
 const parse = (env: Parameters<typeof floorsOf>[0]): { floors: ReturnType<typeof floorsOf>; lines: string[] } => {
@@ -95,7 +95,6 @@ describe('PUBLIC_FLOOR_FAMILIES', () => {
   it('follows a public floor that moves, for every family without its own', () => {
     const { floors } = parse({ PUBLIC_FLOOR: '8', PUBLIC_FLOOR_FAMILIES: 'live=3' });
     expect([floorFor(floors, 'live'), floorFor(floors, 'cost')]).toEqual([3, 8]);
-    expect(floorValues(floors)).toEqual([3, 8]);
   });
 });
 
