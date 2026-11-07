@@ -61,7 +61,7 @@ const motifOf = (row: unknown): Motif => {
  * motif, so the subquery reads the motif's rows through the key's index.
  */
 export const ENVIRONMENT_CELLS =
-  "SELECT motif_id, frame_bucket, grain, day, exposed, sessions, clusters, ok, failed, tokens, duration_ms FROM cells WHERE harness_bucket = ? AND sessions > 0 AND clusters >= ? AND NOT EXISTS (SELECT 1 FROM cells AS other WHERE other.key >= cells.motif_id || '/' AND other.key < cells.motif_id || '0' AND other.grain = cells.grain AND other.day = cells.day AND other.exposed = cells.exposed AND other.sessions > 0 AND other.clusters < ?)";
+  "SELECT motif_id, frame_bucket, grain, day, exposed, sessions, clusters, ok, failed, tokens, token_sessions, token_prompts, duration_ms FROM cells WHERE harness_bucket = ? AND sessions > 0 AND clusters >= ? AND NOT EXISTS (SELECT 1 FROM cells AS other WHERE other.key >= cells.motif_id || '/' AND other.key < cells.motif_id || '0' AND other.grain = cells.grain AND other.day = cells.day AND other.exposed = cells.exposed AND other.sessions > 0 AND other.clusters < ?)";
 
 /** The panel window: four weeks, in days. */
 export const PANEL_DAYS = 28;
@@ -83,7 +83,13 @@ export const panelOf = async (env: Env, now: number): Promise<{ day: string; acc
   return { day, accounts };
 };
 
-const cellOf = (row: unknown): Cell => ({
+/** A count that is NULL on a row written before migration 0013: its coverage was never held, so it reads as unknown and not as full coverage. */
+const coverageField = (row: unknown, key: string): number | null => {
+  const found = fieldOf(row, key);
+  return found === null || found === undefined ? null : numberField(row, key);
+};
+
+const cellBase = (row: unknown): Omit<Cell, 'tokens'> => ({
   motifId: textField(row, 'motif_id'),
   frameBucket: textField(row, 'frame_bucket'),
   grain: grainField(row),
@@ -92,17 +98,29 @@ const cellOf = (row: unknown): Cell => ({
   clusters: numberField(row, 'clusters'),
   ok: numberField(row, 'ok'),
   failed: numberField(row, 'failed'),
-  tokens: numberField(row, 'tokens'),
   durationMs: numberField(row, 'duration_ms'),
   exposed: numberField(row, 'exposed') === 1,
 });
+
+const cellOf = (row: unknown): Cell => {
+  const tokenSessions = coverageField(row, 'token_sessions');
+  const tokenPrompts = coverageField(row, 'token_prompts');
+  const tokens = numberField(row, 'tokens');
+  // The column is a running sum that holds 0 for a cell no session recorded; with a known coverage of none that is no figure, as the derivation states it.
+  return {
+    ...cellBase(row),
+    tokens: tokenSessions === 0 ? null : tokens,
+    ...(tokenSessions === null ? {} : { tokenSessions }),
+    ...(tokenPrompts === null ? {} : { tokenPrompts }),
+  };
+};
 
 export const storedOf = async (env: Env, harness: string, harnessVersion: string, now: number): Promise<StoredPool> => {
   const bucket = harnessBucket(harnessVersion);
   const prefix = bucketPrefix(harness, harnessVersion);
   const modelPrefix = `${harness}/${NO_AXES}/`;
   const [cells, environment, motifs, strata, panel] = await Promise.all([
-    env.DB.prepare('SELECT motif_id, frame_bucket, grain, day, exposed, sessions, clusters, ok, failed, tokens, duration_ms FROM cells WHERE ((harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?) OR (harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?)) AND sessions > 0').bind(bucket, prefix.length, prefix, NO_AXES, modelPrefix.length, modelPrefix).all(),
+    env.DB.prepare('SELECT motif_id, frame_bucket, grain, day, exposed, sessions, clusters, ok, failed, tokens, token_sessions, token_prompts, duration_ms FROM cells WHERE ((harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?) OR (harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?)) AND sessions > 0').bind(bucket, prefix.length, prefix, NO_AXES, modelPrefix.length, modelPrefix).all(),
     env.DB.prepare(ENVIRONMENT_CELLS).bind(ENVIRONMENT_BUCKET, K_CELL, K_CELL).all(),
     env.DB.prepare('SELECT motif FROM motifs WHERE motif_id IN (SELECT motif_id FROM cells WHERE ((harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?) OR (harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?)) AND sessions > 0) OR motif_id IN (SELECT motif_id FROM cells WHERE harness_bucket = ? AND sessions > 0 AND clusters >= ?)').bind(bucket, prefix.length, prefix, NO_AXES, modelPrefix.length, modelPrefix, ENVIRONMENT_BUCKET, K_CELL).all(),
     env.DB.prepare('SELECT dimension, value, sessions, clusters FROM strata WHERE clusters >= ? AND sessions > 0').bind(K_CELL).all(),
