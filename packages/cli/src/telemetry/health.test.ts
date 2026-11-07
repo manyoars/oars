@@ -8,7 +8,7 @@ import { runHook } from '../sessions/hooks.js';
 import { readHookCalls } from '../sessions/hook-calls.js';
 import { deposit, loadStore } from '../sessions/store.js';
 import { cleanup, NOW, stage } from '../sessions/test-support.js';
-import { closedList, type NightlyTelemetry } from './health.js';
+import { closedList, recordStoreHealth, type NightlyTelemetry } from './health.js';
 import { spoolEvents, type SpoolEvent } from './read-events.js';
 import { appendLine, readSpool } from './spool.js';
 
@@ -130,6 +130,23 @@ describe('run cost at the nightly run', () => {
     const { dir, telemetry } = emitter();
     await runHook('nightly', '', staged.runtime, () => NOW, { ...telemetry, env: { ...telemetry.env, OARS_TELEMETRY: '0' } });
     expect(readSpool(dir)).toEqual([]);
+  });
+
+  it('never reads the store when telemetry is off, so an install that opted out pays nothing at night', async () => {
+    const staged = stage(slugOf(REPO));
+    const { telemetry } = emitter();
+    let reads = 0;
+    const watched = Object.defineProperty({ ...staged.runtime }, 'storeDir', {
+      get: () => {
+        reads += 1;
+        return staged.storeDir;
+      },
+    });
+    await recordStoreHealth({ ...telemetry, env: { ...telemetry.env, DO_NOT_TRACK: '1' } }, watched);
+    expect(reads).toBe(0);
+    // The same call with telemetry on does read it.
+    await recordStoreHealth(telemetry, watched);
+    expect(reads).toBeGreaterThan(0);
   });
 });
 

@@ -11,6 +11,15 @@ export interface Emitter {
   now: () => number;
 }
 
+/** Whether this run records at all: a folder is set and consent is on. A caller that must do work to build an event asks first, so an opt-out pays nothing. */
+export const recordsEvents = (emitter: Emitter): boolean => {
+  try {
+    return emitter.telemetry !== undefined && consentOf(emitter.env, emitter.telemetry.dir).enabled;
+  } catch {
+    return false;
+  }
+};
+
 export const emitEvent = (emitter: Emitter, type: string, fields: object): void => {
   try {
     const runtime = emitter.telemetry;
