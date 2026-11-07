@@ -229,7 +229,6 @@ describe('the last day a bundle states', () => {
   });
 });
 
-
 describe('overlapping named cells', () => {
   const program = (name: string, flags: string[] = [], pulls: NonNullable<Extract<NonNullable<WindowStep['identity']>, { program: string }>['pulls']> = []): Motif => {
     const steps: WindowStep[] = [{ action: 'shell.exec', identity: { program: name, sub: null, flags, pulls } }];
@@ -242,7 +241,8 @@ describe('overlapping named cells', () => {
     const overlap = kind === 'flag' ? program('git', ['--x']) : program('git', [], [{ registry: 'npm', name: 'x', version: null }]);
     const bundle = bundleOf(HARNESS, VERSION, { cells: [cellOf(SHELL.motifId, 20, 100), cellOf(git.motifId, 15, 90), cellOf(rare.motifId, 1, 10), cellOf(overlap.motifId, 5, 40)], environment: [], motifs: [SHELL, git, rare, overlap], strata: [] }, DEFAULT_FLOORS);
     expect(bundle.cells.some((cell) => cell.motifId === git.motifId)).toBe(false);
-    const servedPrograms = bundle.cells.filter((cell) => cell.motifId === git.motifId || cell.motifId === rare.motifId);
-    expect(100 - servedPrograms.reduce((sum, cell) => sum + cell.ok, 0)).toBe(100);
+    expect(bundle.cells.some((cell) => cell.motifId === overlap.motifId)).toBe(true);
+    expect(bundle.cells.some((cell) => cell.motifId === SHELL.motifId)).toBe(true);
+    expect([git, rare].filter((motif) => !bundle.cells.some((cell) => cell.motifId === motif.motifId))).toHaveLength(2);
   });
 });
