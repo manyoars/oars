@@ -156,12 +156,13 @@ const cursor = async (stop: Stop, before: Before): Promise<string> => {
   }
 };
 
-/** OpenCode: a refused or aborted tool is an `error` state with a message and no fixed text, and nothing in `session_message` marks an interrupt (the reader reads neither: session-shape.ts COMPLETE), so a refusal is a failed call and an interrupt leaves no trace; an edit stands between the two prompts so they stay two. */
+/** OpenCode: a refused tool is an `error` state with a message and no fixed text, so a refusal is a failed call (`after-error`). An interrupt that cuts a call in flight leaves it an `error` state too, `{ type: 'aborted', message: 'Tool execution interrupted' }` (sst/opencode packages/core/src/session/runner/step.ts:60, published as `Tool.Failed`, publish-llm-event.ts:355-362), so it reads `after-error`; nothing in `session_message` marks the interrupt itself (the reader reads none: session-shape.ts COMPLETE). An edit stands between the two prompts so they stay two. */
 const opencode = async (stop: Stop, before: Before): Promise<string> => {
   const t0 = Date.parse('2026-06-01T10:00:00Z');
   const content: object[] = [];
   if (before === 'failed-run') content.push(ocTool('c0', 'shell', ocShellDone('npm test', 'out', 1)));
-  content.push(ocTool('c1', 'edit', stop === 'rejected' ? { status: 'error', input: { path: '/work/app/src/a.ts' }, error: { type: 'unknown', message: 'permission refused' } } : { status: 'completed', input: { path: '/work/app/src/a.ts' }, content: [{ type: 'text', text: 'edited' }] }));
+  const failed = (error: { type: string; message: string }): object => ({ status: 'error', input: { path: '/work/app/src/a.ts' }, error });
+  content.push(ocTool('c1', 'edit', stop === 'rejected' ? failed({ type: 'unknown', message: 'permission refused' }) : failed({ type: 'aborted', message: 'Tool execution interrupted' })));
   const messages = [ocUser('msg_1', 1, t0 + 1000, 'change the field'), ocAssistant('msg_2', 2, t0 + 2000, content), ocUser('msg_3', 3, t0 + 5000, 'go on')];
   const staged = stage();
   const store = await openOpencodeStore(await stageOpencode(staged.root, [{ id: 'ses_1', directory: '/work/app', created: t0, updated: t0 + 30 * 60_000, messages }]));
@@ -218,7 +219,7 @@ const READS: readonly (readonly [Harness, Build, PromptIntervention, PromptInter
   ['gemini', gemini, 'user-stop', 'none'],
   ['grok', grok, 'none', 'none'],
   // A refused OpenCode call is a failed one, so it reads after-error until a rejection sentence is written for it (no live store has shown OpenCode's wording).
-  ['opencode', opencode, 'after-error', 'none'],
+  ['opencode', opencode, 'after-error', 'after-error'],
 ];
 
 describe.each(READS)('%s', (harness, build, rejected, interrupted) => {
