@@ -54,17 +54,19 @@ type Path = readonly (string | number)[];
 
 const isHolder = (value: unknown): value is object => typeof value === 'object' && value !== null;
 
-/** The two-deep batch as plain JSON with one value set, the way a hostile client would send it. */
-const sent = (path: Path, value: unknown): unknown => {
+/** The two-deep batch as plain JSON with values set (the first pair, then any `also`), the way a hostile client would send it. */
+const sent = (path: Path, value: unknown, ...also: readonly (readonly [Path, unknown])[]): unknown => {
   const raw: unknown = JSON.parse(JSON.stringify(skeletonOfStore(withSubagents())));
-  let holder: unknown = raw;
-  for (const key of path.slice(0, -1)) {
-    if (!isHolder(holder)) throw new Error(`no ${String(key)} in the batch`);
-    holder = Reflect.get(holder, key);
+  for (const [at, to] of [[path, value] as const, ...also]) {
+    let holder: unknown = raw;
+    for (const key of at.slice(0, -1)) {
+      if (!isHolder(holder)) throw new Error(`no ${String(key)} in the batch`);
+      holder = Reflect.get(holder, key);
+    }
+    const last = at.at(-1);
+    if (!isHolder(holder) || last === undefined) throw new Error('nothing to set');
+    Reflect.set(holder, last, to);
   }
-  const last = path.at(-1);
-  if (!isHolder(holder) || last === undefined) throw new Error('nothing to set');
-  Reflect.set(holder, last, value);
   return raw;
 };
 
@@ -129,7 +131,10 @@ describe('edges on the wire (t869)', () => {
     expect(parsed.ok ? parsed.skeleton.transcripts[0]?.tools[1]?.steps[0]?.edges : null).toEqual([{ kind: 'next', target: 0 }]);
   });
   refusing('an edge that points forward', ['transcripts', 0, 'tools', 0, 'steps', 0, 'edges'], [{ kind: 'next', target: 1 }], 'transcripts[0].tools[0].steps[0].edges[0].target');
-  refusing('a next whose target ran in another prompt', ['transcripts', 0, 'tools', 1, 'prompt'], 1, 'transcripts[0].tools[1].steps[0].edges[0].target');
+  // The failed call before the retry names what followed it in its own prompt, so it is dropped here: the case under test is the edge, not that list.
+  it('refuses a next whose target ran in another prompt', () => {
+    expect(refusedField(sent(['transcripts', 0, 'tools', 1, 'prompt'], 1, [['transcripts', 0, 'tools', 0, 'recoveryCalls'], undefined]))).toBe('transcripts[0].tools[1].steps[0].edges[0].target');
+  });
   refusing('a spawned edge on a transcript with no spawner', [...retry, 'edges'], [{ kind: 'spawned', target: 0 }], `${field}.kind`);
   refusing('a spawned edge past the spawning transcript', ['transcripts', 1, 'tools', 0, 'steps', 0, 'edges'], [{ kind: 'spawned', target: 3 }], 'transcripts[1].tools[0].steps[0].edges[0].target');
 });
@@ -247,10 +252,10 @@ describe('a derive from skeletons sees the local graph (t869)', () => {
 });
 
 describe('what the edges cost on the wire (t869)', () => {
-  it('adds 494 bytes to the 5,535-byte skeleton of the two-deep fixture', () => {
+  it('adds 494 bytes to the 5,910-byte skeleton of the two-deep fixture', () => {
     const skeleton = skeletonOfStore(withSubagents());
     const bare = roundTrip(skeleton);
     for (const held of bare.transcripts.flatMap(({ tools }) => tools.flatMap(({ steps }) => steps))) Reflect.deleteProperty(held, 'edges');
-    expect([JSON.stringify(skeleton).length - JSON.stringify(bare).length, JSON.stringify(skeleton).length]).toEqual([494, 5535]);
+    expect([JSON.stringify(skeleton).length - JSON.stringify(bare).length, JSON.stringify(skeleton).length]).toEqual([494, 5910]);
   });
 });
