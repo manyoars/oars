@@ -16,6 +16,7 @@ afterEach(cleanup);
 const FIXTURE = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'otel-pydantic-ai');
 const OK = 'conv-7d196b3aceec8f37';
 const FAILED = 'conv-2ba9d21155a5762d';
+const POLICY = '# Refund policy\nRefunds are accepted within 30 days of delivery. The item must be unused and in its original packaging.\n';
 
 const imported = async () => {
   const s = stage();
@@ -48,11 +49,12 @@ describe('a real Pydantic AI trace deposited with --allow otel', () => {
     expect(store.errors.filter((error) => error.session === `otel-${OK}`)).toEqual([]);
   });
 
-  it('keeps the raising lookup as an error call whose error line is the exception event message', async () => {
+  it('keeps the raising lookup as an error call whose error line is the exception type and message from the exception event', async () => {
     const { store } = await imported();
     expect(store.tools.filter((tool) => tool.session === `otel-${FAILED}`)).toMatchObject([{ tool: 'lookup_policy', status: 'error', toolUseId: 'call_warranty', errorCode: 'other' }]);
-    // The tool span's status carries no message and no `error.type`; the text comes from the `exception` event.
-    expect(store.errors).toMatchObject([{ session: `otel-${FAILED}`, tool: 'lookup_policy', sig: 'lookup_policy | policy index unavailable', example: 'policy index unavailable', toolUseId: 'call_warranty' }]);
+    // The tool span's status carries no message and no `error.type`; the type and the text come from the `exception` event (`exception.type`, `exception.message`). The type reaches the
+    // signature and the example; `errorCode` is the closed class `errorCodeOf` gives the line, and `RuntimeError` is not one of them.
+    expect(store.errors).toMatchObject([{ session: `otel-${FAILED}`, tool: 'lookup_policy', sig: 'lookup_policy | RuntimeError: policy index unavailable', example: 'RuntimeError: policy index unavailable', toolUseId: 'call_warranty' }]);
   });
 
   it('reads the model and the usage from the chat spans only: the uncached input, the cache read, and the output, not the agent span aggregate', async () => {
@@ -63,7 +65,7 @@ describe('a real Pydantic AI trace deposited with --allow otel', () => {
     expect(byId.get(`otel-${FAILED}`)).toMatchObject({ assistantTurns: 1, usageResponses: 1, usage: { input: 120, cacheRead: 0, output: 14 }, usageObserved: ['input', 'output'] });
   });
 
-  it('KNOWN GAP: the user prompt is written content-less, because Pydantic AI puts the messages on the chat spans and `pydantic_ai.all_messages`, not on the agent span', async () => {
+  it('takes the user prompt from the first chat span, because Pydantic AI puts the messages there and in `pydantic_ai.all_messages`, not on the agent span', async () => {
     const store = await openOtelStore(FIXTURE);
     if (store === undefined) throw new Error('no store');
     const first = store.sessions.find((entry) => entry.id === OK);
@@ -73,11 +75,13 @@ describe('a real Pydantic AI trace deposited with --allow otel', () => {
       .split('\n')
       .filter((raw) => raw !== '')
       .map((raw): unknown => JSON.parse(raw));
-    expect(lines[0]).toMatchObject({ type: 'user', message: { content: [{ type: 'image' }] } });
-    expect(JSON.stringify(lines)).not.toContain('refund?');
+    expect(lines[0]).toMatchObject({ type: 'user', message: { content: [{ type: 'text', text: 'How long do I have to ask for a refund?' }] } });
   });
 
-  it('KNOWN GAP: no duration is kept for a call, the successful result carries no content, and the failed one carries only the message', async () => {
+  // KNOWN GAP (t947): a call's duration is still not kept. Capture reads it as the result line's time minus the time of the line that holds the `tool_use`, and the reader puts the
+  // `tool_use` in the model call that named it, so the only line time is that chat span's start (about 87 ms before the first tool span ends), not the tool span's own start
+  // (the ok call's span is 1 ms long, the failed one's 4 ms). Stamping the `tool_use` at the tool span's start moves every call into a line of its own, or capture takes a duration on the result line.
+  it('keeps the tool result content, and still claims no duration for a call', async () => {
     const store = await openOtelStore(FIXTURE);
     if (store === undefined) throw new Error('no store');
     const results = store.sessions.flatMap((entry) =>
@@ -88,8 +92,8 @@ describe('a real Pydantic AI trace deposited with --allow otel', () => {
         .map((raw): unknown => JSON.parse(raw)),
     );
     expect(results).toMatchObject([
-      { noDuration: true, message: { content: [{ type: 'tool_result', tool_use_id: 'call_refund', is_error: false, content: '' }] } },
-      { noDuration: true, message: { content: [{ type: 'tool_result', tool_use_id: 'call_warranty', is_error: true, content: 'policy index unavailable' }] } },
+      { noDuration: true, message: { content: [{ type: 'tool_result', tool_use_id: 'call_refund', is_error: false, content: POLICY }] } },
+      { noDuration: true, message: { content: [{ type: 'tool_result', tool_use_id: 'call_warranty', is_error: true, content: 'RuntimeError: policy index unavailable' }] } },
     ]);
     expect((await imported()).store.tools.map((tool) => tool.durationMs)).toEqual([null, null]);
   });

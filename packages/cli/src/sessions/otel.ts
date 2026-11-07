@@ -17,7 +17,7 @@
 //                `gen_ai.input.messages` (Opt-In: absent by default, and then the turn is written content-less, as an image-only prompt is).
 //   model call   a span whose `gen_ai.operation.name` is `chat`, `generate_content`, or `text_completion`: one assistant line, its `requestId` the span id.
 //   tool call    an `execute_tool` span: a block in the model call that ended before it began (or whose output messages name its `gen_ai.tool.call.id`). It failed iff the
-//                span's status code is ERROR (2) or `error.type` is set (stable, recording-errors.md): the error line is `error.type: status.message`, never the result.
+//                span's status code is ERROR (2) or `error.type` is set (stable, recording-errors.md): the error line is `error.type: status.message`, never the result; a call that did not fail keeps `gen_ai.tool.call.result` as its result content.
 //   usage        `gen_ai.usage.*`; `input_tokens` includes the cache reads and writes (the registry says it SHOULD), and capture's fields are disjoint, so the uncached
 //                part is input - read - write. A figure the span did not report is not written as zero.
 //   harness      `otel`; the version slot holds the emitting framework from the instrumentation scope name (a closed list plus `other`). Nothing names a working folder.
@@ -183,9 +183,18 @@ const messagesOf = (value: unknown): Obj[] => {
   const list = structured(value);
   return Array.isArray(list) ? list.filter(isObj) : [];
 };
-const promptText = (span: Span): string => {
-  const users = messagesOf(span.attrs['gen_ai.input.messages']).filter((message) => message.role === 'user');
+const promptText = (span: Span, models: readonly Span[]): string => {
+  // Pydantic AI's agent span has no `gen_ai.input.messages` (they sit on its chat spans), so the earliest chat span that carries them stands in; a span that has them keeps its own.
+  const source = span.attrs['gen_ai.input.messages'] === undefined ? (models.find((model) => model.attrs['gen_ai.input.messages'] !== undefined) ?? span) : span;
+  const users = messagesOf(source.attrs['gen_ai.input.messages']).filter((message) => message.role === 'user');
   return textParts(users[users.length - 1]);
+};
+
+/** A tool span's result as the content of its result line: a string as written, anything else as JSON; `""` when the span names none. */
+const resultContent = (span: Span): string => {
+  const value = span.attrs['gen_ai.tool.call.result'];
+  if (value === undefined) return '';
+  return typeof value === 'string' ? value : JSON.stringify(value);
 };
 /** The tool call ids a model call's output messages name. */
 const namedCalls = (span: Span): string[] =>
@@ -197,7 +206,8 @@ const count = (value: unknown): number | undefined => (typeof value === 'number'
 
 /** A tool span's error line: `error.type: status.message`, either alone when the other is missing, else the exception event's message. */
 const failureText = (span: Span): string => {
-  const type = str(span.attrs['error.type']);
+  // `error.type` is the stable name; a framework that records the failure only as an exception event (Pydantic AI) still names the class there.
+  const type = str(span.attrs['error.type']) ?? str(span.events.find((event) => event.name === 'exception')?.['exception.type']);
   const message = span.statusMessage ?? str(span.events.find((event) => event.name === 'exception')?.['exception.message']);
   if (type !== undefined && message !== undefined) return `${type}: ${message}`;
   return type ?? message ?? 'tool failed';
@@ -368,7 +378,7 @@ export const otelSessions = (spans: readonly Span[]): OtelSession[] => {
       return at !== undefined && (least === undefined || at < least) ? at : least;
     }, undefined);
     const begin = stamp(unit.span.start ?? unit.span.end ?? (entry.mtime === 0 ? earliest : undefined));
-    const text = promptText(unit.span);
+    const text = promptText(unit.span, mine.filter(isModel));
     const pieces: { t: number; rank: number; line: Obj }[] = [];
     pieces.push({ t: begin, rank: -1, line: { ...base, type: 'user', uuid: `${unit.session}-${unit.span.id}-u`, timestamp: iso(begin), message: { role: 'user', content: [text === '' ? { type: 'image' } : { type: 'text', text }] } } });
 
@@ -389,12 +399,12 @@ export const otelSessions = (spans: readonly Span[]): OtelSession[] => {
       if (chosen !== undefined) return chosen;
       return assistant(tool, `${tool.id}-call`);
     };
-    const result = (id: string, tool: Span, failure: string | undefined): void => {
+    const result = (id: string, tool: Span, failure: string | undefined, output = ''): void => {
       const t = Math.max(stamp(tool.end ?? tool.start), begin);
       pieces.push({
         t,
         rank: 1,
-        line: { ...base, type: 'user', uuid: `${unit.session}-${tool.id}-r-${id}`, timestamp: iso(t), noDuration: true, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: failure !== undefined, content: failure ?? '' }] } },
+        line: { ...base, type: 'user', uuid: `${unit.session}-${tool.id}-r-${id}`, timestamp: iso(t), noDuration: true, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: failure !== undefined, content: failure ?? output }] } },
       });
     };
 
@@ -454,7 +464,7 @@ export const otelSessions = (spans: readonly Span[]): OtelSession[] => {
           block.native = block.name;
         }
         attach(id, span).content.push(block);
-        result(id, span, failed ? (exit !== undefined && exit !== 0 && !span.failed ? `Exit code ${String(exit)}` : failureText(span)) : undefined);
+        result(id, span, failed ? (exit !== undefined && exit !== 0 && !span.failed ? `Exit code ${String(exit)}` : failureText(span)) : undefined, resultContent(span));
       }
     }
     pieces.sort((a, b) => a.t - b.t || a.rank - b.rank);

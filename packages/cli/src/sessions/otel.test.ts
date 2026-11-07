@@ -174,6 +174,12 @@ describe('a failed tool call', () => {
     expect(capture(textOf(await open([{ name: 'a.jsonl', spans }]), T)).errorLines.map((error) => error.line)).toEqual(['boom']);
   });
 
+  it('names the exception type from the exception event when the span has no error.type, and keeps error.type when it has both', async () => {
+    const event = { name: 'exception', attrs: { 'exception.type': 'RuntimeError', 'exception.message': 'boom' } };
+    const spans = [agent(T, 1, undefined, 0, 6, 'x'), tool(T, 2, 1, 1, 2, 'a', {}, { code: 2, events: [event] }), tool(T, 3, 1, 3, 4, 'b', { 'error.type': 'ValueError' }, { code: 2, events: [event] })];
+    expect(capture(textOf(await open([{ name: 'a.jsonl', spans }]), T)).errorLines.map((error) => error.line)).toEqual(['RuntimeError: boom', 'ValueError: boom']);
+  });
+
   it('redacts a secret and an email, and cuts a 1,500-character error at 1,000 characters', async () => {
     const long = `fail: sk-abcdefghijklmnopqrstuvwxyz0123 for alice@example.com ${'x'.repeat(1500)}`;
     const spans = [agent(T, 1, undefined, 0, 4, 'x'), tool(T, 2, 1, 1, 2, 'a', { 'error.type': 'Boom' }, { code: 2, message: long })];
@@ -425,4 +431,34 @@ describe('a folder that grows', () => {
     expect(store?.sessions).toHaveLength(4000);
     expect(took).toBeLessThan(2000);
   }, 30000);
+});
+
+describe('the prompt and the tool result content', () => {
+  const textLines = (lines: Obj[]): string[] => lines.filter((line) => line.type === 'user').map((line) => JSON.stringify(obj(line.message).content));
+
+  it('takes the prompt from the earliest chat span when the agent span has none', async () => {
+    const spans = [agent(T, 1, undefined, 0, 9), chat(T, 3, 1, 4, 5, { 'gen_ai.input.messages': user('second') }), chat(T, 2, 1, 1, 2, { 'gen_ai.input.messages': user('first') })];
+    expect(textLines(linesOf(textOf(await open([{ name: 'a.jsonl', spans }]), T)))[0]).toBe('[{"type":"text","text":"first"}]');
+  });
+
+  it('keeps the agent span prompt when both spans carry one, and writes none when neither does', async () => {
+    const both = [agent(T, 1, undefined, 0, 9, 'from the agent'), chat(T, 2, 1, 1, 2, { 'gen_ai.input.messages': user('from the chat') })];
+    expect(textLines(linesOf(textOf(await open([{ name: 'a.jsonl', spans: both }]), T)))[0]).toBe('[{"type":"text","text":"from the agent"}]');
+    const neither = [agent(T, 1, undefined, 0, 9), chat(T, 2, 1, 1, 2)];
+    expect(textLines(linesOf(textOf(await open([{ name: 'a.jsonl', spans: neither }]), T)))[0]).toBe('[{"type":"image"}]');
+  });
+
+  it('keeps gen_ai.tool.call.result as the result content: text as written, anything else as JSON, and none as an empty string', async () => {
+    const spans = [
+      agent(T, 1, undefined, 0, 9, 'x'),
+      tool(T, 2, 1, 1, 2, 'a', { 'gen_ai.tool.call.id': 'c1', 'gen_ai.tool.call.result': 'plain text' }),
+      tool(T, 3, 1, 3, 4, 'b', { 'gen_ai.tool.call.id': 'c2', 'gen_ai.tool.call.result': { rows: [1, 2] } }),
+      tool(T, 4, 1, 5, 6, 'c', { 'gen_ai.tool.call.id': 'c3' }),
+    ];
+    const results = linesOf(textOf(await open([{ name: 'a.jsonl', spans }]), T)).flatMap((line) => {
+      const content = obj(line.message).content;
+      return Array.isArray(content) ? content.map(obj).filter((block) => block.type === 'tool_result') : [];
+    });
+    expect(results.map((block) => block.content)).toEqual(['plain text', '{"rows":[1,2]}', '']);
+  });
 });
