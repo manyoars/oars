@@ -9,7 +9,7 @@ import { defaultConfigDir } from '../credentials.js';
 import { ExitCode } from '../errors.js';
 import { readSpool } from '../telemetry/spool.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
-import { networkSender, poolDeposit, poolServer, type Reply, type Sender } from './pool-command.js';
+import { DEFAULT_POOL_URL, networkSender, poolDeposit, poolServer, type Reply, type Sender } from './pool-command.js';
 import { batchHash, canonicalBytes, FIELD_ROWS, fieldsOf, writeBatch } from './pool-outbox.js';
 import type { Outgoing } from './pool-print.js';
 import { REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
@@ -158,10 +158,11 @@ const capture = (scene: Scene): Promise<unknown> => deposit(scene.staged.runtime
 
 const at = (value: unknown, name: string): unknown => (typeof value === 'object' && value !== null ? Reflect.get(value, name) : undefined);
 
-describe('the pool server is always named', () => {
-  it('has no default, and takes a flag over the environment', () => {
-    expect(() => poolServer({}, 's')).toThrow(/--server or OARS_POOL_URL/);
-    expect(() => poolServer({ OARS_POOL_URL: '' }, 's')).toThrow(/no default/);
+describe('the pool server', () => {
+  it('defaults to the Many Oars pool, and takes a flag over the environment over the default', () => {
+    expect(DEFAULT_POOL_URL).toBe('https://pool.manyoars.com');
+    expect(poolServer({}, 's')).toBe(DEFAULT_POOL_URL);
+    expect(poolServer({ OARS_POOL_URL: '' }, 's')).toBe(DEFAULT_POOL_URL);
     expect(poolServer({ OARS_POOL_URL: 'https://from-env.test' }, 's')).toBe('https://from-env.test');
     expect(poolServer({ OARS_POOL_URL: 'https://from-env.test' }, 's', 'https://from-flag.test')).toBe('https://from-flag.test');
   });
@@ -177,11 +178,11 @@ describe('the pool server is always named', () => {
     for (const hidden of ['https://user:pass@pool.test', 'https://pool.test/path', 'https://pool.test/?q=1', 'https://pool.test/#f']) expect(() => poolServer({}, 's', hidden)).toThrow(/origin only/);
   });
 
-  it('every command exits as a usage error with no server named, and sends nothing', async () => {
+  it('with no server named, a command asks for a sign-in to the Many Oars pool, and sends nothing', async () => {
     const scene = setting();
-    expect(await scene.cli('pool', 'login', '--provider', 'github')).toBe(ExitCode.USAGE);
-    expect(await scene.cli('pool', 'deposit')).toBe(ExitCode.USAGE);
-    expect(await scene.cli('pool', 'fetch')).toBe(ExitCode.USAGE);
+    expect(await scene.cli('pool', 'deposit')).toBe(ExitCode.AUTH);
+    expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.0')).toBe(ExitCode.AUTH);
+    expect(scene.h.err.join('')).toContain(DEFAULT_POOL_URL);
     expect(scene.seen).toEqual([]);
   });
 
@@ -620,6 +621,35 @@ describe('oars pool deposit', () => {
     expect(outboxFiles(scene)).toEqual(first);
   });
 
+  // t881 fix rounds 1 and 2: the deposit's own gate (the operator's redact domains) decides what the outbox holds, so this goes through the command and reads the written batch. The host is on the public list, so capture keeps it and only the gate can turn it into `private`.
+  it('writes private for a name the operator redacts, an off-list program in clear, and a public-list host the operator redacts, as private', async () => {
+    const SESSION = '66666666-6666-4666-8666-666666666666';
+    const folder = 'gate-repo';
+    const stamp = (n: number): string => `2026-06-01T00:00:0${String(n)}.000Z`;
+    const call = (n: number, name: string, input: object): string =>
+      JSON.stringify({ type: 'assistant', uuid: `g-${String(n)}`, parentUuid: n === 1 ? null : `g-${String(n - 1)}`, isSidechain: false, sessionId: SESSION, timestamp: stamp(n), version: '2.1.300', message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: `t${String(n)}`, name, input }] } });
+    const scene = setting();
+    rmSync(join(scene.staged.projectsRoot, 'proj'), { recursive: true, force: true });
+    addProject(scene.staged, folder, SESSION, [
+      JSON.stringify({ type: 'user', uuid: 'g-0', parentUuid: null, isSidechain: false, sessionId: SESSION, cwd: '/w', timestamp: stamp(0), version: '2.1.300', message: { role: 'user', content: 'deploy it' } }),
+      call(1, 'WebFetch', { url: 'https://docs.stripe.com/api' }),
+      call(2, 'Bash', { command: 'acme-deploy --prod' }),
+      call(3, 'mcp__git.acme.internal__run', {}),
+    ]);
+    // Captured with nothing redacted, then the operator names a domain: the store holds the clear host, and only the deposit's gate can keep it off the wire.
+    await deposit(scene.staged.runtime, { allow: [folder], redactDomains: [], now: () => NOW });
+    const state = join(scene.staged.storeDir, 'state.json');
+    writeFileSync(state, JSON.stringify({ ...JSON.parse(readFileSync(state, 'utf8')), redactDomains: ['acme.internal', 'stripe.com'] }));
+    await signIn(scene);
+    expect(await scene.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
+    const written = batchBytes(scene).join('\n');
+    expect(written).not.toContain('acme.internal');
+    expect(written).not.toContain('stripe.com');
+    expect(written).toContain('"host":"private"');
+    expect(written).toContain('"server":"private"');
+    expect(written).toContain('"program":"acme-deploy"');
+  });
+
   describe('the session gates run before any projection', () => {
     const OTHER_FOLDER = 'zz-private-repo';
     const SESSION = '55555555-5555-4555-8555-555555555555';
@@ -964,8 +994,9 @@ describe('the pool request that gets no answer', () => {
 describe('oars pool outbox', () => {
   it('asks for a sign-in, and names the server', async () => {
     const scene = setting();
-    expect(await scene.cli('pool', 'outbox')).toBe(ExitCode.USAGE);
+    expect(await scene.cli('pool', 'outbox')).toBe(ExitCode.AUTH);
     expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.AUTH);
+    expect(scene.h.err.join('')).toContain(DEFAULT_POOL_URL);
   });
 
   it('says so when there is nothing to print', async () => {
@@ -1148,18 +1179,28 @@ describe('oars pool deposit --send', () => {
     expect(scene.seen).toEqual([]);
   });
 
-  it('is disabled from the command line: every check runs, and then it refuses with no request made', async () => {
+  it('sends from the command line once the covenant is accepted, and sends nothing before', async () => {
     const scene = await batched();
     const hash = await printedAndHash(scene);
-    scene.h.err.length = 0;
-    expect(await scene.cli('pool', 'deposit', '--server', POOL, '--send', hash, '--json')).toBe(ExitCode.CONFLICT);
-    expect(scene.document()).toMatchObject({ problem: { code: 'sending_disabled' } });
-    expect(scene.seen).toEqual([]);
-    // The checks do run first: a hash that was never printed is refused for that, not for the disabled send.
+    let accepted = false;
+    on(scene, 'get', '/v1/covenant', () => HttpResponse.json({ version: 'v1', accepted }));
+    on(scene, 'post', '/v1/covenant/accept', () => {
+      accepted = true;
+      return HttpResponse.json({ ok: true, version: 'v1' });
+    });
+    on(scene, 'post', '/v1/deposits', () => HttpResponse.json({ ok: true }, { status: 201 }));
+    // The lock runs first: a hash that was never printed is refused with no request made.
     expect(await scene.cli('pool', 'deposit', '--server', POOL, '--send', '1'.repeat(64), '--json')).toBe(ExitCode.CONFLICT);
     expect(scene.document()).toMatchObject({ problem: { code: 'batch_unknown' } });
-    expect(await scene.cli('pool', 'deposit', '--server', POOL, '--send', hash)).toBe(ExitCode.CONFLICT);
-    expect(scene.h.err.join('')).toContain('waits on the pool covenant');
+    expect(scene.seen).toEqual([]);
+    // Not yet accepted: the covenant is read, and no batch leaves.
+    expect(await scene.cli('pool', 'deposit', '--server', POOL, '--send', hash, '--json')).toBe(ExitCode.AUTH);
+    expect(scene.document()).toMatchObject({ problem: { code: 'covenant_not_accepted' } });
+    expect(scene.seen.map((entry) => new URL(entry.url).pathname)).toEqual(['/v1/covenant']);
+    scene.seen.length = 0;
+    expect(await scene.cli('pool', 'deposit', '--server', POOL, '--send', hash, '--accept-covenant', 'v1', '--json')).toBe(ExitCode.OK);
+    expect(scene.document()).toMatchObject({ ok: true, sent: true, hash });
+    expect(scene.seen.map((entry) => new URL(entry.url).pathname)).toEqual(['/v1/covenant', '/v1/covenant/accept', '/v1/deposits']);
   });
 
   it('sends a deposit again when the pool answers deposit_conflict, and does not count it as a refusal', async () => {
@@ -1306,7 +1347,7 @@ describe('oars pool fetch', () => {
     expect(scene.seen).toEqual([]);
   });
 
-  const bundleBody = (version: string, harness = 'claude-code'): string => JSON.stringify({ format: 1, harness, harnessVersion: version, vocabVersion: VOCAB_VERSION, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}], strata: [] });
+  const bundleBody = (version: string, harness = 'claude-code'): string => JSON.stringify({ format: 1, harness, harnessVersion: version, vocabVersion: VOCAB_VERSION, floor: 5, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}], strata: [] });
 
   const signedScene = async (): Promise<{ scene: Scene; sign: (text: string) => Promise<string> }> => {
     const scene = setting();
@@ -1365,6 +1406,18 @@ describe('oars pool fetch', () => {
     expect(replicas(scene)).toEqual([]);
   });
 
+  it('refuses a validly signed bundle that states no floor, and keeps nothing', async () => {
+    const { scene, sign } = await signedScene();
+    // The signature holds and the version is right: only the missing `floor` is wrong, so a bundle that does not say what floor the pool applied is not served as a read.
+    const payload = bundleBody('2.1.314').replace('"floor":5,', '');
+    expect(payload).not.toContain('floor');
+    const signature = await sign(payload);
+    on(scene, 'get', `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, () => HttpResponse.json({ payload, signature }));
+    expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.INVALID);
+    expect(scene.document()).toMatchObject({ problem: { code: 'bundle_unverified' } });
+    expect(replicas(scene)).toEqual([]);
+  });
+
   it('refuses a harness version the vocabulary does not hold before asking, asks for a sign-in, and takes the weekly cap as its own exit code', async () => {
     const { scene } = await signedScene();
     expect(await scene.cli('pool', 'fetch', '--harness-version', '../secret', '--server', POOL)).toBe(ExitCode.USAGE);
@@ -1399,7 +1452,7 @@ describe('oars pool fetch', () => {
   };
 
   const signedReply = async (sign: (text: string) => Promise<string>, version: string, etag: string | null, reads = 2, harness = 'claude-code'): Promise<() => Response> => {
-    const payload = JSON.stringify({ format: 1, harness, harnessVersion: version, vocabVersion: VOCAB_VERSION, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: Array.from({ length: reads }, () => ({})), strata: [] });
+    const payload = JSON.stringify({ format: 1, harness, harnessVersion: version, vocabVersion: VOCAB_VERSION, floor: 5, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: Array.from({ length: reads }, () => ({})), strata: [] });
     const signature = await sign(payload);
     return () => HttpResponse.json({ payload, signature }, etag === null ? {} : { headers: { etag } });
   };
@@ -1884,7 +1937,7 @@ describe('pool telemetry: deposit batches and fetches leave counts', () => {
     expect(eventsOf(dir, 'deposit')).toEqual([{ step: 'send', sent: 1, bytes: Buffer.byteLength(batchBytes(scene)[0] ?? '') }]);
   });
 
-  const bundleBody = (version: string): string => JSON.stringify({ format: 1, harness: 'claude-code', harnessVersion: version, vocabVersion: VOCAB_VERSION, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}], strata: [] });
+  const bundleBody = (version: string): string => JSON.stringify({ format: 1, harness: 'claude-code', harnessVersion: version, vocabVersion: VOCAB_VERSION, floor: 5, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}], strata: [] });
   const BUNDLE = `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`;
 
   const signed = async (): Promise<{ scene: Scene; reply: () => Promise<Response> }> => {

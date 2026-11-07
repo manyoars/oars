@@ -2,8 +2,7 @@
 // It never calls `localSalt` or the step log, both of which write, and it holds no store lock, since a replay touches nothing a deposit reads.
 import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { CliError, ExitCode } from '../errors.js';
-import { compileAllow } from '../sessions/allow.js';
+import { compileAllow, runAllow } from '../sessions/allow.js';
 import { makeRedactor } from '../sessions/redact.js';
 import { paths, readState, writeAtomic, type SessionsRuntime } from '../sessions/store.js';
 import type { Crossing, UnreadShape } from './checks.js';
@@ -246,8 +245,7 @@ const readAll = async (runtime: Pick<SessionsRuntime, 'storeDir' | 'projectsRoot
 
 export const replay = async (runtime: Pick<SessionsRuntime, 'storeDir' | 'projectsRoot'>, options: ReplayOptions): Promise<ReplayResult> => {
   const state = await readState(runtime.storeDir);
-  const entries = options.allow.length > 0 ? options.allow : state.allow;
-  if (entries.length === 0) throw new CliError('Name a folder with --allow: nothing is read from a folder you have not named, and no deposit has saved an allowlist.', ExitCode.USAGE, 'usage');
+  const entries = runAllow(state.allow, options.allow);
   const { reads, transcripts, unreadable } = await readAll(runtime, entries, state.redactDomains);
   const held: Held[] = [];
   for (const { transcript, read } of reads) {

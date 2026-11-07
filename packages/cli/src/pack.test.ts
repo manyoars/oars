@@ -143,7 +143,7 @@ const DENY_LIST = [
   'joins no cluster',
 ];
 
-const NOT_OPEN = 'Accounts are not open yet; `oars login` says so until launch.';
+const NOT_OPEN = 'Accounts are not open yet: `oars login` uses the Many Oars issuer by default, and until Many Oars sign-in at `login.manyoars.com` (and its pool at `pool.manyoars.com`) is deployed it exits 2 with an error that names `login.manyoars.com`.';
 
 const WITHHELD_TERMS = [
   /\bprices?\b/i,
@@ -255,7 +255,7 @@ describe('the public text states facts only', () => {
     expect(text).toContain('raw transcripts');
     expect(text).toMatch(/unredacted/);
     expect(text).toContain('except `gold arms`, which sends redacted text through your own Claude subscription');
-    expect(text).toContain('Apart from that and telemetry (on by default, off with `oars telemetry off`, `OARS_TELEMETRY=0`, or `DO_NOT_TRACK=1`; it sends only to the pool server in `OARS_POOL_URL`), oars itself sends nothing, except what you opted into with a pool server of your own naming: after you accept its covenant, the nightly task sends closed-vocabulary session skeletons, and, only after a separate yes to the raw prompt, a locally redacted (best-effort) copy of each full transcript; `oars pool outbox` prints all of it first, and a folder can be switched to skeleton only or off; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.');
+    expect(text).toContain('Apart from that and telemetry (on by default, off with `oars telemetry off`, `OARS_TELEMETRY=0`, or `DO_NOT_TRACK=1`; it sends to the Many Oars pool, or the pool server in `OARS_POOL_URL`), oars itself sends nothing, except what you opted into with a pool server: after you accept its covenant, the nightly task sends closed-vocabulary session skeletons, and, only after a separate yes to the raw prompt, a locally redacted (best-effort) copy of each full transcript; `oars pool outbox` prints all of it whenever you run it, before the next nightly send, and a folder can be switched to skeleton only or off; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.');
     expect(text).toContain(NOT_OPEN);
     expect(text).toContain('%APPDATA%');
     expect(text).toContain('~/.config');
