@@ -112,6 +112,17 @@ describe('edges on the wire (t869)', () => {
     expect(parsed).toMatchObject({ ok: true, others: 1, extensions: [{ at: `${field}.kind`, kind: 'value', value: 'bridged' }] });
     expect(parsed.ok ? parsed.skeleton.transcripts[0]?.tools[1]?.steps[0]?.edges : null).toEqual([{ kind: 'other', target: 0 }]);
   });
+  it('holds an edge of a kind it does not know to a count only: no position check, with or without a spawner', () => {
+    // Target 99 names no step in this batch; the kind is read as other, so the target is kept as a count and not placed.
+    for (const [transcript, tool] of [[0, 1], [1, 0]] as const) {
+      const parsed = parseSkeleton(sent(['transcripts', transcript, 'tools', tool, 'steps', 0, 'edges'], [{ kind: 'bridged', target: 99 }]));
+      const at = `transcripts[${String(transcript)}].tools[${String(tool)}].steps[0].edges[0]`;
+      expect(parsed).toMatchObject({ ok: true, others: 1, extensions: [{ at: `${at}.kind`, kind: 'value', value: 'bridged' }] });
+      const edges = parsed.ok ? parsed.skeleton.transcripts.flatMap(({ tools }) => tools.flatMap(({ steps }) => steps.flatMap((one) => one.edges ?? []))) : null;
+      // Every other edge in the fixture keeps its kind; the one sent is the only 99.
+      expect(edges?.filter(({ target }) => target === 99)).toEqual([{ kind: 'other', target: 99 }]);
+    }
+  });
   it('keeps a field beside the kind and target in the extensions bag, not as an edge', () => {
     const parsed = parseSkeleton(sent([...retry, 'edges'], [{ kind: 'next', target: 0, n: 3 }]));
     expect(parsed).toMatchObject({ ok: true, others: 0, extensions: [{ at: `${field}.n`, kind: 'field', value: 3 }] });
