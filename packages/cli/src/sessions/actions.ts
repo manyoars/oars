@@ -344,6 +344,26 @@ export const ACTION_TABLES: { readonly [harness in Harness]: ActionTable } = {
     toolDelimited: true,
     shells: { bash: 'bash', run_terminal_cmd: 'bash', run_terminal_command: 'bash' },
   },
+  // Pi's own names (badlogic/pi-mono @ 085c84e, packages/coding-agent, docs/cli.md:144-158): `read`, `bash`, `powershell` (Windows), `edit`, `write`, `grep`, `find`, `ls`,
+  // `codemode`, and `tool_search`. A shell call and an edit reach the transcript as `Bash` and `Edit` with the original name in `native`, which is what this table looks up.
+  // Pi registers an MCP tool as `mcp__<server>__<tool>` (docs/mcp.md:77). It has no sub-agent, skill, plan, or ask tool of its own (README.md:19).
+  pi: {
+    rows: {
+      read: 'file.read',
+      bash: 'shell.exec',
+      powershell: 'shell.exec',
+      edit: 'file.edit',
+      write: 'file.write',
+      grep: 'file.search',
+      find: 'file.search',
+      ls: 'file.search',
+      codemode: 'other',
+      tool_search: 'other',
+    },
+    mcp: /^mcp__(?<server>.+?)__(?<tool>.+)$/,
+    toolDelimited: true,
+    shells: { bash: 'bash', powershell: 'powershell' },
+  },
 };
 
 /** The MCP call a native name spells, in full, as the transcript wrote it; undefined for any other name. */
