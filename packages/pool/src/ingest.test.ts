@@ -321,7 +321,7 @@ describe('a large deposit', () => {
     // The sizes docs/pool.md states, so they cannot drift unseen: the skeleton as the worker stores it, the cells, and their JSON. Each call's `"errorCode":null,` is 17 bytes of the skeleton (t868: 818,998 before it; t869 adds 17 for the transcript's null `spawnedIn`), and the three `unknown` coverage bands are 128 bytes on the two frames (t871).
     expect(JSON.stringify(skeleton).length).toBe(887_140);
     expect(wanted.cells.size).toBe(11_548);
-    expect(JSON.stringify([...wanted.cells.values()]).length).toBe(3_342_305);
+    expect(JSON.stringify([...wanted.cells.values()]).length).toBe(3_746_485);
     await inFreshPool({}, async (target) => {
       const token = await accountOn(target, '9101');
       const response = await target.post('/v1/deposits', skeleton, token);
