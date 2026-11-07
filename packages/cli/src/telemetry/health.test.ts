@@ -9,6 +9,7 @@ import { readHookCalls } from '../sessions/hook-calls.js';
 import { deposit, loadStore } from '../sessions/store.js';
 import { cleanup, NOW, stage } from '../sessions/test-support.js';
 import { closedList, type NightlyTelemetry } from './health.js';
+import { spoolEvents, type SpoolEvent } from './read-events.js';
 import { appendLine, readSpool } from './spool.js';
 
 const roots: string[] = [];
@@ -31,10 +32,7 @@ const emitter = (peak = 321): { telemetry: NightlyTelemetry; dir: string } => {
   return { dir, telemetry: { env: { APPDATA: appData }, telemetry: { dir, platform: 'linux' }, version: '1.2.3', now: () => (tick += 5), peakRssMb: () => peak } };
 };
 
-const events = (dir: string, type: string): { at: string; data: { [field: string]: unknown } }[] =>
-  readSpool(dir)
-    .map((line) => JSON.parse(line) as { type: string; at: string; data: { [field: string]: unknown } })
-    .filter((event) => event.type === type);
+const events = (dir: string, type: string): SpoolEvent[] => spoolEvents(dir, type);
 
 describe('store health at the nightly run', () => {
   it('snapshots a fixture store against a hand count', async () => {

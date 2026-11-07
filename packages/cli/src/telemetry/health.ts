@@ -7,7 +7,7 @@ import { frozenSessions, loadStore, paths, readSkeletons, type SessionsRuntime }
 import { LITERAL, publicModel, publicVersion } from '../sessions/public-vocabulary.js';
 import { verifyAll, verifyCaptured } from '../sessions/verify.js';
 import { emitEvent, type Emitter } from './emit.js';
-import { readSpool } from './spool.js';
+import { spoolEvents } from './read-events.js';
 
 /** What the nightly run needs to record: the emitter, and a reader for the process's peak memory (a test sets it). */
 export interface NightlyTelemetry extends Emitter {
@@ -52,22 +52,8 @@ const bytesUnder = async (dir: string): Promise<number> => {
 };
 
 /** The bytes the last seven days of sends put on the wire, read from telemetry's own `wire-send` events: nothing is asked of the pool. */
-const egressBytes = (dir: string, now: number): number => {
-  let total = 0;
-  for (const line of readSpool(dir)) {
-    try {
-      const event: unknown = JSON.parse(line);
-      const data: unknown = typeof event === 'object' && event !== null ? Reflect.get(event, 'data') : undefined;
-      const at = typeof event === 'object' && event !== null ? Date.parse(String(Reflect.get(event, 'at'))) : NaN;
-      if (typeof event !== 'object' || event === null || Reflect.get(event, 'type') !== 'wire-send' || typeof data !== 'object' || data === null) continue;
-      const bytes: unknown = Reflect.get(data, 'bytes');
-      if (Reflect.get(data, 'sent') === 1 && typeof bytes === 'number' && at >= now - WEEK_MS) total += bytes;
-    } catch {
-      // A line that is not an event is not counted.
-    }
-  }
-  return total;
-};
+const egressBytes = (dir: string, now: number): number =>
+  spoolEvents(dir, 'wire-send').reduce((total, { at, data }) => (data.sent === 1 && typeof data.bytes === 'number' && Date.parse(at) >= now - WEEK_MS ? total + data.bytes : total), 0);
 
 const storeFields = async (runtime: SessionsRuntime): Promise<{ [field: string]: number | string[] }> => {
   const { storeDir } = runtime;
