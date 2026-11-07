@@ -320,13 +320,16 @@ export const chatLines = (data: Obj, fallbackId: string, folder: string | null):
     const totals = Array.isArray(request.modelTotals) ? request.modelTotals.filter(isObj) : [];
     const completion = num(request.completionTokens);
     const sum = (field: string): number => totals.reduce((total, entry) => total + (num(entry[field]) ?? 0), 0);
-    // `inputTokens` is taken whole: the source does not say whether it includes `cachedTokens`.
-    const usage: Obj | undefined =
-      totals.length > 0
-        ? { input_tokens: sum('inputTokens'), cache_read_input_tokens: sum('cachedTokens'), output_tokens: sum('outputTokens') }
-        : completion === undefined
-          ? undefined
-          : { output_tokens: completion };
+    // `inputTokens` is taken whole: the source does not say whether it includes `cachedTokens`. A zero in `modelTotals` means unknown, so a category summing to zero is left out
+    // rather than written as a measured zero; when no category is left, the request has no usage.
+    const fromTotals: Obj = {
+      ...(sum('inputTokens') > 0 ? { input_tokens: sum('inputTokens') } : {}),
+      ...(sum('cachedTokens') > 0 ? { cache_read_input_tokens: sum('cachedTokens') } : {}),
+      ...(sum('outputTokens') > 0 ? { output_tokens: sum('outputTokens') } : {}),
+    };
+    const fromCompletion: Obj = completion !== undefined && completion > 0 ? { output_tokens: completion } : {};
+    const counted = totals.length > 0 && Object.keys(fromTotals).length > 0 ? fromTotals : fromCompletion;
+    const usage: Obj | undefined = Object.keys(counted).length > 0 ? counted : undefined;
     if (content.length > 0 || usage !== undefined) {
       const model = str(request.modelId);
       const answered = stamp(request.responseTimestamp);

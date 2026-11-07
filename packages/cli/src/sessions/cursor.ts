@@ -237,8 +237,8 @@ const linesOf = (bubble: Bubble, base: Obj, at: string, model: string | undefine
   const input = num(tokens.inputTokens) ?? 0;
   const output = num(tokens.outputTokens) ?? 0;
   const message: Obj = { role: 'assistant', id: bubble.id, content };
-  // A zero count means Cursor did not record one, so no usage is written rather than a measured zero.
-  if (input > 0 || output > 0) message.usage = { input_tokens: input, output_tokens: output };
+  // A zero count means Cursor did not record one, so that category is left out rather than written as a measured zero (and with neither, no usage is written).
+  if (input > 0 || output > 0) message.usage = { ...(input > 0 ? { input_tokens: input } : {}), ...(output > 0 ? { output_tokens: output } : {}) };
   const lines: Obj[] = [{ ...base, type: 'assistant', uuid: bubble.id, requestId: bubble.id, timestamp: at, ...(model === undefined ? {} : { requestedModel: model }), message }];
   if (call !== undefined && name !== undefined && (call.userDecision === 'rejected' || ((call.status === 'error' || call.status === 'completed') && !aborted(call, name)))) {
     const failure = failureOf(call, name);
