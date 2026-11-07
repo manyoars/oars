@@ -274,6 +274,9 @@ export const largeSkeleton = (id: string, steps = LARGE_STEPS, perCall = 1): Ses
   return oneSkeleton(store({ sessions: [session('s1', { frame: framed })], prompts: [prompt('s1', 0, { frame: framed })], tools: calls }), id);
 };
 
+/** The calls in the big session `docs/pool.md` prices per call, and the one `parts.test.ts` posts in parts. */
+export const BIG_CALLS = 5000;
+
 /** One session with `calls` shell calls: each a few hundred bytes of skeleton, so a few thousand pass the request cap (`parts.test.ts`). */
 export const bigSkeleton = (id: string, calls: number): SessionSkeleton => {
   const framed = frame({ shell: 'bash' });

@@ -4,10 +4,11 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { bigSkeleton, COVERAGE_KEY, coverageBytesSkeleton, envelopeBytes, largeSkeleton, REGISTER_FIXTURE } from '../../cli/src/sessions/pool-fixture.js';
+import { BIG_CALLS, bigSkeleton, COVERAGE_KEY, coverageBytesSkeleton, envelopeBytes, LARGE_STEPS, largeSkeleton, REGISTER_FIXTURE } from '../../cli/src/sessions/pool-fixture.js';
 import { canonicalBytes } from '../../cli/src/sessions/pool-outbox.js';
 import type { SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { incrementsOf } from './ingest.js';
+import { MAX_ASSEMBLED_BYTES } from './parts.js';
 import { sampleSkeleton } from './sample.js';
 import { startPool, stubUser } from './test-pool.js';
 
@@ -56,11 +57,7 @@ const coverageBytes = (): { bare: number; keyOnly: number; hourOnly: number; bot
   return { bare, keyOnly: size(COVERAGE_KEY, false) - bare, hourOnly: size(null, true) - bare, both: size(COVERAGE_KEY, true) - bare, frames: framesOf(false), timedFrames: framesOf(true) };
 };
 
-interface Figures {
-  [id: string]: number;
-}
-
-const figures = async (): Promise<Figures> => {
+const figures = async () => {
   const large = largeSkeleton('0000000000009101');
   const cells = incrementsOf(large).cells;
   const cellJson = JSON.stringify([...cells.values()]).length;
@@ -70,9 +67,12 @@ const figures = async (): Promise<Figures> => {
   const bands = bandBytes(large);
   const register = Buffer.byteLength(canonicalBytes(REGISTER_FIXTURE), 'utf8');
   const sample = JSON.stringify(sampleSkeleton('0000000000009103')).length;
-  const big = Buffer.byteLength(canonicalBytes(bigSkeleton('0000000000000001', 5000)), 'utf8');
-  const perCall = big / 5000;
+  const big = Buffer.byteLength(canonicalBytes(bigSkeleton('0000000000000001', BIG_CALLS)), 'utf8');
+  const perCall = big / BIG_CALLS;
   return {
+    'large-steps': LARGE_STEPS,
+    'big-calls': BIG_CALLS,
+    'join-limit': MAX_ASSEMBLED_BYTES,
     skeleton,
     cells: cells.size,
     'cell-json': cellJson,
@@ -91,7 +91,7 @@ const figures = async (): Promise<Figures> => {
     sample,
     'per-call': perCall,
     big,
-    'row-calls': 1_800_000 / perCall,
+    'row-calls': MAX_ASSEMBLED_BYTES / perCall,
     'sample-sessions': 10_000_000_000 / sample,
   };
 };
@@ -105,6 +105,10 @@ interface Marked {
 
 const computed = await figures();
 
+/** The ids of the figures this test computes; a marker naming any other id is a typo. */
+type FigureId = keyof typeof computed;
+const isFigure = (id: string): id is FigureId => id in computed;
+
 const MARKER = /(\d[\d,.]*)( million)?<!-- figure:([\w-]+)(?:~([\d.]+))? -->/gu;
 
 const markedFigures = (doc: string): Marked[] =>
@@ -115,8 +119,8 @@ const markedFigures = (doc: string): Marked[] =>
     line: doc.slice(0, found.index).split('\n').length,
   }));
 
-/** A comma-grouped figure with no marker must be a limit or constant the doc names, or follow "about" (a rounded statement, or history of code that no longer exists). */
-const CONSTANTS = new Set(['1,000', '5,000', '1,800,000', '2,000,000', '999,999', '100,000', '3,400', '4,096']);
+/** A comma-grouped figure with no marker must be a limit the doc names that no fixture sets (the git log's 5,000 commits, at docs/pool.md:22), or follow "about" (a rounded statement, or history of code that no longer exists). */
+const CONSTANTS = new Set(['1,000', '5,000', '2,000,000', '999,999', '100,000', '4,096']);
 
 /** A bare number with a unit that is a limit, a count of kinds, or an example the doc states, not a size the code determines. */
 const UNIT_CONSTANTS = new Set(['64 cells']); // "A row keeps at most 64 cells" (docs/pool.md:294): the telemetry rollup's limit.
@@ -127,8 +131,8 @@ describe('the figures in docs/pool.md', () => {
   it('equal what the code computes now, exact or within the stated rounding', () => {
     expect(marked.length).toBeGreaterThan(0);
     for (const one of marked) {
+      if (!isFigure(one.id)) throw new Error(`docs/pool.md:${String(one.line)} names figure "${one.id}", which this test does not compute`);
       const real = computed[one.id];
-      if (real === undefined) throw new Error(`docs/pool.md:${String(one.line)} names figure "${one.id}", which this test does not compute`);
       const expected = one.step === null ? real : Math.round(real / one.step) * one.step;
       expect(Math.abs(one.value - expected) < 1e-6, `docs/pool.md:${String(one.line)} states ${String(one.value)} for "${one.id}", the code computes ${String(real)}`).toBe(true);
     }
@@ -146,7 +150,7 @@ describe('the figures in docs/pool.md', () => {
     expect(DOC).toContain('across the four frames');
     expect([coverage.frames, coverage.timedFrames]).toEqual([2, 4]);
     // 116 across four frames is the same 29 a frame as 58 across two.
-    expect((computed['key-timed'] ?? 0) / coverage.timedFrames).toBe(computed['key-per-frame']);
+    expect(computed['key-timed'] / coverage.timedFrames).toBe(computed['key-per-frame']);
   });
 
   it('has no comma-grouped or unit-bearing figure left without a marker', () => {
