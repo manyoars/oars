@@ -31,7 +31,7 @@ export const deriveCost: DeriveFamily = ({ pool }) => {
     return [
       body('cost', cells, {
         slice: { class: motifName(first.motif), model: first.model, week: weekOf(first.cell) },
-        value: { tokensPerPrompt: Math.round(total(cells, (cell) => cell.tokens) / prompts), secondsPerPrompt: Math.round(total(cells, (cell) => cell.durationMs) / prompts / 1000), errorShare: rate(total(cells, (cell) => cell.failed), prompts) },
+        value: { tokensPerPrompt: Math.round(total(cells, (cell) => cell.tokens ?? 0) / prompts), secondsPerPrompt: Math.round(total(cells, (cell) => cell.durationMs) / prompts / 1000), errorShare: rate(total(cells, (cell) => cell.failed), prompts) },
         n: prompts,
         interval: null,
       }),

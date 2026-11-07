@@ -57,7 +57,7 @@ describe('deriveCells', () => {
 
   it('counts a window by its last step, sums its cost, and counts sessions once', () => {
     expect(cellsOf(base, shapeId([READ, EDIT]), 'week')).toEqual([
-      { motifId: shapeId([READ, EDIT]), frameBucket: 'claude-code/2.1.31x/claude-opus-5-5', grain: 'week', day: '2026-10-26', sessions: 2, clusters: 1, ok: 1, failed: 1, tokens: 0, durationMs: 70, exposed: false },
+      { motifId: shapeId([READ, EDIT]), frameBucket: 'claude-code/2.1.31x/claude-opus-5-5', grain: 'week', day: '2026-10-26', sessions: 2, clusters: 1, ok: 1, failed: 1, tokens: 0, tokenSessions: 2, durationMs: 70, exposed: false },
     ]);
   });
 
