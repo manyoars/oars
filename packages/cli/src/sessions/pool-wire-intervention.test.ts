@@ -59,7 +59,7 @@ describe('intervention on the wire', () => {
     });
 
     it('reads a value off the list as other and keeps what was sent in the bag', () => {
-      const sent = JSON.parse(canonicalBytes(skeletonWith(['none']))) as SessionSkeleton;
+      const sent = skeletonWith(['none']);
       Reflect.set(promptsOf(sent)[0] ?? {}, 'intervention', 'celebrated');
       const result = parseSkeleton(sent);
       if (!result.ok) throw new Error(`refused ${result.field}`);
@@ -68,7 +68,7 @@ describe('intervention on the wire', () => {
     });
 
     it('refuses a value that is not text', () => {
-      const sent = JSON.parse(canonicalBytes(skeletonWith(['none']))) as SessionSkeleton;
+      const sent = skeletonWith(['none']);
       Reflect.set(promptsOf(sent)[0] ?? {}, 'intervention', 7);
       expect(parseSkeleton(sent)).toMatchObject({ ok: false, field: 'transcripts[0].prompts[0].intervention' });
     });

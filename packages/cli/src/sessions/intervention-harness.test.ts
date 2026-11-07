@@ -44,7 +44,8 @@ const claudeCode = (turns: readonly Turn[]): string => {
       const input = isEdit(act) ? { file_path: `/work/app/${act.edit}`, old_string: 'a', new_string: 'b' } : { command: act.run };
       lines.push({ type: 'assistant', timestamp: T(next()), message: { role: 'assistant', content: [{ type: 'tool_use', id: `t${String(id)}`, name: isEdit(act) ? 'Edit' : 'Bash', input }] } });
       const failed = !isEdit(act) && act.exit !== 0;
-      lines.push({ type: 'user', timestamp: T(next()), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `t${String(id)}`, is_error: failed, content: failed ? `Exit code ${String((act as { exit: number }).exit)}\nfailed` : 'ok' }] } });
+      const exit = isEdit(act) ? 0 : act.exit;
+      lines.push({ type: 'user', timestamp: T(next()), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `t${String(id)}`, is_error: failed, content: failed ? `Exit code ${String(exit)}\nfailed` : 'ok' }] } });
     }
   }
   return asText(lines);
