@@ -107,7 +107,7 @@ export const REGISTER_FIXTURE = {
           status: 'ok',
           durationMs: 7,
           steps: [
-            { ...STEP, skill: 'commit', action: 'shell.exec', native: 'Bash', identity: { program: 'npm', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] } },
+            { ...STEP, allocated: true, skill: 'commit', action: 'shell.exec', native: 'Bash', identity: { program: 'npm', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] } },
             { ...STEP, edges: [{ kind: 'next', target: 0 }], action: 'mcp.call', native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' } },
             { ...STEP, edges: [{ kind: 'next', target: 1 }, { kind: 'retried', target: 0 }], action: 'skill.run', native: 'Skill', identity: { skill: 'commit' } },
             { ...STEP, action: 'web.fetch', native: 'WebFetch', identity: { host: 'github.com' } },
@@ -166,7 +166,7 @@ describe('the wire field register', () => {
     const total = [...fieldBytes(REGISTER_FIXTURE).values()].reduce((sum, bytes) => sum + bytes, 0);
     expect(total + envelopeBytes(REGISTER_FIXTURE)).toBe(Buffer.byteLength(canonicalBytes(REGISTER_FIXTURE), 'utf8'));
     expect(envelopeBytes(REGISTER_FIXTURE)).toBe(9);
-    expect(Buffer.byteLength(canonicalBytes(REGISTER_FIXTURE), 'utf8')).toBe(2_956);
+    expect(Buffer.byteLength(canonicalBytes(REGISTER_FIXTURE), 'utf8')).toBe(2_973);
     expect(fieldBytes({ a: [1, 2], b: { c: 'x' }, d: undefined }).get('a')).toBe(4 + 5);
     expect(fieldBytes({ a: [1, 2], b: { c: 'x' }, d: undefined }).get('b')).toBe(4 + 2);
     expect(fieldBytes({ a: [1, 2], b: { c: 'x' }, d: undefined }).get('c')).toBe(7);

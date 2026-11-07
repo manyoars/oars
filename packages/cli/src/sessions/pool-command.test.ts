@@ -31,6 +31,7 @@ const LATER = Date.parse('2099-01-01T00:00:00Z');
 // An invented term and an invented secret: neither is real, and the secret must never reach a request.
 const TERM = 'zorblax';
 const HARNESS_SECRET = 'planted-harness-secret';
+const SHARED = '77777777-7777-4777-8777-777777777777';
 
 interface Seen {
   url: string;
@@ -1168,6 +1169,25 @@ describe('oars pool outbox --explain and older batches', () => {
     const fields = fieldsOf(batchBytes(scene)[0] ?? '');
     expect(fields.length).toBeGreaterThan(3);
     for (const field of fields) expect(shown).toContain(`  ${field}: ${FIELD_ROWS[field] ?? 'no row'}`);
+  });
+
+  it('explains a batch whose response made two calls: the allocated marker has its row', async () => {
+    const scene = setting();
+    rmSync(join(scene.staged.projectsRoot, 'proj'), { recursive: true, force: true });
+    const use = (id: string): object => ({ type: 'tool_use', id, name: 'Bash', input: { command: 'ls' } });
+    const answer = (id: string): string => JSON.stringify({ type: 'user', sessionId: SHARED, cwd: '/w', timestamp: '2026-05-01T00:00:03Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'r' }] } });
+    const prompted = JSON.stringify({ type: 'user', sessionId: SHARED, cwd: '/w', timestamp: '2026-05-01T00:00:00Z', message: { role: 'user', content: 'a plain request' } });
+    const replied = JSON.stringify({ type: 'assistant', sessionId: SHARED, cwd: '/w', requestId: 'r1', timestamp: '2026-05-01T00:00:01Z', message: { id: 'm-r1', role: 'assistant', content: [use('a'), use('b')], usage: { input_tokens: 1, output_tokens: 1000 } } });
+    addProject(scene.staged, 'proj', SHARED, [prompted, replied, answer('a'), answer('b')]);
+    await capture(scene);
+    await signIn(scene);
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    scene.h.out.length = 0;
+    expect(batchBytes(scene).join('')).toContain('"allocated":true');
+    expect(await scene.cli('pool', 'outbox', '--explain', '--server', POOL)).toBe(ExitCode.OK);
+    expect(scene.h.err.join('')).not.toContain('field_without_row');
+    expect(scene.h.out.join('')).toContain(`  allocated: ${FIELD_ROWS.allocated ?? 'no row'}`);
+    expect(FIELD_ROWS.allocated).toBeDefined();
   });
 
   it('fails, rather than printing a blank, for a field with no row', async () => {

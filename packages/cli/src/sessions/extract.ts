@@ -1867,14 +1867,18 @@ export const captureSession = (input: ExtractInput): Capture => {
     const response = responseOfCall[position];
     const output = response === undefined ? undefined : outputPerResponse.get(response);
     const tokens = response === undefined || output === undefined || output === 0 ? null : Math.round(output / (callsPerResponse.get(response) ?? 1));
-    call.steps = (drafts[position] ?? []).map((draft, seg) => ({
+    const draftsOfCall = drafts[position] ?? [];
+    // A failed call of several read commands (`a && b`) says that the call failed, not which command did: the result carries one exit, so no segment is `error` on that evidence and the failure stays on the call.
+    const chainFailed = call.status === 'error' && draftsOfCall.filter((draft) => draft.read).length > 1;
+    const allocated = tokens !== null && response !== undefined && (callsPerResponse.get(response) ?? 1) > 1;
+    call.steps = draftsOfCall.map((draft, seg) => ({
       n: call.n,
       seg,
       action: draft.action,
       native: draft.native,
       identity: draft.identity,
-      status: draft.read ? call.status : 'none',
-      cost: seg === 0 ? { tokens, durationMs: call.durationMs } : { tokens: null, durationMs: null },
+      status: draft.read && !chainFailed ? call.status : 'none',
+      cost: seg === 0 ? { tokens, durationMs: call.durationMs, ...(allocated ? { allocated: true } : {}) } : { tokens: null, durationMs: null },
       parent: origin?.spawnedAt ?? null,
       edges: [],
       frameId,

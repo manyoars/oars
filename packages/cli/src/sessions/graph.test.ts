@@ -85,10 +85,28 @@ describe('one step per shell segment', () => {
     expect(steps.map((step) => step.status)).toEqual(['none', 'error', 'none', 'ok']);
   });
 
-  it('gives every segment of an && chain the call status, since the result does not say which failed', () => {
-    const steps = stepsOfPrompts([[{ command: 'git add . && npm test', failed: true }, { command: 'git add .' }]]);
-    expect(steps.map((step) => step.status)).toEqual(['error', 'error', 'ok']);
-    expect(steps[2]?.edges).toContainEqual({ kind: 'retried', n: 0, seg: 0 });
+  it('leaves the segments of a failed && chain unsettled, since the result does not say which failed; the failure stays on the call', () => {
+    const tools = capture(transcript([[{ command: 'git add . && npm test', failed: true }, { command: 'git add .' }]]));
+    expect(tools.map((tool) => tool.status)).toEqual(['error', 'ok']);
+    const steps = tools.flatMap((tool) => tool.steps ?? []);
+    expect(steps.map((step) => step.status)).toEqual(['none', 'none', 'ok']);
+    expect(edgesOf(steps[2], 'after-error')).toEqual([[0, 1]]);
+    expect(edgesOf(steps[2], 'retried')).toEqual([]);
+  });
+
+  it('keeps a single-segment failure as it was, and a passing chain ok in every segment', () => {
+    const steps = stepsOfPrompts([[{ command: 'npm test', failed: true }, { command: 'git add . && npm test' }]]);
+    expect(steps.map((step) => step.status)).toEqual(['error', 'ok', 'ok']);
+  });
+
+  it('marks a call cost allocated only where its response made several calls', () => {
+    const use = (id: string) => ({ type: 'tool_use', id, name: 'Bash', input: { command: 'ls' } });
+    const answer = (id: string) => line({ type: 'user', timestamp: at(2), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'r' }] } });
+    const reply = (requestId: string, uses: string[]) => line({ type: 'assistant', requestId, timestamp: at(1), message: { id: `m-${requestId}`, role: 'assistant', content: uses.map(use), usage: { input_tokens: 1, output_tokens: 1000 } } });
+    const text = [line({ type: 'user', timestamp: at(0), message: { role: 'user', content: 'p' } }), reply('r1', ['a', 'b']), answer('a'), answer('b'), reply('r2', ['c']), answer('c')].join('\n');
+    const costs = capture(text).flatMap((tool) => tool.steps ?? []).map((step) => step.cost);
+    expect(costs.map((cost) => cost.tokens)).toEqual([500, 500, 1000]);
+    expect(costs.map((cost) => cost.allocated)).toEqual([true, true, undefined]);
   });
 
   it('keeps the last 50 commands of a call', () => {
@@ -114,8 +132,8 @@ describe('cost', () => {
       line({ type: 'user', timestamp: at(3), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a', content: 'r' }] } }),
     ].join('\n');
     const [first, second] = capture(text);
-    expect(first?.steps?.map((step) => step.cost)).toEqual([{ tokens: 50, durationMs: 2000 }, { tokens: null, durationMs: null }]);
-    expect(second?.steps?.[0]?.cost).toEqual({ tokens: 50, durationMs: null });
+    expect(first?.steps?.map((step) => step.cost)).toEqual([{ tokens: 50, durationMs: 2000, allocated: true }, { tokens: null, durationMs: null }]);
+    expect(second?.steps?.[0]?.cost).toEqual({ tokens: 50, durationMs: null, allocated: true });
   });
 
   it('counts a response once across the lines that repeat its usage', () => {
