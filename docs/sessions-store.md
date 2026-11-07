@@ -142,7 +142,7 @@ Until a run on the real store measures them, set the heap for both: a store that
   on its next deposit with every captured record as it was. What the projection takes from the shell form is computed from the store and never written: `program`,
   `subcommand`, and `flags` come from the record's `steps`, and from its `segments` for a program the curated list does not name. A step's own names are limited to the
   curated lists, since capture narrowed them to those: a program only the snapshot lists, such as `ffmpeg -i in out`, keeps its program, first or later and behind any wrapper,
-  `timeout`, or block keyword, but loses `-i` stored, because a segment holds no flag; a program no list names projects `private`. A record captured before CAPTURE 9 has no
+  `timeout`, or block keyword, but loses `-i` stored, because a segment holds no flag; a program no list names goes on the wire as its basename after redaction, and `private` only when the redactor, an exclusion term, or the name shape rejects it. A record captured before CAPTURE 9 has no
   steps, so its flags are lost and it projects the program and subcommand alone from the A copy of `target` (a `target` cut at 30 characters or masked by redaction projects `program: private`).
   No staged pooled file or outbox exists for the migration to delete.
 
