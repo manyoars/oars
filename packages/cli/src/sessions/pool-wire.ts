@@ -3,7 +3,7 @@
 // sending, and the server parses it again, field by field, because a live URL takes anything from anyone. This file imports nothing from the file system: the Worker bundles it.
 
 import { ACTION_TABLES, CANONICAL_ACTIONS, mcpOf, type CanonicalAction } from './actions.js';
-import { CUSTOM_AGENT, FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRIVATE, publicEffort, publicModel, publicVersion, PUBLIC_FLAGS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, projectedAgentType, PUBLIC_SUBCOMMANDS, REPO_SIZES, VOCAB_VERSION, type RepoSize } from './public-vocabulary.js';
+import { CUSTOM_AGENT, FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRIVATE, publicEffort, publicVersion, PUBLIC_FLAGS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, projectedAgentType, PUBLIC_SUBCOMMANDS, REPO_SIZES, VOCAB_VERSION, type RepoSize } from './public-vocabulary.js';
 import type { Cell } from './cells.js';
 import type { Redactor } from './redact.js';
 import type { Motif } from './motif.js';
@@ -362,14 +362,17 @@ type Spawned = ReadonlyMap<number, number>;
  * A stored frame with its stack's language shares: each stored share is read through its projection, so a share outside the list is dropped and its language stays in `languages`. A stored
  * language outside the pinned list is `other`, and `other` holds the first share a record gives it. A record captured before the strata holds none.
  */
-const wireFrame = (frame: Frame, strata: Strata | undefined): SkeletonFrame => {
+/** A model or harness version string as the wire holds it: the string after the gate (`wireName`), null staying null. The pool assigns its class. */
+const wireString = (gate: WireGate, value: string | null): string | null => (value === null ? null : wireName(gate, value));
+
+const wireFrame = (frame: Frame, strata: Strata | undefined, gate: WireGate): SkeletonFrame => {
   const shares = new Map<string, LanguageShare>();
   for (const { language, share } of strata?.languages ?? []) {
     const held = projectLanguageShare(share);
     const name = projectLanguage(language);
     if (held !== null && !shares.has(name)) shares.set(name, held);
   }
-  return { ...frame, stack: { ...frame.stack, languageShares: [...shares].map(([language, languageShare]) => ({ language, languageShare })) } };
+  return { ...frame, harnessVersion: wireString(gate, frame.harnessVersion), model: wireString(gate, frame.model), stack: { ...frame.stack, languageShares: [...shares].map(([language, languageShare]) => ({ language, languageShare })) } };
 };
 
 /** Each of `names` after the gate (a name that counts as redacted reads `private`), sorted. */
@@ -419,21 +422,21 @@ const transcriptOf = (
       wallSec: wallSec === null ? null : bucketOf('seconds', wallSec),
       usage: { input: bucketOf('tokens', usage.input), cacheWrite: bucketOf('tokens', usage.cacheWrite), cacheRead: bucketOf('tokens', usage.cacheRead), output: bucketOf('tokens', usage.output), thinking: bucketOf('tokens', usage.thinking) },
       explore: projectExplore(strata?.explore),
-      frame: wireFrame(frame, strata),
+      frame: wireFrame(frame, strata, gate),
     });
   }
   // The frames the steps ran in: the transcript's own first, then one for each distinct (prompt frame, call model, call harness version) a call shows, so a model that changes in the middle of a prompt
   // reaches the steps that ran on it. A call that recorded neither takes its prompt's frame, or the transcript's before the first prompt.
   const reach = reachOf(session, tools, harness, gate);
-  const transcriptFrame: SkeletonFrame = { ...wireFrame(session.frame, session.strata), reach };
+  const transcriptFrame: SkeletonFrame = { ...wireFrame(session.frame, session.strata, gate), reach };
   const frames: SkeletonFrame[] = [transcriptFrame];
   const frameAtKey = new Map<string, number>([[JSON.stringify(transcriptFrame), 0]]);
   const frameOfCall = ({ model, harnessVersion }: ToolObservation, promptPosition: number | null): number => {
     const base = promptPosition === null ? undefined : framedPrompts[promptPosition]?.frame;
     const held: SkeletonFrame = {
       ...(base ?? transcriptFrame),
-      ...(model === undefined ? {} : { model: publicModel(model) }),
-      ...(harnessVersion === null ? {} : { harnessVersion: publicVersion(harnessVersion) }),
+      ...(model === undefined ? {} : { model: wireName(gate, model) }),
+      ...(harnessVersion === null ? {} : { harnessVersion: wireName(gate, harnessVersion) }),
       reach,
     };
     const key = JSON.stringify(held);
@@ -711,12 +714,19 @@ const nameIn = (value: unknown, at: string): string => {
   throw new Refused(at, 'not a name');
 };
 
+/** A model or harness version: null, or a long-tail name (`private`, `other`, the older client's literal, or a name). A value that is no name is set aside, as a native name is. */
+const nameOrNull = (held: Collected, value: unknown, at: string): string | null => {
+  if (value === null || value === undefined) return null;
+  const name = textOf(value, at);
+  return name === PRIVATE || name === OTHER || name === LITERAL || isWireName(name) ? name : unknownValue(held, at, name);
+};
+
 const exactlyIn = (held: Collected, allowed: ReadonlySet<string>) => (value: unknown, at: string): string => {
   const name = textOf(value, at);
   return allowed.has(name) || name === OTHER ? name : unknownValue(held, at, name);
 };
 
-/** `publicModel` and its like hand back what is public and the literal for what is not, so only a value they return unchanged is in the vocabulary. */
+/** `publicEffort` and its like hand back what is public and the literal for what is not, so only a value they return unchanged is in the vocabulary. */
 const heldTo = (held: Collected, isHeld: (value: string | null) => string | null, value: unknown, at: string): string | null => {
   if (value === null || value === undefined) return null;
   const name = textOf(value, at);
@@ -776,8 +786,8 @@ const parseFrame = (held: Collected, value: unknown, at: string): SkeletonFrame 
   });
   return {
     harness: oneOf(held, HARNESSES, raw.harness, under(at, 'harness')),
-    harnessVersion: heldTo(held, publicVersion, raw.harnessVersion, under(at, 'harnessVersion')),
-    model: heldTo(held, publicModel, raw.model, under(at, 'model')),
+    harnessVersion: nameOrNull(held, raw.harnessVersion, under(at, 'harnessVersion')),
+    model: nameOrNull(held, raw.model, under(at, 'model')),
     effort: heldTo(held, publicEffort, raw.effort, under(at, 'effort')),
     day,
     platform: exactlyIn(held, PLATFORMS)(raw.platform, under(at, 'platform')),

@@ -188,8 +188,8 @@ describe('other for an unknown value', () => {
   const FIELDS: { name: string; path: (string | number)[]; value?: string }[] = [
     { name: 'transcript harness', path: ['transcripts', 0, 'harness'] },
     { name: 'frame harness', path: ['transcripts', 0, 'frame', 'harness'] },
-    { name: 'frame harnessVersion', path: ['transcripts', 0, 'frame', 'harnessVersion'] },
-    { name: 'frame model', path: ['transcripts', 0, 'frame', 'model'] },
+    { name: 'frame harnessVersion', path: ['transcripts', 0, 'frame', 'harnessVersion'], value: 'not a name!' },
+    { name: 'frame model', path: ['transcripts', 0, 'frame', 'model'], value: 'not a name!' },
     { name: 'frame effort', path: ['transcripts', 0, 'frame', 'effort'] },
     { name: 'frame platform', path: ['transcripts', 0, 'frame', 'platform'] },
     { name: 'frame shell', path: ['transcripts', 0, 'frame', 'shell'] },
