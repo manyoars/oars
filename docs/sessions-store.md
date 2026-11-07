@@ -323,6 +323,8 @@ lower-cased; a linked worktree's `.git` file is followed to the common `config`)
 it is the lower-cased absolute root path of the first `cwd` a repository holds. It is salted; `fileHashes` is the salted hash of each file
 path a tool touched, sorted.
 
+On a pooled skeleton the session's `repo` is the frame's `repoKey` (`docs/pool.md`, "Repo key, coverage bands, and hour"): the same salted hash, so a read that groups by repo works on pooled data within one account. A skeleton-derived store sets `repo` to it rather than `null`. The key joins one account's harnesses on one repository, not two accounts, and a salt rotation changes it. No cell key reads it.
+
 The **salt** is this machine's, created on first use (`localSalt` in `store.ts`). The one seam for the account's salt is
 `SessionsRuntime.accountSalt`: a provider returning `{ salt, sid }`. When it returns another `sid`, each file recorded under the old one is
 captured again from the harness or `raw/` at the next deposit, and nothing else changes. How a second machine adopts the account's salt is
