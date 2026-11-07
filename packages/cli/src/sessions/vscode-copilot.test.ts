@@ -124,6 +124,21 @@ describe('the VS Code Copilot Chat reader', () => {
     expect(none.session.versions).toEqual([]);
   });
 
+  // A third-party chat participant (another extension's `@name`) is serialized the same way, with that extension's version, which is not Copilot Chat's.
+  it('reads the version only from a Copilot Chat agent, whatever case its extension id is written in, and not from a third-party participant', () => {
+    const agent = (extensionId: string, extensionVersion: string) => ({ id: 'participant', name: 'p', extensionId: { value: extensionId }, extensionVersion });
+    const mixed = extractOf(
+      chat([request(1, 'one', [md('a')], { agent: agent('github.copilot-chat', '0.32.1') }), request(2, 'two', [md('b')], { agent: agent('acme.other-ext', '9.9.9') })]),
+    );
+    expect(mixed.session.env.harness).toBe('0.32.1');
+    expect(mixed.session.versions).toEqual(['0.32.1']);
+    const alone = extractOf(chat([request(1, 'one', [md('a')], { agent: agent('acme.other-ext', '9.9.9') })]));
+    expect(alone.session.env.harness).toBeNull();
+    expect(alone.session.versions).toEqual([]);
+    const noId = extractOf(chat([request(1, 'one', [md('a')], { agent: { name: 'p', extensionVersion: '9.9.9' } }), request(2, 'two', [md('b')], { agent: { extensionId: 'GitHub.copilot-chat', extensionVersion: '9.9.9' } })]));
+    expect(noId.session.env.harness).toBeNull();
+  });
+
   it('gives every public tool name a row: a notebook edit is an edit that touches its file, a directory is a write, terminal driving and a kernel run are other with the name kept, and a skill is a skill', () => {
     // toolNames.ts lists `edit_notebook_file`, `create_directory`, `send_to_terminal`, `run_notebook_cell`, and `skill`; the notebook edit part is `kind:'notebookEditGroup'` (model/chatModel.ts:1321,1331).
     const notebook = { kind: 'notebookEditGroup', uri: { scheme: 'file', path: '/work/app/n.ipynb' }, edits: [], done: true };

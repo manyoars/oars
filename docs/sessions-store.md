@@ -743,8 +743,9 @@ It is settled only if the session count is nonzero, there are zero violations, t
   The `version: 3` above is the chat-session schema's, not the extension's. The Copilot Chat extension's own version is the one version the file
   carries: each request holds the agent VS Code serialized beside it, `agent` (`ISerializableChatRequestData.agent`, `UriDto<IChatAgentData>`,
   `chatModel.ts:2196,2243`, written from the response's agent at `chatModel.ts:3849-3870`), and `IChatAgentData.extensionVersion` (`chatAgents.ts:71`)
-  is that version, so `harnessVersion` is the newest request's `agent.extensionVersion` (t872's census; a request whose agent has none, or a session
-  of an older build with no `agent`, leaves it unset, and the extension's is the only version). The cells are `vscode-copilot/<extension
+  is that version, so `harnessVersion` is the newest request's `agent.extensionVersion` (t872's census), read only when `agent.extensionId.value` is `GitHub.copilot-chat`, compared
+  case-insensitively as `ExtensionIdentifier` does: a third-party chat participant (another extension's `@name`) is serialized the same way with its own extension's
+  version, which is not Copilot Chat's and is never read. A request whose agent has none, or a session of an older build with no `agent`, leaves it unset. The cells are `vscode-copilot/<extension
   version>/<model>`, or `vscode-copilot/unknown/<model>` for a session that names none, which a bundle asks for as `unknown` (`pool.md`, "What a
   bundle serves").
   `completionTokens` on the request is the whole turn's output; `modelTotals[{model, inputTokens, cachedTokens, outputTokens}]`, also on the request (`chatModel.ts:2086,2093`), is the only per-model figure

@@ -3,7 +3,7 @@
 
 import { closedFrame, utcDay } from './frame.js';
 import { classMotif, motifsOf, stepsOfCall, type Motif } from './motif.js';
-import { bucketOf, UNKNOWN_VERSION } from './pool-wire.js';
+import { bucketOf } from './pool-wire.js';
 import { CALL_SHAPE_METHOD, cellRef, contentHash, METHODS } from './read.js';
 import { NO_RECALLS, type RecallGraph } from './recall-consequence.js';
 import { EXTRACTOR_VERSION, harnessOf, type ErrorObservation, type Frame, type Harness, type PromptObservation, type SessionObservation, type ToolObservation } from './schema.js';
@@ -56,7 +56,7 @@ const ONE_OPERATOR = 1;
  * exact-version cell goes stale in days; a reader compares buckets by distance instead. A version with no patch stands for itself.
  */
 export const harnessBucket = (version: string | null): string => {
-  if (version === null) return UNKNOWN_VERSION;
+  if (version === null) return UNKNOWN;
   const found = /^(\d+\.\d+)\.(\d+)/.exec(version);
   return found === null ? version : `${found[1] ?? ''}.${String(Math.floor(Number(found[2]) / 10))}x`;
 };
