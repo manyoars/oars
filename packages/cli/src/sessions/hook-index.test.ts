@@ -8,6 +8,8 @@ import { buildIndex, contextBlock, inRepository, readIndex, repositoryRoot } fro
 import { sessionsBooks, sessionsMeasure } from './command.js';
 import { readHookCalls } from './hook-calls.js';
 import { tool as toolRow } from './pool-fixture.js';
+import { booksLines } from './pool-books.js';
+import { booksOf, bundleOf, keep as keepReplica, pair } from './pool-books-fixture.js';
 import { toolShapeId } from './recall-reads.js';
 import { books, BOOKS_CAVEAT, formatBooks, formatMeasure, measure } from './query.js';
 import { formatStepCounters, readSteps, stepCounters } from './steps.js';
@@ -214,7 +216,7 @@ ${formatStepCounters(stepCounters(await readSteps(staged.storeDir)))}`);
     const plain = harness();
     plain.deps.sessions = staged.runtime;
     expect(await run(['sessions', 'books', '--by', 'class'], plain.deps)).toBe(ExitCode.OK);
-    expect(plain.out.join('')).toBe(`${formatBooks(books(store, 'class', NOW), 'class')}\n${BOOKS_CAVEAT}\n`);
+    expect(plain.out.join('')).toBe(`${formatBooks(books(store, 'class', NOW), 'class')}\n\nno pool bundle yet\n\n${BOOKS_CAVEAT}\n`);
   });
 
   it("books --repo counts only its own repository's newer captures, sessions and subagents alike", async () => {
@@ -280,10 +282,27 @@ ${formatStepCounters(stepCounters(await readSteps(staged.storeDir)))}`);
     expect(store.prompts.length).toBeGreaterThan(0);
     const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
     const kept = await sessionsBooks(deps, { by: 'pull', sinceDays: undefined, repo: HOME });
-    expect(kept.text).toBe('No pulls in the store.');
+    expect(kept.text).toBe(`No pulls in the store.\n\nno pool bundle yet`);
+    expect(kept.document).toMatchObject({ pool: null });
     const none = resolve('/zz/none');
     const absent = await sessionsBooks(deps, { by: 'pull', sinceDays: undefined, repo: none });
-    expect(absent.text).toBe(`No prompts for ${none} in the store (${String(store.prompts.length)} prompts across all repositories).`);
+    expect(absent.text).toBe(`No prompts for ${none} in the store (${String(store.prompts.length)} prompts across all repositories).\n\nno pool bundle yet`);
+  });
+
+  it('books prints the four lines of a kept signed bundle and carries its books in --json, so the replica reaches the command output', async () => {
+    const staged = stage(slugOf(HOME));
+    await deposit(staged.runtime, { allow: [slugOf(HOME)], redactDomains: [], now: () => NOW });
+    const kept = booksOf({ served: { total: 3, byWeek: [{ week: '2026-11-02', cells: 3 }], byTuple: [{ tuple: 'claude-code/2.1.31x/opus', cells: 3 }] }, backlog: 2 });
+    await keepReplica(staged.storeDir, bundleOf(kept), await pair());
+    const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
+    const outcome = await sessionsBooks(deps, { by: 'class', sinceDays: undefined, repo: HOME });
+    expect(outcome.text.split('\n').slice(-6, -2)).toEqual(booksLines(bundleOf(kept)));
+    expect(outcome.text.split('\n').slice(-6, -2)[0]).toBe('served cells 3, below floor 2, as of 2026-11-02');
+    expect(outcome.document).toMatchObject({ pool: kept });
+    const plain = harness();
+    plain.deps.sessions = staged.runtime;
+    expect(await run(['--json', 'sessions', 'books', '--by', 'class'], plain.deps)).toBe(ExitCode.OK);
+    expect(Reflect.get(JSON.parse(plain.out.join('')), 'pool')).toEqual(kept);
   });
 
   it('books over a --since window nothing falls in says so, with or without --repo, and an empty store still reads as empty', async () => {
@@ -291,13 +310,13 @@ ${formatStepCounters(stepCounters(await readSteps(staged.storeDir)))}`);
     await deposit(staged.runtime, { allow: [slugOf(HOME)], redactDomains: [], now: () => NOW });
     expect((await loadStore(staged.storeDir)).prompts.length).toBeGreaterThan(0);
     const deps = { sessions: staged.runtime, install: undefined, now: () => NOW + 3650 * 86_400_000 };
-    expect((await sessionsBooks(deps, { by: 'class', sinceDays: 1, repo: HOME })).text).toBe('No prompts in the --since window.');
-    expect((await sessionsBooks(deps, { by: 'pull', sinceDays: 1, repo: HOME })).text).toBe('No pulls in the --since window.');
-    expect((await sessionsBooks(deps, { by: 'class', sinceDays: 1 })).text).toBe('No prompts in the --since window.');
+    expect((await sessionsBooks(deps, { by: 'class', sinceDays: 1, repo: HOME })).text).toBe(`No prompts in the --since window.\n\nno pool bundle yet`);
+    expect((await sessionsBooks(deps, { by: 'pull', sinceDays: 1, repo: HOME })).text).toBe(`No pulls in the --since window.\n\nno pool bundle yet`);
+    expect((await sessionsBooks(deps, { by: 'class', sinceDays: 1 })).text).toBe(`No prompts in the --since window.\n\nno pool bundle yet`);
     const empty = stage(slugOf(HOME));
     const emptyDeps = { sessions: empty.runtime, install: undefined, now: () => NOW };
     // Nothing deposited means no saved allowlist, which is every folder, so no folder is off it and `books` adds no scope line.
-    expect((await sessionsBooks(emptyDeps, { by: 'class', sinceDays: 1 })).text).toBe('No prompts in the store.');
+    expect((await sessionsBooks(emptyDeps, { by: 'class', sinceDays: 1 })).text).toBe('No prompts in the store.\n\nno pool bundle yet');
   });
 
   it("measure --repo drops another repository's MCP recall calls and keeps calls with no folder", async () => {

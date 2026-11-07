@@ -17,6 +17,7 @@ import { unitCells, type DeriveFamily, type ReadBody } from '../../cli/src/sessi
 import type { Harness } from '../../cli/src/sessions/schema.js';
 import type { Store } from '../../cli/src/sessions/store.js';
 import { cellClassOf } from './cell-class.js';
+import { booksOf } from './books.js';
 import { withheldOf } from './complement.js';
 import type { StoredPool } from './stored.js';
 
@@ -115,5 +116,6 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
     motifs: motifs.filter((motif) => named.has(motif.motifId)),
     reads: readsOf(pool),
     strata: [...stored.strata].sort((a, b) => compare(a.dimension, b.dimension) || compare(a.value, b.value)),
+    books: booksOf({ held, served: kept, panel: stored.panel, panelDay: stored.panelDay, lineage: { floor: K_CELL, format: BUNDLE_FORMAT, vocabVersion: VOCAB_VERSION, asOf: { pool: pool.version, day: pool.lastDay } } }),
   };
 };
