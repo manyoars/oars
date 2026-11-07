@@ -1,4 +1,4 @@
-// A small store for the cell and family tests: only the fields a cell or a read looks at, so a test states the calls and prompts that matter to it.
+// Shared fixtures: a small store for the cell and family tests (only the fields a cell or a read looks at, so a test states the calls and prompts that matter to it), and, from the section below, the register, large, big, and coverage fixtures whose sizes docs/pool.md states.
 import { deriveCells, poolOf, type Pool } from './cells.js';
 import type { CanonicalAction } from './actions.js';
 import { FIELD_LIST_VERSION, SKELETON_FORMAT, sessionsOf, skeletonOf, type Print, type SessionRecords, type SessionSkeleton, type ShellReader, type TranscriptRoot } from './pool-wire.js';
