@@ -344,6 +344,30 @@ export const ACTION_TABLES: { readonly [harness in Harness]: ActionTable } = {
     toolDelimited: true,
     shells: { bash: 'bash', run_terminal_cmd: 'bash', run_terminal_command: 'bash' },
   },
+  // OpenTelemetry GenAI traces (open-telemetry/semantic-conventions-genai @ e6658f1, docs/gen-ai/execute-tool.md): `gen_ai.tool.name` is whatever the instrumented agent calls its
+  // tool, so no name is guaranteed. These are the names the conventions use in their own examples and refinements (the command, skill, and agent-as-tool sections); a span the
+  // reader recognizes by attributes alone (a nonzero `process.exit.code`, a `gen_ai.skill.name`) is renamed before this table is read. An MCP call is spelled `mcp__<server>__<tool>`.
+  otel: {
+    rows: {
+      exec_command: 'shell.exec',
+      execute: 'shell.exec',
+      shell: 'shell.exec',
+      bash: 'shell.exec',
+      command: 'shell.exec',
+      run_skill_script: 'shell.exec',
+      load_skill: 'skill.run',
+      skills: 'skill.run',
+      get_skill_instructions: 'skill.run',
+      load_skill_resource: 'file.read',
+      read_skill_resource: 'file.read',
+      get_skill_reference: 'file.read',
+      transfer_to_agent: 'agent.spawn',
+      invoke_agent: 'agent.spawn',
+    },
+    mcp: /^mcp__(?<server>.+?)__(?<tool>.+)$/,
+    toolDelimited: true,
+    shells: { bash: 'bash', shell: 'bash', exec_command: 'bash' },
+  },
 };
 
 /** The MCP call a native name spells, in full, as the transcript wrote it; undefined for any other name. */
