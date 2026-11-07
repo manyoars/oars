@@ -27,6 +27,30 @@ const canonical = (value: unknown): string => {
 /** The batch as one canonical JSON line: sorted keys, no optional whitespace, UTF-8 when written, and a newline at the end. These are the bytes that are hashed, printed, and sent. */
 export const canonicalBytes = (batch: unknown): string => `${canonical(batch)}\n`;
 
+/** The most bytes one request of a deposit carries. The pool refuses a request past 1 MiB, so a batch past this goes in parts, each of them under that cap. */
+export const PART_BYTES = 512 * 1024;
+
+/**
+ * The batch cut into parts of at most `limit` UTF-8 bytes, never inside a character, so the parts join back to exactly the bytes that were hashed. A batch within the limit is one part.
+ */
+export const partsOf = (bytes: string, limit: number = PART_BYTES): string[] => {
+  const parts: string[] = [];
+  let part = '';
+  let size = 0;
+  for (const character of bytes) {
+    const width = Buffer.byteLength(character, 'utf8');
+    if (size + width > limit) {
+      parts.push(part);
+      part = '';
+      size = 0;
+    }
+    part += character;
+    size += width;
+  }
+  parts.push(part);
+  return parts;
+};
+
 export const batchHash = (bytes: string): string => createHash('sha256').update(Buffer.from(bytes, 'utf8')).digest('hex');
 
 /**
@@ -63,7 +87,7 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   harnessVersion: 'The harness version, only when it is a public release; else the literal placeholder.',
   host: 'The host of a web fetch or search, only when it is on the public list; else private, or null when the step names no host. The pool replaces a host with a keyed hash on arrival and serves it only once enough accounts report it.',
   id: "A hash the client computes per account from the account and the session, so a redeposit replaces and two accounts' sessions cannot be joined. Never the session id.",
-  identity: 'What a step called, in closed vocabulary: a shell program with its subcommand and flags, an MCP server and tool, a skill, or a web host; null for an action with none.',
+  identity: 'What a step called: a shell program with its subcommand and flags, an MCP server and tool, a skill, or a web host, each a name after redaction or `private`; null for an action with none.',
   input: 'A bucket of the input tokens in a prompt, a number.',
   kind: 'How an edge came about, one of a closed list: next, spawned, retried, or after-error.',
   language: 'A programming language of the project, from a closed public list, or other for any language off the list, beside its share bucket.',
@@ -106,9 +130,9 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   target: 'The position of the step an edge names, a number counted over the steps of one transcript in call order.',
   timingPrint: 'A hash of the call durations of the main transcript in the order they ran, or null under 50 timed calls; the calls of a subagent are not in it.',
   tokens: 'A bucket of tokens (a lower bound of the count), a number or null; a step holds one, never the exact count.',
-  tool: 'The tool of an MCP call, only when it is on the public list for that server; else the literal placeholder.',
+  tool: 'The tool of an MCP call: the name as it is after redaction, beside a server that is not private and in a harness whose spelling delimits the server; else the literal placeholder.',
   tools: 'The tool calls of a transcript, each a status and duration and its steps, in the order they ran; never their targets or arguments.',
-  transcripts: 'The main transcript, then each subagent: its frame, prompts, and tool calls, every value checked against the closed vocabulary before the batch is built.',
+  transcripts: 'The main transcript, then each subagent: its frame, prompts, and tool calls, every value checked against its field\'s list or the name shape before the batch is built.',
   usage: 'The tokens of a prompt as buckets (lower bounds): input, cache write, cache read, output, and thinking.',
   version: 'The version of a pulled package, only when it is a registry version; else the literal placeholder or null.',
   vocabVersion: 'The version of the closed vocabulary this client built the batch under: a constant of this client, never a value from a session.',
@@ -132,7 +156,7 @@ export const outboxFolder = (storeDir: string, server: string): string => join(s
 const BATCH_FILE = /^([0-9a-f]{16})\.([0-9a-f]{64})\.jsonl$/;
 
 /** Writes one session's batch under the current stamp. A session has one batch: an older batch of it is removed, and an identical one is written again, so an edited file is restored. */
-export const writeBatch = async (outbox: string, key: string, batch: unknown, stamp: string = currentStamp()): Promise<{ hash: string; folder: string }> => {
+export const writeBatch = async (outbox: string, key: string, batch: unknown, stamp: string = currentStamp()): Promise<{ hash: string; folder: string; bytes: number }> => {
   const bytes = canonicalBytes(batch);
   const hash = batchHash(bytes);
   const folder = join(outbox, stamp);
@@ -142,7 +166,7 @@ export const writeBatch = async (outbox: string, key: string, batch: unknown, st
     if (found?.[1] === key && found[2] !== hash) await rm(join(folder, name), { force: true });
   }
   await writeFile(join(folder, `${key}.${hash}.jsonl`), bytes, 'utf8');
-  return { hash, folder };
+  return { hash, folder, bytes: Buffer.byteLength(bytes) };
 };
 
 export const isMissing = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ENOENT';
