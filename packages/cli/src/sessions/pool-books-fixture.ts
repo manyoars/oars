@@ -23,7 +23,7 @@ export const booksOf = (over: Partial<Books> = {}): Books => ({
   ...over,
 });
 
-export const bundleOf = (books: Books | undefined, harnessVersion = '2.1.314'): Bundle => ({ format: BUNDLE_FORMAT, harness: 'claude-code', harnessVersion, vocabVersion: VOCAB_VERSION, asOf: { pool: 'p1', day: '2026-11-02' }, cells: [], motifs: [], reads: [], strata: [], ...(books === undefined ? {} : { books }) });
+export const bundleOf = (books: Books | undefined, harnessVersion = '2.1.314'): Bundle => ({ floor: 5, format: BUNDLE_FORMAT, harness: 'claude-code', harnessVersion, vocabVersion: VOCAB_VERSION, asOf: { pool: 'p1', day: '2026-11-02' }, cells: [], motifs: [], reads: [], strata: [], ...(books === undefined ? {} : { books }) });
 
 export const pair = async (): Promise<{ x: string; sign: (text: string) => Promise<string> }> => {
   const made = await webcrypto.subtle.generateKey('Ed25519', true, ['sign', 'verify']);
