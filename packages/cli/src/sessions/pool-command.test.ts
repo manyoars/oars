@@ -1869,6 +1869,14 @@ describe('pool telemetry: deposit batches and fetches leave counts', () => {
     expect(eventsOf(dir, 'fetch')).toEqual([{ harness: 'claude-code', fetches: 1 }]);
   });
 
+  it('a 304 to a fetch that named no kept bundle still reached the pool: it records a fetch and exits UNEXPECTED', async () => {
+    const { scene } = await signed();
+    const dir = recording(scene);
+    server.use(http.get(`${POOL}${BUNDLE}`, () => new HttpResponse(null, { status: 304 })));
+    expect(await scene.cli('pool', 'fetch', '--harness', 'claude-code', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.UNEXPECTED);
+    expect(eventsOf(dir, 'fetch')).toEqual([{ harness: 'claude-code', fetches: 1 }]);
+  });
+
   it('a fetch the pool caps records a cap hit and still exits as capped', async () => {
     const { scene } = await signed();
     const dir = recording(scene);
