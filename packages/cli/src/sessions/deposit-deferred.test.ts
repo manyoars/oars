@@ -298,6 +298,9 @@ describe('the allowlist holds under a held lock', () => {
     mkdirSync(other);
     const stray = join(other, 'stray.jsonl');
     copyFileSync(join(FIXTURES, 'proj', 'tldr.jsonl'), stray);
+    // Every folder is allowed until a list names some, so the list here names only the repository.
+    mkdirSync(staged.storeDir, { recursive: true });
+    writeFileSync(paths(staged.storeDir).state, JSON.stringify({ files: {}, redactDomains: [], allow: [slugOf(REPO)] }));
     await runHook('stop', stopInput('stray', stray), staged.runtime, () => NOW);
     expect(existsSync(paths(staged.storeDir).salt)).toBe(false);
     expect(existsSync(paths(staged.storeDir).skeletons)).toBe(false);

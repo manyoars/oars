@@ -6,7 +6,7 @@ import type { Outcome, RunDeps } from '../cli.js';
 
 export interface LoginOptions {
   apiUrl: string;
-  /** `--issuer-url`; `OARS_ISSUER_URL` when absent, then the built-in production issuer once Many Oars has launched (issuer.ts). */
+  /** `--issuer-url`; `OARS_ISSUER_URL` when absent, then the built-in production issuer (issuer.ts). */
   issuerUrl?: string;
   /** False for `--no-browser`. */
   browser: boolean;
@@ -16,7 +16,7 @@ const STEP = 'login';
 
 /** RFC 8628 device flow on Keycloak, then the exchange; stores the credentials. */
 export const login = async (deps: RunDeps, options: LoginOptions): Promise<Outcome> => {
-  const issuerUrl = await resolveIssuerUrl(deps, options.issuerUrl);
+  const issuerUrl = resolveIssuerUrl(deps, options.issuerUrl);
   const config = await discoverIssuer(deps, options.issuerUrl, () => discover(issuerUrl, { ...deps, step: STEP }));
   const device = await startDeviceAuthorization(config, STEP);
   const url = device.verification_uri_complete ?? device.verification_uri;

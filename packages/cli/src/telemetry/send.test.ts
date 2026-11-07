@@ -137,6 +137,19 @@ describe('sendSpool', () => {
   it.each([
     ['none configured', {}],
     ['an empty one', { OARS_POOL_URL: '' }],
+  ])('sends to the Many Oars pool with %s, and clears what it sent', async (_name, env) => {
+    const dir = spooled(2);
+    const urls: string[] = [];
+    const fake: typeof fetch = (input) => {
+      urls.push(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+      return Promise.resolve(new Response(null, { status: 204 }));
+    };
+    expect(await sendSpool({ env, dir, now: () => 1_800_000_100_000, fetch: fake })).toEqual({ outcome: 'sent', sent: 2, requests: 1 });
+    expect(urls).toEqual(['https://pool.manyoars.com/v1/telemetry']);
+    expect(readSpool(dir)).toHaveLength(0);
+  });
+
+  it.each([
     ['one that is not a URL', { OARS_POOL_URL: 'not a url' }],
     ['plain http to another host', { OARS_POOL_URL: 'http://pool.example.test' }],
   ])('sends nothing with %s, and leaves the spool', async (_name, env) => {
@@ -300,13 +313,20 @@ describe('startDailySend', () => {
   it.each([
     ['telemetry is off', { OARS_TELEMETRY: '0', ...SERVER }],
     ['DO_NOT_TRACK is set', { DO_NOT_TRACK: '1', ...SERVER }],
-    ['no server is configured', {}],
-    ['the server setting is empty', { OARS_POOL_URL: '' }],
   ])('starts nothing when %s, and writes no mark', (_name, env) => {
     const { dir, spawned, runtime } = make();
     startDailySend(runtime, env, 5_000_000);
     expect(spawned).toEqual([]);
     expect(existsSync(join(dir, 'last-send'))).toBe(false);
+  });
+
+  it.each([
+    ['no server is configured', {}],
+    ['the server setting is empty', { OARS_POOL_URL: '' }],
+  ])('starts a send when %s: it goes to the Many Oars pool', (_name, env) => {
+    const { dir, spawned, runtime } = make();
+    startDailySend(runtime, env, 5_000_000);
+    expect(spawned).toEqual([dir]);
   });
 
   it('starts nothing before the notice has been shown', () => {

@@ -24,7 +24,7 @@ import { performance } from 'node:perf_hooks';
 import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, utimes, writeFile, type FileHandle } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
-import { compileAllow, requireEntries, slugOf } from './allow.js';
+import { compileAllow, mergeAllow, runAllow, slugOf } from './allow.js';
 import { SOURCES, type Source, type SourceStore } from './sources.js';
 import { buildIndex, indexPath } from './hook-index.js';
 import { archiveRaw } from './archive.js';
@@ -66,7 +66,7 @@ export interface SessionsRuntime {
   projectsRoot: string;
   /** Cursor's `User` folder (`cursorRoot` in cursor.ts), kept as the alias of `sourceRoots.cursor`; absent means no Cursor source. */
   cursorRoot?: string;
-  /** Where each non-Claude source's store lives, by `Source.name` (sources.ts); a source with no root is not read. `deposit` reads one only when `--allow` names it. */
+  /** Where each non-Claude source's store lives, by `Source.name` (sources.ts); a source with no root is not read; one with a root is read unless the allowlist names other entries only or denies it. */
   sourceRoots?: { [source: string]: string };
   /** The source table; absent means `SOURCES`. The seam a test uses to prove an entry needs no other wiring. */
   sources?: readonly Source[];
@@ -794,20 +794,20 @@ const writeStateHeld = async (runtime: SessionsRuntime, state: State, held: Lock
 };
 
 const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, holds: LockHold, trace?: DepositTrace): Promise<DepositResult> => {
-  requireEntries(options.allow);
-  const allow = compileAllow(options.allow);
+  const state = await readState(runtime.storeDir);
+  const entries = runAllow(state.allow, options.allow);
+  const allow = compileAllow(entries);
   const folders = await projectFolders(runtime.projectsRoot);
   const allowed = folders.filter((name) => allow.allows(name));
   const roots = sourceRoots(runtime);
   const table = sourcesOf(runtime);
   const missing = allow.unmatched([...folders, ...table.filter((source) => roots.has(source.name)).map((source) => source.name)]);
-  const state = await readState(runtime.storeDir);
   refuseNewer(state);
   // A log written by a newer oars is refused even when state.json is older or lost; the Stop-hook path reads only state.json.
   const held = (await scanLog(paths(runtime.storeDir).observations)).newerCaptures;
   if (held > 0) throw new CliError(`The log holds captures by a newer oars (sessions: ${String(held)}); upgrade oars.`, ExitCode.UNEXPECTED, 'unexpected');
   state.redactDomains = [...new Set([...state.redactDomains, ...options.redactDomains])];
-  state.allow = [...new Set([...state.allow, ...options.allow])];
+  state.allow = mergeAllow(state.allow, options.allow);
   const context = await contextFor(runtime, state, options.now, holds);
   const result: DepositResult = {
     sessions: 0,
