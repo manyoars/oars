@@ -106,7 +106,7 @@ describe('recoveryEdgesOf', () => {
     readOf({ readId, family: 'recovery', slice: { action: 'shell.exec', errorCode: '1', next, week }, value: { followed, of: 10, share: followed / 10 }, n: followed, clusters: 1, asOf: { pool: 'p', day: week } });
 
   it('sums weeks per next step, cites the heaviest week, ignores other families and names that are not actions, and applies the keep rule to the top', () => {
-    const reads = [read('file.read', 3, '2026-10-26', 'read:a'), read('file.read', 5, '2026-11-02', 'read:b'), read('not an action', 9, '2026-11-02', 'read:c'), { ...read('file.edit', 1, '2026-11-02', 'read:d'), family: 'fit' }];
+    const reads: Read[] = [read('file.read', 3, '2026-10-26', 'read:a'), read('file.read', 5, '2026-11-02', 'read:b'), read('not an action', 9, '2026-11-02', 'read:c'), { ...read('file.edit', 1, '2026-11-02', 'read:d'), family: 'fit' }];
     expect(recoveryEdgesOf(reads)['shell.exec/1']).toEqual([{ next: 'file.read', followed: 8, of: 20, clusters: 1, readId: 'read:b', day: '2026-11-02' }]);
     expect(recoveryEdgesOf(reads, (followed) => followed >= 9)).toEqual({});
   });
