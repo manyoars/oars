@@ -118,7 +118,7 @@ const WIRE_LENGTH = WIRE_NAMES.size;
 /** One line per event type. */
 const EVENTS: ReadonlyMap<string, FieldRules> = new Map([
   ['command', rules({ path: tokens(4), flags: tokens(40), durationMs: whole(DAY_MS), exitCode: whole(255), errorClass: oneOf(ERROR_CLASSES) })],
-  ['hook', rules({ name: oneOf(HOOK_NAMES), latencyMs: whole(DAY_MS), outcome: oneOf(HOOK_OUTCOMES), bytes: whole(BYTES), harnessVersion: MODEL_OR_VERSION(versionWord), model: MODEL_OR_VERSION(modelWord) })],
+  ['hook', rules({ name: oneOf(HOOK_NAMES), latencyMs: whole(DAY_MS), outcome: oneOf(HOOK_OUTCOMES), bytes: whole(BYTES), harness: oneOf(WIRE_HARNESSES), harnessVersion: MODEL_OR_VERSION(versionWord), model: MODEL_OR_VERSION(modelWord) })],
   [
     'recall',
     rules({ form: oneOf(RECALL_FORMS), mode: oneOf(RECALL_MODES), families: listOf(RECALL_FAMILY_NAMES, 16), kind: oneOf(['hit', 'miss']), reads: whole(COUNT), evidence: whole(COUNT), tokens: whole(COUNT), arm: oneOf(RECALL_ARMS) }),
