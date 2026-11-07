@@ -91,9 +91,9 @@ export const recount = async (env: Env, kind: Kind, keys: readonly string[]): Pr
     const counts = await countsOf(env, kind, chunk);
     for (const part of chunksOf(counts)) {
       await env.DB.prepare(
-        `UPDATE ${TABLE[kind]} SET clusters = (SELECT json_extract(value, '$.count') FROM json_each(?) WHERE json_extract(value, '$.key') = ${TABLE[kind]}.key) WHERE key IN (SELECT json_extract(value, '$.key') FROM json_each(?))`,
+        `UPDATE ${TABLE[kind]} SET clusters = counts.count FROM (SELECT json_extract(value, '$.key') AS key, json_extract(value, '$.count') AS count FROM json_each(?)) AS counts WHERE ${TABLE[kind]}.key = counts.key`,
       )
-        .bind(part, part)
+        .bind(part)
         .run();
     }
   }

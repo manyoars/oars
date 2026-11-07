@@ -28,12 +28,12 @@ const rowOf = async (target: TestPool, sql: string, ...values: (string | number)
 const VERSION = '2.1.314';
 
 /** The bundle a signed-in account fetches, verified. */
-const fetched = async (target: TestPool, token: string): Promise<{ reads: number; cells: number }> => {
+const fetched = async (target: TestPool, token: string): Promise<{ reads: number; cells: number; clusters: number[] }> => {
   const response = await target.raw(`/bundle/claude-code/${VERSION}/${VOCAB_VERSION}`, token);
   expect(response.status).toBe(200);
   const verified = await verifyBundle(response.json, target.signingKey(), 'claude-code', VERSION);
   if (!verified.ok) throw new Error(verified.reason);
-  return { reads: verified.bundle.reads.length, cells: verified.bundle.cells.length };
+  return { reads: verified.bundle.reads.length, cells: verified.bundle.cells.length, clusters: verified.bundle.reads.map((read) => read.clusters) };
 };
 
 /** An account that deposits one session per repo key: `keys` of them, so its repo-key set is `keys`. The same sessions go in whatever the account, so they are the same cells. */
@@ -59,7 +59,7 @@ describe('the count a floor compares', () => {
       const accountsPerCell = (await (await target.db()).prepare("SELECT COUNT(DISTINCT account) AS accounts FROM contributors WHERE kind = 'cell' GROUP BY key").all()).results.map((row) => Number(fieldOf(row, 'accounts')));
       expect(accountsPerCell.length).toBeGreaterThan(0);
       expect(accountsPerCell.every((accounts) => accounts === 6)).toBe(true);
-      expect(await fetched(target, tokens[0] ?? '')).toEqual({ reads: 0, cells: 0 });
+      expect(await fetched(target, tokens[0] ?? '')).toEqual({ reads: 0, cells: 0, clusters: [] });
       // Nothing was refused: every account's deposits are held.
       expect(await (await target.db()).prepare('SELECT COUNT(*) AS count FROM deposits').first('count')).toBe(18);
     });
@@ -70,8 +70,10 @@ describe('the count a floor compares', () => {
       const tokens: string[] = [];
       for (const id of ['9311', '9312', '9313', '9314', '9315']) tokens.push(await depositor(target, id, [id.padStart(16, 'b')]));
       expect(await heldClusters(target)).toEqual([5]);
-      const { reads } = await fetched(target, tokens[0] ?? '');
+      const { reads, clusters } = await fetched(target, tokens[0] ?? '');
       expect(reads).toBeGreaterThan(0);
+      expect(clusters).toHaveLength(reads);
+      expect(clusters.every((count) => count === 5)).toBe(true);
     });
   }, 180_000);
 });

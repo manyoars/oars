@@ -25,7 +25,7 @@ export interface Holder {
   repoKeys: readonly string[];
   /** Epoch ms: the provider's account creation (GitHub), else the account's first-seen time at the pool. Absent for an account that predates the record. */
   createdAt?: number | undefined;
-  /** Epoch ms of the account's first deposit to this cell. */
+  /** Epoch ms of UTC midnight of the account's first contributor day at this cell (the store keeps days, not times), so age at first deposit reads up to a day short. */
   firstDeposit: number;
   /** The UTC hours (0 to 23) in which the account deposited, by UTC day. */
   cadence: ReadonlyMap<string, ReadonlySet<number>>;
