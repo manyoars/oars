@@ -10,6 +10,7 @@ import {
   EXTRACTOR_VERSION,
   type ErrorLineObservation,
   type ErrorObservation,
+  type PromptIntervention,
   type PromptObservation,
   type PromptStop,
   type PromptVerify,
@@ -135,19 +136,65 @@ const stoppedOf = (errors: readonly ErrorLineObservation[], nextHead: string | u
   return nextHead?.startsWith(INTERRUPT_MARKER) === true ? 'interrupt' : null;
 };
 
-/** The prompts whose edit a later prompt repeated. One walk in call order: a commit settles every path edited so far, so it empties the map. */
-const redonePrompts = (calls: readonly ToolObservation[]): Set<number> => {
+/**
+ * The prompts whose edit a later prompt repeated, and of those the ones the very next prompt repeated (`immediate`, the `redo` bucket of `intervention`). One walk in call order: a commit settles every path
+ * edited so far, so it empties the map. `nextOf` gives a prompt's next record.
+ */
+const redonePrompts = (calls: readonly ToolObservation[], nextOf: ReadonlyMap<number, number>): { redone: Set<number>; immediate: Set<number> } => {
   const redone = new Set<number>();
+  const immediate = new Set<number>();
   const lastEditor = new Map<string, number>();
   for (const call of calls) {
     if (commitsIn(call) > 0) lastEditor.clear();
     else if (call.prompt !== null && call.target !== null && isEdit(call)) {
       const earlier = lastEditor.get(call.target);
       if (earlier !== undefined && earlier !== call.prompt && call.prompt - earlier <= REDO_WINDOW) redone.add(earlier);
+      if (earlier !== undefined && nextOf.get(earlier) === call.prompt) immediate.add(earlier);
       lastEditor.set(call.target, call.prompt);
     }
   }
-  return redone;
+  return { redone, immediate };
+};
+
+/**
+ * A segment that undoes work in git: a revert that names a commit (a bare `git revert` is `--abort`, `--continue`, or `--quit`, whose flag the segment drops), a restore, or a bare checkout
+ * (the segment drops a path, a flag, and a word with a slash or quotes, so `git checkout -- <path>` and `git checkout feature/x` are the same bare word pair; `isGitUndo` narrows it by the step's flags).
+ */
+const GIT_UNDO = /^git (?:revert .|restore(?: |$))|^git checkout(?: \.)?$/;
+const BARE_CHECKOUT = /^git checkout$/;
+/** Flags of a `git checkout` that move to or create a branch, or leave one with a literal `-`: none of them undoes work. `<literal>` is also what the step makes of any flag off the public list (`--theirs`, `--patch`), so those read as no undo too: a limit, pinned in `intervention.test.ts`. */
+const CHECKOUT_MOVES = new Set(['<literal>', '-b', '-B', '--orphan', '--detach']);
+/** A prompt that begins by asking for the undo, in English: `revert that`, `please undo`, `rollback`. */
+const ASKS_UNDO = /^(?:please )?(?:revert|undo|roll ?back)\b/i;
+
+/** Whether the segment at index `at` is a checkout that moves to a branch: the step with the same `seg` holds the flags that the segment drops (the stored step no longer holds `run`). */
+const movesBranch = (tool: ToolObservation, at: number): boolean =>
+  tool.steps?.some(({ seg, identity }) => seg === at && identity !== null && 'program' in identity && identity.flags.some((flag) => CHECKOUT_MOVES.has(flag))) === true;
+
+/** A clean shell call that undid work in git. `git reset --hard` is read from the step, since a segment keeps no flag. */
+const isGitUndo = (tool: ToolObservation): boolean =>
+  SHELL.has(tool.tool) &&
+  tool.status === 'ok' &&
+  (tool.segments?.some(({ run }, at) => GIT_UNDO.test(run) && !(BARE_CHECKOUT.test(run) && movesBranch(tool, at))) === true ||
+    tool.steps?.some(({ identity }) => identity !== null && 'program' in identity && identity.program === 'git' && identity.sub === 'reset' && identity.flags.includes('--hard')) === true);
+
+/**
+ * What the next prompt `next` did to the work of a prompt (docs/sessions-store.md, "Prompt intervention"). First match: a stop, the last prompt, or the marker's own record is `unknown`; then `revert`, `redo`,
+ * `after-error`; then `unknown` again when the next prompt ran a shell call captured before `segments`, which could have been an undo; else `none`.
+ */
+const interventionOf = (
+  prompt: { head: string },
+  stopped: PromptStop | null,
+  next: { head: string; index: number } | undefined,
+  settled: readonly ToolObservation[],
+  nextCalls: readonly ToolObservation[],
+  immediate: boolean,
+): PromptIntervention => {
+  if (next === undefined || stopped !== null || prompt.head.startsWith(INTERRUPT_MARKER)) return 'unknown';
+  if (settled.some(isEdit) && (nextCalls.some(isGitUndo) || ASKS_UNDO.test(next.head.trimStart()))) return 'revert';
+  if (immediate) return 'redo';
+  if (settled.at(-1)?.status === 'error') return 'after-error';
+  return nextCalls.some((tool) => SHELL.has(tool.tool) && tool.segments === undefined) ? 'unknown' : 'none';
 };
 
 /** The version-2 prompt and error records of one transcript, with the outcome signals. */
@@ -161,13 +208,20 @@ export const deriveSession = (capture: SessionCapture, redact: Redactor): Derive
   const stopsOf = groupBy(firstCopies(capture.errorLines), (error) => error.prompt);
   const calls = firstCopies(tools);
   const settledOf = groupBy(calls, (tool) => tool.prompt);
-  const redone = redonePrompts(calls);
+  const nextOf = new Map<number, number>();
+  for (let at = 1; at < capture.prompts.length; at++) {
+    const before = capture.prompts[at - 1];
+    const after = capture.prompts[at];
+    if (before !== undefined && after !== undefined) nextOf.set(before.index, after.index);
+  }
+  const { redone, immediate } = redonePrompts(calls, nextOf);
   const prompts = capture.prompts.map((prompt, position): PromptObservation => {
     const mine = toolsOf.get(prompt.index) ?? [];
     const main = mine.filter((tool) => !tool.side);
     const settled = settledOf.get(prompt.index) ?? [];
     const sequence = main.map((tool) => shortName(tool.tool));
     const errors = errorsOf.get(prompt.index) ?? [];
+    const stopped = stoppedOf(stopsOf.get(prompt.index) ?? [], capture.prompts[position + 1]?.head);
     // The two main-line calls after the prompt's first main-line error (version 2 re-armed on each error and kept the first two).
     const first = errors[0];
     const recovery = first === undefined ? [] : main.filter((tool) => tool.n >= first.after).slice(0, 2).map((tool) => shortName(tool.tool));
@@ -205,9 +259,10 @@ export const deriveSession = (capture: SessionCapture, redact: Redactor): Derive
       bigrams,
       contextFingerprint: prompt.promptFingerprint,
       verify: verifyOf(settled),
-      stopped: stoppedOf(stopsOf.get(prompt.index) ?? [], capture.prompts[position + 1]?.head),
+      stopped,
       commits: settled.reduce((sum, tool) => sum + commitsIn(tool), 0),
       redo: redone.has(prompt.index),
+      intervention: interventionOf(prompt, stopped, capture.prompts[position + 1], settled, settledOf.get(capture.prompts[position + 1]?.index ?? -1) ?? [], immediate.has(prompt.index)),
       ...(prompt.frame === undefined ? {} : { frame: prompt.frame }),
     };
   });
