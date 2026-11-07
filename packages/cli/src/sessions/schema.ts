@@ -139,7 +139,7 @@ export type UsageField = (typeof USAGE_FIELDS)[number];
 /** Whether a stored session or prompt recorded `field`. A record with no `usageObserved` was captured before version 20, when every category read as observed. */
 export const observesUsage = (record: { usageObserved?: readonly UsageField[] }, field: UsageField): boolean => record.usageObserved === undefined || record.usageObserved.includes(field);
 
-export type Harness = 'claude-code' | 'cursor' | 'codex' | 'copilot' | 'gemini' | 'grok' | 'vscode-copilot';
+export type Harness = 'claude-code' | 'cursor' | 'codex' | 'copilot' | 'gemini' | 'grok' | 'vscode-copilot' | 'otel';
 
 /** The harness a session record came from; a record that does not name one is Claude Code's. */
 export const harnessOf = (session: { harness?: Harness }): Harness => session.harness ?? 'claude-code';
