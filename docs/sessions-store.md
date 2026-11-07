@@ -966,7 +966,7 @@ aliases for the SDK and plugin API only (`AGENTS.md:174-180`), and neither carri
 is warned about by file name and skipped, never fatal, and the other sources still deposit. The one hand run that would settle it: on a machine with `opencode` signed in, run one
 `opencode run "<task>"` that makes one prompt, runs one command that exits nonzero (for example `ls /nonexistent`), and edits one file, then `oars sessions deposit --allow opencode` and
 `oars sessions verify --strict`. It is settled only if the session count is nonzero, there are zero violations, the session holds an `error` tool record for that command with a matching error line,
-and usage is nonzero. Then check three shapes the fixtures take on trust: whether `session_part` rows exist (`experimental.part_rows`), a `location-switched` message after `/cd`-style moves, and a
+and usage is nonzero. Then check three shapes the fixtures take on trust: whether `session_part` rows exist (`experimental.part_rows`), a `location-switched` message after a session moves directory, and a
 fork's copied `msg_<event id>_<seq>` rows (`opencode export` of the same session is the cross-check).
 
 - **Where.** `$XDG_DATA_HOME/opencode/opencode.db`, else `~/.local/share/opencode/opencode.db`, on every operating system, Windows included (`packages/util/src/global-roots.ts:5`,
