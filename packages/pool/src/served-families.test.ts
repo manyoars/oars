@@ -3,6 +3,7 @@
 // signature record cannot be derived from stored cells. The tests below (a tool, a step, a transcript, and the skeleton's top level) fail if a later wire gains one of these fields: the name would
 // stop landing in the bag.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { incrementsOf } from './ingest.js';
 import { parseSkeleton, skeletonOf, verifyBundle, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
 import { CALL_SHAPE_METHOD } from '../../cli/src/sessions/read.js';
 import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from '../../cli/src/sessions/pool-fixture.js';
@@ -195,4 +196,58 @@ describe('the recovery family in a bundle', () => {
     expect(recovery.map(({ slice, value }) => [slice.action, slice.errorCode, slice.next, value.followed, value.of])).toEqual([['shell.exec', '429', 'file.read', 5, 5]]);
     expect(JSON.stringify(recovery)).not.toMatch(/fix|outcome|sig/i);
   }, 120_000);
+});
+
+/** `skeleton` with the same intervention on every prompt: an outcome row that a pool holds for a later test and serves to nothing. */
+const withIntervention = (skeleton: SessionSkeleton, intervention: 'none' | 'after-error' | 'redo' | 'revert' | 'unknown'): SessionSkeleton => ({
+  ...skeleton,
+  transcripts: skeleton.transcripts.map((transcript) => ({ ...transcript, prompts: transcript.prompts.map((held) => ({ ...held, intervention })) })),
+});
+
+describe('the intervention outcome is held per prompt and served by nothing (t882)', () => {
+  let pool: TestPool;
+
+  beforeAll(async () => {
+    pool = await startPool();
+  }, 60_000);
+
+  afterAll(async () => {
+    await pool.dispose();
+  });
+
+  it('stores the bucket on each prompt of the skeleton, and not in the extensions bag', async () => {
+    const { token } = await pool.signIn('github', stubUser('6001'));
+    await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+    expect((await pool.post('/v1/deposits', withIntervention(sampleSkeleton('0000000000006001'), 'revert'), token)).status).toBe(201);
+    const db = await pool.db();
+    const stored = JSON.parse(String(await db.prepare('SELECT skeleton FROM deposits').first('skeleton'))) as SessionSkeleton;
+    expect(stored.transcripts.flatMap((transcript) => transcript.prompts.map((held) => held.intervention))).toEqual(['revert']);
+    expect(String(await db.prepare('SELECT extensions FROM deposits').first('extensions'))).toBe('[]');
+  });
+
+  it('derives the same cells, motifs, and strata with the bucket as without it: no cell reads it', () => {
+    const plain = incrementsOf(sampleSkeleton('0000000000006002'));
+    for (const value of ['none', 'after-error', 'redo', 'revert', 'unknown'] as const) {
+      const held = incrementsOf(withIntervention(sampleSkeleton('0000000000006002'), value));
+      expect([...held.cells]).toEqual([...plain.cells]);
+      expect([...held.strata]).toEqual([...plain.strata]);
+      expect(held.motifs).toEqual(plain.motifs);
+    }
+  });
+
+  it('serves it in no bundle: five accounts deposit it and the signed bundle names no intervention, in a cell, a motif, a read, or a family', async () => {
+    let last = '';
+    for (const id of ['6101', '6102', '6103', '6104', '6105']) {
+      const { token } = await pool.signIn('github', stubUser(id));
+      await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+      expect((await pool.post('/v1/deposits', withIntervention(sampleSkeleton(id.padStart(16, '0')), 'redo'), token)).status).toBe(201);
+      last = token;
+    }
+    const response = await pool.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, last);
+    const verified = await verifyBundle(response.json, pool.signingKey(), 'claude-code', '2.1.314');
+    if (!verified.ok) throw new Error(verified.reason);
+    expect(verified.bundle.reads.length).toBeGreaterThan(0);
+    expect(JSON.stringify(response.json)).not.toMatch(/intervention|after-error|revert/);
+    expect(verified.bundle.reads.map((read) => read.family)).not.toContain('intervention');
+  }, 60_000);
 });
