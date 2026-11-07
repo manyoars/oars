@@ -17,7 +17,7 @@ const netOf = <Row extends { key: string }>(next: ReadonlyMap<string, Row>, prev
   return rows.filter((row) => fields.some((field) => Number(row[field]) !== 0));
 };
 
-const CELL_FIELDS: readonly (keyof CellRow)[] = ['sessions', 'ok', 'failed', 'tokens', 'durationMs'];
+const CELL_FIELDS: readonly (keyof CellRow)[] = ['sessions', 'ok', 'failed', 'tokens', 'tokenSessions', 'tokenPrompts', 'durationMs'];
 const STRATUM_FIELDS: readonly (keyof StratumRow)[] = ['sessions'];
 
 /** The row an account holds under this id: the mark of the write that set it, whether its tier is `none`, and the increments that write made, or none when the stored skeleton no longer parses (see `previousOf`). */
@@ -95,7 +95,7 @@ export const incrementStatements = (env: Env, account: string, id: string, inges
   for (const chunk of chunksOf(cells)) {
     statements.push(
       env.DB.prepare(
-        `INSERT INTO cells (key, harness_bucket, motif_id, frame_bucket, grain, day, exposed, sessions, ok, failed, tokens, duration_ms) SELECT json_extract(value, '$.key'), json_extract(value, '$.harnessBucket'), json_extract(value, '$.motifId'), json_extract(value, '$.frameBucket'), json_extract(value, '$.grain'), json_extract(value, '$.day'), json_extract(value, '$.exposed'), json_extract(value, '$.sessions'), json_extract(value, '$.ok'), json_extract(value, '$.failed'), json_extract(value, '$.tokens'), json_extract(value, '$.durationMs') FROM json_each(?) WHERE ${GUARD} ON CONFLICT (key) DO UPDATE SET sessions = cells.sessions + excluded.sessions, ok = cells.ok + excluded.ok, failed = cells.failed + excluded.failed, tokens = cells.tokens + excluded.tokens, duration_ms = cells.duration_ms + excluded.duration_ms`,
+        `INSERT INTO cells (key, harness_bucket, motif_id, frame_bucket, grain, day, exposed, sessions, ok, failed, tokens, token_sessions, token_prompts, duration_ms) SELECT json_extract(value, '$.key'), json_extract(value, '$.harnessBucket'), json_extract(value, '$.motifId'), json_extract(value, '$.frameBucket'), json_extract(value, '$.grain'), json_extract(value, '$.day'), json_extract(value, '$.exposed'), json_extract(value, '$.sessions'), json_extract(value, '$.ok'), json_extract(value, '$.failed'), json_extract(value, '$.tokens'), json_extract(value, '$.tokenSessions'), json_extract(value, '$.tokenPrompts'), json_extract(value, '$.durationMs') FROM json_each(?) WHERE ${GUARD} ON CONFLICT (key) DO UPDATE SET sessions = cells.sessions + excluded.sessions, ok = cells.ok + excluded.ok, failed = cells.failed + excluded.failed, tokens = cells.tokens + excluded.tokens, token_sessions = cells.token_sessions + excluded.token_sessions, token_prompts = cells.token_prompts + excluded.token_prompts, duration_ms = cells.duration_ms + excluded.duration_ms`,
       ).bind(chunk, ...guard),
     );
   }
