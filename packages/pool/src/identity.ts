@@ -22,6 +22,8 @@ interface Provider {
   /** Google's token route requires its client secret; GitHub's device flow takes none. */
   secretBinding?: 'GOOGLE_CLIENT_SECRET';
   userIdOf: (user: unknown) => string | undefined;
+  /** When the provider made the account (epoch ms), if its profile says. Google's does not, so a Google account's age is its first-seen time at the pool. */
+  createdOf: (user: unknown) => number | undefined;
 }
 
 const PROVIDERS = new Map<string, Provider>([
@@ -37,6 +39,10 @@ const PROVIDERS = new Map<string, Provider>([
         const id = fieldOf(user, 'id');
         return typeof id === 'number' ? String(id) : undefined;
       },
+      createdOf: (user) => {
+        const created = Date.parse(textField(user, 'created_at') ?? '');
+        return Number.isNaN(created) ? undefined : created;
+      },
     },
   ],
   [
@@ -49,6 +55,7 @@ const PROVIDERS = new Map<string, Provider>([
       clientIdBinding: 'GOOGLE_CLIENT_ID',
       secretBinding: 'GOOGLE_CLIENT_SECRET',
       userIdOf: (user) => textField(user, 'sub'),
+      createdOf: () => undefined,
     },
   ],
 ]);
@@ -181,11 +188,14 @@ const WAITING = new Map([
 ]);
 
 /** The pool's own credential for an account: only its hash is stored. Also when the table sheds the rows past their expiry, since they sign nobody in. */
-const credentialFor = async (env: Env, signingKey: string, account: string): Promise<Response> => {
+const credentialFor = async (env: Env, signingKey: string, account: string, providerCreated: number | undefined): Promise<Response> => {
   const token = randomBytes(32).toString('hex');
   const now = Date.now();
   const expiresAt = now + TOKEN_LIFETIME_MS;
-  await env.DB.prepare('INSERT INTO accounts (id) VALUES (?) ON CONFLICT (id) DO NOTHING').bind(account).run();
+  // The two ages the cluster rule reads (t937): the pool's first sight of the account stays the first one, and the provider's creation time is refreshed, since a later login may be the first to carry it.
+  await env.DB.prepare('INSERT INTO accounts (id, first_seen, provider_created) VALUES (?, ?, ?) ON CONFLICT (id) DO UPDATE SET first_seen = COALESCE(accounts.first_seen, excluded.first_seen), provider_created = COALESCE(excluded.provider_created, accounts.provider_created)')
+    .bind(account, now, providerCreated ?? null)
+    .run();
   await env.DB.prepare('DELETE FROM tokens WHERE expires_at <= ?').bind(now).run();
   await env.DB.prepare('INSERT INTO tokens (hash, account, expires_at) VALUES (?, ?, ?)').bind(hashToken(token), account, expiresAt).run();
   return answer(200, { status: 'authorized', token, account, expiresAt, signingKey: publicKeyOf(signingKey) });
@@ -224,7 +234,7 @@ export const loginPoll = async (request: Request, env: Env): Promise<Response> =
   if (profile.status === 401) return refuse(401, 'login_refused', 'The provider did not accept the token.');
   const userId = provider.userIdOf(profile.body);
   if (userId === undefined) return refuse(502, 'provider_error', 'The provider did not name the user.');
-  return credentialFor(env, signingKey, pseudonymOf(pseudonymKey, pending.provider, userId));
+  return credentialFor(env, signingKey, pseudonymOf(pseudonymKey, pending.provider, userId), provider.createdOf(profile.body));
 };
 
 /** `POST /v1/login` took a provider's token from the client, which let a token another app holds for a person sign in as them. It is gone, and an old client is told where to go. */

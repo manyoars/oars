@@ -1,5 +1,5 @@
 // One pool under the Workers runtime for a test file: the bundled handler and its D1 store in Miniflare's workerd, with a stub device-flow provider behind the Worker's outbound fetch. No account, no Docker, no network.
-import { webcrypto } from 'node:crypto';
+import { createHash, webcrypto } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
@@ -29,6 +29,8 @@ export interface StubUser {
   id: string;
   login: string;
   email: string;
+  /** The `created_at` GitHub's profile states (ISO 8601). Absent, the stub states none. */
+  createdAt?: string;
 }
 
 export interface StubCall {
@@ -147,7 +149,7 @@ const stubProvider = (): StubProvider => {
     if (at === 'https://oauth2.googleapis.com/token') return token(form, true);
     const found = users.get((request.headers.get('authorization') ?? '').replace('Bearer access-', ''));
     if (typeof found !== 'object' || found === null) return json({ error: 'bad token' }, 401);
-    if (at === 'https://api.github.com/user') return json({ id: Number(found.id), login: found.login, email: found.email, name: found.login });
+    if (at === 'https://api.github.com/user') return json({ id: Number(found.id), login: found.login, email: found.email, name: found.login, ...(found.createdAt === undefined ? {} : { created_at: found.createdAt }) });
     if (at === 'https://openidconnect.googleapis.com/v1/userinfo') return json({ sub: found.id, email: found.email, name: found.login });
     return json({ error: `no stub for ${at}` }, 500);
   };
@@ -280,4 +282,12 @@ export const containing = (text: string): unknown => expect.stringContaining(tex
 export const anyText = (): unknown => expect.any(String);
 export const anyNumber = (): unknown => expect.any(Number);
 
-export const stubUser = (id: string): StubUser => ({ id, login: `login-of-${id}`, email: `person-${id}@example.test` });
+/**
+ * A user whose GitHub account is years old and was made days away from every other stub's, so a pool of stubs holds unrelated, established accounts: the cluster rule (`clusters.ts`) counts each as its own cluster.
+ * A numeric id sets the offset itself (3 days apart, so two ids under 1,200 apart never share a 24-hour window); a non-numeric id takes it from a hash, where two ids can collide.
+ */
+export const stubUser = (id: string): StubUser => {
+  const slot = /^\d+$/.test(id) ? Number(id) : Number.parseInt(createHash('sha256').update(id).digest('hex').slice(0, 6), 16);
+  return { id, login: `login-of-${id}`, email: `person-${id}@example.test`, createdAt: new Date(Date.UTC(2015, 0, 1) + (slot % 1200) * 3 * 24 * 60 * 60 * 1000).toISOString() };
+};
+
