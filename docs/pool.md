@@ -32,7 +32,7 @@ Four frame fields make "the same work" and "who the pool covers" observable. Eac
 | `repoVisibility` | clear | no, operator-set | closed list of three |
 | `hour` | clear | yes, from the timestamp | 0 to 23 |
 
-The large-deposit fixture's session has `repo`, `tsFirst`, and every prompt's `ts` null, so it carries no `repoKey` and no `hour`: the 128 bytes it gained (876,798 to 876,926) are the three `unknown` bands on its two frames, 64 bytes a frame. `repoKey` and `hour` were measured on a fixture that holds them (`pool-wire-coverage.test.ts`, three prompts at three distinct UTC hours and two calls each, 3,345 bytes of skeleton without either): the key costs 58 bytes (29 on each of the two frames, the transcript's own and the list's one call frame, when no prompt carries a timestamp, 116 across the four frames when three prompts carry three distinct hours), and the hour costs 755 bytes, because each distinct hour among a session's prompts splits its calls onto one more frame of the list, so a session with many prompts across many hours pays one frame per hour it touched (24 at most). Both figures are pinned in that test.
+The large-deposit fixture's session has `repo`, `tsFirst`, and every prompt's `ts` null, so it carries no `repoKey` and no `hour`: the 128 bytes it gained (876,798 to 876,926) are the three `unknown` bands on its two frames, 64 bytes a frame. `repoKey` and `hour` were measured on a fixture that holds them (`pool-wire-coverage.test.ts`, three prompts at three distinct UTC hours and two calls each, 3,484 bytes of skeleton without either): the key costs 58 bytes (29 on each of the two frames, the transcript's own and the list's one call frame, when no prompt carries a timestamp, 116 across the four frames when three prompts carry three distinct hours), and the hour costs 755 bytes, because each distinct hour among a session's prompts splits its calls onto one more frame of the list, so a session with many prompts across many hours pays one frame per hour it touched (24 at most). Both figures are pinned in that test.
 
 ## Sign-in settings
 
@@ -119,12 +119,13 @@ An unknown field name a client sends lands in the `extensions` bag of the deposi
 | `filled` | `adoption` and `fit` per skill and MCP server: whether a session's reach was recorded at all, so an unfilled reach is not read as no tools | clear | yes | 26 |
 | `flags` | `fit` and `adoption` per flag of a program | clear (public list); thresholded (long tail, `t881`) | yes | 10 |
 | `format` | the deposit route: refuses a format it does not read; stored with each batch | clear | no | 10 |
-| `frame` | container for where a session ran: every cell key reads its members | clear | yes | 80 |
-| `frames` | container for the distinct frames a transcript's steps ran in: a step's `frame` is a position in it, so every per-step cell key reads a member | clear | yes | 21 |
+| `frame` | container for where a session ran: every cell key reads its members | clear | yes | 86 |
+| `frames` | container for the distinct frames a transcript's steps ran in: a step's `frame` is a position in it, so every per-step cell key reads a member | clear | yes | 26 |
 | `frameworks` | the `framework` stratum | clear (public list) | yes | 45 |
 | `harness` | every bundle is per harness; the action table a step is checked against | clear | yes | 92 |
 | `harnessVersion` | `fit` and `change` per harness version bucket | clear (public releases) | yes | 78 |
 | `host` | `adoption` and `fit` per web host | hashed at ingest (a public host reads clear and a long-tail host thresholded until `t881` moves the hashing to the pool) | yes | 19 |
+| `hour` | future per-hour-of-day read of when work happens (stated, served by nothing yet); joins no cell | clear | yes | 27 |
 | `id` | the ledger's replace-on-redeposit key; no read | clear (an opaque client hash, per account) | yes | 23 |
 | `identity` | container for what a step called: `fit` and `adoption` read its members | clear | yes | 71 |
 | `input` | `cost`: tokens per prompt class, model, and week | clear (bucket) | yes | 9 |
@@ -141,6 +142,7 @@ An unknown field name a client sends lands in the `extensions` bag of the deposi
 | `name` | `adoption` and `fit` per named package; the future change-effect read for a package delta | clear (public list); thresholded (long tail, `t881`) | yes | 31 |
 | `native` | the action check at ingest and `fit` per native tool name | clear (public list); thresholded (long tail, `t881`) | yes | 98 |
 | `next` | `recovery`: the first action that followed a failed call is the cell's next action; the other four are held for a later read of longer follow-ups | clear (closed list of actions) | yes | 21 |
+| `orgSize` | coverage: what the pool can state about whom a deposit covers (a stated future read; no read filters on it) | clear (closed list; operator-set on this machine) | no | 38 |
 | `output` | `cost`: tokens per prompt class, model, and week | clear (bucket) | yes | 10 |
 | `parent` | `next-step` and `method`: the link from a subagent step to the main-run call that spawned it | clear | yes | 65 |
 | `platform` | the `env:<platform>:<shell>` cell of `fit` | clear | yes | 54 |
@@ -153,6 +155,8 @@ An unknown field name a client sends lands in the `extensions` bag of the deposi
 | `recoveryCalls` | container for what followed a failed call (`next`, `editFollowed`), present on a call that did not succeed: the `recovery` family reads its members | clear | yes | 19 |
 | `registry` | `adoption` of a pulled package per registry; the future change-effect read for a package delta | clear | yes | 32 |
 | `remainingTokens` | future remaining-work read (the `next-step` form named under What a bundle serves) | clear (bucket) | yes | 95 |
+| `repoKey` | future same-work read: one store's sessions in one repository (a stated future read; it joins no cell) | clear (a hash the client made under this store's salt) | yes (with the salt) | 56 |
+| `repoVisibility` | coverage: what the pool can state about whom a deposit covers (a stated future read; no read filters on it) | clear (closed list; operator-set on this machine) | no | 52 |
 | `server` | `adoption` and `fit` per MCP server | clear (public list); thresholded (long tail, `t881`) | yes | 17 |
 | `shell` | the `env:<platform>:<shell>` cell of `fit` | clear | yes | 42 |
 | `side` | keeps a side call out of the main run: the (session, side, prompt) grouping in `cells.ts` | clear | yes | 24 |
@@ -163,6 +167,7 @@ An unknown field name a client sends lands in the `extensions` bag of the deposi
 | `status` | `tool-day` and `fit` failure rates | clear | yes | 97 |
 | `steps` | container for the steps of a call: every step read | clear | yes | 79 |
 | `sub` | `fit` and `adoption` per subcommand | clear (public list); thresholded (long tail, `t881`) | yes | 10 |
+| `team` | coverage: what the pool can state about whom a deposit covers (a stated future read; no read filters on it) | clear (closed list; counted from the local git log at each deposit) | no | 26 |
 | `thinking` | `cost`: tokens per prompt class; the (effort, thinking) cell | clear (bucket) | yes | 12 |
 | `timingPrint` | none stated: no read, check, or later brief names it (see the t873 report) | clear (an opaque client hash) | yes | 18 |
 | `tokens` | `cost`: tokens per step in a class cell | clear (bucket) | yes | 50 |

@@ -386,12 +386,12 @@ describe('a large deposit', () => {
   // The sizes docs/pool.md states for the sample deposit (one session, one prompt, two shell steps), so the figure cannot drift unseen.
   it('stores the sample deposit in the bytes docs/pool.md states', async () => {
     const skeleton = sampleSkeleton('0000000000009103');
-    expect(JSON.stringify(skeleton).length).toBe(1_790);
+    expect(JSON.stringify(skeleton).length).toBe(1_918);
     await inFreshPool({}, async (target) => {
       const token = await accountOn(target, '9103');
       expect((await target.post('/v1/deposits', skeleton, token)).status).toBe(201);
       const db = await target.db();
-      expect(await db.prepare('SELECT LENGTH(CAST(skeleton AS BLOB)) AS bytes FROM deposits').first('bytes')).toBe(1_790);
+      expect(await db.prepare('SELECT LENGTH(CAST(skeleton AS BLOB)) AS bytes FROM deposits').first('bytes')).toBe(1_918);
       expect(await db.prepare('SELECT LENGTH(CAST(deltas AS BLOB)) AS bytes FROM deposits').first('bytes')).toBe(2);
       expect(await db.prepare('SELECT LENGTH(CAST(extensions AS BLOB)) AS bytes FROM deposits').first('bytes')).toBe(2);
     });
