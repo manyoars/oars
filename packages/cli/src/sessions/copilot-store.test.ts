@@ -105,6 +105,35 @@ describe('depositing the Copilot source', () => {
     expect([...verifyAll(skeletons), ...verifyCaptured(store.sessions, store.tools)].filter((result) => result.violations > 0)).toEqual([]);
   });
 
+  it('holds the thinking invariant when a session reports more reasoning tokens than its last response wrote', async () => {
+    const s = staged();
+    // The shutdown totals carry one reasoning figure for the model; the responses wrote 100, 100, and 10 tokens, so it cannot all sit on the last one.
+    const heavy = [
+      start(E, '/x'),
+      prompt(1, 'think hard'),
+      say(2, 'one', { outputTokens: 100 }),
+      say(3, 'two', { outputTokens: 100 }),
+      say(4, 'three', { outputTokens: 10 }),
+      event(T(7), 'session.shutdown', {
+        shutdownType: 'routine',
+        totalApiDurationMs: 5,
+        sessionStartTime: 0,
+        codeChanges: {},
+        modelMetrics: { 'claude-sonnet-4.5': { requests: { count: 3 }, usage: { inputTokens: 10, outputTokens: 210, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 50 } } },
+      }),
+    ];
+    stageCopilot(s.root, [{ id: E, lines: heavy }]);
+    await deposit(s.runtime, options(['copilot']));
+    const { skeletons } = await readSkeletons(s.storeDir);
+    const store = await loadStore(s.storeDir);
+    const found = store.sessions.find((candidate) => candidate.session === `copilot-${E}`);
+    expect(found?.usage).toMatchObject({ output: 210, thinking: 50 });
+    const thinking = verifyAll(skeletons).find((result) => result.name.toLowerCase().includes('thinking'));
+    expect(thinking).toMatchObject({ violations: 0 });
+    expect(thinking?.checked).toBeGreaterThan(0);
+    expect([...verifyAll(skeletons), ...verifyCaptured(store.sessions, store.tools)].filter((result) => result.violations > 0)).toEqual([]);
+  });
+
   it('skips silently when the runtime names no Copilot home or the home does not exist', async () => {
     const s = staged();
     expect(await deposit({ ...s.runtime, sourceRoots: {} }, options(['copilot']))).toMatchObject({ sessions: 0 });
