@@ -295,7 +295,7 @@ The strata sit beside `frame`, not inside `frame.stack`: the wire refuses any ex
 
 ### Prompt outcome signals
 
-Each derived `prompt` record (`EXTRACTOR_VERSION` 6) carries four deterministic signals, kept separate: no composite, no score. A version-2
+Each derived `prompt` record (`EXTRACTOR_VERSION` 6) carries four deterministic signals, kept separate: no composite, no score (a fifth, `intervention`, is described after the table). A version-2
 line, read as written, has none of them. They read the main line only, with a resumed session's repeated calls dropped; a subagent
 transcript's calls are not read.
 
@@ -308,6 +308,28 @@ transcript's calls are not read.
 
 The interrupt marker is a user line, so capture keeps it as a prompt record of its own, with no tools. It counts toward `REDO_WINDOW`'s
 distance and in a share of prompts; its own `stopped` is null and its `verify` is `na`.
+
+### Prompt intervention
+
+A fifth signal, `intervention` (`EXTRACTOR_VERSION` 13), says whether a human stepped in after the prompt's work and how. It is one member of a closed list, computed on the machine from the records
+the other four signals read, so a transcript re-derives to the same value. It is a record of what the next human prompt did, **not a grade**: `none` does not say the work was good, and a bucket
+other than `none` does not say it was bad. Prompt text never reaches the wire; the local rule below reads a prompt's `head` (the first 300 characters, redacted) for one case, and only the bucket leaves.
+
+"The next prompt" is the next prompt record of the same transcript, `Q`, for a prompt `P`. A prompt derived before `EXTRACTOR_VERSION` 13 has no `intervention`; a wire batch carries the field only
+for a prompt that holds it, so **absent means not computed** and `unknown` means computed and not sayable.
+
+| Value | Rule (first match, in this order) | Limit |
+|-------|-----------------------------------|-------|
+| `unknown` | `P` is the interrupt marker's own record, or `P` has `stopped` set (`rejected` or `interrupt`), or `P` has no `Q` (the last prompt of its transcript). | A stop is a human step the closed list has no word for, so it reads `unknown`, not `none`. The last prompt of every transcript reads `unknown`, so a transcript never reads fully known. `unknown` is not a failure of the work. |
+| `revert` | `P` made a successful edit, and either (a) `Q` has a clean (`ok`) shell call with a segment that undoes work in git: `git revert`, `git reset --hard`, `git restore`, `git checkout -- <path>`, or `git checkout .`; or (b) `Q`'s `head` begins with `revert`, `undo`, `roll back`, or `rollback` (case-insensitive, after an optional `please`). | A git undo `Q` ran for other work (a branch cleanup) reads the same, and an undo the person does by hand outside the harness is not seen. Rule (b) reads English only. `git stash`, `git clean`, a `Write` of the old text, and an undo in a prompt later than `Q` are not read. |
+| `redo` | `Q` successfully edits a path hash `P` successfully edited, with no commit that `commits` can see between the two edits. This is the `redo` signal above narrowed to the very next prompt, so it is a reply to the work and not a later task. | A planned second edit of one file reads the same as rework, and a commit a script made does not end the window. The edit is matched by path hash, so a rename is not seen. |
+| `after-error` | The last main-line call of `P` failed (`status` `error`). | The next prompt need not be about the failure: it may open an unrelated task. A prompt whose last call failed and whose agent then answered in words reads the same as one left broken. |
+| `unknown` (second case) | Nothing above matched, and `Q` made a shell call captured before `segments` (CAPTURE 6): it could have been a git undo. | An older capture leaves the value `unknown` until the transcript is captured again. |
+| `none` | Everything else: `Q` exists and none of the above matched. | `none` is silence in the records, not approval. A person who fixed the work in their editor, or who steered with a prompt that edits another file, reads `none`. |
+
+The precedence is `unknown` (first case), `revert`, `redo`, `after-error`, `unknown` (second case), `none`: a positive record stands even where a later record is unreadable. The rule reads
+the normalized records every harness writes (`Bash`, `PowerShell`, `Edit`, `Write`, `MultiEdit`, the call's `status`, its `target` hash, and its `segments`), so a harness supports a bucket as far as its
+adapter fills those records. The table of what each harness supports is below; commit survival stays in "Commit survival" and no bucket here reads it.
 
 ### Hashing
 
