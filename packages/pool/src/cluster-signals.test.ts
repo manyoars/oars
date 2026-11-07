@@ -57,6 +57,8 @@ describe('the count a floor compares', () => {
       const tokens: string[] = [];
       for (const id of ['9301', '9302', '9303', '9304', '9305', '9306']) tokens.push(await depositor(target, id, shared));
       expect(await heldClusters(target)).toEqual([1]);
+      // The strata are weighted by the same recount, which the cells' count does not show.
+      expect((await (await target.db()).prepare('SELECT DISTINCT clusters FROM strata WHERE sessions > 0').all()).results.map((row) => Number(fieldOf(row, 'clusters')))).toEqual([1]);
       // The count before this change: distinct accounts holding each cell, at or above the floor of 5.
       const accountsPerCell = (await (await target.db()).prepare("SELECT COUNT(DISTINCT account) AS accounts FROM contributors WHERE kind = 'cell' GROUP BY key").all()).results.map((row) => Number(fieldOf(row, 'accounts')));
       expect(accountsPerCell.length).toBeGreaterThan(0);

@@ -302,4 +302,3 @@ export const stubUser = (id: string): StubUser => {
   const slot = /^\d+$/.test(id) ? Number(id) : Number.parseInt(createHash('sha256').update(id).digest('hex').slice(0, 6), 16);
   return { id, login: `login-of-${id}`, email: `person-${id}@example.test`, createdAt: new Date(Date.UTC(2015, 0, 1) + (slot % 1200) * 3 * 24 * 60 * 60 * 1000).toISOString() };
 };
-
