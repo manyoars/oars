@@ -1524,7 +1524,7 @@ describe('oars pool fetch', () => {
     const serve = async (scene: Scene, sign: (text: string) => Promise<string>, harness: string, version = '2.1.314', etag: string | null = null): Promise<Array<{ headers: Headers; printedBefore: string }>> => bundleRoute(scene, version, [await signedReply(sign, version, etag, 2, harness)], harness);
 
     /** A store that holds `count` sessions of each harness, written as the capture log holds them (the fixture's rows, no transcripts). */
-    const holding = (scene: Scene, counts: ReadonlyArray<readonly ['claude-code' | 'cursor' | 'codex', number]>): void => {
+    const holding = (scene: Scene, counts: ReadonlyArray<readonly ['claude-code' | 'cursor' | 'codex' | 'otel', number]>): void => {
       const rows = counts.flatMap(([name, count]) => Array.from({ length: count }, (_, index) => JSON.stringify(sessionRow(`${name}-${String(index)}`, name === 'claude-code' ? {} : { harness: name }))));
       writeFileSync(join(scene.staged.storeDir, 'observations.jsonl'), `${rows.join('\n')}\n`);
     };
@@ -1543,7 +1543,7 @@ describe('oars pool fetch', () => {
     it('refuses a harness the pool does not serve before asking, and lists the ones it does', async () => {
       const { scene } = await signedScene();
       expect(await scene.cli('pool', 'fetch', '--harness', 'acme', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.USAGE);
-      expect(scene.h.err.join('')).toContain('acme is not a harness the pool serves. Choose one of claude-code, cursor, codex, copilot, gemini, grok, vscode-copilot, otel.');
+      expect(scene.h.err.join('')).toContain('acme is not a harness the pool serves. Choose one of claude-code, cursor, codex, copilot, gemini, grok, vscode-copilot.');
       expect(scene.seen).toEqual([]);
     });
 
@@ -1563,7 +1563,7 @@ describe('oars pool fetch', () => {
       expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
       // The choice is on stderr before the request goes out, not after it.
       expect(arrivals[0]?.printedBefore).toContain('No --harness given: fetching cursor');
-      expect(scene.h.err.join('')).toContain('No --harness given: fetching cursor, the harness your local store holds the most sessions of (3 of 4). Pass --harness <name> to fetch another (claude-code, cursor, codex, copilot, gemini, grok, vscode-copilot, otel).');
+      expect(scene.h.err.join('')).toContain('No --harness given: fetching cursor, the harness your local store holds the most sessions of (3 of 4). Pass --harness <name> to fetch another (claude-code, cursor, codex, copilot, gemini, grok, vscode-copilot).');
       expect(scene.document()).toMatchObject({ ok: true, harness: 'cursor' });
       // Counts stay here: the request names the harness and the versions, nothing else.
       expect(scene.seen[0]?.url).toBe(`${POOL}/bundle/cursor/2.1.314/${VOCAB_VERSION}`);
@@ -1593,6 +1593,37 @@ describe('oars pool fetch', () => {
       expect(await tied.scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
       expect(tied.scene.seen[0]?.url).toBe(`${POOL}/bundle/claude-code/2.1.314/${VOCAB_VERSION}`);
       expect(tied.scene.h.err.join('')).toContain('No --harness given: fetching claude-code, no one harness leads your local store, so Claude Code is the default. Pass --harness <name> to fetch another (');
+    });
+
+    it('refuses otel before asking: the pool serves no OpenTelemetry bundle', async () => {
+      const { scene } = await signedScene();
+      expect(await scene.cli('pool', 'fetch', '--harness', 'otel', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.USAGE);
+      expect(scene.h.err.join('')).toContain('otel has no pool bundle.');
+      expect(scene.h.err.join('')).toContain('Choose one of claude-code, cursor, codex, copilot, gemini, grok, vscode-copilot.');
+      expect(scene.seen).toEqual([]);
+    });
+
+    it('leaves otel sessions out of the default: an otel-majority store asks for the next harness, or claude-code on a tie', async () => {
+      const next = await signedScene();
+      holding(next.scene, [['otel', 5], ['cursor', 2], ['codex', 1]]);
+      await serve(next.scene, next.sign, 'cursor');
+      expect(await next.scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
+      expect(next.scene.seen[0]?.url).toBe(`${POOL}/bundle/cursor/2.1.314/${VOCAB_VERSION}`);
+      expect(next.scene.h.err.join('')).toContain('No --harness given: fetching cursor, the harness your local store holds the most sessions of (2 of 3).');
+
+      const tied = await signedScene();
+      holding(tied.scene, [['otel', 5], ['cursor', 1], ['codex', 1]]);
+      await serve(tied.scene, tied.sign, 'claude-code');
+      expect(await tied.scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
+      expect(tied.scene.seen[0]?.url).toBe(`${POOL}/bundle/claude-code/2.1.314/${VOCAB_VERSION}`);
+      expect(tied.scene.h.err.join('')).toContain('no one harness leads your local store, so Claude Code is the default');
+
+      const only = await signedScene();
+      holding(only.scene, [['otel', 4]]);
+      await serve(only.scene, only.sign, 'claude-code');
+      expect(await only.scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
+      expect(only.scene.seen[0]?.url).toBe(`${POOL}/bundle/claude-code/2.1.314/${VOCAB_VERSION}`);
+      expect(only.scene.h.err.join('')).toContain('your local store holds no session of a harness the pool serves, so Claude Code is the default');
     });
 
     it('keeps one bundle per harness: two fetches of one version, then a read for each', async () => {
