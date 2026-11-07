@@ -176,6 +176,23 @@ describe('depositing the OpenCode source', () => {
     expect(await deposit(s.runtime, options(['opencode']))).toMatchObject({ sessions: 1, unchanged: 1 });
   });
 
+  it('reads a session again when a pending call settles in place, which bumps only the message row, not the session row or the message count', async () => {
+    const s = await staged();
+    const pending = ocAssistant('msg_p2', 2, at(2), [ocTool('c1', 'shell', { status: 'running', input: { command: 'make' } }, at(3))]);
+    const root = await stageOpencode(s.root, [{ id: 'ses_P', directory: join(s.root, 'p'), created: at(0), updated: at(9), messages: [ocUser('msg_p1', 1, at(1), 'build it'), pending] }]);
+    const runtime = { ...s.runtime, sourceRoots: { opencode: root } };
+    expect(await deposit(runtime, options(['opencode']))).toMatchObject({ sessions: 1 });
+    expect((await loadStore(s.storeDir)).tools.filter((tool) => tool.session === 'opencode-ses_P').map((tool) => tool.status)).not.toContain('error');
+    // Tool.Failed/Tool.Success settle the call through updateMessage (projector.ts:337-339, :539-560): session_message.time_updated moves, session_v2.time_updated does not.
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(join(root, 'opencode.db'));
+    const settled = ocAssistant('msg_p2', 2, at(2), [ocTool('c1', 'shell', ocShellDone('make', 'make: *** No rule to make target', 2), at(3))]);
+    db.prepare('update session_message set data = ?, time_updated = ? where id = ?').run(JSON.stringify(settled.data), at(30), 'msg_p2');
+    db.close();
+    expect(await deposit(runtime, options(['opencode']))).toMatchObject({ sessions: 1, unchanged: 0 });
+    expect((await loadStore(s.storeDir)).tools.filter((tool) => tool.session === 'opencode-ses_P').map((tool) => tool.status)).toEqual(['error']);
+  });
+
   it('fails open on a database it cannot read: the Claude Code folder is kept, and the problem is named', async () => {
     const s = await staged();
     const project = join(s.projectsRoot, 'mine');

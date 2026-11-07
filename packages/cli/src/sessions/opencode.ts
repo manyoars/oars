@@ -284,7 +284,10 @@ export const openOpencodeStore = async (root: string): Promise<OpencodeStore | u
   try {
     const found = db
       .prepare(
-        'select s.id as id, s.parent_id as parent_id, s.fork_session_id as fork_session_id, s.directory as directory, s.version as version, s.agent as agent, s.time_created as time_created, s.time_updated as time_updated, ' +
+        'select s.id as id, s.parent_id as parent_id, s.fork_session_id as fork_session_id, s.directory as directory, s.version as version, s.agent as agent, s.time_created as time_created, ' +
+          // Upstream settles a tool call, a `!cmd`, and text in place through updateMessage and part updates (projector.ts:337-339, :539-560, :1076-1113), which bump only
+          // the message and part rows, so the cursor is the newest of the three.
+          'max(s.time_updated, coalesce((select max(m.time_updated) from session_message m where m.session_id = s.id), 0), coalesce((select max(p.time_updated) from session_part p where p.session_id = s.id), 0)) as time_updated, ' +
           '(select count(*) from session_message m where m.session_id = s.id) as messages from session_v2 s',
       )
       .all();
