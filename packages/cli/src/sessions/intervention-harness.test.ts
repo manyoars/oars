@@ -183,8 +183,17 @@ const cursor = async (turns: readonly Turn[]): Promise<string> => {
   const staged = stage();
   const store = await openCursorStore(await stageCursor(staged.root, [{ id: 'chat', createdAt: Date.parse('2026-06-01T10:00:00Z'), lastUpdatedAt: Date.parse('2026-06-01T10:30:00Z'), bubbles }]));
   const session = store?.sessions[0];
-  if (store === undefined || session === undefined) throw new Error('the fixture store did not open');
-  return store.transcript(session);
+  if (store === undefined) throw new Error('the fixture store did not open');
+  if (session === undefined) {
+    store.close();
+    throw new Error('the fixture store held no session');
+  }
+  // The sqlite handle must close before the afterEach removes the folder: Windows will not delete a database file that is still open.
+  try {
+    return store.transcript(session);
+  } finally {
+    store.close();
+  }
 };
 
 const BUILDERS: readonly (readonly [Harness, (turns: readonly Turn[]) => string | Promise<string>])[] = [
