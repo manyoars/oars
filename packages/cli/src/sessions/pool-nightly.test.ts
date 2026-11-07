@@ -2,7 +2,7 @@
 import { existsSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { open, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync } from 'node:fs';
 import { harness } from '../test-support.js';
 import { nightlyPoolDeps } from './pool-nightly-deps.js';
@@ -305,22 +305,54 @@ describe('withSendLock', () => {
   });
 
   it('keeps the lock for a holder that outlives staleMs while it keeps refreshing, and a second run does not get in', async () => {
-    const outbox = folder();
-    const times = { staleMs: 120, waitMs: 400, pollMs: 10 };
-    let inside = 0;
-    let overlapped = false;
-    const body = async (ms: number): Promise<void> => {
-      inside += 1;
-      overlapped ||= inside > 1;
-      await new Promise((resolve) => setTimeout(resolve, ms));
-      inside -= 1;
-    };
-    const first = withSendLock(outbox, () => body(500), times);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    await expect(withSendLock(outbox, () => body(1), times)).rejects.toBeInstanceOf(SendLockBusy);
-    await first;
-    expect(overlapped).toBe(false);
-    expect(existsSync(join(outbox, 'send.lock'))).toBe(false);
+    // The clock is moved by hand, so a loaded runner cannot starve the holder's refresh timer past staleMs and make the lock look dead: only Date and the refresh interval are faked, the files and the waiter's poll stay real.
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    try {
+      const outbox = folder();
+      const lock = join(outbox, 'send.lock');
+      const times = { staleMs: 120, waitMs: 400, pollMs: 1 };
+      const pause = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 1));
+      let inside = 0;
+      let overlapped = false;
+      let release = (): void => undefined;
+      const hold = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const body = async (until: Promise<void>): Promise<void> => {
+        inside += 1;
+        overlapped ||= inside > 1;
+        await until;
+        inside -= 1;
+      };
+      const first = withSendLock(outbox, () => body(hold), times);
+      // The holder's refresh timer exists once its body runs.
+      while (inside === 0) await pause();
+      const started = Date.now();
+      let outcome: unknown = 'waiting';
+      const second = withSendLock(outbox, () => body(Promise.resolve()), times).then(
+        () => {
+          outcome = 'ran';
+        },
+        (error: unknown) => {
+          outcome = error;
+        },
+      );
+      // One refresh interval (a quarter of staleMs) per step; wait for each refresh to land before the next step, so only the fake clock decides how old the lock looks.
+      for (let step = 0; step < 100 && outcome === 'waiting'; step += 1) {
+        const before = statSync(lock).mtimeMs;
+        await vi.advanceTimersByTimeAsync(times.staleMs / 4);
+        while (outcome === 'waiting' && statSync(lock).mtimeMs === before) await pause();
+      }
+      await second;
+      expect(Date.now() - started).toBeGreaterThan(times.staleMs);
+      expect(outcome).toBeInstanceOf(SendLockBusy);
+      release();
+      await first;
+      expect(overlapped).toBe(false);
+      expect(existsSync(lock)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps the lock a first waiter took when a second still reads the old one as stale', async () => {
