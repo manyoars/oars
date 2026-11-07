@@ -954,6 +954,52 @@ that a deposit counts only the child's own prompts.
   sessions"); only forks and subagent forks were traced, so a restore that sets it would read as a fork and lose the lines before it. A mid-turn interjection (`_meta.interjection`) is dropped whole: its text block is the model-facing frame and the operator's typed text is kept apart in `displayText` (`storage/mod.rs:972-973`), which is not read, so a real steer is lost from the prompts. A restore that reads as a fork is the case above. `updates.jsonl` keeps rewind markers and the dead branches they cut (`session/storage/jsonl/copy.rs:227`), and the reader counts a rewound branch's prompts and calls as the session's. A failed `list_dir`, `grep_files`, `get_task_output`, or `kill_task` carries no `content[]` and no text in its `rawOutput` that the reader takes (`acp_conversion.rs:186-197`, `:357-400`, `:478-490`), so its error line is `tool failed`, not text; so does a failed backend-hosted search, whose `rawOutput` is only `{action, id, status}` (`sampling_events.rs:581-582`, `tool_dispatch.rs:117-127`, `:403-412`). A session's tools can be renamed: wire names are client-renameable (`xai-grok-tools/src/tool_taxonomy.rs:145`, session `tool_overrides` at `acp_session.rs:804`) and `title` is the wire name (`tool_calls.rs:1487`), so a renamed shell or edit tool reads as unknown. `_meta["x.ai/tool"]` on the `tool_call` carries the kind (`tool_calls.rs:1478`, `normalization.rs:28-37`, `tool_taxonomy.rs:187-196`) and is not read; when renaming is active by default was not traced. No reader change until a live store shows it. A `cd` inside a command is never seen (the `current_dir` the writer stores is the cwd before the command, `bash/mod.rs:1876`, `:2240`), so a session that changes folder only through `cd` keeps its starting cwd. Torn lines are counted as unparseable; a
   file with no parseable line is unreadable. Idempotent per session (`grok/<id>` in `state.json`, the size and latest mtime of `updates.jsonl` and `usage.json`).
 
+## The OpenCode source
+
+`oars sessions deposit --allow opencode` reads OpenCode (`sst/opencode`) sessions into the same store. The records carry `harness: "opencode"`, take the same field classes, redaction, and
+1,000-character `line` cap as every other source, and `recall`, `measure`, `books`, and `verify` read them with no special case. It is one more entry in the source table (`sources.ts`). The TUI,
+`opencode run`, and the desktop app share one database, so one reader covers them.
+
+**Fixture-derived, never run live.** This reader was written from the public source of OpenCode (github.com/sst/opencode @ 21bf6b4, MIT; `packages/cli` and `packages/core` 2.2.5) and tested only on
+synthetic fixtures, each of which cites the source line that can write it; no OpenCode store has ever been read by it. No vendor text promises the database layout: the repository promises deprecation
+aliases for the SDK and plugin API only (`AGENTS.md:174-180`), and neither carries history, so the database is the only source. An OpenCode release can change the tables; a database that cannot be read
+is warned about by file name and skipped, never fatal, and the other sources still deposit. The one hand run that would settle it: on a machine with `opencode` signed in, run one
+`opencode run "<task>"` that makes one prompt, runs one command that exits nonzero (for example `ls /nonexistent`), and edits one file, then point the oars store at a temp folder (`APPDATA` on Windows, `XDG_CONFIG_HOME` elsewhere; leave `HOME` and `XDG_DATA_HOME` alone, so the OpenCode database is still found) and confirm `oars sessions` names that folder before the first write, then run `oars sessions deposit --allow opencode` and
+`oars sessions verify --strict`. It is settled only if the session count is nonzero, there are zero violations, the session holds an `error` tool record for that command with a matching error line,
+and usage is nonzero. Then check three shapes the fixtures take on trust: whether `session_part` rows exist (`experimental.part_rows`), a `location-switched` message after a session moves directory, and a
+fork's copied `msg_<event id>_<seq>` rows (`opencode export` of the same session is the cross-check).
+
+- **Where.** `$XDG_DATA_HOME/opencode/opencode.db`, else `~/.local/share/opencode/opencode.db`, on every operating system, Windows included (`packages/util/src/global-roots.ts:5`,
+  `global.ts:13`). SQLite in WAL mode (`core/src/database/database.ts:42`), opened read-only: with no `-wal` file beside it (OpenCode closed) it is opened immutable, so the deposit creates no `-shm` or `-wal`; with one (OpenCode running) it is opened plain read-only, which reads the rows not yet checkpointed into the main file. `OPENCODE_DB` and a channel build's `opencode-<channel>.db` (`packages/cli/src/database-path.ts:4-12`) are not read. Like Cursor and the other
+  sources: read by default; `--allow` narrows and `--deny opencode` keeps it out; the nightly run repeats the saved list. Sessions older than 2.x live in JSON files and old tables that OpenCode
+  migrates into this database at startup (`packages/core/src/database/v1-migration.bun.ts`), so a store OpenCode has not opened since then is not read.
+- **Mapping.** Three tables are read: `session_v2` (`core/src/session/sql.ts:29`), `session_message` (`:87`, one JSON `data` per message), and `session_part` (`:108`). A `user` message's `text` is a prompt.
+  An `assistant` message is one model step: its `text` blocks are the response, its `tool` blocks are calls, `reasoning` is not read. Its content is the `session_part` rows when `part_rows` is on, then any
+  inline content (`session/history.ts:90-125`). A `shell` message is the operator's own `!cmd` and is recorded as Claude Code records it: an operator turn (a `<bash-input>` user line, then a `<bash-stdout>`/`<bash-stderr>` line for its output), with no tool record, no error line, and no agent turn, so `assistantTurns`, `bashCmds`, and error rates compare. `synthetic`, `system`, `skill`, `compaction`, `idle`, and the two
+  `...-switched` agent and model messages are not prompts and are not read. A tool call's name is the part's `name` (`core/src/tool/plugin/*.ts`): `shell` is `Bash`, `edit` and `patch` are `Edit`, `write` is
+  `Write`, `read` is `Read`, `grep` and `glob` are `Grep` and `Glob`, each keeping its OpenCode name in `native`, which the action table looks up (`ACTION_TABLES.opencode`). A call's files are `path` for
+  `edit`, `write`, and `read`, and the `*** Add|Update|Delete File:` and `*** Move to:` headers of a `patch`'s `patchText`; a relative one is joined to the session's folder, so each file is stored once,
+  absolute like Claude Code's. A call still `streaming` or `running` has no outcome. **The outcome:** a shell call completes whatever its exit code and records the exit, signal, and timeout in
+  `state.metadata` (`core/src/shell/result.ts:20-28`, `:36-43`, written by `core/src/tool/plugin/shell.ts:85-88`), so the exit code decides, not the status; a nonzero exit reads `Exit code N` and the output, a signal or a timeout reads its own notice. The tool
+  appends that notice to its text (`result.ts:30-35`), and the reader cuts it so the error line is the command's own. A `state.error` is its `message` alone, not the `{type, message, status, response}` wrapper.
+- **Directory.** `session_v2.directory` is the latest one. A `location-switched` message moves the cwd from then on, and the first one's `previous.location.directory` is where the session started, so
+  earlier lines keep it. A shell call's `workdir` is a one-shot directory (`core/src/tool/plugin/shell.ts:48-51`) and moves nothing.
+- **Timestamps.** Times are epoch milliseconds (`schema/src/schema.ts`). A missing, relative (before 2000), or earlier time takes the latest time so far, starting from the session's `time_created`
+  and falling back to the row's own `time_created` column, so no time goes backward.
+- **Usage.** Per step, on the `assistant` message's `tokens`, never cumulative, so every step is counted once and nothing is summed twice. `tokens.input` is `nonCachedInputTokens`
+  (`core/src/session/usage.ts:12`), already disjoint from `cache.read` and `cache.write`, so it is stored as it is (OpenCode's `Usage` says its inclusive total sums the three,
+  `ai/src/schema/events.ts:20-38`; the stored figure is the non-cached part). `tokens.output` is `visibleOutputTokens`, the output without the reasoning (`events.ts:88-90`), while Claude Code's
+  `output_tokens` includes it, so the stored output is `output + reasoning` with `reasoning` kept as `thinking`. A step with no `tokens`, or with all five figures zero (OpenCode turns a missing
+  figure into zeros, `usage.ts:9-12`), writes no usage: it is missing, not zero (`usageObserved`).
+- **Subagents and forks.** A subagent is its own `session_v2` row with a `parent_id`; it is deposited as a subagent of `opencode-<parent>`, so session counts stay main sessions. A fork copies its
+  parent's messages as `msg_<event id>_<seq>` (`projector.ts:198`, `:226`); those rows are skipped, so the parent's prompts and usage are not counted twice. The `subagent` tool's call is recorded
+  as `agent.spawn`, the `skill` tool's as `skill.run` with the skill's name, and `todowrite` as `plan.update`.
+- **Absent.** There is no cost field in the skeleton (`cost` is not read), no reasoning text, no permission mode, no compaction usage (a compaction request's own `tokens`, real spend, are not read: `compaction` messages are skipped, `session-message.ts:250-254`), and no interrupt, refusal, or denial count. An assistant message's own `error` and a
+  `retry` are not read. The harness version is `session_v2.version`.
+- **Known gaps.** An MCP tool is named `<server>_<tool>` (`core/src/tool/runtime.ts:290-293`), the same spelling as a built-in's, so it cannot be told apart and reads as an unknown tool with its name
+  withheld (`mcp: null`). A `skill` message (the operator running a skill) is not recorded. A background shell call completes at once with no exit and `BACKGROUND_INSTRUCTION` as its text (`core/src/tool/plugin/shell.ts:78`), so it reads as a `Bash` call that succeeded with that instruction as its output, and its real outcome, which arrives later, is not read. A tool another plugin registers has no table row and reads `other`. A database from a build older than 2.x, a channel
+  build's file, and `OPENCODE_DB` are not read. A row whose `data` is not JSON is counted as a bad line. Idempotent per session (`opencode/<id>` in `state.json`, the message count and the newest `time_updated` of the session, its messages, and its parts, because OpenCode settles a tool call, a `!cmd`, and text in place, `projector.ts:337-339`, `:539-560`, `:1076-1113`, which bump only the message and part rows).
+
 ## The OpenTelemetry GenAI source
 
 `oars sessions deposit --allow otel` reads agent traces written in the OpenTelemetry GenAI semantic conventions (OTLP JSON, as the OpenTelemetry file exporter or a Collector
@@ -975,7 +1021,7 @@ line, and usage is nonzero where the library reports it.
 - **Where.** `$OARS_OTEL_TRACES` if set and non-empty, else `<config>/oars/otel-traces` (`<config>` as for the store). A configured folder rather than an `import` command, so
   the cursor, the allowlist, `--deny otel`, the nightly run's saved allow, and the fail-open reads are the ones every other source has. No folder, no read: it is opt-in by
   pointing it at traces. Every `*.jsonl` and `*.json` file in it is read, and the spans of all files are joined by `traceId` first, because a collector may split one trace
-  across files. A file that does not parse is named once as unreadable and skipped; the other files and sources deposit. A deposit only reads. Idempotent per session
+  across files. A file that does not parse is named once as unreadable and skipped; the other files and sources deposit. A torn line in a file that does parse is counted as a bad line on the first session that came from that file, and a file whose torn lines no session came from is named as unreadable with its line count. A deposit only reads. Idempotent per session
   (`otel/<id>` in `state.json`; the size is the span count and the mtime the latest span time, so a file that gains spans is read again).
 - **Mapping.** A session is one `traceId`; traces that share `gen_ai.conversation.id` are one session, each trace a prompt in start-time order, and a trace with no
   conversation id is its own session. A prompt is one per root agent span (`invoke_agent` or any `invoke_*` operation), else per trace root; its text is the last user message
@@ -994,7 +1040,7 @@ line, and usage is nonzero where the library reports it.
   session and the call that spawned it, so its turns never land in the parent. A directly nested one also appears in the parent as an `invoke_agent` call.
 - **Harness version.** No cwd or repository exists in a trace: `folder` is null and the project is `otel`. The harness-version slot holds the emitting framework, taken from the
   instrumentation scope name against a closed list (else `other`). A framework name in that slot is accepted by this adapter: local reads work, public frames show `<literal>`, and
-  no bundle is fetched for `otel`. A separate framework field is a later change, only if a pooled read needs it.
+  no bundle is fetched for `otel`: `oars pool fetch --harness otel` is refused, and otel sessions are not counted when a fetch without `--harness` picks the harness your store holds most of. A separate framework field is a later change, only if a pooled read needs it.
 - **Content.** Prompts, completions, tool arguments, and tool results are Opt-In attributes. When present they pass only through capture's field classes and redaction; `_ref`
   URIs are never fetched.
 - **Known gaps.** No provider is stored. A LangSmith or Langfuse native reader is a later change, only if a field they hold is lost in the OTel form.

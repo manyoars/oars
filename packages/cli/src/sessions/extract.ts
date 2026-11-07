@@ -1639,8 +1639,8 @@ export const captureSession = (input: ExtractInput): Capture => {
     if (type === 'user' && role === 'user' && !side && !hasToolResult(content)) {
       const leading = LEADING_TAG.exec(firstTextBlock(content).trimStart())?.[1];
       harnessLine = o.isMeta === true || (leading !== undefined && LOCAL_COMMAND_TAGS.has(leading));
-      // `promptOpening` is Claude Code's alone: a prompt from any other harness that starts with `<` gets no opening below, yet it is still the operator typing.
-      operatorTurn = o.isMeta !== true && (leading === 'bash-input' || hasImage(content) || (harness !== 'claude-code' && firstTextBlock(content).startsWith('<')));
+      // `promptOpening` is Claude Code's alone: a prompt from any other harness that starts with `<` gets no opening below, yet it is still the operator typing, except the output of a `!` command, which is the harness's own line (an agent turn, as under Claude Code).
+      operatorTurn = o.isMeta !== true && (leading === 'bash-input' || hasImage(content) || (harness !== 'claude-code' && leading !== 'bash-stdout' && leading !== 'bash-stderr' && firstTextBlock(content).startsWith('<')));
     }
     if (type === 'user' && role === 'user' && o.isMeta !== true && !side) {
       const text = firstTextBlock(content);

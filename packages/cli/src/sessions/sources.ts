@@ -11,6 +11,7 @@ import type { SubagentOrigin } from './extract.js';
 import { geminiRoot, openGeminiStore } from './gemini.js';
 import { openOtelStore, otelRoot } from './otel.js';
 import type { Harness } from './schema.js';
+import { opencodeRoot, openOpencodeStore } from './opencode.js';
 import { openVscodeCopilotStore, vscodeAppData } from './vscode-copilot.js';
 
 /** A session found in a source, before its transcript is read. */
@@ -179,6 +180,33 @@ const grok: Source = {
   },
 };
 
+const opencode: Source = {
+  name: 'opencode',
+  harness: 'opencode',
+  label: 'OpenCode',
+  root: (_platform, env, home) => opencodeRoot(env, home),
+  storeFile: (root) => join(root, 'opencode.db'),
+  open: async (root) => {
+    const store = await openOpencodeStore(root);
+    if (store === undefined) return undefined;
+    const byId = new Map(store.sessions.map((session) => [session.id, session]));
+    return {
+      sessions: store.sessions.map((session) => ({
+        id: session.id,
+        folder: session.folder,
+        size: session.size,
+        mtimeMs: session.mtimeMs,
+        ...(session.parent === null ? {} : { subagent: { parent: `opencode-${session.parent}`, agentType: session.agent, spawnedBy: null } }),
+      })),
+      transcript: (session) => store.transcript(need(byId.get(session.id))),
+      rejected: store.rejected,
+      unreadable: [],
+      where: () => join(root, 'opencode.db'),
+      close: store.close,
+    };
+  },
+};
+
 const vscodeCopilot: Source = {
   name: 'vscode-copilot',
   harness: 'vscode-copilot',
@@ -224,7 +252,7 @@ const otel: Source = {
 };
 
 /** Every non-Claude source, in the order the deposit reads them. */
-export const SOURCES: readonly Source[] = [cursor, codex, copilot, gemini, grok, vscodeCopilot, otel];
+export const SOURCES: readonly Source[] = [cursor, codex, copilot, gemini, grok, opencode, vscodeCopilot, otel];
 
 /** How a source is named in a deposit line; a name the table does not know (a test's) is its own label. */
 export const sourceLabel = (name: string, table: readonly Source[] = SOURCES): string => table.find((source) => source.name === name)?.label ?? name;
