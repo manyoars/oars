@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { recoveryClass, type Cell } from '../../cli/src/sessions/cells.js';
 import { classMotif } from '../../cli/src/sessions/motif.js';
 import { bucketPrefix, bundleOf } from './derive.js';
+import { DEFAULT_FLOORS } from './floors.js';
 import type { StoredPool } from './stored.js';
 
 const cellOf = (frameBucket: string, day: string, motifId: string): Cell => ({ motifId, frameBucket, grain: 'day', day, sessions: 5, clusters: 5, ok: 0, failed: 0, tokens: 0, durationMs: 0, exposed: false });
@@ -16,9 +17,9 @@ describe('bundleOf', () => {
     const before: StoredPool = { cells: [own], environment: [], motifs: [], strata: [] };
     const after: StoredPool = { cells: [own, other], environment: [], motifs: [], strata: [] };
 
-    expect(bundleOf('claude-code', '2.1.314', before).asOf.day).toBe('2026-10-12');
-    expect(bundleOf('claude-code', '2.1.314', after).cells.map((cell) => cell.motifId)).toContain('error:429/shell.exec');
-    expect(bundleOf('claude-code', '2.1.314', after).asOf.day).toBe('2026-10-12');
+    expect(bundleOf('claude-code', '2.1.314', before, DEFAULT_FLOORS).asOf.day).toBe('2026-10-12');
+    expect(bundleOf('claude-code', '2.1.314', after, DEFAULT_FLOORS).cells.map((cell) => cell.motifId)).toContain('error:429/shell.exec');
+    expect(bundleOf('claude-code', '2.1.314', after, DEFAULT_FLOORS).asOf.day).toBe('2026-10-12');
   });
 
   it('does not count a sub-floor sibling edge in the denominator of a recovery read', () => {
@@ -28,7 +29,7 @@ describe('bundleOf', () => {
     const edge = (motifId: string, clusters: number, failed: number): Cell => ({ ...cellOf(`${prefix}opus`, '2026-10-12', motifId), grain: 'week', clusters, sessions: clusters, failed });
     const stored: StoredPool = { cells: [edge(read.motifId, 5, 5), edge(edit.motifId, 4, 3)], environment: [], motifs: [read, edit], strata: [] };
 
-    const recovery = bundleOf('claude-code', '2.1.314', stored).reads.filter((entry) => entry.family === 'recovery');
+    const recovery = bundleOf('claude-code', '2.1.314', stored, DEFAULT_FLOORS).reads.filter((entry) => entry.family === 'recovery');
     // The edit edge has 4 accounts and is not served; if its 3 failures were in the denominator, `of` would be 8 and 8 minus 5 would give them away.
     expect(recovery.map(({ slice, value }) => [slice.next, value.followed, value.of])).toEqual([['file.read', 5, 5]]);
   });
