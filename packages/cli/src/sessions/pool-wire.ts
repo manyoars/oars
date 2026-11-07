@@ -76,7 +76,7 @@ export type SkeletonStep = Omit<StepObservation, 'n' | 'seg' | 'frameId' | 'cost
   agentType: string | null;
   /** The step's frame: a position in its transcript's `frames`, the frame of the call that made it, with that call's own model and harness version (t867). The parser refuses a position outside the list. */
   frame: number;
-  /** The skill whose run the step's call sits in, a list member or `private`; absent outside a run. The harness marks no end to a run but stops naming the skill on the next line, and a step carries the skill its call's line named. */
+  /** The skill whose run the step's call sits in, the name after redaction or `private`; absent outside a run. The harness marks no end to a run but stops naming the skill on the next line, and a step carries the skill its call's line named. */
   skill?: string;
 };
 
@@ -104,7 +104,7 @@ export interface LanguageShareEntry {
 }
 
 /**
- * The MCP servers, skills, and plugins in reach of a session, each a list member or `private` (a plugin has no pinned list, so it is always `private`). `filled` says whether the harness recorded a
+ * The MCP servers, skills, and plugins in reach of a session, each the name after redaction or `private` (a plugin has no pinned list, so it is always `private`). `filled` says whether the harness recorded a
  * `setup` or a `funnel` at all: an unfilled reach lists nothing and must not be read as a session with no tools.
  */
 export interface Reach {
@@ -230,7 +230,7 @@ export const sessionsOf = (
   return store.sessions.map((main) => ({ main, transcripts: [main, ...[...(subagents.get(main.session) ?? [])].sort((a, b) => (a.session < b.session ? -1 : 1))].map(recordsOf) }));
 };
 
-/** One command of a shell call as the projection reads it (`projectStoredShell`): a program, its subcommand, and its flags, each a list member or `private`. */
+/** One command of a shell call as the projection reads it (`projectStoredShell`): a program, its subcommand, and its flags, each the name after redaction or `private`. */
 export interface ShellCommand {
   program: string;
   subcommand: string | null;
@@ -824,7 +824,7 @@ const parseIdentity = (held: Collected, harness: WireHarness, action: CanonicalA
   }
   if (action === 'shell.exec') {
     const raw = fieldsOf(held, value, at, ['program', 'sub', 'flags'], ['pulls']);
-    // A program is a list member or `private`, and a `private` program holds no subcommand, flag, or pull.
+    // A program is a name, `private`, or `other`; only `other` holds no subcommand, flag, or pull here.
     const program = textOf(raw.program, under(at, 'program'));
     nameIn(program, under(at, 'program'));
     // The subcommands, flags, and pulls of a program this reader does not know cannot be read against its lists: it takes none, and notes what it left.
