@@ -216,13 +216,17 @@ describe('a git undo read from a real command line', () => {
     expect(fromCommandLine(command)).toBe('none');
   });
 
-  it.each(['git revert HEAD', 'git revert --no-edit abc1234', 'git revert -n HEAD~2', 'git restore src/a.ts', 'git checkout .', 'git checkout -- src/a.ts'])('`%s` undoes the edit: revert', (command) => {
+  it.each(['git revert HEAD', 'git revert --no-edit abc1234', 'git revert -n HEAD~2', 'git restore src/a.ts', 'git checkout .', 'git checkout -- src/a.ts', 'git checkout -f'])('`%s` undoes the edit: revert', (command) => {
     expect(fromCommandLine(command)).toBe('revert');
   });
 
-  // The segment drops a word that starts with `-`, holds a slash, or is quoted, and a step's identity stops at `--`, so a checkout of a branch reads as the bare pair that `git checkout -- <path>` leaves.
-  // The records cannot tell them apart (docs/sessions-store.md, `revert` limit); these rows pin the limit so a change to it is seen.
-  it.each(['git checkout feature/x', 'git checkout origin/main', 'git checkout -', 'git checkout "main"'])('`%s` reads as revert, a known limit of the segment', (command) => {
+  // The segment drops a flag, so `git checkout -b feature/x` and `git checkout -` leave the bare pair that `git checkout -- <path>` leaves; the step's flags tell them apart (`<literal>` for `-`, `-b` for a create).
+  it.each(['git checkout -', 'git checkout -b feature/x', 'git checkout -B feature/x', 'git checkout --detach'])('`%s` moves to a branch and undoes no work: none', (command) => {
+    expect(fromCommandLine(command)).toBe('none');
+  });
+
+  // A word with a slash or quotes is dropped from the segment and leaves no flag, so these checkouts read as the bare pair too (docs/sessions-store.md, `revert` limit); the rows pin the limit so a change to it is seen.
+  it.each(['git checkout feature/x', 'git checkout origin/main', 'git checkout "main"'])('`%s` reads as revert, a known limit of the segment', (command) => {
     expect(fromCommandLine(command)).toBe('revert');
   });
 
