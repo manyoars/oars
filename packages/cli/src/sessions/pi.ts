@@ -242,7 +242,7 @@ export const piLines = (text: string, fallbackId: string): Obj[] => {
       if (body === '' && !image) continue;
       sequence += 1;
       lastResponse = undefined;
-      // An image-only prompt is still the operator's turn; it is written as an image block with no data.
+      // An image-only prompt keeps its line (an image block with no data); capture counts a turn only for a prompt with text, so it is not a counted turn.
       lines.push({ ...base, type: 'user', uuid: `${fallbackId}-u${String(sequence)}`, ...(when === undefined ? {} : { timestamp: when }), message: { role: 'user', content: [body === '' ? { type: 'image' } : { type: 'text', text: body }] } });
     } else if (role === 'assistant') {
       const content: Obj[] = [];

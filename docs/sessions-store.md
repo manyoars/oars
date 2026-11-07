@@ -979,8 +979,8 @@ and the fork holds only its own prompt.
   kept there is not found. A file is written only once a conversation exists and is appended to afterward (`session-manager.ts:1176-1190`). Like Cursor, Codex, and Copilot: read by
   default; `--allow` narrows and `--deny pi` keeps it out; the nightly run repeats the saved list. A deposit only reads.
 - **Mapping.** Line 1 is the header `{type: "session", version, id, timestamp, cwd, parentSession?}`; every other line is an entry `{type, id, parentId, timestamp}`. Only `message`
-  entries are read. A `user` message is a prompt (its content is a string or text and image blocks; text blocks are joined by line ends, and a prompt that is only an image is a turn
-  written as an image block with no data). An `assistant` message is one response: its `text` blocks, its `toolCall` blocks (`{id, name, arguments}`), `model` (the requested
+  entries are read. A `user` message is a prompt (its content is a string or text and image blocks; text blocks are joined by line ends, and a prompt that is only an image is kept as a line
+  written as an image block with no data, but is not counted as a turn, because capture counts a turn only for a prompt with text, as it does for Claude Code and Grok Build). An `assistant` message is one response: its `text` blocks, its `toolCall` blocks (`{id, name, arguments}`), `model` (the requested
   model), and `responseModel` when the provider reports one; `thinking` blocks are not kept. A `toolResult` message settles the call with the same `toolCallId`, and `isError` says it
   failed. A shell call is a `bash` or `powershell` call (`docs/cli.md:144-146`); an edit is an `edit` or `write` call, whose `path` (joined to the session's folder when relative) is the
   file touched; every other name keeps its own, and an MCP tool, which Pi registers as `mcp__<server>__<tool>` (`docs/mcp.md:77`), is read as such. `read`, `grep`, `find`, `ls`,
