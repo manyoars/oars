@@ -153,13 +153,13 @@ describe('measure', () => {
     const text = formatMeasure(partial);
     expect(text).toContain('cache-write tokens per session, last: 1 of 2 sessions recorded');
     expect(text).not.toContain('40 (');
-    // A realistic five-digit mean keeps the row as wide as the header, so the `before` column stays aligned.
+    // A realistic five-digit mean keeps the row as wide as the other rows, so the `before` column stays aligned.
     const wide = measure({ ...withCoverage([]), sessions: [{ ...first, usage: { ...first.usage, cacheWrite: 52_341 }, usageObserved: ['cacheWrite' as const] }, { ...second, usageObserved: [] }] }, [], [], 2);
     const lines = formatMeasure(wide).split('\n');
-    const header = lines[0] ?? '';
+    const reference = lines.find((line) => line.startsWith('sessions in the window')) ?? '';
     const rowOf = lines.find((line) => line.startsWith('cache-write tokens per session ')) ?? '';
     expect(rowOf).toContain('52341');
-    expect(rowOf).toHaveLength(header.length);
+    expect(rowOf).toHaveLength(reference.length);
     const none = measure({ ...withCoverage([]), sessions: [{ ...first, usageObserved: [] }, { ...second, usageObserved: [] }] }, [], [], 2);
     expect(none.last).toMatchObject({ cacheWritePerSession: null, cacheWriteSessions: 0 });
     expect(formatMeasure(none)).toContain('n/a');
