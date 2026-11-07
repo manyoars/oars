@@ -57,10 +57,11 @@ describe('subcommands and flags of every program', () => {
   });
 
   it('never sends a flag value, and sends private for a subcommand or flag that counts as redacted', () => {
-    const skeleton = skeletonFor(frame({ shell: 'bash' }), readAs('acmecorp-plan', ['--token=abc', '--ok', '/x/y', 'a b']));
+    const skeleton = skeletonFor(frame({ shell: 'bash' }), readAs('acmecorp-plan', ['--token=abc', '--ok', '/x/y', 'a b', '-psecret123', '-uuser:pass', '-v']));
     const identity = skeleton?.transcripts[0]?.tools[0]?.steps[0]?.identity;
-    expect(identity).toEqual({ program: 'acme-deploy', sub: PRIVATE, flags: [PRIVATE, '--ok', PRIVATE, PRIVATE] });
-    expect(JSON.stringify(identity)).not.toMatch(/abc|acmecorp|token/);
+    // A single-dash flag is one letter; a longer single-dash token is a short flag with its value attached, which is never read.
+    expect(identity).toEqual({ program: 'acme-deploy', sub: PRIVATE, flags: [PRIVATE, '--ok', PRIVATE, PRIVATE, PRIVATE, PRIVATE, '-v'] });
+    expect(JSON.stringify(identity)).not.toMatch(/abc|acmecorp|token|secret123|user:pass/);
   });
 
   it('sends a private program with no subcommand or flag, because the parser refuses a private program that holds one', () => {
