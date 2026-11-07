@@ -9,7 +9,7 @@ import { defaultConfigDir } from '../credentials.js';
 import { ExitCode } from '../errors.js';
 import { readSpool } from '../telemetry/spool.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
-import { DEFAULT_POOL_URL, networkSender, poolCoverage, poolDeposit, poolServer, type Reply, type Sender } from './pool-command.js';
+import { DEFAULT_POOL_URL, networkSender, poolCoverage, poolDeposit, poolServer, RAW_PROMPT, type Reply, type Sender } from './pool-command.js';
 import { localNames } from './redact.js';
 import { batchHash, canonicalBytes, FIELD_ROWS, fieldsOf, outboxFolder, writeBatch } from './pool-outbox.js';
 import { markSent, sentHashes } from './pool-sent.js';
@@ -161,6 +161,14 @@ const signIn = async (scene: Scene, signingKey: PinnedKey = FIXED_KEY): Promise<
 const capture = (scene: Scene): Promise<unknown> => deposit(scene.staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
 
 const at = (value: unknown, name: string): unknown => (typeof value === 'object' && value !== null ? Reflect.get(value, name) : undefined);
+
+describe('the raw prompt states when and what uploads', () => {
+  it('names the nightly task, covenant acceptance, and the skeleton-only/off exception', () => {
+    expect(RAW_PROMPT).toContain('the nightly task uploads');
+    expect(RAW_PROMPT).toContain('once the pool says your account accepted its covenant');
+    expect(RAW_PROMPT).toContain('except a folder you set to skeleton only or off');
+  });
+});
 
 describe('the pool server', () => {
   it('defaults to the Many Oars pool, and takes a flag over the environment over the default', () => {
