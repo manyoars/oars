@@ -79,7 +79,7 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   fieldsVersion: 'The version of the field list this client builds a batch from: a constant of this client, never a value from a session.',
   format: 'The skeleton format number: a constant of this client, never a value from a session.',
   filled: 'Whether the harness recorded a setup or a tool funnel for the session, true or false; false means the lists beside it are empty because nothing was recorded, not because no tool was in reach.',
-  frame: 'Where a session ran: the harness and its version, the model, the effort, the day, the platform, the shell, and the stack, every value checked against the closed vocabulary. On a step it is a number, the position of the frame its call ran in, in the transcript list of frames.',
+  frame: 'Where a session ran: the harness and its version, the model, the effort, the day, the platform, the shell, and the stack, each checked against its closed list, and the reach of the session (see `reach`). On a step it is a number, the position of the frame its call ran in, in the transcript list of frames.',
   edges: 'The edges arriving at a step, each a kind and the position of the step it names, in the same transcript or, for a spawned edge, in the transcript that spawned this one; absent when none arrive.',
   frames: 'The distinct frames a transcript\'s steps ran in, each as a frame above with the reach of the session; a step names one by position.',
   frameworks: 'The frameworks of the project, each from a closed public list; never a path or a name of yours.',
