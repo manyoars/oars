@@ -2400,7 +2400,7 @@ describe('oars pool raw (t884)', () => {
     expect(await scene.cli('pool', 'raw')).toBe(ExitCode.OK);
     const shown = scene.h.out.join('');
     expect(shown).toContain('best effort');
-    for (const unsafe of ['a host with no dot', 'quoted file contents and command output', 'a secret split across lines', 'images and attachments', 'a JSON env value', 'a common-word account name is masked everywhere']) expect(shown).toContain(unsafe);
+    for (const unsafe of ['a host with no dot', 'quoted file contents and command output', 'a secret split across lines', 'images and attachments', 'a JSON env value', 'a common-word account name is masked everywhere', 'a public host name outside a link', 'your username written another way', 'an IPv6 address with a zone']) expect(shown).toContain(unsafe);
     expect(shown).toContain('not answered yet');
     scene.h.out.length = 0;
     expect(await scene.cli('pool', 'raw', '--consent', 'yes')).toBe(ExitCode.OK);
