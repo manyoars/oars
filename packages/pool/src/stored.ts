@@ -12,6 +12,8 @@ export interface StoredPool {
   environment: Cell[];
   motifs: Motif[];
   strata: StrataCell[];
+  /** Accounts with a deposit in the panel window; left out by a caller that did not read the deposit records. */
+  panel?: number;
 }
 
 const LEVELS: ReadonlySet<unknown> = new Set<MotifLevel>(['shape', 'named', 'class']);
