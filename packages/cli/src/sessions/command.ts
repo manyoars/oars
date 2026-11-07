@@ -11,6 +11,8 @@ import { armsPath, coverageLines, formatScore, isGoldDocument, parseGold, plural
 import { makeRedactor } from './redact.js';
 import { books, BOOKS_CAVEAT, formatBooks, formatMeasure, formatRecall, measure, type BooksBy } from './query.js';
 import { formatLineage, loadLineage, walkLineage } from './lineage.js';
+import type { Emit } from '../telemetry/emit.js';
+import { recallFields } from '../telemetry/fields.js';
 import { appendRecall, readRecalls } from './recall-object.js';
 import { deriveConsequences, formatRecallCounts, recallCounts } from './recall-consequence.js';
 import { pull, pullRefusal, type PullInput } from './recall-reads.js';
@@ -36,6 +38,8 @@ export interface SessionsDeps {
   sessions: SessionsRuntime | undefined;
   install: InstallRuntime | undefined;
   now: () => number;
+  /** Records a telemetry event; absent in a run that has none. */
+  telemetry?: Emit | undefined;
 }
 
 const runtimeOf = (deps: SessionsDeps): SessionsRuntime => {
@@ -109,6 +113,8 @@ export const sessionsRecall = async (deps: SessionsDeps, query: PullInput, sid: 
     key,
   );
   await tryLog(() => appendRecall(storeDir, result.recall));
+  // Counts and closed words only: how it was asked, the families it served, how many reads, and its arm. Never the query or the answer.
+  deps.telemetry?.('recall', recallFields(result.recall, result.reads.map((read) => read.family), result.legacy !== undefined));
   if (result.legacy !== undefined) return { document: { ok: true, ...result.legacy, recall: result.recall }, text: formatRecall(result.legacy) };
   // The document states the recall and not the raw reads: a read's tool, keys, and versions are store strings that can carry text, and `recall.evidence` already states them closed.
   return { document: { ok: true, recall: result.recall }, text: result.recall.answer.rendered === '' ? MISS_TEXT : result.recall.answer.rendered };
@@ -173,7 +179,7 @@ export const sessionsContext = async (deps: SessionsDeps, options: ContextOption
 };
 
 export const sessionsMcp = async (deps: SessionsDeps): Promise<void> => {
-  await serve(runtimeOf(deps), deps.now);
+  await serve(runtimeOf(deps), deps.now, deps.telemetry);
 };
 
 /** Names shown in the `verify` and `books` text; each `--json` document carries them all. */
