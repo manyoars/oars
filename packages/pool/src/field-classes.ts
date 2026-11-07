@@ -16,6 +16,7 @@ export interface FieldRow {
 export const FIELD_CLASSES: { readonly [field: string]: FieldRow } = {
   action: { class: 'clear' },
   agentType: { class: 'clear' },
+  allocated: { class: 'clear' },
   cacheRead: { class: 'clear' },
   cacheWrite: { class: 'clear' },
   change: { class: 'clear' },
