@@ -226,7 +226,8 @@ const PARALLEL_LISTS = ['fields', 'present', 'fieldBytes'];
 const alignParallel = (sent: object, data: Sanitized['data'], dropped: number): Sanitized => {
   const given = PARALLEL_LISTS.filter((name) => name in sent);
   const kept = given.filter((name) => data[name] !== undefined);
-  const lengths = new Set(kept.map((name) => (Array.isArray(data[name]) ? data[name].length : -1)));
+  // Every rule for these three names returns a list, so `flat` of the one-element wrapper is that list's length.
+  const lengths = new Set(kept.map((name) => [data[name]].flat().length));
   if (kept.length === given.length && lengths.size <= 1) return { data, dropped };
   for (const name of kept) Reflect.deleteProperty(data, name);
   return { data, dropped: dropped + kept.length };

@@ -99,7 +99,7 @@ describe('beside the fleet', () => {
     };
     const text = textOf(reportOf(fixture(), NOW, answered), 'dir');
     const numbers = `p50 ${String(edge(50))} ms, p95 ${String(edge(100))} ms`;
-    expect(text).toMatch(new RegExp(`hook\\.pre-tool\\.latency.*n=10  ${numbers}\\n    fleet ${numbers}\\n`));
+    expect(text).toMatch(new RegExp(`hook\\.pre-tool\\.latency \\(harness/version claude-code/2\\.1\\.5\\).*n=10  ${numbers}\\n    fleet ${numbers}\\n`));
   });
 
   it('ends the user’s window with the day the fleet is as of, so a cell reported only today is not read against a window that cannot hold it', () => {

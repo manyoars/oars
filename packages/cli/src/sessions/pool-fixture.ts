@@ -198,6 +198,9 @@ export const REGISTER_FIXTURE = {
           durationMs: 7,
           errorCode: '429',
           recoveryCalls: { next: ['shell.exec'], editFollowed: false },
+          keys: ['file_path'],
+          targetClass: 'source',
+          argClass: ['path'],
           steps: [{ ...REGISTER_STEP, status: 'error', action: 'file.read', native: 'Read', identity: null }],
         },
         {
@@ -205,6 +208,10 @@ export const REGISTER_FIXTURE = {
           prompt: 0,
           status: 'ok',
           durationMs: 7,
+          keys: ['command', 'description'],
+          keysDropped: 1,
+          targetClass: 'none',
+          argClass: ['command', 'text'],
           steps: [
             { ...REGISTER_STEP, allocated: true, skill: 'commit', action: 'shell.exec', native: 'Bash', identity: { program: 'npm', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] } },
             { ...REGISTER_STEP, edges: [{ kind: 'next', target: 0 }], action: 'mcp.call', native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' } },

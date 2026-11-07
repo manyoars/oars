@@ -199,8 +199,8 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | `user-prompt` (one per prompt) | `index`, `opened` (`typed` or `command`; absent before CAPTURE 10, when only a typed line opened a prompt), `wallSec`, `thinking`, `turns`, `model`, `efforts`, `usage`, `usageObserved`, `usageResponses` | P |
 | | `frame`, `frameId`, `session`, `ts`, `head` (the first 300 characters), `promptFingerprint`, `skills` (a skill's name can be private) | A |
 | | `strata` (the file's strata with this prompt's own `explore`; absent before version 14) | A |
-| `tool` (one per tool call) | `n`, `status` (`ok`, `error`, or `none` when no result is in the file; one record per tool-use id), `durationMs`, `harnessVersion`, `side`, `prompt`, `targetBase`, `steps`, `errorCode` (a member of a closed list on a failed call; absent on a call that did not fail and on a record captured before version 14) | P |
-| | `agentType` and `keys` (the input's key names; a private MCP tool's keys name private work), `session`, `parent`, `toolUseId`, `ts`, `tool` (the native name, which can hold a private MCP server's), `target` in either form (a salted hash, or the first line's program and subcommand, where a word can be anything), and `segments`, `pulls`, and `commits` (a plain word, a private package name, and a sha can each identify private work) | A |
+| `tool` (one per tool call) | `n`, `status` (`ok`, `error`, or `none` when no result is in the file; one record per tool-use id), `durationMs`, `harnessVersion`, `side`, `prompt`, `targetBase`, `steps`, `errorCode` (a member of a closed list on a failed call; absent on a call that did not fail and on a record captured before version 14), `targetClass` (the class of the path target, a member of a closed list, `none` for a call with no path target) and `argClass` (the sorted set of the classes of the arguments; neither holds a path or a value; both absent on a record captured before version 22) | P |
+| | `agentType` and `keys` (the input's key names; a private MCP tool's keys name private work; they reach the pool only as a public tool's pinned names or after the name gate, `docs/pool.md`), `session`, `parent`, `toolUseId`, `ts`, `tool` (the native name, which can hold a private MCP server's), `target` in either form (a salted hash, or the first line's program and subcommand, where a word can be anything), and `segments`, `pulls`, and `commits` (a plain word, a private package name, and a sha can each identify private work) | A |
 | | `packages` (each package an install or runner call resolves: `<ecosystem>:<name>`, `packageVersion`, and `first`), `manifest` (the dependency names a call read, wrote, or edited in a manifest) | A |
 | `error-line` (one per failed result) | `harnessVersion`, `side`, `prompt`, `after` | P |
 | | `session`, `toolUseId`, `tool` (the native name), `ts`, `line` (the first informative line, redacted, not normalized, cut to 1,000 characters) | A |
@@ -411,15 +411,15 @@ and an `unknown` never replaces a known state, so a passing failure does not und
 
 ### `books --by package`
 
-`oars sessions books --by package` prints the counts a package field report is built from, from the local store only (it reads the store and the transcripts, writes nothing, and sends nothing). It counts tool calls that pulled a package (installed or ran it by name) on the public list: the pinned registry snapshots plus the curated list, for the ecosystems the snapshots cover. Per package, in name order and with no rank, share, or comparison:
+`oars sessions books --by package` prints the counts a package field report is built from, from the local store only (it reads the store and the transcripts, writes nothing, and sends nothing). It counts tool calls that pulled a package (installed or ran it by name) on the public list: the pinned registry snapshots plus the curated list, for the ecosystems the snapshots cover. An MCP server's calls group under the `mcp` ecosystem as `mcp:<server>`, by server name, and a server counts as public when it is on the published-server list; any other server is counted with the names off the list and never named. Per package, in name order and with no rank, share, or comparison:
 
 - calls, failed calls (`status` `error`), main sessions (a subagent's call counts toward its main session), and the first and last UTC day a counted call ran;
-- per harness and model, calls and failed calls. The model is the call's own, else its prompt's, else `no model`; a model outside the pinned model list reads `another model`;
+- per harness and model, calls and failed calls. The model is the call's own, else its prompt's, else `no model`; a model outside the pinned model list reads `another model`. A subagent's call captured before the call carried its own `model` reads `no model`, because only a main session's prompts are stored;
 - failed calls by `errorCode` class, for calls captured at version 14 or later (a failed call at such a version with no class reads `no class recorded`).
 
-A failed call captured before version 14 has no class to count. It is reported as `not measured` and never as a zero or as a class, so a store captured before version 14 shows `not measured`, not an empty list. Names off the public list are never printed: one line gives how many names and calls they hold.
+A failed call captured before version 14 has no class to count. It is reported as `not measured` and never as a zero or as a class, so a store captured before version 14 shows `not measured`, not an empty list. Names off the public list are never printed: one line gives how many names they are, and how many calls pulled any of them (a call that pulls two such names is one call).
 
-The A38 exclusion applies on every run: the same scan `oars sessions exclusions` runs (a missing or empty term file excludes everything). A transcript is dropped when it or its main session is excluded, so a subagent goes with its parent, and the output states how many transcripts and calls were removed. `--since <days>` narrows by call time; `--repo` is refused. `--json` carries the same data (`rows`, `notPublic`, `excluded`).
+The A38 exclusion applies on every run: the same scan `oars sessions exclusions` runs (a missing or empty term file excludes everything). A transcript is dropped when it or its main session is excluded, so a subagent goes with its parent, and the output states how many transcripts and calls were removed. `--since <days>` narrows by call time, and the removed-calls count covers the same window; the removed-transcripts count covers the whole store. `--repo` is refused. `--json` carries the same data (`rows`, `notPublic`, `excluded`).
 
 ### What `books` adds
 
@@ -668,15 +668,14 @@ carry `harness: "cursor"`; a record with no `harness` is Claude Code's (`harness
   `fileHashes`, and the per-account `sid` salt are the Claude Code code path, not a copy.
 - **Idempotent.** `state.json` keeps one entry per composer (`cursor/<composerId>`) whose cursor is the message count and `lastUpdatedAt`;
   a second deposit adds nothing, and a composer that gained messages is captured again.
-- **Absent fields.** The store has no cache read or write tokens, thinking tokens, subagents, hooks, cost-state, git branch, or Cursor
-  version, so they take the empty value (0, `[]`, or null; `env.harness` is null).
-  The version census of t872 found nothing to read: no field of the composer, its headers, or a bubble carries the Cursor build, so `harnessVersion`
-  stays null, the session's cells are `cursor/unknown/<model>`, and a bundle for them is asked for as `unknown` (`pool.md`, "What a bundle serves").
-  A bubble's time is its `createdAt`, else
-  `timingInfo.clientStartTime` when that is an epoch time at or after the composer's start (a smaller value is a relative clock and is
-  ignored); a user bubble with neither takes the next assistant bubble's, and any other takes the previous one's, so wall time per prompt is coarse.
-  A shell command Cursor records as `completed` with a nonzero `exitCodeV2` is a failed `Bash` call, and a tool `error` is read from its JSON
-  wrapper (the model-visible message, else the client-visible one). Nothing goes to `raw/` (there is no transcript file), and the Stop hook does not read Cursor.
+- **Absent fields.** The store has no cache read or write tokens, thinking tokens, subagents, hooks, cost-state, git branch, or Cursor version, so
+  they take the empty value (0, `[]`, or null; `env.harness` is null). A census of the stored versions found nothing to read: no field of the composer, its
+  headers, or a bubble carries the Cursor build, so `harnessVersion` stays null, the session's cells are `cursor/unknown/<model>`, and a bundle for
+  them is asked for as `unknown` (`pool.md`, "What a bundle serves"). A bubble's time is its `createdAt`, else `timingInfo.clientStartTime` when that
+  is an epoch time at or after the composer's start (a smaller value is a relative clock and is ignored); a user bubble with neither takes the next
+  assistant bubble's, and any other takes the previous one's, so wall time per prompt is coarse. A shell command Cursor records as `completed` with a
+  nonzero `exitCodeV2` is a failed `Bash` call, and a tool `error` is read from its JSON wrapper (the model-visible message, else the client-visible
+  one). Nothing goes to `raw/` (there is no transcript file), and the Stop hook does not read Cursor.
 - **Not read.** `aiService.prompts` (only `text` and `commandType`) and `aiService.generations` are not read: they carry no session id and no
   time, so they cannot be joined to a composer. On the 2026-11-02 copy, 183 of 788 distinct prompt texts match no captured prompt; that is a
   stated gap, not a silent one. The `session` record carries `harness: cursor`; the skeleton does not (`Skeleton` has no such field), and
@@ -804,15 +803,15 @@ It is settled only if the session count is nonzero, there are zero violations, t
   A refusal is `isConfirmed` `{type:5, source:'user'}` (the Skip button, which is a confirmation's decline button), `{type:0, source:'user'}` (an explicit cancel), or the boolean `false` (before VS Code 1.104): all store `user-rejected`.
   `{type:0}` or `{type:5}` with `source` `hook` or `riskAssessment` reads as a permission denial, and a `Denied` with no `source` claims neither actor (`chatService.ts:910`: "absence does not identify an actor"), so it is a plain denial.
   A `{type:5}` with no `source` is the skip after approval and has no outcome. Timestamps are epoch milliseconds; a missing or implausible one is never made up, the time carries forward.
-- **Absent.** Cost and working-directory changes have no equivalent: the file holds none, and the editor's version is nowhere in it.
-  The `version: 3` above is the chat-session schema's, not the extension's. The Copilot Chat extension's own version is the one version the file
-  carries: each request holds the agent VS Code serialized beside it, `agent` (`ISerializableChatRequestData.agent`, `UriDto<IChatAgentData>`,
-  `chatModel.ts:2196,2243`, written from the response's agent at `chatModel.ts:3849-3870`), and `IChatAgentData.extensionVersion` (`chatAgents.ts:71`)
-  is that version, so `harnessVersion` is the newest request's `agent.extensionVersion` (t872's census), read only when `agent.extensionId.value` is `GitHub.copilot-chat`, compared
-  case-insensitively as `ExtensionIdentifier` does: a third-party chat participant (another extension's `@name`) is serialized the same way with its own extension's
-  version, which is not Copilot Chat's and is never read. A request whose agent has none, or a session of an older build with no `agent`, leaves it unset. The cells are `vscode-copilot/<extension
-  version>/<model>`, or `vscode-copilot/unknown/<model>` for a session that names none, which a bundle asks for as `unknown` (`pool.md`, "What a
-  bundle serves").
+- **Absent.** Cost and working-directory changes have no equivalent: the file holds none, and the editor's version is nowhere in it. The `version: 3`
+  above is the chat-session schema's, not the extension's. The Copilot Chat extension's own version is the one version the file carries: each request
+  holds the agent VS Code serialized beside it, `agent` (`ISerializableChatRequestData.agent`, `UriDto<IChatAgentData>`, `chatModel.ts:2196,2243`,
+  written from the response's agent at `chatModel.ts:3849-3870`), and `IChatAgentData.extensionVersion` (`chatAgents.ts:71`) is that version, so
+  `harnessVersion` is the newest request's `agent.extensionVersion` (t872's census), read only when `agent.extensionId.value` is
+  `GitHub.copilot-chat`, compared case-insensitively as `ExtensionIdentifier` does: a third-party chat participant (another extension's `@name`) is
+  serialized the same way with its own extension's version, which is not Copilot Chat's and is never read. A request whose agent has none, or a
+  session of an older build with no `agent`, leaves it unset. The cells are `vscode-copilot/<extension version>/<model>`, or
+  `vscode-copilot/unknown/<model>` for a session that names none, which a bundle asks for as `unknown` (`pool.md`, "What a bundle serves").
   `completionTokens` on the request is the whole turn's output; `modelTotals[{model, inputTokens, cachedTokens, outputTokens}]`, also on the request (`chatModel.ts:2086,2093`), is the only per-model figure
   (`chatService.ts:176-188`); neither sits under a `usage` key in the file, and a turn that used several models has them summed on its one assistant line, subagent-model tokens attributed to the request model. `promptTokens` is the last model call alone, so it is not read as consumption.
   **Input 0 means not known.** A normal Copilot Chat session, written by the extension, carries no `modelTotals`: the extension API bridge passes the editor only `promptTokens`, `completionTokens`, `outputBuffer`, `copilotCredits`, and

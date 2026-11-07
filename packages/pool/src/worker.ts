@@ -105,7 +105,7 @@ const deposit = async (request: Request, env: Env): Promise<Response> => {
   if (Number(request.headers.get('content-length')) > MAX_DEPOSIT_BYTES) return tooLarge();
   const text = await request.text();
   if (new TextEncoder().encode(text).length > MAX_DEPOSIT_BYTES) return tooLarge();
-  return request.headers.has('oars-part') ? receivePart(request, env, account, text, (whole) => storeDeposit(env, account, secret, whole)) : storeDeposit(env, account, secret, text);
+  return request.headers.has('oars-part') ? receivePart(request, env, account, secret, text, (whole) => storeDeposit(env, account, secret, whole)) : storeDeposit(env, account, secret, text);
 };
 
 /** A name that does not decode stays as it came: no vocabulary holds it, so the route refuses it by name. */
@@ -135,7 +135,7 @@ export default {
     }
     if (request.method === 'GET') {
       if (pathname === '/v1/covenant') return covenantStatus(request, env);
-      // Not a deposit and not signed in: percentiles over installs, served only where at least K_CELL report. No query is read.
+      // Not a deposit and not signed in: percentiles over installs, served only where at least the public floor reports. No query is read.
       if (pathname === '/v1/telemetry/fleet') return fleet(env, Date.now());
       // The operator's anomaly read, behind a secret the deploy sets: never served to users.
       if (pathname === '/v1/telemetry/operator') return operator(request, env, Date.now());
