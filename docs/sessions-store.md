@@ -1077,15 +1077,11 @@ and the fork holds only its own prompt.
 It is how an agent that is not a coding harness (a support, research, data, or workflow agent built on any framework that emits GenAI spans, which LangSmith and Langfuse
 both ingest and export) becomes a graph of tool calls in the record.
 
-**Convention-derived, never run on a real trace.** The reader was written from the public conventions and tested only on synthetic fixtures; it has never read a trace a real
-agent wrote. The GenAI conventions moved out of `open-telemetry/semantic-conventions` (v1.45.0 holds only "Moved" stubs) into `open-telemetry/semantic-conventions-genai`,
+**Convention-derived, checked once on a real trace.** The reader was written from the public conventions and has read one real trace: Pydantic AI 2.66.0 (OpenTelemetry SDK 1.45.2, spans written as OTLP JSON lines by a small file exporter, a scripted OpenAI-compatible stub in place of a model), asked one question whose lookup succeeds and one whose lookup raises. The trace is `packages/cli/src/sessions/fixtures/otel-pydantic-ai/trace.jsonl` (host paths and ids scrubbed) and `otel-real-trace.test.ts` pins what it imports: two sessions, one `ok` and one `error` call with a matching error line, nonzero usage, and zero `verify` violations. It is one framework, so any other stays convention-derived. The GenAI conventions moved out of `open-telemetry/semantic-conventions` (v1.45.0 holds only "Moved" stubs) into `open-telemetry/semantic-conventions-genai`,
 which has no release, so the pin is its main @ e6658f1 (2026-11-06); the OTLP JSON encoding is `opentelemetry-proto` v1.11.1 (`docs/specification.md:453-484`,
 `trace.proto:96-327`) and the file format `opentelemetry-specification` @ 616bb3a (`protocol/file-exporter.md:64-75`). Every GenAI attribute read is marked Development in
 the registry (`error.type` and `server.*` are Stable; `process.exit.code` is a Release Candidate), so each one is optional here: a missing or renamed attribute means less is
-read, never a throw. The one hand run that would settle it: run an OTel-instrumented sample agent (for example one using a GenAI instrumentation library) with its spans
-written to a file exporter, with one tool call that succeeds and one that fails, point `OARS_OTEL_TRACES` at the output folder, then `oars sessions deposit --allow otel` and
-`oars sessions verify --strict`. It is settled only if the session count is nonzero, there are zero violations, the failed call is an `error` record with a matching error
-line, and usage is nonzero where the library reports it.
+read, never a throw.
 
 - **Where.** `$OARS_OTEL_TRACES` if set and non-empty, else `<config>/oars/otel-traces` (`<config>` as for the store). A configured folder rather than an `import` command, so
   the cursor, the allowlist, `--deny otel`, the nightly run's saved allow, and the fail-open reads are the ones every other source has. No folder, no read: it is opt-in by
@@ -1112,7 +1108,7 @@ line, and usage is nonzero where the library reports it.
   no bundle is fetched for `otel`: `oars pool fetch --harness otel` is refused, and otel sessions are not counted when a fetch without `--harness` picks the harness your store holds most of. A separate framework field is a later change, only if a pooled read needs it.
 - **Content.** Prompts, completions, tool arguments, and tool results are Opt-In attributes. When present they pass only through capture's field classes and redaction; `_ref`
   URIs are never fetched.
-- **Known gaps.** No provider is stored. A trace deposited before its conversation id arrives (the id sits on the root agent span, which a batch exporter writes last) is kept as its own session as well, next to the merged one it later joins. A LangSmith or Langfuse native reader is a later change, only if a field they hold is lost in the OTel form.
+- **Known gaps.** No provider is stored. Pydantic AI's real spans show four more: its agent span carries no `gen_ai.input.messages` (the messages sit on the chat spans and in `pydantic_ai.all_messages`), so the prompt is written content-less; a tool span's `gen_ai.tool.call.result` is not kept, so a successful result has no content; no call has a duration (a result line is `noDuration`, though the span has both times); and a raised error has no `error.type`, so the error line is the exception message alone, without `exception.type`. Each changes what an already deposited trace captures, so each needs a `CAPTURE_VERSION` bump. A trace deposited before its conversation id arrives (the id sits on the root agent span, which a batch exporter writes last) is kept as its own session as well, next to the merged one it later joins. A LangSmith or Langfuse native reader is a later change, only if a field they hold is lost in the OTel form.
 
 ## The outcome gold set
 

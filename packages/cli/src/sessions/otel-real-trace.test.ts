@@ -2,8 +2,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openOtelStore } from './otel.js';
-import { deposit, loadStore } from './store.js';
+import { deposit, loadStore, readSkeletons } from './store.js';
 import { cleanup, NOW, stage } from './test-support.js';
+import { verifyAll, verifyCaptured } from './verify.js';
 
 afterEach(cleanup);
 
@@ -20,7 +21,7 @@ const imported = async () => {
   const s = stage();
   const runtime = { ...s.runtime, sourceRoots: { otel: FIXTURE } };
   const result = await deposit(runtime, { allow: ['otel'], redactDomains: [], now: () => NOW });
-  return { result, store: await loadStore(s.storeDir) };
+  return { result, store: await loadStore(s.storeDir), skeletons: (await readSkeletons(s.storeDir)).skeletons };
 };
 
 describe('a real Pydantic AI trace deposited with --allow otel', () => {
@@ -29,6 +30,12 @@ describe('a real Pydantic AI trace deposited with --allow otel', () => {
     expect(result).toMatchObject({ sessions: 2, badLines: 0, sources: { otel: { read: 2, unreadable: [], rejected: 0 } } });
     expect(store.sessions.map((entry) => entry.session).sort()).toEqual([`otel-${FAILED}`, `otel-${OK}`].sort());
     for (const entry of store.sessions) expect(entry).toMatchObject({ harness: 'otel', project: 'otel', versions: ['pydantic-ai'], models: { 'stub-support-1': expect.any(Number) }, tools: { lookup_policy: 1 } });
+  });
+
+  it('holds every verify invariant, including --strict', async () => {
+    const { store, skeletons } = await imported();
+    expect(skeletons).toHaveLength(2);
+    expect([...verifyAll(skeletons), ...verifyCaptured(store.sessions, store.tools)].filter((result) => result.violations > 0)).toEqual([]);
   });
 
   it('keeps the successful lookup as an ok call placed in the model call that named it, with the arguments read as a text key', async () => {
