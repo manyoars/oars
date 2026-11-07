@@ -190,12 +190,12 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | Record | Fields | Class |
 |--------|--------|-------|
 | every capture record | `kind`, `cv`, `rev`, `sid` | P |
-| `session` (one per transcript) | `harness` (set on a Cursor session; absent reads as Claude Code), `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `versions`, `models`, `bashCmds`, `compactSummaries`, `costUsd`, `usage`, `env` (below) | P |
+| `session` (one per transcript) | `harness` (set on a Cursor session; absent reads as Claude Code), `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `versions`, `models`, `bashCmds`, `compactSummaries`, `costUsd`, `usage`, `usageObserved`, `usageResponses`, `env` (below) | P |
 | | `agentType` (set on a subagent transcript; a custom agent's name is private), `frame`, `frameId` (the joined frame is one value that links rows; its fields pool only as cells), `session`, `parent`, `spawnedBy`, `spawnedIn` (join ids), `at`, `tsFirst`, `tsLast`, `promptFingerprint`, `repo`, `tools` (native names, which can hold a private MCP server's), `fileHashes`, `urls`, `searches`, `branches`, `tldrs` (400 chars), `confidences` (120 chars) | A |
 | | `setup`, `funnel`, `trust` (optional; absent on a record captured before version 12, and per field where the transcript holds none) | A |
 | | `strata` (optional; absent on a record captured before version 14: `languages` with each language's share bucket, `repoFiles` bucket, `frameworks`, `explore`; see "Errors, packages, and stack strata") | A |
 | | `project` (the folder slug, with the username and directory names), `files` (the paths as written, redacted) | L |
-| `user-prompt` (one per prompt) | `index`, `opened` (`typed` or `command`; absent before CAPTURE 10, when only a typed line opened a prompt), `wallSec`, `thinking`, `turns`, `model`, `efforts`, `usage` | P |
+| `user-prompt` (one per prompt) | `index`, `opened` (`typed` or `command`; absent before CAPTURE 10, when only a typed line opened a prompt), `wallSec`, `thinking`, `turns`, `model`, `efforts`, `usage`, `usageObserved`, `usageResponses` | P |
 | | `frame`, `frameId`, `session`, `ts`, `head` (the first 300 characters), `promptFingerprint`, `skills` (a skill's name can be private) | A |
 | | `strata` (the file's strata with this prompt's own `explore`; absent before version 14) | A |
 | `tool` (one per tool call) | `n`, `status` (`ok`, `error`, or `none` when no result is in the file; one record per tool-use id), `durationMs`, `harnessVersion`, `side`, `prompt`, `targetBase`, `steps`, `errorCode` (a member of a closed list on a failed call; absent on a call that did not fail and on a record captured before version 14) | P |
@@ -212,6 +212,8 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | | skeleton lines (`skeletons/<session>.json`: ids, usage, block hashes, each cost-state model's usage keys), `hook-calls.jsonl` `session`, `at`, and `error` (first line, redacted), `mcp-calls.jsonl` `query` and `at` (each `at` is finer than a UTC day) | A |
 | | `hook-calls.jsonl` `event`, `hit`, `ms`, `startMs`; `mcp-calls.jsonl` `matches` | P |
 | | a `pre-tool` row in `hook-calls.jsonl` is one per hook call on any tool (the installed entry has no matcher): `at`, `event`, `session`, `hit`, `ms`, `startMs`, `error` (`ms` is in-process work; `startMs` is the process time before the hook began, so `startMs + ms` is the field figure, a lower bound: the spawn, the row append, and process exit are outside it), and nothing of the tool, its input, or a query, so its classes are the A and P ones above and no class L field exists on it | A, P |
+
+**Usage totals say what they cover.** A session's and a prompt's `usage` is a sum over the responses that reported usage, and `usageObserved` lists the categories (`input`, `cacheWrite`, `cacheRead`, `output`, `thinking`) at least one of them reported, while `usageResponses` counts those responses (compare it with `assistantTurns` or `turns`). A category not listed was never recorded by the source: its number in `usage` is a placeholder zero, not a measurement, and the skeleton and the pool wire send it as null. A Cursor bubble with a zero token count, a VS Code Copilot request with no `modelTotals` or a zero `inputTokens`, and any line without a `usage` object therefore leave their category unobserved. A record captured before version 19 has neither field and reads as fully observed.
 
 A `P` date is at day resolution only: the finer timestamps above are all class `A`. `sw` (the per-field local-only switch for text
 fields) applies to `urls`, `searches`, `branches`, `tldrs`, `confidences`, `head`, `line`, `sig`, `example`, and `mcp-calls.jsonl` `query`.
