@@ -1,4 +1,4 @@
-import type { HookCall, PromptObservation, ToolObservation } from './schema.js';
+import type { HookCall, PromptObservation, ToolObservation, UsageField } from './schema.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BOOKS_MIN_PROMPTS, books, formatBooks, formatMeasure, formatRecall, measure, recall } from './query.js';
 import type { SurvivalState } from './survival.js';
@@ -95,7 +95,7 @@ describe('measure', () => {
     const calls = [{ at: store.sessions[0]?.tsFirst ?? '', query: '{}', matches: 1 }];
     const result = measure(store, calls, [], 4);
     expect(result.last.recallPerSession).toBe(0.25);
-    expect(result.before).toEqual({ sessions: 0, cursorSessions: 0, recurringPer100: null, recurringSignatures: null, cacheWritePerSession: null, recallPerSession: null, hookRecallPerSession: null, hookHitsPerSession: null, hookDepositsPerSession: null });
+    expect(result.before).toEqual({ sessions: 0, cursorSessions: 0, recurringPer100: null, recurringSignatures: null, cacheWritePerSession: null, cacheWriteSessions: 0, recallPerSession: null, hookRecallPerSession: null, hookHitsPerSession: null, hookDepositsPerSession: null });
     expect(formatMeasure(result)).toContain('-');
     expect(measure({ sessions: [], prompts: [], errors: [], subagents: [], tools: [], newerCaptures: 0 }, [], [], 5).last.sessions).toBe(0);
   });
@@ -140,6 +140,20 @@ describe('measure', () => {
     expect(measure(later, [], [], 1, '2026-06-02T00:00:00Z').last.cacheWritePerSession).toBe(sessions[1]?.usage.cacheWrite);
     expect(measure(later, [], [], 1).last.cacheWritePerSession).toBe(sessions[0]?.usage.cacheWrite);
     expect(formatMeasure(pinned)).toContain('from 2026-06-02T00:00:00Z');
+  });
+
+  it('averages cache writes over the sessions that recorded them, and prints a figure no session recorded as absent', async () => {
+    const loadedStore = await loaded();
+    const [first, second] = loadedStore.sessions.slice(0, 2).map((session, position) => ({ ...session, session: `s${String(position)}`, tsFirst: `2026-06-0${String(position + 1)}T00:00:00Z`, usage: { ...session.usage, cacheWrite: position === 0 ? 40 : 99 } }));
+    if (first === undefined || second === undefined) throw new Error('the fixture has no sessions');
+    const withCoverage = (usageObserved: UsageField[]) => ({ ...loadedStore, sessions: [{ ...first, usageObserved: ['cacheWrite' as const] }, { ...second, usageObserved }], errors: [] });
+    // The second session's 99 is a placeholder beside usageObserved: it must not enter the mean.
+    const partial = measure(withCoverage([]), [], [], 2);
+    expect(partial.last).toMatchObject({ sessions: 2, cacheWritePerSession: 40, cacheWriteSessions: 1 });
+    expect(formatMeasure(partial)).toContain('40 (1 of 2)');
+    const none = measure({ ...withCoverage([]), sessions: [{ ...first, usageObserved: [] }, { ...second, usageObserved: [] }] }, [], [], 2);
+    expect(none.last).toMatchObject({ cacheWritePerSession: null, cacheWriteSessions: 0 });
+    expect(formatMeasure(none)).toContain('n/a');
   });
 
   it('a cutoff after every session leaves the current window empty and the prior window the latest sessions', async () => {
@@ -246,6 +260,22 @@ describe('books outcome columns', () => {
     const [header, first, second] = formatBooks(rows, 'model').split('\n');
     expect(first?.length).toBe(header?.length);
     expect(second?.length).toBe(header?.length);
+  });
+
+  it('sums only the usage a prompt recorded: a category no prompt recorded is absent, and a partial one says how many did', () => {
+    const base = { input: 1, cacheWrite: 2, cacheRead: 10, output: 5, thinking: 0 };
+    // The second prompt's cacheRead 7 and thinking 9 are placeholders beside usageObserved, not measurements.
+    const list = [prompt({ session: 's', index: 0, usage: base, usageObserved: ['input', 'cacheWrite', 'cacheRead', 'output'] }), prompt({ session: 's', index: 1, usage: { ...base, cacheRead: 7, output: 3, thinking: 9 }, usageObserved: ['output'] })];
+    const [row] = books(storeOf(list), 'model', NOW);
+    expect(row).toMatchObject({ prompts: 2, cacheRead: 10, cacheWrite: 2, output: 8, thinking: null, usageRecorded: { cacheRead: 1, cacheWrite: 1, output: 2, thinking: 0 } });
+    const [header, line, ...notes] = formatBooks(row === undefined ? [] : [row], 'model').split('\n');
+    expect(line).toContain('n/a');
+    expect(line).not.toMatch(/\b0\b.*\bn\/a\b/);
+    expect(notes).toContain('m cache read: 1 of 2 prompts recorded');
+    expect(notes).toContain('m cache write: 1 of 2 prompts recorded');
+    expect(notes).toContain('m thinking: 0 of 2 prompts recorded');
+    expect(notes.join('\n')).not.toContain('output');
+    expect(header?.length).toBe(line?.length);
   });
 
   it('prints the columns, with a share where the cell has enough prompts', () => {

@@ -141,6 +141,24 @@ describe('deriveCells', () => {
     expect(cellsOf(classed, classMotif('edit-verify').motifId, 'week')).toMatchObject([{ sessions: 1, ok: 1, failed: 1, tokens: 20, durationMs: 2000 }]);
   });
 
+  it('sums only the usage categories a prompt observed, and says how many sessions recorded the figure', () => {
+    // cacheRead 7 is a placeholder beside usageObserved, not a measurement; s2 observed no input, so its prompt adds nothing to the figure.
+    const partial = { input: 100, cacheWrite: 0, cacheRead: 7, output: 50, thinking: 0 };
+    const none = { input: 0, cacheWrite: 0, cacheRead: 0, output: 300, thinking: 0 };
+    const mixed = store({
+      sessions: [session('s1'), session('s2'), session('s3')],
+      prompts: [prompt('s1', 0, { usage: partial, usageObserved: ['input', 'output'], usageResponses: 1 }), prompt('s2', 0, { usage: none, usageObserved: ['output'], usageResponses: 1 }), prompt('s3', 0, { usage: partial })],
+    });
+    // s3 carries no usageObserved (a record captured before it existed): every category reads as observed.
+    expect(cellsOf(mixed, classMotif('edit-verify').motifId, 'week')).toMatchObject([{ sessions: 3, tokens: 150 + 157, tokenSessions: 2 }]);
+  });
+
+  it('leaves a cell figure null when no session recorded input, never a measured zero', () => {
+    const unknown = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0, thinking: 0 };
+    const unrecorded = store({ sessions: [session('s1')], prompts: [prompt('s1', 0, { usage: unknown, usageObserved: [], usageResponses: 0 })] });
+    expect(cellsOf(unrecorded, classMotif('edit-verify').motifId, 'week')).toMatchObject([{ sessions: 1, tokens: null, tokenSessions: 0 }]);
+  });
+
   it('frames a version-2 prompt, whose session has no capture record, as unknown harness version', () => {
     const old = store({ prompts: [prompt('gone', 0, { frame: undefined })] });
     expect(cellsOf(old, classMotif('edit-verify').motifId, 'week')[0]?.frameBucket).toBe('claude-code/unknown/claude-opus-5-5');
