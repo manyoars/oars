@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -136,11 +136,37 @@ describe('depositing the OpenCode source', () => {
     expect(trackedKeys(s.storeDir)).toEqual(['mine/one.jsonl']);
   });
 
-  it('changes nothing in the OpenCode data folder: a deposit only reads', async () => {
+  it('changes nothing in the OpenCode data folder: a deposit only reads, and creates no -wal or -shm beside a closed WAL database', async () => {
     const s = await staged();
-    const before = readFileSync(join(s.home, 'opencode.db'));
+    const snapshot = (): string[] => readdirSync(s.home).sort().map((name) => `${name}:${readFileSync(join(s.home, name)).toString('base64')}`);
+    expect(readdirSync(s.home)).toEqual(['opencode.db']);
+    const before = snapshot();
     await deposit(s.runtime, options(['opencode']));
-    expect(readFileSync(join(s.home, 'opencode.db')).equals(before)).toBe(true);
+    expect(readdirSync(s.home)).toEqual(['opencode.db']);
+    expect(snapshot()).toEqual(before);
+  });
+
+  it('reads a WAL database that OpenCode still has open, including a row committed only to the -wal file', async () => {
+    const s = await staged();
+    const { DatabaseSync } = await import('node:sqlite');
+    // OpenCode is running: it holds a writer, and its newest message has not been checkpointed into opencode.db.
+    const writer = new DatabaseSync(join(s.home, 'opencode.db'));
+    try {
+      writer.exec('pragma wal_autocheckpoint = 0');
+      writer.prepare('insert into session_message (id, session_id, type, seq, time_created, time_updated, data) values (?, ?, ?, ?, ?, ?, ?)').run('msg_live', 'ses_B', 'user', 9, at(20), at(20), JSON.stringify({ time: { created: at(20) }, text: 'typed while OpenCode runs' }));
+      expect(statSync(join(s.home, 'opencode.db-wal')).size).toBeGreaterThan(0);
+      const db = join(s.home, 'opencode.db');
+      const bytes = readFileSync(db);
+      const names = readdirSync(s.home).sort();
+      expect(await deposit(s.runtime, options(['opencode']))).toMatchObject({ sessions: 2 });
+      const store = await loadStore(s.storeDir);
+      expect(store.prompts.filter((prompt) => prompt.session === 'opencode-ses_B').map((prompt) => prompt.head)).toContain('typed while OpenCode runs');
+      // Reading beside a live writer leaves the folder as OpenCode had it.
+      expect(readFileSync(db).equals(bytes)).toBe(true);
+      expect(readdirSync(s.home).sort()).toEqual(names);
+    } finally {
+      writer.close();
+    }
   });
 
   it('holds every verify invariant, including --strict, for a normal session, one with no usage, and one ending in an assistant line', async () => {

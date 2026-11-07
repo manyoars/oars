@@ -454,8 +454,10 @@ export const stageOpencode = async (root: string, sessions: readonly OpencodeFix
   const dir = join(root, 'opencode-data', 'opencode');
   mkdirSync(dir, { recursive: true });
   // A second stage in one test replaces the store.
-  rmSync(join(dir, file), { force: true });
+  for (const suffix of ['', '-wal', '-shm']) rmSync(join(dir, file + suffix), { force: true });
   const db = new DatabaseSync(join(dir, file));
+  // OpenCode always opens its database in WAL mode (core/src/database/database.ts:42); the mode is stored in the file, so a reader meets a WAL database.
+  db.exec('pragma journal_mode = wal');
   db.exec(`
     create table session_v2 (id text primary key, parent_id text, fork_session_id text, directory text not null, version text not null, agent text, time_created integer not null, time_updated integer not null);
     create table session_message (id text primary key, session_id text not null, type text not null, seq integer not null, time_created integer not null, time_updated integer not null, data text not null);

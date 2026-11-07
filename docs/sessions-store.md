@@ -970,7 +970,7 @@ and usage is nonzero. Then check three shapes the fixtures take on trust: whethe
 fork's copied `msg_<event id>_<seq>` rows (`opencode export` of the same session is the cross-check).
 
 - **Where.** `$XDG_DATA_HOME/opencode/opencode.db`, else `~/.local/share/opencode/opencode.db`, on every operating system, Windows included (`packages/util/src/global-roots.ts:5`,
-  `global.ts:13`). SQLite in WAL mode, opened read-only. `OPENCODE_DB` and a channel build's `opencode-<channel>.db` (`packages/cli/src/database-path.ts:4-12`) are not read. Like Cursor and the other
+  `global.ts:13`). SQLite in WAL mode (`core/src/database/database.ts:42`), opened read-only: with no `-wal` file beside it (OpenCode closed) it is opened immutable, so the deposit creates no `-shm` or `-wal`; with one (OpenCode running) it is opened plain read-only, which reads the rows not yet checkpointed into the main file. `OPENCODE_DB` and a channel build's `opencode-<channel>.db` (`packages/cli/src/database-path.ts:4-12`) are not read. Like Cursor and the other
   sources: read by default; `--allow` narrows and `--deny opencode` keeps it out; the nightly run repeats the saved list. Sessions older than 2.x live in JSON files and old tables that OpenCode
   migrates into this database at startup (`packages/core/src/database/v1-migration.bun.ts`), so a store OpenCode has not opened since then is not read.
 - **Mapping.** Three tables are read: `session_v2` (`core/src/session/sql.ts:29`), `session_message` (`:87`, one JSON `data` per message), and `session_part` (`:108`). A `user` message's `text` is a prompt.
