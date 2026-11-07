@@ -287,7 +287,10 @@ All of these but the two floors are set at the deploy. `wrangler.jsonc` binds `D
 | Binding | Holds |
 |---------|-------|
 | `DB` | The D1 database. |
-| `PSEUDONYM_KEY` | The key accounts are hashed under. Changing it makes every account new. |
+| `PSEUDONYM_KEY` | The key accounts are hashed under. Changing it makes every account new. It also derives the key that seals login handles ("Sign-in"), so no separate seal secret exists. |
+| `GITHUB_CLIENT_ID` | A var in `wrangler.jsonc`: the client ID of the Many Oars GitHub OAuth app (public). Unset, the login routes refuse GitHub with 503 `not_configured`. |
+| `GOOGLE_CLIENT_ID` | A var in `wrangler.jsonc`: the client ID of the Many Oars Google OAuth client (public). Unset, the login routes refuse Google with 503 `not_configured`. |
+| `GOOGLE_CLIENT_SECRET` | Secret, declared by name only: that client's secret, sent only to Google's token route. Unset, the login routes refuse Google with 503 `not_configured`. |
 | `BUNDLE_SIGNING_KEY` | An Ed25519 private key as a JWK. Clients pin the public half, so changing it fails their next login. |
 | `INGEST_HASH_KEY` | The one pool-wide key a host is hashed under (HMAC-SHA-256, `h:` and 64 hex digits) before anything is written. One key and not one per account, because the floor counts the same host across accounts. Unset refuses every deposit with `503 not_configured`, so a host is never stored in clear. Changing it makes every stored host new. |
 | `RAW` | The R2 bucket for the raw tier, bound by name in `wrangler.jsonc` (`oars-pool-raw`). Unset refuses the raw routes with 503 `not_configured`. |
@@ -337,7 +340,7 @@ The operator's read lists anomalies over the 30 day window only and counts insta
 
 ## Tests
 
-`packages/pool` runs the bundled handler and its D1 store under the Workers runtime through Miniflare, in-process, with a stub sign-in provider (its profile route for the Worker, and its device and token routes for the CLI's own `fetch`), so it needs no Docker, account, or network. `full-run.test.ts` drives the real CLI commands against it over a local socket.
+`packages/pool` runs the bundled handler and its D1 store under the Workers runtime through Miniflare, in-process, with a stub sign-in provider behind the Worker's outbound fetch (its device, token, and profile routes), so it needs no Docker, account, or network. `full-run.test.ts` drives the real CLI commands against it over a local socket.
 
 ## Known gaps
 
@@ -345,7 +348,7 @@ The operator's read lists anomalies over the 30 day window only and counts insta
 
 A live read's baseline is not traceable through lineage: the floor counts only the sliced day's cells, so the read cites those and states `value.baseline` from cells it does not cite (cells at the floor, like every other number a bundle serves).
 
-`POST /v1/login` is unauthenticated and, in the Worker, unlimited: the rate-limit rule in deploy step 6 is what bounds it, so the pool must not be deployed without that rule.
+`POST /v1/login/start` and `POST /v1/login/poll` are unauthenticated and, in the Worker, unlimited: each start spends one call to the provider's device-code route and each poll one to its token route (and, on approval, its profile route) from the Worker's address, so the rate-limit rule in deploy step 6 is what bounds them and the pool must not be deployed without that rule.
 
 `POST /v1/telemetry` is unauthenticated and, in the Worker, unlimited, and each request writes one R2 object of up to 1 MiB that never expires: the same rate-limit rule in deploy step 6 is what bounds it, so the pool must not be deployed without that rule.
 
@@ -362,11 +365,11 @@ With no cap on contributing, the only ceilings left are D1's. Cloudflare's page 
 
 Nothing has been deployed. Step 5 is done, and steps 1 to 4, 6, 7, and 8 are open. Each step is owed once, by the account holder, in this order:
 
-1. Create a GitHub OAuth app with device flow enabled, and note its client id. The CLI reads it from `OARS_GITHUB_CLIENT_ID`; the pool holds none of it.
-2. Create a Google OAuth client of type "TVs and Limited Input devices", and note its id and secret, which the CLI reads from `OARS_GOOGLE_CLIENT_ID` and `OARS_GOOGLE_CLIENT_SECRET`.
+1. Done: the GitHub OAuth app "Many Oars CLI" (org `manyoars`) exists with device flow enabled. Its client ID, `Ov23liKTHzJPQeVimbnO`, is public and sits in `wrangler.jsonc` `vars` as `GITHUB_CLIENT_ID`. GitHub's device flow needs no secret.
+2. The Google OAuth client "oars CLI device flow" (project `many-oars`, type "TVs and Limited Input devices") exists; its client ID sits in `wrangler.jsonc` `vars` as `GOOGLE_CLIENT_ID`. **Owner step:** set its secret on the Worker with `wrangler secret put GOOGLE_CLIENT_SECRET`, reading the value from the JSON in `Documents\Many Oars Co\Accounts\` without printing it. No other login secret is new: login handles are sealed under a key derived from `PSEUDONYM_KEY`. The CLI holds no client ID or secret.
 3. Run `wrangler d1 create oars-pool` and `wrangler r2 bucket create oars-telemetry` in `packages/pool`. The config binds both by name, so commit no `database_id`. Set no lifecycle rule on the telemetry bucket: the batches are the record and do not expire. The Analytics Engine dataset `oars_telemetry` is created by the first write; if the account has not used Analytics Engine, turn it on in the dashboard first. Then create the raw tier's bucket the same way: `wrangler r2 bucket create oars-pool-raw` (the name `wrangler.jsonc` binds), and give it a lifecycle rule that expires objects under the `staging/` prefix after 7 days: `wrangler r2 bucket lifecycle add oars-pool-raw staging-expiry staging/ --expire-days 7`. Keep the raw bucket private: it takes no public domain and no `r2.dev` URL. Before the raw tier opens, verify the raw-tier ceiling against production R2: upload and complete a transcript of a few hundred MB and read the subrequest and CPU figures (see The effective ceiling).
 4. Run `wrangler d1 migrations apply oars-pool --remote` in `packages/pool`. Migration `0011_telemetry_rollup.sql` adds the telemetry rollup table; `wrangler deploy` registers the nightly cron from `wrangler.jsonc`. Days before the first deploy are rolled up by calling `rollupDay` for them; the cron reaches only the last two.
 5. Done (2026-11-04, confirmed with `wrangler secret list`): `PSEUDONYM_KEY`, `BUNDLE_SIGNING_KEY`, and `INGEST_HASH_KEY` are set on a draft `oars-pool` Worker with no code and no route, and `COVENANT_VERSION` is left unset. The D1 database from step 3 does not exist yet. `OPERATOR_TOKEN` is not set: to use the operator's read, run `wrangler secret put OPERATOR_TOKEN` (32 random bytes); without it that route answers 503.
-6. Before `wrangler deploy`, add a Cloudflare rate-limiting rule on `/v1/login` and `/v1/telemetry` (in the dashboard, or with the rulesets API). Neither route takes a credential. Each `/v1/login` call spends one read of the provider's profile route from the Worker's address, and each `/v1/telemetry` call writes one R2 object of up to 1 MiB that is never deleted, so without a rule anyone can drive that spend and that storage. The Worker holds no limiter of its own.
+6. Before `wrangler deploy`, add a Cloudflare rate-limiting rule on `/v1/login/start`, `/v1/login/poll`, and `/v1/telemetry` (in the dashboard, or with the rulesets API). None of the three takes a credential. Each `/v1/login/start` call spends one call to the provider's device-code route and each `/v1/login/poll` call one to its token route from the Worker's address, and each `/v1/telemetry` call writes one R2 object of up to 1 MiB that is never deleted, so without a rule anyone can drive that spend and that storage. The Worker holds no limiter of its own.
 7. Run `wrangler deploy` in `packages/pool`, confirm it bound the database from step 3 rather than creating another, and attach the custom domain in the dashboard or with `--domain`. Only `--dry-run` has been exercised.
 8. Publish the covenant, and only then run `wrangler secret put COVENANT_VERSION`, which opens deposits.
