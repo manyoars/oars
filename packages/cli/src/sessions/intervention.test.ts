@@ -220,8 +220,8 @@ describe('a git undo read from a real command line', () => {
     expect(fromCommandLine(command)).toBe('revert');
   });
 
-  // The segment drops a flag, so `git checkout -b feature/x` and `git checkout -` leave the bare pair that `git checkout -- <path>` leaves; the step's flags tell them apart (`<literal>` for `-`, `-b` for a create).
-  it.each(['git checkout -', 'git checkout -b feature/x', 'git checkout -B feature/x', 'git checkout --detach'])('`%s` moves to a branch and undoes no work: none', (command) => {
+  // The segment drops a flag, so `git checkout -b feature/x` and `git checkout -` leave the bare pair that `git checkout -- <path>` leaves; the step's flags tell them apart (`<literal>` for `-`, `-b` for a create). `--patch` stands for any flag off the public list, which the step also turns into `<literal>`: those read `none` as a limit.
+  it.each(['git checkout -', 'git checkout -b feature/x', 'git checkout -B feature/x', 'git checkout --detach', 'git checkout --patch'])('`%s` moves to a branch and undoes no work: none', (command) => {
     expect(fromCommandLine(command)).toBe('none');
   });
 

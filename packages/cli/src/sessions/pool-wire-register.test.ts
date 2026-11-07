@@ -71,6 +71,7 @@ export const fieldBytes = (batch: object): Map<string, number> => {
 export const envelopeBytes = (batch: object): number => 2 + Math.max(0, Object.values(batch).filter((held) => held !== undefined).length - 1) + 1;
 
 const FRAME = { harness: 'claude-code', harnessVersion: '2.1.314', model: 'claude-opus-5-5', effort: 'high', day: '2026-11-01', platform: 'linux', shell: 'bash', stack: { languages: ['python'], frameworks: [], size: null, languageShares: [{ language: 'python', languageShare: 'over-50' }, { language: 'other', languageShare: '10-50' }] } };
+const COVERAGE = { repoKey: '0123456789abcdef', orgSize: 'unknown', team: 'solo', repoVisibility: 'private', hour: 14 };
 const REACH = { filled: true, mcp: ['github'], skills: ['commit'], plugins: ['private'] };
 const STEP = { status: 'ok', tokens: 3, ms: 4, remainingTokens: 2, agentType: null, parent: null, frame: 0 };
 
@@ -88,9 +89,9 @@ export const REGISTER_FIXTURE = {
       leaves: 12,
       harness: 'claude-code',
       spawnedIn: null,
-      frame: { ...FRAME, reach: REACH },
-      frames: [{ ...FRAME, reach: REACH }],
-      prompts: [{ cls: 'edit-verify', errors: 0, wallSec: 5, usage: { input: 1, cacheWrite: 2, cacheRead: 3, output: 4, thinking: 5 }, explore: 6, intervention: 'redo', frame: FRAME }],
+      frame: { ...FRAME, reach: REACH, ...COVERAGE },
+      frames: [{ ...FRAME, reach: REACH, ...COVERAGE }],
+      prompts: [{ cls: 'edit-verify', errors: 0, wallSec: 5, usage: { input: 1, cacheWrite: 2, cacheRead: 3, output: 4, thinking: 5 }, explore: 6, intervention: 'redo', frame: { ...FRAME, hour: 14 } }],
       tools: [
         {
           side: false,
@@ -166,7 +167,7 @@ describe('the wire field register', () => {
     const total = [...fieldBytes(REGISTER_FIXTURE).values()].reduce((sum, bytes) => sum + bytes, 0);
     expect(total + envelopeBytes(REGISTER_FIXTURE)).toBe(Buffer.byteLength(canonicalBytes(REGISTER_FIXTURE), 'utf8'));
     expect(envelopeBytes(REGISTER_FIXTURE)).toBe(9);
-    expect(Buffer.byteLength(canonicalBytes(REGISTER_FIXTURE), 'utf8')).toBe(2_976);
+    expect(Buffer.byteLength(canonicalBytes(REGISTER_FIXTURE), 'utf8')).toBe(3_186);
     expect(fieldBytes({ a: [1, 2], b: { c: 'x' }, d: undefined }).get('a')).toBe(4 + 5);
     expect(fieldBytes({ a: [1, 2], b: { c: 'x' }, d: undefined }).get('b')).toBe(4 + 2);
     expect(fieldBytes({ a: [1, 2], b: { c: 'x' }, d: undefined }).get('c')).toBe(7);
