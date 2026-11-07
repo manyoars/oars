@@ -266,7 +266,7 @@ export interface SessionObservation {
   /**
    * Which `usage` categories at least one counted response reported (class P). A category not listed was never recorded by the source, so its `usage` number is a
    * placeholder zero and not a measurement; a listed one is a sum over `usageResponses` responses, which a partial sum covers only in part. Absent on a record captured
-   * before version 19: every category reads as observed there.
+   * before version 20: every category reads as observed there.
    */
   usageObserved?: UsageField[];
   /** How many responses reported any usage (class P); compare with `assistantTurns` or `turns` for the share a sum covers. Same absence rule as `usageObserved`. */
@@ -581,7 +581,7 @@ export interface UserPromptObservation {
   /**
    * Which `usage` categories at least one counted response reported (class P). A category not listed was never recorded by the source, so its `usage` number is a
    * placeholder zero and not a measurement; a listed one is a sum over `usageResponses` responses, which a partial sum covers only in part. Absent on a record captured
-   * before version 19: every category reads as observed there.
+   * before version 20: every category reads as observed there.
    */
   usageObserved?: UsageField[];
   /** How many responses reported any usage (class P); compare with `assistantTurns` or `turns` for the share a sum covers. Same absence rule as `usageObserved`. */
