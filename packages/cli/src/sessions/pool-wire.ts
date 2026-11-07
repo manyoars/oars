@@ -637,15 +637,15 @@ export const skeletonOf = (records: SessionRecords, id: string, read: ShellReade
   const places = records.transcripts.map(({ tools }) => placesOf(tools));
   const spawners = places[0]?.calls ?? new Map<number, number>();
   // A subagent's step names the call that spawned it by that call's `n` in the transcript its session record names as `spawnedIn`, which the skeleton holds as a position in the batch: that transcript's, and the call's within it.
-  // A record that names none the batch holds, or itself, or a spawner whose own chain comes back to it, sends no link.
+  // A record that names none the batch holds, or itself, or lies on a cycle of spawners, sends no link; one whose spawner sits on a cycle it is not on keeps its link.
   const spawnerOf = records.transcripts.map(({ session }, index): number | null => {
     const at = index === 0 || session.spawnedIn === null ? -1 : records.transcripts.findIndex((held) => held.session.session === session.spawnedIn);
     return at === -1 ? null : at;
   });
   const cyclic = (index: number): boolean => {
-    let at: number | null = index;
-    for (let hop = 0; hop < spawnerOf.length && at !== null; hop += 1) at = spawnerOf[at] ?? null;
-    return at !== null;
+    let at: number | null = spawnerOf[index] ?? null;
+    for (let hop = 0; hop < spawnerOf.length && at !== null && at !== index; hop += 1) at = spawnerOf[at] ?? null;
+    return at === index;
   };
   // The exact tokens of the runs each main-run call spawned. A run a subagent spawned names a call of that other transcript, so it joins no main-run step.
   const spawned = new Map<number, number>();
@@ -1080,7 +1080,7 @@ const parseErrorCode = (held: Collected, status: SkeletonTool['status'], value: 
   return code;
 };
 
-/** A call's `recoveryCalls`: absent is none; otherwise at most 5 actions (a value off the list reads as `other`) and a flag, and only on a call that did not succeed or sit out. */
+/** A call's `recoveryCalls`: absent is none; otherwise at most 5 actions (a value off the list reads as `other`) and a flag, and only on a call that did not succeed or sit out; the transcript parse then refuses one on a call whose status is not `error`. */
 const parseRecovery = (held: Collected, status: SkeletonTool['status'], value: unknown, at: string): RecoveryCalls | undefined => {
   if (value === undefined) return undefined;
   if (status === 'ok' || status === 'none') throw new Refused(at, 'only a failed call has one');
@@ -1106,6 +1106,7 @@ const parseKeys = (held: Collected, native: string | undefined, value: unknown, 
 const parseTool = (held: Collected, harness: WireHarness, value: unknown, at: string): SkeletonTool => {
   const raw = fieldsOf(held, value, at, ['side', 'status', 'steps'], OPTIONAL.tool);
   const status = oneOf(held, STATUSES, raw.status, under(at, 'status'));
+  const errorCode = parseErrorCode(held, status, raw.errorCode, under(at, 'errorCode'));
   const recoveryCalls = parseRecovery(held, status, raw.recoveryCalls, under(at, 'recoveryCalls'));
   const steps = listOf(raw.steps, under(at, 'steps'), (entry, entryAt) => parseStep(held, harness, entry, entryAt));
   const keys = parseKeys(held, steps[0]?.native, raw.keys, under(at, 'keys'));
@@ -1117,7 +1118,7 @@ const parseTool = (held: Collected, harness: WireHarness, value: unknown, at: st
     prompt: orNull(raw.prompt, under(at, 'prompt'), countOf),
     status,
     durationMs: orNull(raw.durationMs, under(at, 'durationMs'), countOf),
-    errorCode: parseErrorCode(held, status, raw.errorCode, under(at, 'errorCode')),
+    errorCode,
     ...(recoveryCalls === undefined ? {} : { recoveryCalls }),
     ...(keys === undefined ? {} : { keys }),
     ...(keysDropped === undefined ? {} : { keysDropped }),
@@ -1388,9 +1389,37 @@ const isFloor = (value: unknown): value is number => typeof value === 'number' &
 const isFloors = (value: unknown): value is BundleFloors =>
   isFields(value) && isFloor(value.public) && isFloor(value.disclosure) && (value.families === undefined || (isFields(value.families) && Object.values(value.families).every(isFloor)));
 
-// A bundle states the floor it applied (`floor`, t881), and a client cannot tell which floor a bundle without one applied, so a format 1 bundle with no `floor` is refused as not a bundle this version reads.
+const isSourced = (value: unknown): value is Sourced =>
+  isFields(value) && ((value.state === 'value' && typeof value.value === 'number') || (value.state === 'no source yet' && typeof value.reason === 'string'));
+
+const isCount = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+
+/** The set of four a bundle may carry: every field the `books` read prints is present and of its type, with its format, vocabulary version, and the two served lists checked as well, so a signed bundle with a malformed block reads as not a bundle, not as a crash in the printer. */
+const isBooks = (value: unknown): value is Books =>
+  isFields(value) &&
+  isFloor(value.floor) &&
+  value.format === BUNDLE_FORMAT &&
+  typeof value.vocabVersion === 'string' &&
+  isFields(value.asOf) &&
+  (value.asOf.day === null || typeof value.asOf.day === 'string') &&
+  isFields(value.served) &&
+  isCount(value.served.total) &&
+  Array.isArray(value.served.byWeek) &&
+  Array.isArray(value.served.byTuple) &&
+  isCount(value.backlog) &&
+  isSourced(value.panel) &&
+  (value.panelDay === null || typeof value.panelDay === 'string') &&
+  isFields(value.demand) &&
+  isSourced(value.demand.comparisonReadOwners) &&
+  isSourced(value.demand.followOnReads) &&
+  isFields(value.goal) &&
+  isSourced(value.goal.readYield) &&
+  isSourced(value.goal.costPerServedCell) &&
+  isSourced(value.goal.yieldPerServedCell);
+
+// A bundle states the floor it applied (`floor`), and a client cannot tell which floor a bundle without one applied, so a format 1 bundle with no `floor` is refused as not a bundle this version reads.
 const isBundle = (value: unknown): value is Bundle =>
-  isFields(value) && value.format === BUNDLE_FORMAT && typeof value.harness === 'string' && isHarness(value.harness) && typeof value.harnessVersion === 'string' && typeof value.vocabVersion === 'string' && typeof value.floor === 'number' && isFields(value.asOf) && Array.isArray(value.cells) && Array.isArray(value.motifs) && Array.isArray(value.reads) && Array.isArray(value.strata) && (value.floors === undefined || isFloors(value.floors));
+  isFields(value) && value.format === BUNDLE_FORMAT && typeof value.harness === 'string' && isHarness(value.harness) && typeof value.harnessVersion === 'string' && typeof value.vocabVersion === 'string' && typeof value.floor === 'number' && isFields(value.asOf) && Array.isArray(value.cells) && Array.isArray(value.motifs) && Array.isArray(value.reads) && Array.isArray(value.strata) && (value.floors === undefined || isFloors(value.floors)) && (value.books === undefined || isBooks(value.books));
 
 const signatureHolds = async ({ payload, signature }: SignedBundle, key: PinnedKey): Promise<boolean> => {
   try {

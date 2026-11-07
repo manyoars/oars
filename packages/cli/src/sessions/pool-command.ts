@@ -39,7 +39,7 @@ const DEFAULT_EXPIRY_SEC = 900;
 /** RFC 8628: a `slow_down` adds five seconds to every poll after it. */
 const SLOW_DOWN_MS = 5000;
 
-export { isObject, loadSignIns, replicaFile, textIn };
+export { isObject, loadSignIns, textIn };
 
 const usage = (message: string, step: string): CliError => new CliError(message, ExitCode.USAGE, step);
 
