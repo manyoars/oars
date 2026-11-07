@@ -1,6 +1,7 @@
 // The telemetry rollup, the fleet read, and the operator's anomaly read. The routes and the nightly handler run under Miniflare's workerd (real R2 and D1); the counting rules run on rows built in memory.
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { LATENCY_EDGES } from '../../cli/src/telemetry/measures.js';
+import { ownCells } from '../../cli/src/telemetry/report.js';
 import { K_CELL } from './derive.js';
 import type { Env, PoolDb } from './http.js';
 import { anomaliesOf, fleetCells, measurablesOf, operator, OUTLIER_SCORE, type InstallDay } from './telemetry-fleet.js';
@@ -91,6 +92,18 @@ describe('the fleet read, from the nightly rollup, on the Worker', () => {
     expect(LATENCY_EDGES.find((edge) => edge >= 100)).toBe(130);
     expect(cellsOf(at.json, 7)).toContainEqual({ metric: 'hook.pre-tool.latency', dimension: 'harnessVersion', value: '2.1.5', kind: 'latency', p50: 130, p95: 130 });
     expect(cellsOf(at.json, 7)).toContainEqual({ metric: 'hook.pre-tool.hit', dimension: 'harnessVersion', value: '2.1.5', kind: 'rate', p50: 1 });
+  }, 60_000);
+
+  it('serves a latency cell equal to the user’s own numbers over the same events: K_CELL installs that each hold the fixture’s ten pre-tool latencies', async () => {
+    // The ten latencies of the CLI report's fixture spool; the fleet side runs the rollup and `fleetCells`, the user's side runs `ownCells`, and both count in `measures.ts` buckets.
+    const events = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100].map((ms) => hook(ms));
+    for (let at = 1; at <= K_CELL; at += 1) await keep(pool, daysAgo(1), uuid(at), events);
+    await nightly(pool);
+    const served = cellsOf((await pool.get('/v1/telemetry/fleet')).json, 7).find((one) => one['metric'] === 'hook.pre-tool.latency');
+    const own = ownCells(events.map((event) => JSON.stringify(event)), Date.parse('2026-11-06T13:00:00Z'), 7).find((one) => one.metric === 'hook.pre-tool.latency');
+    expect(own).toMatchObject({ kind: 'latency', n: 10 });
+    expect(served).toMatchObject({ p50: own && 'p50' in own ? own.p50 : undefined, p95: own && 'p95' in own ? own.p95 : undefined });
+    expect(served?.['p50']).toBeDefined();
   }, 60_000);
 
   it('serves no count, no total, and no install, so no two served numbers differ by an install under the floor', async () => {
