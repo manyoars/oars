@@ -21,6 +21,10 @@
 // the refusal text and loses its `manifest`, and where a result line is new (every Codex refusal, a Cursor one whose status is neither `error` nor `completed`, or one whose terminal result ended aborted) its session's `lines` and skeleton move. Any other
 // decision value, or none, changes nothing and is never stored; a Grok plan-mode refusal and a Codex `write_stdin rejected:` stay as they were. EXTRACTOR stays 11.
 //
+// Version 21 (CAPTURE 21) keeps a `git checkout` step's target class, `target` `path` or `word` (never the target's text), so the `revert` rule can tell `git checkout -- src/a.ts` and `git checkout --ours src/a.ts` (a
+// path) from `git checkout feature/x` (a branch or a path). It also writes a Codex `turn_aborted` with reason `interrupted` as the interrupt marker user line, so that prompt record exists and the session's
+// `prompts` and skeleton move; a Codex session with no such turn is unchanged. A `git checkout` step captured before reads as it did (no `target`). EXTRACTOR 15 reads a Codex or Gemini decline in its fixed text as `user-stop`.
+//
 // Version 17 (CAPTURE 17) frames a Gemini CLI shell call as the shell that ran it. A session whose own `<session_context>` turn says `My operating system is: win32` (or,
 // with no such turn, whose working directory is written the Windows way) stores its shell calls as `PowerShell` where it stored `Bash`: the tool record's `tool`, an
 // error line's `tool`, the session's `tools` and the skeleton's tool names, each step's `native` (`run_shell_command` before), and the frame's `shell` (`bash` before), so every `frameId` of that
@@ -83,13 +87,13 @@ import type { RepoSize } from './public-vocabulary.js';
 import type { SessionFunnel, SessionSetup, SessionTrust } from './session-shape.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '20';
+export const CAPTURE_VERSION = '21';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
 
 /** Stamped `v` on every derived record. A bump re-derives from the log; no transcript is read. */
-export const EXTRACTOR_VERSION = '14';
+export const EXTRACTOR_VERSION = '15';
 
 export const PROMPT_HEAD_CHARS = 300;
 export const ERROR_EXAMPLE_CHARS = 160;
@@ -398,6 +402,11 @@ export interface ShellIdentity {
   program: string;
   sub: string | null;
   flags: string[];
+  /**
+   * Only on `git checkout` (CAPTURE 21), the class of what it acts on and never the target's text: `path` where the line proves a path (a `--` marker, or a flag that only takes
+   * paths), `word` where a target word the segment drops (a slash, quotes) stands with no such proof, so it is a branch or a path and the line cannot say which. Absent with no such word.
+   */
+  target?: 'path' | 'word';
   /** Absent when the command pulled nothing. */
   pulls?: PullIdentity[];
 }

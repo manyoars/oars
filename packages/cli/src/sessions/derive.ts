@@ -167,9 +167,19 @@ const CHECKOUT_MOVES = new Set(['<literal>', '-b', '-B', '--orphan', '--detach']
 /** A prompt that begins by asking for the undo, in English: `revert that`, `please undo`, `rollback`. */
 const ASKS_UNDO = /^(?:please )?(?:revert|undo|roll ?back)\b/i;
 
+/** The capture version that keeps a `git checkout` step's `target` class. */
+const TARGET_CLASS_CAPTURE = 21;
+
 /** Whether the segment at index `at` is a checkout that moves to a branch: the step with the same `seg` holds the flags that the segment drops (the stored step no longer holds `run`). */
-const movesBranch = (tool: ToolObservation, at: number): boolean =>
-  tool.steps?.some(({ seg, identity }) => seg === at && identity !== null && 'program' in identity && identity.flags.some((flag) => CHECKOUT_MOVES.has(flag))) === true;
+const movesBranch = (tool: ToolObservation, at: number): boolean => {
+  const steps = tool.steps?.filter(({ seg }) => seg === at).map(({ identity }) => identity).filter((identity) => identity !== null && 'program' in identity) ?? [];
+  // From CAPTURE 21 the step names the class of what the checkout acts on: a proved path is an undo whatever the flags, and an unproved word is never one. Before it, only the flags tell.
+  if (Number(tool.cv) >= TARGET_CLASS_CAPTURE) {
+    if (steps.some((identity) => identity.target === 'path')) return false;
+    if (steps.some((identity) => identity.target === 'word')) return true;
+  }
+  return steps.some((identity) => identity.flags.some((flag) => CHECKOUT_MOVES.has(flag)));
+};
 
 /** A clean shell call that undid work in git. `git reset --hard` is read from the step, since a segment keeps no flag. */
 const isGitUndo = (tool: ToolObservation): boolean =>
