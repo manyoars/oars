@@ -6,6 +6,7 @@ import { covenantAccept, covenantNotAccepted, covenantStatus, depositsClosed, ha
 import { answer, bound, refuse, wholeBinding, type Env } from './http.js';
 import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf } from './ingest.js';
 import { accountOf, login } from './identity.js';
+import { rawRoute } from './raw.js';
 
 /** D1 holds at most 2 MB in one value. A body declaring more is refused unread, and one that declares nothing is measured before it is parsed. */
 const MAX_DEPOSIT_BYTES = 1024 * 1024;
@@ -100,6 +101,8 @@ const decoded = (name: string): string => {
 export default {
   fetch: async (request: Request, env: Env): Promise<Response> => {
     const { pathname } = new URL(request.url);
+    const raw = rawRoute(request, env);
+    if (raw !== undefined) return raw;
     if (request.method === 'POST') {
       if (pathname === '/v1/deposits') return deposit(request, env);
       if (pathname === '/v1/login') return login(request, env);
