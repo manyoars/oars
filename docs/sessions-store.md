@@ -329,7 +329,13 @@ for a prompt that holds it, so **absent means not computed** and `unknown` means
 
 The precedence is `unknown` (first case), `revert`, `redo`, `after-error`, `unknown` (second case), `none`: a positive record stands even where a later record is unreadable. The rule reads
 the normalized records every harness writes (`Bash`, `PowerShell`, `Edit`, `Write`, `MultiEdit`, the call's `status`, its `target` hash, and its `segments`), so a harness supports a bucket as far as its
-adapter fills those records. The table of what each harness supports is below; commit survival stays in "Commit survival" and no bucket here reads it.
+adapter fills those records. Commit survival stays in "Commit survival" and no bucket here reads it.
+
+**Harness support.** `intervention-harness.test.ts` writes the same six scenarios (a next prompt that touches other work, a last call that failed, a repeated edit, a git undo, a request to undo, and a
+single prompt) in each harness's own form and runs it through the adapter. Claude Code, Cursor, Codex, Copilot CLI, VS Code Copilot Chat, Gemini CLI, and Grok Build all read every bucket, with
+one exception that the test pins: **Codex's `revert` by a git command is not seen when the command is the `bash -lc <command>` form its CLI sends**, because the adapter joins the argv with spaces
+and the shell reader then takes `bash -lc git` as the command, so the segment is `git` and not `git revert`. A Codex session reads `none` there; its `revert` by a request in the next prompt, and
+by an unwrapped argv, is read. No harness is guessed at: a bucket that needs a record the adapter does not fill reads `none` or `unknown` by the table above.
 
 ### Hashing
 
