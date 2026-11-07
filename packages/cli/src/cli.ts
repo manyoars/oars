@@ -181,7 +181,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
 
   sessions
     .command('deposit')
-    .description('read session logs into the local observation log, from every folder unless --allow names some or --deny keeps some out; idempotent. Subagent transcripts under each session (<project>/<session>/subagents/) are deposited with their parent, and each raw transcript is hard-linked into the oars archive beside the store')
+    .description('read session logs into the local observation log, from every folder unless --allow names some or --deny keeps some out; idempotent. Subagent transcripts under each session (<project>/<session>/subagents/) are deposited with their parent, and each raw transcript is hard-linked or copied into the oars archive beside the store')
     .option('--allow <folder>', 'a project folder to read: its path, or its name under ~/.claude/projects (repeatable); `cursor`, `codex`, `copilot`, `gemini`, `grok`, `opencode`, `vscode-copilot`, and `otel` name the Cursor, Codex, Copilot CLI, Gemini CLI, Grok Build, OpenCode, VS Code Copilot Chat, and OpenTelemetry GenAI trace stores. A trailing slash names everything under a folder; * and ? are wildcards', collect)
     .option('--allow-file <list>', 'a file of --allow entries, one per line (# starts a comment, and !<entry> keeps a folder out); repeatable, combines with --allow', collect)
     .option('--deny <folder>', 'a folder never to read, in any form --allow takes (repeatable); saved, and it wins over every --allow until that exact entry is named with --allow', collect)
@@ -390,7 +390,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
 
   hook
     .command('install')
-    .description('merge the SessionStart, PostToolUseFailure, and SessionEnd hooks into a settings file (existing hooks are kept) and raise cleanupPeriodDays to at least 365')
+    .description('merge the SessionStart, PreToolUse, PostToolUseFailure, and SessionEnd hooks into a settings file (existing hooks are kept), raise cleanupPeriodDays to at least 365, and on Windows register the nightly task (which sends to the pool after you accept its covenant)')
     .option('--scope <scope>', 'user (~/.claude/settings.json; the default), project (./.claude/settings.json), or file (needs --file; implied by --file)', scopeOption)
     .option('--file <path>', 'the settings file for --scope file')
     .option('--keep-retention', 'leave cleanupPeriodDays as it is (the harness deletes raw transcripts older than it)')
@@ -485,7 +485,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
       emit(deps, flag(command.optsWithGlobals(), 'json'), await gateReport(sessionDeps(deps)));
     });
 
-  const pool = program.command('pool').description('sign in to a pool server, deposit session skeletons (a closed list of fields, each value redacted first), and fetch signed reads; local capture, recall, and reads need none of it');
+  const pool = program.command('pool').description('sign in to a pool server, deposit session skeletons (a closed list of fields, each value redacted first) and, after a yes to the raw prompt, redacted raw copies, and fetch signed reads; local capture, recall, and reads need none of it');
   const serverOption = '--server <url>';
   const serverHelp = 'the pool server, https or plain http to localhost (default: OARS_POOL_URL, else https://pool.manyoars.com)';
 
