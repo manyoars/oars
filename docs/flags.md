@@ -1,8 +1,8 @@
 # Switches
 
-Every default, hold, and environment gate in the `oars` CLI (`packages/cli/src`) and the pool (`packages/pool/src`): what it was, what it is now, and why any stayed. On `main` after 0.3.0 (not yet in a release), nothing waits behind a flag, a variable, or a closed default except the consent prompts: the pool covenant, accepted before a batch leaves the machine, and the raw-log consent (t884). An off switch stays wherever one exists; none has to be set to turn a thing on.
+Every default, hold, and environment gate in the `oars` CLI (`packages/cli/src`) and the pool (`packages/pool/src`): what it was, what it is now, and why any stayed. As of 0.4.0, nothing waits behind a flag, a variable, or a closed default except the consent prompts: the pool covenant, accepted before a batch leaves the machine, and the raw-log consent (t884). An off switch stays wherever one exists; none has to be set to turn a thing on.
 
-`Now` is the state on `main` after 0.3.0 (t896), not yet in a release. Anchors are the line of the named symbol at the commit that last changed this file; grep the symbol if one has drifted.
+`Now` is the state as of 0.4.0 (t896). Anchors are the line of the named symbol at the commit that last changed this file; grep the symbol if one has drifted.
 
 ## Census
 
