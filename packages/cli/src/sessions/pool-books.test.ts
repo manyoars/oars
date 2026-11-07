@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { contentHash } from './read.js';
-import { booksLines, lastFetchedBundle } from './pool-books.js';
+import { booksLines, booksTotals, lastFetchedBundle } from './pool-books.js';
 import { BUNDLE_FORMAT, VOCAB_VERSION, type Books, type Bundle } from './pool-wire.js';
 
 const SERVER = 'https://pool.example.test';
@@ -102,5 +102,17 @@ describe('booksLines', () => {
 
   it('says there is no known day for a pool with none', () => {
     expect(booksLines(bundleOf(booksOf({ asOf: { pool: 'p', day: null } })))[0]).toBe('served cells 12, below floor 7, as of no known day');
+  });
+});
+
+describe('booksTotals', () => {
+  it('is flat numbers with null for every field that has no source, and null when there are no books', () => {
+    expect(booksTotals(bundleOf(booksOf()))).toEqual({ servedCells: 12, belowFloor: 7, panel: 4, comparisonReadOwners: null, followOnReads: null, readYield: null, costPerServedCell: null, yieldPerServedCell: null });
+    expect(booksTotals(bundleOf(undefined))).toBeNull();
+    expect(booksTotals(undefined)).toBeNull();
+  });
+
+  it('keeps a measured zero as 0', () => {
+    expect(booksTotals(bundleOf(booksOf({ panel: { state: 'value', value: 0 } })))?.panel).toBe(0);
   });
 });

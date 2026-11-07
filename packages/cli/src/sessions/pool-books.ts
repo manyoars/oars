@@ -63,3 +63,32 @@ export const booksLines = (bundle: Bundle | undefined): string[] => {
   if (bundle === undefined) return ['no pool bundle yet'];
   return bundle.books === undefined ? ['the last fetched bundle carries no pool books; run oars pool fetch again'] : linesOf(bundle.books);
 };
+
+/** The totals as flat numbers for the health batch to read (t877); a field with no source is null and never 0, and a bundle with no books gives null. */
+export interface BooksTotals {
+  servedCells: number;
+  belowFloor: number;
+  panel: number | null;
+  comparisonReadOwners: number | null;
+  followOnReads: number | null;
+  readYield: number | null;
+  costPerServedCell: number | null;
+  yieldPerServedCell: number | null;
+}
+
+const valueOf = (field: Sourced): number | null => (field.state === 'value' ? field.value : null);
+
+export const booksTotals = (bundle: Bundle | undefined): BooksTotals | null => {
+  const books = bundle?.books;
+  if (books === undefined) return null;
+  return {
+    servedCells: books.served.total,
+    belowFloor: books.backlog,
+    panel: valueOf(books.panel),
+    comparisonReadOwners: valueOf(books.demand.comparisonReadOwners),
+    followOnReads: valueOf(books.demand.followOnReads),
+    readYield: valueOf(books.goal.readYield),
+    costPerServedCell: valueOf(books.goal.costPerServedCell),
+    yieldPerServedCell: valueOf(books.goal.yieldPerServedCell),
+  };
+};
