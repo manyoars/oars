@@ -30,7 +30,7 @@ export interface Entry {
 
 /**
  * A Worker invocation may make about a thousand subrequests, and each batch read is one, so one invocation reads at most this many batches across every day it rolls.
- * Batches past it go uncounted: a run deletes the day's rows and lists the same keys in the same order, so the next run reads the same first ones again. A fleet that outgrows it needs a Queue.
+ * Listing a day's keys is a subrequest too, one per page (1000 keys), on top of these reads. Batches past it go uncounted: a run deletes the day's rows and lists the same keys in the same order, so the next run reads the same first ones again. A fleet that outgrows it needs a Queue.
  */
 export const MAX_BATCHES_PER_RUN = 800;
 /** An install-day holds at most this many cells, so a crafted batch cannot grow a row without bound. */
@@ -116,6 +116,8 @@ export const rollupDay = async (env: Env & RollupEnv, day: string, options: Roll
   if (bucket === undefined || !DAY.test(day)) return undefined;
   const byInstall = new Map<string, Accumulated>();
   const budget = options.budget ?? MAX_BATCHES_PER_RUN;
+  // A kept day with no reads left is cut before it starts: listing it would spend a subrequest to learn nothing the run can use.
+  if (budget <= 0 && options.keepWhenCut === true) return { day, batches: 0, installs: 0, truncated: true, gets: 0, kept: true };
   let batches = 0;
   let gets = 0;
   let truncated = false;
