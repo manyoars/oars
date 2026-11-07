@@ -11,6 +11,12 @@ const MAX_RAW_PART_BYTES = 1024 * 1024;
 /** R2 will not complete a multipart upload from parts under 5 MiB (except the last), and wants the others equal, so the staged parts are re-cut to this size when the object is assembled. */
 const ASSEMBLY_PART_BYTES = 5 * 1024 * 1024;
 
+/**
+ * How many staged part objects one account may hold at once: R2's list page, so the check is one call. A part is at most 1 MB and the CLI's are 512 KiB (`RAW_PART_BYTES`), so an account stages at most 1,000 MB, and 500 MiB of the CLI's parts, which is a
+ * single transcript far past any real session; a completed or refused object clears its parts, and the bucket's lifecycle rule (pool.md, raw tier) expires the rest after 7 days. A transcript of more than this many parts cannot be staged.
+ */
+export const MAX_STAGED_RAW_PARTS = 1000;
+
 const VERSION = /^[A-Za-z0-9._-]{1,64}$/;
 const REDACTION_HEADER = 'oars-redaction-version';
 const CAPTURE_HEADER = 'oars-capture-version';
@@ -83,7 +89,13 @@ const putPart = async (request: Request, env: Env, hash: string, part: number): 
   if (body.byteLength > MAX_RAW_PART_BYTES) return tooLarge();
   if (await stored(env, account, hash)) return answer(200, { ok: true, stored: true });
   if (body.byteLength === 0) return refuse(422, 'empty_part', 'A part holds at least one byte.');
-  await bucket.put(stagingKey(account, hash, part), body);
+  // A part that replaces a staged one adds no object; any other needs room under the account's cap.
+  const key = stagingKey(account, hash, part);
+  const staged = (await bucket.list({ prefix: `staging/${account}/`, limit: MAX_STAGED_RAW_PARTS })).objects;
+  if (staged.length >= MAX_STAGED_RAW_PARTS && !staged.some((object) => object.key === key)) {
+    return refuse(429, 'staging_full', `An account may stage ${String(MAX_STAGED_RAW_PARTS)} raw parts at once. Complete the objects it has begun, or wait: staged parts expire after 7 days.`, undefined, { 'retry-after': String(7 * 24 * 60 * 60) });
+  }
+  await bucket.put(key, body);
   return answer(200, { ok: true, part });
 };
 

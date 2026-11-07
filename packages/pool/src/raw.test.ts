@@ -1,5 +1,6 @@
 // The raw tier: an authenticated, redacted transcript goes to R2 in parts and a ledger row lands in D1; the bytes never reach D1 and nothing serves them.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { MAX_STAGED_RAW_PARTS } from './raw.js';
 import { fieldOf, startPool, stubUser, textOf, type TestPool } from './test-pool.js';
 
 const MEGABYTE = 1024 * 1024;
@@ -384,4 +385,23 @@ describe('no limits on contribution', () => {
       await limited.dispose();
     }
   }, 60_000);
+});
+
+describe('raw staging is bounded per account (S12, t958)', () => {
+  it('refuses a new staged part with a 429 JSON refusal once the account holds the staging cap, lets a held part be replaced, and leaves another account alone', async () => {
+    const { token, account } = await member();
+    const bucket = await pool.rawBucket();
+    const filler = `1${'0'.repeat(63)}`;
+    for (let at = 1; at <= MAX_STAGED_RAW_PARTS; at += 1) await bucket.put(`staging/${account}/${filler}/${String(at).padStart(6, '0')}`, 'x');
+    const hash = await hex(transcript(10, 7));
+    const refused = await pool.send(partPath(hash, 1), { method: 'PUT', body: transcript(10, 7) }, token, grant);
+    expect(refused).toMatchObject({ status: 429, json: { error: 'staging_full' } });
+    expect(await keysIn(`staging/${account}/${hash}/`)).toEqual([]);
+    // A part already staged is replaced in place, which adds no object.
+    const held = `/v1/raw/${filler}/parts/1`;
+    expect((await pool.send(held, { method: 'PUT', body: 'y' }, token, grant)).status).toBe(200);
+    // Another account has its own room.
+    const other = await member();
+    expect((await pool.send(partPath(hash, 1), { method: 'PUT', body: transcript(10, 7) }, other.token, grant)).status).toBe(200);
+  }, 120_000);
 });
