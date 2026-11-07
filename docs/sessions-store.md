@@ -964,7 +964,7 @@ read them with no special case. It is one more entry in the source table (`sourc
 **Fixture-derived, never run live.** This reader was written from the public source and docs of the agent (github.com/badlogic/pi-mono, now earendil-works/pi, @
 `085c84e98e7f4c950f2be606466fff4f75d8fe7c`, `packages/coding-agent/`) and tested only on synthetic fixtures; no Pi store has ever been read by it. No vendor text promises the
 file format: `docs/session-format.md` lists the file versions (1 linear, 2 tree, 3 `hookMessage` renamed `custom`), says an older file "is automatically migrated ... when loaded",
-and points programs at the SDK's `SessionManager`. No hook or plugin input carries more than the file does (`--mode json` streams the same data live), so the file is the source.
+and points programs at the SDK's `SessionManager`. Pi's extension API does carry more than the file: an extension's `tool_result` handler receives `structuredContent`, which for `bash` holds the real `exit_code` (`docs/extensions.md:1040-1059`, `src/core/tools/bash.ts:425-433`) and is never persisted, `tool_execution_end` carries `durationMs`, and every tool event carries `parentToolCallId` (`docs/extensions.md:807-813`). This reader reads the file anyway: an extension must be installed in Pi first, so it would see only sessions run after the install, and writing one is outside this reader's scope. Until then the exit code is read from the persisted `Command exited with code N` suffix and durations are recorded absent. (`--mode json` streams the same data the file holds.)
 A Pi release can change it; an unreadable session is warned about by name and skipped, never fatal. The one hand run that would settle it: on a machine with `pi` signed in to a
 provider, set `PI_CODING_AGENT_DIR` to a new empty folder, run one `pi -p "<task>"` that makes one prompt, runs one command that exits nonzero (for example `ls /nonexistent`), and
 edits one file, then `/fork` or `--fork` a second session from it and add one prompt; then, with `APPDATA` and `HOME` pointed at another new folder, run `oars sessions deposit --allow pi`
@@ -972,10 +972,10 @@ and `oars sessions verify --strict`. It is settled only if the session count is 
 the command's output, the tool result in the file really ends with `Command exited with code <n>`, usage is nonzero with `input` not smaller than the provider's own uncached figure,
 and the fork holds only its own prompt.
 
-- **Where.** `$PI_CODING_AGENT_DIR` if set and non-empty (a leading `~` is expanded), else `~/.pi/agent` (`%USERPROFILE%\.pi\agent` on Windows) (`src/config.ts:609-624`;
+- **Where.** `$PI_CODING_AGENT_DIR` if set and non-empty (a leading `~` is expanded), else `~/.pi/agent` (`%USERPROFILE%\.pi\agent` on Windows) (`src/config.ts:611, :614, :630-636`;
   `docs/environment-variables.md:81`): `sessions/--<cwd with its leading separator removed and / \ : turned into ->--/<ISO time with : . turned into ->_<session id>.jsonl`
   (`docs/session-format.md:10-14`, `session-manager.ts:590-593`). The id is the part of the file name after the first `_`; the cwd is the header's, not the folder name's. The
-  sessions folder can be moved with `--session-dir`, `PI_CODING_AGENT_SESSION_DIR`, or the `sessionDir` setting (`docs/sessions.md:44`); this reader does not follow those, so a session
+  sessions folder can be moved with `--session-dir`, `PI_CODING_AGENT_SESSION_DIR`, or the `sessionDir` setting (`docs/sessions.md:60`); this reader does not follow those, so a session
   kept there is not found. A file is written only once a conversation exists and is appended to afterward (`session-manager.ts:1176-1190`). Like Cursor, Codex, and Copilot: read by
   default; `--allow` narrows and `--deny pi` keeps it out; the nightly run repeats the saved list. A deposit only reads.
 - **Mapping.** Line 1 is the header `{type: "session", version, id, timestamp, cwd, parentSession?}`; every other line is an entry `{type, id, parentId, timestamp}`. Only `message`
@@ -1002,9 +1002,9 @@ and the fork holds only its own prompt.
   starting from the header's; no time goes backward. A session none of whose lines has a time has no time on its lines (they are omitted, not set to 1970).
 - **Usage.** Each response carries its own `usage` `{input, output, cacheRead, cacheWrite, reasoning?, totalTokens, cost}` (`docs/message-types.md:67-90`), per message and never cumulative, so
   every response is added once. Pi's `input` is already the uncached part: the OpenAI-style providers compute `input = prompt_tokens - cacheRead - cacheWrite`
-  (`openai-completions.ts:1536-1550`, `openai-responses-shared.ts:636-642`), Anthropic's `input_tokens` is disjoint by the API (`anthropic-messages.ts:967-972`), so nothing is subtracted
+  (`packages/ai/src/api/openai-completions.ts:1536-1550`, `packages/ai/src/api/openai-responses-shared.ts:636-642`), Anthropic's `input_tokens` is disjoint by the API (`packages/ai/src/api/anthropic-messages.ts:967-972`), so nothing is subtracted
   and the fields map one for one onto capture's disjoint ones. `reasoning` is inside `output` (`docs/message-types.md:90`) and is recorded as thinking, never added again. A response that
-  ended in an error or an abort with `input`, `output`, `cacheRead`, and `cacheWrite` all zero never reached the provider's count (`anthropic-messages.ts:824` starts them at zero), so it has no usage
+  ended in an error or an abort with `input`, `output`, `cacheRead`, and `cacheWrite` all zero never reached the provider's count (`packages/ai/src/api/anthropic-messages.ts:824` starts them at zero), so it has no usage
   rather than a zero one; a zero beside another figure is kept. `cost` and `totalTokens` are not read. The `usage` on a `compaction`, a `branch_summary`, and a `usage` entry, and on a tool
   result (nested model work, `docs/message-types.md:177`), is not a response of the session and is not counted (a known gap).
 - **Absent.** No file records Pi's version (the header's `version` is the file format's), so the skeleton's harness version is empty, the cells are `pi/unknown/<model>`, and a bundle

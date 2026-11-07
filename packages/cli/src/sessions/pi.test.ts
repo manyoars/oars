@@ -20,7 +20,7 @@ afterEach(cleanup);
 //   the user's `!cmd`                        docs/message-types.md:200-216 (`bashExecution`: command, output, exitCode, cancelled), persisted by agent-session.ts:4043
 //   branching, the leaf, a fork's copy       session-manager.ts:1104-1112 (the leaf is the last entry), :1643-1735 (`createBranchedSession` copies the path, keeping its old times)
 //   version 1 (no ids, one chain)            session-manager.ts:287-313
-// `usage.input` is already net of cache reads and writes: openai-completions.ts:1536-1550, openai-responses-shared.ts:636-642, anthropic-messages.ts:967-972.
+// `usage.input` is already net of cache reads and writes: packages/ai/src/api/{openai-completions.ts:1536-1550, openai-responses-shared.ts:636-642, anthropic-messages.ts:967-972}.
 // No live Pi store was read.
 
 const capture = (text: string) =>
