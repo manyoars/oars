@@ -184,7 +184,7 @@ describe('recall, books, and measure over Codex skeletons', () => {
     await deposit(s.runtime, options(['codex']));
     const signal = measure(await loadStore(s.storeDir), [], [], 5);
     expect(signal.last.sessions).toBe(2);
-    expect(signal.last.otherSessions).toEqual({ codex: 2, copilot: 0, gemini: 0, grok: 0, pi: 0, 'vscode-copilot': 0 });
+    expect(signal.last.otherSessions).toEqual({ codex: 2, copilot: 0, gemini: 0, grok: 0, opencode: 0, pi: 0, 'vscode-copilot': 0 });
     expect(formatMeasure(signal)).toMatch(/of which Codex\s+2\s/);
   });
 

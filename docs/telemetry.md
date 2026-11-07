@@ -51,7 +51,7 @@ One per fire of a hook: the bare `oars gate hook` (recorded by its own process, 
 | `latencyMs` | How long the hook's handler took, in milliseconds, not counting node's own start. |
 | `outcome` | `hit` (it printed context or a deny, or deposited), `miss` (it found nothing), `held` (it had something and the holdback arm kept it from the agent), or `error` (it failed open, or the process deadline ended it before it finished; that fire is written once, with no bytes and no harness version or model; a fire whose answer was settled before the deadline keeps its outcome and bytes). |
 | `bytes` | The size of what the hook printed to stdout; 0 when nothing. |
-| `harness` | The harness the hook ran under, from the closed list the other events use (`claude-code`, `cursor`, `codex`, `copilot`, `gemini`, `grok`, `pi`, `vscode-copilot`), else `other`. Every hook fire carries it, a deadline-ended fire included, except a `nightly` run: the nightly is the scheduled task, which runs under no harness, so it carries none and reads as an `unrecorded` harness. An event written before the field existed has none either and is read the same way, never dropped (the schema version stays `1`: the field is additive). |
+| `harness` | The harness the hook ran under, from the closed list the other events use (`claude-code`, `cursor`, `codex`, `copilot`, `gemini`, `grok`, `opencode`, `pi`, `vscode-copilot`), else `other`. Every hook fire carries it, a deadline-ended fire included, except a `nightly` run: the nightly is the scheduled task, which runs under no harness, so it carries none and reads as an `unrecorded` harness. An event written before the field existed has none either and is read the same way, never dropped (the schema version stays `1`: the field is additive). |
 | `harnessVersion`, `model` | When the hook saw them (the hook input's `model`, or the last 64 KB of the transcript the input names, the same bounded read a push makes; the path is never recorded): a public version or model name as the pool's vocabulary lists it, else `other`. Absent when the hook did not see one: a `nightly` run (it has no hook input) and a deadline-ended fire carry neither. |
 
 ### `recall`
@@ -86,7 +86,7 @@ One per `oars pool fetch` that reached the pool, whatever the pool answered: a r
 
 | Field | What it holds |
 |---|---|
-| `harness` | The harness fetched, from the pool's list (`claude-code`, `cursor`, `codex`, `copilot`, `gemini`, `grok`, `pi`, `vscode-copilot`, or `other`). |
+| `harness` | The harness fetched, from the pool's list (`claude-code`, `cursor`, `codex`, `copilot`, `gemini`, `grok`, `opencode`, `pi`, `vscode-copilot`, or `other`). |
 | `fetches` | 1. |
 | `etagHits` | 1 when the pool answered 304 (the kept bundle is current). |
 | `capHits` | 1 when the pool's weekly fetch cap refused it. |
