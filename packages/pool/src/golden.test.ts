@@ -12,7 +12,7 @@ import { parseSkeleton, skeletonOf, type SessionSkeleton } from '../../cli/src/s
 import type { Harness } from '../../cli/src/sessions/schema.js';
 import { startPool, type TestPool } from './test-pool.js';
 
-const HARNESSES: readonly Harness[] = ['claude-code', 'cursor', 'codex', 'copilot', 'gemini', 'grok', 'vscode-copilot', 'opencode'];
+const HARNESSES: readonly Harness[] = ['claude-code', 'cursor', 'codex', 'copilot', 'gemini', 'grok', 'vscode-copilot', 'pi', 'opencode'];
 const DIR = fileURLToPath(new URL('./golden/', import.meta.url));
 const TOKEN = 'a-golden-token';
 
@@ -94,13 +94,13 @@ describe.each(HARNESSES)('the %s golden', (harness) => {
 });
 
 describe('the goldens together', () => {
-  it('cover the eight adapted harnesses, one batch each, with ids that differ', () => {
-    expect(new Set(HARNESSES).size).toBe(8);
+  it('cover the nine adapted harnesses, one batch each, with ids that differ', () => {
+    expect(new Set(HARNESSES).size).toBe(9);
     const ids = HARNESSES.map((harness) => {
       const parsed = parseSkeleton(JSON.parse(readFileSync(goldenPath(harness), 'utf8')));
       if (!parsed.ok) throw new Error(`${parsed.field}: ${parsed.reason}`);
       return parsed.skeleton.id;
     });
-    expect(new Set(ids).size).toBe(8);
+    expect(new Set(ids).size).toBe(9);
   });
 });

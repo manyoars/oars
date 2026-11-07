@@ -47,7 +47,7 @@ const staged = () => {
     { id: B, cwd: join(s.root, 'other'), lines: session(B, join(s.root, 'other')) },
   ]);
   expect(home.startsWith(s.root)).toBe(true);
-  return { ...s, home, runtime: { ...s.runtime, sourceRoots: { pi: home } } };
+  return { ...s, home, runtime: { ...s.runtime, sourceRoots: { pi: join(home, 'sessions') } } };
 };
 
 const fileOf = (home: string, cwd: string, id: string): string => join(home, 'sessions', `--${cwd.replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`, `2026-06-01T10-00-00-000Z_${id}.jsonl`);
@@ -143,6 +143,20 @@ describe('depositing the Pi source', () => {
     const store = await loadStore(s.storeDir);
     expect(store.tools.map((tool) => [tool.tool, tool.status])).toContainEqual(['Bash', 'error']);
     expect([...verifyAll(skeletons), ...verifyCaptured(store.sessions, store.tools)].filter((result) => result.violations > 0)).toEqual([]);
+  });
+
+  it('reads the folder the user set in PI_CODING_AGENT_SESSION_DIR, as the nightly run resolves it, and not the default folder', async () => {
+    const s = staged();
+    const chosen = join(s.root, 'chosen-sessions');
+    mkdirSync(chosen, { recursive: true });
+    writeFileSync(join(chosen, `2026-06-01T10-00-00-000Z_${C}.jsonl`), `${session(C, '/x').map((line) => JSON.stringify(line)).join('\n')}\n`);
+    const piSource = SOURCES.find((source) => source.name === 'pi');
+    if (piSource === undefined) throw new Error('no pi source');
+    const root = piSource.root('linux', { PI_CODING_AGENT_SESSION_DIR: chosen, PI_CODING_AGENT_DIR: s.home }, join(s.root, 'no-home'));
+    expect(root).toBe(chosen);
+    expect(piSource.storeFile(root)).toBe(chosen);
+    expect(await deposit({ ...s.runtime, sourceRoots: { pi: root } }, options(['pi']))).toMatchObject({ sessions: 1, unchanged: 0 });
+    expect(trackedKeys(s.storeDir)).toEqual([`pi/${C}`]);
   });
 
   it('skips silently when the runtime names no Pi folder or the folder does not exist', async () => {

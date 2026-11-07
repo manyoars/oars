@@ -9,7 +9,7 @@ import { cursorRoot, openCursorStore } from './cursor.js';
 import { grokRoot, openGrokStore } from './grok.js';
 import type { SubagentOrigin } from './extract.js';
 import { geminiRoot, openGeminiStore } from './gemini.js';
-import { openPiStore, piRoot } from './pi.js';
+import { openPiStore, piSessionsDir } from './pi.js';
 import { openOtelStore, otelRoot } from './otel.js';
 import type { Harness } from './schema.js';
 import { opencodeRoot, openOpencodeStore } from './opencode.js';
@@ -212,8 +212,8 @@ const pi: Source = {
   name: 'pi',
   harness: 'pi',
   label: 'Pi',
-  root: (_platform, env, home) => piRoot(env, home),
-  storeFile: (root) => join(root, 'sessions'),
+  root: (_platform, env, home) => piSessionsDir(env, home),
+  storeFile: (root) => root,
   open: async (root) => {
     const store = await openPiStore(root);
     if (store === undefined) return undefined;

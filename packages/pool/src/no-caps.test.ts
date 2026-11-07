@@ -54,6 +54,14 @@ describe('the per-account limits', () => {
     } finally {
       await bytes.dispose();
     }
+    const both = await startPool({ COVENANT_VERSION: 'v1', MAX_DEPOSITS_PER_ACCOUNT: '3', MAX_DEPOSIT_BYTES_PER_ACCOUNT: '1000' });
+    try {
+      const token = await signedIn(both, '8004');
+      await seed(both, 3, 10);
+      expect(await both.post('/v1/deposits', sampleSkeleton('0000000000000001'), token)).toMatchObject({ status: 403, json: { error: 'deposit_limit', message: "An operator's brake holds this account to at most 3 deposits and 1000 stored bytes." } });
+    } finally {
+      await both.dispose();
+    }
   }, 120_000);
 });
 

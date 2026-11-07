@@ -1,6 +1,6 @@
 // The `user-stop` bucket through each harness's own adapter (t912, Item 2): a prompt the human stopped, written in each harness's native transcript form, captured, and derived. A harness reads a stop as
 // far as its adapter writes the rejection sentence or the interrupt marker; the ones that write neither keep their current bucket, and this file pins which is which (docs/sessions-store.md, "`user-stop` by harness").
-// The shapes follow the ones intervention-harness.test.ts, codex.test.ts, cursor.test.ts, and vscode-copilot.test.ts cite; no live store was read.
+// The shapes follow the ones intervention-harness.test.ts, codex.test.ts, cursor.test.ts, pi.test.ts, and vscode-copilot.test.ts cite; no live store was read.
 import { afterEach, describe, expect, it } from 'vitest';
 import { rolloutLines } from './codex.js';
 import { openCursorStore } from './cursor.js';
@@ -10,11 +10,12 @@ import { captureSession } from './extract.js';
 import { chatLines } from './gemini.js';
 import { grokLines } from './grok.js';
 import { openOpencodeStore } from './opencode.js';
+import { piLines } from './pi.js';
 import { makeRedactor } from './redact.js';
 import { makeRepoIdentity, makeRepoRoot } from './repo-root.js';
 import type { Harness, PromptIntervention, PromptObservation, PromptStop } from './schema.js';
 import { chatData, chatLines as vscodeChatLines } from './vscode-copilot.js';
-import { cleanup, copilotEvent, geminiHead, grokUpdate, ocAssistant, ocShellDone, ocTool, ocUser, rolloutLine, stage, stageCursor, stageOpencode, type FixtureBubble } from './test-support.js';
+import { cleanup, copilotEvent, geminiHead, grokUpdate, ocAssistant, ocShellDone, ocTool, ocUser, piEntry, piHeader, rolloutLine, stage, stageCursor, stageOpencode, type FixtureBubble } from './test-support.js';
 
 afterEach(cleanup);
 
@@ -115,6 +116,28 @@ const grok = (_stop: Stop, before: Before): string => {
   events.push(grokUpdate(base + 5, { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'go on' } }));
   const summary = { info: { id: 'sess', cwd: '/work/app' }, created_at: new Date(base * 1000).toISOString(), current_model_id: 'grok-build' };
   return grokLines(asText(events), 'sess', summary, undefined).map((entry) => JSON.stringify(entry)).join('\n');
+};
+
+/** Pi: no permission prompt and no interrupt record in the file (a user abort leaves an assistant message with `stopReason: "aborted"`, which the reader does not read as a stop), so a rejection looks like a call that ended and an abort is the aborted reply. An edit stands between the two prompts, as it does in intervention-harness.test.ts, so they stay two. */
+const pi = (stop: Stop, before: Before): string => {
+  const entries: object[] = [piHeader()];
+  let parent: string | null = null;
+  let id = 0;
+  const add = (second: number, body: object): void => {
+    id += 1;
+    entries.push(piEntry('message', `e${String(id)}`, parent, T(second), { message: { ...body, timestamp: Date.parse(T(second)) } }));
+    parent = `e${String(id)}`;
+  };
+  const call = (second: number, callId: string, name: string, args: object, result: string, isError: boolean): void => {
+    add(second, { role: 'assistant', content: [{ type: 'toolCall', id: callId, name, arguments: args }], api: 'anthropic-messages', provider: 'anthropic', model: 'claude-sonnet-4-5', stopReason: 'toolUse' });
+    add(second, { role: 'toolResult', toolCallId: callId, toolName: name, content: [{ type: 'text', text: result }], isError });
+  };
+  add(1, { role: 'user', content: 'change the field' });
+  if (before === 'failed-run') call(2, 'c0', 'bash', { command: 'npm test' }, 'failed\n\nCommand exited with code 1', true);
+  call(4, 'c1', 'edit', { path: '/work/app/src/a.ts', edits: [{ oldText: 'a', newText: 'b' }] }, 'Edited src/a.ts', false);
+  if (stop === 'interrupt') add(4, { role: 'assistant', content: [], api: 'anthropic-messages', provider: 'anthropic', model: 'claude-sonnet-4-5', stopReason: 'aborted' });
+  add(5, { role: 'user', content: 'go on' });
+  return piLines(asText(entries), 'sess').map((entry) => JSON.stringify(entry)).join('\n');
 };
 
 /** VS Code Copilot Chat: a refusal is `isConfirmed` `{type:0}` (Denied) or `{type:5, source:'user'}`, or `false`; the reader writes the harness's rejection sentence for it. The reader has no cancel record to read and writes no interrupt marker, so the "interrupt" case is a normal confirmed turn: it pins that the prompt keeps reading `none`. */
@@ -220,6 +243,7 @@ const READS: readonly (readonly [Harness, Build, PromptIntervention, PromptInter
   ['grok', grok, 'none', 'none'],
   // A refused OpenCode call is a failed one, so it reads after-error until a rejection sentence is written for it (no live store has shown OpenCode's wording).
   ['opencode', opencode, 'after-error', 'after-error'],
+  ['pi', pi, 'none', 'none'],
 ];
 
 describe.each(READS)('%s', (harness, build, rejected, interrupted) => {

@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { captureSession } from './extract.js';
-import { openPiStore, piBadLines, piLines, piRoot } from './pi.js';
+import { openPiStore, piBadLines, piLines, piRoot, piSessionsDir } from './pi.js';
 import { makeRedactor } from './redact.js';
 import { makeRepoIdentity, makeRepoRoot } from './repo-root.js';
 import { cleanup, piEntry, piHeader, stage, stagePi } from './test-support.js';
@@ -371,6 +371,32 @@ describe('the Pi store', () => {
     expect(piRoot({ PI_CODING_AGENT_DIR: '~/pi-agent' }, '/home/u')).toBe(join('/home/u', 'pi-agent'));
   });
 
+  it('reads PI_CODING_AGENT_SESSION_DIR when it is set, and sessions/ under the agent folder otherwise', () => {
+    const agent = join('/home/u', '.pi', 'agent', 'sessions');
+    expect(piSessionsDir({}, '/home/u')).toBe(agent);
+    expect(piSessionsDir({ PI_CODING_AGENT_SESSION_DIR: '' }, '/home/u')).toBe(agent);
+    expect(piSessionsDir({ PI_CODING_AGENT_DIR: '/data/pi' }, '/home/u')).toBe(join('/data/pi', 'sessions'));
+    expect(piSessionsDir({ PI_CODING_AGENT_SESSION_DIR: '/data/sessions' }, '/home/u')).toBe('/data/sessions');
+    expect(piSessionsDir({ PI_CODING_AGENT_SESSION_DIR: '~/my-sessions' }, '/home/u')).toBe(join('/home/u', 'my-sessions'));
+    expect(piSessionsDir({ PI_CODING_AGENT_SESSION_DIR: '~' }, '/home/u')).toBe('/home/u');
+    // The session folder is the more specific setting: it wins over the agent folder (main.ts:749-753).
+    expect(piSessionsDir({ PI_CODING_AGENT_SESSION_DIR: '/data/sessions', PI_CODING_AGENT_DIR: '/data/pi' }, '/home/u')).toBe('/data/sessions');
+  });
+
+  it('lists the files Pi wrote straight into a chosen session folder, next to any project subfolders', async () => {
+    const s = stage();
+    const chosen = join(s.root, 'chosen');
+    mkdirSync(join(chosen, '--work-app--'), { recursive: true });
+    writeFileSync(join(chosen, '2026-06-01T10-00-00-000Z_flat1111.jsonl'), `${asText(session('flat1111', '/work/app'))}\n`);
+    writeFileSync(join(chosen, '--work-app--', '2026-06-01T10-00-00-000Z_nest2222.jsonl'), `${asText(session('nest2222', '/work/app'))}\n`);
+    writeFileSync(join(chosen, 'notes.txt'), 'not a session');
+    const store = await openPiStore(chosen);
+    expect(store?.sessions.map((entry) => entry.id)).toEqual(['flat1111', 'nest2222']);
+    const flat = store?.sessions.find((entry) => entry.id === 'flat1111');
+    if (flat === undefined) throw new Error('no flat session');
+    expect(((await store?.transcript(flat)) ?? '').split('\n').filter((raw) => raw !== '')).toHaveLength(2);
+  });
+
   it('lists sessions by the id in the file name and the header’s cwd, reports what it cannot read, and lists nothing for a missing store', async () => {
     const s = stage();
     const home = stagePi(s.root, [
@@ -381,21 +407,21 @@ describe('the Pi store', () => {
       { id: '..', cwd: '/x', lines: session('..', '/x') },
     ]);
     expect(home.startsWith(s.root)).toBe(true);
-    const store = await openPiStore(home);
+    const store = await openPiStore(join(home, 'sessions'));
     expect(store?.sessions.map((entry) => [entry.id, entry.folder])).toEqual([['aaaa1111', '/work/app'], ['bbbb2222', 'C:\\Users\\me\\proj']]);
     expect(store?.rejected).toBe(1);
     expect(store?.unreadable.map((entry) => entry.file).join('\n')).toContain('cccc3333');
     expect(store?.unreadable.map((entry) => entry.file).join('\n')).toContain('dddd4444');
-    expect(await openPiStore(join(s.root, 'nowhere'))).toBeUndefined();
+    expect(await openPiStore(join(s.root, 'nowhere', 'sessions'))).toBeUndefined();
     mkdirSync(join(s.root, 'empty-home'), { recursive: true });
     writeFileSync(join(s.root, 'empty-home', 'sessions'), 'a file where the folder should be');
-    expect((await openPiStore(join(s.root, 'empty-home')))?.unreadable).toHaveLength(1);
+    expect((await openPiStore(join(s.root, 'empty-home', 'sessions')))?.unreadable).toHaveLength(1);
   });
 
   it('reads a session’s file as lines, with a torn line kept so the deposit counts it', async () => {
     const s = stage();
     const home = stagePi(s.root, [{ id: 'aaaa1111', cwd: '/work/app', lines: `${asText(session('aaaa1111', '/work/app'))}\n{torn\n` }]);
-    const store = await openPiStore(home);
+    const store = await openPiStore(join(home, 'sessions'));
     const [found] = store?.sessions ?? [];
     if (found === undefined) throw new Error('no session');
     const text = (await store?.transcript(found)) ?? '';
