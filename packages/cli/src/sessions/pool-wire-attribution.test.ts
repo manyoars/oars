@@ -71,7 +71,7 @@ describe('a step names its frame', () => {
     if (first === undefined) throw new Error('no step');
     Reflect.deleteProperty(first, 'frame');
     expect(parseSkeleton(raw)).toEqual({ ok: false, field: 'transcripts[0].tools[0].steps[0].frame', reason: 'missing' });
-    expect(parseSkeleton({ ...clone(midPrompt()), format: 2 })).toEqual({ ok: false, field: 'format', reason: 'not a format this version reads' });
+    expect(parseSkeleton({ ...clone(midPrompt()), format: 2 })).toEqual({ ok: false, field: 'format', reason: 'the format 2 form is no longer read; send format 3' });
   });
 });
 
@@ -96,13 +96,17 @@ describe('the skill behind a call', () => {
     expect(JSON.stringify(inRun())).not.toContain('acme-private-skill');
   });
 
-  it('survives the parser, which holds the skill to the list', () => {
+  it('survives the parser, which reads a skill off the list as other and keeps it as sent', () => {
     expect(parseSkeleton(clone(inRun())).ok).toBe(true);
     const bad: SessionSkeleton = clone(inRun());
     const held = bad.transcripts[0]?.tools[1]?.steps[0];
     if (held === undefined) throw new Error('no step');
     held.skill = 'acme-private-skill';
-    expect(parseSkeleton(bad)).toEqual({ ok: false, field: 'transcripts[0].tools[1].steps[0].skill', reason: 'outside the vocabulary' });
+    const parsed = parseSkeleton(bad);
+    if (!parsed.ok) throw new Error(parsed.reason);
+    expect(parsed.skeleton.transcripts[0]?.tools[1]?.steps[0]?.skill).toBe('other');
+    expect(parsed.extensions).toEqual([{ at: 'transcripts[0].tools[1].steps[0].skill', kind: 'value', value: 'acme-private-skill' }]);
+    expect(parsed.others).toBe(1);
   });
 });
 
@@ -123,12 +127,15 @@ describe('the reach on the frame', () => {
     expect(skeleton.transcripts[0]?.frame.reach).toEqual({ filled: false, mcp: [], skills: [], plugins: [] });
   });
 
-  it('refuses a name outside the lists', () => {
+  it('reads a name outside the lists as other and keeps it as sent', () => {
     const bad: SessionSkeleton = clone(midPrompt({ setup: { plugins: ['x'] } }));
     const reach = bad.transcripts[0]?.frame.reach;
     if (reach === undefined) throw new Error('no reach');
     reach.mcp = ['acme-internal'];
-    expect(parseSkeleton(bad)).toEqual({ ok: false, field: 'transcripts[0].frame.reach.mcp[0]', reason: 'outside the vocabulary' });
+    const parsed = parseSkeleton(bad);
+    if (!parsed.ok) throw new Error(parsed.reason);
+    expect(parsed.skeleton.transcripts[0]?.frame.reach?.mcp).toEqual(['other']);
+    expect(parsed.extensions).toContainEqual({ at: 'transcripts[0].frame.reach.mcp[0]', kind: 'value', value: 'acme-internal' });
   });
 });
 
@@ -148,13 +155,16 @@ describe('the lists the parser holds', () => {
     expect(parseSkeleton(none)).toEqual({ ok: false, field: 'transcripts[0].frames', reason: 'empty' });
   });
 
-  it('refuses a plugin that is not the word private', () => {
+  it('reads a plugin that is not the word private as other and keeps it as sent', () => {
     const bad = raw();
     const reach = bad.transcripts[0]?.frame.reach;
     if (reach === undefined) throw new Error('no reach');
     reach.filled = true;
     reach.plugins = ['acme-plugin'];
-    expect(parseSkeleton(bad)).toEqual({ ok: false, field: 'transcripts[0].frame.reach.plugins[0]', reason: 'outside the vocabulary' });
+    const parsed = parseSkeleton(bad);
+    if (!parsed.ok) throw new Error(parsed.reason);
+    expect(parsed.skeleton.transcripts[0]?.frame.reach?.plugins).toEqual(['other']);
+    expect(parsed.extensions).toContainEqual({ at: 'transcripts[0].frame.reach.plugins[0]', kind: 'value', value: 'acme-plugin' });
   });
 });
 

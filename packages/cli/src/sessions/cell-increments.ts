@@ -4,9 +4,9 @@
 
 import { bucketFields, deriveCells, ENVIRONMENT_BUCKET, isEnvironmentCell, type CellSet, type Grain } from './cells.js';
 import type { Motif } from './motif.js';
-import { bucketOf, floorOf, projectedSteps, type SessionSkeleton, type ShellReader, type SkeletonTranscript } from './pool-wire.js';
+import { bucketOf, floorOf, OTHER, projectedSteps, type SessionSkeleton, type ShellReader, type SkeletonFrame, type SkeletonPrompt, type SkeletonTool, type SkeletonTranscript } from './pool-wire.js';
 import { NO_RECALLS, type RecallGraph } from './recall-consequence.js';
-import { harnessOf, type PromptObservation, type SessionObservation, type StepObservation, type ToolObservation, type Usage } from './schema.js';
+import { harnessOf, type Frame, type Harness, type PromptClass, type PromptObservation, type SessionObservation, type StepObservation, type ToolObservation, type ToolStatus, type Usage } from './schema.js';
 import type { Store } from './store.js';
 
 export interface CellRow {
@@ -104,8 +104,26 @@ export const projectedStore = (store: Store, read: ShellReader): Store => {
 
 const NO_USAGE: Usage = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0, thinking: 0 };
 
+/** A transcript whose harness the reader knows; one that names a harness it does not (`other` on the wire) derives no cells, since a cell is keyed by a harness the bundle can serve. */
+type KnownTranscript = SkeletonTranscript & { harness: Harness };
+
+const isKnown = (transcript: SkeletonTranscript): transcript is KnownTranscript => transcript.harness !== OTHER;
+
+/** A frame whose own harness is `other` takes its transcript's: the two are the same harness, and a frame cannot name one the transcript does not. A repo size this reader does not know is a size the frame does not name. */
+const frameOf = (frame: SkeletonFrame, harness: Harness): Frame => ({
+  ...frame,
+  harness: frame.harness === OTHER ? harness : frame.harness,
+  stack: { ...frame.stack, size: frame.stack.size === OTHER ? null : frame.stack.size },
+});
+
+/** A class this reader does not know counts in `mixed`, the class a prompt that fits no other takes. */
+const classOf = (cls: SkeletonPrompt['cls']): PromptClass => (cls === OTHER ? 'mixed' : cls);
+
+/** A status this reader does not know is a segment the call did not report. */
+const statusOf = (status: SkeletonTool['status']): ToolStatus => (status === OTHER ? 'none' : status);
+
 /** A skeleton's transcript as the record `deriveCells` reads. Everything a skeleton leaves out stays empty, so no derivation here can come to depend on it unnoticed. */
-const sessionRecord = (id: string, parent: string | null, { harness, frame }: SkeletonTranscript): SessionObservation => ({
+const sessionRecord = (id: string, parent: string | null, { harness, frame }: KnownTranscript): SessionObservation => ({
   kind: 'session',
   cv: '',
   sid: '',
@@ -142,10 +160,10 @@ const sessionRecord = (id: string, parent: string | null, { harness, frame }: Sk
   costUsd: null,
   usage: NO_USAGE,
   harness,
-  frame,
+  frame: frameOf(frame, harness),
 });
 
-const promptRecords = (id: string, { prompts }: SkeletonTranscript): PromptObservation[] =>
+const promptRecords = (id: string, { harness, prompts }: KnownTranscript): PromptObservation[] =>
   prompts.map(({ cls, errors, wallSec, usage, explore, frame }, index) => ({
     kind: 'prompt',
     v: '',
@@ -155,7 +173,7 @@ const promptRecords = (id: string, { prompts }: SkeletonTranscript): PromptObser
     ts: null,
     wallSec: wallSec === null ? null : floorOf('seconds', wallSec),
     head: '',
-    cls,
+    cls: classOf(cls),
     tools: [],
     shape: '',
     errors: floorOf('count', errors),
@@ -178,11 +196,11 @@ const promptRecords = (id: string, { prompts }: SkeletonTranscript): PromptObser
     act: 0,
     bigrams: {},
     contextFingerprint: null,
-    frame,
+    frame: frameOf(frame, harness),
   }));
 
-const toolRecords = (id: string, main: string, { tools }: SkeletonTranscript): ToolObservation[] =>
-  tools.map(({ side, prompt, status, durationMs, steps }, n) => ({
+const toolRecords = (id: string, main: string, { tools }: KnownTranscript): ToolObservation[] =>
+  tools.map(({ side, prompt, status, durationMs, errorCode, steps }, n) => ({
     kind: 'tool',
     cv: '',
     sid: '',
@@ -193,7 +211,7 @@ const toolRecords = (id: string, main: string, { tools }: SkeletonTranscript): T
     n,
     ts: null,
     tool: steps[0]?.native ?? '',
-    status,
+    status: statusOf(status),
     target: null,
     targetBase: null,
     keys: [],
@@ -202,11 +220,12 @@ const toolRecords = (id: string, main: string, { tools }: SkeletonTranscript): T
     harnessVersion: null,
     side,
     prompt,
+    ...(errorCode === null ? {} : { errorCode }),
     steps: steps.map(({ action, native, identity, status: reported, parent, tokens, ms }, seg) => ({
       action,
       native,
       identity,
-      status: reported,
+      status: statusOf(reported),
       parent,
       seg,
       edges: [],
@@ -223,6 +242,7 @@ export const storeOf = (skeletons: readonly SessionSkeleton[]): Store => {
     const nameOf = (index: number): string => `${id}#${String(index)}`;
     const main = nameOf(0);
     transcripts.forEach((transcript, index) => {
+      if (!isKnown(transcript)) return;
       const session = nameOf(index);
       (index === 0 ? store.sessions : store.subagents).push(sessionRecord(session, index === 0 ? null : main, transcript));
       store.prompts.push(...promptRecords(session, transcript));

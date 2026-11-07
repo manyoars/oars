@@ -19,7 +19,13 @@ const sentWith = (value: unknown): unknown => ({ ...JSON.parse(JSON.stringify(sk
 
 const refusedField = (value: unknown): string => {
   const parsed = parseSkeleton(value);
-  return parsed.ok ? 'accepted' : parsed.field;
+  if (!parsed.ok) return parsed.field;
+  return parsed.others > 0 ? 'other' : 'accepted';
+};
+
+const keptAt = (value: unknown): string[] => {
+  const parsed = parseSkeleton(value);
+  return parsed.ok ? parsed.extensions.map(({ at }) => at) : ['refused'];
 };
 
 const ENTRY = { deltaKind: 'removed', field: 'package', name: 'typescript', registry: 'npm', metric: 'callsPerSession', change: -3 };
@@ -38,7 +44,7 @@ describe('a delta entry on the wire', () => {
     ];
     const skeleton = skeletonWith(entries);
     expect(skeleton.deltas).toEqual(entries);
-    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton });
+    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton, extensions: [], others: 0 });
   });
 
   it('holds none when none is given', () => {
@@ -48,46 +54,46 @@ describe('a delta entry on the wire', () => {
 
   it('refuses a deltas field that is not a list, and names an entry that is not one', () => {
     expect(refusedField(sentWith('none'))).toBe('deltas');
-    expect(refusedField(sentWith(undefined))).toBe('deltas');
+    expect(refusedField(sentWith(undefined))).toBe('accepted');
     expect(refusedField(sentWith([{}]))).toBe('deltas[0].deltaKind');
-    expect(refusedField(sentWith([ENTRY, { ...ENTRY, name: 'my-secret-lib' }]))).toBe('deltas[1].name');
+    expect(refusedField(sentWith([ENTRY, { ...ENTRY, name: 'my-secret-lib' }]))).toBe('other');
   });
 
   it('accepts a public package with its registry, and refuses the rest of what a package entry could say', () => {
     expect(refusedField(sentWith([ENTRY]))).toBe('accepted');
-    expect(refusedField(sentWith([{ ...ENTRY, name: 'my-secret-lib' }]))).toBe('deltas[0].name');
+    expect(refusedField(sentWith([{ ...ENTRY, name: 'my-secret-lib' }]))).toBe('other');
     expect(refusedField(sentWith([{ ...ENTRY, name: null }]))).toBe('deltas[0].name');
     expect(refusedField(sentWith([{ ...ENTRY, registry: null }]))).toBe('deltas[0].registry');
-    expect(refusedField(sentWith([{ ...ENTRY, registry: 'plugin' }]))).toBe('deltas[0].registry');
+    expect(refusedField(sentWith([{ ...ENTRY, registry: 'plugin' }]))).toBe('other');
     expect(refusedField(sentWith([{ ...ENTRY, name: PRIVATE }]))).toBe('deltas[0].registry');
     expect(refusedField(sentWith([{ ...ENTRY, name: PRIVATE, registry: null }]))).toBe('accepted');
-    expect(refusedField(sentWith([{ ...ENTRY, deltaKind: 'added' }]))).toBe('deltas[0].deltaKind');
-    expect(refusedField(sentWith([{ ...ENTRY, metric: 'thinking' }]))).toBe('deltas[0].metric');
+    expect(refusedField(sentWith([{ ...ENTRY, deltaKind: 'added' }]))).toBe('other');
+    expect(refusedField(sentWith([{ ...ENTRY, metric: 'thinking' }]))).toBe('other');
   });
 
   it('accepts a plugin only as the word private, with no registry', () => {
     expect(refusedField(sentWith([PLUGIN]))).toBe('accepted');
     expect(refusedField(sentWith([{ ...PLUGIN, deltaKind: 'removed' }]))).toBe('accepted');
-    expect(refusedField(sentWith([{ ...PLUGIN, deltaKind: 'changed' }]))).toBe('deltas[0].deltaKind');
-    expect(refusedField(sentWith([{ ...PLUGIN, name: 'superpowers' }]))).toBe('deltas[0].name');
+    expect(refusedField(sentWith([{ ...PLUGIN, deltaKind: 'changed' }]))).toBe('other');
+    expect(refusedField(sentWith([{ ...PLUGIN, name: 'superpowers' }]))).toBe('other');
     expect(refusedField(sentWith([{ ...PLUGIN, name: null }]))).toBe('deltas[0].name');
     expect(refusedField(sentWith([{ ...PLUGIN, registry: 'plugin' }]))).toBe('deltas[0].registry');
-    expect(refusedField(sentWith([{ ...PLUGIN, metric: 'thinking' }]))).toBe('deltas[0].metric');
+    expect(refusedField(sentWith([{ ...PLUGIN, metric: 'thinking' }]))).toBe('other');
   });
 
   it('accepts a permission mode and an effort by field alone, never by value', () => {
     expect(refusedField(sentWith([MODE, EFFORT]))).toBe('accepted');
     expect(refusedField(sentWith([{ ...MODE, name: 'plan' }]))).toBe('deltas[0].name');
     expect(refusedField(sentWith([{ ...EFFORT, name: 'high' }]))).toBe('deltas[0].name');
-    expect(refusedField(sentWith([{ ...MODE, deltaKind: 'added' }]))).toBe('deltas[0].deltaKind');
+    expect(refusedField(sentWith([{ ...MODE, deltaKind: 'added' }]))).toBe('other');
     expect(refusedField(sentWith([{ ...MODE, registry: 'npm' }]))).toBe('deltas[0].registry');
-    expect(refusedField(sentWith([{ ...MODE, metric: 'thinking' }]))).toBe('deltas[0].metric');
-    expect(refusedField(sentWith([{ ...EFFORT, metric: 'callsPerSession' }]))).toBe('deltas[0].metric');
+    expect(refusedField(sentWith([{ ...MODE, metric: 'thinking' }]))).toBe('other');
+    expect(refusedField(sentWith([{ ...EFFORT, metric: 'callsPerSession' }]))).toBe('other');
   });
 
   it('refuses a field outside the four, and a key the entry does not hold: a session id, a root, a date', () => {
-    expect(refusedField(sentWith([{ ...ENTRY, field: 'model' }]))).toBe('deltas[0].field');
-    for (const stray of ['sid', 'session', 'merkleRoot', 'day', 'value']) expect(refusedField(sentWith([{ ...ENTRY, [stray]: 'x' }]))).toBe(`deltas[0].${stray}`);
+    expect(refusedField(sentWith([{ ...ENTRY, field: 'model' }]))).toBe('other');
+    for (const stray of ['sid', 'session', 'merkleRoot', 'day', 'value']) expect(keptAt(sentWith([{ ...ENTRY, [stray]: 'x' }]))).toEqual([`deltas[0].${stray}`]);
     const { deltaKind, field, name, registry, metric } = ENTRY;
     expect(refusedField(sentWith([{ deltaKind, field, name, registry, metric }]))).toBe('deltas[0].change');
   });

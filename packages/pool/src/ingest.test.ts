@@ -362,8 +362,8 @@ describe('a large deposit', () => {
     // The fixture must reach the case: more cell JSON than one value may hold, from a skeleton the route accepts.
     expect(JSON.stringify([...wanted.cells.values()]).length).toBeGreaterThan(2 * 1024 * 1024);
     expect(JSON.stringify(skeleton).length).toBeLessThan(1024 * 1024);
-    // The sizes docs/pool.md states, so they cannot drift unseen: the skeleton as the worker stores it, the cells, and their JSON.
-    expect(JSON.stringify(skeleton).length).toBe(818_961);
+    // The sizes docs/pool.md states, so they cannot drift unseen: the skeleton as the worker stores it, the cells, and their JSON. Each call's `"errorCode":null,` is 17 bytes of the skeleton (t868: 818,998 before it).
+    expect(JSON.stringify(skeleton).length).toBe(876_798);
     expect(wanted.cells.size).toBe(11_548);
     expect(JSON.stringify([...wanted.cells.values()]).length).toBe(3_342_305);
     await inFreshPool({}, async (target) => {
@@ -374,14 +374,28 @@ describe('a large deposit', () => {
       expect(expected).toBeGreaterThan(0);
       expect(await total(target)).toBe(expected);
       const db = await target.db();
-      // What the account's byte limit counts: the skeleton and the deltas column (`[]`, two bytes).
-      expect(await db.prepare('SELECT LENGTH(CAST(skeleton AS BLOB)) + LENGTH(CAST(deltas AS BLOB)) AS bytes FROM deposits').first('bytes')).toBe(818_963);
+      // What the account's byte limit counts: the skeleton, the deltas column (`[]`), and the extensions bag (`[]`), two bytes each.
+      expect(await db.prepare('SELECT LENGTH(CAST(skeleton AS BLOB)) + LENGTH(CAST(deltas AS BLOB)) + LENGTH(CAST(extensions AS BLOB)) AS bytes FROM deposits').first('bytes')).toBe(876_802);
       expect(await db.prepare('SELECT COUNT(*) AS count FROM cells').first('count')).toBe(wanted.cells.size);
       expect(await db.prepare('SELECT COUNT(*) AS count FROM motifs').first('count')).toBe(wanted.motifs.length);
       expect(await db.prepare("SELECT COUNT(*) AS count FROM contributors WHERE kind = 'cell'").first('count')).toBe(wanted.cells.size);
       expect(await db.prepare("SELECT COUNT(*) AS count FROM cells WHERE clusters = 1").first('count')).toBe(wanted.cells.size);
     });
   }, 120_000);
+
+  // The sizes docs/pool.md states for the sample deposit (one session, one prompt, two shell steps), so the figure cannot drift unseen.
+  it('stores the sample deposit in the bytes docs/pool.md states', async () => {
+    const skeleton = sampleSkeleton('0000000000009103');
+    expect(JSON.stringify(skeleton).length).toBe(1_790);
+    await inFreshPool({}, async (target) => {
+      const token = await accountOn(target, '9103');
+      expect((await target.post('/v1/deposits', skeleton, token)).status).toBe(201);
+      const db = await target.db();
+      expect(await db.prepare('SELECT LENGTH(CAST(skeleton AS BLOB)) AS bytes FROM deposits').first('bytes')).toBe(1_790);
+      expect(await db.prepare('SELECT LENGTH(CAST(deltas AS BLOB)) AS bytes FROM deposits').first('bytes')).toBe(2);
+      expect(await db.prepare('SELECT LENGTH(CAST(extensions AS BLOB)) AS bytes FROM deposits').first('bytes')).toBe(2);
+    });
+  });
 
   // The keys of a deposit near the route's limit run past one chunk too, so the cluster update and the contributor insert must pair across chunks.
   it('counts one cluster for every cell when its keys alone take more than one chunk', async () => {
