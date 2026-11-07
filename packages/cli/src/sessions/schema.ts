@@ -21,10 +21,6 @@
 // the refusal text and loses its `manifest`, and where a result line is new (every Codex refusal, a Cursor one whose status is neither `error` nor `completed`, or one whose terminal result ended aborted) its session's `lines` and skeleton move. Any other
 // decision value, or none, changes nothing and is never stored; a Grok plan-mode refusal and a Codex `write_stdin rejected:` stay as they were. EXTRACTOR stays 11.
 //
-// Version 22 (CAPTURE 22) keeps a `git checkout` step's target class, `target` `path` or `word` (never the target's text), so the `revert` rule can tell `git checkout -- src/a.ts` and `git checkout --ours src/a.ts` (a
-// path) from `git checkout feature/x` (a branch or a path). It also writes a Codex `turn_aborted` with reason `interrupted` as the interrupt marker user line, so that prompt record exists and the session's
-// `prompts`, `tsLast` (the marker is a line), and skeleton move; a Codex session with no such turn is unchanged. A `git checkout` step captured before reads as it did (no `target`). EXTRACTOR 15 reads a Codex or Gemini decline in its fixed text as `user-stop`.
-//
 // Version 17 (CAPTURE 17) frames a Gemini CLI shell call as the shell that ran it. A session whose own `<session_context>` turn says `My operating system is: win32` (or,
 // with no such turn, whose working directory is written the Windows way) stores its shell calls as `PowerShell` where it stored `Bash`: the tool record's `tool`, an
 // error line's `tool`, the session's `tools` and the skeleton's tool names, each step's `native` (`run_shell_command` before), and the frame's `shell` (`bash` before), so every `frameId` of that
@@ -33,6 +29,10 @@
 // (`gemini` before) and every value read from the cwd; a folder whose path is not known keeps none. Sessions under `~/.cache/.gemini` (`SANDBOX=sandbox-exec`) are new
 // reads, not moved ones. A Copilot CLI session with rotated `events.N.jsonl` archives is now read as one session, so its `prompts`, `tools`, `lines`, and skeleton move; one
 // with no archives is unchanged. EXTRACTOR stays 11. A version-16 store's next deposit captures every transcript again from the harness or `raw/`.
+//
+// Version 22 (CAPTURE 22) keeps a `git checkout` step's target class, `target` `path` or `word` (never the target's text), so the `revert` rule can tell `git checkout -- src/a.ts` and `git checkout --ours src/a.ts` (a
+// path) from `git checkout feature/x` (a branch or a path). It also writes a Codex `turn_aborted` with reason `interrupted` as the interrupt marker user line, so that prompt record exists and the session's
+// `prompts`, `tsLast` (the marker is a line), and skeleton move; a Codex session with no such turn is unchanged. A `git checkout` step captured before reads as it did (no `target`). EXTRACTOR 15 reads a Codex or Gemini decline in its fixed text as `user-stop`.
 //
 // EXTRACTOR 12 gives a derived prompt the strata of its user-prompt record, so its own `explore` count reaches the pool's wire as a bucket. No transcript is read: a store at
 // 11 re-derives from its log alone.
