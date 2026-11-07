@@ -198,6 +198,52 @@ describe('the recovery family in a bundle', () => {
   }, 120_000);
 });
 
+describe('a bundle for a harness with no version on record', () => {
+  let pool: TestPool;
+
+  beforeAll(async () => {
+    pool = await startPool();
+  }, 60_000);
+
+  afterAll(async () => {
+    await pool.dispose();
+  });
+
+  it('serves the families a numbered bundle serves, none it does not, and nothing under the floor', async () => {
+    // Four accounts with no version and five on 2.1.314, the same harness: the `unknown` bundle sits under the floor, the numbered one at it.
+    let token = '';
+    for (const [id, version] of [['5001', null], ['5002', null], ['5003', null], ['5004', null], ['5101', '2.1.314'], ['5102', '2.1.314'], ['5103', '2.1.314'], ['5104', '2.1.314'], ['5105', '2.1.314']] as const) {
+      ({ token } = await pool.signIn('github', stubUser(id)));
+      await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+      expect((await pool.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0'), { languages: ['typescript'] }, '2026-11-01', 'cursor', { program: 'git', sub: 'push' }, version), token)).status).toBe(201);
+    }
+    const bundleAt = async (version: string) => {
+      const verified = await verifyBundle((await pool.get(`/bundle/cursor/${version}/${VOCAB_VERSION}`, token)).json, pool.signingKey(), 'cursor', version);
+      if (!verified.ok) throw new Error(verified.reason);
+      return verified.bundle;
+    };
+    const numbered = await bundleAt('2.1.314');
+    expect(numbered.reads.length).toBeGreaterThan(0);
+    // Four accounts: nothing of its own, and the environment cells (five accounts across both) are the only thing it holds.
+    const four = await bundleAt('unknown');
+    expect(four.cells.every((cell) => cell.frameBucket.startsWith('env:'))).toBe(true);
+    expect(four.reads.every((read) => read.family === 'fit' && read.slice.platform !== undefined)).toBe(true);
+    // A fifth account lifts the unknown bundle to the floor.
+    ({ token } = await pool.signIn('github', stubUser('5005')));
+    await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+    expect((await pool.post('/v1/deposits', sampleSkeleton('5005'.padStart(16, '0'), { languages: ['typescript'] }, '2026-11-01', 'cursor', { program: 'git', sub: 'push' }, null), token)).status).toBe(201);
+    const unknown = await bundleAt('unknown');
+    const families = new Set(unknown.reads.map((read) => read.family));
+    expect(families.has('tool-day')).toBe(true);
+    expect(families.has('recovery')).toBe(false);
+    expect(unknown.reads.some((read) => read.method === CALL_SHAPE_METHOD.name)).toBe(false);
+    // The same derivation as a numbered bundle, so no family appears here that a numbered bundle would not serve.
+    const numberedFamilies = new Set((await bundleAt('2.1.314')).reads.map((read) => read.family));
+    for (const family of families) expect(numberedFamilies.has(family)).toBe(true);
+    for (const read of unknown.reads) expect(read.clusters).toBeGreaterThanOrEqual(5);
+  }, 60_000);
+});
+
 /** `skeleton` with the same intervention on every prompt: an outcome row that a pool holds for a later test and serves to nothing. */
 const withIntervention = (skeleton: SessionSkeleton, intervention: 'none' | 'after-error' | 'redo' | 'revert' | 'unknown'): SessionSkeleton => ({
   ...skeleton,
