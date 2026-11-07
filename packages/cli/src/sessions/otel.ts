@@ -286,6 +286,7 @@ export const otelSessions = (spans: readonly Span[]): OtelSession[] => {
   }
   const roots = spans.filter((span) => parentOf(span) === undefined);
   const startOf = (span: Span): number => span.start ?? span.end ?? 0;
+  const timed = (span: Span): boolean => span.start !== undefined && span.end !== undefined && span.end >= span.start;
   const conversationOf = conversationsOf(spans);
   const sessionOfTrace = (trace: string): string => sessionIdOf(trace, conversationOf);
 
@@ -392,25 +393,31 @@ export const otelSessions = (spans: readonly Span[]): OtelSession[] => {
       pieces.push({ t, rank: 0, line });
       return { content, line, message };
     };
-    const attach = (callId: string, tool: Span): { content: Obj[] } => {
-      const named = calls.find((call) => call.names.includes(callId));
-      const before = calls.findLast((call) => call.end <= startOf(tool));
-      const chosen = named ?? before;
-      if (chosen !== undefined) return chosen;
-      return assistant(tool, `${tool.id}-call`);
+    const chooseCall = (callId: string, tool: Span): (typeof calls)[number] | undefined => calls.find((call) => call.names.includes(callId)) ?? calls.findLast((call) => call.end <= startOf(tool));
+    const attach = (callId: string, tool: Span): { content: Obj[] } => chooseCall(callId, tool) ?? assistant(tool, `${tool.id}-call`);
+    // A timed tool is its own assistant line at the span's start under the chat's `requestId` (the one-block-per-line shape Claude Code transcripts have), so extract reads the span's own length as the call's duration.
+    const place = (callId: string, tool: Span, block: Obj): void => {
+      const chosen = timed(tool) ? chooseCall(callId, tool) : undefined;
+      if (chosen === undefined) {
+        attach(callId, tool).content.push(block);
+        return;
+      }
+      const { content, line } = assistant(tool, String(chosen.line.requestId));
+      if (chosen.line.requestedModel !== undefined) line.requestedModel = chosen.line.requestedModel;
+      content.push(block);
     };
     const result = (id: string, tool: Span, failure: string | undefined, output = ''): void => {
       const t = Math.max(stamp(tool.end ?? tool.start), begin);
       pieces.push({
         t,
         rank: 1,
-        line: { ...base, type: 'user', uuid: `${unit.session}-${tool.id}-r-${id}`, timestamp: iso(t), noDuration: true, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: failure !== undefined, content: failure ?? output }] } },
+        line: { ...base, type: 'user', uuid: `${unit.session}-${tool.id}-r-${id}`, timestamp: iso(t), ...(timed(tool) ? {} : { noDuration: true }), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: failure !== undefined, content: failure ?? output }] } },
       });
     };
 
     for (const span of mine) {
       if (direct.has(span)) {
-        attach(span.id, span).content.push({ type: 'tool_use', id: span.id, name: 'invoke_agent', native: 'invoke_agent', input: {} });
+        place(span.id, span, { type: 'tool_use', id: span.id, name: 'invoke_agent', native: 'invoke_agent', input: {} });
         result(span.id, span, span.failed ? failureText(span) : undefined);
       } else if (isModel(span)) {
         const { content, line, message } = assistant(span, span.id);
@@ -463,7 +470,7 @@ export const otelSessions = (spans: readonly Span[]): OtelSession[] => {
           block.name = `mcp__unnamed__${toolName}`;
           block.native = block.name;
         }
-        attach(id, span).content.push(block);
+        place(id, span, block);
         result(id, span, failed ? (exit !== undefined && exit !== 0 && !span.failed ? `Exit code ${String(exit)}` : failureText(span)) : undefined, resultContent(span));
       }
     }

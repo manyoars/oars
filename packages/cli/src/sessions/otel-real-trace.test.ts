@@ -61,8 +61,8 @@ describe('a real Pydantic AI trace deposited with --allow otel', () => {
     const { store } = await imported();
     const byId = new Map(store.sessions.map((entry) => [entry.session, entry]));
     // The first chat reported 120 in and 14 out; the second 190 in (64 of them cached) and 11 out. The agent span's `gen_ai.aggregated_usage.*` (310 in) is not added again.
-    expect(byId.get(`otel-${OK}`)).toMatchObject({ assistantTurns: 2, usageResponses: 2, usage: { input: 246, cacheRead: 64, cacheWrite: 0, output: 25, thinking: 0 }, usageObserved: ['input', 'cacheRead', 'output'] });
-    expect(byId.get(`otel-${FAILED}`)).toMatchObject({ assistantTurns: 1, usageResponses: 1, usage: { input: 120, cacheRead: 0, output: 14 }, usageObserved: ['input', 'output'] });
+    expect(byId.get(`otel-${OK}`)).toMatchObject({ assistantTurns: 3, usageResponses: 2, usage: { input: 246, cacheRead: 64, cacheWrite: 0, output: 25, thinking: 0 }, usageObserved: ['input', 'cacheRead', 'output'] });
+    expect(byId.get(`otel-${FAILED}`)).toMatchObject({ assistantTurns: 2, usageResponses: 1, usage: { input: 120, cacheRead: 0, output: 14 }, usageObserved: ['input', 'output'] });
   });
 
   it('takes the user prompt from the first chat span, because Pydantic AI puts the messages there and in `pydantic_ai.all_messages`, not on the agent span', async () => {
@@ -78,10 +78,9 @@ describe('a real Pydantic AI trace deposited with --allow otel', () => {
     expect(lines[0]).toMatchObject({ type: 'user', message: { content: [{ type: 'text', text: 'How long do I have to ask for a refund?' }] } });
   });
 
-  // KNOWN GAP (t947): a call's duration is still not kept. Capture reads it as the result line's time minus the time of the line that holds the `tool_use`, and the reader puts the
-  // `tool_use` in the model call that named it, so the only line time is that chat span's start (about 87 ms before the first tool span ends), not the tool span's own start
-  // (the ok call's span is 1 ms long, the failed one's 4 ms). Stamping the `tool_use` at the tool span's start moves every call into a line of its own, or capture takes a duration on the result line.
-  it('keeps the tool result content, and still claims no duration for a call', async () => {
+  // A timed tool_use is its own assistant line at the tool span's start (same `requestId` as the chat), so capture's result-line time minus tool_use-line time is the tool span's own
+  // length: 1 ms for the ok call, 4 ms for the failed one. The text, the turn count (3 and 2 assistant lines) and the usage (first line of a response) stay as they were.
+  it('keeps the tool result content and reads each call duration from the tool span: 1 ms and 4 ms', async () => {
     const store = await openOtelStore(FIXTURE);
     if (store === undefined) throw new Error('no store');
     const results = store.sessions.flatMap((entry) =>
@@ -92,9 +91,9 @@ describe('a real Pydantic AI trace deposited with --allow otel', () => {
         .map((raw): unknown => JSON.parse(raw)),
     );
     expect(results).toMatchObject([
-      { noDuration: true, message: { content: [{ type: 'tool_result', tool_use_id: 'call_refund', is_error: false, content: POLICY }] } },
-      { noDuration: true, message: { content: [{ type: 'tool_result', tool_use_id: 'call_warranty', is_error: true, content: 'RuntimeError: policy index unavailable' }] } },
+      { message: { content: [{ type: 'tool_result', tool_use_id: 'call_refund', is_error: false, content: POLICY }] } },
+      { message: { content: [{ type: 'tool_result', tool_use_id: 'call_warranty', is_error: true, content: 'RuntimeError: policy index unavailable' }] } },
     ]);
-    expect((await imported()).store.tools.map((tool) => tool.durationMs)).toEqual([null, null]);
+    expect((await imported()).store.tools.map((tool) => tool.durationMs)).toEqual([1, 4]);
   });
 });

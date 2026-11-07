@@ -92,7 +92,8 @@ describe('a single-agent trace with two tool calls', () => {
     const store = await open([{ name: 'a.jsonl', spans: single() }]);
     expect(store.sessions).toMatchObject([{ id: T, folder: null }]);
     const lines = linesOf(textOf(store, T));
-    expect(lines.filter((line) => line.type === 'assistant')).toHaveLength(2);
+    // Two model calls and, because both tool spans are timed, each tool_use on a line of its own at the tool span's start.
+    expect(lines.filter((line) => line.type === 'assistant')).toHaveLength(4);
     const out = capture(textOf(store, T));
     expect(out.prompts).toHaveLength(1);
     expect(out.prompts[0]?.head).toBe('where is my order?');
@@ -112,7 +113,30 @@ describe('a single-agent trace with two tool calls', () => {
 
   it('names the model the response reported, else the one requested', async () => {
     const lines = linesOf(textOf(await open([{ name: 'a.jsonl', spans: single() }]), T));
-    expect(lines.filter((line) => line.type === 'assistant').map((line) => line.requestedModel)).toEqual(['gpt-5.1-2026-01', 'gpt-5.1']);
+    expect(lines.filter((line) => line.type === 'assistant').map((line) => line.requestedModel)).toEqual(['gpt-5.1-2026-01', 'gpt-5.1-2026-01', 'gpt-5.1', 'gpt-5.1']);
+  });
+
+  it('writes a timed tool_use as its own line under the chat requestId at the tool start, and reads the tool span length as the call duration', async () => {
+    const out = capture(textOf(await open([{ name: 'a.jsonl', spans: single() }]), T));
+    expect(out.tools.map((call) => call.durationMs)).toEqual([1000, 1000]);
+    const lines = linesOf(textOf(await open([{ name: 'a.jsonl', spans: single() }]), T));
+    const uses = lines.filter((line) => line.type === 'assistant' && JSON.stringify(line).includes('"tool_use"'));
+    expect(uses.map((line) => line.requestId)).toEqual([sp(2), sp(4)]);
+    expect(lines.filter((line) => line.noDuration === true)).toEqual([]);
+  });
+
+  it('keeps noDuration, and the tool_use in the chat line, when the tool span has no end or ends before it starts', async () => {
+    const spans = [
+      agent(T, 1, undefined, 0, 12, 'go'),
+      chat(T, 2, 1, 1, 3, { 'gen_ai.output.messages': reply('x', 'c1', 'c2') }),
+      span({ trace: T, id: sp(3), parent: sp(1), name: 'execute_tool a', start: 4, attrs: { 'gen_ai.operation.name': 'execute_tool', 'gen_ai.tool.name': 'a', 'gen_ai.tool.call.id': 'c1' } }),
+      tool(T, 4, 1, 6, 5, 'b', { 'gen_ai.tool.call.id': 'c2' }),
+    ];
+    const text = textOf(await open([{ name: 'a.jsonl', spans }]), T);
+    const lines = linesOf(text);
+    expect(lines.filter((line) => line.type === 'assistant')).toHaveLength(1);
+    expect(lines.filter((line) => line.noDuration === true)).toHaveLength(2);
+    expect(capture(text).tools.map((call) => call.durationMs)).toEqual([null, null]);
   });
 
   it('gives each line its own time, converted once from Unix nanoseconds', async () => {
@@ -344,7 +368,7 @@ describe('what the conventions leave out or mark unstable', () => {
       span({ trace: T, id: sp(3), parent: sp(1), name: 'execute_tool t', start: 12, end: 13, attrs: { 'gen_ai.operation.name': 'execute_tool', 'gen_ai.tool.name': 't' } }),
     ];
     const lines = linesOf(textOf(await open([{ name: 'a.jsonl', spans }]), T));
-    expect(lines.map((line) => line.type)).toEqual(['user', 'assistant', 'user']);
+    expect(lines.map((line) => line.type)).toEqual(['user', 'assistant', 'assistant', 'user']);
     expect(lines.every((line) => typeof line.timestamp === 'string' && line.timestamp >= '2026-06-01T10:00:10')).toBe(true);
   });
 
