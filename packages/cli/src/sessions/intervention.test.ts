@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { deriveSession } from './derive.js';
 import { captureSession, emptyUsage } from './extract.js';
 import { makeRedactor } from './redact.js';
-import { CAPTURE_VERSION, EXTRACTOR_VERSION, PROMPT_INTERVENTIONS, type ErrorLineObservation, type ShellSegment, type StepObservation, type ToolObservation, type ToolStatus, type UserPromptObservation } from './schema.js';
+import { CAPTURE_VERSION, EXTRACTOR_VERSION, PROMPT_INTERVENTIONS, type PromptIntervention, type ErrorLineObservation, type ShellSegment, type StepObservation, type ToolObservation, type ToolStatus, type UserPromptObservation } from './schema.js';
 import { FIXTURES } from './test-support.js';
 
 const redact = makeRedactor();
@@ -192,5 +192,41 @@ describe('unknown', () => {
   it('is not unknown when a bucket matched anyway: a positive record stands over an unreadable one', () => {
     expect(derived(['a', 'b'], [edit(0), older(1), edit(1)])[0]).toBe('redo');
     expect(derived(['a', 'b'], [shell(0, 'npm test', 'error'), older(1)])[0]).toBe('after-error');
+  });
+});
+
+/** A Claude Code transcript where the first prompt edits a file and the second runs `command`, captured and derived: the segment is what `captureSession` makes of a real command line, not a built record. */
+const fromCommandLine = (command: string): PromptIntervention | undefined => {
+  const at = (second: number): string => `2026-06-01T10:00:${String(second).padStart(2, '0')}.000Z`;
+  const lines = [
+    { type: 'user', timestamp: at(1), message: { role: 'user', content: 'add a field' } },
+    { type: 'assistant', timestamp: at(2), message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Edit', input: { file_path: '/work/app/src/a.ts', old_string: 'a', new_string: 'b' } }] } },
+    { type: 'user', timestamp: at(3), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', is_error: false, content: 'ok' }] } },
+    { type: 'user', timestamp: at(4), message: { role: 'user', content: 'now this' } },
+    { type: 'assistant', timestamp: at(5), message: { role: 'assistant', content: [{ type: 'tool_use', id: 't2', name: 'Bash', input: { command } }] } },
+    { type: 'user', timestamp: at(6), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't2', is_error: false, content: 'ok' }] } },
+  ];
+  const text = lines.map((line) => JSON.stringify(line)).join('\n');
+  const capture = captureSession({ text, session: 's', project: 'p', rev: 1, at: '2026-06-01T00:00:00Z', bytes: text.length, redact });
+  return deriveSession(capture, redact).prompts[0]?.intervention;
+};
+
+describe('a git undo read from a real command line', () => {
+  it.each(['git revert --abort', 'git revert --continue', 'git revert --quit'])('`%s` ends a revert in progress and undoes no work: none', (command) => {
+    expect(fromCommandLine(command)).toBe('none');
+  });
+
+  it.each(['git revert HEAD', 'git revert --no-edit abc1234', 'git revert -n HEAD~2', 'git restore src/a.ts', 'git checkout .', 'git checkout -- src/a.ts'])('`%s` undoes the edit: revert', (command) => {
+    expect(fromCommandLine(command)).toBe('revert');
+  });
+
+  // The segment drops a word that starts with `-`, holds a slash, or is quoted, and a step's identity stops at `--`, so a checkout of a branch reads as the bare pair that `git checkout -- <path>` leaves.
+  // The records cannot tell them apart (docs/sessions-store.md, `revert` limit); these rows pin the limit so a change to it is seen.
+  it.each(['git checkout feature/x', 'git checkout origin/main', 'git checkout -', 'git checkout "main"'])('`%s` reads as revert, a known limit of the segment', (command) => {
+    expect(fromCommandLine(command)).toBe('revert');
+  });
+
+  it('reads a checkout of a plain branch name as none, since the segment keeps the name', () => {
+    expect(fromCommandLine('git checkout main')).toBe('none');
   });
 });
