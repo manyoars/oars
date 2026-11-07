@@ -411,15 +411,15 @@ and an `unknown` never replaces a known state, so a passing failure does not und
 
 ### `books --by package`
 
-`oars sessions books --by package` prints the counts a package field report is built from, from the local store only (it reads the store and the transcripts, writes nothing, and sends nothing). It counts tool calls that pulled a package (installed or ran it by name) on the public list: the pinned registry snapshots plus the curated list, for the ecosystems the snapshots cover. Per package, in name order and with no rank, share, or comparison:
+`oars sessions books --by package` prints the counts a package field report is built from, from the local store only (it reads the store and the transcripts, writes nothing, and sends nothing). It counts tool calls that pulled a package (installed or ran it by name) on the public list: the pinned registry snapshots plus the curated list, for the ecosystems the snapshots cover. An MCP server's calls group under the `mcp` ecosystem as `mcp:<server>`, by server name, and a server counts as public when it is on the published-server list; any other server is counted with the names off the list and never named. Per package, in name order and with no rank, share, or comparison:
 
 - calls, failed calls (`status` `error`), main sessions (a subagent's call counts toward its main session), and the first and last UTC day a counted call ran;
-- per harness and model, calls and failed calls. The model is the call's own, else its prompt's, else `no model`; a model outside the pinned model list reads `another model`;
+- per harness and model, calls and failed calls. The model is the call's own, else its prompt's, else `no model`; a model outside the pinned model list reads `another model`. A subagent's call captured before the call carried its own `model` reads `no model`, because only a main session's prompts are stored;
 - failed calls by `errorCode` class, for calls captured at version 14 or later (a failed call at such a version with no class reads `no class recorded`).
 
-A failed call captured before version 14 has no class to count. It is reported as `not measured` and never as a zero or as a class, so a store captured before version 14 shows `not measured`, not an empty list. Names off the public list are never printed: one line gives how many names and calls they hold.
+A failed call captured before version 14 has no class to count. It is reported as `not measured` and never as a zero or as a class, so a store captured before version 14 shows `not measured`, not an empty list. Names off the public list are never printed: one line gives how many names they are, and how many calls pulled any of them (a call that pulls two such names is one call).
 
-The A38 exclusion applies on every run: the same scan `oars sessions exclusions` runs (a missing or empty term file excludes everything). A transcript is dropped when it or its main session is excluded, so a subagent goes with its parent, and the output states how many transcripts and calls were removed. `--since <days>` narrows by call time; `--repo` is refused. `--json` carries the same data (`rows`, `notPublic`, `excluded`).
+The A38 exclusion applies on every run: the same scan `oars sessions exclusions` runs (a missing or empty term file excludes everything). A transcript is dropped when it or its main session is excluded, so a subagent goes with its parent, and the output states how many transcripts and calls were removed. `--since <days>` narrows by call time, and the removed-calls count covers the same window; the removed-transcripts count covers the whole store. `--repo` is refused. `--json` carries the same data (`rows`, `notPublic`, `excluded`).
 
 ### What `books` adds
 

@@ -14,7 +14,7 @@ export const NORMALIZE: ReadonlyMap<string, (name: string) => string> = new Map<
   ['homebrew', (name) => name.toLowerCase()],
 ]);
 
-/** A capture ecosystem to the vocabulary's. `skill`, `plugin`, and `mcp` are not package registries and are absent. */
+/** A capture ecosystem to the vocabulary's. `skill`, `plugin`, and `mcp` are not package registries and are absent; `books --by package` reads `mcp` through `resolveMcpPull`. */
 const ECOSYSTEM_OF: ReadonlyMap<PullEcosystem, string> = new Map<PullEcosystem, string>([
   ['npm', 'npm'],
   ['pypi', 'pypi'],
@@ -51,6 +51,9 @@ export const resolvePull = (pull: ToolPull): Omit<ToolPackage, 'first'> | null =
   if (resolved === null) return null;
   return { package: resolved, packageVersion: pull.version !== null && EXACT_VERSION.test(pull.version) ? pull.version : null };
 };
+
+/** An MCP server pull as `mcp:<server>`, or null for any other ecosystem. Stored `packages` never hold it, since a server is no registry package. */
+export const resolveMcpPull = (pull: ToolPull): string | null => (pull.ecosystem === 'mcp' ? `mcp:${pull.name}` : null);
 
 /**
  * The packages one call installs or runs, each marked `first` when no earlier call of the transcript file named that package at that version. `seen` is the
