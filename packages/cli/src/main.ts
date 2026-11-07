@@ -36,6 +36,7 @@ process.exitCode = await run(process.argv.slice(2), {
   now: Date.now,
   openBrowser,
   install: {
+    platform: process.platform,
     nodePath: process.execPath,
     hookBin: fileURLToPath(new URL('./hook-bin.js', import.meta.url)),
     userSettings: join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'settings.json'),

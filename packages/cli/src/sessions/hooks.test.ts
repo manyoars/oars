@@ -238,14 +238,14 @@ describe('nightly run', () => {
     expect((await loadStore(staged.storeDir)).sessions).toHaveLength(3);
   });
 
-  it('repeats the saved --allow and --redact-domain set, refreshes the index, and does nothing before a first deposit', async () => {
+  it('repeats the saved --allow and --redact-domain set, refreshes the index, and reads every folder before a first deposit', async () => {
     const staged = await deposited();
     copyFileSync(join(FIXTURES, 'proj', 'tldr.jsonl'), join(staged.projectsRoot, slugOf(REPO), 'late.jsonl'));
     expect(await runHook('nightly', '', staged.runtime, () => NOW)).toBeUndefined();
     expect((await loadStore(staged.storeDir)).sessions.map((session) => session.session)).toContain('late');
     const fresh = stage();
     expect(await runHook('nightly', '', fresh.runtime, () => NOW)).toBeUndefined();
-    expect((await readHookCalls(fresh.storeDir)).map((call) => call.hit)).toEqual([false]);
+    expect((await readHookCalls(fresh.storeDir)).map((call) => call.hit)).toEqual([true]);
   });
 });
 
