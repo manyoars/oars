@@ -90,35 +90,29 @@ describe('the skill behind a call', () => {
       }),
     );
 
-  it('goes on the steps of the calls in the run, a listed skill by name and any other as private, and not on the call after it', () => {
+  it('goes on the steps of the calls in the run, a skill by name, and not on the call after it', () => {
     const steps = inRun().transcripts[0]?.tools.flatMap((call) => call.steps) ?? [];
-    expect(steps.map((held) => held.skill)).toEqual([undefined, 'commit', PRIVATE, undefined]);
-    expect(JSON.stringify(inRun())).not.toContain('acme-private-skill');
+    expect(steps.map((held) => held.skill)).toEqual([undefined, 'commit', 'acme-private-skill', undefined]);
   });
 
-  it('survives the parser, which reads a skill off the list as other and keeps it as sent', () => {
+  it('survives the parser, which takes a skill name as it is and refuses a value that is no name', () => {
     expect(parseSkeleton(clone(inRun())).ok).toBe(true);
     const bad: SessionSkeleton = clone(inRun());
     const held = bad.transcripts[0]?.tools[1]?.steps[0];
     if (held === undefined) throw new Error('no step');
-    held.skill = 'acme-private-skill';
-    const parsed = parseSkeleton(bad);
-    if (!parsed.ok) throw new Error(parsed.reason);
-    expect(parsed.skeleton.transcripts[0]?.tools[1]?.steps[0]?.skill).toBe('other');
-    expect(parsed.extensions).toEqual([{ at: 'transcripts[0].tools[1].steps[0].skill', kind: 'value', value: 'acme-private-skill' }]);
-    expect(parsed.others).toBe(1);
+    held.skill = 'rm -rf /home/me';
+    expect(parseSkeleton(bad)).toEqual({ ok: false, field: 'transcripts[0].tools[1].steps[0].skill', reason: 'not a name' });
   });
 });
 
 describe('the reach on the frame', () => {
-  it('lists the servers, skills, and plugins the session shows, each listed or private', () => {
+  it('lists the servers, skills, and plugins the session shows, each by name', () => {
     const skeleton = midPrompt({
       setup: { plugins: ['acme-plugin'] },
       funnel: { offered: ['mcp__playwright__browser_click', 'mcp__acme-internal__run', 'Read'], loaded: ['mcp__github__create_issue'] },
     });
-    expect(skeleton.transcripts[0]?.frame.reach).toEqual({ filled: true, mcp: ['github', 'playwright', PRIVATE], skills: [], plugins: [PRIVATE] });
+    expect(skeleton.transcripts[0]?.frame.reach).toEqual({ filled: true, mcp: ['acme-internal', 'github', 'playwright'], skills: [], plugins: [PRIVATE] });
     expect(skeleton.transcripts[0]?.frames.every(({ reach }) => reach?.filled === true)).toBe(true);
-    expect(JSON.stringify(skeleton)).not.toContain('acme');
     expect(parseSkeleton(clone(skeleton)).ok).toBe(true);
   });
 
@@ -127,15 +121,16 @@ describe('the reach on the frame', () => {
     expect(skeleton.transcripts[0]?.frame.reach).toEqual({ filled: false, mcp: [], skills: [], plugins: [] });
   });
 
-  it('reads a name outside the lists as other and keeps it as sent', () => {
+  it('takes a name as it is and refuses a value that is no name', () => {
     const bad: SessionSkeleton = clone(midPrompt({ setup: { plugins: ['x'] } }));
     const reach = bad.transcripts[0]?.frame.reach;
     if (reach === undefined) throw new Error('no reach');
     reach.mcp = ['acme-internal'];
     const parsed = parseSkeleton(bad);
     if (!parsed.ok) throw new Error(parsed.reason);
-    expect(parsed.skeleton.transcripts[0]?.frame.reach?.mcp).toEqual(['other']);
-    expect(parsed.extensions).toContainEqual({ at: 'transcripts[0].frame.reach.mcp[0]', kind: 'value', value: 'acme-internal' });
+    expect(parsed.skeleton.transcripts[0]?.frame.reach?.mcp).toEqual(['acme-internal']);
+    reach.mcp = ['acme internal; rm'];
+    expect(parseSkeleton(bad)).toEqual({ ok: false, field: 'transcripts[0].frame.reach.mcp[0]', reason: 'not a name' });
   });
 });
 

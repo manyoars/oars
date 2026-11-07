@@ -1,4 +1,4 @@
-// `oars pool`: the only part of the sessions code that talks to a remote. The server is always named, by flag or environment, so nothing leaves on a default. Sign-in runs the provider's device flow here and reads no harness token; a session leaves only as a closed-vocabulary skeleton, and only after the exclusion check found it clean. Local capture, recall,
+// `oars pool`: the only part of the sessions code that talks to a remote. The server is always named, by flag or environment, so nothing leaves on a default. Sign-in runs the provider's device flow here and reads no harness token; a session leaves only as a skeleton of a closed list of fields, each value redacted first, and only after the exclusion check found it clean. Local capture, recall,
 // and reads never come through here.
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -7,17 +7,18 @@ import { emitOf } from '../telemetry/emit.js';
 import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../errors.js';
 import { compileAllow } from './allow.js';
 import { makeCoverage, readCoverageSetting, writeCoverageSetting } from './coverage.js';
-import { checkSession, exclusionPaths, lastWritten, type Reason } from './exclusion.js';
+import { checkSession, exclusionPaths, lastWritten, loadTerms, type Reason } from './exclusion.js';
+import { makeRedactor } from './redact.js';
 import { recordSend, recordWire, newTally, tallyBatch } from '../telemetry/wire.js';
 import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, isMissing, lockedBatch, markShown, outboxFolder, partsOf, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
-import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type PinnedKey, type SessionRecords, type TranscriptRoot } from './pool-wire.js';
+import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type PinnedKey, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
 import { carriedDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { shellReader } from './projection.js';
 import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
 import { contentHash } from './read.js';
 import { harnessOf as sessionHarness, type Harness } from './schema.js';
-import { loadStore, readSaved, readSkeletons, type SessionsRuntime } from './store.js';
+import { loadStore, readRedactDomains, readSaved, readSkeletons, type SessionsRuntime } from './store.js';
 import { runGit, type Git } from './survival.js';
 import { vocabulary } from './vocab-load.js';
 
@@ -433,6 +434,8 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   const allow = compileAllow((await readSaved(runtime.storeDir)).allow);
   const discarded = await discardStale(outbox);
   const counts: DepositCounts = { sessions: 0, batched: 0, excluded: { folder: 0, term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, uncaptured: 0, notEnded: 0, refused: 0, refusedFields: [], discarded, withdrawn: 0 };
+  // The one gate on a name: the operator's redactor and exclusion terms (t881). Everything else the pool classes itself.
+  const gate: WireGate = { redact: makeRedactor(await readRedactDomains(runtime.storeDir)), terms: await loadTerms(terms) };
   const built = new Set<string>();
   // The bytes of the batches written in this pass: telemetry counts them, and the command's own document does not carry them.
   let builtBytes = 0;
@@ -475,7 +478,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   const coverageOf = makeCoverage(runtime, await readCoverageSetting(runtime.storeDir), options.git ?? runGit);
   for (const { records, key } of ready) {
     const delta = carried.get(records.main.session);
-    const skeleton = skeletonOf(records, key, shellReader(vocabulary()), contentHash, delta?.entries, await coverageOf(records.main));
+    const skeleton = skeletonOf(records, key, shellReader(vocabulary()), contentHash, delta?.entries, gate, await coverageOf(records.main));
     if (skeleton === null) {
       counts.uncaptured += 1;
       await withdraw(key);
