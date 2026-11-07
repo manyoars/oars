@@ -6,6 +6,9 @@
   "compatibility_date": "2026-07-01",
   "compatibility_flags": ["nodejs_compat"],
   "d1_databases": [{ "binding": "DB", "database_name": "oars-pool", "migrations_dir": "migrations" }],
-  "r2_buckets": [{ "binding": "TELEMETRY", "bucket_name": "oars-telemetry" }],
+  "r2_buckets": [
+    { "binding": "RAW", "bucket_name": "oars-pool-raw" },
+    { "binding": "TELEMETRY", "bucket_name": "oars-telemetry" }
+  ],
   "analytics_engine_datasets": [{ "binding": "TELEMETRY_EVENTS", "dataset": "oars_telemetry" }]
 }

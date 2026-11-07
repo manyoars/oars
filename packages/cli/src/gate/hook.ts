@@ -57,6 +57,8 @@ export interface GateHookDeps {
    * is the rows so far plus a not-read row for the crossing asked about, with `stop` ending that ask: a process cut off mid-ask stops it and leaves one row, not a manager running unseen.
    */
   stage?: (pending: { file: string; text: string; stop?: () => void } | null) => void;
+  /** Told how a call ended when its output alone does not say: `held` when a note was kept from the agent (the unexposed arm), `error` when the hook failed open. For telemetry; it changes nothing. */
+  ended?: (how: 'held' | 'error') => void;
 }
 
 interface Input {
@@ -289,6 +291,7 @@ export const runGateHook = async (stdin: string, deps: GateHookDeps): Promise<st
   } finally {
     deps.stage?.(null);
   }
+  if (blocks.length === 0 && notes.length === 0 && written.some((row) => row.arm === 'held')) deps.ended?.('held');
   await keepIndex(deps.storeDir, index, [...lines]).catch(() => undefined);
   if (answered.length > 0) await append(registryCachePath(deps.storeDir), answered.map((row) => `${JSON.stringify(row)}\n`).join('')).catch(() => undefined);
   return outputOf(blocks, notes);
@@ -300,6 +303,7 @@ export const gateHook = async (stdin: string, deps: GateHookDeps): Promise<strin
     return await runGateHook(stdin, deps);
   } catch {
     // Fail-open: a recorder that cannot record must not cost a session its tool call.
+    deps.ended?.('error');
   }
   return '';
 };
