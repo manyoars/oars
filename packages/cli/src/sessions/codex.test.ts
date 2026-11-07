@@ -7,7 +7,9 @@ import { codexRoot, openCodexStore, rolloutBadLines, rolloutLines } from './code
 import { captureSession } from './extract.js';
 import { makeRedactor } from './redact.js';
 import { makeRepoIdentity, makeRepoRoot } from './repo-root.js';
-import { cleanup, rolloutLine as line, stage, stageCodex } from './test-support.js';
+import { deposit, loadStore, readSkeletons } from './store.js';
+import { cleanup, NOW, rolloutLine as line, stage, stageCodex } from './test-support.js';
+import { verifyAll, verifyCaptured } from './verify.js';
 
 afterEach(cleanup);
 
@@ -731,8 +733,81 @@ describe('Paginated rollouts', () => {
         exited(7, 'u2', { status: 'failed' }),
         exited(8, 'nope', { status: 'failed', exit_code: 1, aggregated_output: 'x' }),
       ]);
-      expect(out.tools.map((tool) => [tool.status, tool.errorCode ?? null])).toEqual([['error', 'user-rejected'], ['none', null]]);
-      expect(out.errorLines.map((entry) => entry.line)).toEqual(['exec command rejected by user']);
+      // An item no call owns is its own Bash record (a code-mode cell's command), so 'nope' is a third, failed one.
+      expect(out.tools.map((tool) => [tool.status, tool.errorCode ?? null])).toEqual([['error', 'user-rejected'], ['none', null], ['error', '1']]);
+      expect(out.errorLines.map((entry) => entry.line)).toEqual(['exec command rejected by user', 'x']);
+    });
+
+    // Codex 0.166+ runs its shell inside a code-mode cell: a `custom_tool_call` named `exec` whose input is JavaScript, answered by a `custom_tool_call_output`
+    // whose first part's header is `Script completed`, `Script failed`, or `Script running with cell ID <id>`; `wait` polls a cell. Each command the cell ran
+    // persists its own CommandExecution item, `exec-<uuid>`, which no call owns (live store, 2026-11-06).
+    describe('code-mode cells (Codex 0.166+)', () => {
+      const cell = (second: number, id: string, js: string) => ord(line(T(second), 'response_item', { type: 'custom_tool_call', name: 'exec', call_id: id, input: js, status: 'completed' }));
+      const cellOut = (second: number, id: string, parts: string[]) =>
+        ord(line(T(second), 'response_item', { type: 'custom_tool_call_output', call_id: id, output: parts.map((text) => ({ type: 'input_text', text })) }));
+      const item = (second: number, id: string, text: string, rest: object) =>
+        done(second, {
+          type: 'CommandExecution',
+          id,
+          process_id: '75375',
+          command: ['C:\\Program Files\\PowerShell\\7\\pwsh.exe', '-Command', text],
+          cwd: 'file:///C:/work/app',
+          parsed_cmd: [{ type: 'unknown', cmd: text }],
+          source: 'unified_exec_startup',
+          duration: { secs: 0, nanos: 500000000 },
+          ...rest,
+        });
+      const fixture = () => {
+        begin();
+        return [
+          pmeta({ cli_version: '0.167.0' }),
+          done(1, { type: 'UserMessage', id: 'u1', content: [{ type: 'text', text: 'look around', text_elements: [] }] }),
+          cell(2, 'c1', 'text(await tools.exec_command({cmd:"ls /nonexistent"}));\n'),
+          item(3, 'exec-1', 'echo hi', { status: 'completed', exit_code: 0, aggregated_output: 'hi' }),
+          item(4, 'exec-2', 'ls /nonexistent', { status: 'failed', exit_code: 1, aggregated_output: "ls: cannot access '/nonexistent': No such file or directory" }),
+          cellOut(5, 'c1', ['Script completed\nWall time 0.4 seconds\nOutput:\nhi']),
+          cell(6, 'c2', 'text(await tools.exec_command({cmd:"sleep 30"}));\n'),
+          cellOut(7, 'c2', ['Script running with cell ID 14\nWall time 1 seconds\nOutput:\n']),
+          item(8, 'exec-3', 'sleep 30', { status: 'completed', exit_code: 0, aggregated_output: '' }),
+          call(9, 'w1', 'wait', { arguments: JSON.stringify({ cell_id: 14, max_tokens: 1000, yield_time_ms: 1000 }) }),
+          ord(shellOut(10, 'w1', [{ type: 'input_text', text: 'Script completed\nWall time 30 seconds\nOutput:\ndone' }])),
+          cell(11, 'c3', 'text(await tools.nope());\n'),
+          cellOut(12, 'c3', ['Script failed\nWall time 0.1 seconds\nOutput:\n', 'Script error:\nexec_command failed: no such tool']),
+        ];
+      };
+
+      it('records each command a cell ran as its own Bash record, with its exit code, output, and duration', () => {
+        const out = extractOf(fixture(), 'codex');
+        const blocks = (entry: Record<string, unknown>): Array<Record<string, unknown>> => {
+          const message = entry.message;
+          const content = typeof message === 'object' && message !== null && 'content' in message ? message.content : [];
+          return Array.isArray(content) ? content.filter((block): block is Record<string, unknown> => typeof block === 'object' && block !== null) : [];
+        };
+        const uses = rolloutLines(asText(fixture()), 's').flatMap((entry) => (entry.type === 'assistant' ? blocks(entry) : [])).filter((block) => block.type === 'tool_use');
+        expect(uses.filter((block) => block.native === 'exec_command').map((block) => block.input)).toEqual([{ command: 'echo hi' }, { command: 'ls /nonexistent' }, { command: 'sleep 30' }]);
+        expect(uses.filter((block) => block.native === 'exec' || block.native === 'wait').map((block) => [block.native, block.input])).toEqual([['exec', {}], ['exec', {}], ['wait', {}], ['exec', {}]]);
+        // Only the item-owned records have a native name the action table reads; a cell's `exec` and `wait` are not listed there, so a step stores them as `<literal>`.
+        const shell = out.tools.filter((tool) => tool.steps?.[0]?.native === 'exec_command');
+        expect(shell.map((tool) => [tool.status, tool.durationMs])).toEqual([['ok', 500], ['error', 500], ['ok', 500]]);
+        expect(out.errorLines.map((entry) => entry.line)).toContain("ls: cannot access '/nonexistent': No such file or directory");
+      });
+
+      it('settles a cell from its own header: completed ok, running then waited ok, failed with the Script error text', () => {
+        const out = extractOf(fixture(), 'codex');
+        const cells = out.tools.filter((tool) => tool.steps?.[0]?.native !== 'exec_command');
+        expect(cells.map((tool) => tool.status)).toEqual(['ok', 'ok', 'ok', 'error']);
+        expect(out.errorLines.map((entry) => entry.line)).toContain('exec_command failed: no such tool');
+      });
+
+      it('holds every verify invariant, including --strict, for the deposited fixture', async () => {
+        const s = stage();
+        const home = stageCodex(s.root, [{ id: 'aaaaaaaa-0000-4000-8000-000000000001', lines: fixture() }]);
+        const result = await deposit({ ...s.runtime, sourceRoots: { codex: home } }, { allow: ['codex'], redactDomains: [], now: () => NOW });
+        expect(result).toMatchObject({ sessions: 1 });
+        const { skeletons } = await readSkeletons(s.storeDir);
+        const store = await loadStore(s.storeDir);
+        expect([...verifyAll(skeletons), ...verifyCaptured(store.sessions, store.tools)].filter((entry) => entry.violations > 0)).toEqual([]);
+      });
     });
 
     it('leaves a Declined item unsettled when its output is a setup failure, not the user refusal text (events.rs:448-458)', () => {
