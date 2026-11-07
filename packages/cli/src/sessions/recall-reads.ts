@@ -143,6 +143,14 @@ export interface FitFloors {
  */
 export const FIT_FLOORS: FitFloors = { minFailedSessions: 3, minFailedShare: 0.1, minCalls: 20 };
 
+/**
+ * The floors the pre-tool push holds a shape to (t926). The pre-tool hook fires after the call is decided, so a push is a warning or nothing: a shape that fails less than half
+ * its calls is a base rate (the two broad shell shapes, `Bash` and `PowerShell` with a command, fail about a third of theirs whatever the command) and warning on it tells the
+ * agent nothing it can act on. A shape that fails at least half its calls is a defect of the call itself (`Monitor` with `query`, `Read` with `path`). Pulls and the pool keep
+ * `FIT_FLOORS`: a base rate is still a fact to read on request.
+ */
+export const PUSH_FLOORS: FitFloors = { ...FIT_FLOORS, minFailedShare: 0.5 };
+
 interface ShapeTally {
   tool: string;
   keys: string[];

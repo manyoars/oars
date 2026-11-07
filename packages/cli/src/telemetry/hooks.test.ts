@@ -11,6 +11,7 @@ import { folderKey } from '../gate/record.js';
 import { defaultConfigDir } from '../credentials.js';
 import { slugOf } from '../sessions/allow.js';
 import { indexPath, type HookIndex } from '../sessions/hook-index.js';
+import { withoutCells } from '../sessions/next-fixtures.js';
 import { runHook } from '../sessions/hooks.js';
 import type * as RecallPush from '../sessions/recall-push.js';
 import { armOf } from '../sessions/recall-object.js';
@@ -118,7 +119,8 @@ describe('a session hook records one event per fire', () => {
 
   it('post-tool: a failure the index knows is a hit, an unknown one a miss', async () => {
     const dir = spoolFolder();
-    const { runtime } = await deposited();
+    const { runtime, storeDir } = await deposited();
+    await withoutCells(storeDir);
     await runHook('post-tool', JSON.stringify({ session_id: 'p', tool_name: 'Bash', tool_response: `Exit code 2\n${QUOTING}` }), runtime, () => NOW, undefined, emitterAt(dir));
     await runHook('post-tool', JSON.stringify({ session_id: 'p', tool_name: 'Bash', tool_response: 'ok' }), runtime, () => NOW, undefined, emitterAt(dir));
     expect(hooks(dir).map((event) => event.data.outcome)).toEqual(['hit', 'miss']);

@@ -1,8 +1,8 @@
 # @manyoars/oars-client
 
 A typed client for the Many Oars public API. The types are generated from the API's OpenAPI document, and the client is a thin
-[openapi-fetch](https://openapi-ts.dev/openapi-fetch/) wrapper that adds three headers to every call: `Authorization: Bearer
-<token>`, `User-Agent: oars/<version>`, and a fresh `Idempotency-Key` on a mutation that does not bring its own.
+[openapi-fetch](https://openapi-ts.dev/openapi-fetch/) wrapper that adds up to three headers to a call: `Authorization: Bearer
+<token>` when you give a token, `User-Agent: oars/<version>`, and a fresh `Idempotency-Key` on a mutation that does not bring its own.
 
 Node 24 or later. ESM only.
 

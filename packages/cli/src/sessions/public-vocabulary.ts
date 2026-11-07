@@ -208,15 +208,6 @@ export const PUBLIC_FLAGS: ReadonlySet<string> = words(`
   -Command -Depth -ErrorAction -ExecutionPolicy -Filter -Force -Include -LiteralPath -NoLogo -NoProfile -NonInteractive -Path -Pattern -Raw -Recurse -Tail
 `);
 
-/** Hosts that say nothing about who asked. Matched whole: `acme.github.io` names a customer even though `github.io` is public. */
-export const PUBLIC_HOSTS: ReadonlySet<string> = words(`
-  github.com raw.githubusercontent.com gist.github.com docs.github.com api.github.com gitlab.com bitbucket.org stackoverflow.com superuser.com serverfault.com
-  en.wikipedia.org developer.mozilla.org npmjs.com www.npmjs.com registry.npmjs.org pypi.org docs.python.org crates.io docs.rs pkg.go.dev go.dev rubygems.org
-  docs.oracle.com spring.io docs.spring.io maven.apache.org kubernetes.io docs.docker.com hub.docker.com nodejs.org react.dev vite.dev vitejs.dev typescriptlang.org
-  www.typescriptlang.org docs.astro.build developers.cloudflare.com docs.stripe.com stripe.com docs.anthropic.com docs.claude.com code.claude.com learn.microsoft.com
-  docs.aws.amazon.com cloud.google.com platform.openai.com arxiv.org medium.com dev.to news.ycombinator.com reddit.com www.reddit.com youtube.com www.youtube.com
-`);
-
 /** MCP servers published for anyone to install. A server someone named themselves can name their company, so it reads as the literal. */
 export const PUBLIC_MCP_SERVERS: ReadonlySet<string> = words(`
   claude-in-chrome playwright puppeteer github gitlab filesystem fetch memory sequential-thinking context7 sentry

@@ -5,6 +5,7 @@
 import { appendFile, mkdir } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { servedPool } from './pool.js';
+import { recallPool } from './recall-bundle.js';
 import { noEmit, type Emit } from '../telemetry/emit.js';
 import { recallFields } from '../telemetry/fields.js';
 import { appendRecall } from './recall-object.js';
@@ -109,7 +110,7 @@ export const handleMessage = async (runtime: SessionsRuntime, now: () => number,
       // The server is not told which session it serves, so `sid` is null: naming it is what a consequence for an MCP pull still needs.
       const store = await loadStore(runtime.storeDir);
       const redactDomains = await readRedactDomains(runtime.storeDir);
-      const result = pull(store, query, { sid: null, now: now(), frame: null, redactDomains, current: await servedPool(runtime.storeDir, store) });
+      const result = pull(store, query, { sid: null, now: now(), frame: null, redactDomains, current: await recallPool(runtime.storeDir, store, servedPool) });
       // What an asker typed is class A: the call log masks each string with the redactor `pull` applies to the recall row, before it is serialized, because JSON escaping of a quote or newline hides a secret from the rules.
       const redact = makeRedactor(redactDomains);
       const masked = JSON.stringify(query, (_key, value: unknown) => (typeof value === 'string' ? redact(value) : value));
