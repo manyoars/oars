@@ -9,16 +9,16 @@ useServer();
 
 /** The file the retired launch switch read. Nothing reads it now; a request for it would be a regression. */
 const LAUNCH_FILE_URL = 'https://manyoars.com/.well-known/oars.json';
-const UNAVAILABLE = 'Cannot reach Many Oars sign-in for the pool at pool.manyoars.com (it may not be deployed yet). Pass --issuer-url or set OARS_ISSUER_URL to use another issuer.';
+const UNAVAILABLE = 'Cannot reach Many Oars sign-in at login.manyoars.com (Many Oars and its pool at pool.manyoars.com may not be deployed yet). Pass --issuer-url or set OARS_ISSUER_URL to use another issuer.';
 const single = (text: string[]): unknown => JSON.parse(text.join(''));
 
 /** Answers the retired launch file as launched=false and counts the requests, so a test can prove a login never asked and is not held by it. */
-const countFlagCalls = (launched = false) => {
+const countFlagCalls = () => {
   const calls = { count: 0 };
   server.use(
     http.get(LAUNCH_FILE_URL, () => {
       calls.count += 1;
-      return HttpResponse.json({ launched });
+      return HttpResponse.json({ launched: false });
     }),
   );
   return calls;
@@ -67,7 +67,7 @@ describe('the issuer oars login uses', () => {
 
   it('is the production issuer when neither is set, with no launch file and no call to one', async () => {
     const h = harness({ OARS_ISSUER_URL: '' });
-    const flag = countFlagCalls(false);
+    const flag = countFlagCalls();
     server.use(...production(), exchangeOk().handler);
     expect(await run(['login', '--no-browser', '--json'], h.deps)).toBe(ExitCode.OK);
     expect(flag.count).toBe(0);
@@ -114,7 +114,6 @@ describe('the issuer oars login uses', () => {
     const h = harness({ OARS_ISSUER_URL: '' });
     server.use(http.get(PRODUCTION_DISCOVERY, () => HttpResponse.error()));
     expect(await run(['login', '--no-browser'], h.deps)).toBe(ExitCode.USAGE);
-    expect(h.err.join('')).toBe(`${UNAVAILABLE}
-`);
+    expect(h.err.join('')).toBe(`${UNAVAILABLE}\n`);
   });
 });
