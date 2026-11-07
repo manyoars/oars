@@ -6,7 +6,7 @@ import { CAPTURE_VERSION, EXTRACTOR_VERSION, OLDEST_READABLE_CAPTURE } from '../
 import { frozenSessions, loadStore, paths, readSkeletons, type SessionsRuntime } from '../sessions/store.js';
 import { LITERAL, publicModel, publicVersion } from '../sessions/public-vocabulary.js';
 import { verifyAll, verifyCaptured } from '../sessions/verify.js';
-import { emitEvent, type Emitter } from './emit.js';
+import { emitEvent, recordsEvents, type Emitter } from './emit.js';
 import { spoolEvents } from './read-events.js';
 
 /** What the nightly run needs to record: the emitter, and a reader for the process's peak memory (a test sets it). */
@@ -79,6 +79,8 @@ const storeFields = async (runtime: SessionsRuntime): Promise<{ [field: string]:
 
 /** The store-health event of one nightly run. A store that cannot be read is recorded as that and nothing else; it never stops the run. */
 export const recordStoreHealth = async (telemetry: NightlyTelemetry, runtime: SessionsRuntime): Promise<void> => {
+  // The pass reads every skeleton and stats every raw file, so an install with telemetry off must not start it.
+  if (!recordsEvents(telemetry)) return;
   try {
     const fields = await storeFields(runtime);
     // The outbox is an extra: a folder that cannot be read leaves the two figures out and the snapshot stands.
