@@ -1398,6 +1398,66 @@ describe('oars pool fetch', () => {
     expect(JSON.parse(readFileSync(String(at(answer, 'file')), 'utf8'))).toEqual({ payload, signature });
   });
 
+  describe('prints the floor it finds in the bundle and holds none of its own', () => {
+    const floored = async (sign: (text: string) => Promise<string>, floors: unknown, version = '2.1.314'): Promise<() => Response> => {
+      const payload = JSON.stringify({ format: 1, harness: 'claude-code', harnessVersion: version, vocabVersion: VOCAB_VERSION, floor: 5, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}], strata: [], ...(floors === undefined ? {} : { floors }) });
+      const signature = await sign(payload);
+      return () => HttpResponse.json({ payload, signature }, { headers: { etag: '"floored"' } });
+    };
+
+    it.each([3, 5, 10])('prints a bundle at floor %i as that number', async (floor) => {
+      const { scene, sign } = await signedScene();
+      on(scene, 'get', `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, await floored(sign, { public: floor, disclosure: 2 }));
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
+      expect(scene.h.out.join('')).toContain(`The pool served it at a public floor of ${String(floor)} clusters and a disclosure floor of 2.`);
+    });
+
+    it('names a family on a floor of its own, and puts the floors in --json', async () => {
+      const { scene, sign } = await signedScene();
+      const floors = { public: 3, disclosure: 4, families: { live: 2, 'tool-day': 8 } };
+      on(scene, 'get', `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, await floored(sign, floors));
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
+      expect(scene.document()).toMatchObject({ floors });
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
+      expect(scene.h.out.join('')).toContain('a disclosure floor of 4, with live at 2 and tool-day at 8.');
+    });
+
+    it('prints the floor of the bundle it kept when the pool answers 304', async () => {
+      const { scene, sign } = await signedScene();
+      bundleRoute(scene, '2.1.314', [await floored(sign, { public: 7, disclosure: 2 }), () => new HttpResponse(null, { status: 304 })]);
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
+      expect(scene.document()).toMatchObject({ unchanged: true, floors: { public: 7, disclosure: 2 } });
+    });
+
+    it('says nothing of a floor when the bundle states none: an older pool\'s bundle still parses', async () => {
+      const { scene, sign } = await signedScene();
+      on(scene, 'get', `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, await floored(sign, undefined));
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
+      expect(scene.document()).not.toHaveProperty('floors');
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
+      expect(scene.h.out.join('')).not.toContain('floor');
+    });
+
+    it('parses a family this client does not know and prints none of it, so a later pool that adds one breaks no released client', async () => {
+      const { scene, sign } = await signedScene();
+      on(scene, 'get', `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, await floored(sign, { public: 5, disclosure: 2, families: { 'a-later-family': 3 } }));
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
+      const text = scene.h.out.join('');
+      expect(text).toContain('a disclosure floor of 2.');
+      expect(text).not.toContain('a-later-family');
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
+      expect(scene.document()).toMatchObject({ floors: { families: { 'a-later-family': 3 } } });
+    });
+
+    it.each([{ public: 0, disclosure: 2 }, { public: 5.5, disclosure: 2 }, { public: 5 }, { public: 5, disclosure: 2, families: { live: 0 } }, 'five'])('refuses a signed bundle whose floors are %j, rather than print them', async (floors) => {
+      const { scene, sign } = await signedScene();
+      on(scene, 'get', `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, await floored(sign, floors));
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.INVALID);
+      expect(scene.h.err.join('')).toContain('not a signed bundle this version reads');
+    });
+  });
+
   it('names the version it fetched', async () => {
     const { scene, sign } = await signedScene();
     const payload = bundleBody('2.1.9');
