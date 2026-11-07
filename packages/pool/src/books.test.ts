@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest';
 import type { Cell } from '../../cli/src/sessions/cells.js';
 import { namedId, shapeMotif, type Motif, type WindowStep } from '../../cli/src/sessions/motif.js';
 import type { Harness } from '../../cli/src/sessions/schema.js';
-import { bundleOf, K_CELL } from './derive.js';
+import { bundleOf } from './derive.js';
+import { DEFAULT_FLOORS, DEFAULT_PUBLIC_FLOOR } from './floors.js';
 import type { StoredPool } from './stored.js';
 import { containing, matching } from './test-pool.js';
 
@@ -19,21 +20,21 @@ const SEARCH = shapeMotif([{ action: 'file.search', identity: null }]);
 const weekCell = (motifId: string, clusters: number, over: Partial<Cell> = {}): Cell => ({ motifId, frameBucket: `${BUCKET}/opus`, grain: 'week', day: WEEK, sessions: clusters, clusters, ok: clusters, failed: 0, tokens: 0, durationMs: 0, exposed: false, ...over });
 
 const booksOver = (cells: Cell[], extra: Partial<StoredPool> = {}, motifs: Motif[] = [READ, SHELL, SEARCH]): NonNullable<ReturnType<typeof bundleOf>['books']> => {
-  const books = bundleOf(HARNESS, VERSION, { cells, environment: [], motifs, strata: [], ...extra }).books;
+  const books = bundleOf(HARNESS, VERSION, { cells, environment: [], motifs, strata: [], ...extra }, DEFAULT_FLOORS).books;
   if (books === undefined) throw new Error('the bundle carries no books');
   return books;
 };
 
 describe('books: served cells and the below-floor backlog', () => {
   it('counts the week cells at or above the floor as served, and the rest as one backlog total', () => {
-    const books = booksOver([weekCell(READ.motifId, K_CELL), weekCell(SHELL.motifId, K_CELL - 1), weekCell(SEARCH.motifId, 1)]);
+    const books = booksOver([weekCell(READ.motifId, DEFAULT_PUBLIC_FLOOR), weekCell(SHELL.motifId, DEFAULT_PUBLIC_FLOOR - 1), weekCell(SEARCH.motifId, 1)]);
     expect(books.served.total).toBe(1);
     expect(books.backlog).toBe(2);
   });
 
   it('breaks served cells down by week and by tuple, and names no sub-floor value', () => {
     const next = '2026-11-09';
-    const books = booksOver([weekCell(READ.motifId, 9), weekCell(READ.motifId, K_CELL, { day: next }), weekCell(SHELL.motifId, 7), weekCell(SEARCH.motifId, 2)]);
+    const books = booksOver([weekCell(READ.motifId, 9), weekCell(READ.motifId, DEFAULT_PUBLIC_FLOOR, { day: next }), weekCell(SHELL.motifId, 7), weekCell(SEARCH.motifId, 2)]);
     expect(books.served.byWeek).toEqual([{ week: WEEK, cells: 2 }, { week: next, cells: 1 }]);
     expect(books.served.byTuple).toEqual([{ tuple: `${BUCKET}/opus`, cells: 3 }]);
     const text = JSON.stringify(books);
@@ -70,15 +71,20 @@ describe('books: served cells and the below-floor backlog', () => {
     const big = named('big');
     const small = named('small');
     const cells = [weekCell(shape.motifId, 8), weekCell(big.motifId, 6), weekCell(small.motifId, 2)];
-    const bundle = bundleOf(HARNESS, VERSION, { cells, environment: [], motifs: [shape, big, small], strata: [] });
+    const bundle = bundleOf(HARNESS, VERSION, { cells, environment: [], motifs: [shape, big, small], strata: [] }, DEFAULT_FLOORS);
     expect(bundle.cells.map((cell) => cell.motifId)).toEqual([shape.motifId]);
     expect(bundle.books?.served.total).toBe(1);
     expect(bundle.books?.backlog).toBe(2);
   });
 
   it('carries its lineage: the floor, the versions, and the as-of of the served cells', () => {
-    const bundle = bundleOf(HARNESS, VERSION, { cells: [weekCell(READ.motifId, K_CELL)], environment: [], motifs: [READ], strata: [] });
-    expect(bundle.books).toMatchObject({ floor: K_CELL, format: bundle.format, vocabVersion: bundle.vocabVersion, asOf: bundle.asOf });
+    const bundle = bundleOf(HARNESS, VERSION, { cells: [weekCell(READ.motifId, DEFAULT_PUBLIC_FLOOR)], environment: [], motifs: [READ], strata: [] }, DEFAULT_FLOORS);
+    expect(bundle.books).toMatchObject({ floor: DEFAULT_PUBLIC_FLOOR, format: bundle.format, vocabVersion: bundle.vocabVersion, asOf: bundle.asOf });
+  });
+
+  it('states the floor it was served at, not the default', () => {
+    const bundle = bundleOf(HARNESS, VERSION, { cells: [weekCell(READ.motifId, 3)], environment: [], motifs: [READ], strata: [] }, { ...DEFAULT_FLOORS, public: 3 });
+    expect(bundle.books).toMatchObject({ floor: 3, served: { total: 1 } });
   });
 
   it('serves zero cells as zero served with the backlog beside it, because cells exist and are measured', () => {
@@ -90,18 +96,18 @@ describe('books: served cells and the below-floor backlog', () => {
 
 describe('books: the panel', () => {
   it('is a number when the pool read its deposits, and no source yet when it did not', () => {
-    expect(booksOver([weekCell(READ.motifId, K_CELL)], { panel: 3 }).panel).toEqual({ state: 'value', value: 3 });
-    expect(booksOver([weekCell(READ.motifId, K_CELL)]).panel).toEqual({ state: 'no source yet', reason: containing('deposit') });
+    expect(booksOver([weekCell(READ.motifId, DEFAULT_PUBLIC_FLOOR)], { panel: 3 }).panel).toEqual({ state: 'value', value: 3 });
+    expect(booksOver([weekCell(READ.motifId, DEFAULT_PUBLIC_FLOOR)]).panel).toEqual({ state: 'no source yet', reason: containing('deposit') });
   });
 
   it('keeps a panel of zero as zero: a read that found nobody is a measurement', () => {
-    expect(booksOver([weekCell(READ.motifId, K_CELL)], { panel: 0 }).panel).toEqual({ state: 'value', value: 0 });
+    expect(booksOver([weekCell(READ.motifId, DEFAULT_PUBLIC_FLOOR)], { panel: 0 }).panel).toEqual({ state: 'value', value: 0 });
   });
 });
 
 describe('books: demand and yield have no source yet', () => {
   it('states each as no source yet with a reason, and never as 0', () => {
-    const books = booksOver([weekCell(READ.motifId, K_CELL)]);
+    const books = booksOver([weekCell(READ.motifId, DEFAULT_PUBLIC_FLOOR)]);
     for (const field of [books.demand.comparisonReadOwners, books.demand.followOnReads, books.goal.readYield, books.goal.costPerServedCell, books.goal.yieldPerServedCell]) {
       expect(field).toEqual({ state: 'no source yet', reason: matching(/\S+ \S+ \S+/) });
     }

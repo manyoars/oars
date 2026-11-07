@@ -30,9 +30,13 @@
 // reads, not moved ones. A Copilot CLI session with rotated `events.N.jsonl` archives is now read as one session, so its `prompts`, `tools`, `lines`, and skeleton move; one
 // with no archives is unchanged. EXTRACTOR stays 11. A version-16 store's next deposit captures every transcript again from the harness or `raw/`.
 //
-// Version 22 (CAPTURE 22) keeps a `git checkout` step's target class, `target` `path` or `word` (never the target's text), so the `revert` rule can tell `git checkout -- src/a.ts` and `git checkout --ours src/a.ts` (a
+// Version 23 (CAPTURE 23) keeps a `git checkout` step's target class, `target` `path` or `word` (never the target's text), so the `revert` rule can tell `git checkout -- src/a.ts` and `git checkout --ours src/a.ts` (a
 // path) from `git checkout feature/x` (a branch or a path). It also writes a Codex `turn_aborted` with reason `interrupted` as the interrupt marker user line, so that prompt record exists and the session's
 // `prompts`, `tsLast` (the marker is a line), and skeleton move; a Codex session with no such turn is unchanged. A `git checkout` step captured before reads as it did (no `target`). EXTRACTOR 15 reads a Codex or Gemini decline in its fixed text as `user-stop`.
+//
+// Version 22 (CAPTURE 22, t870) adds the optional `targetClass` and `argClass` to a tool call (`call-shape.ts`): the class of its path target (`source`, `test`, `config`, `doc`, `lockfile`, `generated`, `data`, `none`, `other`) and the sorted set
+// of the classes of its arguments (`path`, `url`, `pattern`, `command`, `number`, `flag`, `text`, `none`), each computed from the path and the input at capture and stored as a closed-list member, never the path or a value. It changes no value
+// captured before, so EXTRACTOR stays 12; a version-21 store's next deposit captures every transcript again, and a call of an older record has neither field.
 //
 // EXTRACTOR 12 gives a derived prompt the strata of its user-prompt record, so its own `explore` count reaches the pool's wire as a bucket. No transcript is read: a store at
 // 11 re-derives from its log alone.
@@ -83,11 +87,12 @@
 // organization domains the operator names. The skeleton holds hashes only.
 
 import type { CanonicalAction } from './actions.js';
+import type { ArgClass, TargetClass } from './call-shape.js';
 import type { RepoSize } from './public-vocabulary.js';
 import type { SessionFunnel, SessionSetup, SessionTrust } from './session-shape.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '22';
+export const CAPTURE_VERSION = '23';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
@@ -406,7 +411,7 @@ export interface ShellIdentity {
   sub: string | null;
   flags: string[];
   /**
-   * Only on `git checkout` (CAPTURE 22), the class of what it acts on and never the target's text: `path` where the line proves a path (a `--` marker, or a flag that only takes
+   * Only on `git checkout` (CAPTURE 23), the class of what it acts on and never the target's text: `path` where the line proves a path (a `--` marker, or a flag that only takes
    * paths), `word` where a target word the segment drops (a slash, quotes) stands with no such proof, so it is a branch or a path and the line cannot say which. Absent with no such word.
    */
   target?: 'path' | 'word';
@@ -491,6 +496,10 @@ export interface ToolObservation {
   targetBase: TargetBase | null;
   /** The input's key names, sorted. Class A (EXTRACTOR 11). */
   keys: string[];
+  /** The class of the call's path target (`targetClassOf`): a member of `TARGET_CLASSES`, `none` for a call with no path target. Absent on a record captured before CAPTURE 22. Class P: a closed list, never the path or its base name. */
+  targetClass?: TargetClass;
+  /** The classes of the call's arguments (`argClassOf`), a sorted set of `ARG_CLASSES` members, `['none']` for a call with no argument value. Absent on a record captured before CAPTURE 22. Class P: never a value. */
+  argClass?: ArgClass[];
   /** The class of a failed call (`errorCodeOf`): a member of `ERROR_CODES`, never result text. Absent on a call that did not fail and on a record captured before CAPTURE 14. Class P. */
   errorCode?: string;
   /** From the call's line to its first result's line; null when either timestamp is missing or no result is in the file. */

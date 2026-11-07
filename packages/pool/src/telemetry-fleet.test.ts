@@ -2,7 +2,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { LATENCY_EDGES } from '../../cli/src/telemetry/measures.js';
 import { ownCells } from '../../cli/src/telemetry/report.js';
-import { K_CELL } from './derive.js';
+import { DEFAULT_PUBLIC_FLOOR } from './floors.js';
 import type { Env, PoolDb } from './http.js';
 import { anomaliesOf, fleetCells, measurablesOf, operator, OUTLIER_SCORE, type InstallDay } from './telemetry-fleet.js';
 import { dayOf, MAX_BATCHES_PER_RUN, rollupDay, rollupRecent, shiftDay, type Entry, type KeptBucket } from './telemetry-rollup.js';
@@ -79,15 +79,15 @@ describe('the fleet read, from the nightly rollup, on the Worker', () => {
     for (let at = 0; at < count; at += 1) await keep(pool, day, uuid(first + at), Array.from({ length: 10 }, () => hook(latency, 'hit', version)));
   };
 
-  it('serves nothing for a cell fewer than K_CELL installs report, and serves it at K_CELL', async () => {
-    await report(K_CELL - 1, daysAgo(1));
+  it('serves nothing for a cell fewer than DEFAULT_PUBLIC_FLOOR installs report, and serves it at DEFAULT_PUBLIC_FLOOR', async () => {
+    await report(DEFAULT_PUBLIC_FLOOR - 1, daysAgo(1));
     await nightly(pool);
     const below = await pool.get('/v1/telemetry/fleet');
     expect(below.status).toBe(200);
     expect(cellsOf(below.json, 7)).toEqual([]);
     expect(cellsOf(below.json, 30)).toEqual([]);
 
-    await keep(pool, daysAgo(1), uuid(K_CELL), [hook(100)]);
+    await keep(pool, daysAgo(1), uuid(DEFAULT_PUBLIC_FLOOR), [hook(100)]);
     await nightly(pool);
     const at = await pool.get('/v1/telemetry/fleet');
     // 100 ms falls in the bucket whose upper edge is 130 (edges grow by 1.5 times each).
@@ -97,17 +97,17 @@ describe('the fleet read, from the nightly rollup, on the Worker', () => {
   }, 60_000);
 
   it('keys a hook cell by harness and harness version: one version under two harnesses is two served cells', async () => {
-    for (let at = 1; at <= K_CELL; at += 1) await keep(pool, daysAgo(1), uuid(at), [hook(100, 'hit', '2.1.5', 'pre-tool', 'claude-code'), hook(400, 'hit', '2.1.5', 'pre-tool', 'codex')]);
+    for (let at = 1; at <= DEFAULT_PUBLIC_FLOOR; at += 1) await keep(pool, daysAgo(1), uuid(at), [hook(100, 'hit', '2.1.5', 'pre-tool', 'claude-code'), hook(400, 'hit', '2.1.5', 'pre-tool', 'codex')]);
     await nightly(pool);
     const latency = cellsOf((await pool.get('/v1/telemetry/fleet')).json, 7).filter((cell) => cell['metric'] === 'hook.pre-tool.latency');
     expect(latency.map((cell) => cell['value']).sort()).toEqual(['claude-code/2.1.5', 'codex/2.1.5']);
     expect(latency.find((cell) => cell['value'] === 'codex/2.1.5')?.['p50']).toBe(LATENCY_EDGES.find((edge) => edge >= 400));
   }, 60_000);
 
-  it('serves a latency cell equal to the user’s own numbers over the same events: K_CELL installs that each hold the fixture’s ten pre-tool latencies', async () => {
+  it('serves a latency cell equal to the user’s own numbers over the same events: DEFAULT_PUBLIC_FLOOR installs that each hold the fixture’s ten pre-tool latencies', async () => {
     // The ten latencies of the CLI report's fixture spool; the fleet side runs the rollup and `fleetCells`, the user's side runs `ownCells`, and both count in `measures.ts` buckets.
     const events = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100].map((ms) => hook(ms));
-    for (let at = 1; at <= K_CELL; at += 1) await keep(pool, daysAgo(1), uuid(at), events);
+    for (let at = 1; at <= DEFAULT_PUBLIC_FLOOR; at += 1) await keep(pool, daysAgo(1), uuid(at), events);
     await nightly(pool);
     const served = cellsOf((await pool.get('/v1/telemetry/fleet')).json, 7).find((one) => one['metric'] === 'hook.pre-tool.latency');
     const own = ownCells(events.map((event) => JSON.stringify(event)), Date.parse('2026-11-06T13:00:00Z'), 7).find((one) => one.metric === 'hook.pre-tool.latency');
@@ -118,9 +118,9 @@ describe('the fleet read, from the nightly rollup, on the Worker', () => {
 
   it('serves no count, no total, and no install, so no two served numbers differ by an install under the floor', async () => {
     // Five installs on 2.1.5 and four on 2.1.6; one of the five reported only 20 days ago.
-    await report(K_CELL - 1, daysAgo(2), 100, '2.1.5', 1);
-    await keep(pool, daysAgo(20), uuid(K_CELL), [hook(100)]);
-    await report(K_CELL - 1, daysAgo(2), 100, '2.1.6', 50);
+    await report(DEFAULT_PUBLIC_FLOOR - 1, daysAgo(2), 100, '2.1.5', 1);
+    await keep(pool, daysAgo(20), uuid(DEFAULT_PUBLIC_FLOOR), [hook(100)]);
+    await report(DEFAULT_PUBLIC_FLOOR - 1, daysAgo(2), 100, '2.1.6', 50);
     await nightly(pool);
     // Day 20 is not in the nightly's two days: roll it as the operator's backfill would.
     await rollupDayFor(pool, daysAgo(20));
@@ -151,9 +151,9 @@ describe('the fleet read, from the nightly rollup, on the Worker', () => {
   }, 60_000);
 
   it('serves two windows that differ by one install as percentiles only, so neither shows the install between them', async () => {
-    // K_CELL installs report 3 days ago (in both windows); one more reported 20 days ago (in the 30 only).
-    await report(K_CELL, daysAgo(3), 100, '2.1.5', 1);
-    await keep(pool, daysAgo(20), uuid(K_CELL + 1), [hook(100)]);
+    // DEFAULT_PUBLIC_FLOOR installs report 3 days ago (in both windows); one more reported 20 days ago (in the 30 only).
+    await report(DEFAULT_PUBLIC_FLOOR, daysAgo(3), 100, '2.1.5', 1);
+    await keep(pool, daysAgo(20), uuid(DEFAULT_PUBLIC_FLOOR + 1), [hook(100)]);
     await rollupDayFor(pool, daysAgo(3));
     await rollupDayFor(pool, daysAgo(20));
     const answered = await pool.get('/v1/telemetry/fleet');
@@ -193,7 +193,7 @@ describe('the fleet read, from the nightly rollup, on the Worker', () => {
   }, 60_000);
 
   it('reads no query and no credential: the same answer with or without them', async () => {
-    await report(K_CELL, daysAgo(1));
+    await report(DEFAULT_PUBLIC_FLOOR, daysAgo(1));
     await nightly(pool);
     const plain = await pool.get('/v1/telemetry/fleet');
     const asked = await pool.get('/v1/telemetry/fleet?install=x&window=1', 'a-token');
@@ -228,7 +228,7 @@ describe('the fleet read, from the nightly rollup, on the Worker', () => {
       // Install 1 sent 2,000 events 45 days ago: far outside the window, so it is no outlier. Five installs report ten events each 10 days ago, and two of them one more 3 days ago.
       await keep(pool, daysAgo(45), uuid(1), Array.from({ length: 2000 }, () => hook(50)));
       for (const at of [2, 3, 4]) await keep(pool, daysAgo(45), uuid(at), [hook(50)]);
-      for (let at = 1; at <= K_CELL; at += 1) await keep(pool, daysAgo(10), uuid(at), Array.from({ length: 10 }, () => hook(50)));
+      for (let at = 1; at <= DEFAULT_PUBLIC_FLOOR; at += 1) await keep(pool, daysAgo(10), uuid(at), Array.from({ length: 10 }, () => hook(50)));
       for (const at of [1, 2]) await keep(pool, daysAgo(3), uuid(at), [hook(50)]);
       for (const day of [45, 10, 3]) await rollupDayFor(pool, daysAgo(day));
       const { DB: real } = await pool.miniflare.getBindings<Bindings>();
@@ -247,7 +247,7 @@ describe('the fleet read, from the nightly rollup, on the Worker', () => {
       expect(answered.status).toBe(200);
       expect(fieldOf(json, 'outliers')).toEqual([]);
       // Five installs ever, two in the last 7 days, and the first day the fleet read was served is the day five installs report together.
-      expect(fieldOf(json, 'measurables')).toEqual({ reporting: { installsEver: K_CELL, installsLast7Days: 2, share: 2 / K_CELL }, firstFleetRead: daysAgo(10) });
+      expect(fieldOf(json, 'measurables')).toEqual({ reporting: { installsEver: DEFAULT_PUBLIC_FLOOR, installsLast7Days: 2, share: 2 / DEFAULT_PUBLIC_FLOOR }, firstFleetRead: daysAgo(10) });
       expect(asked.some((sql) => sql.includes('COUNT(DISTINCT install)'))).toBe(true);
       expect(asked.some((sql) => sql.includes('MIN(day)'))).toBe(true);
       // No read of the rows starts at the beginning of time.
@@ -264,6 +264,40 @@ describe('the fleet read, from the nightly rollup, on the Worker', () => {
       expect(fieldOf(fieldOf(answered.json, 'measurables'), 'firstFleetRead')).toBe(daysAgo(1));
     }, 60_000);
   });
+});
+
+describe('the fleet read follows the PUBLIC_FLOOR binding', () => {
+  /** Three installs each report the same ten pre-tool fires yesterday; the nightly rolls them. */
+  const threeInstalls = async (pool: TestPool): Promise<void> => {
+    for (let at = 1; at <= 3; at += 1) await keep(pool, daysAgo(1), uuid(at), Array.from({ length: 10 }, () => hook(100)));
+    await nightly(pool);
+  };
+
+  it('serves a cell three installs report, and states floor 3, when the pool is deployed with PUBLIC_FLOOR 3', async () => {
+    const low = await startPool({ COVENANT_VERSION: '', PUBLIC_FLOOR: '3' });
+    try {
+      await threeInstalls(low);
+      const answered = await low.get('/v1/telemetry/fleet');
+      expect(answered.status).toBe(200);
+      expect(fieldOf(answered.json, 'floor')).toBe(3);
+      expect(cellsOf(answered.json, 7)).toContainEqual({ metric: 'hook.pre-tool.hit', dimension: 'harnessVersion', value: 'claude-code/2.1.5', kind: 'rate', p50: 1 });
+    } finally {
+      await low.dispose();
+    }
+  }, 60_000);
+
+  it('serves nothing for the same three installs at the default binding, and states the default floor', async () => {
+    const standard = await startPool({ COVENANT_VERSION: '' });
+    try {
+      await threeInstalls(standard);
+      const answered = await standard.get('/v1/telemetry/fleet');
+      expect(fieldOf(answered.json, 'floor')).toBe(DEFAULT_PUBLIC_FLOOR);
+      expect(cellsOf(answered.json, 7)).toEqual([]);
+      expect(cellsOf(answered.json, 30)).toEqual([]);
+    } finally {
+      await standard.dispose();
+    }
+  }, 60_000);
 });
 
 /** The operator's backfill of one past day: the nightly run reaches only the last two. */
@@ -292,9 +326,15 @@ const row = (day: string, install: string, more: Partial<InstallDay> = {}): Inst
 describe('the counting rules', () => {
   it('serves a cell by distinct installs, not by rows: one install over many days is one install', () => {
     const rows = Array.from({ length: 30 }, (_, at) => row(daysAgo(at), uuid(1), { entries: [entry('2.1.5', 5, 5)] }));
-    expect(fleetCells(rows)).toEqual([]);
+    expect(fleetCells(rows, DEFAULT_PUBLIC_FLOOR)).toEqual([]);
     const five = [...rows, ...[2, 3, 4, 5].map((at) => row(daysAgo(1), uuid(at), { entries: [entry('2.1.5', 5, 5)] }))];
-    expect(fleetCells(five)).toHaveLength(1);
+    expect(fleetCells(five, DEFAULT_PUBLIC_FLOOR)).toHaveLength(1);
+  });
+
+  it('serves a cell at the floor the deploy set: five installs clear 3 and not 6', () => {
+    const rows = [1, 2, 3, 4, 5].map((at) => row(daysAgo(1), uuid(at), { entries: [entry('2.1.5', 5, 5)] }));
+    expect(fleetCells(rows, 3)).toHaveLength(1);
+    expect(fleetCells(rows, 6)).toEqual([]);
   });
 
   it('weighs installs equally in a latency cell: one install with 2,000 fires beside four with one each is not the fleet’s percentile', () => {
@@ -302,12 +342,12 @@ describe('the counting rules', () => {
     const fast = LATENCY_EDGES.findIndex((edge) => edge >= 10);
     const latency = (index: number, n: number): Entry => ({ metric: 'hook.pre-tool.latency', dimension: 'harnessVersion', value: '2.1.5', kind: 'latency', n, hits: 0, buckets: [[index, n]] });
     const rows = [row(daysAgo(1), uuid(1), { entries: [latency(slow, 2000)] }), ...[2, 3, 4, 5].map((at) => row(daysAgo(1), uuid(at), { entries: [latency(fast, 1)] }))];
-    expect(fleetCells(rows)).toEqual([expect.objectContaining({ p50: LATENCY_EDGES[fast], p95: LATENCY_EDGES[slow] })]);
+    expect(fleetCells(rows, DEFAULT_PUBLIC_FLOOR)).toEqual([expect.objectContaining({ p50: LATENCY_EDGES[fast], p95: LATENCY_EDGES[slow] })]);
     // The install's own p50 is the slow edge, which the pooled fires would have served.
     expect(LATENCY_EDGES[fast]).not.toBe(LATENCY_EDGES[slow]);
     // An install row with no fires weighs nothing.
     const empty = { ...latency(fast, 0), buckets: [] };
-    expect(fleetCells([...rows, row(daysAgo(1), uuid(6), { entries: [empty] })])).toHaveLength(1);
+    expect(fleetCells([...rows, row(daysAgo(1), uuid(6), { entries: [empty] })], DEFAULT_PUBLIC_FLOOR)).toHaveLength(1);
   });
 
   it('measures the share of installs still reporting, and the first day the fleet read was served', () => {
@@ -319,40 +359,40 @@ describe('the counting rules', () => {
       row(daysAgo(2), uuid(2), { entries }),
       row(daysAgo(1), uuid(6), { entries }),
     ];
-    const measured = measurablesOf(rows, daysAgo(1));
+    const measured = measurablesOf(rows, daysAgo(1), DEFAULT_PUBLIC_FLOOR);
     expect(measured.reporting).toEqual({ installsEver: 6, installsLast7Days: 3, share: 0.5 });
     expect(measured.firstFleetRead).toBe(daysAgo(30));
-    expect(measurablesOf([], daysAgo(1))).toEqual({ reporting: { installsEver: 0, installsLast7Days: 0, share: 0 }, firstFleetRead: null });
+    expect(measurablesOf([], daysAgo(1), DEFAULT_PUBLIC_FLOOR)).toEqual({ reporting: { installsEver: 0, installsLast7Days: 0, share: 0 }, firstFleetRead: null });
     // Four installs never make a cell; install 6 joining install 1 to 4 would, inside the 30 day window.
-    expect(measurablesOf(rows.filter((one) => one.install !== uuid(5) && one.install !== uuid(6)), daysAgo(1)).firstFleetRead).toBeNull();
+    expect(measurablesOf(rows.filter((one) => one.install !== uuid(5) && one.install !== uuid(6)), daysAgo(1), DEFAULT_PUBLIC_FLOOR).firstFleetRead).toBeNull();
   });
 
   it('finds the first fleet read against the widest served window: five installs a week apart serve a 30 day cell on the day the fifth reports', () => {
     const entries = [entry('2.1.5', 3, 3)];
     const rows = [28, 21, 14, 7, 0].map((ago, at) => row(daysAgo(ago), uuid(at + 1), { entries }));
-    expect(fleetCells(rows)).toHaveLength(1);
-    expect(measurablesOf(rows, daysAgo(0)).firstFleetRead).toBe(daysAgo(0));
-    expect(measurablesOf(rows.slice(0, 4), daysAgo(0)).firstFleetRead).toBeNull();
+    expect(fleetCells(rows, DEFAULT_PUBLIC_FLOOR)).toHaveLength(1);
+    expect(measurablesOf(rows, daysAgo(0), DEFAULT_PUBLIC_FLOOR).firstFleetRead).toBe(daysAgo(0));
+    expect(measurablesOf(rows.slice(0, 4), daysAgo(0), DEFAULT_PUBLIC_FLOOR).firstFleetRead).toBeNull();
   });
 
-  it('lists a far count among installs and among accounts, and lists none without a baseline of K_CELL', () => {
+  it('lists a far count among installs and among accounts, and lists none without a baseline of DEFAULT_PUBLIC_FLOOR', () => {
     const counts = [18, 19, 20, 20, 21, 22, 19, 20, 5000];
     const rows = counts.map((events, at) => row(daysAgo(1), uuid(at + 1), { events, batches: 1, account: `acct-${String(at % 5)}` }));
-    const found = anomaliesOf(rows);
+    const found = anomaliesOf(rows, DEFAULT_PUBLIC_FLOOR);
     expect(found.installs).toBe(9);
     expect(found.outliers.filter((one) => one.entity === 'install' && one.basis === 'events').map((one) => one.id)).toEqual([uuid(9)]);
     // Five accounts; the 5000-event install sits in acct-3 with the 4th install's 20.
     expect(found.outliers.filter((one) => one.entity === 'account').map((one) => [one.id, one.direction])).toEqual([['acct-3', 'high']]);
-    expect(anomaliesOf(rows.slice(0, K_CELL - 2).concat(rows.slice(-1))).outliers).toEqual([]);
+    expect(anomaliesOf(rows.slice(0, DEFAULT_PUBLIC_FLOOR - 2).concat(rows.slice(-1)), DEFAULT_PUBLIC_FLOOR).outliers).toEqual([]);
     expect(OUTLIER_SCORE).toBe(5);
   });
 
   it('lists a far low count, and not a fleet whose counts are all alike', () => {
     const alike = Array.from({ length: 6 }, (_, at) => row(daysAgo(1), uuid(at + 1), { events: 100, batches: 2 }));
-    expect(anomaliesOf(alike).outliers).toEqual([]);
-    expect(anomaliesOf([...alike.slice(0, 5), row(daysAgo(1), uuid(7), { events: 1, batches: 2 })]).outliers).toEqual([{ entity: 'install', id: uuid(7), basis: 'events', count: 1, median: 100, direction: 'low' }]);
+    expect(anomaliesOf(alike, DEFAULT_PUBLIC_FLOOR).outliers).toEqual([]);
+    expect(anomaliesOf([...alike.slice(0, 5), row(daysAgo(1), uuid(7), { events: 1, batches: 2 })], DEFAULT_PUBLIC_FLOOR).outliers).toEqual([{ entity: 'install', id: uuid(7), basis: 'events', count: 1, median: 100, direction: 'low' }]);
     // One event off in a fleet of identical counts is not far.
-    expect(anomaliesOf([...alike, row(daysAgo(1), uuid(8), { events: 101, batches: 2 })]).outliers).toEqual([]);
+    expect(anomaliesOf([...alike, row(daysAgo(1), uuid(8), { events: 101, batches: 2 })], DEFAULT_PUBLIC_FLOOR).outliers).toEqual([]);
   });
 });
 
