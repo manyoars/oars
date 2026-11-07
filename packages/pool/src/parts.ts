@@ -53,13 +53,14 @@ export const receivePart = async (request: Request, env: Env, account: string, b
   // A retried part lands on its own row and changes nothing.
   await env.DB.prepare('INSERT INTO deposit_parts (account, batch, part, count, body) VALUES (?, ?, ?, ?, ?) ON CONFLICT (account, batch, part) DO NOTHING').bind(account, batch, part, count, body).run();
   const held = await heldParts(env, account, batch);
-  if (held.length < count) return answer(202, { ok: true, pending: count - held.length });
-  const whole = held.map((row) => row.body).join('');
-  const bytes = new TextEncoder().encode(whole);
+  // Parts that arrive together each read a small `before`, so the bound that holds is on what is staged after the insert: past it, nothing of the batch stays.
+  const bytes = new TextEncoder().encode(held.map((row) => row.body).join(''));
   if (bytes.length > MAX_ASSEMBLED_BYTES) {
     await forget(env, account, batch);
     return refuse(413, 'too_large', `A deposit holds at most ${String(MAX_ASSEMBLED_BYTES)} bytes, in parts or whole.`);
   }
+  if (held.length < count) return answer(202, { ok: true, pending: count - held.length });
+  const whole = held.map((row) => row.body).join('');
   if (hex(await crypto.subtle.digest('SHA-256', bytes)) !== batch) {
     await forget(env, account, batch);
     return refuse(400, 'part_mismatch', 'The parts do not join to the batch that oars-batch names. Send every part again.', 'oars-batch');

@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { frame, printOf, prompt, session, sessionsFrom, step, storedNames, store, tool } from '../../cli/src/sessions/pool-fixture.js';
 import { canonicalBytes, partsOf } from '../../cli/src/sessions/pool-outbox.js';
 import { parseSkeleton, skeletonOf, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
+import { receivePart } from './parts.js';
+import type { Bound, Env } from './http.js';
 import { startPool, stubUser, type Answer, type TestPool } from './test-pool.js';
 
 const CAP = 1024 * 1024;
@@ -196,6 +198,35 @@ describe('a deposit past the request cap', () => {
       await pool.dispose();
     }
   }, 120_000);
+
+  it('keeps nothing staged past the join cap when parts of an unfinished batch land between a part first read and its insert', async () => {
+    // Miniflare runs one request at a time here, so the interleave is scripted: a stand-in for D1 that lets the other parts land right after this part's first read.
+    const staged: { part: number; body: string }[] = [];
+    const piece = 'x'.repeat(1_000_000);
+    let reads = 0;
+    const prepare = (sql: string) => ({
+      bind: (...values: (string | number | null)[]): Bound => ({
+        first: () => Promise.resolve(null),
+        all: () => {
+          reads += 1;
+          const seen = staged.map((row) => ({ part: row.part, count: 3, body: row.body, deposit: null }));
+          if (reads === 1) staged.push({ part: 2, body: piece });
+          return Promise.resolve({ results: seen });
+        },
+        run: () => {
+          if (sql.startsWith('INSERT')) staged.push({ part: Number(values[2]), body: String(values[4]) });
+          if (sql.startsWith('DELETE')) staged.length = 0;
+          return Promise.resolve({ meta: { changes: 1 } });
+        },
+      }),
+    });
+    const request = new Request('http://pool.test/v1/deposits', { method: 'POST', headers: partHeaders(sha('three parts, one read behind'), 1, 3), body: piece });
+    const env: Env = { DB: { prepare, batch: () => Promise.resolve([]) } };
+    const answered = await receivePart(request, env, 'account', piece, () => Promise.resolve(new Response('stored', { status: 201 })));
+    // Part 2 landed after part 1 read nothing: both bodies now sit staged, and 2,000,000 bytes cannot join under 1,800,000.
+    expect(answered.status).toBe(413);
+    expect(staged).toEqual([]);
+  });
 
   it('is refused past what one stored row can hold, and a body that is not a skeleton is refused by name', async () => {
     const pool = await startPool();
