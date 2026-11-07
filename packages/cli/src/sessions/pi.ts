@@ -5,7 +5,7 @@
 // reader is original. No vendor text promises the format (docs/session-format.md names the file version and says an older file is migrated when loaded, and sends programs to the SDK),
 // so `docs/sessions-store.md` says what a live run would still have to prove.
 //
-// Where it reads from (`piRoot`): `$PI_CODING_AGENT_DIR`, else `~/.pi/agent` (`%USERPROFILE%\.pi\agent` on Windows) (src/config.ts:611, :614, :630-636, docs/environment-variables.md:81). A session is
+// Where it reads from (`piRoot`): `$PI_CODING_AGENT_DIR`, else `~/.pi/agent` (`%USERPROFILE%\.pi\agent` on Windows) (src/config.ts:610, :613-614, :630-636, docs/environment-variables.md:81). A session is
 // `sessions/--<cwd with its leading separator removed and / \ : turned into ->--/<ISO time with : . turned into ->_<session id>.jsonl` (docs/session-format.md:10-14,
 // session-manager.ts:590-593). The sessions folder can be moved by `--session-dir`, `PI_CODING_AGENT_SESSION_DIR`, or a setting (docs/sessions.md:60); this reader does not follow those.
 // A file is written only once a conversation exists, then appended to (session-manager.ts:1176-1190). Line 1 is the header and every later line is an entry:
