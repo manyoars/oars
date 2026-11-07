@@ -104,7 +104,7 @@ const REAL = {
           errorCode: '1',
           recoveryCalls: { next: [], editFollowed: false },
           steps: [
-            { ...STEP, action: 'shell.exec', native: 'Bash', identity: { program: 'npm', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] } },
+            { ...STEP, allocated: true, action: 'shell.exec', native: 'Bash', identity: { program: 'npm', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] } },
             { ...STEP, action: 'mcp.call', native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' }, edges: [{ kind: 'next', target: 0 }] },
             { ...STEP, action: 'skill.run', native: 'Skill', identity: { skill: 'commit' }, skill: 'commit' },
             { ...STEP, action: 'web.fetch', native: 'WebFetch', identity: { host: 'github.com' } },
