@@ -233,6 +233,54 @@ describe('a deposit past the request cap', () => {
     expect(staged).toEqual([]);
   });
 
+  it('refuses a join whose staged part was sealed under another key as a part_mismatch, and keeps nothing staged; the same parts under one key join', async () => {
+    // A stand-in for the one table the parts path touches, so the two secrets meet in one batch without a deploy changing its secret mid-test.
+    interface Row {
+      part: number;
+      count: number;
+      body: string;
+      deposit: string | null;
+    }
+    const staging = (): { env: Env; rows: Row[] } => {
+      const rows: Row[] = [];
+      const prepare = (sql: string) => ({
+        bind: (...values: (string | number | null)[]): Bound => ({
+          first: () => Promise.resolve(null),
+          all: () => Promise.resolve({ results: [...rows].sort((a, b) => a.part - b.part) }),
+          run: () => {
+            if (sql.startsWith('INSERT')) rows.push({ part: Number(values[2]), count: Number(values[3]), body: String(values[4]), deposit: null });
+            if (sql.startsWith('DELETE')) rows.length = 0;
+            return Promise.resolve({ meta: { changes: 1 } });
+          },
+        }),
+      });
+      return { env: { DB: { prepare, batch: () => Promise.resolve([]) } }, rows };
+    };
+    const parts = ['{"a":', '1}'];
+    const batch = sha(parts.join(''));
+    const send = (env: Env, secret: string, index: number, joined: string[]): Promise<Response> =>
+      receivePart(new Request('http://pool.test/v1/deposits', { method: 'POST', headers: partHeaders(batch, index, 2), body: parts[index - 1] ?? '' }), env, 'account', secret, parts[index - 1] ?? '', (text) => {
+        joined.push(text);
+        return Promise.resolve(Response.json({ ok: true, id: 'deposit-1' }, { status: 201 }));
+      });
+
+    const apart = staging();
+    const refusedJoin: string[] = [];
+    expect((await send(apart.env, 'secret-a', 1, refusedJoin)).status).toBe(202);
+    expect(apart.rows).toHaveLength(1);
+    const refused = await send(apart.env, 'secret-b', 2, refusedJoin);
+    expect(refused.status).toBe(400);
+    expect(await refused.json()).toMatchObject({ error: 'part_mismatch' });
+    expect(apart.rows).toEqual([]);
+    expect(refusedJoin).toEqual([]);
+
+    const together = staging();
+    const joined: string[] = [];
+    expect((await send(together.env, 'secret-a', 1, joined)).status).toBe(202);
+    expect((await send(together.env, 'secret-a', 2, joined)).status).toBe(201);
+    expect(joined).toEqual([parts.join('')]);
+  });
+
   it('stages no host in clear: a host in an early part is unreadable in every deposit_parts row until the join (t907)', async () => {
     const pool = await startPool();
     try {
@@ -255,7 +303,7 @@ describe('a deposit past the request cap', () => {
     }
   }, 120_000);
 
-  it('seals each staged part under its own IV, so the same text staged twice reads differently, and the join still hashes to the batch', async () => {
+  it('seals each staged part under its own IV, so the same text staged twice reads differently', async () => {
     const pool = await startPool();
     try {
       const token = await signedIn(pool, '9011');
@@ -270,7 +318,7 @@ describe('a deposit past the request cap', () => {
     }
   }, 120_000);
 
-  it('refuses a join whose staged part was tampered with, or sealed under another key, as a part_mismatch, and forgets the batch', async () => {
+  it('refuses a join whose staged part was tampered with, or never sealed, as a part_mismatch, and forgets the batch', async () => {
     const pool = await startPool();
     try {
       const token = await signedIn(pool, '9012');
