@@ -443,7 +443,8 @@ describe('no harness token is ever read', () => {
     expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
     on(scene, 'get', `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, () => HttpResponse.json({ error: 'fetch_cap', message: 'capped' }, { status: 429 }));
     await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL);
-    expect(scene.seen.length).toBeGreaterThan(3);
+    // Login now takes two requests (start, poll) where the provider-token route took more.
+    expect(scene.seen.length).toBeGreaterThanOrEqual(3);
     expect(scene.sent()).not.toContain(HARNESS_SECRET);
     expect(scene.sent()).toContain(POOL_TOKEN);
   });

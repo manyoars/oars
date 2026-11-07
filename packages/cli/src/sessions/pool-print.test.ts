@@ -50,8 +50,8 @@ describe('printed', () => {
   it('prints a body after a blank line with its length, masked', () => {
     const masker = new Masker();
     masker.add('tok-123456');
-    const post: Outgoing = { method: 'POST', url: new URL('https://pool.test/v1/login'), headers: [], body: '{"token":"tok-123456"}' };
-    expect(printed(post, masker)).toBe('POST /v1/login HTTP/1.1\nhost: pool.test\nconnection: keep-alive\ncontent-length: 22\n\n{"token":"<credential: 10 bytes>"}\n');
+    const post: Outgoing = { method: 'POST', url: new URL('https://pool.test/v1/login/poll'), headers: [], body: '{"handle":"tok-123456"}' };
+    expect(printed(post, masker)).toBe('POST /v1/login/poll HTTP/1.1\nhost: pool.test\nconnection: keep-alive\ncontent-length: 23\n\n{"handle":"<credential: 10 bytes>"}\n');
   });
 });
 
