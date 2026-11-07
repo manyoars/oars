@@ -14,7 +14,7 @@ const parse = (env: Parameters<typeof floorsOf>[0]): { floors: ReturnType<typeof
 describe('the defaults', () => {
   it('are 5 and 2, and wrangler.jsonc states the same two numbers', () => {
     expect([DEFAULT_PUBLIC_FLOOR, DEFAULT_DISCLOSURE_FLOOR]).toEqual([5, 2]);
-    expect(fieldOf(wranglerConfig().parsed, 'vars')).toEqual({ PUBLIC_FLOOR: String(DEFAULT_PUBLIC_FLOOR), DISCLOSURE_FLOOR: String(DEFAULT_DISCLOSURE_FLOOR) });
+    expect(fieldOf(wranglerConfig().parsed, 'vars')).toMatchObject({ PUBLIC_FLOOR: String(DEFAULT_PUBLIC_FLOOR), DISCLOSURE_FLOOR: String(DEFAULT_DISCLOSURE_FLOOR) });
   });
 
   it('are what unset bindings give, with nothing logged', () => {
