@@ -71,7 +71,7 @@ describe('keys on the wire', () => {
     expect(parsed.extensions).toContainEqual({ at: 'transcripts[0].tools[0].keys[1]', kind: 'value', value: 'planted_unlisted_key' });
   });
 
-  it('refuses a key that is no name shape on a tool off the pinned lists, and a keys that is no list', () => {
+  it('reads a key that is no name shape as other, and refuses a keys that is no list', () => {
     const wire = clone(oneCall('WorkspaceHelper', { keys: ['query'] }));
     first(wire).keys = ['a b'];
     expect(parseSkeleton(wire)).toMatchObject({ ok: true, others: 1 });

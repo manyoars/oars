@@ -188,8 +188,8 @@ describe('other for an unknown value', () => {
   const FIELDS: { name: string; path: (string | number)[]; value?: string }[] = [
     { name: 'transcript harness', path: ['transcripts', 0, 'harness'] },
     { name: 'frame harness', path: ['transcripts', 0, 'frame', 'harness'] },
-    { name: 'frame harnessVersion', path: ['transcripts', 0, 'frame', 'harnessVersion'] },
-    { name: 'frame model', path: ['transcripts', 0, 'frame', 'model'] },
+    { name: 'frame harnessVersion', path: ['transcripts', 0, 'frame', 'harnessVersion'], value: 'not a name!' },
+    { name: 'frame model', path: ['transcripts', 0, 'frame', 'model'], value: 'not a name!' },
     { name: 'frame effort', path: ['transcripts', 0, 'frame', 'effort'] },
     { name: 'frame platform', path: ['transcripts', 0, 'frame', 'platform'] },
     { name: 'frame shell', path: ['transcripts', 0, 'frame', 'shell'] },
@@ -204,8 +204,8 @@ describe('other for an unknown value', () => {
     // A native name that is no name (a command line, say) is set aside; a name travels as it is, below.
     { name: 'step native', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'native'], value: 'not a name!' },
     { name: 'step status', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'status'] },
-    { name: 'shell sub', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'sub'] },
-    { name: 'shell flag', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'flags', 0] },
+    { name: 'shell sub', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'sub'], value: 'not a name!' },
+    { name: 'shell flag', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'flags', 0], value: 'not a name!' },
     { name: 'pull registry', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'pulls', 0, 'registry'] },
     { name: 'pull version', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'pulls', 0, 'version'] },
   ];
