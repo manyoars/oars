@@ -1818,6 +1818,33 @@ describe('pool telemetry: deposit batches and fetches leave counts', () => {
     ]);
   });
 
+  it('a fetch the pool refuses still reached the pool: it records a fetch and exits as it did', async () => {
+    const { scene } = await signed();
+    const dir = recording(scene);
+    server.use(http.get(`${POOL}${BUNDLE}`, () => HttpResponse.json({ error: 'server_error', message: 'The pool is down.' }, { status: 500 })));
+    const quiet = await signed();
+    server.use(http.get(`${POOL}${BUNDLE}`, () => HttpResponse.json({ error: 'server_error', message: 'The pool is down.' }, { status: 500 })));
+    const without = await quiet.scene.cli('pool', 'fetch', '--harness', 'claude-code', '--harness-version', '2.1.314', '--server', POOL);
+    expect(without).not.toBe(ExitCode.OK);
+    expect(await scene.cli('pool', 'fetch', '--harness', 'claude-code', '--harness-version', '2.1.314', '--server', POOL)).toBe(without);
+    expect(eventsOf(dir, 'fetch')).toEqual([{ harness: 'claude-code', fetches: 1 }]);
+  });
+
+  it('a bundle that fails verification still reached the pool: it records a fetch and exits as it did, keeping nothing', async () => {
+    const { scene, reply } = await signed();
+    const dir = recording(scene);
+    server.use(
+      http.get(`${POOL}${BUNDLE}`, async () => {
+        const answered: unknown = await (await reply()).json();
+        const bad = typeof answered === 'object' && answered !== null ? { ...answered, signature: 'not-a-signature' } : answered;
+        return HttpResponse.json(bad);
+      }),
+    );
+    expect(await scene.cli('pool', 'fetch', '--harness', 'claude-code', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.INVALID);
+    expect(scene.document()).toMatchObject({ problem: { code: 'bundle_unverified' } });
+    expect(eventsOf(dir, 'fetch')).toEqual([{ harness: 'claude-code', fetches: 1 }]);
+  });
+
   it('a fetch the pool caps records a cap hit and still exits as capped', async () => {
     const { scene } = await signed();
     const dir = recording(scene);

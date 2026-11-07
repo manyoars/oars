@@ -43,9 +43,9 @@ One per fire of a hook: the bare `oars gate hook` (recorded by its own process, 
 |---|---|
 | `name` | Which hook: `session-start`, `pre-tool`, `post-tool`, `stop`, `nightly`, or `gate` (the bare `oars gate hook`). |
 | `latencyMs` | How long the hook's handler took, in milliseconds, not counting node's own start. |
-| `outcome` | `hit` (it printed context or a deny, or deposited), `miss` (it found nothing), `held` (it had something and the holdback arm kept it from the agent), or `error` (it failed open). |
+| `outcome` | `hit` (it printed context or a deny, or deposited), `miss` (it found nothing), `held` (it had something and the holdback arm kept it from the agent), or `error` (it failed open, or the process deadline ended it before it finished; that fire is written once, with no bytes). |
 | `bytes` | The size of what the hook printed to stdout; 0 when nothing. |
-| `harnessVersion`, `model` | When the hook saw them (the hook input's `model`, or the transcript a push reads): a public version or model name as the pool's vocabulary lists it, else `other`. Absent when the hook did not see one. |
+| `harnessVersion`, `model` | When the hook saw them (the hook input's `model`, or the last 64 KB of the transcript the input names, the same bounded read a push makes; the path is never recorded): a public version or model name as the pool's vocabulary lists it, else `other`. Absent when the hook did not see one. |
 
 ### `recall`
 
@@ -75,11 +75,11 @@ One per `oars pool deposit` pass (`step` is `build`), and one per batch sent (`s
 
 ### `fetch`
 
-One per `oars pool fetch` that reached the pool.
+One per `oars pool fetch` that reached the pool, whatever the pool answered: a refused fetch and a bundle that fails verification count as fetches, with no `reads`.
 
 | Field | What it holds |
 |---|---|
-| `harness` | The harness fetched, from the pool's list (`claude-code`, `cursor`, `codex`, `copilot`, `gemini`, `grok`, `vscode-copilot`). |
+| `harness` | The harness fetched, from the pool's list (`claude-code`, `cursor`, `codex`, `copilot`, `gemini`, `grok`, `vscode-copilot`, or `other`). |
 | `fetches` | 1. |
 | `etagHits` | 1 when the pool answered 304 (the kept bundle is current). |
 | `capHits` | 1 when the pool's weekly fetch cap refused it. |

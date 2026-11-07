@@ -604,10 +604,15 @@ export const poolFetch = async (deps: RunDeps, options: { server?: string | unde
       text: `${harness} ${harnessVersion} is unchanged: the bundle at ${file} is still current (${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs).`,
     };
   }
-  if (reply.status !== 200) throw refusal(FETCH, reply);
+  // A refused fetch and a bundle that fails verification both reached the pool, so each is a fetch; only the success adds reads.
+  if (reply.status !== 200) {
+    emit('fetch', { harness, fetches: 1 });
+    throw refusal(FETCH, reply);
+  }
   const verified = await verifyBundle(reply.body, signingKey, harness, harnessVersion);
   if (!verified.ok) {
     const title = `Refused the bundle: ${verified.reason}.`;
+    emit('fetch', { harness, fetches: 1 });
     throw new CliError(title, ExitCode.INVALID, FETCH, { code: 'bundle_unverified', title });
   }
   const etag = reply.headers.get('etag');
