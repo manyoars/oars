@@ -2,7 +2,7 @@
 // a login records the account's age (`identity.ts`). After a deposit lands, `recount` takes the touched cells' and strata's accounts through the rule in `clusters.ts` and writes the weighted
 // count to their `clusters` column, the one number a floor compares in SQL (`stored.ts`) and in code (`floors.ts`). Nothing here refuses, drops, or hides an account or a deposit.
 import type { SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
-import { clustersOf, type Holder } from './clusters.js';
+import { clusterHolders, type Holder } from './clusters.js';
 import { fieldOf, type Bound, type Env } from './http.js';
 import { chunksOf } from './ingest.js';
 
@@ -76,7 +76,7 @@ const countsOf = async (env: Env, kind: Kind, keys: string): Promise<{ key: stri
       cadence: cadence.get(account) ?? new Map<string, Set<number>>(),
     });
   }
-  return [...holders].map(([key, found]) => ({ key, count: clustersOf(found).count }));
+  return [...holders].map(([key, found]) => ({ key, count: clusterHolders(found).count }));
 };
 
 /**

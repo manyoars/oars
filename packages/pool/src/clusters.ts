@@ -64,7 +64,7 @@ const inLockstep = (a: Holder, b: Holder): boolean => {
 const young = (holder: Holder): boolean => holder.createdAt !== undefined && holder.firstDeposit - holder.createdAt < YOUNG_DAYS * DAY_MS;
 
 /** The connected components of "shares a machine, a repo-key set, or a creation window and a deposit cadence", each counted 1, or half when every account in it is young. */
-export const clustersOf = (holders: readonly Holder[]): Clusters => {
+export const clusterHolders = (holders: readonly Holder[]): Clusters => {
   const parent = holders.map((_, at) => at);
   const find = (at: number): number => {
     let root = at;

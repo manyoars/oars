@@ -1,6 +1,6 @@
 // The cluster rule: accounts that share a machine, a repo-key set, or a creation window and a deposit cadence are one cluster, and a cluster of only young accounts counts half.
 import { describe, expect, it } from 'vitest';
-import { CADENCE_SHARE, CLUSTER_WINDOW_MS, clustersOf as clusterRule, REPO_KEYS_MIN, YOUNG_DAYS, YOUNG_WEIGHT, type Holder } from './clusters.js';
+import { CADENCE_SHARE, CLUSTER_WINDOW_MS, clusterHolders as clusterRule, REPO_KEYS_MIN, YOUNG_DAYS, YOUNG_WEIGHT, type Holder } from './clusters.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const FIRST = Date.UTC(2026, 10, 1);

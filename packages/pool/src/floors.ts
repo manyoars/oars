@@ -96,8 +96,9 @@ export const wireFloors = (floors: Floors): BundleFloors => {
 };
 
 /**
- * The count a cell clears a floor with. This is the one place a cell's count is taken, so the Sybil brief replaces this function with verified-distinct clusters and no caller changes. Today it is the cell's held count of
- * accounts (`clusters`, one per account however many sessions it sent). The index queries in `stored.ts` compare the `clusters` column to a floor in SQL, only to fetch fewer rows; the bundle's own decision is this function.
+ * The count a cell clears a floor with: its verified-distinct clusters of accounts, not its accounts (`clusters.ts`, "Clusters" in docs/pool.md), a weighting and never a cap. The stored `clusters` column
+ * is that count, written by `recount` (`cluster-store.ts`) after every deposit, so the SQL in `stored.ts` that compares the column to a floor to fetch fewer rows and this function, which the bundle's own
+ * decision uses, read one number. A served read carries it in its `clusters` field.
  */
 export const clustersOf = (cell: Cell): number => cell.clusters;
 
