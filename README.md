@@ -36,6 +36,14 @@ just audit     # npm audit for high or critical advisories in what ships; needs 
 `just check` includes a staleness test: it regenerates the client's types from `openapi/public.json` and fails when
 `packages/client/src/generated/schema.d.ts` differs.
 
+**Testing and sockets.** A test reaches a handler in process (call it with a `Request`, or build the store and call the
+function) rather than over a socket. Every loopback connection a test opens and closes stays in the operating system's
+TIME_WAIT table for a minute (about two on Windows), and concurrent runs share that table's dynamic port range (16,384
+ports on Windows), so a test that opens a socket says why in a one-line comment: the transport, a port, or a timeout is
+what it tests. The pool tests go through `startPool` in `packages/pool/src/test-pool.ts`, which keeps their requests to
+the Worker on Node's keep-alive connection pool; a full `vitest run` leaves a few hundred such sockets, and a change that
+adds thousands is a regression (`test-pool.test.ts` fails when the connections stop being reused).
+
 ## The public API spec
 
 `openapi/public.json` is a committed copy, never edited by hand. To add a call, list its `operationId` in
