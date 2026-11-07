@@ -378,6 +378,26 @@ export const ACTION_TABLES: { readonly [harness in Harness]: ActionTable } = {
     toolDelimited: false,
     shells: { shell: 'bash' },
   },
+  // Pi's own names (badlogic/pi-mono @ 085c84e, packages/coding-agent, docs/cli.md:144-158): `read`, `bash`, `powershell` (Windows), `edit`, `write`, `grep`, `find`, `ls`,
+  // `codemode`, and `tool_search`. A shell call and an edit reach the transcript as `Bash` and `Edit` with the original name in `native`, which is what this table looks up.
+  // Pi registers an MCP tool as `mcp__<server>__<tool>` (docs/mcp.md:77). It has no sub-agent, skill, plan, or ask tool of its own (README.md:19).
+  pi: {
+    rows: {
+      read: 'file.read',
+      bash: 'shell.exec',
+      powershell: 'shell.exec',
+      edit: 'file.edit',
+      write: 'file.write',
+      grep: 'file.search',
+      find: 'file.search',
+      ls: 'file.search',
+      codemode: 'other',
+      tool_search: 'other',
+    },
+    mcp: /^mcp__(?<server>.+?)__(?<tool>.+)$/,
+    toolDelimited: true,
+    shells: { bash: 'bash', powershell: 'powershell' },
+  },
   // OpenTelemetry GenAI traces (open-telemetry/semantic-conventions-genai @ e6658f1, docs/gen-ai/execute-tool.md): `gen_ai.tool.name` is whatever the instrumented agent calls its
   // tool, so no name is guaranteed. These are the names the conventions use in their own examples and refinements (the command, skill, and agent-as-tool sections); a span the
   // reader recognizes by attributes alone (a nonzero `process.exit.code`, a `gen_ai.skill.name`) is renamed before this table is read. An MCP call is spelled `mcp__<server>__<tool>`.
