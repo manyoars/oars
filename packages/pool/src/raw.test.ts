@@ -243,6 +243,21 @@ describe('retries and completion', () => {
     expect(await keysIn(`raw/${account}/`)).toEqual([`raw/${account}/${hash}`]);
   }, 60_000);
 
+  it('answers a full 1 MB part for an object that stands, over and over, without the connection being reset', async () => {
+    const { token } = await member();
+    const bytes = transcript(2000, 12);
+    const hash = await hex(bytes);
+    await sendParts(hash, bytes, token);
+    expect((await complete(hash, 1, bytes.length, token)).status).toBe(201);
+    // The answer must not go out over an unread body: on Windows that resets the socket under the client (ECONNRESET, "terminated").
+    const full = transcript(MEGABYTE, 13);
+    for (let again = 0; again < 20; again += 1) {
+      const sent = await pool.send(partPath(hash, 1), { method: 'PUT', body: full }, token, grant);
+      expect(sent.status).toBe(200);
+      expect(fieldOf(sent.json, 'stored')).toBe(true);
+    }
+  }, 60_000);
+
   it('names the part that never arrived, and leaves no object and no row', async () => {
     const { token, account } = await member();
     const bytes = transcript(3 * MEGABYTE, 2);
