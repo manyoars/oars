@@ -4,7 +4,8 @@ import { NO_AXES, type Cell } from '../../cli/src/sessions/cells.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
 import type { StepIdentity } from '../../cli/src/sessions/schema.js';
 import { cellClassOf } from './cell-class.js';
-import { bundleOf, CLEAR_FLOOR, FLOORS, K_CELL } from './derive.js';
+import { bundleOf } from './derive.js';
+import { DEFAULT_FLOORS, DEFAULT_PUBLIC_FLOOR } from './floors.js';
 import { classFor, isListed } from './field-classes.js';
 import type { StoredPool } from './stored.js';
 
@@ -77,20 +78,19 @@ describe('a served bundle reads the class', () => {
     motifs: [clearMotif, tailMotif],
     strata: [],
   });
-  const frames = (clusters: number, floors?: Parameters<typeof bundleOf>[3]): string[] => bundleOf('claude-code', '2.1.314', stored(clusters), floors).cells.map((cell) => `${cell.motifId} ${cell.frameBucket}`);
+  const frames = (clusters: number, floors = DEFAULT_FLOORS): string[] => bundleOf('claude-code', '2.1.314', stored(clusters), floors).cells.map((cell) => `${cell.motifId} ${cell.frameBucket}`);
 
   it('serves a clear cell below the clear floor only when the floor says so, and a thresholded one never', () => {
-    expect(frames(K_CELL - 1, { clear: 1, thresholded: K_CELL })).toEqual(['m-clear claude-code/2.1.31x/claude-sonnet-4-5']);
+    expect(frames(DEFAULT_PUBLIC_FLOOR - 1, { ...DEFAULT_FLOORS, clear: 1 })).toEqual(['m-clear claude-code/2.1.31x/claude-sonnet-4-5']);
   });
 
   it('serves all three at the floor', () => {
-    expect(frames(K_CELL)).toHaveLength(3);
+    expect(frames(DEFAULT_PUBLIC_FLOOR)).toHaveLength(3);
   });
 
   it('keeps one cell floor for both classes today, and states the thresholded floor on the bundle', () => {
-    expect(CLEAR_FLOOR).toBe(K_CELL);
-    expect(FLOORS).toEqual({ clear: K_CELL, thresholded: K_CELL });
-    expect(frames(K_CELL - 1)).toEqual([]);
-    expect(bundleOf('claude-code', '2.1.314', stored(K_CELL)).floor).toBe(K_CELL);
+    expect(DEFAULT_FLOORS.clear).toBe(DEFAULT_FLOORS.public);
+    expect(frames(DEFAULT_PUBLIC_FLOOR - 1)).toEqual([]);
+    expect(bundleOf('claude-code', '2.1.314', stored(DEFAULT_PUBLIC_FLOOR), DEFAULT_FLOORS).floor).toBe(DEFAULT_PUBLIC_FLOOR);
   });
 });
