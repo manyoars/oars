@@ -76,7 +76,9 @@ const storeDeposit = async (env: Env, account: string, text: string): Promise<Re
     // The upsert changes nothing in two cases: a brake refused the row, or another deposit of this session set the row after this one read it. Only the second leaves a row with another mark than the one read.
     const held = await markOf(env, account, skeleton.id);
     if (held !== undefined && held !== (previous?.ingest ?? '')) return refuse(409, 'deposit_conflict', 'Another deposit of this session landed first. Send it again.');
-    return refuse(403, 'deposit_limit', `An operator's brake holds this account at ${limit === undefined ? 'no limit' : String(limit)} deposits and ${budget === undefined ? 'no limit' : String(budget)} stored bytes.`);
+    // Only the brakes that are set are named: an unset one limits nothing.
+    const set = [...(limit === undefined ? [] : [`${String(limit)} deposits`]), ...(budget === undefined ? [] : [`${String(budget)} stored bytes`])];
+    return refuse(403, 'deposit_limit', `An operator's brake holds this account to at most ${set.join(' and ')}.`);
   }
   return answer(201, { ok: true, id: skeleton.id });
 };

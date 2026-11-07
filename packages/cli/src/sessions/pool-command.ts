@@ -401,7 +401,7 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
       reply = await ask(deps, DEPOSIT, server, POOL_DEPOSITS, call, via);
     }
     // 201 on any part means the deposit already finished (this part is a retry), so the rest need not be sent.
-    const ended = reply.status === 201 || reply.status !== 202 || at === calls.length - 1;
+    const ended = reply.status !== 202 || at === calls.length - 1;
     // One send event per batch, on the reply that ends it, whatever number of parts it took.
     if (ended) recordSend(deps, { status: reply.status, code: isObject(reply.body) ? textIn(reply.body, 'error') : undefined, bytes: Buffer.byteLength(bytes) });
     if (reply.status === 201) break;
