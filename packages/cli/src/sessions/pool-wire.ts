@@ -3,7 +3,7 @@
 // sending, and the server parses it again, field by field, because a live URL takes anything from anyone. This file imports nothing from the file system: the Worker bundles it.
 
 import { ACTION_TABLES, CANONICAL_ACTIONS, mcpOf, type CanonicalAction } from './actions.js';
-import { CUSTOM_AGENT, FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRIVATE, publicEffort, publicVersion, PUBLIC_PACKAGES, projectedAgentType, REPO_SIZES, VOCAB_VERSION, type RepoSize } from './public-vocabulary.js';
+import { CUSTOM_AGENT, FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRIVATE, publicEffort, publicVersion, PUBLIC_PACKAGES, projectedAgentType, PUBLIC_FLAGS, REPO_SIZES, VOCAB_VERSION, type RepoSize } from './public-vocabulary.js';
 import type { Cell } from './cells.js';
 import type { Redactor } from './redact.js';
 import type { Motif } from './motif.js';
@@ -316,10 +316,10 @@ const SHORT_FLAG = /^-[A-Za-z]$/;
 // The long form has its own shape, with no `:` (the joiner `WIRE_NAME` allows for `scope:name`), because `--password:hunter2` is a value joined to its flag and no part of it is a name.
 const LONG_FLAG = /^--[A-Za-z0-9][A-Za-z0-9_.+-]*$/;
 /**
- * The shape of a flag name: a long flag (two dashes, then a name with no `:`) or a short one (one dash, one letter). A value joined to its flag fails it: `--token=abc`, `--password:hunter2`, and a short flag with its
- * value attached (`-psecret123`, `-uuser:pass`), which is why a single-dash token longer than one letter is never a name.
+ * The shape of a flag name: a long flag (two dashes, then a name with no `:`) or a short one (one dash, one letter), or a single-dash token longer than one letter only when the public flag list holds it (`-NoProfile`, `-Command`). A value joined to its flag
+ * fails it: `--token=abc`, `--password:hunter2`, and a short flag with its value attached (`-psecret123`, `-uuser:pass`), which no list holds.
  */
-const isWireFlag = (flag: string): boolean => SHORT_FLAG.test(flag) || (flag.length <= NAME_MAX && LONG_FLAG.test(flag));
+const isWireFlag = (flag: string): boolean => SHORT_FLAG.test(flag) || PUBLIC_FLAGS.has(flag) || (flag.length <= NAME_MAX && LONG_FLAG.test(flag));
 
 /** A flag name as the wire holds it: the name after the one gate, or `private` when it counts as redacted. Only the name is ever read, never a value. */
 const wireFlag = (gate: WireGate, flag: string): string => (isWireFlag(flag) && wireName(gate, flag.replace(FLAG_DASHES, '')) !== PRIVATE ? flag : PRIVATE);
