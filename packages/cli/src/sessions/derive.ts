@@ -179,7 +179,7 @@ const isGitUndo = (tool: ToolObservation): boolean =>
     tool.steps?.some(({ identity }) => identity !== null && 'program' in identity && identity.program === 'git' && identity.sub === 'reset' && identity.flags.includes('--hard')) === true);
 
 /**
- * What the next prompt `next` did to the work of a prompt (docs/sessions-store.md, "Prompt intervention"). First match: a stop, the last prompt, or the marker's own record is `unknown`; then `revert`, `redo`,
+ * What the next prompt `next` did to the work of a prompt (docs/sessions-store.md, "Prompt intervention"). First match: the last prompt or the marker's own record is `unknown`; then a stop (`stopped` set) is `user-stop`; then `revert`, `redo`,
  * `after-error`; then `unknown` again when the next prompt ran a shell call captured before `segments`, which could have been an undo; else `none`.
  */
 const interventionOf = (
@@ -190,7 +190,9 @@ const interventionOf = (
   nextCalls: readonly ToolObservation[],
   immediate: boolean,
 ): PromptIntervention => {
-  if (next === undefined || stopped !== null || prompt.head.startsWith(INTERRUPT_MARKER)) return 'unknown';
+  if (next === undefined || prompt.head.startsWith(INTERRUPT_MARKER)) return 'unknown';
+  // A stop is read before the others: a rejected call is settled as an error, so `after-error` would otherwise claim every rejection.
+  if (stopped !== null) return 'user-stop';
   if (settled.some(isEdit) && (nextCalls.some(isGitUndo) || ASKS_UNDO.test(next.head.trimStart()))) return 'revert';
   if (immediate) return 'redo';
   if (settled.at(-1)?.status === 'error') return 'after-error';
@@ -250,6 +252,8 @@ export const deriveSession = (capture: SessionCapture, redact: Redactor): Derive
       efforts: prompt.efforts,
       skills: prompt.skills,
       usage: prompt.usage,
+      ...(prompt.usageObserved === undefined ? {} : { usageObserved: prompt.usageObserved }),
+      ...(prompt.usageResponses === undefined ? {} : { usageResponses: prompt.usageResponses }),
       recovery,
       explore: sequence.filter((tool) => EXPLORE.has(tool)).length,
       strata: prompt.strata,

@@ -51,9 +51,9 @@ const derived = (heads: readonly string[], calls: readonly Call[], failures: rea
 const REJECTED = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file).";
 
 describe('the closed list', () => {
-  it('names the five buckets, and the extractor that writes them is version 13', () => {
-    expect(PROMPT_INTERVENTIONS).toEqual(['none', 'after-error', 'redo', 'revert', 'unknown']);
-    expect(Number(EXTRACTOR_VERSION)).toBeGreaterThanOrEqual(13);
+  it('names the six buckets, and the extractor that writes them is version 14', () => {
+    expect(PROMPT_INTERVENTIONS).toEqual(['none', 'after-error', 'redo', 'revert', 'user-stop', 'unknown']);
+    expect(Number(EXTRACTOR_VERSION)).toBeGreaterThanOrEqual(14);
   });
 });
 
@@ -170,15 +170,39 @@ describe('revert', () => {
   });
 });
 
+describe('user-stop', () => {
+  it('is a prompt the user rejected a call of', () => {
+    expect(derived(['a', 'b'], [edit(0, 'hash-a', 'error')], [{ prompt: 0, line: REJECTED }])).toEqual(['user-stop', 'unknown']);
+  });
+
+  it('is a prompt the user interrupted: the next record is the marker, which reads unknown itself', () => {
+    expect(derived(['a', '[Request interrupted by user]', 'c'], [edit(0)])).toEqual(['user-stop', 'unknown', 'unknown']);
+  });
+
+  it('wins over after-error: a rejected call settles as an error, and it is the last call of the prompt', () => {
+    expect(derived(['a', 'b'], [shell(0, 'npm test', 'error'), edit(0, 'hash-a', 'error')], [{ prompt: 0, line: REJECTED }])).toEqual(['user-stop', 'unknown']);
+    expect(derived(['a', 'b'], [edit(0, 'hash-a', 'error')])).toEqual(['after-error', 'unknown']);
+  });
+
+  it('wins over redo and revert: the next prompt repeats the edit or asks for the undo, and the stop still reads first', () => {
+    expect(derived(['a', 'b'], [edit(0), edit(1)], [{ prompt: 0, line: REJECTED }])[0]).toBe('user-stop');
+    expect(derived(['a', 'undo that'], [edit(0)], [{ prompt: 0, line: REJECTED }])[0]).toBe('user-stop');
+    expect(derived(['a', '[Request interrupted by user]', 'b'], [edit(0), edit(2)])[0]).toBe('user-stop');
+  });
+
+  it('is not a policy denial: that is the permission rules, not the human, so the failed call reads after-error', () => {
+    expect(derived(['a', 'b'], [edit(0, 'hash-a', 'error')], [{ prompt: 0, line: 'Permission to use Edit has been denied.' }])[0]).toBe('after-error');
+  });
+});
+
 describe('unknown', () => {
   it('is the last prompt of a transcript, whatever it did', () => {
     expect(derived(['only'], [edit(0), shell(0, 'npm test', 'error')])).toEqual(['unknown']);
     expect(derived([], [])).toEqual([]);
   });
 
-  it('is a prompt the user rejected a call of, or interrupted: a stop has no word in the list', () => {
-    expect(derived(['a', 'b'], [edit(0, 'hash-a', 'error')], [{ prompt: 0, line: REJECTED }])).toEqual(['unknown', 'unknown']);
-    expect(derived(['a', '[Request interrupted by user]', 'c'], [edit(0)])).toEqual(['unknown', 'unknown', 'unknown']);
+  it('is a rejected prompt that is the last of its transcript: the last prompt reads unknown before a stop is looked at', () => {
+    expect(derived(['a'], [edit(0, 'hash-a', 'error')], [{ prompt: 0, line: REJECTED }])).toEqual(['unknown']);
   });
 
   it('is the interrupt marker\'s own record', () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { frame, printOf, prompt, rootsOf, session, sessionsFrom, step, storedNames, store, tool } from './pool-fixture.js';
 import { bucketOf, hasEnded, MIN_TIMED_CALLS, parseSkeleton, SESSION_IDLE_HOURS, skeletonOf, type SessionSkeleton } from './pool-wire.js';
+import type { UsageField } from './schema.js';
 import type { Store } from './store.js';
 
 const framed = frame({ shell: 'bash' });
@@ -133,6 +134,31 @@ describe('the fold and the envelope', () => {
   });
 });
 
+describe('a usage total the source never recorded', () => {
+  const usageOf = (observed: UsageField[] | undefined) =>
+    built(store({ sessions: [session('m', { frame: framed })], prompts: [prompt('m', 0, { frame: framed, usage: { input: 0, cacheWrite: 0, cacheRead: 0, output: 700, thinking: 0 }, ...(observed === undefined ? {} : { usageObserved: observed }) })], tools: [] })).transcripts[0]?.prompts[0]?.usage;
+
+  it('sends null for a prompt with no observed category, never the bucket of zero', () => {
+    expect(usageOf([])).toEqual({ input: null, cacheWrite: null, cacheRead: null, output: null, thinking: null });
+  });
+
+  it('sends a number only for the categories a partial total observed', () => {
+    expect(usageOf(['output'])).toEqual({ input: null, cacheWrite: null, cacheRead: null, output: bucketOf('tokens', 700), thinking: null });
+  });
+
+  it('sends the responses a partial total covers as a count bucket, and none for a record that carries no coverage', () => {
+    const covered = (responses: number | undefined) =>
+      built(store({ sessions: [session('m', { frame: framed })], prompts: [prompt('m', 0, { frame: framed, usageObserved: ['output'], ...(responses === undefined ? {} : { usageResponses: responses }) })], tools: [] })).transcripts[0]?.prompts[0];
+    expect(covered(37)?.usageResponses).toBe(bucketOf('count', 37));
+    expect(covered(0)?.usageResponses).toBe(bucketOf('count', 0));
+    expect(covered(undefined)).not.toHaveProperty('usageResponses');
+  });
+
+  it('reads a record that predates usageObserved as fully observed', () => {
+    expect(usageOf(undefined)?.input).toBe(bucketOf('tokens', 0));
+  });
+});
+
 describe('remainingTokens', () => {
   it('is the bucket of the sum, not a sum of buckets', () => {
     const from = store({
@@ -144,6 +170,20 @@ describe('remainingTokens', () => {
     // 600 + 600 is 1,200, bucket 1; two buckets of 600 would sum to 0.
     expect(remaining).toEqual([bucketOf('tokens', 1200), bucketOf('tokens', 600), 0]);
     expect(bucketOf('tokens', 600) + bucketOf('tokens', 600)).toBe(0);
+  });
+
+  it('stays null while steps follow and none reported tokens, and sums only the ones that did', () => {
+    const none = { tokens: null, durationMs: null };
+    const run = (costs: Array<{ tokens: number | null; durationMs: null }>): Array<number | null | undefined> | undefined =>
+      built(
+        store({
+          sessions: [session('m', { frame: framed })],
+          prompts: [prompt('m', 0, { frame: framed })],
+          tools: costs.map((held, n) => tool('m', n, 'Read', { steps: [step(n, 0, 'file.read', { native: 'Read', cost: held })] })),
+        }),
+      ).transcripts[0]?.tools.map(({ steps }) => steps[0]?.remainingTokens);
+    expect(run([none, none, none])).toEqual([null, null, 0]);
+    expect(run([none, cost(1200), none])).toEqual([bucketOf('tokens', 1200), null, 0]);
   });
 
   it('counts the subagent runs a main-run step spawned later, and a subagent step only its own run', () => {
@@ -183,7 +223,7 @@ describe('remainingTokens', () => {
   });
 
   it('leaves every main-run step unchanged for a nested run, whatever it spent', () => {
-    const main = (nested: number): (number | undefined)[] | undefined =>
+    const main = (nested: number): Array<number | null | undefined> | undefined =>
       built(
         store({
           sessions: [session('m', { frame: framed })],
