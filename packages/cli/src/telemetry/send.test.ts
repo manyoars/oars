@@ -238,6 +238,17 @@ describe('sendSpool', () => {
     expect(readSpool(dir)).toEqual([]);
   });
 
+  it('treats an object the route would refuse as junk: no string type, an empty one, or one over 64 characters', async () => {
+    const fake = await serve();
+    const dir = spooled(1);
+    // The first lines are the oldest: if any went in a batch the route would answer 400 and block every later send.
+    const refused = ['{}', '{"type":5}', '{"type":""}', `{"type":"${'x'.repeat(65)}"}`];
+    writeFileSync(spoolPaths(dir).current, `${refused.join('\n')}\n${eventLine(0)}\n`);
+    expect(await sendWith(dir, { OARS_POOL_URL: fake.origin })).toEqual({ outcome: 'sent', sent: 1, requests: 1 });
+    expect(eventsOf(fake.received[0])).toHaveLength(1);
+    expect(readSpool(dir)).toEqual([]);
+  });
+
   it('gives up without a request, and never throws, when the install id cannot be made', async () => {
     const fake = await serve();
     const dir = spooled(1);

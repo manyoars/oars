@@ -213,6 +213,8 @@ A live read's baseline is not traceable through lineage: the floor counts only t
 
 `POST /v1/login` is unauthenticated and, in the Worker, unlimited: the rate-limit rule in deploy step 6 is what bounds it, so the pool must not be deployed without that rule.
 
+`POST /v1/telemetry` is unauthenticated and, in the Worker, unlimited, and each request writes one R2 object of up to 1 MiB that never expires: the same rate-limit rule in deploy step 6 is what bounds it, so the pool must not be deployed without that rule.
+
 The pool does not check that the provider token it is sent was issued to the Many Oars client ID, so a token any other app holds for a person would sign in as that person; that is not acceptable once the pool opens, and it closes before deposits open.
 
 ## Deploy steps
@@ -224,6 +226,6 @@ Nothing has been deployed or provisioned. Each step is owed once, by the account
 3. Run `wrangler d1 create oars-pool` and `wrangler r2 bucket create oars-telemetry` in `packages/pool`. The config binds both by name, so commit no `database_id`. Set no lifecycle rule on the bucket: the batches are the record and do not expire. The Analytics Engine dataset `oars_telemetry` is created by the first write; if the account has not used Analytics Engine, turn it on in the dashboard first.
 4. Run `wrangler d1 migrations apply oars-pool --remote` in `packages/pool`.
 5. Run `wrangler secret put` for `PSEUDONYM_KEY` (32 random bytes) and `BUNDLE_SIGNING_KEY`, and leave `COVENANT_VERSION` unset.
-6. Before `wrangler deploy`, add a Cloudflare rate-limiting rule on `/v1/login` (in the dashboard, or with the rulesets API). The route takes no credential and each call spends one read of the provider's profile route from the Worker's address, so without a rule anyone can drive that spend. The Worker holds no limiter of its own.
+6. Before `wrangler deploy`, add a Cloudflare rate-limiting rule on `/v1/login` and `/v1/telemetry` (in the dashboard, or with the rulesets API). Neither route takes a credential. Each `/v1/login` call spends one read of the provider's profile route from the Worker's address, and each `/v1/telemetry` call writes one R2 object of up to 1 MiB that is never deleted, so without a rule anyone can drive that spend and that storage. The Worker holds no limiter of its own.
 7. Run `wrangler deploy` in `packages/pool`, confirm it bound the database from step 3 rather than creating another, and attach the custom domain in the dashboard or with `--domain`. Only `--dry-run` has been exercised.
 8. Publish the covenant, and only then run `wrangler secret put COVENANT_VERSION`, which opens deposits.
