@@ -80,6 +80,20 @@ describe('redactTranscript', () => {
     expect(redactTranscript('see foo-Users-bar here', []).text).toBe('see foo-Users-bar here');
   });
 
+  // The name rule runs before the path rules, so a hyphenated or spaced name is masked whole (fix round 3, Item 17).
+  it.each([
+    ['a hyphenated name in an encoded Windows folder', 'C--Users-mary-jane-work', ['mary-jane'], 'C--Users-<user>-work'],
+    ['a spaced name in a Windows path', String.raw`C:\Users\John Smith\repo`, ['John Smith'], String.raw`C:\Users\<user>\repo`],
+    ['a spaced name in an encoded Windows folder', 'C--Users-John-Smith-repo', ['John Smith'], 'C--Users-<user>-repo'],
+    ['a hyphenated name in a unix path', '/home/mary-jane/work', ['mary-jane'], '/home/<user>/work'],
+  ])('masks the whole of %s', (_label, input, names, expected) => {
+    expect(redactTranscript(input, [], names).text).toBe(expected);
+  });
+
+  it('masks the longer of two overlapping names whole', () => {
+    expect(redactTranscript('/home/mary-jane/x and mary', [], ['mary', 'mary-jane']).text).toBe('/home/<user>/x and <user>');
+  });
+
   it('masks a name only as a whole word, and ignores one too short to mean anything', () => {
     expect(redactTranscript('canaryusers and canaryuser.', [], ['canaryuser']).text).toBe('canaryusers and <user>.');
     expect(redactTranscript('a b ab', [], ['a', 'ab']).text).toBe('a b ab');
