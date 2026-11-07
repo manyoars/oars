@@ -14,7 +14,7 @@ import { gateInstall, gatePolicy, gateReplay, gateReport, gateUninstall } from '
 import { DEADLINE_MS, gateHook } from './gate/hook.js';
 import { managerReader } from './gate/registry.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
-import { poolDeposit, poolFetch, poolLogin, poolOutbox, poolRaw } from './sessions/pool-command.js';
+import { poolCoverage, poolDeposit, poolFetch, poolLogin, poolOutbox, poolRaw } from './sessions/pool-command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 import { telemetryOff, telemetryOn, telemetryShow, telemetryStatus } from './telemetry/command.js';
@@ -518,6 +518,16 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       emit(deps, flag(options, 'json'), await poolRaw(deps, { consent: text(options, 'consent'), folder: text(options, 'folder'), mode: text(options, 'mode') }));
+    });
+
+  pool
+    .command('coverage')
+    .description('state whom your deposits cover, kept on this machine and never looked up: --org-size solo, 2-10, 11-100, 101-1000, over-1000, or unknown; --repo-visibility public, private, or unknown. With no flag it prints what is set')
+    .option('--org-size <band>', 'how many people your organization has')
+    .option('--repo-visibility <visibility>', 'whether your repositories are public or private')
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await poolCoverage(deps, { orgSize: text(options, 'orgSize'), repoVisibility: text(options, 'repoVisibility') }));
     });
 
   pool
