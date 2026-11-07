@@ -24,6 +24,7 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, posix, win32 } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 /** The OpenCode data folder for an environment; a test passes its own so it never reads the real one. */
 export const opencodeRoot = (env: { [name: string]: string | undefined }, home: string = homedir()): string => {
@@ -82,6 +83,10 @@ interface Database {
 /** `node:sqlite` is loaded only when an OpenCode store exists: it prints an experimental-feature warning on first use. */
 const open = async (file: string): Promise<Database> => {
   const { DatabaseSync } = await import('node:sqlite');
+  // OpenCode keeps the database in WAL mode (core/src/database/database.ts:42), and even a read-only open of a WAL database writes a `-shm` and a `-wal` beside it.
+  // With no `-wal` file OpenCode has closed cleanly and every commit is in the main file, so `immutable=1` reads it and creates nothing. With a `-wal` file OpenCode
+  // is running (or died), its newest rows are only there, and a plain read-only open is the one that reads them; the `-shm` it needs is already beside it.
+  if (!existsSync(`${file}-wal`)) return new DatabaseSync(`${pathToFileURL(file).href}?immutable=1`, { readOnly: true });
   return new DatabaseSync(file, { readOnly: true });
 };
 
