@@ -1,27 +1,25 @@
-// The families a bundle does not serve, pinned at the boundary that keeps them out: the wire. Recovery reads error rows (a signature, an error class, an outcome), and fit's call-shape
-// method reads a tool's input key names; no skeleton field carries any of them, so neither can be derived from stored cells. The tests below (a tool, a step, a transcript, and the
-// skeleton's top level) fail if a later wire gains one of these fields: the name would stop landing in the bag.
+// The families a bundle serves and does not serve. Recovery is served from cells (t868): what others did next after a failed call, by (failed action, `errorCode`, next action), at the floor of 5 accounts.
+// What stays out is pinned at the boundary that keeps it out, the wire: a signature hash, an outcome, and a tool's input key names are on no skeleton field, so fit's call-shape method and a
+// signature record cannot be derived from stored cells. The tests below (a tool, a step, a transcript, and the skeleton's top level) fail if a later wire gains one of these fields: the name would
+// stop landing in the bag.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { parseSkeleton, verifyBundle, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
+import { parseSkeleton, skeletonOf, verifyBundle, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
 import { CALL_SHAPE_METHOD } from '../../cli/src/sessions/read.js';
+import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from '../../cli/src/sessions/pool-fixture.js';
 import { sampleSkeleton } from './sample.js';
 import { startPool, stubUser, type TestPool } from './test-pool.js';
 
 // The fields a withheld family would read, none of them on the wire today.
 interface WithheldFields {
   keys?: string[];
-  errorCode?: string;
   sigHash?: string;
   outcome?: string;
-  recoveryCalls?: string;
 }
 
 const WITHHELD: readonly (readonly [keyof WithheldFields, string[] | string])[] = [
   ['keys', ['command']],
-  ['errorCode', 'x'],
   ['sigHash', 'x'],
   ['outcome', 'x'],
-  ['recoveryCalls', 'x'],
 ];
 
 describe('the wire holds no field a withheld family needs', () => {
@@ -94,7 +92,7 @@ describe('a bundle over five accounts', () => {
     await pool.dispose();
   });
 
-  it('serves tool-day and holds no recovery read and no call-shape read', async () => {
+  it('serves tool-day and holds no recovery read when no call failed, and no call-shape read', async () => {
     let last = '';
     for (const id of ['4001', '4002', '4003', '4004', '4005']) {
       const { token } = await pool.signIn('github', stubUser(id));
@@ -108,5 +106,139 @@ describe('a bundle over five accounts', () => {
     expect(families.has('tool-day')).toBe(true);
     expect(families.has('recovery')).toBe(false);
     expect(verified.bundle.reads.some((read) => read.method === CALL_SHAPE_METHOD.name)).toBe(false);
+  }, 60_000);
+});
+
+/** A session whose first call failed with a 429 and was followed by a read and then an edit. */
+const failingSkeleton = (id: string) => {
+  const framed = frame({ harnessVersion: '2.1.314', shell: 'bash', day: '2026-11-01' });
+  const shell = step(0, 0, 'shell.exec', { native: 'Bash', status: 'error', identity: { program: 'git', sub: 'push', flags: [] } });
+  const [only] = sessionsFrom(
+    store({
+      sessions: [session('s1', { frame: framed })],
+      prompts: [prompt('s1', 0, { frame: framed })],
+      tools: [
+        tool('s1', 0, 'Bash', { status: 'error', errorCode: '429', steps: [shell] }),
+        tool('s1', 1, 'Read', { steps: [step(1, 0, 'file.read', { native: 'Read' })] }),
+        tool('s1', 2, 'Edit', { steps: [step(2, 0, 'file.edit', { native: 'Edit' })] }),
+      ],
+    }),
+  );
+  const built = only === undefined ? null : skeletonOf(only, id, storedNames, printOf);
+  if (built === null) throw new Error('no skeleton');
+  return built;
+};
+
+describe('the recovery family in a bundle', () => {
+  let pool: TestPool;
+
+  beforeAll(async () => {
+    pool = await startPool();
+  }, 60_000);
+
+  afterAll(async () => {
+    await pool.dispose();
+  });
+
+  it('reads an off-list errorCode as other and keeps the value in the extensions bag, never in a cell', async () => {
+    const { token } = await pool.signIn('github', stubUser('5099'));
+    await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+    const skeleton = failingSkeleton('0000000000005099');
+    const response = await pool.post('/v1/deposits', {
+      ...skeleton,
+      transcripts: skeleton.transcripts.map((transcript) => ({ ...transcript, tools: transcript.tools.map((entry, index) => (index === 0 ? { ...entry, errorCode: 'off-list' } : entry)) })),
+    }, token);
+    expect(response.status).toBe(201);
+    const db = await pool.db();
+    expect(JSON.parse(String(await db.prepare('SELECT extensions FROM deposits').first('extensions')))).toEqual([{ at: 'transcripts[0].tools[0].errorCode', kind: 'value', value: 'off-list' }]);
+    expect(String(await db.prepare('SELECT skeleton FROM deposits').first('skeleton'))).toContain('"errorCode":"other"');
+    expect(await db.prepare("SELECT COUNT(*) AS count FROM motifs WHERE motif LIKE '%off-list%'").first('count')).toBe(0);
+  });
+
+  it('refuses an errorCode that is no text, and one on a call that succeeded, with the field named', async () => {
+    const { token } = await pool.signIn('github', stubUser('5098'));
+    await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+    const skeleton = failingSkeleton('0000000000005098');
+    const sentWith = (index: number, errorCode: unknown) => ({
+      ...skeleton,
+      transcripts: skeleton.transcripts.map((transcript) => ({ ...transcript, tools: transcript.tools.map((entry, at) => (at === index ? { ...entry, errorCode } : entry)) })),
+    });
+    const noText = await pool.post('/v1/deposits', sentWith(0, 7), token);
+    expect(noText.status).toBe(422);
+    expect(noText.json).toMatchObject({ error: 'closed_vocabulary', field: 'transcripts[0].tools[0].errorCode' });
+    const onSuccess = await pool.post('/v1/deposits', sentWith(1, '429'), token);
+    expect(onSuccess.status).toBe(422);
+    expect(onSuccess.json).toMatchObject({ error: 'closed_vocabulary', field: 'transcripts[0].tools[1].errorCode' });
+  });
+
+  const bundleAfter = async (ids: readonly string[]) => {
+    let last = '';
+    for (const id of ids) {
+      const { token } = await pool.signIn('github', stubUser(id));
+      await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+      expect((await pool.post('/v1/deposits', failingSkeleton(id.padStart(16, '0')), token)).status).toBe(201);
+      last = token;
+    }
+    const verified = await verifyBundle((await pool.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, last)).json, pool.signingKey(), 'claude-code', '2.1.314');
+    if (!verified.ok) throw new Error(verified.reason);
+    return verified.bundle;
+  };
+
+  it('is withheld at 4 accounts and served at 5, and states what followed, never a fix', async () => {
+    const four = await bundleAfter(['5001', '5002', '5003', '5004']);
+    expect(four.reads.some((read) => read.family === 'recovery')).toBe(false);
+    expect(four.cells.some((cell) => cell.failed > 0 && cell.grain === 'week' && cell.frameBucket.endsWith('/-'))).toBe(false);
+    const five = await bundleAfter(['5005']);
+    const modelMotifs = new Set(five.motifs.filter((motif) => motif.cls?.startsWith('error:')).map((motif) => motif.motifId));
+    expect(five.cells.filter((cell) => modelMotifs.has(cell.motifId)).map((cell) => cell.frameBucket)).toEqual(['claude-code/-/claude-opus-5-5', 'claude-code/-/claude-opus-5-5']);
+    const recovery = five.reads.filter((read) => read.family === 'recovery');
+    expect(recovery.map(({ slice, value }) => [slice.action, slice.errorCode, slice.next, value.followed, value.of])).toEqual([['shell.exec', '429', 'file.read', 5, 5]]);
+    expect(JSON.stringify(recovery)).not.toMatch(/fix|outcome|sig/i);
+  }, 120_000);
+});
+
+describe('a bundle for a harness with no version on record', () => {
+  let pool: TestPool;
+
+  beforeAll(async () => {
+    pool = await startPool();
+  }, 60_000);
+
+  afterAll(async () => {
+    await pool.dispose();
+  });
+
+  it('serves the families a numbered bundle serves, none it does not, and nothing under the floor', async () => {
+    // Four accounts with no version and five on 2.1.314, the same harness: the `unknown` bundle sits under the floor, the numbered one at it.
+    let token = '';
+    for (const [id, version] of [['5001', null], ['5002', null], ['5003', null], ['5004', null], ['5101', '2.1.314'], ['5102', '2.1.314'], ['5103', '2.1.314'], ['5104', '2.1.314'], ['5105', '2.1.314']] as const) {
+      ({ token } = await pool.signIn('github', stubUser(id)));
+      await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+      expect((await pool.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0'), { languages: ['typescript'] }, '2026-11-01', 'cursor', { program: 'git', sub: 'push' }, version), token)).status).toBe(201);
+    }
+    const bundleAt = async (version: string) => {
+      const verified = await verifyBundle((await pool.get(`/bundle/cursor/${version}/${VOCAB_VERSION}`, token)).json, pool.signingKey(), 'cursor', version);
+      if (!verified.ok) throw new Error(verified.reason);
+      return verified.bundle;
+    };
+    const numbered = await bundleAt('2.1.314');
+    expect(numbered.reads.length).toBeGreaterThan(0);
+    // Four accounts: nothing of its own, and the environment cells (five accounts across both) are the only thing it holds.
+    const four = await bundleAt('unknown');
+    expect(four.cells.every((cell) => cell.frameBucket.startsWith('env:'))).toBe(true);
+    expect(four.reads.every((read) => read.family === 'fit' && read.slice.platform !== undefined)).toBe(true);
+    // A fifth account lifts the unknown bundle to the floor.
+    ({ token } = await pool.signIn('github', stubUser('5005')));
+    await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+    expect((await pool.post('/v1/deposits', sampleSkeleton('5005'.padStart(16, '0'), { languages: ['typescript'] }, '2026-11-01', 'cursor', { program: 'git', sub: 'push' }, null), token)).status).toBe(201);
+    const unknown = await bundleAt('unknown');
+    const families = new Set(unknown.reads.map((read) => read.family));
+    expect(families.has('tool-day')).toBe(true);
+    expect(families.has('recovery')).toBe(false);
+    expect(unknown.reads.some((read) => read.method === CALL_SHAPE_METHOD.name)).toBe(false);
+    // The same derivation as a numbered bundle, so no family appears here that a numbered bundle would not serve.
+    const numberedFamilies = new Set((await bundleAt('2.1.314')).reads.map((read) => read.family));
+    for (const family of families) expect(numberedFamilies.has(family)).toBe(true);
+    for (const read of unknown.reads) expect(read.clusters).toBeGreaterThanOrEqual(5);
   }, 60_000);
 });

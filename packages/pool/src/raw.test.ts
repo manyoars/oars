@@ -60,7 +60,7 @@ const complete = (hash: string, parts: number, bytes: number, token: string, hea
 
 const rowsOf = async (account: string): Promise<readonly unknown[]> => (await (await pool.db()).prepare('SELECT * FROM raw_objects WHERE account = ?').bind(account).all()).results;
 
-const keysIn = async (prefix: string, target: TestPool = pool): Promise<string[]> => (await (await target.bucket()).list({ prefix })).objects.map(({ key }) => key);
+const keysIn = async (prefix: string, target: TestPool = pool): Promise<string[]> => (await (await target.rawBucket()).list({ prefix })).objects.map(({ key }) => key);
 
 describe('a transcript over the 1 MB request cap', () => {
   it('round trips byte for byte through R2, in parts of at most 1 MB', async () => {
@@ -71,7 +71,7 @@ describe('a transcript over the 1 MB request cap', () => {
     expect(parts).toBe(3);
     const done = await complete(hash, parts, bytes.length, token);
     expect(done.status, JSON.stringify(done.json)).toBe(201);
-    const stored = await (await pool.bucket()).get(`raw/${account}/${hash}`);
+    const stored = await (await pool.rawBucket()).get(`raw/${account}/${hash}`);
     expect(stored).not.toBeNull();
     expect(Buffer.from((await stored?.arrayBuffer()) ?? new ArrayBuffer(0)).equals(Buffer.from(bytes))).toBe(true);
     // The staged parts are gone once the object stands.
@@ -85,7 +85,7 @@ describe('a transcript over the 1 MB request cap', () => {
     const parts = await sendParts(hash, bytes, token);
     const done = await complete(hash, parts, bytes.length, token);
     expect(done.status, JSON.stringify(done.json)).toBe(201);
-    const stored = await (await pool.bucket()).get(`raw/${account}/${hash}`);
+    const stored = await (await pool.rawBucket()).get(`raw/${account}/${hash}`);
     expect(Buffer.from((await stored?.arrayBuffer()) ?? new ArrayBuffer(0)).equals(Buffer.from(bytes))).toBe(true);
   }, 120_000);
 

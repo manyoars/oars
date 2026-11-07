@@ -362,8 +362,8 @@ describe('a large deposit', () => {
     // The fixture must reach the case: more cell JSON than one value may hold, from a skeleton the route accepts.
     expect(JSON.stringify([...wanted.cells.values()]).length).toBeGreaterThan(2 * 1024 * 1024);
     expect(JSON.stringify(skeleton).length).toBeLessThan(1024 * 1024);
-    // The sizes docs/pool.md states, so they cannot drift unseen: the skeleton as the worker stores it, the cells, and their JSON.
-    expect(JSON.stringify(skeleton).length).toBe(818_998);
+    // The sizes docs/pool.md states, so they cannot drift unseen: the skeleton as the worker stores it, the cells, and their JSON. Each call's `"errorCode":null,` is 17 bytes of the skeleton (t868: 818,998 before it; t869 adds 17 for the transcript's null `spawnedIn`).
+    expect(JSON.stringify(skeleton).length).toBe(876_815);
     expect(wanted.cells.size).toBe(11_548);
     expect(JSON.stringify([...wanted.cells.values()]).length).toBe(3_342_305);
     await inFreshPool({}, async (target) => {
@@ -375,7 +375,7 @@ describe('a large deposit', () => {
       expect(await total(target)).toBe(expected);
       const db = await target.db();
       // What the account's byte limit counts: the skeleton, the deltas column (`[]`), and the extensions bag (`[]`), two bytes each.
-      expect(await db.prepare('SELECT LENGTH(CAST(skeleton AS BLOB)) + LENGTH(CAST(deltas AS BLOB)) + LENGTH(CAST(extensions AS BLOB)) AS bytes FROM deposits').first('bytes')).toBe(819_002);
+      expect(await db.prepare('SELECT LENGTH(CAST(skeleton AS BLOB)) + LENGTH(CAST(deltas AS BLOB)) + LENGTH(CAST(extensions AS BLOB)) AS bytes FROM deposits').first('bytes')).toBe(876_819);
       expect(await db.prepare('SELECT COUNT(*) AS count FROM cells').first('count')).toBe(wanted.cells.size);
       expect(await db.prepare('SELECT COUNT(*) AS count FROM motifs').first('count')).toBe(wanted.motifs.length);
       expect(await db.prepare("SELECT COUNT(*) AS count FROM contributors WHERE kind = 'cell'").first('count')).toBe(wanted.cells.size);
@@ -386,12 +386,12 @@ describe('a large deposit', () => {
   // The sizes docs/pool.md states for the sample deposit (one session, one prompt, two shell steps), so the figure cannot drift unseen.
   it('stores the sample deposit in the bytes docs/pool.md states', async () => {
     const skeleton = sampleSkeleton('0000000000009103');
-    expect(JSON.stringify(skeleton).length).toBe(1_756);
+    expect(JSON.stringify(skeleton).length).toBe(1_807);
     await inFreshPool({}, async (target) => {
       const token = await accountOn(target, '9103');
       expect((await target.post('/v1/deposits', skeleton, token)).status).toBe(201);
       const db = await target.db();
-      expect(await db.prepare('SELECT LENGTH(CAST(skeleton AS BLOB)) AS bytes FROM deposits').first('bytes')).toBe(1_756);
+      expect(await db.prepare('SELECT LENGTH(CAST(skeleton AS BLOB)) AS bytes FROM deposits').first('bytes')).toBe(1_807);
       expect(await db.prepare('SELECT LENGTH(CAST(deltas AS BLOB)) AS bytes FROM deposits').first('bytes')).toBe(2);
       expect(await db.prepare('SELECT LENGTH(CAST(extensions AS BLOB)) AS bytes FROM deposits').first('bytes')).toBe(2);
     });
