@@ -185,7 +185,7 @@ describe('the extensions bag', () => {
 
 describe('other for an unknown value', () => {
   // Every enumerated wire field: where it sits, and a value no vocabulary holds.
-  const FIELDS: { name: string; path: (string | number)[]; expected?: unknown }[] = [
+  const FIELDS: { name: string; path: (string | number)[]; value?: string }[] = [
     { name: 'transcript harness', path: ['transcripts', 0, 'harness'] },
     { name: 'frame harness', path: ['transcripts', 0, 'frame', 'harness'] },
     { name: 'frame harnessVersion', path: ['transcripts', 0, 'frame', 'harnessVersion'] },
@@ -201,13 +201,12 @@ describe('other for an unknown value', () => {
     { name: 'prompt cls', path: ['transcripts', 0, 'prompts', 0, 'cls'] },
     { name: 'tool status', path: ['transcripts', 0, 'tools', 0, 'status'] },
     { name: 'step action', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'action'] },
-    { name: 'step native', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'native'] },
+    // A native name that is no name (a command line, say) is set aside; a name travels as it is, below.
+    { name: 'step native', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'native'], value: 'not a name!' },
     { name: 'step status', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'status'] },
-    { name: 'shell program', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'program'] },
     { name: 'shell sub', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'sub'] },
     { name: 'shell flag', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'flags', 0] },
     { name: 'pull registry', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'pulls', 0, 'registry'] },
-    { name: 'pull name', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'pulls', 0, 'name'] },
     { name: 'pull version', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'pulls', 0, 'version'] },
   ];
 
@@ -226,15 +225,34 @@ describe('other for an unknown value', () => {
     return sent;
   };
 
-  it.each(FIELDS)('parses an unknown $name as other, counts it, and keeps it as sent in the bag', ({ path }) => {
+  it.each(FIELDS)('parses an unknown $name as other, counts it, and keeps it as sent in the bag', ({ path, value = 'a-value-no-vocabulary-holds' }) => {
     const sent = withEnough();
-    set(sent, path, 'a-value-no-vocabulary-holds');
+    set(sent, path, value);
     const result = parsed(sent);
     expect(at(result.skeleton, ...path)).toBe('other');
     expect(result.others).toBe(1);
     // The place of the unknown value comes first; a part of the step it leaves unread (the identity of an unknown action, the flags of an unknown program) is noted after it, also as sent.
-    expect(result.extensions[0]).toEqual({ at: path.reduce<string>((place, key) => (typeof key === 'number' ? `${place}[${String(key)}]` : place === '' ? key : `${place}.${key}`), ''), kind: 'value', value: 'a-value-no-vocabulary-holds' });
+    expect(result.extensions[0]).toEqual({ at: path.reduce<string>((place, key) => (typeof key === 'number' ? `${place}[${String(key)}]` : place === '' ? key : `${place}.${key}`), ''), kind: 'value', value });
     expect(result.extensions.every(({ kind }) => kind === 'value')).toBe(true);
+  });
+
+  // A long-tail name is not an unknown value: the pool assigns its class (thresholded or clear), so the reader takes it as it is and counts and bags nothing.
+  it.each([
+    { name: 'step native', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'native'] },
+    { name: 'shell program', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'program'] },
+    { name: 'pull name', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'pulls', 0, 'name'] },
+  ])('takes a $name off any list as it is, with nothing counted and nothing kept in the bag', ({ path }) => {
+    const sent = withEnough();
+    // A version beside a name off the public list travels only as the literal.
+    set(sent, ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'pulls', 0, 'version'], LITERAL);
+    // A program off the list holds no subcommand or flag the reader can check, so the fixture's are cleared.
+    set(sent, ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'sub'], null);
+    set(sent, ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'flags'], []);
+    set(sent, path, 'a-name-no-list-holds');
+    const result = parsed(sent);
+    expect(at(result.skeleton, ...path)).toBe('a-name-no-list-holds');
+    expect(result.others).toBe(0);
+    expect(result.extensions).toEqual([]);
   });
 
   it('takes an explicit other without counting it, and refuses a value of the wrong type', () => {
@@ -296,15 +314,15 @@ describe('one parse owns its own bag', () => {
 });
 
 describe('a transcript whose harness reads other', () => {
-  it('keeps each tool name as sent in the bag, and the skeleton reads private and the literal as before', () => {
+  it('takes each tool name as sent, being a name, and keeps it in no bag', () => {
     const sent = wire();
     set(sent, ['transcripts', 0, 'harness'], 'a-harness-no-table-holds');
     const result = parsed(sent);
-    expect(at(result.skeleton, 'transcripts', 0, 'tools', 0, 'steps', 0, 'native')).toBe('private');
-    expect(result.extensions).toContainEqual({ at: 'transcripts[0].tools[0].steps[0].native', kind: 'value', value: 'Bash' });
+    expect(at(result.skeleton, 'transcripts', 0, 'tools', 0, 'steps', 0, 'native')).toBe('Bash');
+    expect(result.extensions.map(({ at: found }) => found)).toEqual(['transcripts[0].harness']);
   });
 
-  it('keeps an MCP tool name as sent in the bag, and reads the tool as the literal', () => {
+  it('keeps an MCP tool name as sent in the bag, and reads the tool as the literal; the native name is a name and travels', () => {
     const sent = wire();
     set(sent, ['transcripts', 0, 'harness'], 'a-harness-no-table-holds');
     set(sent, ['transcripts', 0, 'tools', 0, 'steps', 0, 'action'], 'mcp.call');
@@ -313,7 +331,7 @@ describe('a transcript whose harness reads other', () => {
     const result = parsed(sent);
     expect(at(result.skeleton, 'transcripts', 0, 'tools', 0, 'steps', 0, 'identity')).toEqual({ server: 'private', tool: LITERAL });
     expect(result.extensions).toContainEqual({ at: 'transcripts[0].tools[0].steps[0].identity.tool', kind: 'value', value: 'create_issue' });
-    expect(result.extensions).toContainEqual({ at: 'transcripts[0].tools[0].steps[0].native', kind: 'value', value: 'mcp__acme__create_issue' });
+    expect(at(result.skeleton, 'transcripts', 0, 'tools', 0, 'steps', 0, 'native')).toBe('mcp__acme__create_issue');
   });
 
   it('keeps nothing for a name that is already other or private', () => {
@@ -352,7 +370,7 @@ describe('every push to the bag is bounded', () => {
 
   it('refuses the flags of an unknown program over 8 KiB as too large at its path', () => {
     const sent = wire();
-    set(sent, ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'program'], 'a-program-no-table-holds');
+    set(sent, ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'program'], 'other');
     set(sent, ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'flags'], [big]);
     expect(parseSkeleton(sent)).toMatchObject({ ok: false, field: 'transcripts[0].tools[0].steps[0].identity.flags', reason: 'too large' });
   });

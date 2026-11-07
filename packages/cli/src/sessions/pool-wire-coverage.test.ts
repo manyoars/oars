@@ -5,7 +5,7 @@ import { captureSession } from './extract.js';
 import { rolloutLines } from './codex.js';
 import { makeRedactor } from './redact.js';
 import { rolloutLine } from './test-support.js';
-import { hourOf, NO_COVERAGE, ORG_SIZES, parseSkeleton, REPO_VISIBILITIES, skeletonOf, TEAMS, type Coverage, type SessionSkeleton, type SkeletonFrame } from './pool-wire.js';
+import { hourOf, NO_COVERAGE, OPEN_GATE, ORG_SIZES, parseSkeleton, REPO_VISIBILITIES, skeletonOf, TEAMS, type Coverage, type SessionSkeleton, type SkeletonFrame } from './pool-wire.js';
 import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from './pool-fixture.js';
 
 const KEY_A = '0123456789abcdef';
@@ -21,7 +21,7 @@ const stored = (repo: string | null, extra: Partial<ReturnType<typeof session>> 
 
 const skeletonFrom = (from: ReturnType<typeof store>, coverage?: Coverage): SessionSkeleton => {
   const [only] = sessionsFrom(from);
-  const skeleton = only === undefined ? null : skeletonOf(only, '0123456789abcdef', storedNames, printOf, [], coverage);
+  const skeleton = only === undefined ? null : skeletonOf(only, '0123456789abcdef', storedNames, printOf, [], OPEN_GATE, coverage);
   if (skeleton === null) throw new Error('no skeleton');
   return skeleton;
 };

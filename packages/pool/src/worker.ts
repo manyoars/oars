@@ -3,10 +3,11 @@ import { parseSkeleton, type SessionSkeleton } from '../../cli/src/sessions/pool
 import { batchCounts, batchTier } from './access.js';
 import { fetchBundle, harnessRequired } from './bundle.js';
 import { covenantAccept, covenantNotAccepted, covenantStatus, depositsClosed, hasAccepted } from './covenant.js';
-import { answer, bound, brake, refuse, type Env } from './http.js';
+import { answer, bound, brake, notConfigured, refuse, type Env } from './http.js';
 import { receivePart } from './parts.js';
 import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf } from './ingest.js';
 import { accountOf, login } from './identity.js';
+import { hashHosts, hashKey } from './ingest-hash.js';
 import { rawRoute } from './raw.js';
 import { telemetry, type TelemetryEnv } from './telemetry.js';
 
@@ -37,15 +38,19 @@ const futureDayField = ({ transcripts }: SessionSkeleton, now: number): string |
   return undefined;
 };
 
-/** A whole batch, from the request or joined from its parts: parsed, projected, and written as one deposit. */
-const storeDeposit = async (env: Env, account: string, text: string): Promise<Response> => {
+/** A whole batch, from the request or joined from its parts: parsed, projected, and written as one deposit. The hash key is read before the body, so a pool with none never gets here. */
+const storeDeposit = async (env: Env, account: string, secret: string, text: string): Promise<Response> => {
   let body: unknown;
   try {
     body = JSON.parse(text);
   } catch {
     return refuse(400, 'closed_vocabulary', 'The body is not JSON.', 'skeleton');
   }
-  const parsed = parseSkeleton(body);
+  // The body is read once as it came, so a refusal is judged on what the client sent (a host that is not a name is still refused).
+  const sent = parseSkeleton(body);
+  if (!sent.ok) return refuse(422, 'closed_vocabulary', `${sent.field}: ${sent.reason}`, sent.field);
+  // Then the hosts are hashed and the body is read again: the row, the bag, the literals, the cells, and the motifs all come from the hashed form, so a clear host never reaches a write.
+  const parsed = parseSkeleton(await hashHosts(await hashKey(secret), body));
   if (!parsed.ok) return refuse(422, 'closed_vocabulary', `${parsed.field}: ${parsed.reason}`, parsed.field);
   // The parsed skeleton is what is stored, not the text that came in: it holds only the fields that were read.
   const { skeleton, extensions, others } = parsed;
@@ -91,11 +96,14 @@ const deposit = async (request: Request, env: Env): Promise<Response> => {
   const account = await accountOf(request, env);
   if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
   if (!(await hasAccepted(env, account, version))) return covenantNotAccepted(version);
+  // A host is hashed before any write, so a pool with no key refuses here, before the body is read, rather than store one in clear.
+  const secret = bound(env.INGEST_HASH_KEY);
+  if (secret === undefined) return notConfigured('INGEST_HASH_KEY');
   const tooLarge = (): Response => refuse(413, 'too_large', `A skeleton holds at most ${String(MAX_DEPOSIT_BYTES)} bytes.`);
   if (Number(request.headers.get('content-length')) > MAX_DEPOSIT_BYTES) return tooLarge();
   const text = await request.text();
   if (new TextEncoder().encode(text).length > MAX_DEPOSIT_BYTES) return tooLarge();
-  return request.headers.has('oars-part') ? receivePart(request, env, account, text, (whole) => storeDeposit(env, account, whole)) : storeDeposit(env, account, text);
+  return request.headers.has('oars-part') ? receivePart(request, env, account, text, (whole) => storeDeposit(env, account, secret, whole)) : storeDeposit(env, account, secret, text);
 };
 
 /** A name that does not decode stays as it came: no vocabulary holds it, so the route refuses it by name. */
