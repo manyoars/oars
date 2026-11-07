@@ -294,7 +294,9 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
   // The assistant lines since the last counted token_count share one response id; the first of them carries its usage.
   let open: Obj | undefined;
   let lastTotal: number | undefined;
-  const calls = new Map<string, { kind: 'shell' | 'patch' | 'other'; ids: string[]; session?: string }>();
+  const calls = new Map<string, { kind: 'shell' | 'patch' | 'other'; ids: string[]; session?: string; dynamic?: true }>();
+  // The tools the session declared as dynamic (`dynamic_tools`): their output carries no failure signal, only their DynamicToolCall item does.
+  const dynamicNames = new Set<string>();
   // A unified-exec process still running, by its session id, to the exec_command that started it: in a Legacy rollout the `write_stdin` that sees it exit settles both.
   const running = new Map<string, string>();
   // Records below this ordinal are the parent prefix a subagent's rollout copied (ordinal.rs:86-89), not the session's own. Only a Paginated rollout
@@ -402,6 +404,11 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
       const failed = item.status === 'failed' || refused;
       const text = isObj(item.error) ? (str(item.error.message) ?? '') : isObj(item.result) ? bodyText(item.result.content) : '';
       settleMcp(id, failed ? (text === '' ? 'mcp tool call failed' : text) : undefined, when);
+    } else if (kind === 'DynamicToolCall' && id !== undefined && (item.status === 'completed' || item.status === 'failed')) {
+      // The item's `success` and `error` (items.rs:301-322; dynamic.rs:246-262): a call with no item stays unsettled, since its output text says nothing of failure.
+      const failed = item.status === 'failed' || item.success === false;
+      const text = isObj(item.error) ? (str(item.error.message) ?? '') : '';
+      settleMcp(id, failed ? (text === '' ? 'dynamic tool call failed' : text) : undefined, when);
     }
   };
   const parentKeys = (parent: string): string[] =>
@@ -437,6 +444,7 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
       stamp(payload.timestamp);
       const declared = toolNames(payload.dynamic_tools);
       if (declared.length > 0) tools({ offered: declared });
+      for (const name of declared) dynamicNames.add(name);
       inherited = num(payload.subagent_history_start_ordinal);
       paginated = payload.history_mode === 'paginated';
       if (inherited === undefined && parentText !== undefined && str(payload.forked_from_id) !== undefined && !isObj(payload.history_base)) copied = { keys: parentKeys(parentText), at: 0 };
@@ -540,7 +548,7 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
             when,
           );
         } else {
-          calls.set(id, { kind: 'other', ids: [id] });
+          calls.set(id, { kind: 'other', ids: [id], ...(dynamicNames.has(bare) ? { dynamic: true } : {}) });
           const file = str(input.path) ?? str(input.file_path);
           const query = str(input.query);
           assistant([{ type: 'tool_use', id, name, input: { ...(file === undefined ? {} : { file_path: file }), ...(query === undefined ? {} : { query }) } }], when);
@@ -556,7 +564,7 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
             if (out.exit === undefined && DECLINED_OUTPUT.test(out.text)) settleShell(id, DECLINED_SHELL, '', when, false);
             else if (out.exit !== undefined || out.spawnError) settleShell(id, out.spawnError ? out.text : failureOf(out.exit, out.text), out.text, when, out.exit !== undefined);
             else if (out.running !== undefined && known.session === undefined) running.set(out.running, id);
-          } else if (known.kind === 'other') {
+          } else if (known.kind === 'other' && known.dynamic !== true) {
             // Another call's output carries no failure signal (an MCP call's comes from its mcp_tool_call_end), and a patch settles only from its
             // patch_apply_end, because a rejected patch comes back as plain output text (tools/handlers/apply_patch.rs).
             resolved.add(id);

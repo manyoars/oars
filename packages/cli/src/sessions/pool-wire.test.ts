@@ -236,6 +236,17 @@ describe('parseSkeleton refuses, and names the field', () => {
     expect(refusedField(sent([...firstStep, 'ms'], 17))).toBe('accepted');
   });
 
+  it('carries the allocation marker of a step, accepts only true, and leaves a measured step without it', () => {
+    const stepOf = (value: unknown) => {
+      const parsed = parseSkeleton(value);
+      if (!parsed.ok) return undefined;
+      return parsed.skeleton.transcripts[0]?.tools[0]?.steps[0];
+    };
+    expect(stepOf(sent([...firstStep, 'allocated'], true))).toMatchObject({ allocated: true });
+    expect(stepOf(sample())).not.toHaveProperty('allocated');
+    expect(refusedField(sent([...firstStep, 'allocated'], false))).toBe(`${stepField}.allocated`);
+  });
+
   it('keeps the old step cost and a stray exact field in the bag, and serves nothing from them', () => {
     expect(keptAt(withStep({ cost: { tokens: 1500, durationMs: 40 } }))).toEqual([`${stepField}.cost`]);
     expect(keptAt(sent(['transcripts', 0, 'prompts', 0, 'usage', 'total'], 1500))).toEqual(['transcripts[0].prompts[0].usage.total']);
