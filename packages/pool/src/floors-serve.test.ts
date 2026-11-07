@@ -96,7 +96,7 @@ describe('what the bundle and the ETag carry', () => {
     expect(isOlderBundle({ ...bundle })).toBe(true);
     const { floors, ...rest } = bundle;
     expect(floors).toBeDefined();
-    expect(Object.keys(rest).sort()).toEqual(['asOf', 'cells', 'floor', 'format', 'harness', 'harnessVersion', 'motifs', 'reads', 'strata', 'vocabVersion']);
+    expect(Object.keys(rest).sort()).toEqual(['asOf', 'books', 'cells', 'floor', 'format', 'harness', 'harnessVersion', 'motifs', 'reads', 'strata', 'vocabVersion']);
     const read = bundle.reads.find((entry) => entry.family !== 'live');
     const { floor, ...readRest } = read ?? { floor: 0 };
     expect(floor).toBe(5);

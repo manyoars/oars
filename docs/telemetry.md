@@ -178,6 +178,27 @@ No session content, prompt text, tool output, file path, directory name, URL, ar
 
 Every event passes a closed schema before it reaches the spool. A field the schema does not know is dropped; so is a value that does not fit its rule (a name is letters, digits, and hyphens only, which no path, URL, or sentence is; a number is a whole number in a fixed range; `errorClass` is one of the closed words above). Each drop is counted in the event's `dropped`. A test feeds a home path, command text, a prompt-shaped sentence, and a URL to every field of every event type and checks the spool for them.
 
+## The report
+
+`oars telemetry report` shows the user what telemetry measured about their own use. It reads the spool on this machine, needs no server and no account, writes nothing, and prints the last 7 days and the last 30. `--json` prints the same numbers as one document.
+
+| Metric | What it is | Grouped by |
+|---|---|---|
+| `hook.<name>.latency` | how long the hook took: p50 and p95 in milliseconds | the harness version the hook ran under |
+| `hook.<name>.hit` | the share of fires that found something (`hit` or `held`, over those and `miss`; a hook that failed counts in neither) | the harness version |
+| `command.<name>.latency` and `command.<name>.failure` | how long a command took, and the share that exited non-zero, under the first name of its path (`pool` for `pool fetch`) | the oars version |
+| `store.readFailure` and `store.verifyFailure` | the share of nightly snapshots that could not read the store, and that found a session that does not verify | the oars version |
+
+Your latency percentiles are counted in the same buckets as the fleet's (each bucket's upper edge, within a factor of 1.5 of the exact value), so a latency of yours and the fleet's read on one scale. When a fleet read answers, your windows end with the day it is as of (yesterday, UTC), the day its windows end; with none, they end now. The last store snapshot's counts are printed under the numbers. Each metric appears only once the event that carries it is in the spool, so a spool that holds only `command` events shows only the command metrics.
+
+**Beside the fleet.** When `OARS_POOL_URL` names a pool server, the report asks it for `GET /v1/telemetry/fleet` and prints the fleet's percentile under each of the user's own cells that the server serves: the p50 and p95 of the fleet's latencies, or the median install's rate. A cell the server does not serve says `fleet: not served (fewer than 5 installs report this)`. With no server set, the report says `No pool server is configured (OARS_POOL_URL), so these are your numbers only.`; a server that refuses, cannot be reached, or answers something that is not a fleet read is named with its reason, and the user's numbers are printed all the same. The request is a bare GET: it sends no install id, no credential, and nothing from the spool, so asking for the report discloses nothing that sending does not (and it works with telemetry off, since it sends nothing). It is not part of the nightly or of any hook.
+
+**What the fleet read may show.** A cell is served only where at least the public floor (`PUBLIC_FLOOR`, 5 by default) distinct installs report it in the window, the same floor in installs as the rest of the pool. It serves percentiles and no counts: no install count, event count, or total. Two served numbers therefore cannot be set against each other to show an install under the floor, and a window's percentile is not the sum of anything. A latency percentile is the upper edge of a histogram bucket, each 1.5 times the one before, so it is within a factor of 1.5 of the true value; the histograms are merged with every install weighing the same, so one install that fires thousands of times does not become the fleet's number. The read serves per harness version (hooks) or per oars version (commands, store) and no total across versions. Nothing in it joins telemetry to a deposit or reaches a bundle.
+
+**Where the fleet's numbers come from.** A nightly rollup (`docs/pool.md`, "Telemetry rollup") reads the day's kept batches from R2 into one row per install, account, and day, and the read serves from that table. Reading the record rather than Analytics Engine avoids a new secret and a new paid product: a Worker can write Analytics Engine but not read it. An event counts once however many batches carried it.
+
+**The operator's read.** `GET /v1/telemetry/operator`, behind a secret only the pool's operator holds, lists installs and accounts whose event or batch counts over 30 days sit at least 5 robust deviations from the fleet's median (with fewer than 5 of them there is no baseline, so it lists none). It is for a person to read: it flags, limits, and blocks nothing, and it is never served to users. The same read gives the two measurables: the share of installs that reported a batch in the last 7 days over the installs that ever have, and the first day the fleet read served a cell from telemetry alone.
+
 ## Switches
 
 - `oars telemetry status` shows whether it is on, which switch decided that, whether the notice was shown, and the spool's size.
@@ -185,5 +206,6 @@ Every event passes a closed schema before it reaches the spool. A field the sche
 - `oars telemetry on` resumes, prints the notice, and records that it was shown.
 - `OARS_TELEMETRY=0` (also `false`, `off`, `no`) or `DO_NOT_TRACK=1` (also `true`) turns it off for that process, and wins over `oars telemetry on`. Off also stops recording, not just sending.
 - `oars telemetry show` prints the spool. `--json` prints the same events as one document.
+- `oars telemetry report` prints your own numbers, and the fleet's beside them when a pool server answers (see "The report").
 
 To remove everything telemetry keeps, delete `<config>/oars/telemetry/`.

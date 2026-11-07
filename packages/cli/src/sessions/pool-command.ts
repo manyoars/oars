@@ -6,11 +6,12 @@ import type { Outcome, RunDeps } from '../cli.js';
 import { emitOf } from '../telemetry/emit.js';
 import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../errors.js';
 import { compileAllow } from './allow.js';
+import { makeCoverage, readCoverageSetting, writeCoverageSetting } from './coverage.js';
 import { checkSession, exclusionPaths, lastWritten, loadTerms, type Reason } from './exclusion.js';
 import { makeRedactor } from './redact.js';
 import { recordSend, recordWire, newTally, tallyBatch } from '../telemetry/wire.js';
 import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, isMissing, lockedBatch, markShown, outboxFolder, partsOf, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
-import { HARNESSES, hasEnded, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type BundleFloors, type PinnedKey, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
+import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type BundleFloors, type PinnedKey, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
 import { carriedDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { shellReader } from './projection.js';
@@ -18,6 +19,7 @@ import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from 
 import { contentHash, FIRST_ORDER_FAMILIES } from './read.js';
 import { harnessOf as sessionHarness, type Harness } from './schema.js';
 import { loadStore, readRedactDomains, readSaved, readSkeletons, type SessionsRuntime } from './store.js';
+import { runGit, type Git } from './survival.js';
 import { vocabulary } from './vocab-load.js';
 
 const LOGIN = 'pool-login';
@@ -95,7 +97,7 @@ const signInOf = (value: unknown): SignIn | undefined => {
 const signInsFile = (storeDir: string): string => join(storeDir, 'pool-accounts.json');
 
 /** Every saved sign-in. A file that cannot be read stops the command: treating it as empty would forget a pin and trust whatever key the server names next. */
-const loadSignIns = async (storeDir: string, step: string): Promise<SignIn[]> => {
+export const loadSignIns = async (storeDir: string, step: string): Promise<SignIn[]> => {
   const file = signInsFile(storeDir);
   let text: string;
   try {
@@ -417,7 +419,7 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
  * allowlist, then the exclusion check. A session that fails either, or has no raw to scan, is counted and never built. A session is built only once it has ended: no transcript of it, main or subagent, has gained a line (the later of its capture
  * and its raw file's last write) for `session_idle_hours` (6 hours). One that has not is counted under `notEnded`, and any batch of it from an earlier pass is withdrawn. `--send <hash>` is the lock in `sendBatch`.
  */
-export const poolDeposit = async (deps: RunDeps, options: { server?: string | undefined; acceptCovenant?: string | undefined; send?: string | undefined; via?: Sender | undefined }): Promise<Outcome> => {
+export const poolDeposit = async (deps: RunDeps, options: { server?: string | undefined; acceptCovenant?: string | undefined; send?: string | undefined; via?: Sender | undefined; git?: Git | undefined }): Promise<Outcome> => {
   const runtime = runtimeOf(deps);
   const server = poolServer(deps.env, DEPOSIT, options.server);
   const { account, token } = await signedIn(deps, runtime.storeDir, server, DEPOSIT);
@@ -472,9 +474,11 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   // A delta is built from the sessions that passed, carried by the batch of the session that filled its after window, and marked sent only once that batch is written: a deposit that stops first builds it again.
   const placed = ready.flatMap(({ records }) => placedOf(records) ?? []);
   const carried = carriedDeltas(account, placed, await sentDeltas(outbox));
+  // The coverage bands (t871): the operator's two settings, read here, and the team band counted from the local git log. Nothing is looked up, and anything unread goes as unknown.
+  const coverageOf = makeCoverage(runtime, await readCoverageSetting(runtime.storeDir), options.git ?? runGit);
   for (const { records, key } of ready) {
     const delta = carried.get(records.main.session);
-    const skeleton = skeletonOf(records, key, shellReader(vocabulary()), contentHash, delta?.entries, gate);
+    const skeleton = skeletonOf(records, key, shellReader(vocabulary()), contentHash, delta?.entries, gate, await coverageOf(records.main));
     if (skeleton === null) {
       counts.uncaptured += 1;
       await withdraw(key);
@@ -555,7 +559,7 @@ export const poolOutbox = async (deps: RunDeps, options: { server?: string | und
 };
 
 /** One folder per harness under the server's, so a fetch for one harness never overwrites another's bundle of the same version. */
-const replicaFile = (storeDir: string, server: string, harness: Harness, harnessVersion: string): string => join(storeDir, 'pool-replica', contentHash(server), harness, `${encodeURIComponent(harnessVersion)}.json`);
+export const replicaFile = (storeDir: string, server: string, harness: Harness, harnessVersion: string): string => join(storeDir, 'pool-replica', contentHash(server), harness, `${encodeURIComponent(harnessVersion)}.json`);
 
 /**
  * What the pool says it served a bundle at, printed as the bundle states it: the client holds no floor of its own and applies none (a floor is the pool's deploy setting), so a bundle that states none prints nothing.
@@ -666,4 +670,30 @@ export const poolFetch = async (deps: RunDeps, options: { server?: string | unde
     document: { ok: true, server, harness, harnessVersion, file, unchanged: false, cells: cells.length, motifs: motifs.length, reads: reads.length, asOf, ...(floors === undefined ? {} : { floors }) },
     text: `Fetched ${harness} ${harnessVersion}: ${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs, verified against the pinned key and kept at ${file}.${floorSentence(floors)}`,
   };
+};
+
+const COVERAGE = 'pool-coverage';
+
+/** A named value from a closed list, or a usage error that lists the members. */
+const oneOfList = <T extends string>(list: readonly T[], flag: string, value: string): T => {
+  const found = list.find((entry) => entry === value);
+  if (found === undefined) throw usage(`${flag} takes one of ${list.join(', ')}; got ${value}. Nothing was saved.`, COVERAGE);
+  return found;
+};
+
+/**
+ * `oars pool coverage`: the two bands only the operator can state, kept on this machine and read at deposit. They are what the pool can say about whom a deposit covers, not a filter; `unknown` states nothing.
+ * With no flag it prints what is set.
+ */
+export const poolCoverage = async (deps: RunDeps, options: { orgSize?: string | undefined; repoVisibility?: string | undefined }): Promise<Outcome> => {
+  const { storeDir } = runtimeOf(deps);
+  const before = await readCoverageSetting(storeDir);
+  const setting = {
+    orgSize: options.orgSize === undefined ? before.orgSize : oneOfList(ORG_SIZES, '--org-size', options.orgSize),
+    repoVisibility: options.repoVisibility === undefined ? before.repoVisibility : oneOfList(REPO_VISIBILITIES, '--repo-visibility', options.repoVisibility),
+  };
+  const changed = options.orgSize !== undefined || options.repoVisibility !== undefined;
+  if (changed) await writeCoverageSetting(storeDir, setting);
+  const lines = [`Organization size: ${setting.orgSize}`, `Repository visibility: ${setting.repoVisibility}`, 'Both stay on this machine until a deposit states them as bands; nothing is looked up. The team band is counted from each repository\'s local git log at deposit.'];
+  return { document: { ok: true, saved: changed, ...setting }, text: lines.join('\n') };
 };

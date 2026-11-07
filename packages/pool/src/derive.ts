@@ -16,6 +16,7 @@ import { deriveToolDay } from '../../cli/src/sessions/read-tool-day.js';
 import { unitCells, type DeriveFamily, type ReadBody } from '../../cli/src/sessions/read-support.js';
 import type { Harness } from '../../cli/src/sessions/schema.js';
 import type { Store } from '../../cli/src/sessions/store.js';
+import { booksOf } from './books.js';
 import { withheldOf } from './complement.js';
 import { clears, floorFor, wireFloors, type Floors } from './floors.js';
 import type { StoredPool } from './stored.js';
@@ -120,5 +121,6 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
     reads: reads.flatMap(({ read }) => read),
     strata: [...stored.strata].sort((a, b) => compare(a.dimension, b.dimension) || compare(a.value, b.value)),
     floors: wireFloors(floors),
+    books: booksOf({ held, served: new Set(served), panel: stored.panel, panelDay: stored.panelDay, lineage: { floor: floors.public, format: BUNDLE_FORMAT, vocabVersion: VOCAB_VERSION, asOf: { pool: pool.version, day: pool.lastDay } } }),
   };
 };

@@ -403,7 +403,7 @@ describe('oars sessions', () => {
     const { deps, err } = setup();
     expect(await run(['sessions', 'recall'], deps)).toBe(ExitCode.USAGE);
     expect(await run(['sessions', 'books', '--by', 'colour'], deps)).toBe(ExitCode.USAGE);
-    expect(err.join('')).toContain('class, model, harness, or pull');
+    expect(err.join('')).toContain('class, model, harness, pull, or package');
   });
 
   it('serves MCP over the runtime stdio with recall --mcp', async () => {

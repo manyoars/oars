@@ -31,7 +31,8 @@ const skeletonFor = (harness: Harness, id: string): SessionSkeleton => {
   const [only] = sessionsFrom(
     store({
       sessions: [session('s1', { frame: framed, harness })],
-      prompts: [prompt('s1', 0, { frame: framed })],
+      // One golden prompt carries a partial usage sum (input and output observed, three categories null on the wire) and the responses it covers, so the golden contract pins both wire forms.
+      prompts: [prompt('s1', 0, { frame: framed, intervention: 'unknown', ...(harness === 'claude-code' ? { usage: { input: 1200, cacheWrite: 0, cacheRead: 0, output: 300, thinking: 0 }, usageObserved: ['input', 'output'], usageResponses: 2 } : {}) })],
       tools: [
         tool('s1', 0, shell, { steps: [step(0, 0, 'shell.exec', { native: shell, identity: { program: 'git', sub: 'push', flags: ['-f'] } })] }),
         tool('s1', 1, read, { steps: [step(1, 0, 'file.read', { native: read })] }),
