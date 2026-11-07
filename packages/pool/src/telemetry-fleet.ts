@@ -1,7 +1,7 @@
 // What the rollup serves: the fleet read for users, and the operator's anomaly read. Both come from `telemetry_install_days` (telemetry-rollup.ts) and from nothing else, so neither joins telemetry
 // to a deposit or reaches a bundle.
 //
-// The fleet read serves a cell (a metric at one harness or oars version) only where at least the public floor (`PUBLIC_FLOOR`, 5 by default, counted here in installs) installs report it in the window, counted in installs. It serves percentiles and no
+// The fleet read serves a cell (a metric at one harness or oars version) only where at least `PUBLIC_FLOOR` (5 by default) distinct installs report it in the window. It serves percentiles and no
 // counts: no install count, event count, or total, so two served numbers cannot be subtracted to show an install under the floor. A latency cell is the p50 and p95 of the fleet's latencies; a
 // rate cell is the median install's rate. A percentile cannot be subtracted either: the 30 day window is not the 7 day window plus anything.
 import { cellKey, histogramPercentile, percentile, WINDOWS } from '../../cli/src/telemetry/measures.js';
