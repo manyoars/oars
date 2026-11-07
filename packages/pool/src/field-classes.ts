@@ -46,6 +46,7 @@ export const FIELD_CLASSES: { readonly [field: string]: FieldRow } = {
   id: { class: 'clear' },
   identity: { class: 'clear' },
   input: { class: 'clear' },
+  intervention: { class: 'clear' },
   kind: { class: 'clear' },
   language: { class: 'clear' },
   languageShare: { class: 'clear' },
