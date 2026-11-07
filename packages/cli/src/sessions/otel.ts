@@ -106,7 +106,7 @@ const FRAMEWORKS: readonly [string, RegExp][] = [
   ['langchain', /langchain|langgraph/i],
   ['openai-agents', /openai[-_.]agents/i],
   ['crewai', /crewai/i],
-  ['google-adk', /google[-_.]adk|adk/i],
+  ['google-adk', /google[-_.]adk|\badk\b/i],
   ['pydantic-ai', /pydantic[-_.]ai/i],
   ['strands', /strands/i],
   ['microsoft-agent-framework', /agent[-_.]framework/i],
@@ -225,11 +225,26 @@ export interface OtelSession {
 export const otelSessions = (spans: readonly Span[]): OtelSession[] => {
   const byId = new Map(spans.map((span) => [`${span.trace}/${span.id}`, span]));
   const parentOf = (span: Span): Span | undefined => (span.parent === undefined ? undefined : byId.get(`${span.trace}/${span.parent}`));
+  // Each lookup below is built once: a file-exporter folder grows without bound and every deposit reads all of it, so nothing here may scan every span per span.
+  const chainOf = new Map<Span, Span[]>();
   const ancestors = (span: Span): Span[] => {
+    const held = chainOf.get(span);
+    if (held !== undefined) return held;
     const chain: Span[] = [];
     for (let at = parentOf(span); at !== undefined && chain.length < 256; at = parentOf(at)) chain.push(at);
+    chainOf.set(span, chain);
     return chain;
   };
+  const childrenOf = new Map<string, Span[]>();
+  const agentTraces = new Set<string>();
+  for (const span of spans) {
+    if (isAgent(span)) agentTraces.add(span.trace);
+    if (span.parent === undefined) continue;
+    const key = `${span.trace}/${span.parent}`;
+    const siblings = childrenOf.get(key);
+    if (siblings === undefined) childrenOf.set(key, [span]);
+    else siblings.push(span);
+  }
   const roots = spans.filter((span) => parentOf(span) === undefined);
   const startOf = (span: Span): number => span.start ?? span.end ?? 0;
   const conversationOf = new Map<string, string>();
@@ -266,25 +281,42 @@ export const otelSessions = (spans: readonly Span[]): OtelSession[] => {
   }
   // A trace with no agent span: each root is a unit; a stray span whose parent is missing from the data is a root too.
   for (const root of roots) {
-    if (!isAgent(root) && !spans.some((other) => other.trace === root.trace && isAgent(other))) {
+    if (!isAgent(root) && !agentTraces.has(root.trace)) {
       unitOf.set(root, { span: root, session: sessionOfTrace(root.trace), spawn: undefined });
       rootUnits.add(root);
     }
   }
   // A call outside every agent span (a sibling of it under a custom root) belongs to the trace's first root unit instead of being dropped.
-  const ownerOf = (span: Span): Unit | undefined =>
-    [span, ...ancestors(span)].map((candidate) => unitOf.get(candidate)).find((unit) => unit !== undefined) ?? [...rootUnits].map((root) => unitOf.get(root)).find((unit) => unit?.span.trace === span.trace);
+  const firstRootUnit = new Map<string, Unit>();
+  for (const root of rootUnits) {
+    const unit = unitOf.get(root);
+    if (unit !== undefined && !firstRootUnit.has(root.trace)) firstRootUnit.set(root.trace, unit);
+  }
+  const ownerOf = (span: Span): Unit | undefined => [span, ...ancestors(span)].map((candidate) => unitOf.get(candidate)).find((unit) => unit !== undefined) ?? firstRootUnit.get(span.trace);
 
   const members = new Map<Unit, Span[]>();
   for (const span of spans) {
     if (!isModel(span) && !isTool(span)) continue;
     const owner = ownerOf(span);
-    if (owner !== undefined) members.set(owner, [...(members.get(owner) ?? []), span]);
+    if (owner === undefined) continue;
+    const held = members.get(owner);
+    if (held === undefined) members.set(owner, [span]);
+    else held.push(span);
   }
 
   const out = new Map<string, { lines: Obj[]; mtime: number; spans: number; subagent: OtelSession['subagent']; file: string }>();
   const framework = (unit: Unit): string => unit.span.framework;
   const orderedUnits = [...unitOf.values()].sort((a, b) => startOf(a.span) - startOf(b.span) || a.span.order - b.span.order);
+  // A directly nested agent is a call of the parent, though no tool span says so; grouped by the unit that owns its parent span, in one pass.
+  const directOf = new Map<Unit, Span[]>();
+  for (const child of orderedUnits) {
+    if (child.spawn === undefined || child.spawn.tool !== undefined) continue;
+    const owner = ownerOf(parentOf(child.span) ?? child.span);
+    if (owner === undefined || owner.session !== child.spawn.parent || !ancestors(child.span).includes(owner.span)) continue;
+    const held = directOf.get(owner);
+    if (held === undefined) directOf.set(owner, [child.span]);
+    else held.push(child.span);
+  }
   for (const unit of orderedUnits) {
     const entry = out.get(unit.session) ?? { lines: [], mtime: 0, spans: 0, subagent: undefined, file: unit.span.file };
     out.set(unit.session, entry);
@@ -300,16 +332,19 @@ export const otelSessions = (spans: readonly Span[]): OtelSession[] => {
       return ms;
     };
     const iso = (ms: number): string => new Date(ms).toISOString();
-    const begin = stamp(unit.span.start ?? unit.span.end);
+    // A directly nested agent is a call of the parent; it is placed among the unit's own spans by start time.
+    const direct = new Set(directOf.get(unit) ?? []);
+    const mine = [...(members.get(unit) ?? []), ...direct].sort((a, b) => startOf(a) - startOf(b) || a.order - b.order);
+    // A first unit with no time of its own is dated by the earliest timed span it holds before it falls back to 0.
+    const earliest = mine.reduce<number | undefined>((least, span) => {
+      const at = span.start ?? span.end;
+      return at !== undefined && (least === undefined || at < least) ? at : least;
+    }, undefined);
+    const begin = stamp(unit.span.start ?? unit.span.end ?? (entry.mtime === 0 ? earliest : undefined));
     const text = promptText(unit.span);
     const pieces: { t: number; rank: number; line: Obj }[] = [];
     pieces.push({ t: begin, rank: -1, line: { ...base, type: 'user', uuid: `${unit.session}-${unit.span.id}-u`, timestamp: iso(begin), message: { role: 'user', content: [text === '' ? { type: 'image' } : { type: 'text', text }] } } });
 
-    // A directly nested agent is a call of the parent, though no tool span says so; it is placed among the unit's own spans by start time.
-    const direct = new Set(
-      orderedUnits.filter((child) => child.spawn?.parent === unit.session && child.spawn.tool === undefined && ancestors(child.span).includes(unit.span) && ownerOf(parentOf(child.span) ?? child.span) === unit).map((child) => child.span),
-    );
-    const mine = [...(members.get(unit) ?? []), ...direct].sort((a, b) => startOf(a) - startOf(b) || a.order - b.order);
     const calls: { span: Span; content: Obj[]; line: Obj; end: number; names: string[] }[] = [];
     const assistant = (span: Span, requestId: string): { content: Obj[]; line: Obj; message: Obj } => {
       const content: Obj[] = [];
@@ -371,7 +406,7 @@ export const otelSessions = (spans: readonly Span[]): OtelSession[] => {
         const command = exit !== undefined || str(span.attrs['process.executable.name']) !== undefined;
         const skill = str(span.attrs['gen_ai.skill.name']);
         const resource = str(span.attrs['gen_ai.skill.resource.name']);
-        const spawned = str(span.attrs['gen_ai.transfer.mode']) !== undefined || str(span.attrs['gen_ai.transfer.target.name']) !== undefined || spans.some((other) => isAgent(other) && other.parent === span.id && other.trace === span.trace);
+        const spawned = str(span.attrs['gen_ai.transfer.mode']) !== undefined || str(span.attrs['gen_ai.transfer.target.name']) !== undefined || (childrenOf.get(`${span.trace}/${span.id}`) ?? []).some(isAgent);
         const mcp = str(span.attrs['mcp.method.name']) === 'tools/call';
         const block: Obj = { type: 'tool_use', id, name: toolName, native: toolName, input: args };
         let failed = span.failed;
@@ -433,13 +468,14 @@ export const openOtelStore = async (root: string): Promise<OtelStore | undefined
   const unreadable: { file: string; reason: string }[] = [];
   const spans: Span[] = [];
   const order = { next: 0 };
-  const bad: string[] = [];
+  // The torn lines of each file stay with that file: a session that came from it counts them, else the file is named.
+  const torn = new Map<string, string[]>();
   for (const name of names) {
     const file = join(root, name);
     try {
       if (!(await stat(file)).isFile()) continue;
-      const { requests, bad: torn } = requestsOf(await readFile(file, 'utf8'));
-      bad.push(...torn);
+      const { requests, bad } = requestsOf(await readFile(file, 'utf8'));
+      if (bad.length > 0) torn.set(file, bad);
       for (const request of requests) {
         spans.push(...spansOf(request, order, file));
       }
@@ -460,13 +496,19 @@ export const openOtelStore = async (root: string): Promise<OtelStore | undefined
     sessions.push({ id: session.id, folder: null, size: session.size, mtimeMs: session.mtimeMs, subagent: session.subagent, file: session.file });
   }
   sessions.sort((a, b) => a.mtimeMs - b.mtimeMs || a.id.localeCompare(b.id));
+  const tornOf = new Map<string, string[]>();
+  for (const [file, bad] of torn) {
+    const owner = sessions.find((session) => session.file === file);
+    if (owner === undefined) unreadable.push({ file, reason: `${String(bad.length)} ${bad.length === 1 ? 'line is' : 'lines are'} not JSON` });
+    else tornOf.set(owner.id, bad);
+  }
   return {
     sessions,
     rejected,
     unreadable,
     transcript: (session) => {
       const held = lines.get(session.id) ?? [];
-      const text = [...held.map((line) => JSON.stringify(line)), ...(session.id === sessions[0]?.id ? bad : [])].join('\n');
+      const text = [...held.map((line) => JSON.stringify(line)), ...(tornOf.get(session.id) ?? [])].join('\n');
       return text === '' ? '' : `${text}\n`;
     },
   };
