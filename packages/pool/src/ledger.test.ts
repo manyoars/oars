@@ -123,7 +123,7 @@ const onlyRollupCron = (body: string): boolean => {
   return arrays.length === (body.match(/"crons"/g) ?? []).length && arrays.every((one) => one === ROLLUP_CRONS);
 };
 const ROLLUP_FILES = ['src/telemetry-rollup.ts', 'src/telemetry-fleet.ts'];
-const LEDGER_NAME = /\b(?:deposits|contributors)\b/i;
+const LEDGER_NAME = /b(?:deposits|contributors|raw_objects)b/i;
 
 /** What in `files` (name to text) would delete from the ledger or run it on a schedule. */
 const offences = (files: { [name: string]: string }): string[] =>
@@ -203,6 +203,11 @@ describe('the pool has no path that deletes the ledger', () => {
     for (const name of ROLLUP_FILES) {
       expect(Object.keys(files), name).toContain(name);
       expect(code(files[name] ?? ''), name).not.toMatch(LEDGER_NAME);
+    }
+    // The name guard cannot fall behind the ledger tables the delete guard knows: each must match.
+    for (const table of ['deposits', 'contributors', 'raw_objects']) {
+      expect(LEDGER_NAME.test(table), table).toBe(true);
+      expect(new RegExp(`^${LEDGER_TABLE}$`, 'i').test(table), `${table} is a LEDGER_TABLE`).toBe(true);
     }
     // A handler that does not run the rollup, or one in another file, is still an offence.
     expect(offences({ 'src/worker.ts': 'export default { scheduled(event, env) { sweep(env); } }' })).toEqual(['src/worker.ts: a scheduled handler']);
