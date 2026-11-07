@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { batchHash, BATCH_FIELDS, canonicalBytes, currentStamp, FIELD_ROWS, fieldsOf, writeBatch } from './pool-outbox.js';
-import { parseSkeleton, SKELETON_FORMAT } from './pool-wire.js';
+import { VOCAB_VERSION } from './public-vocabulary.js';
+import { FIELD_LIST_VERSION, parseSkeleton, SKELETON_FORMAT } from './pool-wire.js';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -80,6 +81,8 @@ const STEP = { status: 'ok', tokens: 3, ms: 4, remainingTokens: 2, agentType: nu
 const REACH = { filled: true, mcp: ['github', 'private'], skills: ['commit'], plugins: ['private'] };
 const REAL = {
   format: SKELETON_FORMAT,
+  vocabVersion: VOCAB_VERSION,
+  fieldsVersion: FIELD_LIST_VERSION,
   id: '0123456789abcdef',
   deltas: [{ deltaKind: 'removed', field: 'package', name: 'typescript', registry: 'npm', metric: 'callsPerSession', change: -2 }],
   timingPrint: null,
