@@ -32,7 +32,7 @@ const GENERATED_NAME = /\.(?:min\.(?:js|css)|d\.ts|map|generated\.[a-z]+|pb\.go|
 
 /**
  * The class of a path target, from the base that hashed it and the path's own suffix. A call with no path target (`base` null) is `none`; the order below is the order a path is asked,
- * so a lockfile is never `config` and a `tests/data.json` is `test`. The mapping is pinned in `call-shape.test.ts`. The path is read here and goes no further.
+ * so a lockfile is never `config` and a `tests/data.json` is `test`. The mapping is pinned in `call-shape.test.ts`. `path` is the key the target is hashed on (relative to the repository or the cwd, never the absolute path), so the folders above a repository do not decide the class; it is read here and goes no further.
  */
 export const targetClassOf = (path: string | undefined, base: TargetBase | null): TargetClass => {
   if (base === null || path === undefined || path === '') return 'none';
