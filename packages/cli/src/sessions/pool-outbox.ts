@@ -27,6 +27,30 @@ const canonical = (value: unknown): string => {
 /** The batch as one canonical JSON line: sorted keys, no optional whitespace, UTF-8 when written, and a newline at the end. These are the bytes that are hashed, printed, and sent. */
 export const canonicalBytes = (batch: unknown): string => `${canonical(batch)}\n`;
 
+/** The most bytes one request of a deposit carries. The pool refuses a request past 1 MiB, so a batch past this goes in parts, each of them under that cap. */
+export const PART_BYTES = 512 * 1024;
+
+/**
+ * The batch cut into parts of at most `limit` UTF-8 bytes, never inside a character, so the parts join back to exactly the bytes that were hashed. A batch within the limit is one part.
+ */
+export const partsOf = (bytes: string, limit: number = PART_BYTES): string[] => {
+  const parts: string[] = [];
+  let part = '';
+  let size = 0;
+  for (const character of bytes) {
+    const width = Buffer.byteLength(character, 'utf8');
+    if (size + width > limit) {
+      parts.push(part);
+      part = '';
+      size = 0;
+    }
+    part += character;
+    size += width;
+  }
+  parts.push(part);
+  return parts;
+};
+
 export const batchHash = (bytes: string): string => createHash('sha256').update(Buffer.from(bytes, 'utf8')).digest('hex');
 
 /**
@@ -36,6 +60,7 @@ export const batchHash = (bytes: string): string => createHash('sha256').update(
 export const FIELD_ROWS: { readonly [field: string]: string } = {
   action: 'The canonical action of a step, one of a closed list this client holds; never the harness tool text.',
   agentType: 'The type of the subagent whose run holds a step: a built-in type of the harness, else the word custom; null on a step of the main run.',
+  allocated: 'Whether the step\'s token figure was divided among the calls of one model response (true) rather than measured for the call alone; absent when measured. A flag only, never a count.',
   cacheRead: 'A bucket of the tokens read from the cache in a prompt, a number.',
   cacheWrite: 'A bucket of the tokens written to the cache in a prompt, a number.',
   change: 'How far a delta moved, a signed bucket of its metric (a lower bound) in a number from -7 to 7 for calls per session and from -11 to 11 for thinking tokens; never the exact count.',
@@ -136,7 +161,7 @@ export const outboxFolder = (storeDir: string, server: string): string => join(s
 const BATCH_FILE = /^([0-9a-f]{16})\.([0-9a-f]{64})\.jsonl$/;
 
 /** Writes one session's batch under the current stamp. A session has one batch: an older batch of it is removed, and an identical one is written again, so an edited file is restored. */
-export const writeBatch = async (outbox: string, key: string, batch: unknown, stamp: string = currentStamp()): Promise<{ hash: string; folder: string }> => {
+export const writeBatch = async (outbox: string, key: string, batch: unknown, stamp: string = currentStamp()): Promise<{ hash: string; folder: string; bytes: number }> => {
   const bytes = canonicalBytes(batch);
   const hash = batchHash(bytes);
   const folder = join(outbox, stamp);
@@ -146,7 +171,7 @@ export const writeBatch = async (outbox: string, key: string, batch: unknown, st
     if (found?.[1] === key && found[2] !== hash) await rm(join(folder, name), { force: true });
   }
   await writeFile(join(folder, `${key}.${hash}.jsonl`), bytes, 'utf8');
-  return { hash, folder };
+  return { hash, folder, bytes: Buffer.byteLength(bytes) };
 };
 
 export const isMissing = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ENOENT';

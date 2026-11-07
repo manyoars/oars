@@ -2,7 +2,7 @@
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { Outcome } from '../cli.js';
-import { parseAllowList } from './allow.js';
+import { denialOf, parseAllowList, runAllow } from './allow.js';
 import { SOURCES, sourceLabel } from './sources.js';
 import { CliError, ExitCode } from '../errors.js';
 import { loadTerms } from './exclusion.js';
@@ -11,20 +11,22 @@ import { armsPath, coverageLines, formatScore, isGoldDocument, parseGold, plural
 import { makeRedactor } from './redact.js';
 import { books, BOOKS_CAVEAT, formatBooks, formatMeasure, formatRecall, measure, type BooksBy } from './query.js';
 import { formatLineage, loadLineage, walkLineage } from './lineage.js';
+import type { Emit } from '../telemetry/emit.js';
+import { recallFields } from '../telemetry/fields.js';
 import { appendRecall, readRecalls } from './recall-object.js';
 import { deriveConsequences, formatRecallCounts, recallCounts } from './recall-consequence.js';
 import { pull, pullRefusal, type PullInput } from './recall-reads.js';
 import { MISS_TEXT } from './recall-render.js';
 import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, inRepository, readIndex, type ContextOptions } from './hook-index.js';
-import { hookStatus, installHooks, scheduleStatus, setSchedule, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
+import { ensureSchedule, hookStatus, installHooks, recordSchedule, SCHEDULE_LEFT_OFF, scheduleOptedOut, scheduleStatus, setSchedule, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
 import { serve } from './mcp.js';
 import { refreshPool, servedPool } from './pool.js';
 import { FAMILIES } from './read.js';
 import { formatNotReadable, notReadable } from './read-readable.js';
 import { formatReads, isFamily, parseSlice, selectReads } from './read-rows.js';
 import { CAPTURE_VERSION, OLDEST_READABLE_CAPTURE, type StepRow } from './schema.js';
-import { deposit, frozenSessions, loadStore, readCalls, readRedactDomains, readSkeletons, skippedFolders, slugOf, type SessionsRuntime, type SkippedScope, type Store } from './store.js';
+import { deposit, frozenSessions, loadStore, readCalls, readRedactDomains, readSaved, readSkeletons, skippedFolders, slugOf, type SessionsRuntime, type SkippedScope, type Store } from './store.js';
 import { formatStepCounters, inputKey, newContext, readSteps, stampKey, runDeposit, runStep, stepCounters, stuckSteps, tryLog, type StuckStep } from './steps.js';
 import { formatSelfBaseline, selfBaseline as selfBaselineOf, type SelfBaselineResult } from './baseline.js';
 import { staleBatchesAnywhere } from './pool-outbox.js';
@@ -36,6 +38,8 @@ export interface SessionsDeps {
   sessions: SessionsRuntime | undefined;
   install: InstallRuntime | undefined;
   now: () => number;
+  /** Records a telemetry event; absent in a run that has none. */
+  telemetry?: Emit | undefined;
 }
 
 const runtimeOf = (deps: SessionsDeps): SessionsRuntime => {
@@ -43,24 +47,30 @@ const runtimeOf = (deps: SessionsDeps): SessionsRuntime => {
   return deps.sessions;
 };
 
+/** A list that names nothing is a mistake, not a request for the default (every folder): it is refused. */
 const readAllowFile = async (file: string): Promise<string[]> => {
+  let entries: string[];
   try {
-    return parseAllowList(await readFile(file, 'utf8'));
+    entries = parseAllowList(await readFile(file, 'utf8'));
   } catch {
     throw new CliError(`Cannot read the --allow-file ${file}.`, ExitCode.USAGE, 'usage');
   }
+  if (entries.length === 0) throw new CliError(`The --allow-file ${file} names no folder. Without --allow or --allow-file, deposit reads every folder.`, ExitCode.USAGE, 'usage');
+  return entries;
 };
 
-export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: string[]; allowFiles: string[]; redactDomains: string[] }): Promise<Outcome> => {
+export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: string[]; allowFiles: string[]; deny?: string[]; redactDomains: string[] }): Promise<Outcome> => {
   const fromFiles = await Promise.all(options.allowFiles.map((file) => readAllowFile(file)));
   const runtime = runtimeOf(deps);
   const table = runtime.sources ?? SOURCES;
-  const allow = [...options.allow, ...fromFiles.flat()];
-  const result = await runDeposit(newContext(runtime.storeDir, deps.now, 'manual'), true, inputKey('manual', allow, options.redactDomains), async (trace) => {
+  const allow = [...options.allow, ...fromFiles.flat(), ...(options.deny ?? []).map(denialOf)];
+  const { result, read } = await runDeposit(newContext(runtime.storeDir, deps.now, 'manual'), true, inputKey('manual', allow, options.redactDomains), async (trace) => {
+    // Survival reads the folders this deposit reads, from the list saved before the deposit merges this run's entries into it.
+    const scope = runAllow((await readSaved(runtime.storeDir)).allow, allow);
     const done = await deposit(runtime, { allow, redactDomains: options.redactDomains, now: deps.now }, trace);
-    return { value: done, in: { transcript: done.sessions + done.subagents + done.unchanged } };
+    return { value: { result: done, read: scope }, in: { transcript: done.sessions + done.subagents + done.unchanged } };
   });
-  const survival = await recordSurvival(runtime, allow, deps.now);
+  const survival = await recordSurvival(runtime, read, deps.now);
   const lines = [
     `Deposited ${String(result.sessions)} sessions and ${String(result.subagents)} subagent transcripts (${String(result.lines)} lines, ${String(result.badLines)} unparseable) as ${String(result.observations)} observations; ${String(result.unchanged)} files unchanged.`,
     `Read ${String(result.folders.length)} folders; skipped ${String(result.skippedFolders)} not on the allowlist.`,
@@ -103,6 +113,8 @@ export const sessionsRecall = async (deps: SessionsDeps, query: PullInput, sid: 
     key,
   );
   await tryLog(() => appendRecall(storeDir, result.recall));
+  // Counts and closed words only: how it was asked, the families it served, how many reads, and its arm. Never the query or the answer.
+  deps.telemetry?.('recall', recallFields(result.recall, result.reads.map((read) => read.family), result.legacy !== undefined));
   if (result.legacy !== undefined) return { document: { ok: true, ...result.legacy, recall: result.recall }, text: formatRecall(result.legacy) };
   // The document states the recall and not the raw reads: a read's tool, keys, and versions are store strings that can carry text, and `recall.evidence` already states them closed.
   return { document: { ok: true, recall: result.recall }, text: result.recall.answer.rendered === '' ? MISS_TEXT : result.recall.answer.rendered };
@@ -167,7 +179,7 @@ export const sessionsContext = async (deps: SessionsDeps, options: ContextOption
 };
 
 export const sessionsMcp = async (deps: SessionsDeps): Promise<void> => {
-  await serve(runtimeOf(deps), deps.now);
+  await serve(runtimeOf(deps), deps.now, deps.telemetry);
 };
 
 /** Names shown in the `verify` and `books` text; each `--json` document carries them all. */
@@ -400,19 +412,31 @@ export interface HookTarget {
   file: string | undefined;
 }
 
+/** `--scope`, else `file` when `--file` names one, else the user settings. */
+const hookScope = (options: HookTarget): Scope => options.scope ?? (options.file === undefined ? 'user' : 'file');
+
 export const sessionsHookInstall = async (deps: SessionsDeps, options: HookTarget & { keepRetention: boolean; schedule: 'nightly' | 'off' | undefined }): Promise<Outcome> => {
   const runtime = installOf(deps);
   const lines: string[] = [];
   const document: { ok: true; install?: object; schedule?: string } = { ok: true };
-  // `--schedule` alone touches no settings file: nothing is written to one the operator has not named.
+  // `--schedule` alone touches no settings file: it names the task, not the hooks.
   if (options.schedule === undefined || options.scope !== undefined || options.file !== undefined) {
-    const file = settingsPath(runtime, options.scope ?? 'file', options.file);
+    const file = settingsPath(runtime, hookScope(options), options.file);
     const result = await installHooks(runtime, file, options.keepRetention);
     document.install = result;
     lines.push(`Installed ${result.installed.join(', ')} hooks in ${file}.`, result.retention);
   }
-  if (options.schedule !== undefined) {
-    const line = await setSchedule(runtime, options.schedule);
+  // Without `--schedule`, Windows gets the nightly task too; `--schedule off` is the opt-out, and it sticks until `--schedule nightly`.
+  if (options.schedule !== undefined || runtime.platform === 'win32') {
+    const storeDir = deps.sessions?.storeDir;
+    const optedOut = options.schedule === undefined && storeDir !== undefined && (await scheduleOptedOut(storeDir));
+    let line = SCHEDULE_LEFT_OFF;
+    if (options.schedule !== undefined) {
+      line = await setSchedule(runtime, options.schedule);
+      await recordSchedule(storeDir, options.schedule);
+    } else if (!optedOut) {
+      line = await ensureSchedule(runtime);
+    }
     document.schedule = line;
     lines.push(line);
   }
@@ -421,7 +445,7 @@ export const sessionsHookInstall = async (deps: SessionsDeps, options: HookTarge
 
 export const sessionsHookUninstall = async (deps: SessionsDeps, options: HookTarget): Promise<Outcome> => {
   const runtime = installOf(deps);
-  const file = settingsPath(runtime, options.scope ?? 'file', options.file);
+  const file = settingsPath(runtime, hookScope(options), options.file);
   const result = await uninstallHooks(file);
   const text = result.removed.length === 0 ? `No Many Oars hooks in ${file}.` : `Removed ${result.removed.join(', ')} hooks from ${file}; other settings and hooks are untouched (cleanupPeriodDays is left as it is).`;
   return { document: { ok: true, ...result }, text };

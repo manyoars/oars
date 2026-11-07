@@ -87,12 +87,20 @@ const run = (args: readonly string[], env: NodeJS.ProcessEnv, cwd: string, input
     child.stdin.end(input);
   });
 
+/** The type of each spooled event, in order. */
+const typesOf = (dir: string): string[] =>
+  readSpool(dir).map((text) => {
+    const parsed: unknown = JSON.parse(text);
+    return String(typeof parsed === 'object' && parsed !== null ? Reflect.get(parsed, 'type') : undefined);
+  });
+
 describe.skipIf(!built)('the built nightly send', () => {
   it('makes one POST /v1/telemetry for the nightly event and leaves the spool empty', async () => {
     const fake = await serve();
     const { root, dir, env } = home();
     expect(await run([hookBin, 'nightly'], { ...env, OARS_POOL_URL: fake.origin }, root)).toBe(0);
-    expect(fake.received).toEqual([{ method: 'POST', url: '/v1/telemetry', events: 1 }]);
+    // The seeded command event, the store-health and run-cost events the nightly run itself records, and the `hook` event for the nightly fire (t876), all before it sends.
+    expect(fake.received).toEqual([{ method: 'POST', url: '/v1/telemetry', events: 4 }]);
     expect(readSpool(dir)).toEqual([]);
   }, 60_000);
 
@@ -104,15 +112,18 @@ describe.skipIf(!built)('the built nightly send', () => {
     expect(await run([hookBin, 'session-start'], { ...env, OARS_POOL_URL: fake.origin }, root, '{}')).toBe(0);
     expect(await run([hookBin, 'stop'], { ...env, OARS_POOL_URL: fake.origin }, root, '{}')).toBe(0);
     expect(fake.received).toEqual([]);
-    expect(readSpool(dir)).toHaveLength(1);
+    // The seeded command event, and one `hook` event for each of the three fires (t876).
+    expect(typesOf(dir)).toEqual(['command', 'hook', 'hook', 'hook']);
   }, 60_000);
 
-  it('makes no nightly request without a server configured', async () => {
+  it('makes no nightly request when the server setting is refused', async () => {
     const fake = await serve();
     const { root, dir, env } = home();
-    expect(await run([hookBin, 'nightly'], env, root)).toBe(0);
+    // Plain http to a host that is not localhost is refused by the validator, so nothing is requested (and an unset setting would reach the real pool).
+    expect(await run([hookBin, 'nightly'], { ...env, OARS_POOL_URL: 'http://pool.example.test' }, root)).toBe(0);
     expect(fake.received).toEqual([]);
-    expect(readSpool(dir)).toHaveLength(1);
+    // Nothing leaves, so the seeded command event stays beside the nightly run's own store-health, run-cost, and hook events.
+    expect(readSpool(dir)).toHaveLength(4);
   }, 60_000);
 });
 
