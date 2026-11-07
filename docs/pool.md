@@ -18,21 +18,21 @@ Every command takes the server from `--server <url>` or `OARS_POOL_URL`. There i
 
 Four frame fields make "the same work" and "who the pool covers" observable. Each is optional on the wire and carries a value only when the client could state one.
 
-- **`repoKey`.** 16 lowercase hex characters: the salted hash of the repository's identity that the store already keeps as `repo` (`docs/sessions-store.md`, "Hashing"), so two clones of one repository under one account share it. It is on the transcript frame, as `where`, and a session whose repository is unknown sends none. The emitter drops any value that is not key-shaped, so a path, a remote URL, or a name never reaches a batch. Cells do not read it.
+- **`repoKey`.** 16 lowercase hex characters: the salted hash of the repository's identity that the store already keeps as `repo` (`docs/sessions-store.md`, "Hashing"), so two clones of one repository, or two harnesses in one, share it under one store's salt. It is on the transcript frame, as `where`, and a session whose repository is unknown sends none. The emitter drops any value that is not key-shaped, so a path, a remote URL, or a name never reaches a batch. Cells do not read it.
 - **`orgSize`, `team`, `repoVisibility`.** Coverage bands from closed lists: `orgSize` is `solo`, `2-10`, `11-100`, `101-1000`, `over-1000`, or `unknown`; `team` is `solo`, `team`, or `unknown`; `repoVisibility` is `public`, `private`, or `unknown`. `orgSize` and `repoVisibility` are what the operator sets with `oars pool coverage`; `team` is the count of distinct commit authors in the repository's local git log (`git log --format=%aE`, at most 5,000 commits, counted and never sent), one author being `solo`. No network call is made, and anything unread goes as `unknown`. The bands state what the pool can say about its coverage; no read filters on them.
 - **`hour`.** The UTC hour of day, 0 to 23, beside the UTC day, on the transcript frame, each prompt frame, and each call frame. It joins no cell.
 
-**The join's limit.** The key is salted per account, so it joins one operator's harnesses on one repository and nothing else: two accounts on the same repository get two keys, and the pool cannot join them. A salt rotation changes every key, so batches deposited before and after a rotation no longer join. The earlier truth stands, that two accounts' sessions cannot be joined.
+**The join's limit.** The salt is the store's own, this machine's (`localSalt` in `store.ts`); `accountSalt`, the account-wide salt, is still the open M4 seam. So the key joins one operator's harnesses on one repository on one machine and nothing else: the same account on a second machine gets a second key until the account salt lands, two accounts on the same repository get two keys, and the pool cannot join either. A salt rotation, like a new machine, starts new keys, so batches deposited before and after no longer join. The earlier truth stands, that two accounts' sessions cannot be joined.
 
 | Field | Class | Re-derives from `raw/` | Note |
 |-------|-------|------------------------|------|
-| `repoKey` | hashed, per account | yes, with the salt | 16 hex characters |
+| `repoKey` | hashed, per store (this machine's salt) | yes, with the salt | 16 hex characters |
 | `orgSize` | clear | no, operator-set | closed list of six |
-| `team` | clear | yes, from the local git log at deposit | closed list of three |
+| `team` | clear | no, read from the repository's local git log at each deposit | closed list of three |
 | `repoVisibility` | clear | no, operator-set | closed list of three |
 | `hour` | clear | yes, from the timestamp | 0 to 23 |
 
-The five fields together cost 128 bytes on the large-deposit fixture's skeleton (818,961 to 819,089). Bytes per session were not measured on a fixture of their own.
+The large-deposit fixture's session has `repo`, `tsFirst`, and every prompt's `ts` null, so it carries no `repoKey` and no `hour`: the 128 bytes it gained (818,961 to 819,089) are the three `unknown` bands on its two frames, 64 bytes a frame. `repoKey` and `hour` were measured on a fixture that holds them (`pool-wire-coverage.test.ts`, three prompts at three distinct UTC hours and two calls each, 3,345 bytes of skeleton without either): the key costs 58 bytes (29 on each of the two frames of the list when every prompt shares one hour, 116 across the four frames when they do not), and the hour costs 755 bytes, because each distinct hour among a session's prompts splits its calls onto one more frame of the list, so a session with many prompts across many hours pays one frame per hour it touched (24 at most). Both figures are pinned in that test.
 
 ## Sign-in settings
 

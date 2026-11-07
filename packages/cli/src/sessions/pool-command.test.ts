@@ -1698,10 +1698,15 @@ describe('oars pool deposit: local deltas', () => {
 });
 
 describe('coverage on the wire (t871)', () => {
+  const REMOTE_URL = 'https://github.com/secret-org/secret-app.git';
   /** A transcript whose every line names `cwd`, in a project folder named for it, so the deposit can find the repository the session sat in. */
   const inRepo = async (): Promise<{ scene: Scene; repo: string }> => {
     const repo = mkdtempSync(join(tmpdir(), 'oars-coverage-repo-'));
     mkdirSync(join(repo, '.git'));
+    // A remote the repository's identity is read from: its text must never reach a request, only the salted key of it.
+    writeFileSync(join(repo, '.git', 'config'), `[remote "origin"]
+	url = ${REMOTE_URL}
+`);
     const scene = setting();
     const project = slugOf(repo);
     const line = (value: object): string => JSON.stringify(value);
@@ -1761,7 +1766,9 @@ describe('coverage on the wire (t871)', () => {
     expect(git).toHaveBeenCalledTimes(1);
     expect(frameOfBatch(scene)).toMatchObject({ orgSize: '2-10', team: 'team', repoVisibility: 'public' });
     const text = batchBytes(scene).join('');
-    for (const forbidden of ['ada', 'grace', 'example.com', repo, slugOf(repo)]) expect(text).not.toContain(forbidden);
+    // The key is there, so the search below is not over a batch that never held a repository.
+    expect(frameOfBatch(scene)?.repoKey).toMatch(/^[0-9a-f]{16}$/);
+    for (const forbidden of ['ada', 'grace', 'example.com', repo, slugOf(repo), REMOTE_URL, 'secret-org', 'secret-app', 'github.com']) expect(text).not.toContain(forbidden);
     rmSync(repo, { recursive: true, force: true });
   });
 

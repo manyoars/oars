@@ -107,7 +107,7 @@ export interface Coverage {
 
 export const NO_COVERAGE: Coverage = { orgSize: 'unknown', team: 'unknown', repoVisibility: 'unknown' };
 
-/** A repo key is the per-account salted hash a session record holds of its repository's identity: sixteen lowercase hex characters. */
+/** A repo key is the store-salted hash a session record holds of its repository's identity: sixteen lowercase hex characters. */
 const REPO_KEY = /^[0-9a-f]{16}$/;
 
 /** The UTC hour of day, 0 to 23, of a timestamp, whatever offset it was written in; null when there is none or it does not parse. */

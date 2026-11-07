@@ -2,6 +2,9 @@
 import { describe, expect, it } from 'vitest';
 import { incrementsOf, storeOf } from './cell-increments.js';
 import { captureSession } from './extract.js';
+import { rolloutLines } from './codex.js';
+import { makeRedactor } from './redact.js';
+import { rolloutLine } from './test-support.js';
 import { hourOf, NO_COVERAGE, ORG_SIZES, parseSkeleton, REPO_VISIBILITIES, skeletonOf, TEAMS, type Coverage, type SessionSkeleton } from './pool-wire.js';
 import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from './pool-fixture.js';
 
@@ -88,6 +91,30 @@ describe('the repo key as capture makes it', () => {
     expect(clone).toBe(here);
     expect(other).toMatch(/^[0-9a-f]{16}$/);
     expect(other).not.toBe(here);
+  });
+
+  it('is one key for one repository under one account across two harnesses, Claude Code and Codex', () => {
+    const repoRoot = (): string => '/w/app';
+    const repoIdentity = (): string => 'origin:github.com/org/app';
+    const common = { session: 's', project: 'p', rev: 1, at: 'x', redact: makeRedactor(), salt: 'account-one', sid: null, repoRoot, repoIdentity } as const;
+    const claudeText = lines('/w/app');
+    const rollout = [
+      rolloutLine('2026-06-01T10:00:00.000Z', 'session_meta', { id: 'sess-1', session_id: 'sess-1', timestamp: '2026-06-01T10:00:00.000Z', cwd: '/w/app', originator: 'codex_cli_rs', cli_version: '0.50.0' }),
+      rolloutLine('2026-06-01T10:00:01.000Z', 'turn_context', { model: 'gpt-5-codex', cwd: '/w/app' }),
+      rolloutLine('2026-06-01T10:00:02.000Z', 'event_msg', { type: 'user_message', message: 'read it' }),
+    ];
+    const codexText = rolloutLines(rollout.map((entry) => JSON.stringify(entry)).join('\n'), 'sess').map((entry) => JSON.stringify(entry)).join('\n');
+    const claude = captureSession({ ...common, text: claudeText, bytes: claudeText.length }).session;
+    const codex = captureSession({ ...common, text: codexText, bytes: codexText.length, harness: 'codex' }).session;
+    const keyOfHarness = (captured: typeof claude, harness: 'claude-code' | 'codex'): string | undefined =>
+      skeletonFrom(stored(captured.repo, { frame: frame({ day: '2026-11-01', harness }) })).transcripts[0]?.frame.repoKey;
+    const first = keyOfHarness(claude, 'claude-code');
+    const second = keyOfHarness(codex, 'codex');
+    expect(first).toMatch(/^[0-9a-f]{16}$/);
+    expect(second).toBe(first);
+    // The harnesses differ on the same wire, so the one key is what joins them.
+    expect(skeletonFrom(stored(codex.repo, { frame: frame({ day: '2026-11-01', harness: 'codex' }) })).transcripts[0]?.frame.harness).toBe('codex');
+    expect(claude.harness ?? 'claude-code').not.toBe(codex.harness);
   });
 
   it('does not hold the identity: the key of a repository is not a prefix, suffix, or substring of its remote', () => {
@@ -188,7 +215,47 @@ describe('the hour', () => {
 
   it('joins no cell: the cell keys are the same with and without it', () => {
     const base = incrementsOf(skeletonFrom(stored(KEY_A)));
-    const noTime = incrementsOf(skeletonFrom(stored(KEY_A, { tsFirst: null })));
+    const untimed = stored(KEY_A, { tsFirst: null });
+    for (const entry of untimed.prompts) entry.ts = null;
+    const noTime = incrementsOf(skeletonFrom(untimed));
+    expect(skeletonFrom(untimed).transcripts[0]?.frames.every((entry) => entry.hour === undefined)).toBe(true);
     expect([...noTime.cells.keys()]).toEqual([...base.cells.keys()]);
+  });
+});
+
+// What the two fields that carry data cost on a skeleton that holds them. The large-deposit fixture has `repo`, `tsFirst`, and every prompt's `ts` null, so it measures only the three `unknown` bands.
+describe('bytes on a fixture that carries a repo key and timestamps', () => {
+  const HOURS = ['2026-11-01T09:10:00.000Z', '2026-11-01T14:20:00.000Z', '2026-11-01T22:30:00.000Z'];
+  const bytesOf = (repo: string | null, timed: boolean): number => {
+    const framed = frame({ day: '2026-11-01', shell: 'bash' });
+    const from = store({
+      sessions: [session('s1', { frame: framed, repo, tsFirst: timed ? HOURS[0] ?? null : null })],
+      prompts: HOURS.map((ts, index) => prompt('s1', index, { frame: framed, ts: timed ? ts : null })),
+      tools: HOURS.flatMap((_, index) => [0, 1].map((call) => tool('s1', index * 2 + call, 'Read', { steps: [step(index * 2 + call, 0, 'file.read', { native: 'Read' })], prompt: index }))),
+    });
+    return JSON.stringify(skeletonFrom(from)).length;
+  };
+
+  it('puts the hour on one frame per distinct prompt hour, and the key on every frame', () => {
+    const skeleton = skeletonFrom(stored(KEY_A));
+    const timed = skeletonFrom(
+      store({
+        sessions: [session('s1', { frame: frame({ day: '2026-11-01' }), repo: KEY_A, tsFirst: HOURS[0] ?? null })],
+        prompts: HOURS.map((ts, index) => prompt('s1', index, { frame: frame({ day: '2026-11-01' }), ts })),
+        tools: HOURS.flatMap((_, index) => [0, 1].map((call) => tool('s1', index * 2 + call, 'Read', { steps: [step(index * 2 + call, 0, 'file.read', { native: 'Read' })], prompt: index }))),
+      }),
+    );
+    expect(skeleton.transcripts[0]?.frames.length).toBe(2);
+    // The transcript's own frame (hour 9) is shared by the first prompt; two more distinct hours add two more frames.
+    expect(timed.transcripts[0]?.frames.map(({ hour }) => hour)).toEqual([9, 14, 22]);
+  });
+
+  it('costs the pinned bytes: the key, and the hour with the frames it splits off', () => {
+    const bare = bytesOf(null, false);
+    const keyOnly = bytesOf(KEY_A, false);
+    const hourOnly = bytesOf(null, true);
+    const both = bytesOf(KEY_A, true);
+    expect({ bare, keyOnly: keyOnly - bare, hourOnly: hourOnly - bare, both: both - bare }).toEqual({ bare: 3345, keyOnly: 58, hourOnly: 755, both: 871 });
+    // The key is 29 bytes (`,"repoKey":"` and 16 hex) on each of 2 frames bare of timestamps and 4 with three prompt hours; the hour is what splits the call frames, one more full frame per distinct hour.
   });
 });

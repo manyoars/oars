@@ -213,6 +213,8 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | | `hook-calls.jsonl` `event`, `hit`, `ms`, `startMs`; `mcp-calls.jsonl` `matches` | P |
 | | a `pre-tool` row in `hook-calls.jsonl` is one per hook call on any tool (the installed entry has no matcher): `at`, `event`, `session`, `hit`, `ms`, `startMs`, `error` (`ms` is in-process work; `startMs` is the process time before the hook began, so `startMs + ms` is the field figure, a lower bound: the spawn, the row append, and process exit are outside it), and nothing of the tool, its input, or a query, so its classes are the A and P ones above and no class L field exists on it | A, P |
 
+Of the class A fields above, two have a form that leaves on a pooled skeleton: `repo` leaves only as the frame's `repoKey` (the same salted hash, 16 hex characters, never the identity), and `tsFirst` and a prompt's `ts` leave only as the UTC `hour` (0 to 23) beside the frame's `day`. The fields themselves stay local.
+
 A `P` date is at day resolution only: the finer timestamps above are all class `A`. `sw` (the per-field local-only switch for text
 fields) applies to `urls`, `searches`, `branches`, `tldrs`, `confidences`, `head`, `line`, `sig`, `example`, and `mcp-calls.jsonl` `query`.
 
@@ -323,7 +325,7 @@ lower-cased; a linked worktree's `.git` file is followed to the common `config`)
 it is the lower-cased absolute root path of the first `cwd` a repository holds. It is salted; `fileHashes` is the salted hash of each file
 path a tool touched, sorted.
 
-On a pooled skeleton the session's `repo` is the frame's `repoKey` (`docs/pool.md`, "Repo key, coverage bands, and hour"): the same salted hash, so a read that groups by repo works on pooled data within one account. A skeleton-derived store sets `repo` to it rather than `null`. The key joins one account's harnesses on one repository, not two accounts, and a salt rotation changes it. No cell key reads it.
+On a pooled skeleton the session's `repo` is the frame's `repoKey` (`docs/pool.md`, "Repo key, coverage bands, and hour"): the same salted hash, so a read that groups by repo works on pooled data from one store. A skeleton-derived store sets `repo` to it rather than `null`. The salt is this store's own (`localSalt`, below), not yet the account's (`accountSalt`, the open M4 seam), so the key joins one operator's harnesses on one repository on one machine, not a second machine and not two accounts; a salt rotation or a new machine starts new keys. No cell key reads it.
 
 The **salt** is this machine's, created on first use (`localSalt` in `store.ts`). The one seam for the account's salt is
 `SessionsRuntime.accountSalt`: a provider returning `{ salt, sid }`. When it returns another `sid`, each file recorded under the old one is
