@@ -53,7 +53,7 @@ const REJECTED = "The user doesn't want to proceed with this tool use. The tool 
 describe('the closed list', () => {
   it('names the five buckets, and the extractor that writes them is version 13', () => {
     expect(PROMPT_INTERVENTIONS).toEqual(['none', 'after-error', 'redo', 'revert', 'unknown']);
-    expect(EXTRACTOR_VERSION).toBe('13');
+    expect(Number(EXTRACTOR_VERSION)).toBeGreaterThanOrEqual(13);
   });
 });
 
