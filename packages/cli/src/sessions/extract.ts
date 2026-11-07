@@ -13,7 +13,7 @@ import { linkSteps } from './graph.js';
 import { callIdentity, shellIdentity, UNREAD_SHELL, type WordOfCommand } from './identity.js';
 import type { Redactor } from './redact.js';
 import { manifestDelta, manifestFileOf, manifestNames, packagesOf, type ManifestFile } from './package-resolve.js';
-import { createShape, INTERRUPT_MARKER } from './session-shape.js';
+import { createShape, DECLINED_RE, INTERRUPT_MARKER } from './session-shape.js';
 import {
   CAPTURE_VERSION,
   ERROR_LINE_CHARS,
@@ -154,7 +154,8 @@ const EXIT_CODE_RE = /^Exit code:? (-?\d+)/;
 const HARNESS_ERROR_PATTERNS: ReadonlyArray<readonly [RegExp, (typeof HARNESS_ERROR_CLASSES)[number]]> = [
   [/^\[Request interrupted by user/, 'interrupted'],
   // Claude Code's text, then the refusal sentences Codex (`rejected by user`, written by its adapter and by events.rs:456) and Gemini (an abort `User cancelled tool execution`; a confirmation-prompt denial `Reason: User denied execution.`, `User cancelled operation`, or `Operation cancelled by user`) write.
-  [/The user doesn't want to proceed with this tool use|The tool use was rejected|^(?:exec command|patch) rejected by user\s*$|^\[Operation Cancelled\] (?:Reason: )?(?:User (?:cancelled|denied)|Operation cancelled by user)/, 'user-rejected'],
+  // The Codex and Gemini alternatives are `DECLINED_RE`'s own source, so the error code and the `user-stop` bucket read one pattern.
+  [new RegExp(`The user doesn't want to proceed with this tool use|The tool use was rejected|${DECLINED_RE.source}`), 'user-rejected'],
   [/Permission to use [^\n]* has been denied/, 'permission-denied'],
   [/InputValidationError/, 'input-validation'],
   [/<tool_use_error>/, 'tool-use-error'],

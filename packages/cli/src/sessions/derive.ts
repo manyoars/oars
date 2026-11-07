@@ -4,7 +4,7 @@
 // recovery_episodes.py, so the numbers measured before the split reproduce after it.
 import { captureSession, classify, compress, cut, EDITS, EXPLORE, ACT, normalize, SHELL, shortName, type Capture, type ExtractInput } from './extract.js';
 import type { Redactor } from './redact.js';
-import { INTERRUPT_MARKER, REJECTED_RE } from './session-shape.js';
+import { DECLINED_RE, INTERRUPT_MARKER, REJECTED_RE } from './session-shape.js';
 import {
   ERROR_EXAMPLE_CHARS,
   EXTRACTOR_VERSION,
@@ -136,6 +136,9 @@ const stoppedOf = (errors: readonly ErrorLineObservation[], nextHead: string | u
   return nextHead?.startsWith(INTERRUPT_MARKER) === true ? 'interrupt' : null;
 };
 
+/** A decline in the fixed text Codex or Gemini CLI writes (`DECLINED_RE`). It is read for `intervention` only: `stopped` stays as the books and the gold arms read it. */
+const declinedIn = (errors: readonly ErrorLineObservation[]): boolean => errors.some((error) => DECLINED_RE.test(error.line));
+
 /**
  * The prompts whose edit a later prompt repeated, and of those the ones the very next prompt repeated (`immediate`, the `redo` bucket of `intervention`). One walk in call order: a commit settles every path
  * edited so far, so it empties the map. `nextOf` gives a prompt's next record.
@@ -167,9 +170,19 @@ const CHECKOUT_MOVES = new Set(['<literal>', '-b', '-B', '--orphan', '--detach']
 /** A prompt that begins by asking for the undo, in English: `revert that`, `please undo`, `rollback`. */
 const ASKS_UNDO = /^(?:please )?(?:revert|undo|roll ?back)\b/i;
 
+/** The capture version that keeps a `git checkout` step's `target` class. */
+const TARGET_CLASS_CAPTURE = 23;
+
 /** Whether the segment at index `at` is a checkout that moves to a branch: the step with the same `seg` holds the flags that the segment drops (the stored step no longer holds `run`). */
-const movesBranch = (tool: ToolObservation, at: number): boolean =>
-  tool.steps?.some(({ seg, identity }) => seg === at && identity !== null && 'program' in identity && identity.flags.some((flag) => CHECKOUT_MOVES.has(flag))) === true;
+const movesBranch = (tool: ToolObservation, at: number): boolean => {
+  const steps = tool.steps?.filter(({ seg }) => seg === at).map(({ identity }) => identity).filter((identity) => identity !== null && 'program' in identity) ?? [];
+  // From CAPTURE 23 the step names the class of what the checkout acts on: a proved path is an undo whatever the flags, and an unproved word is never one. Before it, only the flags tell.
+  if (Number(tool.cv) >= TARGET_CLASS_CAPTURE) {
+    if (steps.some((identity) => identity.target === 'path')) return false;
+    if (steps.some((identity) => identity.target === 'word')) return true;
+  }
+  return steps.some((identity) => identity.flags.some((flag) => CHECKOUT_MOVES.has(flag)));
+};
 
 /** A clean shell call that undid work in git. `git reset --hard` is read from the step, since a segment keeps no flag. */
 const isGitUndo = (tool: ToolObservation): boolean =>
@@ -184,7 +197,7 @@ const isGitUndo = (tool: ToolObservation): boolean =>
  */
 const interventionOf = (
   prompt: { head: string },
-  stopped: PromptStop | null,
+  stopped: boolean,
   next: { head: string; index: number } | undefined,
   settled: readonly ToolObservation[],
   nextCalls: readonly ToolObservation[],
@@ -192,7 +205,7 @@ const interventionOf = (
 ): PromptIntervention => {
   if (next === undefined || prompt.head.startsWith(INTERRUPT_MARKER)) return 'unknown';
   // A stop is read before the others: a rejected call is settled as an error, so `after-error` would otherwise claim every rejection.
-  if (stopped !== null) return 'user-stop';
+  if (stopped) return 'user-stop';
   if (settled.some(isEdit) && (nextCalls.some(isGitUndo) || ASKS_UNDO.test(next.head.trimStart()))) return 'revert';
   if (immediate) return 'redo';
   if (settled.at(-1)?.status === 'error') return 'after-error';
@@ -264,7 +277,7 @@ export const deriveSession = (capture: SessionCapture, redact: Redactor): Derive
       stopped,
       commits: settled.reduce((sum, tool) => sum + commitsIn(tool), 0),
       redo: redone.has(prompt.index),
-      intervention: interventionOf(prompt, stopped, capture.prompts[position + 1], settled, settledOf.get(capture.prompts[position + 1]?.index ?? -1) ?? [], immediate.has(prompt.index)),
+      intervention: interventionOf(prompt, stopped !== null || declinedIn(stopsOf.get(prompt.index) ?? []), capture.prompts[position + 1], settled, settledOf.get(capture.prompts[position + 1]?.index ?? -1) ?? [], immediate.has(prompt.index)),
       ...(prompt.frame === undefined ? {} : { frame: prompt.frame }),
     };
   });
