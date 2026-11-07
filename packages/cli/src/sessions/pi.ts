@@ -5,9 +5,9 @@
 // reader is original. No vendor text promises the format (docs/session-format.md names the file version and says an older file is migrated when loaded, and sends programs to the SDK),
 // so `docs/sessions-store.md` says what a live run would still have to prove.
 //
-// Where it reads from (`piRoot`): `$PI_CODING_AGENT_DIR`, else `~/.pi/agent` (`%USERPROFILE%\.pi\agent` on Windows) (src/config.ts:610, :613-614, :630-636, docs/environment-variables.md:81). A session is
+// Where it reads from (`piSessionsDir`): `$PI_CODING_AGENT_SESSION_DIR` when set (a flat folder of session files, session-manager.ts:942-955, main.ts:749-753), else `sessions/` under (`piRoot`): `$PI_CODING_AGENT_DIR`, else `~/.pi/agent` (`%USERPROFILE%\.pi\agent` on Windows) (src/config.ts:610, :613-614, :630-636, docs/environment-variables.md:81). A session is
 // `sessions/--<cwd with its leading separator removed and / \ : turned into ->--/<ISO time with : . turned into ->_<session id>.jsonl` (docs/session-format.md:10-14,
-// session-manager.ts:590-593). The sessions folder can be moved by `--session-dir`, `PI_CODING_AGENT_SESSION_DIR`, or a setting (docs/sessions.md:60); this reader does not follow those.
+// session-manager.ts:590-593). `--session-dir` and the `sessionDir` setting can also move it (docs/sessions.md:60); this reader does not follow those.
 // A file is written only once a conversation exists, then appended to (session-manager.ts:1176-1190). Line 1 is the header and every later line is an entry:
 //   session           {version, id, timestamp, cwd, parentSession?}: `version` is the FILE format's (1 linear, 2 tree, 3 `hookMessage` renamed `custom`), not Pi's; no app version is recorded.
 //                     The session's cwd is fixed (docs/sessions.md:15): a `cd` inside a command is not tracked, and a resume from another folder runs in this one.
@@ -31,12 +31,23 @@ import { open, readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, posix, win32 } from 'node:path';
 
+/** Pi expands a leading ~ in its path settings (config.ts:614, utils/paths.ts:134-137). */
+const expandHome = (path: string, home: string): string => (path === '~' ? home : /^~[/\\]/.test(path) ? join(home, path.slice(2)) : path);
+
 /** The Pi agent folder for an environment; a test passes its own so it never reads the real one. */
 export const piRoot = (env: { [name: string]: string | undefined }, home: string = homedir()): string => {
   const set = env.PI_CODING_AGENT_DIR;
-  if (set === undefined || set === '') return join(home, '.pi', 'agent');
-  // Pi expands a leading ~ (config.ts:614).
-  return set === '~' ? home : /^~[/\\]/.test(set) ? join(home, set.slice(2)) : set;
+  return set === undefined || set === '' ? join(home, '.pi', 'agent') : expandHome(set, home);
+};
+
+/**
+ * The folder the reader reads Pi sessions from. The user's own `PI_CODING_AGENT_SESSION_DIR` wins when set and non-empty: Pi writes session files straight into it, with no per-project
+ * subfolder (session-manager.ts:1766-1768, main.ts:749-753), and lists only the `.jsonl` files directly in it (listSessionsFromDir, session-manager.ts:942-955). Otherwise it is `sessions/`
+ * under the agent folder, whose files sit in `--<cwd>--` subfolders. `--session-dir` and the `sessionDir` setting are not read by this reader.
+ */
+export const piSessionsDir = (env: { [name: string]: string | undefined }, home: string = homedir()): string => {
+  const set = env.PI_CODING_AGENT_SESSION_DIR;
+  return set === undefined || set === '' ? join(piRoot(env, home), 'sessions') : expandHome(set, home);
 };
 
 type Obj = { [key: string]: unknown };
@@ -304,8 +315,8 @@ const firstLine = async (file: string): Promise<string | undefined> => {
   }
 };
 
-export const openPiStore = async (root: string): Promise<PiStore | undefined> => {
-  const base = join(root, 'sessions');
+/** `base` is the sessions folder (`piSessionsDir`): its subfolders hold the files Pi groups by project, and a `.jsonl` file directly in it is one Pi wrote to a session folder the user chose. */
+export const openPiStore = async (base: string): Promise<PiStore | undefined> => {
   const unreadable: { file: string; reason: string }[] = [];
   let folders;
   try {
@@ -316,12 +327,13 @@ export const openPiStore = async (root: string): Promise<PiStore | undefined> =>
   }
   const sessions: PiSession[] = [];
   let rejected = 0;
-  for (const folder of folders.filter((candidate) => candidate.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
+  const places = [base, ...folders.filter((candidate) => candidate.isDirectory()).sort((a, b) => a.name.localeCompare(b.name)).map((folder) => join(base, folder.name))];
+  for (const dir of places) {
     let files;
     try {
-      files = await readdir(join(base, folder.name), { withFileTypes: true });
+      files = dir === base ? folders : await readdir(dir, { withFileTypes: true });
     } catch (error) {
-      unreadable.push({ file: join(base, folder.name), reason: reasonOf(error, join(base, folder.name)) });
+      unreadable.push({ file: dir, reason: reasonOf(error, dir) });
       continue;
     }
     for (const entry of files.filter((candidate) => candidate.isFile() && candidate.name.endsWith('.jsonl')).sort((a, b) => a.name.localeCompare(b.name))) {
@@ -332,7 +344,7 @@ export const openPiStore = async (root: string): Promise<PiStore | undefined> =>
         rejected += 1;
         continue;
       }
-      const file = join(base, folder.name, entry.name);
+      const file = join(dir, entry.name);
       try {
         const first = await firstLine(file);
         const header = first === undefined ? undefined : parse(first);
