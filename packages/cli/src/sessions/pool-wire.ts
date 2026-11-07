@@ -3,7 +3,7 @@
 // sending, and the server parses it again, field by field, because a live URL takes anything from anyone. This file imports nothing from the file system: the Worker bundles it.
 
 import { ACTION_TABLES, CANONICAL_ACTIONS, mcpOf, type CanonicalAction } from './actions.js';
-import { CUSTOM_AGENT, FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRIVATE, publicEffort, publicVersion, PUBLIC_FLAGS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, projectedAgentType, PUBLIC_SUBCOMMANDS, REPO_SIZES, VOCAB_VERSION, type RepoSize } from './public-vocabulary.js';
+import { CUSTOM_AGENT, FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRIVATE, publicEffort, publicVersion, PUBLIC_PACKAGES, projectedAgentType, REPO_SIZES, VOCAB_VERSION, type RepoSize } from './public-vocabulary.js';
 import type { Cell } from './cells.js';
 import type { Redactor } from './redact.js';
 import type { Motif } from './motif.js';
@@ -243,11 +243,6 @@ export interface ShellCommand {
 export type ShellReader = (tool: ToolObservation) => readonly ShellCommand[];
 
 
-const SHORT_FLAG = /^-[A-Za-z]$/;
-
-/** The flags the wire has a row for: the curated list and a single letter. */
-const isWireFlag = (flag: string): boolean => PUBLIC_FLAGS.has(flag) || SHORT_FLAG.test(flag);
-
 /** The most characters a name may hold on the wire. A longer value is not a name: it counts as redacted. */
 export const NAME_MAX = 128;
 // A name is a word: letters, digits, and a few joiners, with an optional leading `@` for a scope. A mis-parsed command line, a path, an email, or a quoted string fails it.
@@ -277,17 +272,27 @@ export const wireName = (gate: WireGate, name: string): string => {
   return isWireName(name) && unchanged(gate, name) && !gate.terms.some((term) => term !== '' && lower.includes(term.toLowerCase())) ? name : PRIVATE;
 };
 
+const FLAG_DASHES = /^-{1,2}/;
+/** The shape of a flag name: one or two dashes, then a name. A value joined to its flag (`--token=abc`) or a path fails it. */
+const isWireFlag = (flag: string): boolean => FLAG_DASHES.test(flag) && flag.length <= NAME_MAX && isWireName(flag.replace(FLAG_DASHES, ''));
+
+/** A flag name as the wire holds it: the name after the one gate, or `private` when it counts as redacted. Only the name is ever read, never a value. */
+const wireFlag = (gate: WireGate, flag: string): string => (isWireFlag(flag) && wireName(gate, flag.replace(FLAG_DASHES, '')) !== PRIVATE ? flag : PRIVATE);
+
 /** The basename of a program as capture read it: a path never goes on the wire. */
 const basenameOf = (program: string): string => program.replace(/^.*[\\/]/, '');
 
 /**
- * A projected command as the server's parser reads it. A program the server's curated list holds keeps its subcommand and flags, held to the curated lists. Any other program goes as its basename after the gate
- * (the stored identity reads `<literal>`, so the name comes from the call's segments), with no subcommand or flag: those are not carried for a long-tail program yet.
+ * A projected command as the server's parser reads it: the program as its basename after the gate (the stored identity reads `<literal>` for a program off the curated list, so the name comes from the call's segments),
+ * and the subcommand and flag names the reader gives, each through the same gate and never a flag value. Which of them the reader holds for a program is capture's; the wire adds no list of its own.
  */
 const wireCommand = ({ program, subcommand, flags }: ShellCommand, raw: string | undefined, gate: WireGate): ShellIdentity => {
-  if (PUBLIC_PROGRAMS.has(program)) return { program, sub: subcommand !== null && PUBLIC_SUBCOMMANDS.get(program)?.has(subcommand) === true ? subcommand : null, flags: flags.filter(isWireFlag) };
   const named = program !== PRIVATE ? program : raw;
-  return { program: named === undefined ? PRIVATE : wireName(gate, basenameOf(named)), sub: null, flags: [] };
+  if (named === undefined) return { program: PRIVATE, sub: null, flags: [] };
+  const sent = wireName(gate, basenameOf(named));
+  // A private program holds no subcommand or flag: the parser refuses one that does.
+  if (sent === PRIVATE) return { program: PRIVATE, sub: null, flags: [] };
+  return { program: sent, sub: subcommand === null ? null : wireName(gate, subcommand), flags: flags.map((flag) => wireFlag(gate, flag)) };
 };
 
 /** A pull in the wire's spelling: its package name after the gate. A version beside a name that is not on the public list could identify it, so it goes as `<literal>` (null stays null), the rule capture applies. */
@@ -718,8 +723,11 @@ const nameIn = (value: unknown, at: string): string => {
 const nameOrNull = (held: Collected, value: unknown, at: string): string | null => {
   if (value === null || value === undefined) return null;
   const name = textOf(value, at);
-  return name === PRIVATE || name === OTHER || name === LITERAL || isWireName(name) ? name : unknownValue(held, at, name);
+  return name === LITERAL ? name : nameValue(held, name, at);
 };
+
+/** A long-tail name in a field whose value the pool classes: `private`, `other`, or a name; a value that is no name is set aside. */
+const nameValue = (held: Collected, name: string, at: string): string => (name === PRIVATE || name === OTHER || isWireName(name) ? name : unknownValue(held, at, name));
 
 const exactlyIn = (held: Collected, allowed: ReadonlySet<string>) => (value: unknown, at: string): string => {
   const name = textOf(value, at);
@@ -832,7 +840,7 @@ const parsePull = (held: Collected, value: unknown, at: string): PullIdentity =>
 
 const parseFlag = (held: Collected, value: unknown, at: string): string => {
   const flag = textOf(value, at);
-  return flag === OTHER || isWireFlag(flag) ? flag : unknownValue(held, at, flag);
+  return flag === PRIVATE || flag === OTHER || isWireFlag(flag) ? flag : unknownValue(held, at, flag);
 };
 
 /** What a reader sets aside whole: a part of a step it cannot read against a vocabulary. Its place is noted and its content kept as sent, as for any value it does not know (see `unknownValue`). */
@@ -861,8 +869,8 @@ const parseIdentity = (held: Collected, harness: WireHarness, action: CanonicalA
       if (!(Array.isArray(raw.flags) && raw.flags.length === 0)) throw new Refused(under(at, 'flags'), 'a private program holds no flags');
       if (raw.pulls !== undefined) throw new Refused(under(at, 'pulls'), 'a private program holds no pulls');
     }
-    const subs = PUBLIC_SUBCOMMANDS.get(program) ?? new Set<string>();
-    const sub = orNull(raw.sub, under(at, 'sub'), exactlyIn(held, subs));
+    // A private program holds no subcommand, so one it sends is set aside, as its flags are refused.
+    const sub = orNull(raw.sub, under(at, 'sub'), (entry, entryAt) => (program === PRIVATE ? unknownValue(held, entryAt, textOf(entry, entryAt)) : nameValue(held, textOf(entry, entryAt), entryAt)));
     const flags = listOf(raw.flags, under(at, 'flags'), (entry, entryAt) => parseFlag(held, entry, entryAt));
     return raw.pulls === undefined ? { program, sub, flags } : { program, sub, flags, pulls: listOf(raw.pulls, under(at, 'pulls'), (entry, entryAt) => parsePull(held, entry, entryAt)) };
   }
