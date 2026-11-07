@@ -6,6 +6,7 @@ import type { Outcome, RunDeps } from '../cli.js';
 import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../errors.js';
 import { compileAllow } from './allow.js';
 import { checkSession, exclusionPaths, lastWritten, type Reason } from './exclusion.js';
+import { recordSend, recordWire, newTally, tallyBatch } from '../telemetry/wire.js';
 import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, isMissing, lockedBatch, markShown, outboxFolder, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
 import { HARNESSES, hasEnded, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type PinnedKey, type SessionRecords, type TranscriptRoot } from './pool-wire.js';
 import { carriedDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
@@ -386,6 +387,7 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
   for (let attempt = 1; attempt < SEND_ATTEMPTS && reply.status === 409 && isObject(reply.body) && textIn(reply.body, 'error') === DEPOSIT_CONFLICT; attempt += 1) {
     reply = await ask(deps, DEPOSIT, server, POOL_DEPOSITS, { token, bytes }, via);
   }
+  recordSend(deps, { status: reply.status, code: isObject(reply.body) ? textIn(reply.body, 'error') : undefined, bytes: Buffer.byteLength(bytes) });
   if (reply.status !== 201) throw refusal(DEPOSIT, reply);
   return { document: { ok: true, server, hash, sent: true }, text: `Sent batch ${hash} to ${server}.` };
 };
@@ -411,6 +413,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   const discarded = await discardStale(outbox);
   const counts: DepositCounts = { sessions: 0, batched: 0, excluded: { folder: 0, term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, uncaptured: 0, notEnded: 0, refused: 0, refusedFields: [], discarded, withdrawn: 0 };
   const built = new Set<string>();
+  const wireTally = newTally();
   const refusedFields = new Set<string>();
   const roots = new Map<string, TranscriptRoot>((await readSkeletons(runtime.storeDir, undefined, true)).skeletons.map(({ session, merkleRoot, leaves }) => [session, { merkleRoot, leaves }]));
   // The sessions that pass both gates and have ended, in the order the store holds them: the windows of a delta are counted over these alone, and the batch of each is built after, once its deltas are known.
@@ -463,6 +466,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
       continue;
     }
     await writeBatch(outbox, key, parsed.skeleton);
+    tallyBatch(wireTally, parsed.skeleton);
     await markDeltasSent(outbox, delta?.marks ?? []);
     built.add(key);
     counts.batched += 1;
@@ -470,6 +474,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   // The batch of a session or account this store no longer holds goes too.
   counts.withdrawn += await removeBatchesExcept(outbox, built);
   counts.refusedFields = [...refusedFields].sort();
+  recordWire(deps, wireTally);
   const { folder, term, noRaw, noTerms, unreadable } = counts.excluded;
   const lines = [
     `Wrote ${String(counts.batched)} of ${String(counts.sessions)} sessions to the outbox for ${server}. Nothing was sent.`,

@@ -18,6 +18,7 @@ import { poolDeposit, poolFetch, poolLogin, poolOutbox } from './sessions/pool-c
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 import { telemetryOff, telemetryOn, telemetryShow, telemetryStatus } from './telemetry/command.js';
+import { recordCrash } from './telemetry/crash.js';
 import { finishTelemetry, observeCommand, type Observed } from './telemetry/observe.js';
 import type { TelemetryRuntime } from './telemetry/record.js';
 
@@ -575,6 +576,8 @@ const execute = async (argv: string[], deps: RunDeps, observed: Observed): Promi
   } catch (error) {
     // --help and --version end the parse through exitOverride with exit code 0; commander has already printed them.
     if (error instanceof CommanderError && error.exitCode === 0) return ExitCode.OK;
+    // A failure the program did not mean (not a CliError, not commander's own): its class and a hash of its stack are recorded, then it is handled as before.
+    if (!(error instanceof CliError) && !(error instanceof CommanderError)) recordCrash(deps, error);
     const failure = asCliError(error);
     // Commander wrote its own usage message to stderr; a CliError is ours to print.
     if (!(error instanceof CommanderError) || argv.includes('--json')) printFailure(deps, argv.includes('--json'), failure);

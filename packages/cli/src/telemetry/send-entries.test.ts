@@ -92,7 +92,8 @@ describe.skipIf(!built)('the built nightly send', () => {
     const fake = await serve();
     const { root, dir, env } = home();
     expect(await run([hookBin, 'nightly'], { ...env, OARS_POOL_URL: fake.origin }, root)).toBe(0);
-    expect(fake.received).toEqual([{ method: 'POST', url: '/v1/telemetry', events: 1 }]);
+    // The seeded command event, and the store-health and run-cost events the nightly run itself records before it sends.
+    expect(fake.received).toEqual([{ method: 'POST', url: '/v1/telemetry', events: 3 }]);
     expect(readSpool(dir)).toEqual([]);
   }, 60_000);
 
@@ -112,7 +113,8 @@ describe.skipIf(!built)('the built nightly send', () => {
     const { root, dir, env } = home();
     expect(await run([hookBin, 'nightly'], env, root)).toBe(0);
     expect(fake.received).toEqual([]);
-    expect(readSpool(dir)).toHaveLength(1);
+    // Nothing leaves, so the seeded command event stays beside the nightly run's own store-health and run-cost events.
+    expect(readSpool(dir)).toHaveLength(3);
   }, 60_000);
 });
 

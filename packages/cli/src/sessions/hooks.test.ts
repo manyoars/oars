@@ -5,7 +5,7 @@ import { Readable } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
 import { slugOf } from './allow.js';
 import { readHookCalls } from './hook-calls.js';
-import { hookRuntime, runHook } from './hooks.js';
+import { hookRuntime, HOOK_EVENTS, nightlyTelemetry, runHook } from './hooks.js';
 import { deposit, depositSession, loadStore } from './store.js';
 import { cleanup, composers, FIXTURES, folders, NOW, stage, stageCursor, stageRawCursor, type Staged } from './test-support.js';
 
@@ -170,6 +170,30 @@ describe('hookRuntime', () => {
     expect(runtime.storeDir).toBe(join(env.APPDATA, 'oars', 'sessions'));
     expect(runtime.projectsRoot).toBe(join('x', 'claude', 'projects'));
     expect(hookRuntime('stop', {}, 'linux', 'home', io).projectsRoot).toBe(join('home', '.claude', 'projects'));
+  });
+});
+
+describe('nightlyTelemetry', () => {
+  it('points the nightly run at <APPDATA>/oars/telemetry with the version and the clock it was given', () => {
+    const appData = join(process.cwd(), 'temp-appdata-for-test');
+    const env = { APPDATA: appData, XDG_CONFIG_HOME: appData };
+    const clock = (): number => NOW;
+    const telemetry = nightlyTelemetry('nightly', env, 'win32', 'unused-home', () => '4.5.6', clock);
+    expect(telemetry).toEqual({ env, telemetry: { dir: join(appData, 'oars', 'telemetry'), platform: 'win32' }, version: '4.5.6', now: clock });
+  });
+
+  it('falls back to the home config folder when the environment names none', () => {
+    expect(nightlyTelemetry('nightly', {}, 'linux', join('home', 'dev'), () => '1.0.0', Date.now)?.telemetry?.dir).toBe(join('home', 'dev', '.config', 'oars', 'telemetry'));
+  });
+
+  it('gives every other hook nothing to record', () => {
+    let versionReads = 0;
+    const version = (): string => {
+      versionReads += 1;
+      return '1.0.0';
+    };
+    for (const event of HOOK_EVENTS.filter((name) => name !== 'nightly')) expect(nightlyTelemetry(event, { APPDATA: 'x' }, 'linux', 'home', version, Date.now)).toBeUndefined();
+    expect(versionReads).toBe(0);
   });
 });
 

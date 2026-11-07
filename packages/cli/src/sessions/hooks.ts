@@ -16,6 +16,7 @@ import type { HookCall } from './schema.js';
 import { errorLine, inputKey, logStep, newContext, runDeposit, stampKey, tryLog, type StepReport } from './steps.js';
 import { deposit, depositSession, readSaved, type SessionsRuntime } from './store.js';
 import { recordSurvival } from './survival.js';
+import type { NightlyTelemetry } from '../telemetry/health.js';
 
 export type HookEvent = HookCall['event'];
 
@@ -106,11 +107,19 @@ const stop = async (runtime: SessionsRuntime, input: Input, now: () => number): 
   return { hit: deposited === 'deposited', queried: false };
 };
 
-const nightly = async (runtime: SessionsRuntime, now: () => number): Promise<Outcome> => {
+/** What the nightly run measures about itself for telemetry: the clock it reads and the time its deposit took. */
+interface Timing {
+  clock: () => number;
+  parseMs: number;
+}
+
+const nightlyRun = async (runtime: SessionsRuntime, now: () => number, timing: Timing): Promise<Outcome> => {
   // A state.json that cannot be read is a failed deposit run like any other: its error row and the skipped derive row (spec 4.4) are logged.
   const saved = await readSaved(runtime.storeDir).catch((failure: unknown) => runDeposit<Awaited<ReturnType<typeof readSaved>>>(newContext(runtime.storeDir, now, 'nightly'), true, inputKey('nightly', [], []), () => Promise.reject(failure instanceof Error ? failure : new Error(String(failure)))));
   const result = await runDeposit(newContext(runtime.storeDir, now, 'nightly'), true, inputKey('nightly', saved.allow, saved.redactDomains), async (trace) => {
+    const parseStart = timing.clock();
     const done = await deposit(runtime, { allow: saved.allow, redactDomains: saved.redactDomains, now }, trace);
+    timing.parseMs = timing.clock() - parseStart;
     return { value: done, in: { transcript: done.sessions + done.subagents + done.unchanged } };
   });
   const survival = await recordSurvival(runtime, saved.allow, now);
@@ -123,6 +132,29 @@ const nightly = async (runtime: SessionsRuntime, now: () => number): Promise<Out
   if (skipped !== undefined) return { hit: true, queried: false, error: `Skipped ${String(skipped[1].rejected)} ${sourceLabel(skipped[0], runtime.sources ?? SOURCES)} sessions whose id is not a safe file name` };
   // A survival read that fails every night is otherwise invisible, for the same reason; it comes last because the run itself did not lose a session.
   return survival === null ? { hit: true, queried: false, error: await errorLine(runtime.storeDir, 'Commit survival not read this run.') } : { hit: true, queried: false };
+};
+
+/** The nightly run, then (when telemetry is given) the store-health snapshot and the run's cost. Recording happens after the run and cannot change its outcome or its error. */
+const nightly = async (runtime: SessionsRuntime, now: () => number, telemetry: NightlyTelemetry | undefined): Promise<Outcome> => {
+  const timing: Timing = { clock: telemetry?.now ?? now, parseMs: 0 };
+  const started = timing.clock();
+  let outcome: Outcome | undefined;
+  let failure: unknown;
+  let failed = false;
+  try {
+    outcome = await nightlyRun(runtime, now, timing);
+  } catch (thrown) {
+    failure = thrown;
+    failed = true;
+  }
+  if (telemetry !== undefined) {
+    // Loaded here so the hooks that run before every tool call never pay for the telemetry modules.
+    const { recordRunCost, recordStoreHealth } = await import('../telemetry/health.js');
+    await recordStoreHealth(telemetry, runtime);
+    recordRunCost(telemetry, { totalMs: timing.clock() - started, parseMs: timing.parseMs, failed: failed || outcome?.error !== undefined });
+  }
+  if (failed) throw failure;
+  return outcome ?? { hit: false, queried: false };
 };
 
 /** What a lookup hook looks up, as its recall key (spec 4.2 names none for a lookup): the cwd for session-start, the failure's signature for post-tool, the call's shape for pre-tool; null when it had nothing to look up. */
@@ -151,11 +183,22 @@ export const hookRuntime = (
   ...io,
 });
 
+/** What the nightly run records with, and nothing for any other hook: the telemetry folder sits beside the session store under the config directory, so `oars telemetry` and the nightly run read and write the same one. The version is read only for the nightly run, so the per-tool hooks never touch the manifest. */
+export const nightlyTelemetry = (
+  event: HookEvent,
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+  home: string,
+  version: () => string,
+  now: () => number,
+): NightlyTelemetry | undefined =>
+  event === 'nightly' ? { env, telemetry: { dir: join(defaultConfigDir(env, platform, home), 'oars', 'telemetry'), platform }, version: version(), now } : undefined;
+
 /**
  * Runs one hook. It never fails or blocks the session it runs in: whatever happens, it resolves (the process exits 0), and the
  * hook-call line records the outcome, with the failure's first line when there was one, so the record is evidence, not a claim.
  */
-export const runHook = async (event: HookEvent, stdin: string, runtime: SessionsRuntime, now: () => number): Promise<string | undefined> => {
+export const runHook = async (event: HookEvent, stdin: string, runtime: SessionsRuntime, now: () => number, telemetry?: NightlyTelemetry): Promise<string | undefined> => {
   const started = performance.now();
   let session: string | null = null;
   let outcome: Outcome = { hit: false, queried: false };
@@ -170,7 +213,7 @@ export const runHook = async (event: HookEvent, stdin: string, runtime: Sessions
     else if (event === 'pre-tool') outcome = await preTool(runtime, input, now);
     else if (event === 'post-tool') outcome = await postTool(runtime, input);
     else if (event === 'stop') outcome = await stop(runtime, input, now);
-    else outcome = await nightly(runtime, now);
+    else outcome = await nightly(runtime, now, telemetry);
   } catch (thrown) {
     failure = thrown;
     failed = true;
