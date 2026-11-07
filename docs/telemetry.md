@@ -60,6 +60,31 @@ One per recall: `oars sessions recall` (every form), the `oars_recall` MCP tool 
 | `reads`, `evidence`, `tokens` | How many reads and evidence rows the answer cites, and its size in tokens (a count for comparing arms, not a bill). |
 | `arm` | The exposure record the recall also keeps on this machine: `shown`, or `held` (a push the holdback arm kept from the agent). A pull is always `shown`. |
 
+### `deposit`
+
+One per `oars pool deposit` pass (`step` is `build`), and one per batch sent (`step` is `send`). Counts only: no folder, term, session id, name, or batch content.
+
+| Field | What it holds |
+|---|---|
+| `step` | `build` (a pass that wrote batches to the outbox) or `send` (one batch sent with `--send`). |
+| `sessions` | Sessions in the store the pass counted. |
+| `batched`, `bytes` | Batches the pass wrote, and their total size in bytes. |
+| `sent` | On a `send`: 1. |
+| `excludedFolder`, `excludedTerm`, `excludedNoRaw`, `excludedNoTerms`, `excludedUnreadable` | How many sessions each session gate kept out: a folder not on the allowlist, an exclusion term, no raw to scan, no term file, and unreadable. A count each, never which folder or which term. |
+| `notEnded`, `uncaptured`, `refused`, `withdrawn`, `discarded` | Sessions that had not ended, sessions with nothing to build, sessions the vocabulary refused, batches removed because their session no longer passes, and batches built under an older format. |
+
+### `fetch`
+
+One per `oars pool fetch` that reached the pool.
+
+| Field | What it holds |
+|---|---|
+| `harness` | The harness fetched, from the pool's list (`claude-code`, `cursor`, `codex`, `copilot`, `gemini`, `grok`, `vscode-copilot`). |
+| `fetches` | 1. |
+| `etagHits` | 1 when the pool answered 304 (the kept bundle is current). |
+| `capHits` | 1 when the pool's weekly fetch cap refused it. |
+| `reads` | The reads in the bundle fetched or kept. |
+
 Later releases add event types here, one section each.
 
 ## What is never recorded or sent
