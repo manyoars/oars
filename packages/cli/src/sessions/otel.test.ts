@@ -16,6 +16,15 @@ afterEach(cleanup);
 //   gen_ai.usage.input_tokens (includes cached tokens), .output_tokens, .cache_read.input_tokens, .cache_write.input_tokens, .reasoning.output_tokens
 //   gen_ai.tool.name, gen_ai.tool.call.id, gen_ai.tool.call.arguments (Opt-In)   execute-tool.md:75-83
 //   error.type (stable), status.code 2 = ERROR (trace.proto:327), process.exit.code (the command refinement), gen_ai.skill.name, gen_ai.transfer.target.name, mcp.method.name
+// Pinned lines (semantic-conventions-genai @ e6658f14, paths under docs/ unless the path starts with model/; every GenAI attribute is Development):
+//   gen_ai.conversation.id registry/attributes/gen-ai.md:15 (merging traces on it is the reader's rule, from the SHOULD at :112)   gen_ai.agent.name registry/attributes/gen-ai.md:12
+//   gen_ai.transfer.mode / .target.name gen-ai/execute-tool.md:225-226 (registry/attributes/gen-ai.md:80)   gen_ai.skill.name / .resource.name registry/attributes/gen-ai.md:65-66, gen-ai/execute-tool.md:386
+//   mcp.method.name registry/attributes/mcp.md:10 (Development); the span name and attribute table gen-ai/mcp.md:143, 160; the conventions carry no MCP server name
+//   process.executable.name / process.exit.code gen-ai/execute-tool.md:725-726 (Release Candidate, from semantic-conventions v1.45.0 registry/attributes/process.md:28, 30)
+//   message parts: the schema model/gen-ai/gen-ai-input-messages.json:74 (`parts`), :414-434 (`TextPart`: `type` "text", `content`); the worked example registry/attributes/gen-ai.md:22, 33
+//   failure text: the span status message (semantic-conventions v1.45.0 docs/general/recording-errors.md:57-58), else the `exception` span event (docs/exceptions/exceptions-spans.md:47, a Deprecated
+//   document at :7 that moved exceptions to log records, which an OTLP trace file does not hold); `exception.message` is Stable (registry/attributes/exception.md:17). The GenAI-specific
+//   `gen_ai.execute_tool.exception` (gen-ai/execute-tool.md:857-866) is a log event, so it is not read.
 
 type Obj = { [key: string]: unknown };
 const T = 'a'.repeat(32);
