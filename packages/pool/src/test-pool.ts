@@ -48,6 +48,26 @@ export const wranglerConfig = (): { compatibilityDate: string; compatibilityFlag
   return { compatibilityDate: parsed.compatibility_date, compatibilityFlags: entries.filter((flag): flag is string => typeof flag === 'string'), text, parsed };
 };
 
+/**
+ * Miniflare 4 sends every `dispatchFetch` with `reset: true`, so undici closes the socket after each response: one loopback socket in TIME_WAIT for every request a test makes, and for every D1 or R2 call it makes through `getBindings` too, because the proxy client holds this same function. A full run left about 9,000 of them, enough to exhaust the dynamic port range when gates run together (t909, t930).
+ * This sends the same request on Node's keep-alive pool instead, with the two headers Miniflare's own dispatcher adds. A WebSocket upgrade keeps the original path.
+ */
+const keepAlive = (miniflare: Miniflare): void => {
+  const original = miniflare.dispatchFetch;
+  miniflare.dispatchFetch = async (input, init) => {
+    const forward = new StubRequest(input, init);
+    if (forward.headers.get('upgrade') !== null) return original(input, init);
+    const entry = await miniflare.ready;
+    const sent = new URL(forward.url);
+    const headers = new Headers([...forward.headers.entries()]);
+    headers.set('MF-Original-URL', forward.url);
+    headers.set('MF-Disable-Pretty-Error', 'true');
+    const response = await fetch(new URL(`${sent.pathname}${sent.search}`, entry), { method: forward.method, headers, ...(forward.body === null ? {} : { body: forward.body, duplex: 'half' }), redirect: forward.redirect });
+    if (response.status === 500 && response.headers.has('MF-Experimental-Error-Stack')) throw new Error(`the Worker threw: ${await response.text()}`);
+    return new StubResponse(response.body, { status: response.status, statusText: response.statusText, headers: [...response.headers.entries()] });
+  };
+};
+
 const json = (body: object, status = 200): StubResponse => new StubResponse(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 interface StubProvider {
@@ -176,6 +196,7 @@ export const startPool = async (bindings: { [name: string]: string } = {}, optio
     bindings: { PSEUDONYM_KEY: 'a-test-pseudonym-key', INGEST_HASH_KEY: 'a-test-ingest-hash-key', BUNDLE_SIGNING_KEY: key.jwk, COVENANT_VERSION: 'v1', FETCH_CAP: '1000', ...bindings },
     outboundService: stub.outbound,
   });
+  keepAlive(miniflare);
   await miniflare.ready;
   const db = async (): Promise<TestDb> => (await miniflare.getBindings<{ DB: TestDb }>()).DB;
   const bucket = async (): Promise<TestBucket> => (await miniflare.getBindings<{ TELEMETRY: TestBucket }>()).TELEMETRY;
