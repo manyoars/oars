@@ -383,7 +383,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
   hook
     .command('install')
     .description('merge the SessionStart, PostToolUseFailure, and SessionEnd hooks into a settings file (existing hooks are kept) and raise cleanupPeriodDays to at least 365')
-    .option('--scope <scope>', 'user (~/.claude/settings.json), project (./.claude/settings.json), or file (needs --file; the default)', scopeOption)
+    .option('--scope <scope>', 'user (~/.claude/settings.json; the default), project (./.claude/settings.json), or file (needs --file; implied by --file)', scopeOption)
     .option('--file <path>', 'the settings file for --scope file')
     .option('--keep-retention', 'leave cleanupPeriodDays as it is (the harness deletes raw transcripts older than it)')
     .option('--schedule <mode>', 'nightly: register a Windows task that runs the full deposit and the recurrence refresh daily; off: remove it', (value: string) => {
@@ -408,7 +408,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
   hook
     .command('uninstall')
     .description('remove only the hooks `install` wrote from a settings file (cleanupPeriodDays stays; `install --schedule off` removes the task)')
-    .option('--scope <scope>', 'user, project, or file (needs --file; the default)', scopeOption)
+    .option('--scope <scope>', 'user (the default), project, or file (needs --file; implied by --file)', scopeOption)
     .option('--file <path>', 'the settings file for --scope file')
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
@@ -428,9 +428,9 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
 
   gate
     .command('replay')
-    .description('find the crossings in your session logs and write them to crossings.jsonl in the sessions store; reads nothing outside the folders you name, and no network unless --registry-state')
-    .option('--allow <folder>', 'a project folder to read, as for `oars sessions deposit` (repeatable); default: the allowlist a deposit saved', collect)
-    .option('--registry-state', 'ask the package manager what the registry holds for each package named (npm view, pip index versions); off by default, and the manager keeps its own cache')
+    .description('find the crossings in your session logs and write them to crossings.jsonl in the sessions store; reads nothing outside the allowlist, and asks the package manager what the registry holds unless --no-registry-state')
+    .option('--allow <folder>', 'a project folder to read, as for `oars sessions deposit` (repeatable); default: the allowlist a deposit saved, else every folder', collect)
+    .option('--no-registry-state', 'do not ask the package manager what the registry holds for each package named (npm view, pip index versions; asked by default, as the live hook does, and the manager keeps its own cache)')
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       emit(deps, flag(options, 'json'), await gateReplay(sessionDeps(deps), { allow: list(options, 'allow'), ...(flag(options, 'registryState') ? { registry: managerReader() } : {}) }));

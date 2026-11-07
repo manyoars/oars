@@ -46,12 +46,15 @@ describe('one command installs and removes the hooks', () => {
     for (const event of EVENTS) expect(commandsOf(after, event)).toEqual([]);
   });
 
-  it('refuses the bare forms, which name no settings file, so the README must give --scope', async () => {
+  it('takes the bare forms as the user settings', async () => {
     const dir = stage().root;
-    const runtime: InstallRuntime = { nodePath: dir, hookBin: dir, userSettings: join(dir, 'settings.json'), cwd: dir, schtasks: () => Promise.resolve({ code: 0, output: '' }) };
+    const file = join(dir, 'settings.json');
+    const runtime: InstallRuntime = { nodePath: resolve(dir, 'node'), hookBin: resolve(dir, 'dist', 'hook-bin.js'), userSettings: file, cwd: dir, schtasks: () => Promise.resolve({ code: 0, output: '' }) };
     const deps = { sessions: undefined, install: runtime, now: () => NOW };
-    await expect(sessionsHookInstall(deps, { scope: undefined, file: undefined, keepRetention: false, schedule: undefined })).rejects.toThrow('--scope file needs --file');
-    await expect(sessionsHookUninstall(deps, { scope: undefined, file: undefined })).rejects.toThrow('--scope file needs --file');
+    await sessionsHookInstall(deps, { scope: undefined, file: undefined, keepRetention: false, schedule: undefined });
+    for (const event of EVENTS) expect(commandsOf(await readSettings(file), event)).toHaveLength(1);
+    await sessionsHookUninstall(deps, { scope: undefined, file: undefined });
+    for (const event of EVENTS) expect(commandsOf(await readSettings(file), event)).toEqual([]);
   });
 });
 
