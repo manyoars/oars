@@ -5,10 +5,11 @@ import { fieldOf, wranglerConfig } from './test-pool.js';
 describe('wrangler.jsonc', () => {
   const { parsed, text } = wranglerConfig();
 
-  it('commits no account id, route, custom domain, or plain variable but the two public floors', () => {
+  it('commits no account id, route, custom domain, or plain variable but the two public floors and the two public client IDs', () => {
     for (const key of ['account_id', 'route', 'routes', 'workers_dev', 'env', 'preview_urls']) expect(fieldOf(parsed, key), key).toBeUndefined();
     // A floor is public by design (it is stated in every bundle), so it is a plain variable; `floors.test.ts` holds these to the defaults in the code.
-    expect(Object.keys(fieldOf(parsed, 'vars') ?? {}).sort()).toEqual(['DISCLOSURE_FLOOR', 'PUBLIC_FLOOR']);
+    // A client ID is public (the provider's consent screen and the device-code request show it), so the pool's two are plain variables; Google's client secret is not, and stays a Worker secret.
+    expect(Object.keys(fieldOf(parsed, 'vars') ?? {}).sort()).toEqual(['DISCLOSURE_FLOOR', 'GITHUB_CLIENT_ID', 'GOOGLE_CLIENT_ID', 'PUBLIC_FLOOR']);
     expect(text).not.toMatch(/manyoars\.com|\.workers\.dev/);
   });
 
@@ -30,7 +31,9 @@ describe('wrangler.jsonc', () => {
     expect(text).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/i);
   });
 
-  it('names no secret: the signing key, OAuth values, and covenant version are bindings the deploy sets', () => {
-    for (const binding of ['BUNDLE_SIGNING_KEY', 'PSEUDONYM_KEY', 'GITHUB_CLIENT_ID', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'COVENANT_VERSION']) expect(text).not.toContain(binding);
+  it('names no secret: the signing key, the pseudonym key, the Google client secret, and the covenant version are bindings the deploy sets', () => {
+    for (const binding of ['BUNDLE_SIGNING_KEY', 'PSEUDONYM_KEY', 'COVENANT_VERSION']) expect(text).not.toContain(binding);
+    // The secret is named in a comment for the reader and is no key or value of the config itself.
+    expect(JSON.stringify(parsed)).not.toContain('GOOGLE_CLIENT_SECRET');
   });
 });

@@ -167,7 +167,7 @@ describe('the held cell count', () => {
       await send(target, one, sampleSkeleton('0000000000008502'));
       expect(await clustersOf(target)).toEqual(first);
       const db = await target.db();
-      await db.prepare("UPDATE contributors SET day = '2000-01-01'").run();
+      await db.prepare("UPDATE contributors SET day = '2024-01-01'").run();
       await send(target, one, sampleSkeleton('0000000000008503'));
       expect(await clustersOf(target)).toEqual(first);
       expect(await db.prepare("SELECT COUNT(*) AS count FROM contributors WHERE kind = 'cell'").first('count')).toBe(first.length * 2);
