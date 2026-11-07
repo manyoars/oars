@@ -107,7 +107,7 @@ describe('skeletonOf', () => {
 });
 
 describe('ordinals', () => {
-  it('sends a call and a prompt as positions, never the numbers the session gave them, and no spawner or edge', () => {
+  it('sends a call and a prompt as positions, never the numbers the session gave them, and a spawner and an edge as positions too', () => {
     const from = store({
       sessions: [session('s1', { frame: framed })],
       subagents: [session('s1~agent-x', { parent: 's1', spawnedIn: 's1', frame: framed })],
@@ -123,12 +123,15 @@ describe('ordinals', () => {
     // Calls 3, 7, and 9 are positions 0, 1, and 2; prompts 2 and 4 are positions 0 and 1.
     expect(skeleton?.transcripts[0]?.tools.map((held) => held.prompt)).toEqual([1, 0, 0]);
     expect(skeleton?.transcripts[1]?.tools[0]?.steps[0]?.parent).toBe(1);
+    // The subagent's one step was spawned by main call 7 (position 1), which is step position 1 of the spawning transcript (t869).
+    expect(skeleton?.transcripts.map((held) => held.spawnedIn)).toEqual([null, 0]);
+    expect(skeleton?.transcripts[1]?.tools[0]?.steps[0]?.edges).toEqual([{ kind: 'spawned', target: 1 }]);
     const text = JSON.stringify(skeleton);
-    for (const field of ['"spawnedIn"', '"edges"', '"index"', '"n"', '"seg"']) expect(text).not.toContain(field);
+    for (const field of ['"index"', '"n"', '"seg"']) expect(text).not.toContain(field);
     expect(parseSkeleton(JSON.parse(text))).toEqual({ ok: true, skeleton });
   });
 
-  it('sends no link for a subagent a subagent spawned, whose parent number is not a call of the main run', () => {
+  it('links a subagent a subagent spawned to the call of the subagent that spawned it, not to the main run', () => {
     const from = store({
       sessions: [session('s1', { frame: framed })],
       subagents: [session('s1~agent-x', { parent: 's1', spawnedIn: 's1', frame: framed }), session('s1~agent-y', { parent: 's1', spawnedIn: 's1~agent-x', frame: framed })],
@@ -140,9 +143,10 @@ describe('ordinals', () => {
         tool('s1~agent-y', 0, 'Bash', { parent: 's1', steps: [{ ...shell, parent: 2 }] }),
       ],
     });
-    const parents = skeletonFrom(from)?.transcripts.map((held) => held.tools[0]?.steps[0]?.parent);
-    // Call 2 of agent-x spawned agent-y, which the main run's own call 2 (position 1) did not.
-    expect(parents?.[2]).toBeNull();
+    const skeleton = skeletonFrom(from);
+    // Call 2 of agent-x (position 0 there) spawned agent-y, which the main run's own call 2 (position 1) did not.
+    expect(skeleton?.transcripts.map((held) => held.spawnedIn)).toEqual([null, 0, 1]);
+    expect(skeleton?.transcripts[2]?.tools[0]?.steps[0]?.parent).toBe(0);
   });
 
   it('numbers the prompts a subagent names but does not hold after the ones it holds, one position per number', () => {
@@ -194,7 +198,7 @@ describe('parseSkeleton refuses, and names the field', () => {
     { name: 'the exact number of a call', path: ['transcripts', 0, 'tools', 0, 'n'], value: 3, field: 'transcripts[0].tools[0].n' },
     { name: 'the exact index of a prompt', path: ['transcripts', 0, 'prompts', 0, 'index'], value: 3, field: 'transcripts[0].prompts[0].index' },
     { name: 'a spawner address', path: ['transcripts', 0, 'spawnedIn'], value: 0, field: 'transcripts[0].spawnedIn' },
-    { name: 'a step edge', path: [...firstStep, 'edges'], value: [], field: `${stepField}.edges` },
+    { name: 'a step edge that is no list', path: [...firstStep, 'edges'], value: 'next', field: `${stepField}.edges` },
     { name: 'a private agent name as a subagent type', path: [...firstStep, 'agentType'], value: 'acme-private-agent', field: `${stepField}.agentType` },
     { name: 'a subagent type on a main-run step', path: [...firstStep, 'agentType'], value: 'Explore', field: `${stepField}.agentType` },
     { name: 'a root that is not a SHA-256', path: ['transcripts', 0, 'merkleRoot'], value: 'acme-root', field: 'transcripts[0].merkleRoot' },

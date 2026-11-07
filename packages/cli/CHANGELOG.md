@@ -4,6 +4,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 
 ## Unreleased
 
+- The skeleton carries edges and the spawn link (format 3): a step's `edges` are `{ kind, target }` with `kind` one of `next`, `spawned`, `retried`, and `after-error` and `target` the position of the step it names in its transcript (the client decides `retried`, since the pool holds no raw key), and a transcript's `spawnedIn` is the position of the transcript that spawned it, so a subagent two deep rebuilds its tree from the batch. Only Claude Code fills the spawn link; Codex and Gemini send null. The server refuses an out-of-range target and a `next` that crosses a prompt. Cells are unchanged. Nothing is sent: the batch only grows by the new fields.
 - The skeleton is format 3: a step names its frame (`frame`, a position in the transcript's new `frames` list, which the server refuses when out of range) and the skill whose run it sits in (`skill`, a list member or `private`), and a frame carries `reach` (the MCP servers, skills, and plugins in reach, and `filled`, which says whether the harness recorded any). A call's model and harness version come from its own line, so a model that changes in the middle of a prompt reaches the steps that ran on it. Cells are unchanged. A tool record gains `model` and `skill`. Format 2 batches are refused; nothing is migrated.
 
 ## 0.3.0
