@@ -622,7 +622,7 @@ describe('oars pool deposit', () => {
     expect(outboxFiles(scene)).toEqual(first);
   });
 
-  // t881 fix rounds 1 and 2: the deposit's own gate (the operator's redact domains) decides what the outbox holds, so this goes through the command and reads the written batch. The host is on the public list, so capture keeps it and only the gate can turn it into `private`.
+  // t881 fix rounds 1 and 2: the deposit's own gate (the operator's redact domains) decides what the outbox holds, so this goes through the command and reads the written batch. The host is on the public list, so capture kept it even before t903 and only the gate can turn it into `private`.
   it('writes private for a name the operator redacts, an off-list program in clear, and a public-list host the operator redacts, as private', async () => {
     const SESSION = '66666666-6666-4666-8666-666666666666';
     const folder = 'gate-repo';
@@ -649,6 +649,32 @@ describe('oars pool deposit', () => {
     expect(written).toContain('"host":"private"');
     expect(written).toContain('"server":"private"');
     expect(written).toContain('"program":"acme-deploy"');
+  });
+
+  // t903: capture keeps a skill-run, host, and pull name as it is after redaction, so the one gate sends an off-list one in clear (the pool hashes the host on arrival); there is no second projection.
+  it('writes an off-list host, skill-run name, and pull name in clear, and the command takes the batch', async () => {
+    const SESSION = '77777777-7777-4777-8777-777777777777';
+    const folder = 'long-tail-repo';
+    const stamp = (n: number): string => `2026-06-01T00:00:0${String(n)}.000Z`;
+    const call = (n: number, name: string, input: object): string =>
+      JSON.stringify({ type: 'assistant', uuid: `l-${String(n)}`, parentUuid: n === 1 ? null : `l-${String(n - 1)}`, isSidechain: false, sessionId: SESSION, timestamp: stamp(n), version: '2.1.300', message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: `t${String(n)}`, name, input }] } });
+    const scene = setting();
+    rmSync(join(scene.staged.projectsRoot, 'proj'), { recursive: true, force: true });
+    addProject(scene.staged, folder, SESSION, [
+      JSON.stringify({ type: 'user', uuid: 'l-0', parentUuid: null, isSidechain: false, sessionId: SESSION, cwd: '/w', timestamp: stamp(0), version: '2.1.300', message: { role: 'user', content: 'go' } }),
+      call(1, 'WebFetch', { url: 'https://wiki.longtail-example.dev/page?token=abc123' }),
+      call(2, 'Skill', { skill: 'longtail-release' }),
+      call(3, 'Bash', { command: 'npm install longtail-widget@1.2.3' }),
+    ]);
+    await deposit(scene.staged.runtime, { allow: [folder], redactDomains: [], now: () => NOW });
+    await signIn(scene);
+    expect(await scene.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
+    const written = batchBytes(scene).join('\n');
+    expect(written).toContain('"host":"wiki.longtail-example.dev"');
+    expect(written).toContain('"skill":"longtail-release"');
+    expect(written).toContain('"name":"longtail-widget"');
+    expect(written).not.toContain('abc123');
+    for (const bytes of batchBytes(scene)) expect(parseSkeleton(JSON.parse(bytes)).ok).toBe(true);
   });
 
   describe('the session gates run before any projection', () => {

@@ -16,7 +16,7 @@ interface Call {
 }
 
 /** One prompt holding the given calls. */
-const captured = (calls: readonly Call[], harness?: 'claude-code' | 'cursor'): Capture => {
+const captured = (calls: readonly Call[], harness?: 'claude-code' | 'cursor', domains: readonly string[] = []): Capture => {
   const text = [
     line({ type: 'user', timestamp: '2026-05-29T04:30:00Z', message: { role: 'user', content: 'p' } }),
     ...calls.flatMap((call, index) => [
@@ -24,24 +24,24 @@ const captured = (calls: readonly Call[], harness?: 'claude-code' | 'cursor'): C
       ...(call.failure === undefined ? [] : [line({ type: 'user', timestamp: '2026-05-29T04:30:02Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `t${String(index)}`, is_error: true, content: call.failure }] } })]),
     ]),
   ].join('\n');
-  return captureSession({ text, session: 's', project: 'p', rev: 1, at: 'x', bytes: 1, redact: makeRedactor([]), ...(harness === undefined ? {} : { harness }) });
+  return captureSession({ text, session: 's', project: 'p', rev: 1, at: 'x', bytes: 1, redact: makeRedactor(domains), ...(harness === undefined ? {} : { harness }) });
 };
 
 const capture = (calls: readonly Call[], harness?: 'claude-code' | 'cursor'): ToolObservation[] => captured(calls, harness).tools;
-const stepsOf = (calls: readonly Call[]): StepObservation[] => capture(calls).flatMap((tool) => tool.steps ?? []);
-const shell = (command: string): StepObservation[] => stepsOf([{ name: 'Bash', input: { command } }]);
+const stepsOf = (calls: readonly Call[], domains: readonly string[] = []): StepObservation[] => captured(calls, undefined, domains).tools.flatMap((tool) => tool.steps ?? []);
+const shell = (command: string, domains: readonly string[] = []): StepObservation[] => stepsOf([{ name: 'Bash', input: { command } }], domains);
 
 // The class A and L fields of each record, from the class table in `docs/sessions-store.md`. Named as the fields to drop, so a field added later counts as class P and is checked until someone classes it.
 const NOT_POOLED = {
   session: ['session', 'parent', 'spawnedBy', 'spawnedIn', 'at', 'tsFirst', 'tsLast', 'promptFingerprint', 'repo', 'strata', 'tools', 'fileHashes', 'urls', 'searches', 'branches', 'tldrs', 'confidences', 'project', 'files'],
   prompt: ['session', 'ts', 'head', 'promptFingerprint', 'skills', 'strata'],
-  tool: ['session', 'parent', 'toolUseId', 'ts', 'tool', 'target', 'segments', 'pulls', 'packages', 'manifest', 'commits'],
+  tool: ['session', 'parent', 'toolUseId', 'ts', 'tool', 'target', 'steps', 'segments', 'pulls', 'packages', 'manifest', 'commits'],
   errorLine: ['session', 'toolUseId', 'tool', 'ts', 'line'],
 } as const;
 
 const withoutFields = (record: object, fields: readonly string[]): object => Object.fromEntries(Object.entries(record).filter(([field]) => !fields.includes(field)));
 
-/** Every class P field of the four capture records. */
+/** Every class P field of the four capture records. `steps` is class A since CAPTURE 24 (a skill-run name, a host, and a pull name can be private), so `stepsText` checks it beside this. */
 const pooled = (capture: Capture): string =>
   JSON.stringify([
     withoutFields(capture.session, NOT_POOLED.session),
@@ -76,7 +76,10 @@ describe('a git checkout step keeps the class of its target, never the target', 
   });
 });
 
-describe('identity holds public names only', () => {
+/** The tool records' steps, which hold a skill-run name, a host, and a pull name as they are after redaction (class A), and every other name public. */
+const stepsText = (capture: Capture): string => JSON.stringify(capture.tools.map((tool) => tool.steps));
+
+describe('identity holds public names, and a skill-run, host, and pull name after redaction', () => {
   it('reads a shell step as its program, subcommand, and flag names', () => {
     expect(shell('git push --force origin main')[0]?.identity).toEqual({ program: 'git', sub: 'push', flags: ['--force'] });
   });
@@ -101,8 +104,7 @@ describe('identity holds public names only', () => {
     ['a Windows path holding a username', 'type C:\\Users\\alicesmith\\notes.txt', 'alicesmith'],
     ['a private program by path', '/home/alicesmith/bin/acme-deploy --prod', 'acme-deploy'],
     ['a private script', './scripts/acme-release.sh', 'acme-release'],
-    ['a private package', 'npm install @acme-corp/internal-ledger@1.2.3', 'acme-corp'],
-    ['a private package on a runner', 'npx acme-private-tool --customer=globex', 'acme-private-tool'],
+    ['a value beside a private package on a runner', 'npx acme-private-tool --customer=globex', 'globex'],
     ['a private flag on a public program', 'node run.js --acme-customer-list', 'acme-customer-list'],
     ['a private word where a subcommand goes', 'git acmealias', 'acmealias'],
     ['a private word in a quoted sentence', 'git commit -m "for acme corp"', 'acme'],
@@ -115,6 +117,7 @@ describe('identity holds public names only', () => {
     const failed = captured([{ name: 'Bash', input: { command }, failure: `boom: ${command}` }]);
     expect(failed.errorLines).toHaveLength(1);
     expect(pooled(failed)).not.toContain(value);
+    expect(stepsText(failed)).not.toContain(value);
   });
 
   it('masks a private program and takes no flags from it', () => {
@@ -184,10 +187,19 @@ describe('identity holds public names only', () => {
     expect(shell('cargo add serde@1.0.0')[0]?.identity).toMatchObject({ pulls: [{ registry: 'crates', name: 'serde', version: '1.0.0' }] });
   });
 
-  it('masks a private pull and its version, and a version that is not one', () => {
-    expect(shell('npm install @acme-corp/internal-ledger@1.2.3')[0]?.identity).toMatchObject({ pulls: [{ registry: 'npm', name: '<literal>', version: '<literal>' }] });
-    expect(shell('npm install acme-only')[0]?.identity).toMatchObject({ pulls: [{ registry: 'npm', name: '<literal>', version: null }] });
+  it('masks a pull name whose underscore-delimited part the operator redacts, as it does a host or skill in the same case', () => {
+    // The whole name is unchanged by the redactor (`_` is a word character to it) but its `git.acme.internal` part is not.
+    expect(shell('npm install git.acme.internal_x', ['acme.internal'])[0]?.identity).toMatchObject({ pulls: [{ registry: 'npm', name: '<literal>', version: null }] });
+    expect(stepsOf([{ name: 'Skill', input: { skill: 'git.acme.internal_x' } }], ['acme.internal'])[0]?.identity).toEqual({ skill: '<literal>' });
+  });
+
+  it('keeps a private pull name as written, masks its version, and masks a name that is not one', () => {
+    expect(shell('npm install @acme-corp/internal-ledger@1.2.3')[0]?.identity).toMatchObject({ pulls: [{ registry: 'npm', name: '@acme-corp/internal-ledger', version: '<literal>' }] });
+    expect(shell('npm install acme-only')[0]?.identity).toMatchObject({ pulls: [{ registry: 'npm', name: 'acme-only', version: null }] });
     expect(shell('npm install typescript@beta')[0]?.identity).toMatchObject({ pulls: [{ registry: 'npm', name: 'typescript', version: '<literal>' }] });
+    // A name the operator's redaction changed is not a name, and nor is one over the cap.
+    expect(shell('pip install https://pkgs.corp.example/x.tar.gz', ['corp.example'])[0]?.identity).toMatchObject({ pulls: [{ registry: 'pypi', name: '<literal>', version: null }] });
+    expect(shell(`npm install ${'a'.repeat(129)}`)[0]?.identity).toMatchObject({ pulls: [{ registry: 'npm', name: '<literal>', version: null }] });
   });
 
   it('masks a version whose suffix is a private build tag, and keeps digits and release words', () => {
@@ -214,6 +226,7 @@ describe('identity holds public names only', () => {
     expect(stepsOf([call])[0]).toMatchObject({ action: 'mcp.call', native: '<literal>', identity: { server: '<literal>', tool: '<literal>' } });
     expect(pooled(captured([call]))).not.toContain('acme');
     expect(pooled(captured([call]))).not.toContain('ledger');
+    expect(stepsText(captured([call]))).not.toContain('ledger');
   });
 
   it('masks a tool name on a public server that is not shaped like one', () => {
@@ -226,8 +239,9 @@ describe('identity holds public names only', () => {
       const masked = { native: '<literal>', identity: { server, tool: '<literal>' } };
       expect(stepsOf([call])[0]).toMatchObject({ action: 'mcp.call', ...masked });
       expect(pooled(captured([call]))).not.toContain('acme');
+      expect(stepsText(captured([call]))).not.toContain('acme');
       // Codex spells a call the same way, and the capture path reaches it through this function once its adapter lands.
-      expect(callIdentity(ACTION_TABLES.codex, 'mcp.call', name, '<literal>', { skill: undefined, url: undefined })).toEqual(masked);
+      expect(callIdentity(ACTION_TABLES.codex, 'mcp.call', name, '<literal>', { skill: undefined, url: undefined, redact: makeRedactor([]) })).toEqual(masked);
     }
   });
 
@@ -239,7 +253,7 @@ describe('identity holds public names only', () => {
     expect(stepsOf([{ name: 'mcp__postgres__query', input: {} }])[0]).toMatchObject({ native: 'mcp__postgres__query', identity: { server: 'postgres', tool: 'query' } });
     expect(stepsOf([{ name: 'mcp__sequential-thinking__sequentialthinking', input: {} }])[0]).toMatchObject({ identity: { server: 'sequential-thinking', tool: 'sequentialthinking' } });
     // Codex has no recall row, so its recall call reads as an MCP call through the same list.
-    expect(callIdentity(ACTION_TABLES.codex, 'mcp.call', 'mcp__oars__oars_recall', '<literal>', { skill: undefined, url: undefined })).toEqual({ native: 'mcp__oars__oars_recall', identity: { server: 'oars', tool: 'oars_recall' } });
+    expect(callIdentity(ACTION_TABLES.codex, 'mcp.call', 'mcp__oars__oars_recall', '<literal>', { skill: undefined, url: undefined, redact: makeRedactor([]) })).toEqual({ native: 'mcp__oars__oars_recall', identity: { server: 'oars', tool: 'oars_recall' } });
   });
 
   it('seeds tools only under a server the list itself makes public', () => {
@@ -250,24 +264,29 @@ describe('identity holds public names only', () => {
     expect(stepsOf([{ name: 'mcp__notion__search', input: {} }])[0]).toMatchObject({ native: '<literal>', identity: { server: 'notion', tool: '<literal>' } });
   });
 
-  it('reads a public skill, and masks a private one', () => {
+  it('keeps a skill-run name as written, and masks one that is not a name', () => {
     expect(stepsOf([{ name: 'Skill', input: { skill: 'pdf' } }])[0]?.identity).toEqual({ skill: 'pdf' });
-    expect(stepsOf([{ name: 'Skill', input: { skill: 'acme-release' } }])[0]?.identity).toEqual({ skill: '<literal>' });
+    expect(stepsOf([{ name: 'Skill', input: { skill: 'acme-release' } }])[0]?.identity).toEqual({ skill: 'acme-release' });
+    expect(stepsOf([{ name: 'Skill', input: { skill: 'plugin:acme-release' } }])[0]?.identity).toEqual({ skill: 'plugin:acme-release' });
+    for (const skill of ['acme release', 'a/b', 'a'.repeat(129), 'build.acme.internal']) {
+      expect(stepsOf([{ name: 'Skill', input: { skill } }], ['acme.internal'])[0]?.identity).toEqual({ skill: '<literal>' });
+    }
     expect(stepsOf([{ name: 'Skill', input: {} }])[0]?.identity).toEqual({ skill: '<literal>' });
   });
 
-  it('reads a public host, and masks any other', () => {
+  it('keeps a host as written without its credentials, path, and query, and masks one the operator redacts', () => {
     expect(stepsOf([{ name: 'WebFetch', input: { url: 'https://github.com/acme/private?token=abc' } }])[0]?.identity).toEqual({ host: 'github.com' });
     const call = { name: 'WebFetch', input: { url: 'https://alice:s3cretpw@corp.example/acme?token=abc' } };
-    expect(stepsOf([call])[0]?.identity).toEqual({ host: '<literal>' });
+    expect(stepsOf([call])[0]?.identity).toEqual({ host: 'corp.example' });
+    expect(JSON.stringify(captured([call]).tools.map((tool) => tool.steps))).not.toMatch(/s3cretpw|alice|acme\//);
     expect(pooled(captured([call]))).not.toContain('s3cretpw');
-    expect(pooled(captured([call]))).not.toContain('corp.example');
+    expect(stepsOf([{ name: 'WebFetch', input: { url: 'https://git.acme.internal/x' } }], ['acme.internal'])[0]?.identity).toEqual({ host: '<literal>' });
+    expect(stepsOf([{ name: 'WebFetch', input: { url: `https://${'a'.repeat(130)}.example/x` } }])[0]?.identity).toEqual({ host: '<literal>' });
   });
 
-  it('does not take a public name as a part of a host', () => {
-    for (const url of ['https://acme.github.io/x', 'https://github.com.acme.example/x', 'https://notgithub.com/x', 'not a url']) {
-      expect(stepsOf([{ name: 'WebFetch', input: { url } }])[0]?.identity).toEqual({ host: '<literal>' });
-    }
+  it('does not take a public name as a part of a host, and masks an address that is not one', () => {
+    expect(stepsOf([{ name: 'WebFetch', input: { url: 'https://acme.github.io/x' } }])[0]?.identity).toEqual({ host: 'acme.github.io' });
+    expect(stepsOf([{ name: 'WebFetch', input: { url: 'not a url' } }])[0]?.identity).toEqual({ host: '<literal>' });
   });
 
   it('gives a search and a fetch with no address no host', () => {
@@ -291,5 +310,6 @@ describe('identity holds public names only', () => {
     const [tool] = capture([call], 'cursor');
     expect(tool?.steps?.[0]).toMatchObject({ action: 'mcp.call', native: '<literal>', identity: { server: 'postgres', tool: '<literal>' } });
     expect(pooled(captured([call], 'cursor'))).not.toContain('acme');
+    expect(stepsText(captured([call], 'cursor'))).not.toContain('acme');
   });
 });
