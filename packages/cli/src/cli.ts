@@ -390,7 +390,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
 
   hook
     .command('install')
-    .description('merge the SessionStart, PreToolUse, PostToolUseFailure, and SessionEnd hooks into a settings file (existing hooks are kept), raise cleanupPeriodDays to at least 365, and on Windows register the nightly task (which sends telemetry while telemetry is on, and pool batches only after you accept a pool covenant)')
+    .description('merge the SessionStart, UserPromptSubmit, PreToolUse, PostToolUseFailure, and SessionEnd hooks into a settings file (existing hooks are kept), raise cleanupPeriodDays to at least 365, and on Windows register the nightly task (which sends telemetry while telemetry is on, and pool batches only after you accept a pool covenant)')
     .option('--scope <scope>', 'user (~/.claude/settings.json; the default), project (./.claude/settings.json), or file (needs --file; implied by --file)', scopeOption)
     .option('--file <path>', 'the settings file for --scope file')
     .option('--keep-retention', 'leave cleanupPeriodDays as it is (the harness deletes raw transcripts older than it)')
