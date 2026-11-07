@@ -53,7 +53,8 @@ const fileDigests = (): { [file: string]: string } => Object.fromEntries(Object.
 
 /**
  * Each VOCAB_VERSION with the digest of every snapshot file's bytes and of the curated lists. Append an entry for a new version; never edit a
- * published one. A snapshot or curated list that changes without a new entry here fails the first test below.
+ * published one, except to repin `curated` in place when the only change is to a list the pool does not read (a list the pool reads is
+ * a new version). A snapshot or curated list that changes without a new entry here fails the first test below.
  */
 const PINNED: { readonly [version: string]: { readonly files: { readonly [file: string]: string }; readonly curated: string } } = {
   '1': {
