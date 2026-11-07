@@ -208,7 +208,7 @@ describe('the fleet read, from the nightly rollup, on the Worker', () => {
       for (let at = 1; at <= K_CELL; at += 1) await keep(pool, daysAgo(10), uuid(at), Array.from({ length: 10 }, () => hook(50)));
       for (const at of [1, 2]) await keep(pool, daysAgo(3), uuid(at), [hook(50)]);
       for (const day of [45, 10, 3]) await rollupDayFor(pool, daysAgo(day));
-      const real = await pool.db();
+      const { DB: real } = await pool.miniflare.getBindings<Bindings>();
       const asked: string[] = [];
       const recording: PoolDb = {
         prepare: (sql) => ({
