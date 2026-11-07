@@ -400,13 +400,16 @@ export interface HookTarget {
   file: string | undefined;
 }
 
+/** `--scope`, else `file` when `--file` names one, else the user settings. */
+const hookScope = (options: HookTarget): Scope => options.scope ?? (options.file === undefined ? 'user' : 'file');
+
 export const sessionsHookInstall = async (deps: SessionsDeps, options: HookTarget & { keepRetention: boolean; schedule: 'nightly' | 'off' | undefined }): Promise<Outcome> => {
   const runtime = installOf(deps);
   const lines: string[] = [];
   const document: { ok: true; install?: object; schedule?: string } = { ok: true };
-  // `--schedule` alone touches no settings file: nothing is written to one the operator has not named.
+  // `--schedule` alone touches no settings file: it names the task, not the hooks.
   if (options.schedule === undefined || options.scope !== undefined || options.file !== undefined) {
-    const file = settingsPath(runtime, options.scope ?? 'file', options.file);
+    const file = settingsPath(runtime, hookScope(options), options.file);
     const result = await installHooks(runtime, file, options.keepRetention);
     document.install = result;
     lines.push(`Installed ${result.installed.join(', ')} hooks in ${file}.`, result.retention);
@@ -421,7 +424,7 @@ export const sessionsHookInstall = async (deps: SessionsDeps, options: HookTarge
 
 export const sessionsHookUninstall = async (deps: SessionsDeps, options: HookTarget): Promise<Outcome> => {
   const runtime = installOf(deps);
-  const file = settingsPath(runtime, options.scope ?? 'file', options.file);
+  const file = settingsPath(runtime, hookScope(options), options.file);
   const result = await uninstallHooks(file);
   const text = result.removed.length === 0 ? `No Many Oars hooks in ${file}.` : `Removed ${result.removed.join(', ')} hooks from ${file}; other settings and hooks are untouched (cleanupPeriodDays is left as it is).`;
   return { document: { ok: true, ...result }, text };
