@@ -508,7 +508,7 @@ const buildProgram = (deps: RunDeps): Command => {
     .command('fetch')
     .description('fetch the signed bundle for one harness version, verify it against the key pinned at login, and keep it locally')
     .option('--harness <name>', 'the harness whose bundle to fetch (default: the one your local store holds the most sessions of, claude-code when none leads)')
-    .requiredOption('--harness-version <version>', 'the public harness version whose bundle to fetch')
+    .requiredOption('--harness-version <version>', 'the public harness version whose bundle to fetch, or unknown for a harness that records none (Cursor, VS Code Copilot Chat, Gemini, Grok)')
     .option(serverOption, serverHelp)
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();

@@ -1257,6 +1257,16 @@ describe('oars pool fetch', () => {
     expect(scene.h.out.join('')).toContain('Fetched claude-code 2.1.9: 2 reads');
   });
 
+  it('fetches the bundle of a harness with no version on record by asking for `unknown`, and keeps it under that name', async () => {
+    const { scene, sign } = await signedScene();
+    const payload = bundleBody('unknown', 'cursor');
+    const signature = await sign(payload);
+    on(scene, 'get', `/bundle/cursor/unknown/${VOCAB_VERSION}`, () => HttpResponse.json({ payload, signature }));
+    expect(await scene.cli('pool', 'fetch', '--harness', 'cursor', '--harness-version', 'unknown', '--server', POOL, '--json')).toBe(ExitCode.OK);
+    expect(scene.document()).toMatchObject({ ok: true, harness: 'cursor', harnessVersion: 'unknown', reads: 2, cells: 1 });
+    expect(replicas(scene)).toHaveLength(1);
+  });
+
   it('refuses a tampered bundle and a bundle of another harness version, and keeps neither', async () => {
     const { scene, sign } = await signedScene();
     const payload = bundleBody('2.1.314');
