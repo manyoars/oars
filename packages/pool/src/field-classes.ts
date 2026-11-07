@@ -1,8 +1,9 @@
 // The pool's class table: one row per field a format 3 batch carries, naming how the pool treats its value. `docs/pool.md`'s wire field register carries the same classes and `field-classes.test.ts` keeps the two equal.
 // A class changes by a deploy of this file, never by a client release: the client redacts and sends every other value as it is (`wireName` in `pool-wire.ts`).
+import { isPublicMcpTool, PUBLIC_FLAGS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SKILLS, PUBLIC_SUBCOMMANDS, publicModel, publicVersion } from '../../cli/src/sessions/public-vocabulary.js';
 
 /**
- * `clear`: a closed list or an opaque client hash, served as it is. `thresholded`: held always and served only once `K_CELL` distinct accounts report the same value (`PUBLIC_FLOOR` replaces it when t888 lands).
+ * `clear`: a closed list or an opaque client hash, served at `CLEAR_FLOOR` (`derive.ts`), today the same as `K_CELL`. `thresholded`: held always and served only once `K_CELL` distinct accounts report the same value (`PUBLIC_FLOOR` replaces it when t888 lands).
  * `hashed at ingest`: replaced by an HMAC-SHA-256 under `INGEST_HASH_KEY` before anything is written. `raw tier`: stored, never served.
  */
 export type FieldClass = 'clear' | 'thresholded' | 'hashed at ingest' | 'raw tier';
@@ -41,7 +42,7 @@ export const FIELD_CLASSES: { readonly [field: string]: FieldRow } = {
   frames: { class: 'clear' },
   frameworks: { class: 'clear' },
   harness: { class: 'clear' },
-  harnessVersion: { class: 'clear' },
+  harnessVersion: { class: 'clear', longTail: 'thresholded' },
   hour: { class: 'clear' },
   host: { class: 'hashed at ingest' },
   id: { class: 'clear' },
@@ -59,7 +60,7 @@ export const FIELD_CLASSES: { readonly [field: string]: FieldRow } = {
   mcp: { class: 'clear', longTail: 'thresholded' },
   merkleRoot: { class: 'clear' },
   metric: { class: 'clear' },
-  model: { class: 'clear' },
+  model: { class: 'clear', longTail: 'thresholded' },
   ms: { class: 'clear' },
   name: { class: 'clear', longTail: 'thresholded' },
   native: { class: 'clear', longTail: 'thresholded' },
@@ -108,3 +109,44 @@ export const FIELD_CLASSES: { readonly [field: string]: FieldRow } = {
 
 /** The class of a field, or undefined when the table has no row for it (a field the client emits with no row fails `field-classes.test.ts`). */
 export const classOf = (field: string): FieldRow | undefined => (Object.hasOwn(FIELD_CLASSES, field) ? FIELD_CLASSES[field] : undefined);
+
+const SHORT_FLAG = /^-[A-Za-z]$/;
+
+/**
+ * Whether the public list of a field names a value. The lists are the ones capture still closes names with (`public-vocabulary.ts`); the pool reads them here so the class of a value is decided on the server, by this file's deploy.
+ * `sub` is listed under its program (`context`), and `tool` under its server. A field with no list has every value listed, so it takes its own class.
+ */
+export const isListed = (field: string, value: string, context?: string): boolean => {
+  switch (field) {
+    case 'model':
+      return publicModel(value) === value;
+    case 'harnessVersion':
+    case 'version':
+      return publicVersion(value) === value;
+    case 'program':
+      return PUBLIC_PROGRAMS.has(value);
+    case 'sub':
+      return PUBLIC_SUBCOMMANDS.get(context ?? '')?.has(value) === true;
+    case 'flags':
+      return PUBLIC_FLAGS.has(value) || SHORT_FLAG.test(value);
+    case 'name':
+      return PUBLIC_PACKAGES.has(value);
+    case 'server':
+    case 'mcp':
+      return PUBLIC_MCP_SERVERS.has(value);
+    case 'tool':
+      return isPublicMcpTool(context ?? '', value);
+    case 'skill':
+    case 'skills':
+      return PUBLIC_SKILLS.has(value);
+    default:
+      return true;
+  }
+};
+
+/** The class a value takes: the field's class on its list, its `longTail` class off it. A field with no row fails closed to `thresholded`. */
+export const classFor = (field: string, listed: boolean): FieldClass => {
+  const row = classOf(field);
+  if (row === undefined) return 'thresholded';
+  return listed ? row.class : (row.longTail ?? row.class);
+};

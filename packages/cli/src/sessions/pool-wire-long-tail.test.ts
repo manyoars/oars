@@ -2,7 +2,7 @@
 // characters counts as redacted, and only that case sends `private`. The class of the name (clear, thresholded, hashed) is the pool's to assign (packages/pool/src/field-classes.ts).
 import { describe, expect, it } from 'vitest';
 import { frame, printOf, prompt, session, sessionsFrom, step, store, tool } from './pool-fixture.js';
-import { isWireName, NAME_MAX, parseSkeleton, skeletonOf, wireName, type SessionSkeleton, type WireGate } from './pool-wire.js';
+import { isWireName, isWirePullName, NAME_MAX, parseSkeleton, skeletonOf, wireName, type SessionSkeleton, type WireGate } from './pool-wire.js';
 import { shellReader } from './projection.js';
 import { LITERAL, PRIVATE } from './public-vocabulary.js';
 import { makeRedactor } from './redact.js';
@@ -32,9 +32,16 @@ const shell = (program: string, run: string): Call => ({
 
 describe('the wire name shape', () => {
   it('takes a name and refuses a command line, a path, an email, and a name over the limit', () => {
-    for (const name of ['kubectl', 'g++', 'python3.11', '@scope/pkg', 'github.com', 'mcp__acme__get_issue', 'a-b_c']) expect(isWireName(name), name).toBe(true);
-    for (const name of ['', 'rm -rf x', '/usr/bin/x', 'C:\\x', 'a@b.co', '$(whoami)', 'FOO=bar', 'x'.repeat(NAME_MAX + 1)]) expect(isWireName(name), name).toBe(false);
+    for (const name of ['kubectl', 'g++', 'python3.11', 'github.com', 'mcp__acme__get_issue', 'a-b_c']) expect(isWireName(name), name).toBe(true);
+    for (const name of ['', 'rm -rf x', '/usr/bin/x', 'src/acme/plan.md', '@scope/pkg', 'C:\\x', 'a@b.co', '$(whoami)', 'FOO=bar', 'x'.repeat(NAME_MAX + 1)]) expect(isWireName(name), name).toBe(false);
     expect(isWireName('x'.repeat(NAME_MAX))).toBe(true);
+    // Only a pull's package name may hold a `/`, as a scope or a module path.
+    for (const name of ['@scope/pkg', 'golang.org/x/tools', 'kubectl']) expect(isWirePullName(name), name).toBe(true);
+    for (const name of ['/usr/bin/x', 'a//b', 'C:\\x', 'x'.repeat(NAME_MAX + 1)]) expect(isWirePullName(name), name).toBe(false);
+    // The same path is a name nowhere else, and a pull's own shape does not widen the gate for other fields.
+    expect(wireName(gate, 'src/acme/plan.md')).toBe(PRIVATE);
+    expect(wireName(gate, '@scope/pkg')).toBe(PRIVATE);
+    expect(wireName(gate, '@scope/pkg', isWirePullName)).toBe('@scope/pkg');
   });
 });
 

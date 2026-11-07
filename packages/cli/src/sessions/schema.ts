@@ -30,9 +30,9 @@
 // reads, not moved ones. A Copilot CLI session with rotated `events.N.jsonl` archives is now read as one session, so its `prompts`, `tools`, `lines`, and skeleton move; one
 // with no archives is unchanged. EXTRACTOR stays 11. A version-16 store's next deposit captures every transcript again from the harness or `raw/`.
 //
-// Version 20 (CAPTURE 20, t870) adds the optional `targetClass` and `argClass` to a tool call (`call-shape.ts`): the class of its path target (`source`, `test`, `config`, `doc`, `lockfile`, `generated`, `data`, `none`, `other`) and the sorted set
+// Version 22 (CAPTURE 22, t870) adds the optional `targetClass` and `argClass` to a tool call (`call-shape.ts`): the class of its path target (`source`, `test`, `config`, `doc`, `lockfile`, `generated`, `data`, `none`, `other`) and the sorted set
 // of the classes of its arguments (`path`, `url`, `pattern`, `command`, `number`, `flag`, `text`, `none`), each computed from the path and the input at capture and stored as a closed-list member, never the path or a value. It changes no value
-// captured before, so EXTRACTOR stays 12; a version-19 store's next deposit captures every transcript again, and a call of an older record has neither field.
+// captured before, so EXTRACTOR stays 12; a version-21 store's next deposit captures every transcript again, and a call of an older record has neither field.
 //
 // EXTRACTOR 12 gives a derived prompt the strata of its user-prompt record, so its own `explore` count reaches the pool's wire as a bucket. No transcript is read: a store at
 // 11 re-derives from its log alone.
@@ -88,7 +88,7 @@ import type { RepoSize } from './public-vocabulary.js';
 import type { SessionFunnel, SessionSetup, SessionTrust } from './session-shape.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '20';
+export const CAPTURE_VERSION = '22';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
@@ -135,6 +135,9 @@ export interface Usage {
 /** The five usage categories, in the order a record lists the ones it observed. */
 export const USAGE_FIELDS = ['input', 'cacheWrite', 'cacheRead', 'output', 'thinking'] as const;
 export type UsageField = (typeof USAGE_FIELDS)[number];
+
+/** Whether a stored session or prompt recorded `field`. A record with no `usageObserved` was captured before version 20, when every category read as observed. */
+export const observesUsage = (record: { usageObserved?: readonly UsageField[] }, field: UsageField): boolean => record.usageObserved === undefined || record.usageObserved.includes(field);
 
 export type Harness = 'claude-code' | 'cursor' | 'codex' | 'copilot' | 'gemini' | 'grok' | 'vscode-copilot';
 
@@ -484,9 +487,9 @@ export interface ToolObservation {
   targetBase: TargetBase | null;
   /** The input's key names, sorted. Class A (EXTRACTOR 11). */
   keys: string[];
-  /** The class of the call's path target (`targetClassOf`): a member of `TARGET_CLASSES`, `none` for a call with no path target. Absent on a record captured before CAPTURE 20. Class P: a closed list, never the path or its base name. */
+  /** The class of the call's path target (`targetClassOf`): a member of `TARGET_CLASSES`, `none` for a call with no path target. Absent on a record captured before CAPTURE 22. Class P: a closed list, never the path or its base name. */
   targetClass?: TargetClass;
-  /** The classes of the call's arguments (`argClassOf`), a sorted set of `ARG_CLASSES` members, `['none']` for a call with no argument value. Absent on a record captured before CAPTURE 20. Class P: never a value. */
+  /** The classes of the call's arguments (`argClassOf`), a sorted set of `ARG_CLASSES` members, `['none']` for a call with no argument value. Absent on a record captured before CAPTURE 22. Class P: never a value. */
   argClass?: ArgClass[];
   /** The class of a failed call (`errorCodeOf`): a member of `ERROR_CODES`, never result text. Absent on a call that did not fail and on a record captured before CAPTURE 14. Class P. */
   errorCode?: string;

@@ -321,7 +321,9 @@ describe('parseSkeleton refuses, and names the field', () => {
     expect(verdictOf(withStep({ identity: { program: PRIVATE, sub: null, flags: ['--force'] } }))).toBe(`${stepField}.identity.flags`);
     expect(verdictOf(withStep({ identity: { program: PRIVATE, sub: null, flags: [], pulls: [] } }))).toBe(`${stepField}.identity.pulls`);
     expect(verdictOf(withStep({ identity: { program: 'git', sub: 'push', flags: ['-f', '--force'] } }))).toBe('accepted');
-    expect(verdictOf(withStep({ identity: { program: 'git', sub: 'push', flags: ['-force'] } }))).toBe('other');
+    expect(verdictOf(withStep({ identity: { program: 'git', sub: 'push', flags: ['-force'] } }))).toBe('other'); // a single-dash token longer than one letter may hold a value (`-psecret`), so it is no flag name unless the public flag list holds it (`-NoProfile`)
+    expect(verdictOf(withStep({ identity: { program: 'git', sub: 'push', flags: ['--force=1'] } }))).toBe('other');
+    expect(verdictOf(withStep({ identity: { program: 'git', sub: 'push', flags: ['--password:hunter2'] } }))).toBe('other'); // a `:` joins a value to a long flag, so it is no flag name
   });
 
   it('holds MCP, skill, and web identities to the shape of a name', () => {
@@ -360,9 +362,10 @@ describe('parseSkeleton refuses, and names the field', () => {
     const pull = (version: string): unknown => withStep({ identity: { program: 'npm', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version }] } });
     for (const version of ['1.2.3', '^4.0.0', 'v2.x', '1.2.3-rc.1', '1.0.0-beta.2', '1.0.0-next.20250101', '1.0.0+5']) expect(verdictOf(pull(version))).toBe('accepted');
     for (const version of ['1.0.0-acme-secret', '1.0.0+sha.5114f85', '1.0.0-rc.acme', '1.0.0-', '1.0.0-SNAPSHOT']) expect(verdictOf(pull(version))).toBe('other');
+    // A harness version is a name the pool classes (t900): any name takes, and a value that is no name is set aside.
     const harness = (version: string): string => verdictOf(sent(['transcripts', 0, 'frame', 'harnessVersion'], version));
-    for (const version of ['2.1.314', '2.0.0-beta.1', '1.7.0-nightly', '2.0.0-dev.20250101']) expect(harness(version)).toBe('accepted');
-    for (const version of ['1.0.0-acme-secret', '1.0.0.acme', '1.0.0+abc123']) expect(harness(version)).toBe('other');
+    for (const version of ['2.1.314', '2.0.0-beta.1', '1.0.0-acme-secret', '1.0.0+abc123']) expect(harness(version)).toBe('accepted');
+    for (const version of ['1.0.0 acme', '/x/y']) expect(harness(version)).toBe('other');
   });
 
   // A tool beside a server travels by name when the harness's spelling delimits the server; a value that is no name is set aside.
