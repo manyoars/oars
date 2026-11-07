@@ -4,7 +4,7 @@
 // here is projected or uploaded.
 //
 // One collector per transcript, fed line by line by `captureSession`. It reads the Claude Code line shapes (a census of 2.1.312 to 2.1.318) and
-// two neutral lines an adapter may write for a harness whose records are not Claude-shaped (`oars-tools`, `oars-interrupt`).
+// one neutral line an adapter may write for a harness whose records are not Claude-shaped (`oars-tools`).
 
 import type { Harness } from './schema.js';
 

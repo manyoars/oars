@@ -256,6 +256,31 @@ describe('a Codex or Gemini decline is read by its fixed text and nothing else',
     expect(await interventions('codex', () => lines, 'rejected', 'edit')).toEqual(['unknown']);
   });
 
+  // The four decline forms `error-code.test.ts` classes `user-rejected` reach the bucket too, and a cancellation that names no user does not.
+  const geminiError = (error: string): string => {
+    const call = { id: 'b', name: 'run_shell_command', args: { command: 'rm x' }, status: 'cancelled', timestamp: T(3), result: [{ functionResponse: { id: 'b', name: 'run_shell_command', response: { error } } }] };
+    const records: object[] = [
+      geminiHead('sess-1'),
+      { id: 'u1', timestamp: T(1), type: 'user', content: [{ text: 'change the field' }] },
+      { id: 'g1', timestamp: T(2), type: 'gemini', content: '', model: 'gemini-2.5-pro', toolCalls: [call] },
+      { id: 'u2', timestamp: T(5), type: 'user', content: [{ text: 'go on' }] },
+    ];
+    return chatLines(asText(records), 'sess', '/work/app').map((entry) => JSON.stringify(entry)).join('\n');
+  };
+
+  it.each([
+    ['a call the user cancelled', '[Operation Cancelled] User cancelled tool execution.'],
+    ['a denial at the confirmation prompt', '[Operation Cancelled] Reason: User denied execution.'],
+    ['a batch call the user cancelled', '[Operation Cancelled] Reason: User cancelled operation'],
+    ['a batch call cancelled by the user', '[Operation Cancelled] Reason: Operation cancelled by user'],
+  ])('reads a Gemini %s: user-stop', async (_name, error) => {
+    expect(await interventions('gemini', () => geminiError(error), 'rejected', 'edit')).toEqual(['user-stop', 'unknown']);
+  });
+
+  it('does not read a Gemini cancellation that names no user', async () => {
+    expect(await interventions('gemini', () => geminiError('[Operation Cancelled] Reason: Operation cancelled.'), 'rejected', 'edit')).not.toContain('user-stop');
+  });
+
   it('does not read a Codex turn_aborted whose reason is the harness own', async () => {
     const lines = [
       rolloutLine(T(0), 'session_meta', { id: 'sess-1', session_id: 'sess-1', timestamp: T(0), cwd: '/work/app', originator: 'codex_cli_rs', cli_version: '0.50.0' }),
