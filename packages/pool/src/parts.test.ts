@@ -228,6 +228,66 @@ describe('a deposit past the request cap', () => {
     expect(staged).toEqual([]);
   });
 
+  it('stages no host in clear: a host in an early part is unreadable in every deposit_parts row until the join (t907)', async () => {
+    const pool = await startPool();
+    try {
+      const token = await signedIn(pool, '9010');
+      const host = 'private-host.internal.example.com';
+      const batch = sha('a batch with a host in its first part');
+      const early = `{"identity":{"host":"${host}"},"hostLiteral":"${host}"`;
+      expect((await pool.post('/v1/deposits', early, token, partHeaders(batch, 1, 3))).status).toBe(202);
+      expect((await pool.post('/v1/deposits', ',"more":1', token, partHeaders(batch, 2, 3))).status).toBe(202);
+      const db = await pool.db();
+      const staged = (await db.prepare('SELECT body FROM deposit_parts').all()).results;
+      expect(staged).toHaveLength(2);
+      for (const row of staged) {
+        const body = String(Object.values(row)[0]);
+        expect(body).not.toContain(host);
+        expect(body).not.toContain(early.slice(0, 12));
+      }
+    } finally {
+      await pool.dispose();
+    }
+  }, 120_000);
+
+  it('seals each staged part under its own IV, so the same text staged twice reads differently, and the join still hashes to the batch', async () => {
+    const pool = await startPool();
+    try {
+      const token = await signedIn(pool, '9011');
+      const piece = 'x'.repeat(64);
+      const batch = sha(piece + piece);
+      await pool.post('/v1/deposits', piece, token, partHeaders(batch, 1, 3));
+      await pool.post('/v1/deposits', piece, token, partHeaders(batch, 2, 3));
+      const bodies = (await (await pool.db()).prepare('SELECT body FROM deposit_parts ORDER BY part').all()).results.map((row) => String(Object.values(row)[0]));
+      expect(bodies[0]).not.toBe(bodies[1]);
+    } finally {
+      await pool.dispose();
+    }
+  }, 120_000);
+
+  it('refuses a join whose staged part was tampered with, or sealed under another key, as a part_mismatch, and forgets the batch', async () => {
+    const pool = await startPool();
+    try {
+      const token = await signedIn(pool, '9012');
+      const parts = ['{"a":', '1}'];
+      const batch = sha(parts.join(''));
+      expect((await pool.post('/v1/deposits', parts[0] ?? '', token, partHeaders(batch, 1, 2))).status).toBe(202);
+      const db = await pool.db();
+      const sealed = String(await db.prepare('SELECT body FROM deposit_parts WHERE part = 1').first('body'));
+      // Flip one character of the sealed text: the tag no longer verifies.
+      const flipped = `${sealed.slice(0, -2)}${sealed.at(-2) === 'A' ? 'B' : 'A'}${sealed.slice(-1)}`;
+      await db.prepare('UPDATE deposit_parts SET body = ? WHERE part = 1').bind(flipped).run();
+      expect(await pool.post('/v1/deposits', parts[1] ?? '', token, partHeaders(batch, 2, 2))).toMatchObject({ status: 400, json: { error: 'part_mismatch' } });
+      expect(await rows(pool, `SELECT COUNT(*) AS count FROM deposit_parts WHERE batch = '${batch}'`)).toBe(0);
+      // Text that is not a sealed part at all fails the same way.
+      expect((await pool.post('/v1/deposits', parts[0] ?? '', token, partHeaders(batch, 1, 2))).status).toBe(202);
+      await db.prepare('UPDATE deposit_parts SET body = ? WHERE part = 1').bind('{"a":').run();
+      expect(await pool.post('/v1/deposits', parts[1] ?? '', token, partHeaders(batch, 2, 2))).toMatchObject({ status: 400, json: { error: 'part_mismatch' } });
+    } finally {
+      await pool.dispose();
+    }
+  }, 120_000);
+
   it('is refused past what one stored row can hold, and a body that is not a skeleton is refused by name', async () => {
     const pool = await startPool();
     try {
