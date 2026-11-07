@@ -311,11 +311,13 @@ export const wireName = (gate: WireGate, name: string, hasShape: (name: string) 
 
 const FLAG_DASHES = /^-{1,2}/;
 const SHORT_FLAG = /^-[A-Za-z]$/;
+// The long form has its own shape, with no `:` (the joiner `WIRE_NAME` allows for `scope:name`), because `--password:hunter2` is a value joined to its flag and no part of it is a name.
+const LONG_FLAG = /^--[A-Za-z0-9][A-Za-z0-9_.+-]*$/;
 /**
- * The shape of a flag name: a long flag (two dashes, then a name) or a short one (one dash, one letter). A value joined to its flag fails it: `--token=abc`, and a short flag with its value attached
- * (`-psecret123`, `-uuser:pass`), which is why a single-dash token longer than one letter is never a name.
+ * The shape of a flag name: a long flag (two dashes, then a name with no `:`) or a short one (one dash, one letter). A value joined to its flag fails it: `--token=abc`, `--password:hunter2`, and a short flag with its
+ * value attached (`-psecret123`, `-uuser:pass`), which is why a single-dash token longer than one letter is never a name.
  */
-const isWireFlag = (flag: string): boolean => SHORT_FLAG.test(flag) || (flag.startsWith('--') && flag.length <= NAME_MAX && isWireName(flag.slice(2)));
+const isWireFlag = (flag: string): boolean => SHORT_FLAG.test(flag) || (flag.length <= NAME_MAX && LONG_FLAG.test(flag));
 
 /** A flag name as the wire holds it: the name after the one gate, or `private` when it counts as redacted. Only the name is ever read, never a value. */
 const wireFlag = (gate: WireGate, flag: string): string => (isWireFlag(flag) && wireName(gate, flag.replace(FLAG_DASHES, '')) !== PRIVATE ? flag : PRIVATE);
