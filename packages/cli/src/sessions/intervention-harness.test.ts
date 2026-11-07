@@ -1,6 +1,6 @@
 // `intervention` through each harness's own adapter (t882, Item 2): the same scenarios, written in each harness's native transcript form, captured, and derived. The rule reads only the normalized
 // records, so a harness supports a bucket as far as its adapter fills `Edit`, `Bash`, `status`, `target`, and `segments`; this file is that proof, harness by harness. The shapes follow the ones
-// codex.test.ts, copilot.test.ts, gemini.test.ts, and grok.test.ts cite; no live store was read.
+// codex.test.ts, copilot.test.ts, gemini.test.ts, grok.test.ts, and pi.test.ts cite; no live store was read.
 import { afterEach, describe, expect, it } from 'vitest';
 import { rolloutLines } from './codex.js';
 import { openCursorStore } from './cursor.js';
@@ -9,11 +9,12 @@ import { deriveSession } from './derive.js';
 import { captureSession } from './extract.js';
 import { chatLines } from './gemini.js';
 import { grokLines } from './grok.js';
+import { piLines } from './pi.js';
 import { makeRedactor } from './redact.js';
 import { makeRepoIdentity, makeRepoRoot } from './repo-root.js';
 import type { Harness, PromptIntervention } from './schema.js';
 import { chatData, chatLines as vscodeChatLines } from './vscode-copilot.js';
-import { cleanup, copilotEvent, geminiHead, grokUpdate, rolloutLine, stage, stageCursor, type FixtureBubble } from './test-support.js';
+import { cleanup, copilotEvent, geminiHead, grokUpdate, piEntry, piHeader, rolloutLine, stage, stageCursor, type FixtureBubble } from './test-support.js';
 
 afterEach(cleanup);
 
@@ -196,12 +197,38 @@ const cursor = async (turns: readonly Turn[]): Promise<string> => {
   }
 };
 
+/** Pi: one `message` entry per line, each naming the one before it as its parent; the entry time is ISO and the message's own time is Unix ms (docs/session-format.md:49-59). A failed shell call is `isError` with the "Command exited with code N" suffix (tools/bash.ts:434-440). */
+const pi = (turns: readonly Turn[]): string => {
+  const entries: object[] = [piHeader()];
+  let parent: string | null = null;
+  let id = 0;
+  const add = (body: object): void => {
+    id += 1;
+    const second = next();
+    entries.push(piEntry('message', `e${String(id)}`, parent, T(second), { message: { ...body, timestamp: Date.parse(T(second)) } }));
+    parent = `e${String(id)}`;
+  };
+  for (const turn of turns) {
+    add({ role: 'user', content: turn.text });
+    for (const act of turn.acts) {
+      const call = `c${String(id)}`;
+      const args = isEdit(act) ? { path: `/work/app/${act.edit}`, edits: [{ oldText: 'a', newText: 'b' }] } : { command: act.run };
+      const name = isEdit(act) ? 'edit' : 'bash';
+      add({ role: 'assistant', content: [{ type: 'toolCall', id: call, name, arguments: args }], api: 'anthropic-messages', provider: 'anthropic', model: 'claude-sonnet-4-5', stopReason: 'toolUse' });
+      const failed = !isEdit(act) && act.exit !== 0;
+      add({ role: 'toolResult', toolCallId: call, toolName: name, content: [{ type: 'text', text: failed ? `failed\n\nCommand exited with code ${String(isEdit(act) ? 0 : act.exit)}` : 'ok' }], isError: failed });
+    }
+  }
+  return piLines(asText(entries), 'sess').map((entry) => JSON.stringify(entry)).join('\n');
+};
+
 const BUILDERS: readonly (readonly [Harness, (turns: readonly Turn[]) => string | Promise<string>])[] = [
   ['claude-code', claudeCode],
   ['codex', codex],
   ['copilot', copilot],
   ['gemini', gemini],
   ['grok', grok],
+  ['pi', pi],
   ['vscode-copilot', vscode],
   ['cursor', cursor],
 ];
