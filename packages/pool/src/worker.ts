@@ -1,6 +1,5 @@
 // The pool server: a Workers fetch handler over one D1 database. Deposits take closed-vocabulary skeletons only, and a refusal names the field.
 import { parseSkeleton, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
-import type { Frame } from '../../cli/src/sessions/schema.js';
 import { batchCounts, batchTier } from './access.js';
 import { fetchBundle, harnessRequired } from './bundle.js';
 import { covenantAccept, covenantNotAccepted, covenantStatus, depositsClosed, hasAccepted } from './covenant.js';
@@ -27,7 +26,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** The field of a frame dated after tomorrow UTC. A forged day would set the pool's `lastDay`, so `asOf` and every adoption read would follow it. Tomorrow passes because a client's clock can run a little ahead. Here and not in `parseSkeleton`, which has no clock. */
 const futureDayField = ({ transcripts }: SessionSkeleton, now: number): string | undefined => {
   const tomorrow = new Date(now + DAY_MS).toISOString().slice(0, 10);
-  const late = ({ day }: Frame): boolean => day !== null && day > tomorrow;
+  const late = ({ day }: { readonly day: string | null }): boolean => day !== null && day > tomorrow;
   for (const [at, { frame, prompts }] of transcripts.entries()) {
     if (late(frame)) return `transcripts[${String(at)}].frame.day`;
     const index = prompts.findIndex((entry) => late(entry.frame));
@@ -56,12 +55,14 @@ const deposit = async (request: Request, env: Env): Promise<Response> => {
   const parsed = parseSkeleton(body);
   if (!parsed.ok) return refuse(422, 'closed_vocabulary', `${parsed.field}: ${parsed.reason}`, parsed.field);
   // The parsed skeleton is what is stored, not the text that came in: it holds only the fields that were read.
-  const { skeleton } = parsed;
+  const { skeleton, extensions, others } = parsed;
   const lateField = futureDayField(skeleton, Date.now());
   if (lateField !== undefined) return refuse(422, 'closed_vocabulary', `${lateField}: later than tomorrow UTC`, lateField);
   const limit = wholeBinding(env.MAX_DEPOSITS_PER_ACCOUNT, DEFAULT_MAX_DEPOSITS);
   const budget = wholeBinding(env.MAX_DEPOSIT_BYTES_PER_ACCOUNT, DEFAULT_MAX_ACCOUNT_BYTES);
   const stored = JSON.stringify(skeleton);
+  // The bag is stored beside the skeleton and read by nothing that serves: ingest reads `skeleton` only, so no cell, read, or bundle is derived from it.
+  const bag = JSON.stringify(extensions);
   // Whether this batch counts toward access is decided here, from the batch and the row it replaces; it is judged at the batch's own tier, which the upsert writes again on a resend: the tier falls on any resend whose root no longer holds, and the date clears only when that resend also writes a cell.
   // `written` is what ingest will write over the row held now, not what the batch derives: a batch sent again unchanged writes nothing and leaves the row's date alone.
   const next = incrementsOf(skeleton);
@@ -73,9 +74,9 @@ const deposit = async (request: Request, env: Env): Promise<Response> => {
   const ingest = crypto.randomUUID();
   // One statement, so two deposits at once cannot both take the last of either limit. A redeposit replaces its own row: it adds no row, so it passes the count at the limit, and only its new size counts against the budget.
   const insert = env.DB.prepare(
-    'INSERT INTO deposits (account, id, skeleton, deltas, tier, counted_at, ingest) SELECT ?, ?, ?, ?, ?, ?, ? WHERE ((SELECT COUNT(*) FROM deposits WHERE account = ?) < ? OR EXISTS (SELECT 1 FROM deposits WHERE account = ? AND id = ?)) AND (SELECT COALESCE(SUM(LENGTH(CAST(skeleton AS BLOB)) + LENGTH(CAST(deltas AS BLOB))), 0) FROM deposits WHERE account = ? AND id <> ?) + ? <= ? ON CONFLICT (account, id) DO UPDATE SET skeleton = excluded.skeleton, deltas = excluded.deltas, tier = excluded.tier, ingest = excluded.ingest, counted_at = CASE WHEN ? = 0 THEN deposits.counted_at WHEN excluded.counted_at IS NULL THEN NULL ELSE COALESCE(deposits.counted_at, excluded.counted_at) END WHERE deposits.ingest = ?',
+    'INSERT INTO deposits (account, id, skeleton, deltas, tier, counted_at, ingest, format, vocab_version, fields_version, extensions, other_values) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ((SELECT COUNT(*) FROM deposits WHERE account = ?) < ? OR EXISTS (SELECT 1 FROM deposits WHERE account = ? AND id = ?)) AND (SELECT COALESCE(SUM(LENGTH(CAST(skeleton AS BLOB)) + LENGTH(CAST(deltas AS BLOB)) + LENGTH(CAST(extensions AS BLOB))), 0) FROM deposits WHERE account = ? AND id <> ?) + ? <= ? ON CONFLICT (account, id) DO UPDATE SET skeleton = excluded.skeleton, deltas = excluded.deltas, tier = excluded.tier, ingest = excluded.ingest, format = excluded.format, vocab_version = excluded.vocab_version, fields_version = excluded.fields_version, extensions = excluded.extensions, other_values = excluded.other_values, counted_at = CASE WHEN ? = 0 THEN deposits.counted_at WHEN excluded.counted_at IS NULL THEN NULL ELSE COALESCE(deposits.counted_at, excluded.counted_at) END WHERE deposits.ingest = ?',
   )
-    .bind(account, skeleton.id, stored, DELTAS, tier, countedAt, ingest, account, limit, account, skeleton.id, account, skeleton.id, new TextEncoder().encode(stored).length + new TextEncoder().encode(DELTAS).length, budget, written > 0 ? 1 : 0, previous?.ingest ?? '');
+    .bind(account, skeleton.id, stored, DELTAS, tier, countedAt, ingest, skeleton.format, skeleton.vocabVersion, skeleton.fieldsVersion, bag, others, account, limit, account, skeleton.id, account, skeleton.id, new TextEncoder().encode(stored).length + new TextEncoder().encode(DELTAS).length + new TextEncoder().encode(bag).length, budget, written > 0 ? 1 : 0, previous?.ingest ?? '');
   // The row and every increment it writes are one transaction; the increments are guarded by the row's `ingest` mark, so a refused deposit writes none of them.
   const [inserted] = await env.DB.batch([insert, ...incrementStatements(env, account, skeleton.id, ingest, new Date().toISOString().slice(0, 10), next, previous?.increments)]);
   if ((inserted?.meta.changes ?? 0) === 0) {

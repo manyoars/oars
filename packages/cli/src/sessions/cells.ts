@@ -2,11 +2,12 @@
 // stay the primary record, so a cell file can be dropped and rebuilt and any later derivation can run over old data. Nothing here reads raw.
 
 import { closedFrame, utcDay } from './frame.js';
-import { classMotif, motifsOf, stepsOfCall, type Motif } from './motif.js';
+import { classMotif, motifName, motifsOf, stepsOfCall, type Motif } from './motif.js';
 import { bucketOf } from './pool-wire.js';
-import { CALL_SHAPE_METHOD, cellRef, contentHash, METHODS } from './read.js';
+import { CALL_SHAPE_METHOD, cellRef, contentHash, METHODS, RECOVERY_EDGE_METHOD } from './read.js';
+import { recoveryCallsOf } from './recovery-calls.js';
 import { NO_RECALLS, type RecallGraph } from './recall-consequence.js';
-import { EXTRACTOR_VERSION, harnessOf, type ErrorObservation, type Frame, type Harness, type PromptObservation, type SessionObservation, type ToolObservation } from './schema.js';
+import { ERROR_CODES, EXTRACTOR_VERSION, harnessOf, type ErrorObservation, type Frame, type Harness, type PromptObservation, type SessionObservation, type ToolObservation } from './schema.js';
 import type { Store } from './store.js';
 
 /** Rule 6: an `index` cell is weekly, except a live cell, which stays at the UTC day. */
@@ -46,6 +47,30 @@ export const EFFORT_CLASS = 'effort:';
  */
 export const effortClass = (effort: string, thinking: number): string => `${EFFORT_CLASS}${effort}/thinking:${String(bucketOf('tokens', thinking))}`;
 
+/**
+ * The two day-cell families of a failed call by its `errorCode` (t868): `error:<code>/<name>` keeps the model and no version beside the code, and `error-version:<code>/<name>` keeps the harness version bucket and no model
+ * (`versionBucketOf`). Each joins three dimensions: name, code, and either model or version. A class motif with no prompt class in it, so a read of prompt classes skips both by prefix (`isPromptClass`).
+ */
+export const ERROR_CLASS = 'error:';
+export const ERROR_VERSION_CLASS = 'error-version:';
+
+/**
+ * The week cell of what followed a failed call (t868): `recovery:<code>/<failed action>><next action>`, where the next action is that of the call right after it in the same prompt, or `none` when nothing
+ * followed. It keeps the harness version bucket and no model, so it joins three dimensions: the failed-to-next edge, code, and version. A class motif with no prompt class in it, like the others.
+ */
+export const RECOVERY_CLASS = 'recovery:';
+export const NO_NEXT = 'none';
+export const recoveryClass = (code: string, failed: string, next: string): string => `${RECOVERY_CLASS}${code}/${failed}>${next}`;
+
+/** The three parts of a recovery class name, or null for a name that is not one. An action name holds no `>` or `/`, and a code holds no `/`. */
+export const parseRecoveryClass = (cls: string): { code: string; failed: string; next: string } | null => {
+  const found = /^recovery:([^/]+)\/([^>/]+)>([^>/]+)$/.exec(cls);
+  return found === null ? null : { code: found[1] ?? '', failed: found[2] ?? '', next: found[3] ?? '' };
+};
+
+/** Whether a class motif names a prompt class, as opposed to one of the side cells (effort, or a failed call's code or what followed it). */
+export const isPromptClass = (cls: string | null): boolean => cls !== null && ![EFFORT_CLASS, ERROR_CLASS, ERROR_VERSION_CLASS, RECOVERY_CLASS].some((prefix) => cls.startsWith(prefix));
+
 /** The frame bucket of a cell that joins no axis. */
 export const NO_AXES = '-';
 
@@ -63,6 +88,9 @@ export const harnessBucket = (version: string | null): string => {
 
 /** Only what most comparisons cross: platform, shell, and stack are on the frame and in the records, so a later extractor can add them without new capture. */
 export const frameBucketOf = (frame: Frame): string => [frame.harness, harnessBucket(frame.harnessVersion), frame.model ?? UNKNOWN].join('/');
+
+/** The frame bucket of a cell that keeps the version and drops the model: `harness/versionBucket/-`. */
+export const versionBucketOf = (frame: Frame): string => [frame.harness, harnessBucket(frame.harnessVersion), NO_AXES].join('/');
 
 export const bucketFields = (bucket: string): { harness: string; harnessBucket: string; model: string } => {
   const [harness = UNKNOWN, version = UNKNOWN, model = UNKNOWN] = bucket.split('/');
@@ -214,6 +242,42 @@ export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): Cell
         }
       }
     }
+    // What followed each failed call that has a code (t868): a week cell per (code, failed action, next action).
+    // A call is read by its first step's action, as a skeleton's is; a record captured before steps has the action its native name maps to.
+    const calls = line.map((call) => ({ side: call.side, prompt: call.prompt, status: call.status, steps: stepsOfCall(call, harness) }));
+    for (const [at, tool] of line.entries()) {
+      const followed = recoveryCallsOf(calls, at);
+      if (followed === null || tool.errorCode === undefined) continue;
+      const code = ERROR_CODES.has(tool.errorCode) ? tool.errorCode : 'other';
+      const motif = classMotif(recoveryClass(code, calls[at]?.steps[0]?.action ?? 'other', followed.next[0] ?? NO_NEXT));
+      motifs.set(motif.motifId, motif);
+      const tally = tallyAt(motif, versionBucketOf(frame), 'week', weekStartOf(frame.day ?? UNKNOWN), false);
+      tally.sessions.add(first.parent);
+      tally.failed += 1;
+    }
+    // The failed calls by their `errorCode` (t868). Rule 6: a day cell exists for a known day only.
+    const failedDay = frame.day ?? UNKNOWN;
+    for (const tool of failedDay === UNKNOWN ? [] : line) {
+      if (tool.status !== 'error' || tool.errorCode === undefined) continue;
+      const code = ERROR_CODES.has(tool.errorCode) ? tool.errorCode : 'other';
+      for (const counted of stepsOfCall(tool, harness)) {
+        if (counted.status !== 'error') continue;
+        // The call's name at both levels: its action alone, and a named call (a flag or a pull would be a second dimension, so those steps are named by program and subcommand alone upstream).
+        for (const { motif: named } of motifsOf([counted])) {
+          if (named.level === 'named' && counted.identity === null) continue;
+          const name = motifName(named);
+          for (const [prefix, bucket] of [[ERROR_CLASS, `${frame.harness}/${NO_AXES}/${frame.model ?? UNKNOWN}`], [ERROR_VERSION_CLASS, versionBucketOf(frame)]] as const) {
+            const motif = classMotif(`${prefix}${code}/${name}`);
+            motifs.set(motif.motifId, motif);
+            const tally = tallyAt(motif, bucket, 'day', failedDay, false);
+            tally.sessions.add(first.parent);
+            tally.failed += 1;
+            tally.tokens += counted.tokens;
+            tally.durationMs += counted.durationMs;
+          }
+        }
+      }
+    }
   }
 
   for (const prompt of store.prompts) {
@@ -255,6 +319,6 @@ const errorRowsRead = (errors: readonly ErrorObservation[]): string[] =>
 export const poolOf = (set: CellSet, errors: readonly ErrorObservation[]): Pool => ({
   cells: set.cells,
   motifs: new Map(set.motifs.map((motif) => [motif.motifId, motif])),
-  version: contentHash([EXTRACTOR_VERSION, METHODS, CALL_SHAPE_METHOD, set.cells.map(cellIdOf), errorRowsRead(errors)]),
+  version: contentHash([EXTRACTOR_VERSION, METHODS, CALL_SHAPE_METHOD, RECOVERY_EDGE_METHOD, set.cells.map(cellIdOf), errorRowsRead(errors)]),
   lastDay: set.cells.reduce<string | null>((last, cell) => (cell.day !== UNKNOWN && (last === null || cell.day > last) ? cell.day : last), null),
 });

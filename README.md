@@ -14,7 +14,7 @@ Accounts are not open yet; `oars login` says so until launch.
 
 ## Session memory
 
-`oars sessions` keeps a local record of your own Claude Code sessions so a repeated error can be looked up. It makes no model call and no network call, except `gold arms`, which sends redacted text through your own Claude subscription. Apart from that, oars itself sends nothing; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.
+`oars sessions` keeps a local record of your own Claude Code sessions so a repeated error can be looked up. It makes no model call and no network call, except `gold arms`, which sends redacted text through your own Claude subscription. Apart from that and telemetry (on by default, off with `oars telemetry off`, `OARS_TELEMETRY=0`, or `DO_NOT_TRACK=1`; it will send, in a later release, only to a pool server you configure), oars itself sends nothing; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.
 
 - **Captured:** the sessions of the folders you name with `--allow` (a folder you never named is never read), with secrets, emails, and the domains you name masked in the log.
 - **Stored:** under `<config>/oars/sessions/` on your machine (`<config>` is `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `~/.config` elsewhere), including `raw/`, a hard link or copy of each deposited transcript. `raw/` is on by default and holds raw transcripts, unredacted: they keep whatever the transcript held, secrets included, and stay on your machine.

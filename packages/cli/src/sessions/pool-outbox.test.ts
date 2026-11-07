@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { batchHash, BATCH_FIELDS, canonicalBytes, currentStamp, FIELD_ROWS, fieldsOf, writeBatch } from './pool-outbox.js';
-import { parseSkeleton, SKELETON_FORMAT } from './pool-wire.js';
+import { VOCAB_VERSION } from './public-vocabulary.js';
+import { FIELD_LIST_VERSION, parseSkeleton, SKELETON_FORMAT } from './pool-wire.js';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -83,6 +84,8 @@ const WHERE = { repoKey: '0123456789abcdef', orgSize: '2-10', team: 'team', repo
 
 const REAL = {
   format: SKELETON_FORMAT,
+  vocabVersion: VOCAB_VERSION,
+  fieldsVersion: FIELD_LIST_VERSION,
   id: '0123456789abcdef',
   deltas: [{ deltaKind: 'removed', field: 'package', name: 'typescript', registry: 'npm', metric: 'callsPerSession', change: -2 }],
   timingPrint: null,
@@ -98,8 +101,10 @@ const REAL = {
         {
           side: false,
           prompt: 0,
-          status: 'ok',
+          status: 'error',
           durationMs: 7,
+          errorCode: '1',
+          recoveryCalls: { next: [], editFollowed: false },
           steps: [
             { ...STEP, action: 'shell.exec', native: 'Bash', identity: { program: 'npm', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] } },
             { ...STEP, action: 'mcp.call', native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' } },

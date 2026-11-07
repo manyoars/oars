@@ -51,13 +51,24 @@ Revokes the stored login and deletes it.
 - `oars keys list` lists the keys with their prefix, scope, and expiry. A secret never comes back.
 - `oars keys revoke <keyId>` ends a key at once. There is no `rotate`: revoke the key and create another.
 
+### telemetry
+
+oars records how it is used, on this machine, and says so: on the first run that is not a hook it prints a notice on stderr, once. Each command except the bare `oars gate hook` (which skips the full CLI to stay inside its time budget) leaves one event in a local spool under `<config>/oars/telemetry/`: the command path, the names of the flags given (never their values), the duration, the exit code, a closed error class, the oars version, the OS, and the time. Nothing else is recorded: no session content, prompt text, file path, URL, or argument. The events will be sent in batches by a later release, only to a server you configure; with none configured they stay in the spool. A per-install random id (not derived from your machine or account) is in each event.
+
+- `oars telemetry status` says whether it is on, which switch decided that, whether the notice was shown, and how large the spool is.
+- `oars telemetry off` stops recording and sending; `oars telemetry on` resumes it and prints the notice again.
+- `oars telemetry show` prints the spool exactly as stored, oldest first.
+- `OARS_TELEMETRY=0` or `DO_NOT_TRACK=1` turns it off for the process, and wins over `oars telemetry on`.
+
+Every event type, with an example, is in [docs/telemetry.md](https://github.com/manyoars/oars/blob/main/docs/telemetry.md).
+
 ### sessions
 
-`oars sessions` keeps a local, deterministic memory of your own Claude Code sessions. oars makes no model call and no network call, except `gold arms`, which sends redacted text through your own Claude subscription.
+`oars sessions` keeps a local, deterministic memory of your own Claude Code sessions. The session commands make no model call and no network call, except `gold arms`, which sends redacted text through your own Claude subscription. oars also records telemetry events (a command's path, its flag names, how long it took, its exit code, and its error class, with a random install id, the oars version, the OS, and the time; never session content, prompts, paths, URLs, or argument values), which will be sent in batches by a later release, only to a server you configure ([what telemetry records and how to turn it off](https://github.com/manyoars/oars/blob/main/docs/telemetry.md)).
 
-What it captures: the Claude Code sessions in the folders you name with `--allow`, and, by name, the sessions of Cursor, Codex, Copilot CLI, Gemini CLI, Grok Build, and VS Code Copilot Chat (`--allow cursor`, `codex`, `copilot`, `gemini`, `grok`, `vscode-copilot`). Where it stores them: `<config>/oars/sessions/` on your machine (`<config>` is `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `~/.config` elsewhere). The `raw/` folder in it is on by default and holds raw transcripts (a hard link or copy of each deposited one). Secret masking applies to the log, not to `raw/`: those files are unredacted and keep whatever the transcript held, secrets included. They stay on your machine and, apart from `gold arms`, nothing is uploaded. To remove them, see [Remove everything](#remove-everything).
+What it captures: the Claude Code sessions in the folders you name with `--allow`, and, by name, the sessions of Cursor, Codex, Copilot CLI, Gemini CLI, Grok Build, and VS Code Copilot Chat (`--allow cursor`, `codex`, `copilot`, `gemini`, `grok`, `vscode-copilot`). Where it stores them: `<config>/oars/sessions/` on your machine (`<config>` is `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `~/.config` elsewhere). The `raw/` folder in it is on by default and holds raw transcripts (a hard link or copy of each deposited one). Secret masking applies to the log, not to `raw/`: those files are unredacted and keep whatever the transcript held, secrets included. They stay on your machine; apart from `gold arms`, no session command uploads them, and telemetry never carries anything from them. To remove them, see [Remove everything](#remove-everything).
 
-Apart from that, oars itself sends nothing; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.
+Apart from that and telemetry (on by default, off with `oars telemetry off`, `OARS_TELEMETRY=0`, or `DO_NOT_TRACK=1`; it will send, in a later release, only to a pool server you configure), oars itself sends nothing; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.
 
 ```bash
 # Read the folders you name (a path, or its name under ~/.claude/projects). At least one --allow is required; there is no "all".
@@ -99,7 +110,7 @@ before a line is written (redaction runs on the full text, then the text is cut)
 text, never raw content. It keeps these text fields and no others: the first 300 characters of each prompt, the first informative line of a
 tool error (cut to 1,000 characters in the error-line record, 160 characters in a derived example), TLDR lines (400) and Confidence lines (120) from assistant text, WebSearch queries, fetched URLs, file
 paths, and git branch names (the last four have no length limit), all redacted first; plus the project folder slug (not redacted, so it
-carries your username and directory names; the log stays local), skill names, effort values, model names, harness versions, tool names (including MCP server names), a shell call's program and subcommand, and tool-input key names. A tool call's file target is a salted hash, never the path. Apart from `gold arms`, nothing is uploaded.
+carries your username and directory names; the log stays local), skill names, effort values, model names, harness versions, tool names (including MCP server names), a shell call's program and subcommand, and tool-input key names. A tool call's file target is a salted hash, never the path. Apart from `gold arms`, no session command uploads anything, and telemetry carries none of these fields.
 Subagent transcripts (`<project>/<session>/subagents/`) are deposited with their parent session and subagent type; `books --by class`
 shows their tokens as the `delegated` column, and their errors are in the signatures, `measure`, and recall under the session that
 spawned them, so per-session counts still count main sessions. Every deposited transcript is also
