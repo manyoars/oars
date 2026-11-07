@@ -417,15 +417,15 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
       if (message !== '') assistant([{ type: 'text', text: message }], when);
     } else if (kind === 'FileChange' && id !== undefined && (item.status === 'completed' || item.status === 'failed' || (item.status === 'declined' && DECLINED_PATCH_TEXT.test(str(item.stderr) ?? '')))) {
       settlePatch(id, item.status === 'declined' ? DECLINED_PATCH : item.status === 'failed' ? (str(item.stderr) ?? 'patch failed') : undefined, when);
-    } else if (kind === 'CommandExecution' && id !== undefined && item.status === 'declined' && DECLINED_OUTPUT.test(str(item.aggregated_output) ?? '')) {
+    } else if (kind === 'CommandExecution' && id !== undefined && item.status === 'declined' && calls.has(id)) {
       // A `declined` one has exit code -1 (events.rs:552-554); only the user's refusal text settles it, as a refusal.
-      settleShell(id, DECLINED_SHELL, '', when);
-    } else if (kind === 'CommandExecution' && (item.status === 'completed' || item.status === 'failed') && (id === undefined || !calls.has(id))) {
+      if (DECLINED_OUTPUT.test(str(item.aggregated_output) ?? '')) settleShell(id, DECLINED_SHELL, '', when);
+    } else if (kind === 'CommandExecution' && id !== undefined && (item.status === 'completed' || item.status === 'failed' || item.status === 'declined') && !calls.has(id)) {
       // A code-mode cell's `exec_command` (Codex 0.166+) is run by the cell's JavaScript, so no call carries the item's `exec-<uuid>` id: the item is the
       // command's only record, and it is its own Bash call. Binding it to its cell by position would hold for 191 of 193 items in a live 0.167.0 store and fail
       // for 2, so it is not attempted.
       const exit = num(item.exit_code);
-      if (id === undefined || resolved.has(id)) return;
+      if (resolved.has(id)) return;
       resolved.add(id);
       const output = str(item.aggregated_output) ?? '';
       const spent = isObj(item.duration) ? Math.round((num(item.duration.secs) ?? 0) * 1000 + (num(item.duration.nanos) ?? 0) / 1e6) : undefined;
@@ -436,7 +436,10 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
       const began = spent === undefined ? when : new Date(Math.max(Date.parse(when) - spent, Date.parse(before ?? when))).toISOString();
       assistant([{ type: 'tool_use', id, name: 'Bash', native: 'exec_command', input: command === undefined ? {} : { command } }], began);
       // An item with no exit_code (an Option, skipped when None, items.rs:284-286) keeps its command and has no outcome, as an owned one does.
-      if (exit !== undefined) result(id, failureOf(exit, output), when, output, spent !== undefined);
+      // A refused one (exit code -1) is the user's refusal only where its output says so; any other declined text leaves no outcome.
+      if (item.status === 'declined') {
+        if (DECLINED_OUTPUT.test(output)) result(id, DECLINED_SHELL, when, '');
+      } else if (exit !== undefined) result(id, failureOf(exit, output), when, output, spent !== undefined);
     } else if (kind === 'CommandExecution' && id !== undefined && (item.status === 'completed' || item.status === 'failed')) {
       // The exec_command's own item: `id` is its call id, written when the process exits, even one the model never polled (header). It carries the
       // real exit code and the output.
@@ -592,7 +595,7 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
             when,
           );
         } else {
-          calls.set(id, { kind: 'other', ids: [id], ...(dynamicNames.has(bare) ? { dynamic: true } : {}) });
+          calls.set(id, { kind: 'other', ids: [id], ...(dynamicNames.has(name) ? { dynamic: true } : {}) });
           const file = str(input.path) ?? str(input.file_path);
           const query = str(input.query);
           assistant([{ type: 'tool_use', id, name, input: { ...(file === undefined ? {} : { file_path: file }), ...(query === undefined ? {} : { query }) } }], when);
