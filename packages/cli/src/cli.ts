@@ -117,7 +117,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .command('login')
     .description('sign in with your browser (RFC 8628 device flow)')
     .option('--no-browser', 'print the link and code without opening a browser')
-    .option('--issuer-url <url>', 'the Keycloak realm URL (default: OARS_ISSUER_URL, else Many Oars once it has launched)')
+    .option('--issuer-url <url>', 'the Keycloak realm URL (default: OARS_ISSUER_URL, else the Many Oars issuer)')
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       const outcome = await login(deps, {
@@ -392,7 +392,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .option('--scope <scope>', 'user (~/.claude/settings.json; the default), project (./.claude/settings.json), or file (needs --file; implied by --file)', scopeOption)
     .option('--file <path>', 'the settings file for --scope file')
     .option('--keep-retention', 'leave cleanupPeriodDays as it is (the harness deletes raw transcripts older than it)')
-    .option('--schedule <mode>', 'nightly: register a Windows task that runs the full deposit and the recurrence refresh daily; off: remove it', (value: string) => {
+    .option('--schedule <mode>', 'nightly: register a Windows task that runs the full deposit and the recurrence refresh daily (a plain install on Windows does this too); off: remove it', (value: string) => {
       if (value !== 'nightly' && value !== 'off') throw new InvalidArgumentError('it must be nightly or off.');
       return value;
     })
