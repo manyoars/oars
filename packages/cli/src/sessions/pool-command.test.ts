@@ -1543,7 +1543,7 @@ describe('oars pool fetch', () => {
     it('refuses a harness the pool does not serve before asking, and lists the ones it does', async () => {
       const { scene } = await signedScene();
       expect(await scene.cli('pool', 'fetch', '--harness', 'acme', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.USAGE);
-      expect(scene.h.err.join('')).toContain('acme is not a harness the pool serves. Choose one of claude-code, cursor, codex, copilot, gemini, grok, vscode-copilot.');
+      expect(scene.h.err.join('')).toContain('acme is not a harness the pool serves. Choose one of claude-code, cursor, codex, copilot, gemini, grok, vscode-copilot, otel.');
       expect(scene.seen).toEqual([]);
     });
 
@@ -1563,7 +1563,7 @@ describe('oars pool fetch', () => {
       expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
       // The choice is on stderr before the request goes out, not after it.
       expect(arrivals[0]?.printedBefore).toContain('No --harness given: fetching cursor');
-      expect(scene.h.err.join('')).toContain('No --harness given: fetching cursor, the harness your local store holds the most sessions of (3 of 4). Pass --harness <name> to fetch another (claude-code, cursor, codex, copilot, gemini, grok, vscode-copilot).');
+      expect(scene.h.err.join('')).toContain('No --harness given: fetching cursor, the harness your local store holds the most sessions of (3 of 4). Pass --harness <name> to fetch another (claude-code, cursor, codex, copilot, gemini, grok, vscode-copilot, otel).');
       expect(scene.document()).toMatchObject({ ok: true, harness: 'cursor' });
       // Counts stay here: the request names the harness and the versions, nothing else.
       expect(scene.seen[0]?.url).toBe(`${POOL}/bundle/cursor/2.1.314/${VOCAB_VERSION}`);
