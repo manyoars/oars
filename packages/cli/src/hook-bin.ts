@@ -2,6 +2,7 @@
 // hook event JSON on stdin. It imports only the store modules (not the CLI), so a call costs little more than the node start, and it
 // always exits 0 with no output on any failure: a hook must never fail or block a session.
 import { homedir } from 'node:os';
+import { sendNightly } from './telemetry/send.js';
 import { HOOK_EVENTS, hookRuntime, runHook, type HookEvent } from './sessions/hooks.js';
 
 const readStdin = async (): Promise<string> => {
@@ -23,6 +24,8 @@ try {
       Date.now,
     );
     if (output !== undefined) process.stdout.write(output);
+    // The nightly task is where telemetry is sent from; it never throws, and it sends nothing unless telemetry is on, the notice was shown, and OARS_POOL_URL names a server.
+    if (event === 'nightly') await sendNightly(process.env, process.platform, homedir(), Date.now);
   }
 } catch {
   // Fail-open.
