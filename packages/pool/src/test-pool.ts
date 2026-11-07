@@ -19,8 +19,8 @@ export interface TestDb {
 
 /** The R2 calls these tests make, named for the same reason as `TestDb`. */
 export interface TestBucket {
-  list: (options: { prefix: string }) => Promise<{ objects: { key: string }[] }>;
-  get: (key: string) => Promise<{ text: () => Promise<string> } | null>;
+  list: (options?: { prefix?: string }) => Promise<{ objects: readonly { key: string }[] }>;
+  get: (key: string) => Promise<{ text: () => Promise<string>; arrayBuffer: () => Promise<ArrayBuffer> } | null>;
   delete: (keys: string[]) => Promise<void>;
 }
 
@@ -124,7 +124,11 @@ export interface TestPool {
   db: () => Promise<TestDb>;
   /** The telemetry bucket the Worker keeps batches in. */
   bucket: () => Promise<TestBucket>;
-  post: (path: string, body: unknown, token?: string) => Promise<Answer>;
+  /** The raw tier's bucket, read straight from the binding: what the Worker wrote, never through a route. */
+  rawBucket: () => Promise<TestBucket>;
+  /** A request with any method and a text or byte body, for the raw tier's PUT and POST. */
+  send: (path: string, init: { method: string; body?: string | Uint8Array }, token?: string, headers?: { [name: string]: string }) => Promise<RawAnswer>;
+  post: (path: string, body: unknown, token?: string, headers?: { [name: string]: string }) => Promise<Answer>;
   get: (path: string, token?: string) => Promise<Answer>;
   raw: (path: string, token?: string, headers?: { [name: string]: string }) => Promise<RawAnswer>;
   /** What the CLI's own `fetch` reaches when it asks a provider for a device code or a token: the same stub the Worker's outbound calls reach, so one approval serves both. */
@@ -151,7 +155,8 @@ const generatedKey = async (): Promise<{ jwk: string; x: string }> => {
   return { jwk: JSON.stringify(jwk), x: jwk.x ?? '' };
 };
 
-export const startPool = async (bindings: { [name: string]: string } = {}): Promise<TestPool> => {
+/** `raw: false` leaves the R2 binding out, the way a pool deployed before its bucket exists looks. */
+export const startPool = async (bindings: { [name: string]: string } = {}, options: { raw?: boolean } = {}): Promise<TestPool> => {
   const bundled = await build({ entryPoints: [fileIn('./worker.ts')], bundle: true, write: false, format: 'esm', platform: 'node', conditions: ['workerd', 'worker'], external: ['node:*'] });
   const contents = bundled.outputFiles[0]?.text;
   if (contents === undefined) throw new Error('the bundle is empty');
@@ -165,7 +170,7 @@ export const startPool = async (bindings: { [name: string]: string } = {}): Prom
     compatibilityFlags: config.compatibilityFlags,
     d1Databases: { DB: 'pool-test' },
     // The bindings wrangler.jsonc names. Miniflare's local Analytics Engine accepts a write and keeps nothing, so a test reads what the Worker wrote to it through a fake (telemetry.test.ts).
-    r2Buckets: { TELEMETRY: 'telemetry-test' },
+    r2Buckets: { TELEMETRY: 'telemetry-test', ...(options.raw === false ? {} : { RAW: 'oars-pool-raw' }) },
     analyticsEngineDatasets: { TELEMETRY_EVENTS: { dataset: 'oars_telemetry' } },
     bindings: { PSEUDONYM_KEY: 'a-test-pseudonym-key', BUNDLE_SIGNING_KEY: key.jwk, COVENANT_VERSION: 'v1', FETCH_CAP: '1000', ...bindings },
     outboundService: stub.outbound,
@@ -178,13 +183,15 @@ export const startPool = async (bindings: { [name: string]: string } = {}): Prom
     for (const line of readFileSync(fileIn(`../migrations/${file}`), 'utf8').split('\n')) if (line.trim() !== '' && !line.startsWith('--')) await database.prepare(line).run();
   }
 
-  const call = async (path: string, init: { method: string; body?: string }, token?: string, headers: { [name: string]: string } = {}): Promise<RawAnswer> => {
+  const rawBucket = async (): Promise<TestBucket> => (await miniflare.getBindings<{ RAW: TestBucket }>()).RAW;
+
+  const call = async (path: string, init: { method: string; body?: string | Uint8Array }, token?: string, headers: { [name: string]: string } = {}): Promise<RawAnswer> => {
     const response = await miniflare.dispatchFetch(`http://pool.test${path}`, { ...init, headers: { ...(token === undefined ? {} : { authorization: `Bearer ${token}` }), ...headers } });
     const text = await response.text();
     return { status: response.status, json: text === '' ? null : JSON.parse(text), headers: response.headers };
   };
-  const post: TestPool['post'] = async (path, body, token) => {
-    const { status, json } = await call(path, { method: 'POST', body: typeof body === 'string' ? body : JSON.stringify(body) }, token);
+  const post: TestPool['post'] = async (path, body, token, headers) => {
+    const { status, json } = await call(path, { method: 'POST', body: typeof body === 'string' ? body : JSON.stringify(body) }, token, headers);
     return { status, json };
   };
   const raw: TestPool['raw'] = (path, token, headers) => call(path, { method: 'GET' }, token, headers);
@@ -197,6 +204,8 @@ export const startPool = async (bindings: { [name: string]: string } = {}): Prom
     url: async () => (await miniflare.ready).origin,
     db,
     bucket,
+    rawBucket,
+    send: call,
     post,
     get,
     raw,
