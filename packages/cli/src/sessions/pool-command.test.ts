@@ -1599,7 +1599,7 @@ describe('oars pool fetch', () => {
       const { scene } = await signedScene();
       expect(await scene.cli('pool', 'fetch', '--harness', 'otel', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.USAGE);
       expect(scene.h.err.join('')).toContain('otel has no pool bundle.');
-      expect(scene.h.err.join('')).toContain('Choose one of claude-code, cursor, codex, copilot, gemini, grok, vscode-copilot.');
+      expect(scene.h.err.join('')).toContain('Choose one of claude-code, cursor, codex, copilot, gemini, grok, opencode, vscode-copilot.');
       expect(scene.seen).toEqual([]);
     });
 
