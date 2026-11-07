@@ -1,4 +1,6 @@
 // Item 2 of t937: the pool stores the cluster signals it can, from data it already receives, and serves none of them.
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { verifyBundle, VOCAB_VERSION, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { repoKeysOf } from './cluster-store.js';
@@ -49,7 +51,7 @@ const depositor = async (target: TestPool, id: string, keys: readonly string[]):
 const heldClusters = async (target: TestPool): Promise<number[]> => [...new Set((await (await target.db()).prepare('SELECT clusters FROM cells WHERE sessions > 0').all()).results.map((row) => Number(fieldOf(row, 'clusters'))))];
 
 describe('the count a floor compares', () => {
-  it('does not clear PUBLIC_FLOOR 5 for six accounts that share a machine’s repo keys, which five accounts counted before', async () => {
+  it('does not clear PUBLIC_FLOOR 5 for six accounts that share a machine’s repo keys, which six accounts cleared before', async () => {
     await inFreshPool(async (target) => {
       const shared = ['00000000000000a1', '00000000000000a2', '00000000000000a3'];
       const tokens: string[] = [];
@@ -125,6 +127,30 @@ describe('provider account age', () => {
       await target.signIn('github', { ...stubUser('9103'), createdAt: '2018-01-02T00:00:00Z' });
       await target.signIn('github', { ...stubUser('9103'), createdAt: 'not a date' });
       expect(fieldOf(await rowOf(target, 'SELECT provider_created FROM accounts WHERE id = ?', account), 'provider_created')).toBe(Date.UTC(2018, 0, 2));
+    });
+  }, 60_000);
+});
+
+describe('the first_seen backfill in 0014_clusters.sql', () => {
+  it('dates an account that deposited before the migration at its earliest contributor day, and leaves one that never deposited NULL', async () => {
+    await inFreshPool(async (target) => {
+      const db = await target.db();
+      // The migration's own statement, read from the file, so the test cannot drift from what ships.
+      const backfill = readFileSync(fileURLToPath(new URL('../migrations/0014_clusters.sql', import.meta.url)), 'utf8')
+        .split('\n')
+        .filter((line) => line.startsWith('UPDATE accounts SET first_seen'));
+      expect(backfill).toHaveLength(1);
+      const { account: depositor } = await target.signIn('github', stubUser('9401'));
+      const { account: bystander } = await target.signIn('github', stubUser('9402'));
+      // Accounts and deposits as they stood before the migration: no first_seen.
+      for (const [kind, key, day] of [['cell', 'k1', '2026-03-05'], ['cell', 'k2', '2026-01-02'], ['stratum', 'k3', '2026-02-10']] as const) {
+        await db.prepare('INSERT INTO contributors (kind, key, account, day) VALUES (?, ?, ?, ?)').bind(kind, key, depositor, day).run();
+      }
+      await db.prepare('UPDATE accounts SET first_seen = NULL').run();
+      await db.prepare(backfill[0] ?? '').run();
+      expect(await rowOf(target, 'SELECT first_seen FROM accounts WHERE id = ?', depositor)).toEqual({ first_seen: Date.UTC(2026, 0, 2) });
+      // Its next sign-in then fills it from now, as for any new account.
+      expect(await rowOf(target, 'SELECT first_seen FROM accounts WHERE id = ?', bystander)).toEqual({ first_seen: null });
     });
   }, 60_000);
 });

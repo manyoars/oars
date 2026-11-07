@@ -38,9 +38,7 @@ export interface Clusters {
   count: number;
 }
 
-const jaccard = (a: readonly string[], b: readonly string[]): number => {
-  const left = new Set(a);
-  const right = new Set(b);
+const jaccard = (left: ReadonlySet<string>, right: ReadonlySet<string>): number => {
   let shared = 0;
   for (const key of left) if (right.has(key)) shared += 1;
   return shared / (left.size + right.size - shared);
@@ -48,7 +46,8 @@ const jaccard = (a: readonly string[], b: readonly string[]): number => {
 
 const sharesMachine = (a: Holder, b: Holder): boolean => a.machine !== undefined && a.machine === b.machine;
 
-const sharesRepoKeys = (a: Holder, b: Holder): boolean => new Set(a.repoKeys).size >= REPO_KEYS_MIN && new Set(b.repoKeys).size >= REPO_KEYS_MIN && jaccard(a.repoKeys, b.repoKeys) >= REPO_KEYS_JACCARD;
+/** Takes each holder's repo-key set, built once per call of `clusterHolders`, not once per pair. */
+const sharesRepoKeys = (a: ReadonlySet<string>, b: ReadonlySet<string>): boolean => a.size >= REPO_KEYS_MIN && b.size >= REPO_KEYS_MIN && jaccard(a, b) >= REPO_KEYS_JACCARD;
 
 const sameHour = (a: ReadonlySet<number> | undefined, b: ReadonlySet<number> | undefined): boolean => a !== undefined && b !== undefined && [...a].some((hour) => b.has(hour));
 
@@ -63,9 +62,13 @@ const inLockstep = (a: Holder, b: Holder): boolean => {
 
 const young = (holder: Holder): boolean => holder.createdAt !== undefined && holder.firstDeposit - holder.createdAt < YOUNG_DAYS * DAY_MS;
 
+const joined = (a: Holder, aKeys: ReadonlySet<string> | undefined, b: Holder | undefined, bKeys: ReadonlySet<string> | undefined): boolean => b !== undefined && aKeys !== undefined && bKeys !== undefined && (sharesMachine(a, b) || sharesRepoKeys(aKeys, bKeys) || inLockstep(a, b));
+
 /** The connected components of "shares a machine, a repo-key set, or a creation window and a deposit cadence", each counted 1, or half when every account in it is young. */
 export const clusterHolders = (holders: readonly Holder[]): Clusters => {
   const parent = holders.map((_, at) => at);
+  // Each holder's repo-key set, built once here and not once per pair below.
+  const keySets = holders.map(({ repoKeys }) => new Set(repoKeys));
   const find = (at: number): number => {
     let root = at;
     while (parent[root] !== root) root = parent[root] ?? root;
@@ -74,8 +77,7 @@ export const clusterHolders = (holders: readonly Holder[]): Clusters => {
   };
   holders.forEach((one, at) => {
     for (let other = at + 1; other < holders.length; other += 1) {
-      const next = holders[other];
-      if (next !== undefined && (sharesMachine(one, next) || sharesRepoKeys(one, next) || inLockstep(one, next))) parent[find(other)] = find(at);
+      if (joined(one, keySets[at], holders[other], keySets[other])) parent[find(other)] = find(at);
     }
   });
   const members = new Map<number, Holder[]>();
