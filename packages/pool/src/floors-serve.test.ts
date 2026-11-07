@@ -80,6 +80,8 @@ describe('what the bundle and the ETag carry', () => {
     const etag = (floors: Floors): string => etagOf(HARNESS, VERSION, 7, served, floors);
     expect(etag(at(3))).not.toBe(etag(at(5)));
     expect(etag({ ...at(5), disclosure: 3 })).not.toBe(etag(at(5)));
+    // The clear class's floor is its own field, so it names the bundle too.
+    expect(etag({ ...at(5), clear: 3 })).not.toBe(etag(at(5)));
     expect(etag(at(5, { live: 3 }))).not.toBe(etag(at(5)));
     expect(etag(at(5, { live: 3 }))).not.toBe(etag(at(5, { live: 4 })));
     expect(etag(at(5, { live: 3, cost: 6 }))).toBe(etag(at(5, { cost: 6, live: 3 })));
