@@ -553,7 +553,6 @@ export const OPTIONAL = {
   frame: ['harnessVersion', 'model', 'effort', 'day', 'shell', 'reach'],
   stack: ['size', 'languageShares'],
   prompt: ['wallSec', 'explore'],
-  usage: ['input', 'cacheWrite', 'cacheRead', 'output', 'thinking'],
   tool: ['prompt', 'durationMs', 'errorCode', 'recoveryCalls'],
   step: ['tokens', 'ms', 'parent', 'skill', 'remainingTokens'],
 } as const satisfies { readonly [level: string]: readonly string[] };
@@ -710,7 +709,7 @@ const bucketIn = (kind: BucketKind, value: unknown, at: string): number => {
 };
 
 const parseUsage = (held: Collected, value: unknown, at: string): SkeletonUsage => {
-  const raw = fieldsOf(held, value, at, [], OPTIONAL.usage);
+  const raw = fieldsOf(held, value, at, ['input', 'cacheWrite', 'cacheRead', 'output', 'thinking']);
   const bucket = (field: keyof SkeletonUsage): number | null => orNull(raw[field], under(at, field), (entry, entryAt) => bucketIn('tokens', entry, entryAt));
   return { input: bucket('input'), cacheWrite: bucket('cacheWrite'), cacheRead: bucket('cacheRead'), output: bucket('output'), thinking: bucket('thinking') };
 };
