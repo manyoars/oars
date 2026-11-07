@@ -15,6 +15,8 @@ import { session as sessionRow } from './pool-fixture.js';
 import { parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey } from './pool-wire.js';
 import { contentHash } from './read.js';
 import { deposit } from './store.js';
+import { spoolEvents } from '../telemetry/read-events.js';
+import { readSpool } from '../telemetry/spool.js';
 import { addProject, cleanup, NOW, settledClock, stage, type Staged } from './test-support.js';
 
 // The session gates must stop a session before the projection runs; the real projection is wrapped so a test can see whether it was called.
@@ -31,6 +33,7 @@ const LATER = Date.parse('2099-01-01T00:00:00Z');
 // An invented term and an invented secret: neither is real, and the secret must never reach a request.
 const TERM = 'zorblax';
 const HARNESS_SECRET = 'planted-harness-secret';
+const SHARED = '77777777-7777-4777-8777-777777777777';
 
 interface Seen {
   url: string;
@@ -1199,6 +1202,25 @@ describe('oars pool outbox --explain and older batches', () => {
     for (const field of fields) expect(shown).toContain(`  ${field}: ${FIELD_ROWS[field] ?? 'no row'}`);
   });
 
+  it('explains a batch whose response made two calls: the allocated marker has its row', async () => {
+    const scene = setting();
+    rmSync(join(scene.staged.projectsRoot, 'proj'), { recursive: true, force: true });
+    const use = (id: string): object => ({ type: 'tool_use', id, name: 'Bash', input: { command: 'ls' } });
+    const answer = (id: string): string => JSON.stringify({ type: 'user', sessionId: SHARED, cwd: '/w', timestamp: '2026-05-01T00:00:03Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'r' }] } });
+    const prompted = JSON.stringify({ type: 'user', sessionId: SHARED, cwd: '/w', timestamp: '2026-05-01T00:00:00Z', message: { role: 'user', content: 'a plain request' } });
+    const replied = JSON.stringify({ type: 'assistant', sessionId: SHARED, cwd: '/w', requestId: 'r1', timestamp: '2026-05-01T00:00:01Z', message: { id: 'm-r1', role: 'assistant', content: [use('a'), use('b')], usage: { input_tokens: 1, output_tokens: 1000 } } });
+    addProject(scene.staged, 'proj', SHARED, [prompted, replied, answer('a'), answer('b')]);
+    await capture(scene);
+    await signIn(scene);
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    scene.h.out.length = 0;
+    expect(batchBytes(scene).join('')).toContain('"allocated":true');
+    expect(await scene.cli('pool', 'outbox', '--explain', '--server', POOL)).toBe(ExitCode.OK);
+    expect(scene.h.err.join('')).not.toContain('field_without_row');
+    expect(scene.h.out.join('')).toContain(`  allocated: ${FIELD_ROWS.allocated ?? 'no row'}`);
+    expect(FIELD_ROWS.allocated).toBeDefined();
+  });
+
   it('fails, rather than printing a blank, for a field with no row', async () => {
     const scene = await batched();
     const outbox = join(scene.staged.storeDir, 'pool-outbox', readdirSync(join(scene.staged.storeDir, 'pool-outbox'))[0] ?? '');
@@ -1284,6 +1306,16 @@ describe('oars pool fetch', () => {
     on(scene, 'get', `/bundle/claude-code/2.1.9/${VOCAB_VERSION}`, () => HttpResponse.json({ payload, signature }));
     expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.9', '--server', POOL)).toBe(ExitCode.OK);
     expect(scene.h.out.join('')).toContain('Fetched claude-code 2.1.9: 2 reads');
+  });
+
+  it('fetches the bundle of a harness with no version on record by asking for `unknown`, and keeps it under that name', async () => {
+    const { scene, sign } = await signedScene();
+    const payload = bundleBody('unknown', 'cursor');
+    const signature = await sign(payload);
+    on(scene, 'get', `/bundle/cursor/unknown/${VOCAB_VERSION}`, () => HttpResponse.json({ payload, signature }));
+    expect(await scene.cli('pool', 'fetch', '--harness', 'cursor', '--harness-version', 'unknown', '--server', POOL, '--json')).toBe(ExitCode.OK);
+    expect(scene.document()).toMatchObject({ ok: true, harness: 'cursor', harnessVersion: 'unknown', reads: 2, cells: 1 });
+    expect(replicas(scene)).toHaveLength(1);
   });
 
   it('refuses a tampered bundle and a bundle of another harness version, and keeps neither', async () => {
@@ -1721,5 +1753,68 @@ describe('oars pool deposit: local deltas', () => {
     expect(await deposited(scene)).toBe(ExitCode.OK);
     expect(carriedBy(scene).map(({ entry }) => entry)).toEqual([MODE_DELTA]);
     expect(logOf(scene)).toHaveLength(1);
+  });
+});
+
+describe('wire policing in telemetry', () => {
+  const printedAndHash = async (scene: Scene): Promise<string> => {
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    return printedHashes(scene)[0] ?? '';
+  };
+  /** Telemetry for a scene: a temp config folder (APPDATA), with the telemetry folder where main.ts puts it. */
+  const watched = (scene: Scene): string => {
+    scene.h.deps.env.APPDATA = scene.staged.root;
+    const dir = join(scene.staged.root, 'oars', 'telemetry');
+    scene.h.deps.telemetry = { dir, platform: 'linux' };
+    return dir;
+  };
+  const spooled = (dir: string, type: string): { data: { [field: string]: unknown } }[] => spoolEvents(dir, type);
+
+  it('counts the fields of a pass against a hand count of the batches it wrote', async () => {
+    const scene = setting();
+    const dir = watched(scene);
+    await capture(scene);
+    await signIn(scene);
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    const batches = batchBytes(scene);
+    expect(batches.length).toBeGreaterThan(0);
+    const events = spooled(dir, 'wire');
+    // One event for the harness of the fixture, with every batch of the pass.
+    expect(events).toHaveLength(1);
+    const data = events[0]?.data ?? {};
+    expect(data.batches).toBe(batches.length);
+    expect(data.bytes).toBe(batches.reduce((sum, bytes) => sum + Buffer.byteLength(bytes.trimEnd()), 0));
+    const fields = Array.isArray(data.fields) ? data.fields.map(String) : [];
+    const at = (name: string): number => fields.indexOf(name);
+    const numbers = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+    // `format` is one number in each batch: the hand count reads it from the written bytes.
+    const formats = batches.flatMap((bytes) => [...bytes.matchAll(/"format":(\d+)/g)].map((found) => found[1] ?? ''));
+    expect(numbers(data.present)[at('format')]).toBe(batches.length);
+    expect(numbers(data.fieldBytes)[at('format')]).toBe(formats.join('').length);
+    // Only names the register holds.
+    for (const name of fields) expect(Object.keys(FIELD_ROWS)).toContain(name);
+    expect(readSpool(dir).join('')).not.toContain(TERM);
+  });
+
+  it('records a taken send with its bytes, and a refused one with the pool\'s code', async () => {
+    const scene = await batched();
+    const dir = watched(scene);
+    const hash = await printedAndHash(scene);
+    const taken = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201, { ok: true }) });
+    await poolDeposit(scene.h.deps, sendOptions(hash, taken.via));
+    const refused = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(429, { error: 'rate_limited', message: 'Slow down.' }) });
+    await expect(poolDeposit(scene.h.deps, sendOptions(hash, refused.via))).rejects.toMatchObject({ problem: { code: 'rate_limited' } });
+    const bytes = Buffer.byteLength(batchBytes(scene)[0] ?? '');
+    expect(spooled(dir, 'wire-send').map((event) => event.data)).toEqual([
+      { sent: 1, status: 201, bytes },
+      { sent: 0, status: 429, code: 'rate_limited', bytes },
+    ]);
+  });
+
+  it('records nothing without a telemetry folder, and a send still raises what it did', async () => {
+    const scene = await batched();
+    const hash = await printedAndHash(scene);
+    const refused = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(500, {}) });
+    await expect(poolDeposit(scene.h.deps, sendOptions(hash, refused.via))).rejects.toMatchObject({ problem: { status: 500 } });
   });
 });

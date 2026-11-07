@@ -663,6 +663,22 @@ describe('Paginated rollouts', () => {
     expect(out.errorLines.map((entry) => entry.line)).toEqual(['server unavailable', 'no such note']);
   });
 
+  it('settles a declared dynamic tool from its DynamicToolCall item (items.rs:301-322, dynamic.rs:246-262), and leaves one with no item unsettled', () => {
+    begin();
+    const dynamic = (second: number, id: string, rest: object) => done(second, { type: 'DynamicToolCall', id, tool: 'lookup', arguments: {}, ...rest });
+    const out = extractOf([
+      pmeta({ dynamic_tools: [{ name: 'lookup' }] }),
+      call(2, 'd1', 'lookup'),
+      dynamic(3, 'd1', { status: 'failed', success: false, error: { message: 'lookup backend down' } }),
+      call(4, 'd2', 'lookup'),
+      dynamic(5, 'd2', { status: 'completed', success: true }),
+      call(6, 'd3', 'lookup'),
+      ord(line(T(7), 'response_item', { type: 'function_call_output', call_id: 'd3', output: 'text' })),
+    ]);
+    expect(out.tools.map((tool) => tool.status)).toEqual(['error', 'ok', 'none']);
+    expect(out.errorLines.map((entry) => entry.line)).toEqual(['lookup backend down']);
+  });
+
   it('ignores an item_completed item it has no use for (a Plan) without failing', () => {
     begin();
     const lines = rolloutLines(asText([pmeta(), done(2, { type: 'Plan', id: 'x', text: 'steps' })]), 's');
