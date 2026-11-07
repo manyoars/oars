@@ -621,7 +621,7 @@ describe('oars pool deposit', () => {
   });
 
   // t881 fix rounds 1 and 2: the deposit's own gate (the operator's redact domains) decides what the outbox holds, so this goes through the command and reads the written batch. The host is on the public list, so capture keeps it and only the gate can turn it into `private`.
-  it('writes private for a name the operator redacts, an off-list program in clear, and a public-list host the operator redacts nowhere', async () => {
+  it('writes private for a name the operator redacts, an off-list program in clear, and a public-list host the operator redacts, as private', async () => {
     const SESSION = '66666666-6666-4666-8666-666666666666';
     const folder = 'gate-repo';
     const stamp = (n: number): string => `2026-06-01T00:00:0${String(n)}.000Z`;
