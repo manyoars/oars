@@ -48,9 +48,9 @@ One per fire of a hook: the bare `oars gate hook` (recorded by its own process, 
 |---|---|
 | `name` | Which hook: `session-start`, `pre-tool`, `post-tool`, `stop`, `nightly`, or `gate` (the bare `oars gate hook`). |
 | `latencyMs` | How long the hook's handler took, in milliseconds, not counting node's own start. |
-| `outcome` | `hit` (it printed context or a deny, or deposited), `miss` (it found nothing), `held` (it had something and the holdback arm kept it from the agent), or `error` (it failed open, or the process deadline ended it before it finished; that fire is written once, with no bytes). |
+| `outcome` | `hit` (it printed context or a deny, or deposited), `miss` (it found nothing), `held` (it had something and the holdback arm kept it from the agent), or `error` (it failed open, or the process deadline ended it before it finished; that fire is written once, with no bytes and no harness version or model). |
 | `bytes` | The size of what the hook printed to stdout; 0 when nothing. |
-| `harnessVersion`, `model` | When the hook saw them (the hook input's `model`, or the last 64 KB of the transcript the input names, the same bounded read a push makes; the path is never recorded): a public version or model name as the pool's vocabulary lists it, else `other`. Absent when the hook did not see one. |
+| `harnessVersion`, `model` | When the hook saw them (the hook input's `model`, or the last 64 KB of the transcript the input names, the same bounded read a push makes; the path is never recorded): a public version or model name as the pool's vocabulary lists it, else `other`. Absent when the hook did not see one: a `nightly` run (it has no hook input) and a deadline-ended fire carry neither. |
 
 ### `recall`
 

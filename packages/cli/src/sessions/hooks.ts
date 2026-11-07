@@ -198,7 +198,7 @@ export const runHook = async (event: HookEvent, stdin: string, runtime: Sessions
     await tryLog(() => logStep(newContext(runtime.storeDir, now, event), 'recall', failed ? 'error' : 'ok', ms, report, line));
   }
   // After the answer is settled and the local rows are written; it runs before hook-bin prints, at the cost measured in t876 item 5. `emit` never throws. A push states its own frame;
-  // every other fire reads the transcript's tail the way a push does, so the version and model are there on a miss, a post-tool, a stop, and a nightly run too.
+  // every other fire reads the transcript's tail the way a push does, so the version and model are there on a miss, a post-tool, and a stop. (A nightly run has no hook input, so it has no transcript to read.)
   const { recall } = outcome;
   const stated = recall?.frame !== undefined || transcript === undefined ? undefined : await statedAt(transcript);
   emit('hook', {
