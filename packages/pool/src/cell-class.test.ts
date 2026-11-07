@@ -41,6 +41,8 @@ describe('the class of a cell', () => {
     expect(cellClassOf(cellOf('m', 'claude-code/unknown/unknown', 1), motifOf('m', null))).toBe('clear');
     // The version-free model cell that `bundleOf` serves beside the bucket's: no version axis, so only the model decides.
     expect(cellClassOf(cellOf('m', `claude-code/${NO_AXES}/claude-sonnet-4-5`, 1), motifOf('m', git(['--force'])))).toBe('clear');
+    // The version-only cell `versionBucketOf` builds for the recovery and error-version cells: no model axis (`-`), so only the version decides.
+    expect(cellClassOf(cellOf('m', `claude-code/2.1.31x/${NO_AXES}`, 1), motifOf('m', git(['--force'])))).toBe('clear');
   });
 
   it('is thresholded when any one part is off a list', () => {
