@@ -509,6 +509,84 @@ describe('a bundle is one harness at one numbered bucket', () => {
   }, 60_000);
 });
 
+describe('a bundle for a harness with no version on record', () => {
+  // Cursor, Gemini, and Grok Build record no version, and neither does a VS Code Copilot Chat session whose requests carry no `agent.extensionVersion`, so their sessions fill `<harness>/unknown/<model>` cells, which no numbered bundle holds. The route takes `unknown` for them.
+  const deposits = async (fresh: TestPool, harness: Harness, version: string | null, base: number, count: number): Promise<string> => {
+    let reader = '';
+    for (let at = 0; at < count; at += 1) {
+      const id = String(base + at);
+      const { token } = await fresh.signIn('github', stubUser(id));
+      await fresh.post('/v1/covenant/accept', { version: 'v1' }, token);
+      expect((await fresh.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0'), { languages: ['typescript'] }, '2026-11-01', harness, { program: 'ls', sub: null }, version), token)).status).toBe(201);
+      reader = token;
+    }
+    return reader;
+  };
+  const unknownBundle = async (fresh: TestPool, harness: Harness, token: string): Promise<Bundle> => {
+    const { status, json } = await fresh.get(`/bundle/${harness}/unknown/${VOCAB_VERSION}`, token);
+    expect(status).toBe(200);
+    const verified = await verifyBundle(json, fresh.signingKey(), harness, 'unknown');
+    if (!verified.ok) throw new Error(verified.reason);
+    return verified.bundle;
+  };
+  const ownCells = (bundle: Bundle): Bundle['cells'] => bundle.cells.filter((cell) => !cell.frameBucket.startsWith('env:'));
+
+  it('withholds the unknown-version cells at four accounts and serves them at the fifth, and serves a versioned harness none of them', async () => {
+    const fresh = await startPool();
+    try {
+      const four = await deposits(fresh, 'cursor', null, 8100, 4);
+      const withheld = await unknownBundle(fresh, 'cursor', four);
+      expect(withheld.harnessVersion).toBe('unknown');
+      expect(withheld.cells).toEqual([]);
+      expect(withheld.reads).toEqual([]);
+      expect(withheld.motifs).toEqual([]);
+      const five = await deposits(fresh, 'cursor', null, 8104, 1);
+      const served = await unknownBundle(fresh, 'cursor', five);
+      expect(ownCells(served).length).toBeGreaterThan(0);
+      for (const cell of ownCells(served)) {
+        expect(cell.frameBucket.startsWith('cursor/unknown/')).toBe(true);
+        expect(cell.clusters).toBeGreaterThanOrEqual(5);
+      }
+      expect(served.reads.length).toBeGreaterThan(0);
+      // The same pool answers a numbered request for that harness with the environment cells alone: the unknown cells are not under any number.
+      const numbered = await fresh.get(`/bundle/cursor/${VERSION}/${VOCAB_VERSION}`, five);
+      const numberedBundle = await verifyBundle(numbered.json, fresh.signingKey(), 'cursor', VERSION);
+      if (!numberedBundle.ok) throw new Error(numberedBundle.reason);
+      expect(ownCells(numberedBundle.bundle)).toEqual([]);
+    } finally {
+      await fresh.dispose();
+    }
+  }, 60_000);
+
+  it('holds one harness\'s unknown-version cells apart from another\'s, and apart from a numbered version', async () => {
+    const fresh = await startPool();
+    try {
+      await deposits(fresh, 'cursor', null, 8200, 5);
+      await deposits(fresh, 'gemini', null, 8300, 5);
+      const reader = await deposits(fresh, 'claude-code', VERSION, 8400, 5);
+      const cursor = await unknownBundle(fresh, 'cursor', reader);
+      const gemini = await unknownBundle(fresh, 'gemini', reader);
+      expect(ownCells(cursor).every((cell) => cell.frameBucket.startsWith('cursor/unknown/'))).toBe(true);
+      expect(ownCells(gemini).every((cell) => cell.frameBucket.startsWith('gemini/unknown/'))).toBe(true);
+      expect(ownCells(cursor).length).toBeGreaterThan(0);
+      expect(ownCells(gemini).length).toBeGreaterThan(0);
+      // claude-code has a version on record, so its `unknown` bundle holds none of its numbered cells.
+      expect(ownCells(await unknownBundle(fresh, 'claude-code', reader))).toEqual([]);
+      // The tag names the version segment: a numbered tag does not answer an unknown request.
+      const numberedTag = (await fresh.raw(`/bundle/cursor/${VERSION}/${VOCAB_VERSION}`, reader)).headers.get('etag');
+      const crossed = await fresh.raw(`/bundle/cursor/unknown/${VOCAB_VERSION}`, reader, { 'if-none-match': numberedTag ?? '' });
+      expect(crossed.status).toBe(200);
+    } finally {
+      await fresh.dispose();
+    }
+  }, 60_000);
+
+  it('still refuses a word that is neither a number nor unknown', async () => {
+    expect(await pool.get(`/bundle/cursor/Unknown/${VOCAB_VERSION}`, (await depositor('9001')))).toMatchObject({ status: 400, json: { error: 'unknown_harness_version' } });
+    expect(await pool.get(`/bundle/cursor/none/${VOCAB_VERSION}`, (await depositor('9002')))).toMatchObject({ status: 400, json: { error: 'unknown_harness_version' } });
+  });
+});
+
 describe('the ETag', () => {
   // A bundle is derived by the families it lists, so a client holding a tag from before a family was added must not be told its bundle is current.
   it('names the families a bundle derives, so a changed list is a changed tag', () => {
