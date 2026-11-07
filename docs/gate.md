@@ -28,7 +28,7 @@ An `npx <name>` with no version, whose folder (or a parent's, up to 12 levels) h
 
 ## The source: raw transcripts, not the store
 
-Replay reads raw transcripts under the allowlist, from the harness's folder and the store's `raw/` archive, one copy per relative path. It does not read Codex, Cursor, Copilot, Gemini CLI, Grok Build, or VS Code Copilot Chat: they keep sessions in their own formats, not as transcript files, so `--allow codex`, `--allow cursor`, `--allow copilot`, `--allow gemini`, `--allow grok`, and `--allow vscode-copilot` add nothing, and the report says so. A name's `origin` is keyed by name alone, so a package that also crossed as a server of the same name in one transcript shares that server's origin. The store loses what the checks need: form (`pulls` has no install or fetch-and-run, and is per call, not per command), flags and quoted words, permission mode, Skill input, and the earlier text "where the name came from" needs. Reading raw costs parse time, and raw is class `L`, so nothing of class `L` goes in the record: no path, working directory, or command text.
+Replay reads raw transcripts under the allowlist, from the harness's folder and the store's `raw/` archive, one copy per relative path. It does not read Codex, Cursor, Copilot, Gemini CLI, Grok Build, Pi, or VS Code Copilot Chat: they keep sessions in their own formats, not as transcript files, so `--allow codex`, `--allow cursor`, `--allow copilot`, `--allow gemini`, `--allow grok`, `--allow pi`, and `--allow vscode-copilot` add nothing, and the report says so. A name's `origin` is keyed by name alone, so a package that also crossed as a server of the same name in one transcript shares that server's origin. The store loses what the checks need: form (`pulls` has no install or fetch-and-run, and is per call, not per command), flags and quoted words, permission mode, Skill input, and the earlier text "where the name came from" needs. Reading raw costs parse time, and raw is class `L`, so nothing of class `L` goes in the record: no path, working directory, or command text.
 
 ## What a name may be
 
@@ -129,7 +129,7 @@ Reads only `crossings.jsonl` and prints counts, in the closed vocabulary above, 
 
 ## What replay cannot see
 
-A command run from a script, alias, or Makefile; a manifest edit a later bare install picked up; what a person saw or approved; an MCP server started and never called; folders off the allowlist; logs the harness already cleaned up; a session in Codex, Cursor, Copilot, Gemini CLI, Grok Build, or VS Code Copilot Chat, which replay does not read. `oars gate report` ends with this list and the counts by shape.
+A command run from a script, alias, or Makefile; a manifest edit a later bare install picked up; what a person saw or approved; an MCP server started and never called; folders off the allowlist; logs the harness already cleaned up; a session in Codex, Cursor, Copilot, Gemini CLI, Grok Build, Pi, or VS Code Copilot Chat, which replay does not read. `oars gate report` ends with this list and the counts by shape.
 
 ## Measured
 
