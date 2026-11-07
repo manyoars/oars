@@ -19,7 +19,8 @@ export interface TestDb {
 
 /** The R2 calls these tests make, named for the same reason as `TestDb`. */
 export interface TestBucket {
-  list: (options: { prefix: string }) => Promise<{ objects: { key: string }[] }>;
+  list: (options: { prefix: string; cursor?: string }) => Promise<{ objects: { key: string }[]; truncated: boolean; cursor?: string }>;
+  put: (key: string, value: string) => Promise<unknown>;
   get: (key: string) => Promise<{ text: () => Promise<string> } | null>;
   delete: (keys: string[]) => Promise<void>;
 }

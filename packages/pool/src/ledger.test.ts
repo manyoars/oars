@@ -1,5 +1,5 @@
 // The ledger plane has no expiry: the database refuses a delete of a `deposits` row or a `contributors` record, and a guard over the pool's own source fails
-// when a delete path or a scheduled trigger appears. A legally required erasure would be one new migration that drops the two `*_no_delete` triggers.
+// when a delete path or a scheduled trigger appears. The one scheduled trigger allowed is the telemetry rollup (worker.ts calls `rollupRecent`), whose files name no ledger table. A legally required erasure would be one new migration that drops the two `*_no_delete` triggers.
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -82,16 +82,24 @@ const LEDGER_DROP = new RegExp(`\\bDROP\\s+TABLE\\s+(IF\\s+EXISTS\\s+)?${LEDGER_
 const SCHEDULED_HANDLER = /\bscheduled\s*(\(|:|=|,|\})/;
 const CRON_CONFIG = /"crons"/;
 
+// The nightly telemetry rollup is the one scheduled job: `worker.ts` may carry the handler when it runs `rollupRecent`, and the Worker config may carry the cron that fires it. The rollup reads the telemetry
+// record and writes its own table, so the files that hold it (checked by the test below) name no ledger table.
+const ROLLUP_CALL = /\brollupRecent\(/;
+const ROLLUP_FILES = ['src/telemetry-rollup.ts', 'src/telemetry-fleet.ts'];
+const LEDGER_NAME = /\b(?:deposits|contributors)\b/i;
+
 /** What in `files` (name to text) would delete from the ledger or run it on a schedule. */
 const offences = (files: { [name: string]: string }): string[] =>
   Object.entries(files).flatMap(([name, text]) => {
     const body = code(text);
+    const rollupHandler = name === 'src/worker.ts' && ROLLUP_CALL.test(body);
+    const rollupCron = name === 'wrangler.jsonc';
     return [
       ...(LEDGER_DELETE.test(body) ? [`${name}: DELETE FROM the ledger`] : []),
       ...(LEDGER_REPLACE.test(body) ? [`${name}: a REPLACE that deletes a ledger row`] : []),
       ...(LEDGER_DROP.test(body) ? [`${name}: a DROP TABLE that deletes ledger rows`] : []),
-      ...(SCHEDULED_HANDLER.test(body) ? [`${name}: a scheduled handler`] : []),
-      ...(CRON_CONFIG.test(body) ? [`${name}: a cron trigger`] : []),
+      ...(SCHEDULED_HANDLER.test(body) && !rollupHandler ? [`${name}: a scheduled handler`] : []),
+      ...(CRON_CONFIG.test(body) && !rollupCron ? [`${name}: a cron trigger`] : []),
     ];
   });
 
@@ -145,6 +153,23 @@ describe('the pool has no path that deletes the ledger', () => {
     ['a crons array', '{ "triggers": { "crons": ["0 3 * * *"] } }', 'a cron trigger'],
   ])('names %s', (_label, text, offence) => {
     expect(offences({ planted: text })).toEqual([`planted: ${offence}`]);
+  });
+
+  it('lets only the telemetry rollup run on a schedule, and keeps its files clear of the ledger', () => {
+    const files = poolFiles();
+    // The rollup is the one scheduled job: worker.ts carries the handler, and it runs `rollupRecent` and nothing else.
+    expect(code(files['src/worker.ts'] ?? '')).toMatch(SCHEDULED_HANDLER);
+    expect(files['wrangler.jsonc']).toMatch(CRON_CONFIG);
+    expect(offences(files)).toEqual([]);
+    for (const name of ROLLUP_FILES) {
+      expect(Object.keys(files), name).toContain(name);
+      expect(code(files[name] ?? ''), name).not.toMatch(LEDGER_NAME);
+    }
+    // A handler that does not run the rollup, or one in another file, is still an offence.
+    expect(offences({ 'src/worker.ts': 'export default { scheduled(event, env) { sweep(env); } }' })).toEqual(['src/worker.ts: a scheduled handler']);
+    expect(offences({ 'src/other.ts': 'export default { scheduled(event, env) { rollupRecent(env, 1); } }' })).toEqual(['src/other.ts: a scheduled handler']);
+    expect(offences({ 'src/worker.ts': 'export default { scheduled(event, env) { rollupRecent(env, 1); } }' })).toEqual([]);
+    expect(offences({ 'src/other.json': '{ "crons": ["0 3 * * *"] }' })).toEqual(['src/other.json: a cron trigger']);
   });
 
   it('reads a source file in a subfolder of src', () => {
