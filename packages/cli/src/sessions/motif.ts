@@ -23,7 +23,8 @@ export interface WindowStep {
 /** A step as a cell counts it. */
 export interface CountedStep extends WindowStep {
   status: ToolStatus;
-  tokens: number;
+  /** Null when the step recorded no cost (a source that never reported one, or a call captured before steps): a cell leaves it out of its sum and coverage, never reading it as 0. */
+  tokens: number | null;
   durationMs: number;
 }
 
@@ -57,8 +58,8 @@ export const shapeMotif = (steps: readonly WindowStep[]): Motif => motifOf('shap
 
 /** The steps of one call. A record captured before steps existed reads through the same action table capture uses, so old data joins new. */
 export const stepsOfCall = (tool: ToolObservation, harness: Harness): CountedStep[] => {
-  if (tool.steps === undefined) return [{ action: actionOf(ACTION_TABLES[harness], tool.tool).action, identity: null, status: tool.status, tokens: 0, durationMs: tool.durationMs ?? 0 }];
-  return tool.steps.map((step) => ({ action: step.action, identity: step.identity, status: step.status, tokens: step.cost.tokens ?? 0, durationMs: step.cost.durationMs ?? 0 }));
+  if (tool.steps === undefined) return [{ action: actionOf(ACTION_TABLES[harness], tool.tool).action, identity: null, status: tool.status, tokens: null, durationMs: tool.durationMs ?? 0 }];
+  return tool.steps.map((step) => ({ action: step.action, identity: step.identity, status: step.status, tokens: step.cost.tokens, durationMs: step.cost.durationMs ?? 0 }));
 };
 
 export interface MotifWindow {
