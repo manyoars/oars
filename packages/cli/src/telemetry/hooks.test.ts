@@ -3,7 +3,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GateHookDeps } from '../gate/hook.js';
 import { fireRecorder } from '../gate/hook-record.js';
 import { runHookProcess } from '../gate/hook-process.js';
@@ -19,9 +19,23 @@ import { cleanup, NOW, stage } from '../sessions/test-support.js';
 import { emitFor, type Emit } from './emit.js';
 import { readSpool } from './spool.js';
 
+// A push's frame names claude-code today (`harnessOf({})`); this stands in for a push made under another harness, so the test can show the frame's harness is the one the hook event carries.
+const pushed = vi.hoisted(() => ({ harness: undefined as string | undefined }));
+vi.mock('../sessions/recall-push.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../sessions/recall-push.js')>();
+  return {
+    ...actual,
+    pushRecall: async (input: Parameters<typeof actual.pushRecall>[0]) => {
+      const recall = await actual.pushRecall(input);
+      return recall === undefined || recall.frame === null || pushed.harness === undefined ? recall : { ...recall, frame: { ...recall.frame, harness: pushed.harness } };
+    },
+  };
+});
+
 const roots: string[] = [];
 afterEach(() => {
   cleanup();
+  pushed.harness = undefined;
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -122,6 +136,13 @@ describe('a session hook records one event per fire', () => {
     expect(one?.data).toMatchObject({ name: 'pre-tool', outcome: 'hit', bytes: Buffer.byteLength(shown ?? ''), harness: 'claude-code', harnessVersion: '2.1.300', model: 'claude-opus-4-5' });
     expect(two?.data).toMatchObject({ name: 'pre-tool', outcome: 'held', bytes: 0 });
     expect(logged(dir).filter((event) => event.type === 'recall').map((event) => event.data.arm)).toEqual(['shown', 'held']);
+  });
+
+  it('a push made under another harness names that harness in the hook event, not claude-code', async () => {
+    const dir = spoolFolder();
+    pushed.harness = 'codex';
+    await runHook('pre-tool', monitor(sessionOn('shown')), withIndex().runtime, () => NOW, undefined, emitterAt(dir));
+    expect(hooks(dir)[0]?.data).toMatchObject({ name: 'pre-tool', outcome: 'hit', harness: 'codex' });
   });
 
   it('post-tool, stop, and a pre-tool miss carry the frame the transcript states, and a private model goes as other', async () => {
