@@ -46,6 +46,9 @@ describe('the class of a path target', () => {
     ['Makefile.bak', 'other'],
     ['C:\\work\\src\\main.ts', 'source'],
     ['.', 'other'],
+    // The order is intended: a doc folder names the role before the source extension does, and a .json file is config wherever it sits.
+    ['src/doc/render.ts', 'doc'],
+    ['data/rows.json', 'config'],
   ];
   it.each(cases)('reads %s as %s', (path, expected) => {
     expect(targetClassOf(path, 'repo')).toBe(expected);

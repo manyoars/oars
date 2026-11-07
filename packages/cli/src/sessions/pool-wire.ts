@@ -587,7 +587,8 @@ const transcriptOf = (
     });
     const { keys, dropped } = wireKeys(tool.keys, steps[0]?.native, gate);
     const targetClass = memberOf(TARGET_CLASSES, tool.targetClass);
-    const argClass = tool.argClass === undefined ? undefined : ARG_CLASSES.filter((kind) => tool.argClass?.includes(kind));
+    const stored = tool.argClass;
+    const argClass = stored === undefined ? undefined : ARG_CLASSES.filter((kind) => stored.includes(kind));
     steppedTools.push({
       side,
       prompt: promptPosition,
