@@ -6,7 +6,7 @@ import { covenantAccept, covenantNotAccepted, covenantStatus, depositsClosed, ha
 import { answer, bound, brake, notConfigured, refuse, type Env } from './http.js';
 import { receivePart } from './parts.js';
 import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf } from './ingest.js';
-import { accountOf, login } from './identity.js';
+import { accountOf, loginGone, loginPoll, loginStart } from './identity.js';
 import { hashHosts, hashKey } from './ingest-hash.js';
 import { rawRoute } from './raw.js';
 import { telemetry, type TelemetryEnv } from './telemetry.js';
@@ -130,7 +130,9 @@ export default {
       if (pathname === '/v1/deposits') return deposit(request, env);
       // Not a deposit: it needs no covenant, and it is answered with deposits closed.
       if (pathname === '/v1/telemetry') return telemetry(request, env, Date.now);
-      if (pathname === '/v1/login') return login(request, env);
+      if (pathname === '/v1/login/start') return loginStart(request, env);
+      if (pathname === '/v1/login/poll') return loginPoll(request, env);
+      if (pathname === '/v1/login') return loginGone();
       if (pathname === '/v1/covenant/accept') return covenantAccept(request, env);
     }
     if (request.method === 'GET') {
