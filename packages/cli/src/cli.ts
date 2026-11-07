@@ -103,7 +103,7 @@ const sessionDeps = (deps: RunDeps): SessionsDeps => ({ sessions: deps.sessions,
 
 const buildProgram = (deps: RunDeps, observed: Observed): Command => {
   const program = new Command('oars')
-    .description('Many Oars: sign in, manage API keys, and keep a local, searchable record of your own Claude Code sessions')
+    .description('Many Oars: sign in, manage API keys, and keep a local, searchable record of your own coding-agent sessions')
     .version(deps.version)
     .exitOverride()
     .configureOutput({ writeOut: deps.io.stdout, writeErr: deps.io.stderr })
@@ -177,11 +177,11 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
       emit(deps, flag(options, 'json'), await keysRevoke(deps, { apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')), keyId }));
     });
 
-  const sessions = program.command('sessions').description("deposit and recall your own Claude Code session logs, locally (no model calls, no network, except `gold arms`, which asks your own Claude subscription)");
+  const sessions = program.command('sessions').description("deposit and recall your own coding-agent session logs, locally (these commands make no model call and no network call, except `gold arms`, which asks your own Claude subscription; telemetry is separate: oars telemetry)");
 
   sessions
     .command('deposit')
-    .description('read session logs into the local observation log, from every folder unless --allow names some or --deny keeps some out; idempotent. Subagent transcripts under each session (<project>/<session>/subagents/) are deposited with their parent, and each raw transcript is hard-linked into the oars archive beside the store')
+    .description('read session logs into the local observation log, from every folder unless --allow names some or --deny keeps some out; idempotent. Subagent transcripts under each session (<project>/<session>/subagents/) are deposited with their parent, and each raw transcript is hard-linked or copied into the oars archive beside the store')
     .option('--allow <folder>', 'a project folder to read: its path, or its name under ~/.claude/projects (repeatable); `cursor`, `codex`, `copilot`, `gemini`, `grok`, `opencode`, `vscode-copilot`, and `otel` name the Cursor, Codex, Copilot CLI, Gemini CLI, Grok Build, OpenCode, VS Code Copilot Chat, and OpenTelemetry GenAI trace stores. A trailing slash names everything under a folder; * and ? are wildcards', collect)
     .option('--allow-file <list>', 'a file of --allow entries, one per line (# starts a comment, and !<entry> keeps a folder out); repeatable, combines with --allow', collect)
     .option('--deny <folder>', 'a folder never to read, in any form --allow takes (repeatable); saved, and it wins over every --allow until that exact entry is named with --allow', collect)
@@ -390,7 +390,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
 
   hook
     .command('install')
-    .description('merge the SessionStart, UserPromptSubmit, PreToolUse, PostToolUseFailure, and SessionEnd hooks into a settings file (existing hooks are kept) and raise cleanupPeriodDays to at least 365')
+    .description('merge the SessionStart, UserPromptSubmit, PreToolUse, PostToolUseFailure, and SessionEnd hooks into a settings file (existing hooks are kept), raise cleanupPeriodDays to at least 365, and on Windows register the nightly task (which sends telemetry while telemetry is on, and pool batches only after you accept a pool covenant)')
     .option('--scope <scope>', 'user (~/.claude/settings.json; the default), project (./.claude/settings.json), or file (needs --file; implied by --file)', scopeOption)
     .option('--file <path>', 'the settings file for --scope file')
     .option('--keep-retention', 'leave cleanupPeriodDays as it is (the harness deletes raw transcripts older than it)')
@@ -485,7 +485,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
       emit(deps, flag(command.optsWithGlobals(), 'json'), await gateReport(sessionDeps(deps)));
     });
 
-  const pool = program.command('pool').description('sign in to a pool server, deposit session skeletons (a closed list of fields, each value redacted first), and fetch signed reads; local capture, recall, and reads need none of it');
+  const pool = program.command('pool').description('sign in to a pool server, deposit session skeletons (a closed list of fields, each value redacted first) and, after a yes to the raw prompt, redacted raw copies, and fetch signed reads; local capture, recall, and reads need none of it');
   const serverOption = '--server <url>';
   const serverHelp = 'the pool server, https or plain http to localhost (default: OARS_POOL_URL, else https://pool.manyoars.com)';
 
@@ -515,7 +515,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .description('the raw prompt: whether a redacted copy of each full transcript may leave besides its skeleton (--consent yes|no), and what one folder may send (--folder <folder> --mode all|skeleton|off); with no option, shows the prompt and your answer')
     .option('--consent <answer>', 'yes or no; a no, or no answer, sends skeletons only')
     .option('--folder <entry>', 'a folder, folder prefix, or glob, as --allow takes it')
-    .option('--mode <mode>', 'all, skeleton, or off for that folder: on by default after you accept; skeleton sends no raw; off sends nothing from now on')
+    .option('--mode <mode>', 'all, skeleton, or off for that folder: on by default after you accept; skeleton sends no raw; off sends nothing from that folder to the pool from now on')
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       emit(deps, flag(options, 'json'), await poolRaw(deps, { consent: text(options, 'consent'), folder: text(options, 'folder'), mode: text(options, 'mode') }));
