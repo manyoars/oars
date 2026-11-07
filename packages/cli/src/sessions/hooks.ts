@@ -109,7 +109,6 @@ const stop = async (runtime: SessionsRuntime, input: Input, now: () => number): 
 const nightly = async (runtime: SessionsRuntime, now: () => number): Promise<Outcome> => {
   // A state.json that cannot be read is a failed deposit run like any other: its error row and the skipped derive row (spec 4.4) are logged.
   const saved = await readSaved(runtime.storeDir).catch((failure: unknown) => runDeposit<Awaited<ReturnType<typeof readSaved>>>(newContext(runtime.storeDir, now, 'nightly'), true, inputKey('nightly', [], []), () => Promise.reject(failure instanceof Error ? failure : new Error(String(failure)))));
-  if (saved.allow.length === 0) return { hit: false, queried: false };
   const result = await runDeposit(newContext(runtime.storeDir, now, 'nightly'), true, inputKey('nightly', saved.allow, saved.redactDomains), async (trace) => {
     const done = await deposit(runtime, { allow: saved.allow, redactDomains: saved.redactDomains, now }, trace);
     return { value: done, in: { transcript: done.sessions + done.subagents + done.unchanged } };

@@ -296,8 +296,8 @@ ${formatStepCounters(stepCounters(await readSteps(staged.storeDir)))}`);
     expect((await sessionsBooks(deps, { by: 'class', sinceDays: 1 })).text).toBe('No prompts in the --since window.');
     const empty = stage(slugOf(HOME));
     const emptyDeps = { sessions: empty.runtime, install: undefined, now: () => NOW };
-    // Nothing deposited means no saved allowlist, so the staged folder is off it, and `books` says so under the empty-store line.
-    expect((await sessionsBooks(emptyDeps, { by: 'class', sinceDays: 1 })).text).toBe(`No prompts in the store.\n1 project folder holds 4 main transcripts; it is never read: not on the allowlist. Not captured: ${slugOf(HOME)}.`);
+    // Nothing deposited means no saved allowlist, which is every folder, so no folder is off it and `books` adds no scope line.
+    expect((await sessionsBooks(emptyDeps, { by: 'class', sinceDays: 1 })).text).toBe('No prompts in the store.');
   });
 
   it("measure --repo drops another repository's MCP recall calls and keeps calls with no folder", async () => {

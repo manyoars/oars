@@ -2,7 +2,6 @@ import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CliError } from '../errors.js';
 import { parseRows, type CrossingRecord, type RegistryRow, type RunRow } from './record.js';
 import { REGISTRY_MAX_DAYS, replay } from './replay.js';
 import type * as StoreModule from '../sessions/store.js';
@@ -128,8 +127,14 @@ describe('the source of a replay', () => {
     expect(row?.name).not.toContain('corp.example');
   });
 
-  it('refuses to read anything when no folder is named', async () => {
-    await expect(run([])).rejects.toBeInstanceOf(CliError);
+  it('reads every folder when none is named or saved, and keeps a saved denial out', async () => {
+    await writeLog(projectsRoot, REPO, 'a.jsonl', [bash(1, 't1', 'npm install named')]);
+    await writeLog(projectsRoot, OFF_LIST, 'p.jsonl', [bash(2, 't2', 'npm install other')]);
+    await run([]);
+    expect((await written()).crossings.map((row) => row.name).sort()).toEqual(['named', 'other']);
+    await writeFile(join(storeDir, 'state.json'), JSON.stringify({ files: {}, redactDomains: [], allow: [`!${OFF_LIST}`] }));
+    await run([]);
+    expect((await written()).crossings.map((row) => row.name)).toEqual(['named']);
   });
 
   it('writes nothing outside crossings.jsonl and the novelty index beside it, and leaves no temp file', async () => {

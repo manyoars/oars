@@ -2,7 +2,7 @@
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { Outcome } from '../cli.js';
-import { parseAllowList } from './allow.js';
+import { denialOf, parseAllowList } from './allow.js';
 import { SOURCES, sourceLabel } from './sources.js';
 import { CliError, ExitCode } from '../errors.js';
 import { loadTerms } from './exclusion.js';
@@ -24,7 +24,7 @@ import { FAMILIES } from './read.js';
 import { formatNotReadable, notReadable } from './read-readable.js';
 import { formatReads, isFamily, parseSlice, selectReads } from './read-rows.js';
 import { CAPTURE_VERSION, OLDEST_READABLE_CAPTURE, type StepRow } from './schema.js';
-import { deposit, frozenSessions, loadStore, readCalls, readRedactDomains, readSkeletons, skippedFolders, slugOf, type SessionsRuntime, type SkippedScope, type Store } from './store.js';
+import { deposit, frozenSessions, loadStore, readCalls, readRedactDomains, readSaved, readSkeletons, skippedFolders, slugOf, type SessionsRuntime, type SkippedScope, type Store } from './store.js';
 import { formatStepCounters, inputKey, newContext, readSteps, stampKey, runDeposit, runStep, stepCounters, stuckSteps, tryLog, type StuckStep } from './steps.js';
 import { formatSelfBaseline, selfBaseline as selfBaselineOf, type SelfBaselineResult } from './baseline.js';
 import { staleBatchesAnywhere } from './pool-outbox.js';
@@ -43,24 +43,28 @@ const runtimeOf = (deps: SessionsDeps): SessionsRuntime => {
   return deps.sessions;
 };
 
+/** A list that names nothing is a mistake, not a request for the default (every folder): it is refused. */
 const readAllowFile = async (file: string): Promise<string[]> => {
+  let entries: string[];
   try {
-    return parseAllowList(await readFile(file, 'utf8'));
+    entries = parseAllowList(await readFile(file, 'utf8'));
   } catch {
     throw new CliError(`Cannot read the --allow-file ${file}.`, ExitCode.USAGE, 'usage');
   }
+  if (entries.length === 0) throw new CliError(`The --allow-file ${file} names no folder. Without --allow or --allow-file, deposit reads every folder.`, ExitCode.USAGE, 'usage');
+  return entries;
 };
 
-export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: string[]; allowFiles: string[]; redactDomains: string[] }): Promise<Outcome> => {
+export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: string[]; allowFiles: string[]; deny?: string[]; redactDomains: string[] }): Promise<Outcome> => {
   const fromFiles = await Promise.all(options.allowFiles.map((file) => readAllowFile(file)));
   const runtime = runtimeOf(deps);
   const table = runtime.sources ?? SOURCES;
-  const allow = [...options.allow, ...fromFiles.flat()];
+  const allow = [...options.allow, ...fromFiles.flat(), ...(options.deny ?? []).map(denialOf)];
   const result = await runDeposit(newContext(runtime.storeDir, deps.now, 'manual'), true, inputKey('manual', allow, options.redactDomains), async (trace) => {
     const done = await deposit(runtime, { allow, redactDomains: options.redactDomains, now: deps.now }, trace);
     return { value: done, in: { transcript: done.sessions + done.subagents + done.unchanged } };
   });
-  const survival = await recordSurvival(runtime, allow, deps.now);
+  const survival = await recordSurvival(runtime, (await readSaved(runtime.storeDir)).allow, deps.now);
   const lines = [
     `Deposited ${String(result.sessions)} sessions and ${String(result.subagents)} subagent transcripts (${String(result.lines)} lines, ${String(result.badLines)} unparseable) as ${String(result.observations)} observations; ${String(result.unchanged)} files unchanged.`,
     `Read ${String(result.folders.length)} folders; skipped ${String(result.skippedFolders)} not on the allowlist.`,
