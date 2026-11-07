@@ -1,6 +1,6 @@
 // Cost (rank 3): tokens and wall time per prompt, by prompt class, model, and ISO week. Confounders: class drift, subagent work outside the prompt's own usage, and
 // task size, which nothing here can see. Tokens are plain counts, not priced. A prompt with no wall time adds no seconds and stays in the denominator, so seconds per prompt understates.
-import { bucketFields, EFFORT_CLASS, UNKNOWN, type Cell } from './cells.js';
+import { bucketFields, isPromptClass, UNKNOWN, type Cell } from './cells.js';
 import { motifName } from './motif.js';
 import { body, atGrain, groupBy, rate, settled, total, type DeriveFamily } from './read-support.js';
 
@@ -21,7 +21,7 @@ const weekOf = (cell: Cell): string => (cell.day === UNKNOWN ? UNKNOWN : isoWeek
 export const deriveCost: DeriveFamily = ({ pool }) => {
   const classed = atGrain(pool, 'week').flatMap((cell) => {
     const motif = pool.motifs.get(cell.motifId);
-    return motif?.level === 'class' && !motif.cls?.startsWith(EFFORT_CLASS) ? [{ cell, motif, model: bucketFields(cell.frameBucket).model }] : [];
+    return motif?.level === 'class' && isPromptClass(motif.cls) ? [{ cell, motif, model: bucketFields(cell.frameBucket).model }] : [];
   });
   return [...groupBy(classed, ({ cell, model }) => `${cell.motifId}/${model}/${weekOf(cell)}`).values()].flatMap((group) => {
     const [first] = group;
