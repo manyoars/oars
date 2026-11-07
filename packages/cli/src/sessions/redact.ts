@@ -59,3 +59,30 @@ export const makeRedactor = (domains: readonly string[] = []): Redactor => {
     return out.replace(TOKEN, (token) => (looksRandom(token) ? '<secret>' : token));
   };
 };
+
+// What a whole transcript holds beyond what a slice of one does (t884): home paths and usernames, environment values, and hosts. A raw copy that
+// leaves the machine goes through these after `makeRedactor`'s rules. Best effort, not a proof: `docs/sessions-store.md` ("The raw copy") lists what it cannot catch.
+const URL_HOST = /(\b[a-z][a-z0-9+.-]*:\/\/)(?:[^\s/@"'\\]*@)?[A-Za-z0-9.-]+(?::\d+)?/gi;
+const IPV4 = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
+const INTERNAL_NAME = /\b(?:[a-z0-9-]+\.)+(?:internal|local|lan|corp|intranet|home|localdomain)\b/gi;
+const UNIX_HOME = /(\/(?:home|Users)\/)(?![<.])[^/\s"'\\]+/g;
+const WINDOWS_HOME = /([A-Za-z]:[\\/]+Users[\\/]+)(?![<.])[^\\/\s"']+/gi;
+const ENVIRONMENT = /\b((?:export\s+)?[A-Z][A-Z0-9_]{2,}=)(?!<)(?:\\?["'][^"'\\]*\\?["']|[^\s"'\\]+)/g;
+const PLACEHOLDER = /<(?:secret|email|org-domain|host|user|env)>/g;
+
+const placeholders = (text: string): number => text.match(PLACEHOLDER)?.length ?? 0;
+
+/** A whole transcript body redacted for upload, and how many values were masked (placeholders added, a count and nothing else). */
+export const redactTranscript = (body: string, domains: readonly string[] = []): { text: string; masked: number } => {
+  const text = makeRedactor(domains)(body)
+    .replace(URL_HOST, '$1<host>')
+    .replace(INTERNAL_NAME, '<host>')
+    .replace(IPV4, '<host>')
+    .replace(UNIX_HOME, '$1<user>')
+    .replace(WINDOWS_HOME, '$1<user>')
+    .replace(ENVIRONMENT, '$1<env>');
+  return { text, masked: Math.max(0, placeholders(text) - placeholders(body)) };
+};
+
+/** The version of the rules above, stated to the pool with every raw part; a change to any rule of `redactTranscript` raises it. */
+export const REDACTION_VERSION = '1';
