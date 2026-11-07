@@ -3,12 +3,18 @@
 // a closed word, a small whole number, or a short list of closed words: never free text, a path, or a URL (none of them fits `TOKEN`).
 // Later briefs add event types: add one line to `EVENTS`.
 import { ExitCode } from '../errors.js';
+import { FIELD_ROWS } from '../sessions/pool-outbox.js';
+import { OTHER, HARNESSES } from '../sessions/pool-wire.js';
+import { LITERAL, publicModel, publicVersion } from '../sessions/public-vocabulary.js';
 
 /** Bumped when an event type or field changes meaning; every spooled event carries it. */
 export const SCHEMA_VERSION = 1;
 
+/** What an event field may hold: a closed word, a whole number, or a list of either. */
+export type Value = string | number | string[] | number[];
+
 /** A value a rule admits, or `undefined` for a value it refuses. */
-type Rule = (value: unknown) => string | number | string[] | undefined;
+type Rule = (value: unknown) => Value | undefined;
 type FieldRules = ReadonlyMap<string, Rule>;
 
 /** A command or option name as the program defines it: letters, digits, and hyphens. No space, slash, dot, colon, or quote. */
@@ -29,6 +35,34 @@ const oneOf =
   (value) =>
     typeof value === 'string' && allowed.includes(value) ? value : undefined;
 
+/** A list of whole numbers, none above `max`: the counts that sit beside a list of names. */
+const counts =
+  (length: number, max: number): Rule =>
+  (value) =>
+    Array.isArray(value) && value.length <= length && value.every((entry) => typeof entry === 'number' && Number.isSafeInteger(entry) && entry >= 0 && entry <= max) ? value.map(Number) : undefined;
+
+/** A list of names, every one of them in `allowed`. */
+const namesIn =
+  (allowed: ReadonlySet<string>, length: number): Rule =>
+  (value) =>
+    Array.isArray(value) && value.length <= length && value.every((entry) => typeof entry === 'string' && allowed.has(entry)) ? value.map(String) : undefined;
+
+/** A list of values the pool wire's own public vocabulary admits, or the word `other` for one it does not: the caller maps, the schema checks again. */
+const publicList =
+  (visible: (value: string | null) => string | null, length: number): Rule =>
+  (value) =>
+    Array.isArray(value) && value.length <= length && value.every((entry) => typeof entry === 'string' && (entry === OTHER || (entry !== LITERAL && visible(entry) === entry))) ? value.map(String) : undefined;
+
+/** A fixed number of lowercase hexadecimal digits: a hash, which names nothing. */
+const hex =
+  (digits: number): Rule =>
+  (value) =>
+    typeof value === 'string' && new RegExp(`^[0-9a-f]{${String(digits)}}$`).test(value) ? value : undefined;
+
+/** A problem code as a server names it: lowercase words joined with underscores. No space, slash, dot, colon, or quote, so no path, URL, or sentence fits. */
+const CODE = /^[a-z][a-z0-9_]{0,39}$/;
+const code: Rule = (value) => (typeof value === 'string' && CODE.test(value) ? value : undefined);
+
 const rules = (fields: { [name: string]: Rule }): FieldRules => new Map(Object.entries(fields));
 
 const DAY_MS = 86_400_000;
@@ -37,9 +71,58 @@ const DAY_MS = 86_400_000;
 export const ERROR_CLASSES = ['usage', 'auth', 'invalid', 'conflict', 'rate-limited', 'unreachable', 'capped', 'unexpected'] as const;
 export type ErrorClass = (typeof ERROR_CLASSES)[number];
 
+/** The built-in error classes a crash may name; any other class (a library's, a program's, or text set as a name) is `other`. */
+export const CRASH_CLASSES = ['Error', 'TypeError', 'RangeError', 'SyntaxError', 'ReferenceError', 'EvalError', 'URIError', 'AggregateError', 'other'] as const;
+export type CrashClass = (typeof CRASH_CLASSES)[number];
+
+const HUGE = 2 ** 50;
+const ENTRIES = 1_000_000_000;
+const WIRE_NAMES: ReadonlySet<string> = new Set(Object.keys(FIELD_ROWS));
+const WIRE_HARNESSES: readonly string[] = [...HARNESSES, OTHER];
+/** At most as many names as the register holds, so a batch's whole field list fits. */
+const WIRE_LENGTH = WIRE_NAMES.size;
+
 /** One line per event type. */
 const EVENTS: ReadonlyMap<string, FieldRules> = new Map([
   ['command', rules({ path: tokens(4), flags: tokens(40), durationMs: whole(DAY_MS), exitCode: whole(255), errorClass: oneOf(ERROR_CLASSES) })],
+  // The nightly snapshot of the session store. `readFailed` is 1 when the store could not be read, and then no count is sent.
+  [
+    'store-health',
+    rules({
+      readFailed: whole(1),
+      sessions: whole(ENTRIES),
+      subagents: whole(ENTRIES),
+      skeletons: whole(ENTRIES),
+      unparseable: whole(ENTRIES),
+      rawBytes: whole(HUGE),
+      verifyChecked: whole(ENTRIES),
+      verifyFailed: whole(ENTRIES),
+      captureVersion: whole(10_000),
+      extractorVersion: whole(10_000),
+      harnessVersions: publicList(publicVersion, 32),
+      models: publicList(publicModel, 32),
+      outboxBytes: whole(HUGE),
+      egressBytes: whole(HUGE),
+    }),
+  ],
+  // What one nightly run cost. `failed` is 1 when the run failed.
+  ['run-cost', rules({ totalMs: whole(DAY_MS), parseMs: whole(DAY_MS), peakRssMb: whole(1_000_000), failed: whole(1) })],
+  // An error nobody planned for: its class and a hash of its stack. Never its message.
+  ['crash', rules({ errorClass: oneOf(CRASH_CLASSES), stackHash: hex(16) })],
+  // One deposit pass, for one harness: the register's field names, and beside them how many batches held each and how many bytes it took.
+  [
+    'wire',
+    rules({
+      harness: oneOf(WIRE_HARNESSES),
+      batches: whole(ENTRIES),
+      bytes: whole(HUGE),
+      fields: namesIn(WIRE_NAMES, WIRE_LENGTH),
+      present: counts(WIRE_LENGTH, ENTRIES),
+      fieldBytes: counts(WIRE_LENGTH, HUGE),
+    }),
+  ],
+  // One send of one batch: whether the pool took it, the HTTP status, and the code of its refusal.
+  ['wire-send', rules({ sent: whole(1), status: whole(599), code, bytes: whole(HUGE) })],
 ]);
 
 export const EVENT_TYPES: readonly string[] = [...EVENTS.keys()];
@@ -73,7 +156,7 @@ export const errorClassOf = (exit: ExitCode): ErrorClass | undefined => {
 
 /** What a field set came to: the fields that fit, and how many did not (an unknown name, or a value its rule refused). */
 export interface Sanitized {
-  data: { [field: string]: string | number | string[] };
+  data: { [field: string]: Value };
   dropped: number;
 }
 
