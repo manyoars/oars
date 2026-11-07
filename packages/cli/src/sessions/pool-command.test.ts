@@ -615,8 +615,8 @@ describe('oars pool deposit', () => {
     expect(outboxFiles(scene)).toEqual(first);
   });
 
-  // t881 fix round 1: the deposit's own gate (the operator's redact domains and exclusion terms) decides what the outbox holds, so this goes through the command and reads the written batch.
-  it('writes private for a name the operator redacts, an off-list program in clear, and the redacted host nowhere', async () => {
+  // t881 fix rounds 1 and 2: the deposit's own gate (the operator's redact domains) decides what the outbox holds, so this goes through the command and reads the written batch. The host is on the public list, so capture keeps it and only the gate can turn it into `private`.
+  it('writes private for a name the operator redacts, an off-list program in clear, and a public-list host the operator redacts nowhere', async () => {
     const SESSION = '66666666-6666-4666-8666-666666666666';
     const folder = 'gate-repo';
     const stamp = (n: number): string => `2026-06-01T00:00:0${String(n)}.000Z`;
@@ -626,18 +626,19 @@ describe('oars pool deposit', () => {
     rmSync(join(scene.staged.projectsRoot, 'proj'), { recursive: true, force: true });
     addProject(scene.staged, folder, SESSION, [
       JSON.stringify({ type: 'user', uuid: 'g-0', parentUuid: null, isSidechain: false, sessionId: SESSION, cwd: '/w', timestamp: stamp(0), version: '2.1.300', message: { role: 'user', content: 'deploy it' } }),
-      call(1, 'WebFetch', { url: 'https://git.acme.internal/docs' }),
+      call(1, 'WebFetch', { url: 'https://docs.stripe.com/api' }),
       call(2, 'Bash', { command: 'acme-deploy --prod' }),
       call(3, 'mcp__git.acme.internal__run', {}),
     ]);
     // Captured with nothing redacted, then the operator names a domain: the store holds the clear host, and only the deposit's gate can keep it off the wire.
     await deposit(scene.staged.runtime, { allow: [folder], redactDomains: [], now: () => NOW });
     const state = join(scene.staged.storeDir, 'state.json');
-    writeFileSync(state, JSON.stringify({ ...JSON.parse(readFileSync(state, 'utf8')), redactDomains: ['acme.internal'] }));
+    writeFileSync(state, JSON.stringify({ ...JSON.parse(readFileSync(state, 'utf8')), redactDomains: ['acme.internal', 'stripe.com'] }));
     await signIn(scene);
     expect(await scene.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
     const written = batchBytes(scene).join('\n');
     expect(written).not.toContain('acme.internal');
+    expect(written).not.toContain('stripe.com');
     expect(written).toContain('"host":"private"');
     expect(written).toContain('"server":"private"');
     expect(written).toContain('"program":"acme-deploy"');
