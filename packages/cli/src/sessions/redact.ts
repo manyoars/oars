@@ -93,7 +93,7 @@ export const localNames = (home: string = homedir(), account: () => string = acc
     try {
       return account();
     } catch {
-      return process.env['USER'] ?? process.env['USERNAME'] ?? '';
+      return process.env['USER'] || process.env['USERNAME'] || '';
     }
   };
   return [...new Set([read(), basename(home)].filter((name) => name.length >= MIN_NAME))];
