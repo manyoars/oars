@@ -216,6 +216,32 @@ describe('the Grok Build table', () => {
   });
 });
 
+describe('the Pi table', () => {
+  // Pi's own tool names (badlogic/pi-mono @ 085c84e, packages/coding-agent/docs/cli.md:144-158); an MCP tool is mcp__<server>__<tool> (docs/mcp.md:77).
+  it.each([
+    ['read', 'file.read'],
+    ['bash', 'shell.exec'],
+    ['powershell', 'shell.exec'],
+    ['edit', 'file.edit'],
+    ['write', 'file.write'],
+    ['grep', 'file.search'],
+    ['find', 'file.search'],
+    ['ls', 'file.search'],
+    ['codemode', 'other'],
+    ['tool_search', 'other'],
+  ] as const)('maps %s to %s and keeps the name', (native, action) => {
+    expect(actionOf(ACTION_TABLES.pi, native)).toEqual({ action, native });
+  });
+
+  it('names the shell for bash and powershell only, and reads an MCP name with its server and tool', () => {
+    expect(shellOf(ACTION_TABLES.pi, 'bash')).toBe('bash');
+    expect(shellOf(ACTION_TABLES.pi, 'powershell')).toBe('powershell');
+    expect(shellOf(ACTION_TABLES.pi, 'read')).toBeNull();
+    expect(mcpOf(ACTION_TABLES.pi, 'mcp__github__get_issue')).toEqual({ server: 'github', tool: 'get_issue' });
+    expect(mcpOf(ACTION_TABLES.pi, 'read')).toBeUndefined();
+  });
+});
+
 describe('every table', () => {
   it.each(Object.entries(ACTION_TABLES))('%s holds only canonical actions', (_harness, table) => {
     for (const action of Object.values(table.rows)) expect(CANONICAL_ACTIONS).toContain(action);
