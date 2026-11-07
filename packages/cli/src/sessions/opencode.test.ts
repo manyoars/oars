@@ -344,6 +344,34 @@ describe('the OpenCode reader', () => {
     store.close();
   });
 
+  it('writes a successful `!cmd` as a <bash-input> line and a <bash-stdout> line, and skips the output line when the command printed nothing', async () => {
+    const shell = (id: string, seq: number, command: string, output: string) => ({
+      id,
+      type: 'shell',
+      seq,
+      created: at(seq),
+      data: { time: { created: at(seq), completed: at(seq + 1) }, shellID: `sh${seq}`, command, status: 'exited', exit: 0, output: { output, cursor: output.length, size: output.length, truncated: false } },
+    });
+    const { store, read } = await opened((dir) => [
+      {
+        id: 'ses_ok',
+        directory: dir,
+        created: at(0),
+        updated: at(9),
+        messages: [ocUser('msg_1', 1, at(1), 'hello'), shell('msg_2', 2, 'ls', 'a.txt'), shell('msg_4', 4, 'true', ''), ocAssistant('msg_6', 6, at(30), [{ type: 'text', text: 'done' }])],
+      },
+    ]);
+    const users = linesOf(read('ses_ok').text)
+      .filter((l) => l.type === 'user')
+      .map((l) => l.message?.content?.[0]?.text);
+    expect(users).toEqual(['hello', '<bash-input>ls</bash-input>', '<bash-stdout>a.txt</bash-stdout><bash-stderr></bash-stderr>', '<bash-input>true</bash-input>']);
+    const { session, prompts, errorLines } = capture(read('ses_ok').text, 'ok');
+    expect(errorLines).toEqual([]);
+    expect([session.assistantTurns, session.bashCmds]).toEqual([1, 0]);
+    expect(prompts.map((p) => p.head)).toEqual(['hello']);
+    store.close();
+  });
+
   it('does not read a synthetic message, a system message, a skill message, or a compaction as the operator\'s prompt', async () => {
     const { store, read } = await opened((dir) => [
       {
