@@ -72,6 +72,49 @@ const extractOf = (data: object, folder: string | null = '/work/app') => {
   );
 };
 
+describe('the VS Code Copilot Chat reader: a total the source never recorded', () => {
+  it('leaves a request with no modelTotals and no completionTokens unobserved, not a measured zero', () => {
+    const out = extractOf(chat([request(1, 'fix the build', [md('done')])]));
+    expect(out.session.usageObserved).toEqual([]);
+    expect(out.session.usageResponses).toBe(0);
+    expect(out.prompts[0]?.usageObserved).toEqual([]);
+  });
+
+  it('reports completionTokens alone as an output-only partial total', () => {
+    const out = extractOf(chat([request(1, 'fix the build', [md('done')], { completionTokens: 7 })]));
+    expect(out.session.usage).toMatchObject({ output: 7 });
+    expect(out.session.usageObserved).toEqual(['output']);
+    expect(out.session.usageResponses).toBe(1);
+  });
+
+  it('reads a zero inputTokens in modelTotals as unknown, not as a measured zero', () => {
+    const out = extractOf(chat([request(1, 'x', [md('done')], { modelTotals: [{ model: 'm', inputTokens: 0, outputTokens: 5 }] })]));
+    expect(out.session.usageObserved).toEqual(['output']);
+  });
+
+  it('keeps a zero cachedTokens or outputTokens observed when the request carried the field: a zero is a value, a missing field is not', () => {
+    const out = extractOf(chat([request(1, 'x', [md('done')], { modelTotals: [{ model: 'm', inputTokens: 900, cachedTokens: 0, outputTokens: 0 }] })]));
+    expect(out.session.usageObserved).toEqual(['input', 'cacheRead', 'output']);
+    expect(out.session.usage).toMatchObject({ input: 900, cacheRead: 0, output: 0 });
+    expect(out.prompts[0]?.usageObserved).toEqual(['input', 'cacheRead', 'output']);
+    // A total that names no cachedTokens says nothing about the cache.
+    const missing = extractOf(chat([request(1, 'x', [md('done')], { modelTotals: [{ model: 'm', inputTokens: 900, outputTokens: 5 }] })]));
+    expect(missing.session.usageObserved).toEqual(['input', 'output']);
+  });
+
+  it('takes output from completionTokens when every modelTotals outputTokens is 0, and keeps a carried zero cache', () => {
+    const out = extractOf(chat([request(1, 'x', [md('done')], { completionTokens: 50, modelTotals: [{ model: 'm', inputTokens: 0, cachedTokens: 0, outputTokens: 0 }] })]));
+    expect(out.session.usage).toMatchObject({ output: 50, cacheRead: 0 });
+    expect(out.session.usageObserved).toEqual(['cacheRead', 'output']);
+    // A real output total wins over completionTokens, and a zero with no completionTokens stays a measured zero.
+    const total = extractOf(chat([request(1, 'x', [md('done')], { completionTokens: 50, modelTotals: [{ model: 'm', inputTokens: 900, outputTokens: 60 }] })]));
+    expect(total.session.usage).toMatchObject({ output: 60 });
+    const zero = extractOf(chat([request(1, 'x', [md('done')], { modelTotals: [{ model: 'm', inputTokens: 900, outputTokens: 0 }] })]));
+    expect(zero.session.usage).toMatchObject({ output: 0 });
+    expect(zero.session.usageObserved).toEqual(['input', 'output']);
+  });
+});
+
 describe('the VS Code Copilot Chat reader', () => {
   it('turns a normal session into a prompt, calls with outcomes, whole-turn usage, the model, and the cwd, with the vendor version unset', () => {
     const out = extractOf(

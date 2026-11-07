@@ -6,7 +6,7 @@ import { bucketFields, deriveCells, ENVIRONMENT_BUCKET, isEnvironmentCell, type 
 import type { Motif } from './motif.js';
 import { bucketOf, floorOf, OTHER, projectedSteps, type SessionSkeleton, type ShellReader, type SkeletonFrame, type SkeletonPrompt, type SkeletonTool, type SkeletonTranscript } from './pool-wire.js';
 import { NO_RECALLS, type RecallGraph } from './recall-consequence.js';
-import { harnessOf, type Frame, type Harness, type PromptClass, type PromptObservation, type SessionObservation, type StepEdge, type StepObservation, type ToolObservation, type ToolStatus, type Usage } from './schema.js';
+import { USAGE_FIELDS, harnessOf, type Frame, type Harness, type PromptClass, type PromptObservation, type SessionObservation, type StepEdge, type StepObservation, type ToolObservation, type ToolStatus, type Usage } from './schema.js';
 import type { Store } from './store.js';
 
 export interface CellRow {
@@ -96,7 +96,7 @@ export const cellsOf = (store: Store, graph: RecallGraph = NO_RECALLS): CellSet 
   return { cells, motifs: [...motifs.values()].sort((a, b) => order(a.motifId, b.motifId)) };
 };
 
-/** A local store with each shell step read as a deposit reads it (`projectedSteps`), so its named motifs are the ones the pool holds. */
+/** A local store with each shell step read as a deposit reads it (`projectedSteps`), so its named motifs are the ones the pool holds. It uses the open gate, which keeps the name shape and length but applies no redactor or exclusion term: a local read sends nothing. */
 export const projectedStore = (store: Store, read: ShellReader): Store => {
   const harnesses = new Map([...store.sessions, ...store.subagents].map((session) => [session.session, harnessOf(session)]));
   return { ...store, tools: store.tools.map((tool) => (tool.steps === undefined ? tool : { ...tool, steps: projectedSteps(tool, read, harnesses.get(tool.session) ?? 'claude-code') })) };
@@ -148,7 +148,8 @@ const sessionRecord = (id: string, parent: string | null, spawnedIn: string | nu
   tools: {},
   files: [],
   fileHashes: [],
-  repo: null,
+  // The store's salted key, so a read that groups by repo works on pooled data from one store (one machine). It joins no cell.
+  repo: frame.repoKey ?? null,
   urls: [],
   searches: [],
   bashCmds: 0,
@@ -164,7 +165,7 @@ const sessionRecord = (id: string, parent: string | null, spawnedIn: string | nu
 });
 
 const promptRecords = (id: string, { harness, prompts }: KnownTranscript): PromptObservation[] =>
-  prompts.map(({ cls, errors, wallSec, usage, explore, frame }, index) => ({
+  prompts.map(({ cls, errors, wallSec, usage, usageResponses, explore, frame }, index) => ({
     kind: 'prompt',
     v: '',
     session: id,
@@ -183,13 +184,16 @@ const promptRecords = (id: string, { harness, prompts }: KnownTranscript): Promp
     model: frame.model ?? '',
     efforts: frame.effort === null ? [] : [frame.effort],
     skills: [],
+    // A category the wire sent as null was never recorded: it reads as a placeholder zero here and is left out of `usageObserved`.
     usage: {
-      input: floorOf('tokens', usage.input),
-      cacheWrite: floorOf('tokens', usage.cacheWrite),
-      cacheRead: floorOf('tokens', usage.cacheRead),
-      output: floorOf('tokens', usage.output),
-      thinking: floorOf('tokens', usage.thinking),
+      input: floorOf('tokens', usage.input ?? 0),
+      cacheWrite: floorOf('tokens', usage.cacheWrite ?? 0),
+      cacheRead: floorOf('tokens', usage.cacheRead ?? 0),
+      output: floorOf('tokens', usage.output ?? 0),
+      thinking: floorOf('tokens', usage.thinking ?? 0),
     },
+    usageObserved: USAGE_FIELDS.filter((field) => usage[field] !== null),
+    ...(usageResponses === undefined ? {} : { usageResponses: floorOf('count', usageResponses) }),
     recovery: [],
     // The lowest value of the bucket, as every other bucketed value counts; a prompt that sent none counts none.
     explore: explore === null ? 0 : floorOf('calls', explore),
@@ -270,7 +274,8 @@ export const incrementsOf = (skeleton: SessionSkeleton): Increments => {
   for (const cell of derived.cells) {
     const exposed = cell.exposed ? 1 : 0;
     const key = `${cell.motifId}/${cell.frameBucket}/${cell.grain}/${cell.day}/${String(exposed)}`;
-    cells.set(key, { key, harnessBucket: isEnvironmentCell(cell) ? ENVIRONMENT_BUCKET : bucketFields(cell.frameBucket).harnessBucket, motifId: cell.motifId, frameBucket: cell.frameBucket, grain: cell.grain, day: cell.day, exposed, sessions: cell.sessions, ok: cell.ok, failed: cell.failed, tokens: cell.tokens, durationMs: cell.durationMs });
+    // The served column is a running sum, so a cell no session of this batch recorded tokens for adds nothing to it; the sum itself holds only what was observed.
+    cells.set(key, { key, harnessBucket: isEnvironmentCell(cell) ? ENVIRONMENT_BUCKET : bucketFields(cell.frameBucket).harnessBucket, motifId: cell.motifId, frameBucket: cell.frameBucket, grain: cell.grain, day: cell.day, exposed, sessions: cell.sessions, ok: cell.ok, failed: cell.failed, tokens: cell.tokens ?? 0, durationMs: cell.durationMs });
   }
   // A session counts once per value, so each value is one session of this batch.
   const strata = new Map<string, StratumRow>();

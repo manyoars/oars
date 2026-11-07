@@ -81,7 +81,7 @@ describe('versions on every batch', () => {
 });
 
 // The pin: the field names a batch holds, hashed, filed under the field-list version. Adding a field changes the hash, so the test fails until the version moves and the new pin is added beside the old.
-const FIELDS_PINNED: { readonly [version: number]: string } = { 1: '3bf238006c97c800', 2: '9ddaff511a5a8342', 3: '4f59ec59f40accb5', 4: 'dcd086e0971b7948' };
+const FIELDS_PINNED: { readonly [version: number]: string } = { 1: '3bf238006c97c800', 2: '9ddaff511a5a8342', 3: '4f59ec59f40accb5', 4: 'dcd086e0971b7948', 5: 'dc85267df48b42cb', 6: '6b58bf15c7c5f639', 7: 'a3348890aa46b605' };
 const fieldsHash = (): string => createHash('sha256').update(BATCH_FIELDS.join(',')).digest('hex').slice(0, 16);
 
 describe('the field-list version', () => {
@@ -188,8 +188,8 @@ describe('other for an unknown value', () => {
   const FIELDS: { name: string; path: (string | number)[]; value?: string }[] = [
     { name: 'transcript harness', path: ['transcripts', 0, 'harness'] },
     { name: 'frame harness', path: ['transcripts', 0, 'frame', 'harness'] },
-    { name: 'frame harnessVersion', path: ['transcripts', 0, 'frame', 'harnessVersion'] },
-    { name: 'frame model', path: ['transcripts', 0, 'frame', 'model'] },
+    { name: 'frame harnessVersion', path: ['transcripts', 0, 'frame', 'harnessVersion'], value: 'not a name!' },
+    { name: 'frame model', path: ['transcripts', 0, 'frame', 'model'], value: 'not a name!' },
     { name: 'frame effort', path: ['transcripts', 0, 'frame', 'effort'] },
     { name: 'frame platform', path: ['transcripts', 0, 'frame', 'platform'] },
     { name: 'frame shell', path: ['transcripts', 0, 'frame', 'shell'] },
@@ -204,8 +204,8 @@ describe('other for an unknown value', () => {
     // A native name that is no name (a command line, say) is set aside; a name travels as it is, below.
     { name: 'step native', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'native'], value: 'not a name!' },
     { name: 'step status', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'status'] },
-    { name: 'shell sub', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'sub'] },
-    { name: 'shell flag', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'flags', 0] },
+    { name: 'shell sub', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'sub'], value: 'not a name!' },
+    { name: 'shell flag', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'flags', 0], value: 'not a name!' },
     { name: 'pull registry', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'pulls', 0, 'registry'] },
     { name: 'pull version', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'pulls', 0, 'version'] },
   ];
