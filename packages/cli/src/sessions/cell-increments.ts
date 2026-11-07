@@ -6,7 +6,7 @@ import { bucketFields, deriveCells, ENVIRONMENT_BUCKET, isEnvironmentCell, type 
 import type { Motif } from './motif.js';
 import { bucketOf, floorOf, OTHER, projectedSteps, type SessionSkeleton, type ShellReader, type SkeletonFrame, type SkeletonPrompt, type SkeletonTool, type SkeletonTranscript } from './pool-wire.js';
 import { NO_RECALLS, type RecallGraph } from './recall-consequence.js';
-import { harnessOf, type Frame, type Harness, type PromptClass, type PromptObservation, type SessionObservation, type StepObservation, type ToolObservation, type ToolStatus, type Usage } from './schema.js';
+import { harnessOf, type Frame, type Harness, type PromptClass, type PromptObservation, type SessionObservation, type StepEdge, type StepObservation, type ToolObservation, type ToolStatus, type Usage } from './schema.js';
 import type { Store } from './store.js';
 
 export interface CellRow {
@@ -123,7 +123,7 @@ const classOf = (cls: SkeletonPrompt['cls']): PromptClass => (cls === OTHER ? 'm
 const statusOf = (status: SkeletonTool['status']): ToolStatus => (status === OTHER ? 'none' : status);
 
 /** A skeleton's transcript as the record `deriveCells` reads. Everything a skeleton leaves out stays empty, so no derivation here can come to depend on it unnoticed. */
-const sessionRecord = (id: string, parent: string | null, { harness, frame }: KnownTranscript): SessionObservation => ({
+const sessionRecord = (id: string, parent: string | null, spawnedIn: string | null, { harness, frame }: KnownTranscript): SessionObservation => ({
   kind: 'session',
   cv: '',
   sid: '',
@@ -132,7 +132,7 @@ const sessionRecord = (id: string, parent: string | null, { harness, frame }: Kn
   parent,
   agentType: null,
   spawnedBy: null,
-  spawnedIn: null,
+  spawnedIn,
   rev: 1,
   at: '',
   bytes: 0,
@@ -199,8 +199,13 @@ const promptRecords = (id: string, { harness, prompts }: KnownTranscript): Promp
     frame: frameOf(frame, harness),
   }));
 
-const toolRecords = (id: string, main: string, { tools }: KnownTranscript): ToolObservation[] =>
-  tools.map(({ side, prompt, status, durationMs, errorCode, steps }, n) => ({
+/** A step's place as the store names it: its call's position and its segment. A transcript's steps are numbered across its calls in order, which is what an edge's target counts. */
+const stepPlaces = ({ tools }: SkeletonTranscript): { n: number; seg: number }[] => tools.flatMap(({ steps }, n) => steps.map((_, seg) => ({ n, seg })));
+
+const toolRecords = (id: string, main: string, transcript: KnownTranscript, spawner: SkeletonTranscript | null): ToolObservation[] => {
+  const own = stepPlaces(transcript);
+  const spawning = spawner === null ? [] : stepPlaces(spawner);
+  return transcript.tools.map(({ side, prompt, status, durationMs, errorCode, steps }, n) => ({
     kind: 'tool',
     cv: '',
     sid: '',
@@ -221,19 +226,24 @@ const toolRecords = (id: string, main: string, { tools }: KnownTranscript): Tool
     side,
     prompt,
     ...(errorCode === null ? {} : { errorCode }),
-    steps: steps.map(({ action, native, identity, status: reported, parent, tokens, ms }, seg) => ({
+    steps: steps.map(({ action, native, identity, status: reported, parent, tokens, ms, edges }, seg) => ({
       action,
       native,
       identity,
       status: statusOf(reported),
       parent,
       seg,
-      edges: [],
+      // A target is read back as the call position and segment it names, in this transcript or, for a `spawned` edge, in the spawning one. A target the transcript does not hold names nothing and is left out, and so does a kind this reader does not know (`other`).
+      edges: (edges ?? []).flatMap(({ kind, target }): StepEdge[] => {
+        const place = (kind === 'spawned' ? spawning : own)[target];
+        return place === undefined || kind === OTHER ? [] : [{ kind, n: place.n, seg: place.seg }];
+      }),
       cost: { tokens: tokens === null ? null : floorOf('tokens', tokens), durationMs: ms === null ? null : floorOf('ms', ms) },
       n,
       frameId: '',
     })),
   }));
+};
 
 /** One account's deposits as a store. A session's id is its skeleton's, which the client hashes per account, so it joins nothing across accounts. */
 export const storeOf = (skeletons: readonly SessionSkeleton[]): Store => {
@@ -244,9 +254,10 @@ export const storeOf = (skeletons: readonly SessionSkeleton[]): Store => {
     transcripts.forEach((transcript, index) => {
       if (!isKnown(transcript)) return;
       const session = nameOf(index);
-      (index === 0 ? store.sessions : store.subagents).push(sessionRecord(session, index === 0 ? null : main, transcript));
+      const spawner = transcript.spawnedIn === null ? null : (transcripts[transcript.spawnedIn] ?? null);
+      (index === 0 ? store.sessions : store.subagents).push(sessionRecord(session, index === 0 ? null : main, transcript.spawnedIn === null ? null : nameOf(transcript.spawnedIn), transcript));
       store.prompts.push(...promptRecords(session, transcript));
-      store.tools.push(...toolRecords(session, main, transcript));
+      store.tools.push(...toolRecords(session, main, transcript, spawner));
     });
   }
   return store;
