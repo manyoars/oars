@@ -44,7 +44,7 @@ describe('intervention on the wire', () => {
 
   describe('through the parser', () => {
     it('round-trips the canonical bytes: built, written, parsed, and equal', () => {
-      const built = skeletonWith(['redo', undefined, 'after-error', 'none', 'revert', 'unknown']);
+      const built = skeletonWith(['redo', undefined, 'after-error', 'none', 'revert', 'user-stop', 'unknown']);
       const result = parseSkeleton(JSON.parse(canonicalBytes(built)));
       if (!result.ok) throw new Error(`refused ${result.field}: ${result.reason}`);
       expect(result.skeleton).toEqual(built);
