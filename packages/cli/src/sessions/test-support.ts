@@ -452,3 +452,97 @@ export const stageOtel = (root: string, files: readonly OtelFixture[]): string =
   for (const file of files) writeFileSync(join(dir, file.name), typeof file.lines === 'string' ? file.lines : `${file.lines.map((line) => JSON.stringify(line)).join('\n')}\n`);
   return dir;
 };
+
+/*
+ * OpenCode (sst/opencode @ 21bf6b4, packages/cli and core 2.2.5). The store is one SQLite file, `<data>/opencode/opencode.db`; the tables below hold only the columns the
+ * reader reads, in the shape core/src/session/sql.ts declares: `session_v2` (:29), `session_message` (:87, `data` is the message minus `type` and `id`, projector.ts:662),
+ * and `session_part` (:108, written only when `experimental.part_rows` is on, projector.ts:316-320). Times are epoch milliseconds (schema/src/schema.ts DateTimeUtcFromMillis).
+ */
+export interface OpencodeMessageFixture {
+  id: string;
+  type: string;
+  seq: number;
+  created: number;
+  data: object;
+}
+
+export interface OpencodePartFixture {
+  messageId: string;
+  ordinal: number;
+  type: string;
+  data: object;
+}
+
+export interface OpencodeFixture {
+  id: string;
+  directory: string;
+  created: number;
+  updated: number;
+  messages: readonly OpencodeMessageFixture[];
+  parts?: readonly OpencodePartFixture[];
+  parentId?: string;
+  /** `fork_session_id`: the session this one was forked from, whose messages it copies (projector.ts:160-250). */
+  forkOf?: string;
+  version?: string;
+  agent?: string;
+}
+
+/** A user message (`session-message.ts` User: `text`, optional `files`). */
+export const ocUser = (id: string, seq: number, created: number, text: string, extra: object = {}): OpencodeMessageFixture => ({ id, type: 'user', seq, created, data: { time: { created }, text, ...extra } });
+
+/** A tool part of an assistant message (`AssistantTool`, session-message.ts:172-186): `id` is the call id, `state` one of streaming, running, completed, error. */
+export const ocTool = (id: string, name: string, state: object, created = 0): object => ({ type: 'tool', id, name, state, time: { created } });
+
+/** An assistant message (`Assistant`, session-message.ts:216-245); its content is inline unless `part_rows` is on. */
+export const ocAssistant = (id: string, seq: number, created: number, content: readonly object[], extra: object = {}): OpencodeMessageFixture => ({
+  id,
+  type: 'assistant',
+  seq,
+  created,
+  data: { agent: 'build', model: { id: 'claude-sonnet-5-5', providerID: 'anthropic' }, content, time: { created }, ...extra },
+});
+
+/** A shell tool state that completed: the shell tool records the exit in `metadata` (core/src/shell/result.ts:20-28, :36-43; written by core/src/tool/plugin/shell.ts:85-88), whatever the code. */
+export const ocShellDone = (command: string, text: string, exit?: number, extra: object = {}): object => ({
+  status: 'completed',
+  input: { command },
+  content: [{ type: 'text', text }],
+  metadata: { truncated: false, ...(exit === undefined ? {} : { exit }), ...extra },
+});
+
+/** Writes an OpenCode data folder (`<root>/opencode-data/opencode/opencode.db`) and returns the folder, which is always under `root`. */
+export const stageOpencode = async (root: string, sessions: readonly OpencodeFixture[], file = 'opencode.db'): Promise<string> => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const dir = join(root, 'opencode-data', 'opencode');
+  mkdirSync(dir, { recursive: true });
+  // A second stage in one test replaces the store.
+  for (const suffix of ['', '-wal', '-shm']) rmSync(join(dir, file + suffix), { force: true });
+  const db = new DatabaseSync(join(dir, file));
+  // OpenCode always opens its database in WAL mode (core/src/database/database.ts:42); the mode is stored in the file, so a reader meets a WAL database.
+  db.exec('pragma journal_mode = wal');
+  db.exec(`
+    create table session_v2 (id text primary key, parent_id text, fork_session_id text, directory text not null, version text not null, agent text, time_created integer not null, time_updated integer not null);
+    create table session_message (id text primary key, session_id text not null, type text not null, seq integer not null, time_created integer not null, time_updated integer not null, data text not null);
+    create table session_part (message_id text not null, session_id text not null, ordinal integer not null, type text not null, call_id text, time_created integer not null, time_updated integer not null, data text not null, primary key (message_id, ordinal));
+  `);
+  for (const session of sessions) {
+    db.prepare('insert into session_v2 (id, parent_id, fork_session_id, directory, version, agent, time_created, time_updated) values (?, ?, ?, ?, ?, ?, ?, ?)').run(
+      session.id,
+      session.parentId ?? null,
+      session.forkOf ?? null,
+      session.directory,
+      session.version ?? '2.2.5',
+      session.agent ?? 'build',
+      session.created,
+      session.updated,
+    );
+    for (const message of session.messages) {
+      db.prepare('insert into session_message (id, session_id, type, seq, time_created, time_updated, data) values (?, ?, ?, ?, ?, ?, ?)').run(message.id, session.id, message.type, message.seq, message.created, message.created, JSON.stringify(message.data));
+    }
+    for (const part of session.parts ?? []) {
+      db.prepare('insert into session_part (message_id, session_id, ordinal, type, call_id, time_created, time_updated, data) values (?, ?, ?, ?, ?, ?, ?, ?)').run(part.messageId, session.id, part.ordinal, part.type, null, session.created, session.created, JSON.stringify(part.data));
+    }
+  }
+  db.close();
+  return dir;
+};
