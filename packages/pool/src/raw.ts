@@ -75,10 +75,12 @@ const putPart = async (request: Request, env: Env, hash: string, part: number): 
   const admitted = await admit(request, env);
   if (admitted instanceof Response) return admitted;
   const { account, bucket } = admitted;
-  if (await stored(env, account, hash)) return answer(200, { ok: true, stored: true });
   const tooLarge = (): Response => refuse(413, 'too_large', `A raw part holds at most ${String(MAX_RAW_PART_BYTES)} bytes.`);
   if (Number(request.headers.get('content-length')) > MAX_RAW_PART_BYTES) return tooLarge();
+  // The body is read before the stored answer, not after: an answer sent over an unread body of up to 1 MB gets the
+  // connection reset under the client on Windows (ECONNRESET, "terminated"), so a retried part would fail where it should answer 200.
   const body = await request.arrayBuffer();
+  if (await stored(env, account, hash)) return answer(200, { ok: true, stored: true });
   if (body.byteLength > MAX_RAW_PART_BYTES) return tooLarge();
   if (body.byteLength === 0) return refuse(422, 'empty_part', 'A part holds at least one byte.');
   await bucket.put(stagingKey(account, hash, part), body);
