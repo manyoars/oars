@@ -1,7 +1,7 @@
-// Item 4 of t881: a long-tail name and a hashed host are held always and served only once `K_CELL` distinct accounts report the same value, and every bundle states the floor it applied.
+// Item 4 of t881: a long-tail name and a hashed host are held always and served only once `DEFAULT_PUBLIC_FLOOR` distinct accounts report the same value, and every bundle states the floor it applied.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { verifyBundle, VOCAB_VERSION, type Bundle } from '../../cli/src/sessions/pool-wire.js';
-import { K_CELL } from './derive.js';
+import { DEFAULT_PUBLIC_FLOOR } from './floors.js';
 import { sampleSkeleton } from './sample.js';
 import { startPool, stubUser, type TestPool } from './test-pool.js';
 
@@ -46,13 +46,13 @@ const fetched = async (token: string): Promise<{ bundle: Bundle; text: string }>
 describe('a long-tail program', () => {
   it('is served nothing at four accounts and named at the fifth', async () => {
     const tokens: string[] = [];
-    for (let at = 0; at < K_CELL; at += 1) {
+    for (let at = 0; at < DEFAULT_PUBLIC_FLOOR; at += 1) {
       tokens.push(await signedIn(String(8100 + at)));
       const id = String(at + 1).padStart(16, '0');
       expect((await pool.post('/v1/deposits', sampleSkeleton(id, { languages: ['typescript'] }, '2026-11-01', 'claude-code', { program: LONG_TAIL, sub: null }), tokens[at])).status).toBe(201);
       const { text } = await fetched(tokens[0] ?? '');
       // Four accounts serve nothing that names it, in a cell, a motif, or a read; the fifth serves it.
-      expect(text.includes(LONG_TAIL)).toBe(at + 1 >= K_CELL);
+      expect(text.includes(LONG_TAIL)).toBe(at + 1 >= DEFAULT_PUBLIC_FLOOR);
     }
   });
 });
@@ -61,19 +61,19 @@ describe('every bundle states its floor', () => {
   it('names the floor applied in the signed payload', async () => {
     const token = await signedIn('8200');
     const { bundle } = await fetched(token);
-    expect(bundle.floor).toBe(K_CELL);
+    expect(bundle.floor).toBe(DEFAULT_PUBLIC_FLOOR);
   });
 });
 
 describe('a hashed host', () => {
   it('is served nothing at four accounts, only as a hash at the fifth, and never in clear', async () => {
-    for (let at = 0; at < K_CELL; at += 1) {
+    for (let at = 0; at < DEFAULT_PUBLIC_FLOOR; at += 1) {
       const token = await signedIn(String(8300 + at));
       expect((await pool.post('/v1/deposits', fetching(String(at + 100).padStart(16, '0'), HOST), token)).status).toBe(201);
       const { text } = await fetched(token);
       expect(text).not.toContain(HOST);
       // A hash is a hash-list value: it is held at four and served at the fifth.
-      expect(/h:[0-9a-f]{64}/.test(text)).toBe(at + 1 >= K_CELL);
+      expect(/h:[0-9a-f]{64}/.test(text)).toBe(at + 1 >= DEFAULT_PUBLIC_FLOOR);
     }
   });
 });
@@ -86,7 +86,7 @@ describe('differencing a total against the named values', () => {
         expect((await fresh.post('/v1/deposits', sampleSkeleton(id, { languages: ['typescript'] }, '2026-11-01', 'claude-code', { program, sub: null }), token)).status).toBe(201);
       };
       const tokens: string[] = [];
-      for (let at = 0; at < K_CELL; at += 1) {
+      for (let at = 0; at < DEFAULT_PUBLIC_FLOOR; at += 1) {
         const { token } = await fresh.signIn('github', stubUser(String(8400 + at)));
         await fresh.post('/v1/covenant/accept', { version: 'v1' }, token);
         tokens.push(token);
@@ -106,7 +106,7 @@ describe('differencing a total against the named values', () => {
       const names = [...named].flatMap(dayCells).reduce((sum, cell) => sum + cell.ok + cell.failed, 0);
       // The shape is served with the long-tail call inside it, so a name served beside it would leave that call as the difference: the difference is zero or at least the floor's worth of calls.
       expect(total).toBeGreaterThan(0);
-      expect(total - names === 0 || total - names >= K_CELL).toBe(true);
+      expect(total - names === 0 || total - names >= DEFAULT_PUBLIC_FLOOR).toBe(true);
     } finally {
       await fresh.dispose();
     }

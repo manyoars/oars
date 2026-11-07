@@ -47,6 +47,12 @@ export interface Env {
   COVENANT_VERSION?: string;
   /** How many bundles an account without access may fetch in one ISO week. */
   FETCH_CAP?: string;
+  /** How many clusters a cell needs to be served and a read to count it. A whole number of at least 1; unset, or anything else, is 5. */
+  PUBLIC_FLOOR?: string;
+  /** How many clusters must hold a signature's hash before its text may be requested. A whole number of at least 1; unset, or anything else, is 2. */
+  DISCLOSURE_FLOOR?: string;
+  /** Public floors for single read families, `live=3,tool-day=8`. A name that is not a served read family refuses the whole list. */
+  PUBLIC_FLOOR_FAMILIES?: string;
   /** An operator's brake on the rows one account may hold. Unset means no limit: the pool does not ration contribution. */
   MAX_DEPOSITS_PER_ACCOUNT?: string;
   /** An operator's brake on the stored bytes one account may hold. Unset means no limit. */
