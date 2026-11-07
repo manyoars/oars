@@ -34,7 +34,7 @@
 // of the classes of its arguments (`path`, `url`, `pattern`, `command`, `number`, `flag`, `text`, `none`), each computed from the path and the input at capture and stored as a closed-list member, never the path or a value. It changes no value
 // captured before, so EXTRACTOR stays 12; a version-21 store's next deposit captures every transcript again, and a call of an older record has neither field.
 //
-// Version 23 (CAPTURE 23, t903) changes three stored values and no field name: a step identity's skill-run name, host, and pull's package name are kept as they are after the operator's redaction (`redactDomains`, the secret and email patterns, the name shape, and the 128-character cap still apply; the operator's exclusion terms are applied at the deposit's gate, not at capture), where before each was `<literal>` unless a public list held it. A store opened at version 22 keeps its `<literal>` values until its next deposit captures every transcript again from the harness or `raw/`; the tool record's `steps` moves from class P to class A because those names can be private.
+// Version 24 (CAPTURE 24, t903) changes three stored values and no field name: a step identity's skill-run name, host, and pull's package name are kept as they are after the operator's redaction (`redactDomains`, the secret and email patterns, the name shape, and the 128-character cap still apply; the operator's exclusion terms are applied at the deposit's gate, not at capture), where before each was `<literal>` unless a public list held it. A store opened at version 23 or older keeps its `<literal>` values until its next deposit captures every transcript again from the harness or `raw/`; the tool record's `steps` moves from class P to class A because those names can be private.
 //
 // EXTRACTOR 12 gives a derived prompt the strata of its user-prompt record, so its own `explore` count reaches the pool's wire as a bucket. No transcript is read: a store at
 // 11 re-derives from its log alone.
@@ -90,7 +90,7 @@ import type { RepoSize } from './public-vocabulary.js';
 import type { SessionFunnel, SessionSetup, SessionTrust } from './session-shape.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '23';
+export const CAPTURE_VERSION = '24';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
@@ -507,7 +507,7 @@ export interface ToolObservation {
   side: boolean;
   /** The prompt index the call ran under; null before the first prompt. */
   prompt: number | null;
-  /** What the call was in the canonical vocabulary; absent on a record captured before this field existed. Class A since CAPTURE 23: a step identity's skill-run name, host, and pull name are kept as they are after redaction and can be private; class P before. */
+  /** What the call was in the canonical vocabulary; absent on a record captured before this field existed. Class A since CAPTURE 24: a step identity's skill-run name, host, and pull name are kept as they are after redaction and can be private; class P before. */
   steps?: StepObservation[];
   /** Each command of a shell call, in order (CAPTURE 6); on every shell call and no other. Absent on a record captured earlier. */
   segments?: ShellSegment[];

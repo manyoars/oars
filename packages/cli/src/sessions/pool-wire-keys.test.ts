@@ -121,7 +121,7 @@ describe('a planted value is on the wire nowhere', () => {
     JSON.stringify({ type, timestamp: '2026-06-10T00:00:00.000Z', cwd: '/w', message: { role: type, model: 'claude-opus-5-5', content } });
   const call = (id: string, name: string, input: object): string => line('assistant', [{ type: 'tool_use', id, name, input }]);
   const PLANTED = ['quokka-ledger', 'marmalade-secret', 'octopus-pattern', 'walrus --flag', '/a'];
-  // A fetched URL's host is a long-tail name since CAPTURE 23 (t903): it crosses as `identity.host` and the pool hashes it on arrival. The URL's path and the prompt never do.
+  // A fetched URL's host is a long-tail name since CAPTURE 24 (t903): it crosses as `identity.host` and the pool hashes it on arrival. The URL's path and the prompt never do.
   const HOST = 'zephyr.example.org';
 
   it('keeps every planted path, URL path, pattern, command, and text out of a whole batch, and sends a URL host as a name', () => {
