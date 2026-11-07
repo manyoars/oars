@@ -105,10 +105,18 @@ describe('edges on the wire (t869)', () => {
   // Main call 5 (position 1) is the retry with three edges; the failed call before it is position 0, and call 8 is position 2.
   const retry = ['transcripts', 0, 'tools', 1, 'steps', 0];
   const field = 'transcripts[0].tools[1].steps[0].edges[0]';
-  refusing('a kind outside the closed list', [...retry, 'edges'], [{ kind: 'bridged', target: 0 }], `${field}.kind`);
   refusing('a target past the transcript', [...retry, 'edges'], [{ kind: 'next', target: 3 }], `${field}.target`);
   refusing('a fractional target', [...retry, 'edges'], [{ kind: 'next', target: 0.5 }], `${field}.target`);
-  refusing('a field beside the kind and target', [...retry, 'edges'], [{ kind: 'next', target: 0, n: 3 }], `${field}.n`);
+  it('reads a kind outside the closed list as other and keeps what was sent, the way every enumerated value is read', () => {
+    const parsed = parseSkeleton(sent([...retry, 'edges'], [{ kind: 'bridged', target: 0 }]));
+    expect(parsed).toMatchObject({ ok: true, others: 1, extensions: [{ at: `${field}.kind`, kind: 'value', value: 'bridged' }] });
+    expect(parsed.ok ? parsed.skeleton.transcripts[0]?.tools[1]?.steps[0]?.edges : null).toEqual([{ kind: 'other', target: 0 }]);
+  });
+  it('keeps a field beside the kind and target in the extensions bag, not as an edge', () => {
+    const parsed = parseSkeleton(sent([...retry, 'edges'], [{ kind: 'next', target: 0, n: 3 }]));
+    expect(parsed).toMatchObject({ ok: true, others: 0, extensions: [{ at: `${field}.n`, kind: 'field', value: 3 }] });
+    expect(parsed.ok ? parsed.skeleton.transcripts[0]?.tools[1]?.steps[0]?.edges : null).toEqual([{ kind: 'next', target: 0 }]);
+  });
   refusing('an edge that points forward', ['transcripts', 0, 'tools', 0, 'steps', 0, 'edges'], [{ kind: 'next', target: 1 }], 'transcripts[0].tools[0].steps[0].edges[0].target');
   refusing('a next whose target ran in another prompt', ['transcripts', 0, 'tools', 1, 'prompt'], 1, 'transcripts[0].tools[1].steps[0].edges[0].target');
   refusing('a spawned edge on a transcript with no spawner', [...retry, 'edges'], [{ kind: 'spawned', target: 0 }], `${field}.kind`);
@@ -208,6 +216,15 @@ describe('a derive from skeletons sees the local graph (t869)', () => {
     expect(rebuilt.subagents.map(({ spawnedIn }) => spawnedIn)).toEqual(['0123456789abcdef#0', '0123456789abcdef#1']);
   });
 
+  it('leaves an edge of a kind it does not know out of the store, since the store names no such edge', () => {
+    const skeleton = roundTrip(skeletonOfStore(withSubagents()));
+    const retry = skeleton.transcripts[0]?.tools[1]?.steps[0];
+    if (retry === undefined) throw new Error('no retry step');
+    retry.edges = [{ kind: 'other', target: 0 }, { kind: 'next', target: 0 }];
+    const rebuilt = storeOf([skeleton]).tools.find((call) => call.session === '0123456789abcdef#0' && call.n === 1);
+    expect(rebuilt?.steps?.[0]?.edges.map(({ kind }) => kind)).toEqual(['next']);
+  });
+
   it('leaves the cells where they were: edges add none', () => {
     const skeleton = roundTrip(skeletonOfStore(withSubagents()));
     const bare: SessionSkeleton = {
@@ -219,10 +236,10 @@ describe('a derive from skeletons sees the local graph (t869)', () => {
 });
 
 describe('what the edges cost on the wire (t869)', () => {
-  it('adds 494 bytes to the 5,498-byte skeleton of the two-deep fixture', () => {
+  it('adds 494 bytes to the 5,535-byte skeleton of the two-deep fixture', () => {
     const skeleton = skeletonOfStore(withSubagents());
     const bare = roundTrip(skeleton);
     for (const held of bare.transcripts.flatMap(({ tools }) => tools.flatMap(({ steps }) => steps))) Reflect.deleteProperty(held, 'edges');
-    expect([JSON.stringify(skeleton).length - JSON.stringify(bare).length, JSON.stringify(skeleton).length]).toEqual([494, 5498]);
+    expect([JSON.stringify(skeleton).length - JSON.stringify(bare).length, JSON.stringify(skeleton).length]).toEqual([494, 5535]);
   });
 });
