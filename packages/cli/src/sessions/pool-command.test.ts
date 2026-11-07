@@ -1992,6 +1992,9 @@ describe('oars pool deposit: local deltas', () => {
   });
 });
 
+/** A case-insensitive match for `name` between word boundaries: not inside a longer run of letters and digits such as a hex hash. */
+const wholeWord = (name: string): RegExp => new RegExp(`\\b${name}\\b`, 'i');
+
 describe('coverage on the wire (t871)', () => {
   const REMOTE_URL = 'https://github.com/secret-org/secret-app.git';
   /** A transcript whose every line names `cwd`, in a project folder named for it, so the deposit can find the repository the session sat in. */
@@ -2063,8 +2066,21 @@ describe('coverage on the wire (t871)', () => {
     const text = batchBytes(scene).join('');
     // The key is there, so the search below is not over a batch that never held a repository.
     expect(frameOfBatch(scene)?.repoKey).toMatch(/^[0-9a-f]{16}$/);
-    for (const forbidden of ['ada', 'grace', 'example.com', repo, slugOf(repo), REMOTE_URL, 'secret-org', 'secret-app', 'github.com']) expect(text).not.toContain(forbidden);
+    // A name is searched for as a whole word: the body is full of lowercase hex (ids, hashes, `repoKey`), and `ada` is three hex digits, so a bare substring of it turns up in a random hash now and then (t929).
+    for (const name of ['ada', 'grace']) expect(text).not.toMatch(wholeWord(name));
+    for (const forbidden of ['example.com', repo, slugOf(repo), REMOTE_URL, 'secret-org', 'secret-app', 'github.com']) expect(text).not.toContain(forbidden);
     rmSync(repo, { recursive: true, force: true });
+  });
+
+  it('looks for an author name as a whole word, so a hash that holds ada as hex is not a leak', () => {
+    const hashed = '{"repoKey":"3f0ada9c11b2d4e5","id":"9a1b2c3d4e5f6071"}';
+    // The old check, a bare substring, calls this body a leak.
+    expect(hashed.includes('ada')).toBe(true);
+    expect(hashed).not.toMatch(wholeWord('ada'));
+    // A real author value still matches: a quoted field, a bare word, and the start of an email.
+    expect('{"author":"ada"}').toMatch(wholeWord('ada'));
+    expect('{"author":"Ada Lovelace"}').toMatch(wholeWord('ada'));
+    expect('{"author":"ada@example.com"}').toMatch(wholeWord('ada'));
   });
 
   it('states solo for one author, and unknown when git cannot be read', async () => {
