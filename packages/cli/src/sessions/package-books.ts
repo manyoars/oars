@@ -1,7 +1,7 @@
 // `oars sessions books --by package`: the per-package counts a field report prints, read from the local store only. A pure function of a
 // loaded store and the excluded sessions the A38 scan returns, so the numbers can be rerun by anyone. It prints counts: no rank, share, or comparison.
-import { PUBLIC_PACKAGES } from './public-vocabulary.js';
-import { resolvePull } from './package-resolve.js';
+import { PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES } from './public-vocabulary.js';
+import { resolveMcpPull, resolvePull } from './package-resolve.js';
 import { projectStoredPackage } from './projection.js';
 import { harnessOf, type ToolObservation } from './schema.js';
 import type { Store } from './store.js';
@@ -60,9 +60,10 @@ const tally = (): Tally => ({ calls: 0, failed: 0, sessions: new Set(), days: ne
 
 const isMeasured = (tool: ToolObservation): boolean => Number(tool.cv) >= ERROR_CODE_SINCE;
 
-/** A pulled name is public when its ecosystem's pinned snapshot or the curated list names it (the rule the field-report script applied). */
+/** A pulled name is public when its ecosystem's pinned snapshot or the curated list names it (the rule the field-report script applied); an MCP server, when the published-server list does. */
 const isPublic = (vocab: Vocabulary, key: string): boolean => {
   const colon = key.indexOf(':');
+  if (key.startsWith('mcp:')) return PUBLIC_MCP_SERVERS.has(key.slice(colon + 1));
   return projectStoredPackage(vocab, { package: key, packageVersion: null }).package !== 'private' || PUBLIC_PACKAGES.has(key.slice(colon + 1));
 };
 
@@ -89,8 +90,8 @@ export const packageBooks = (store: Store, excluded: ReadonlySet<string>, vocab:
     }
     const keys = new Set<string>();
     for (const pull of tool.pulls ?? []) {
-      const resolved = resolvePull(pull);
-      if (resolved !== null) keys.add(resolved.package);
+      const resolved = resolvePull(pull)?.package ?? resolveMcpPull(pull);
+      if (resolved !== null) keys.add(resolved);
     }
     if (keys.size === 0) continue;
     const harness = harnesses.get(tool.session) ?? 'claude-code';

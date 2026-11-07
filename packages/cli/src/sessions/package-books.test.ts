@@ -77,6 +77,21 @@ describe('packageBooks', () => {
     expect(packageBooks(from, NONE, vocabulary()).rows[0]?.harnessModels.map((cell) => cell.model)).toEqual(['no model']);
   });
 
+  it('groups mcp pulls under the mcp ecosystem by server name, counting a private server without naming it', () => {
+    const mcp = (id: string, n: number, name: string, over: Partial<ToolObservation> = {}): ToolObservation =>
+      tool(id, n, `mcp__${name}__do_it`, { pulls: [{ ecosystem: 'mcp', name, version: null }], ts: '2026-11-02T10:00:00.000Z', ...over });
+    const from = store({
+      sessions: [session('s1')],
+      tools: [mcp('s1', 0, 'playwright'), mcp('s1', 1, 'playwright', { status: 'error', cv: '19', errorCode: '1' }), mcp('s1', 2, 'acme-internal'), pulling('s1', 3, ['prettier'])],
+    });
+    const result = packageBooks(from, NONE, vocabulary());
+    expect(result.rows.map((row) => row.package)).toEqual(['mcp:playwright', 'npm:prettier']);
+    expect(result.rows[0]).toMatchObject({ calls: 2, failed: 1, sessions: 1 });
+    expect(result.notPublic).toEqual({ names: 1, calls: 1 });
+    expect(JSON.stringify(result)).not.toContain('acme-internal');
+    expect(formatPackageBooks(result)).toContain('mcp:playwright: 2 calls, 1 failed');
+  });
+
   it('takes the model from the prompt when the call names none, and reads a name outside the model snapshot as another model', () => {
     const from = store({
       sessions: [session('s1')],
