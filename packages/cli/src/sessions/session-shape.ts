@@ -51,6 +51,8 @@ const PERMISSION_MODES: { readonly [harness in Harness]: ReadonlySet<string> } =
   opencode: new Set(),
   // Pi has no permission modes: its tools run as the user, and a session records none.
   pi: new Set(),
+  // A trace carries no permission mode.
+  otel: new Set(),
 };
 
 /**
@@ -73,6 +75,8 @@ const COMPLETE: { readonly [harness in Harness]: { readonly interrupts: boolean;
   opencode: { interrupts: false, rejections: false, denials: false, timing: true },
   // Pi's reader writes the prompts and the responses with their entry times, and reads no interrupt, refusal, or denial: an aborted call is a tool error and no more.
   pi: { interrupts: false, rejections: false, denials: false, timing: true },
+  // A trace's spans carry their own start and end times; it records no interrupt, refusal, or denial count.
+  otel: { interrupts: false, rejections: false, denials: false, timing: true },
 };
 
 export type TrustEventKind = 'interrupt' | 'rejection' | 'denial';

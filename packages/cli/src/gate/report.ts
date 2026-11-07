@@ -79,7 +79,7 @@ export const LIMITS: readonly string[] = [
   'what a person saw or approved on screen; the permission mode is what the log kept',
   'an MCP server that was started and never called',
   'folders off the allowlist, and logs the harness has already cleaned up',
-  'a session in Codex, Cursor, Copilot, Gemini CLI, Grok Build, OpenCode, Pi, or VS Code Copilot Chat, which replay does not read (`--allow codex`, `--allow cursor`, `--allow copilot`, `--allow gemini`, `--allow grok`, `--allow opencode`, `--allow pi`, and `--allow vscode-copilot` add nothing to it): they keep sessions in their own formats, not as transcript files',
+  'a session in Codex, Cursor, Copilot, Gemini CLI, Grok Build, OpenCode, Pi, VS Code Copilot Chat, or an OpenTelemetry GenAI trace, which replay does not read (`--allow codex`, `--allow cursor`, `--allow copilot`, `--allow gemini`, `--allow grok`, `--allow opencode`, `--allow pi`, `--allow vscode-copilot`, and `--allow otel` add nothing to it): they keep sessions in their own formats, not as transcript files',
   'pool reads, sign-in, and deposit prompts; this release reads none of them',
 ];
 

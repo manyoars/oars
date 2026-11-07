@@ -423,6 +423,68 @@ export const stagePi = (root: string, files: readonly PiFixture[]): string => {
   return home;
 };
 
+/** An OTLP JSON `AnyValue` (opentelemetry-proto v1.11.1 docs/specification.md:453-484: an int64 is a decimal string). */
+export const otlpValue = (value: unknown): object => {
+  if (typeof value === 'string') return { stringValue: value };
+  if (typeof value === 'boolean') return { boolValue: value };
+  if (typeof value === 'number') return Number.isInteger(value) ? { intValue: String(value) } : { doubleValue: value };
+  if (Array.isArray(value)) return { arrayValue: { values: value.map(otlpValue) } };
+  if (typeof value !== 'object' || value === null) return { stringValue: String(value) };
+  return { kvlistValue: { values: Object.entries(value).map(([key, held]) => ({ key, value: otlpValue(held) })) } };
+};
+
+export interface OtlpSpanInput {
+  trace: string;
+  id: string;
+  parent?: string;
+  name: string;
+  /** Seconds after the fixture's base time; the span carries Unix nanoseconds as a decimal string (trace.proto:96-327). */
+  start?: number;
+  end?: number;
+  attrs?: { [key: string]: unknown };
+  /** The status code: 0 unset, 1 ok, 2 error (trace.proto:327). */
+  code?: number;
+  message?: string;
+  events?: readonly { name: string; attrs: { [key: string]: unknown } }[];
+}
+
+export const OTLP_BASE = Date.parse('2026-06-01T10:00:00Z');
+const nanos = (second: number): string => String((BigInt(OTLP_BASE) + BigInt(Math.round(second * 1000))) * 1_000_000n);
+
+/** One span as `Span` in `trace.proto`, JSON-encoded (hex ids, integer enums, camelCase). */
+export const otlpSpan = (input: OtlpSpanInput): object => ({
+  traceId: input.trace,
+  spanId: input.id,
+  ...(input.parent === undefined ? {} : { parentSpanId: input.parent }),
+  name: input.name,
+  kind: 1,
+  ...(input.start === undefined ? {} : { startTimeUnixNano: nanos(input.start) }),
+  ...(input.end === undefined ? {} : { endTimeUnixNano: nanos(input.end) }),
+  attributes: Object.entries(input.attrs ?? {}).map(([key, value]) => ({ key, value: otlpValue(value) })),
+  events: (input.events ?? []).map((event) => ({ name: event.name, attributes: Object.entries(event.attrs).map(([key, value]) => ({ key, value: otlpValue(value) })) })),
+  ...(input.code === undefined ? {} : { status: { code: input.code, ...(input.message === undefined ? {} : { message: input.message }) } }),
+});
+
+/** An `ExportTraceServiceRequest` (one line of a file exporter's output, file-exporter.md:64-75) holding the spans under one instrumentation scope. */
+export const otlpRequest = (spans: readonly object[], scope = 'opentelemetry.instrumentation.langchain'): object => ({
+  resourceSpans: [{ resource: { attributes: [{ key: 'service.name', value: { stringValue: 'support-agent' } }] }, scopeSpans: [{ scope: { name: scope }, spans }] }],
+});
+
+export interface OtelFixture {
+  /** The file name in the folder. */
+  name: string;
+  /** Requests as objects (one a line), or raw text for a torn file. */
+  lines: readonly unknown[] | string;
+}
+
+/** A folder of OTLP JSON trace files; returns it, always under `root`. */
+export const stageOtel = (root: string, files: readonly OtelFixture[]): string => {
+  const dir = join(root, 'otel-traces');
+  mkdirSync(dir, { recursive: true });
+  for (const file of files) writeFileSync(join(dir, file.name), typeof file.lines === 'string' ? file.lines : `${file.lines.map((line) => JSON.stringify(line)).join('\n')}\n`);
+  return dir;
+};
+
 /*
  * OpenCode (sst/opencode @ 21bf6b4, packages/cli and core 2.2.5). The store is one SQLite file, `<data>/opencode/opencode.db`; the tables below hold only the columns the
  * reader reads, in the shape core/src/session/sql.ts declares: `session_v2` (:29), `session_message` (:87, `data` is the message minus `type` and `id`, projector.ts:662),

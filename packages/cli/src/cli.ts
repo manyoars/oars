@@ -14,7 +14,7 @@ import { gateInstall, gatePolicy, gateReplay, gateReport, gateUninstall } from '
 import { DEADLINE_MS, gateHook } from './gate/hook.js';
 import { managerReader } from './gate/registry.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
-import { poolCoverage, poolDeposit, poolFetch, poolLogin, poolOutbox } from './sessions/pool-command.js';
+import { poolCoverage, poolDeposit, poolFetch, poolLogin, poolOutbox, poolRaw } from './sessions/pool-command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 import { telemetryOff, telemetryOn, telemetryReport, telemetryShow, telemetryStatus } from './telemetry/command.js';
@@ -182,7 +182,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
   sessions
     .command('deposit')
     .description('read session logs into the local observation log, from every folder unless --allow names some or --deny keeps some out; idempotent. Subagent transcripts under each session (<project>/<session>/subagents/) are deposited with their parent, and each raw transcript is hard-linked into the oars archive beside the store')
-    .option('--allow <folder>', 'a project folder to read: its path, or its name under ~/.claude/projects (repeatable); `cursor`, `codex`, `copilot`, `gemini`, `grok`, `opencode`, `pi`, and `vscode-copilot` name the Cursor, Codex, Copilot CLI, Gemini CLI, Grok Build, OpenCode, Pi, and VS Code Copilot Chat stores. A trailing slash names everything under a folder; * and ? are wildcards', collect)
+    .option('--allow <folder>', 'a project folder to read: its path, or its name under ~/.claude/projects (repeatable); `cursor`, `codex`, `copilot`, `gemini`, `grok`, `opencode`, `pi`, `vscode-copilot`, and `otel` name the Cursor, Codex, Copilot CLI, Gemini CLI, Grok Build, OpenCode, Pi, VS Code Copilot Chat, and OpenTelemetry GenAI trace stores. A trailing slash names everything under a folder; * and ? are wildcards', collect)
     .option('--allow-file <list>', 'a file of --allow entries, one per line (# starts a comment, and !<entry> keeps a folder out); repeatable, combines with --allow', collect)
     .option('--deny <folder>', 'a folder never to read, in any form --allow takes (repeatable); saved, and it wins over every --allow until that exact entry is named with --allow', collect)
     .option('--redact-domain <domain>', 'an organization domain to mask in everything written (repeatable)', collect)
@@ -511,6 +511,17 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     });
 
   pool
+    .command('raw')
+    .description('the raw prompt: whether a redacted copy of each full transcript may leave besides its skeleton (--consent yes|no), and what one folder may send (--folder <folder> --mode all|skeleton|off); with no option, shows the prompt and your answer')
+    .option('--consent <answer>', 'yes or no; a no, or no answer, sends skeletons only')
+    .option('--folder <entry>', 'a folder, folder prefix, or glob, as --allow takes it')
+    .option('--mode <mode>', 'all, skeleton, or off for that folder: on by default after you accept; skeleton sends no raw; off sends nothing from now on')
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await poolRaw(deps, { consent: text(options, 'consent'), folder: text(options, 'folder'), mode: text(options, 'mode') }));
+    });
+
+  pool
     .command('coverage')
     .description('state whom your deposits cover, kept on this machine and never looked up: --org-size solo, 2-10, 11-100, 101-1000, over-1000, or unknown; --repo-visibility public, private, or unknown. With no flag it prints what is set')
     .option('--org-size <band>', 'how many people your organization has')
@@ -534,7 +545,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .command('fetch')
     .description('fetch the signed bundle for one harness version, verify it against the key pinned at login, and keep it locally')
     .option('--harness <name>', 'the harness whose bundle to fetch (default: the one your local store holds the most sessions of, claude-code when none leads)')
-    .requiredOption('--harness-version <version>', 'the public harness version whose bundle to fetch, or unknown for a session that recorded none (Cursor, Gemini, Grok Build, Pi, or a VS Code Copilot Chat session whose requests name no agent version)')
+    .requiredOption('--harness-version <version>', 'the public harness version whose bundle to fetch, or unknown for a session that recorded none (Cursor, Gemini, Grok Build, Pi, or a VS Code Copilot Chat session whose requests name no agent version; there is no bundle for otel)')
     .option(serverOption, serverHelp)
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();

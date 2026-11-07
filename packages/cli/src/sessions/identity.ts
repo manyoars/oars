@@ -1,8 +1,11 @@
-// A step's `identity` (recall spec Section 2.2): what the step acted on, by action, in public names only. Every name passes through
-// `public-vocabulary.ts`, so what may leave the machine is decided in that one file; anything it does not list becomes `<literal>`.
+// A step's `identity` (recall spec Section 2.2): what the step acted on, by action. A program, subcommand, flag, MCP server and tool pass through
+// `public-vocabulary.ts` and become `<literal>` when it does not list them; a skill-run name, a host, and a pull name are kept as they are after the
+// operator's redaction (CAPTURE 24), and what leaves the machine is decided at the deposit's one gate and by the pool.
 
 import { mcpOf, type ActionTable, type CanonicalAction } from './actions.js';
-import { BUNDLING_PROGRAMS, isPublicMcpTool, isRegistryVersion, LITERAL, PUBLIC_FLAGS, PUBLIC_HOSTS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SKILLS, PUBLIC_SUBCOMMANDS } from './public-vocabulary.js';
+import { isWireName, isWirePullName, wireName } from './pool-wire.js';
+import { BUNDLING_PROGRAMS, isPublicMcpTool, isRegistryVersion, LITERAL, PRIVATE, PUBLIC_FLAGS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SUBCOMMANDS } from './public-vocabulary.js';
+import type { Redactor } from './redact.js';
 import type { PullEcosystem, PullIdentity, ShellIdentity, StepIdentity, ToolPull } from './schema.js';
 
 /** A word of a shell command, as the tokenizer read it. */
@@ -12,6 +15,15 @@ export interface WordOfCommand {
 }
 
 const orLiteral = (name: string, allowed: ReadonlySet<string>): string => (allowed.has(name) ? name : LITERAL);
+
+/**
+ * A long-tail name (a skill run, a host, a pull) as the store keeps it: the name itself, or `<literal>` when it is not a name or the operator's redaction would change it. The test is the wire's own (`wireName`), so a name stored here is a
+ * name the deposit sends, and a list never decides it: the pool does, by deploy. The operator's exclusion terms are the deposit's, since they change after the capture.
+ */
+const keptName = (name: string, redact: Redactor, hasShape: (name: string) => boolean = isWireName): string => {
+  const kept = wireName({ redact, terms: [] }, name, hasShape);
+  return kept === PRIVATE ? LITERAL : kept;
+};
 
 const SHORT_CLUSTER = /^-[a-z]{1,4}$/;
 const SHORT_LETTER = /^-[A-Za-z]$/;
@@ -70,10 +82,13 @@ const REGISTRY_OF: { readonly [ecosystem in PullEcosystem]: string } = {
   mcp: 'mcp',
 };
 
-/** A pull in public names. A private package's version can still identify it, so it is masked with the name; a stated version stays stated. */
-export const pullIdentity = (pull: ToolPull): PullIdentity => {
-  const name = orLiteral(pull.name, PUBLIC_PACKAGES);
-  const showsVersion = name !== LITERAL && pull.version !== null && isRegistryVersion(pull.version);
+/**
+ * A pull with its package name as written (the command was redacted before it was read, and the name is checked once more part by part, as a host and a skill-run name are). A package off the public list can be identified by its version, so the version is masked beside it; a stated version of a listed package stays stated.
+ * A name that is not one (a URL, a path, a mask) is `<literal>`.
+ */
+export const pullIdentity = (pull: ToolPull, redact: Redactor): PullIdentity => {
+  const name = keptName(pull.name, redact, isWirePullName);
+  const showsVersion = PUBLIC_PACKAGES.has(name) && pull.version !== null && isRegistryVersion(pull.version);
   return { registry: REGISTRY_OF[pull.ecosystem], name, version: pull.version === null ? null : showsVersion ? pull.version : LITERAL };
 };
 
@@ -96,25 +111,25 @@ const checkoutTarget = (all: readonly WordOfCommand[]): ShellIdentity['target'] 
   return args.some((word) => (word.quoted || !word.text.startsWith('-')) && !isPositional(word)) ? 'word' : undefined;
 };
 
-export const shellIdentity = (program: string, args: readonly WordOfCommand[], pulls: readonly ToolPull[]): ShellIdentity => {
+export const shellIdentity = (program: string, args: readonly WordOfCommand[], pulls: readonly ToolPull[], redact: Redactor): ShellIdentity => {
   if (!PUBLIC_PROGRAMS.has(program)) return UNREAD_SHELL;
   const sub = subOf(program, args);
   const target = program === 'git' && sub === 'checkout' ? checkoutTarget(args) : undefined;
   const identity: ShellIdentity = { program, sub, flags: flagsOf(program, args), ...(target === undefined ? {} : { target }) };
-  return pulls.length === 0 ? identity : { ...identity, pulls: pulls.map(pullIdentity) };
+  return pulls.length === 0 ? identity : { ...identity, pulls: pulls.map((pull) => pullIdentity(pull, redact)) };
 };
 
-const hostOf = (url: string | undefined): { host: string | null } => {
+const hostOf = (url: string | undefined, redact: Redactor): { host: string | null } => {
   if (url === undefined || url === '') return { host: null };
-  // The parser drops credentials, the path, and the query, and lower-cases the host; the list then decides.
+  // The parser drops credentials, the path, and the query, and lower-cases the host; the redactor and the name shape then decide, and the pool hashes it on arrival.
   const parsed = URL.canParse(url) ? new URL(url).hostname : '';
-  return { host: orLiteral(parsed, PUBLIC_HOSTS) };
+  return { host: keptName(parsed, redact) };
 };
 
 /** What a non-shell call's step reads as. `native` comes back masked unless every name it holds is public, since an MCP name spells out its server. */
-export const callIdentity = (table: ActionTable, action: CanonicalAction, native: string, shown: string, input: { skill: string | undefined; url: string | undefined }): { native: string; identity: StepIdentity } => {
-  if (action === 'web.fetch' || action === 'web.search') return { native: shown, identity: hostOf(input.url) };
-  if (action === 'skill.run') return { native: shown, identity: { skill: orLiteral(input.skill ?? '', PUBLIC_SKILLS) } };
+export const callIdentity = (table: ActionTable, action: CanonicalAction, native: string, shown: string, input: { skill: string | undefined; url: string | undefined; redact: Redactor }): { native: string; identity: StepIdentity } => {
+  if (action === 'web.fetch' || action === 'web.search') return { native: shown, identity: hostOf(input.url, input.redact) };
+  if (action === 'skill.run') return { native: shown, identity: { skill: keptName(input.skill ?? '', input.redact) } };
   const mcp = action === 'mcp.call' ? mcpOf(table, native) : undefined;
   if (mcp === undefined) return { native: shown, identity: null };
   if (!PUBLIC_MCP_SERVERS.has(mcp.server)) return { native: LITERAL, identity: { server: LITERAL, tool: LITERAL } };

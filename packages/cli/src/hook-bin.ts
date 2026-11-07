@@ -25,6 +25,13 @@ const versionOf = (): string => {
   }
 };
 
+/** After the covenant is accepted, the nightly task sends what the pool outbox holds; with no server, sign-in, or acceptance it sends nothing. Loaded only here so the per-tool hooks never pay for it. It never throws. */
+const nightlyPool = async (event: HookEvent): Promise<void> => {
+  const { nightlyPoolDeps } = await import('./sessions/pool-nightly-deps.js');
+  const { nightlyPoolSend } = await import('./sessions/pool-nightly.js');
+  await nightlyPoolSend(nightlyPoolDeps(process.env, hookRuntime(event, process.env, process.platform, homedir(), { stdin: process.stdin, stdout: process.stdout }), versionOf(), Date.now));
+};
+
 const eventOf = (name: string | undefined): HookEvent | undefined => HOOK_EVENTS.find((event) => event === name);
 
 try {
@@ -40,7 +47,10 @@ try {
     );
     if (output !== undefined) process.stdout.write(output);
     // The nightly task is where telemetry is sent from; it never throws, and it sends nothing unless telemetry is on and the notice was shown (the server is OARS_POOL_URL, else the Many Oars pool).
-    if (event === 'nightly') await sendNightly(process.env, process.platform, homedir(), Date.now);
+    if (event === 'nightly') {
+      await sendNightly(process.env, process.platform, homedir(), Date.now);
+      await nightlyPool(event);
+    }
   }
 } catch {
   // Fail-open.
