@@ -3,8 +3,8 @@ import { answer, bodyOf, fieldOf, refuse, textField, type Env } from './http.js'
 
 /** What one stored row can hold: D1 caps a row at 2,000,000 bytes, and the stored skeleton shares the row with its other columns. A batch past this is refused whole, whatever its parts. */
 export const MAX_ASSEMBLED_BYTES = 1_800_000;
-/** How many parts one batch may have, so the staging rows of one batch stay bounded. */
-const MAX_PARTS = 64;
+/** How many parts one batch may have. The client sends parts of 512 KiB, so the join cap needs 4 at most; 8 leaves room for a smaller part size. */
+const MAX_PARTS = 8;
 
 const PART = /^([1-9][0-9]{0,2})\/([1-9][0-9]{0,2})$/;
 const SHA256 = /^[0-9a-f]{64}$/;
@@ -35,12 +35,24 @@ export const receivePart = async (request: Request, env: Env, account: string, b
   const count = Number(found?.[2]);
   if (found === null || part > count || count > MAX_PARTS) return badPart(`oars-part is n/m with 1 <= n <= m <= ${String(MAX_PARTS)}.`);
   if (!SHA256.test(batch)) return badPart('oars-batch is the SHA-256 of the whole batch, in lowercase hexadecimal.');
+  const before = await heldParts(env, account, batch);
+  // A finished batch answers any retried part from its deposit, whatever the retry names.
+  const finished = before.find((row) => row.deposit !== null);
+  if (finished !== undefined) return answer(201, { ok: true, id: finished.deposit });
+  // Parts naming two counts are never one batch. Nothing is written for this one, and what is held is dropped so the client's next full send starts clean.
+  if (before.some((row) => row.count !== count)) {
+    await forget(env, account, batch);
+    return badPart('The parts of one batch all name the same count. Send every part again.');
+  }
+  // Staging is bounded by what the join may hold: a part that takes the held bytes past it is refused now, not when the last part arrives.
+  const staged = before.filter((row) => row.part !== part).reduce((sum, row) => sum + new TextEncoder().encode(row.body).length, new TextEncoder().encode(body).length);
+  if (staged > MAX_ASSEMBLED_BYTES) {
+    await forget(env, account, batch);
+    return refuse(413, 'too_large', `A deposit holds at most ${String(MAX_ASSEMBLED_BYTES)} bytes, in parts or whole.`);
+  }
   // A retried part lands on its own row and changes nothing.
   await env.DB.prepare('INSERT INTO deposit_parts (account, batch, part, count, body) VALUES (?, ?, ?, ?, ?) ON CONFLICT (account, batch, part) DO NOTHING').bind(account, batch, part, count, body).run();
   const held = await heldParts(env, account, batch);
-  if (held.some((row) => row.count !== count)) return badPart('The parts of one batch all name the same count.');
-  const finished = held.find((row) => row.deposit !== null);
-  if (finished !== undefined) return answer(201, { ok: true, id: finished.deposit });
   if (held.length < count) return answer(202, { ok: true, pending: count - held.length });
   const whole = held.map((row) => row.body).join('');
   const bytes = new TextEncoder().encode(whole);
