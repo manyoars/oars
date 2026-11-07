@@ -3,7 +3,7 @@
 // sending, and the server parses it again, field by field, because a live URL takes anything from anyone. This file imports nothing from the file system: the Worker bundles it.
 
 import { ACTION_TABLES, CANONICAL_ACTIONS, mcpOf, type CanonicalAction } from './actions.js';
-import { CUSTOM_AGENT, FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRIVATE, publicEffort, publicModel, publicVersion, PUBLIC_FLAGS, PUBLIC_HOSTS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SKILLS, projectedAgentType, PUBLIC_SUBCOMMANDS, REPO_SIZES, VOCAB_VERSION, type RepoSize } from './public-vocabulary.js';
+import { CUSTOM_AGENT, FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRIVATE, publicEffort, publicModel, publicVersion, PUBLIC_FLAGS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, projectedAgentType, PUBLIC_SUBCOMMANDS, REPO_SIZES, VOCAB_VERSION, type RepoSize } from './public-vocabulary.js';
 import type { Cell } from './cells.js';
 import type { Redactor } from './redact.js';
 import type { Motif } from './motif.js';

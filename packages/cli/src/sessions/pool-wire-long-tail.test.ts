@@ -92,8 +92,10 @@ describe('what the client sends after redaction', () => {
 describe('what the pool takes', () => {
   const sendStep = (identity: unknown, action: string, native: string): unknown => {
     const skeleton = skeletonFor([{ native: 'Bash', steps: [step(0, 0, 'shell.exec', { native: 'Bash', identity: { program: 'git', sub: null, flags: [] } })] }]);
-    const wire = JSON.parse(JSON.stringify(skeleton)) as { transcripts: { tools: { steps: Record<string, unknown>[] }[] }[] };
-    Object.assign(wire.transcripts[0]?.tools[0]?.steps[0] ?? {}, { action, native, identity });
+    const first = skeleton?.transcripts[0]?.tools[0]?.steps[0];
+    if (first === undefined) throw new Error('the sample has no step');
+    Object.assign(first, { action, native, identity });
+    const wire: unknown = JSON.parse(JSON.stringify(skeleton));
     return wire;
   };
 
