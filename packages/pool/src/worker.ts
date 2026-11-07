@@ -7,6 +7,7 @@ import { answer, bound, notConfigured, refuse, wholeBinding, type Env } from './
 import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf } from './ingest.js';
 import { accountOf, login } from './identity.js';
 import { hashHosts, hashKey } from './ingest-hash.js';
+import { telemetry, type TelemetryEnv } from './telemetry.js';
 
 /** D1 holds at most 2 MB in one value. A body declaring more is refused unread, and one that declares nothing is measured before it is parsed. */
 const MAX_DEPOSIT_BYTES = 1024 * 1024;
@@ -106,10 +107,12 @@ const decoded = (name: string): string => {
 };
 
 export default {
-  fetch: async (request: Request, env: Env): Promise<Response> => {
+  fetch: async (request: Request, env: Env & TelemetryEnv): Promise<Response> => {
     const { pathname } = new URL(request.url);
     if (request.method === 'POST') {
       if (pathname === '/v1/deposits') return deposit(request, env);
+      // Not a deposit: it needs no covenant, and it is answered with deposits closed.
+      if (pathname === '/v1/telemetry') return telemetry(request, env, Date.now);
       if (pathname === '/v1/login') return login(request, env);
       if (pathname === '/v1/covenant/accept') return covenantAccept(request, env);
     }
