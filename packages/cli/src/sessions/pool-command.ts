@@ -759,7 +759,7 @@ const RAW = 'pool-raw';
 
 /** The raw prompt, in plain words: shown by `oars pool raw` until it is answered, and what the nightly send relies on. Redaction is best effort and the text says so. */
 export const RAW_PROMPT = [
-  'Raw transcripts are separate from the covenant. If you say yes, a redacted copy of each full transcript of every folder you allowed is uploaded to the pool, not only its skeleton.',
+  'Raw transcripts are separate from the covenant. If you say yes, then once the pool says your account accepted its covenant, the nightly task uploads a redacted copy of each full transcript of every folder you allowed, beside its skeleton, except a folder you set to skeleton only or off.',
   'Redaction runs on this machine, before anything is queued, and it is best effort: it masks secret shapes it knows, emails, your username, home paths, environment values, and hosts, and it can miss a secret that has no recognizable shape or a name written in prose.',
   'It also does not catch a host with no dot, a public host name outside a link, quoted file contents and command output, a secret split across lines, images and attachments, a JSON env value, your username written another way, another person\'s hyphenated name in a project folder path, or an IPv6 address with a zone or inside a longer word, and a common-word account name is masked everywhere it appears.',
   'Say no, or say nothing, and only skeletons leave. Change your mind any time: oars pool raw --consent yes|no. A no stops later sends only; it cannot recall what was already sent.',
@@ -780,7 +780,7 @@ export const poolRaw = async (deps: RunDeps, options: { consent?: string | undef
     }
   });
   const answer = choices.rawConsent === null ? 'not answered yet: only skeletons leave' : choices.rawConsent === 'granted' ? 'yes: redacted raw copies leave' : 'no: only skeletons leave';
-  const switched = Object.entries(choices.folders).map(([entry, set]) => `  ${entry}: ${set === 'off' ? 'nothing leaves' : 'skeletons only'}`);
+  const switched = Object.entries(choices.folders).map(([entry, set]) => `  ${entry}: ${set === 'off' ? 'nothing sent to the pool' : 'skeletons only'}`);
   const lines = [...(choices.rawConsent === null ? [RAW_PROMPT, ''] : []), `Raw copies: ${answer}.`, ...(switched.length === 0 ? [] : ['Folders switched down:', ...switched])];
   return { document: { ok: true, rawConsent: choices.rawConsent, folders: choices.folders }, text: lines.join('\n') };
 };
