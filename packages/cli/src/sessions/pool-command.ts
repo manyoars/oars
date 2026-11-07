@@ -6,7 +6,7 @@ import type { Outcome, RunDeps } from '../cli.js';
 import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../errors.js';
 import { compileAllow } from './allow.js';
 import { checkSession, exclusionPaths, lastWritten, type Reason } from './exclusion.js';
-import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, isMissing, lockedBatch, markShown, outboxFolder, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
+import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, isMissing, lockedBatch, markShown, outboxFolder, partsOf, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
 import { HARNESSES, hasEnded, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type PinnedKey, type SessionRecords, type TranscriptRoot } from './pool-wire.js';
 import { carriedDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
@@ -132,6 +132,8 @@ interface Call {
   /** A body already serialized, sent as it is: a batch from the outbox, whose bytes were hashed and printed. */
   bytes?: string;
   token?: string;
+  /** One part of a batch sent in several: its position (from 1), how many there are, and the SHA-256 of the whole batch, which is what keeps the parts one deposit. */
+  part?: { index: number; count: number; batch: string };
   /** The ETag of the bundle already kept, so the pool can answer 304 with no bundle. */
   ifNoneMatch?: string;
   /** Set for a command that prints what it sends: the print comes first, with these secrets masked. */
@@ -146,6 +148,7 @@ const outgoing = (deps: RunDeps, server: string, path: string, init: Call): Outg
   const headers: Array<[string, string]> = [['user-agent', `oars/${deps.version}`], ['accept', 'application/json']];
   if (init.token !== undefined) headers.push(['authorization', `Bearer ${init.token}`]);
   // Node's `fetch` writes `cache-control` and `pragma` itself whenever `if-none-match` is set, so they are named here to be printed.
+  if (init.part !== undefined) headers.push(['oars-part', `${String(init.part.index)}/${String(init.part.count)}`], ['oars-batch', init.part.batch]);
   if (init.ifNoneMatch !== undefined) headers.push(['if-none-match', init.ifNoneMatch], ['cache-control', 'no-cache'], ['pragma', 'no-cache']);
   const body = init.bytes ?? (init.body === undefined ? undefined : JSON.stringify(init.body));
   if (body !== undefined) headers.push(['content-type', 'application/json']);
@@ -383,11 +386,18 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
     const title = lockMessages.batch_changed;
     throw new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code: 'batch_changed', title, status: 409 });
   }
-  let reply = await ask(deps, DEPOSIT, server, POOL_DEPOSITS, { token, bytes }, via);
-  for (let attempt = 1; attempt < SEND_ATTEMPTS && reply.status === 409 && isObject(reply.body) && textIn(reply.body, 'error') === DEPOSIT_CONFLICT; attempt += 1) {
-    reply = await ask(deps, DEPOSIT, server, POOL_DEPOSITS, { token, bytes }, via);
+  // A batch past one request's bytes goes in parts, in order, each answered 202 until the last completes the deposit with 201. A part sent again is harmless, so the retry below covers every part alike.
+  const parts = partsOf(bytes);
+  for (const [at, piece] of parts.entries()) {
+    const call: Call = { token, bytes: piece, ...(parts.length === 1 ? {} : { part: { index: at + 1, count: parts.length, batch: hash } }) };
+    let reply = await ask(deps, DEPOSIT, server, POOL_DEPOSITS, call, via);
+    for (let attempt = 1; attempt < SEND_ATTEMPTS && reply.status === 409 && isObject(reply.body) && textIn(reply.body, 'error') === DEPOSIT_CONFLICT; attempt += 1) {
+      reply = await ask(deps, DEPOSIT, server, POOL_DEPOSITS, call, via);
+    }
+    // 201 on any part means the deposit already finished (this part is a retry), so the rest need not be sent.
+    if (reply.status === 201) break;
+    if (reply.status !== 202 || at === parts.length - 1) throw refusal(DEPOSIT, reply);
   }
-  if (reply.status !== 201) throw refusal(DEPOSIT, reply);
   return { document: { ok: true, server, hash, sent: true }, text: `Sent batch ${hash} to ${server}.` };
 };
 
