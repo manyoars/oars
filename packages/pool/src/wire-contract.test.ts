@@ -200,7 +200,7 @@ describe('a value this server does not know', () => {
 describe('a format 3 batch with every optional field absent', () => {
   /** What an absent optional field reads as, which is what a sent null is. */
   const EMPTY: { [name: string]: unknown } = { deltas: [], timingPrint: null, languageShares: [] };
-  const ABSENT_ONLY: ReadonlySet<string> = new Set(['reach', 'skill']);
+  const ABSENT_ONLY: ReadonlySet<string> = new Set(['reach', 'skill', 'edges', 'recoveryCalls']);
 
   // Each level of the wire with its optional names and where it sits; a level added to OPTIONAL fails the length check below until it is listed here.
   const LEVELS_OPTIONAL: readonly (readonly [readonly string[], (string | number)[]])[] = [
@@ -210,6 +210,7 @@ describe('a format 3 batch with every optional field absent', () => {
     [OPTIONAL.prompt, ['transcripts', 0, 'prompts', 0]],
     [OPTIONAL.tool, ['transcripts', 0, 'tools', 0]],
     [OPTIONAL.step, ['transcripts', 0, 'tools', 0, 'steps', 0]],
+    [OPTIONAL.transcript, ['transcripts', 0]],
   ];
 
   it('is served from what remains, as the same batch with each of them sent as null', async () => {
@@ -218,7 +219,7 @@ describe('a format 3 batch with every optional field absent', () => {
     expect(LEVELS_OPTIONAL).toHaveLength(Object.keys(OPTIONAL).length);
     for (const [names, path] of LEVELS_OPTIONAL) {
       for (const name of names) {
-        // A reach or a skill has no null form: it is an object or a list member, so sending nothing is the one way to leave it out.
+        // A reach, a skill, an edge list, or a recoveryCalls has no null form: it is an object, a list member, or a list left out when empty, so sending nothing is the one way to leave it out.
         if (ABSENT_ONLY.has(name)) Reflect.deleteProperty(holder(nulled, ...path), name);
         else holder(nulled, ...path)[name] = name in EMPTY ? EMPTY[name] : null;
         Reflect.deleteProperty(holder(sparse, ...path), name);

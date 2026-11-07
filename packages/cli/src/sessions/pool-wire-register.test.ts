@@ -87,6 +87,7 @@ export const REGISTER_FIXTURE = {
       merkleRoot: 'a'.repeat(64),
       leaves: 12,
       harness: 'claude-code',
+      spawnedIn: null,
       frame: { ...FRAME, reach: REACH },
       frames: [{ ...FRAME, reach: REACH }],
       prompts: [{ cls: 'edit-verify', errors: 0, wallSec: 5, usage: { input: 1, cacheWrite: 2, cacheRead: 3, output: 4, thinking: 5 }, explore: 6, frame: FRAME }],
@@ -94,12 +95,21 @@ export const REGISTER_FIXTURE = {
         {
           side: false,
           prompt: 0,
+          status: 'error',
+          durationMs: 7,
+          errorCode: '429',
+          recoveryCalls: { next: ['shell.exec'], editFollowed: false },
+          steps: [{ ...STEP, status: 'error', action: 'file.read', native: 'Read', identity: null }],
+        },
+        {
+          side: false,
+          prompt: 0,
           status: 'ok',
           durationMs: 7,
           steps: [
             { ...STEP, skill: 'commit', action: 'shell.exec', native: 'Bash', identity: { program: 'npm', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] } },
-            { ...STEP, action: 'mcp.call', native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' } },
-            { ...STEP, action: 'skill.run', native: 'Skill', identity: { skill: 'commit' } },
+            { ...STEP, edges: [{ kind: 'next', target: 0 }], action: 'mcp.call', native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' } },
+            { ...STEP, edges: [{ kind: 'next', target: 1 }, { kind: 'retried', target: 0 }], action: 'skill.run', native: 'Skill', identity: { skill: 'commit' } },
             { ...STEP, action: 'web.fetch', native: 'WebFetch', identity: { host: 'github.com' } },
           ],
         },
@@ -156,7 +166,7 @@ describe('the wire field register', () => {
     const total = [...fieldBytes(REGISTER_FIXTURE).values()].reduce((sum, bytes) => sum + bytes, 0);
     expect(total + envelopeBytes(REGISTER_FIXTURE)).toBe(Buffer.byteLength(canonicalBytes(REGISTER_FIXTURE), 'utf8'));
     expect(envelopeBytes(REGISTER_FIXTURE)).toBe(9);
-    expect(Buffer.byteLength(canonicalBytes(REGISTER_FIXTURE), 'utf8')).toBe(2_518);
+    expect(Buffer.byteLength(canonicalBytes(REGISTER_FIXTURE), 'utf8')).toBe(2_937);
     expect(fieldBytes({ a: [1, 2], b: { c: 'x' }, d: undefined }).get('a')).toBe(4 + 5);
     expect(fieldBytes({ a: [1, 2], b: { c: 'x' }, d: undefined }).get('b')).toBe(4 + 2);
     expect(fieldBytes({ a: [1, 2], b: { c: 'x' }, d: undefined }).get('c')).toBe(7);

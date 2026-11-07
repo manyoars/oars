@@ -91,6 +91,7 @@ const REAL = {
       merkleRoot: 'a'.repeat(64),
       leaves: 12,
       harness: 'claude-code',
+      spawnedIn: null,
       frame: { ...FRAME, reach: REACH },
       frames: [{ ...FRAME, reach: REACH }, { ...FRAME, model: 'claude-sonnet-5-5', reach: REACH }],
       prompts: [{ cls: 'edit-verify', errors: 0, wallSec: 5, usage: { input: 1, cacheWrite: 2, cacheRead: 3, output: 4, thinking: 5 }, explore: 6, frame: FRAME }],
@@ -98,11 +99,13 @@ const REAL = {
         {
           side: false,
           prompt: 0,
-          status: 'ok',
+          status: 'error',
           durationMs: 7,
+          errorCode: '1',
+          recoveryCalls: { next: [], editFollowed: false },
           steps: [
             { ...STEP, action: 'shell.exec', native: 'Bash', identity: { program: 'npm', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] } },
-            { ...STEP, action: 'mcp.call', native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' } },
+            { ...STEP, action: 'mcp.call', native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' }, edges: [{ kind: 'next', target: 0 }] },
             { ...STEP, action: 'skill.run', native: 'Skill', identity: { skill: 'commit' }, skill: 'commit' },
             { ...STEP, action: 'web.fetch', native: 'WebFetch', identity: { host: 'github.com' } },
           ],

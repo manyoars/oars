@@ -15,8 +15,12 @@ describe('wrangler.jsonc', () => {
     expect(databases).toEqual([{ binding: 'DB', database_name: 'oars-pool', migrations_dir: 'migrations' }]);
   });
 
-  it('binds the raw tier\'s bucket by name, with no account or resource id', () => {
-    expect(fieldOf(parsed, 'r2_buckets')).toEqual([{ binding: 'RAW', bucket_name: 'oars-pool-raw' }]);
+  it('binds the raw tier, the telemetry record, and the index by name, with no account or resource id', () => {
+    expect(fieldOf(parsed, 'r2_buckets')).toEqual([
+      { binding: 'RAW', bucket_name: 'oars-pool-raw' },
+      { binding: 'TELEMETRY', bucket_name: 'oars-telemetry' }
+    ]);
+    expect(fieldOf(parsed, 'analytics_engine_datasets')).toEqual([{ binding: 'TELEMETRY_EVENTS', dataset: 'oars_telemetry' }]);
   });
 
   it('holds nothing shaped like an id or a key', () => {
