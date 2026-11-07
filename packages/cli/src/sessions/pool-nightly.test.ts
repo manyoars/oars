@@ -271,17 +271,17 @@ describe('withSendLock', () => {
   it('runs one holder at a time and removes the lock file when the holder throws', async () => {
     const outbox = folder();
     const order: string[] = [];
-    const first = withSendLock(outbox, async () => {
-      order.push('first in');
-      await new Promise((resolve) => setTimeout(resolve, 60));
-      order.push('first out');
-    });
-    const second = withSendLock(outbox, () => {
-      order.push('second in');
-      return Promise.resolve();
-    });
-    await Promise.all([first, second]);
-    expect(order).toEqual(['first in', 'first out', 'second in']);
+    // The lock promises one holder at a time, not first come first served: either holder may win the race, so the test asserts only that each holder's `out` follows its own `in` before the other `in`.
+    const holder = (name: string, ms: number) => async (): Promise<void> => {
+      order.push(`${name} in`);
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      order.push(`${name} out`);
+    };
+    await Promise.all([withSendLock(outbox, holder('first', 60)), withSendLock(outbox, holder('second', 1))]);
+    expect(order).toHaveLength(4);
+    expect(order[1]).toBe(order[0].replace(' in', ' out'));
+    expect(order[3]).toBe(order[2].replace(' in', ' out'));
+    expect(new Set(order).size).toBe(4);
     await expect(withSendLock(outbox, () => Promise.reject(new Error('boom')))).rejects.toThrow('boom');
     expect(existsSync(join(outbox, 'send.lock'))).toBe(false);
   });
