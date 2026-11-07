@@ -84,7 +84,27 @@ const CRON_CONFIG = /"crons"/;
 
 // The nightly telemetry rollup is the one scheduled job: `worker.ts` may carry the handler when it runs `rollupRecent`, and the Worker config may carry the cron that fires it. The rollup reads the telemetry
 // record and writes its own table, so the files that hold it (checked by the test below) name no ledger table.
-const ROLLUP_CALL = /\brollupRecent\(/;
+// "Runs it" is exact: the handler's body is this one statement and nothing else, and the config's cron list is this one entry. Anything more (a second job in the handler, a second cron) is an offence.
+const ROLLUP_BODY = 'await rollupRecent(env, controller.scheduledTime);';
+const ROLLUP_CRONS = '"17 3 * * *"';
+/** The statements of the `scheduled` handler: what lies between the braces of its body, nested blocks included, or undefined when none is found. */
+const scheduledBody = (body: string): string | undefined => {
+  const from = body.search(/\bscheduled\b/);
+  const opening = from < 0 ? null : /(?:=>|\))\s*\{/.exec(body.slice(from));
+  if (opening === null) return undefined;
+  const start = from + opening.index + opening[0].length;
+  let depth = 1;
+  for (let at = start; at < body.length; at += 1) {
+    depth += body[at] === '{' ? 1 : body[at] === '}' ? -1 : 0;
+    if (depth === 0) return body.slice(start, at).trim().replace(/\s+/g, ' ');
+  }
+  return undefined;
+};
+/** True when every `"crons"` in the config is an array of exactly the rollup's one entry. */
+const onlyRollupCron = (body: string): boolean => {
+  const arrays = [...body.matchAll(/"crons"\s*:\s*\[([^\]]*)\]/g)].map((one) => (one[1] ?? '').trim());
+  return arrays.length === (body.match(/"crons"/g) ?? []).length && arrays.every((one) => one === ROLLUP_CRONS);
+};
 const ROLLUP_FILES = ['src/telemetry-rollup.ts', 'src/telemetry-fleet.ts'];
 const LEDGER_NAME = /\b(?:deposits|contributors)\b/i;
 
@@ -92,8 +112,8 @@ const LEDGER_NAME = /\b(?:deposits|contributors)\b/i;
 const offences = (files: { [name: string]: string }): string[] =>
   Object.entries(files).flatMap(([name, text]) => {
     const body = code(text);
-    const rollupHandler = name === 'src/worker.ts' && ROLLUP_CALL.test(body);
-    const rollupCron = name === 'wrangler.jsonc';
+    const rollupHandler = name === 'src/worker.ts' && scheduledBody(body) === ROLLUP_BODY;
+    const rollupCron = name === 'wrangler.jsonc' && onlyRollupCron(body);
     return [
       ...(LEDGER_DELETE.test(body) ? [`${name}: DELETE FROM the ledger`] : []),
       ...(LEDGER_REPLACE.test(body) ? [`${name}: a REPLACE that deletes a ledger row`] : []),
@@ -157,9 +177,10 @@ describe('the pool has no path that deletes the ledger', () => {
 
   it('lets only the telemetry rollup run on a schedule, and keeps its files clear of the ledger', () => {
     const files = poolFiles();
-    // The rollup is the one scheduled job: worker.ts carries the handler, and it runs `rollupRecent` and nothing else.
-    expect(code(files['src/worker.ts'] ?? '')).toMatch(SCHEDULED_HANDLER);
-    expect(files['wrangler.jsonc']).toMatch(CRON_CONFIG);
+    // The rollup is the one scheduled job: worker.ts carries the handler, its body is exactly the one `rollupRecent` call, and the config carries exactly its one cron.
+    expect(scheduledBody(code(files['src/worker.ts'] ?? ''))).toBe(ROLLUP_BODY);
+    expect(code(files['wrangler.jsonc'] ?? '')).toMatch(CRON_CONFIG);
+    expect(onlyRollupCron(code(files['wrangler.jsonc'] ?? ''))).toBe(true);
     expect(offences(files)).toEqual([]);
     for (const name of ROLLUP_FILES) {
       expect(Object.keys(files), name).toContain(name);
@@ -167,8 +188,21 @@ describe('the pool has no path that deletes the ledger', () => {
     }
     // A handler that does not run the rollup, or one in another file, is still an offence.
     expect(offences({ 'src/worker.ts': 'export default { scheduled(event, env) { sweep(env); } }' })).toEqual(['src/worker.ts: a scheduled handler']);
-    expect(offences({ 'src/other.ts': 'export default { scheduled(event, env) { rollupRecent(env, 1); } }' })).toEqual(['src/other.ts: a scheduled handler']);
-    expect(offences({ 'src/worker.ts': 'export default { scheduled(event, env) { rollupRecent(env, 1); } }' })).toEqual([]);
+    const handler = (statements: string): string => `export default { scheduled: async (controller: { scheduledTime: number }, env: Env): Promise<void> => { ${statements} } }`;
+    expect(offences({ 'src/other.ts': handler(ROLLUP_BODY) })).toEqual(['src/other.ts: a scheduled handler']);
+    expect(offences({ 'src/worker.ts': handler(ROLLUP_BODY) })).toEqual([]);
+    expect(offences({ 'src/worker.ts': 'export default { scheduled(controller, env) { await rollupRecent(env, controller.scheduledTime); } }' })).toEqual([]);
+    // A handler that also runs another job, or runs the rollup with a nested block, is an offence however it is ordered.
+    expect(offences({ 'src/worker.ts': handler(`${ROLLUP_BODY} sweep(env);`) })).toEqual(['src/worker.ts: a scheduled handler']);
+    expect(offences({ 'src/worker.ts': handler(`sweep(env); ${ROLLUP_BODY}`) })).toEqual(['src/worker.ts: a scheduled handler']);
+    expect(offences({ 'src/worker.ts': handler(`if (env.DB) { ${ROLLUP_BODY} }`) })).toEqual(['src/worker.ts: a scheduled handler']);
+    expect(offences({ 'src/worker.ts': 'export default { fetch }' })).toEqual([]);
+    // The cron list is exactly the rollup's one entry.
+    expect(offences({ 'wrangler.jsonc': '{ "triggers": { "crons": ["17 3 * * *"] } }' })).toEqual([]);
+    expect(offences({ 'wrangler.jsonc': '{ "triggers": { "crons": ["17 3 * * *", "0 * * * *"] } }' })).toEqual(['wrangler.jsonc: a cron trigger']);
+    expect(offences({ 'wrangler.jsonc': '{ "triggers": { "crons": ["0 * * * *"] } }' })).toEqual(['wrangler.jsonc: a cron trigger']);
+    expect(offences({ 'wrangler.jsonc': '{ "triggers": { "crons": ["17 3 * * *"] }, "env": { "x": { "triggers": { "crons": ["5 * * * *"] } } } }' })).toEqual(['wrangler.jsonc: a cron trigger']);
+    expect(offences({ 'wrangler.jsonc': '{ "triggers": { "crons": "17 3 * * *" } }' })).toEqual(['wrangler.jsonc: a cron trigger']);
     expect(offences({ 'src/other.json': '{ "crons": ["0 3 * * *"] }' })).toEqual(['src/other.json: a cron trigger']);
   });
 
