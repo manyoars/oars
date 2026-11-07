@@ -4,109 +4,83 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { frame, printOf, prompt, session, sessionsFrom, step, storedNames, store, tool } from '../../cli/src/sessions/pool-fixture.js';
+import { bigSkeleton, COVERAGE_KEY, coverageBytesSkeleton, envelopeBytes, largeSkeleton, REGISTER_FIXTURE } from '../../cli/src/sessions/pool-fixture.js';
 import { canonicalBytes } from '../../cli/src/sessions/pool-outbox.js';
-import { envelopeBytes, REGISTER_FIXTURE } from '../../cli/src/sessions/pool-wire-register.test.js';
-import { skeletonOf, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
-import type { CanonicalAction } from '../../cli/src/sessions/actions.js';
-import { PUBLIC_PROGRAMS, PUBLIC_SUBCOMMANDS } from '../../cli/src/sessions/public-vocabulary.js';
+import type { SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { incrementsOf } from './ingest.js';
 import { sampleSkeleton } from './sample.js';
+import { startPool, stubUser } from './test-pool.js';
 
 const DOC = readFileSync(fileURLToPath(new URL('../../../docs/pool.md', import.meta.url)), 'utf8');
 
-const oneSkeleton = (from: ReturnType<typeof store>, id: string): SessionSkeleton => {
-  const [only] = sessionsFrom(from);
-  const built = only === undefined ? null : skeletonOf(only, id, storedNames, printOf);
-  if (built === null) throw new Error('no skeleton');
-  return built;
+/** The three `unknown` coverage bands a skeleton with no repo, no hour, and no org context still carries on each frame. */
+const BANDS = ['orgSize', 'team', 'repoVisibility'];
+
+/** What the bands cost on a skeleton: its JSON length minus the same skeleton with the bands deleted from the transcript's frame and each frame in its list. */
+const bandBytes = (built: SessionSkeleton): { bytes: number; frames: number } => {
+  const bare: SessionSkeleton = structuredClone(built);
+  let frames = 0;
+  for (const transcript of bare.transcripts) {
+    for (const held of [transcript.frame, ...transcript.frames]) {
+      frames += 1;
+      for (const band of BANDS) Reflect.deleteProperty(held, band);
+    }
+  }
+  return { bytes: JSON.stringify(built).length - JSON.stringify(bare).length, frames };
 };
 
-/** The 3,400-step deposit of `ingest.test.ts` ("a large deposit"): one prompt of calls on a fixed pseudo-random line, so its cells are mostly distinct. */
-const largeSkeleton = (): SessionSkeleton => {
-  const natives: [CanonicalAction, string][] = [
-    ['file.read', 'Read'],
-    ['file.edit', 'Edit'],
-    ['file.write', 'Write'],
-    ['file.search', 'Grep'],
-    ['plan.update', 'TodoWrite'],
-    ['shell.exec', 'Bash'],
-    ['shell.exec', 'Bash'],
-    ['shell.exec', 'Bash'],
-    ['shell.exec', 'Bash'],
-  ];
-  const flags = 'abcdefghijklmnopqrstuvwxyz'.split(/(?:)/u);
-  const programs = [...PUBLIC_PROGRAMS];
-  let seed = 7;
-  const next = (): number => {
-    seed = (seed * 1103515245 + 12345) % 2147483648;
-    return Math.floor(seed / 65536);
-  };
-  const framed = frame({ shell: 'bash', day: '2026-11-01', stack: { languages: ['typescript'], frameworks: [], size: null } });
-  const calls = Array.from({ length: 3400 }, (_, n) => {
-    const [action, native] = natives[next() % natives.length] ?? natives[0] ?? ['other', 'x'];
-    const program = programs[next() % programs.length] ?? 'git';
-    const subs = [null, ...(PUBLIC_SUBCOMMANDS.get(program) ?? [])];
-    const identity = action === 'shell.exec' ? { program, sub: subs[next() % subs.length] ?? null, flags: [`-${flags[next() % flags.length] ?? 'a'}`] } : null;
-    return tool('s1', n, native, { steps: [step(n, 0, action, { native, identity })] });
-  });
-  return oneSkeleton(store({ sessions: [session('s1', { frame: framed })], prompts: [prompt('s1', 0, { frame: framed })], tools: calls }), '0000000000009101');
+/** The row the worker stores for the large deposit, measured the way `ingest.test.ts` does: post it to a pool and read the bytes of the columns the account's byte limit counts. */
+const storedRow = async (built: SessionSkeleton): Promise<{ stored: number; extensions: number }> => {
+  const target = await startPool();
+  try {
+    const { token } = await target.signIn('github', stubUser('9201'));
+    await target.post('/v1/covenant/accept', { version: 'v1' }, token);
+    const posted = await target.post('/v1/deposits', built, token);
+    if (posted.status !== 201) throw new Error(`the large deposit was refused with ${String(posted.status)}`);
+    const db = await target.db();
+    const column = async (name: string): Promise<number> => Number(await db.prepare(`SELECT LENGTH(CAST(${name} AS BLOB)) AS bytes FROM deposits`).first('bytes'));
+    return { stored: (await column('skeleton')) + (await column('deltas')) + (await column('extensions')), extensions: await column('extensions') };
+  } finally {
+    await target.dispose();
+  }
 };
 
-/** The 5,000-shell-call session of `parts.test.ts`. */
-const bigBytes = (): number => {
-  const framed = frame({ shell: 'bash' });
-  const shell = (n: number) => step(n, 0, 'shell.exec', { native: 'Bash', identity: { program: 'git', sub: 'push', flags: [] } });
-  const calls = Array.from({ length: 5000 }, (_, n) => tool('s1', n, 'Bash', { steps: [shell(n)] }));
-  const built = oneSkeleton(store({ sessions: [session('s1', { frame: framed })], prompts: [prompt('s1', 0, { frame: framed })], tools: calls }), '0000000000000001');
-  return Buffer.byteLength(canonicalBytes(built), 'utf8');
-};
-
-/** The three-prompt fixture of `pool-wire-coverage.test.ts` ("bytes on a fixture that carries a repo key and timestamps"). */
+/** The coverage-bytes fixture's costs, from the one builder `pool-wire-coverage.test.ts` pins them on. */
 const coverageBytes = (): { bare: number; keyOnly: number; hourOnly: number; both: number; frames: number; timedFrames: number } => {
-  const key = '0123456789abcdef';
-  const hours = ['2026-11-01T09:10:00.000Z', '2026-11-01T14:20:00.000Z', '2026-11-01T22:30:00.000Z'];
-  const skeleton = (repo: string | null, timed: boolean): SessionSkeleton => {
-    const framed = frame({ day: '2026-11-01', shell: 'bash' });
-    return oneSkeleton(
-      store({
-        sessions: [session('s1', { frame: framed, repo, tsFirst: timed ? (hours[0] ?? null) : null })],
-        prompts: hours.map((ts, index) => prompt('s1', index, { frame: framed, ts: timed ? ts : null })),
-        tools: hours.flatMap((_, index) => [0, 1].map((call) => tool('s1', index * 2 + call, 'Read', { steps: [step(index * 2 + call, 0, 'file.read', { native: 'Read' })], prompt: index }))),
-      }),
-      key,
-    );
-  };
-  const size = (repo: string | null, timed: boolean): number => JSON.stringify(skeleton(repo, timed)).length;
+  const size = (repo: string | null, timed: boolean): number => JSON.stringify(coverageBytesSkeleton(repo, timed)).length;
   const framesOf = (timed: boolean): number => {
-    const transcript = skeleton(key, timed).transcripts[0];
+    const transcript = coverageBytesSkeleton(COVERAGE_KEY, timed).transcripts[0];
     return transcript === undefined ? 0 : 1 + transcript.frames.length;
   };
   const bare = size(null, false);
-  return { bare, keyOnly: size(key, false) - bare, hourOnly: size(null, true) - bare, both: size(key, true) - bare, frames: framesOf(false), timedFrames: framesOf(true) };
+  return { bare, keyOnly: size(COVERAGE_KEY, false) - bare, hourOnly: size(null, true) - bare, both: size(COVERAGE_KEY, true) - bare, frames: framesOf(false), timedFrames: framesOf(true) };
 };
 
 interface Figures {
   [id: string]: number;
 }
 
-const figures = (): Figures => {
-  const large = largeSkeleton();
+const figures = async (): Promise<Figures> => {
+  const large = largeSkeleton('0000000000009101');
   const cells = incrementsOf(large).cells;
   const cellJson = JSON.stringify([...cells.values()]).length;
   const skeleton = JSON.stringify(large).length;
   const coverage = coverageBytes();
+  const row = await storedRow(large);
+  const bands = bandBytes(large);
   const register = Buffer.byteLength(canonicalBytes(REGISTER_FIXTURE), 'utf8');
   const sample = JSON.stringify(sampleSkeleton('0000000000009103')).length;
-  const big = bigBytes();
+  const big = Buffer.byteLength(canonicalBytes(bigSkeleton('0000000000000001', 5000)), 'utf8');
   const perCall = big / 5000;
   return {
     skeleton,
     cells: cells.size,
     'cell-json': cellJson,
     'cell-ratio': cellJson / skeleton,
-    // The row the worker stores: the skeleton, the deltas column (`[]`), and the extensions bag (`[]`), two bytes each.
-    stored: skeleton + 2 + 2,
+    stored: row.stored,
+    extensions: row.extensions,
+    bands: bands.bytes,
+    'bands-per-frame': bands.bytes / bands.frames,
     'coverage-bare': coverage.bare,
     'key-cost': coverage.keyOnly,
     'key-per-frame': coverage.keyOnly / coverage.frames,
@@ -129,6 +103,8 @@ interface Marked {
   line: number;
 }
 
+const computed = await figures();
+
 const MARKER = /(\d[\d,.]*)( million)?<!-- figure:([\w-]+)(?:~([\d.]+))? -->/gu;
 
 const markedFigures = (doc: string): Marked[] =>
@@ -143,7 +119,6 @@ const markedFigures = (doc: string): Marked[] =>
 const CONSTANTS = new Set(['1,000', '5,000', '1,800,000', '2,000,000', '999,999', '100,000', '3,400', '4,096']);
 
 describe('the figures in docs/pool.md', () => {
-  const computed = figures();
   const marked = markedFigures(DOC);
 
   it('equal what the code computes now, exact or within the stated rounding', () => {
