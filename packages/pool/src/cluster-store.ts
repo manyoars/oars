@@ -79,9 +79,12 @@ const countsOf = async (env: Env, kind: Kind, keys: string): Promise<{ key: stri
   return [...holders].map(([key, found]) => ({ key, count: clusterHolders(found).count }));
 };
 
+/** Every cell or stratum key `account` holds: the signals it adds (repo keys, deposit hours) are the account's, so a deposit can change the cluster of any key it holds, not only this batch's. */
+export const heldBy = async (env: Env, account: string, kind: Kind): Promise<string[]> => (await rows(env, 'SELECT DISTINCT key FROM contributors WHERE kind = ? AND account = ?', kind, account)).map((row) => text(row, 'key'));
+
 /**
- * Writes the weighted count of each key in `keys` to its row's `clusters`. It reads what is committed, so two deposits racing converge on the later recount, and a key with no row
- * (a stratum a batch did not write) is left alone. A key none hold stays at the 0 it began with.
+ * Writes the weighted count of each key in `keys` to its row's `clusters`. It reads what is committed, then writes after awaiting, so a recount that started earlier can write after a later one:
+ * a count can lag a deposit until the next deposit that touches the key. A key with no row (a stratum a batch did not write) is left alone. A key none hold stays at the 0 it began with.
  */
 export const recount = async (env: Env, kind: Kind, keys: readonly string[]): Promise<void> => {
   for (const chunk of chunksOf(keys)) {

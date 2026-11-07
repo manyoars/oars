@@ -55,6 +55,10 @@ describe('the count a floor compares', () => {
       const tokens: string[] = [];
       for (const id of ['9301', '9302', '9303', '9304', '9305', '9306']) tokens.push(await depositor(target, id, shared));
       expect(await heldClusters(target)).toEqual([1]);
+      // The count before this change: distinct accounts holding each cell, at or above the floor of 5.
+      const accountsPerCell = (await (await target.db()).prepare("SELECT COUNT(DISTINCT account) AS accounts FROM contributors WHERE kind = 'cell' GROUP BY key").all()).results.map((row) => Number(fieldOf(row, 'accounts')));
+      expect(accountsPerCell.length).toBeGreaterThan(0);
+      expect(accountsPerCell.every((accounts) => accounts === 6)).toBe(true);
       expect(await fetched(target, tokens[0] ?? '')).toEqual({ reads: 0, cells: 0 });
       // Nothing was refused: every account's deposits are held.
       expect(await (await target.db()).prepare('SELECT COUNT(*) AS count FROM deposits').first('count')).toBe(18);
@@ -68,6 +72,23 @@ describe('the count a floor compares', () => {
       expect(await heldClusters(target)).toEqual([5]);
       const { reads } = await fetched(target, tokens[0] ?? '');
       expect(reads).toBeGreaterThan(0);
+    });
+  }, 180_000);
+});
+
+describe('a deposit that joins an account to another', () => {
+  it('recounts the cells the account already held: five accounts that cleared a cell with distinct keys then share eight keys elsewhere (their sets overlap at 0.8), and the cell reads 1', async () => {
+    await inFreshPool(async (target) => {
+      const tokens: string[] = [];
+      for (const id of ['9321', '9322', '9323', '9324', '9325']) tokens.push(await depositor(target, id, [id.padStart(16, 'c')]));
+      expect(await heldClusters(target)).toEqual([5]);
+      // Each account's set is its own key and these eight: Jaccard 8 / 10 = 0.8, the threshold.
+      const shared = Array.from({ length: 8 }, (_, at) => `00000000000000d${String(at)}`);
+      // A session in another cell (a different stack), so the batch itself never touches the cell the five cleared.
+      for (const [at, token] of tokens.entries()) {
+        for (const [which, key] of shared.entries()) expect((await target.post('/v1/deposits', withRepoKey(sampleSkeleton(`${String(at)}${String(which)}`.padStart(16, 'e'), { languages: ['rust'] }, '2026-11-02', 'cursor', { program: 'git', sub: 'commit' }, '3.0.0'), key), token)).status).toBe(201);
+      }
+      expect(await heldClusters(target)).toEqual([1]);
     });
   }, 180_000);
 });
@@ -117,6 +138,7 @@ describe('deposit signals', () => {
       const { token, account } = await target.signIn('github', stubUser('9203'));
       await target.post('/v1/covenant/accept', { version: 'v1' }, token);
       const db = await target.db();
+      const dayBefore = new Date().toISOString().slice(0, 10);
       expect((await target.post('/v1/deposits', withRepoKey(sampleSkeleton('0000000000009203'), KEY_A), token)).status).toBe(201);
       expect((await target.post('/v1/deposits', withRepoKey(sampleSkeleton('0000000000009204'), KEY_B), token)).status).toBe(201);
       expect((await target.post('/v1/deposits', withRepoKey(sampleSkeleton('0000000000009204'), KEY_B), token)).status).toBe(201);
@@ -124,18 +146,27 @@ describe('deposit signals', () => {
       expect(keys).toEqual([KEY_A, KEY_B]);
       const hours = (await db.prepare('SELECT day, hour FROM deposit_hours WHERE account = ?').bind(account).all()).results;
       expect(hours).toHaveLength(1);
-      expect(fieldOf(hours[0], 'day')).toBe(new Date().toISOString().slice(0, 10));
+      // A run that crosses UTC midnight stores either day.
+      expect([dayBefore, new Date().toISOString().slice(0, 10)]).toContain(fieldOf(hours[0], 'day'));
       expect(Number(fieldOf(hours[0], 'hour'))).toBeGreaterThanOrEqual(0);
     });
   }, 60_000);
 
-  it('writes nothing for a deposit the pool refuses', async () => {
-    await inFreshPool(async (target) => {
+  it('writes nothing for a deposit the pool refuses through an operator brake', async () => {
+    const target = await startPool({ COVENANT_VERSION: 'v1', MAX_DEPOSITS_PER_ACCOUNT: '1' });
+    try {
       const { token } = await target.signIn('github', stubUser('9205'));
-      expect((await target.post('/v1/deposits', withRepoKey(sampleSkeleton('0000000000009205'), KEY_A), token)).status).not.toBe(201);
+      await target.post('/v1/covenant/accept', { version: 'v1' }, token);
+      expect((await target.post('/v1/deposits', withRepoKey(sampleSkeleton('0000000000009205'), KEY_A), token)).status).toBe(201);
       const db = await target.db();
+      // Cleared after the first deposit, so a row here can only come from the refused one (its hour is the same as the first's).
+      await db.prepare('DELETE FROM account_repo_keys').run();
+      await db.prepare('DELETE FROM deposit_hours').run();
+      expect(await target.post('/v1/deposits', withRepoKey(sampleSkeleton('0000000000009206'), KEY_B), token)).toMatchObject({ status: 403, json: { error: 'deposit_limit' } });
       expect(await db.prepare('SELECT COUNT(*) AS count FROM account_repo_keys').first('count')).toBe(0);
       expect(await db.prepare('SELECT COUNT(*) AS count FROM deposit_hours').first('count')).toBe(0);
-    });
+    } finally {
+      await target.dispose();
+    }
   }, 60_000);
 });

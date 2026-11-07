@@ -271,10 +271,12 @@ export const containing = (text: string): unknown => expect.stringContaining(tex
 export const anyText = (): unknown => expect.any(String);
 export const anyNumber = (): unknown => expect.any(Number);
 
-/** A user whose GitHub account is years old and was made days away from every other stub's, so a pool of stubs holds unrelated, established accounts: the cluster rule (`clusters.ts`) counts each as its own cluster. */
-export const stubUser = (id: string): StubUser => ({
-  id,
-  login: `login-of-${id}`,
-  email: `person-${id}@example.test`,
-  createdAt: new Date(Date.UTC(2015, 0, 1) + (Number.parseInt(createHash('sha256').update(id).digest('hex').slice(0, 6), 16) % 1000) * 3 * 24 * 60 * 60 * 1000).toISOString(),
-});
+/**
+ * A user whose GitHub account is years old and was made days away from every other stub's, so a pool of stubs holds unrelated, established accounts: the cluster rule (`clusters.ts`) counts each as its own cluster.
+ * A numeric id sets the offset itself (3 days apart, so two ids under 1,200 apart never share a 24-hour window); a non-numeric id takes it from a hash, where two ids can collide.
+ */
+export const stubUser = (id: string): StubUser => {
+  const slot = /^\d+$/.test(id) ? Number(id) : Number.parseInt(createHash('sha256').update(id).digest('hex').slice(0, 6), 16);
+  return { id, login: `login-of-${id}`, email: `person-${id}@example.test`, createdAt: new Date(Date.UTC(2015, 0, 1) + (slot % 1200) * 3 * 24 * 60 * 60 * 1000).toISOString() };
+};
+

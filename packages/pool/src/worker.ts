@@ -5,7 +5,7 @@ import { fetchBundle, harnessRequired } from './bundle.js';
 import { covenantAccept, covenantNotAccepted, covenantStatus, depositsClosed, hasAccepted } from './covenant.js';
 import { answer, bound, brake, notConfigured, refuse, type Env } from './http.js';
 import { receivePart } from './parts.js';
-import { recount, repoKeysOf, signalStatements } from './cluster-store.js';
+import { heldBy, recount, repoKeysOf, signalStatements } from './cluster-store.js';
 import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf } from './ingest.js';
 import { accountOf, login } from './identity.js';
 import { hashHosts, hashKey } from './ingest-hash.js';
@@ -94,9 +94,9 @@ const storeDeposit = async (env: Env, account: string, secret: string, text: str
     const set = [...(limit === undefined ? [] : [`${String(limit)} deposits`]), ...(budget === undefined ? [] : [`${String(budget)} stored bytes`])];
     return refuse(403, 'deposit_limit', `An operator's brake holds this account to at most ${set.join(' and ')}.`);
   }
-  // The counts the floors compare are clusters of accounts, not accounts (t937): taken once the row and its contributor records are committed, for the cells and strata this batch holds.
-  await recount(env, 'cell', [...next.cells.keys()]);
-  await recount(env, 'stratum', [...next.strata.keys()]);
+  // The counts the floors compare are clusters of accounts, not accounts (t937): taken once the row and its contributor records are committed, for every cell and stratum this account holds, not only this batch's: the repo keys and hours it adds belong to the account, so they can join it to another account in cells the batch never touched.
+  await recount(env, 'cell', await heldBy(env, account, 'cell'));
+  await recount(env, 'stratum', await heldBy(env, account, 'stratum'));
   return answer(201, { ok: true, id: skeleton.id });
 };
 
