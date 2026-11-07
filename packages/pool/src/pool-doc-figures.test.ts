@@ -118,6 +118,9 @@ const markedFigures = (doc: string): Marked[] =>
 /** A comma-grouped figure with no marker must be a limit or constant the doc names, or follow "about" (a rounded statement, or history of code that no longer exists). */
 const CONSTANTS = new Set(['1,000', '5,000', '1,800,000', '2,000,000', '999,999', '100,000', '3,400', '4,096']);
 
+/** A bare number with a unit that is a limit, a count of kinds, or an example the doc states, not a size the code determines. */
+const UNIT_CONSTANTS = new Set(['64 cells']); // "A row keeps at most 64 cells" (docs/pool.md:294): the telemetry rollup's limit.
+
 describe('the figures in docs/pool.md', () => {
   const marked = markedFigures(DOC);
 
@@ -136,8 +139,20 @@ describe('the figures in docs/pool.md', () => {
     expect(Object.keys(computed).filter((id) => !named.has(id))).toEqual([]);
   });
 
-  it('has no exact figure left without a marker', () => {
-    const bare = [...DOC.matchAll(/(?<!about )(?<![\d,])\d{1,3}(?:,\d{3})+(?![\d,])(?! million)(?!<!-- figure)/gu)].map((found) => found[0]).filter((text) => !CONSTANTS.has(text));
-    expect(bare).toEqual([]);
+  // The words "two frames" and "four frames" at docs/pool.md:35 count the frames the key costs are divided over, so they are held to the fixture too.
+  it('names the frame counts of the coverage fixture', () => {
+    const coverage = coverageBytes();
+    expect(DOC).toContain('on each of the two frames');
+    expect(DOC).toContain('across the four frames');
+    expect([coverage.frames, coverage.timedFrames]).toEqual([2, 4]);
+    // 116 across four frames is the same 29 a frame as 58 across two.
+    expect((computed['key-timed'] ?? 0) / coverage.timedFrames).toBe(computed['key-per-frame']);
+  });
+
+  it('has no comma-grouped or unit-bearing figure left without a marker', () => {
+    const grouped = [...DOC.matchAll(/(?<!about )(?<![\d,])\d{1,3}(?:,\d{3})+(?![\d,])(?! million)(?!<!-- figure)/gu)].map((found) => found[0]).filter((text) => !CONSTANTS.has(text));
+    // A bare number before a unit: `278 bytes`, `9 cells`, `2-byte`. A marked figure has its comment between the number and the unit, so it does not match.
+    const unit = [...DOC.matchAll(/(?<!about )(?<![\d,.])\d+(?:\.\d+)?[ -](?:bytes?|cells?|calls?|frames?)\b/gu)].map((found) => found[0]).filter((text) => !UNIT_CONSTANTS.has(text));
+    expect({ grouped, unit }).toEqual({ grouped: [], unit: [] });
   });
 });
