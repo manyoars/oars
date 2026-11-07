@@ -238,6 +238,24 @@ describe('parseSkeleton refuses, and names the field', () => {
     expect(refusedField(sent(['transcripts', 0, 'prompts', 0, 'wallSec'], 1.5))).toBe('transcripts[0].prompts[0].wallSec');
   });
 
+  it('accepts a usage category sent as null and a remaining-token count sent as null or left out: the source never recorded it', () => {
+    const prompt = ['transcripts', 0, 'prompts', 0];
+    expect(refusedField(sent([...prompt, 'usage', 'cacheRead'], null))).toBe('accepted');
+    expect(refusedField(sent([...prompt, 'usage'], { input: null, cacheWrite: null, cacheRead: null, output: null, thinking: null }))).toBe('accepted');
+    expect(refusedField(sent([...prompt, 'usage'], {}))).toBe('transcripts[0].prompts[0].usage.input');
+    expect(refusedField(sent([...prompt, 'usage', 'cacheRead'], 'x'))).toBe('transcripts[0].prompts[0].usage.cacheRead');
+    expect(refusedField(sent(['transcripts', 0, 'tools', 0, 'steps', 0, 'remainingTokens'], null))).toBe('accepted');
+    expect(refusedField(sent(['transcripts', 0, 'tools', 0, 'steps', 0, 'remainingTokens'], undefined))).toBe('accepted');
+  });
+
+  it('takes the responses a prompt\'s usage covers as an optional count bucket, and refuses an exact one', () => {
+    const prompt = ['transcripts', 0, 'prompts', 0];
+    expect(refusedField(sent([...prompt, 'usageResponses'], 4))).toBe('accepted');
+    expect(refusedField(sent([...prompt, 'usageResponses'], undefined))).toBe('accepted');
+    expect(refusedField(sent([...prompt, 'usageResponses'], 1.5))).toBe('transcripts[0].prompts[0].usageResponses');
+    expect(refusedField(sent([...prompt, 'usageResponses'], 'x'))).toBe('transcripts[0].prompts[0].usageResponses');
+  });
+
   it('holds every bucketed field to its own edges', () => {
     const prompt = ['transcripts', 0, 'prompts', 0];
     expect(refusedField(sent([...prompt, 'usage', 'input'], 11))).toBe('accepted');

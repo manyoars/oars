@@ -39,7 +39,9 @@ import {
   type ToolManifest,
   type ToolObservation,
   type ToolPull,
+  USAGE_FIELDS,
   type Usage,
+  type UsageField,
   type UsageKey,
   type UserPromptObservation,
 } from './schema.js';
@@ -233,7 +235,28 @@ const addUsage = (total: Usage, line: Usage): void => {
 interface LineUsage {
   usage: Usage;
   hasThinking: boolean;
+  /** The categories this line's source reported as numbers; the rest of `usage` is a placeholder zero. */
+  observed: UsageField[];
 }
+
+/** What a running total rests on: the categories any counted response reported, and how many responses did. */
+interface UsageCoverage {
+  observed: Set<UsageField>;
+  responses: number;
+}
+
+const emptyCoverage = (): UsageCoverage => ({ observed: new Set(), responses: 0 });
+
+const addCoverage = (coverage: UsageCoverage, line: LineUsage): void => {
+  coverage.responses += 1;
+  for (const field of line.observed) coverage.observed.add(field);
+};
+
+/** The record fields for a total: the observed categories in the fixed order, and the responses that reported. */
+const coverageFields = (coverage: UsageCoverage): { usageObserved: UsageField[]; usageResponses: number } => ({
+  usageObserved: USAGE_FIELDS.filter((field) => coverage.observed.has(field)),
+  usageResponses: coverage.responses,
+});
 
 /** cost_per_class.py: only numeric fields count; thinking comes from `output_tokens_details`. */
 const readUsage = (message: Obj): LineUsage | undefined => {
@@ -241,15 +264,15 @@ const readUsage = (message: Obj): LineUsage | undefined => {
   if (!isObj(raw)) return undefined;
   const details = isObj(raw.output_tokens_details) ? raw.output_tokens_details : {};
   const thinking = num(details.thinking_tokens);
+  const input = num(raw.input_tokens);
+  const cacheWrite = num(raw.cache_creation_input_tokens);
+  const cacheRead = num(raw.cache_read_input_tokens);
+  const output = num(raw.output_tokens);
+  const reported: Array<[UsageField, number | undefined]> = [['input', input], ['cacheWrite', cacheWrite], ['cacheRead', cacheRead], ['output', output], ['thinking', thinking]];
   return {
-    usage: {
-      input: num(raw.input_tokens) ?? 0,
-      cacheWrite: num(raw.cache_creation_input_tokens) ?? 0,
-      cacheRead: num(raw.cache_read_input_tokens) ?? 0,
-      output: num(raw.output_tokens) ?? 0,
-      thinking: thinking ?? 0,
-    },
+    usage: { input: input ?? 0, cacheWrite: cacheWrite ?? 0, cacheRead: cacheRead ?? 0, output: output ?? 0, thinking: thinking ?? 0 },
     hasThinking: thinking !== undefined,
+    observed: reported.filter(([, value]) => value !== undefined).map(([field]) => field),
   };
 };
 
@@ -372,6 +395,7 @@ interface Current {
   efforts: Set<string>;
   skills: Set<string>;
   usage: Usage;
+  coverage: UsageCoverage;
   turns: number;
   opened: PromptOpened;
   /** The last harness version the prompt's lines name. */
@@ -1437,6 +1461,7 @@ export const captureSession = (input: ExtractInput): Capture => {
     costUsd: null,
     usage: emptyUsage(),
   };
+  const sessionCoverage = emptyCoverage();
   const versions = new Set<string>();
   const branches = new Set<string>();
   const files = new Set<string>();
@@ -1495,6 +1520,7 @@ export const captureSession = (input: ExtractInput): Capture => {
       efforts: [...cur.efforts].sort(),
       skills: [...cur.skills].sort(),
       usage: cur.usage,
+      ...coverageFields(cur.coverage),
       promptFingerprint,
     });
     promptFrames.push({ version: cur.version, model: majorityOrNull(cur.models) ?? majorityOrNull(cur.messageModels), effort: majorityOrNull(cur.effortCounts), ts: cur.ts });
@@ -1598,7 +1624,10 @@ export const captureSession = (input: ExtractInput): Capture => {
     }
     if (type === 'assistant' && role === 'assistant') {
       session.assistantTurns += 1;
-      if (!side && lineUsage !== undefined && firstOfResponse) addUsage(session.usage, lineUsage.usage);
+      if (!side && lineUsage !== undefined && firstOfResponse) {
+        addUsage(session.usage, lineUsage.usage);
+        addCoverage(sessionCoverage, lineUsage);
+      }
     }
 
     // prompt_graphs.py and cost_per_class.py: a prompt is a main-line user line with text and no tool result. They also dropped any leading "<", which lost
@@ -1640,6 +1669,7 @@ export const captureSession = (input: ExtractInput): Capture => {
           efforts: new Set(),
           skills: new Set(),
           usage: emptyUsage(),
+          coverage: emptyCoverage(),
           turns: 0,
           version: version !== undefined && version !== '' ? version : undefined,
           effortCounts: new Map(),
@@ -1662,7 +1692,10 @@ export const captureSession = (input: ExtractInput): Capture => {
           cur.turns += 1;
           if (requested !== undefined && requested !== '') cur.models.set(requested, (cur.models.get(requested) ?? 0) + 1);
           if (realMessageModel !== undefined) bump(cur.messageModels, realMessageModel);
-          if (lineUsage !== undefined && firstOfResponse) addUsage(cur.usage, lineUsage.usage);
+          if (lineUsage !== undefined && firstOfResponse) {
+            addUsage(cur.usage, lineUsage.usage);
+            addCoverage(cur.coverage, lineUsage);
+          }
         }
       }
       // prompt_graphs.py reads efforts and skills from every line.
@@ -1797,7 +1830,7 @@ export const captureSession = (input: ExtractInput): Capture => {
   }
   finish();
 
-  Object.assign(session, shape.finish());
+  Object.assign(session, shape.finish(), coverageFields(sessionCoverage));
   session.versions = [...versions].sort();
   session.branches = [...branches].sort();
   const kept = [...files].sort().slice(0, FILES_PER_SESSION_MAX);
