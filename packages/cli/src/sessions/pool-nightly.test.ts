@@ -362,10 +362,10 @@ describe('withSendLock', () => {
     const real = await import('node:fs/promises');
     let first = true;
     const seen = { stat: async (path: string) => {
-      const found = await real.stat(path);
-      if (!first) return found;
+      const { mtimeMs } = await real.stat(path);
+      const skew = first ? 60_000 : 0;
       first = false;
-      return { ...found, mtimeMs: found.mtimeMs - 60_000 };
+      return { mtimeMs: mtimeMs - skew };
     } };
     await expect(withSendLock(outbox, () => Promise.resolve('ran'), { staleMs: 1000, waitMs: 30, pollMs: 5 }, seen)).rejects.toBeInstanceOf(SendLockBusy);
     expect(readFileSync(lock, 'utf8')).toBe('live-run');
