@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { bucketFields, cellIdOf, deriveCells, frameBucketOf, harnessBucket, poolOf, serializeCells, UNKNOWN, type Cell, type Grain } from './cells.js';
 import { classMotif, shapeId } from './motif.js';
-import { error, frame, prompt, session, store, tool } from './pool-fixture.js';
+import { error, frame, prompt, session, step, store, tool } from './pool-fixture.js';
 import type * as ReadModule from './read.js';
+import type { ToolObservation } from './schema.js';
 import type { Store } from './store.js';
 
 const READ = { action: 'file.read', identity: null } as const;
@@ -57,7 +58,7 @@ describe('deriveCells', () => {
 
   it('counts a window by its last step, sums its cost, and counts sessions once', () => {
     expect(cellsOf(base, shapeId([READ, EDIT]), 'week')).toEqual([
-      { motifId: shapeId([READ, EDIT]), frameBucket: 'claude-code/2.1.31x/claude-opus-5-5', grain: 'week', day: '2026-10-26', sessions: 2, clusters: 1, ok: 1, failed: 1, tokens: 0, tokenSessions: 2, tokenPrompts: 4, durationMs: 70, exposed: false },
+      { motifId: shapeId([READ, EDIT]), frameBucket: 'claude-code/2.1.31x/claude-opus-5-5', grain: 'week', day: '2026-10-26', sessions: 2, clusters: 1, ok: 1, failed: 1, tokens: null, tokenSessions: 0, tokenPrompts: 0, durationMs: 70, exposed: false },
     ]);
   });
 
@@ -157,6 +158,21 @@ describe('deriveCells', () => {
     const unknown = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0, thinking: 0 };
     const unrecorded = store({ sessions: [session('s1')], prompts: [prompt('s1', 0, { usage: unknown, usageObserved: [], usageResponses: 0 })] });
     expect(cellsOf(unrecorded, classMotif('edit-verify').motifId, 'week')).toMatchObject([{ sessions: 1, tokens: null, tokenSessions: 0, tokenPrompts: 0 }]);
+  });
+
+  it('leaves a step cell figure out of every sum and coverage count when the step has no recorded cost, never a measured zero', () => {
+    const recorded = (n: number, tokens: number | null): ToolObservation => tool('s1', n, 'Read', { steps: [step(n, 0, 'file.read', { cost: { tokens, durationMs: null } })] });
+    const only = (tools: ToolObservation[]): Cell[] => deriveCells(store({ sessions: [session('s1')], prompts: [prompt('s1', 0)], tools })).cells.filter((cell) => cell.motifId === shapeId([READ]) && cell.grain === 'week');
+    expect(only([recorded(0, null)])).toMatchObject([{ tokens: null, tokenSessions: 0, tokenPrompts: 0 }]);
+    // Two reads, one with a recorded cost: the figure is that one's, and the coverage counts one step.
+    expect(only([recorded(0, 7), recorded(1, null)])).toMatchObject([{ tokens: 7, tokenSessions: 1, tokenPrompts: 1 }]);
+  });
+
+  it('leaves an error cell figure null for a failed step with no recorded cost', () => {
+    const failing = tool('s1', 0, 'Bash', { status: 'error', errorCode: 'ENOENT', steps: [step(0, 0, 'shell.exec', { status: 'error', cost: { tokens: null, durationMs: null } })] });
+    const cells = deriveCells(store({ sessions: [session('s1')], prompts: [prompt('s1', 0)], tools: [failing] })).cells.filter((cell) => cell.failed > 0 && cell.grain === 'day');
+    expect(cells.length).toBeGreaterThan(0);
+    for (const cell of cells) expect(cell).toMatchObject({ tokens: null, tokenSessions: 0, tokenPrompts: 0 });
   });
 
   it('frames a version-2 prompt, whose session has no capture record, as unknown harness version', () => {
