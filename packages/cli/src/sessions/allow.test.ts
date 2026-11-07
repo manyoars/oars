@@ -77,4 +77,14 @@ describe('the default and denials', () => {
     expect(runAllow(['a'], ['!c'])).toEqual(['a', '!c']);
     expect(runAllow([], [])).toEqual([]);
   });
+
+  it('lifts a denial on a list that names no folder without narrowing it: every folder stays in scope', () => {
+    expect(mergeAllow(['!b'], ['b'])).toEqual([]);
+    expect(runAllow(['!b'], ['b'])).toEqual([]);
+    expect(mergeAllow(['!b', '!c'], ['b'])).toEqual(['!c']);
+    expect(runAllow(['!b', '!c'], ['b'])).toEqual(['!c']);
+    // A run that also names another folder narrows to the folders it names, the lifted one among them.
+    expect(mergeAllow(['!b'], ['b', 'c'])).toEqual(['b', 'c']);
+    expect(runAllow(['!b'], ['b', 'c'])).toEqual(['b', 'c']);
+  });
 });

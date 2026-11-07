@@ -62,18 +62,27 @@ export const compileAllow = (entries: readonly string[]): Allow => {
 };
 
 /**
+ * Whether the named entries only lift saved denials: each is denied in `saved`, and `saved` names no folder. On every-folder scope such
+ * an `--allow` drops the denial and adds nothing, because adding the entry would narrow every later run to it.
+ */
+const liftsOnly = (saved: readonly string[], named: readonly string[]): boolean =>
+  named.length > 0 && saved.every(isDenial) && named.every((entry) => saved.includes(denialOf(entry)));
+
+/**
  * The list a deposit saves: the saved entries and the given ones, where naming a folder again with `--allow` lifts the denial of exactly
  * that entry. A denial is kept until then, so a later `--allow` of a wider prefix cannot read a denied folder.
  */
-export const mergeAllow = (saved: readonly string[], given: readonly string[]): string[] => [
-  ...new Set([...saved.filter((entry) => !(isDenial(entry) && given.includes(entry.slice(DENY.length)))), ...given]),
-];
+export const mergeAllow = (saved: readonly string[], given: readonly string[]): string[] => {
+  const kept = saved.filter((entry) => !(isDenial(entry) && given.includes(entry.slice(DENY.length))));
+  const added = liftsOnly(saved, given.filter((entry) => !isDenial(entry))) ? given.filter(isDenial) : given;
+  return [...new Set([...kept, ...added])];
+};
 
 /** What one deposit reads: the folders it names, else the saved list (empty is every folder), less every denial saved or given. */
 export const runAllow = (saved: readonly string[], given: readonly string[]): string[] => {
   const merged = mergeAllow(saved, given);
   const named = given.filter((entry) => !isDenial(entry));
-  return named.length === 0 ? merged : [...named, ...merged.filter(isDenial)];
+  return named.length === 0 || liftsOnly(saved, named) ? merged : [...named, ...merged.filter(isDenial)];
 };
 
 /** One entry per line; blank lines and lines starting with `#` are skipped. */
