@@ -182,7 +182,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
   sessions
     .command('deposit')
     .description('read session logs into the local observation log, from every folder unless --allow names some or --deny keeps some out; idempotent. Subagent transcripts under each session (<project>/<session>/subagents/) are deposited with their parent, and each raw transcript is hard-linked into the oars archive beside the store')
-    .option('--allow <folder>', 'a project folder to read: its path, or its name under ~/.claude/projects (repeatable); `cursor`, `codex`, `copilot`, `gemini`, `grok`, and `vscode-copilot` name the Cursor, Codex, Copilot CLI, Gemini CLI, Grok Build, and VS Code Copilot Chat stores. A trailing slash names everything under a folder; * and ? are wildcards', collect)
+    .option('--allow <folder>', 'a project folder to read: its path, or its name under ~/.claude/projects (repeatable); `cursor`, `codex`, `copilot`, `gemini`, `grok`, `opencode`, and `vscode-copilot` name the Cursor, Codex, Copilot CLI, Gemini CLI, Grok Build, OpenCode, and VS Code Copilot Chat stores. A trailing slash names everything under a folder; * and ? are wildcards', collect)
     .option('--allow-file <list>', 'a file of --allow entries, one per line (# starts a comment, and !<entry> keeps a folder out); repeatable, combines with --allow', collect)
     .option('--deny <folder>', 'a folder never to read, in any form --allow takes (repeatable); saved, and it wins over every --allow until that exact entry is named with --allow', collect)
     .option('--redact-domain <domain>', 'an organization domain to mask in everything written (repeatable)', collect)

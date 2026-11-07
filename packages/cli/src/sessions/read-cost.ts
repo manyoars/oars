@@ -37,12 +37,12 @@ export const deriveCost: DeriveFamily = ({ pool }) => {
     if (first === undefined) return [];
     const cells = group.map(({ cell }) => cell);
     const prompts = total(cells, settled);
-    // Tokens hold only the prompts that recorded input, so they are divided by those prompts when every cell says how many (a cell read back from the pool's stored sums does not).
-    const covered = promptsWithTokens(cells) ?? prompts;
+    // Tokens hold only the prompts that recorded input, so they are divided by those prompts. A cell read back from a pool row written before coverage was stored says no count, and the group's coverage is then unknown: no figure, never a guess at full coverage.
+    const covered = promptsWithTokens(cells);
     return [
       body('cost', cells, {
         slice: { class: motifName(first.motif), model: first.model, week: weekOf(first.cell) },
-        value: { tokensPerPrompt: covered === 0 ? null : Math.round(total(cells, (cell) => cell.tokens ?? 0) / covered), secondsPerPrompt: Math.round(total(cells, (cell) => cell.durationMs) / prompts / 1000), errorShare: rate(total(cells, (cell) => cell.failed), prompts) },
+        value: { tokensPerPrompt: covered === undefined || covered === 0 ? null : Math.round(total(cells, (cell) => cell.tokens ?? 0) / covered), ...(covered === undefined ? { tokenCoverage: 'unknown' } : {}), secondsPerPrompt: Math.round(total(cells, (cell) => cell.durationMs) / prompts / 1000), errorShare: rate(total(cells, (cell) => cell.failed), prompts) },
         n: prompts,
         interval: null,
       }),

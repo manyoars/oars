@@ -30,6 +30,10 @@
 // reads, not moved ones. A Copilot CLI session with rotated `events.N.jsonl` archives is now read as one session, so its `prompts`, `tools`, `lines`, and skeleton move; one
 // with no archives is unchanged. EXTRACTOR stays 11. A version-16 store's next deposit captures every transcript again from the harness or `raw/`.
 //
+// Version 23 (CAPTURE 23) keeps a `git checkout` step's target class, `target` `path` or `word` (never the target's text), so the `revert` rule can tell `git checkout -- src/a.ts` and `git checkout --ours src/a.ts` (a
+// path) from `git checkout feature/x` (a branch or a path). It also writes a Codex `turn_aborted` with reason `interrupted` as the interrupt marker user line, so that prompt record exists and the session's
+// `prompts`, `tsLast` (the marker is a line), and skeleton move; a Codex session with no such turn is unchanged. A `git checkout` step captured before reads as it did (no `target`). EXTRACTOR 15 reads a Codex or Gemini decline in its fixed text as `user-stop`.
+//
 // Version 22 (CAPTURE 22, t870) adds the optional `targetClass` and `argClass` to a tool call (`call-shape.ts`): the class of its path target (`source`, `test`, `config`, `doc`, `lockfile`, `generated`, `data`, `none`, `other`) and the sorted set
 // of the classes of its arguments (`path`, `url`, `pattern`, `command`, `number`, `flag`, `text`, `none`), each computed from the path and the input at capture and stored as a closed-list member, never the path or a value. It changes no value
 // captured before, so EXTRACTOR stays 12; a version-21 store's next deposit captures every transcript again, and a call of an older record has neither field.
@@ -88,13 +92,13 @@ import type { RepoSize } from './public-vocabulary.js';
 import type { SessionFunnel, SessionSetup, SessionTrust } from './session-shape.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '22';
+export const CAPTURE_VERSION = '23';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
 
 /** Stamped `v` on every derived record. A bump re-derives from the log; no transcript is read. */
-export const EXTRACTOR_VERSION = '14';
+export const EXTRACTOR_VERSION = '15';
 
 export const PROMPT_HEAD_CHARS = 300;
 export const ERROR_EXAMPLE_CHARS = 160;
@@ -139,7 +143,7 @@ export type UsageField = (typeof USAGE_FIELDS)[number];
 /** Whether a stored session or prompt recorded `field`. A record with no `usageObserved` was captured before version 20, when every category read as observed. */
 export const observesUsage = (record: { usageObserved?: readonly UsageField[] }, field: UsageField): boolean => record.usageObserved === undefined || record.usageObserved.includes(field);
 
-export type Harness = 'claude-code' | 'cursor' | 'codex' | 'copilot' | 'gemini' | 'grok' | 'vscode-copilot';
+export type Harness = 'claude-code' | 'cursor' | 'codex' | 'copilot' | 'gemini' | 'grok' | 'opencode' | 'vscode-copilot';
 
 /** The harness a session record came from; a record that does not name one is Claude Code's. */
 export const harnessOf = (session: { harness?: Harness }): Harness => session.harness ?? 'claude-code';
@@ -406,6 +410,11 @@ export interface ShellIdentity {
   program: string;
   sub: string | null;
   flags: string[];
+  /**
+   * Only on `git checkout` (CAPTURE 23), the class of what it acts on and never the target's text: `path` where the line proves a path (a `--` marker, or a flag that only takes
+   * paths), `word` where a target word the segment drops (a slash, quotes) stands with no such proof, so it is a branch or a path and the line cannot say which. Absent with no such word.
+   */
+  target?: 'path' | 'word';
   /** Absent when the command pulled nothing. */
   pulls?: PullIdentity[];
 }
