@@ -3,6 +3,7 @@
 // always exits 0 with no output on any failure: a hook must never fail or block a session.
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { hookEmitter } from './telemetry/hook-emit.js';
 import { sendNightly } from './telemetry/send.js';
 import { HOOK_EVENTS, hookRuntime, nightlyTelemetry, runHook, type HookEvent } from './sessions/hooks.js';
 
@@ -35,6 +36,7 @@ try {
       hookRuntime(event, process.env, process.platform, homedir(), { stdin: process.stdin, stdout: process.stdout }),
       Date.now,
       nightlyTelemetry(event, process.env, process.platform, homedir(), versionOf, Date.now),
+      hookEmitter(process.env, process.platform, homedir(), new URL('../package.json', import.meta.url), Date.now),
     );
     if (output !== undefined) process.stdout.write(output);
     // The nightly task is where telemetry is sent from; it never throws, and it sends nothing unless telemetry is on and the notice was shown (the server is OARS_POOL_URL, else the Many Oars pool).

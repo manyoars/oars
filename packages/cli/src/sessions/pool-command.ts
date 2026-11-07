@@ -3,6 +3,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { Outcome, RunDeps } from '../cli.js';
+import { emitOf } from '../telemetry/emit.js';
 import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../errors.js';
 import { compileAllow } from './allow.js';
 import { checkSession, exclusionPaths, lastWritten, type Reason } from './exclusion.js';
@@ -406,6 +407,7 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
     if (reply.status === 201) break;
     if (ended) throw refusal(DEPOSIT, reply);
   }
+  emitOf(deps)('deposit', { step: 'send', sent: 1, bytes: Buffer.byteLength(bytes) });
   return { document: { ok: true, server, hash, sent: true }, text: `Sent batch ${hash} to ${server}.` };
 };
 
@@ -430,6 +432,8 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   const discarded = await discardStale(outbox);
   const counts: DepositCounts = { sessions: 0, batched: 0, excluded: { folder: 0, term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, uncaptured: 0, notEnded: 0, refused: 0, refusedFields: [], discarded, withdrawn: 0 };
   const built = new Set<string>();
+  // The bytes of the batches written in this pass: telemetry counts them, and the command's own document does not carry them.
+  let builtBytes = 0;
   const wireTally = newTally();
   const refusedFields = new Set<string>();
   const roots = new Map<string, TranscriptRoot>((await readSkeletons(runtime.storeDir, undefined, true)).skeletons.map(({ session, merkleRoot, leaves }) => [session, { merkleRoot, leaves }]));
@@ -482,7 +486,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
       await withdraw(key);
       continue;
     }
-    await writeBatch(outbox, key, parsed.skeleton);
+    builtBytes += (await writeBatch(outbox, key, parsed.skeleton)).bytes;
     tallyBatch(wireTally, parsed.skeleton);
     await markDeltasSent(outbox, delta?.marks ?? []);
     built.add(key);
@@ -493,6 +497,8 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   counts.refusedFields = [...refusedFields].sort();
   recordWire(deps, wireTally);
   const { folder, term, noRaw, noTerms, unreadable } = counts.excluded;
+  // Counts only: how many sessions each gate kept out, never a folder, a term, or a name.
+  emitOf(deps)('deposit', { step: 'build', sessions: counts.sessions, batched: counts.batched, bytes: builtBytes, excludedFolder: folder, excludedTerm: term, excludedNoRaw: noRaw, excludedNoTerms: noTerms, excludedUnreadable: unreadable, notEnded: counts.notEnded, uncaptured: counts.uncaptured, refused: counts.refused, withdrawn: counts.withdrawn, discarded });
   const lines = [
     `Wrote ${String(counts.batched)} of ${String(counts.sessions)} sessions to the outbox for ${server}. Nothing was sent.`,
     `Kept out by the session gates, never built: ${String(folder)} in a folder not on the allowlist, ${String(term)} for a term, ${String(noRaw)} with no raw to scan, ${String(noTerms)} with no term file, ${String(unreadable)} unreadable.`,
@@ -606,20 +612,33 @@ export const poolFetch = async (deps: RunDeps, options: { server?: string | unde
   const credential = new Masker();
   credential.add(token);
   const reply = await ask(deps, FETCH, server, `/bundle/${harness}/${encodeURIComponent(harnessVersion)}/${encodeURIComponent(VOCAB_VERSION)}`, { token, show: credential, ...(kept?.etag === undefined ? {} : { ifNoneMatch: kept.etag }) });
-  if (reply.status === 429) throw cappedError(deps, reply, kept !== undefined);
+  const emit = emitOf(deps);
+  if (reply.status === 429) {
+    emit('fetch', { harness, fetches: 1, capHits: 1 });
+    throw cappedError(deps, reply, kept !== undefined);
+  }
   if (reply.status === 304) {
     // A 304 answers an If-None-Match, so one to a fetch that sent none is a pool that has lost track of what it was asked.
-    if (kept?.etag === undefined) throw new CliError('The pool answered 304 to a fetch that named no kept bundle.', ExitCode.UNEXPECTED, FETCH);
+    if (kept?.etag === undefined) {
+      emit('fetch', { harness, fetches: 1 });
+      throw new CliError('The pool answered 304 to a fetch that named no kept bundle.', ExitCode.UNEXPECTED, FETCH);
+    }
     const { cells, motifs, reads, asOf } = kept.bundle;
+    emit('fetch', { harness, fetches: 1, etagHits: 1, reads: reads.length });
     return {
       document: { ok: true, server, harness, harnessVersion, file, unchanged: true, cells: cells.length, motifs: motifs.length, reads: reads.length, asOf },
       text: `${harness} ${harnessVersion} is unchanged: the bundle at ${file} is still current (${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs).`,
     };
   }
-  if (reply.status !== 200) throw refusal(FETCH, reply);
+  // A refused fetch and a bundle that fails verification both reached the pool, so each is a fetch; only the success adds reads.
+  if (reply.status !== 200) {
+    emit('fetch', { harness, fetches: 1 });
+    throw refusal(FETCH, reply);
+  }
   const verified = await verifyBundle(reply.body, signingKey, harness, harnessVersion);
   if (!verified.ok) {
     const title = `Refused the bundle: ${verified.reason}.`;
+    emit('fetch', { harness, fetches: 1 });
     throw new CliError(title, ExitCode.INVALID, FETCH, { code: 'bundle_unverified', title });
   }
   const etag = reply.headers.get('etag');
@@ -627,6 +646,7 @@ export const poolFetch = async (deps: RunDeps, options: { server?: string | unde
   await writeFile(file, `${JSON.stringify({ ...(isObject(reply.body) ? reply.body : {}), ...(etag === null ? {} : { etag }) })}
 `);
   const { cells, motifs, reads, asOf } = verified.bundle;
+  emit('fetch', { harness, fetches: 1, reads: reads.length });
   return {
     document: { ok: true, server, harness, harnessVersion, file, unchanged: false, cells: cells.length, motifs: motifs.length, reads: reads.length, asOf },
     text: `Fetched ${harness} ${harnessVersion}: ${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs, verified against the pinned key and kept at ${file}.`,

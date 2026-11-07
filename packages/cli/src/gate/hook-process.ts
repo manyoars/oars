@@ -5,6 +5,13 @@ import { appendFileSync, readFileSync, statSync } from 'node:fs';
 import { gateHook, type GateHookDeps } from './hook.js';
 import { parseRows } from './record.js';
 
+/** What telemetry is told of one fire of `oars gate hook`: how long the handler took, how it ended, and the bytes it printed. */
+export interface HookFire {
+  latencyMs: number;
+  outcome: 'hit' | 'miss' | 'held' | 'error';
+  bytes: number;
+}
+
 export interface HookProcess {
   /** Reads the whole of stdin. Called inside the guard, so a stream that cannot be set up is a failed read, not a crash. */
   stdin: () => Promise<string>;
@@ -15,6 +22,10 @@ export interface HookProcess {
   write?: (text: string) => Promise<void>;
   /** Milliseconds from now until the process ends itself. */
   deadlineMs: number;
+  /** Told once how the fire went, with the transcript path the harness named (to read the frame from, never to record), after its output is written so recording is never in front of the answer. A throw here is swallowed: the exit code and stdout do not depend on it. */
+  record?: (fire: HookFire, transcript: string | undefined) => void | Promise<void>;
+  /** Milliseconds, only compared with itself: the latency in a fire is the difference across the handler. Absent: `Date.now`. */
+  clock?: () => number;
 }
 
 /** The staged record is written before anything prints, so when the deadline ends the process with it still staged no note or deny was shown: its crossing rows read as no exposure, since a row cannot be backfilled. A block row has `arm: none` already but names its line, so every crossing row is reset, not only those with an arm. */
@@ -22,6 +33,17 @@ const unprinted = (text: string): string =>
   parseRows(text)
     .map((row) => `${JSON.stringify(row.kind === 'crossing' ? { ...row, arm: 'none', lineShown: 'none', lineHeld: 'none' } : row)}\n`)
     .join('');
+
+/** The transcript path the harness put in the hook input, when there is one; anything else, including input that is not JSON, names none. */
+const transcriptOf = (input: string): string | undefined => {
+  try {
+    const parsed: unknown = JSON.parse(input);
+    const path: unknown = typeof parsed === 'object' && parsed !== null ? Reflect.get(parsed, 'transcript_path') : undefined;
+    return typeof path === 'string' && path !== '' ? path : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 const sizeOf = (file: string): number => {
   try {
@@ -41,7 +63,31 @@ const landed = (file: string, text: string, size: number): boolean => {
 };
 
 /** Resolves once `exit(0)` has been called, or never when the deadline timer is what ended the process. */
-export const runHookProcess = async ({ stdin, deps, exit, write, deadlineMs }: HookProcess): Promise<void> => {
+export const runHookProcess = async ({ stdin, deps, exit, write, deadlineMs, record, clock = Date.now }: HookProcess): Promise<void> => {
+  const started = clock();
+  // `held` and `error` are what the output cannot say; the callback reaches the hook through `deps`.
+  const how: { ended: HookFire['outcome'] | null } = { ended: null };
+  let fired: Pick<HookFire, 'outcome' | 'bytes'>;
+  let transcript: string | undefined;
+  // Telemetry hears of a fire once: the deadline timer records the fire it cuts short (the slowest ones), and the main path skips a fire the timer has already told.
+  let recorded = false;
+  // Set once the main path's `record` has resolved. While it is false after `recorded`, the main path is still reading the transcript, and a stalled read would otherwise lose the fire at the deadline.
+  let settled = false;
+  let told: Pick<HookFire, 'outcome' | 'bytes'> | undefined;
+  const send = async (result: Pick<HookFire, 'outcome' | 'bytes'>, transcript?: string): Promise<void> => {
+    try {
+      await record?.({ latencyMs: Math.max(0, Math.round(clock() - started)), ...result }, transcript);
+    } catch {
+      // Telemetry never changes what the hook did.
+    }
+  };
+  const tell = async (result: Pick<HookFire, 'outcome' | 'bytes'>, transcript?: string): Promise<void> => {
+    if (recorded) return;
+    recorded = true;
+    told = result;
+    await send(result, transcript);
+    settled = true;
+  };
   // `size` is the file's length when the record was staged: an append that wrote and then stalled has put the record's own bytes past it, and the deadline must not write it again.
   let staged: { file: string; text: string; size: number; stop?: () => void } | null = null;
   // The last resort when the process is stuck past its grace: keep the staged record, then go. A write that fails here has nowhere to report, so it is dropped.
@@ -53,6 +99,10 @@ export const runHookProcess = async ({ stdin, deps, exit, write, deadlineMs }: H
       } catch {
         // Fail-open.
       }
+      // The fire the deadline cut short is still a fire: recorded as an error with nothing printed, after the row and before the stop so a slow stop cannot lose it.
+      // When the main path had told it first and its transcript read is still going, the fire it settled on goes now, with no transcript, so the read cannot cost the event.
+      if (!recorded) void tell({ outcome: 'error', bytes: 0 });
+      else if (!settled && told !== undefined) void send(told);
       // A registry ask still running is then stopped, so the manager the hook started does not outlive it; a stop that throws must not cost the exit.
       try {
         staged?.stop?.();
@@ -67,11 +117,16 @@ export const runHookProcess = async ({ stdin, deps, exit, write, deadlineMs }: H
     const built = deps((pending) => {
       staged = pending === null ? null : { ...pending, size: sizeOf(pending.file) };
     });
-    const output = await gateHook(await stdin(), built);
+    const input = await stdin();
+    transcript = transcriptOf(input);
+    const output = await gateHook(input, { ...built, ended: (result) => { how.ended = result; built.ended?.(result); } });
     if (output !== '') await write?.(output);
+    fired = { outcome: how.ended ?? (output === '' ? 'miss' : 'hit'), bytes: Buffer.byteLength(output) };
   } catch {
     // Fail-open: a throw anywhere above is a record not written, never an exit code.
+    fired = { outcome: 'error', bytes: 0 };
   }
+  await tell(fired, transcript);
   // A manager the registry ask started can outlive the ask; leaving by `exit` rather than waiting for it is what keeps the call under a second.
   exit(0);
 };

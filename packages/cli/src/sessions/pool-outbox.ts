@@ -156,7 +156,7 @@ export const outboxFolder = (storeDir: string, server: string): string => join(s
 const BATCH_FILE = /^([0-9a-f]{16})\.([0-9a-f]{64})\.jsonl$/;
 
 /** Writes one session's batch under the current stamp. A session has one batch: an older batch of it is removed, and an identical one is written again, so an edited file is restored. */
-export const writeBatch = async (outbox: string, key: string, batch: unknown, stamp: string = currentStamp()): Promise<{ hash: string; folder: string }> => {
+export const writeBatch = async (outbox: string, key: string, batch: unknown, stamp: string = currentStamp()): Promise<{ hash: string; folder: string; bytes: number }> => {
   const bytes = canonicalBytes(batch);
   const hash = batchHash(bytes);
   const folder = join(outbox, stamp);
@@ -166,7 +166,7 @@ export const writeBatch = async (outbox: string, key: string, batch: unknown, st
     if (found?.[1] === key && found[2] !== hash) await rm(join(folder, name), { force: true });
   }
   await writeFile(join(folder, `${key}.${hash}.jsonl`), bytes, 'utf8');
-  return { hash, folder };
+  return { hash, folder, bytes: Buffer.byteLength(bytes) };
 };
 
 export const isMissing = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ENOENT';
