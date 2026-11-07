@@ -1,5 +1,6 @@
 // The ledger plane has no expiry: the database refuses a delete of a `deposits` row or a `contributors` record, and a guard over the pool's own source fails
 // when a delete path or a scheduled trigger appears. A legally required erasure would be one new migration that drops the two `*_no_delete` triggers.
+import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -50,7 +51,8 @@ describe('the server refuses a ledger delete', () => {
     const { token, account } = await pool.signIn('github', stubUser('8603'));
     await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
     const grant = { 'oars-redaction-version': '1', 'oars-capture-version': 'cap-1', 'oars-raw-consent': 'granted' };
-    const hash = 'e'.repeat(64);
+    // The pool checks the hash, so the path carries the SHA-256 of the three bytes.
+    const hash = createHash('sha256').update(new Uint8Array([1, 2, 3])).digest('hex');
     expect((await pool.send(`/v1/raw/${hash}/parts/1`, { method: 'PUT', body: new Uint8Array([1, 2, 3]) }, token, grant)).status).toBe(200);
     expect((await pool.send(`/v1/raw/${hash}/complete`, { method: 'POST', body: '{"parts":1,"bytes":3}' }, token, grant)).status).toBe(201);
     const db = await pool.db();

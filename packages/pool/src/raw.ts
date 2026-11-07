@@ -1,5 +1,6 @@
 // The raw tier: a locally redacted transcript goes to R2 in parts, and D1 keeps one ledger row per object. This file is the only one that touches the raw bucket or `raw_objects`, and it serves nothing: no route returns a raw byte, a hash, or a count (`raw-serves-nothing.test.ts` pins that).
 // The server cannot verify redaction. It takes the client's word that the bytes were redacted (and hosts masked) before they were sent, and it runs no scanner.
+import { createHash } from 'node:crypto';
 import { covenantNotAccepted, depositsClosed, hasAccepted } from './covenant.js';
 import { answer, bodyOf, bound, fieldOf, notConfigured, refuse, type Env, type RawBucket, type RawUploadedPart } from './http.js';
 import { accountOf } from './identity.js';
@@ -89,11 +90,12 @@ const wholeField = (value: unknown, key: string, most: number): number | undefin
   return typeof found === 'number' && Number.isSafeInteger(found) && found >= 1 && found <= most ? found : undefined;
 };
 
-/** Joins the staged parts into one R2 object through a multipart upload, re-cut to equal 5 MiB parts. Memory holds one assembly part and one staged part at a time. A refusal aborts the upload, so nothing is left half made. */
+/** Joins the staged parts into one R2 object through a multipart upload, re-cut to equal 5 MiB parts, and checks that the bytes hash to the SHA-256 in the path. Memory holds one assembly part and one staged part at a time. A refusal aborts the upload, so nothing is left half made. */
 const assemble = async (bucket: RawBucket, account: string, hash: string, parts: number, bytes: number): Promise<Response | undefined> => {
   const upload = await bucket.createMultipartUpload(objectKey(account, hash));
   const uploaded: RawUploadedPart[] = [];
   const buffer = new Uint8Array(ASSEMBLY_PART_BYTES);
+  const digest = createHash('sha256');
   let filled = 0;
   let total = 0;
   const flush = async (): Promise<void> => {
@@ -108,6 +110,7 @@ const assemble = async (bucket: RawBucket, account: string, hash: string, parts:
     }
     const chunk = new Uint8Array(await staged.arrayBuffer());
     total += chunk.length;
+    digest.update(chunk);
     for (let from = 0; from < chunk.length; ) {
       const take = Math.min(chunk.length - from, ASSEMBLY_PART_BYTES - filled);
       buffer.set(chunk.subarray(from, from + take), filled);
@@ -120,12 +123,16 @@ const assemble = async (bucket: RawBucket, account: string, hash: string, parts:
     await upload.abort();
     return refuse(422, 'bytes_mismatch', `The parts hold ${String(total)} bytes, not ${String(bytes)}.`, 'bytes');
   }
+  if (digest.digest('hex') !== hash) {
+    await upload.abort();
+    return refuse(422, 'hash_mismatch', 'The parts do not hash to the SHA-256 in the path.', 'sha256');
+  }
   if (filled > 0) await flush();
   await upload.complete(uploaded);
   return undefined;
 };
 
-/** `POST /v1/raw/:sha256/complete`, `{parts, bytes}`: joins parts 1 to `parts`, checks the byte count, writes the object and then the ledger row. Sent again for an object that stands, it answers 200. */
+/** `POST /v1/raw/:sha256/complete`, `{parts, bytes}`: joins parts 1 to `parts`, checks the byte count and the SHA-256, writes the object and then the ledger row. Sent again for an object that stands, it answers 200. */
 const complete = async (request: Request, env: Env, hash: string): Promise<Response> => {
   const admitted = await admit(request, env);
   if (admitted instanceof Response) return admitted;
