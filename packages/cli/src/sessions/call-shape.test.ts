@@ -45,6 +45,7 @@ describe('the class of a path target', () => {
     ['photo.png', 'other'],
     ['Makefile.bak', 'other'],
     ['C:\\work\\src\\main.ts', 'source'],
+    ['.', 'other'],
   ];
   it.each(cases)('reads %s as %s', (path, expected) => {
     expect(targetClassOf(path, 'repo')).toBe(expected);
@@ -105,5 +106,29 @@ describe('capture stores the two classes and never the values', () => {
     ]);
     const stored = JSON.stringify(tools.map(({ targetClass, argClass }) => ({ targetClass, argClass })));
     for (const planted of ['zebra-unicorn', 'npm test', 'example.org', 'run the tests']) expect(stored).not.toContain(planted);
+  });
+
+  // Claude Code sends an absolute file_path, so the folders above the repository must not decide the class: only the key the target is hashed on (relative to the repository or the cwd) is read.
+  describe('reads the path below the repository or the cwd, never the folders above it', () => {
+    const roots = ['/home/me/build/app', '/workspace/out/app', '/srv/test/app', '/home/me/docs/app', '/opt/vendor/app', 'C:\\Users\\me\\dist\\app'];
+    const classOfAbsolute = (root: string, file: string, repoRoot: boolean): string | undefined => {
+      const cwd = root;
+      const text = [
+        JSON.stringify({ type: 'user', timestamp: '2026-06-10T00:00:00.000Z', cwd, message: { role: 'user', content: 'go' } }),
+        JSON.stringify({ type: 'assistant', timestamp: '2026-06-10T00:00:00.000Z', cwd, message: { role: 'assistant', model: 'model-a', content: [{ type: 'tool_use', id: 't1', name: 'Read', input: { file_path: `${root}/${file}` } }] } }),
+      ].join('\n');
+      const input = { text, session: 's', project: 'p', rev: 1, at: '', bytes: 0, redact: makeRedactor() };
+      return captureSession(repoRoot ? { ...input, repoRoot: () => root } : input).tools[0]?.targetClass;
+    };
+    it.each(roots)('a root named %s reads source for a source file, from the repository and from the cwd', (root) => {
+      expect(classOfAbsolute(root, 'src/main.ts', true)).toBe('source');
+      expect(classOfAbsolute(root, 'src/main.ts', false)).toBe('source');
+    });
+    it.each(roots)('a root named %s still reads the suffix below it as test, generated, doc, and lockfile', (root) => {
+      expect(classOfAbsolute(root, 'tests/a.ts', true)).toBe('test');
+      expect(classOfAbsolute(root, 'dist/a.js', false)).toBe('generated');
+      expect(classOfAbsolute(root, 'docs/a.html', true)).toBe('doc');
+      expect(classOfAbsolute(root, 'package-lock.json', false)).toBe('lockfile');
+    });
   });
 });
