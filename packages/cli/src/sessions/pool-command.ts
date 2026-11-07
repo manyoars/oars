@@ -736,7 +736,7 @@ const RAW = 'pool-raw';
 /** The raw prompt, in plain words: shown by `oars pool raw` until it is answered, and what the nightly send relies on. Redaction is best effort and the text says so. */
 export const RAW_PROMPT = [
   'Raw transcripts are separate from the covenant. If you say yes, a redacted copy of each full transcript of every folder you allowed is uploaded to the pool, not only its skeleton.',
-  'Redaction runs on this machine, before anything is queued, and it is best effort: it masks secret shapes it knows, emails, home paths, environment values, and hosts, and it can miss a secret that has no recognizable shape or a name written in prose.',
+  'Redaction runs on this machine, before anything is queued, and it is best effort: it masks secret shapes it knows, emails, your username, home paths, environment values, and hosts, and it can miss a secret that has no recognizable shape or a name written in prose.',
   'Say no, or say nothing, and only skeletons leave. Change your mind any time: oars pool raw --consent yes|no. A no stops later sends only; it cannot recall what was already sent.',
 ].join('\n');
 

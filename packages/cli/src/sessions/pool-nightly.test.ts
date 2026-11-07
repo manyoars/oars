@@ -1,5 +1,5 @@
 // The nightly send (t884 Item 4): after the covenant is accepted the nightly task builds the outbox and sends new batches and, with its own yes, the redacted raw parts. Acceptance is the consent, so with none (or no server, or no sign-in) it sends nothing.
-import { existsSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdirSync } from 'node:fs';
@@ -9,7 +9,7 @@ import { nightlyPoolSend } from './pool-nightly.js';
 import type { Reply, Sender } from './pool-command.js';
 import type { Outgoing } from './pool-print.js';
 import { batchHash, outboxFolder } from './pool-outbox.js';
-import { SendLockBusy, withSendLock } from './pool-send-lock.js';
+import { SendLockBusy, withSendLock, type LockFs } from './pool-send-lock.js';
 import { deposit, updatePoolChoices } from './store.js';
 import { cleanup, NOW, settledClock, stage, type Staged } from './test-support.js';
 
@@ -322,7 +322,39 @@ describe('withSendLock', () => {
     expect(existsSync(join(outbox, 'send.lock'))).toBe(false);
   });
 
-  it('lets exactly one of two waiters take over a stale lock', async () => {
+  it('keeps the lock a first waiter took when a second still reads the old one as stale', async () => {
+    const outbox = folder();
+    mkdirSync(outbox, { recursive: true });
+    const lock = join(outbox, 'send.lock');
+    writeFileSync(lock, 'dead-run');
+    let inside = 0;
+    let overlapped = false;
+    // Both waiters' first look at the lock reports it stale, but the second look comes only after the first waiter has taken the lock and is running: a takeover that removes the file by path
+    // would delete the first waiter's fresh lock and let the second in beside it.
+    let looked = 0;
+    const fs: LockFs = {
+      stat: async (path) => {
+        if (looked < 2 && path === lock) {
+          looked += 1;
+          if (looked === 2) while (inside === 0) await new Promise((resolve) => setTimeout(resolve, 2));
+          return { mtimeMs: Date.now() - 60_000 };
+        }
+        return { mtimeMs: statSync(path).mtimeMs };
+      },
+    };
+    const body = async (): Promise<void> => {
+      inside += 1;
+      overlapped ||= inside > 1;
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      inside -= 1;
+    };
+    const times = { staleMs: 1000, waitMs: 2000, pollMs: 5 };
+    await Promise.all([withSendLock(outbox, body, times, fs), withSendLock(outbox, body, times, fs)]);
+    expect(overlapped).toBe(false);
+    expect(readdirSync(outbox)).toEqual([]);
+  });
+
+  it('lets three waiters take over a stale lock one at a time', async () => {
     const outbox = folder();
     mkdirSync(outbox, { recursive: true });
     const lock = join(outbox, 'send.lock');
