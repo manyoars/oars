@@ -23,7 +23,7 @@ export const POSITION_MIN_N = 20;
 export const POSITION_BAND = { low: 0.2, high: 0.8 } as const;
 /**
  * The bytes a table may add to a turn's context. Eight lines of about 70 bytes: a session start or a prompt carries it every time it is sent, and a table the agent has to
- * read past is one it stops reading. A position over the cap is left off, the most-observed first, so what is cut is the least certain.
+ * read past is one it stops reading. Bundle positions come first, then local ones, each by observations; the cap cuts from the end, so a local position goes before a bundle one.
  */
 export const TABLE_CAP_BYTES = 600;
 const TOP_NEXT = 3;
@@ -139,12 +139,14 @@ export type RecoveryDecision =
   | { kind: 'retry' }
   /** A local edge under the floor. */
   | { kind: 'floor' }
-  /** No cell for this action and error class, or the top next is that nothing followed. */
+  /** A cell covers this action and error class and its top next step is that nothing followed: the failure is covered, so no older line answers it either. */
+  | { kind: 'ended' }
+  /** No cell for this action and error class. */
   | { kind: 'none' };
 
 /**
  * What a failure is answered with: the bundle's edges for this action and error class if it holds any (they cleared the pool's floor), else the local pool's. Silent when the top
- * next step is a same-step retry (direction 13c), when a local edge is under `RECOVERY_FLOOR`, or when nothing followed.
+ * next step is a same-step retry (direction 13c), when a local edge is under `RECOVERY_FLOOR`, or when the top is that nothing followed (`ended`).
  */
 export const recoveryDecision = (bundle: NextReads | undefined, local: { recovery: RecoveryEdges; poolVersion: string } | undefined, action: string, code: string): RecoveryDecision => {
   const key = `${action}/${code}`;
@@ -157,7 +159,7 @@ export const recoveryDecision = (bundle: NextReads | undefined, local: { recover
   // A tie with another next step is not a retry-only cell, so it is served; the strict lead is what direction 13c silences.
   const second = chosen.edges[1];
   if (top.next === action && (second === undefined || top.followed > second.followed)) return { kind: 'retry' };
-  if (top.next === 'none') return { kind: 'none' };
+  if (top.next === 'none') return { kind: 'ended' };
   if (chosen.source === 'local' && top.followed < RECOVERY_FLOOR) return { kind: 'floor' };
   return { kind: 'serve', ...chosen };
 };

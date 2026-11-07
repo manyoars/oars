@@ -83,6 +83,15 @@ describe('the recovery edge at PostToolUseFailure', () => {
     expect(await readRecalls(made.storeDir)).toEqual([]);
   });
 
+  it('stays silent, with no row, when the cell covers the failure and nothing followed it, even when a recurring signature matches', async () => {
+    const made = await staged({ [KEY]: [edge('none', RECOVERY_FLOOR + 3)] });
+    const index = await readIndex(made.storeDir);
+    const sig = signatureOf('Bash', 'Exit code 1\nnothing seen before', makeRedactor([]));
+    writeFileSync(indexPath(made.storeDir), JSON.stringify({ ...index, signatures: { [sig]: { sessions: 4, followed: [['file.read', 3]] } } }));
+    expect(await runHook('post-tool', fail(sessionOn(made, 'shown', KEY)), made.runtime, () => NOW)).toBeUndefined();
+    expect(await readRecalls(made.storeDir)).toEqual([]);
+  });
+
   it('lets the signature line answer a failure no cell covers', async () => {
     const made = await staged({});
     const index = await readIndex(made.storeDir);
@@ -116,7 +125,7 @@ describe('recoveryDecision', () => {
   it('serves a tie with the retry, is silent on a strict retry lead and on nothing followed, and holds a local cell to the floor', () => {
     expect(recoveryDecision(undefined, local([edge('file.edit', 7), edge('shell.exec', 7)]), 'shell.exec', '1').kind).toBe('serve');
     expect(recoveryDecision(undefined, local([edge('shell.exec', 8), edge('file.edit', 7)]), 'shell.exec', '1').kind).toBe('retry');
-    expect(recoveryDecision(undefined, local([edge('none', 9)]), 'shell.exec', '1').kind).toBe('none');
+    expect(recoveryDecision(undefined, local([edge('none', 9)]), 'shell.exec', '1').kind).toBe('ended');
     expect(recoveryDecision(undefined, local([edge('file.edit', 4)]), 'shell.exec', '1').kind).toBe('floor');
     expect(recoveryDecision(undefined, undefined, 'shell.exec', '1').kind).toBe('none');
   });

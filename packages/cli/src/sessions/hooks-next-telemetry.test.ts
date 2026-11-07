@@ -77,8 +77,10 @@ describe('the hook telemetry of the next-node reads', () => {
     const again = await run(made, 'prompt', promptOf(shown));
     expect(hook(again.events)?.fields).toMatchObject({ name: 'prompt', outcome: 'miss', bytes: 0 });
     const held = await run(made, 'session-start', startOf(sessionOn(made, 'held', 'positions')));
-    // The session start still injects its context block, so the fire is a hit for what went out; the held table is the recall event's arm and adds no bytes.
+    // The session start still injects its context block, so it carries bytes; the held table still counts the fire as held, because `held` follows the recall's arm whatever else the hook printed.
     expect(held.events.find((event) => event.type === 'recall')?.fields).toMatchObject({ arm: 'held' });
+    expect(hook(held.events)?.fields).toMatchObject({ name: 'session-start', outcome: 'held' });
+    expect(held.output ?? '').not.toBe('');
     expect(held.output ?? '').not.toContain('oars recall, next steps');
     expect(Number(hook(held.events)?.fields.bytes)).toBeLessThan(Number(hook(first.events)?.fields.bytes));
   });
