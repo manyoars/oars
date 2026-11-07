@@ -41,6 +41,8 @@ export interface Env {
   PSEUDONYM_KEY?: string;
   /** An Ed25519 private key as a JWK. */
   BUNDLE_SIGNING_KEY?: string;
+  /** The pool-wide HMAC key for a hashed field (a host). Unset refuses every deposit, so a host is never stored in clear. */
+  INGEST_HASH_KEY?: string;
   /** Unset keeps deposits closed. */
   COVENANT_VERSION?: string;
   /** How many bundles an account without access may fetch in one ISO week. */

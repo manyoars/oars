@@ -80,7 +80,7 @@ describe('an oversized deposit with a declared length', () => {
     const request = new Request('http://pool.test/v1/deposits', { method: 'POST', body: 'x', headers: { authorization: `Bearer ${TOKEN}`, 'content-length': String(1024 * 1024 + 1) } });
     const read = (): Promise<string> => Promise.reject(new Error('the body was read'));
     Object.defineProperty(request, 'text', { value: read });
-    const response = await worker.fetch(request, { DB: db, COVENANT_VERSION: 'v1' });
+    const response = await worker.fetch(request, { DB: db, COVENANT_VERSION: 'v1', INGEST_HASH_KEY: 'a-test-ingest-hash-key' });
     expect(response.status).toBe(413);
     expect(await response.json()).toMatchObject({ error: 'too_large' });
   });
@@ -146,7 +146,7 @@ describe('a frame day in the future', () => {
       const bound = { first: () => Promise.resolve(row), all: () => Promise.resolve({ results: [] }), run: () => Promise.resolve({ meta: { changes: 1 } }) };
       const db = { prepare: () => ({ bind: () => bound }), batch: () => Promise.resolve([{ meta: { changes: 1 } }]) };
       const request = new Request('http://pool.test/v1/deposits', { method: 'POST', body: JSON.stringify(sent), headers: { authorization: `Bearer ${TOKEN}` } });
-      return worker.fetch(request, { DB: db, COVENANT_VERSION: 'v1' });
+      return worker.fetch(request, { DB: db, COVENANT_VERSION: 'v1', INGEST_HASH_KEY: 'a-test-ingest-hash-key' });
     };
     const onDay = (day: string): SessionSkeleton => sampleSkeleton('00000000000000f2', { languages: ['typescript'] }, day);
 

@@ -120,7 +120,7 @@ describe('the local read and the deposit share one computation', () => {
     const bare = store({ sessions: [session('s1')], tools: [tool('s1', 0, 'Bash')] });
     expect(projectedStore(bare, storedNames)).toEqual(bare);
     const projected = projectedStore(localStore(), () => [{ program: 'ffmpeg', subcommand: null, flags: ['-i'] }]);
-    expect(projected.tools[0]?.steps?.[0]?.identity).toEqual({ program: 'private', sub: null, flags: [] });
+    expect(projected.tools[0]?.steps?.[0]?.identity).toEqual({ program: 'ffmpeg', sub: null, flags: [] });
   });
 });
 

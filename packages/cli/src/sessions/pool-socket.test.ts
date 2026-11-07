@@ -124,7 +124,7 @@ describe('what is printed is what goes over the socket', () => {
     h.deps.sessions = staged.runtime;
     loop = await listen(h.err);
     const { x, sign } = await signer();
-    const payload = JSON.stringify({ format: 1, harness: 'claude-code', harnessVersion: '2.1.314', vocabVersion: VOCAB_VERSION, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}], strata: [] });
+    const payload = JSON.stringify({ format: 1, harness: 'claude-code', harnessVersion: '2.1.314', vocabVersion: VOCAB_VERSION, floor: 5, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}], strata: [] });
     loop.answers.set('POST /login/device/code', [json(200, { device_code: 'device-code-1', user_code: 'USER-1', verification_uri: 'https://provider.test/device', interval: 1, expires_in: 10 })]);
     loop.answers.set('POST /login/oauth/access_token', [json(200, { access_token: PROVIDER_TOKEN })]);
     loop.answers.set('POST /v1/login', [json(200, { token: POOL_TOKEN, account: 'acct_one', expiresAt: Date.parse('2099-01-01T00:00:00Z'), signingKey: { kty: 'OKP', crv: 'Ed25519', x } })]);
