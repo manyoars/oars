@@ -30,6 +30,12 @@
 // reads, not moved ones. A Copilot CLI session with rotated `events.N.jsonl` archives is now read as one session, so its `prompts`, `tools`, `lines`, and skeleton move; one
 // with no archives is unchanged. EXTRACTOR stays 11. A version-16 store's next deposit captures every transcript again from the harness or `raw/`.
 //
+// Version 22 (CAPTURE 22, t870) adds the optional `targetClass` and `argClass` to a tool call (`call-shape.ts`): the class of its path target (`source`, `test`, `config`, `doc`, `lockfile`, `generated`, `data`, `none`, `other`) and the sorted set
+// of the classes of its arguments (`path`, `url`, `pattern`, `command`, `number`, `flag`, `text`, `none`), each computed from the path and the input at capture and stored as a closed-list member, never the path or a value. It changes no value
+// captured before, so EXTRACTOR stays 12; a version-21 store's next deposit captures every transcript again, and a call of an older record has neither field.
+//
+// Version 23 (CAPTURE 23, t903) changes three stored values and no field name: a step identity's skill-run name, host, and pull's package name are kept as they are after the operator's redaction (`redactDomains`, exclusion terms, and the 128-character cap still apply), where before each was `<literal>` unless a public list held it. A store opened at version 22 keeps its `<literal>` values until its next deposit captures every transcript again from the harness or `raw/`; the tool record's `steps` moves from class P to class A because those names can be private.
+//
 // EXTRACTOR 12 gives a derived prompt the strata of its user-prompt record, so its own `explore` count reaches the pool's wire as a bucket. No transcript is read: a store at
 // 11 re-derives from its log alone.
 //
@@ -79,11 +85,12 @@
 // organization domains the operator names. The skeleton holds hashes only.
 
 import type { CanonicalAction } from './actions.js';
+import type { ArgClass, TargetClass } from './call-shape.js';
 import type { RepoSize } from './public-vocabulary.js';
 import type { SessionFunnel, SessionSetup, SessionTrust } from './session-shape.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '22';
+export const CAPTURE_VERSION = '23';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
@@ -388,7 +395,7 @@ export interface ErrorObservation {
 
 export type ToolStatus = 'ok' | 'error' | 'none';
 
-/** A package a shell step pulled, in public names (`<literal>` outside the allowlist). */
+/** A package a shell step pulled. The package name is kept as it is after redaction (`<literal>` when redaction changes it, it is not a name, or it is over 128 characters); the registry is a public name. */
 export interface PullIdentity {
   registry: string;
   name: string;
@@ -435,7 +442,7 @@ export interface StepObservation {
   action: CanonicalAction;
   /** The harness's own name for the tool when the action table lists it or every name it holds is public, else `<literal>` (the tool record keeps it, class A). */
   native: string;
-  /** What the step acted on, in public names only; null for an action that has none (a file's path never appears here). */
+  /** What the step acted on; a skill-run name, host, and pull name are kept as they are after redaction (`<literal>` when redaction changes them, they are not names, or they are over 128 characters), and every other name is public or `<literal>`. Null for an action that has none (a file's path never appears here). */
   identity: StepIdentity;
   /** The call's status when it reports this segment; `none` for a segment it does not, such as one a pipe hides. */
   status: ToolStatus;
@@ -482,6 +489,10 @@ export interface ToolObservation {
   targetBase: TargetBase | null;
   /** The input's key names, sorted. Class A (EXTRACTOR 11). */
   keys: string[];
+  /** The class of the call's path target (`targetClassOf`): a member of `TARGET_CLASSES`, `none` for a call with no path target. Absent on a record captured before CAPTURE 22. Class P: a closed list, never the path or its base name. */
+  targetClass?: TargetClass;
+  /** The classes of the call's arguments (`argClassOf`), a sorted set of `ARG_CLASSES` members, `['none']` for a call with no argument value. Absent on a record captured before CAPTURE 22. Class P: never a value. */
+  argClass?: ArgClass[];
   /** The class of a failed call (`errorCodeOf`): a member of `ERROR_CODES`, never result text. Absent on a call that did not fail and on a record captured before CAPTURE 14. Class P. */
   errorCode?: string;
   /** From the call's line to its first result's line; null when either timestamp is missing or no result is in the file. */
@@ -496,7 +507,7 @@ export interface ToolObservation {
   side: boolean;
   /** The prompt index the call ran under; null before the first prompt. */
   prompt: number | null;
-  /** What the call was in the canonical vocabulary; absent on a record captured before this field existed. Class P. */
+  /** What the call was in the canonical vocabulary; absent on a record captured before this field existed. Class A since CAPTURE 23: a step identity's skill-run name, host, and pull name are kept as they are after redaction and can be private; class P before. */
   steps?: StepObservation[];
   /** Each command of a shell call, in order (CAPTURE 6); on every shell call and no other. Absent on a record captured earlier. */
   segments?: ShellSegment[];

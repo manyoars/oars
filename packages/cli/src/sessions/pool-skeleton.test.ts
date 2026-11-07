@@ -62,9 +62,9 @@ describe('the leak test: a private name in a path, a program, a package, an argu
   it('leaves none of those bytes anywhere in the batch but a program, server, pull, or native tool name', () => {
     const skeleton = capturedSkeleton();
     const named = new Set(['program', 'server', 'native']);
-    // `name` is exempt only on a pull (the one object with a `registry`), so a delta's `name` is still scanned.
+    // `name` is exempt only on a pull (the one object with a `registry` and a `version`; a delta has no `version`), so a delta's `name` is still scanned.
     const text = JSON.stringify(skeleton, function (this: object, key: string, value: unknown) {
-      return named.has(key) || (key === 'name' && 'registry' in this) ? undefined : value;
+      return named.has(key) || (key === 'name' && 'registry' in this && 'version' in this) ? undefined : value;
     }).toLowerCase();
     for (const bytes of [PLANTED.toLowerCase(), 'acme-deploy', 'abc123', 'secret.ts', 'feat/']) expect(text).not.toContain(bytes);
     expect(JSON.stringify(shellIdentities(skeleton))).toContain('"program":"acme-deploy"');

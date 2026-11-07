@@ -41,7 +41,7 @@ const NOT_POOLED = {
 
 const withoutFields = (record: object, fields: readonly string[]): object => Object.fromEntries(Object.entries(record).filter(([field]) => !fields.includes(field)));
 
-/** Every class P field of the four capture records. `steps` is class A since CAPTURE 22 (a skill-run name, a host, and a pull name can be private), so `stepsText` checks it beside this. */
+/** Every class P field of the four capture records. `steps` is class A since CAPTURE 23 (a skill-run name, a host, and a pull name can be private), so `stepsText` checks it beside this. */
 const pooled = (capture: Capture): string =>
   JSON.stringify([
     withoutFields(capture.session, NOT_POOLED.session),
