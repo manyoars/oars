@@ -95,9 +95,27 @@ export const pullIdentity = (pull: ToolPull, redact: Redactor): PullIdentity => 
 /** A shell step whose program is private or unreadable: its flags are its own, so none are kept. */
 export const UNREAD_SHELL: ShellIdentity = { program: LITERAL, sub: null, flags: [] };
 
+/** Flags of `git checkout` that take only paths: a checkout with one of them acts on a path, never on a branch. */
+const PATH_ONLY_FLAGS: ReadonlySet<string> = new Set(['--ours', '--theirs', '--patch', '-p', '--pathspec-from-file']);
+
+/**
+ * The class of what a `git checkout` acts on, from the line alone and never the target's text. A `--` marker or a path-only flag proves a path; a target word the segment drops (the same
+ * words `isPositional` refuses: quoted, or holding a slash, a backslash, or `$`) with neither proof could be a branch (`feature/x`) or a path (`src/a.ts`), so it is `word`; no such word is absent.
+ */
+const checkoutTarget = (all: readonly WordOfCommand[]): ShellIdentity['target'] => {
+  // Words before `checkout` are the global options of `git` (`-C <dir>`), not what the checkout acts on.
+  const args = all.slice(all.findIndex(({ text, quoted }) => !quoted && text === 'checkout') + 1);
+  const dashes = args.findIndex(({ text, quoted }) => !quoted && text === '--');
+  const flagWords = (dashes < 0 ? args : args.slice(0, dashes)).filter(({ text, quoted }) => !quoted && text.startsWith('-')).map(({ text }) => text.split('=')[0] ?? text);
+  if (dashes >= 0 || flagWords.some((flag) => PATH_ONLY_FLAGS.has(flag))) return 'path';
+  return args.some((word) => (word.quoted || !word.text.startsWith('-')) && !isPositional(word)) ? 'word' : undefined;
+};
+
 export const shellIdentity = (program: string, args: readonly WordOfCommand[], pulls: readonly ToolPull[], redact: Redactor): ShellIdentity => {
   if (!PUBLIC_PROGRAMS.has(program)) return UNREAD_SHELL;
-  const identity: ShellIdentity = { program, sub: subOf(program, args), flags: flagsOf(program, args) };
+  const sub = subOf(program, args);
+  const target = program === 'git' && sub === 'checkout' ? checkoutTarget(args) : undefined;
+  const identity: ShellIdentity = { program, sub, flags: flagsOf(program, args), ...(target === undefined ? {} : { target }) };
   return pulls.length === 0 ? identity : { ...identity, pulls: pulls.map((pull) => pullIdentity(pull, redact)) };
 };
 

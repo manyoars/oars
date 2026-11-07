@@ -50,6 +50,32 @@ const pooled = (capture: Capture): string =>
     capture.errorLines.map((errorLine) => withoutFields(errorLine, NOT_POOLED.errorLine)),
   ]);
 
+describe('a git checkout step keeps the class of its target, never the target', () => {
+  it.each([
+    ['git checkout -- src/a.ts', 'path'],
+    ['git checkout --ours src/a.ts', 'path'],
+    ['git checkout -p src/a.ts', 'path'],
+    ['git checkout feature/x', 'word'],
+    ['git checkout "fix-1"', 'word'],
+    ['git checkout -f origin/main', 'word'],
+    ['git -C /work/app checkout -- src/a.ts', 'path'],
+  ])('`%s` is %s', (command, target) => {
+    expect(shell(command)[0]?.identity).toMatchObject({ program: 'git', sub: 'checkout', target });
+  });
+
+  it.each(['git checkout', 'git checkout -b dev', 'git checkout main', 'git checkout -', 'git -C /work/app checkout'])('`%s` has no target class', (command) => {
+    expect(shell(command)[0]?.identity).not.toHaveProperty('target');
+  });
+
+  it('keeps no text of the target', () => {
+    expect(JSON.stringify(shell('git checkout secret-team/private-branch')[0]?.identity)).not.toContain('secret');
+  });
+
+  it('leaves every other git subcommand without a target', () => {
+    expect(shell('git diff -- src/a.ts')[0]?.identity).not.toHaveProperty('target');
+  });
+});
+
 /** The tool records' steps, which hold a skill-run name, a host, and a pull name as they are after redaction (class A), and every other name public. */
 const stepsText = (capture: Capture): string => JSON.stringify(capture.tools.map((tool) => tool.steps));
 
