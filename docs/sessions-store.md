@@ -964,7 +964,7 @@ that a deposit counts only the child's own prompts.
 synthetic fixtures, each of which cites the source line that can write it; no OpenCode store has ever been read by it. No vendor text promises the database layout: the repository promises deprecation
 aliases for the SDK and plugin API only (`AGENTS.md:174-180`), and neither carries history, so the database is the only source. An OpenCode release can change the tables; a database that cannot be read
 is warned about by file name and skipped, never fatal, and the other sources still deposit. The one hand run that would settle it: on a machine with `opencode` signed in, run one
-`opencode run "<task>"` that makes one prompt, runs one command that exits nonzero (for example `ls /nonexistent`), and edits one file, then `oars sessions deposit --allow opencode` and
+`opencode run "<task>"` that makes one prompt, runs one command that exits nonzero (for example `ls /nonexistent`), and edits one file, then point the oars store at a temp folder (`APPDATA` on Windows, `XDG_CONFIG_HOME` elsewhere; leave `HOME` and `XDG_DATA_HOME` alone, so the OpenCode database is still found) and confirm `oars sessions` names that folder before the first write, then run `oars sessions deposit --allow opencode` and
 `oars sessions verify --strict`. It is settled only if the session count is nonzero, there are zero violations, the session holds an `error` tool record for that command with a matching error line,
 and usage is nonzero. Then check three shapes the fixtures take on trust: whether `session_part` rows exist (`experimental.part_rows`), a `location-switched` message after a session moves directory, and a
 fork's copied `msg_<event id>_<seq>` rows (`opencode export` of the same session is the cross-check).
@@ -980,7 +980,7 @@ fork's copied `msg_<event id>_<seq>` rows (`opencode export` of the same session
   `Write`, `read` is `Read`, `grep` and `glob` are `Grep` and `Glob`, each keeping its OpenCode name in `native`, which the action table looks up (`ACTION_TABLES.opencode`). A call's files are `path` for
   `edit`, `write`, and `read`, and the `*** Add|Update|Delete File:` and `*** Move to:` headers of a `patch`'s `patchText`; a relative one is joined to the session's folder, so each file is stored once,
   absolute like Claude Code's. A call still `streaming` or `running` has no outcome. **The outcome:** a shell call completes whatever its exit code and records the exit, signal, and timeout in
-  `state.metadata` (`core/src/shell/result.ts:41-47`), so the exit code decides, not the status; a nonzero exit reads `Exit code N` and the output, a signal or a timeout reads its own notice. The tool
+  `state.metadata` (`core/src/shell/result.ts:20-28`, `:36-43`, written by `core/src/tool/plugin/shell.ts:85-88`), so the exit code decides, not the status; a nonzero exit reads `Exit code N` and the output, a signal or a timeout reads its own notice. The tool
   appends that notice to its text (`result.ts:30-35`), and the reader cuts it so the error line is the command's own. A `state.error` is its `message` alone, not the `{type, message, status, response}` wrapper.
 - **Directory.** `session_v2.directory` is the latest one. A `location-switched` message moves the cwd from then on, and the first one's `previous.location.directory` is where the session started, so
   earlier lines keep it. A shell call's `workdir` is a one-shot directory (`core/src/tool/plugin/shell.ts:48-51`) and moves nothing.
@@ -994,10 +994,10 @@ fork's copied `msg_<event id>_<seq>` rows (`opencode export` of the same session
 - **Subagents and forks.** A subagent is its own `session_v2` row with a `parent_id`; it is deposited as a subagent of `opencode-<parent>`, so session counts stay main sessions. A fork copies its
   parent's messages as `msg_<event id>_<seq>` (`projector.ts:198`, `:226`); those rows are skipped, so the parent's prompts and usage are not counted twice. The `subagent` tool's call is recorded
   as `agent.spawn`, the `skill` tool's as `skill.run` with the skill's name, and `todowrite` as `plan.update`.
-- **Absent.** There is no cost field in the skeleton (`cost` is not read), no reasoning text, no permission mode, and no interrupt, refusal, or denial count. An assistant message's own `error` and a
+- **Absent.** There is no cost field in the skeleton (`cost` is not read), no reasoning text, no permission mode, no compaction usage (a compaction request's own `tokens`, real spend, are not read: `compaction` messages are skipped, `session-message.ts:250-254`), and no interrupt, refusal, or denial count. An assistant message's own `error` and a
   `retry` are not read. The harness version is `session_v2.version`.
 - **Known gaps.** An MCP tool is named `<server>_<tool>` (`core/src/tool/runtime.ts:290-293`), the same spelling as a built-in's, so it cannot be told apart and reads as an unknown tool with its name
-  withheld (`mcp: null`). A `skill` message (the operator running a skill) is not recorded. A tool another plugin registers has no table row and reads `other`. A database from a build older than 2.x, a channel
+  withheld (`mcp: null`). A `skill` message (the operator running a skill) is not recorded. A background shell call completes at once with no exit and `BACKGROUND_INSTRUCTION` as its text (`core/src/tool/plugin/shell.ts:78`), so it reads as a `Bash` call that succeeded with that instruction as its output, and its real outcome, which arrives later, is not read. A tool another plugin registers has no table row and reads `other`. A database from a build older than 2.x, a channel
   build's file, and `OPENCODE_DB` are not read. A row whose `data` is not JSON is counted as a bad line. Idempotent per session (`opencode/<id>` in `state.json`, the message count and the newest `time_updated` of the session, its messages, and its parts, because OpenCode settles a tool call, a `!cmd`, and text in place, `projector.ts:337-339`, `:539-560`, `:1076-1113`, which bump only the message and part rows).
 
 ## The outcome gold set
