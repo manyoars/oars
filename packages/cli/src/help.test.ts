@@ -20,6 +20,12 @@ describe('help text states what the code does', () => {
     expect(await helpOf('sessions', 'deposit')).toContain('is hard-linked or copied into the oars archive');
   });
 
+  it('the program line says coding-agent sessions, not Claude Code sessions', async () => {
+    const text = await helpOf();
+    expect(text).toContain('a local, searchable record of your own coding-agent sessions');
+    expect(text).not.toContain('Claude Code sessions');
+  });
+
   it('pool names the redacted raw copies that a yes to the raw prompt adds', async () => {
     expect(await helpOf('pool')).toContain('and, after a yes to the raw prompt, redacted raw copies');
   });

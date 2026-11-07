@@ -103,7 +103,7 @@ const sessionDeps = (deps: RunDeps): SessionsDeps => ({ sessions: deps.sessions,
 
 const buildProgram = (deps: RunDeps, observed: Observed): Command => {
   const program = new Command('oars')
-    .description('Many Oars: sign in, manage API keys, and keep a local, searchable record of your own Claude Code sessions')
+    .description('Many Oars: sign in, manage API keys, and keep a local, searchable record of your own coding-agent sessions')
     .version(deps.version)
     .exitOverride()
     .configureOutput({ writeOut: deps.io.stdout, writeErr: deps.io.stderr })
