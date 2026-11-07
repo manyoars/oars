@@ -157,6 +157,7 @@ An unknown field name a client sends lands in the `extensions` bag of the deposi
 | `GET /v1/covenant` | `{version, accepted}`. `version` is null when deposits are closed. Sign-in is optional. |
 | `POST /v1/covenant/accept` | Takes `{version}`. 409 `covenant_version` for any version but the one in force. |
 | `POST /v1/deposits` | Takes one skeleton, 1 MB at most. A larger one gets 413 `too_large`, unread when it declares its length. |
+| `POST /v1/telemetry` | Product telemetry from the CLI (docs/telemetry.md), not a deposit: it needs no covenant and no sign-in, and it is answered with deposits closed. Takes `{install, events}`: `install` is the CLI's random UUID, `events` is 1 to 250 objects (Analytics Engine's per-request write limit), each with a `type` of 1 to 64 characters. Answers 201 `{ok, kept, indexed}`. 400 `invalid_telemetry` names the first bad field (`body`, `install`, `events`, `events[2]`, `events[2].type`); 413 `too_large` past 1 MiB; 503 `not_configured` with no `TELEMETRY` bucket and 503 `telemetry_unavailable` when R2 fails (nothing is indexed then, so the resend does not count twice). See "Telemetry storage". |
 | `GET /bundle/:harness/:harnessVersion/:vocabVersion` | A signed bundle for one harness at one version (the harness is a required segment, since a number does not name its harness and two harnesses can share a numbered bucket; 400 `unknown_harness` for a name off the list, 400 `harness_required` on the old two-segment path): `{payload, signature}`, Ed25519 over the payload's exact bytes. The request names no family. It holds the cells for that version's bucket and the reads the pool derives today (fit without call shape, cost, change, live, adoption, method, next-step, and tool-day; recovery and reads above order 1 are not served), the version-free (name, `platform`, `shell`) cells that clear the check under "What a bundle serves", plus rule 3's strata cells (language, framework, repo size, and the two pairs, language with its share and repo size with its explore bucket) counted pool-wide. 401 with no valid credential (`harness_required` is answered with or without one, since the old path is named before any credential is read), 400 `unknown_harness_version` or `unknown_vocab_version` by name, 404 for any other path. The old `/v1/slices/:stack` route is gone. |
 
 ## Bindings
@@ -172,6 +173,33 @@ All of these are set at the deploy, never in `wrangler.jsonc`, which holds no ac
 | `FETCH_CAP` | Optional. Bundles one account may fetch per ISO week; a value that is not a positive whole number is 1. |
 | `MAX_DEPOSITS_PER_ACCOUNT` | Optional. Rows one account may hold. |
 | `MAX_DEPOSIT_BYTES_PER_ACCOUNT` | Optional. Stored bytes one account may hold. |
+| `TELEMETRY` | The R2 bucket `oars-telemetry`, the record of every telemetry batch. Named in `wrangler.jsonc`, which binds it by name. Unset, `POST /v1/telemetry` answers 503. |
+| `TELEMETRY_EVENTS` | The Analytics Engine dataset `oars_telemetry`, the index reads come from. Named in `wrangler.jsonc`. Unset, batches are kept and not indexed. |
+
+## Telemetry storage
+
+`POST /v1/telemetry` keeps every accepted batch twice, for two jobs.
+
+**The record is R2.** One object per batch at `telemetry/<YYYY-MM-DD>/<uuid>.json`, the day the batch arrived (UTC). No lifecycle rule sets an expiry, matching the raw tier, because Cloudflare's limits page gives Analytics Engine three months of retention and the record must outlast that. The object is `{received, account?, batch}`: `received` is the arrival time, `account` is the pseudonym of the credential the request carried (absent when it carried none, or one the pool does not know), and `batch` is the request body exactly as it came, so an event type or field this server has never seen is kept. No address, user agent, or other header is read, so none is kept. The route does not join a batch to a deposit, and a batch reaches no bundle.
+
+**The index is Analytics Engine.** Each event becomes one data point, written after the object is kept. A failed write costs the index and never the object (the answer says `indexed: false`). The layout is fixed, because a read names columns by position:
+
+| Column | Holds |
+|--------|-------|
+| `index1` | the install id (also the sampling key) |
+| `blob1` | event `type` |
+| `blob2` | `cli`, the oars version |
+| `blob3` | `os` |
+| `blob4` | the command path, space-joined (`data.path`) |
+| `blob5` | `data.errorClass` |
+| `blob6` | the account pseudonym, or empty |
+| `blob7` | the flag names, comma-joined (`data.flags`) |
+| `double1` | `v`, the schema version |
+| `double2` | the event time, epoch milliseconds (0 when unreadable) |
+| `double3` | `data.durationMs` |
+| `double4` | `data.exitCode` |
+
+A field an event does not carry is an empty blob or 0, so a read of `command` events filters on `blob1`. A blob is cut at 128 characters in the index; the record keeps the full text. Only strings and numbers of the known fields are indexed, so an event type this server has never seen reaches the index as its envelope.
 
 ## Tests
 
@@ -193,7 +221,7 @@ Nothing has been deployed or provisioned. Each step is owed once, by the account
 
 1. Create a GitHub OAuth app with device flow enabled, and note its client id. The CLI reads it from `OARS_GITHUB_CLIENT_ID`; the pool holds none of it.
 2. Create a Google OAuth client of type "TVs and Limited Input devices", and note its id and secret, which the CLI reads from `OARS_GOOGLE_CLIENT_ID` and `OARS_GOOGLE_CLIENT_SECRET`.
-3. Run `wrangler d1 create oars-pool` in `packages/pool`. The config binds it by name, so commit no `database_id`.
+3. Run `wrangler d1 create oars-pool` and `wrangler r2 bucket create oars-telemetry` in `packages/pool`. The config binds both by name, so commit no `database_id`. Set no lifecycle rule on the bucket: the batches are the record and do not expire. The Analytics Engine dataset `oars_telemetry` is created by the first write; if the account has not used Analytics Engine, turn it on in the dashboard first.
 4. Run `wrangler d1 migrations apply oars-pool --remote` in `packages/pool`.
 5. Run `wrangler secret put` for `PSEUDONYM_KEY` (32 random bytes) and `BUNDLE_SIGNING_KEY`, and leave `COVENANT_VERSION` unset.
 6. Before `wrangler deploy`, add a Cloudflare rate-limiting rule on `/v1/login` (in the dashboard, or with the rulesets API). The route takes no credential and each call spends one read of the provider's profile route from the Worker's address, so without a rule anyone can drive that spend. The Worker holds no limiter of its own.
