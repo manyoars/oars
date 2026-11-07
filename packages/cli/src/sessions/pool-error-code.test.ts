@@ -62,6 +62,16 @@ describe('errorCode on the wire', () => {
     expect(parseSkeleton(raw)).toMatchObject({ ok: false, field: 'transcripts[0].tools[0].errorCode', reason: 'not text' });
   });
 
+  it('lists the errorCode in the extensions bag before the recoveryCalls keys', () => {
+    const raw = skeletonOf1([call(0, { status: 'error', errorCode: '1' })]);
+    const only = raw.transcripts[0]?.tools[0];
+    Reflect.set(only ?? {}, 'errorCode', 'zzz');
+    Reflect.set(only ?? {}, 'recoveryCalls', { next: [], editFollowed: false, zz: 1 });
+    const parsed = parseSkeleton(raw);
+    if (!parsed.ok) throw new Error(`refused ${parsed.field}`);
+    expect(parsed.extensions.map(({ at }) => at)).toEqual(['transcripts[0].tools[0].errorCode', 'transcripts[0].tools[0].recoveryCalls.zz']);
+  });
+
   it('refuses a code on a call that did not fail', () => {
     const raw = skeletonOf1([call(0, { status: 'ok' })]);
     Reflect.set(raw.transcripts[0]?.tools[0] ?? {}, 'errorCode', '1');
