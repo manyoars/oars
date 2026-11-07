@@ -1,4 +1,4 @@
-// The set of four from direction conclusion section 20 rule 1, as totals the bundle carries. Served cells are the week cells at or above the floor that the bundle serves; every other week cell the pool holds
+// The set of four from the pool design notes, set of four, as totals the bundle carries. Served cells are the week cells at or above the floor that the bundle serves; every other week cell the pool holds
 // (sub-floor, or served but withheld by `complement.ts`) is backlog, so the served number never overstates what a reader can see. The backlog is one number: a list of it would name a sub-floor value.
 import type { Cell } from '../../cli/src/sessions/cells.js';
 import type { Books, Sourced } from '../../cli/src/sessions/pool-wire.js';
@@ -6,8 +6,8 @@ import type { Books, Sourced } from '../../cli/src/sessions/pool-wire.js';
 const NONE_YET = (reason: string): Sourced => ({ state: 'no source yet', reason });
 
 /** The places a later brief fills. Each holds `no source yet` and its reason until a source exists; none is a number. */
-export const DEMAND_SOURCE = { comparisonReadOwners: NONE_YET('no comparison read exists to fetch yet'), paidReads: NONE_YET('no read is sold yet') };
-export const GOAL_SOURCE = { readRevenue: NONE_YET('no read is sold yet'), costPerServedCell: NONE_YET('no cost feed exists yet'), revenuePerServedCell: NONE_YET('no read is sold yet') };
+export const DEMAND_SOURCE = { comparisonReadOwners: NONE_YET('no comparison read exists to fetch yet'), followOnReads: NONE_YET('no source feeds this yet') };
+export const GOAL_SOURCE = { readYield: NONE_YET('no source feeds this yet'), costPerServedCell: NONE_YET('no cost feed exists yet'), yieldPerServedCell: NONE_YET('no source feeds this yet') };
 
 const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 

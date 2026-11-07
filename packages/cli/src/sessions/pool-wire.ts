@@ -1016,8 +1016,8 @@ export interface Books {
   panel: Sourced;
   /** The UTC day the panel was counted: the pool reads its deposits once a day. */
   panelDay: string | null;
-  demand: { comparisonReadOwners: Sourced; paidReads: Sourced };
-  goal: { readRevenue: Sourced; costPerServedCell: Sourced; revenuePerServedCell: Sourced };
+  demand: { comparisonReadOwners: Sourced; followOnReads: Sourced };
+  goal: { readYield: Sourced; costPerServedCell: Sourced; yieldPerServedCell: Sourced };
 }
 
 /** One harness version's replica, as the server signs it. It names its harness, which the signature covers, so a bundle for one harness cannot stand in for another's. Nothing in it is keyed by stack. */

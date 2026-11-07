@@ -1,4 +1,4 @@
-// The set of four (direction conclusion section 20 rule 1), as the pool states it. These tests hold served and sub-floor cells and ask what the totals say: a count of served cells, a backlog that is
+// The set of four (the pool design notes, set of four), as the pool states it. These tests hold served and sub-floor cells and ask what the totals say: a count of served cells, a backlog that is
 // a total and never a list, a panel that is one account count, and fields with no source that never read as zero.
 import { describe, expect, it } from 'vitest';
 import type { Cell } from '../../cli/src/sessions/cells.js';
@@ -6,6 +6,7 @@ import { namedId, shapeMotif, type Motif, type WindowStep } from '../../cli/src/
 import type { Harness } from '../../cli/src/sessions/schema.js';
 import { bundleOf, K_CELL } from './derive.js';
 import type { StoredPool } from './stored.js';
+import { containing, matching } from './test-pool.js';
 
 const HARNESS: Harness = 'claude-code';
 const VERSION = '2.1.314';
@@ -70,7 +71,7 @@ describe('books: served cells and the below-floor backlog', () => {
 describe('books: the panel', () => {
   it('is a number when the pool read its deposits, and no source yet when it did not', () => {
     expect(booksOver([weekCell(READ.motifId, K_CELL)], { panel: 3 }).panel).toEqual({ state: 'value', value: 3 });
-    expect(booksOver([weekCell(READ.motifId, K_CELL)]).panel).toEqual({ state: 'no source yet', reason: expect.stringContaining('deposit') });
+    expect(booksOver([weekCell(READ.motifId, K_CELL)]).panel).toEqual({ state: 'no source yet', reason: containing('deposit') });
   });
 
   it('keeps a panel of zero as zero: a read that found nobody is a measurement', () => {
@@ -78,11 +79,11 @@ describe('books: the panel', () => {
   });
 });
 
-describe('books: demand and revenue have no source yet', () => {
+describe('books: demand and yield have no source yet', () => {
   it('states each as no source yet with a reason, and never as 0', () => {
     const books = booksOver([weekCell(READ.motifId, K_CELL)]);
-    for (const field of [books.demand.comparisonReadOwners, books.demand.paidReads, books.goal.readRevenue, books.goal.costPerServedCell, books.goal.revenuePerServedCell]) {
-      expect(field).toEqual({ state: 'no source yet', reason: expect.stringMatching(/\S+ \S+ \S+/) });
+    for (const field of [books.demand.comparisonReadOwners, books.demand.followOnReads, books.goal.readYield, books.goal.costPerServedCell, books.goal.yieldPerServedCell]) {
+      expect(field).toEqual({ state: 'no source yet', reason: matching(/\S+ \S+ \S+/) });
     }
     expect(JSON.stringify(books.demand)).not.toMatch(/"value"/);
     expect(JSON.stringify(books.goal)).not.toMatch(/"value"/);
