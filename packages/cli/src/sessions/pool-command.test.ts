@@ -1410,7 +1410,7 @@ describe('oars pool fetch', () => {
   it('refuses a validly signed bundle that states no floor, and keeps nothing', async () => {
     const { scene, sign } = await signedScene();
     // The signature holds and the version is right: only the missing `floor` is wrong, so a bundle that does not say what floor the pool applied is not served as a read.
-    const payload = bundleBody('2.1.314').replace('"floor":5,', '');
+    const payload = bundleBody('2.1.314').replace(`"floor":${TEST_FLOOR},`, '');
     expect(payload).not.toContain('floor');
     const signature = await sign(payload);
     on(scene, 'get', `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, () => HttpResponse.json({ payload, signature }));
