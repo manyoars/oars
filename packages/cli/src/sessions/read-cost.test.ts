@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { deriveCells, poolOf } from './cells.js';
 import { frame, poolFrom, prompt, session, store } from './pool-fixture.js';
 import { deriveCost, isoWeek } from './read-cost.js';
 import type { Store } from './store.js';
@@ -37,6 +38,33 @@ describe('cost', () => {
     expect(read?.value).toEqual({ tokensPerPrompt: 300, secondsPerPrompt: 20, errorShare: 0.5 });
     expect(read?.n).toBe(2);
     expect(read?.interval).toBeNull();
+  });
+
+  it('divides tokens by the prompts that recorded input, so an unrecorded prompt does not dilute the figure', () => {
+    // p1 recorded input (150 tokens); p2 recorded only output (300 is a lone category beside a placeholder-zero input) and so adds nothing to the figure or the divisor.
+    const from = store({
+      sessions: [session('s1')],
+      prompts: [
+        prompt('s1', 0, { usage: usage(100, 50), usageObserved: ['input', 'output'], usageResponses: 1 }),
+        prompt('s1', 1, { usage: usage(0, 300), usageObserved: ['output'], usageResponses: 1 }),
+      ],
+    });
+    const [read] = cost(from);
+    expect(read?.value).toMatchObject({ tokensPerPrompt: 150 });
+    expect(read?.n).toBe(2);
+  });
+
+  it('gives tokensPerPrompt null when no prompt of the group recorded input, never 0', () => {
+    const from = store({ sessions: [session('s1')], prompts: [prompt('s1', 0, { usage: usage(0, 0), usageObserved: [], usageResponses: 0 })] });
+    const [read] = cost(from);
+    expect(read?.value).toMatchObject({ tokensPerPrompt: null });
+  });
+
+  it('falls back to every settled prompt for cells that carry no coverage count', () => {
+    const from = store({ sessions: [session('s1')], prompts: [prompt('s1', 0, { usage: usage(100, 50) }), prompt('s1', 1, { usage: usage(100, 50) })] });
+    const bare = deriveCells(from).cells.map(({ tokenPrompts: _dropped, ...rest }) => rest);
+    const [read] = deriveCost({ pool: poolOf({ cells: bare, motifs: deriveCells(from).motifs }, from.errors), store: from });
+    expect(read?.value).toMatchObject({ tokensPerPrompt: 150 });
   });
 
   it('reads no tool windows', () => {

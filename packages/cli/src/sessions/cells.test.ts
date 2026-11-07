@@ -57,7 +57,7 @@ describe('deriveCells', () => {
 
   it('counts a window by its last step, sums its cost, and counts sessions once', () => {
     expect(cellsOf(base, shapeId([READ, EDIT]), 'week')).toEqual([
-      { motifId: shapeId([READ, EDIT]), frameBucket: 'claude-code/2.1.31x/claude-opus-5-5', grain: 'week', day: '2026-10-26', sessions: 2, clusters: 1, ok: 1, failed: 1, tokens: 0, tokenSessions: 2, durationMs: 70, exposed: false },
+      { motifId: shapeId([READ, EDIT]), frameBucket: 'claude-code/2.1.31x/claude-opus-5-5', grain: 'week', day: '2026-10-26', sessions: 2, clusters: 1, ok: 1, failed: 1, tokens: 0, tokenSessions: 2, tokenPrompts: 4, durationMs: 70, exposed: false },
     ]);
   });
 
@@ -150,13 +150,13 @@ describe('deriveCells', () => {
       prompts: [prompt('s1', 0, { usage: partial, usageObserved: ['input', 'output'], usageResponses: 1 }), prompt('s2', 0, { usage: none, usageObserved: ['output'], usageResponses: 1 }), prompt('s3', 0, { usage: partial })],
     });
     // s3 carries no usageObserved (a record captured before it existed): every category reads as observed.
-    expect(cellsOf(mixed, classMotif('edit-verify').motifId, 'week')).toMatchObject([{ sessions: 3, tokens: 150 + 157, tokenSessions: 2 }]);
+    expect(cellsOf(mixed, classMotif('edit-verify').motifId, 'week')).toMatchObject([{ sessions: 3, tokens: 150 + 157, tokenSessions: 2, tokenPrompts: 2 }]);
   });
 
   it('leaves a cell figure null when no session recorded input, never a measured zero', () => {
     const unknown = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0, thinking: 0 };
     const unrecorded = store({ sessions: [session('s1')], prompts: [prompt('s1', 0, { usage: unknown, usageObserved: [], usageResponses: 0 })] });
-    expect(cellsOf(unrecorded, classMotif('edit-verify').motifId, 'week')).toMatchObject([{ sessions: 1, tokens: null, tokenSessions: 0 }]);
+    expect(cellsOf(unrecorded, classMotif('edit-verify').motifId, 'week')).toMatchObject([{ sessions: 1, tokens: null, tokenSessions: 0, tokenPrompts: 0 }]);
   });
 
   it('frames a version-2 prompt, whose session has no capture record, as unknown harness version', () => {
