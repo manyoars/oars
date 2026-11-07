@@ -255,7 +255,8 @@ export const runHook = async (
     latencyMs: ms,
     outcome: failed ? 'error' : recall?.arm === 'held' ? 'held' : outcome.hit ? 'hit' : 'miss',
     bytes: Buffer.byteLength(outcome.output ?? ''),
-    ...frameWords(recall?.frame?.harness ?? 'claude-code', recall?.frame?.harnessVersion ?? stated?.harnessVersion, recall?.frame?.model ?? outcome.model ?? stated?.model),
+    // The nightly is the scheduled task, not a harness's hook: it names no harness.
+    ...frameWords(event === 'nightly' ? undefined : recall?.frame?.harness ?? 'claude-code', recall?.frame?.harnessVersion ?? stated?.harnessVersion, recall?.frame?.model ?? outcome.model ?? stated?.model),
   });
   // A push is a recall: its read is the `fit` family, and its arm is the exposure record, as a count of one.
   if (recall !== undefined) emit('recall', recallFields(recall, ['fit']));
