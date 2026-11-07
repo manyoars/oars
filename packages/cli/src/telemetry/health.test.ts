@@ -7,6 +7,7 @@ import { slugOf } from '../sessions/allow.js';
 import { runHook } from '../sessions/hooks.js';
 import { readHookCalls } from '../sessions/hook-calls.js';
 import { appendStep } from '../sessions/steps.js';
+import { CAPTURE_VERSION } from '../sessions/schema.js';
 import { deposit, loadStore } from '../sessions/store.js';
 import { cleanup, NOW, stage } from '../sessions/test-support.js';
 import { closedList, recordStoreHealth, type NightlyTelemetry } from './health.js';
@@ -49,7 +50,7 @@ describe('store health at the nightly run', () => {
       subagents: store.subagents.length,
       skeletons: readdirSync(join(staged.storeDir, 'skeletons')).length,
       rawBytes: bytesUnder(join(staged.storeDir, 'raw')),
-      captureVersions: [18],
+      captureVersions: [Number(CAPTURE_VERSION)],
       extractorVersions: [12],
       unparseable: [...store.sessions, ...store.subagents].reduce((sum, session) => sum + session.badLines, 0),
     });
@@ -69,9 +70,9 @@ describe('store health at the nightly run', () => {
     // One session captured by an older oars, and a step an older extractor ran: the capture half holds two versions here; the extractor half is the next test.
     const log = join(staged.storeDir, 'observations.jsonl');
     const lines = readFileSync(log, 'utf8').split('\n');
-    const index = lines.findIndex((line) => line.includes('"kind":"session"') && line.includes('"cv":"18"'));
+    const index = lines.findIndex((line) => line.includes('"kind":"session"') && line.includes(`"cv":"${CAPTURE_VERSION}"`));
     expect(index).toBeGreaterThanOrEqual(0);
-    lines[index] = (lines[index] ?? '').replace('"cv":"18"', '"cv":"17"');
+    lines[index] = (lines[index] ?? '').replace(`"cv":"${CAPTURE_VERSION}"`, '"cv":"17"');
     writeFileSync(log, lines.join('\n'));
     await appendStep(staged.storeDir, { at: new Date(NOW).toISOString(), run: 'r', trigger: 'nightly', step: 'deposit', status: 'ok', ms: 1, in: {}, out: {}, cv: '17', ev: '11', key: null, error: null });
     const { dir, telemetry } = emitter();
@@ -79,7 +80,7 @@ describe('store health at the nightly run', () => {
 
     const [health] = events(dir, 'store-health');
     expect(health?.data.readFailed).toBeUndefined();
-    expect(health?.data.captureVersions).toEqual([17, 18]);
+    expect(health?.data.captureVersions).toEqual([17, Number(CAPTURE_VERSION)]);
     expect(health?.data.extractorVersions).toEqual([11]);
     expect(health?.data.captureVersion).toBeUndefined();
     expect(health?.data.extractorVersion).toBeUndefined();
@@ -89,7 +90,7 @@ describe('store health at the nightly run', () => {
     const staged = stage(slugOf(REPO));
     await deposit(staged.runtime, { allow: [REPO], redactDomains: [], now: () => NOW });
     const row = (step: 'deposit' | 'verify', ev: string, minute: number): Promise<void> =>
-      appendStep(staged.storeDir, { at: new Date(NOW + minute * 60_000).toISOString(), run: 'r', trigger: 'nightly', step, status: 'ok', ms: 1, in: {}, out: {}, cv: '18', ev, key: null, error: null });
+      appendStep(staged.storeDir, { at: new Date(NOW + minute * 60_000).toISOString(), run: 'r', trigger: 'nightly', step, status: 'ok', ms: 1, in: {}, out: {}, cv: CAPTURE_VERSION, ev, key: null, error: null });
     // `deposit` ran at 11 and later at 12 (written out of order, as a log can be): only 12 is what it last ran at.
     await row('deposit', '12', 2);
     await row('deposit', '11', 1);
