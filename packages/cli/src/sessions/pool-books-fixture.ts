@@ -9,6 +9,7 @@ export const SERVER = 'https://pool.example.test';
 
 export const NONE = { state: 'no source yet', reason: 'no source feeds this yet' } as const;
 
+// `floor: 5` stays a literal: a CLI fixture must not import the pool's default, because the client holds no floor of its own.
 export const booksOf = (over: Partial<Books> = {}): Books => ({
   floor: 5,
   format: BUNDLE_FORMAT,

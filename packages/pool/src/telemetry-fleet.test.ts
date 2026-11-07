@@ -256,6 +256,40 @@ describe('the fleet read, from the nightly rollup, on the Worker', () => {
   });
 });
 
+describe('the fleet read follows the PUBLIC_FLOOR binding', () => {
+  /** Three installs each report the same ten pre-tool fires yesterday; the nightly rolls them. */
+  const threeInstalls = async (pool: TestPool): Promise<void> => {
+    for (let at = 1; at <= 3; at += 1) await keep(pool, daysAgo(1), uuid(at), Array.from({ length: 10 }, () => hook(100)));
+    await nightly(pool);
+  };
+
+  it('serves a cell three installs report, and states floor 3, when the pool is deployed with PUBLIC_FLOOR 3', async () => {
+    const low = await startPool({ COVENANT_VERSION: '', PUBLIC_FLOOR: '3' });
+    try {
+      await threeInstalls(low);
+      const answered = await low.get('/v1/telemetry/fleet');
+      expect(answered.status).toBe(200);
+      expect(fieldOf(answered.json, 'floor')).toBe(3);
+      expect(cellsOf(answered.json, 7)).toContainEqual({ metric: 'hook.pre-tool.hit', dimension: 'harnessVersion', value: '2.1.5', kind: 'rate', p50: 1 });
+    } finally {
+      await low.dispose();
+    }
+  }, 60_000);
+
+  it('serves nothing for the same three installs at the default binding, and states the default floor', async () => {
+    const standard = await startPool({ COVENANT_VERSION: '' });
+    try {
+      await threeInstalls(standard);
+      const answered = await standard.get('/v1/telemetry/fleet');
+      expect(fieldOf(answered.json, 'floor')).toBe(DEFAULT_PUBLIC_FLOOR);
+      expect(cellsOf(answered.json, 7)).toEqual([]);
+      expect(cellsOf(answered.json, 30)).toEqual([]);
+    } finally {
+      await standard.dispose();
+    }
+  }, 60_000);
+});
+
 /** The operator's backfill of one past day: the nightly run reaches only the last two. */
 const rollupDayFor = async (pool: TestPool, day: string): Promise<void> => {
   await rollupDay(await pool.miniflare.getBindings<Bindings>(), day);
