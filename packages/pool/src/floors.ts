@@ -17,6 +17,7 @@ export interface Floors {
   /**
    * The floor a `clear` cell (`cell-class.ts`) is served at when a read is at the public floor. It is the public floor today, because a cell below the floor shows how few accounts did a thing, so serving a clear cell lower is the owner's decision and a change
    * to this field with no client release. It has no binding of its own: `floorsOf` sets it to `public`. The gap below `public` carries to every read family's floor (`cellFloor`), and the bundle states `public`, which a clear cell's floor is never above.
+   * The version-free environment cells stay at the `fit` family's floor whatever `clear` is: `storedOf` fetches them (and their motifs) at that floor, and the `ENVIRONMENT_CELLS` rule is written for it, so a lower `clear` also needs a change in `stored.ts` before a clear environment cell is served below it.
    */
   clear: number;
   /** The read families that have a floor of their own. A family not named here is served at `public`. */
