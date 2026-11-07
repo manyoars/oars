@@ -1,6 +1,6 @@
 // EXTRACTOR 13: a derived prompt carries `intervention`, the bucket of what the next human prompt did to its work (t882). Derived prompts are a pure function of the capture log, so a store written at 12
-// is re-derived at 13 from the log alone, and the wire then carries the field for every prompt of it. This is docs/pool.md "Wire field register" rule 7: local store re-derived under the new wire,
-// zero unparseable. It reads the repo's fixtures only, staged into a temp store.
+// is re-derived at 13 from the log alone, and the wire then carries the field for every prompt of it. This is section 17 rule 7 of the direction conclusion (round trip: local store re-derived under the new wire,
+// zero unparseable). It reads the repo's fixtures only, staged into a temp store.
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { canonicalBytes } from './pool-outbox.js';

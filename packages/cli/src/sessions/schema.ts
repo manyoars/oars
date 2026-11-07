@@ -102,7 +102,7 @@ export const FILES_PER_SESSION_MAX = 100;
 
 /**
  * What the next human prompt did to a prompt's work (t882, `docs/sessions-store.md` "Prompt intervention"): a closed list, not a grade. `unknown` is a prompt the records cannot say anything about (the last of its
- * transcript, or one the user stopped); a prompt derived before EXTRACTOR 13 has no value at all, which is a different thing.
+ * transcript, one the user stopped, or one whose next prompt ran a shell call captured before `segments`); a prompt derived before EXTRACTOR 13 has no value at all, which is a different thing.
  */
 export const PROMPT_INTERVENTIONS = ['none', 'after-error', 'redo', 'revert', 'unknown'] as const;
 export type PromptIntervention = (typeof PROMPT_INTERVENTIONS)[number];

@@ -287,7 +287,7 @@ describe('the intervention outcome is held per prompt and served by nothing (t88
     for (const id of ['6101', '6102', '6103', '6104', '6105']) {
       const { token } = await pool.signIn('github', stubUser(id));
       await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
-      expect((await pool.post('/v1/deposits', withIntervention(sampleSkeleton(id.padStart(16, '0')), 'redo'), token)).status).toBe(201);
+      expect((await pool.post('/v1/deposits', withIntervention(sampleSkeleton(id.padStart(16, '0')), 'after-error'), token)).status).toBe(201);
       last = token;
     }
     const response = await pool.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, last);

@@ -67,6 +67,16 @@ describe('intervention on the wire', () => {
       expect(result.extensions).toContainEqual({ at: 'transcripts[0].prompts[0].intervention', kind: 'value', value: 'celebrated' });
     });
 
+    it('accepts a literal beside other and puts it in the bag at its path', () => {
+      const sent = skeletonWith(['none']);
+      Reflect.set(promptsOf(sent)[0] ?? {}, 'intervention', 'other');
+      Reflect.set(promptsOf(sent)[0] ?? {}, 'interventionLiteral', 'x');
+      const result = parseSkeleton(sent);
+      if (!result.ok) throw new Error(`refused ${result.field}: ${result.reason}`);
+      expect(promptsOf(result.skeleton)[0]?.intervention).toBe('other');
+      expect(result.extensions).toContainEqual({ at: 'transcripts[0].prompts[0].interventionLiteral', kind: 'literal', value: 'x' });
+    });
+
     it('refuses a value that is not text', () => {
       const sent = skeletonWith(['none']);
       Reflect.set(promptsOf(sent)[0] ?? {}, 'intervention', 7);
