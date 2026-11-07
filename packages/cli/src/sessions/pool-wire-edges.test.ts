@@ -28,7 +28,7 @@ const withSubagents = (): Store =>
       session('s1~b', { parent: 's1', spawnedIn: 's1~a', agentType: 'Plan', frame: framed }),
     ],
     prompts: [prompt('s1', 0, { frame: framed })],
-    // Main calls 3, 5, and 8 are positions 0, 1, and 2. Agent a's call 20 (position 0) is the one that spawned agent b, and call 5 of the main run spawned a.
+    // Main calls 3, 5, and 8 are positions 0, 1, and 2. Agent a's call 21 (position 1) is the one that spawned agent b, and call 5 of the main run spawned a.
     tools: [
       ...linked('s1', [3, 5, 8], null),
       ...linked('s1~a', [20, 21, 22], 5).map((call) => ({ ...call, steps: (call.steps ?? []).map((held) => ({ ...held, parent: 5 })) })),
@@ -123,15 +123,43 @@ describe('the parent link (t869)', () => {
     expect(skeleton.transcripts.map(({ tools }) => tools[0]?.steps[0]?.parent)).toEqual([null, 1, 1]);
   });
 
-  it('sends null for a subagent whose spawner the batch does not hold', () => {
+  it('sends null for a subagent whose spawner the batch does not hold, and no spawned edge', () => {
     const from = store({
       sessions: [session('s1', { frame: framed })],
-      subagents: [session('s1~a', { parent: 's1', spawnedIn: null, agentType: 'Explore', frame: framed })],
+      // The spawner is a session the store does not hold, so the step's `spawned` edge and its `parent` name nothing in the batch.
+      subagents: [session('s1~a', { parent: 's1', spawnedIn: 'absent', agentType: 'Explore', frame: framed })],
       prompts: [prompt('s1', 0, { frame: framed })],
-      tools: [tool('s1', 0, 'Bash', { steps: [shell(0)] }), tool('s1~a', 0, 'Bash', { steps: [shell(0)] })],
+      tools: [tool('s1', 0, 'Bash', { steps: [shell(0)] }), tool('s1~a', 0, 'Bash', { steps: [shell(0, { parent: 7, edges: [{ kind: 'spawned', n: 7, seg: 0 }] })] })],
     });
     const skeleton = skeletonOfStore(from);
     expect(skeleton.transcripts.map(({ spawnedIn }) => spawnedIn)).toEqual([null, null]);
+    const held = skeleton.transcripts[1]?.tools[0]?.steps[0];
+    expect(held?.parent).toBeNull();
+    expect(held).not.toHaveProperty('edges');
+    expect(JSON.stringify(skeleton)).not.toContain('"edges"');
+    expect(roundTrip(skeleton)).toEqual(skeleton);
+  });
+
+  it('sends no link for subagents that name each other or themselves, and the parse accepts what it sent', () => {
+    const named = (id: string): ToolObservation[] => linked(id, [20, 21, 22], 5).map((call) => ({ ...call, steps: (call.steps ?? []).map((held) => ({ ...held, parent: 5 })) }));
+    const from = store({
+      sessions: [session('s1', { frame: framed })],
+      subagents: [
+        session('s1~a', { parent: 's1', spawnedIn: 's1~b', agentType: 'Explore', frame: framed }),
+        session('s1~b', { parent: 's1', spawnedIn: 's1~a', agentType: 'Plan', frame: framed }),
+        session('s1~c', { parent: 's1', spawnedIn: 's1~c', agentType: 'Plan', frame: framed }),
+      ],
+      prompts: [prompt('s1', 0, { frame: framed })],
+      tools: [...linked('s1', [3, 5, 8], null), ...named('s1~a'), ...named('s1~b'), ...named('s1~c')],
+    });
+    const skeleton = skeletonOfStore(from);
+    expect(skeleton.transcripts.map(({ spawnedIn }) => spawnedIn)).toEqual([null, null, null, null]);
+    for (const transcript of skeleton.transcripts) {
+      for (const held of transcript.tools.flatMap(({ steps }) => steps)) {
+        expect(held.parent).toBeNull();
+        expect((held.edges ?? []).map(({ kind }) => kind)).not.toContain('spawned');
+      }
+    }
     expect(roundTrip(skeleton)).toEqual(skeleton);
   });
 
@@ -154,12 +182,12 @@ describe('a derive from skeletons sees the local graph (t869)', () => {
     const local = withSubagents();
     const skeleton = roundTrip(skeletonOfStore(local));
     const rebuilt = storeOf([skeleton]);
-    const edgesOf = (from: Store, session: string): { kind: string; at: string }[][] =>
+    const edgesOf = (from: Store, session: string): string[][] =>
       from.tools
         .filter((call) => call.session === session)
         .sort((a, b) => a.n - b.n)
         .flatMap((call) => call.steps ?? [])
-        .map(({ edges }) => edges.map(({ kind }) => ({ kind, at: '' })));
+        .map(({ edges }) => edges.map(({ kind }) => kind));
     for (const [index, name] of ['s1', 's1~a', 's1~b'].entries()) expect(edgesOf(rebuilt, `0123456789abcdef#${String(index)}`)).toEqual(edgesOf(local, name));
     // Targets: positions in the local store are call numbers, so compare as the flat position of the step each names.
     const flat = (from: Store, session: string): StepObservation[] => from.tools.filter((call) => call.session === session).sort((a, b) => a.n - b.n).flatMap((call) => call.steps ?? []);
@@ -187,5 +215,14 @@ describe('a derive from skeletons sees the local graph (t869)', () => {
       transcripts: skeleton.transcripts.map((transcript) => ({ ...transcript, spawnedIn: null, tools: transcript.tools.map((call) => ({ ...call, steps: call.steps.map((held) => ({ ...held, edges: [] })) })) })),
     };
     expect(JSON.stringify(cellsOf(storeOf([skeleton])))).toBe(JSON.stringify(cellsOf(storeOf([bare]))));
+  });
+});
+
+describe('what the edges cost on the wire (t869)', () => {
+  it('adds 494 bytes to the 5,498-byte skeleton of the two-deep fixture', () => {
+    const skeleton = skeletonOfStore(withSubagents());
+    const bare = roundTrip(skeleton);
+    for (const held of bare.transcripts.flatMap(({ tools }) => tools.flatMap(({ steps }) => steps))) Reflect.deleteProperty(held, 'edges');
+    expect([JSON.stringify(skeleton).length - JSON.stringify(bare).length, JSON.stringify(skeleton).length]).toEqual([494, 5498]);
   });
 });

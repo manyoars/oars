@@ -453,7 +453,7 @@ export const skeletonOf = (records: SessionRecords, id: string, read: ShellReade
   // A record that names none the batch holds, or itself, or a spawner whose own chain comes back to it, sends no link.
   const spawnerOf = records.transcripts.map(({ session }, index): number | null => {
     const at = index === 0 || session.spawnedIn === null ? -1 : records.transcripts.findIndex((held) => held.session.session === session.spawnedIn);
-    return at === -1 || at === index ? null : at;
+    return at === -1 ? null : at;
   });
   const cyclic = (index: number): boolean => {
     let at: number | null = index;
