@@ -83,7 +83,7 @@ import type { RepoSize } from './public-vocabulary.js';
 import type { SessionFunnel, SessionSetup, SessionTrust } from './session-shape.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '19';
+export const CAPTURE_VERSION = '20';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
@@ -126,6 +126,10 @@ export interface Usage {
   output: number;
   thinking: number;
 }
+
+/** The five usage categories, in the order a record lists the ones it observed. */
+export const USAGE_FIELDS = ['input', 'cacheWrite', 'cacheRead', 'output', 'thinking'] as const;
+export type UsageField = (typeof USAGE_FIELDS)[number];
 
 export type Harness = 'claude-code' | 'cursor' | 'codex' | 'copilot' | 'gemini' | 'grok' | 'vscode-copilot';
 
@@ -266,6 +270,14 @@ export interface SessionObservation {
   costUsd: number | null;
   /** Summed assistant usage of the file's own line (a main transcript's sidechain lines are not counted; a subagent transcript is its own line). */
   usage: Usage;
+  /**
+   * Which `usage` categories at least one counted response reported (class P). A category not listed was never recorded by the source, so its `usage` number is a
+   * placeholder zero and not a measurement; a listed one is a sum over `usageResponses` responses, which a partial sum covers only in part. Absent on a record captured
+   * before version 20: every category reads as observed there.
+   */
+  usageObserved?: UsageField[];
+  /** How many responses reported any usage (class P); compare with `assistantTurns` or `turns` for the share a sum covers. Same absence rule as `usageObserved`. */
+  usageResponses?: number;
   /** What the transcript shows of the setup the session ran with (class A); absent when it shows none, and on a record captured before version 12. */
   setup?: SessionSetup;
   /** The tool names at each funnel stage the transcript shows (class A); same absence rules. */
@@ -314,6 +326,9 @@ export interface PromptObservation {
   efforts: string[];
   skills: string[];
   usage: Usage;
+  /** Carried from the capture record: the categories and response count the prompt's `usage` rests on (see `UserPromptObservation`). */
+  usageObserved?: UsageField[];
+  usageResponses?: number;
   /** The two tools after the first error of each error run (the recovery pair); empty when no error. */
   recovery: string[];
   explore: number;
@@ -572,6 +587,14 @@ export interface UserPromptObservation {
   efforts: string[];
   skills: string[];
   usage: Usage;
+  /**
+   * Which `usage` categories at least one counted response reported (class P). A category not listed was never recorded by the source, so its `usage` number is a
+   * placeholder zero and not a measurement; a listed one is a sum over `usageResponses` responses, which a partial sum covers only in part. Absent on a record captured
+   * before version 20: every category reads as observed there.
+   */
+  usageObserved?: UsageField[];
+  /** How many responses reported any usage (class P); compare with `assistantTurns` or `turns` for the share a sum covers. Same absence rule as `usageObserved`. */
+  usageResponses?: number;
   /** Class A: the session's prompt fingerprint at the time of the prompt, when one had been seen. */
   promptFingerprint: string | null;
   /** Where and when this prompt ran; absent on a record captured before this field existed. Class A (EXTRACTOR 11): its fields pool only as cells. */

@@ -91,7 +91,7 @@ export const REGISTER_FIXTURE = {
       spawnedIn: null,
       frame: { ...FRAME, reach: REACH, ...COVERAGE },
       frames: [{ ...FRAME, reach: REACH, ...COVERAGE }],
-      prompts: [{ cls: 'edit-verify', errors: 0, wallSec: 5, usage: { input: 1, cacheWrite: 2, cacheRead: 3, output: 4, thinking: 5 }, explore: 6, intervention: 'redo', frame: { ...FRAME, hour: 14 } }],
+      prompts: [{ cls: 'edit-verify', errors: 0, wallSec: 5, usage: { input: 1, cacheWrite: 2, cacheRead: 3, output: 4, thinking: 5 }, explore: 6, usageResponses: 2, intervention: 'redo', frame: { ...FRAME, hour: 14 } }],
       tools: [
         {
           side: false,
@@ -167,7 +167,7 @@ describe('the wire field register', () => {
     const total = [...fieldBytes(REGISTER_FIXTURE).values()].reduce((sum, bytes) => sum + bytes, 0);
     expect(total + envelopeBytes(REGISTER_FIXTURE)).toBe(Buffer.byteLength(canonicalBytes(REGISTER_FIXTURE), 'utf8'));
     expect(envelopeBytes(REGISTER_FIXTURE)).toBe(9);
-    expect(Buffer.byteLength(canonicalBytes(REGISTER_FIXTURE), 'utf8')).toBe(3_186);
+    expect(Buffer.byteLength(canonicalBytes(REGISTER_FIXTURE), 'utf8')).toBe(3_205);
     expect(fieldBytes({ a: [1, 2], b: { c: 'x' }, d: undefined }).get('a')).toBe(4 + 5);
     expect(fieldBytes({ a: [1, 2], b: { c: 'x' }, d: undefined }).get('b')).toBe(4 + 2);
     expect(fieldBytes({ a: [1, 2], b: { c: 'x' }, d: undefined }).get('c')).toBe(7);

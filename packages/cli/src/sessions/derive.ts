@@ -252,6 +252,8 @@ export const deriveSession = (capture: SessionCapture, redact: Redactor): Derive
       efforts: prompt.efforts,
       skills: prompt.skills,
       usage: prompt.usage,
+      ...(prompt.usageObserved === undefined ? {} : { usageObserved: prompt.usageObserved }),
+      ...(prompt.usageResponses === undefined ? {} : { usageResponses: prompt.usageResponses }),
       recovery,
       explore: sequence.filter((tool) => EXPLORE.has(tool)).length,
       strata: prompt.strata,
