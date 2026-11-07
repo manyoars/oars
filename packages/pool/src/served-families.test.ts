@@ -100,7 +100,7 @@ describe('a bundle over five accounts', () => {
       expect((await pool.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0')), token)).status).toBe(201);
       last = token;
     }
-    const verified = await verifyBundle((await pool.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, last)).json, pool.signingKey(), 'claude-code', '2.1.314');
+    const verified = await verifyBundle((await pool.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, last)).json, pool.pinned(), 'claude-code', '2.1.314');
     if (!verified.ok) throw new Error(verified.reason);
     const families = new Set(verified.bundle.reads.map((read) => read.family));
     expect(families.has('tool-day')).toBe(true);
@@ -179,7 +179,7 @@ describe('the recovery family in a bundle', () => {
       expect((await pool.post('/v1/deposits', failingSkeleton(id.padStart(16, '0')), token)).status).toBe(201);
       last = token;
     }
-    const verified = await verifyBundle((await pool.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, last)).json, pool.signingKey(), 'claude-code', '2.1.314');
+    const verified = await verifyBundle((await pool.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, last)).json, pool.pinned(), 'claude-code', '2.1.314');
     if (!verified.ok) throw new Error(verified.reason);
     return verified.bundle;
   };
@@ -217,7 +217,7 @@ describe('a bundle for a harness with no version on record', () => {
       expect((await pool.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0'), { languages: ['typescript'] }, '2026-11-01', 'cursor', { program: 'git', sub: 'push' }, version), token)).status).toBe(201);
     }
     const bundleAt = async (version: string) => {
-      const verified = await verifyBundle((await pool.get(`/bundle/cursor/${version}/${VOCAB_VERSION}`, token)).json, pool.signingKey(), 'cursor', version);
+      const verified = await verifyBundle((await pool.get(`/bundle/cursor/${version}/${VOCAB_VERSION}`, token)).json, pool.pinned(), 'cursor', version);
       if (!verified.ok) throw new Error(verified.reason);
       return verified.bundle;
     };
@@ -301,7 +301,7 @@ describe('the intervention outcome is held per prompt and served by nothing (t88
       last = token;
     }
     const response = await pool.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, last);
-    const verified = await verifyBundle(response.json, pool.signingKey(), 'claude-code', '2.1.314');
+    const verified = await verifyBundle(response.json, pool.pinned(), 'claude-code', '2.1.314');
     if (!verified.ok) throw new Error(verified.reason);
     expect(verified.bundle.reads.length).toBeGreaterThan(0);
     expect(JSON.stringify(response.json)).not.toMatch(/intervention|after-error|revert|user-stop/);

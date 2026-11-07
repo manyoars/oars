@@ -1369,10 +1369,18 @@ export interface Bundle {
 
 /** The signature covers these exact bytes, so nothing has to be canonicalized on either side. */
 export interface SignedBundle {
+  /** Names the signing key (S17). A bundle with no `kid` is read as `LEGACY_KEY_ID`, the name a pre-key-id sign-in pins its one key under. */
+  kid?: string;
   payload: string;
   /** Ed25519 over the payload's UTF-8 bytes, in base64. */
   signature: string;
 }
+
+/** The key id of a bundle that names none, and of a sign-in file written before key ids: the pool's default `BUNDLE_KEY_ID`. */
+export const LEGACY_KEY_ID = 'k1';
+
+/** Key ids this release no longer trusts: the way a leaked signing key is rotated out (docs/pool.md, "Rotating the bundle signing key"). A bundle signed under one is refused even when its key is pinned. */
+export const RETIRED_KEY_IDS: ReadonlySet<string> = new Set<string>();
 
 /** The public half of the pool's key, as a client pins it at login. */
 export interface PinnedKey {
@@ -1381,7 +1389,12 @@ export interface PinnedKey {
   x: string;
 }
 
-const isSignedBundle = (value: unknown): value is SignedBundle => isFields(value) && typeof value.payload === 'string' && typeof value.signature === 'string';
+/** The keys pinned for one server, by key id. One entry until the pool rotates its key. */
+export interface PinnedKeys {
+  [kid: string]: PinnedKey;
+}
+
+const isSignedBundle = (value: unknown): value is SignedBundle => isFields(value) && typeof value.payload === 'string' && typeof value.signature === 'string' && (value.kid === undefined || typeof value.kid === 'string');
 
 const isFloor = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
 
@@ -1430,10 +1443,18 @@ const signatureHolds = async ({ payload, signature }: SignedBundle, key: PinnedK
   }
 };
 
+/** A key id for a message: the id as the pool sends them (letters, digits, dot, dash, underscore), and a stand-in for anything else, since the pool or a man in the middle chose it. */
+const keyIdName = (kid: string): string => (/^[A-Za-z0-9._-]{1,32}$/.test(kid) ? kid : '(unreadable key id)');
+
 /** The bundle, only when the pinned key signed these bytes for the harness and version that were asked for: another harness's or version's bundle, under a good signature, is still the wrong answer. */
-export const verifyBundle = async (signed: unknown, key: PinnedKey, harness: Harness, harnessVersion: string): Promise<{ ok: true; bundle: Bundle } | { ok: false; reason: string }> => {
+export const verifyBundle = async (signed: unknown, keys: PinnedKeys, harness: Harness, harnessVersion: string, retired: ReadonlySet<string> = RETIRED_KEY_IDS): Promise<{ ok: true; bundle: Bundle } | { ok: false; reason: string }> => {
   if (!isSignedBundle(signed)) return { ok: false, reason: 'not a signed bundle' };
-  if (!(await signatureHolds(signed, key))) return { ok: false, reason: 'the signature does not match the key pinned at login' };
+  const kid = signed.kid ?? LEGACY_KEY_ID;
+  const named = keyIdName(kid);
+  if (retired.has(kid)) return { ok: false, reason: `this bundle is signed with key ${named}, which this release of oars no longer trusts. Upgrade with npm install -g @manyoars/oars` };
+  const key = Object.hasOwn(keys, kid) ? keys[kid] : undefined;
+  if (key === undefined) return { ok: false, reason: `this bundle is signed with key ${named}, which is not pinned for this server. Run oars pool login again to pin the pool's current key` };
+  if (!(await signatureHolds(signed, key))) return { ok: false, reason: `the signature does not match the key ${named} pinned at login` };
   const bundle: unknown = JSON.parse(signed.payload);
   if (!isBundle(bundle)) return { ok: false, reason: 'not a signed bundle this version reads' };
   if (bundle.vocabVersion !== VOCAB_VERSION) return { ok: false, reason: `this bundle is for vocabulary version ${bundle.vocabVersion}, not ${VOCAB_VERSION}` };

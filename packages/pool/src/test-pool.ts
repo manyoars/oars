@@ -194,6 +194,8 @@ export interface TestPool {
   signIn: (provider: string, user: StubUser) => Promise<{ token: string; account: string; signingKey: unknown }>;
   stub: StubProvider;
   signingKey: () => { kty: string; crv: string; x: string };
+  /** The keys a client holds for this pool, by key id: what `verifyBundle` takes. */
+  pinned: () => { [kid: string]: { kty: string; crv: string; x: string } };
   dispose: () => Promise<void>;
 }
 
@@ -282,6 +284,7 @@ export const startPool = async (bindings: { [name: string]: string } = {}, optio
       return { token: textOf(signedIn.json, 'token'), account: textOf(signedIn.json, 'account'), signingKey: fieldOf(signedIn.json, 'signingKey') };
     },
     signingKey: () => ({ kty: 'OKP', crv: 'Ed25519', x: key.x }),
+    pinned: () => ({ k1: { kty: 'OKP', crv: 'Ed25519', x: key.x } }),
     dispose: () => miniflare.dispose(),
   };
 };

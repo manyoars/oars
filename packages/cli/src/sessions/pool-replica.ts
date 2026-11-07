@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 import { isMissing } from './pool-outbox.js';
-import { isBundleVersion, verifyBundle, type Bundle, type PinnedKey } from './pool-wire.js';
+import { isBundleVersion, LEGACY_KEY_ID, verifyBundle, type Bundle, type PinnedKey, type PinnedKeys } from './pool-wire.js';
 import { contentHash } from './read.js';
 import type { Harness } from './schema.js';
 
@@ -33,15 +33,32 @@ export interface SignIn {
   account: string;
   token: string;
   expiresAt: number;
-  /** Pinned at the first login to this server; every bundle is checked against it. */
-  signingKey: PinnedKey;
+  /** The keys pinned for this server, by key id: each is trusted at the first login that names its id and never replaced, and every bundle is checked against the one its `kid` names. */
+  signingKeys: PinnedKeys;
 }
+
+/** Keys as a sign-in file or the pool's login answer states them: a `signingKeys` object by key id, or the one `signingKey` the pool names with `kid` (a file from before key ids has no `kid`, and pins under `LEGACY_KEY_ID`). */
+const keysOf = (value: object): PinnedKeys | undefined => {
+  const set: unknown = Reflect.get(value, 'signingKeys');
+  if (set === undefined) {
+    const single = keyOf(Reflect.get(value, 'signingKey'));
+    return single === undefined ? undefined : { [textIn(value, 'kid') ?? LEGACY_KEY_ID]: single };
+  }
+  if (!isObject(set)) return undefined;
+  const keys: PinnedKeys = {};
+  for (const [kid, entry] of Object.entries(set)) {
+    const key = keyOf(entry);
+    if (key === undefined) return undefined;
+    keys[kid] = key;
+  }
+  return Object.keys(keys).length === 0 ? undefined : keys;
+};
 
 export const signInOf = (value: unknown): SignIn | undefined => {
   if (!isObject(value)) return undefined;
   const [server, account, token, expiresAt] = [textIn(value, 'server'), textIn(value, 'account'), textIn(value, 'token'), numberIn(value, 'expiresAt')];
-  const signingKey = keyOf(Reflect.get(value, 'signingKey'));
-  return server === undefined || account === undefined || token === undefined || expiresAt === undefined || signingKey === undefined ? undefined : { server, account, token, expiresAt, signingKey };
+  const signingKeys = keysOf(value);
+  return server === undefined || account === undefined || token === undefined || expiresAt === undefined || signingKeys === undefined ? undefined : { server, account, token, expiresAt, signingKeys };
 };
 
 export const signInsFile = (storeDir: string): string => join(storeDir, 'pool-accounts.json');
@@ -76,14 +93,14 @@ export const loadSignIns = async (storeDir: string, step: string): Promise<SignI
 export const replicaFile = (storeDir: string, server: string, harness: Harness, harnessVersion: string): string => join(storeDir, 'pool-replica', contentHash(server), harness, `${encodeURIComponent(harnessVersion)}.json`);
 
 /** What an earlier fetch kept: the bundle, checked again against the pinned key, and the ETag the pool sent with it. Nothing readable and verified is nothing kept, and the next fetch is then an ordinary one. */
-export const keptReplica = async (file: string, key: PinnedKey, harness: Harness, harnessVersion: string): Promise<{ etag: string | undefined; bundle: Bundle } | undefined> => {
+export const keptReplica = async (file: string, keys: PinnedKeys, harness: Harness, harnessVersion: string): Promise<{ etag: string | undefined; bundle: Bundle } | undefined> => {
   let parsed: unknown;
   try {
     parsed = JSON.parse(await readFile(file, 'utf8'));
   } catch {
     return undefined;
   }
-  const verified = await verifyBundle(parsed, key, harness, harnessVersion);
+  const verified = await verifyBundle(parsed, keys, harness, harnessVersion);
   return verified.ok ? { etag: isObject(parsed) ? textIn(parsed, 'etag') : undefined, bundle: verified.bundle } : undefined;
 };
 
@@ -100,8 +117,8 @@ export interface Setup {
 export const sessionBundle = async (storeDir: string, setup: Setup | undefined): Promise<Bundle | undefined> => {
   if (setup === undefined || !isBundleVersion(setup.harnessVersion)) return undefined;
   const signIns = await loadSignIns(storeDir, 'recall').catch((): SignIn[] => []);
-  for (const { server, signingKey } of signIns) {
-    const kept = await keptReplica(replicaFile(storeDir, server, setup.harness, setup.harnessVersion), signingKey, setup.harness, setup.harnessVersion);
+  for (const { server, signingKeys } of signIns) {
+    const kept = await keptReplica(replicaFile(storeDir, server, setup.harness, setup.harnessVersion), signingKeys, setup.harness, setup.harnessVersion);
     if (kept !== undefined) return kept.bundle;
   }
   return undefined;

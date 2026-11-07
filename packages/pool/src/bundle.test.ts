@@ -30,7 +30,7 @@ const VERSION = '2.1.314';
 const fetched = async (token: string, version = VERSION): Promise<Bundle> => {
   const { status, json } = await pool.get(`/bundle/claude-code/${version}/${VOCAB_VERSION}`, token);
   expect(status).toBe(200);
-  const verified = await verifyBundle(json, pool.signingKey(), 'claude-code', version);
+  const verified = await verifyBundle(json, pool.pinned(), 'claude-code', version);
   if (!verified.ok) throw new Error(verified.reason);
   return verified.bundle;
 };
@@ -99,7 +99,7 @@ describe('a bundle over five accounts', () => {
         return token;
       };
       const strataOf = async (token: string): Promise<Bundle['strata']> => {
-        const verified = await verifyBundle((await fresh.get(`/bundle/claude-code/${VERSION}/${VOCAB_VERSION}`, token)).json, fresh.signingKey(), 'claude-code', VERSION);
+        const verified = await verifyBundle((await fresh.get(`/bundle/claude-code/${VERSION}/${VOCAB_VERSION}`, token)).json, fresh.pinned(), 'claude-code', VERSION);
         if (!verified.ok) throw new Error(verified.reason);
         return verified.bundle.strata;
       };
@@ -127,7 +127,7 @@ describe('a bundle over five accounts', () => {
       };
       const payloadOf = async (token: string): Promise<{ strata: Bundle['strata']; outside: string }> => {
         const { json } = await fresh.get(`/bundle/claude-code/${VERSION}/${VOCAB_VERSION}`, token);
-        const verified = await verifyBundle(json, fresh.signingKey(), 'claude-code', VERSION);
+        const verified = await verifyBundle(json, fresh.pinned(), 'claude-code', VERSION);
         if (!verified.ok) throw new Error(verified.reason);
         return { strata: verified.bundle.strata, outside: JSON.stringify({ ...verified.bundle, strata: undefined }) };
       };
@@ -158,7 +158,7 @@ describe('a bundle over five accounts', () => {
       };
       const payloadOf = async (token: string): Promise<{ pairs: string[]; outside: string }> => {
         const { json } = await fresh.get(`/bundle/claude-code/${VERSION}/${VOCAB_VERSION}`, token);
-        const verified = await verifyBundle(json, fresh.signingKey(), 'claude-code', VERSION);
+        const verified = await verifyBundle(json, fresh.pinned(), 'claude-code', VERSION);
         if (!verified.ok) throw new Error(verified.reason);
         const { strata } = verified.bundle;
         return { pairs: strata.filter((cell) => cell.dimension === 'languageShare' || cell.dimension === 'repoFilesExplore').map((cell) => `${cell.dimension}/${cell.value} ${String(cell.clusters)}`), outside: JSON.stringify({ ...verified.bundle, strata: undefined }) };
@@ -251,7 +251,7 @@ describe('clusters over the cells of a read', () => {
   };
 
   const readsIn = async (spread: TestPool, token: string): Promise<Bundle> => {
-    const verified = await verifyBundle((await spread.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, token)).json, spread.signingKey(), 'claude-code', '2.1.314');
+    const verified = await verifyBundle((await spread.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, token)).json, spread.pinned(), 'claude-code', '2.1.314');
     if (!verified.ok) throw new Error(verified.reason);
     return verified.bundle;
   };
@@ -398,7 +398,7 @@ describe('a damaged ledger row', () => {
       expect(after.status).toBe(200);
       expect(after.json).toEqual(before.json);
       expect(after.headers.get('etag')).toBe(before.headers.get('etag'));
-      const verified = await verifyBundle(after.json, bad.signingKey(), 'claude-code', VERSION);
+      const verified = await verifyBundle(after.json, bad.pinned(), 'claude-code', VERSION);
       if (!verified.ok) throw new Error(verified.reason);
       expect(verified.bundle.reads.length).toBeGreaterThan(0);
       for (const read of verified.bundle.reads) expect(read.clusters).toBe(5);
@@ -417,14 +417,14 @@ describe('the client refuses', () => {
 
   it('a tampered payload, a tampered signature, another key, and another harness version', async () => {
     const good = await signed();
-    expect(fieldOf(await verifyBundle(good, pool.signingKey(), 'claude-code', '2.1.314'), 'ok')).toBe(true);
+    expect(fieldOf(await verifyBundle(good, pool.pinned(), 'claude-code', '2.1.314'), 'ok')).toBe(true);
     const tampered = good.payload.replace(/"clusters":\d+/, '"clusters":99');
     expect(tampered).not.toBe(good.payload);
-    expect(await verifyBundle({ ...good, payload: tampered }, pool.signingKey(), 'claude-code', '2.1.314')).toMatchObject({ ok: false, reason: containing('signature') });
+    expect(await verifyBundle({ ...good, payload: tampered }, pool.pinned(), 'claude-code', '2.1.314')).toMatchObject({ ok: false, reason: containing('signature') });
     const flipped = good.signature.startsWith('A') ? `B${good.signature.slice(1)}` : `A${good.signature.slice(1)}`;
-    expect(await verifyBundle({ ...good, signature: flipped }, pool.signingKey(), 'claude-code', '2.1.314')).toMatchObject({ ok: false, reason: containing('signature') });
-    expect(await verifyBundle(good, { ...pool.signingKey(), x: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' }, 'claude-code', '2.1.314')).toMatchObject({ ok: false, reason: containing('signature') });
-    expect(await verifyBundle(good, pool.signingKey(), 'claude-code', '2.2.0')).toMatchObject({ ok: false, reason: containing('harness version') });
+    expect(await verifyBundle({ ...good, signature: flipped }, pool.pinned(), 'claude-code', '2.1.314')).toMatchObject({ ok: false, reason: containing('signature') });
+    expect(await verifyBundle(good, { k1: { ...pool.signingKey(), x: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' } }, 'claude-code', '2.1.314')).toMatchObject({ ok: false, reason: containing('signature') });
+    expect(await verifyBundle(good, pool.pinned(), 'claude-code', '2.2.0')).toMatchObject({ ok: false, reason: containing('harness version') });
   });
 
   // Signed by a key the client pins, so the signature holds: only the vocabulary version, or the payload's shape, is wrong.
@@ -438,21 +438,21 @@ describe('the client refuses', () => {
       const signature = Buffer.from(await webcrypto.subtle.sign('Ed25519', pair.privateKey, new TextEncoder().encode(payload))).toString('base64');
       return { payload, signature };
     };
-    expect(await verifyBundle(await sign(VOCAB_VERSION), key, 'claude-code', '2.1.314')).toMatchObject({ ok: true });
-    expect(await verifyBundle(await sign('9'), key, 'claude-code', '2.1.314')).toMatchObject({ ok: false, reason: containing('vocabulary version') });
+    expect(await verifyBundle(await sign(VOCAB_VERSION), { k1: key }, 'claude-code', '2.1.314')).toMatchObject({ ok: true });
+    expect(await verifyBundle(await sign('9'), { k1: key }, 'claude-code', '2.1.314')).toMatchObject({ ok: false, reason: containing('vocabulary version') });
     // Signed and of the right versions, but with no strata: the shape check refuses it, not the signature or a version.
-    expect(await verifyBundle(await sign(VOCAB_VERSION, false), key, 'claude-code', '2.1.314')).toMatchObject({ ok: false, reason: containing('this version reads') });
+    expect(await verifyBundle(await sign(VOCAB_VERSION, false), { k1: key }, 'claude-code', '2.1.314')).toMatchObject({ ok: false, reason: containing('this version reads') });
     // The same bytes, validly signed, for a harness that was not asked for, and a payload that names no harness or one outside the schema's list.
-    expect(await verifyBundle(await sign(VOCAB_VERSION, true, 'cursor'), key, 'claude-code', '2.1.314')).toMatchObject({ ok: false, reason: 'this bundle is for harness cursor, not claude-code' });
-    expect(await verifyBundle(await sign(VOCAB_VERSION, true, 'cursor'), key, 'cursor', '2.1.314')).toMatchObject({ ok: true });
-    expect(await verifyBundle(await sign(VOCAB_VERSION, true, null), key, 'claude-code', '2.1.314')).toMatchObject({ ok: false, reason: containing('this version reads') });
-    expect(await verifyBundle(await sign(VOCAB_VERSION, true, 'acme'), key, 'claude-code', '2.1.314')).toMatchObject({ ok: false, reason: containing('this version reads') });
+    expect(await verifyBundle(await sign(VOCAB_VERSION, true, 'cursor'), { k1: key }, 'claude-code', '2.1.314')).toMatchObject({ ok: false, reason: 'this bundle is for harness cursor, not claude-code' });
+    expect(await verifyBundle(await sign(VOCAB_VERSION, true, 'cursor'), { k1: key }, 'cursor', '2.1.314')).toMatchObject({ ok: true });
+    expect(await verifyBundle(await sign(VOCAB_VERSION, true, null), { k1: key }, 'claude-code', '2.1.314')).toMatchObject({ ok: false, reason: containing('this version reads') });
+    expect(await verifyBundle(await sign(VOCAB_VERSION, true, 'acme'), { k1: key }, 'claude-code', '2.1.314')).toMatchObject({ ok: false, reason: containing('this version reads') });
   });
 
   it('anything that is not a signed bundle', async () => {
-    expect(await verifyBundle('nope', pool.signingKey(), 'claude-code', '2.1.314')).toMatchObject({ ok: false, reason: containing('not a signed bundle') });
-    expect(await verifyBundle({ payload: 'x', signature: '%%%' }, pool.signingKey(), 'claude-code', '2.1.314')).toMatchObject({ ok: false, reason: containing('signature') });
-    expect(await verifyBundle({ payload: 'x', signature: 'AAAA' }, { kty: 'nope', crv: 'nope', x: 'nope' }, 'claude-code', '2.1.314')).toMatchObject({ ok: false, reason: containing('signature') });
+    expect(await verifyBundle('nope', pool.pinned(), 'claude-code', '2.1.314')).toMatchObject({ ok: false, reason: containing('not a signed bundle') });
+    expect(await verifyBundle({ payload: 'x', signature: '%%%' }, pool.pinned(), 'claude-code', '2.1.314')).toMatchObject({ ok: false, reason: containing('signature') });
+    expect(await verifyBundle({ payload: 'x', signature: 'AAAA' }, { k1: { kty: 'nope', crv: 'nope', x: 'nope' } }, 'claude-code', '2.1.314')).toMatchObject({ ok: false, reason: containing('signature') });
   });
 });
 
@@ -474,7 +474,7 @@ describe('a bundle is one harness at one numbered bucket', () => {
       const bundleOf = async (harness: Harness): Promise<Bundle> => {
         const { status, json } = await fresh.get(`/bundle/${harness}/${VERSION}/${VOCAB_VERSION}`, reader);
         expect(status).toBe(200);
-        const verified = await verifyBundle(json, fresh.signingKey(), harness, VERSION);
+        const verified = await verifyBundle(json, fresh.pinned(), harness, VERSION);
         if (!verified.ok) throw new Error(verified.reason);
         return verified.bundle;
       };
@@ -525,7 +525,7 @@ describe('a bundle for a harness with no version on record', () => {
   const unknownBundle = async (fresh: TestPool, harness: Harness, token: string): Promise<Bundle> => {
     const { status, json } = await fresh.get(`/bundle/${harness}/unknown/${VOCAB_VERSION}`, token);
     expect(status).toBe(200);
-    const verified = await verifyBundle(json, fresh.signingKey(), harness, 'unknown');
+    const verified = await verifyBundle(json, fresh.pinned(), harness, 'unknown');
     if (!verified.ok) throw new Error(verified.reason);
     return verified.bundle;
   };
@@ -550,7 +550,7 @@ describe('a bundle for a harness with no version on record', () => {
       expect(served.reads.length).toBeGreaterThan(0);
       // The same pool answers a numbered request for that harness with the environment cells alone: the unknown cells are not under any number.
       const numbered = await fresh.get(`/bundle/cursor/${VERSION}/${VOCAB_VERSION}`, five);
-      const numberedBundle = await verifyBundle(numbered.json, fresh.signingKey(), 'cursor', VERSION);
+      const numberedBundle = await verifyBundle(numbered.json, fresh.pinned(), 'cursor', VERSION);
       if (!numberedBundle.ok) throw new Error(numberedBundle.reason);
       expect(ownCells(numberedBundle.bundle)).toEqual([]);
     } finally {
@@ -629,7 +629,7 @@ describe('fit by platform and shell', () => {
   };
 
   const bundleFrom = async (spread: TestPool, token: string, version = VERSION): Promise<Bundle> => {
-    const verified = await verifyBundle((await spread.get(`/bundle/claude-code/${version}/${VOCAB_VERSION}`, token)).json, spread.signingKey(), 'claude-code', version);
+    const verified = await verifyBundle((await spread.get(`/bundle/claude-code/${version}/${VOCAB_VERSION}`, token)).json, spread.pinned(), 'claude-code', version);
     if (!verified.ok) throw new Error(verified.reason);
     return verified.bundle;
   };
@@ -723,4 +723,40 @@ describe('fit by platform and shell', () => {
       expect(after.asOf.day).toBe(before.asOf.day);
     });
   }, 120_000);
+});
+
+describe('the bundle names its signing key (S17)', () => {
+  it('carries the key id the deploy sets, k1 until one is set, and refuses to serve under an id that is not an id', async () => {
+    const token = (await pool.signIn('github', stubUser('7001'))).token;
+    expect(fieldOf((await pool.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, token)).json, 'kid')).toBe('k1');
+    const rotated = await startPool({ BUNDLE_KEY_ID: 'k2' });
+    try {
+      const rotatedToken = (await rotated.signIn('github', stubUser('7002'))).token;
+      const answer = await rotated.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, rotatedToken);
+      expect(fieldOf(answer.json, 'kid')).toBe('k2');
+      expect(await verifyBundle(answer.json, { k2: rotated.signingKey() }, 'claude-code', '2.1.314')).toMatchObject({ ok: true });
+      expect(await verifyBundle(answer.json, rotated.pinned(), 'claude-code', '2.1.314')).toMatchObject({ ok: false, reason: containing('k2') });
+    } finally {
+      await rotated.dispose();
+    }
+    const typo = await startPool({ BUNDLE_KEY_ID: 'k 2!' });
+    try {
+      const typoToken = (await typo.signIn('github', stubUser('7003'))).token;
+      expect((await typo.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, typoToken)).status).toBe(503);
+    } finally {
+      await typo.dispose();
+    }
+  });
+
+  it('refuses a retired key id even when its key is pinned, and a key id nobody pinned, naming the id', async () => {
+    const token = (await pool.signIn('github', stubUser('7004'))).token;
+    const { json } = await pool.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, token);
+    const bare = { payload: textOf(json, 'payload'), signature: textOf(json, 'signature') };
+    expect(await verifyBundle(json, pool.pinned(), 'claude-code', '2.1.314', new Set(['k1']))).toMatchObject({ ok: false, reason: containing('k1') });
+    expect(await verifyBundle(json, {}, 'claude-code', '2.1.314')).toMatchObject({ ok: false, reason: containing('k1') });
+    expect(await verifyBundle({ ...bare, kid: '__proto__' }, pool.pinned(), 'claude-code', '2.1.314')).toMatchObject({ ok: false, reason: containing('__proto__') });
+    expect(await verifyBundle({ ...bare, kid: 'x'.repeat(200) }, pool.pinned(), 'claude-code', '2.1.314')).toMatchObject({ ok: false, reason: containing('unreadable') });
+    // A bundle with no key id is read as k1, the id a pre-key-id sign-in pins under.
+    expect(await verifyBundle(bare, pool.pinned(), 'claude-code', '2.1.314')).toMatchObject({ ok: true });
+  });
 });

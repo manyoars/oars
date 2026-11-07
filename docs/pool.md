@@ -284,6 +284,7 @@ R2 will not complete a multipart upload from parts under 5 MiB (the last excepte
 | `POST /v1/login/start` | Takes `{provider}`. Answers `{handle, userCode, verificationUrl, interval, expiresIn}` (see "Sign-in"). 400 `unknown_provider`, 503 `not_configured`, 502 `provider_error`. |
 | `POST /v1/login/poll` | Takes `{handle}`. Answers 200 with `status` `pending`, `slow_down`, `expired`, `denied`, or `authorized` (with `{token, account, expiresAt, signingKey}`: the pool's credential and the public half of its signing key). 400 `missing_field`, 401 `invalid_handle`, 401 `login_refused` (the provider's profile route does not accept the token it issued), 503 `not_configured`, 502 `provider_error`. |
 | `POST /v1/login` | Gone: 410 `gone`, naming the two routes above. It no longer takes a provider's token. |
+| `DELETE /v1/login` | Revokes the credential in the `Authorization` header. 204 when it was live; a revoked, expired, or unknown credential gets 401 `unauthorized`. `oars pool logout` calls it, then removes the local entry (and removes it even when the pool cannot be reached, saying the credential was not revoked there). An account holds at most 5 live credentials: a login past that revokes the oldest. |
 | `GET /v1/covenant` | `{version, accepted}`. `version` is null when deposits are closed. Sign-in is optional. |
 | `POST /v1/covenant/accept` | Takes `{version}`. 409 `covenant_version` for any version but the one in force. |
 | `POST /v1/deposits` | Takes one skeleton, 1 MiB at most per request. A larger request gets 413 `too_large`, unread when it declares its length; a larger batch is sent in parts (`oars-part`, `oars-batch`: see the limits above). |
@@ -306,6 +307,7 @@ All of these but the two floors are set at the deploy. `wrangler.jsonc` binds `D
 | `GOOGLE_CLIENT_ID` | A var in `wrangler.jsonc`: the client ID of the Many Oars Google OAuth client (public). Unset, the login routes refuse Google with 503 `not_configured`. |
 | `GOOGLE_CLIENT_SECRET` | Secret, declared by name only: that client's secret, sent only to Google's token route. Unset, the login routes refuse Google with 503 `not_configured`. |
 | `BUNDLE_SIGNING_KEY` | An Ed25519 private key as a JWK. Clients pin the public half, so changing it fails their next login. |
+| `BUNDLE_KEY_ID` | A plain variable (`wrangler.jsonc`), the id of that key: `k1` until a rotation. Every bundle carries it as `kid`, and the login answer names it beside the public key. A value that is not letters, digits, dot, dash, or underscore (32 at most) answers 503 `not_configured`. |
 | `INGEST_HASH_KEY` | The one pool-wide key a host is hashed under (HMAC-SHA-256, `h:` and 64 hex digits) before anything is written. One key and not one per account, because the floor counts the same host across accounts. Unset refuses every deposit with `503 not_configured`, so a host is never stored in clear. Changing it makes every stored host new. |
 | `RAW` | The R2 bucket for the raw tier, bound by name in `wrangler.jsonc` (`oars-pool-raw`). Unset refuses the raw routes with 503 `not_configured`. |
 | `COVENANT_VERSION` | The covenant in force. Leave it unset until the covenant is published. |
@@ -385,3 +387,15 @@ Nothing has been deployed. Steps 1 and 5 are done, step 2 waits only on its owne
 6. Before `wrangler deploy`, add a Cloudflare rate-limiting rule on `/v1/login/start`, `/v1/login/poll`, and `/v1/telemetry` (in the dashboard, or with the rulesets API). None of the three takes a credential. Each `/v1/login/start` call spends one call to the provider's device-code route and each `/v1/login/poll` call one to its token route from the Worker's address, and each `/v1/telemetry` call writes one R2 object of up to 1 MiB that is never deleted, so without a rule anyone can drive that spend and that storage. The Worker holds no limiter of its own.
 7. Run `wrangler deploy` in `packages/pool`, confirm it bound the database from step 3 rather than creating another, and attach the custom domain in the dashboard or with `--domain`. Only `--dry-run` has been exercised.
 8. Publish the covenant, and only then run `wrangler secret put COVENANT_VERSION`, which opens deposits.
+
+
+### Rotating the bundle signing key
+
+A client pins each public key under its `kid` at login (`pool-accounts.json`, `signingKeys`), checks a bundle against the key its `kid` names, and refuses a bundle whose `kid` it has not pinned or whose signature fails, naming the `kid`. A bundle with no `kid` is read as `k1`.
+
+1. Make the next key pair and pick its id (`k2`).
+2. If the old key leaked, ship an `oars` release that lists the old id in `RETIRED_KEY_IDS` (`pool-wire.ts`): that release refuses any bundle under it, pinned or not.
+3. Set the Worker secret `BUNDLE_SIGNING_KEY` to the new key and the variable `BUNDLE_KEY_ID` to `k2`, then deploy. No new secret is needed.
+4. A client pins `k2` beside `k1` at its next `oars pool login` (a changed key behind an id it already holds is refused); until then its fetch says the bundle is signed with an unpinned key.
+
+Gap: this release pins keys at login and does not ship them, so a client on a release from before step 2 keeps trusting the leaked key until it upgrades. Shipping the next public key inside a release needs the real key pair, which does not exist before the first deploy.

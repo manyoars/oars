@@ -4,6 +4,9 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from 'node:crypto';
 import { answer, bodyOf, bound, fieldOf, notConfigured, refuse, textField, type Env } from './http.js';
 
+/** The id of the signing key until a deploy sets `BUNDLE_KEY_ID`: the name a client file from before key ids pins its one key under. */
+const DEFAULT_KEY_ID = 'k1';
+
 const TOKEN_LIFETIME_MS = 90 * 24 * 60 * 60 * 1000;
 
 /** Live credentials one account may hold (S8): a person signs in on a few machines (laptop, desktop, a build runner, a spare), so five is room for them, while a copied credential cannot ride beside an unbounded pile of others. A login past it revokes the oldest. */
@@ -112,6 +115,13 @@ export const logout = async (request: Request, env: Env): Promise<Response> => {
   return revoked?.meta.changes === 1 ? new Response(null, { status: 204 }) : refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
 };
 
+/** The id the bundle signing key is known by (S17), from `BUNDLE_KEY_ID`; `k1` until a rotation sets another, and undefined for one that is set but is not letters, digits, dot, dash, or underscore (at most 32): a typo must not label a key with a wrong id. A client pins each key under its id, so a bundle names the key that signed it. */
+export const keyIdOf = (env: Env): string | undefined => {
+  const set = bound(env.BUNDLE_KEY_ID);
+  if (set === undefined) return DEFAULT_KEY_ID;
+  return /^[A-Za-z0-9._-]{1,32}$/.test(set) ? set : undefined;
+};
+
 /** The half of the signing key a client pins at login. */
 export const publicKeyOf = (privateJwk: string): { kty: unknown; crv: unknown; x: unknown } => {
   const parsed: unknown = JSON.parse(privateJwk);
@@ -198,7 +208,7 @@ const WAITING = new Map([
 ]);
 
 /** The pool's own credential for an account: only its hash is stored. Also when the table sheds the rows past their expiry, since they sign nobody in. */
-const credentialFor = async (env: Env, signingKey: string, account: string, providerCreated: number | undefined): Promise<Response> => {
+const credentialFor = async (env: Env, signingKey: string, kid: string, account: string, providerCreated: number | undefined): Promise<Response> => {
   const token = randomBytes(32).toString('hex');
   const now = Date.now();
   const expiresAt = now + TOKEN_LIFETIME_MS;
@@ -210,7 +220,7 @@ const credentialFor = async (env: Env, signingKey: string, account: string, prov
   await env.DB.prepare('INSERT INTO tokens (hash, account, expires_at) VALUES (?, ?, ?)').bind(hashToken(token), account, expiresAt).run();
   // Newest first by rowid (the table is a rowid table, so a later credential has a later one); everything past the cap is the oldest and is revoked.
   await env.DB.prepare('DELETE FROM tokens WHERE account = ? AND rowid NOT IN (SELECT rowid FROM tokens WHERE account = ? ORDER BY rowid DESC LIMIT ?)').bind(account, account, LIVE_TOKEN_CAP).run();
-  return answer(200, { status: 'authorized', token, account, expiresAt, signingKey: publicKeyOf(signingKey) });
+  return answer(200, { status: 'authorized', token, account, expiresAt, kid, signingKey: publicKeyOf(signingKey) });
 };
 
 /** `POST /v1/login/poll` with `{ handle }`: one poll of the provider's token route for the device code the handle holds. Answers the state, or on approval the pool's credential, its expiry, and the public half of the signing key. */
@@ -221,6 +231,8 @@ export const loginPoll = async (request: Request, env: Env): Promise<Response> =
   if (pseudonymKey === undefined) return notConfigured('PSEUDONYM_KEY');
   const signingKey = bound(env.BUNDLE_SIGNING_KEY);
   if (signingKey === undefined) return notConfigured('BUNDLE_SIGNING_KEY');
+  const kid = keyIdOf(env);
+  if (kid === undefined) return notConfigured('BUNDLE_KEY_ID');
   const pending = unsealHandle(pseudonymKey, handle);
   const provider = pending === undefined ? undefined : PROVIDERS.get(pending.provider);
   if (pending === undefined || provider === undefined) return refuse(401, 'invalid_handle', 'This pool did not issue that login handle. Start the login again.', 'handle');
@@ -246,7 +258,7 @@ export const loginPoll = async (request: Request, env: Env): Promise<Response> =
   if (profile.status === 401) return refuse(401, 'login_refused', 'The provider did not accept the token.');
   const userId = provider.userIdOf(profile.body);
   if (userId === undefined) return refuse(502, 'provider_error', 'The provider did not name the user.');
-  return credentialFor(env, signingKey, pseudonymOf(pseudonymKey, pending.provider, userId), provider.createdOf(profile.body));
+  return credentialFor(env, signingKey, kid, pseudonymOf(pseudonymKey, pending.provider, userId), provider.createdOf(profile.body));
 };
 
 /** `POST /v1/login` took a provider's token from the client, which let a token another app holds for a person sign in as them. It is gone, and an old client is told where to go. */

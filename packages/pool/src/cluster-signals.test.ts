@@ -33,7 +33,7 @@ const VERSION = '2.1.314';
 const fetched = async (target: TestPool, token: string): Promise<{ reads: number; cells: number; clusters: number[] }> => {
   const response = await target.raw(`/bundle/claude-code/${VERSION}/${VOCAB_VERSION}`, token);
   expect(response.status).toBe(200);
-  const verified = await verifyBundle(response.json, target.signingKey(), 'claude-code', VERSION);
+  const verified = await verifyBundle(response.json, target.pinned(), 'claude-code', VERSION);
   if (!verified.ok) throw new Error(verified.reason);
   return { reads: verified.bundle.reads.length, cells: verified.bundle.cells.length, clusters: verified.bundle.reads.map((read) => read.clusters) };
 };

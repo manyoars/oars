@@ -1,8 +1,9 @@
 // The outbox (`oars pool deposit` and `oars pool outbox`): every batch that may leave this machine is first written here, as canonical JSON lines, and `deposit` stops. Nothing in this file
 // looks inside a batch except to name its fields, at every depth, for `--explain`; what a batch holds is the projection's business.
 import { createHash } from 'node:crypto';
-import { appendFile, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
 import { SKELETON_FORMAT, VOCAB_VERSION } from './pool-wire.js';
 import { contentHash } from './read.js';
 
@@ -171,12 +172,12 @@ export const writeBatch = async (outbox: string, key: string, batch: unknown, st
   const bytes = canonicalBytes(batch);
   const hash = batchHash(bytes);
   const folder = join(outbox, stamp);
-  await mkdir(folder, { recursive: true });
+  await mkdirOwnerOnly(folder);
   for (const name of await readdir(folder)) {
     const found = BATCH_FILE.exec(name);
     if (found?.[1] === key && found[2] !== hash) await rm(join(folder, name), { force: true });
   }
-  await writeFile(join(folder, `${key}.${hash}.jsonl`), bytes, 'utf8');
+  await writeOwnerOnly(join(folder, `${key}.${hash}.jsonl`), bytes);
   return { hash, folder, bytes: Buffer.byteLength(bytes) };
 };
 
@@ -253,8 +254,8 @@ const shownFile = (outbox: string): string => join(outbox, 'shown.log');
 
 /** Records that this hash was printed, one line for each print: the lock below sends only a hash that appears here. */
 export const markShown = async (outbox: string, hash: string, at: number): Promise<void> => {
-  await mkdir(outbox, { recursive: true });
-  await appendFile(shownFile(outbox), `${hash} ${new Date(at).toISOString()}\n`, 'utf8');
+  await mkdirOwnerOnly(outbox);
+  await appendFile(shownFile(outbox), `${hash} ${new Date(at).toISOString()}\n`, { encoding: 'utf8', mode: 0o600 });
 };
 
 const wasShown = async (outbox: string, hash: string): Promise<boolean> => {

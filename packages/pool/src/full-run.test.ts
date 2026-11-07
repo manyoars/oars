@@ -96,7 +96,7 @@ describe('login, deposit, and fetch against a local server', () => {
     const [fifth] = people.slice(-1);
     if (fifth === undefined) throw new Error('no fifth person');
     const kept: unknown = JSON.parse(readFileSync(textOf(fifth.last(), 'file'), 'utf8'));
-    const verified = await verifyBundle(kept, pool.signingKey(), 'claude-code', '2.1.314');
+    const verified = await verifyBundle(kept, pool.pinned(), 'claude-code', '2.1.314');
     if (!verified.ok) throw new Error(verified.reason);
     for (const read of verified.bundle.reads) expect(read.clusters).toBe(5);
 

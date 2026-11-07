@@ -26,6 +26,7 @@ import { CAPTURE_VERSION, harnessOf as sessionHarness, type Harness } from './sc
 import { loadStore, readRedactDomains, readSkeletons, readState, updatePoolChoices, type SessionsRuntime } from './store.js';
 import { runGit, type Git } from './survival.js';
 import { vocabulary } from './vocab-load.js';
+import { mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
 
 const LOGIN = 'pool-login';
 const LOGOUT = 'pool-logout';
@@ -209,10 +210,14 @@ export const poolLogin = async (deps: RunDeps, options: { server?: string | unde
   const signIn = signInOf(isObject(reply.body) ? { ...reply.body, server } : undefined);
   if (signIn === undefined) throw new CliError('The pool answered a sign-in with no account, token, or signing key.', ExitCode.UNEXPECTED, LOGIN);
   const known = saved.find((entry) => entry.server === server);
-  // The key is trusted once, here, and never replaced by a later login: a server that swaps it could otherwise sign anything it likes.
-  if (known !== undefined && known.signingKey.x !== signIn.signingKey.x) throw new CliError(`${server} now signs with a different key than the one pinned at your first login. Nothing was saved. If the pool really did change its key, remove ${server} from ${signInsFile(storeDir)} and sign in again.`, ExitCode.AUTH, LOGIN, { code: 'signing_key_changed', title: 'The pool signing key changed.' });
-  await mkdir(storeDir, { recursive: true });
-  await writeFile(signInsFile(storeDir), `${JSON.stringify([...saved.filter((entry) => entry !== known), signIn])}\n`, { mode: 0o600 });
+  // A key is trusted once, here, under the id the pool names it by, and never replaced: a server that swaps the key behind an id it already holds could otherwise sign anything it likes. A new id is added beside the old ones (a rotation, docs/pool.md).
+  const held = known?.signingKeys ?? {};
+  for (const [kid, key] of Object.entries(signIn.signingKeys)) {
+    if (Object.hasOwn(held, kid) && held[kid]?.x !== key.x) throw new CliError(`${server} now signs with a different key than the one pinned for ${kid} at your first login. Nothing was saved. If the pool really did change this key, remove ${server} from ${signInsFile(storeDir)} and sign in again.`, ExitCode.AUTH, LOGIN, { code: 'signing_key_changed', title: 'The pool signing key changed.' });
+  }
+  const pinned: SignIn = { ...signIn, signingKeys: { ...held, ...signIn.signingKeys } };
+  await mkdirOwnerOnly(storeDir);
+  await writeOwnerOnly(signInsFile(storeDir), `${JSON.stringify([...saved.filter((entry) => entry !== known), signIn])}\n`);
   return { document: { ok: true, server, account: signIn.account, expiresAt: signIn.expiresAt }, text: `Signed in to ${server} as ${signIn.account}.` };
 };
 
@@ -236,8 +241,8 @@ export const poolLogout = async (deps: RunDeps, options: { server?: string | und
     if (!(error instanceof CliError) || error.exitCode !== ExitCode.UNREACHABLE) throw error;
   }
   if (reply !== undefined && reply.status !== 204 && reply.status !== 401 && !poolDown(reply.status)) throw refusal(LOGOUT, reply);
-  await writeFile(signInsFile(storeDir), `${JSON.stringify(saved.filter((entry) => entry !== known))}
-`, { mode: 0o600 });
+  await writeOwnerOnly(signInsFile(storeDir), `${JSON.stringify(saved.filter((entry) => entry !== known))}
+`);
   const revoked = reply?.status === 204;
   const text = revoked
     ? `Signed out of ${server}: the credential is revoked there and removed here.`
@@ -612,10 +617,10 @@ export const poolFetch = async (deps: RunDeps, options: { server?: string | unde
   const server = poolServer(deps.env, FETCH, options.server);
   const { harnessVersion } = options;
   if (!isBundleVersion(harnessVersion)) throw usage(`${harnessVersion} is not a public harness version.`, FETCH);
-  const { token, signingKey } = await signedIn(deps, storeDir, server, FETCH);
+  const { token, signingKeys } = await signedIn(deps, storeDir, server, FETCH);
   const harness = await fetchHarness(deps, storeDir, options.harness);
   const file = replicaFile(storeDir, server, harness, harnessVersion);
-  const kept = await keptReplica(file, signingKey, harness, harnessVersion);
+  const kept = await keptReplica(file, signingKeys, harness, harnessVersion);
   const credential = new Masker();
   credential.add(token);
   const reply = await ask(deps, FETCH, server, `/bundle/${harness}/${encodeURIComponent(harnessVersion)}/${encodeURIComponent(VOCAB_VERSION)}`, { token, show: credential, ...(kept?.etag === undefined ? {} : { ifNoneMatch: kept.etag }) });
@@ -642,7 +647,7 @@ export const poolFetch = async (deps: RunDeps, options: { server?: string | unde
     emit('fetch', { harness, fetches: 1 });
     throw refusal(FETCH, reply);
   }
-  const verified = await verifyBundle(reply.body, signingKey, harness, harnessVersion);
+  const verified = await verifyBundle(reply.body, signingKeys, harness, harnessVersion);
   if (!verified.ok) {
     const title = `Refused the bundle: ${verified.reason}.`;
     emit('fetch', { harness, fetches: 1 });

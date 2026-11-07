@@ -1,8 +1,9 @@
 // The raw part of the outbox (t884): one redacted copy of each transcript of a session that passed the gates, in the same outbox as the batches and printed by the same command. A copy is named for its
 // session key, its place among the session's transcripts (0 is the main one), and the SHA-256 of its redacted bytes, which is the hash the pool's `/v1/raw/:sha256` routes take.
 import { createHash } from 'node:crypto';
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
 import { partsOf } from './pool-outbox.js';
 import { REDACTION_VERSION } from './redact.js';
 import { CAPTURE_VERSION } from './schema.js';
@@ -29,12 +30,12 @@ const namesIn = async (folder: string): Promise<string[]> => {
 export const writeRaw = async (outbox: string, key: string, place: number, bytes: string): Promise<{ hash: string; bytes: number }> => {
   const folder = join(outbox, rawStamp());
   const hash = rawHash(bytes);
-  await mkdir(folder, { recursive: true });
+  await mkdirOwnerOnly(folder);
   for (const name of await namesIn(folder)) {
     const found = RAW_FILE.exec(name);
     if (found?.[1] === key && Number(found[2]) === place && found[3] !== hash) await rm(join(folder, name), { force: true });
   }
-  await writeFile(join(folder, `${key}.${String(place)}.${hash}.redacted`), bytes, 'utf8');
+  await writeOwnerOnly(join(folder, `${key}.${String(place)}.${hash}.redacted`), bytes);
   return { hash, bytes: Buffer.byteLength(bytes) };
 };
 

@@ -1,5 +1,5 @@
 import { createHash, webcrypto } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { http, HttpResponse } from 'msw';
@@ -2594,5 +2594,49 @@ describe('oars pool logout (S8)', () => {
     expect(await scene.cli('pool', 'logout', '--server', POOL, '--json')).toBe(ExitCode.OK);
     expect(scene.document()).toEqual({ ok: true, server: POOL, revoked: false, removed: false });
     expect(scene.seen).toEqual([]);
+  });
+});
+
+describe('the pool account file is the owner\'s alone (S9)', () => {
+  const posix = it.skipIf(process.platform === 'win32');
+  const modeOf = (path: string): number => statSync(path).mode & 0o777;
+
+  posix('a login narrows an account file and a data folder that were once wider, and a logout keeps them narrow', async () => {
+    const scene = setting();
+    const file = join(scene.staged.storeDir, 'pool-accounts.json');
+    mkdirSync(scene.staged.storeDir, { recursive: true });
+    writeFileSync(file, '[]\n', { mode: 0o644 });
+    chmodSync(file, 0o644);
+    chmodSync(scene.staged.storeDir, 0o755);
+    poolAt(scene);
+    expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
+    expect(modeOf(file)).toBe(0o600);
+    expect(modeOf(scene.staged.storeDir)).toBe(0o700);
+    chmodSync(file, 0o644);
+    server.use(http.delete(`${POOL}/v1/login`, () => new HttpResponse(null, { status: 204 })));
+    expect(await scene.cli('pool', 'logout', '--server', POOL)).toBe(ExitCode.OK);
+    expect(modeOf(file)).toBe(0o600);
+  });
+});
+
+describe('oars pool login pins keys by key id (S17)', () => {
+  const pinnedIn = (scene: Scene): unknown => {
+    const parsed: unknown = JSON.parse(readFileSync(join(scene.staged.storeDir, 'pool-accounts.json'), 'utf8'));
+    return Array.isArray(parsed) ? at(parsed[0], 'signingKeys') : undefined;
+  };
+
+  it('pins the key under the id the pool names (k1 for a pool that names none), adds a new id beside it, and refuses a changed key behind an id it holds', async () => {
+    const scene = setting();
+    poolAt(scene, { polls: [HttpResponse.json({ ...okLogin(), kid: 'k1' })] });
+    expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
+    expect(pinnedIn(scene)).toEqual({ k1: FIXED_KEY });
+    const second: PinnedKey = { kty: 'OKP', crv: 'Ed25519', x: 'a-second-key' };
+    poolAt(scene, { polls: [HttpResponse.json({ ...okLogin(second), kid: 'k2' })] });
+    expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
+    expect(pinnedIn(scene)).toEqual({ k1: FIXED_KEY, k2: second });
+    poolAt(scene, { polls: [HttpResponse.json({ ...okLogin({ ...second, x: 'swapped' }), kid: 'k2' })] });
+    expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.AUTH);
+    expect(scene.h.err.join('')).toContain('k2');
+    expect(pinnedIn(scene)).toEqual({ k1: FIXED_KEY, k2: second });
   });
 });
