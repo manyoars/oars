@@ -1289,7 +1289,14 @@ describe('oars pool fetch', () => {
       expect(scene.h.out.join('')).not.toContain('floor');
     });
 
-    it.each([{ public: 0, disclosure: 2 }, { public: 5.5, disclosure: 2 }, { public: 5 }, { public: 5, disclosure: 2, families: { lve: 3 } }, { public: 5, disclosure: 2, families: { live: 0 } }, 'five'])('refuses a signed bundle whose floors are %j, rather than print them', async (floors) => {
+    it('carries a family this client does not know, so a later pool that adds one breaks no released client', async () => {
+      const { scene, sign } = await signedScene();
+      on(scene, 'get', `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, await floored(sign, { public: 5, disclosure: 2, families: { 'a-later-family': 3 } }));
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
+      expect(scene.h.out.join('')).toContain('with a-later-family at 3.');
+    });
+
+    it.each([{ public: 0, disclosure: 2 }, { public: 5.5, disclosure: 2 }, { public: 5 }, { public: 5, disclosure: 2, families: { live: 0 } }, 'five'])('refuses a signed bundle whose floors are %j, rather than print them', async (floors) => {
       const { scene, sign } = await signedScene();
       on(scene, 'get', `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, await floored(sign, floors));
       expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.INVALID);
