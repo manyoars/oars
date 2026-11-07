@@ -46,7 +46,7 @@ describe('the class of a path target', () => {
     ['Makefile.bak', 'other'],
     ['C:\\work\\src\\main.ts', 'source'],
     ['.', 'other'],
-    // The order is intended: a doc folder names the role before the source extension does, and a .json file is config wherever it sits.
+    // The order is intended: a doc folder names the role before the source extension does, and a .json file outside a test, generated, or doc folder is config.
     ['src/doc/render.ts', 'doc'],
     ['data/rows.json', 'config'],
   ];
