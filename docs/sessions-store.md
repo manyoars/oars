@@ -183,7 +183,7 @@ A version-2 session (no `cv`) is still read: its already-derived `prompt` and `e
 
 Every record carries `kind`, `cv`, `sid`, `session`, and `rev` (a version-3 record reads with `sid` null). Text is redacted (secrets by
 pattern and entropy, emails, and the domains named with `--redact-domain`) before it is cut or written. Each field has one class
-(the umbrella repository's D1 spec, Section 1.1). The store uploads nothing (telemetry, `docs/telemetry.md`, has its own folder and carries nothing from the store), so a class says what a field may hold, not where it goes:
+(the umbrella repository's D1 spec, Section 1.1). Reading and writing the store makes no network call; what leaves the machine is built from it by `oars pool` and the nightly task (`docs/pool.md`), and telemetry (`docs/telemetry.md`) keeps its own folder and carries only counts and sizes of the store (`store-health`). So a class says what a field may hold, not where it goes:
 
 - `L` the most sensitive: raw transcripts, the unhashed paths, the project folder slug, the salt, `state.json`.
 - `A` redacted text (cut to its limit), join ids, and every salted hash.
