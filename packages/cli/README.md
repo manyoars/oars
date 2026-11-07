@@ -2,7 +2,7 @@
 
 The `oars` command line for Many Oars: sign in, manage API keys, and keep a local memory of your own Claude Code sessions (`oars sessions`).
 
-Accounts are not open yet; `oars login` says so until launch.
+Accounts are not open yet: `oars login` uses the Many Oars issuer by default, and until Many Oars sign-in at `login.manyoars.com` (and its pool at `pool.manyoars.com`) is deployed it exits 2 with an error that names `login.manyoars.com`.
 
 Node 24 or later. ESM only.
 
@@ -34,7 +34,7 @@ These flags work on every command:
 Signs in with your browser (RFC 8628 device flow) and stores the login.
 
 - `--no-browser` prints the link and code without opening a browser.
-- `--issuer-url <url>` is the Keycloak realm URL. The default is `OARS_ISSUER_URL`. With neither, `login` uses the built-in Many Oars issuer once Many Oars has launched, which it learns from `https://manyoars.com/.well-known/oars.json` (`{"launched": true}`). The flag only switches the built-in issuer on; it never supplies a URL. Before launch, or when the built-in issuer does not answer discovery, with no `--issuer-url` or `OARS_ISSUER_URL`, the command prints "Many Oars has not launched yet: pass --issuer-url or set OARS_ISSUER_URL." and exits 2.
+- `--issuer-url <url>` is the Keycloak realm URL. The default is `OARS_ISSUER_URL`. With neither, `login` uses the built-in Many Oars issuer, `https://login.manyoars.com/realms/aor`; nothing has to be switched on first. When the built-in issuer does not answer discovery (Many Oars and its pool at `pool.manyoars.com` may not be deployed yet), with no `--issuer-url` or `OARS_ISSUER_URL`, the command prints "Cannot reach Many Oars sign-in at login.manyoars.com (Many Oars and its pool at pool.manyoars.com may not be deployed yet). Pass --issuer-url or set OARS_ISSUER_URL to use another issuer." and exits 2.
 
 ### logout
 
@@ -53,7 +53,7 @@ Revokes the stored login and deletes it.
 
 ### telemetry
 
-oars records how it is used, on this machine, and says so: on the first run that is not a hook it prints a notice on stderr, once. Each command leaves an event in a local spool under `<config>/oars/telemetry/`: the command path, the names of the flags given (never their values), the duration, the exit code, a closed error class, the oars version, the OS, and the time. So does each fire of a hook (the bare `oars gate hook` included, written after its answer is printed: which hook, how long, hit, miss, held, or error, and the bytes it printed), each recall (how it was asked and which read families it served, as counts), each deposit pass or sent batch (sessions counted, batches, bytes, and how many sessions each gate kept out, never which), and each fetch (an ETag hit, a cap hit). Five more kinds of event are recorded, each only counts, sizes, and closed words: once a night, a `store-health` snapshot of the session store and a `run-cost` event (time and peak memory); a `crash` event when oars fails in a way it did not plan for (the error's class and a hash of its stack, never its message); and, for each `oars pool deposit` batch, a `wire` event (which fields it held and how many bytes each took) and, with `--send`, a `wire-send` event (the HTTP status, the pool's refusal code, and the size). Nothing else is recorded: no session content, prompt text, file path, URL, or argument. Every field of every event, with an example, is in [docs/telemetry.md](https://github.com/manyoars/oars/blob/main/docs/telemetry.md). The events are sent in batches to the server named in `OARS_POOL_URL`, and only there; with none set they stay in the spool. A per-install random id (not derived from your machine or account) is in each event.
+oars records how it is used, on this machine, and says so: on the first run that is not a hook it prints a notice on stderr, once. Each command leaves an event in a local spool under `<config>/oars/telemetry/`: the command path, the names of the flags given (never their values), the duration, the exit code, a closed error class, the oars version, the OS, and the time. So does each fire of a hook (the bare `oars gate hook` included, written after its answer is printed: which hook, how long, hit, miss, held, or error, and the bytes it printed), each recall (how it was asked and which read families it served, as counts), each deposit pass or sent batch (sessions counted, batches, bytes, and how many sessions each gate kept out, never which), and each fetch (an ETag hit, a cap hit). Five more kinds of event are recorded, each only counts, sizes, and closed words: once a night, a `store-health` snapshot of the session store and a `run-cost` event (time and peak memory); a `crash` event when oars fails in a way it did not plan for (the error's class and a hash of its stack, never its message); and, for each `oars pool deposit` batch, a `wire` event (which fields it held and how many bytes each took) and, with `--send`, a `wire-send` event (the HTTP status, the pool's refusal code, and the size). Nothing else is recorded: no session content, prompt text, file path, URL, or argument. Every field of every event, with an example, is in [docs/telemetry.md](https://github.com/manyoars/oars/blob/main/docs/telemetry.md). The events are sent in batches to the Many Oars pool (`https://pool.manyoars.com`), or to the pool server in `OARS_POOL_URL` if you set one. A per-install random id (not derived from your machine or account) is in each event.
 
 - `oars telemetry status` says whether it is on, which switch decided that, whether the notice was shown, and how large the spool is.
 - `oars telemetry off` stops recording and sending; `oars telemetry on` resumes it and prints the notice again.
@@ -65,15 +65,16 @@ Every event type, with an example, is in [docs/telemetry.md](https://github.com/
 
 ### sessions
 
-`oars sessions` keeps a local, deterministic memory of your own Claude Code sessions. The session commands make no model call and no network call, except `gold arms`, which sends redacted text through your own Claude subscription. oars also records telemetry events (a command's path, its flag names, how long it took, its exit code, and its error class, with a random install id, the oars version, the OS, and the time; never session content, prompts, paths, URLs, or argument values), which are sent in batches to the server named in `OARS_POOL_URL`, and only there ([what telemetry records and how to turn it off](https://github.com/manyoars/oars/blob/main/docs/telemetry.md)).
+`oars sessions` keeps a local, deterministic memory of your own Claude Code sessions. The session commands make no model call and no network call, except `gold arms`, which sends redacted text through your own Claude subscription. oars also records telemetry events (a command's path, its flag names, how long it took, its exit code, and its error class, with a random install id, the oars version, the OS, and the time; never session content, prompts, paths, URLs, or argument values), which are sent in batches to the Many Oars pool or the pool server in `OARS_POOL_URL` ([what telemetry records and how to turn it off](https://github.com/manyoars/oars/blob/main/docs/telemetry.md)).
 
-What it captures: the Claude Code sessions in the folders you name with `--allow`, and, by name, the sessions of Cursor, Codex, Copilot CLI, Gemini CLI, Grok Build, and VS Code Copilot Chat (`--allow cursor`, `codex`, `copilot`, `gemini`, `grok`, `vscode-copilot`). Where it stores them: `<config>/oars/sessions/` on your machine (`<config>` is `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `~/.config` elsewhere). The `raw/` folder in it is on by default and holds raw transcripts (a hard link or copy of each deposited one). Secret masking applies to the log, not to `raw/`: those files are unredacted and keep whatever the transcript held, secrets included. They stay on your machine; apart from `gold arms`, no session command uploads them, and telemetry never carries anything from them. To remove them, see [Remove everything](#remove-everything).
+What it captures: by default, the Claude Code sessions of every project folder and the sessions of Cursor, Codex, Copilot CLI, Gemini CLI, Grok Build, and VS Code Copilot Chat. `--allow` narrows that to the folders and stores you name (`--allow cursor`, `codex`, `copilot`, `gemini`, `grok`, `vscode-copilot` name the stores), and `--deny` keeps one out. Where it stores them: `<config>/oars/sessions/` on your machine (`<config>` is `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `~/.config` elsewhere). The `raw/` folder in it is on by default and holds raw transcripts (a hard link or copy of each deposited one). Secret masking applies to the log, not to `raw/`: those files are unredacted and keep whatever the transcript held, secrets included. They stay on your machine; apart from `gold arms`, no session command uploads them, and telemetry never carries anything from them. To remove them, see [Remove everything](#remove-everything).
 
-Apart from that and telemetry (on by default, off with `oars telemetry off`, `OARS_TELEMETRY=0`, or `DO_NOT_TRACK=1`; it sends only to the pool server in `OARS_POOL_URL`), oars itself sends nothing; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.
+Apart from that and telemetry (on by default, off with `oars telemetry off`, `OARS_TELEMETRY=0`, or `DO_NOT_TRACK=1`; it sends to the Many Oars pool, or the pool server in `OARS_POOL_URL`), oars itself sends nothing; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.
 
 ```bash
-# Read the folders you name (a path, or its name under ~/.claude/projects). At least one --allow is required; there is no "all".
-oars sessions deposit --allow ~/work/app --allow ~/work/tools --redact-domain corp.example
+# Read every folder; or only the ones you name (a path, or its name under ~/.claude/projects); --deny keeps one out.
+oars sessions deposit --redact-domain corp.example
+oars sessions deposit --allow ~/work/app --allow ~/work/tools --deny ~/work/tools/secret
 
 # Look up an error as printed, a file, or a prompt class.
 oars sessions recall --error "unexpected EOF while looking for matching \`''"
@@ -121,7 +122,7 @@ field, and a Merkle root over the raw lines) that `verify` checks; the skeleton 
 per hundred sessions and, on a second line, the distinct recurring signatures in the window.
 #### Many folders: `--allow` prefixes, globs, and `--allow-file`
 
-An `--allow` entry is a folder (or its slug), a folder prefix with a trailing slash (`~/work/` reads that folder and every project under it), or a glob (`*` any run of characters, `?` one character, matched against the project-folder name Claude Code derives from the path). `--allow-file <list>` reads entries from a file, one per line (blank lines and `#` comments skipped), so hundreds of folders need no batching and no long command line. A leading `~` is expanded to your home folder, in a list file or quoted entry too. Both repeat and combine. Entries a deposit saves are what the SessionEnd hook and the nightly task reuse; a folder you have never named is never read.
+An `--allow` entry is a folder (or its slug), a folder prefix with a trailing slash (`~/work/` reads that folder and every project under it), or a glob (`*` any run of characters, `?` one character, matched against the project-folder name Claude Code derives from the path). `--allow-file <list>` reads entries from a file, one per line (blank lines and `#` comments skipped), so hundreds of folders need no batching and no long command line. A leading `~` is expanded to your home folder, in a list file or quoted entry too. Both repeat and combine. With neither, a deposit reads every folder. `--deny <entry>` (or `!<entry>` in a list file) keeps the folders it names out, in any of those forms; it is saved, and it wins over every `--allow` until that exact entry is named with `--allow` again. Naming it again lifts the denial and nothing else when the saved list names no folder (every folder stays in scope); when the saved list names folders, the entry joins them. Entries a deposit saves are what the SessionEnd hook, the nightly task, `oars pool deposit`, and `oars gate replay` reuse; with none saved, they read every folder. An `--allow-file` that names nothing is refused.
 
 #### Recall in a running session: hooks
 
@@ -132,14 +133,14 @@ An `--allow` entry is a folder (or its slug), a folder prefix with a trailing sl
 | `SessionStart` | injects `oars sessions recall --context` for the session's cwd as additional context: the top 5 errors by sessions within the latest 300 sessions of the repository (the `measure --last 300 --repo` window) and what usually followed | under 500 ms |
 | `PreToolUse` (no matcher: every tool) | for a call whose tool and input key names match a shape the store has seen fail often enough, and at least twice as often as its action does, injects its counts as additional context, once per session and shape (the check reads the last 64 KB of the recall log, about 44 rows, so a very long session can be told again, and the arm redraws when the nightly index moves), and records the recall. 10 percent of those sessions and shapes are held back: a held arm records what it would have shown and injects nothing. Starts node per call | under 500 ms |
 | `PostToolUseFailure` (matcher `Bash\|PowerShell`) | for a failed tool call whose error starts with `Exit code N` normalizes the first informative line as `deposit` does and, on a hit, adds "seen in N sessions; what followed: X". A shell pre-filter in the registered command reads the event first and starts node only when it carries `Exit code` | pre-filter: shell builtins only, no node start; whole path under 1 s |
-| `SessionEnd` | deposits that one transcript (idempotent by size and mtime), only from a folder an earlier `--allow` named. Once per session: `Stop` fires after every turn and would append a new revision of the growing transcript each time. A session the harness ends without `SessionEnd` is picked up by the nightly deposit | under 5 s |
+| `SessionEnd` | deposits that one transcript (idempotent by size and mtime), only from a folder the saved allowlist holds (every folder until a deposit names some, less any `--deny`). Once per session: `Stop` fires after every turn and would append a new revision of the growing transcript each time. A session the harness ends without `SessionEnd` is picked up by the nightly deposit | under 5 s |
 
 Claude Code fires `PostToolUse` on success only; a failed Bash call arrives as `PostToolUseFailure`, so that is the event registered. The pre-filter is a `read`, a `case`, and a `printf | node` in the shell the harness runs hooks in (Git Bash on Windows, where a fresh `node` alone costs 250 ms or more), so it needs no `findstr` and no extra dependency. Writers of the store (`SessionEnd`, the nightly run, `deposit`) take `store.lock`, so parallel sessions cannot lose each other's `state.json` entries; a lock older than ten minutes is broken.
 
 ```bash
-# Nothing is written unless you name the file (default --scope file), or say --scope user|project.
+# The default is the user settings file; --scope project or --file names another.
+oars sessions hook install                              # ~/.claude/settings.json (or $CLAUDE_CONFIG_DIR)
 oars sessions hook install --scope file --file ./.claude/settings.local.json
-oars sessions hook install --scope user                 # ~/.claude/settings.json (or $CLAUDE_CONFIG_DIR)
 oars sessions hook install --scope project              # ./.claude/settings.json
 oars sessions hook install --file my-settings.json --keep-retention
 oars sessions hook status                               # user, project, and the nightly task
@@ -150,7 +151,7 @@ Install merges: existing hooks (a Stop hook that rotates sessions, say) stay, ev
 
 #### Nightly schedule (Windows)
 
-`oars sessions hook install --schedule nightly` registers the Task Scheduler task `OarsSessionsNightly` (daily, 03:00) that runs the full deposit over the saved `--allow` and `--redact-domain` entries and refreshes the recurrence index the hooks read. `--schedule off` removes it; `hook status` shows whether it is registered. Alone, `--schedule` writes no settings file.
+On Windows, `oars sessions hook install` registers the Task Scheduler task `OarsSessionsNightly` (daily, 03:00) unless it is already there; `--schedule nightly` registers it by itself, with no settings file. The task runs the full deposit over the saved `--allow` and `--redact-domain` entries and refreshes the recurrence index the hooks read. `--schedule off` removes it and records the choice in the store (`<config>/oars/sessions/schedule.json`), so a later plain install leaves it off until `--schedule nightly` registers it again and clears the record; `hook status` shows whether it is registered. A machine that refuses the task still gets the hooks, and the install says how to retry. Alone, `--schedule` writes no settings file.
 
 #### Reading `measure` before and after
 
@@ -163,22 +164,22 @@ Install merges: existing hooks (a Stop hook that rotates sessions, say) stay, ev
 ### Gate: what your agents picked
 
 ```
-oars gate replay --allow ~/work/app    # find installs, fetch-and-runs, MCP servers, and skills in logs on disk
-oars gate replay --registry-state      # also ask npm or pip what the registry holds (off by default)
+oars gate replay                       # find installs, fetch-and-runs, MCP servers, and skills in logs on disk, and ask npm or pip what the registry holds
+oars gate replay --no-registry-state   # the same, without asking the registry
 oars gate report                       # counts over crossings.jsonl, by who recorded each, and what replay cannot see
 oars gate install                      # add the hook to Claude Code at user scope, so crossings are recorded as they happen
 oars gate uninstall                    # remove only that hook entry
 oars gate policy                       # print the policy in force (warn, block, or off per class)
 ```
 
-Replay is local and read-only on your transcripts; it writes `crossings.jsonl` and the novelty index `gate-index.txt` into the sessions store and nothing else (with `--registry-state`, npm and pip also keep their own caches). The hook (`oars gate hook`, run by Claude Code, not by you) appends to `crossings.jsonl` as each crossing happens, plus `gate-index.txt`, `gate-registry.jsonl`, and the empty `gate-ask-*.lock` files in the same store (a registry ask the hook had to cut is finished by a helper process that ends on its own timeouts, and the package manager keeps its own cache outside the store), and always exits 0. With no policy file it adds a note about a name first published in the last 30 days or an npm name the registry does not hold; `gate-policy.json` changes that per class, and a block needs `block` written by you. A block is a labeled deny, and a crossing goes nowhere unless you opt in (no opt-in exists yet). `report` reads only `crossings.jsonl`. Both record picks and neither judges them; a note or label states a fact about the registry and nothing else. See `docs/gate.md` in the repository.
+Replay is local and read-only on your transcripts; it writes `crossings.jsonl` and the novelty index `gate-index.txt` into the sessions store and nothing else (npm and pip also keep their own caches, unless `--no-registry-state`). The hook (`oars gate hook`, run by Claude Code, not by you) appends to `crossings.jsonl` as each crossing happens, plus `gate-index.txt`, `gate-registry.jsonl`, and the empty `gate-ask-*.lock` files in the same store (a registry ask the hook had to cut is finished by a helper process that ends on its own timeouts, and the package manager keeps its own cache outside the store), and always exits 0. With no policy file it adds a note about a name first published in the last 30 days or an npm name the registry does not hold; `gate-policy.json` changes that per class, and a block needs `block` written by you. A block is a labeled deny, and a crossing goes nowhere unless you opt in (no opt-in exists yet). `report` reads only `crossings.jsonl`. Both record picks and neither judges them; a note or label states a fact about the registry and nothing else. See `docs/gate.md` in the repository.
 
 ### pool
 
-`oars pool` talks to a pool server that you name with `--server <url>` or `OARS_POOL_URL`; there is no default server. Every other command works without it.
+`oars pool` talks to the Many Oars pool, `https://pool.manyoars.com`, or a pool server you name with `--server <url>` or `OARS_POOL_URL`. Every other command works without it.
 
 - `oars pool login --provider github|google` signs in by the provider's device flow, run here, and prints every request before it sends it. `OARS_GITHUB_CLIENT_ID` (or `OARS_GOOGLE_CLIENT_ID` and `OARS_GOOGLE_CLIENT_SECRET`) must be set; an unset one stops the command before anything is sent and names the variable.
-- `oars pool deposit` writes a batch of closed-vocabulary session skeletons to an outbox for each session that passes your folder allowlist and the exclusion check, and stops. Nothing is sent: `--send <hash>` sends no request. A batch that was shown and is unchanged stops with `sending_disabled` (exit 5), and any other hash stops with its own refusal.
+- `oars pool deposit` writes a batch of closed-vocabulary session skeletons to an outbox for each session that passes your folder allowlist and the exclusion check, and stops: nothing is sent. `--send <hash>` sends one batch that `outbox` printed and that is unchanged on disk, once this account has accepted the pool covenant (`--accept-covenant <version>`, or an earlier acceptance); before that it reads the covenant, sends no batch, and exits 3 with `covenant_not_accepted`. A hash that was never shown, or a batch that changed, is refused before any request.
 - `deposit`, `outbox`, and `fetch` need `oars pool login` first; without it they exit 3 and name the server.
 - `oars pool outbox` prints each batch exactly as it would be sent, with its SHA-256, and `--explain` adds each field's rule.
 - `oars pool fetch --harness-version <version>` fetches that version's signed bundle, verifies it against the key pinned at login, and keeps it locally.

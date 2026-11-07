@@ -252,7 +252,7 @@ describe('oars gate install and uninstall', () => {
     const userSettings = join(dir, 'claude', 'settings.json');
     const staged = stage();
     const storeDir = staged.storeDir;
-    const install: InstallRuntime = { nodePath: 'node', hookBin: 'hook-bin.js', userSettings, cwd: dir, schtasks: () => Promise.resolve({ code: 0, output: '' }) };
+    const install: InstallRuntime = { nodePath: 'node', hookBin: 'hook-bin.js', userSettings, cwd: dir, platform: 'linux', schtasks: () => Promise.resolve({ code: 0, output: '' }) };
     h.deps.install = install;
     h.deps.sessions = staged.runtime;
     return { ...h, userSettings, storeDir };
