@@ -108,7 +108,7 @@ An unknown field name a client sends lands in the `extensions` bag of the deposi
 | `frames` | container for the distinct frames a transcript's steps ran in: a step's `frame` is a position in it, so every per-step cell key reads a member | clear | yes | 21 |
 | `frameworks` | the `framework` stratum | clear (public list) | yes | 45 |
 | `harness` | every bundle is per harness; the action table a step is checked against | clear | yes | 92 |
-| `harnessVersion` | `fit` and `change` per harness version bucket | clear (public releases) | yes | 78 |
+| `harnessVersion` | `fit` and `change` per harness version bucket | clear (public releases); thresholded (long tail) | yes | 78 |
 | `host` | `adoption` and `fit` per web host | hashed at ingest | yes | 19 |
 | `id` | the ledger's replace-on-redeposit key; no read | clear (an opaque client hash, per account) | yes | 23 |
 | `identity` | container for what a step called: `fit` and `adoption` read its members | clear | yes | 71 |
@@ -122,7 +122,7 @@ An unknown field name a client sends lands in the `extensions` bag of the deposi
 | `mcp` | `adoption` and `fit` per MCP server in reach, offered, loaded, or called | clear (public list); thresholded (long tail) | yes | 32 |
 | `merkleRoot` | the ingest tier check (`access.ts`) and the future raw-file audit; no read | clear (an opaque client hash) | partly (while the raw file stays) | 79 |
 | `metric` | future change-effect read (calls per session or thinking tokens) | clear | yes | 26 |
-| `model` | every cell key; `fit` and `cost` per model | clear (public values) | yes | 75 |
+| `model` | every cell key; `fit` and `cost` per model | clear (public list); thresholded (long tail) | yes | 75 |
 | `ms` | `cost`: the time of a step, as a cell's `durationMs` | clear (bucket) | yes | 30 |
 | `name` | `adoption` and `fit` per named package; the future change-effect read for a package delta | clear (public list); thresholded (long tail) | yes | 31 |
 | `native` | the action check at ingest and `fit` per native tool name | clear (public list); thresholded (long tail) | yes | 98 |
