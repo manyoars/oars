@@ -18,6 +18,15 @@ export const isoWeek = (day: string): string => {
 
 const weekOf = (cell: Cell): string => (cell.day === UNKNOWN ? UNKNOWN : isoWeek(cell.day));
 
+const promptsWithTokens = (cells: readonly Cell[]): number | undefined => {
+  let sum = 0;
+  for (const cell of cells) {
+    if (cell.tokenPrompts === undefined) return undefined;
+    sum += cell.tokenPrompts;
+  }
+  return sum;
+};
+
 export const deriveCost: DeriveFamily = ({ pool }) => {
   const classed = atGrain(pool, 'week').flatMap((cell) => {
     const motif = pool.motifs.get(cell.motifId);
@@ -28,10 +37,12 @@ export const deriveCost: DeriveFamily = ({ pool }) => {
     if (first === undefined) return [];
     const cells = group.map(({ cell }) => cell);
     const prompts = total(cells, settled);
+    // Tokens hold only the prompts that recorded input, so they are divided by those prompts when every cell says how many (a cell read back from the pool's stored sums does not).
+    const covered = promptsWithTokens(cells) ?? prompts;
     return [
       body('cost', cells, {
         slice: { class: motifName(first.motif), model: first.model, week: weekOf(first.cell) },
-        value: { tokensPerPrompt: Math.round(total(cells, (cell) => cell.tokens ?? 0) / prompts), secondsPerPrompt: Math.round(total(cells, (cell) => cell.durationMs) / prompts / 1000), errorShare: rate(total(cells, (cell) => cell.failed), prompts) },
+        value: { tokensPerPrompt: covered === 0 ? null : Math.round(total(cells, (cell) => cell.tokens ?? 0) / covered), secondsPerPrompt: Math.round(total(cells, (cell) => cell.durationMs) / prompts / 1000), errorShare: rate(total(cells, (cell) => cell.failed), prompts) },
         n: prompts,
         interval: null,
       }),
