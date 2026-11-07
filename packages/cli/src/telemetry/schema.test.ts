@@ -96,6 +96,11 @@ describe('the closed schema', () => {
     expect(sanitize('wire', { harness: 'claude-code', fields: ['action', 'harness'], present: [3, 3], fieldBytes: [120, 60], batches: 3, bytes: 900 })).toMatchObject({ dropped: 0 });
     // Names come from the register: a name outside it, and a number list with a text entry, are refused.
     expect(sanitize('wire', { fields: ['action', 'secret-project'], present: [1, 'x'] })).toEqual({ data: {}, dropped: 2 });
+    // The three lists are parallel: when one is refused, the other two would misalign, so all three go.
+    expect(sanitize('wire', { harness: 'claude-code', fields: ['action', 'harness'], present: [3, 'x'], fieldBytes: [120, 60], batches: 3 })).toEqual({ data: { harness: 'claude-code', batches: 3 }, dropped: 3 });
+    expect(sanitize('wire', { fields: ['action', 'secret-project'], present: [1, 2], fieldBytes: [5, 6] })).toEqual({ data: {}, dropped: 3 });
+    // Lists that are each valid but not the same length are not parallel either.
+    expect(sanitize('wire', { fields: ['action', 'harness'], present: [3], fieldBytes: [120, 60] })).toEqual({ data: {}, dropped: 3 });
     expect(sanitize('wire-send', { sent: 0, status: 429, code: 'rate_limited', bytes: 10 })).toEqual({ data: { sent: 0, status: 429, code: 'rate_limited', bytes: 10 }, dropped: 0 });
     expect(sanitize('wire-send', { code: 'Rate limited: see https://x.test' })).toEqual({ data: {}, dropped: 1 });
   });
