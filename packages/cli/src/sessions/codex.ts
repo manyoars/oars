@@ -207,7 +207,8 @@ const SCRIPT_ERROR = /(?:^|\n)Script error:\n?/;
  * The message of a call that failed before it produced an exit code, written as the whole output (no `Output:` header): `execution error: ` for a
  * shell call (core/src/tools/events.rs:438), and for the default unified-exec tool (ConfigShellToolType is only `UnifiedExec | Disabled`,
  * protocol/src/openai_models.rs:330-333) `exec_command failed: ` (core/src/tools/handlers/unified_exec/exec_command.rs:270), `write_stdin failed: `
- * (write_stdin.rs:123), and `write_stdin approval failed: ` (:121). `write_stdin rejected: ` (:118) stays unsettled: its reason is the approval policy's.
+ * (write_stdin.rs:123), and `write_stdin approval failed: ` (:121). `wait failed: ` is assumed by analogy with `write_stdin failed: ` (write_stdin.rs:123) and has not
+ * been seen in the live store. `write_stdin rejected: ` (:118) stays unsettled: its reason is the approval policy's.
  */
 const SPAWN_ERROR = /^(?:execution error|exec_command failed|wait failed|write_stdin(?: approval)? failed): /;
 /**
