@@ -150,7 +150,7 @@ Install merges: existing hooks (a Stop hook that rotates sessions, say) stay, ev
 
 #### Nightly schedule (Windows)
 
-On Windows, `oars sessions hook install` registers the Task Scheduler task `OarsSessionsNightly` (daily, 03:00) unless it is already there; `--schedule nightly` registers it by itself, with no settings file. The task runs the full deposit over the saved `--allow` and `--redact-domain` entries and refreshes the recurrence index the hooks read. `--schedule off` removes it (the next plain install registers it again); `hook status` shows whether it is registered. A machine that refuses the task still gets the hooks, and the install says how to retry. Alone, `--schedule` writes no settings file.
+On Windows, `oars sessions hook install` registers the Task Scheduler task `OarsSessionsNightly` (daily, 03:00) unless it is already there; `--schedule nightly` registers it by itself, with no settings file. The task runs the full deposit over the saved `--allow` and `--redact-domain` entries and refreshes the recurrence index the hooks read. `--schedule off` removes it and records the choice in the store (`<config>/oars/sessions/schedule.json`), so a later plain install leaves it off until `--schedule nightly` registers it again and clears the record; `hook status` shows whether it is registered. A machine that refuses the task still gets the hooks, and the install says how to retry. Alone, `--schedule` writes no settings file.
 
 #### Reading `measure` before and after
 

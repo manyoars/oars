@@ -446,6 +446,64 @@ describe('the nightly task on a plain install', () => {
     await sessionsHookInstall({ sessions: undefined, install, now: () => 0 }, { ...plain, file: join(dir, 's.json'), schedule: 'off' });
     expect(calls.map((args) => args[0])).toEqual(['/Delete']);
   });
+
+  // `--schedule off` is recorded in the sessions store, so a later plain install honors it instead of registering the task again.
+  const withStore = (dir: string, platform: NodeJS.Platform = 'win32') => ({ sessions: { storeDir: join(dir, 'store'), projectsRoot: join(dir, 'projects'), stdin: '', stdout: { write: () => undefined } }, install: runtimeIn(dir, 0, platform), now: () => 0 });
+
+  it('a plain install after --schedule off makes no /Create call', async () => {
+    const dir = scratch();
+    const deps = withStore(dir);
+    const file = join(dir, 's.json');
+    calls.length = 0;
+    await sessionsHookInstall(deps, { ...plain, file, schedule: 'off' });
+    expect(readFileSync(join(dir, 'store', 'schedule.json'), 'utf8')).toContain('"off"');
+    calls.length = 0;
+    const outcome = await sessionsHookInstall(deps, { ...plain, file });
+    expect(calls).toEqual([]);
+    expect(outcome.text).toContain('Installed SessionStart');
+    expect(outcome.text).toContain('--schedule nightly');
+    expect(JSON.stringify(outcome.document)).toContain('--schedule off');
+  });
+
+  it('--schedule nightly after --schedule off registers the task and clears the record', async () => {
+    const dir = scratch();
+    const deps = withStore(dir);
+    const file = join(dir, 's.json');
+    await sessionsHookInstall(deps, { ...plain, file, schedule: 'off' });
+    calls.length = 0;
+    await sessionsHookInstall(deps, { ...plain, file, schedule: 'nightly' });
+    expect(calls.map((args) => args[0])).toEqual(['/Create']);
+    expect(existsSync(join(dir, 'store', 'schedule.json'))).toBe(false);
+    calls.length = 0;
+    await sessionsHookInstall(deps, { ...plain, file });
+    expect(calls.map((args) => args[0])).toEqual(['/Query']);
+  });
+
+  it('keeps the opt-out when the nightly registration is refused', async () => {
+    const dir = scratch();
+    const file = join(dir, 's.json');
+    await sessionsHookInstall(withStore(dir), { ...plain, file, schedule: 'off' });
+    const refusing = { ...withStore(dir), install: runtimeIn(dir, 1, 'win32') };
+    await expect(sessionsHookInstall(refusing, { ...plain, file, schedule: 'nightly' })).rejects.toThrow('Access is denied');
+    expect(existsSync(join(dir, 'store', 'schedule.json'))).toBe(true);
+  });
+
+  it('reads an unreadable record as no opt-out', async () => {
+    const dir = scratch();
+    mkdirSync(join(dir, 'store'), { recursive: true });
+    writeFileSync(join(dir, 'store', 'schedule.json'), 'not json');
+    calls.length = 0;
+    // Nothing registered yet: the query fails, then the create succeeds.
+    const install: InstallRuntime = {
+      ...runtimeIn(dir, 0, 'win32'),
+      schtasks: (args) => {
+        calls.push(args);
+        return Promise.resolve({ code: args[0] === '/Query' ? 1 : 0, output: '' });
+      },
+    };
+    await sessionsHookInstall({ ...withStore(dir), install }, { ...plain, file: join(dir, 's.json') });
+    expect(calls.map((args) => args[0])).toEqual(['/Query', '/Create']);
+  });
 });
 
 describe('oars sessions hook (CLI)', () => {
