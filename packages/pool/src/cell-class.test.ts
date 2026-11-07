@@ -30,7 +30,7 @@ describe('a value against its list', () => {
   });
 });
 
-const motifOf = (id: string, identity: StepIdentity): Motif => ({ motifId: id, level: 'named', steps: [{ action: 'shell.run', identity }], cls: null });
+const motifOf = (id: string, identity: StepIdentity): Motif => ({ motifId: id, level: 'named', steps: [{ action: 'shell.exec', identity }], cls: null });
 const git = (flags: string[] = [], sub: string | null = 'status'): StepIdentity => ({ program: 'git', sub, flags });
 const cellOf = (motifId: string, frameBucket: string, clusters: number): Cell => ({ motifId, frameBucket, grain: 'day', day: '2026-11-01', sessions: clusters, clusters, ok: clusters, failed: 0, tokens: 0, durationMs: 0, exposed: false });
 
