@@ -388,14 +388,16 @@ describe('parseSkeleton refuses, and names the field', () => {
 
   // The harness list is the schema's `Harness` union: a skeleton from a harness missing from it is refused whole, so each name needs a pass here.
   it('accepts a skeleton from every harness the schema names', () => {
-    const natives: [Harness, string][] = [['claude-code', 'Bash'], ['cursor', 'run_terminal_cmd'], ['codex', 'exec_command'], ['copilot', 'bash'], ['gemini', 'run_shell_command'], ['grok', 'run_terminal_cmd'], ['vscode-copilot', 'run_in_terminal']];
+    const natives: [Harness, string][] = [['claude-code', 'Bash'], ['cursor', 'run_terminal_cmd'], ['codex', 'exec_command'], ['copilot', 'bash'], ['gemini', 'run_shell_command'], ['grok', 'run_terminal_cmd'], ['pi', 'bash'], ['vscode-copilot', 'run_in_terminal']];
     for (const [harness, native] of natives) {
       const raw = withStep({ native });
       if (!isHolder(raw)) throw new Error('the sample is not an object');
       const transcripts: unknown = Reflect.get(raw, 'transcripts');
       if (!Array.isArray(transcripts) || !isHolder(transcripts[0])) throw new Error('the sample has no transcript');
       Reflect.set(transcripts[0], 'harness', harness);
+      // `refusedField` alone would pass for a harness missing from the list: an unlisted name is kept as `other`, not refused, so the verdict is what shows it.
       expect(refusedField(raw), harness).toBe('accepted');
+      expect(verdictOf(raw), harness).toBe('accepted');
     }
   });
 });

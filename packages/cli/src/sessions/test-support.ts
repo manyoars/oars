@@ -390,3 +390,35 @@ export const stageGrok = (root: string, files: readonly GrokFixture[]): string =
   }
   return home;
 };
+
+/**
+ * One Pi session-file line (badlogic/pi-mono @ 085c84e, packages/coding-agent/docs/session-format.md:49-59): every entry but the header is
+ * `{type, id, parentId, timestamp}` plus its own fields.
+ */
+export const piEntry = (type: string, id: string, parentId: string | null, timestamp: string, rest: object = {}): { [key: string]: unknown } => ({ type, id, parentId, timestamp, ...rest });
+
+/** The header, first line of every file (session-format.md:64-76); `version` is the file-format version, not Pi's. */
+export const piHeader = (over: object = {}): { [key: string]: unknown } => ({ type: 'session', version: 3, id: 'sess', timestamp: '2026-06-01T10:00:00.000Z', cwd: '/work/app', ...over });
+
+export interface PiFixture {
+  /** The session id: the part of the file name after the timestamp. */
+  id: string;
+  /** The working directory the header names; the folder name above the file is derived from it as Pi does. */
+  cwd: string;
+  /** Lines as objects (the header first), or raw text for a torn file. */
+  lines: readonly unknown[] | string;
+}
+
+/**
+ * A Pi agent folder holding the given sessions under `sessions/--<cwd>--/<timestamp>_<id>.jsonl` (session-format.md:10-14; the folder name is
+ * session-manager.ts:593); returns the agent folder, which is always under `root`.
+ */
+export const stagePi = (root: string, files: readonly PiFixture[]): string => {
+  const home = join(root, 'pi-home');
+  for (const file of files) {
+    const dir = join(home, 'sessions', `--${file.cwd.replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `2026-06-01T10-00-00-000Z_${file.id}.jsonl`), typeof file.lines === 'string' ? file.lines : `${file.lines.map((line) => JSON.stringify(line)).join('\n')}\n`);
+  }
+  return home;
+};

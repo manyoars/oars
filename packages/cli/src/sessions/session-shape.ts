@@ -44,6 +44,8 @@ const PERMISSION_MODES: { readonly [harness in Harness]: ReadonlySet<string> } =
   cursor: new Set(),
   // Grok Build's reader reads no mode (its `current_mode_update` carries one, but this reader does not read it), so no value is documented to keep.
   grok: new Set(),
+  // Pi has no permission modes: its tools run as the user, and a session records none.
+  pi: new Set(),
 };
 
 /**
@@ -62,6 +64,8 @@ const COMPLETE: { readonly [harness in Harness]: { readonly interrupts: boolean;
   cursor: { interrupts: false, rejections: false, denials: false, timing: false },
   // Grok Build's reader writes the prompts and replies with their line times (seconds), and reads no cancel, tool refusal, or hook denial.
   grok: { interrupts: false, rejections: false, denials: false, timing: true },
+  // Pi's reader writes the prompts and the responses with their entry times, and reads no interrupt, refusal, or denial: an aborted call is a tool error and no more.
+  pi: { interrupts: false, rejections: false, denials: false, timing: true },
 };
 
 export type TrustEventKind = 'interrupt' | 'rejection' | 'denial';
