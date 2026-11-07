@@ -10,6 +10,7 @@ import { defaultConfigDir, fileCredentialStore } from './credentials.js';
 import { cursorRoot } from './sessions/cursor.js';
 import { claudeEvaluator, runClaude } from './sessions/gold-arms.js';
 import { SOURCES } from './sessions/sources.js';
+import { spawnDetachedSend } from './telemetry/send.js';
 
 /** The version in this package's package.json (one folder up from dist/). */
 const readVersion = (): string => {
@@ -28,7 +29,7 @@ process.exitCode = await run(process.argv.slice(2), {
     stderr: (text) => process.stderr.write(text),
   },
   store: fileCredentialStore(configDir),
-  telemetry: { dir: join(configDir, 'oars', 'telemetry'), platform: process.platform },
+  telemetry: { dir: join(configDir, 'oars', 'telemetry'), platform: process.platform, spawnSend: spawnDetachedSend },
   version: readVersion(),
   sleep: (ms) => sleep(ms),
   random: Math.random,

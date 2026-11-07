@@ -17,6 +17,11 @@ describe('wrangler.jsonc', () => {
     expect(databases).toEqual([{ binding: 'DB', database_name: 'oars-pool', migrations_dir: 'migrations' }]);
   });
 
+  it('binds the telemetry record and index by name, with no resource id', () => {
+    expect(fieldOf(parsed, 'r2_buckets')).toEqual([{ binding: 'TELEMETRY', bucket_name: 'oars-telemetry' }]);
+    expect(fieldOf(parsed, 'analytics_engine_datasets')).toEqual([{ binding: 'TELEMETRY_EVENTS', dataset: 'oars_telemetry' }]);
+  });
+
   it('holds nothing shaped like an id or a key', () => {
     expect(text).not.toMatch(/[0-9a-f]{32}/i);
     expect(text).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/i);

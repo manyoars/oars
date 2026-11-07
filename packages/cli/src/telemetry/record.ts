@@ -7,6 +7,8 @@ export interface TelemetryRuntime {
   /** `<config>/oars/telemetry`. */
   dir: string;
   platform: NodeJS.Platform;
+  /** Starts the detached send (`spawnDetachedSend`); only `main.ts` supplies it, so a run without one never sends. */
+  spawnSend?: (dir: string) => void;
 }
 
 export interface RecordContext extends TelemetryRuntime {
