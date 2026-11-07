@@ -355,7 +355,7 @@ by an unwrapped argv, is read. No harness is guessed at: a bucket that needs a r
 | Copilot CLI | `none` | `none` | `session.error` and `abort` are not read. |
 | Grok Build | `none` | `none` | No event names a stop. |
 
-A harness that cannot show a stop reads its prompts as the table above says, as before `user-stop` existed. **The limit:** a Codex or Gemini decline reads `user-stop` for `intervention` and leaves `stopped` null, so the books and the gold arms (which read `stopped`) do not count it. Only a decline in the fixed text counts: a Codex `write_stdin rejected: <reason>` is the approval policy's, and a call that failed is `after-error`, as before.
+A harness that cannot show a stop reads its prompts as the table above says, as before `user-stop` existed. **What `stopped` means:** it records a turn the user ended, in every harness, and the split is by event, not by harness. A Codex `turn_aborted` with reason `interrupted` is that event, so it sets `stopped` `interrupt` as Claude Code's marker does; a decline (Codex or Gemini) rejects one call and the turn goes on, so it leaves `stopped` null. **The limit:** a Codex or Gemini decline reads `user-stop` for `intervention` and leaves `stopped` null, so the books and the gold arms (which read `stopped`) do not count it. Only a decline in the fixed text counts: a Codex `write_stdin rejected: <reason>` is the approval policy's, and a call that failed is `after-error`, as before.
 
 ### Hashing
 

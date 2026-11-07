@@ -73,6 +73,28 @@ const skeletonsOf = (loaded: Awaited<ReturnType<typeof loadStore>>): SessionSkel
     return built;
   });
 
+type Loaded = Awaited<ReturnType<typeof loadStore>>;
+const countOf = (loaded: Loaded): { [bucket in PromptIntervention]: number } => {
+  const counts = { none: 0, 'after-error': 0, redo: 0, revert: 0, 'user-stop': 0, unknown: 0 };
+  for (const prompt of loaded.prompts) if (prompt.intervention !== undefined) counts[prompt.intervention] += 1;
+  return counts;
+};
+/** The few fields of a capture record the rewrite below reads or drops. */
+interface LogRecord {
+  kind: string;
+  cv?: string;
+  session?: string;
+  index?: number;
+  head?: string;
+  steps?: { identity: { target?: string } | null }[];
+}
+const isLogRecord = (value: unknown): value is LogRecord => typeof value === 'object' && value !== null && 'kind' in value && typeof value.kind === 'string';
+/**
+ * The store totals (20 prompts) over the staged store with the capture log as main left it (CAPTURE 20), read by EXTRACTOR 15: measured by running this test. Main's own EXTRACTOR 14 reads the two
+ * declines as `after-error` (none 5, after-error 2, revert 3, unknown 10, as the review expected), not run here because the old extractor is not in this tree.
+ */
+const MAIN_ERA: { [bucket in PromptIntervention]: number } = { none: 5, 'after-error': 0, redo: 0, revert: 3, 'user-stop': 2, unknown: 10 };
+
 const options = { allow: ['proj', 'codex', 'gemini'], redactDomains: [], now: () => NOW };
 
 describe('EXTRACTOR_VERSION 15 and CAPTURE_VERSION 21', () => {
@@ -81,14 +103,46 @@ describe('EXTRACTOR_VERSION 15 and CAPTURE_VERSION 21', () => {
     expect(Number(CAPTURE_VERSION)).toBeGreaterThanOrEqual(21);
   });
 
-  it('refreshes a store stamped as main left it, puts every session on the wire with none refused and extensions empty, and holds a listed intervention on every prompt', async () => {
+  it('refreshes a store as main left it (CAPTURE 20, EXTRACTOR 14), puts every session on the wire with none refused and extensions empty, and holds a listed intervention on every prompt', async () => {
     const s = staged();
     await deposit(s.runtime, options);
     const derived = paths(s.storeDir).derived;
-    // The store as main left it: `derived.json` stamped '14' (derived prompts are not stored, so the stamp is all that moves).
-    const asFourteen = readFileSync(derived, 'utf8').replaceAll(`"v":"${EXTRACTOR_VERSION}"`, '"v":"14"');
-    writeFileSync(derived, asFourteen);
-    expect(asFourteen).not.toContain(`"v":"${EXTRACTOR_VERSION}"`);
+    // The store as main left it: the stamp is '14' (derived prompts are not stored, so it is all that moves there), and the capture log is rewritten as CAPTURE 20 wrote it:
+    // every record is `cv` '20', a `git checkout` step has no `target` key, and a Codex `turn_aborted` has no marker prompt record.
+    writeFileSync(derived, readFileSync(derived, 'utf8').replaceAll(`"v":"${EXTRACTOR_VERSION}"`, '"v":"14"'));
+    const log = paths(s.storeDir).observations;
+    const dropped = { markers: 0, targets: 0, rewritten: 0 };
+    const kept: string[] = [];
+    const later = new Map<string, number>();
+    for (const line of readFileSync(log, 'utf8').split('\n').filter((entry) => entry !== '')) {
+      const record: unknown = JSON.parse(line);
+      if (!isLogRecord(record)) throw new Error('a capture record has no kind');
+      if (record.kind === 'user-prompt' && record.session === `codex-${CODEX}` && typeof record.head === 'string' && record.head.startsWith('[Request interrupted by user')) {
+        dropped.markers += 1;
+        later.set(record.session, 1);
+        continue;
+      }
+      if (record.kind === 'user-prompt' && typeof record.session === 'string' && later.has(record.session) && typeof record.index === 'number') record.index -= 1;
+      for (const step of record.steps ?? []) {
+        if (step.identity !== null && step.identity.target !== undefined) {
+          delete step.identity.target;
+          dropped.targets += 1;
+        }
+      }
+      if (record.cv === CAPTURE_VERSION) {
+        record.cv = '20';
+        dropped.rewritten += 1;
+      }
+      kept.push(JSON.stringify(record));
+    }
+    writeFileSync(log, `${kept.join('\n')}\n`);
+    // The rewrite did something on each count, so the store below is not the CAPTURE 21 store restamped.
+    expect(dropped.markers).toBe(1);
+    expect(dropped.targets).toBe(4);
+    expect(dropped.rewritten).toBeGreaterThan(0);
+    const before = await loadStore(s.storeDir);
+    expect(before.tools.every((tool) => Number(tool.cv) <= 20)).toBe(true);
+    expect(countOf(before)).toEqual(MAIN_ERA);
 
     await refresh(s.runtime, [], '2026-06-10T00:00:00.000Z');
     expect(readFileSync(derived, 'utf8')).not.toContain('"v":"14"');
@@ -125,9 +179,7 @@ describe('EXTRACTOR_VERSION 15 and CAPTURE_VERSION 21', () => {
   it('counts the buckets over the staged store, for the report', async () => {
     const s = staged();
     await deposit(s.runtime, options);
-    const counts = new Map<PromptIntervention, number>();
-    for (const prompt of (await loadStore(s.storeDir)).prompts) if (prompt.intervention !== undefined) counts.set(prompt.intervention, (counts.get(prompt.intervention) ?? 0) + 1);
-    // Store totals over `fixtures/proj` plus the eight added sessions (21 prompts). At main's versions the same transcripts read none 5, after-error 2, revert 3, unknown 10 (20 prompts: no Codex marker record), worked out from the rules, not run.
-    expect(Object.fromEntries(PROMPT_INTERVENTIONS.map((bucket) => [bucket, counts.get(bucket) ?? 0]))).toEqual({ none: 5, 'after-error': 0, redo: 0, revert: 2, 'user-stop': 3, unknown: 11 });
+    // Store totals over `fixtures/proj` plus the eight added sessions (21 prompts, the Codex marker record included). The same sessions with main's capture log are `MAIN_ERA` above (20 prompts).
+    expect(countOf(await loadStore(s.storeDir))).toEqual({ none: 5, 'after-error': 0, redo: 0, revert: 2, 'user-stop': 3, unknown: 11 });
   });
 });
