@@ -11,7 +11,7 @@ export const deriveRecoveryEdges: DeriveFamily = ({ pool }) => {
     const parts = cls === undefined || cls === null ? null : parseRecoveryClass(cls);
     return parts === null ? [] : [{ cell, ...parts }];
   });
-  // The denominator is the failures of the same action and code in the same frame bucket and week.
+  // The denominator is the failures of the same action and code in the same frame bucket and week, over the cells this pool holds. A bundle's pool holds served cells only (`bundleOf`), so no `of` sums a cell under the floor and subtraction reveals none; the local read has no floor and sums what it holds.
   const keyOf = ({ cell, code, failed }: { cell: Cell; code: string; failed: string }): string => `${cell.frameBucket}/${cell.day}/${code}/${failed}`;
   const failures = new Map([...groupBy(edges, keyOf)].map(([key, group]) => [key, total(group.map(({ cell }) => cell), (cell) => cell.failed)]));
   return edges.flatMap((edge) => {
