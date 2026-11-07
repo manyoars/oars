@@ -198,7 +198,7 @@ const fleetNumbers = (cell: OwnCell, fleet: FleetNumbers): string => (cell.kind 
 
 const cellLines = (cell: OwnCell, answered: boolean, floor: number): string[] => {
   const own = cell.kind === 'rate' ? `your rate ${percent(cell.rate ?? 0)}` : numbersOf(cell);
-  const lines = [`  ${cell.metric} (${cell.dimension} ${cell.value})  n=${String(cell.n)}  ${own}`];
+  const lines = [`  ${cell.metric} (${cell.dimension === 'harnessVersion' ? 'harness/version' : cell.dimension} ${cell.value})  n=${String(cell.n)}  ${own}`];
   if (cell.fleet !== undefined) lines.push(`    ${fleetNumbers(cell, cell.fleet)}`);
   else if (answered) lines.push(`    fleet: not served (fewer than ${String(floor)} installs report this)`);
   return lines;
