@@ -459,9 +459,11 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
       continue;
     }
     const parsed = parseSkeleton(skeleton);
-    if (!parsed.ok) {
+    // The server reads a value outside its lists as `other` and keeps a field it does not know, so the parser no longer refuses either: the emitter is the privacy control, and a batch this client built holds neither.
+    const refusedAt = parsed.ok ? parsed.extensions[0]?.at : parsed.field;
+    if (!parsed.ok || refusedAt !== undefined) {
       counts.refused += 1;
-      refusedFields.add(parsed.field);
+      refusedFields.add(refusedAt ?? '');
       await withdraw(key);
       continue;
     }
