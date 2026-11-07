@@ -1,4 +1,4 @@
-// The staged-store round trip for EXTRACTOR 15 and CAPTURE 22 (t915, section 17 rule 7 of the direction conclusion): the fixtures that carry the three misreads (a checkout of a slashed or quoted branch, a checkout with an unlisted
+// The staged-store round trip for EXTRACTOR 15 and CAPTURE 23 (t915, section 17 rule 7 of the direction conclusion): the fixtures that carry the three misreads (a checkout of a slashed or quoted branch, a checkout with an unlisted
 // path flag, and a Codex or Gemini decline or interrupt), staged into a temp store with the repo's fixtures, a store stamped as main left it (EXTRACTOR 14) refreshed, and every session put on the wire and parsed back.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -97,10 +97,10 @@ const MAIN_ERA: { [bucket in PromptIntervention]: number } = { none: 5, 'after-e
 
 const options = { allow: ['proj', 'codex', 'gemini'], redactDomains: [], now: () => NOW };
 
-describe('EXTRACTOR_VERSION 15 and CAPTURE_VERSION 22', () => {
+describe('EXTRACTOR_VERSION 15 and CAPTURE_VERSION 23', () => {
   it('are the versions that read a checkout by its target class and a Codex or Gemini decline as a stop', () => {
     expect(Number(EXTRACTOR_VERSION)).toBeGreaterThanOrEqual(15);
-    expect(Number(CAPTURE_VERSION)).toBeGreaterThanOrEqual(22);
+    expect(Number(CAPTURE_VERSION)).toBeGreaterThanOrEqual(23);
   });
 
   it('refreshes a store as main left it (CAPTURE 21, EXTRACTOR 14), puts every session on the wire with none refused and extensions empty, and holds a listed intervention on every prompt', async () => {
@@ -136,7 +136,7 @@ describe('EXTRACTOR_VERSION 15 and CAPTURE_VERSION 22', () => {
       kept.push(JSON.stringify(record));
     }
     writeFileSync(log, `${kept.join('\n')}\n`);
-    // The rewrite did something on each count, so the store below is not the CAPTURE 22 store restamped.
+    // The rewrite did something on each count, so the store below is not the CAPTURE 23 store restamped.
     expect(dropped.markers).toBe(1);
     expect(dropped.targets).toBe(4);
     expect(dropped.rewritten).toBeGreaterThan(0);

@@ -171,12 +171,12 @@ const CHECKOUT_MOVES = new Set(['<literal>', '-b', '-B', '--orphan', '--detach']
 const ASKS_UNDO = /^(?:please )?(?:revert|undo|roll ?back)\b/i;
 
 /** The capture version that keeps a `git checkout` step's `target` class. */
-const TARGET_CLASS_CAPTURE = 22;
+const TARGET_CLASS_CAPTURE = 23;
 
 /** Whether the segment at index `at` is a checkout that moves to a branch: the step with the same `seg` holds the flags that the segment drops (the stored step no longer holds `run`). */
 const movesBranch = (tool: ToolObservation, at: number): boolean => {
   const steps = tool.steps?.filter(({ seg }) => seg === at).map(({ identity }) => identity).filter((identity) => identity !== null && 'program' in identity) ?? [];
-  // From CAPTURE 22 the step names the class of what the checkout acts on: a proved path is an undo whatever the flags, and an unproved word is never one. Before it, only the flags tell.
+  // From CAPTURE 23 the step names the class of what the checkout acts on: a proved path is an undo whatever the flags, and an unproved word is never one. Before it, only the flags tell.
   if (Number(tool.cv) >= TARGET_CLASS_CAPTURE) {
     if (steps.some((identity) => identity.target === 'path')) return false;
     if (steps.some((identity) => identity.target === 'word')) return true;

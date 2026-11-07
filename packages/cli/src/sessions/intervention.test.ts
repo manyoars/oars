@@ -242,7 +242,7 @@ const checkoutStep = (prompt: number, flags: string[], cv?: string, target?: 'pa
   steps: [{ n: 0, seg: 0, action: 'shell.exec', native: 'Bash', identity: { program: 'git', sub: 'checkout', flags, ...(target === undefined ? {} : { target }) }, status: 'ok', cost: { tokens: null, durationMs: null }, parent: null, edges: [], frameId: 'f' }],
 });
 
-describe('a checkout captured before CAPTURE 22 keeps its old reading', () => {
+describe('a checkout captured before CAPTURE 23 keeps its old reading', () => {
   it('reads a bare checkout with no flag as revert, a branch switch included: the step has no target to say otherwise', () => {
     expect(derived(['a', 'b'], [edit(0), checkoutStep(1, [], '20')])[0]).toBe('revert');
   });
@@ -251,9 +251,9 @@ describe('a checkout captured before CAPTURE 22 keeps its old reading', () => {
     expect(derived(['a', 'b'], [edit(0), checkoutStep(1, ['<literal>'], '20')])[0]).toBe('none');
   });
 
-  it('reads the target class from CAPTURE 22: word is none, path is revert even beside an unlisted flag', () => {
-    expect(derived(['a', 'b'], [edit(0), checkoutStep(1, [], '22', 'word')])[0]).toBe('none');
-    expect(derived(['a', 'b'], [edit(0), checkoutStep(1, ['<literal>'], '22', 'path')])[0]).toBe('revert');
+  it('reads the target class from CAPTURE 23: word is none, path is revert even beside an unlisted flag', () => {
+    expect(derived(['a', 'b'], [edit(0), checkoutStep(1, [], '23', 'word')])[0]).toBe('none');
+    expect(derived(['a', 'b'], [edit(0), checkoutStep(1, ['<literal>'], '23', 'path')])[0]).toBe('revert');
   });
 });
 
@@ -266,12 +266,12 @@ describe('a git undo read from a real command line', () => {
     expect(fromCommandLine(command)).toBe('revert');
   });
 
-  // The segment drops a flag, so `git checkout -b feature/x` and `git checkout -` leave the bare pair that `git checkout -- <path>` leaves; the step's flags tell them apart (`<literal>` for `-`, `-b` for a create). Any other flag off the public list is also `<literal>` and reads `none`; a path-only flag (`--ours`, `--patch`) is a path from CAPTURE 22.
+  // The segment drops a flag, so `git checkout -b feature/x` and `git checkout -` leave the bare pair that `git checkout -- <path>` leaves; the step's flags tell them apart (`<literal>` for `-`, `-b` for a create). Any other flag off the public list is also `<literal>` and reads `none`; a path-only flag (`--ours`, `--patch`) is a path from CAPTURE 23.
   it.each(['git checkout -', 'git checkout -b feature/x', 'git checkout -B feature/x', 'git checkout --detach'])('`%s` moves to a branch and undoes no work: none', (command) => {
     expect(fromCommandLine(command)).toBe('none');
   });
 
-  // CAPTURE 22 keeps the target class: `--` or a path-only flag proves a path; a dropped word (a slash, quotes) with no proof is a `word`, which is never an undo.
+  // CAPTURE 23 keeps the target class: `--` or a path-only flag proves a path; a dropped word (a slash, quotes) with no proof is a `word`, which is never an undo.
   it.each(['git checkout -- src/a.ts', 'git checkout --ours src/a.ts', 'git checkout --theirs -- src/a.ts', 'git checkout --patch src/a.ts', 'git checkout --patch', 'git checkout -p src/a.ts'])('`%s` names a path: revert', (command) => {
     expect(fromCommandLine(command)).toBe('revert');
   });
