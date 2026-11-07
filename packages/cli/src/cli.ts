@@ -17,7 +17,7 @@ import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
 import { poolCoverage, poolDeposit, poolFetch, poolLogin, poolOutbox } from './sessions/pool-command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
-import { telemetryOff, telemetryOn, telemetryShow, telemetryStatus } from './telemetry/command.js';
+import { telemetryOff, telemetryOn, telemetryReport, telemetryShow, telemetryStatus } from './telemetry/command.js';
 import { recordCrash } from './telemetry/crash.js';
 import { emitOf } from './telemetry/emit.js';
 import { finishTelemetry, observeCommand, type Observed } from './telemetry/observe.js';
@@ -540,7 +540,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
       emit(deps, flag(options, 'json'), await poolFetch(deps, { server: text(options, 'server'), harness: text(options, 'harness'), harnessVersion: text(options, 'harnessVersion') ?? '' }));
     });
 
-  const telemetry = program.command('telemetry').description('what oars records about its own use, on this machine (docs/telemetry.md): status, on, off, and show');
+  const telemetry = program.command('telemetry').description('what oars records about its own use, on this machine (docs/telemetry.md): status, on, off, show, and report');
   const telemetryJson = (command: Command): boolean => flag(command.optsWithGlobals(), 'json');
 
   telemetry
@@ -569,6 +569,13 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .description('print the spool exactly as stored: every event telemetry has kept, oldest first')
     .action((_options: OptionValues, command: Command) => {
       emit(deps, telemetryJson(command), telemetryShow(deps));
+    });
+
+  telemetry
+    .command('report')
+    .description('your own hook latency, hit rates, and store health over the last 7 and 30 days, from the spool, beside the fleet\'s when OARS_POOL_URL names a pool server that answers')
+    .action(async (_options: OptionValues, command: Command) => {
+      emit(deps, telemetryJson(command), await telemetryReport(deps));
     });
 
   return program;
