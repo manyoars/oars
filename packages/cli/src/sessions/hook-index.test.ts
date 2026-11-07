@@ -380,13 +380,13 @@ ${formatStepCounters(stepCounters(await readSteps(staged.storeDir)))}`);
 describe('the call shapes in the index', () => {
   const SHAPE = toolShapeId('Monitor', ['query']);
   const calls = (name: string) =>
-    Array.from({ length: 10 }, (_, n) => toolRow(name, n, 'Monitor', { ts: '2026-11-01T00:00:00.000Z', status: n < 2 ? 'error' : 'ok', keys: ['query'], durationMs: 5, toolUseId: `${name}-${String(n)}`, harnessVersion: '2.1.300', prompt: 0 }));
+    Array.from({ length: 10 }, (_, n) => toolRow(name, n, 'Monitor', { ts: '2026-11-01T00:00:00.000Z', status: n < 6 ? 'error' : 'ok', keys: ['query'], durationMs: 5, toolUseId: `${name}-${String(n)}`, harnessVersion: '2.1.300', prompt: 0 }));
   // Calls of a tool no action table lists that never fail, so `Monitor` (action `other`) has a base rate to beat.
   const quiet = Array.from({ length: 100 }, (_, n) => toolRow('q', n, 'Quiet', { ts: '2026-11-01T00:00:00.000Z', status: 'ok', keys: ['x'], durationMs: 5, toolUseId: `q-${String(n)}`, harnessVersion: '2.1.300', prompt: 0 }));
   const indexOver = (names: readonly string[]) => buildIndex({ sessions: [], prompts: [], errors: [], subagents: [], tools: [...names.flatMap(calls), ...quiet], newerCaptures: 0 }, [], '2026-11-02T00:00:00.000Z');
 
   it('holds a shape over the fit floors by its shape ID', () => {
-    expect(indexOver(['a', 'b', 'c']).fit?.[SHAPE]).toMatchObject({ family: 'fit', tool: 'Monitor', keys: ['query'], n: 3, count: 6, calls: 30 });
+    expect(indexOver(['a', 'b', 'c']).fit?.[SHAPE]).toMatchObject({ family: 'fit', tool: 'Monitor', keys: ['query'], n: 3, count: 18, calls: 30 });
   });
 
   it('leaves out a shape under them', () => {
@@ -400,44 +400,54 @@ describe('the call shapes in the index', () => {
     const sessions = ['a', 'b', 'c'];
 
     it('drops a shape that fails only a little more than its action does, though it is over the floors', () => {
-      // 20 percent and 15 percent over two shell shapes: the action's share is 21 of 130, so neither reaches twice it.
-      const fit = over([...sessions.flatMap((name) => shaped(name, 'PowerShell', ['command'], 10, 2)), ...shaped('d', 'PowerShell', ['command', 'timeout'], 100, 15)]);
+      // Half of 30 calls fail, over the push floors, but the action's share is 45 of 130 (35 percent), and half is not twice that.
+      const fit = over([...sessions.flatMap((name) => shaped(name, 'PowerShell', ['command'], 10, 5)), ...shaped('d', 'PowerShell', ['command', 'timeout'], 100, 30)]);
       expect(fit).toEqual({});
+    });
+
+    it('does not push a broad shell shape that fails about a third of its calls whatever the command (t757: a base rate, not a warning)', () => {
+      // 51 of 150 calls fail, 34 percent, in three sessions: over the pull floors and over twice the action's share (51 of 550), as the two broad shell shapes were on the operator's store.
+      const ok = shaped('d', 'PowerShell', ['pattern'], 400, 0);
+      const broad = sessions.flatMap((name) => shaped(name, 'PowerShell', ['command', 'timeout'], 50, 17));
+      expect(over([...ok, ...broad])).toEqual({});
+      // The same shape failing more often than not is the call's own defect, and is pushed.
+      const defect = sessions.flatMap((name) => shaped(name, 'PowerShell', ['command', 'timeout'], 50, 30));
+      expect(Object.keys(over([...ok, ...defect]))).toEqual([toolShapeId('PowerShell', ['command', 'timeout'])]);
     });
 
     it('keeps a shape that fails at twice its action share or more, in the same action', () => {
       const broad = shaped('d', 'PowerShell', ['command', 'timeout'], 100, 15);
       const sharp = sessions.flatMap((name) => shaped(name, 'PowerShell', ['pattern'], 7, 5));
-      // Over the floors at 20 percent, but under twice the action's 24 percent.
-      const middling = sessions.flatMap((name) => shaped(name, 'PowerShell', ['command'], 10, 2));
+      // Over the floors at half, but under twice the action's 30 percent (45 of 151).
+      const middling = sessions.flatMap((name) => shaped(name, 'PowerShell', ['command'], 10, 5));
       const fit = over([...broad, ...sharp, ...middling]);
       expect(Object.keys(fit)).toEqual([toolShapeId('PowerShell', ['pattern'])]);
     });
 
     it('holds Monitor, whose action is other, to the share of other, unlisted tools included', () => {
       const quiet = shaped('d', 'Quiet', ['x'], 200, 0);
-      const sharp = sessions.flatMap((name) => shaped(name, 'Monitor', ['query'], 10, 2));
+      const sharp = sessions.flatMap((name) => shaped(name, 'Monitor', ['query'], 10, 6));
       expect(Object.keys(over([...quiet, ...sharp]))).toEqual([SHAPE]);
     });
 
     it('holds a failing tool no action table lists to the same share of other', () => {
       const quiet = shaped('d', 'Quiet', ['x'], 200, 0);
       const unlisted = toolShapeId('Mystery', ['x']);
-      const sharp = sessions.flatMap((name) => shaped(name, 'Mystery', ['x'], 10, 2));
-      // 6 of 230 other calls fail, so 20 percent is far over twice the action's share.
+      const sharp = sessions.flatMap((name) => shaped(name, 'Mystery', ['x'], 10, 6));
+      // 18 of 230 other calls fail, so 60 percent is far over twice the action's share.
       expect(Object.keys(over([...quiet, ...sharp]))).toEqual([unlisted]);
-      // With Monitor failing as often, the action's share is 20 percent too, and neither shape is twice it.
-      const alike = sessions.flatMap((name) => shaped(name, 'Monitor', ['query'], 10, 2));
+      // With Monitor failing as often, the action's share is 60 percent too, and neither shape is twice it.
+      const alike = sessions.flatMap((name) => shaped(name, 'Monitor', ['query'], 10, 6));
       expect(over([...sharp, ...alike])).toEqual({});
     });
 
     it('requires exactly twice the share: a tie fires, one failure fewer does not', () => {
-      // The action holds 2 shapes: base is (6 + 4) of (30 + 70) = 0.10; twice is 0.20.
-      const tie = sessions.flatMap((name) => shaped(name, 'PowerShell', ['pattern'], 10, 2));
-      const rest = shaped('d', 'PowerShell', ['command'], 70, 4);
+      // The action holds 2 shapes: base is (15 + 15) of (30 + 90) = 0.25; twice is 0.50, the shape's share.
+      const tie = sessions.flatMap((name) => shaped(name, 'PowerShell', ['pattern'], 10, 5));
+      const rest = shaped('d', 'PowerShell', ['command'], 90, 15);
       expect(Object.keys(over([...tie, ...rest]))).toEqual([toolShapeId('PowerShell', ['pattern'])]);
-      const under = sessions.flatMap((name, at) => shaped(name, 'PowerShell', ['pattern'], 10, at === 0 ? 1 : 2));
-      expect(over([...under, ...rest])).toEqual({});
+      // One more failure elsewhere in the action lifts its share past half of the shape's.
+      expect(over([...tie, ...shaped('d', 'PowerShell', ['command'], 90, 16)])).toEqual({});
     });
   });
 });
