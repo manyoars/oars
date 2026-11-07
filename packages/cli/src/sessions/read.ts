@@ -62,7 +62,7 @@ export interface ReadSlice {
   [axis: string]: string;
 }
 
-/** What a read says. Names and numbers only: a read never holds a path, a prompt, or an error's text. A local read names only what capture keeps (the public lists, else `<literal>`); a read derived from the pool's cells can also name a long-tail program, server, or skill, which the pool serves only once the floor's accounts report it. */
+/** What a read says. Names and numbers only: a read never holds a path, a prompt, or an error's text. A local read can name a long-tail program or native tool name (taken from the call's segments, through the open gate, which keeps the name shape but not your redaction or exclusion terms), and a pool read can also name a long-tail server or skill, which the pool serves only at the floor. */
 export interface ReadValue {
   [metric: string]: number | string | null | { [name: string]: number };
 }

@@ -1,4 +1,4 @@
-// t900 (conclusion section 17 rule 7): old and new clients both deposit. `pool-wire-old-client.json` holds the skeletons the client at oars main c87f3da (t881) built from the stores below: an off-list program went with
+// t900 (conclusion section 17 rule 7): old and new clients both deposit. `pool-wire-old-client.json` holds the skeletons the client at oars main c87f3da (t881) built from two staged stores (not kept here): an off-list program went with
 // `sub: null` and no flags, and a model or version the client's capture had closed read `<literal>` (the second test sets that form by hand). The parser at this branch reads each, refuses none, and sets nothing aside.
 import { describe, expect, it } from 'vitest';
 import { parseSkeleton } from './pool-wire.js';
