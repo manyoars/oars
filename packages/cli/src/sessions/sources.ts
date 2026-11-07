@@ -26,6 +26,11 @@ export interface SourceSession {
   mtimeMs: number;
   /** Set when the session is a spawned agent's: it is deposited as a subagent of its parent, so session counts stay main sessions. */
   subagent?: SubagentOrigin;
+  /**
+   * Set when a later read folded this session into another (`<id>` of that one): the deposit records the supersede for a session it already holds, with no transcript,
+   * and records nothing for one it never held. `size` and `mtimeMs` are 0, a cursor no read session has.
+   */
+  supersededBy?: string;
 }
 
 export interface SourceStore {
@@ -263,8 +268,11 @@ const otel: Source = {
     if (store === undefined) return undefined;
     const byId = new Map(store.sessions.map((session) => [session.id, session]));
     return {
-      sessions: store.sessions.map((session) => ({ id: session.id, folder: session.folder, size: session.size, mtimeMs: session.mtimeMs, ...(session.subagent === undefined ? {} : { subagent: session.subagent }) })),
-      transcript: (session) => store.transcript(need(byId.get(session.id))),
+      sessions: [
+        ...store.sessions.map((session) => ({ id: session.id, folder: session.folder, size: session.size, mtimeMs: session.mtimeMs, ...(session.subagent === undefined ? {} : { subagent: session.subagent }) })),
+        ...store.superseded.map((entry) => ({ id: entry.id, folder: null, size: 0, mtimeMs: 0, supersededBy: entry.by })),
+      ],
+      transcript: (session) => (session.supersededBy === undefined ? store.transcript(need(byId.get(session.id))) : ''),
       rejected: store.rejected,
       unreadable: store.unreadable,
       where: (session) => byId.get(session.id)?.file ?? root,
