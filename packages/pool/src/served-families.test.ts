@@ -4,7 +4,7 @@
 // stop landing in the bag.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { incrementsOf } from './ingest.js';
-import { parseSkeleton, skeletonOf, verifyBundle, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
+import { parseSkeleton, skeletonOf, verifyBundle, VOCAB_VERSION, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { CALL_SHAPE_METHOD } from '../../cli/src/sessions/read.js';
 import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from '../../cli/src/sessions/pool-fixture.js';
 import { sampleSkeleton } from './sample.js';
@@ -220,8 +220,9 @@ describe('the intervention outcome is held per prompt and served by nothing (t88
     await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
     expect((await pool.post('/v1/deposits', withIntervention(sampleSkeleton('0000000000006001'), 'revert'), token)).status).toBe(201);
     const db = await pool.db();
-    const stored = JSON.parse(String(await db.prepare('SELECT skeleton FROM deposits').first('skeleton'))) as SessionSkeleton;
-    expect(stored.transcripts.flatMap((transcript) => transcript.prompts.map((held) => held.intervention))).toEqual(['revert']);
+    const stored = parseSkeleton(JSON.parse(String(await db.prepare('SELECT skeleton FROM deposits').first('skeleton'))));
+    if (!stored.ok) throw new Error(`stored skeleton refused: ${stored.field}`);
+    expect(stored.skeleton.transcripts.flatMap((transcript) => transcript.prompts.map((held) => held.intervention))).toEqual(['revert']);
     expect(String(await db.prepare('SELECT extensions FROM deposits').first('extensions'))).toBe('[]');
   });
 
