@@ -241,6 +241,20 @@ describe.each(BUILDERS)('%s', (harness, build) => {
   });
 });
 
+describe('codex, command sent wrapped in bash -lc', () => {
+  const edit: Turn = { text: 'add a field', acts: [{ edit: 'src/a.ts' }] };
+
+  it('still reads the git undo when its script holds a single quote', async () => {
+    const turns: Turn[] = [edit, { text: 'put it back', acts: [{ run: `echo "it's"; git revert HEAD`, exit: 0 }] }];
+    expect(await interventions('codex', codexWith(true), turns)).toEqual(['revert', 'unknown']);
+  });
+
+  it('reads a wrapped empty script as no undo and no crash', async () => {
+    const turns: Turn[] = [edit, { text: 'put it back', acts: [{ run: '', exit: 0 }] }];
+    expect(await interventions('codex', codexWith(true), turns)).toEqual(['none', 'unknown']);
+  });
+});
+
 describe('codex, command sent as a plain argv', () => {
   it('sees the git undo once the command is not wrapped', async () => {
     const turns: Turn[] = [{ text: 'add a field', acts: [{ edit: 'src/a.ts' }] }, { text: 'put it back', acts: [{ run: 'git revert HEAD', exit: 0 }] }];
