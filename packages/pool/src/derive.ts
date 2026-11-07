@@ -26,7 +26,7 @@ export const K_CELL = 5;
 
 /**
  * The floor a cell is served at, by its class (`cell-class.ts`): a `clear` cell names only values on a public list, a `thresholded` one names a value off it (or a hash). Both are `K_CELL` today, because the cell floor is spec Section 8's account count
- * and a cell below it shows how few accounts did a thing; serving a clear cell below `K_CELL` is a decision for the owner and a change to `CLEAR_FLOOR` here, with no client release. The complement and denominator rules are written for the thresholded floor.
+ * and a cell below it shows how few accounts did a thing; serving a clear cell below `K_CELL` is a decision for the owner and a change to `CLEAR_FLOOR` here, with no client release, for the version cells. The version-free environment cells stay at `K_CELL` whatever `CLEAR_FLOOR` is: `stored.ts` reads them (and their motifs) only at `K_CELL`, because the rule that withholds an environment total beside a sub-floor part (`ENVIRONMENT_CELLS`) is written for the thresholded floor, so lowering the clear floor below `K_CELL` does not serve a clear environment cell without a change there too. The complement and denominator rules are written for the thresholded floor.
  */
 export interface Floors {
   readonly clear: number;
