@@ -764,9 +764,9 @@ describe('oars pool deposit', () => {
       });
 
       /** Rewrites every stored session record, the way an older capture or a damaged store would hold it. */
-      const rewriteSessions = (scene: Scene, change: (session: { frame?: { model?: unknown } }) => void): void => {
+      const rewriteSessions = (scene: Scene, change: (session: { frame?: { day?: unknown } }) => void): void => {
         const file = join(scene.staged.storeDir, 'observations.jsonl');
-        const isSession = (record: unknown): record is { kind: 'session'; frame?: { model?: unknown } } => at(record, 'kind') === 'session';
+        const isSession = (record: unknown): record is { kind: 'session'; frame?: { day?: unknown } } => at(record, 'kind') === 'session';
         const lines = readFileSync(file, 'utf8').split('\n').filter((text) => text !== '').map((text) => {
           const record: unknown = JSON.parse(text);
           if (isSession(record)) change(record);
@@ -786,7 +786,7 @@ describe('oars pool deposit', () => {
       it('a session the vocabulary now refuses', async () => {
         const { scene, hash } = await built();
         rewriteSessions(scene, (session) => {
-          if (session.frame !== undefined) session.frame.model = 'acme-private-llm';
+          if (session.frame !== undefined) session.frame.day = 'tomorrow';
         });
         await expectWithdrawn(scene, hash);
       });
@@ -949,8 +949,8 @@ ${user('and goes on')}
     await signIn(scene);
     const file = join(scene.staged.storeDir, 'observations.jsonl');
     const original = readFileSync(file, 'utf8');
-    const isSession = (record: unknown): record is { kind: 'session'; frame?: { model?: unknown } } => at(record, 'kind') === 'session';
-    const rewrite = (change: (session: { frame?: { model?: unknown } }) => void): void => {
+    const isSession = (record: unknown): record is { kind: 'session'; frame?: { day?: unknown } } => at(record, 'kind') === 'session';
+    const rewrite = (change: (session: { frame?: { day?: unknown } }) => void): void => {
       const lines = original.split('\n').filter((line) => line !== '').map((line) => {
         const record: unknown = JSON.parse(line);
         if (isSession(record)) change(record);
@@ -967,13 +967,13 @@ ${user('and goes on')}
     expect(counted).toMatchObject({ batched: 0, uncaptured: at(counted, 'sessions') });
 
     rewrite((session) => {
-      if (session.frame !== undefined) session.frame.model = 'acme-private-llm';
+      if (session.frame !== undefined) session.frame.day = 'tomorrow';
     });
     scene.h.out.length = 0;
     expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
     expect(outboxFiles(scene)).toEqual([]);
-    expect(scene.h.out.join('')).toContain('refused by the vocabulary (transcripts[0].frame.model)');
-    expect(scene.h.out.join('')).not.toContain('acme-private-llm');
+    expect(scene.h.out.join('')).toContain('refused by the vocabulary (transcripts[0].frame.day)');
+    expect(scene.h.out.join('')).not.toContain('tomorrow');
     expect(scene.seen).toEqual([]);
   });
 });
