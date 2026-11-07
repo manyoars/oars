@@ -39,7 +39,7 @@ export type Git = (root: string, args: readonly string[], stdin?: string) => Pro
 
 export const survivalFile = (storeDir: string): string => join(storeDir, 'commit-survival.jsonl');
 
-const runGit: Git = (root, args, stdin) =>
+export const runGit: Git = (root, args, stdin) =>
   new Promise((resolve, reject) => {
     const child = execFile(
       'git',
@@ -168,7 +168,7 @@ const cwdIn = async (file: string, project: string): Promise<string | undefined>
   }
 };
 
-const cwdOfProject = async (runtime: SessionsRuntime, project: string, sessions: ReadonlySet<string>): Promise<string | undefined> => {
+export const cwdOfProject = async (runtime: Pick<SessionsRuntime, 'projectsRoot' | 'storeDir'>, project: string, sessions: ReadonlySet<string>): Promise<string | undefined> => {
   for (const session of sessions) {
     for (const root of [runtime.projectsRoot, paths(runtime.storeDir).raw]) {
       const found = await cwdIn(join(root, project, `${session}.jsonl`), project);
