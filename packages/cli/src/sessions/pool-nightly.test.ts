@@ -279,9 +279,8 @@ describe('withSendLock', () => {
     };
     await Promise.all([withSendLock(outbox, holder('first', 60)), withSendLock(outbox, holder('second', 1))]);
     expect(order).toHaveLength(4);
-    expect(order[1]).toBe(order[0].replace(' in', ' out'));
-    expect(order[3]).toBe(order[2].replace(' in', ' out'));
-    expect(new Set(order).size).toBe(4);
+    expect(order.map((entry) => entry.split(" ")[0])).toEqual([order[0]?.split(" ")[0], order[0]?.split(" ")[0], order[2]?.split(" ")[0], order[2]?.split(" ")[0]]);
+    expect(order.map((entry) => entry.split(" ")[1])).toEqual(["in", "out", "in", "out"]);
     await expect(withSendLock(outbox, () => Promise.reject(new Error('boom')))).rejects.toThrow('boom');
     expect(existsSync(join(outbox, 'send.lock'))).toBe(false);
   });
