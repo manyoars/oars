@@ -39,8 +39,8 @@ const fetched = async (target: TestPool, token: string): Promise<{ reads: number
 };
 
 /** An account that deposits one session per repo key: `keys` of them, so its repo-key set is `keys`. The same sessions go in whatever the account, so they are the same cells. */
-const depositor = async (target: TestPool, id: string, keys: readonly string[]): Promise<string> => {
-  const { token } = await target.signIn('github', stubUser(id));
+const depositor = async (target: TestPool, id: string, keys: readonly string[], fresh = false): Promise<string> => {
+  const { token } = await target.signIn('github', stubUser(id), { fresh });
   await target.post('/v1/covenant/accept', { version: 'v1' }, token);
   for (const [at, key] of keys.entries()) {
     expect((await target.post('/v1/deposits', withRepoKey(sampleSkeleton(`${String(at)}${id}`.padStart(16, '0')), key), token)).status).toBe(201);
@@ -76,6 +76,45 @@ describe('the count a floor compares', () => {
       expect(reads).toBeGreaterThan(0);
       expect(clusters).toHaveLength(reads);
       expect(clusters.every((count) => count === 5)).toBe(true);
+    });
+  }, 180_000);
+});
+
+describe('the floor counts standing accounts (S13, t958)', () => {
+  it('keeps a cell below PUBLIC_FLOOR 5 when four fresh accounts and one account that has stood deposit it, so four free accounts cannot probe a guessed name', async () => {
+    await inFreshPool(async (target) => {
+      const tokens: string[] = [];
+      for (const id of ['9401', '9402', '9403', '9404', '9405']) tokens.push(await depositor(target, id, [id.padStart(16, 'f')], id !== '9401'));
+      // Five accounts hold each cell and, unrelated, were five clusters before this change; one has stood.
+      expect(await heldClusters(target)).toEqual([1]);
+      expect(await fetched(target, tokens[0] ?? '')).toEqual({ reads: 0, cells: 0, clusters: [] });
+    });
+  }, 180_000);
+
+  it('serves a cell once five unrelated accounts that have stood hold it', async () => {
+    await inFreshPool(async (target) => {
+      const ids = ['9411', '9412', '9413', '9414', '9415'];
+      const tokens: string[] = [];
+      for (const id of ids) tokens.push(await depositor(target, id, [id.padStart(16, 'f')]));
+      expect(await heldClusters(target)).toEqual([5]);
+      expect((await fetched(target, tokens[0] ?? '')).reads).toBeGreaterThan(0);
+    });
+  }, 180_000);
+
+  it('counts an account whose first counting batch is 90 days old at its next deposit, without the latch, and not one a day short', async () => {
+    await inFreshPool(async (target) => {
+      const ids = ['9421', '9422', '9423', '9424', '9425'];
+      const tokens: string[] = [];
+      for (const id of ids) tokens.push(await depositor(target, id, [id.padStart(16, 'f')], id === '9425'));
+      expect(await heldClusters(target)).toEqual([4]);
+      const db = await target.db();
+      const day = 24 * 60 * 60 * 1000;
+      await db.prepare('UPDATE deposits SET counted_at = ? WHERE account = (SELECT id FROM accounts WHERE access IS NOT \'standing\')').bind(Date.now() - 89 * day).run();
+      expect((await target.post('/v1/deposits', withRepoKey(sampleSkeleton('00000000000000aa'), KEY_A), tokens[4] ?? '')).status).toBe(201);
+      expect(await heldClusters(target)).toEqual([4]);
+      await db.prepare('UPDATE deposits SET counted_at = ? WHERE account = (SELECT id FROM accounts WHERE access IS NOT \'standing\')').bind(Date.now() - 91 * day).run();
+      expect((await target.post('/v1/deposits', withRepoKey(sampleSkeleton('00000000000000ab'), KEY_A), tokens[4] ?? '')).status).toBe(201);
+      expect(await heldClusters(target)).toEqual([5]);
     });
   }, 180_000);
 });

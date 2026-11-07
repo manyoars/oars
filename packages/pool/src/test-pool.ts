@@ -191,7 +191,8 @@ export interface TestPool {
   get: (path: string, token?: string) => Promise<Answer>;
   raw: (path: string, token?: string, headers?: { [name: string]: string }) => Promise<RawAnswer>;
   /** The sign-in the CLI performs through the pool's two login routes, with the provider's approval given at the stub between them. */
-  signIn: (provider: string, user: StubUser) => Promise<{ token: string; account: string; signingKey: unknown }>;
+  /** Signs the stub user in. The account has stood unless `fresh`: the floor counts only accounts that have (S13), so a test that serves a cell needs holders that have, and a test of the fetch cap or of what a fresh account does passes `fresh: true`. */
+  signIn: (provider: string, user: StubUser, options?: { fresh?: boolean }) => Promise<{ token: string; account: string; signingKey: unknown }>;
   stub: StubProvider;
   signingKey: () => { kty: string; crv: string; x: string };
   dispose: () => Promise<void>;
@@ -274,11 +275,12 @@ export const startPool = async (bindings: { [name: string]: string } = {}, optio
     get,
     raw,
     stub,
-    signIn: async (provider, user) => {
+    signIn: async (provider, user, options = {}) => {
       const started = await post('/v1/login/start', { provider });
       const issued = /USER-(\d+)/.exec(textOf(started.json, 'userCode'))?.[1];
       stub.approve(`device-${issued ?? ''}`, user);
       const signedIn = await post('/v1/login/poll', { handle: textOf(started.json, 'handle') });
+      if (options.fresh !== true) await (await db()).prepare("UPDATE accounts SET access = 'standing' WHERE id = ?").bind(textOf(signedIn.json, 'account')).run();
       return { token: textOf(signedIn.json, 'token'), account: textOf(signedIn.json, 'account'), signingKey: fieldOf(signedIn.json, 'signingKey') };
     },
     signingKey: () => ({ kty: 'OKP', crv: 'Ed25519', x: key.x }),
