@@ -8,12 +8,14 @@ import { noEmit, type Emit } from '../telemetry/emit.js';
 import { frameWords, HOOK_HARNESS, recallFields } from '../telemetry/fields.js';
 import { cursorRoot } from './cursor.js';
 import { SOURCES, sourceLabel } from './sources.js';
-import { signatureOf } from './extract.js';
+import { ACTION_TABLES, actionOf } from './actions.js';
+import { errorCodeOf, signatureOf } from './extract.js';
 import { appendHookCall } from './hook-calls.js';
-import { contextBlock, readIndex } from './hook-index.js';
+import { contextBlock, readIndex, type HookIndex } from './hook-index.js';
 import type { Recall } from './recall-object.js';
-import { pushRecall } from './recall-push.js';
-import { statedAt } from './transcript-tail.js';
+import { bundleNext, frameKeyOf, lastTable, mergePositions, positionsRecall, recoveryDecision, recoveryRecall, signatureRecall, isSignatureRetry, type Asker, type NextInput, type NextReads } from './recall-next.js';
+import { pushRecall, tailOf } from './recall-push.js';
+import { statedAt, statedOf } from './transcript-tail.js';
 import { toolShapeId } from './recall-reads.js';
 import { makeRedactor } from './redact.js';
 import type { HookCall } from './schema.js';
@@ -24,7 +26,7 @@ import type { NightlyTelemetry } from '../telemetry/health.js';
 
 export type HookEvent = HookCall['event'];
 
-export const HOOK_EVENTS: readonly HookEvent[] = ['session-start', 'pre-tool', 'post-tool', 'stop', 'nightly'];
+export const HOOK_EVENTS: readonly HookEvent[] = ['session-start', 'prompt', 'pre-tool', 'post-tool', 'stop', 'nightly'];
 
 const TOP = 5;
 const MAX_CHARS = 1200;
@@ -62,12 +64,52 @@ interface Outcome {
   model?: string;
 }
 
-const sessionStart = async (runtime: SessionsRuntime, input: Input): Promise<Outcome> => {
+/** What a next-node read needs of the hook's input: the session, the transcript's tail (version, model), and the clock; undefined when the harness gave no session, since the holdback arm is the session's. */
+const nextInputOf = async (runtime: SessionsRuntime, input: Input, now: () => number): Promise<{ next: NextInput; asker: Asker } | undefined> => {
+  const sid = str(input.session_id);
+  if (sid === undefined) return undefined;
+  const transcript = str(input.transcript_path);
+  const tail = transcript === undefined ? '' : await tailOf(transcript);
+  const { harnessVersion } = statedOf(tail);
+  return { next: { storeDir: runtime.storeDir, sid, tail, platform: process.platform, at: new Date(now()).toISOString() }, asker: { harness: HOOK_HARNESS, harnessVersion } };
+};
+
+/**
+ * The split-positions table (Item 3): the kept bundle's positions first, the local pool's second. A `repeat` read (UserPromptSubmit) goes out only when the table differs from
+ * the one this session was last sent, shown or held, so a held session and a shown one hear the same number of times.
+ */
+const positionsTable = async (runtime: SessionsRuntime, input: Input, now: () => number, index: HookIndex | undefined, repeat: boolean): Promise<Recall | undefined> => {
+  const prepared = await nextInputOf(runtime, input, now);
+  if (prepared === undefined) return undefined;
+  const bundle = await bundleNext(runtime.storeDir, prepared.asker);
+  const positions = mergePositions(bundle?.positions ?? [], index?.positionsByFrame?.[frameKeyOf(prepared.asker)] ?? []);
+  if (positions.length === 0) return undefined;
+  const previous = repeat ? await lastTable(runtime.storeDir, prepared.next.sid) : undefined;
+  return positionsRecall(prepared.next, prepared.asker, positions, bundle?.poolVersion ?? index?.at ?? '', previous);
+};
+
+const sessionStart = async (runtime: SessionsRuntime, input: Input, now: () => number): Promise<Outcome> => {
   const cwd = str(input.cwd);
-  const index = cwd === undefined ? undefined : await readIndex(runtime.storeDir);
+  const index = await readIndex(runtime.storeDir);
   const block = index === undefined || cwd === undefined ? undefined : contextBlock(index, { cwd, top: TOP, maxChars: MAX_CHARS });
+  const recall = await positionsTable(runtime, input, now, index, false);
   const model = str(input.model);
-  return block === undefined ? { hit: false, queried: index !== undefined, ...(model === undefined ? {} : { model }) } : { output: additional('SessionStart', block), hit: true, queried: true, ...(model === undefined ? {} : { model }) };
+  const shown = recall?.arm === 'shown' ? recall.answer.rendered : undefined;
+  const text = [block, shown].filter((part) => part !== undefined).join('\n\n');
+  return {
+    hit: text !== '' || recall !== undefined,
+    queried: index !== undefined || recall !== undefined,
+    ...(text === '' ? {} : { output: additional('SessionStart', text) }),
+    ...(recall === undefined ? {} : { recall }),
+    ...(model === undefined ? {} : { model }),
+  };
+};
+
+/** UserPromptSubmit: the positions table again, only when it changed since this session's last one. */
+const prompt = async (runtime: SessionsRuntime, input: Input, now: () => number): Promise<Outcome> => {
+  const recall = await positionsTable(runtime, input, now, await readIndex(runtime.storeDir), true);
+  if (recall === undefined) return { hit: false, queried: false };
+  return recall.arm === 'shown' ? { output: additional('UserPromptSubmit', recall.answer.rendered), hit: true, queried: true, recall } : { hit: true, queried: true, recall };
 };
 
 const inputKeys = (input: Input): string[] => (isRecord(input.tool_input) ? Object.keys(input.tool_input) : []);
@@ -95,17 +137,33 @@ const failureText = (input: Input): string | undefined => {
   return response !== undefined && /^Exit code \d+/.test(response) ? response : undefined;
 };
 
-const postTool = async (runtime: SessionsRuntime, input: Input): Promise<Outcome> => {
+/**
+ * The recovery edge (Item 2): what followed a failure of this action and error class, from the kept bundle for the session's setup and then the local pool, held to A33's
+ * holdback like every next-node read. A same-step retry or a local edge under the floor says nothing, signature line included; the signature line answers only a failure no cell covers.
+ */
+const postTool = async (runtime: SessionsRuntime, input: Input, now: () => number): Promise<Outcome> => {
   const tool = str(input.tool_name);
   const text = failureText(input);
-  if (tool === undefined || text === undefined) return { hit: false, queried: false };
+  const prepared = tool === undefined || text === undefined ? undefined : await nextInputOf(runtime, input, now);
+  if (tool === undefined || text === undefined || prepared === undefined) return { hit: false, queried: false };
   const index = await readIndex(runtime.storeDir);
-  if (index === undefined) return { hit: false, queried: false };
-  const found = index.signatures[signatureOf(tool, text, makeRedactor(index.redactDomains))];
-  if (found === undefined) return { hit: false, queried: true };
-  const followed = found.followed.map(([next]) => next).join(', ');
-  const context = `oars recall: seen in ${String(found.sessions)} sessions; what followed: ${followed === '' ? 'nothing recorded' : followed}`;
-  return { output: additional(str(input.hook_event_name) ?? 'PostToolUseFailure', context), hit: true, queried: true };
+  const bundle: NextReads | undefined = await bundleNext(runtime.storeDir, prepared.asker);
+  if (index === undefined && bundle === undefined) return { hit: false, queried: false };
+  const action = actionOf(ACTION_TABLES['claude-code'], tool).action;
+  const code = errorCodeOf(text);
+  const decision = recoveryDecision(bundle, index === undefined ? undefined : { recovery: index.recoveryByFrame?.[frameKeyOf(prepared.asker)] ?? {}, poolVersion: index.at }, action, code);
+  const event = str(input.hook_event_name) ?? 'PostToolUseFailure';
+  if (decision.kind === 'serve') {
+    const recall = await recoveryRecall(prepared.next, prepared.asker, action, code, decision);
+    return recall.arm === 'shown' ? { output: additional(event, recall.answer.rendered), hit: true, queried: true, recall } : { hit: true, queried: true, recall };
+  }
+  // A same-step retry, a local cell too thin to serve, and a cell whose top is that nothing followed all end the lookup: a cell that exists but says nothing is not a reason to fall back to a signature count.
+  if (decision.kind === 'retry' || decision.kind === 'floor' || decision.kind === 'ended') return { hit: false, queried: true };
+  const sig = signatureOf(tool, text, makeRedactor(index?.redactDomains ?? []));
+  const found = index?.signatures[sig];
+  if (index === undefined || found === undefined || isSignatureRetry(tool, found)) return { hit: false, queried: true };
+  const recall = await signatureRecall(prepared.next, prepared.asker, tool, sig, found, index.at);
+  return recall.arm === 'shown' ? { output: additional(event, recall.answer.rendered), hit: true, queried: true, recall } : { hit: true, queried: true, recall };
 };
 
 const stop = async (runtime: SessionsRuntime, input: Input, now: () => number): Promise<Outcome> => {
@@ -172,6 +230,7 @@ const lookupKey = (event: HookEvent, input: Input): string | null => {
     const cwd = str(input.cwd);
     return cwd === undefined ? null : stampKey(event, cwd);
   }
+  if (event === 'prompt') return stampKey(event, 'positions');
   const tool = str(input.tool_name);
   if (event === 'pre-tool') return tool === undefined ? null : stampKey(event, toolShapeId(tool, inputKeys(input)));
   const text = failureText(input);
@@ -227,9 +286,10 @@ export const runHook = async (
     transcript = str(input.transcript_path);
     key = lookupKey(event, input);
     session = str(input.session_id) ?? null;
-    if (event === 'session-start') outcome = await sessionStart(runtime, input);
+    if (event === 'session-start') outcome = await sessionStart(runtime, input, now);
+    else if (event === 'prompt') outcome = await prompt(runtime, input, now);
     else if (event === 'pre-tool') outcome = await preTool(runtime, input, now);
-    else if (event === 'post-tool') outcome = await postTool(runtime, input);
+    else if (event === 'post-tool') outcome = await postTool(runtime, input, now);
     else if (event === 'stop') outcome = await stop(runtime, input, now);
     else outcome = await nightly(runtime, now, telemetry);
   } catch (thrown) {
@@ -258,7 +318,7 @@ export const runHook = async (
     // The nightly is the scheduled task, not a harness's hook: it names no harness.
     ...frameWords(event === 'nightly' ? undefined : recall?.frame?.harness ?? HOOK_HARNESS, recall?.frame?.harnessVersion ?? stated?.harnessVersion, recall?.frame?.model ?? outcome.model ?? stated?.model),
   });
-  // A push is a recall: its read is the `fit` family, and its arm is the exposure record, as a count of one.
-  if (recall !== undefined) emit('recall', recallFields(recall, ['fit']));
+  // A push is a recall: its read is the family its query names (the `fit` push names none), and its arm is the exposure record, as a count of one.
+  if (recall !== undefined) emit('recall', recallFields(recall, [recall.query.family ?? 'fit']));
   return outcome.output;
 };

@@ -14,7 +14,7 @@ import { gateInstall, gatePolicy, gateReplay, gateReport, gateUninstall } from '
 import { DEADLINE_MS, gateHook } from './gate/hook.js';
 import { managerReader } from './gate/registry.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
-import { poolCoverage, poolDeposit, poolFetch, poolLogin, poolOutbox } from './sessions/pool-command.js';
+import { poolCoverage, poolDeposit, poolFetch, poolLogin, poolOutbox, poolRaw } from './sessions/pool-command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 import { telemetryOff, telemetryOn, telemetryReport, telemetryShow, telemetryStatus } from './telemetry/command.js';
@@ -390,7 +390,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
 
   hook
     .command('install')
-    .description('merge the SessionStart, PostToolUseFailure, and SessionEnd hooks into a settings file (existing hooks are kept) and raise cleanupPeriodDays to at least 365')
+    .description('merge the SessionStart, UserPromptSubmit, PreToolUse, PostToolUseFailure, and SessionEnd hooks into a settings file (existing hooks are kept) and raise cleanupPeriodDays to at least 365')
     .option('--scope <scope>', 'user (~/.claude/settings.json; the default), project (./.claude/settings.json), or file (needs --file; implied by --file)', scopeOption)
     .option('--file <path>', 'the settings file for --scope file')
     .option('--keep-retention', 'leave cleanupPeriodDays as it is (the harness deletes raw transcripts older than it)')
@@ -508,6 +508,17 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       emit(deps, flag(options, 'json'), await poolDeposit(deps, { server: text(options, 'server'), acceptCovenant: text(options, 'acceptCovenant'), send: text(options, 'send') }));
+    });
+
+  pool
+    .command('raw')
+    .description('the raw prompt: whether a redacted copy of each full transcript may leave besides its skeleton (--consent yes|no), and what one folder may send (--folder <folder> --mode all|skeleton|off); with no option, shows the prompt and your answer')
+    .option('--consent <answer>', 'yes or no; a no, or no answer, sends skeletons only')
+    .option('--folder <entry>', 'a folder, folder prefix, or glob, as --allow takes it')
+    .option('--mode <mode>', 'all, skeleton, or off for that folder: on by default after you accept; skeleton sends no raw; off sends nothing from now on')
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await poolRaw(deps, { consent: text(options, 'consent'), folder: text(options, 'folder'), mode: text(options, 'mode') }));
     });
 
   pool
