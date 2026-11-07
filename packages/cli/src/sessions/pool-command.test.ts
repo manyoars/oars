@@ -517,6 +517,12 @@ const outboxFiles = (scene: Scene): string[] => {
   return existsSync(root) ? readdirSync(root, { recursive: true, encoding: 'utf8' }).filter((name) => name.endsWith('.jsonl')).sort() : [];
 };
 
+/** Empties every `sent.log` under the outbox, for a test that posts one batch again to read how the second post ends; the skip of a sent hash is tested on its own. */
+const forgetSent = (scene: Scene): void => {
+  const root = join(scene.staged.storeDir, 'pool-outbox');
+  for (const name of readdirSync(root, { recursive: true, encoding: 'utf8' })) if (name.endsWith('sent.log')) rmSync(join(root, name));
+};
+
 const batchBytes = (scene: Scene): string[] => outboxFiles(scene).map((name) => readFileSync(join(scene.staged.storeDir, 'pool-outbox', name), 'utf8'));
 
 /** The hash `oars pool outbox` printed for each batch, in the order printed. */
@@ -1116,10 +1122,12 @@ describe('oars pool deposit --send', () => {
     }
     expect(posts.map((request) => request.body).join('')).toBe(bytes);
     // A part answered 201 means the deposit finished already, so the parts after it are not sent.
+    forgetSent(scene);
     const finished = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201, { ok: true }) });
     await poolDeposit(scene.h.deps, sendOptions(hash, finished.via));
     expect(finished.requests.filter((request) => request.method === 'POST')).toHaveLength(1);
     // A last part that is not 201, and a middle part that is neither 202 nor 201, are refusals.
+    forgetSent(scene);
     const refused = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': [answer(202, { ok: true }), answer(202, { ok: true }), answer(400, { error: 'part_mismatch', message: 'no' })] });
     await expect(poolDeposit(scene.h.deps, sendOptions(hash, refused.via))).rejects.toMatchObject({ problem: { status: 400 } });
     const early = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(500, { error: 'boom', message: 'no' }) });
@@ -1207,6 +1215,18 @@ describe('oars pool deposit --send', () => {
     expect(scene.seen.map((entry) => new URL(entry.url).pathname)).toEqual(['/v1/covenant', '/v1/covenant/accept', '/v1/deposits']);
   });
 
+  it('skips a hash already in sent.log, as the nightly does: one line, exit 0, one POST over two runs', async () => {
+    const scene = await batched();
+    const hash = await printedAndHash(scene);
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201, { ok: true }) });
+    const first = await poolDeposit(scene.h.deps, sendOptions(hash, pool.via));
+    expect(first.document).toMatchObject({ ok: true, sent: true, hash });
+    const second = await poolDeposit(scene.h.deps, sendOptions(hash, pool.via));
+    expect(second.document).toMatchObject({ ok: true, sent: false, hash });
+    expect(second.text).toMatch(new RegExp(`^already sent ${hash} at \\d{4}-\\d{2}-\\d{2}T[\\d:.]+Z$`));
+    expect(pool.requests.filter((request) => request.method === 'POST')).toHaveLength(1);
+  });
+
   it('sends a deposit again when the pool answers deposit_conflict, and does not count it as a refusal', async () => {
     const scene = await batched();
     const hash = await printedAndHash(scene);
@@ -1254,6 +1274,7 @@ describe('oars pool deposit --send', () => {
     expect(accepting.requests.find((request) => request.url.pathname === '/v1/covenant/accept')?.body).toBe(JSON.stringify({ version: 'v1' }));
     expect(accepting.requests.at(-1)?.url.pathname).toBe('/v1/deposits');
 
+    forgetSent(scene);
     const stale = wire({ 'GET /v1/covenant': answer(200, { version: 'v2', accepted: false }), 'POST /v1/covenant/accept': answer(409, { error: 'covenant_version', message: 'The current covenant is v2.' }) });
     await expect(poolDeposit(scene.h.deps, { ...sendOptions(hash, stale.via), acceptCovenant: 'v1' })).rejects.toMatchObject({ exitCode: ExitCode.UNEXPECTED });
     expect(stale.requests.map((request) => request.url.pathname)).toEqual(['/v1/covenant', '/v1/covenant/accept']);
@@ -2136,6 +2157,7 @@ describe('wire policing in telemetry', () => {
     const hash = await printedAndHash(scene);
     const taken = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201, { ok: true }) });
     await poolDeposit(scene.h.deps, sendOptions(hash, taken.via));
+    forgetSent(scene);
     const refused = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(429, { error: 'rate_limited', message: 'Slow down.' }) });
     await expect(poolDeposit(scene.h.deps, sendOptions(hash, refused.via))).rejects.toMatchObject({ problem: { code: 'rate_limited' } });
     const bytes = Buffer.byteLength(batchBytes(scene)[0] ?? '');
@@ -2160,6 +2182,7 @@ describe('wire policing in telemetry', () => {
     // Not one event per part: three would triple the weekly sent bytes the health report reads.
     expect(spooled(dir, 'wire-send').map((event) => event.data)).toEqual([{ sent: 1, status: 201, bytes: Buffer.byteLength(bytes) }]);
     // A first part that is refused ends the batch there: one event, with that status.
+    forgetSent(scene);
     const refused = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(500, { error: 'boom', message: 'no' }) });
     await expect(poolDeposit(scene.h.deps, sendOptions(hash, refused.via))).rejects.toMatchObject({ problem: { status: 500 } });
     expect(refused.requests.filter((request) => request.method === 'POST')).toHaveLength(1);
