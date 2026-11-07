@@ -1399,7 +1399,8 @@ describe('oars pool fetch', () => {
     // The signature holds and the version is right: only the missing `floor` is wrong, so a bundle that does not say what floor the pool applied is not served as a read.
     const payload = bundleBody('2.1.314').replace('"floor":5,', '');
     expect(payload).not.toContain('floor');
-    on(scene, 'get', `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, async () => HttpResponse.json({ payload, signature: await sign(payload) }));
+    const signature = await sign(payload);
+    on(scene, 'get', `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, () => HttpResponse.json({ payload, signature }));
     expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.INVALID);
     expect(scene.document()).toMatchObject({ problem: { code: 'bundle_unverified' } });
     expect(replicas(scene)).toEqual([]);
