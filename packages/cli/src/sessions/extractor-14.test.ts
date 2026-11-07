@@ -34,7 +34,7 @@ describe('EXTRACTOR_VERSION 14', () => {
     expect(Number(EXTRACTOR_VERSION)).toBeGreaterThanOrEqual(14);
   });
 
-  it('re-derives a store written at 13, where a stop read unknown, and every session of it builds, parses with none refused or extended, and holds a listed intervention on every prompt', async () => {
+  it('restamps a store written at 13 on refresh (derived prompts are not stored, so the stamp is all that moves), and the 14 derivation of every session builds, parses with none refused or extended, and holds a listed intervention on every prompt', async () => {
     const staged = stage();
     addProject(staged, 'proj', 'stops', STOPS);
     await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
@@ -44,7 +44,7 @@ describe('EXTRACTOR_VERSION 14', () => {
     writeFileSync(derived, asThirteen);
     expect(asThirteen).not.toContain(`"v":"${EXTRACTOR_VERSION}"`);
     rmSync(staged.projectsRoot, { recursive: true, force: true });
-    const stale = await loadStore(staged.storeDir); // a read derives from the log, so the 13-stamped file is not what this returns
+    const stale = await loadStore(staged.storeDir); // a read derives from the log under 14 whatever the file's stamp says, so this proves no 13-era value moved
     expect(stale.prompts.length).toBeGreaterThan(0);
 
     await refresh(staged.runtime, [], '2026-06-10T00:00:00.000Z');
