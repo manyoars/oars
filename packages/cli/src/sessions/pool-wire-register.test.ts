@@ -89,7 +89,7 @@ export const REGISTER_FIXTURE = {
       harness: 'claude-code',
       frame: { ...FRAME, reach: REACH },
       frames: [{ ...FRAME, reach: REACH }],
-      prompts: [{ cls: 'edit-verify', errors: 0, wallSec: 5, usage: { input: 1, cacheWrite: 2, cacheRead: 3, output: 4, thinking: 5 }, explore: 6, frame: FRAME }],
+      prompts: [{ cls: 'edit-verify', errors: 0, wallSec: 5, usage: { input: 1, cacheWrite: 2, cacheRead: 3, output: 4, thinking: 5 }, explore: 6, intervention: 'redo', frame: FRAME }],
       tools: [
         {
           side: false,
@@ -165,7 +165,7 @@ describe('the wire field register', () => {
     const total = [...fieldBytes(REGISTER_FIXTURE).values()].reduce((sum, bytes) => sum + bytes, 0);
     expect(total + envelopeBytes(REGISTER_FIXTURE)).toBe(Buffer.byteLength(canonicalBytes(REGISTER_FIXTURE), 'utf8'));
     expect(envelopeBytes(REGISTER_FIXTURE)).toBe(9);
-    expect(Buffer.byteLength(canonicalBytes(REGISTER_FIXTURE), 'utf8')).toBe(2_816);
+    expect(Buffer.byteLength(canonicalBytes(REGISTER_FIXTURE), 'utf8')).toBe(2_838);
     expect(fieldBytes({ a: [1, 2], b: { c: 'x' }, d: undefined }).get('a')).toBe(4 + 5);
     expect(fieldBytes({ a: [1, 2], b: { c: 'x' }, d: undefined }).get('b')).toBe(4 + 2);
     expect(fieldBytes({ a: [1, 2], b: { c: 'x' }, d: undefined }).get('c')).toBe(7);
