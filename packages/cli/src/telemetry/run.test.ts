@@ -165,7 +165,7 @@ describe('oars telemetry status and show', () => {
     expect(text).toContain('Telemetry is on (on by default).');
     expect(text).toContain('The notice has been shown.');
     expect(text).toMatch(/\d+ events \(\d+ bytes\)/);
-    expect(text).toContain('Events will be sent by a later release, to the Many Oars pool or the pool server you name');
+    expect(text).toContain('Events are sent to the Many Oars pool or the pool server in OARS_POOL_URL');
   });
 
   it('status names the switch that turned it off', async () => {

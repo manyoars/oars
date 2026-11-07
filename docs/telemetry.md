@@ -11,7 +11,12 @@
 
 ## What is sent, and when
 
-The events in the spool are what telemetry sends, unchanged: `oars telemetry show` prints them exactly as stored. They will be sent in batches by a later release, only while telemetry is on and the notice has been shown, to the Many Oars pool (`https://pool.manyoars.com`) or the pool server you name (`--server` or `OARS_POOL_URL`). This version records; the sender is a later release (the check it must call first is `telemetrySendAllowed` in `consent.ts`: off, or notice not yet shown, means nothing sends).
+The events in the spool are what telemetry sends, unchanged: `oars telemetry show` prints them exactly as stored. They are sent only while telemetry is on and the notice has been shown (`telemetrySendAllowed` in `consent.ts` is checked first: off, or notice not yet shown, means nothing sends), and only to the Many Oars pool (`https://pool.manyoars.com`) or the pool server named in `OARS_POOL_URL`, the setting `oars pool` reads. With none set, the events go to the Many Oars pool.
+
+- **When.** The nightly task sends, and a command you run sends at most once a day, from a detached process that your command does not wait for. A session hook (`oars gate hook`, and the session-start, pre-tool, post-tool, and stop events of `hook-bin.js`) never sends; `hook-bin.js` sends only for its `nightly` event. The once-a-day mark is `<config>/oars/telemetry/last-send`. The nightly task sees `OARS_POOL_URL` only if it is in your user environment, not only in one shell; otherwise it sends to the Many Oars pool.
+- **How.** Events go to `POST /v1/telemetry` in batches of at most 250, each request with a 10 second timeout and no redirects followed. The server keeps each batch whole and indexes its events (`docs/pool.md`, "Telemetry storage"); it stores no IP address or user agent.
+- **What clears the spool.** Only a 2xx answer clears the events that batch carried; a line written while the send ran stays. Any other answer, a timeout, or a refused connection keeps the spool as it was, and the next send tries again. Delivery is therefore at least once: a batch whose answer was lost is sent again, so a reader of the data dedupes on the install id and the event time.
+- **Stopping it.** `oars telemetry off`, `OARS_TELEMETRY=0`, or `DO_NOT_TRACK=1` stops sending as well as recording. There is no setting that stops only the sending: the events are the spool, and the spool is what is sent.
 
 ## Event types
 
