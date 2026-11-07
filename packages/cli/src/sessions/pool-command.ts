@@ -7,23 +7,27 @@ import { emitOf } from '../telemetry/emit.js';
 import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../errors.js';
 import { compileAllow } from './allow.js';
 import { makeCoverage, readCoverageSetting, writeCoverageSetting } from './coverage.js';
-import { checkSession, exclusionPaths, lastWritten, loadTerms, type Reason } from './exclusion.js';
-import { makeRedactor } from './redact.js';
+import { checkSession, exclusionPaths, lastWritten, loadTerms, transcriptFilesOf, type Reason } from './exclusion.js';
+import { localNames, makeRedactor, REDACTION_VERSION, redactTranscript } from './redact.js';
 import { recordSend, recordWire, newTally, tallyBatch } from '../telemetry/wire.js';
 import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, isMissing, lockedBatch, markShown, outboxFolder, partsOf, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
 import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type BundleFloors, type PinnedKey, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
 import { carriedDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
+import { rawAllowed, sendsOf } from './pool-choices.js';
+import { heldRaw, rawParts, removeRawExcept, writeRaw } from './pool-raw.js';
+import { SendLockBusy, withSendLock } from './pool-send-lock.js';
+import { markSent, sentLog } from './pool-sent.js';
 import { shellReader } from './projection.js';
 import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
 import { contentHash, FIRST_ORDER_FAMILIES } from './read.js';
-import { harnessOf as sessionHarness, type Harness } from './schema.js';
-import { loadStore, readRedactDomains, readSaved, readSkeletons, type SessionsRuntime } from './store.js';
+import { CAPTURE_VERSION, harnessOf as sessionHarness, type Harness } from './schema.js';
+import { loadStore, readRedactDomains, readSkeletons, readState, updatePoolChoices, type SessionsRuntime } from './store.js';
 import { runGit, type Git } from './survival.js';
 import { vocabulary } from './vocab-load.js';
 
 const LOGIN = 'pool-login';
-const DEPOSIT = 'pool-deposit';
+export const DEPOSIT = 'pool-deposit';
 const OUTBOX = 'pool-outbox';
 const POOL_DEPOSITS = '/v1/deposits';
 const FETCH = 'pool-fetch';
@@ -53,12 +57,12 @@ export const poolServer = (env: NodeJS.ProcessEnv, step: string, named?: string)
   return url.origin;
 };
 
-const runtimeOf = (deps: RunDeps): SessionsRuntime => {
+export const runtimeOf = (deps: RunDeps): SessionsRuntime => {
   if (deps.sessions === undefined) throw new CliError('The session store is not configured in this run.', ExitCode.UNEXPECTED, 'unexpected');
   return deps.sessions;
 };
 
-const textIn = (value: object, key: string): string | undefined => {
+export const textIn = (value: object, key: string): string | undefined => {
   const found: unknown = Reflect.get(value, key);
   return typeof found === 'string' && found !== '' ? found : undefined;
 };
@@ -68,7 +72,7 @@ const numberIn = (value: object, key: string): number | undefined => {
   return typeof found === 'number' && Number.isFinite(found) ? found : undefined;
 };
 
-const isObject = (value: unknown): value is object => typeof value === 'object' && value !== null;
+export const isObject = (value: unknown): value is object => typeof value === 'object' && value !== null;
 
 const keyOf = (value: unknown): PinnedKey | undefined => {
   if (!isObject(value)) return undefined;
@@ -122,7 +126,7 @@ export const loadSignIns = async (storeDir: string, step: string): Promise<SignI
   });
 };
 
-const signedIn = async (deps: RunDeps, storeDir: string, server: string, step: string): Promise<SignIn> => {
+export const signedIn = async (deps: RunDeps, storeDir: string, server: string, step: string): Promise<SignIn> => {
   const found = (await loadSignIns(storeDir, step)).find((entry) => entry.server === server);
   if (found === undefined || found.expiresAt <= deps.now()) throw new CliError(`Not signed in to ${server}. Run oars pool login first.`, ExitCode.AUTH, step);
   return found;
@@ -145,6 +149,11 @@ interface Call {
   ifNoneMatch?: string;
   /** Set for a command that prints what it sends: the print comes first, with these secrets masked. */
   show?: Masker;
+  /** A raw part is a PUT of bytes that are not JSON; every other call is a GET, or a POST when it has a body. */
+  method?: 'PUT';
+  type?: string;
+  /** Headers beyond the usual ones (the raw routes state their redaction and capture versions, and the raw consent). */
+  extra?: Array<[string, string]>;
 }
 
 /** How a request leaves this machine. The command line passes none, so a send goes over the network (`networkSender`); a test passes one to read what would leave. */
@@ -157,14 +166,15 @@ const outgoing = (deps: RunDeps, server: string, path: string, init: Call): Outg
   // Node's `fetch` writes `cache-control` and `pragma` itself whenever `if-none-match` is set, so they are named here to be printed.
   if (init.part !== undefined) headers.push(['oars-part', `${String(init.part.index)}/${String(init.part.count)}`], ['oars-batch', init.part.batch]);
   if (init.ifNoneMatch !== undefined) headers.push(['if-none-match', init.ifNoneMatch], ['cache-control', 'no-cache'], ['pragma', 'no-cache']);
+  headers.push(...(init.extra ?? []));
   const body = init.bytes ?? (init.body === undefined ? undefined : JSON.stringify(init.body));
-  if (body !== undefined) headers.push(['content-type', 'application/json']);
+  if (body !== undefined) headers.push(['content-type', init.type ?? 'application/json']);
   headers.push(...TRANSPORT_HEADERS);
-  return { method: body === undefined ? 'GET' : 'POST', url: new URL(path, server), headers, ...(body === undefined ? {} : { body }) };
+  return { method: init.method ?? (body === undefined ? 'GET' : 'POST'), url: new URL(path, server), headers, ...(body === undefined ? {} : { body }) };
 };
 
 /** One call to the pool. A redirect is an error: it could carry a batch or a token somewhere the checks on the named server never saw. */
-const ask = (deps: RunDeps, step: string, server: string, path: string, init: Call, via?: Sender): Promise<Reply> => {
+export const ask = (deps: RunDeps, step: string, server: string, path: string, init: Call, via?: Sender): Promise<Reply> => {
   const request = outgoing(deps, server, path, init);
   return via === undefined ? send(deps, step, request, init.show) : via(request);
 };
@@ -343,6 +353,10 @@ interface DepositCounts {
   batched: number;
   /** Sessions kept out by a session gate, by reason and by count only: never a folder name or a term. */
   excluded: { folder: number; term: number; noRaw: number; noTerms: number; unreadable: number };
+  /** Sessions in a folder switched off (`oars pool raw folder ... off`): nothing of them is built or queued. */
+  off: number;
+  /** The redacted raw copies queued (one per transcript), their bytes, and how many values the redactor masked in them. Counts only. */
+  raw: { copies: number; bytes: number; masked: number };
   /** Captured before steps and frames, or with a transcript that has no root, so it holds no closed reading to build. Re-capture would give it one. */
   uncaptured: number;
   /** Passed the gates but has a transcript, main or subagent, that gained a line within `session_idle_hours`: its batch waits until the session has ended. */
@@ -362,7 +376,7 @@ const excludedKey = (reason: Exclude<Reason, 'clean'>): keyof DepositCounts['exc
 const DEPOSIT_CONFLICT = 'deposit_conflict';
 const SEND_ATTEMPTS = 3;
 
-const vocabularyExpired = (deps: RunDeps): CliError | undefined => {
+export const vocabularyExpired = (deps: RunDeps): CliError | undefined => {
   if (!isVocabularyExpired(new Date(deps.now()))) return undefined;
   const title = `This oars is out of date: its vocabulary ${VOCAB_VERSION} was taken on ${VOCAB_SNAPSHOT_DATE}, over ${String(REGISTRY_MAX_AGE_DAYS)} days ago. Upgrade with npm install -g @manyoars/oars, then run oars pool deposit again. Your sessions stay on this machine.`;
   return new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code: 'vocabulary_expired', title, status: 409 });
@@ -380,23 +394,9 @@ const callsOf = (token: string, bytes: string, hash: string): Call[] => {
   return parts.map((piece, at) => ({ token, bytes: piece, ...(parts.length === 1 ? {} : { part: { index: at + 1, count: parts.length, batch: hash } }) }));
 };
 
-/** `deposit --send <hash>`: the lock, then the covenant (accepted here or before, or nothing is sent), then the request. The body is read and hashed again just before the request. */
-const sendBatch = async (deps: RunDeps, options: { outbox: string; server: string; token: string; hash: string; acceptCovenant: string | undefined; via: Sender | undefined }): Promise<Outcome> => {
-  const { outbox, server, token, hash } = options;
-  const via = options.via ?? networkSender(deps, DEPOSIT);
-  if (!/^[0-9a-f]{64}$/.test(hash)) throw usage('--send takes the SHA-256 that oars pool outbox printed: 64 hexadecimal characters.', DEPOSIT);
-  const locked = await lockedBatch(outbox, hash);
-  if (!locked.ok) {
-    const title = lockMessages[locked.code];
-    throw new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code: locked.code, title, status: 409 });
-  }
-  await openCovenant(deps, server, token, options.acceptCovenant, via);
-  const bytes = await unchangedBytes(locked.file, hash);
-  if (bytes === undefined) {
-    const title = lockMessages.batch_changed;
-    throw new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code: 'batch_changed', title, status: 409 });
-  }
-  // A batch past one request's bytes goes in parts, in order, each answered 202 until the last completes the deposit with 201. A part sent again is harmless, so the retry below covers every part alike.
+/** One batch to the pool: a batch past one request's bytes goes in parts, in order, each answered 202 until the last completes the deposit with 201. A part sent again is harmless, so the retry covers every part alike. */
+export const postBatch = async (deps: RunDeps, options: { server: string; token: string; bytes: string; hash: string; via: Sender }): Promise<void> => {
+  const { server, token, bytes, hash, via } = options;
   const calls = callsOf(token, bytes, hash);
   for (const [at, call] of calls.entries()) {
     let reply = await ask(deps, DEPOSIT, server, POOL_DEPOSITS, call, via);
@@ -411,7 +411,51 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
     if (ended) throw refusal(DEPOSIT, reply);
   }
   emitOf(deps)('deposit', { step: 'send', sent: 1, bytes: Buffer.byteLength(bytes) });
-  return { document: { ok: true, server, hash, sent: true }, text: `Sent batch ${hash} to ${server}.` };
+};
+
+/**
+ * One redacted raw copy to the pool: its parts by PUT, then the completion, which the pool checks against the SHA-256 in the path. Every request states the redaction and capture versions and that the person said yes to the raw prompt;
+ * the caller sends only for a person who did. A part sent again replaces itself, and one for an object that stands writes nothing, so a copy that failed halfway is sent again whole.
+ */
+export const postRaw = async (deps: RunDeps, options: { server: string; token: string; hash: string; body: string; bytes: number; via: Sender }): Promise<void> => {
+  const { server, token, hash, body, bytes, via } = options;
+  const extra: Array<[string, string]> = [['oars-redaction-version', REDACTION_VERSION], ['oars-capture-version', CAPTURE_VERSION], ['oars-raw-consent', 'granted']];
+  const parts = rawParts(body);
+  for (const [at, piece] of parts.entries()) {
+    const reply = await ask(deps, DEPOSIT, server, `/v1/raw/${hash}/parts/${String(at + 1)}`, { token, bytes: piece, method: 'PUT', type: 'application/x-ndjson', extra }, via);
+    if (reply.status !== 200) throw refusal(DEPOSIT, reply);
+  }
+  const done = await ask(deps, DEPOSIT, server, `/v1/raw/${hash}/complete`, { token, body: { parts: parts.length, bytes }, extra }, via);
+  if (done.status !== 200 && done.status !== 201) throw refusal(DEPOSIT, done);
+};
+
+const rawNote = (consent: string | null): string =>
+  consent === 'granted' ? '' : consent === 'declined' ? 'You answered no to the raw prompt; oars pool raw --consent yes changes it.' : 'None is queued until you answer the raw prompt with oars pool raw --consent yes.';
+
+/** `deposit --send <hash>`: the send lock the nightly task takes too, then a skip for a hash already in `sent.log`, then the batch lock, then the covenant (accepted here or before, or nothing is sent), then the request. The body is read and hashed again just before the request. */
+const sendBatch = async (deps: RunDeps, options: { outbox: string; server: string; token: string; hash: string; acceptCovenant: string | undefined; via: Sender | undefined }): Promise<Outcome> => {
+  const { outbox, server, token, hash } = options;
+  const via = options.via ?? networkSender(deps, DEPOSIT);
+  if (!/^[0-9a-f]{64}$/.test(hash)) throw usage('--send takes the SHA-256 that oars pool outbox printed: 64 hexadecimal characters.', DEPOSIT);
+  const refuse = (code: string, title: string): CliError => new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code, title, status: 409 });
+  try {
+    return await withSendLock(outbox, async () => {
+      // The rule the nightly follows: a hash `sent.log` holds is not posted again. Read under the lock, so two runs cannot both see it unsent.
+      const sentAt = (await sentLog(outbox)).get(hash);
+      if (sentAt !== undefined) return { document: { ok: true, server, hash, sent: false, sentAt }, text: `already sent ${hash} at ${sentAt}` };
+      const locked = await lockedBatch(outbox, hash);
+      if (!locked.ok) throw refuse(locked.code, lockMessages[locked.code]);
+      await openCovenant(deps, server, token, options.acceptCovenant, via);
+      const bytes = await unchangedBytes(locked.file, hash);
+      if (bytes === undefined) throw refuse('batch_changed', lockMessages.batch_changed);
+      await postBatch(deps, { server, token, bytes, hash, via });
+      await markSent(outbox, hash, deps.now());
+      return { document: { ok: true, server, hash, sent: true }, text: `Sent batch ${hash} to ${server}.` };
+    });
+  } catch (error) {
+    if (error instanceof SendLockBusy) throw refuse('send_locked', 'Another oars run is sending from this outbox. Try again in a minute.');
+    throw error;
+  }
 };
 
 /**
@@ -431,12 +475,15 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   const outbox = outboxFolder(runtime.storeDir, server);
   if (options.send !== undefined) return sendBatch(deps, { outbox, server, token, hash: options.send, acceptCovenant: options.acceptCovenant, via: options.via });
   const { terms } = exclusionPaths(runtime.projectsRoot, deps.env);
-  const allow = compileAllow((await readSaved(runtime.storeDir)).allow);
+  const saved = await readState(runtime.storeDir);
+  const names = localNames();
+  const allow = compileAllow(saved.allow);
   const discarded = await discardStale(outbox);
-  const counts: DepositCounts = { sessions: 0, batched: 0, excluded: { folder: 0, term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, uncaptured: 0, notEnded: 0, refused: 0, refusedFields: [], discarded, withdrawn: 0 };
+  const counts: DepositCounts = { sessions: 0, batched: 0, excluded: { folder: 0, term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, off: 0, raw: { copies: 0, bytes: 0, masked: 0 }, uncaptured: 0, notEnded: 0, refused: 0, refusedFields: [], discarded, withdrawn: 0 };
   // The one gate on a name: the operator's redactor and exclusion terms (t881). Everything else the pool classes itself.
   const gate: WireGate = { redact: makeRedactor(await readRedactDomains(runtime.storeDir)), terms: await loadTerms(terms) };
   const built = new Set<string>();
+  const rawKept = new Set<string>();
   // The bytes of the batches written in this pass: telemetry counts them, and the command's own document does not carry them.
   let builtBytes = 0;
   const wireTally = newTally();
@@ -447,6 +494,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   // A session that fails a gate loses its earlier batch at once, so a later throw in this pass cannot leave one in the outbox.
   const withdraw = async (key: string): Promise<void> => {
     counts.withdrawn += await removeBatchOf(outbox, key);
+    await removeRawExcept(outbox, new Set(), key);
   };
   for (const records of sessionsOf(await loadStore(runtime.storeDir), roots)) {
     counts.sessions += 1;
@@ -454,6 +502,12 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
     const key = contentHash([account, records.main.session]);
     if (!allow.allows(records.main.project)) {
       counts.excluded.folder += 1;
+      await withdraw(key);
+      continue;
+    }
+    // A folder switched off sends nothing from now on; what it sent before stays where it went.
+    if (sendsOf(saved.pool, records.main.project) === 'off') {
+      counts.off += 1;
       await withdraw(key);
       continue;
     }
@@ -494,6 +548,18 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
       continue;
     }
     builtBytes += (await writeBatch(outbox, key, parsed.skeleton)).bytes;
+    // The raw copy comes only after both gates and only with a yes to the raw prompt and a folder not at skeleton only: each transcript of the session, redacted here, before it is queued.
+    if (rawAllowed(saved.pool, records.main.project)) {
+      let place = 0;
+      for (const file of await transcriptFilesOf(runtime, records.main.project, records.main.session)) {
+        const redacted = redactTranscript(await readFile(file.path, 'utf8'), saved.redactDomains, names);
+        counts.raw.bytes += (await writeRaw(outbox, key, place, redacted.text)).bytes;
+        counts.raw.copies += 1;
+        counts.raw.masked += redacted.masked;
+        place += 1;
+      }
+      rawKept.add(key);
+    }
     tallyBatch(wireTally, parsed.skeleton);
     await markDeltasSent(outbox, delta?.marks ?? []);
     built.add(key);
@@ -501,6 +567,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   }
   // The batch of a session or account this store no longer holds goes too.
   counts.withdrawn += await removeBatchesExcept(outbox, built);
+  await removeRawExcept(outbox, rawKept);
   counts.refusedFields = [...refusedFields].sort();
   recordWire(deps, wireTally);
   const { folder, term, noRaw, noTerms, unreadable } = counts.excluded;
@@ -512,6 +579,8 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
     `Not built: ${String(counts.uncaptured)} captured before steps and frames or with no root, ${String(counts.notEnded)} not ended (a transcript gained a line within ${String(SESSION_IDLE_HOURS)} hours), ${String(counts.refused)} refused by the vocabulary${counts.refusedFields.length === 0 ? '' : ` (${counts.refusedFields.join(', ')})`}.`,
     ...(counts.withdrawn === 0 ? [] : [`Removed ${String(counts.withdrawn)} ${counts.withdrawn === 1 ? 'batch' : 'batches'} of sessions that no longer pass the gates, have not ended, or are no longer in the store.`]),
     ...(discarded === 0 ? [] : [`Discarded ${String(discarded)} ${discarded === 1 ? 'batch' : 'batches'} built under an older vocabulary, field list, or skeleton format.`]),
+    `Raw copies queued: ${String(counts.raw.copies)} (${String(counts.raw.bytes)} bytes, ${String(counts.raw.masked)} values masked). ${rawNote(saved.pool.rawConsent)}`.trim(),
+    ...(counts.off === 0 ? [] : [`${String(counts.off)} ${counts.off === 1 ? 'session' : 'sessions'} in a folder switched off: nothing of them is queued.`]),
     'Run oars pool outbox to print exactly what would be sent.',
   ];
   return { document: { ok: true, server, ...counts }, text: lines.join('\n') };
@@ -540,22 +609,27 @@ export const poolOutbox = async (deps: RunDeps, options: { server?: string | und
   const { batches, edited } = await heldBatches(outbox);
   const masker = new Masker();
   masker.add(token);
-  const shown: Array<{ hash: string; request: string; fields?: { [field: string]: string } }> = [];
+  const sent = await sentLog(outbox);
+  const shown: Array<{ hash: string; request: string; sent?: string; fields?: { [field: string]: string } }> = [];
   for (const batch of batches) {
     const fields = options.explain === true ? explained(batch.bytes) : undefined;
     // A batch past one request prints every part's request, in the order they are sent.
     const request = callsOf(token, batch.bytes, batch.hash).map((call) => printed(outgoing(deps, server, POOL_DEPOSITS, call), masker)).join('\n');
-    shown.push({ hash: batch.hash, request, ...(fields === undefined ? {} : { fields }) });
+    shown.push({ hash: batch.hash, request, ...(sent.has(batch.hash) ? { sent: sent.get(batch.hash) ?? '' } : {}), ...(fields === undefined ? {} : { fields }) });
   }
+  const { copies } = await heldRaw(outbox);
+  const rawBlocks = copies.flatMap((copy) =>
+    rawParts(copy.body).map((part, at, all) => [`raw part ${String(at + 1)}/${String(all.length)} sha256: ${copy.hash} bytes: ${String(Buffer.byteLength(part))}${sent.has(copy.hash) ? ` sent: ${sent.get(copy.hash) ?? ''}` : ''}`, ...(options.explain === true ? [part] : [])].join('\n')),
+  );
   for (const { hash } of shown) await markShown(outbox, hash, deps.now());
   const stale = await staleBatches(outbox);
-  const blocks = shown.map(({ hash, request, fields }) => [request, `sha256: ${hash}`, ...Object.entries(fields ?? {}).map(([field, row]) => `  ${field}: ${row}`)].join('\n'));
+  const blocks = shown.map(({ hash, request, sent: at, fields }) => [request, `sha256: ${hash}`, ...(at === undefined ? [] : [`sent: ${at}`]), ...Object.entries(fields ?? {}).map(([field, row]) => `  ${field}: ${row}`)].join('\n'));
   const notes = [
     ...(edited === 0 ? [] : [`${String(edited)} ${edited === 1 ? 'batch was' : 'batches were'} edited on disk since ${edited === 1 ? 'it was' : 'they were'} written and ${edited === 1 ? 'is' : 'are'} not printed or sent. Run oars pool deposit to build ${edited === 1 ? 'it' : 'them'} again.`]),
     ...(stale === 0 ? [] : [`${String(stale)} ${stale === 1 ? 'batch was' : 'batches were'} built under an older vocabulary, field list, or skeleton format and will never be sent.`]),
   ];
-  const text = shown.length === 0 ? ['The outbox is empty. Run oars pool deposit first.', ...notes].join('\n') : [...blocks, ...notes].join('\n\n');
-  return { document: { ok: true, server, batches: shown, edited, stale }, text };
+  const text = shown.length === 0 && rawBlocks.length === 0 ? ['The outbox is empty. Run oars pool deposit first.', ...notes].join('\n') : [...blocks, ...rawBlocks, ...notes].join('\n\n');
+  return { document: { ok: true, server, batches: shown, raw: copies.map(({ hash, bytes }) => ({ hash, bytes, ...(sent.has(hash) ? { sent: sent.get(hash) ?? '' } : {}) })), edited, stale }, text };
 };
 
 /** One folder per harness under the server's, so a fetch for one harness never overwrites another's bundle of the same version. */
@@ -597,23 +671,32 @@ const cappedError = (deps: RunDeps, reply: Reply, kept: boolean): CliError => {
 /** What a fetch asks for when no `--harness` is given, and what it falls back to when no one harness leads the local store. */
 const DEFAULT_HARNESS: Harness = 'claude-code';
 
+/** The harnesses a bundle is served for. `otel` reads the framework into the version slot, so no public bundle is keyed by it (lead 219): it is in `HARNESSES` for the wire, not for a fetch. */
+const FETCHABLE: readonly Harness[] = HARNESSES.filter((name) => name !== 'otel');
+
 /**
  * The harness a fetch asks for. `--harness` names it, and nothing is printed. Without the flag it is the harness the local store holds the most sessions of, and the choice and the way to
- * change it go to stderr before the request: a fetch never picks silently. An empty store or a tie asks for Claude Code's and says so. It reads counts only, and none of them leaves the machine.
+ * change it go to stderr before the request: a fetch never picks silently. An empty store or a tie asks for Claude Code's and says so. Sessions of a harness with no bundle (`otel`) are not counted. It reads counts only, and none of them leaves the machine.
  */
 const fetchHarness = async (deps: RunDeps, storeDir: string, named: string | undefined): Promise<Harness> => {
   if (named !== undefined) {
-    if (!isHarness(named)) throw usage(`${named} is not a harness the pool serves. Choose one of ${HARNESSES.join(', ')}.`, FETCH);
+    if (named === 'otel') throw usage(`otel has no pool bundle. Choose one of ${FETCHABLE.join(', ')}.`, FETCH);
+    if (!isHarness(named)) throw usage(`${named} is not a harness the pool serves. Choose one of ${FETCHABLE.join(', ')}.`, FETCH);
     return named;
   }
   const counts = new Map<Harness, number>();
-  for (const session of (await loadStore(storeDir)).sessions) counts.set(sessionHarness(session), (counts.get(sessionHarness(session)) ?? 0) + 1);
+  const sessions = (await loadStore(storeDir)).sessions;
+  for (const session of sessions) {
+    const harness = sessionHarness(session);
+    if (FETCHABLE.includes(harness)) counts.set(harness, (counts.get(harness) ?? 0) + 1);
+  }
   const [top, runnerUp] = [...counts.entries()].sort((a, b) => b[1] - a[1]);
   const lead = top !== undefined && (runnerUp === undefined || top[1] > runnerUp[1]) ? top : undefined;
   const harness = lead === undefined ? DEFAULT_HARNESS : lead[0];
   const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
-  const why = lead === undefined ? `${total === 0 ? 'your local store is empty' : 'no one harness leads your local store'}, so Claude Code is the default` : `the harness your local store holds the most sessions of (${String(lead[1])} of ${String(total)})`;
-  deps.io.stderr(`No --harness given: fetching ${harness}, ${why}. Pass --harness <name> to fetch another (${HARNESSES.join(', ')}).
+  const none = sessions.length === 0 ? 'your local store is empty' : 'your local store holds no session of a harness the pool serves';
+  const why = lead === undefined ? `${total === 0 ? none : 'no one harness leads your local store'}, so Claude Code is the default` : `the harness your local store holds the most sessions of (${String(lead[1])} of ${String(total)})`;
+  deps.io.stderr(`No --harness given: fetching ${harness}, ${why}. Pass --harness <name> to fetch another (${FETCHABLE.join(', ')}).
 `);
   return harness;
 };
@@ -670,6 +753,36 @@ export const poolFetch = async (deps: RunDeps, options: { server?: string | unde
     document: { ok: true, server, harness, harnessVersion, file, unchanged: false, cells: cells.length, motifs: motifs.length, reads: reads.length, asOf, ...(floors === undefined ? {} : { floors }) },
     text: `Fetched ${harness} ${harnessVersion}: ${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs, verified against the pinned key and kept at ${file}.${floorSentence(floors)}`,
   };
+};
+
+const RAW = 'pool-raw';
+
+/** The raw prompt, in plain words: shown by `oars pool raw` until it is answered, and what the nightly send relies on. Redaction is best effort and the text says so. */
+export const RAW_PROMPT = [
+  'Raw transcripts are separate from the covenant. If you say yes, a redacted copy of each full transcript of every folder you allowed is uploaded to the pool, not only its skeleton.',
+  'Redaction runs on this machine, before anything is queued, and it is best effort: it masks secret shapes it knows, emails, your username, home paths, environment values, and hosts, and it can miss a secret that has no recognizable shape or a name written in prose.',
+  'It also does not catch a host with no dot, a public host name outside a link, quoted file contents and command output, a secret split across lines, images and attachments, a JSON env value, your username written another way, another person\'s hyphenated name in a project folder path, or an IPv6 address with a zone or inside a longer word, and a common-word account name is masked everywhere it appears.',
+  'Say no, or say nothing, and only skeletons leave. Change your mind any time: oars pool raw --consent yes|no. A no stops later sends only; it cannot recall what was already sent.',
+].join('\n');
+
+/** `oars pool raw`: shows the raw prompt and the answer so far; `--consent yes|no` records the answer; `--folder <entry> --mode all|skeleton|off` sets what one folder may send. */
+export const poolRaw = async (deps: RunDeps, options: { consent?: string | undefined; folder?: string | undefined; mode?: string | undefined }): Promise<Outcome> => {
+  const runtime = runtimeOf(deps);
+  if (options.consent !== undefined && options.consent !== 'yes' && options.consent !== 'no') throw usage('--consent takes yes or no.', RAW);
+  if ((options.folder === undefined) !== (options.mode === undefined)) throw usage('--folder and --mode go together: --folder <folder or glob> --mode all|skeleton|off.', RAW);
+  if (options.mode !== undefined && options.mode !== 'all' && options.mode !== 'skeleton' && options.mode !== 'off') throw usage('--mode takes all, skeleton, or off.', RAW);
+  const { folder, mode } = options;
+  const choices = await updatePoolChoices(runtime.storeDir, (current) => {
+    if (options.consent !== undefined) current.rawConsent = options.consent === 'yes' ? 'granted' : 'declined';
+    if (folder !== undefined) {
+      if (mode === 'all') Reflect.deleteProperty(current.folders, folder);
+      else if (mode === 'skeleton' || mode === 'off') current.folders[folder] = mode;
+    }
+  });
+  const answer = choices.rawConsent === null ? 'not answered yet: only skeletons leave' : choices.rawConsent === 'granted' ? 'yes: redacted raw copies leave' : 'no: only skeletons leave';
+  const switched = Object.entries(choices.folders).map(([entry, set]) => `  ${entry}: ${set === 'off' ? 'nothing leaves' : 'skeletons only'}`);
+  const lines = [...(choices.rawConsent === null ? [RAW_PROMPT, ''] : []), `Raw copies: ${answer}.`, ...(switched.length === 0 ? [] : ['Folders switched down:', ...switched])];
+  return { document: { ok: true, rawConsent: choices.rawConsent, folders: choices.folders }, text: lines.join('\n') };
 };
 
 const COVERAGE = 'pool-coverage';

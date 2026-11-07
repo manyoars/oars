@@ -58,13 +58,40 @@ const capturedSkeleton = (): SessionSkeleton => {
 const shellIdentities = (skeleton: SessionSkeleton): unknown[] => skeleton.transcripts.flatMap(({ tools }) => tools.flatMap(({ steps }) => steps.filter(({ action }) => action === 'shell.exec').map(({ identity }) => identity)));
 
 describe('the leak test: a private name in a path, a program, a package, an argument, and a branch', () => {
-  // A program or MCP server name is a long-tail name and travels as a name, for the pool to count (it holds it below the floor). A path, an argument, a branch, a token, and a pattern never do.
-  it('leaves none of those bytes anywhere in the batch but a program, server, or native tool name', () => {
+  // A program, MCP server, or pull name is a long-tail name and travels as a name, for the pool to count (it holds it below the floor). A path, an argument, a branch, a token, and a pattern never do.
+  it('leaves none of those bytes anywhere in the batch but a program, server, pull, or native tool name', () => {
     const skeleton = capturedSkeleton();
     const named = new Set(['program', 'server', 'native']);
-    const text = JSON.stringify(skeleton, (key, value: unknown) => (named.has(key) ? undefined : value)).toLowerCase();
+    // `name` is exempt only on a pull (the one object with a `registry` and a `version`; a delta has no `version`), so a delta's `name` is still scanned.
+    const text = JSON.stringify(skeleton, function (this: object, key: string, value: unknown) {
+      return named.has(key) || (key === 'name' && 'registry' in this && 'version' in this) ? undefined : value;
+    }).toLowerCase();
     for (const bytes of [PLANTED.toLowerCase(), 'acme-deploy', 'abc123', 'secret.ts', 'feat/']) expect(text).not.toContain(bytes);
     expect(JSON.stringify(shellIdentities(skeleton))).toContain('"program":"acme-deploy"');
+    expect(JSON.stringify(shellIdentities(skeleton))).toContain(`"name":"${PLANTED.toLowerCase()}-pkg"`);
+  });
+
+  // Capture stores a skill-run, host, and pull name as it is after redaction, and the one gate sends it: there is no second projection between the transcript and the batch.
+  it('carries an off-list skill, host, and pull name from a transcript to the batch as they are', () => {
+    const calls = [
+      { name: 'Skill', input: { skill: `${PLANTED}-release` } },
+      { name: 'WebFetch', input: { url: `https://${PLANTED}.example/plan?token=abc123` } },
+      { name: 'Bash', input: { command: `npm install ${PLANTED.toLowerCase()}-pkg@1.2.3` } },
+    ];
+    const text = [
+      JSON.stringify({ type: 'user', uuid: 'u0', timestamp: '2026-11-01T00:00:01.000Z', version: '2.1.300', message: { role: 'user', content: 'go' } }),
+      ...calls.map((call, i) => line(i, { type: 'tool_use', id: `t${String(i)}`, ...call })),
+    ].join('\n');
+    const { tools } = captureSession({ text, session: 's', project: 'p', rev: 1, at: 'x', bytes: 1, redact: makeRedactor(), salt: 'salt', sid: null, repoRoot: () => null, runtime: { oars: '1.2.3', node: 'v99', os: 'plan9' } });
+    const [only] = sessionsFrom(store({ sessions: [session('s', { frame: framed })], prompts: [prompt('s', 0, { frame: framed })], tools }));
+    const skeleton = only === undefined ? null : skeletonOf(only, '0123456789abcdef', shellReader(vocab), printOf);
+    const identities = stepsOf(skeleton).map(({ identity }) => identity);
+    expect(identities).toEqual([
+      { skill: `${PLANTED}-release` },
+      { host: `${PLANTED.toLowerCase()}.example` },
+      { program: 'npm', sub: 'install', flags: [], pulls: [{ registry: 'npm', name: `${PLANTED.toLowerCase()}-pkg`, version: '<literal>' }] },
+    ]);
+    expect(JSON.stringify(skeleton)).not.toMatch(/abc123|plan\?/);
   });
 
   // Capture already masks what it stores, so the fixture above cannot show projection at work: here the stored step holds the private name itself, as an older or damaged store could.

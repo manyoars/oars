@@ -635,7 +635,7 @@ export interface PlannedCommit {
 
 export interface ShellRead {
   segments: ShellSegment[];
-  /** The same commands as `segments`, in public names only, with the redacted text they compare by. */
+  /** The same commands as `segments`, in public names, apart from a pull's package name, which is kept as it is after redaction, with the redacted text they compare by. */
   steps: ShellStepRead[];
   pulls: ToolPull[];
   commitPlan: PlannedCommit[];
@@ -1241,7 +1241,7 @@ export const readShell = (command: string, redact: Redactor): ShellRead => {
   }
   return {
     segments: kept.map((held) => ({ run: runOf(held), read: held.read })),
-    steps: kept.map((held) => ({ identity: shellIdentity(held.program, held.args, pullsOfCommand(held.program, held.args).filter(present)), read: held.read, run: runOf(held) })),
+    steps: kept.map((held) => ({ identity: shellIdentity(held.program, held.args, pullsOfCommand(held.program, held.args).filter(present), redact), read: held.read, run: runOf(held) })),
     pulls: [...pulls.values()],
     commitPlan: commitPlanOf(commands),
   };
@@ -1353,7 +1353,7 @@ interface StepDraft {
 }
 
 /** A call's steps: one per command of a shell call, else one. */
-const draftsOf = (table: ActionTable, named: { action: CanonicalAction; native: string }, native: string, shell: ShellRead | undefined, target: string | null, input: Obj): StepDraft[] => {
+const draftsOf = (table: ActionTable, named: { action: CanonicalAction; native: string }, native: string, shell: ShellRead | undefined, target: string | null, input: Obj, redact: Redactor): StepDraft[] => {
   const { action } = named;
   if (action === 'shell.exec') {
     const read = shell?.steps ?? [];
@@ -1362,7 +1362,7 @@ const draftsOf = (table: ActionTable, named: { action: CanonicalAction; native: 
   }
   const url = str(input.url);
   const skill = str(input.skill);
-  return [{ action, ...callIdentity(table, action, native, named.native, { skill, url }), read: true, rawKey: `${native}\n${target ?? url ?? skill ?? ''}` }];
+  return [{ action, ...callIdentity(table, action, native, named.native, { skill, url, redact }), read: true, rawKey: `${native}\n${target ?? url ?? skill ?? ''}` }];
 };
 
 /** The `target` of a tool call (see {@link ToolObservation.target}). A path target also returns the `key` it was hashed on, read for its class and then dropped, never stored. */
@@ -1747,7 +1747,7 @@ export const captureSession = (input: ExtractInput): Capture => {
         const aimed = targetOf(name, toolInput, lineCwd, salt, redact, lineRoot);
         const shell = SHELL.has(name) || named.action === 'shell.exec' ? readShell(str(toolInput.command) ?? '', redact) : undefined;
         for (const held of shell?.steps ?? []) framePrograms.add(held.identity.program);
-        drafts.push(draftsOf(actions, named, native, shell, aimed.target, toolInput));
+        drafts.push(draftsOf(actions, named, native, shell, aimed.target, toolInput, redact));
         responseOfCall.push(response);
         callsPerResponse.set(response, (callsPerResponse.get(response) ?? 0) + 1);
         const manifestFile = PATH_TOOLS.has(name) && filePath !== undefined ? manifestFileOf(filePath) : null;

@@ -101,7 +101,16 @@ export interface State {
   redactDomains: string[];
   /** Every `--allow` entry any deposit used (folders, prefixes, globs): the SessionEnd hook deposits a session only from a folder these name. */
   allow: string[];
+  /** What the person chose about sending to a pool: the raw-copy consent and the folders switched down. Never read by capture. */
+  pool: PoolChoices;
 }
+
+/** The answer to the raw-copy prompt (`granted`, `declined`, or not asked yet) and the per-folder switches (an `--allow`-style entry mapped to what it may send). */
+export interface PoolChoices {
+  rawConsent: 'granted' | 'declined' | null;
+  folders: { [entry: string]: FolderSend };
+}
+export type FolderSend = 'skeleton' | 'off';
 
 const isMissing = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ENOENT';
 
@@ -170,13 +179,26 @@ export const readState = async (storeDir: string): Promise<State> => {
       }
       const domains = Array.isArray(parsed.redactDomains) ? parsed.redactDomains.filter((entry): entry is string => typeof entry === 'string') : [];
       const allow = Array.isArray(parsed.allow) ? parsed.allow.filter((entry): entry is string => typeof entry === 'string') : [];
-      return { files, redactDomains: domains, allow };
+      const pool = isRecord(parsed.pool) ? parsed.pool : {};
+      const folders: PoolChoices['folders'] = {};
+      if (isRecord(pool.folders)) for (const [entry, mode] of Object.entries(pool.folders)) if (mode === 'skeleton' || mode === 'off') folders[entry] = mode;
+      return { files, redactDomains: domains, allow, pool: { rawConsent: pool.rawConsent === 'granted' || pool.rawConsent === 'declined' ? pool.rawConsent : null, folders } };
     }
   } catch (error) {
     if (!isMissing(error) && !(error instanceof SyntaxError)) throw error;
   }
-  return { files: {}, redactDomains: [], allow: [] };
+  return { files: {}, redactDomains: [], allow: [], pool: { rawConsent: null, folders: {} } };
 };
+
+/** Changes the pool choices under the store lock, so a deposit running at the same time keeps them (it writes the state it read). */
+export const updatePoolChoices = (storeDir: string, change: (choices: PoolChoices) => void): Promise<PoolChoices> =>
+  withLock(storeDir, async (held) => {
+    const state = await readState(storeDir);
+    change(state.pool);
+    if (!(await held())) throw new StoreLockLostError();
+    await writeAtomic(paths(storeDir).state, JSON.stringify(state));
+    return state.pool;
+  });
 
 export const readRedactDomains = async (storeDir: string): Promise<string[]> => (await readState(storeDir)).redactDomains;
 
@@ -1119,7 +1141,8 @@ const rawOnlyTranscripts = async (context: DepositContext, project: string, onDi
   // Listed from raw/ itself, so a lost state.json (no entries to name the files) still finds them; a file with no entry counts as behind.
   const behind = (await rawRelatives(root, [])).filter((relative) => {
     const entry = context.state.files[`${prefix}${relative}`];
-    return !onDisk.has(`${prefix}${relative}`) && (entry === undefined || entry.v !== CAPTURE_VERSION || entry.s !== context.salt.sid);
+    // A domain named after the capture changes what the redactor masks, so a file recorded under another domain set is behind too.
+    return !onDisk.has(`${prefix}${relative}`) && (entry === undefined || entry.v !== CAPTURE_VERSION || entry.s !== context.salt.sid || !sameSet(entry.d, context.domains));
   });
   const found: Transcript[] = [];
   for (const relative of behind) {
