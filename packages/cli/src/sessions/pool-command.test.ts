@@ -2111,3 +2111,33 @@ describe('oars pool deposit: the raw copy (t884)', () => {
     expect(scene.h.out.join('')).toContain(body.slice(0, 200));
   });
 });
+
+describe('oars pool raw (t884)', () => {
+  it('shows the prompt until it is answered, records the answer, and can change it', async () => {
+    const scene = setting();
+    expect(await scene.cli('pool', 'raw')).toBe(ExitCode.OK);
+    const shown = scene.h.out.join('');
+    expect(shown).toContain('best effort');
+    expect(shown).toContain('not answered yet');
+    scene.h.out.length = 0;
+    expect(await scene.cli('pool', 'raw', '--consent', 'yes')).toBe(ExitCode.OK);
+    expect(scene.h.out.join('')).toContain('yes: redacted raw copies leave');
+    expect(scene.h.out.join('')).not.toContain('best effort');
+    expect(await scene.cli('pool', 'raw', '--consent', 'no')).toBe(ExitCode.OK);
+    expect(scene.h.out.join('')).toContain('no: only skeletons leave');
+  });
+
+  it('sets and clears a folder switch, and refuses a half-given or unknown option', async () => {
+    const scene = setting();
+    expect(await scene.cli('pool', 'raw', '--folder', 'proj', '--mode', 'off')).toBe(ExitCode.OK);
+    expect(scene.h.out.join('')).toContain('proj: nothing leaves');
+    expect(await scene.cli('pool', 'raw', '--folder', 'proj', '--mode', 'skeleton')).toBe(ExitCode.OK);
+    expect(scene.h.out.join('')).toContain('proj: skeletons only');
+    scene.h.out.length = 0;
+    expect(await scene.cli('pool', 'raw', '--folder', 'proj', '--mode', 'all')).toBe(ExitCode.OK);
+    expect(scene.h.out.join('')).not.toContain('proj:');
+    expect(await scene.cli('pool', 'raw', '--folder', 'proj')).toBe(ExitCode.USAGE);
+    expect(await scene.cli('pool', 'raw', '--consent', 'maybe')).toBe(ExitCode.USAGE);
+    expect(await scene.cli('pool', 'raw', '--folder', 'proj', '--mode', 'some')).toBe(ExitCode.USAGE);
+  });
+});
