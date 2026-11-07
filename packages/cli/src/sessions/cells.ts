@@ -34,7 +34,7 @@ export interface Cell {
    * `usageObserved` is not a measurement). Null when no session recorded any: absent, never a measured 0.
    */
   tokens: number | null;
-  /** How many of `sessions` recorded input, which is the coverage the `tokens` figure has (a session that recorded input but not every category still counts as covered, so the figure can be partial by category); less than `sessions` makes it a partial sum. Absent on a cell read back from the pool's stored sums, which carry no coverage count. */
+  /** On a `class` cell, how many of `sessions` recorded input, which is the coverage the `tokens` figure has (a session that recorded input but not every category still counts as covered, so the figure can be partial by category); less than `sessions` makes it a partial sum. Absent on a cell read back from the pool's stored sums, which carry no coverage count. A step cell does not honor it yet: it counts every session as recorded and reads a null step cost as 0 (`motif.ts:61`), which t921 Item 5 fixes. */
   tokenSessions?: number;
   /** How many of the cell's prompts the `tokens` figure covers (a step cell counts steps): the divisor of a per-prompt mean, since `tokens` holds only prompts that recorded input. Absent like `tokenSessions`. */
   tokenPrompts?: number;
