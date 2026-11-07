@@ -62,7 +62,7 @@ describe('cost', () => {
 
   it('falls back to every settled prompt for cells that carry no coverage count', () => {
     const from = store({ sessions: [session('s1')], prompts: [prompt('s1', 0, { usage: usage(100, 50) }), prompt('s1', 1, { usage: usage(100, 50) })] });
-    const bare = deriveCells(from).cells.map(({ tokenPrompts: _dropped, ...rest }) => rest);
+    const bare = deriveCells(from).cells.map((cell) => ({ ...cell, tokenPrompts: undefined }));
     const [read] = deriveCost({ pool: poolOf({ cells: bare, motifs: deriveCells(from).motifs }, from.errors), store: from });
     expect(read?.value).toMatchObject({ tokensPerPrompt: 150 });
   });
