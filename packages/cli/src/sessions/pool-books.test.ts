@@ -107,9 +107,13 @@ describe('booksLines', () => {
 
 describe('booksTotals', () => {
   it('is flat numbers with null for every field that has no source, and null when there are no books', () => {
-    expect(booksTotals(bundleOf(booksOf()))).toEqual({ servedCells: 12, belowFloor: 7, panel: 4, comparisonReadOwners: null, followOnReads: null, readYield: null, costPerServedCell: null, yieldPerServedCell: null });
+    expect(booksTotals(bundleOf(booksOf()))).toEqual({ floor: 5, asOfDay: '2026-11-02', panelDay: '2026-11-07', servedCells: 12, belowFloor: 7, panel: 4, comparisonReadOwners: null, followOnReads: null, readYield: null, costPerServedCell: null, yieldPerServedCell: null });
     expect(booksTotals(bundleOf(undefined))).toBeNull();
     expect(booksTotals(undefined)).toBeNull();
+  });
+
+  it('carries its lineage, and null for a day the bundle does not know, so an old panel is not read as current', () => {
+    expect(booksTotals(bundleOf(booksOf({ floor: 8, asOf: { pool: 'p1', day: null }, panelDay: null })))).toMatchObject({ floor: 8, asOfDay: null, panelDay: null });
   });
 
   it('keeps a measured zero as 0', () => {
