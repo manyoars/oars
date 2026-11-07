@@ -6,6 +6,7 @@ import { deriveCost } from '../../cli/src/sessions/read-cost.js';
 import { store } from '../../cli/src/sessions/pool-fixture.js';
 import type { Env } from './http.js';
 import { sampleSkeleton } from './sample.js';
+import { DEFAULT_FLOORS } from './floors.js';
 import { storedOf } from './stored.js';
 import { fieldOf, startPool, stubUser, type TestPool } from './test-pool.js';
 
@@ -51,7 +52,7 @@ const costOf = async (target: TestPool): Promise<{ value: unknown; n: number }[]
       batch: () => Promise.reject(new Error('the read writes nothing')),
     },
   };
-  const stored = await storedOf(env, 'claude-code', '2.1.314', Date.parse('2026-11-03T00:00:00Z'));
+  const stored = await storedOf(env, 'claude-code', '2.1.314', DEFAULT_FLOORS, Date.parse('2026-11-03T00:00:00Z'));
   return deriveCost({ pool: poolOf({ cells: stored.cells, motifs: stored.motifs }, []), store: store({}) }).filter((read) => read.slice.class === 'edit-verify');
 };
 
