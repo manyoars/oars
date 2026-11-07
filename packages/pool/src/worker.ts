@@ -3,7 +3,8 @@ import { parseSkeleton, type SessionSkeleton } from '../../cli/src/sessions/pool
 import { batchCounts, batchTier } from './access.js';
 import { fetchBundle, harnessRequired } from './bundle.js';
 import { covenantAccept, covenantNotAccepted, covenantStatus, depositsClosed, hasAccepted } from './covenant.js';
-import { answer, bound, refuse, wholeBinding, type Env } from './http.js';
+import { answer, bound, brake, refuse, type Env } from './http.js';
+import { receivePart } from './parts.js';
 import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf } from './ingest.js';
 import { accountOf, login } from './identity.js';
 import { rawRoute } from './raw.js';
@@ -12,9 +13,8 @@ import { telemetry, type TelemetryEnv } from './telemetry.js';
 /** D1 holds at most 2 MB in one value. A body declaring more is refused unread, and one that declares nothing is measured before it is parsed. */
 const MAX_DEPOSIT_BYTES = 1024 * 1024;
 
-/** These two bound one account's ledger, by row and by stored byte; a fetch reads the stored cells, never the ledger. */
-const DEFAULT_MAX_DEPOSITS = 20_000;
-const DEFAULT_MAX_ACCOUNT_BYTES = 64 * 1024 * 1024;
+/** What an unset brake binds to: no account holds this many rows or bytes, so the statement below needs no second form. */
+const UNLIMITED = Number.MAX_SAFE_INTEGER;
 
 /** What a batch's `deltas` hold until the wire carries them (spec Section 2, "Deltas"): the client builds them, so ingest has none to take. */
 const DELTAS = '[]';
@@ -37,17 +37,8 @@ const futureDayField = ({ transcripts }: SessionSkeleton, now: number): string |
   return undefined;
 };
 
-const deposit = async (request: Request, env: Env): Promise<Response> => {
-  // The gate comes before the sign-in and the body, so a closed pool reads neither.
-  const version = bound(env.COVENANT_VERSION);
-  if (version === undefined) return depositsClosed();
-  const account = await accountOf(request, env);
-  if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
-  if (!(await hasAccepted(env, account, version))) return covenantNotAccepted(version);
-  const tooLarge = (): Response => refuse(413, 'too_large', `A skeleton holds at most ${String(MAX_DEPOSIT_BYTES)} bytes.`);
-  if (Number(request.headers.get('content-length')) > MAX_DEPOSIT_BYTES) return tooLarge();
-  const text = await request.text();
-  if (new TextEncoder().encode(text).length > MAX_DEPOSIT_BYTES) return tooLarge();
+/** A whole batch, from the request or joined from its parts: parsed, projected, and written as one deposit. */
+const storeDeposit = async (env: Env, account: string, text: string): Promise<Response> => {
   let body: unknown;
   try {
     body = JSON.parse(text);
@@ -60,8 +51,9 @@ const deposit = async (request: Request, env: Env): Promise<Response> => {
   const { skeleton, extensions, others } = parsed;
   const lateField = futureDayField(skeleton, Date.now());
   if (lateField !== undefined) return refuse(422, 'closed_vocabulary', `${lateField}: later than tomorrow UTC`, lateField);
-  const limit = wholeBinding(env.MAX_DEPOSITS_PER_ACCOUNT, DEFAULT_MAX_DEPOSITS);
-  const budget = wholeBinding(env.MAX_DEPOSIT_BYTES_PER_ACCOUNT, DEFAULT_MAX_ACCOUNT_BYTES);
+  // The pool does not ration contribution (data is the point): both brakes are an operator's, off unless a binding sets one.
+  const limit = brake(env.MAX_DEPOSITS_PER_ACCOUNT);
+  const budget = brake(env.MAX_DEPOSIT_BYTES_PER_ACCOUNT);
   const stored = JSON.stringify(skeleton);
   // The bag is stored beside the skeleton and read by nothing that serves: ingest reads `skeleton` only, so no cell, read, or bundle is derived from it.
   const bag = JSON.stringify(extensions);
@@ -78,16 +70,32 @@ const deposit = async (request: Request, env: Env): Promise<Response> => {
   const insert = env.DB.prepare(
     'INSERT INTO deposits (account, id, skeleton, deltas, tier, counted_at, ingest, format, vocab_version, fields_version, extensions, other_values) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ((SELECT COUNT(*) FROM deposits WHERE account = ?) < ? OR EXISTS (SELECT 1 FROM deposits WHERE account = ? AND id = ?)) AND (SELECT COALESCE(SUM(LENGTH(CAST(skeleton AS BLOB)) + LENGTH(CAST(deltas AS BLOB)) + LENGTH(CAST(extensions AS BLOB))), 0) FROM deposits WHERE account = ? AND id <> ?) + ? <= ? ON CONFLICT (account, id) DO UPDATE SET skeleton = excluded.skeleton, deltas = excluded.deltas, tier = excluded.tier, ingest = excluded.ingest, format = excluded.format, vocab_version = excluded.vocab_version, fields_version = excluded.fields_version, extensions = excluded.extensions, other_values = excluded.other_values, counted_at = CASE WHEN ? = 0 THEN deposits.counted_at WHEN excluded.counted_at IS NULL THEN NULL ELSE COALESCE(deposits.counted_at, excluded.counted_at) END WHERE deposits.ingest = ?',
   )
-    .bind(account, skeleton.id, stored, DELTAS, tier, countedAt, ingest, skeleton.format, skeleton.vocabVersion, skeleton.fieldsVersion, bag, others, account, limit, account, skeleton.id, account, skeleton.id, new TextEncoder().encode(stored).length + new TextEncoder().encode(DELTAS).length + new TextEncoder().encode(bag).length, budget, written > 0 ? 1 : 0, previous?.ingest ?? '');
+    .bind(account, skeleton.id, stored, DELTAS, tier, countedAt, ingest, skeleton.format, skeleton.vocabVersion, skeleton.fieldsVersion, bag, others, account, limit ?? UNLIMITED, account, skeleton.id, account, skeleton.id, new TextEncoder().encode(stored).length + new TextEncoder().encode(DELTAS).length + new TextEncoder().encode(bag).length, budget ?? UNLIMITED, written > 0 ? 1 : 0, previous?.ingest ?? '');
   // The row and every increment it writes are one transaction; the increments are guarded by the row's `ingest` mark, so a refused deposit writes none of them.
   const [inserted] = await env.DB.batch([insert, ...incrementStatements(env, account, skeleton.id, ingest, new Date().toISOString().slice(0, 10), next, previous?.increments)]);
   if ((inserted?.meta.changes ?? 0) === 0) {
-    // The upsert changes nothing in two cases: a limit refused the row, or another deposit of this session set the row after this one read it. Only the second leaves a row with another mark than the one read.
+    // The upsert changes nothing in two cases: a brake refused the row, or another deposit of this session set the row after this one read it. Only the second leaves a row with another mark than the one read.
     const held = await markOf(env, account, skeleton.id);
     if (held !== undefined && held !== (previous?.ingest ?? '')) return refuse(409, 'deposit_conflict', 'Another deposit of this session landed first. Send it again.');
-    return refuse(403, 'deposit_limit', `An account holds at most ${String(limit)} deposits and ${String(budget)} stored bytes.`);
+    // Only the brakes that are set are named: an unset one limits nothing.
+    const set = [...(limit === undefined ? [] : [`${String(limit)} deposits`]), ...(budget === undefined ? [] : [`${String(budget)} stored bytes`])];
+    return refuse(403, 'deposit_limit', `An operator's brake holds this account to at most ${set.join(' and ')}.`);
   }
   return answer(201, { ok: true, id: skeleton.id });
+};
+
+const deposit = async (request: Request, env: Env): Promise<Response> => {
+  // The gate comes before the sign-in and the body, so a closed pool reads neither.
+  const version = bound(env.COVENANT_VERSION);
+  if (version === undefined) return depositsClosed();
+  const account = await accountOf(request, env);
+  if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
+  if (!(await hasAccepted(env, account, version))) return covenantNotAccepted(version);
+  const tooLarge = (): Response => refuse(413, 'too_large', `A skeleton holds at most ${String(MAX_DEPOSIT_BYTES)} bytes.`);
+  if (Number(request.headers.get('content-length')) > MAX_DEPOSIT_BYTES) return tooLarge();
+  const text = await request.text();
+  if (new TextEncoder().encode(text).length > MAX_DEPOSIT_BYTES) return tooLarge();
+  return request.headers.has('oars-part') ? receivePart(request, env, account, text, (whole) => storeDeposit(env, account, whole)) : storeDeposit(env, account, text);
 };
 
 /** A name that does not decode stays as it came: no vocabulary holds it, so the route refuses it by name. */

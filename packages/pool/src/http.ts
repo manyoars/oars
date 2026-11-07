@@ -45,7 +45,9 @@ export interface Env {
   COVENANT_VERSION?: string;
   /** How many bundles an account without access may fetch in one ISO week. */
   FETCH_CAP?: string;
+  /** An operator's brake on the rows one account may hold. Unset means no limit: the pool does not ration contribution. */
   MAX_DEPOSITS_PER_ACCOUNT?: string;
+  /** An operator's brake on the stored bytes one account may hold. Unset means no limit. */
   MAX_DEPOSIT_BYTES_PER_ACCOUNT?: string;
 }
 
@@ -75,6 +77,12 @@ export const textField = (value: unknown, key: string): string | undefined => {
 export const wholeBinding = (value: string | undefined, fallback: number): number => {
   const whole = Number(bound(value) ?? fallback);
   return Number.isSafeInteger(whole) && whole > 0 ? whole : fallback;
+};
+
+/** A positive whole number from an optional brake, or undefined for no limit: unset, empty, and anything that is not a positive whole number all leave the account unlimited. */
+export const brake = (value: string | undefined): number | undefined => {
+  const whole = Number(bound(value));
+  return bound(value) !== undefined && Number.isSafeInteger(whole) && whole > 0 ? whole : undefined;
 };
 
 /** A body as JSON, or undefined: the route then refuses by the field it needed. A provider's response comes here too, since an outage can answer HTML. */
