@@ -1,7 +1,7 @@
 // The pool serves two floors by cell class: a `clear` cell (closed public vocabulary and client hashes only) at `CLEAR_FLOOR`, a `thresholded` one (any long-tail part) at `PUBLIC_FLOOR`. The class of a version cell is read by `bundle.test.ts`
 // and `cell-class.test.ts`; here are the cells that count accounts (a fresh account against a clear and a thresholded name) and the rule that decides whether a version-free environment total is served beside its parts.
 import { describe, expect, it } from 'vitest';
-import { ENVIRONMENT_BUCKET, type Cell } from '../../cli/src/sessions/cells.js';
+import { ENVIRONMENT_BUCKET } from '../../cli/src/sessions/cells.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
 import { verifyBundle, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
 import { floorsOf } from './floors.js';
@@ -70,7 +70,7 @@ describe('which environment totals are served', () => {
     cell: { motifId, frameBucket, grain: 'week', day: '2026-11-02', sessions: clusters, clusters: 0, ok: clusters, failed: 0, tokens: 0, durationMs: 0, exposed: false },
     any: clusters,
   });
-  const standing = (held: Held, clusters: number): Held => ({ cell: { ...held.cell, clusters } as Cell, any: held.any });
+  const standing = (held: Held, clusters: number): Held => ({ cell: { ...held.cell, clusters }, any: held.any });
   const total = (motifId: string, clusters: number): Held => cell(motifId, `${ENVIRONMENT_BUCKET}linux:bash`, clusters);
   const defaults = floorsOf({}, () => undefined);
   const served = (candidates: Held[], parts: Held[], floors = defaults): string[] => environmentOf(candidates, parts, motifs, floors, 5).map((one) => one.motifId);
