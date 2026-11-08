@@ -1,6 +1,6 @@
 # @manyoars/oars
 
-oars keeps a local, searchable record of your coding agent sessions, across Claude Code, Cursor, Codex, and other harnesses. Ask it about an error and it shows the past sessions that match. More at [manyoars.com](https://manyoars.com/).
+oars keeps a local, searchable record of your coding agent sessions, across Claude Code, Cursor, Codex, and other harnesses. Ask it about an error and it shows how many past sessions hit it, when, and which tools came next. More at [manyoars.com](https://manyoars.com/).
 
 Node 24 or later. ESM only.
 
