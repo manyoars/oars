@@ -129,7 +129,7 @@ const sizeOf = (value: unknown): ValueSize => {
 
 const depthOf = (folders: number): PathDepth => (folders <= 2 ? PATH_DEPTHS[folders] ?? '0' : folders <= 4 ? '3-4' : folders <= 8 ? '5-8' : 'over-8');
 
-/** A path with its `.` and `..` parts resolved, so a path that climbs out of a folder reads as outside it. A Windows drive and a leading `~` stay, as the leading `/` of a posix path does. */
+/** A path with its `.` and `..` parts resolved, so a path that climbs out of a folder reads as outside it. A Windows drive, a leading `~`, and the leading `//` of a UNC or WSL path stay, as the leading `/` of a posix path does. */
 const resolved = (path: string): string => {
   const kept: string[] = [];
   for (const part of path.split('/')) {
@@ -137,7 +137,7 @@ const resolved = (path: string): string => {
       if (kept.length !== 1 || !DRIVE.test(kept[0] ?? '')) kept.pop();
     } else if (part !== '' && part !== '.') kept.push(part);
   }
-  return `${path.startsWith('/') ? '/' : ''}${kept.join('/')}`;
+  return `${path.startsWith('//') ? '//' : path.startsWith('/') ? '/' : ''}${kept.join('/')}`;
 };
 
 /**

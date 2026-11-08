@@ -269,7 +269,7 @@ export const MAX_SYSTEM_TERMS = 5000;
  * across families (a sub-floor `keys` cell is one key's `size` total plus another's less the action's calls, though no one family holds it alone). Every family states one linear equation, and while the served cells
  * determine any unserved cell (`determinedOf`), the smallest served cell of its equation that shares a family with it is withheld (any served cell of its equation where none does), and both stages repeat.
  * A system of more than `maxTerms` terms is not eliminated, because the work grows faster than its size: measured, a long-tail action of 4,000 `keys` cells took 1.8 s and one of 13,000 took 10 s, against a Worker's CPU
- * limit. Nothing can be shown determined or not in such a system, so every served cell of it is withheld, which is safe and costs only that action's cells for that day.
+ * limit. Nothing can be shown determined or not in such a system, so every served cell of it is withheld, which is safe and costs that action's facet, one-step shape, and named cells, day and week, for that week and version bucket.
  */
 export const withheldOf = (held: readonly Cell[], motifs: readonly Motif[], floor: number, maxTerms = MAX_SYSTEM_TERMS): Set<Cell> => {
   // The one-step shape cells tie an action's calls only where its shape cells split them, so an action with no shape cells keeps its shape cells out of this rule.

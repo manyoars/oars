@@ -55,6 +55,9 @@ describe('value features', () => {
     expect(argFeaturesOf('Read', { file_path: './src/a.ts' }, 'C:\\w', 'C:\\w\\pkg')[0]).toMatchObject({ pathDepth: '2' });
     // A Windows drive is kept, so a path that climbs above the repository root reads as outside it, as the posix form does.
     expect(argFeaturesOf('Read', { file_path: '../../../x' }, 'C:\\w', 'C:\\w\\pkg')[0]).toMatchObject({ pathDepth: 'outside', dirKind: 'other' });
+    // A UNC or WSL root keeps its leading double slash, so a path inside it reads as inside, absolute or relative to a cwd in it.
+    expect(argFeaturesOf('Read', { file_path: '\\\\srv\\share\\repo\\src\\a.ts' }, '\\\\srv\\share\\repo', '\\\\srv\\share\\repo')[0]).toMatchObject({ pathDepth: '1', dirKind: 'source', extension: 'source' });
+    expect(argFeaturesOf('Read', { file_path: 'a.ts' }, '\\\\srv\\share\\repo', '\\\\srv\\share\\repo\\src')[0]).toMatchObject({ pathDepth: '1', extension: 'source' });
     // An absolute path that climbs out of the root is outside it too, and a leading `~` is a home folder that `..` does not pop.
     expect(argFeaturesOf('Read', { file_path: '/w/../etc/passwd' }, '/w', '/w')[0]).toMatchObject({ pathDepth: 'outside', dirKind: 'other' });
     expect(argFeaturesOf('Read', { file_path: '/w/src/../a.ts' }, '/w', '/w')[0]).toMatchObject({ pathDepth: '0', dirKind: 'root', extension: 'source' });
