@@ -45,3 +45,23 @@ describe('a bundle of shape cells', () => {
     expect(shapes.every(({ inputs, value }) => inputs.length === 1 && value.failed === 1)).toBe(true);
   });
 });
+
+describe('the class of a layer 1 shape cell', () => {
+  const classOfShape = (facet: Parameters<typeof shapeClass>[1], value: string): string => {
+    const motif = classMotif(shapeClass('file.read', facet, value));
+    return cellClassOf(cellOf(motif.motifId, 1), motif);
+  };
+
+  it('is clear for a value feature or closed value of a key on a public tool list, and for a change kind', () => {
+    expect(classOfShape('size', 'file_path=9-32')).toBe('clear');
+    expect(classOfShape('depth', 'file_path=2')).toBe('clear');
+    expect(classOfShape('pattern', 'pattern=anchor')).toBe('clear');
+    expect(classOfShape('enum', 'output_mode=count')).toBe('clear');
+    expect(classOfShape('change', 'key-added')).toBe('clear');
+  });
+
+  it('is thresholded for a key that only another tool sent', () => {
+    expect(classOfShape('size', 'acme_workspace_id=1-8')).toBe('thresholded');
+    expect(classOfShape('enum', 'acme_dry_run=true')).toBe('thresholded');
+  });
+});

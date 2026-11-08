@@ -29,8 +29,19 @@ const identityClear = (identity: StepIdentity): boolean => {
   return identity.host === null || clearOf('host', identity.host);
 };
 
-/** A shape cell's value: the key names of a call are a long tail, so a `keys` cell is held to the thresholded floor; every other facet is a closed list. A class motif that is no shape names nothing here. */
-const shapeClear = (motif: Motif): boolean => parseShapeClass(motif.cls ?? '')?.facet !== 'keys';
+/** The layer 1 facets: each value is `<key>=<member>`, so the key decides the class. */
+const KEYED_FACETS: ReadonlySet<string> = new Set(['size', 'depth', 'extension', 'dir', 'pattern', 'enum']);
+
+/**
+ * A shape cell's value: the key names of a call are a long tail, so a `keys` cell is held to the thresholded floor; a layer 1 facet is clear when its key is on a public tool's pinned list and thresholded when it is a name
+ * any other tool sent; every other facet is a closed list. A class motif that is no shape names nothing here.
+ */
+const shapeClear = (motif: Motif): boolean => {
+  const shape = parseShapeClass(motif.cls ?? '');
+  if (shape === null) return true;
+  if (shape.facet === 'keys') return false;
+  return !KEYED_FACETS.has(shape.facet) || clearOf('key', shape.value.slice(0, shape.value.lastIndexOf('=')));
+};
 
 /** A cell whose motif is not held is `thresholded`: a class the pool cannot read is the strict one. */
 export const cellClassOf = (cell: Cell, motif: Motif | undefined): CellClass =>

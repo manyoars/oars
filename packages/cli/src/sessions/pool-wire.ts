@@ -3,8 +3,8 @@
 // sending, and the server parses it again, field by field, because a live URL takes anything from anyone. This file imports nothing from the file system: the Worker bundles it.
 
 import { ACTION_TABLES, CANONICAL_ACTIONS, mcpOf, type CanonicalAction } from './actions.js';
-import { CUSTOM_AGENT, FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRIVATE, publicEffort, publicVersion, PUBLIC_PACKAGES, projectedAgentType, PUBLIC_FLAGS, REPO_SIZES, TOOL_INPUT_KEYS, VOCAB_VERSION, type RepoSize } from './public-vocabulary.js';
-import { ARG_CLASSES, TARGET_CLASSES, type ArgClass, type TargetClass } from './call-shape.js';
+import { CLOSED_ARG_VALUES, CUSTOM_AGENT, FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRIVATE, publicEffort, publicVersion, PUBLIC_PACKAGES, projectedAgentType, PUBLIC_FLAGS, REPO_SIZES, TOOL_INPUT_KEYS, VOCAB_VERSION, type RepoSize } from './public-vocabulary.js';
+import { ARG_CLASSES, CHANGE_KINDS, DIRECTORY_KINDS, EXTENSION_CLASSES, PATH_DEPTHS, PATTERN_FEATURES, TARGET_CLASSES, VALUE_SIZES, type ArgClass, type ArgFeature, type ArgValue, type ChangeKind, type DirectoryKind, type ExtensionClass, type PathDepth, type PatternFeature, type TargetClass, type ValueSize } from './call-shape.js';
 import type { Cell } from './cells.js';
 import type { Redactor } from './redact.js';
 import type { Motif } from './motif.js';
@@ -102,7 +102,29 @@ export interface SkeletonTool {
   targetClass?: TargetClass | typeof OTHER;
   /** The classes of the call's arguments as a sorted set, derived at capture (`argClassOf`); never a value. Absent on a call captured before it. */
   argClass?: Array<ArgClass | typeof OTHER>;
+  /** Each sent key's value features (layer 1), sorted by key: closed-list members only, never the value. Only a key in `keys` has one. Absent when none is sent. */
+  argFeatures?: SkeletonArgFeature[];
+  /** Each sent key's closed value (layer 1): a boolean as `true` or `false`, or a member of its tool's list in `CLOSED_ARG_VALUES`. Only a key in `keys` has one. Absent when none is sent. */
+  argValues?: SkeletonArgValue[];
+  /** What changed from the previous call of the same tool in the same prompt (layer 1), a sorted set of `CHANGE_KINDS` members. Absent on the first such call and on a call captured before it. */
+  changeKind?: Array<ChangeKind | typeof OTHER>;
   steps: SkeletonStep[];
+}
+
+/** One sent key's value features as the wire holds them: each a closed-list member, or `other` for one this reader does not know. */
+export interface SkeletonArgFeature {
+  key: string;
+  valueSize: ValueSize | typeof OTHER;
+  pathDepth?: PathDepth | typeof OTHER;
+  extension?: ExtensionClass | typeof OTHER;
+  dirKind?: DirectoryKind | typeof OTHER;
+  patternFeatures?: Array<PatternFeature | typeof OTHER>;
+}
+
+/** One sent key's closed value as the wire holds it, or `other` for one off the list this reader holds. */
+export interface SkeletonArgValue {
+  key: string;
+  enumValue: string;
 }
 
 /**
@@ -358,6 +380,31 @@ export const wireKeys = (stored: readonly string[], native: string | undefined, 
 /** A stored closed-list member, else dropped: a hand-edited record never puts a value off the list on the wire. */
 const memberOf = <T extends string>(list: readonly T[], value: unknown): T | undefined => list.find((entry) => entry === value);
 
+/** Whether a closed value is one the wire may carry for a tool's key: a boolean's two words, or a member of the tool's list. */
+export const isClosedValue = (native: string | undefined, key: string, value: string): boolean => value === 'true' || value === 'false' || (native !== undefined && CLOSED_ARG_VALUES.get(native)?.get(key)?.has(value) === true);
+
+/**
+ * A call's value features as the wire sends them (layer 1): only a sent key's, and only closed-list members, so a hand-edited record never puts a value on the wire. An entry whose size is off its list is dropped whole, a
+ * path or pattern field off its list is left out, and a pattern holding no listed feature sends none.
+ */
+export const wireFeatures = (stored: readonly ArgFeature[] | undefined, sent: ReadonlySet<string>): ArgFeature[] =>
+  (stored ?? []).flatMap((feature): ArgFeature[] => {
+    const valueSize = memberOf(VALUE_SIZES, feature.valueSize);
+    if (!sent.has(feature.key) || valueSize === undefined) return [];
+    const pathDepth = memberOf(PATH_DEPTHS, feature.pathDepth);
+    const extension = memberOf(EXTENSION_CLASSES, feature.extension);
+    const dirKind = memberOf(DIRECTORY_KINDS, feature.dirKind);
+    const patternFeatures = PATTERN_FEATURES.filter((entry) => feature.patternFeatures?.includes(entry) === true);
+    return [{ key: feature.key, valueSize, ...(pathDepth === undefined ? {} : { pathDepth }), ...(extension === undefined ? {} : { extension }), ...(dirKind === undefined ? {} : { dirKind }), ...(patternFeatures.length === 0 ? {} : { patternFeatures }) }];
+  });
+
+/** A call's closed values as the wire sends them (layer 1): only a sent key's, and only a value `isClosedValue` admits. */
+export const wireValues = (stored: readonly ArgValue[] | undefined, sent: ReadonlySet<string>, native: string | undefined): ArgValue[] =>
+  (stored ?? []).filter(({ key, enumValue }) => sent.has(key) && isClosedValue(native, key, enumValue)).map(({ key, enumValue }) => ({ key, enumValue }));
+
+/** A call's change kinds as the wire sends them: the closed-list members, in the list's order. */
+export const wireChange = (stored: readonly ChangeKind[] | undefined): ChangeKind[] => CHANGE_KINDS.filter((kind) => stored?.includes(kind) === true);
+
 /** The basename of a program as capture read it: a path never goes on the wire. */
 const basenameOf = (program: string): string => program.replace(/^.*[\\/]/, '');
 
@@ -589,6 +636,10 @@ const transcriptOf = (
     const targetClass = memberOf(TARGET_CLASSES, tool.targetClass);
     const stored = tool.argClass;
     const argClass = stored === undefined ? undefined : ARG_CLASSES.filter((kind) => stored.includes(kind));
+    const sent = new Set(keys);
+    const argFeatures = wireFeatures(tool.argFeatures, sent);
+    const argValues = wireValues(tool.argValues, sent, steps[0]?.native);
+    const changeKind = wireChange(tool.changeKind);
     steppedTools.push({
       side,
       prompt: promptPosition,
@@ -600,6 +651,9 @@ const transcriptOf = (
       ...(dropped === 0 ? {} : { keysDropped: bucketOf('count', dropped) }),
       ...(targetClass === undefined ? {} : { targetClass }),
       ...(argClass === undefined ? {} : { argClass: argClass.sort() }),
+      ...(argFeatures.length === 0 ? {} : { argFeatures }),
+      ...(argValues.length === 0 ? {} : { argValues }),
+      ...(changeKind.length === 0 ? {} : { changeKind }),
       steps,
     });
   }
@@ -753,10 +807,13 @@ export const OPTIONAL = {
   frame: ['harnessVersion', 'model', 'effort', 'day', 'shell', 'reach', 'repoKey', 'orgSize', 'team', 'repoVisibility', 'hour'],
   stack: ['size', 'languageShares'],
   prompt: ['wallSec', 'explore', 'usageResponses', 'intervention'],
-  tool: ['prompt', 'durationMs', 'errorCode', 'recoveryCalls', 'keys', 'keysDropped', 'targetClass', 'argClass'],
+  tool: ['prompt', 'durationMs', 'errorCode', 'recoveryCalls', 'keys', 'keysDropped', 'targetClass', 'argClass', 'argFeatures', 'argValues', 'changeKind'],
   step: ['tokens', 'ms', 'allocated', 'parent', 'skill', 'edges', 'remainingTokens'],
   transcript: ['spawnedIn'],
 } as const satisfies { readonly [level: string]: readonly string[] };
+
+/** The fields of a value feature that only a path or a pattern holds: absent, never null, since a feature of another kind of value has no such field. */
+const FEATURE_OPTIONAL = ['pathDepth', 'extension', 'dirKind', 'patternFeatures'] as const;
 
 /** The most bytes (as JSON) one field this reader does not know, or one literal, may hold: an enumerated value or a literal never needs more, and a newer client's larger structure belongs in a new format version. The deposit's own cap is no part of this. */
 export const MAX_EXTENSION_BYTES = 8 * 1024;
@@ -1103,6 +1160,44 @@ const parseKeys = (held: Collected, native: string | undefined, value: unknown, 
   });
 };
 
+/** The call's `keys` as sent and as read: a feature or a value names one of them, and one that read as `other` (a name off a pinned list this reader holds) makes its entry's key `other` too. */
+interface SentKeys {
+  sent: readonly unknown[];
+  read: readonly string[];
+}
+
+/** A sent key's entry names a key of the call's own `keys`, so a feature or a value never names a key the call did not send. */
+const sentKey = (held: Collected, keys: SentKeys, value: unknown, at: string): string => {
+  const key = textOf(value, at);
+  const index = keys.sent.indexOf(key);
+  if (index < 0) throw new Refused(at, 'not a key the call sent');
+  return keys.read[index] === OTHER ? unknownValue(held, at, key) : key;
+};
+
+const parseFeature = (held: Collected, keys: SentKeys, value: unknown, at: string): SkeletonArgFeature => {
+  const raw = fieldsOf(held, value, at, ['key', 'valueSize'], FEATURE_OPTIONAL);
+  const pathDepth = raw.pathDepth === undefined ? undefined : oneOf(held, PATH_DEPTHS, raw.pathDepth, under(at, 'pathDepth'));
+  const extension = raw.extension === undefined ? undefined : oneOf(held, EXTENSION_CLASSES, raw.extension, under(at, 'extension'));
+  const dirKind = raw.dirKind === undefined ? undefined : oneOf(held, DIRECTORY_KINDS, raw.dirKind, under(at, 'dirKind'));
+  const patternFeatures = raw.patternFeatures === undefined ? undefined : listOf(raw.patternFeatures, under(at, 'patternFeatures'), (entry, entryAt) => oneOf(held, PATTERN_FEATURES, entry, entryAt));
+  return {
+    key: sentKey(held, keys, raw.key, under(at, 'key')),
+    valueSize: oneOf(held, VALUE_SIZES, raw.valueSize, under(at, 'valueSize')),
+    ...(pathDepth === undefined ? {} : { pathDepth }),
+    ...(extension === undefined ? {} : { extension }),
+    ...(dirKind === undefined ? {} : { dirKind }),
+    ...(patternFeatures === undefined ? {} : { patternFeatures }),
+  };
+};
+
+/** A closed value this reader does not hold for the key reads as `other` and goes to the bag, as any value off a list does. */
+const parseValue = (held: Collected, keys: SentKeys, native: string | undefined, value: unknown, at: string): SkeletonArgValue => {
+  const raw = fieldsOf(held, value, at, ['key', 'enumValue']);
+  const key = sentKey(held, keys, raw.key, under(at, 'key'));
+  const enumValue = textOf(raw.enumValue, under(at, 'enumValue'));
+  return { key, enumValue: key !== OTHER && isClosedValue(native, key, enumValue) ? enumValue : unknownValue(held, under(at, 'enumValue'), enumValue) };
+};
+
 const parseTool = (held: Collected, harness: WireHarness, value: unknown, at: string): SkeletonTool => {
   const raw = fieldsOf(held, value, at, ['side', 'status', 'steps'], OPTIONAL.tool);
   const status = oneOf(held, STATUSES, raw.status, under(at, 'status'));
@@ -1113,6 +1208,10 @@ const parseTool = (held: Collected, harness: WireHarness, value: unknown, at: st
   const keysDropped = raw.keysDropped === undefined ? undefined : bucketIn('count', raw.keysDropped, under(at, 'keysDropped'));
   const targetClass = raw.targetClass === undefined ? undefined : oneOf(held, TARGET_CLASSES, raw.targetClass, under(at, 'targetClass'));
   const argClass = raw.argClass === undefined ? undefined : listOf(raw.argClass, under(at, 'argClass'), (entry, entryAt) => oneOf(held, ARG_CLASSES, entry, entryAt));
+  const sentKeys: SentKeys = { sent: Array.isArray(raw.keys) ? raw.keys : [], read: keys ?? [] };
+  const argFeatures = raw.argFeatures === undefined ? undefined : listOf(raw.argFeatures, under(at, 'argFeatures'), (entry, entryAt) => parseFeature(held, sentKeys, entry, entryAt));
+  const argValues = raw.argValues === undefined ? undefined : listOf(raw.argValues, under(at, 'argValues'), (entry, entryAt) => parseValue(held, sentKeys, steps[0]?.native, entry, entryAt));
+  const changeKind = raw.changeKind === undefined ? undefined : listOf(raw.changeKind, under(at, 'changeKind'), (entry, entryAt) => oneOf(held, CHANGE_KINDS, entry, entryAt));
   return {
     side: booleanOf(raw.side, under(at, 'side')),
     prompt: orNull(raw.prompt, under(at, 'prompt'), countOf),
@@ -1124,6 +1223,9 @@ const parseTool = (held: Collected, harness: WireHarness, value: unknown, at: st
     ...(keysDropped === undefined ? {} : { keysDropped }),
     ...(targetClass === undefined ? {} : { targetClass }),
     ...(argClass === undefined ? {} : { argClass }),
+    ...(argFeatures === undefined ? {} : { argFeatures }),
+    ...(argValues === undefined ? {} : { argValues }),
+    ...(changeKind === undefined ? {} : { changeKind }),
     steps,
   };
 };

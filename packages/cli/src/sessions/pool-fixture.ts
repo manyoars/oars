@@ -201,6 +201,7 @@ export const REGISTER_FIXTURE = {
           keys: ['file_path'],
           targetClass: 'source',
           argClass: ['path'],
+          argFeatures: [{ key: 'file_path', valueSize: '9-32', pathDepth: '1', extension: 'source', dirKind: 'source' }],
           steps: [{ ...REGISTER_STEP, status: 'error', action: 'file.read', native: 'Read', identity: null }],
         },
         {
@@ -208,10 +209,14 @@ export const REGISTER_FIXTURE = {
           prompt: 0,
           status: 'ok',
           durationMs: 7,
-          keys: ['command', 'description'],
+          keys: ['command', 'description', 'run_in_background'],
           keysDropped: 1,
           targetClass: 'none',
-          argClass: ['command', 'text'],
+          argClass: ['command', 'flag', 'text'],
+          // The parser does not ask which kind of value holds a pattern, so the fixture carries `patternFeatures` on a key Bash sends.
+          argFeatures: [{ key: 'command', valueSize: '9-32', patternFeatures: ['literal'] }],
+          argValues: [{ key: 'run_in_background', enumValue: 'true' }],
+          changeKind: ['key-added'],
           steps: [
             { ...REGISTER_STEP, allocated: true, skill: 'commit', action: 'shell.exec', native: 'Bash', identity: { program: 'npm', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] } },
             { ...REGISTER_STEP, edges: [{ kind: 'next', target: 0 }], action: 'mcp.call', native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' } },

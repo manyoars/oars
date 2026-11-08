@@ -2,10 +2,10 @@
 // increments with `incrementsOf`, and a local read derives its cells with `cellsOf` over the store it holds, projected the way a deposit projects it (`projectedStore`). Both end in the
 // one `cellsOf`, so a session gives the same cells at the pool and on the machine. This file reads no file system: the pool's Worker bundles it.
 
-import { ARG_CLASSES } from './call-shape.js';
+import { ARG_CLASSES, CHANGE_KINDS, type ArgFeature, type ArgValue } from './call-shape.js';
 import { bucketFields, deriveCells, ENVIRONMENT_BUCKET, isEnvironmentCell, type CellSet, type Grain } from './cells.js';
 import type { Motif } from './motif.js';
-import { bucketOf, floorOf, OTHER, OPEN_GATE, projectedSteps, wireKeys, type SessionSkeleton, type ShellReader, type SkeletonFrame, type SkeletonPrompt, type SkeletonTool, type SkeletonTranscript } from './pool-wire.js';
+import { bucketOf, floorOf, OTHER, OPEN_GATE, projectedSteps, wireChange, wireFeatures, wireKeys, wireValues, type SkeletonArgFeature, type SkeletonArgValue, type SessionSkeleton, type ShellReader, type SkeletonFrame, type SkeletonPrompt, type SkeletonTool, type SkeletonTranscript } from './pool-wire.js';
 import { NO_RECALLS, type RecallGraph } from './recall-consequence.js';
 import { USAGE_FIELDS, harnessOf, type Frame, type Harness, type PromptClass, type PromptObservation, type SessionObservation, type StepEdge, type StepObservation, type ToolObservation, type ToolStatus, type Usage } from './schema.js';
 import type { Store } from './store.js';
@@ -113,7 +113,16 @@ export const projectedStore = (store: Store, read: ShellReader): Store => {
       if (tool.steps === undefined) return tool;
       const steps = projectedSteps(tool, read, harnesses.get(tool.session) ?? 'claude-code');
       const { keys, dropped } = wireKeys(tool.keys, steps[0]?.native, OPEN_GATE);
-      return { ...tool, steps, keys, ...(dropped === 0 ? {} : { keysDropped: dropped }) };
+      const sent = new Set(keys);
+      const argFeatures = wireFeatures(tool.argFeatures, sent);
+      const argValues = wireValues(tool.argValues, sent, steps[0]?.native);
+      const changeKind = wireChange(tool.changeKind);
+      // Only what the wire would carry, so the shape cells here are the pool's.
+      const projected: ToolObservation = { ...tool, steps, keys };
+      delete projected.argFeatures;
+      delete projected.argValues;
+      delete projected.changeKind;
+      return { ...projected, ...(dropped === 0 ? {} : { keysDropped: dropped }), ...(argFeatures.length === 0 ? {} : { argFeatures }), ...(argValues.length === 0 ? {} : { argValues }), ...(changeKind.length === 0 ? {} : { changeKind }) };
     }),
   };
 };
@@ -134,6 +143,25 @@ const frameOf = (frame: SkeletonFrame, harness: Harness): Frame => ({
 
 /** A class this reader does not know counts in `mixed`, the class a prompt that fits no other takes. */
 const classOf = (cls: SkeletonPrompt['cls']): PromptClass => (cls === OTHER ? 'mixed' : cls);
+
+/** A feature whose key or size this reader does not know names nothing it can count, and a field it does not know is a field the call did not send. */
+const knownFeatures = (features: readonly SkeletonArgFeature[] | undefined): ArgFeature[] =>
+  (features ?? []).flatMap(({ key, valueSize, pathDepth, extension, dirKind, patternFeatures }): ArgFeature[] =>
+    key === OTHER || valueSize === OTHER
+      ? []
+      : [
+          {
+            key,
+            valueSize,
+            ...(pathDepth === undefined || pathDepth === OTHER ? {} : { pathDepth }),
+            ...(extension === undefined || extension === OTHER ? {} : { extension }),
+            ...(dirKind === undefined || dirKind === OTHER ? {} : { dirKind }),
+            ...(patternFeatures === undefined ? {} : { patternFeatures: patternFeatures.flatMap((feature) => (feature === OTHER ? [] : [feature])) }),
+          },
+        ],
+  );
+
+const knownValues = (values: readonly SkeletonArgValue[] | undefined): ArgValue[] => (values ?? []).filter(({ key, enumValue }) => key !== OTHER && enumValue !== OTHER);
 
 /** A status this reader does not know is a segment the call did not report. */
 const statusOf = (status: SkeletonTool['status']): ToolStatus => (status === OTHER ? 'none' : status);
@@ -225,7 +253,7 @@ const stepPlaces = ({ tools }: SkeletonTranscript): { n: number; seg: number }[]
 const toolRecords = (id: string, main: string, transcript: KnownTranscript, spawner: SkeletonTranscript | null): ToolObservation[] => {
   const own = stepPlaces(transcript);
   const spawning = spawner === null ? [] : stepPlaces(spawner);
-  return transcript.tools.map(({ side, prompt, status, durationMs, errorCode, keys, keysDropped, targetClass, argClass, steps }, n) => ({
+  return transcript.tools.map(({ side, prompt, status, durationMs, errorCode, keys, keysDropped, targetClass, argClass, argFeatures, argValues, changeKind, steps }, n) => ({
     kind: 'tool',
     cv: '',
     sid: '',
@@ -244,6 +272,9 @@ const toolRecords = (id: string, main: string, transcript: KnownTranscript, spaw
     ...(keysDropped === undefined ? {} : { keysDropped: floorOf('count', keysDropped) }),
     ...(targetClass === undefined ? {} : { targetClass }),
     ...(argClass === undefined ? {} : { argClass: ARG_CLASSES.filter((kind) => argClass.includes(kind)).sort() }),
+    ...(argFeatures === undefined ? {} : { argFeatures: knownFeatures(argFeatures) }),
+    ...(argValues === undefined ? {} : { argValues: knownValues(argValues) }),
+    ...(changeKind === undefined ? {} : { changeKind: CHANGE_KINDS.filter((kind) => changeKind.includes(kind)) }),
     durationMs,
     toolUseId: '',
     harnessVersion: null,

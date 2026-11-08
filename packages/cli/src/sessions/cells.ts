@@ -78,10 +78,11 @@ export const parseRecoveryClass = (cls: string): { code: string; failed: string;
 /**
  * The week cell of a call's shape: `shape:<action>/<facet>/<value>`, one facet of what the call held and never a value. It keeps the harness version bucket and no model, so it joins three dimensions: the call's action, the
  * facet's value, and version. `target` is the class of the path target, `arg` one member of the argument classes (a set is one cell per member, rule 2), `dropped` the `count` bucket of key names not sent, and `keys` the
- * sorted key names joined by commas, the call-shape method's key (a long tail, so the pool holds it to the thresholded floor). A class motif with no prompt class in it, like the others.
+ * sorted key names joined by commas, the call-shape method's key (a long tail, so the pool holds it to the thresholded floor). Layer 1 adds one cell per sent key's value feature (`size`, `depth`, `extension`, `dir`, and each
+ * `pattern` feature, its value `<key>=<member>`), per closed value (`enum`, `<key>=<value>`), and per change kind (`change`). A class motif with no prompt class in it, like the others.
  */
 export const SHAPE_CLASS = 'shape:';
-export const SHAPE_FACETS = ['target', 'arg', 'dropped', 'keys'] as const;
+export const SHAPE_FACETS = ['target', 'arg', 'dropped', 'keys', 'size', 'depth', 'extension', 'dir', 'pattern', 'enum', 'change'] as const;
 export type ShapeFacet = (typeof SHAPE_FACETS)[number];
 export const shapeClass = (action: string, facet: ShapeFacet, value: string): string => `${SHAPE_CLASS}${action}/${facet}/${value}`;
 
@@ -98,6 +99,15 @@ export const shapeFacetsOf = (tool: ToolObservation): [ShapeFacet, string][] => 
   ...(tool.argClass ?? []).map((kind): [ShapeFacet, string] => ['arg', kind]),
   ...(tool.keysDropped === undefined ? [] : [['dropped', String(bucketOf('count', tool.keysDropped))] satisfies [ShapeFacet, string]]),
   ...(tool.keys.length === 0 ? [] : [['keys', [...tool.keys].sort().join(',')] satisfies [ShapeFacet, string]]),
+  ...(tool.argFeatures ?? []).flatMap(({ key, valueSize, pathDepth, extension, dirKind, patternFeatures }): [ShapeFacet, string][] => [
+    ['size', `${key}=${valueSize}`],
+    ...(pathDepth === undefined ? [] : [['depth', `${key}=${pathDepth}`] satisfies [ShapeFacet, string]]),
+    ...(extension === undefined ? [] : [['extension', `${key}=${extension}`] satisfies [ShapeFacet, string]]),
+    ...(dirKind === undefined ? [] : [['dir', `${key}=${dirKind}`] satisfies [ShapeFacet, string]]),
+    ...(patternFeatures ?? []).map((feature): [ShapeFacet, string] => ['pattern', `${key}=${feature}`]),
+  ]),
+  ...(tool.argValues ?? []).map(({ key, enumValue }): [ShapeFacet, string] => ['enum', `${key}=${enumValue}`]),
+  ...(tool.changeKind ?? []).map((kind): [ShapeFacet, string] => ['change', kind]),
 ];
 
 /** Whether a class motif names a prompt class, as opposed to one of the side cells (effort, a failed call's code or what followed it, or a call's shape). */

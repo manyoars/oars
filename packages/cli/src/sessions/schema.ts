@@ -30,6 +30,10 @@
 // reads, not moved ones. A Copilot CLI session with rotated `events.N.jsonl` archives is now read as one session, so its `prompts`, `tools`, `lines`, and skeleton move; one
 // with no archives is unchanged. EXTRACTOR stays 11. A version-16 store's next deposit captures every transcript again from the harness or `raw/`.
 //
+// Version 27 (CAPTURE 27) adds three optional fields to a tool call (`call-shape.ts`), each computed from the input at capture and stored as closed-list members, never a value: `argFeatures` (per key, the value's size and,
+// for a path, its depth, extension class, and folder kind, for a pattern what it uses), `argValues` (a boolean, or a string its tool's closed list holds), and `changeKind` (what changed from the previous call of the
+// same tool in the prompt). It changes no value captured before, so EXTRACTOR stays as it is; a version-26 store's next deposit captures every transcript again, and a call of an older record has none of them.
+//
 // Version 24 (CAPTURE 24, t903) changes three stored values and no field name: a step identity's skill-run name, host, and pull's package name are kept as they are after the operator's redaction (`redactDomains`, the secret and email patterns, the name shape, and the 128-character cap still apply; the operator's exclusion terms are applied at the deposit's gate, not at capture), where before each was `<literal>` unless a public list held it. A store opened at version 23 or older keeps its `<literal>` values until its next deposit captures every transcript again from the harness or `raw/`; the tool record's `steps` moves from class P to class A because those names can be private.
 //
 // Version 23 (CAPTURE 23) keeps a `git checkout` step's target class, `target` `path` or `word` (never the target's text), so the `revert` rule can tell `git checkout -- src/a.ts` and `git checkout --ours src/a.ts` (a
@@ -89,12 +93,12 @@
 // organization domains the operator names. The skeleton holds hashes only.
 
 import type { CanonicalAction } from './actions.js';
-import type { ArgClass, TargetClass } from './call-shape.js';
+import type { ArgClass, ArgFeature, ArgValue, ChangeKind, TargetClass } from './call-shape.js';
 import type { RepoSize } from './public-vocabulary.js';
 import type { SessionFunnel, SessionSetup, SessionTrust } from './session-shape.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '26';
+export const CAPTURE_VERSION = '27';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
@@ -509,6 +513,12 @@ export interface ToolObservation {
   targetClass?: TargetClass;
   /** The classes of the call's arguments (`argClassOf`), a sorted set of `ARG_CLASSES` members, `['none']` for a call with no argument value. Absent on a record captured before CAPTURE 22. Class P: never a value. */
   argClass?: ArgClass[];
+  /** Each argument's features (`argFeaturesOf`), sorted by key: closed-list facts about its value (size, a path's depth, extension class, and folder kind, a pattern's features), never the value. Absent on a record captured before CAPTURE 27. Class A, as `keys` is: a private tool's key names are private. */
+  argFeatures?: ArgFeature[];
+  /** Each argument's closed value (`argValuesOf`): a boolean, or a string on its tool's list in `CLOSED_ARG_VALUES`; a value off the list is not stored. Absent on a record captured before CAPTURE 27, and when the call held none. Class A, as `argFeatures`. */
+  argValues?: ArgValue[];
+  /** What changed from the previous call of the same tool in the same prompt (`changeKindOf`), a sorted set of `CHANGE_KINDS` members. Absent on the first such call and on a record captured before CAPTURE 27. Class P. */
+  changeKind?: ChangeKind[];
   /** The class of a failed call (`errorCodeOf`): a member of `ERROR_CODES`, never result text. Absent on a call that did not fail and on a record captured before CAPTURE 14. Class P. */
   errorCode?: string;
   /** From the call's line to its first result's line; null when either timestamp is missing or no result is in the file. */

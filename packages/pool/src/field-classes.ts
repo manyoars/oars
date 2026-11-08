@@ -1,6 +1,6 @@
 // The pool's class table: one row per field a format 3 batch carries, naming how the pool treats its value. `docs/pool.md`'s wire field register carries the same classes and `field-classes.test.ts` keeps the two equal.
 // A class changes by a deploy of this file, never by a client release: the client redacts and sends every other value as it is (`wireName` in `pool-wire.ts`).
-import { isPublicMcpTool, PUBLIC_FLAGS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SKILLS, PUBLIC_SUBCOMMANDS, publicModel, publicVersion } from '../../cli/src/sessions/public-vocabulary.js';
+import { isPublicMcpTool, PUBLIC_INPUT_KEYS, PUBLIC_FLAGS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SKILLS, PUBLIC_SUBCOMMANDS, publicModel, publicVersion } from '../../cli/src/sessions/public-vocabulary.js';
 
 /**
  * `clear`: a closed list or an opaque client hash, served at the clear floor (`Floors.clear`, `floors.ts`), today the public floor. `thresholded`: held always and served only once `PUBLIC_FLOOR` distinct accounts report the same value (5 by default).
@@ -19,20 +19,26 @@ export const FIELD_CLASSES: { readonly [field: string]: FieldRow } = {
   agentType: { class: 'clear' },
   allocated: { class: 'clear' },
   argClass: { class: 'clear' },
+  argFeatures: { class: 'clear' },
+  argValues: { class: 'clear' },
   cacheRead: { class: 'clear' },
   cacheWrite: { class: 'clear' },
   change: { class: 'clear' },
+  changeKind: { class: 'clear' },
   cls: { class: 'clear' },
   day: { class: 'clear' },
   deltaKind: { class: 'clear' },
+  dirKind: { class: 'clear' },
   deltas: { class: 'clear' },
   durationMs: { class: 'clear' },
   edges: { class: 'clear' },
   editFollowed: { class: 'clear' },
   effort: { class: 'clear' },
+  enumValue: { class: 'clear' },
   errorCode: { class: 'clear' },
   errors: { class: 'clear' },
   explore: { class: 'clear' },
+  extension: { class: 'clear' },
   field: { class: 'clear' },
   fieldsVersion: { class: 'clear' },
   filled: { class: 'clear' },
@@ -48,6 +54,7 @@ export const FIELD_CLASSES: { readonly [field: string]: FieldRow } = {
   id: { class: 'clear' },
   identity: { class: 'clear' },
   input: { class: 'clear' },
+  key: { class: 'clear', longTail: 'thresholded' },
   keys: { class: 'clear', longTail: 'thresholded' },
   keysDropped: { class: 'clear' },
   intervention: { class: 'clear' },
@@ -68,6 +75,8 @@ export const FIELD_CLASSES: { readonly [field: string]: FieldRow } = {
   orgSize: { class: 'clear' },
   output: { class: 'clear' },
   parent: { class: 'clear' },
+  pathDepth: { class: 'clear' },
+  patternFeatures: { class: 'clear' },
   platform: { class: 'clear' },
   plugins: { class: 'clear' },
   program: { class: 'clear', longTail: 'thresholded' },
@@ -102,6 +111,7 @@ export const FIELD_CLASSES: { readonly [field: string]: FieldRow } = {
   transcripts: { class: 'clear' },
   usage: { class: 'clear' },
   usageResponses: { class: 'clear' },
+  valueSize: { class: 'clear' },
   version: { class: 'clear', longTail: 'thresholded' },
   vocabVersion: { class: 'clear' },
   wallSec: { class: 'clear' },
@@ -139,6 +149,8 @@ export const isListed = (field: string, value: string, context?: string): boolea
     case 'skill':
     case 'skills':
       return PUBLIC_SKILLS.has(value);
+    case 'key':
+      return PUBLIC_INPUT_KEYS.has(value);
     default:
       return true;
   }
