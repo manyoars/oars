@@ -22,7 +22,7 @@ const frameClear = (frameBucket: string): boolean => {
 const identityClear = (identity: StepIdentity): boolean => {
   if (identity === null) return true;
   if ('program' in identity) {
-    return clearOf('program', identity.program) && (identity.sub === null || clearOf('sub', identity.sub, identity.program)) && identity.flags.every((flag) => clearOf('flags', flag)) && (identity.pulls ?? []).every((pull) => clearOf('name', pull.name));
+    return clearOf('program', identity.program) && (identity.sub === null || clearOf('sub', identity.sub, identity.program)) && identity.flags.every((flag) => clearOf('flags', flag)) && (identity.pulls ?? []).every((pull) => clearOf('name', pull.name) && (pull.version === null || clearOf('version', pull.version)));
   }
   if ('server' in identity) return clearOf('mcp', identity.server) && clearOf('tool', identity.tool, identity.server);
   if ('skill' in identity) return clearOf('skill', identity.skill);

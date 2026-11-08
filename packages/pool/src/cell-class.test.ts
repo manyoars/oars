@@ -63,6 +63,14 @@ describe('the class of a cell', () => {
     expect(cellClassOf(cellOf('m', frame, 1), motifOf('m', { host: 'a1b2c3' }))).toBe('thresholded');
   });
 
+  it('reads a pull\'s version as well as its name', () => {
+    const pulled = (version: string | null): Motif => motifOf('m', { program: 'npm', sub: 'install', flags: [], pulls: [{ registry: 'npm', name: 'typescript', version }] });
+    expect(cellClassOf(cellOf('m', frame, 1), pulled('^1.2.3'))).toBe('thresholded');
+    expect(cellClassOf(cellOf('m', frame, 1), pulled('1.x'))).toBe('thresholded');
+    expect(cellClassOf(cellOf('m', frame, 1), pulled('1.2.3'))).toBe('clear');
+    expect(cellClassOf(cellOf('m', frame, 1), pulled(null))).toBe('clear');
+  });
+
   it('is thresholded when the motif is not held (fail closed)', () => {
     expect(cellClassOf(cellOf('m', frame, 1), undefined)).toBe('thresholded');
   });
