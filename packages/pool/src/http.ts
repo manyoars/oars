@@ -44,6 +44,8 @@ export interface Env {
   GOOGLE_CLIENT_ID?: string;
   /** Google's client secret, which its token route requires. A Worker secret, never in the repo; unset refuses Google's login. */
   GOOGLE_CLIENT_SECRET?: string;
+  /** How many sign-ins one client address may start in an hour. A whole number of at least 1; unset, or anything else, is 10. */
+  LOGIN_STARTS_PER_HOUR?: string;
   /** An Ed25519 private key as a JWK. */
   BUNDLE_SIGNING_KEY?: string;
   /** The pool-wide HMAC key for a hashed field (a host). Unset refuses every deposit, so a host is never stored in clear. */

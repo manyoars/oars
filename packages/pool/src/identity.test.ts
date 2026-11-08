@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { anyNumber, anyText, containing, fieldOf, matching, startPool, stubUser, TEST_GOOGLE_SECRET, textOf, wranglerConfig, type TestPool } from './test-pool.js';
 import worker from './worker.js';
@@ -39,6 +40,12 @@ const startOf = async (provider: string, target: TestPool = pool): Promise<{ han
   return { handle: textOf(started.json, 'handle'), userCode, device: deviceOf(userCode) };
 };
 
+/** One poll of the pool, made due first: the pool holds the provider's interval per handle, and a poll right after a start comes early (the early poll has its own tests). */
+const poll = async (handle: string, target: TestPool = pool): Promise<{ status: number; json: unknown }> => {
+  await target.due(handle);
+  return target.post('/v1/login/poll', { handle });
+};
+
 /** The handle with one bit of one byte flipped: `where` picks the nonce (front), the ciphertext (middle), or the tag (end). A bit of the bytes and not a character of the text, since the last base64url character can carry unused bits. */
 const altered = (handle: string, where: 'front' | 'middle' | 'end'): string => {
   const bytes = Buffer.from(handle, 'base64url');
@@ -63,10 +70,10 @@ describe.each(FLOWS)('the $provider brokered sign-in', ({ provider, clientId, de
 
   it('answers pending until the person approves, then reads the person with the token it received and answers the pool credential', async () => {
     const { handle, device } = await startOf(provider);
-    expect(await pool.post('/v1/login/poll', { handle })).toEqual({ status: 200, json: { status: 'pending' } });
+    expect(await poll(handle)).toEqual({ status: 200, json: { status: 'pending' } });
     pool.stub.approve(device, stubUser('101'));
     const before = pool.stub.calls.length;
-    const signedIn = await pool.post('/v1/login/poll', { handle });
+    const signedIn = await poll(handle);
     expect(signedIn.status).toBe(200);
     expect(signedIn.json).toMatchObject({ status: 'authorized', token: anyText(), account: matching(/^acct_[0-9a-f]{32}$/), expiresAt: anyNumber() });
     // Exactly the public half: a matcher on the whole answer would still pass if the private `d` came along.
@@ -91,13 +98,13 @@ describe.each(FLOWS)('the $provider brokered sign-in', ({ provider, clientId, de
   ])('maps the provider\'s %s to %s', async (word, status) => {
     const { handle, device } = await startOf(provider);
     pool.stub.script(device, word);
-    expect(await pool.post('/v1/login/poll', { handle })).toEqual({ status: 200, json: { status } });
+    expect(await poll(handle)).toEqual({ status: 200, json: { status } });
   });
 
   it('reads a code the provider has forgotten as expired', async () => {
     const { handle, device } = await startOf(provider);
     pool.stub.forget(device);
-    expect(await pool.post('/v1/login/poll', { handle })).toEqual({ status: 200, json: { status: 'expired' } });
+    expect(await poll(handle)).toEqual({ status: 200, json: { status: 'expired' } });
   });
 
   it('keeps one pseudonym across sign-ins, and a new credential each time', async () => {
@@ -112,20 +119,89 @@ describe.each(FLOWS)('the $provider brokered sign-in', ({ provider, clientId, de
     const { handle, device } = await startOf(provider);
     pool.stub.approve(device, stubUser('301'));
     const before = pool.stub.calls.length;
-    for (const where of ['front', 'middle', 'end'] as const) expect(await pool.post('/v1/login/poll', { handle: altered(handle, where) }), where).toMatchObject({ status: 401, json: { error: 'invalid_handle' } });
-    expect(await pool.post('/v1/login/poll', { handle: handle.slice(0, 10) })).toMatchObject({ status: 401, json: { error: 'invalid_handle' } });
-    expect(await pool.post('/v1/login/poll', { handle: 'not a handle!' })).toMatchObject({ status: 401, json: { error: 'invalid_handle' } });
+    for (const where of ['front', 'middle', 'end'] as const) expect(await poll(altered(handle, where)), where).toMatchObject({ status: 401, json: { error: 'invalid_handle' } });
+    expect(await poll(handle.slice(0, 10))).toMatchObject({ status: 401, json: { error: 'invalid_handle' } });
+    expect(await poll(handle.slice(0, 40))).toMatchObject({ status: 401, json: { error: 'invalid_handle' } });
+    expect(await poll('not a handle!')).toMatchObject({ status: 401, json: { error: 'invalid_handle' } });
     // Nothing reached the provider for any of them.
     expect(pool.stub.calls.length).toBe(before);
+  });
+
+  it("answers slow_down itself to a poll that comes before the provider's interval, without calling the provider", async () => {
+    const { handle, device } = await startOf(provider);
+    pool.stub.approve(device, stubUser('501'));
+    const before = pool.stub.calls.length;
+    // No `due`: the start set the next poll one interval (1 second in the stub) out, and this comes at once.
+    expect(await pool.post('/v1/login/poll', { handle })).toEqual({ status: 200, json: { status: 'slow_down' } });
+    expect(await pool.post('/v1/login/poll', { handle })).toEqual({ status: 200, json: { status: 'slow_down' } });
+    expect(pool.stub.calls.length).toBe(before);
+    // A poll that is due reaches the provider, and an approved one signs in.
+    expect(await poll(handle)).toMatchObject({ status: 200, json: { status: 'authorized' } });
+    expect(pool.stub.calls.length).toBeGreaterThan(before);
+  });
+
+  it('holds the interval after a poll: the next poll is early until the interval has passed', async () => {
+    const { handle } = await startOf(provider);
+    expect(await poll(handle)).toEqual({ status: 200, json: { status: 'pending' } });
+    const before = pool.stub.calls.length;
+    expect(await pool.post('/v1/login/poll', { handle })).toEqual({ status: 200, json: { status: 'slow_down' } });
+    expect(pool.stub.calls.length).toBe(before);
+  });
+
+  it("adds 5 seconds to the handle's interval when the provider says slow_down, and holds it", async () => {
+    const { handle, device } = await startOf(provider);
+    pool.stub.script(device, 'slow_down');
+    const db = await pool.db();
+    const rowOf = async (): Promise<{ interval: unknown; wait: unknown }> => {
+      const row = await db.prepare('SELECT interval_sec AS interval, next_at - ? AS wait FROM login_polls WHERE handle_hash = ?').bind(Date.now(), createHash('sha256').update(handle).digest('hex')).first();
+      return { interval: fieldOf(row, 'interval'), wait: fieldOf(row, 'wait') };
+    };
+    expect(await poll(handle)).toEqual({ status: 200, json: { status: 'slow_down' } });
+    const held = await rowOf();
+    expect(held.interval).toBe(6);
+    // The next poll is 6 seconds out (less the little that passed), and the pool answers it itself.
+    expect(Number(held.wait)).toBeGreaterThan(4_000);
+    const before = pool.stub.calls.length;
+    expect(await pool.post('/v1/login/poll', { handle })).toEqual({ status: 200, json: { status: 'slow_down' } });
+    expect(pool.stub.calls.length).toBe(before);
+  });
+
+  it('turns away a handle the pool holds no record of, and calls nobody', async () => {
+    const { handle } = await startOf(provider);
+    const db = await pool.db();
+    await db.prepare('DELETE FROM login_polls WHERE handle_hash = ?').bind(createHash('sha256').update(handle).digest('hex')).run();
+    const before = pool.stub.calls.length;
+    expect(await poll(handle)).toMatchObject({ status: 401, json: { error: 'invalid_handle' } });
+    expect(pool.stub.calls.length).toBe(before);
+  });
+
+  it('binds the provider and the expiry to the handle: a swapped provider or a later expiry fails closed, with no provider call', async () => {
+    const { handle, device } = await startOf(provider);
+    pool.stub.approve(device, stubUser('502'));
+    const bytes = Buffer.from(handle, 'base64url');
+    const nameAt = 13;
+    const nameLength = bytes[12] ?? 0;
+    expect(bytes.subarray(nameAt, nameAt + nameLength).toString('utf8')).toBe(provider);
+    // github and google are both 6 bytes, so the swap keeps the layout and only the tag can tell.
+    const swapped = Buffer.from(bytes);
+    Buffer.from(provider === 'github' ? 'google' : 'github').copy(swapped, nameAt);
+    const later = Buffer.from(bytes);
+    later.writeBigUInt64BE(later.readBigUInt64BE(nameAt + nameLength) + 3_600_000n, nameAt + nameLength);
+    const before = pool.stub.calls.length;
+    expect(await poll(swapped.toString('base64url'))).toMatchObject({ status: 401, json: { error: 'invalid_handle' } });
+    expect(await poll(later.toString('base64url'))).toMatchObject({ status: 401, json: { error: 'invalid_handle' } });
+    expect(pool.stub.calls.length).toBe(before);
+    // The handle itself is untouched and still signs in.
+    expect(await poll(handle)).toMatchObject({ status: 200, json: { status: 'authorized' } });
   });
 
   it('turns away a handle another Worker sealed, and one a client forged from a device code', async () => {
     const other = await startPool({ PSEUDONYM_KEY: 'another-workers-pseudonym-key' });
     try {
       const foreign = await startOf(provider, other);
-      expect(await pool.post('/v1/login/poll', { handle: foreign.handle })).toMatchObject({ status: 401, json: { error: 'invalid_handle' } });
+      expect(await poll(foreign.handle)).toMatchObject({ status: 401, json: { error: 'invalid_handle' } });
       const forged = Buffer.from(JSON.stringify({ provider, deviceCode: 'device-1', expiresAt: Date.now() + 60_000 })).toString('base64url');
-      expect(await pool.post('/v1/login/poll', { handle: forged })).toMatchObject({ status: 401, json: { error: 'invalid_handle' } });
+      expect(await poll(forged)).toMatchObject({ status: 401, json: { error: 'invalid_handle' } });
     } finally {
       await other.dispose();
     }
@@ -143,7 +219,7 @@ describe.each(FLOWS)('the $provider brokered sign-in', ({ provider, clientId, de
     for (const url of [tokenUrl, userUrl]) {
       pool.stub.html.add(url);
       try {
-        expect(await pool.post('/v1/login/poll', { handle }), url).toMatchObject({ status: 502, json: { error: 'provider_error' } });
+        expect(await poll(handle), url).toMatchObject({ status: 502, json: { error: 'provider_error' } });
       } finally {
         pool.stub.html.clear();
       }
@@ -156,7 +232,7 @@ describe.each(FLOWS)('the $provider brokered sign-in', ({ provider, clientId, de
     pool.stub.approve(device, stubUser('402'));
     pool.stub.forbidden.add(userUrl);
     try {
-      expect(await pool.post('/v1/login/poll', { handle })).toMatchObject({ status: 502, json: { error: 'provider_error' } });
+      expect(await poll(handle)).toMatchObject({ status: 502, json: { error: 'provider_error' } });
     } finally {
       pool.stub.forbidden.clear();
     }
@@ -170,7 +246,7 @@ describe.each(FLOWS)('the $provider brokered sign-in', ({ provider, clientId, de
     const db = await pool.db();
     const before = (await db.prepare('SELECT COUNT(*) AS n FROM tokens').first('n')) as number;
     try {
-      expect(await pool.post('/v1/login/poll', { handle })).toMatchObject({ status: 502, json: { error: 'provider_error' } });
+      expect(await poll(handle)).toMatchObject({ status: 502, json: { error: 'provider_error' } });
     } finally {
       pool.stub.statused.clear();
     }
@@ -186,7 +262,7 @@ describe.each(FLOWS)('the $provider brokered sign-in', ({ provider, clientId, de
     }
     const { handle, device } = await startOf(provider);
     pool.stub.script(device, 'incorrect_client_credentials');
-    expect(await pool.post('/v1/login/poll', { handle })).toMatchObject({ status: 502, json: { error: 'provider_error', message: containing('incorrect_client_credentials') } });
+    expect(await poll(handle)).toMatchObject({ status: 502, json: { error: 'provider_error', message: containing('incorrect_client_credentials') } });
   });
 });
 
@@ -234,7 +310,7 @@ describe('the pseudonym', () => {
     const github = await pool.signIn('github', user);
     const { handle, device } = await startOf('google');
     pool.stub.approve(device, user);
-    const google = await pool.post('/v1/login/poll', { handle });
+    const google = await poll(handle);
     expect(github.account).not.toBe(fieldOf(google.json, 'account'));
     const stored = await everyRow();
     expect(stored).toContain(github.account);
@@ -253,6 +329,39 @@ describe('the old token route', () => {
   });
 });
 
+describe('the start route per client address', () => {
+  it("answers 429 with Retry-After once an address has started its hour's sign-ins, without calling the provider, and leaves another address alone", async () => {
+    const capped = await startPool({ LOGIN_STARTS_PER_HOUR: '3' });
+    try {
+      const from = (address: string): ReturnType<TestPool['post']> => capped.post('/v1/login/start', { provider: 'github' }, undefined, { 'cf-connecting-ip': address });
+      for (let started = 0; started < 3; started += 1) expect((await from('203.0.113.7')).status).toBe(200);
+      const before = capped.stub.calls.length;
+      expect(await from('203.0.113.7')).toMatchObject({ status: 429, json: { error: 'rate_limited' } });
+      expect(capped.stub.calls.length).toBe(before);
+      expect((await from('203.0.113.8')).status).toBe(200);
+      const over = await capped.send('/v1/login/start', { method: 'POST', body: JSON.stringify({ provider: 'github' }) }, undefined, { 'content-type': 'application/json', 'cf-connecting-ip': '203.0.113.7' });
+      expect(over.status).toBe(429);
+      expect(Number(over.headers.get('retry-after'))).toBeGreaterThan(0);
+      expect(Number(over.headers.get('retry-after'))).toBeLessThanOrEqual(3_600);
+      // The table names no address: the client is an HMAC.
+      const rows = JSON.stringify((await (await capped.db()).prepare('SELECT * FROM login_starts').all()).results);
+      expect(rows).not.toContain('203.0.113');
+    } finally {
+      await capped.dispose();
+    }
+  }, 60_000);
+
+  it('counts a request with no address as one client of its own', async () => {
+    const capped = await startPool({ LOGIN_STARTS_PER_HOUR: '1' });
+    try {
+      expect((await capped.post('/v1/login/start', { provider: 'github' })).status).toBe(200);
+      expect((await capped.post('/v1/login/start', { provider: 'github' })).status).toBe(429);
+    } finally {
+      await capped.dispose();
+    }
+  }, 60_000);
+});
+
 describe('sign-in rows', () => {
   it('sheds the credentials past their expiry at a login, and keeps the live ones', async () => {
     const db = await pool.db();
@@ -267,7 +376,7 @@ describe('sign-in rows', () => {
 
 // Outside the runtime, where the clock and a stand-in fetch can be set.
 describe.each(['github', 'google'])('%s with the Worker\'s clock and network set by the test', (provider) => {
-  const db = { prepare: () => ({ bind: () => ({ first: () => Promise.resolve(null), all: () => Promise.resolve({ results: [] }), run: () => Promise.resolve({ meta: { changes: 1 } }) }) }), batch: () => Promise.resolve([]) };
+  const db = { prepare: () => ({ bind: () => ({ first: () => Promise.resolve({ count: 1 }), all: () => Promise.resolve({ results: [] }), run: () => Promise.resolve({ meta: { changes: 1 } }) }) }), batch: () => Promise.resolve([]) };
   const env = { DB: db, PSEUDONYM_KEY: 'k', BUNDLE_SIGNING_KEY: '{}', GITHUB_CLIENT_ID: 'gh', GOOGLE_CLIENT_ID: 'goog', GOOGLE_CLIENT_SECRET: 'sekret' };
   const post = (path: string, body: object, over: object = {}): Promise<Response> => worker.fetch(new Request(`http://pool.test${path}`, { method: 'POST', body: JSON.stringify(body) }), { ...env, ...over });
   const device = (): Response => Response.json({ device_code: 'dc-1', user_code: 'ABCD-EFGH', verification_uri: 'https://example.test/device', expires_in: 600, interval: 5 });
@@ -338,6 +447,38 @@ describe.each(['github', 'google'])('%s with the Worker\'s clock and network set
     expect(await post('/v1/login/poll', { handle }, gone)).toMatchObject({ status: 503 });
     expect(await post('/v1/login/poll', { handle }, { BUNDLE_SIGNING_KEY: '' })).toMatchObject({ status: 503 });
     expect(await post('/v1/login/poll', { handle }, { PSEUDONYM_KEY: '' })).toMatchObject({ status: 503 });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it('refuses with 503 and calls nobody when the interval store fails: a bound that opens when its store fails is no bound', async () => {
+    const store = (answers: { first: unknown; changes: number }, failAt: (sql: string) => boolean = () => false): object => ({
+      prepare: (sql: string) => ({
+        bind: () => ({
+          first: () => (failAt(sql) ? Promise.reject(new Error('d1 down')) : Promise.resolve(answers.first)),
+          all: () => Promise.resolve({ results: [] }),
+          run: () => (failAt(sql) ? Promise.reject(new Error('d1 down')) : Promise.resolve({ meta: { changes: answers.changes } })),
+        }),
+      }),
+      batch: () => Promise.resolve([]),
+    });
+    const fine = { first: { count: 1 }, changes: 1 };
+    const fetcher = vi.fn(() => Promise.resolve(device()));
+    vi.stubGlobal('fetch', fetcher);
+    // The count failing, and the count coming back as no number.
+    expect(await post('/v1/login/start', { provider }, { DB: store(fine, (sql) => sql.includes('login_starts')) })).toMatchObject({ status: 503 });
+    expect(await post('/v1/login/start', { provider }, { DB: store({ first: null, changes: 1 }) })).toMatchObject({ status: 503 });
+    expect(fetcher).not.toHaveBeenCalled();
+    // The handle's row failing to write: the handle could never be polled, so none is handed out.
+    expect(await post('/v1/login/start', { provider }, { DB: store(fine, (sql) => sql.includes('INSERT INTO login_polls')) })).toMatchObject({ status: 503 });
+    const handle = textOf(await (await post('/v1/login/start', { provider })).json(), 'handle');
+    fetcher.mockClear();
+    expect(await post('/v1/login/poll', { handle }, { DB: store(fine, (sql) => sql.startsWith('UPDATE login_polls SET next_at = ? +')) })).toMatchObject({ status: 503 });
+    expect(fetcher).not.toHaveBeenCalled();
+    // The provider's slow_down could not be held.
+    fetcher.mockImplementation(() => Promise.resolve(Response.json({ error: 'slow_down' })));
+    expect(await post('/v1/login/poll', { handle }, { DB: store(fine, (sql) => sql.includes('interval_sec = interval_sec +')) })).toMatchObject({ status: 503 });
+    // A handle with no row, the store answering: start again.
+    fetcher.mockClear();
+    expect(await post('/v1/login/poll', { handle }, { DB: store({ first: null, changes: 0 }) })).toMatchObject({ status: 401 });
     expect(fetcher).not.toHaveBeenCalled();
   });
 });

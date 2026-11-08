@@ -195,6 +195,8 @@ export interface TestPool {
   get: (path: string, token?: string) => Promise<Answer>;
   raw: (path: string, token?: string, headers?: { [name: string]: string }) => Promise<RawAnswer>;
   /** The sign-in the CLI performs through the pool's two login routes, with the provider's approval given at the stub between them. */
+  /** Makes a handle's next poll due now, as if the provider's interval had passed: the pool holds the interval per handle, and a poll right after a start comes early. */
+  due: (handle: string) => Promise<void>;
   signIn: (provider: string, user: StubUser) => Promise<{ token: string; account: string; signingKey: unknown }>;
   stub: StubProvider;
   signingKey: () => { kty: string; crv: string; x: string };
@@ -239,7 +241,7 @@ export const startPool = async (bindings: { [name: string]: string } = {}, optio
     // The bindings wrangler.jsonc names. Miniflare's local Analytics Engine accepts a write and keeps nothing, so a test reads what the Worker wrote to it through a fake (telemetry.test.ts).
     r2Buckets: { TELEMETRY: 'telemetry-test', ...(options.raw === false ? {} : { RAW: 'oars-pool-raw' }) },
     analyticsEngineDatasets: { TELEMETRY_EVENTS: { dataset: 'oars_telemetry' } },
-    bindings: { ...clientIds(config.parsed), GOOGLE_CLIENT_SECRET: TEST_GOOGLE_SECRET, PSEUDONYM_KEY: 'a-test-pseudonym-key', INGEST_HASH_KEY: 'a-test-ingest-hash-key', BUNDLE_SIGNING_KEY: key.jwk, COVENANT_VERSION: 'v1', FETCH_CAP: '1000', ...bindings },
+    bindings: { ...clientIds(config.parsed), GOOGLE_CLIENT_SECRET: TEST_GOOGLE_SECRET, PSEUDONYM_KEY: 'a-test-pseudonym-key', INGEST_HASH_KEY: 'a-test-ingest-hash-key', BUNDLE_SIGNING_KEY: key.jwk, COVENANT_VERSION: 'v1', FETCH_CAP: '1000', LOGIN_STARTS_PER_HOUR: '1000', ...bindings },
     outboundService: stub.outbound,
   });
   keepAlive(miniflare);
@@ -268,6 +270,9 @@ export const startPool = async (bindings: { [name: string]: string } = {}, optio
     const { status, json } = await raw(path, token);
     return { status, json };
   };
+  const due = async (handle: string): Promise<void> => {
+    await database.prepare('UPDATE login_polls SET next_at = 0 WHERE handle_hash = ?').bind(createHash('sha256').update(handle).digest('hex')).run();
+  };
   return {
     miniflare,
     url: async () => (await miniflare.ready).origin,
@@ -279,11 +284,14 @@ export const startPool = async (bindings: { [name: string]: string } = {}, optio
     get,
     raw,
     stub,
+    due,
     signIn: async (provider, user) => {
       const started = await post('/v1/login/start', { provider });
       const issued = /USER-(\d+)/.exec(textOf(started.json, 'userCode'))?.[1];
       stub.approve(`device-${issued ?? ''}`, user);
-      const signedIn = await post('/v1/login/poll', { handle: textOf(started.json, 'handle') });
+      const handle = textOf(started.json, 'handle');
+      await due(handle);
+      const signedIn = await post('/v1/login/poll', { handle });
       return { token: textOf(signedIn.json, 'token'), account: textOf(signedIn.json, 'account'), signingKey: fieldOf(signedIn.json, 'signingKey') };
     },
     signingKey: () => ({ kty: 'OKP', crv: 'Ed25519', x: key.x }),
