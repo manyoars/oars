@@ -93,9 +93,11 @@ const passwordLike = (value: string): boolean => value.length >= 4 && /[\d!@#$%^
 const rawRules: Redactor = (text) =>
   text
     .replace(/-----BEGIN PGP PRIVATE KEY BLOCK-----[\s\S]*?(?:-----END PGP PRIVATE KEY BLOCK-----|$)/g, '<secret>')
-    .replace(/PuTTY-User-Key-File-\d+:[\s\S]*?(?:Private-MAC:[ \t]*\w*|$)/g, '<secret>')
+    .replace(/PuTTY-User-Key-File-\d+:[\s\S]*?Private-Lines:[\s\S]*?(?:Private-MAC:[ \t]*\w*|$)/g, '<secret>')
+    .replace(/\bdop_v1_[a-f0-9]{64}\b/g, '<secret>')
     .replace(AWS_SECRET_KEY, (key) => (/[/+]/.test(key) && looksRandom(key) ? '<secret>' : key))
-    .replace(/((?<!\S)(?:-u|--user)\s+["']?(?!\d+:)[^\s:"']+:)[^\s"']{4,}/g, '$1<secret>')
+    .replace(/((?<!\S)(?:-u\s*|--user\s+)["']?(?!\d+:)[^\s:"']+:)[^\s"']{4,}/g, '$1<secret>')
+    .replace(/(?<!\S)-p(["'])[^"'\n]{4,}\1/g, '-p$1<secret>$1')
     .replace(/(?<!\S)-p([^\s"'-][^\s"']{3,})/g, (flag, value: string) => (passwordLike(value) ? '-p<secret>' : flag))
     .replace(/(\bsshpass\s+-p\s*)(?:"[^"]*"|'[^']*'|[^\s"']+)/g, '$1<secret>')
     .replace(/((?<!\S)-W\s+)(?:(["'])[^"']+\2|([^\s"'/:-][^\s"'/:]{3,}))/g, (flag, lead: string, quote: string | undefined, bare: string | undefined) =>

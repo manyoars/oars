@@ -56,6 +56,10 @@ const SHAPES: readonly Shape[] = [
   { name: 'ADMIN_PIN=', text: 'ADMIN_PIN=482913', leaks: ['482913'] },
   { name: 'DB_HOST_KEY=', text: 'DB_HOST_KEY=abcd1234', leaks: ['abcd1234'] },
   { name: 'MAPBOX_SK=', text: 'MAPBOX_SK=q8z7x6c5v4b3n2m1', leaks: ['q8z7x6c5v4b3n2m1'] },
+  { name: 'a DigitalOcean token', text: `dop_v1_${HEX(64, 13)}`, leaks: [HEX(64, 13)] },
+  { name: 'curl -u attached to its user', text: 'curl -uadmin:hunter2pass https://api.example.com/v1', leaks: ['hunter2pass'] },
+  { name: "mysql -p'<password>'", text: "mysql -u root -p'P@ssw0rd!9x' db", leaks: ['P@ssw0rd!9x'] },
+  { name: 'mysql -p"<password>"', text: 'mysql -u root -p"P@ssw0rd!9y" db', leaks: ['P@ssw0rd!9y'] },
   { name: 'a lower-case GitHub token', text: `ghp_${pick(LOWER, 36, 11)}`, leaks: [pick(LOWER, 36, 11)] },
   { name: 'a lower-case Slack token', text: `xoxb-1234567890-${pick(LOWER, 24, 12)}`, leaks: [pick(LOWER, 24, 12)] },
 ];
@@ -163,6 +167,11 @@ describe('what the new rules leave alone', () => {
     ['an attached port flag', 'docker run -p3000:3000/tcp -p127.0.0.1:80:80 nginx'],
     ['a compiler flag', 'gcc -pthread -pedantic -Wall -Werror main.c'],
     ['a uid:gid user', 'docker run -u 1000:1000 alpine'],
+    ['an attached uid:gid user', 'docker run -u1000:1000 alpine'],
+    ['a PGP public key block', `-----BEGIN PGP PUBLIC KEY BLOCK-----
+Comment: a public key is meant to be shared
+-----END PGP PUBLIC KEY BLOCK-----`],
+    ['a prose mention of a PuTTY key file header', 'PuTTY-User-Key-File-3: is the header line; it is followed by Encryption and Comment'],
     ['a flag', 'curl --user-agent x --password-stdin -s url, make --pass-through=1'],
     ['a lower-case assignment inside a line', 'run --out=build2024 then ?page=2&sort=name'],
   ] as const;
