@@ -134,4 +134,21 @@ describe('capture stores the two classes and never the values', () => {
       expect(classOfAbsolute(root, 'package-lock.json', false)).toBe('lockfile');
     });
   });
+
+  it('reads the depth of a relative and of an absolute path to one file the same when the cwd is a folder inside the repository', () => {
+    const root = '/home/me/acme';
+    const cwd = `${root}/packages/app`;
+    const line = (type: string, content: unknown, model?: string) => JSON.stringify({ type, timestamp: '2026-06-10T00:00:00.000Z', cwd, message: { role: type, ...(model === undefined ? {} : { model }), content } });
+    const text = [
+      line('user', 'go'),
+      line('assistant', [{ type: 'tool_use', id: 't1', name: 'Read', input: { file_path: 'src/ui/button.ts' } }], 'model-a'),
+      line('assistant', [{ type: 'tool_use', id: 't2', name: 'Read', input: { file_path: `${cwd}/src/ui/button.ts` } }], 'model-a'),
+    ].join('\n');
+    const tools = captureSession({ text, session: 's', project: 'p', rev: 1, at: '', bytes: 0, redact: makeRedactor(), repoRoot: () => root }).tools;
+    const [relative, absolute] = tools.map((call) => call.argFeatures?.[0]);
+    expect(relative).toBeDefined();
+    // The value's length differs; the path's own features do not.
+    expect({ ...relative, valueSize: '' }).toEqual({ ...absolute, valueSize: '' });
+    expect(tools[0]?.argFeatures?.[0]).toMatchObject({ pathDepth: '3-4' });
+  });
 });
