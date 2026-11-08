@@ -91,6 +91,22 @@ describe('the due check', () => {
     expect(readFileSync(join(dir, 'pool-send.log'), 'utf8')).toBe(`${new Date(T0).toISOString()} spawn denied\n`);
   });
 
+  it('retries a failed start only at the next trigger after the debounce', async () => {
+    const dir = store();
+    const { deps, clock, started } = rig(dir);
+    const working = deps.start;
+    deps.start = () => {
+      throw new Error('spawn denied');
+    };
+    expect(await catchUp(deps)).toBe('failed');
+    deps.start = working;
+    clock.at = T0 + 30 * MINUTE;
+    expect(await catchUp(deps)).toBe('not-due');
+    clock.at = T0 + SEND_EVERY_MS;
+    expect(await catchUp(deps)).toBe('started');
+    expect(started).toEqual([T0 + SEND_EVERY_MS]);
+  });
+
   it('fails open when the store cannot even take the log', async () => {
     const dir = store();
     const { deps } = rig(join(dir, 'file-not-folder', 'sessions'));

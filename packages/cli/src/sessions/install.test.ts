@@ -506,7 +506,7 @@ describe('the task an earlier version registered', () => {
     const off = await sessionsHookInstall(deps, { ...alone, schedule: 'off' });
     expect(readFileSync(join(store, 'schedule.json'), 'utf8')).toBe('{"schedule":"off"}\n');
     expect(off.document).toMatchObject({ ok: true, sends: 'off' });
-    expect(off.text).toContain('Background sweeps and sends are off');
+    expect(off.text).toContain('The background sweep and the pool send are off');
     expect(off.text).toContain('--schedule on');
     const on = await sessionsHookInstall(deps, { ...alone, schedule: 'on' });
     expect(existsSync(join(store, 'schedule.json'))).toBe(false);
@@ -522,6 +522,18 @@ describe('the task an earlier version registered', () => {
     expect(linux.text.split('\n')[0]).toBe('No scheduled task to remove (only Windows ever had one).');
     const windows = await sessionsHookInstall({ ...deps, install: windowsWith(dir, false) }, { ...alone, schedule: 'off' });
     expect(windows.text.split('\n')[0]).toBe('No scheduled task to remove.');
+  });
+
+  it('--schedule on through the parser clears the recorded opt-out', async () => {
+    const dir = scratch();
+    const store = join(dir, 'sessions');
+    mkdirSync(store, { recursive: true });
+    writeFileSync(join(store, 'schedule.json'), '{"schedule":"off"}\n');
+    const { deps } = harness();
+    deps.install = runtimeIn(dir, 0, 'linux');
+    deps.sessions = { storeDir: store, projectsRoot: join(dir, 'projects'), stdin: process.stdin, stdout: { write: () => true } };
+    expect(await run(['sessions', 'hook', 'install', '--schedule', 'on'], deps)).toBe(ExitCode.OK);
+    expect(existsSync(join(store, 'schedule.json'))).toBe(false);
   });
 
   it('--schedule off alone writes no settings file and only removes the task', async () => {

@@ -2,7 +2,7 @@
 // send is due (at most about hourly) and starts it detached, so the caller never waits and its exit code and output never change. The detached process is `hook-bin.js nightly` (the name
 // is the persisted trigger word in the step log): it deposits every harness the person allowed, including those with no session-end hook, derives, sends telemetry when telemetry is on,
 // and sends the pool outbox after the covenant is accepted; each of those gates itself, so a start by this check sends nothing a person has not agreed to.
-// Fail-open: an error is written to `pool-send.log` in the session store (masked, one line) and the next trigger tries again.
+// Fail-open: an error is written to `pool-send.log` in the session store (masked, one line). The mark is written before the start, so a failed start is retried by the next trigger after the debounce, about an hour later.
 import { spawn } from 'node:child_process';
 import { appendFile, mkdir, open, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -105,7 +105,7 @@ export const catchUp = async (deps: CatchUpDeps): Promise<CatchUpResult> => {
     deps.start();
     return 'started';
   } catch (error) {
-    // The mark is already written when the start itself failed; the claim holds the rest of this window, and the next window tries again.
+    // The mark is already written when the start itself failed; the debounce holds until SEND_EVERY_MS after the mark, and the next trigger after that retries.
     const line = await errorLine(deps.storeDir, error).catch(() => 'unknown error');
     await mkdir(deps.storeDir, { recursive: true }).then(() => appendFile(join(deps.storeDir, LOG), `${new Date(deps.now()).toISOString()} ${line}\n`, 'utf8')).catch(() => undefined);
     return 'failed';
@@ -124,7 +124,7 @@ export const storeReady = (storeDir: string): (() => Promise<boolean>) => async 
 
 /**
  * Starts `node <hook-bin> nightly` detached with no stdio and never waits for it, as telemetry's sender and the gate's helper are started. The sender inherits this process's environment. A child that cannot
- * start (its `error` event) is written to `pool-send.log` like any other failure, and the next trigger tries again.
+ * start (its `error` event) is written to `pool-send.log` like any other failure; the retry is the next trigger after the debounce.
  */
 export const startSender = (hookBin: string, storeDir: string, now: () => number, start: SenderSpawn = spawn): (() => void) => () => {
   const child = start(process.execPath, [hookBin, 'nightly'], { detached: true, stdio: 'ignore', windowsHide: true });

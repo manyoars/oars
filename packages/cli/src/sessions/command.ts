@@ -446,7 +446,7 @@ export interface HookTarget {
 const hookScope = (options: HookTarget): Scope => options.scope ?? (options.file === undefined ? 'user' : 'file');
 
 /** What `--schedule off` and `--schedule on` say: the recorded choice about the background sweep and send that the session-end hook and every command start. */
-const SENDS_OFF = 'Background sweeps and sends are off, as you chose with --schedule off. Turn them back on with: oars sessions hook install --schedule on';
+const SENDS_OFF = 'The background sweep and the pool send are off, as you chose with --schedule off (telemetry has its own switch: oars telemetry off). Turn them back on with: oars sessions hook install --schedule on';
 const SENDS_ON = 'Background sweeps and sends are on: a due sweep and send starts from the session-end hook and from any oars command, at most about hourly.';
 
 export const sessionsHookInstall = async (deps: SessionsDeps, options: HookTarget & { keepRetention: boolean; schedule: 'nightly' | 'off' | 'on' | undefined }): Promise<Outcome> => {
