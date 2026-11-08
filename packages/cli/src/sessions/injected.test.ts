@@ -89,7 +89,12 @@ describe('Claude Code attachment records', () => {
     expect(at(out, 'attachment', 'files', 0, 'content')).toMatch(/^\[injected instructions [0-9a-f]{12}\]$/);
   });
 
-  const KINDS = ['nested_memory', 'skill_listing', 'invoked_skills', 'deferred_tools_delta', 'mcp_instructions_delta', 'hook_success', 'hook_additional_context', 'environment', 'session_context', 'agent_listing_delta', 'prompt_snapshot'];
+  // Every attachment type the rule owns except `instructions`, which has its own case above: one case each, so a type dropped from the set fails here.
+  const KINDS = [
+    'nested_memory', 'skill_listing', 'invoked_skills', 'dynamic_skill', 'agent_listing_delta', 'deferred_tools_record', 'deferred_tools_delta', 'mcp_instructions_delta',
+    'prompt_snapshot', 'hook_success', 'hook_additional_context', 'hook_blocking_error', 'hook_non_blocking_error', 'hook_cancelled', 'environment', 'session_context',
+    'context_sections', 'credential_org', 'model', 'output_style', 'output_style_instructions', 'command_permissions', 'auto_mode', 'plan_mode', 'team_context',
+  ];
   it.each(KINDS)('replaces the text of a %s attachment, named by its type', (kind) => {
     const line = { type: 'attachment', attachment: { type: kind, content: [FILLER, 'second filler block'], stdout: FILLER } };
     const out = text(run(line));
@@ -160,6 +165,7 @@ describe('Codex records', () => {
     expect(text(run(message('user', '<user_instructions>filler</user_instructions>')))).toMatch(/\[injected user-instructions /);
     expect(text(run(message('developer', '<permissions instructions>\nfiller\n</permissions instructions>')))).toMatch(/\[injected permissions /);
     expect(text(run(message('developer', 'No tag at all, just words')))).toMatch(/\[injected developer /);
+    expect(text(run(message('user', '<guardian_tool_descriptions>filler</guardian_tool_descriptions>')))).toMatch(/\[injected guardian-tool-descriptions /);
   });
 
   it('leaves a typed user message, an assistant message, and a developer message with no text', () => {
@@ -185,6 +191,8 @@ describe('Codex records', () => {
     expect(at(out, 'payload', 'base_instructions', 'text')).toMatch(/^\[injected base-instructions /);
     const turn = { type: 'turn_context', payload: { cwd: 'x', user_instructions: FILLER, developer_instructions: FILLER } };
     expect(text(run(turn)).match(/\[injected (user|developer)-instructions /g)).toHaveLength(2);
+    const legacy = { type: 'session_meta', payload: { id: 's1', instructions: FILLER } };
+    expect(at(run(legacy), 'payload', 'instructions')).toMatch(/^\[injected instructions [0-9a-f]{12}\]$/);
     const quiet = { type: 'session_meta', payload: { id: 's1' } };
     expect(run(quiet)).toBe(quiet);
     expect(run({ type: 'session_meta' })).toEqual({ type: 'session_meta' });
