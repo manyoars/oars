@@ -1,4 +1,4 @@
-// `oars pool`: the only part of the sessions code that talks to a remote. The server is the one named by flag or environment, else the Many Oars pool; nothing leaves until a command that sends is run or, after covenant acceptance, the nightly task sends. Sign-in runs the provider's device flow here and reads no harness token; a session leaves only as a skeleton of a closed list of fields, each value redacted first, and only after the exclusion check found it clean. Local capture, recall,
+// `oars pool`: the only part of the sessions code that talks to a remote. The server is the one named by flag or environment, else the Many Oars pool; nothing leaves until a command that sends is run or, after covenant acceptance, the detached sender (hook-bin.js nightly) sends. Sign-in runs the provider's device flow here and reads no harness token; a session leaves only as a skeleton of a closed list of fields, each value redacted first, and only after the exclusion check found it clean. Local capture, recall,
 // and reads never come through here.
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -11,7 +11,7 @@ import { checkSession, exclusionPaths, lastWritten, loadTerms, transcriptFilesOf
 import { localNames, makeRedactor, REDACTION_VERSION, redactTranscript } from './redact.js';
 import { recordSend, recordWire, newTally, tallyBatch } from '../telemetry/wire.js';
 import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, lockedBatch, markShown, outboxFolder, partsOf, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
-import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
+import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, unpinnedKid, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
 import { carriedDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { rawAllowed, sendsOf } from './pool-choices.js';
@@ -26,8 +26,10 @@ import { CAPTURE_VERSION, harnessOf as sessionHarness, type Harness } from './sc
 import { loadStore, readRedactDomains, readSkeletons, readState, updatePoolChoices, type SessionsRuntime } from './store.js';
 import { runGit, type Git } from './survival.js';
 import { vocabulary } from './vocab-load.js';
+import { mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
 
 const LOGIN = 'pool-login';
+const LOGOUT = 'pool-logout';
 export const DEPOSIT = 'pool-deposit';
 const OUTBOX = 'pool-outbox';
 const POOL_DEPOSITS = '/v1/deposits';
@@ -89,7 +91,7 @@ interface Call {
   /** Set for a command that prints what it sends: the print comes first, with these secrets masked. */
   show?: Masker;
   /** A raw part is a PUT of bytes that are not JSON; every other call is a GET, or a POST when it has a body. */
-  method?: 'PUT';
+  method?: 'PUT' | 'DELETE';
   type?: string;
   /** Headers beyond the usual ones (the raw routes state their redaction and capture versions, and the raw consent). */
   extra?: Array<[string, string]>;
@@ -208,11 +210,57 @@ export const poolLogin = async (deps: RunDeps, options: { server?: string | unde
   const signIn = signInOf(isObject(reply.body) ? { ...reply.body, server } : undefined);
   if (signIn === undefined) throw new CliError('The pool answered a sign-in with no account, token, or signing key.', ExitCode.UNEXPECTED, LOGIN);
   const known = saved.find((entry) => entry.server === server);
-  // The key is trusted once, here, and never replaced by a later login: a server that swaps it could otherwise sign anything it likes.
-  if (known !== undefined && known.signingKey.x !== signIn.signingKey.x) throw new CliError(`${server} now signs with a different key than the one pinned at your first login. Nothing was saved. If the pool really did change its key, remove ${server} from ${signInsFile(storeDir)} and sign in again.`, ExitCode.AUTH, LOGIN, { code: 'signing_key_changed', title: 'The pool signing key changed.' });
-  await mkdir(storeDir, { recursive: true });
-  await writeFile(signInsFile(storeDir), `${JSON.stringify([...saved.filter((entry) => entry !== known), signIn])}\n`, { mode: 0o600 });
+  // A key is trusted once, here, under the id the pool names it by, and never replaced: a server that swaps the key behind an id it already holds could otherwise sign anything it likes. A server cannot add an id either: a new id enters only in a release of oars (RELEASE_KEYS, docs/pool.md), so a server at this URL that names one is refused.
+  const held = known?.signingKeys ?? {};
+  for (const [kid, key] of Object.entries(signIn.signingKeys)) {
+    if (Object.hasOwn(held, kid) && held[kid]?.x !== key.x) {
+      const message = `${server} now signs with a different key than the one pinned for ${kid} at your first login. Nothing was saved. If the pool really did change this key, remove ${server} from ${signInsFile(storeDir)} and sign in again.`;
+      throw new CliError(message, ExitCode.AUTH, LOGIN, { code: 'signing_key_changed', title: 'The pool signing key changed.', detail: message });
+    }
+  }
+  const unpinned = known === undefined ? undefined : unpinnedKid(held, signIn.signingKeys);
+  if (unpinned !== undefined) {
+    const message = `${server} signs with the key ${unpinned}, which this machine never pinned for it and this release of oars does not ship. Nothing was saved. Upgrade with npm install -g @manyoars/oars; if the pool really did rotate its key, remove ${server} from ${signInsFile(storeDir)} and sign in again.`;
+    throw new CliError(message, ExitCode.AUTH, LOGIN, { code: 'signing_key_unpinned', title: 'The pool signing key is not pinned.', detail: message });
+  }
+  // Only the keys already held are kept on a repeat login: a key the server offers under a released id is never stored beside the release's own.
+  const pinned: SignIn = { ...signIn, signingKeys: known === undefined ? signIn.signingKeys : held };
+  await mkdirOwnerOnly(storeDir);
+  await writeOwnerOnly(signInsFile(storeDir), `${JSON.stringify([...saved.filter((entry) => entry !== known), pinned])}\n`);
   return { document: { ok: true, server, account: signIn.account, expiresAt: signIn.expiresAt }, text: `Signed in to ${server} as ${signIn.account}.` };
+};
+
+/** The pool is not answering: it could not be reached, or a gateway in front of it says so. */
+const poolDown = (status: number): boolean => status === 502 || status === 503 || status === 504;
+
+/**
+ * `oars pool logout` (S8): revokes this machine's credential at the pool (`DELETE /v1/login`), then removes the local entry. A pool that cannot be reached does not keep the entry: the person asked to be signed out here, so the entry
+ * goes and the output says the credential was not revoked there (it lapses on its own, and a login past the pool's cap revokes the oldest). A refusal for any other reason keeps the entry, so the command can be run again.
+ */
+export const poolLogout = async (deps: RunDeps, options: { server?: string | undefined }): Promise<Outcome> => {
+  const { storeDir } = runtimeOf(deps);
+  const server = poolServer(deps.env, LOGOUT, options.server);
+  const saved = await loadSignIns(storeDir, LOGOUT);
+  const known = saved.find((entry) => entry.server === server);
+  if (known === undefined) return { document: { ok: true, server, revoked: false, removed: false }, text: `Not signed in to ${server}.` };
+  // The request prints before it is sent with the credential masked, as every other pool request does.
+  const credential = new Masker();
+  credential.add(known.token);
+  let reply: Reply | undefined;
+  try {
+    reply = await ask(deps, LOGOUT, server, '/v1/login', { method: 'DELETE', token: known.token, show: credential });
+  } catch (error) {
+    if (!(error instanceof CliError) || error.exitCode !== ExitCode.UNREACHABLE) throw error;
+  }
+  if (reply !== undefined && reply.status !== 204 && reply.status !== 401 && !poolDown(reply.status)) throw refusal(LOGOUT, reply);
+  await writeOwnerOnly(signInsFile(storeDir), `${JSON.stringify(saved.filter((entry) => entry !== known))}\n`);
+  const revoked = reply?.status === 204;
+  const text = revoked
+    ? `Signed out of ${server}: the credential is revoked there and removed here.`
+    : reply?.status === 401
+      ? `Signed out of ${server}: the pool had already revoked the credential, and it is removed here.`
+      : `Signed out of ${server} here, but the pool could not be reached, so the credential was not revoked there. It lapses on its own.`;
+  return { document: { ok: true, server, revoked, removed: true }, text };
 };
 
 /** A send stops here when the server is closed or wants a covenant accepted, before the batch is read for the last time. */
@@ -320,7 +368,7 @@ export const postRaw = async (deps: RunDeps, options: { server: string; token: s
 const rawNote = (consent: string | null): string =>
   consent === 'granted' ? '' : consent === 'declined' ? 'You answered no to the raw prompt; oars pool raw --consent yes changes it.' : 'None is queued until you answer the raw prompt with oars pool raw --consent yes.';
 
-/** `deposit --send <hash>`: the send lock the nightly task takes too, then a skip for a hash already in `sent.log`, then the batch lock, then the covenant (accepted here or before, or nothing is sent), then the request. The body is read and hashed again just before the request. */
+/** `deposit --send <hash>`: the send lock the detached sender (hook-bin.js nightly) takes too, then a skip for a hash already in `sent.log`, then the batch lock, then the covenant (accepted here or before, or nothing is sent), then the request. The body is read and hashed again just before the request. */
 const sendBatch = async (deps: RunDeps, options: { outbox: string; server: string; token: string; hash: string; acceptCovenant: string | undefined; via: Sender | undefined }): Promise<Outcome> => {
   const { outbox, server, token, hash } = options;
   const via = options.via ?? networkSender(deps, DEPOSIT);
@@ -361,6 +409,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   // Accepting the covenant is a step of sending a batch: alone it would exit 0 as though something had been sent under it.
   if (options.send === undefined && options.acceptCovenant !== undefined) throw usage('--accept-covenant belongs to --send: it is accepted as a step of sending a batch. Nothing was accepted.', DEPOSIT);
   const outbox = outboxFolder(runtime.storeDir, server);
+  await mkdirOwnerOnly(outbox);
   if (options.send !== undefined) return sendBatch(deps, { outbox, server, token, hash: options.send, acceptCovenant: options.acceptCovenant, via: options.via });
   const { terms } = exclusionPaths(runtime.projectsRoot, deps.env);
   const saved = await readState(runtime.storeDir);
@@ -580,10 +629,10 @@ export const poolFetch = async (deps: RunDeps, options: { server?: string | unde
   const server = poolServer(deps.env, FETCH, options.server);
   const { harnessVersion } = options;
   if (!isBundleVersion(harnessVersion)) throw usage(`${harnessVersion} is not a public harness version.`, FETCH);
-  const { token, signingKey } = await signedIn(deps, storeDir, server, FETCH);
+  const { token, signingKeys } = await signedIn(deps, storeDir, server, FETCH);
   const harness = await fetchHarness(deps, storeDir, options.harness);
   const file = replicaFile(storeDir, server, harness, harnessVersion);
-  const kept = await keptReplica(file, signingKey, harness, harnessVersion);
+  const kept = await keptReplica(file, signingKeys, harness, harnessVersion);
   const credential = new Masker();
   credential.add(token);
   const reply = await ask(deps, FETCH, server, `/bundle/${harness}/${encodeURIComponent(harnessVersion)}/${encodeURIComponent(VOCAB_VERSION)}`, { token, show: credential, ...(kept?.etag === undefined ? {} : { ifNoneMatch: kept.etag }) });
@@ -610,7 +659,7 @@ export const poolFetch = async (deps: RunDeps, options: { server?: string | unde
     emit('fetch', { harness, fetches: 1 });
     throw refusal(FETCH, reply);
   }
-  const verified = await verifyBundle(reply.body, signingKey, harness, harnessVersion);
+  const verified = await verifyBundle(reply.body, signingKeys, harness, harnessVersion);
   if (!verified.ok) {
     const title = `Refused the bundle: ${verified.reason}.`;
     emit('fetch', { harness, fetches: 1 });
@@ -630,9 +679,9 @@ export const poolFetch = async (deps: RunDeps, options: { server?: string | unde
 
 const RAW = 'pool-raw';
 
-/** The raw prompt, in plain words: shown by `oars pool raw` until it is answered, and what the nightly send relies on. Redaction is best effort and the text says so. */
+/** The raw prompt, in plain words: shown by `oars pool raw` until it is answered, and what the detached sender relies on. Redaction is best effort and the text says so. */
 export const RAW_PROMPT = [
-  'Raw transcripts are separate from the covenant. If you say yes, then once the pool says your account accepted its covenant, the nightly task uploads a redacted copy of each full transcript of every folder you allowed, beside its skeleton, except a folder you set to skeleton only or off.',
+  'Raw transcripts are separate from the covenant. If you say yes, then once the pool says your account accepted its covenant, the sender that a session-end hook or any oars command starts (at most about once an hour) uploads a redacted copy of each full transcript of every folder you allowed, beside its skeleton, except a folder you set to skeleton only or off.',
   'Redaction runs on this machine, before anything is queued, and it is best effort: it masks secret shapes it knows, emails, your username, home paths, environment values, and hosts, and it can miss a secret that has no recognizable shape or a name written in prose.',
   'It also does not catch a host with no dot, a public host name outside a link, quoted file contents and command output, a secret split across lines, images and attachments, a JSON env value, your username written another way, another person\'s hyphenated name in a project folder path, or an IPv6 address with a zone or inside a longer word, and a common-word account name is masked everywhere it appears.',
   'Say no, or say nothing, and only skeletons go to the pool. Change your mind any time: oars pool raw --consent yes|no. A no stops later sends only; it cannot recall what was already sent.',

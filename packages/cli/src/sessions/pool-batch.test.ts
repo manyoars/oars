@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { frame, printOf, prompt, rootsOf, session, sessionsFrom, step, storedNames, store, tool } from './pool-fixture.js';
-import { bucketOf, hasEnded, MIN_TIMED_CALLS, parseSkeleton, SESSION_IDLE_HOURS, skeletonOf, type SessionSkeleton } from './pool-wire.js';
+import { bucketOf, hasEnded, HOLD_WINDOW_MS, MIN_TIMED_CALLS, parseSkeleton, SESSION_IDLE_HOURS, skeletonOf, type SessionSkeleton } from './pool-wire.js';
 import type { UsageField } from './schema.js';
 import type { Store } from './store.js';
 
@@ -29,6 +29,14 @@ describe('a session has ended', () => {
     expect(one === undefined || hasEnded(one, NOW, 0)).toBe(false);
     expect(other === undefined || hasEnded(other, NOW, 0)).toBe(false);
     expect(both !== undefined && hasEnded(both, NOW, 0)).toBe(true);
+  });
+
+  it('holds a session for the hold window even when the idle bound is lower: 59 minutes stays out, 61 goes', () => {
+    const MINUTE = 60_000;
+    expect(HOLD_WINDOW_MS).toBe(60 * MINUTE);
+    const [both] = sessionsFrom(from(7, 7));
+    expect(both !== undefined && hasEnded(both, NOW, NOW - 59 * MINUTE, 0)).toBe(false);
+    expect(both !== undefined && hasEnded(both, NOW, NOW - 61 * MINUTE, 0)).toBe(true);
   });
 
   it('counts a write to a raw file after the last capture as activity', () => {

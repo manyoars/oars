@@ -81,13 +81,14 @@ describe('the notice', () => {
   });
 
   it('says what is recorded, what is never recorded, what is sent and where, and every switch', () => {
-    for (const phrase of ['flag names', 'hook fire, recall, deposit, and fetch', 'counts and closed words', 'install id', 'oars version', 'never', 'Many Oars pool', 'pool server in OARS_POOL_URL', 'Once a night', 'crash', 'never its message', 'oars telemetry show', 'oars telemetry off', 'OARS_TELEMETRY=0', 'DO_NOT_TRACK=1']) expect(NOTICE).toContain(phrase);
+    for (const phrase of ['flag names', 'hook fire, recall, deposit, and fetch', 'counts and closed words', 'install id', 'oars version', 'never', 'Many Oars pool', 'pool server in OARS_POOL_URL', 'Each time the background sender runs', 'crash', 'never its message', 'oars telemetry show', 'oars telemetry off', 'OARS_TELEMETRY=0', 'DO_NOT_TRACK=1']) expect(NOTICE).toContain(phrase);
     // The default pool is not deployed (lead 208), and the notice must not claim a destination the code does not reach.
     expect(NOTICE).toContain('not deployed yet');
     expect(NOTICE).not.toContain('and only there');
-    // Only the store snapshot and the run's cost are nightly: a crash and a deposit's batches are recorded when they happen, and the notice must not say otherwise.
-    const nightly = NOTICE.slice(NOTICE.indexOf('Once a night'), NOTICE.indexOf('.', NOTICE.indexOf('Once a night')) + 1);
-    expect(nightly).toBe('Once a night it also records counts and sizes of the session store and what the run cost.');
+    // Only the store snapshot and the run's cost are recorded per sender run: a crash and a deposit's batches are recorded when they happen, and the notice must not say otherwise.
+    const perRun = NOTICE.slice(NOTICE.indexOf('Each time the background sender runs'), NOTICE.indexOf('.', NOTICE.indexOf('Each time the background sender runs')) + 1);
+    expect(perRun).toBe('Each time the background sender runs, at most about once an hour, it also records counts and sizes of the session store and what the run cost.');
+    expect(NOTICE).toContain('Events are sent in a batch at most once a day.');
     for (const phrase of ['A crash is recorded as the error\'s class and a hash of its stack (never its message).', 'Each pool deposit records, per batch, which fields it held and how many bytes each took', 'a wire-send event', 'the pool\'s refusal code']) expect(NOTICE).toContain(phrase);
   });
 });

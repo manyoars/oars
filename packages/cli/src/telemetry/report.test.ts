@@ -208,6 +208,6 @@ describe('oars telemetry report', () => {
     const made = setup();
     for (const path of [join(made.dir, 'events.jsonl')]) rmSync(path);
     expect(await run(['telemetry', 'report'], made.deps)).toBe(0);
-    expect(made.out.join('')).toContain('Nothing is measured in the spool yet');
+    expect(made.out.join('')).toContain('Nothing is measured in the spool yet: the hooks and the detached sender record as they run.');
   });
 });

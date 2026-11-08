@@ -48,6 +48,8 @@ export interface Env {
   GOOGLE_CLIENT_SECRET?: string;
   /** An Ed25519 private key as a JWK. */
   BUNDLE_SIGNING_KEY?: string;
+  /** The id of that key, named in every bundle and at login so a client can pin more than one key; a plain variable, since an id is public. Unset is `k1`. */
+  BUNDLE_KEY_ID?: string;
   /** The pool-wide HMAC key for a hashed field (a host). Unset refuses every deposit, so a host is never stored in clear. */
   INGEST_HASH_KEY?: string;
   /** Unset keeps deposits closed. */

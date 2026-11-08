@@ -287,6 +287,8 @@ describe('a trace whose agent span was never exported', () => {
   it('is one session with one prompt and both tools, not one prompt per orphaned span', async () => {
     const store = await open([{ name: 'a.jsonl', spans: [chat(T, 2, 1, 1, 2, { 'gen_ai.input.messages': user('where is my refund') }), tool(T, 3, 1, 2, 3, 'lookup', { 'gen_ai.input.messages': user('a tool prompt') }), tool(T, 4, 1, 3, 4, 'refund')] }]);
     expect(store.sessions).toHaveLength(1);
+    // The earliest root is itself a chat span: it counts once, so the cursor size is the three spans read, not four.
+    expect(store.sessions[0]?.size).toBe(3);
     const out = capture(textOf(store, T));
     expect(out.prompts.map((prompt) => prompt.head)).toEqual(['where is my refund']);
     expect(out.tools.map((entry) => entry.tool)).toEqual(['lookup', 'refund']);
@@ -299,8 +301,9 @@ describe('a trace id that is not alphanumeric', () => {
     const store = await open([{ name: 'a.jsonl', spans: [agent(odd, 1, undefined, 0, 20, 'plan'), agent(odd, 3, 1, 2, 10, 'sub', { 'gen_ai.agent.name': 'flights' }), tool(odd, 5, 3, 4, 5, 'search')] }]);
     expect(store.sessions).toHaveLength(2);
     const child = store.sessions.find((entry) => entry.subagent !== undefined);
-    expect(child?.subagent?.parent).toBeDefined();
-    expect(store.sessions.map((entry) => entry.id)).toContain(child?.subagent?.parent.replace(/^otel-/, ''));
+    const parentId = present(child?.subagent).parent.replace(/^otel-/, '');
+    expect(store.sessions.map((entry) => entry.id)).toContain(parentId);
+    expect(child?.id).toBe(`${parentId}-${sp(3)}`);
     expect(child?.id).toMatch(/^[A-Za-z0-9._-]+$/);
   });
 });

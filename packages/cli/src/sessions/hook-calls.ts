@@ -1,5 +1,6 @@
 // The hook counters: `hook-calls.jsonl`, one line per hook invocation, appended by the hook and read by `measure`.
-import { appendFile, mkdir, readFile } from 'node:fs/promises';
+import { appendFile, readFile } from 'node:fs/promises';
+import { mkdirOwnerOnly } from './owner-only.js';
 import { paths } from './store.js';
 import type { HookCall } from './schema.js';
 
@@ -11,7 +12,7 @@ const eventOf = (value: unknown): HookCall['event'] | undefined => {
 };
 
 export const appendHookCall = async (storeDir: string, call: HookCall): Promise<void> => {
-  await mkdir(storeDir, { recursive: true });
+  await mkdirOwnerOnly(storeDir);
   await appendFile(paths(storeDir).hookCalls, `${JSON.stringify(call)}\n`, { mode: 0o600 });
 };
 
