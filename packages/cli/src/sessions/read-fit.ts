@@ -43,7 +43,7 @@ export const deriveFitEnvironment: DeriveFamily = ({ pool }) =>
   });
 
 /**
- * Fit by call shape: how often calls of an action fail when they hold one facet of shape (a target class, an argument class, a count of unsent key names, or a set of key names), by harness version bucket, from the
+ * Fit by call shape: how often calls of an action fail when they hold one facet of shape (a target class, an argument class, a count of unsent key names, a set of key names, or a value feature, closed value, or change kind of a sent key), by harness version bucket, from the
  * shape cells (`shapeClass`). A cell counts each call once per facet it holds, so the facets of one action are never summed into one rate. Same confounders as the reads above, and a facet is not the failure's cause.
  */
 export const deriveFitShape: DeriveFamily = ({ pool }) =>

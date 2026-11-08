@@ -210,7 +210,7 @@ export const argFeaturesOf = (native: string, input: { readonly [key: string]: u
       const kind = argClassOfEntry(key, value);
       const feature: ArgFeature = { key, valueSize: sizeOf(value) };
       if (typeof value === 'string' && kind === 'path') {
-        // An absolute path outside the working folder names folders above it, so its depth is `outside` and its folder kind `other`: only its own name's extension is read.
+        // An absolute path outside the repository root (else the working folder) names folders above it, so its depth is `outside` and its folder kind `other`: only its own name's extension is read.
         const parts = partsBelow(value, root, cwd);
         feature.extension = extensionOf(parts === null ? value.replace(/^.*[\\/]/, '') : (parts.at(-1) ?? ''));
         feature.pathDepth = parts === null ? 'outside' : depthOf(parts.length - 1);

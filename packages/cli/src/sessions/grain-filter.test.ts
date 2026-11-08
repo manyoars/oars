@@ -91,7 +91,7 @@ describe('a grain filter on every read', () => {
     expect(shape(only(all, 'day'))).toEqual([]);
   });
 
-  it('gives call shape nothing to cite when the frames of its failures have no day: a day cell exists for a known day only', () => {
+  it('gives call shape nothing to cite when the frames of its failures have no day: its shape cells are in no known week', () => {
     const undated = shaped(false);
     expect(fitReads(undated)).toHaveLength(1);
     expect(deriveCallShape({ pool: poolFrom(undated), store: undated })).toEqual([]);
