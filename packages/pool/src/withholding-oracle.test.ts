@@ -14,11 +14,13 @@ import { CLOSED_ARG_VALUES } from '../../cli/src/sessions/public-vocabulary.js';
 import { makeRedactor } from '../../cli/src/sessions/redact.js';
 import { ERROR_CODES, type ToolObservation, type ToolStatus } from '../../cli/src/sessions/schema.js';
 import { bundleOf } from './derive.js';
-import { DEFAULT_FLOORS } from './floors.js';
+import { cellClassOf } from './cell-class.js';
+import { DEFAULT_FLOORS, cellFloor, type Floors } from './floors.js';
 import type { StoredPool } from './stored.js';
 
 const FLOOR = DEFAULT_FLOORS.public;
-// The oracle judges every cell against the one floor `FLOOR` (`cell.clusters >= FLOOR`), so it serves at a clear floor equal to the public one; the two-floor split is held by `floor-split.test.ts` and `cell-class.test.ts`.
+// The sweep runs on two configurations: `ONE_FLOOR` (a clear floor equal to the public one, the leg the arg/none fixtures can fail on, since at the shipped clear floor of 1 a clear arg/none at 2 to 4 accounts clears its own floor)
+// and `DEFAULT_FLOORS` (clear 1, what deploys), where each cell is judged against its own class's floor. `floor-split.test.ts` and `cell-class.test.ts` are point cases and sweep nothing.
 const ONE_FLOOR = { ...DEFAULT_FLOORS, clear: FLOOR };
 const CWD = '/work/app';
 const SKELETON_ID = '0123456789abcdef';
@@ -324,9 +326,9 @@ const matrixOf = (accounts: Accounts, patience: number): { held: Held; motifOf: 
  * The sub-floor cells (and columns) that the cells the real `bundleOf` serves give back, for every store of the held cells' vocabulary: the cell's row is in the rational span of the served rows and the
  * rows of the action's calls. Throws on a (cell, column) pair that exists with a row of zeros, because a zero row is in every span: it would be counted as recovered when it is a gap in the generator.
  */
-const leaksOf = (accounts: Accounts, patience = PATIENCE): Leak[] => {
-  const { held, motifOf, pairs, kept } = matrixOf(accounts, patience);
-  const served = new Set(bundleOf('claude-code', '2.1.314', held.pool, ONE_FLOOR).cells.map(keyOf));
+const leaksOf = (accounts: Accounts, floors: Floors, matrix = matrixOf(accounts, PATIENCE)): Leak[] => {
+  const { held, motifOf, pairs, kept } = matrix;
+  const served = new Set(bundleOf('claude-code', '2.1.314', held.pool, floors).cells.map(keyOf));
   const rowOf = (at: number): bigint[] => kept.map(({ vector }) => vector[at] ?? 0n);
   const callRows = ACTIONS.flatMap((_, action) => [0, 1].map((status) => kept.map(({ calls }) => calls[action * 2 + status] ?? 0n)));
   const span = new Span();
@@ -336,11 +338,18 @@ const leaksOf = (accounts: Accounts, patience = PATIENCE): Leak[] => {
   for (const [at, { cell, column, key }] of pairs.entries()) {
     const row = rowOf(at);
     if (row.every((value) => value === 0n)) throw new Error(`no atom gives ${motifOf.get(cell.motifId)?.cls ?? key} ${column}: a gap in the generator`);
-    if (served.has(key) || cell.clusters >= FLOOR) continue;
+    if (served.has(key) || cell.clusters >= cellFloor(floors, FLOOR, cellClassOf(cell, motifOf.get(cell.motifId)))) continue;
     if (span.covers(row)) leaks.push({ cell: `${motifOf.get(cell.motifId)?.cls ?? cell.motifId} ${cell.frameBucket} ${cell.grain}`, column });
   }
   return leaks;
 };
+
+/** The two configurations the sweep runs on: one floor for every class (the leg the arg/none fixtures can fail on), and the floors this pool ships (a clear cell at its own, lower floor). */
+const FLOORINGS: readonly (readonly [string, Floors])[] = [['one floor', ONE_FLOOR], ['the default floors', DEFAULT_FLOORS]];
+
+/** The leaks of the held cells at each configuration, by its name; the matrix does not depend on the floors, so it is built once. */
+const leaksAtEach = (accounts: Accounts, matrix = matrixOf(accounts, PATIENCE)): { [name: string]: Leak[] } => Object.fromEntries(FLOORINGS.map(([name, floors]) => [name, leaksOf(accounts, floors, matrix)]));
+const NO_LEAKS = { 'one floor': [], 'the default floors': [] };
 
 /** `count` accounts that each send the same call. */
 const accountsOf = (count: number, make: (account: number) => Atom): Accounts => Array.from({ length: count }, (_, account) => [make(account)]);
@@ -460,7 +469,7 @@ describe('the withholding oracle', () => {
   it('serves nothing that gives back a keys cell through a combination of served totals: path,pattern is the path total plus the pattern total less the calls', () => {
     const accounts = [...accountsOf(FLOOR + 5, () => grep({ path: 'src/a.ts' })), ...accountsOf(FLOOR - 1, () => grep({ path: 'src/a.ts', pattern: 'foo' })), ...accountsOf(FLOOR + 5, () => grep({ pattern: 'foo' }))];
     expect(servedOf(accounts)).toBeGreaterThan(0);
-    expect(leaksOf(accounts)).toEqual([]);
+    expect(leaksAtEach(accounts)).toEqual(NO_LEAKS);
   });
 
   // The same fixture with one closed value beside the key. A boolean has no other per-key facet (`output_mode` also has `size`, which its string value emits), and a boolean, or a list that names all its values, is a value of every
@@ -474,13 +483,13 @@ describe('the withholding oracle', () => {
     const send = (input: { readonly [key: string]: unknown }): Atom => atomOf(call(native, input));
     const accounts = [...accountsOf(FLOOR + 5, () => send({ [key]: value })), ...accountsOf(FLOOR - 1, () => send({ [key]: value, [other]: 'foo' })), ...accountsOf(FLOOR + 5, () => send({ [other]: 'foo' }))];
     expect(servedOf(accounts)).toBeGreaterThan(0);
-    expect(leaksOf(accounts)).toEqual([]);
+    expect(leaksAtEach(accounts)).toEqual(NO_LEAKS);
   });
 
   it('serves nothing that gives back arg/none: 12 calls of a tool, 10 with query and 2 with no input, at floor 5', () => {
     const accounts = [...accountsOf(10, () => atomOf(call('WebSearch', { query: 'q' }))), ...accountsOf(2, () => atomOf(call('WebSearch', {})))];
     expect(servedOf(accounts)).toBeGreaterThan(0);
-    expect(leaksOf(accounts)).toEqual([]);
+    expect(leaksAtEach(accounts)).toEqual(NO_LEAKS);
   });
 
   // `arg/none` is a part of the `keys` family (`complement.ts`, the `facet` rule), and the sum is inexact for two calls: one whose keys are all null sends a key and no value, so it is in `keys/query` and in `arg/none`, and one
@@ -494,7 +503,7 @@ describe('the withholding oracle', () => {
     const accounts = [...accountsOf(10, () => atomOf(call('WebSearch', { query: 'q' }))), ...accountsOf(2, () => atomOf(call('WebSearch', {}))), ...accountsOf(count, () => atomOf(call('WebSearch', odd)))];
     expect(servedOf(accounts)).toBeGreaterThan(0);
     expect(heldOf(accounts).cells.some(({ clusters }) => clusters < FLOOR)).toBe(true);
-    expect(leaksOf(accounts)).toEqual([]);
+    expect(leaksAtEach(accounts)).toEqual(NO_LEAKS);
   });
 
   // The matrix stops only when the rank has stopped rising for `PATIENCE` draws in a row. This fixture holds 141 cells, and its last rank-raising draw is past the 400 atoms the first version drew and stopped at: that fixed
@@ -506,21 +515,22 @@ describe('the withholding oracle', () => {
     const searches = ['q', 'a query of some length', 'a query that is considerably longer than thirty-two characters'].flatMap((query) => accountsOf(6, () => atomOf(call('WebSearch', { query }))));
     const failures = [...ERROR_CODES].flatMap((code) => [{}, { limit: 10 }].flatMap((extra) => accountsOf(6, () => atomOf(call('Read', { file_path: 'src/a.ts', ...extra }, { status: 'error', errorCode: code })))));
     const accounts = [...reads, ...greps, ...searches, ...failures];
-    expect(matrixOf(accounts, PATIENCE).rose).toBeGreaterThan(400);
-    expect(leaksOf(accounts)).toEqual([]);
+    const matrix = matrixOf(accounts, PATIENCE);
+    expect(matrix.rose).toBeGreaterThan(400);
+    expect(leaksAtEach(accounts, matrix)).toEqual(NO_LEAKS);
   }, 60000);
 
   it('serves nothing that gives back arg/number: keys/file_path,limit 40 beside keys/file_path,offset 3, beside arg/number 43, which is held and not served', () => {
     const path = { file_path: 'src/a.ts' };
     const accounts = [...accountsOf(10, () => atomOf(call('Read', path))), ...accountsOf(40, () => atomOf(call('Read', { ...path, limit: 10 }))), ...accountsOf(3, () => atomOf(call('Read', { ...path, offset: 0 })))];
     expect(servedOf(accounts)).toBeGreaterThan(0);
-    expect(leaksOf(accounts)).toEqual([]);
+    expect(leaksAtEach(accounts)).toEqual(NO_LEAKS);
   });
 
   it('serves nothing that gives back depth 1 through dir root: depth 0 and dir root count the same calls, beside the keys total and depth 2', () => {
     const at = (file: string) => atomOf(call('Read', { file_path: file }));
     const accounts = [...accountsOf(20, () => at('a.ts')), ...accountsOf(3, () => at('src/a.ts')), ...accountsOf(10, () => at('src/lib/a.ts')), ...accountsOf(20, () => at('docs/lib/a.md'))];
     expect(servedOf(accounts)).toBeGreaterThan(0);
-    expect(leaksOf(accounts)).toEqual([]);
+    expect(leaksAtEach(accounts)).toEqual(NO_LEAKS);
   });
 });
