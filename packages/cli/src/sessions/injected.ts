@@ -79,15 +79,20 @@ const mapContent = (content: Json | undefined, text: TextRule, result: TextRule)
   return items.some((item, at) => item !== content[at]) ? items : content;
 };
 
-const messageRule = (key: string, meta: boolean): ((message: JsonObject) => JsonObject) => {
+type Position = 'typed' | 'meta' | 'blob';
+
+const messageRule = (key: string, position: Position, known: ReadonlySet<string>): ((message: JsonObject) => JsonObject) => {
   const whole: TextRule = (text) => (text.trim() === '' || MARKER.test(text.trim()) ? text : markerOf(key, 'meta', text));
   const leading: TextRule = (text) => {
     const run = LEADING_REMINDERS.exec(text);
     return run === null ? text : `${run[0].replace(REMINDER, (block) => markerOf(key, 'system-reminder', block))}${text.slice(run[0].length)}`;
   };
+  // A request blob repeats earlier messages and carries no `isMeta`: a text block that is the text of a meta message or an injected attachment
+  // is marked under the same kind as its first line, so the hash matches.
+  const repeated: TextRule = (text) => (known.has(normalize(text)) ? markerOf(key, 'meta', text) : leading(text));
   const anywhere: TextRule = (text) => text.replace(REMINDER, (block) => markerOf(key, 'system-reminder', block));
   return (message) => {
-    const content = mapContent(message['content'], meta ? whole : leading, anywhere);
+    const content = mapContent(message['content'], position === 'meta' ? whole : position === 'blob' ? repeated : leading, anywhere);
     return content === message['content'] || content === undefined ? message : { ...message, content };
   };
 };
@@ -135,16 +140,44 @@ const codexFields = (key: string, payload: JsonObject): JsonObject =>
 
 const HOOK_SUMMARY_FIELDS = ['hookAdditionalContext', 'hookErrors', 'hookInfos'] as const;
 
-/** The rule for one machine: every injected block of a decoded transcript line becomes `[injected <kind> <hash>]`, hashed under `key`. */
-export const injectedRule = (key: string): InjectedRule => {
-  const userMessage = messageRule(key, false);
-  const metaMessage = messageRule(key, true);
+const textsOf = (content: Json | undefined): string[] => {
+  if (typeof content === 'string') return [content];
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((block) => (isObject(block) && block['type'] === 'text' && typeof block['text'] === 'string' ? [block['text']] : []));
+};
+
+/**
+ * Adds to `known` the normalized text of what `line` holds that a request blob repeats without the flag that marked it: the text of a meta message
+ * and the rendered copy of an injected attachment. The redactor runs this over a whole transcript before it marks any line.
+ */
+export const learnInjected = (line: JsonObject, known: Set<string>): Set<string> => {
+  const add = (text: string): void => {
+    if (text.trim() !== '' && !MARKER.test(text.trim())) known.add(normalize(text));
+  };
+  const message = line['message'];
+  if (line['type'] === 'user' && line['isMeta'] === true && isObject(message) && message['role'] === 'user') textsOf(message['content']).forEach(add);
+  const attachment = line['attachment'];
+  const kind = isObject(attachment) ? attachment['type'] : undefined;
+  if (line['type'] === 'attachment' && typeof kind === 'string' && INJECTED_ATTACHMENTS.has(kind) && line['rendered'] !== undefined) {
+    mapStrings(line['rendered'], 'rendered', (text, name) => {
+      if (text.length >= MIN_BLOCK && !STRUCTURAL.has(name)) add(text);
+      return text;
+    });
+  }
+  return known;
+};
+
+/** The rule for one machine: every injected block of a decoded transcript line becomes `[injected <kind> <hash>]`, hashed under `key`; `known` is what `learnInjected` collected from the transcript. */
+export const injectedRule = (key: string, known: ReadonlySet<string> = new Set()): InjectedRule => {
+  const userMessage = messageRule(key, 'typed', known);
+  const metaMessage = messageRule(key, 'meta', known);
+  const blobMessage = messageRule(key, 'blob', known);
   return (line) => {
     switch (line['type']) {
       case 'user':
         return withMessage(line, 'message', line['isMeta'] === true ? metaMessage : userMessage);
       case 'api-request-blob':
-        return withMessage(line, 'message', userMessage);
+        return withMessage(line, 'message', blobMessage);
       case 'attachment': {
         const attachment = line['attachment'];
         const kind = isObject(attachment) ? attachment['type'] : undefined;

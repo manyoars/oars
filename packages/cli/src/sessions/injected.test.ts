@@ -1,7 +1,7 @@
 // The blocks a harness injects are replaced by `[injected <kind> <hash>]` and nothing else in a line moves. Every fixture is made up: the
 // "instructions" are filler sentences, so no real instruction text, path, or name is in this file.
 import { describe, expect, it } from 'vitest';
-import { injectedRule, type JsonObject } from './injected.js';
+import { injectedRule, learnInjected, type JsonObject } from './injected.js';
 import { redactTranscript } from './redact.js';
 
 const KEY = 'test-key-one';
@@ -9,6 +9,8 @@ const MARK = /\[injected ([a-z0-9-]+) ([0-9a-f]{12})\]/;
 const FILLER = 'Always answer in haiku and keep the blue lamp lit.';
 const reminder = (text: string): string => `<system-reminder>\n${text}\n</system-reminder>`;
 const run = (line: JsonObject, key = KEY): JsonObject => injectedRule(key)(line);
+// The texts of the lines that other lines repeat, as the redactor collects them before it marks anything.
+const learn = (...lines: JsonObject[]): ReadonlySet<string> => lines.reduce((known, line) => learnInjected(line, known), new Set<string>());
 const text = (value: unknown): string => JSON.stringify(value);
 // The value at a path of keys and indexes, or undefined: a test reads the output without asserting its type.
 const at = (value: unknown, ...path: Array<string | number>): unknown => path.reduce((found, step) => (typeof found === 'object' && found !== null ? Reflect.get(found, step) : undefined), value);
@@ -251,5 +253,42 @@ describe('Claude Code hook summaries', () => {
     expect(run(quiet)).toBe(quiet);
     const bare = { type: 'system' };
     expect(run(bare)).toBe(bare);
+  });
+});
+
+describe('a request blob repeats what other lines hold', () => {
+  const META = 'Step one of the lamp routine, then step two of the lamp routine.';
+  const meta = { type: 'user', isMeta: true, message: { role: 'user', content: [{ type: 'text', text: META }] } };
+  const blob = (body: string) => ({ type: 'api-request-blob', hash: 'b1', message: { role: 'user', content: [{ type: 'text', text: body }, { type: 'text', text: 'typed words' }] } });
+  const attachment = { type: 'attachment', rendered: [{ role: 'user', content: FILLER }], attachment: { type: 'instructions', files: [] } };
+
+  it('replaces the text of a meta message under the marker its user line gets', () => {
+    const rule = injectedRule(KEY, learn(meta));
+    const out = rule(blob(`  ${META.replace('Step one', 'Step\n one')} `));
+    expect(at(out, 'message', 'content', 0, 'text')).toBe(at(rule(meta), 'message', 'content', 0, 'text'));
+    expect(at(out, 'message', 'content', 1, 'text')).toBe('typed words');
+  });
+
+  it('replaces the rendered copy of an injected attachment, and leaves text nothing marked', () => {
+    const rule = injectedRule(KEY, learn(attachment));
+    expect(text(rule(blob(FILLER)))).toMatch(/\[injected meta [0-9a-f]{12}\]/);
+    const other = blob('some other typed words');
+    expect(rule(other)).toBe(other);
+  });
+
+  it('does not learn from a queued prompt, an ordinary user line, or a line with no message', () => {
+    const queued = { type: 'attachment', rendered: [{ role: 'user', content: FILLER }], attachment: { type: 'queued_command', prompt: FILLER } };
+    const typed = { type: 'user', message: { role: 'user', content: FILLER } };
+    const empty = { type: 'user', isMeta: true };
+    const plain = blob(FILLER);
+    expect(injectedRule(KEY, learn(queued, typed, empty, { type: 'attachment' }))(plain)).toBe(plain);
+  });
+
+  it('is applied by the redactor across the lines of one transcript', () => {
+    const body = [meta, blob(META)].map((line) => JSON.stringify(line)).join('\n');
+    const lines = redactTranscript(`${body}\n`, [], [], KEY).text.trim().split('\n');
+    expect(MARK.exec(lines[0] ?? '')?.[2]).toBeDefined();
+    expect(MARK.exec(lines[0] ?? '')?.[2]).toBe(MARK.exec(lines[1] ?? '')?.[2]);
+    expect(lines[1]).not.toContain('lamp routine');
   });
 });

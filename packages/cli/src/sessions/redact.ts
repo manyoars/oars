@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { homedir, userInfo } from 'node:os';
 import { basename } from 'node:path';
-import { injectedRule, type InjectedRule, type Json, type JsonObject } from './injected.js';
+import { injectedRule, learnInjected, type InjectedRule, type Json, type JsonObject } from './injected.js';
 
 // Redaction before anything is written to the session store. Deterministic and conservative: it would rather over-mask a
 // long random-looking token than let a secret through. Pattern rules first, then emails, the organization domains the
@@ -216,7 +216,11 @@ export const redactTranscript = (body: string, domains: readonly string[] = [], 
       .replace(ENVIRONMENT, '$1<env>')
       .replace(LOWER_ENVIRONMENT, '$1<env>');
   };
-  const redacted = redactDecoded(body, redactText, injectedRule(injectedKey));
+  // A request blob repeats messages other lines hold, so what those lines carry is collected before any line is marked.
+  const repeated = new Set<string>();
+  const whole = parseContainer(body);
+  for (const parsed of whole !== undefined ? [whole] : body.split(String.fromCharCode(10)).map(parseContainer)) if (parsed !== undefined && !Array.isArray(parsed)) learnInjected(parsed, repeated);
+  const redacted = redactDecoded(body, redactText, injectedRule(injectedKey, repeated));
   return { text: redacted, masked: Math.max(0, placeholders(redacted) - placeholders(body)) };
 };
 
