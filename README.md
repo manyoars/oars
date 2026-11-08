@@ -29,7 +29,7 @@ Node 24 (LTS) and [`just`](https://github.com/casey/just).
 
 ```sh
 npm ci
-just check     # dependency licenses, client build, lint, typecheck, and unit tests; CI runs the same recipe
+just check     # dependency licenses, client build, lint, typecheck, and unit tests; CI runs the same recipe on Linux and Windows
 just audit     # npm audit for high or critical advisories in what ships; needs the network, so CI runs it as its own job
 ```
 

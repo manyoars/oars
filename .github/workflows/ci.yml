@@ -13,14 +13,23 @@ on:
 permissions:
   contents: read
 
+# A newer push cancels the older run only on task/* and claude/* branches (the orchestrator's worker branches, which push several
+# times a minute), where every run of the same branch shares one group (ci-<ref>-worker). Any other ref (main, tags, pull requests) gets a group of its own per
+# run, so nothing queues behind another run and nothing is cancelled: a landed sha always keeps its result.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.ref }}-${{ (startsWith(github.ref, 'refs/heads/task/') || startsWith(github.ref, 'refs/heads/claude/')) && 'worker' || github.run_id }}
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/heads/task/') || startsWith(github.ref, 'refs/heads/claude/') }}
 
 jobs:
   check:
-    # GitHub-hosted runners only: this repository is public.
-    runs-on: ubuntu-latest
+    name: check (${{ matrix.os }})
+    # GitHub-hosted runners only: this repository is public. The lead's gate reads both legs, so Windows is a leg of its own and
+    # neither leg may cancel the other.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
