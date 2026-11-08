@@ -157,11 +157,11 @@ const registryAnswer = async (deps: GateHookDeps, crossing: Crossing, cwd: strin
   if ((await deps.locked?.(ask).catch(() => false)) === true) return undefined;
   const stop = new AbortController();
   let answer: RegistryAnswer | undefined;
-  let handedOff = false;
+  const hand = { off: false };
   const handOff = async (): Promise<void> => {
     if (helpers.started >= MAX_HELPERS) return;
     helpers.started += 1;
-    handedOff = true;
+    hand.off = true;
     await deps.fill?.(ask).catch(() => undefined);
   };
   if (budgetOf(deps) >= MIN_ASK_MS) {
@@ -183,7 +183,7 @@ const registryAnswer = async (deps: GateHookDeps, crossing: Crossing, cwd: strin
     // Not answered in time: the row reads not-read, and the helper (started at the mark, or here when there was no time to reach it) finishes the ask so the next sight reads it from the cache.
     // This ask is stopped first, so the hook's manager does not outlive the hook.
     stop.abort();
-    if (!handedOff) await handOff();
+    if (!hand.off) await handOff();
     return undefined;
   }
   return { answer, asked: true };
