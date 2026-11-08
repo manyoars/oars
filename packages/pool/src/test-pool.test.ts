@@ -21,7 +21,7 @@ describe('the pool harness reuses its connections', () => {
       expect(await (await pool.db()).prepare('select 1 as one').first('one')).toBe(1);
     }
     // Without the keep-alive sender Miniflare resets every connection: one connect per call, 40 here.
-    expect(pool.connects() - before).toBeLessThanOrEqual(2);
+    expect(pool.connects() - before, `connects=${String(pool.connects() - before)} peak=${String(pool.peak())}`).toBeLessThanOrEqual(2);
   });
 
   // A test process starved by a loaded box can sit idle longer than undici's default keep-alive timeout (4 s) between two calls, which closes the socket and costs a reconnect. The pause is
@@ -31,7 +31,7 @@ describe('the pool harness reuses its connections', () => {
     const before = pool.connects();
     await new Promise<void>((resolve) => setTimeout(resolve, 4_500));
     expect((await pool.post('/v1/deposits', '{}')).status).toBe(401);
-    expect(pool.connects() - before).toBe(0);
+    expect(pool.connects() - before, `connects=${String(pool.connects() - before)} peak=${String(pool.peak())}`).toBe(0);
   });
 
   // A release that Miniflare sends has no timing the test could drive, so the server here answers every call at once and holds each release until the case lets it go.
