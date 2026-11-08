@@ -1398,7 +1398,7 @@ export interface PinnedKeys {
  * Public keys this release of oars ships, by key id: the only way a key id the login did not pin becomes trusted, because a server at a pool's URL must not be able to introduce a key by naming a new id (S17). Empty until the pool's first rotation
  * (docs/pool.md, "Rotating the bundle signing key"); a bundle is checked against the keys pinned at login and these, a shipped key winning under a shared id, so a server cannot shadow it with a key of its own.
  */
-export const RELEASE_KEYS: PinnedKeys = {};
+export const RELEASE_KEYS: Readonly<PinnedKeys> = Object.freeze({});
 
 /** The first key id a login offers that the server's entry does not hold and no release ships, or none: such an id could only have come from the server. */
 export const unpinnedKid = (held: PinnedKeys, offered: PinnedKeys, released: PinnedKeys = RELEASE_KEYS): string | undefined =>

@@ -743,6 +743,11 @@ describe('the bundle names its signing key (S17)', () => {
     try {
       // Checked before the handle is read, so no approval is needed to see the refusal at login.
       expect(await typo.post('/v1/login/poll', { handle: 'any' })).toMatchObject({ status: 503, json: { error: 'not_configured' } });
+      // The bundle route names the same missing setting: a person the pool knows (a row put in straight, since login is refused) gets a 503, never a bundle signed under no id.
+      const db = await typo.db();
+      await db.prepare("INSERT INTO accounts (id) VALUES ('acct_typo')").run();
+      await db.prepare("INSERT INTO tokens (hash, account, expires_at) VALUES (?, 'acct_typo', ?)").bind(createHash('sha256').update('typo-token').digest('hex'), Date.now() + 60_000).run();
+      expect(await typo.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, 'typo-token')).toMatchObject({ status: 503, json: { error: 'not_configured', message: containing('BUNDLE_KEY_ID') } });
     } finally {
       await typo.dispose();
     }

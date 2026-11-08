@@ -2,11 +2,14 @@ import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, s
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { appendHookCall } from './hook-calls.js';
 import { appendOwnerOnly, mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
 import { markDeltasSent } from './pool-delta.js';
 import { markSent } from './pool-sent.js';
 import { markShown, writeBatch } from './pool-outbox.js';
 import { writeRaw } from './pool-raw.js';
+import { appendStep } from './steps.js';
+import { withLock } from './store.js';
 
 // The mode calls do nothing on Windows (it has no POSIX mode bits), so these checks run where the bits exist.
 const posix = it.skipIf(process.platform === 'win32');
@@ -85,5 +88,23 @@ describe('owner-only writes (S9, S10)', () => {
     chmodSync(rawFile, 0o644);
     await writeRaw(outbox, '0123456789abcdef', 1, 'redacted text');
     expect(modeOf(rawFile)).toBe(0o600);
+  });
+});
+
+describe('the store folder is the operator's alone from first use (S9)', () => {
+  posix('is made 0700 by the first hook call, step row, or store lock, not only by oars pool login', async () => {
+    const byHook = join(root, 'by-hook', 'store');
+    await appendHookCall(byHook, { at: '2026-11-07T00:00:00.000Z', event: 'prompt', session: null, hit: false, ms: 1, error: null });
+    expect(modeOf(byHook)).toBe(0o700);
+    const byStep = join(root, 'by-step', 'store');
+    await appendStep(byStep, { at: '2026-11-07T00:00:00.000Z', run: 'r', trigger: 'manual', step: 'capture', status: 'ok', ms: 1, in: {}, out: {}, cv: '1', ev: '1' });
+    expect(modeOf(byStep)).toBe(0o700);
+    const byLock = join(root, 'by-lock', 'store');
+    await withLock(byLock, () => Promise.resolve(undefined));
+    expect(modeOf(byLock)).toBe(0o700);
+    // A store an older client made wider is narrowed on the next use.
+    chmodSync(byHook, 0o755);
+    await appendHookCall(byHook, { at: '2026-11-07T00:00:01.000Z', event: 'prompt', session: null, hit: false, ms: 1, error: null });
+    expect(modeOf(byHook)).toBe(0o700);
   });
 });
