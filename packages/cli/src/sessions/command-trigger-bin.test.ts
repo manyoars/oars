@@ -19,7 +19,7 @@ afterEach(() => {
 
 const version = (): string => {
   const parsed: unknown = JSON.parse(readFileSync(pkg, 'utf8'));
-  const value = typeof parsed === 'object' && parsed !== null ? Reflect.get(parsed, 'version') : undefined;
+  const value: unknown = typeof parsed === 'object' && parsed !== null ? Reflect.get(parsed, 'version') : undefined;
   if (typeof value !== 'string') throw new Error('package.json has no version');
   return value;
 };
