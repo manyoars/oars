@@ -1,5 +1,5 @@
 // `POST /v1/telemetry`: product telemetry from the CLI, a channel beside the session wire. It is not a deposit, so it needs no covenant and no sign-in. A batch is kept whole in R2, which is the
-// record (for `RETENTION_DAYS`, then the nightly sweep drops it: `retention.ts`), and its events are written to Workers Analytics Engine, which is what reads come from. Analytics Engine keeps three months, so it is the index and never the only copy.
+// record (for `RETENTION_DAYS`, then the nightly sweep drops it: `retention.ts`), and its events are written to Workers Analytics Engine, which is what reads come from. Analytics Engine keeps three months, and it is the index, not the record.
 // Nothing here joins a batch to a deposit or an account: no address, user agent, or Authorization header is read, so a bearer a client sends is ignored and never stored (census S23).
 import { answer, fieldOf, notConfigured, refuse, type Env } from './http.js';
 

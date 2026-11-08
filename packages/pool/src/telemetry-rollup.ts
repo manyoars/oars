@@ -1,6 +1,6 @@
 // The nightly rollup: the telemetry record (the R2 batches `POST /v1/telemetry` keeps whole) read into one row per install, account, and day, which is what the fleet read and the operator's anomaly read come from.
 // Why R2 and not Analytics Engine: a Worker has a binding to write Analytics Engine but none to read it, so reading it means the SQL API with an account token held as a secret, a new moving part; the R2
-// binding is already here, and R2 is the record that outlives Analytics Engine's three months. The rollup is a pure function of a day's objects, so running it again changes nothing, and it
+// binding is already here, and R2 is the record, kept for the same 90 days as Analytics Engine. The rollup is a pure function of a day's objects, so running it again changes nothing, and it
 // reads only that: nothing here touches a deposit, a contributor, or a bundle.
 import { bucketOf, cellKey, measuresOf, type Kind, type Measure } from '../../cli/src/telemetry/measures.js';
 import { fieldOf, type Env } from './http.js';
