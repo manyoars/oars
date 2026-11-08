@@ -7,19 +7,21 @@ import { startPool, workerError, type TestPool } from './test-pool.js';
 // A connection serves one request at a time, so what keep-alive bounds is the connections opened against the most requests in flight at once, not a fixed number: Miniflare releases the
 // handles `getBindings` returns in a batched DELETE it sends 100 ms after a garbage collection, and that request can overlap the next call the test makes and need a connection of its
 // own (1 to 5 connects on a loaded CI runner). Without the keep-alive sender every request resets its connection: one connect per request, far above any overlap.
+const requestOf = (message: unknown): object | null => (typeof message === 'object' && message !== null && 'request' in message && typeof message.request === 'object' ? message.request : null);
+
 const watchConnections = (): { connects: () => number; peak: () => number; stop: () => void } => {
-  const open = new Set<unknown>();
+  const open = new Set<object | null>();
   let connects = 0;
   let peak = 0;
   const connected = (): void => {
     connects += 1;
   };
   const created = (message: unknown): void => {
-    open.add((message as { request: unknown }).request);
+    open.add(requestOf(message));
     peak = Math.max(peak, open.size);
   };
   const finished = (message: unknown): void => {
-    open.delete((message as { request: unknown }).request);
+    open.delete(requestOf(message));
   };
   subscribe('undici:client:connected', connected);
   subscribe('undici:request:create', created);
