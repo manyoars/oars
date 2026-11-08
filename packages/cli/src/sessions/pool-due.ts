@@ -5,6 +5,7 @@
 // Fail-open: an error is written to `pool-send.log` in the session store (masked, one line). The mark is written before the start, so a failed start is retried by the next trigger after the debounce, about an hour later.
 import { spawn } from 'node:child_process';
 import { appendFile, mkdir, open, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { errorLine } from './steps.js';
 
@@ -12,7 +13,7 @@ import { errorLine } from './steps.js';
 export type SenderSpawn = (
   command: string,
   args: string[],
-  options: { detached: true; stdio: 'ignore'; windowsHide: true },
+  options: { detached: true; stdio: 'ignore'; windowsHide: true; cwd: string },
 ) => { on: (event: 'error', listener: (error: Error) => void) => unknown; unref: () => void };
 
 /** The debounce: a sweep is started at most once in this long. */
@@ -123,11 +124,11 @@ export const afterStop = (storeDir: string, hookBin: string, now: () => number =
 export const storeReady = (storeDir: string): (() => Promise<boolean>) => async () => (await stat(join(storeDir, 'state.json')).then(() => true, () => false)) && !(await scheduleOptedOut(storeDir));
 
 /**
- * Starts `node <hook-bin> nightly` detached with no stdio and never waits for it, as telemetry's sender and the gate's helper are started. The sender inherits this process's environment. A child that cannot
+ * Starts `node <hook-bin> nightly` detached with no stdio and never waits for it, as telemetry's sender and the gate's helper are started. The sender inherits this process's environment but runs in the home folder, so it never holds the caller's project folder or worktree open (Windows cannot remove a folder that is a running process's working directory). A child that cannot
  * start (its `error` event) is written to `pool-send.log` like any other failure; the retry is the next trigger after the debounce.
  */
 export const startSender = (hookBin: string, storeDir: string, now: () => number, start: SenderSpawn = spawn): (() => void) => () => {
-  const child = start(process.execPath, [hookBin, 'nightly'], { detached: true, stdio: 'ignore', windowsHide: true });
+  const child = start(process.execPath, [hookBin, 'nightly'], { detached: true, stdio: 'ignore', windowsHide: true, cwd: homedir() });
   child.on('error', (error) => {
     void logFailure(storeDir, now(), error);
   });

@@ -79,6 +79,21 @@ describe('a command runs the catch-up', () => {
     await run(['--version'], deps);
     expect(calls).toBe(1);
   });
+  it('is not run from hook uninstall, whose removal steps delete the store the sweep would recreate', async () => {
+    const { deps } = harness();
+    const dir = store();
+    // The runtime points at the temp folder on a non-Windows platform, so no real settings file and no real task is read.
+    deps.install = { platform: 'linux', nodePath: process.execPath, hookBin: 'hook-bin.js', userSettings: join(dir, 'settings.json'), cwd: dir, schtasks: () => Promise.resolve({ code: 1, output: '' }) };
+    let calls = 0;
+    deps.catchUp = () => {
+      calls += 1;
+      return Promise.resolve();
+    };
+    expect(await run(['sessions', 'hook', 'uninstall', '--file', join(dir, 'settings.json')], deps)).toBe(0);
+    expect(calls).toBe(0);
+    await run(['--version'], deps);
+    expect(calls).toBe(1);
+  });
 });
 
 describe('the SessionEnd hook runs the catch-up', () => {

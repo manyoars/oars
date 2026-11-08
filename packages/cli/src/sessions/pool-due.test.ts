@@ -1,7 +1,7 @@
 // The due check with driven time: an injected clock and starter, a temp store, no sleeps. The store is a folder under the OS temp dir, asserted before any write.
 import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { afterStop, catchUp, recordSchedule, scheduleOptedOut, SEND_EVERY_MS, startSender, storeReady, type CatchUpDeps } from './pool-due.js';
@@ -141,7 +141,7 @@ describe('the store and the sender', () => {
     expect(await storeReady(dir)()).toBe(true);
   });
 
-  it('starts node on hook-bin nightly, detached, with no stdio, and lets go of it', () => {
+  it('starts node on hook-bin nightly, detached, with no stdio, in the home folder (so it holds no project folder open), and lets go of it', () => {
     const calls: { command: string; args: string[]; options: object }[] = [];
     const events: string[] = [];
     startSender('C:\\x\\hook-bin.js', store(), () => T0, (command, args, options) => {
@@ -151,7 +151,7 @@ describe('the store and the sender', () => {
         unref: () => void events.push('unref'),
       };
     })();
-    expect(calls).toEqual([{ command: process.execPath, args: ['C:\\x\\hook-bin.js', 'nightly'], options: { detached: true, stdio: 'ignore', windowsHide: true } }]);
+    expect(calls).toEqual([{ command: process.execPath, args: ['C:\\x\\hook-bin.js', 'nightly'], options: { detached: true, stdio: 'ignore', windowsHide: true, cwd: homedir() } }]);
     expect(events).toEqual(['error', 'unref']);
   });
 
