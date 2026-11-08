@@ -1,4 +1,4 @@
-import { createHash, webcrypto } from 'node:crypto';
+import { createHash, createHmac, webcrypto } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,7 +21,7 @@ import { session as sessionRow } from './pool-fixture.js';
 import { slugOf } from './allow.js';
 import { parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey, type SkeletonFrame } from './pool-wire.js';
 import { contentHash } from './read.js';
-import { deposit, updatePoolChoices } from './store.js';
+import { deposit, localSalt, updatePoolChoices } from './store.js';
 import { spoolEvents } from '../telemetry/read-events.js';
 import { addProject, cleanup, NOW, settledClock, stage, TEST_FLOOR, type Staged } from './test-support.js';
 
@@ -2366,6 +2366,32 @@ describe('oars pool deposit: the raw copy (t884)', () => {
     const granted = await ready('granted');
     await granted.cli('pool', 'deposit', '--server', POOL);
     expect(granted.h.out.join('')).not.toContain('--consent yes');
+  });
+
+  it('marks the same injected block with the same hash in two sessions, keyed by the store salt of this machine', async () => {
+    const scene = setting();
+    rmSync(join(scene.staged.projectsRoot, 'proj'), { recursive: true, force: true });
+    const block = 'Always answer in haiku and keep the blue lamp lit.';
+    const sessions = ['66666666-6666-4666-8666-666666666666', '77777777-7777-4777-8777-777777777777'];
+    for (const id of sessions) {
+      const common = { sessionId: id, cwd: '/w', timestamp: '2026-06-01T00:00:00Z' };
+      const lines = [{ ...common, type: 'attachment', attachment: { type: 'instructions', content: block } }, { ...common, type: 'user', message: { role: 'user', content: `typed words for ${id}` } }];
+      addProject(scene.staged, 'zz-raw-folder', id, lines.map((entry) => JSON.stringify(entry)));
+    }
+    await deposit(scene.staged.runtime, { allow: ['zz-raw-folder'], redactDomains: [], now: () => NOW });
+    await signIn(scene);
+    await updatePoolChoices(scene.staged.storeDir, (choices) => {
+      choices.rawConsent = 'granted';
+    });
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    const bodies = rawFiles(scene).map((name) => readFileSync(join(scene.staged.storeDir, 'pool-outbox', name), 'utf8'));
+    expect(bodies).toHaveLength(2);
+    const { salt } = await localSalt(scene.staged.storeDir);
+    const expected = createHmac('sha256', `injected-block:${salt}`).update(block).digest('hex').slice(0, 12);
+    for (const body of bodies) {
+      expect(body).toContain(`[injected instructions ${expected}]`);
+      expect(body).not.toContain('haiku');
+    }
   });
 
   it('lists each raw copy in the outbox with its hash and bytes, and prints the body only with --explain', async () => {

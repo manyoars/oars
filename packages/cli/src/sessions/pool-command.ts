@@ -415,7 +415,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   const saved = await readState(runtime.storeDir);
   const names = localNames();
   // The key an injected block's hash is made under: this machine's salt, so the same block hashes the same in every session and the key never leaves it.
-  const injectedKey = `injected-block:${(await (runtime.accountSalt ?? localSalt)(runtime.storeDir)).salt}`;
+  const injectedKey = `injected-block:${(await localSalt(runtime.storeDir)).salt}`;
   const allow = compileAllow(saved.allow);
   const discarded = await discardStale(outbox);
   const counts: DepositCounts = { sessions: 0, batched: 0, excluded: { folder: 0, term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, off: 0, raw: { copies: 0, bytes: 0, masked: 0 }, uncaptured: 0, notEnded: 0, refused: 0, refusedFields: [], discarded, withdrawn: 0 };
