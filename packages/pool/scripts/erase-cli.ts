@@ -77,7 +77,7 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
           io.print(`No deposit row for account ${options.account}, session ${options.id} in ${where}. Nothing would be erased: check the selector.`);
           return 1;
         }
-        return plan(io, `erase deposit ${options.id} of account ${options.account} in ${where} (${found ? 'the row exists' : 'no such row: only the value would be erased'})${options.valueStdin ? ', and every trace of the value read from stdin' : ''}`);
+        return plan(io, `erase deposit ${options.id} of account ${options.account} in ${where} (${found ? 'the row exists' : 'no such row: only the value would be erased'})${options.valueStdin ? ', and scrub the value read from stdin from every deposit row, motif, cell, and contributor record that holds it, and drop the unfinished staged parts of each account that held it' : ''}`);
       }
       const value = options.valueStdin ? (await io.stdin()).replace(/\r?\n$/, '') : undefined;
       io.print(summary(await eraseLeakedSecret(store, { account: options.account, id: options.id, ...(value === undefined ? {} : { value }) }, io.now())));

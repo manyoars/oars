@@ -48,7 +48,7 @@ const numberOf = (row: unknown, key: string): number => {
 
 const dayOf = (now: Date): string => now.toISOString().slice(0, 10);
 
-/** The marker a deposit row holds in place of its skeleton. It parses as no skeleton, so a resend over it nets nothing. */
+/** The marker a deposit row holds in place of its skeleton. It parses as no skeleton, and the deposit tombstone refuses a resend of the session before `previousOf` reads it. */
 const markerOf = (reason: ErasureReason): string => JSON.stringify({ erased: reason });
 
 const nameOf = (value: string, what: string): string => {
@@ -122,7 +122,8 @@ const scan = async (store: EraseStore, table: string, columns: readonly string[]
 
 /**
  * Erases a deposit row that holds a leaked secret: its content is replaced by a marker in place (no row is dropped), and its key is tombstoned. With the value, every other deposit row that holds it goes the same way, the
- * motifs that name it are scrubbed of it (their counts stand), staged parts that hold it are dropped, and a tombstone of its SHA-256 makes ingest refuse a deposit that carries it again. A raw object that holds it is erased by key.
+ * motifs, cells (key and frame bucket, where a frame's `model` is kept), and contributor records that name it are scrubbed of it (their counts stand), the unfinished staged parts of every account that held it are dropped, and a tombstone of its
+ * SHA-256 makes ingest refuse a deposit that carries it again. A raw object that holds it is erased by key.
  * A session that was never deposited is refused when no value is given: its tombstone would refuse that id forever.
  */
 export const eraseLeakedSecret = async (store: EraseStore, secret: LeakedSecret, now: Date): Promise<Erased> => {
@@ -142,13 +143,22 @@ export const eraseLeakedSecret = async (store: EraseStore, secret: LeakedSecret,
       if (textOf(row, 'skeleton').includes(stored) || textOf(row, 'extensions').includes(stored)) held.push({ account: textOf(row, 'account'), id: textOf(row, 'id') });
       return Promise.resolve();
     }, 'erased_on IS NULL AND ');
-    await scan(store, 'deposit_parts', ['account', 'batch', 'part', 'body'], ['account', 'batch', 'part'], async (row) => {
-      if (textOf(row, 'body').includes(stored)) rows += await store.run('DELETE FROM deposit_parts WHERE account = ? AND batch = ? AND part = ?', [textOf(row, 'account'), textOf(row, 'batch'), numberOf(row, 'part')]);
-    });
     await scan(store, 'motifs', ['motif_id', 'motif'], ['motif_id'], async (row) => {
       const motif = textOf(row, 'motif');
       if (motif.includes(stored)) rows += await store.run('UPDATE motifs SET motif = ? WHERE motif_id = ?', [motif.replaceAll(stored, SCRUBBED), textOf(row, 'motif_id')]);
     });
+    // A frame's `model` is a name the pool stores in clear: in the cell's key and frame bucket, and in the contributor record that names the cell. The text is replaced in place; no row moves, and no count changes.
+    await scan(store, 'cells', ['key', 'frame_bucket'], ['key'], async (row) => {
+      const key = textOf(row, 'key');
+      const bucket = textOf(row, 'frame_bucket');
+      if (key.includes(stored) || bucket.includes(stored)) rows += await store.run('UPDATE cells SET key = ?, frame_bucket = ? WHERE key = ?', [key.replaceAll(stored, SCRUBBED), bucket.replaceAll(stored, SCRUBBED), key]);
+    });
+    await scan(store, 'contributors', ['kind', 'key', 'account', 'day'], ['kind', 'key', 'account', 'day'], async (row) => {
+      const key = textOf(row, 'key');
+      if (key.includes(stored)) rows += await store.run('UPDATE contributors SET key = ? WHERE kind = ? AND key = ? AND account = ? AND day = ?', [key.replaceAll(stored, SCRUBBED), textOf(row, 'kind'), key, textOf(row, 'account'), textOf(row, 'day')]);
+    });
+    // Staged parts are sealed with a key the command does not hold, so their text cannot be searched. The unfinished ones of every account that held the value are dropped whole; another account's wait for its own sweep.
+    for (const holder of new Set(held.map((one) => one.account).concat(account))) rows += await store.run('DELETE FROM deposit_parts WHERE account = ? AND deposit IS NULL', [holder]);
   }
   for (const one of held) rows += await dropDeposit(store, one.account, one.id, 'leaked-secret', now);
   const erased = { rows, objects: 0 };

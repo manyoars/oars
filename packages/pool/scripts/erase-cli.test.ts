@@ -120,7 +120,6 @@ describe('main', () => {
       answer: (sql) => {
         if (sql.startsWith('SELECT 1 AS found')) return [{ found: 1 }];
         if (sql.includes('FROM deposits')) return [{ account: ACCOUNT, id: 's2', skeleton: `{"program":"${value}"}`, extensions: '[]' }];
-        if (sql.includes('FROM deposit_parts')) return [{ account: ACCOUNT, batch: 'b1', part: 1, body: `{"x":"${value}"}` }];
         if (sql.includes('FROM motifs')) return [{ motif_id: 'm1', motif: `run ${value} now` }];
         return [];
       },
@@ -130,7 +129,8 @@ describe('main', () => {
     expect(calls.flat().some((arg) => arg.includes(value))).toBe(false);
     const sql = calls.map((call) => call[6] ?? '');
     // Rows are changed by key, the motif by its scrubbed text, and the tombstone carries the SHA-256.
-    expect(sql).toContain(`DELETE FROM deposit_parts WHERE account = '${ACCOUNT}' AND batch = 'b1' AND part = 1`);
+    // Staged parts are sealed, so they are dropped by account (the named one and the one whose row held the value), never matched by text.
+    expect(sql).toContain(`DELETE FROM deposit_parts WHERE account = '${ACCOUNT}' AND deposit IS NULL`);
     expect(sql).toContain("UPDATE motifs SET motif = 'run [erased] now' WHERE motif_id = 'm1'");
     expect(sql.some((text) => text.startsWith('UPDATE deposits SET') && text.includes("id = 's2'"))).toBe(true);
     expect(sql.some((text) => text.includes('INSERT OR IGNORE INTO erasure_tombstones') && text.includes("'value'"))).toBe(true);

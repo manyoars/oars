@@ -139,8 +139,8 @@ export const receivePart = async (request: Request, env: Env, account: string, s
   if (stored.status === 201) {
     const id = textField(await bodyOf(stored.clone()), 'id') ?? '';
     await env.DB.prepare("UPDATE deposit_parts SET body = '', deposit = ? WHERE account = ? AND batch = ?").bind(id, account, batch).run();
-  } else if (stored.status === 400 || stored.status === 422) {
-    // The batch itself is refused (size was refused above, before the join, so there is no 413 here): sending its parts again would change nothing, so they are not kept. A conflict or a brake can pass later, so those keep them.
+  } else if (stored.status === 400 || stored.status === 403 || stored.status === 422) {
+    // The batch itself is refused (size was refused above, before the join, so there is no 413 here; a 403 is a batch that carries erased content): sending its parts again would change nothing, so they are not kept. A conflict or a brake can pass later, so those keep them.
     await forget(env, account, batch);
   }
   return stored;

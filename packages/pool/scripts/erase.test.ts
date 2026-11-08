@@ -23,6 +23,9 @@ const NOW = new Date('2026-11-08T12:00:00Z');
 const FAKE_KEY = 'AKIAFAKEKEY0000SECRET';
 /** A second value, for the test whose first deposit must pass: a tombstone from an earlier test would refuse FAKE_KEY. */
 const SECOND_KEY = 'AKIAFAKEKEY0000SECOND';
+/** A third and a fourth, for a value that sits in a frame's `model` and for one that sits in a staged part. */
+const MODEL_KEY = 'AKIAFAKEKEY0MODELKEY';
+const PART_KEY = 'AKIAFAKEKEY0000PARTS';
 
 /** The erasure store over the pool's local D1 and raw bucket, as `wrangler --local` would reach them. */
 const storeOf = (db: TestDb, bucket: TestBucket): EraseStore => ({
@@ -53,9 +56,10 @@ const putRaw = async (token: string, bytes: Uint8Array): Promise<{ hash: string;
 const rawKeys = async (account: string): Promise<string[]> => [...(await (await pool.rawBucket()).list()).objects.map((object) => object.key)].filter((key) => key.split('/')[1] === account);
 
 /** A sample deposit whose first shell step names `program`, a name the pool stores in clear below the floor. */
-const skeletonWith = (id: string, program?: string): unknown => {
+const skeletonWith = (id: string, program?: string, model?: string): unknown => {
   const text = JSON.stringify(sampleSkeleton(id));
-  return JSON.parse(program === undefined ? text : text.replaceAll('"program":"git"', `"program":"${program}"`));
+  const named = program === undefined ? text : text.replaceAll('"program":"git"', `"program":"${program}"`);
+  return JSON.parse(model === undefined ? named : named.replaceAll('"model":"claude-opus-5-5"', `"model":"${model}"`));
 };
 
 const all = async (sql: string, ...binds: (string | number)[]): Promise<readonly unknown[]> => (await (await pool.db()).prepare(sql).bind(...binds).all()).results;
@@ -155,6 +159,30 @@ describe('erasing a row that holds a leaked secret', () => {
     expect(await all("SELECT kind, reason, rows_erased, objects_erased FROM erasure_audit WHERE kind = 'row'")).toContainEqual(expect.objectContaining({ kind: 'row', reason: 'leaked-secret' }));
   }, 90_000);
 
+  it('scrubs a value that sits in the model of a frame from the cells and contributors that name it, with every count unchanged', async () => {
+    const { token, account } = await member();
+    const bystander = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000078aa', undefined, MODEL_KEY), token)).status).toBe(201);
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000078ab'), bystander.token)).status).toBe(201);
+    // A model name is stored in clear in the cell key and its frame bucket, and in the contributor record: the value is in the pool before the erasure.
+    expect(await count('SELECT COUNT(*) AS held FROM cells WHERE key LIKE ? AND frame_bucket LIKE ?', `%${MODEL_KEY}%`, `%${MODEL_KEY}%`)).toBeGreaterThanOrEqual(1);
+    expect(await count("SELECT COUNT(*) AS held FROM contributors WHERE key LIKE ?", `%${MODEL_KEY}%`)).toBeGreaterThanOrEqual(1);
+    const shape = async (): Promise<string> =>
+      JSON.stringify([
+        await all('SELECT motif_id, grain, day, exposed, sessions, clusters, ok, failed, tokens FROM cells ORDER BY motif_id, grain, day, exposed, sessions, clusters, ok, failed, tokens'),
+        await all('SELECT COUNT(*) AS held FROM strata'),
+        await all('SELECT kind, account, day, COUNT(*) AS held FROM contributors GROUP BY kind, account, day ORDER BY kind, account, day'),
+      ]);
+    const before = await shape();
+
+    const erased = await eraseLeakedSecret(await store(), { account, id: '00000000000078aa', value: MODEL_KEY }, NOW);
+    expect(erased.rows).toBeGreaterThanOrEqual(2);
+    expect(await dump()).not.toContain(MODEL_KEY);
+    expect(await shape()).toBe(before);
+    // The bystander's cells stand, with their own model.
+    expect(await count("SELECT COUNT(*) AS held FROM cells WHERE frame_bucket LIKE '%claude-opus-5-5%'")).toBeGreaterThanOrEqual(1);
+  }, 90_000);
+
   it('refuses the same value again, in any session and in the session that held it, and nothing else', async () => {
     const { token, account } = await member();
     expect((await pool.post('/v1/deposits', skeletonWith('00000000000072aa', SECOND_KEY), token)).status).toBe(201);
@@ -247,6 +275,37 @@ describe('erasing one account under a lawful request', () => {
     expect(await count('SELECT COUNT(*) AS held FROM deposit_parts WHERE account = ?', account)).toBe(1);
     expect((await eraseAccount(await store(), account, NOW)).rows).toBe(1);
     expect(await count('SELECT COUNT(*) AS held FROM deposit_parts WHERE account = ?', account)).toBe(0);
+  }, 60_000);
+});
+
+/** Stages one part of a two-part deposit through `oars-part`, as the client does. The pool seals the body before it is stored, so a row of `deposit_parts` is ciphertext. */
+const stage = async (token: string, id: string, program: string, part: 1 | 2): Promise<number> => {
+  const body = JSON.stringify(skeletonWith(id, program));
+  const half = Math.floor(body.length / 2);
+  const batch = createHash('sha256').update(body).digest('hex');
+  return (await pool.send('/v1/deposits', { method: 'POST', body: part === 1 ? body.slice(0, half) : body.slice(half) }, token, { 'oars-part': `${String(part)}/2`, 'oars-batch': batch })).status;
+};
+
+describe('staged parts and a leaked secret', () => {
+  it('drops the staged parts of the account that held the value, though the pool seals every part and the command cannot match its text', async () => {
+    const { token, account } = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000079aa', PART_KEY), token)).status).toBe(201);
+    expect(await stage(token, '00000000000079ab', PART_KEY, 1)).toBe(202);
+    expect(await count('SELECT COUNT(*) AS held FROM deposit_parts WHERE account = ? AND deposit IS NULL', account)).toBe(1);
+    // The staged text is ciphertext: the value is not in it, and so no scan of it could have found the value.
+    expect(JSON.stringify(await all('SELECT body FROM deposit_parts WHERE account = ? AND deposit IS NULL', account))).not.toContain(PART_KEY);
+    await eraseLeakedSecret(await store(), { account, id: '00000000000079aa', value: PART_KEY }, NOW);
+    expect(await count('SELECT COUNT(*) AS held FROM deposit_parts WHERE account = ? AND deposit IS NULL', account)).toBe(0);
+  }, 60_000);
+
+  it('forgets the parts of a batch the pool refuses as erased, so they do not wait for a sweep', async () => {
+    const { token, account } = await member();
+    const value = 'AKIAFAKEKEY0000PARTB';
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000079ba', value), token)).status).toBe(201);
+    await eraseLeakedSecret(await store(), { account, id: '00000000000079ba', value }, NOW);
+    expect(await stage(token, '00000000000079bb', value, 1)).toBe(202);
+    expect(await stage(token, '00000000000079bb', value, 2)).toBe(403);
+    expect(await count('SELECT COUNT(*) AS held FROM deposit_parts WHERE account = ? AND deposit IS NULL', account)).toBe(0);
   }, 60_000);
 });
 
