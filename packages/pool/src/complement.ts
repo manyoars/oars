@@ -3,6 +3,7 @@
 // smallest served one: the whole less the served parts is then a sum over at least two parts, one of them at or above the floor, which no reader can split. The whole and the other parts stay, so a thin
 // pool still serves what it can. Families also combine (the served totals of several can add and subtract to an unserved cell), so a rank check then withholds until the served cells determine no unserved one
 // (`withheldOf`). The environment cells (`ENVIRONMENT_CELLS`, `stored.ts`) keep their own rule, every part served or the total is not, and their counterparts are also dropped when a bucket cell is withheld (`bundleOf`).
+import { argFeaturesOf } from '../../cli/src/sessions/call-shape.js';
 import { isEnvironmentCell, NO_AXES, parseShapeClass, weekStartOf, type Cell, type ShapeFacet } from '../../cli/src/sessions/cells.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
 import { OPEN_LIST_KEYS } from '../../cli/src/sessions/public-vocabulary.js';
@@ -105,6 +106,23 @@ const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, motif: Mot
       const at = parsed.value.indexOf('=');
       if (parsed.value.slice(at + 1) !== (parsed.facet === 'depth' ? '0' : 'root')) return [];
       return [{ family: JSON.stringify(['depth-dir', parsed.action, parsed.value.slice(0, at), cell.frameBucket, cell.grain, cell.day, cell.exposed]), role: parsed.facet === 'depth' ? 'whole' : 'part' }];
+    },
+  },
+  // A key's `size` cell is the whole of its `enum` cells whose member's length falls in that size, for a boolean-free exhaustive list: every call that sends the key sends a listed value, so the calls in a size are the calls of
+  // the members of that length. `files_with_matches` alone is 18 characters, so `size output_mode=9-32` and `enum output_mode=files_with_matches` count the same calls. An open list is not such a whole: an off-list value
+  // has a size and no `enum` cell (`countsOnlySome`).
+  {
+    name: 'enum-size',
+    placements: (cell, motif) => {
+      const parsed = motif === undefined || motif.cls === null ? null : parseShapeClass(motif.cls);
+      if (parsed === null || (parsed.facet !== 'size' && parsed.facet !== 'enum')) return [];
+      const at = parsed.value.indexOf('=');
+      const key = parsed.value.slice(0, at);
+      const member = parsed.value.slice(at + 1);
+      if (parsed.facet === 'enum' && (countsOnlySome('enum', parsed.value) || member === 'true' || member === 'false')) return [];
+      // The size the emitter itself gives the member, so the buckets are not restated here.
+      const size = parsed.facet === 'size' ? member : argFeaturesOf('', { [key]: member }, undefined)[0]?.valueSize;
+      return [{ family: JSON.stringify(['enum-size', parsed.action, key, size, cell.frameBucket, cell.grain, cell.day, cell.exposed]), role: parsed.facet === 'size' ? 'whole' : 'part' }];
     },
   },
   // The calls that send a key k are split by the `keys` cells whose list holds k, and by each per-key facet of k: the `keys` cells that hold k are parts of those facets' total.

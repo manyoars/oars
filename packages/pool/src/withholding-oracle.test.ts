@@ -10,7 +10,7 @@ import { targetOf } from '../../cli/src/sessions/extract.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
 import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from '../../cli/src/sessions/pool-fixture.js';
 import { parseSkeleton, skeletonOf } from '../../cli/src/sessions/pool-wire.js';
-import { CLOSED_ARG_VALUES } from '../../cli/src/sessions/public-vocabulary.js';
+import { CLOSED_ARG_VALUES, OPEN_LIST_KEYS } from '../../cli/src/sessions/public-vocabulary.js';
 import { makeRedactor } from '../../cli/src/sessions/redact.js';
 import { ERROR_CODES, type ToolObservation, type ToolStatus } from '../../cli/src/sessions/schema.js';
 import { bundleOf } from './derive.js';
@@ -200,20 +200,6 @@ const seeded = (seed: number): (() => number) => {
   };
 };
 
-/** The values a key can take when a candidate call is built: enough of each closed list (path depth, extension, folder kind, size) for the held cells to pick from. */
-const VALUE_POOL: ReadonlyMap<string, readonly unknown[]> = new Map<string, readonly unknown[]>([
-  ['file_path', ['a.ts', 'src/a.ts', 'src/lib/a.ts', 'docs/lib/a.md', 'README.md', 'test/a.test.ts', 'a/b/c/d/e/f.json']],
-  ['path', ['a.ts', 'src/a.ts', 'src/lib/a.ts', 'docs/lib/a.md', 'README.md']],
-  ['pattern', ['foo', 'foo.*bar', '^a|b$']],
-  ['query', ['q', 'a query of some length', 'a query that is considerably longer than thirty-two characters']],
-  ['limit', [10, 2000]],
-  ['offset', [0, 500]],
-  ['head_limit', [10, 2000]],
-  ['output_mode', ['count']],
-  ['-i', [true, false]],
-  ['model', [true, 'sonnet']],
-]);
-
 /** The held cells' own vocabulary: for each action, the key sets its `keys` cells name, and whether a keyless call is held (`arg/none`). */
 const vocabularyOf = (held: Held): { action: string; native: string; keySets: string[][]; codes: string[] }[] => {
   const motifOf = new Map(held.pool.motifs.map((motif) => [motif.motifId, motif]));
@@ -231,10 +217,32 @@ const vocabularyOf = (held: Held): { action: string; native: string; keySets: st
 };
 
 /**
- * The atoms the held cells allow, one a call, from one stream of a fixed seed: key sets from the `keys` cells, values from the pool, and every status and cost variant, then run through the route. The stream has no end
- * (the caller stops it when the rank stops rising) and gives `null` when the held cells name no key set to call with.
+ * What a key can be sent, from the held cells and not from a list of ours: the values of the held `enum` cells (a boolean for `true` and `false`, else the member as the string it was), and the values the fixture's own
+ * calls send under the key, which are the calls that made the other held cells (`size`, `depth`, `extension`, `dir`, `pattern`).
  */
-const candidatesOf = (held: Held): (() => Atom | null) => {
+const valuesOf = (held: Held, accounts: Accounts): ReadonlyMap<string, unknown[]> => {
+  const motifOf = new Map(held.pool.motifs.map((motif) => [motif.motifId, motif]));
+  const found = new Map<string, Map<string, unknown>>();
+  const add = (key: string, value: unknown): void => found.set(key, (found.get(key) ?? new Map<string, unknown>()).set(JSON.stringify(value), value));
+  for (const { input } of accounts.flat().flatMap(({ calls }) => calls)) for (const [key, value] of Object.entries(input)) add(key, value);
+  for (const cell of held.cells) {
+    const parsed = parseShapeClass(motifOf.get(cell.motifId)?.cls ?? '');
+    if (parsed === null || (parsed.facet !== 'enum' && parsed.facet !== 'size')) continue;
+    const at = parsed.value.indexOf('=');
+    const key = parsed.value.slice(0, at);
+    const member = parsed.value.slice(at + 1);
+    if (parsed.facet === 'enum') add(key, member === 'true' ? true : member === 'false' ? false : member);
+    // A key of an open list can also be sent a value off the list (a custom agent, a full model id): it has the key's `size` cell and no `enum` cell, so the held `size` cell is all that names it.
+    else if (OPEN_LIST_KEYS.has(key)) add(key, '~'.repeat(COVERAGE_SIZES[VALUE_SIZES.indexOf(member as (typeof VALUE_SIZES)[number])] ?? 0));
+  }
+  return new Map([...found].map(([key, values]) => [key, [...values.values()]]));
+};
+
+/**
+ * The atoms the held cells allow, one a call, from one stream of a fixed seed: key sets from the `keys` cells, values from `valuesOf`, and every status and cost variant (the costs above the wire buckets, so a drawn
+ * call's cost is never bucketed to 0), then run through the route. The stream has no end (the caller stops it when the rank stops rising) and gives `null` when the held cells name no key set to call with.
+ */
+const candidatesOf = (held: Held, accounts: Accounts): (() => Atom | null) => {
   const random = seeded(7);
   const pick = <T>(items: readonly T[]): T => {
     const chosen = items[Math.floor(random() * items.length)];
@@ -242,12 +250,13 @@ const candidatesOf = (held: Held): (() => Atom | null) => {
     return chosen;
   };
   const vocabulary = vocabularyOf(held);
+  const values = valuesOf(held, accounts);
   return () => {
     if (vocabulary.length === 0) return null;
     const { native, keySets, codes } = pick(vocabulary);
     const callOf = (): Call => {
       const keys = pick(keySets);
-      const input = Object.fromEntries([...keys, ...(random() < 0.15 ? ['not_a_public_key'] : [])].map((key) => [key, pick(VALUE_POOL.get(key) ?? ['x'])]));
+      const input = Object.fromEntries([...keys, ...(random() < 0.15 ? ['not_a_public_key'] : [])].map((key) => [key, key === 'not_a_public_key' ? 'x' : pick(values.get(key) ?? [])]));
       const status = pick<ToolStatus>(['ok', 'ok', 'error', 'none']);
       const errorCode = status === 'error' && codes.length > 0 && random() < 0.7 ? pick(codes) : undefined;
       return call(native, input, { status, ...(errorCode === undefined ? {} : { errorCode }), tokens: random() < 0.5 ? null : 5000, durationMs: random() < 0.5 ? null : 500 });
@@ -269,6 +278,29 @@ interface MatrixColumn {
 
 /** Where the matrix stops sampling: this many atoms in a row that add no rank. The unit is an atom drawn from the held cells' own vocabulary, so a larger fixture draws more before it stops. */
 const PATIENCE = 400;
+
+/**
+ * The fixture's own calls sent again with every ok/error assignment, once as they are and once as a pair of the same call twice, at the unit cost (tokens 5000, 500 ms): a cell that tallies `failed` (a `change` cell, whose second call is the one that fails) needs
+ * an atom whose call failed, and a random draw rarely sends the same call twice in a row. An atom that emits a cell the fixture does not hold is discarded, as any other.
+ */
+const variantsOf = (atoms: readonly Atom[], codes: readonly string[]): Atom[] => {
+  const seen = new Set<string>();
+  return atoms.flatMap((atom) =>
+    [atom.calls, ...atom.calls.map((one) => [one, one])].flatMap((calls) => {
+      const statuses = calls.length === 1 ? [['ok'], ['error']] : [['ok', 'ok'], ['ok', 'error'], ['error', 'ok'], ['error', 'error']];
+      return statuses.flatMap((assigned) =>
+        // A failed call is sent without an error code and with each code the fixture holds.
+        [undefined, ...codes].flatMap((code) => {
+          const made = { ...atom, calls: calls.map((one, at) => call(one.tool, one.input, assigned[at] === 'error' ? { status: 'error', ...(code === undefined ? {} : { errorCode: code }) } : {})) };
+          const key = JSON.stringify([made.calls, made.promptTokens, made.wallSec]);
+          if (seen.has(key) || (code !== undefined && !assigned.includes('error'))) return [];
+          seen.add(key);
+          return [made];
+        }),
+      );
+    }),
+  );
+};
 
 /**
  * The matrix of section 2: one column per atom that adds rank, and the (cell, column) pairs that are its rows. The universe is every account's own atoms, then the closed-list coverage (`coverageOf`), then draws from one
@@ -303,8 +335,8 @@ const matrixOf = (accounts: Accounts, patience: number): { held: Held; motifOf: 
     kept.push(made);
     return true;
   };
-  for (const atom of [...accounts.flat(), ...coverageOf()]) keep(atom);
-  const draw = candidatesOf(held);
+  for (const atom of [...accounts.flat(), ...variantsOf(accounts.flat(), vocabularyOf(held)[0]?.codes ?? []), ...coverageOf()]) keep(atom);
+  const draw = candidatesOf(held, accounts);
   // `rose` is the draw that last raised the rank; the sampling ended `patience` draws after it.
   let rose = 0;
   for (let drawn = 1, idle = 0; idle < patience; drawn += 1) {
@@ -354,7 +386,7 @@ const COVERAGE_PATTERNS = ['a|b', '^a$', '[a-z]', 'a\\.b', '(a)', 'foo', 'a+', '
 const COVERAGE_SIZES = [0, 1, 9, 33, 129, 513, 2049, 8193];
 
 /**
- * The calls that, between them, emit every member of every closed list the cells are keyed on. They are in the matrix's universe (`matrixOf`), so a member a fixture holds is a column the sweep has whether or not `VALUE_POOL`
+ * The calls that, between them, emit every member of every closed list the cells are keyed on. They are in the matrix's universe (`matrixOf`), so a member a fixture holds is a column the sweep has whether or not `valuesOf`
  * can draw it, and a list member nothing here emits goes red in the meta-test below, so a new facet or member is not silently outside the universe. A call whose input holds a closed value is built from
  * `CLOSED_ARG_VALUES` itself, and a failed call from `ERROR_CODES`, so neither list can grow unseen.
  */
@@ -515,10 +547,63 @@ describe('the withholding oracle', () => {
     expect(leaksOf(accounts)).toEqual([]);
   });
 
+  // t993's fixture, the review's finding: `files_with_matches` (18 characters) is the only member of the exhaustive `output_mode` list in size `9-32`, so `enum output_mode=files_with_matches` always equals `size output_mode=9-32`.
+  // Served, `keys/output_mode` 19 less `enum` count 8 and `size` 9-32 7 is the withheld `content` 4. No noise call closes it: it holds in every store.
+  it('serves nothing that gives back an enum cell through the size cell of an exhaustive list: output_mode, 4 content, 8 count, and 7 files_with_matches accounts', () => {
+    const send = (mode: string): Atom => grep({ output_mode: mode });
+    const accounts = [...accountsOf(4, () => send('content')), ...accountsOf(8, () => send('count')), ...accountsOf(7, () => send('files_with_matches'))];
+    expect(servedOf(accounts)).toBeGreaterThan(0);
+    expect(leaksOf(accounts)).toEqual([]);
+  });
+
   it('serves nothing that gives back depth 1 through dir root: depth 0 and dir root count the same calls, beside the keys total and depth 2', () => {
     const at = (file: string) => atomOf(call('Read', { file_path: file }));
     const accounts = [...accountsOf(20, () => at('a.ts')), ...accountsOf(3, () => at('src/a.ts')), ...accountsOf(10, () => at('src/lib/a.ts')), ...accountsOf(20, () => at('docs/lib/a.md'))];
     expect(servedOf(accounts)).toBeGreaterThan(0);
     expect(leaksOf(accounts)).toEqual([]);
   });
+
+  // The seeded sweep: each seed builds a fixture from calls, one tool, a served entry of keyed calls, a keyless entry under the floor (the `arg/none` cell), and one to three more entries of random key sets and counts,
+  // some under the floor. The values come from the closed lists (`CLOSED_ARG_VALUES`) and a few strings and numbers of different kinds, and the costs are above the wire buckets (tokens 1000 and up, durations
+  // 100 ms and up), so a call's cost is never bucketed to 0. Every fixture is asked what the real bundle gives back; none of them states a relation.
+  const closedOf = (native: string, key: string): string[] => [...(CLOSED_ARG_VALUES.get(native)?.get(key) ?? [])];
+  const SWEEP_TOOLS: readonly { native: string; keys: readonly (readonly [string, readonly unknown[]])[] }[] = [
+    { native: 'Grep', keys: [['pattern', ['foo', 'foo.*bar']], ['path', ['src/a.ts', 'docs/lib/a.md']], ['glob', ['**/*.ts', 'src']], ['output_mode', closedOf('Grep', 'output_mode')], ['-i', [true, false]], ['head_limit', [10, 2000]]] },
+    { native: 'Read', keys: [['file_path', ['a.ts', 'src/a.ts', 'src/lib/a.ts']], ['limit', [10, 2000]], ['offset', [0, 500]]] },
+    { native: 'WebSearch', keys: [['query', ['q', 'a query of some length']], ['allowed_domains', [['a.test'], ['a.test', 'b.test']]], ['blocked_domains', [['b.test'], ['b.test', 'c.test']]]] },
+    { native: 'Agent', keys: [['description', ['do it', 'a description of some length']], ['subagent_type', [...closedOf('Agent', 'subagent_type'), 'my-agent']], ['model', [...closedOf('Agent', 'model'), 'claude-x-1']], ['run_in_background', [true, false]]] },
+  ];
+  const sweepOf = (seed: number): Accounts => {
+    const random = seeded(seed * 7919);
+    const pick = <T>(items: readonly T[]): T => {
+      const chosen = items[Math.floor(random() * items.length)];
+      if (chosen === undefined) throw new Error('nothing to pick from');
+      return chosen;
+    };
+    const { native, keys } = pick(SWEEP_TOOLS);
+    const entry = (accounts: number, keyed: boolean): Accounts => {
+      const chosen = keyed ? keys.filter(() => random() < 0.5) : [];
+      const sent = keyed && chosen.length === 0 ? [pick(keys)] : chosen;
+      const base = sent.map(([key, values]) => [key, pick(values)] as const);
+      // One-account noise: the second account to the last of the first few each send the next value of one key (the key sets, and so the `keys` cells, stay the same), so a key with one value in the fixture is not
+      // a stand-in for the calls that send it (`pattern glob=wildcard` would count exactly the calls that send `glob`).
+      const inputOf = (account: number): { readonly [key: string]: unknown } =>
+        Object.fromEntries(base.map(([key, value], at) => [key, account === at + 1 ? ((sent[at]?.[1] ?? [])[((sent[at]?.[1] ?? []).indexOf(value) + 1) % (sent[at]?.[1] ?? []).length] ?? value) : value]));
+      const status = random() < 0.85 ? 'ok' : 'error';
+      const one = (account: number): Call => call(native, inputOf(account), { status, ...(status === 'error' && random() < 0.5 ? { errorCode: pick([...ERROR_CODES]) } : {}), tokens: pick([null, 1000, 5000, 70000]), durationMs: pick([null, 100, 500, 9000]) });
+      const paired = random() < 0.2;
+      return accountsOf(accounts, (account) => ({ calls: paired ? [one(account), one(account)] : [one(account)], promptTokens: pick([null, 5000]), wallSec: pick([null, 3]) }));
+    };
+    const more = Array.from({ length: 1 + Math.floor(random() * 3) }, () => entry(pick([1, 2, 3, 4, 4, 5, 6, 8, 11]), true));
+    return [...entry(FLOOR + 6 + Math.floor(random() * 6), true), ...entry(1 + Math.floor(random() * (FLOOR - 1)), false), ...more.flat()];
+  };
+
+  const SWEEP_SEEDS = 16;
+  it.each(Array.from({ length: SWEEP_SEEDS }, (_, at) => [at + 1]))('serves nothing that gives back a sub-floor cell in the call-built fixture of seed %i', (seed) => {
+    const accounts = sweepOf(seed);
+    const held = heldOf(accounts);
+    expect(servedOf(accounts)).toBeGreaterThan(0);
+    expect(held.cells.some(({ clusters }) => clusters < FLOOR)).toBe(true);
+    expect(leaksOf(accounts)).toEqual([]);
+  }, 120000);
 });
