@@ -1,4 +1,4 @@
-// The class table (field-classes.ts), the fields a format 3 batch carries (BATCH_FIELDS), and the class column of the wire field register in docs/pool.md must name the same fields with the same classes.
+// The class table (field-classes.ts), the fields a format 3 or 4 batch carries (BATCH_FIELDS), and the class column of the wire field register in docs/pool.md must name the same fields with the same classes.
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';

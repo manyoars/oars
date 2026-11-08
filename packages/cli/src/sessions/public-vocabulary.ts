@@ -302,6 +302,24 @@ export const HARNESS_AGENT_TYPES: ReadonlyMap<string, ReadonlySet<string>> = new
   }).map(([harness, types]) => [harness, words(types)]),
 );
 
+/**
+ * The closed values of a public tool's arguments, by tool and key: a string value on this list goes on the wire as itself (`argValues`), one off it goes nowhere. A boolean of any key is closed already and needs no row.
+ * The subagent types are the built-ins (`HARNESS_AGENT_TYPES`), so a custom agent's name is off the list.
+ */
+const BUILT_IN_AGENTS = [...(HARNESS_AGENT_TYPES.get('claude-code') ?? new Set<string>())].join(' ');
+const CLOSED_ROWS: { readonly [tool: string]: { readonly [key: string]: string } } = {
+  Agent: { subagent_type: BUILT_IN_AGENTS, model: 'sonnet opus haiku inherit' },
+  Grep: { output_mode: 'content files_with_matches count' },
+  NotebookEdit: { cell_type: 'code markdown', edit_mode: 'replace insert delete' },
+  Task: { subagent_type: BUILT_IN_AGENTS, model: 'sonnet opus haiku inherit' },
+};
+export const CLOSED_ARG_VALUES: ReadonlyMap<string, ReadonlyMap<string, ReadonlySet<string>>> = new Map(
+  Object.entries(CLOSED_ROWS).map(([tool, keys]) => [tool, new Map(Object.entries(keys).map(([key, values]) => [key, words(values)]))]),
+);
+
+/** The keys of `CLOSED_ROWS` whose list is not exhaustive: a custom agent's name or a full model id is off it and has no `enum` cell, so the key's on-list values do not sum to the calls that send it. */
+export const OPEN_LIST_KEYS: ReadonlySet<string> = words('subagent_type model');
+
 /** What a subagent type pools as when it is not a built-in: a custom agent's name is private. */
 export const CUSTOM_AGENT = 'custom';
 
@@ -341,3 +359,6 @@ export const TOOL_INPUT_KEYS: ReadonlyMap<string, ReadonlySet<string>> = new Map
     Write: 'file_path content',
   }).map(([tool, keys]) => [tool, words(keys)]),
 );
+
+/** Every key name a public tool's pinned list holds: a value feature or closed value keyed on one of these names nothing private, so the pool serves its cell at the clear floor. */
+export const PUBLIC_INPUT_KEYS: ReadonlySet<string> = new Set([...TOOL_INPUT_KEYS.values()].flatMap((keys) => [...keys]));

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { gateHook, registryCachePath, crossingsPath, type GateHookDeps } from './hook.js';
+import { DEADLINE_ENV, DEADLINE_MS, HANDOFF_MARK_ENV, deadlineOf, gateHook, handOffMarkOf, registryCachePath, crossingsPath, type GateHookDeps } from './hook.js';
 import { indexFile } from './novelty.js';
 import { folderKey, parseRows, type CrossingRecord } from './record.js';
 import type { RegistryAnswer, RegistryReader } from './registry.js';
@@ -365,6 +365,13 @@ describe('oars gate hook: the deadline', () => {
     expect(reader).not.toHaveBeenCalled();
     expect(rowsOf(store)).toHaveLength(1);
   });
+
+  it('keeps 800 ms unless the environment names a larger whole number of ms', () => {
+    expect(DEADLINE_MS).toBe(800);
+    expect(deadlineOf({})).toBe(DEADLINE_MS);
+    expect(deadlineOf({ [DEADLINE_ENV]: '6000' })).toBe(6000);
+    for (const given of ['', 'soon', '800', '100', '-5', '6000.5', 'Infinity']) expect(deadlineOf({ [DEADLINE_ENV]: given })).toBe(DEADLINE_MS);
+  });
 });
 
 describe('oars gate hook: one ask per name', () => {
@@ -388,21 +395,73 @@ describe('oars gate hook: one ask per name', () => {
     expect(reader).toHaveBeenCalledTimes(2);
   });
 
-  it('stops its own ask before it hands the name over, so the manager is never asked twice at once', async () => {
+  // The process clock is fixed at 0 in these cases, so the mark (deadline less the hand-off's 400 ms) and the cut (deadline less the 150 ms write reserve) are real timers 50 and 300 ms away
+  // at a 450 ms deadline. The order of the two never changes with load: a timer due earlier runs first, and the hand-off is awaited between them.
+  it('hands the name over at the mark while its own ask is still running, then stops that ask at the cut and hands nothing over again', async () => {
     const store = folder();
     let signal: AbortSignal | undefined;
     const registry: RegistryReader = (ask) => {
       signal = ask.signal;
       return new Promise<RegistryAnswer>(() => undefined);
     };
-    const aborted: boolean[] = [];
+    const abortedAtFill: boolean[] = [];
     const fill = vi.fn<NonNullable<GateHookDeps['fill']>>(() => {
-      aborted.push(signal?.aborted ?? false);
+      abortedAtFill.push(signal?.aborted ?? false);
       return Promise.resolve();
     });
-    await gateHook(payload('npm install left-pad'), depsFor(store, { registry, clock: () => 0, deadlineMs: 400, fill }));
-    expect(signal).toBeDefined();
-    expect(aborted).toEqual([true]);
+    await gateHook(payload('npm install left-pad'), depsFor(store, { registry, clock: () => 0, deadlineMs: 450, fill }));
+    expect(fill).toHaveBeenCalledTimes(1);
+    expect(abortedAtFill).toEqual([false]);
+    expect(signal?.aborted).toBe(true);
+    expect(rowsOf(store).map((row) => row.registryState)).toEqual(['not-read']);
+  });
+
+  it('uses an answer that comes between the mark and the cut, after the hand-off already started', async () => {
+    const store = folder();
+    const registry: RegistryReader = () => new Promise<RegistryAnswer>((resolve) => { setTimeout(() => { resolve({ state: 'found', latest: '1.0.0', created: '2020-01-01T00:00:00.000Z' }); }, 150); });
+    const fill = vi.fn<NonNullable<GateHookDeps['fill']>>(() => Promise.resolve());
+    await gateHook(payload('npm install left-pad'), depsFor(store, { registry, clock: () => 0, deadlineMs: 450, fill }));
+    expect(fill).toHaveBeenCalledTimes(1);
+    expect(rowsOf(store).map((row) => row.registryState)).toEqual(['found']);
+  });
+
+  it('never starts a helper for an answer that comes before the mark', async () => {
+    const store = folder();
+    const fill = vi.fn<NonNullable<GateHookDeps['fill']>>(() => Promise.resolve());
+    await gateHook(payload('npm install left-pad'), depsFor(store, { registry: found('1.0.0'), clock: () => 0, deadlineMs: 450, fill }));
+    expect(fill).not.toHaveBeenCalled();
+    expect(rowsOf(store).map((row) => row.registryState)).toEqual(['found']);
+  });
+
+  it('puts the hand-off mark 400 ms before the deadline unless the environment names an earlier whole number of ms', () => {
+    expect(handOffMarkOf({}, 800)).toBe(400);
+    expect(handOffMarkOf({ [HANDOFF_MARK_ENV]: '1000' }, 30_000)).toBe(1000);
+    for (const given of ['', 'soon', '0', '-5', '1000.5', 'Infinity', '400', '5000']) expect(handOffMarkOf({ [HANDOFF_MARK_ENV]: given }, 800)).toBe(400);
+  });
+
+  it('starts the hand-off at the mark the deps name, however far off the deadline is', async () => {
+    const store = folder();
+    let answer: (found: RegistryAnswer) => void = () => undefined;
+    const registry: RegistryReader = () => new Promise<RegistryAnswer>((resolve) => { answer = resolve; });
+    const fill = vi.fn<NonNullable<GateHookDeps['fill']>>(() => Promise.resolve());
+    const hook = gateHook(payload('npm install left-pad'), depsFor(store, { registry, clock: () => 0, deadlineMs: 30_000, handOffMarkMs: 50, fill }));
+    // The deadline is 30 s away and the ask has not answered: only the mark can start the hand-off, and the ask is still open when it does.
+    await vi.waitFor(() => { expect(fill).toHaveBeenCalledTimes(1); }, { timeout: 5_000 });
+    answer({ state: 'found', latest: '1.0.0', created: '2020-01-01T00:00:00.000Z' });
+    await hook;
+    expect(rowsOf(store).map((row) => row.registryState)).toEqual(['found']);
+  });
+
+  it('hands over at once when the mark has passed by the time the ask has started, and only once', async () => {
+    const store = folder();
+    let now = 0;
+    const registry: RegistryReader = () => {
+      now = 700;
+      return new Promise<RegistryAnswer>(() => undefined);
+    };
+    const fill = vi.fn<NonNullable<GateHookDeps['fill']>>(() => Promise.resolve());
+    await gateHook(payload('npm install left-pad'), depsFor(store, { registry, clock: () => now, deadlineMs: 1000, fill }));
+    expect(fill).toHaveBeenCalledTimes(1);
   });
 
   it('cuts an ask at once when starting it used up the budget, and stops it, hands the name over, and writes the row', async () => {

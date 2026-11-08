@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { DEADLINE_ENV } from '../gate/hook.js';
 import { folderKey } from '../gate/record.js';
 import { readSpool } from './spool.js';
 
@@ -31,7 +32,10 @@ const home = (): string => {
   return folder;
 };
 
-const envFor = (folder: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({ PATH: process.env.PATH, APPDATA: folder, HOME: folder, USERPROFILE: folder, XDG_CONFIG_HOME: folder, ...extra });
+// The gate hook counts node's own start inside its 800 ms, and a box loaded past what a user's machine sees (a full parallel gate) can spend all of it there: the hook is then ended before it
+// prints, and a comparison of two fires reads one as empty. The shipped 800 ms hook measured under 10 busy loops on 20 logical cores: 120 of 120 sights printed their deny or note, the slowest
+// 396 ms. This case answers from a kept answer (no manager is asked), so a sight is node's start plus file reads, and 10 s is about 25 times that slowest; it ends at once whatever the deadline is.
+const envFor = (folder: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({ [DEADLINE_ENV]: '10000', PATH: process.env.PATH, APPDATA: folder, HOME: folder, USERPROFILE: folder, XDG_CONFIG_HOME: folder, ...extra });
 const DENY = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install ghost-lib' }, cwd: tmpdir(), permission_mode: 'default', hook_event_name: 'PreToolUse' });
 
 interface Logged {

@@ -48,7 +48,7 @@ export interface Allow {
 /** The prefix `--deny` saves an entry under. */
 export const DENY = '!';
 
-const isDenial = (entry: string): boolean => entry.startsWith(DENY);
+export const isDenial = (entry: string): boolean => entry.startsWith(DENY);
 
 export const denialOf = (entry: string): string => `${DENY}${entry}`;
 
