@@ -54,3 +54,24 @@ describe('a shape total beside a long-tail part under the public floor', () => {
     expect(served([cellOf(SHAPE, 6, 6), cellOf(CLEAR, 5, 5), cellOf(TAIL, 5, 5)], five)).toEqual(['clear', 'shape', 'tail']);
   });
 });
+
+describe('a shape total whose clear part is already withheld for its week, at a clear floor of 2', () => {
+  const two = floorsOf({ CLEAR_FLOOR: '2' }, () => undefined);
+  /** The week cell of a motif, held by `standing` accounts. */
+  const weekOf = (motif: Motif, standing: number): { cell: Cell; any: number } => {
+    const { cell, any } = cellOf(motif, standing, standing, WEEK);
+    return { cell: { ...cell, grain: 'week' }, any };
+  };
+
+  it('is withheld, since a part held by fewer accounts than the long-tail part needs does not hide it', () => {
+    // git: the week (4) clears 2, its first day (1) does not, so the smallest served day (3, the day of the shape) is withheld for the week; that part is under the public floor of 5.
+    const held = [weekOf(CLEAR, 4), cellOf(CLEAR, 1, 1, '2026-11-03'), cellOf(CLEAR, 3, 3, '2026-11-04'), cellOf(SHAPE, 4, 4, '2026-11-04'), cellOf(TAIL, 1, 1, '2026-11-04')];
+    expect(served(held, two)).toEqual(['clear']);
+  });
+
+  it('stays served when the part withheld for its week has the accounts the long-tail part needs', () => {
+    const held = [weekOf(CLEAR, 9), cellOf(CLEAR, 1, 1, '2026-11-03'), cellOf(CLEAR, 5, 5, '2026-11-04'), cellOf(SHAPE, 6, 6, '2026-11-04'), cellOf(TAIL, 1, 1, '2026-11-04')];
+    expect(served(held, two)).toEqual(['clear', 'shape']);
+  });
+});
+

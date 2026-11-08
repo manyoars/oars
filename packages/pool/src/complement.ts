@@ -55,11 +55,13 @@ export const withheldOf = (held: readonly Cell[], motifs: readonly Motif[], { fl
     changed = false;
     for (const { whole, parts } of families) {
       if (whole === null || !clears(whole, floorOf(whole)) || withheld.has(whole)) continue;
-      if (!parts.some((part) => !clears(part, floorOf(part))) || parts.some((part) => withheld.has(part))) continue;
+      if (!parts.some((part) => !clears(part, floorOf(part)))) continue;
       // A sub-floor part held to a higher floor than its whole (a long-tail name under a clear shape, which carries no identity) is not hidden by withholding a part that is served only on the whole's lower floor: the part withheld in its place
       // must itself be at or above the floor of that sub-floor part, on the accounts that have stood, or the whole less the served parts could be that name alone. With no such part, the whole is withheld.
       const bar = Math.max(...parts.filter((part) => !clears(part, floorOf(part))).map(floorOf));
       const guarded = bar > floorOf(whole);
+      // A part already withheld (for its week, say) hides a sub-floor part only if it too is at or above that bar: in a guarded family one withheld on a lower floor does not.
+      if (parts.some((part) => withheld.has(part) && (!guarded || standingOf(part) >= bar))) continue;
       const [next] = parts.filter((part) => clears(part, floorOf(part)) && (!guarded || standingOf(part) >= bar)).sort(smallest);
       if (next === undefined && !guarded) continue;
       withheld.add(next ?? whole);
