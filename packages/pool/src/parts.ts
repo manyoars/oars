@@ -7,6 +7,14 @@ export const MAX_ASSEMBLED_BYTES = 1_800_000;
 /** How many parts one batch may have. The client sends parts of 512 KiB, so the join cap needs 4 at most; 8 leaves room for a smaller part size. */
 const MAX_PARTS = 8;
 
+/**
+ * How many unfinished batches one account may stage at once. The CLI sends a batch's parts in order under a send lock, so one machine has one batch unfinished at a time and a batch is at most 4 parts (the join cap over 512 KiB parts); 16 leaves
+ * room for the same account on several machines, each with an interrupted batch. At the cap an account stages at most 16 x 1,800,000 bytes, about 29 MB, of sealed text.
+ */
+export const MAX_STAGED_BATCHES = 16;
+/** An unfinished batch older than this is swept. A client that comes back later sends every part again, which starts a batch clean, so a sweep costs a retry and no data. */
+export const STAGED_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
 const PART = /^([1-9][0-9]{0,2})\/([1-9][0-9]{0,2})$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 
@@ -70,6 +78,12 @@ const heldParts = async (env: Env, account: string, batch: string): Promise<Held
 
 const forget = (env: Env, account: string, batch: string): Promise<unknown> => env.DB.prepare('DELETE FROM deposit_parts WHERE account = ? AND batch = ?').bind(account, batch).run();
 
+/** An account's unfinished batches older than `STAGED_MAX_AGE_MS`, a batch's age being its oldest part's. A finished batch's marker (`deposit` set, no body) is never swept, because a retried part is answered from it. It runs on the account's own staging write, so no cron is needed and each account pays only for its own rows. */
+const sweep = (env: Env, account: string, now: number): Promise<unknown> =>
+  env.DB.prepare('DELETE FROM deposit_parts WHERE account = ? AND deposit IS NULL AND batch IN (SELECT batch FROM deposit_parts WHERE account = ? AND deposit IS NULL GROUP BY batch HAVING MIN(COALESCE(staged_at, 0)) < ?)')
+    .bind(account, account, now - STAGED_MAX_AGE_MS)
+    .run();
+
 /** One part of a batch, already read and under the request cap. `secret` is the pool's `INGEST_HASH_KEY`, which seals the staged text. `store` is the path a whole deposit takes. */
 export const receivePart = async (request: Request, env: Env, account: string, secret: string, body: string, store: (text: string) => Promise<Response>): Promise<Response> => {
   const found = PART.exec(request.headers.get('oars-part') ?? '');
@@ -78,6 +92,7 @@ export const receivePart = async (request: Request, env: Env, account: string, s
   const count = Number(found?.[2]);
   if (found === null || part > count || count > MAX_PARTS) return badPart(`oars-part is n/m with 1 <= n <= m <= ${String(MAX_PARTS)}.`);
   if (!SHA256.test(batch)) return badPart('oars-batch is the SHA-256 of the whole batch, in lowercase hexadecimal.');
+  await sweep(env, account, Date.now());
   const before = await heldParts(env, account, batch);
   // A finished batch answers any retried part from its deposit, whatever the retry names.
   const finished = before.find((row) => row.deposit !== null);
@@ -95,8 +110,17 @@ export const receivePart = async (request: Request, env: Env, account: string, s
   }
   // A retried part lands on its own row and changes nothing. The text is sealed first: no host is written in clear, staged or not.
   const key = await sealKey(secret, account, batch);
-  await env.DB.prepare('INSERT INTO deposit_parts (account, batch, part, count, body) VALUES (?, ?, ?, ?, ?) ON CONFLICT (account, batch, part) DO NOTHING').bind(account, batch, part, count, await seal(key, body)).run();
+  // A batch not yet begun needs room: an account holds at most `MAX_STAGED_BATCHES` unfinished ones, so staging is bounded per account and not only per batch. The count and the insert are one statement, so parts that arrive together cannot each read room that another has taken; a part of a batch already held always passes.
+  const inserted = await env.DB.prepare(
+    'INSERT INTO deposit_parts (account, batch, part, count, body, staged_at) SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM deposit_parts WHERE account = ? AND batch = ? AND deposit IS NULL) OR (SELECT COUNT(DISTINCT batch) FROM deposit_parts WHERE account = ? AND deposit IS NULL AND batch <> ?) < ? ON CONFLICT (account, batch, part) DO NOTHING',
+  )
+    .bind(account, batch, part, count, await seal(key, body), Date.now(), account, batch, account, batch, MAX_STAGED_BATCHES)
+    .run();
   const held = await heldParts(env, account, batch);
+  // Nothing was written and this part is not already held: the cap refused it.
+  if (inserted.meta.changes === 0 && !held.some((row) => row.part === part)) {
+    return refuse(429, 'staging_full', `An account may hold ${String(MAX_STAGED_BATCHES)} unfinished batches at once. Finish them, or wait: an unfinished batch is dropped after 24 hours.`, 'oars-batch', { 'retry-after': String(STAGED_MAX_AGE_MS / 1000) });
+  }
   // Parts that arrive together each read a small `before`, so the bound that holds is on what is staged after the insert: past it, nothing of the batch stays.
   if (held.reduce((sum, row) => sum + plainBytes(row.body), 0) > MAX_ASSEMBLED_BYTES) {
     await forget(env, account, batch);

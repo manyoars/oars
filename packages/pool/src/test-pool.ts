@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { convertV4MiniflareOptions, Miniflare, Request as StubRequest, Response as StubResponse } from 'miniflare';
 import { expect } from 'vitest';
+import type { Bound, PoolDb } from './http.js';
 
 interface Statement {
   first: (column?: string) => Promise<unknown>;
@@ -19,11 +20,40 @@ export interface TestDb {
 
 /** The R2 calls these tests make, named for the same reason as `TestDb`. */
 export interface TestBucket {
-  list: (options?: { prefix?: string; cursor?: string }) => Promise<{ objects: readonly { key: string }[]; truncated?: boolean; cursor?: string }>;
+  list: (options?: { prefix?: string; cursor?: string; limit?: number }) => Promise<{ objects: readonly { key: string }[]; truncated?: boolean; cursor?: string }>;
   put: (key: string, value: string) => Promise<unknown>;
   get: (key: string) => Promise<{ text: () => Promise<string>; arrayBuffer: () => Promise<ArrayBuffer> } | null>;
   delete: (keys: string[]) => Promise<void>;
 }
+
+/**
+ * The pool's D1 as `Env.DB` takes it, for a test that calls a route function directly. Miniflare runs one request at a time here, so a race between requests is scripted: `before` runs ahead of each statement's `run` and may hold it until the other requests have caught up.
+ */
+export const poolDbOf = (db: TestDb, before: (sql: string) => Promise<void> = () => Promise.resolve()): PoolDb => {
+  // One statement reaches the database at a time (a burst of parallel calls resets Miniflare's sockets), so requests interleave between statements, never inside one.
+  let turn: Promise<unknown> = Promise.resolve();
+  const alone = <T>(call: () => Promise<T>): Promise<T> => {
+    const next = turn.then(call);
+    turn = next.catch(() => undefined);
+    return next;
+  };
+  return {
+    prepare: (sql) => ({
+      bind: (...values): Bound => {
+        const statement = db.prepare(sql).bind(...values);
+        return {
+          first: () => alone(() => statement.first()),
+          all: () => alone(() => statement.all()),
+          run: async () => {
+            await before(sql);
+            return alone(async () => ({ meta: { changes: Number(fieldOf(fieldOf(await statement.run(), 'meta'), 'changes')) } }));
+          },
+        };
+      },
+    }),
+    batch: () => Promise.resolve([]),
+  };
+};
 
 export interface StubUser {
   id: string;
@@ -191,7 +221,8 @@ export interface TestPool {
   get: (path: string, token?: string) => Promise<Answer>;
   raw: (path: string, token?: string, headers?: { [name: string]: string }) => Promise<RawAnswer>;
   /** The sign-in the CLI performs through the pool's two login routes, with the provider's approval given at the stub between them. */
-  signIn: (provider: string, user: StubUser) => Promise<{ token: string; account: string; signingKey: unknown }>;
+  /** Signs the stub user in. The account has stood unless `fresh`: the floor counts only accounts that have (S13), so a test that serves a cell needs holders that have, and a test of the fetch cap or of what a fresh account does passes `fresh: true`. */
+  signIn: (provider: string, user: StubUser, options?: { fresh?: boolean }) => Promise<{ token: string; account: string; signingKey: unknown }>;
   stub: StubProvider;
   signingKey: () => { kty: string; crv: string; x: string };
   /** The keys a client holds for this pool, by key id: what `verifyBundle` takes. */
@@ -279,11 +310,12 @@ export const startPool = async (bindings: { [name: string]: string } = {}, optio
     get,
     raw,
     stub,
-    signIn: async (provider, user) => {
+    signIn: async (provider, user, options = {}) => {
       const started = await post('/v1/login/start', { provider });
       const issued = /USER-(\d+)/.exec(textOf(started.json, 'userCode'))?.[1];
       stub.approve(`device-${issued ?? ''}`, user);
       const signedIn = await post('/v1/login/poll', { handle: textOf(started.json, 'handle') });
+      if (options.fresh !== true) await (await db()).prepare("UPDATE accounts SET access = 'standing' WHERE id = ?").bind(textOf(signedIn.json, 'account')).run();
       return { token: textOf(signedIn.json, 'token'), account: textOf(signedIn.json, 'account'), signingKey: fieldOf(signedIn.json, 'signingKey') };
     },
     signingKey: () => ({ kty: 'OKP', crv: 'Ed25519', x: key.x }),
@@ -306,4 +338,3 @@ export const stubUser = (id: string): StubUser => {
   const slot = /^\d+$/.test(id) ? Number(id) : Number.parseInt(createHash('sha256').update(id).digest('hex').slice(0, 6), 16);
   return { id, login: `login-of-${id}`, email: `person-${id}@example.test`, createdAt: new Date(Date.UTC(2015, 0, 1) + (slot % 1200) * 3 * 24 * 60 * 60 * 1000).toISOString() };
 };
-

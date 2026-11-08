@@ -97,7 +97,7 @@ export const wireFloors = (floors: Floors): BundleFloors => {
 
 /**
  * The count a cell clears a floor with: its verified-distinct clusters of accounts, not its accounts (`clusters.ts`, "Clusters" in docs/pool.md), a weighting and never a cap. The stored `clusters` column
- * is that count, written by `recount` (`cluster-store.ts`) after every deposit, so the SQL in `stored.ts` that compares the column to a floor to fetch fewer rows and this function, which the bundle's own
+ * is that count of the accounts that have stood (a free account that has not counts toward no floor, S13), written by `recount` (`cluster-store.ts`) after every deposit, so the SQL in `stored.ts` that compares the column to a floor to fetch fewer rows and this function, which the bundle's own
  * decision uses, read one number. A served read carries it in its `clusters` field.
  */
 export const clustersOf = (cell: Cell): number => cell.clusters;
