@@ -119,7 +119,7 @@ export const FLEET_MAX_AGE_SECONDS = 3600;
  * `GET /v1/telemetry/fleet`: both windows, ending yesterday. No query is read, and the answer is the same whoever asks. An anonymous read
  * (`anonymous`) may be shared and reused for `FLEET_MAX_AGE_SECONDS`; a read that carries a credential is never stored by a shared cache.
  */
-export const fleet = async (env: Env, now: number, anonymous = true): Promise<Response> => {
+export const fleet = async (env: Env, now: number, anonymous: boolean): Promise<Response> => {
   const asOf = asOfDay(now);
   const floor = publicFloorOf(env);
   const rows = await rowsBetween(env, shiftDay(asOf, 1 - Math.max(...WINDOWS)), asOf);

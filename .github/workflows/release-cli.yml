@@ -105,6 +105,7 @@ jobs:
             echo "::error::$GITHUB_REF_NAME does not match the tarball's version $packed"
             exit 1
           fi
-      # --ignore-scripts and a tarball argument: nothing from the package or its dependencies runs in this job.
+      # --ignore-scripts and a tarball argument: nothing from the package or its dependencies runs in this job. The path must start with
+      # `./`: npm reads a bare `release-pack/x.tgz` as GitHub shorthand (`github:release-pack/x.tgz`) and would fetch that repository.
       - name: Publish
-        run: npm publish release-pack/*.tgz --provenance --access public --ignore-scripts
+        run: npm publish ./release-pack/*.tgz --provenance --access public --ignore-scripts
