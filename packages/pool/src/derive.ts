@@ -1,7 +1,7 @@
 // Cells and reads (recall spec Sections 2.5 and 2.6), with the same code a local store runs. A deposit's skeleton becomes cells in `cell-increments.ts`, which ingest adds to the stored
 // ones; a bundle is derived from the stored cells, whose `clusters` is the held count of verified-distinct clusters of accounts (`clusters.ts`). Recovery is served from cells alone (what others did next after a failed call, `read-recovery-edge.ts`), and so is fit by call shape (`deriveFitShape`, from the shape cells); the signature record is left out: a skeleton holds no signature (`docs/pool.md`, "What a bundle serves").
-import { cellIdOf, harnessBucket, NO_AXES, poolOf, type Cell, type Pool } from '../../cli/src/sessions/cells.js';
-import { motifName } from '../../cli/src/sessions/motif.js';
+import { cellIdOf, harnessBucket, NO_AXES, parseShapeClass, poolOf, type Cell, type Pool } from '../../cli/src/sessions/cells.js';
+import { motifName, type Motif } from '../../cli/src/sessions/motif.js';
 import { BUNDLE_FORMAT, type Bundle, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
 import { makeRead, orderResolver, type FirstOrderFamily, type Read } from '../../cli/src/sessions/read.js';
 import { deriveAdoption } from '../../cli/src/sessions/read-adoption.js';
@@ -65,6 +65,12 @@ const readsOf = (pool: Pool, derive: DeriveFamily, floor: number): Read[] => {
 
 const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
+/**
+ * The `arg` cells are held and never served: `arg/number` is the sum of the `keys` cells that hold a numeric key, and the server does not hold the kind of each key, so no equation closes it (spec
+ * 2026-11-08-pool-withholding-relations, option c). They stay in the held cells, so `arg/none` still sits in the `keys` family (`complement.ts`) and protects it.
+ */
+const isArgCell = (motif: Motif | undefined): boolean => parseShapeClass(motif?.cls ?? '')?.facet === 'arg';
+
 /** The frame buckets of one harness at one numbered bucket start with this: `frameBucket` is `harness/bucket/model`, and two harnesses can share a numbered bucket. */
 export const bucketPrefix = (harness: string, harnessVersion: string): string => `${harness}/${harnessBucket(harnessVersion)}/`;
 
@@ -96,7 +102,7 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
     for (const cell of environment) {
       if (withheldBuckets.has(counterpart(cell))) withheld.add(cell);
     }
-    const served = held.filter((cell) => clears(cell, cellFloor(floors, floor, cellClassOf(cell, motifOf.get(cell.motifId)))) && !withheld.has(cell));
+    const served = held.filter((cell) => clears(cell, cellFloor(floors, floor, cellClassOf(cell, motifOf.get(cell.motifId)))) && !withheld.has(cell) && !isArgCell(motifOf.get(cell.motifId)));
     const kept = new Set(served);
     // `cells` holds the version-free model cells of every version too, so the bucket's own are taken by its prefix: another version's failure on a later day must not move the day.
     const own = poolOf({ cells: cells.filter((cell) => kept.has(cell) && cell.frameBucket.startsWith(prefix)), motifs }, []);
