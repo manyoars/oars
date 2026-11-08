@@ -110,6 +110,9 @@ const REAL = {
           keysDropped: 1,
           targetClass: 'none',
           argClass: ['command', 'text'],
+          argFeatures: [{ key: 'command', valueSize: '9-32', pathDepth: '1', extension: 'source', dirKind: 'test', patternFeatures: ['anchor'] }],
+          argValues: [{ key: 'command', enumValue: 'true' }],
+          changeKind: ['key-added'],
           steps: [
             { ...STEP, allocated: true, action: 'shell.exec', native: 'Bash', identity: { program: 'npm', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] } },
             { ...STEP, action: 'mcp.call', native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' }, edges: [{ kind: 'next', target: 0 }] },
