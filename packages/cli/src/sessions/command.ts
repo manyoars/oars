@@ -17,6 +17,7 @@ import { appendRecall, readRecalls } from './recall-object.js';
 import { deriveConsequences, formatRecallCounts, recallCounts } from './recall-consequence.js';
 import { pull, pullRefusal, type PullInput } from './recall-reads.js';
 import { MISS_TEXT } from './recall-render.js';
+import { EMPTY_RECALL, emptyBooks, nothingFoundLines } from './empty-state.js';
 import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, inRepository, readIndex, type ContextOptions } from './hook-index.js';
 import { ensureSchedule, hookStatus, installHooks, recordSchedule, SCHEDULE_LEFT_OFF, scheduleOptedOut, scheduleStatus, setSchedule, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
@@ -89,6 +90,8 @@ export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: stri
     survival === null
       ? 'Commit survival not read this run.'
       : `Commits older than ${String(SURVIVAL_DAYS)} days: ${String(survival.survived)} survived, ${String(survival.reverted)} reverted, ${String(survival.unreachable)} unreachable, ${String(survival.unknown)} unknown.`,
+    // Nothing parsed and nothing already deposited: say where it looked, so an empty result is not a silent one.
+    ...(result.sessions + result.subagents + result.unchanged === 0 ? nothingFoundLines(result, runtime, table) : []),
   ];
   return { document: { ok: true, ...result, survival }, text: lines.join('\n') };
 };
@@ -108,22 +111,23 @@ export const sessionsRecall = async (deps: SessionsDeps, query: PullInput, sid: 
   const { storeDir } = runtimeOf(deps);
   // The key is the query and `ev`, known before the work, so a recall that keeps failing is the same key each time.
   const key = stampKey(JSON.stringify(query));
-  const result = await runStep(
+  const { found: result, empty } = await runStep(
     newContext(storeDir, deps.now, 'manual'),
     'recall',
     async () => {
       const store = await loadStore(storeDir);
       const found = pull(store, query, { sid, now: deps.now(), frame: null, redactDomains: await readRedactDomains(storeDir), current: await recallPool(storeDir, store, servedPool) });
-      return { value: found, report: { in: { query: 1 }, out: { matches: found.legacy?.matches.length ?? found.reads.length }, key } };
+      return { value: { found, empty: store.sessions.length === 0 }, report: { in: { query: 1 }, out: { matches: found.legacy?.matches.length ?? found.reads.length }, key } };
     },
     key,
   );
   await tryLog(() => appendRecall(storeDir, result.recall));
   // Counts and closed words only: how it was asked, the families it served, how many reads, and its arm. Never the query or the answer.
   deps.telemetry?.('recall', recallFields(result.recall, result.reads.map((read) => read.family), result.legacy !== undefined));
-  if (result.legacy !== undefined) return { document: { ok: true, ...result.legacy, recall: result.recall }, text: formatRecall(result.legacy) };
+  // A miss over a store with no sessions is not "no match": the store has nothing to match, and the text names the command that fills it.
+  if (result.legacy !== undefined) return { document: { ok: true, ...result.legacy, recall: result.recall }, text: empty && result.legacy.matches.length === 0 ? EMPTY_RECALL : formatRecall(result.legacy) };
   // The document states the recall and not the raw reads: a read's tool, keys, and versions are store strings that can carry text, and `recall.evidence` already states them closed.
-  return { document: { ok: true, recall: result.recall }, text: result.recall.answer.rendered === '' ? MISS_TEXT : result.recall.answer.rendered };
+  return { document: { ok: true, recall: result.recall }, text: result.recall.answer.rendered === '' ? (empty ? EMPTY_RECALL : MISS_TEXT) : result.recall.answer.rendered };
 };
 
 /** `recall --counts`: push and pull, shown and held, as counts only. */
@@ -254,11 +258,13 @@ export const sessionsBooks = async (deps: SessionsDeps, options: { by: BooksBy |
   // A mistyped root, or a --since window nothing falls in, over a populated store must not read as an empty store.
   const emptyWindow = rows.length === 0 && options.sinceDays !== undefined && store.prompts.length > 0;
   const table =
-    store.prompts.length === 0 && options.repo !== undefined
-      ? `No prompts for ${options.repo} in the store (${String(loaded.prompts.length)} prompts across all repositories).`
-      : emptyWindow
-        ? `No ${options.by === 'pull' ? 'pulls' : 'prompts'} in the --since window.`
-        : formatBooks(rows, options.by);
+    loaded.sessions.length === 0 && loaded.prompts.length === 0
+      ? emptyBooks(options.by === 'pull' ? 'pulls' : 'prompts')
+      : store.prompts.length === 0 && options.repo !== undefined
+        ? `No prompts for ${options.repo} in the store (${String(loaded.prompts.length)} prompts across all repositories).`
+        : emptyWindow
+          ? `No ${options.by === 'pull' ? 'pulls' : 'prompts'} in the --since window.`
+          : formatBooks(rows, options.by);
   const scope = await scopeOf(runtime);
   const bundle = await lastFetchedBundle(storeDir);
   return { document: { ok: true, by: options.by, rows, newerCaptures: store.newerCaptures, scope, pool: bundle?.books ?? null }, text: [table, ...skippedNotice(scope), ...newerNotice(store), '', ...booksLines(bundle), ...(rows.length === 0 ? [] : ['', BOOKS_CAVEAT])].join('\n') };

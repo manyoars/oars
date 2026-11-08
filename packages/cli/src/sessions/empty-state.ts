@@ -1,0 +1,27 @@
+// What `deposit`, `recall`, and `books` say when there is nothing to show, so a first run reads as "nothing found here" and not as a broken tool.
+import type { Source } from './sources.js';
+import type { DepositResult, SessionsRuntime } from './store.js';
+
+/** The two commands that get someone out of an empty store: fill it from their own sessions, or watch it work on made-up ones first. */
+const WAYS_OUT = 'Fill it with `oars sessions deposit`, or see it work on made-up sessions first with `oars sessions try`.';
+
+/** `recall` over a store with no sessions in it. */
+export const EMPTY_RECALL = `Your store is empty, so there is nothing to recall. ${WAYS_OUT}`;
+
+/** `books` over a store with no sessions in it; `what` is "prompts" or "pulls". */
+export const emptyBooks = (what: string): string => `No ${what} in the store: it is empty. ${WAYS_OUT}`;
+
+/**
+ * The lines a deposit that read nothing adds: every place it looked and what it found there. A source with no root on this machine was
+ * not looked in, so it is not listed. Paths are the reader's own, printed on their own terminal.
+ */
+export const nothingFoundLines = (result: DepositResult, runtime: SessionsRuntime, table: readonly Source[]): string[] => {
+  const places = [
+    `Claude Code: ${runtime.projectsRoot} (${String(result.folders.length)} project folders read, ${String(result.skippedFolders)} not on the allowlist)`,
+    ...table.flatMap((source) => {
+      const root = runtime.sourceRoots?.[source.name];
+      return root === undefined ? [] : [`${source.label}: ${root} (${String(result.sources[source.name]?.read ?? 0)} sessions read)`];
+    }),
+  ];
+  return ['Found no sessions. Looked in:', ...places.map((place) => `  ${place}`), 'Run it after a coding-agent session has run on this machine, or see oars work first with `oars sessions try`.'];
+};
