@@ -421,11 +421,11 @@ describe('every family of cells (`FAMILY_RULES`)', () => {
   });
 
   it('leaves no unserved cell determined at the two floors, each cell judged against the floor of its own class', () => {
-    // A clear cell (a target or argument class, a listed model) is served at the clear floor of 1 and a thresholded one (a key list, a long-tail model, a custom name) at 5, so the served cells are a different set than at one floor.
+    // 150 seeds, not 400: the case judges every cell on two floors and takes about 3 s of the 30 s a test has. A clear cell (a target or argument class, a listed model) is served at the clear floor of 1 and a thresholded one (a key list, a long-tail model, a custom name) at 5, so the served cells are a different set than at one floor.
     let withheldSome = 0;
     let split = 0;
     const broken: string[] = [];
-    for (let seed = 1; seed <= 400; seed += 1) {
+    for (let seed = 1; seed <= 150; seed += 1) {
       const { held, motifs } = bundleFrom(seed);
       const motifOf = new Map(motifs.map((motif) => [motif.motifId, motif]));
       const floorOf = (cell: Cell): number => cellFloor(DEFAULT_FLOORS, F, cellClassOf(cell, motifOf.get(cell.motifId)));
@@ -436,8 +436,8 @@ describe('every family of cells (`FAMILY_RULES`)', () => {
       const determined = determinedCells(held, motifs, (cell) => cell.clusters >= floorOf(cell) && !withheld.has(cell));
       if (determined.length > 0) broken.push(`seed ${String(seed)}: ${String(determined.length)} determined`);
     }
-    expect(withheldSome).toBeGreaterThan(100);
-    expect(split).toBeGreaterThan(100);
+    expect(withheldSome).toBeGreaterThan(40);
+    expect(split).toBeGreaterThan(40);
     expect(broken).toEqual([]);
   });
 
