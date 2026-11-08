@@ -207,6 +207,10 @@ const VALUE_POOL: ReadonlyMap<string, readonly unknown[]> = new Map<string, read
   ['query', ['q', 'a query of some length', 'a query that is considerably longer than thirty-two characters']],
   ['limit', [10, 2000]],
   ['offset', [0, 500]],
+  ['head_limit', [10, 2000]],
+  ['output_mode', ['count']],
+  ['-i', [true, false]],
+  ['model', [true, 'sonnet']],
 ]);
 
 /** The held cells' own vocabulary: for each action, the key sets its `keys` cells name, and whether a keyless call is held (`arg/none`). */
@@ -295,7 +299,7 @@ const leaksOf = (accounts: Accounts, extra = 400): Leak[] => {
   const leaks: Leak[] = [];
   for (const [at, { cell, column, key }] of pairs.entries()) {
     const row = rowOf(at);
-    if (row.every((value) => value === 0n)) throw new Error(`no atom gives ${key} ${column}: a gap in the generator`);
+    if (row.every((value) => value === 0n)) throw new Error(`no atom gives ${motifOf.get(cell.motifId)?.cls ?? key} ${column}: a gap in the generator`);
     if (served.has(key) || cell.clusters >= FLOOR) continue;
     if (span.covers(row)) leaks.push({ cell: `${motifOf.get(cell.motifId)?.cls ?? cell.motifId} ${cell.frameBucket} ${cell.grain}`, column });
   }
@@ -410,6 +414,30 @@ describe('the withholding oracle', () => {
   it('names a list member that no call emits', () => {
     const withoutLimit = coverageOf().filter(({ calls }) => !calls.some(({ input }) => 'limit' in input));
     expect(unemittedBy(withoutLimit).filter((member) => !UNREACHABLE.includes(member))).toEqual(['ARG_CLASSES/number', 'CHANGE_KINDS/key-added', 'CHANGE_KINDS/key-removed']);
+  });
+
+  // The cases `determinedCells` (`shape-cells.test.ts`) stated from cells, now built from calls through the route, so the oracle is the one arbiter.
+  const grep = (input: { readonly [key: string]: unknown }): Atom => atomOf(call('Grep', input));
+  const servedOf = (accounts: Accounts): number => bundleOf('claude-code', '2.1.314', heldOf(accounts).pool, DEFAULT_FLOORS).cells.length;
+
+  it('serves nothing that gives back a keys cell through a combination of served totals: path,pattern is the path total plus the pattern total less the calls', () => {
+    const accounts = [...accountsOf(FLOOR + 5, () => grep({ path: 'src/a.ts' })), ...accountsOf(FLOOR - 1, () => grep({ path: 'src/a.ts', pattern: 'foo' })), ...accountsOf(FLOOR + 5, () => grep({ pattern: 'foo' }))];
+    expect(servedOf(accounts)).toBeGreaterThan(0);
+    expect(leaksOf(accounts)).toEqual([]);
+  });
+
+  // The same fixture with one closed value as the key's only per-key facet. A boolean, and a list that names all its values, is a value of every call that sends the key, so its cells sum to the key's calls under any key name,
+  // an open list's `model` included; if the facet counted only some calls it would stand apart from the `keys` cells and the bundle would serve what they recover.
+  it.each([
+    ['an exhaustive list', 'Grep', 'output_mode', 'count'],
+    ['a boolean', 'Grep', '-i', true],
+    ['a boolean under the key of an open list', 'Agent', 'model', true],
+  ])('serves nothing that gives back a keys cell through the enum cell of %s', (_, native, key, value) => {
+    const other = native === 'Agent' ? 'description' : 'pattern';
+    const send = (input: { readonly [key: string]: unknown }): Atom => atomOf(call(native, input));
+    const accounts = [...accountsOf(FLOOR + 5, () => send({ [key]: value })), ...accountsOf(FLOOR - 1, () => send({ [key]: value, [other]: 'foo' })), ...accountsOf(FLOOR + 5, () => send({ [other]: 'foo' }))];
+    expect(servedOf(accounts)).toBeGreaterThan(0);
+    expect(leaksOf(accounts)).toEqual([]);
   });
 
   it('serves nothing that gives back arg/none: 12 calls of a tool, 10 with query and 2 with no input, at floor 5', () => {

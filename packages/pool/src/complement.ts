@@ -85,10 +85,26 @@ const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, motif: Mot
     name: 'facet',
     placements: (cell, motif) => {
       const parsed = motif === undefined || motif.cls === null ? null : parseShapeClass(motif.cls);
-      const keyed = parsed === null ? undefined : FACET_PARTITIONS.get(parsed.facet);
-      if (parsed === null || keyed === undefined) return [];
+      if (parsed === null) return [];
+      // `arg/none` is the calls that send no value, so beside the `keys` cells (the calls that send a key) it splits the action's calls: it is a part of the `keys` family. A call whose keys are all null is in both, and a call
+      // with only an unsent key in neither; the sum is then not exact, in the direction that only withholds more (the oracle, `withholding-oracle.test.ts`, is what checks it).
+      const facet: ShapeFacet = parsed.facet === 'arg' && parsed.value === 'none' ? 'keys' : parsed.facet;
+      const keyed = FACET_PARTITIONS.get(facet);
+      if (keyed === undefined) return [];
       const key = keyed ? parsed.value.slice(0, parsed.value.indexOf('=')) : '';
-      return [{ family: facetFamilyKey(parsed.action, parsed.facet, key, cell), role: 'part', total: countsOnlySome(parsed.facet, parsed.value) ? ownCalls(parsed.action, parsed.facet, key, cell) : callsTotal(parsed.action, key, cell) }];
+      return [{ family: facetFamilyKey(parsed.action, facet, key, cell), role: 'part', total: countsOnlySome(facet, parsed.value) ? ownCalls(parsed.action, facet, key, cell) : callsTotal(parsed.action, key, cell) }];
+    },
+  },
+  // A path with no folder below the root has depth `0` and folder kind `root` (`call-shape.ts:130,174`), so a key's `depth` `0` cell and its `dir` `root` cell count the same calls: one equation, which the two facets' own
+  // families cannot state because each holds only its own facet's cells.
+  {
+    name: 'depth-dir',
+    placements: (cell, motif) => {
+      const parsed = motif === undefined || motif.cls === null ? null : parseShapeClass(motif.cls);
+      if (parsed === null || (parsed.facet !== 'depth' && parsed.facet !== 'dir')) return [];
+      const at = parsed.value.indexOf('=');
+      if (parsed.value.slice(at + 1) !== (parsed.facet === 'depth' ? '0' : 'root')) return [];
+      return [{ family: JSON.stringify(['depth-dir', parsed.action, parsed.value.slice(0, at), cell.frameBucket, cell.grain, cell.day, cell.exposed]), role: parsed.facet === 'depth' ? 'whole' : 'part' }];
     },
   },
   // The calls that send a key k are split by the `keys` cells whose list holds k, and by each per-key facet of k: the `keys` cells that hold k are parts of those facets' total.
