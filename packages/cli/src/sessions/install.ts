@@ -1,7 +1,7 @@
 // `oars sessions hook install|uninstall|status`: writes the four Claude Code hook entries into one settings file, merging with what is
 // there. An entry is ours when its command ends with `hook-bin.js" <session-start|pre-tool|post-tool|stop>`, so uninstall removes those entries and nothing else. Also the retention floor
-// (the harness deletes raw transcripts after `cleanupPeriodDays`, 30 when unset) and the Windows nightly task.
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+// (the harness deletes raw transcripts after `cleanupPeriodDays`, 30 when unset) and removing the Windows task earlier versions registered.
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 import { ACTION_TABLES } from './actions.js';
@@ -14,7 +14,7 @@ const OWN_COMMAND = /hook-bin\.js" (?:session-start|prompt|pre-tool|post-tool|st
 
 /** What the install needs from the machine, so a test can stand in for each. */
 export interface InstallRuntime {
-  /** `process.platform`: only `win32` has the nightly task. */
+  /** `process.platform`: only `win32` ever had the nightly task. */
   platform: NodeJS.Platform;
   nodePath: string;
   /** Absolute path of the built `hook-bin.js`. */
@@ -22,7 +22,7 @@ export interface InstallRuntime {
   /** `<claude config dir>/settings.json`. */
   userSettings: string;
   cwd: string;
-  /** Runs `schtasks` with these arguments. */
+  /** Runs `schtasks` with these arguments; used only to remove the task an earlier version registered. */
   schtasks: (args: string[]) => Promise<{ code: number; output: string }>;
 }
 
@@ -222,76 +222,26 @@ export const hookStatus = async (runtime: InstallRuntime, extra: string | undefi
   return statuses;
 };
 
-/** The `schtasks` arguments for the nightly task: the same node and hook-bin the hooks use, at a fixed hour. */
-export const scheduleArgs = (runtime: InstallRuntime, hour: number): string[] => [
-  '/Create',
-  '/TN',
-  TASK_NAME,
-  '/TR',
-  `"${runtime.nodePath}" "${runtime.hookBin}" nightly`,
-  '/SC',
-  'DAILY',
-  '/ST',
-  `${String(hour).padStart(2, '0')}:00`,
-  '/F',
-];
-
-export const SCHEDULE_HOUR = 3;
-
-const registered = (): string => `Scheduled task ${TASK_NAME}: the full deposit and the recurrence refresh run daily at ${String(SCHEDULE_HOUR).padStart(2, '0')}:00.`;
-
-export const setSchedule = async (runtime: InstallRuntime, mode: 'nightly' | 'off'): Promise<string> => {
-  if (mode === 'nightly') {
-    const created = await runtime.schtasks(scheduleArgs(runtime, SCHEDULE_HOUR));
-    if (created.code !== 0) throw new CliError(`Could not register the scheduled task: ${created.output.trim()}`, ExitCode.UNEXPECTED, 'unexpected');
-    return registered();
-  }
-  const deleted = await runtime.schtasks(['/Delete', '/TN', TASK_NAME, '/F']);
-  return deleted.code === 0 ? `Removed the scheduled task ${TASK_NAME}.` : `No scheduled task ${TASK_NAME} to remove.`;
-};
-
-/** Where `--schedule off` is remembered: a file of its own in the sessions store, because `state.json` is rewritten whole by every deposit. */
-const scheduleRecord = (storeDir: string): string => join(storeDir, 'schedule.json');
-
-/** True once the operator ran `--schedule off` and has not run `--schedule nightly` since. A record that cannot be read or parsed counts as no opt-out. */
-export const scheduleOptedOut = async (storeDir: string): Promise<boolean> => {
-  try {
-    const parsed: unknown = JSON.parse(await readFile(scheduleRecord(storeDir), 'utf8'));
-    return typeof parsed === 'object' && parsed !== null && 'schedule' in parsed && parsed.schedule === 'off';
-  } catch {
-    return false;
-  }
-};
-
-/** Records the choice of `--schedule`: `off` writes the opt-out; `nightly` clears it. Without a store the choice has nowhere to live and is not recorded. */
-export const recordSchedule = async (storeDir: string | undefined, mode: 'nightly' | 'off'): Promise<void> => {
-  if (storeDir === undefined) return;
-  if (mode === 'nightly') {
-    await rm(scheduleRecord(storeDir), { force: true });
-    return;
-  }
-  await mkdir(storeDir, { recursive: true });
-  await writeFile(scheduleRecord(storeDir), `${JSON.stringify({ schedule: 'off' })}\n`, { mode: 0o600 });
-};
-
-/** What a plain `hook install` says when the operator turned the nightly task off: it is left alone. */
-export const SCHEDULE_LEFT_OFF = `Scheduled task ${TASK_NAME}: left off, as you chose with --schedule off. Turn it back on with: oars sessions hook install --schedule nightly`;
+/** What `hook install` says to someone who asks for the task that earlier versions registered: sends ride the hook and the commands now. */
+export const SCHEDULE_REFUSED = 'oars no longer registers a scheduled task: sends now ride the session-end hook and any oars command (at most about hourly). Run: oars sessions hook install';
 
 /**
- * What a plain `hook install` does about the nightly task on Windows: register it unless it is already there. Registration is
- * best effort: the hooks are installed by then, so a machine that refuses the task (policy, no Task Scheduler) is told how to retry
- * and is not failed. `install --schedule off` removes the task and records the opt-out (`recordSchedule`), which the caller checks
- * (`scheduleOptedOut`) before calling this; `--schedule nightly` clears it.
+ * Removes the nightly task an earlier version registered, and says so in one line; nothing when it is not there. Only Windows ever had one, so any other platform makes no call. Install and uninstall both
+ * call this, so a machine that upgrades loses the task the first time either runs. A task that is there but refuses to go (policy) is reported, never failed: the hooks are the work of the command.
  */
-export const ensureSchedule = async (runtime: InstallRuntime): Promise<string> => {
+export const removeSchedule = async (runtime: InstallRuntime): Promise<string | undefined> => {
+  if (runtime.platform !== 'win32') return undefined;
   const queried = await runtime.schtasks(['/Query', '/TN', TASK_NAME]);
-  if (queried.code === 0) return `Scheduled task ${TASK_NAME}: already registered.`;
-  const created = await runtime.schtasks(scheduleArgs(runtime, SCHEDULE_HOUR));
-  if (created.code !== 0) return `Could not register the scheduled task ${TASK_NAME} (${created.output.trim()}); the hooks are installed. Retry with: oars sessions hook install --schedule nightly`;
-  return registered();
+  if (queried.code !== 0) return undefined;
+  const deleted = await runtime.schtasks(['/Delete', '/TN', TASK_NAME, '/F']);
+  return deleted.code === 0
+    ? `Removed the scheduled task ${TASK_NAME} that an earlier version registered; sends now ride the session-end hook and any oars command.`
+    : `Could not remove the scheduled task ${TASK_NAME} (${deleted.output.trim()}); remove it yourself with: schtasks /Delete /TN ${TASK_NAME} /F`;
 };
 
-export const scheduleStatus = async (runtime: InstallRuntime): Promise<string> => {
+/** The status line for a task left over from an earlier version; nothing when there is none. */
+export const scheduleStatus = async (runtime: InstallRuntime): Promise<string | undefined> => {
+  if (runtime.platform !== 'win32') return undefined;
   const queried = await runtime.schtasks(['/Query', '/TN', TASK_NAME]);
-  return queried.code === 0 ? `Scheduled task ${TASK_NAME}: registered.` : `Scheduled task ${TASK_NAME}: not registered.`;
+  return queried.code === 0 ? `Scheduled task ${TASK_NAME}: registered by an earlier version; oars sessions hook install or uninstall removes it.` : undefined;
 };
