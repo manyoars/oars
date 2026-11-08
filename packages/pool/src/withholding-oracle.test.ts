@@ -3,15 +3,15 @@
 // `bundleOf` serves determine a sub-floor cell for every store the held cells allow. A reader who holds every served cell and the action's calls (the `fit` read) learns a sub-floor cell when its row is in the
 // span of the served rows. One row per (cell, stored column) and one column per atom (one session as the pool stores it); the atoms come only through the route, from a fixed seed, until the rank stops rising.
 import { describe, expect, it } from 'vitest';
-import { argClassOf, argFeaturesOf, argValuesOf, changeKindOf, targetClassOf, type ComparedCall } from '../../cli/src/sessions/call-shape.js';
+import { ARG_CLASSES, CHANGE_KINDS, DIRECTORY_KINDS, EXTENSION_CLASSES, PATH_DEPTHS, PATTERN_FEATURES, TARGET_CLASSES, VALUE_SIZES, argClassOf, argFeaturesOf, argValuesOf, changeKindOf, targetClassOf, type ComparedCall } from '../../cli/src/sessions/call-shape.js';
 import { incrementsOf, type CellRow } from '../../cli/src/sessions/cell-increments.js';
-import { ERROR_CLASS, ERROR_VERSION_CLASS, RECOVERY_CLASS, SHAPE_CLASS, parseShapeClass, type Cell } from '../../cli/src/sessions/cells.js';
+import { ERROR_CLASS, ERROR_VERSION_CLASS, RECOVERY_CLASS, SHAPE_CLASS, SHAPE_FACETS, parseShapeClass, type Cell } from '../../cli/src/sessions/cells.js';
 import { hashPath } from '../../cli/src/sessions/extract.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
 import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from '../../cli/src/sessions/pool-fixture.js';
 import { parseSkeleton, skeletonOf } from '../../cli/src/sessions/pool-wire.js';
 import { CLOSED_ARG_VALUES } from '../../cli/src/sessions/public-vocabulary.js';
-import type { ToolObservation, ToolStatus } from '../../cli/src/sessions/schema.js';
+import { ERROR_CODES, type ToolObservation, type ToolStatus } from '../../cli/src/sessions/schema.js';
 import { bundleOf } from './derive.js';
 import { DEFAULT_FLOORS } from './floors.js';
 import type { StoredPool } from './stored.js';
@@ -25,11 +25,17 @@ const COLUMNS = ['ok', 'failed', 'sessions', 'durationMs', 'tokens', 'tokenSessi
 type Column = (typeof COLUMNS)[number];
 
 /** A tool the fixtures call: its public name, canonical action, and the input key its target is hashed on. */
-const TOOLS: readonly { native: string; action: 'file.read' | 'file.search' | 'web.search'; pathKey?: string }[] = [
+const TOOLS: readonly { native: string; action: 'agent.spawn' | 'file.edit' | 'file.read' | 'file.search' | 'shell.exec' | 'web.search'; pathKey?: string }[] = [
   { native: 'Read', action: 'file.read', pathKey: 'file_path' },
   { native: 'Grep', action: 'file.search', pathKey: 'path' },
   { native: 'WebSearch', action: 'web.search' },
+  { native: 'Bash', action: 'shell.exec' },
+  { native: 'Agent', action: 'agent.spawn' },
+  { native: 'Task', action: 'agent.spawn' },
+  { native: 'NotebookEdit', action: 'file.edit', pathKey: 'notebook_path' },
 ];
+/** The actions those tools map to: the `fit` read gives an action's calls, whatever native tool made them. */
+const ACTIONS = [...new Set(TOOLS.map(({ action }) => action))];
 
 /** One call as a transcript line would give it: the tool's raw input, how it ended, and what its step recorded. */
 interface Call {
@@ -271,7 +277,7 @@ const leaksOf = (accounts: Accounts, extra = 400): Leak[] => {
         if (at !== undefined) vector[at] = BigInt(row[column]);
       }
     }
-    const calls = TOOLS.flatMap(({ native }) => (['ok', 'error'] as const).map((status) => BigInt(atom.calls.filter((spec) => spec.tool === native && spec.status === status).length)));
+    const calls = ACTIONS.flatMap((action) => (['ok', 'error'] as const).map((status) => BigInt(atom.calls.filter((spec) => TOOLS.find(({ native }) => native === spec.tool)?.action === action && spec.status === status).length)));
     return { vector, calls };
   };
   const universe = [...accounts.flat(), ...candidatesOf(held, extra)];
@@ -282,7 +288,7 @@ const leaksOf = (accounts: Accounts, extra = 400): Leak[] => {
     if (made !== null && rank.add(made.vector)) kept.push(made);
   }
   const rowOf = (at: number): bigint[] => kept.map(({ vector }) => vector[at] ?? 0n);
-  const callRows = TOOLS.flatMap((_, tool) => [0, 1].map((status) => kept.map(({ calls }) => calls[tool * 2 + status] ?? 0n)));
+  const callRows = ACTIONS.flatMap((_, action) => [0, 1].map((status) => kept.map(({ calls }) => calls[action * 2 + status] ?? 0n)));
   const span = new Span();
   for (const row of callRows) span.add(row);
   for (const [at, { key }] of pairs.entries()) if (served.has(key)) span.add(rowOf(at));
@@ -299,7 +305,113 @@ const leaksOf = (accounts: Accounts, extra = 400): Leak[] => {
 /** `count` accounts that each send the same call. */
 const accountsOf = (count: number, make: (account: number) => Atom): Accounts => Array.from({ length: count }, (_, account) => [make(account)]);
 
+/** A path for each target class, path depth, extension class, and folder kind the emitter reads (`call-shape.ts`), under the working folder `/work/app`; `/etc/hosts` is outside it. */
+const COVERAGE_PATHS = [
+  'a.ts', 'src/a.ts', 'src/lib/a.ts', 'a/b/c/d.ts', 'a/b/c/d/e/f.ts', 'a/b/c/d/e/f/g/h/i/j.ts', '/etc/hosts',
+  'test/a.test.ts', 'tsconfig.json', 'README.md', 'package-lock.json', 'dist/a.js', 'data.csv', 'a.xyz', 'logo.png', 'Makefile',
+  'docs/a.md', '.github/a.yml', 'foo/a.ts', 'test/a.ts',
+];
+/** One regular expression for each pattern feature a regex can hold (`recursive` comes from a glob), and the lengths that open each value size (`call-shape.ts:91`). */
+const COVERAGE_PATTERNS = ['a|b', '^a$', '[a-z]', 'a\\.b', '(a)', 'foo', 'a+', 'a.b'];
+const COVERAGE_SIZES = [0, 1, 9, 33, 129, 513, 2049, 8193];
+
+/**
+ * The calls that, between them, emit every member of every closed list the cells are keyed on. This is the coverage round 8 lacked: a list member nothing here emits goes red in the meta-test below, so a new facet or
+ * member is not silently outside the universe. A call whose input holds a closed value is built from `CLOSED_ARG_VALUES` itself, and a failed call from `ERROR_CODES`, so neither list can grow unseen.
+ */
+const coverageOf = (): Atom[] => {
+  const calls: Call[][] = [
+    ...COVERAGE_PATHS.flatMap((file) => [[call('Read', { file_path: file })], [call('Grep', { path: file })], [call('NotebookEdit', { notebook_path: file })]]),
+    ...COVERAGE_PATTERNS.map((pattern) => [call('Grep', { pattern })]),
+    [call('Grep', { pattern: 'x', glob: '**/*.ts' })],
+    ...COVERAGE_SIZES.map((length) => [call('WebSearch', { query: 'x'.repeat(length) })]),
+    [call('WebSearch', { query: 'https://example.test/x' })],
+    [call('Bash', { command: 'ls' })],
+    [call('Read', { file_path: 'src/a.ts', limit: 10 })],
+    [call('Grep', { pattern: 'x', '-i': true }), call('Grep', { pattern: 'x', '-i': false })],
+    [call('WebSearch', {})],
+    // A key off the tool's list is dropped, and counted.
+    [call('WebSearch', { query: 'q', not_a_public_key: 'x' })],
+    // Each change kind is a second call of one tool in one prompt.
+    [call('Read', { file_path: 'src/a.ts' }), call('Read', { file_path: 'src/a.ts' })],
+    [call('Read', { file_path: 'src/a.ts' }), call('Read', { file_path: 'src/a.ts', limit: 10 })],
+    [call('Read', { file_path: 'src/a.ts', limit: 10 }), call('Read', { file_path: 'src/a.ts' })],
+    [call('WebSearch', { query: 'q' }), call('WebSearch', { query: 'a longer query' })],
+    [call('WebSearch', { query: 'aa' }), call('WebSearch', { query: 'bb' })],
+    [call('Read', { file_path: 'src/a.ts' }), call('Read', { file_path: 'src/b.ts' })],
+    // Each closed value of each tool's argument.
+    ...[...CLOSED_ARG_VALUES].flatMap(([native, keys]) => [...keys].flatMap(([key, values]) => [...values].map((value) => [call(native, { [key]: value })]))),
+    // Each error code, on a failed call that something follows (the `recovery:` cells) and on one that nothing follows.
+    ...[...ERROR_CODES].flatMap((code) => [[call('WebSearch', { query: 'q' }, { status: 'error', errorCode: code })], [call('Read', { file_path: 'src/a.ts' }, { status: 'error', errorCode: code }), call('Bash', { command: 'ls' })]]),
+  ];
+  return calls.map((made) => atomOf(...made));
+};
+
+/** The members of each closed list, by the name the meta-test reports, and the cell classes that carry them. */
+interface Emitted {
+  facets: Set<string>;
+  byFacet: Map<string, Set<string>>;
+  errors: Set<string>;
+  recoveries: Set<string>;
+  enums: Set<string>;
+}
+
+/** What the atoms emit, read from the class names of the motifs they name. */
+const emittedBy = (atoms: readonly Atom[]): Emitted => {
+  const found: Emitted = { facets: new Set(), byFacet: new Map(), errors: new Set(), recoveries: new Set(), enums: new Set() };
+  for (const atom of atoms) {
+    for (const { cls } of emit(atom).motifs) {
+      if (cls === null) continue;
+      const shape = parseShapeClass(cls);
+      if (shape !== null) {
+        found.facets.add(shape.facet);
+        const member = shape.facet === 'size' || shape.facet === 'depth' || shape.facet === 'extension' || shape.facet === 'dir' || shape.facet === 'pattern' || shape.facet === 'enum' ? shape.value.slice(shape.value.indexOf('=') + 1) : shape.value;
+        found.byFacet.set(shape.facet, (found.byFacet.get(shape.facet) ?? new Set()).add(member));
+        if (shape.facet === 'enum') found.enums.add(`${shape.action}|${shape.value}`);
+      } else if (cls.startsWith(ERROR_CLASS)) found.errors.add(cls.slice(ERROR_CLASS.length).split('/')[0] ?? '');
+      else if (cls.startsWith(RECOVERY_CLASS)) found.recoveries.add(cls.slice(RECOVERY_CLASS.length).split('/')[0] ?? '');
+    }
+  }
+  return found;
+};
+
+/**
+ * The two list members no cell can name. The wire spells "a value this reader does not know" `other`, so `knownFeatures` (`cell-increments.ts:157-158`) reads an `other` extension or folder kind as a field the call did not
+ * send: the call still counts in `size`, and in `depth` and `target`, but adds no `extension` or `dir` cell. The first meta-test asserts these are exactly the members left over, so the exclusion goes red if the route starts to emit one.
+ */
+const UNREACHABLE = ['EXTENSION_CLASSES/other', 'DIRECTORY_KINDS/other'];
+
+/** Every member of a closed list that the atoms do not emit, named `list/member`. */
+const unemittedBy = (atoms: readonly Atom[]): string[] => {
+  const found = emittedBy(atoms);
+  const missing = (list: string, members: readonly string[], seen: ReadonlySet<string> | undefined): string[] => members.filter((member) => seen?.has(member) !== true).map((member) => `${list}/${member}`);
+  const actionOf = (native: string): string => TOOLS.find((known) => known.native === native)?.action ?? native;
+  return [
+    ...missing('SHAPE_FACETS', SHAPE_FACETS, found.facets),
+    ...missing('TARGET_CLASSES', TARGET_CLASSES, found.byFacet.get('target')),
+    ...missing('ARG_CLASSES', ARG_CLASSES, found.byFacet.get('arg')),
+    ...missing('VALUE_SIZES', VALUE_SIZES, found.byFacet.get('size')),
+    ...missing('PATH_DEPTHS', PATH_DEPTHS, found.byFacet.get('depth')),
+    ...missing('EXTENSION_CLASSES', EXTENSION_CLASSES, found.byFacet.get('extension')),
+    ...missing('DIRECTORY_KINDS', DIRECTORY_KINDS, found.byFacet.get('dir')),
+    ...missing('PATTERN_FEATURES', PATTERN_FEATURES, found.byFacet.get('pattern')),
+    ...missing('CHANGE_KINDS', CHANGE_KINDS, found.byFacet.get('change')),
+    ...missing('ERROR_CODES (error:)', [...ERROR_CODES], found.errors),
+    ...missing('ERROR_CODES (recovery:)', [...ERROR_CODES], found.recoveries),
+    ...missing('CLOSED_ARG_VALUES', [...CLOSED_ARG_VALUES].flatMap(([native, keys]) => [...keys].flatMap(([key, values]) => [...values].map((value) => `${actionOf(native)}|${key}=${value}`))), found.enums),
+  ];
+};
+
 describe('the withholding oracle', () => {
+  it('emits every member of every closed list a cell is keyed on, so a new facet or member goes red until the universe covers it', () => {
+    expect(unemittedBy(coverageOf())).toEqual(UNREACHABLE);
+  });
+
+  it('names a list member that no call emits', () => {
+    const withoutLimit = coverageOf().filter(({ calls }) => !calls.some(({ input }) => 'limit' in input));
+    expect(unemittedBy(withoutLimit).filter((member) => !UNREACHABLE.includes(member))).toEqual(['ARG_CLASSES/number', 'CHANGE_KINDS/key-added', 'CHANGE_KINDS/key-removed']);
+  });
+
   it('serves nothing that gives back arg/none: 12 calls of a tool, 10 with query and 2 with no input, at floor 5', () => {
     const accounts = [...accountsOf(10, () => atomOf(call('WebSearch', { query: 'q' }))), ...accountsOf(2, () => atomOf(call('WebSearch', {})))];
     expect(leaksOf(accounts)).toEqual([]);
