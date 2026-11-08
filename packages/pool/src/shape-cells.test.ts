@@ -45,7 +45,7 @@ const determinedCells = (held: readonly Cell[], motifs: readonly Motif[], served
   const columns: (Cell | string)[] = [];
   const columnOf = new Map<Cell | string, number>();
   const unknown = (term: Cell | string): boolean => typeof term === 'string' || !served(term);
-  const rows: number[][] = [];
+  const rows: [number, number][][] = [];
   for (const { head, parts } of relations.values()) {
     if (head === null || parts.length === 0) continue;
     const row = new Map<number, number>();
