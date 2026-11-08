@@ -18,6 +18,7 @@ import { addProject, cleanup, FIXTURES, NOW, stage } from './test-support.js';
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { emptyBooks } from './empty-state.js';
 
 afterEach(() => {
   cleanup();
@@ -316,7 +317,7 @@ ${formatStepCounters(stepCounters(await readSteps(staged.storeDir)))}`);
     const empty = stage(slugOf(HOME));
     const emptyDeps = { sessions: empty.runtime, install: undefined, now: () => NOW };
     // Nothing deposited means no saved allowlist, which is every folder, so no folder is off it and `books` adds no scope line.
-    expect((await sessionsBooks(emptyDeps, { by: 'class', sinceDays: 1 })).text).toBe('No prompts in the store.\n\nno pool bundle yet');
+    expect((await sessionsBooks(emptyDeps, { by: 'class', sinceDays: 1 })).text).toBe(`${emptyBooks('prompts')}\n\nno pool bundle yet`);
   });
 
   it("measure --repo drops another repository's MCP recall calls and keeps calls with no folder", async () => {
