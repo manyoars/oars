@@ -17,7 +17,8 @@ describe('the pool harness reuses its connections', () => {
   it('opens at most two connections for twenty requests and twenty D1 calls', async () => {
     const before = pool.connects();
     for (let at = 0; at < 20; at += 1) {
-      expect((await pool.post('/v1/deposits', '{}')).status).toBe(401);
+      // No body: workerd closes the connection when a Worker answers without reading the request body, so an unread-body POST measures that close and not connection reuse.
+      expect((await pool.get('/v1/covenant')).status).toBe(200);
       expect(await (await pool.db()).prepare('select 1 as one').first('one')).toBe(1);
     }
     // Without the keep-alive sender Miniflare resets every connection: one connect per call, 40 here.
@@ -27,10 +28,11 @@ describe('the pool harness reuses its connections', () => {
   // A test process starved by a loaded box can sit idle longer than undici's default keep-alive timeout (4 s) between two calls, which closes the socket and costs a reconnect. The pause is
   // made here, so the case does not wait for a load to make it.
   it('keeps its connection across a pause longer than the default keep-alive timeout', async () => {
-    await pool.post('/v1/deposits', '{}');
+    await pool.get('/v1/covenant');
     const before = pool.connects();
     await new Promise<void>((resolve) => setTimeout(resolve, 4_500));
-    expect((await pool.post('/v1/deposits', '{}')).status).toBe(401);
+    // No body: workerd closes the connection when a Worker answers without reading the request body, so an unread-body POST measures that close and not connection reuse.
+    expect((await pool.get('/v1/covenant')).status).toBe(200);
     expect(pool.connects() - before, `connects=${String(pool.connects() - before)} peak=${String(pool.peak())}`).toBe(0);
   });
 
