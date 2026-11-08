@@ -1422,6 +1422,27 @@ describe('oars pool fetch', () => {
       expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.INVALID);
       expect(scene.h.err.join('')).toContain('not a signed bundle this version reads');
     });
+
+    it.each([0, 1.5, '1'])('refuses a signed bundle whose clear floor is %j, rather than print it', async (clear) => {
+      const { scene, sign } = await signedScene();
+      on(scene, 'get', `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, await floored(sign, { public: 5, disclosure: 2, clear }));
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.INVALID);
+      expect(scene.h.err.join('')).toContain('not a signed bundle this version reads');
+    });
+
+    it('reads a bundle with a clear floor of 1 and carries it in --json', async () => {
+      const { scene, sign } = await signedScene();
+      on(scene, 'get', `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, await floored(sign, { public: 5, disclosure: 2, clear: 1 }));
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
+      expect(scene.document()).toMatchObject({ floors: { public: 5, disclosure: 2, clear: 1 } });
+    });
+
+    it('reads a bundle that states no clear floor, as an older pool states none', async () => {
+      const { scene, sign } = await signedScene();
+      on(scene, 'get', `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, await floored(sign, { public: 5, disclosure: 2 }));
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
+      expect(scene.document()).toMatchObject({ floors: { public: 5, disclosure: 2 } });
+    });
   });
 
   it('names the version it fetched', async () => {
