@@ -109,7 +109,7 @@ const cellBase = (row: unknown): Omit<Cell, 'tokens'> => ({
 });
 
 /** A cell as held, and the count of every account that holds it, standing or not (`clusters_any`). */
-interface Held {
+export interface Held {
   cell: Cell;
   any: number;
 }
@@ -140,7 +140,7 @@ const countedAs = (held: Held, motifs: ReadonlyMap<string, Motif>, floors: Floor
  * withholds the total, because the total less its served parts would be that part. A part is sub-floor against its own class: a long-tail version, model, or shell is held to the public floor even beside a clear total, which is how the
  * rule withholds a total that would reveal it, while a clear part at the clear floor withholds nothing.
  */
-const environmentOf = (candidates: readonly Held[], parts: readonly Held[], motifs: ReadonlyMap<string, Motif>, floors: Floors, floor: number): Cell[] => {
+export const environmentOf = (candidates: readonly Held[], parts: readonly Held[], motifs: ReadonlyMap<string, Motif>, floors: Floors, floor: number): Cell[] => {
   const counted = (held: Held): Cell => countedAs(held, motifs, floors);
   const clearsOwn = (held: Held): boolean => {
     const cell = counted(held);
