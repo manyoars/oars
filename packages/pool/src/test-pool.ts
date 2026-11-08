@@ -192,6 +192,8 @@ interface StubProvider {
   html: Set<string>;
   /** URLs answered 403, the way GitHub answers a call over its rate limit. */
   forbidden: Set<string>;
+  /** Profile URLs answered with this status and the user's real body, the way a proxy or a provider fault can put an id in a non-2xx answer. */
+  statused: Map<string, number>;
   outbound: (request: StubRequest) => Promise<StubResponse>;
 }
 
@@ -201,6 +203,7 @@ const stubProvider = (): StubProvider => {
   const calls: StubCall[] = [];
   const html = new Set<string>();
   const forbidden = new Set<string>();
+  const statused = new Map<string, number>();
   const refuse = new Map<string, string>();
   const scripted = new Map<string, string>();
   let issued = 0;
@@ -236,11 +239,12 @@ const stubProvider = (): StubProvider => {
     if (at === 'https://oauth2.googleapis.com/token') return token(form, true);
     const found = users.get((request.headers.get('authorization') ?? '').replace('Bearer access-', ''));
     if (typeof found !== 'object' || found === null) return json({ error: 'bad token' }, 401);
-    if (at === 'https://api.github.com/user') return json({ id: Number(found.id), login: found.login, email: found.email, name: found.login, ...(found.createdAt === undefined ? {} : { created_at: found.createdAt }) });
-    if (at === 'https://openidconnect.googleapis.com/v1/userinfo') return json({ sub: found.id, email: found.email, name: found.login });
+    const status = statused.get(at) ?? 200;
+    if (at === 'https://api.github.com/user') return json({ id: Number(found.id), login: found.login, email: found.email, name: found.login, ...(found.createdAt === undefined ? {} : { created_at: found.createdAt }) }, status);
+    if (at === 'https://openidconnect.googleapis.com/v1/userinfo') return json({ sub: found.id, email: found.email, name: found.login }, status);
     return json({ error: `no stub for ${at}` }, 500);
   };
-  return { approve: (code, user) => users.set(code, user), script: (code, word) => scripted.set(code, word), forget: (code) => users.delete(code), calls, html, forbidden, refuse, outbound };
+  return { approve: (code, user) => users.set(code, user), script: (code, word) => scripted.set(code, word), forget: (code) => users.delete(code), calls, html, forbidden, statused, refuse, outbound };
 };
 
 export interface Answer {
@@ -267,8 +271,9 @@ export interface TestPool {
   post: (path: string, body: unknown, token?: string, headers?: { [name: string]: string }) => Promise<Answer>;
   get: (path: string, token?: string) => Promise<Answer>;
   raw: (path: string, token?: string, headers?: { [name: string]: string }) => Promise<RawAnswer>;
-  /** The sign-in the CLI performs through the pool's two login routes, with the provider's approval given at the stub between them. */
-  /** Signs the stub user in. The account has stood unless `fresh`: the floor counts only accounts that have (S13), so a test that serves a cell needs holders that have, and a test of the fetch cap or of what a fresh account does passes `fresh: true`. */
+  /** Makes a handle's next poll due now, as if the provider's interval had passed: the pool holds the interval per handle, and a poll right after a start comes early. */
+  due: (handle: string) => Promise<void>;
+  /** Signs the stub user in through the pool's two login routes, as the CLI does, with the provider's approval given at the stub between them. The account has stood unless `fresh`: the floor counts only accounts that have (S13), so a test that serves a cell needs holders that have, and a test of the fetch cap or of what a fresh account does passes `fresh: true`. */
   signIn: (provider: string, user: StubUser, options?: { fresh?: boolean }) => Promise<{ token: string; account: string; signingKey: unknown }>;
   stub: StubProvider;
   /** The connections the pool's own requests have opened (see `KeepAliveSender`). */
@@ -276,6 +281,8 @@ export interface TestPool {
   /** The most requests the pool's own requests had in flight at once (see `KeepAliveSender`). */
   peak: () => number;
   signingKey: () => { kty: string; crv: string; x: string };
+  /** The keys a client holds for this pool, by key id: what `verifyBundle` takes. */
+  pinned: () => { [kid: string]: { kty: string; crv: string; x: string } };
   dispose: () => Promise<void>;
 }
 
@@ -319,7 +326,7 @@ export const startPool = async (bindings: { [name: string]: string } = {}, optio
       // The bindings wrangler.jsonc names. Miniflare's local Analytics Engine accepts a write and keeps nothing, so a test reads what the Worker wrote to it through a fake (telemetry.test.ts).
       r2Buckets: { TELEMETRY: 'telemetry-test', ...(options.raw === false ? {} : { RAW: 'oars-pool-raw' }) },
       analyticsEngineDatasets: { TELEMETRY_EVENTS: { dataset: 'oars_telemetry' } },
-      bindings: { ...clientIds(config.parsed), GOOGLE_CLIENT_SECRET: TEST_GOOGLE_SECRET, PSEUDONYM_KEY: 'a-test-pseudonym-key', INGEST_HASH_KEY: 'a-test-ingest-hash-key', BUNDLE_SIGNING_KEY: key.jwk, COVENANT_VERSION: 'v1', FETCH_CAP: '1000', ...bindings },
+      bindings: { ...clientIds(config.parsed), GOOGLE_CLIENT_SECRET: TEST_GOOGLE_SECRET, PSEUDONYM_KEY: 'a-test-pseudonym-key', INGEST_HASH_KEY: 'a-test-ingest-hash-key', BUNDLE_SIGNING_KEY: key.jwk, COVENANT_VERSION: 'v1', FETCH_CAP: '1000', LOGIN_STARTS_PER_HOUR: '1000', ...bindings },
       outboundService: stub.outbound,
     }),
   );
@@ -341,13 +348,17 @@ export const startPool = async (bindings: { [name: string]: string } = {}, optio
     return { status: response.status, json: text === '' ? null : JSON.parse(text), headers: response.headers };
   };
   const post: TestPool['post'] = async (path, body, token, headers) => {
-    const { status, json } = await call(path, { method: 'POST', body: typeof body === 'string' ? body : JSON.stringify(body) }, token, headers);
+    // A client posts JSON as `application/json`; a test that wants another type, or none, names it in `headers`.
+    const { status, json } = await call(path, { method: 'POST', body: typeof body === 'string' ? body : JSON.stringify(body) }, token, { 'content-type': 'application/json', ...headers });
     return { status, json };
   };
   const raw: TestPool['raw'] = (path, token, headers) => call(path, { method: 'GET' }, token, headers);
   const get: TestPool['get'] = async (path, token) => {
     const { status, json } = await raw(path, token);
     return { status, json };
+  };
+  const due = async (handle: string): Promise<void> => {
+    await database.prepare('UPDATE login_polls SET next_at = 0 WHERE handle_hash = ?').bind(createHash('sha256').update(handle).digest('hex')).run();
   };
   return {
     miniflare,
@@ -360,17 +371,21 @@ export const startPool = async (bindings: { [name: string]: string } = {}, optio
     get,
     raw,
     stub,
+    due,
     connects: sender.connects,
     peak: sender.peak,
     signIn: async (provider, user, options = {}) => {
       const started = await post('/v1/login/start', { provider });
       const issued = /USER-(\d+)/.exec(textOf(started.json, 'userCode'))?.[1];
       stub.approve(`device-${issued ?? ''}`, user);
-      const signedIn = await post('/v1/login/poll', { handle: textOf(started.json, 'handle') });
+      const handle = textOf(started.json, 'handle');
+      await due(handle);
+      const signedIn = await post('/v1/login/poll', { handle });
       if (options.fresh !== true) await (await db()).prepare("UPDATE accounts SET access = 'standing' WHERE id = ?").bind(textOf(signedIn.json, 'account')).run();
       return { token: textOf(signedIn.json, 'token'), account: textOf(signedIn.json, 'account'), signingKey: fieldOf(signedIn.json, 'signingKey') };
     },
     signingKey: () => ({ kty: 'OKP', crv: 'Ed25519', x: key.x }),
+    pinned: () => ({ k1: { kty: 'OKP', crv: 'Ed25519', x: key.x } }),
     dispose: async () => {
       await miniflare.dispose();
       await sender.close();

@@ -112,7 +112,7 @@ describe('the bundle carries the coverage on its cells (additive and optional on
       for (let at = 0; at < 6; at += 1) await deposit(own, String(9110 + at), [withUsage(sampleSkeleton(String(9110 + at).padStart(16, '0')), at % 2 === 0 ? RECORDED : NOTHING, at % 2 === 0 ? 1 : 0)]);
       const { token } = await own.signIn('github', stubUser('9120'));
       const answer = await own.raw(PATH, token);
-      const verified = await verifyBundle(answer.json, own.signingKey(), 'claude-code', '2.1.314');
+      const verified = await verifyBundle(answer.json, own.pinned(), 'claude-code', '2.1.314');
       if (!verified.ok) throw new Error(verified.reason);
       const classCells = verified.bundle.cells.filter((cell) => cell.grain === 'week' && verified.bundle.motifs.some((motif) => motif.motifId === cell.motifId && motif.level === 'class' && motif.cls === 'edit-verify'));
       expect(classCells).toMatchObject([{ sessions: 6, tokenSessions: 3, tokenPrompts: 3 }]);

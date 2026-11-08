@@ -13,9 +13,9 @@
 // How a trace becomes a session:
 //   session      one `traceId`; traces that share `gen_ai.conversation.id` are one session, each trace a turn in start-time order. An agent span nested inside another
 //                agent's (directly or through an agent-as-tool `execute_tool` span) is its own session `<traceId>-<spanId>`, a subagent of the span's session.
-//   prompt       one per root agent span (`invoke_agent`, `invoke_workflow`, any `invoke_*` operation), else per trace root; its text is the last user message of
-//                `gen_ai.input.messages`, else of the earliest chat child span that has them (Opt-In: absent by default, and then the turn is written content-less,
-//                as an image-only prompt is).
+//   prompt       one per root agent span (`invoke_agent`, `invoke_workflow`, any `invoke_*` operation), else one per trace, from its earliest root (by start time, then input
+//                order; a root whose parent never reached the data joins it); its text is the last user message of `gen_ai.input.messages`, else of the earliest chat child span
+//                that has them (Opt-In: absent by default, and then the turn is written content-less, as an image-only prompt is).
 //   model call   a span whose `gen_ai.operation.name` is `chat`, `generate_content`, or `text_completion`: one assistant line, its `requestId` the span id.
 //   tool call    an `execute_tool` span, put under the model call that ended before it began (or whose output messages name its `gen_ai.tool.call.id`): a block in
 //                that call's line, or, with both times and end not before start (a directly nested agent span too), its own assistant line at the span's start under
@@ -480,7 +480,8 @@ export const otelSessions = (spans: readonly Span[]): OtelSession[] => {
     }
     pieces.sort((a, b) => a.t - b.t || a.rank - b.rank);
     entry.lines.push(...pieces.map((piece) => piece.line));
-    entry.spans += 1 + mine.length;
+    // The unit's own span counts once, though it is also a model or tool span when the earliest root of an agentless trace is one.
+    entry.spans += 1 + mine.filter((span) => span !== unit.span).length;
   }
   return [...out.entries()].map(([id, held]) => ({ id, size: held.spans, mtimeMs: held.mtime, lines: held.lines, subagent: held.subagent, file: held.file }));
 };

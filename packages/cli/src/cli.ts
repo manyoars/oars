@@ -15,13 +15,13 @@ import { DEADLINE_MS, gateHook } from './gate/hook.js';
 import { managerReader } from './gate/registry.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
 import { sessionsTry } from './sessions/try.js';
-import { poolCoverage, poolDeposit, poolFetch, poolLogin, poolOutbox, poolRaw } from './sessions/pool-command.js';
+import { poolCoverage, poolDeposit, poolFetch, poolLogin, poolLogout, poolOutbox, poolRaw } from './sessions/pool-command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 import { telemetryOff, telemetryOn, telemetryReport, telemetryShow, telemetryStatus } from './telemetry/command.js';
 import { recordCrash } from './telemetry/crash.js';
 import { emitOf } from './telemetry/emit.js';
-import { finishTelemetry, observeCommand, type Observed } from './telemetry/observe.js';
+import { finishTelemetry, isHook, observeCommand, type Observed } from './telemetry/observe.js';
 import type { TelemetryRuntime } from './telemetry/record.js';
 
 /** Everything the CLI takes from its process, so the tests can stand in for each. */
@@ -43,6 +43,8 @@ export interface RunDeps {
   install?: InstallRuntime;
   /** Where telemetry keeps its id, settings, and spool; absent in a run that has none, which records nothing. */
   telemetry?: TelemetryRuntime | undefined;
+  /** The catch-up every command that is not a hook runs after it ends: starts a due sweep and send, detached. Absent in a run that has none. */
+  catchUp?: (() => Promise<unknown>) | undefined;
 }
 
 /** What a command produced: the `--json` document, and the line a human sees instead. */
@@ -389,7 +391,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
       emit(deps, flag(options, 'json'), await sessionsGoldArms(sessionDeps(deps), { file }));
     });
 
-  const hook = sessions.command('hook').description('install the recall hooks into a Claude Code settings file, and the nightly deposit task');
+  const hook = sessions.command('hook').description('install the recall hooks into a Claude Code settings file, and remove the scheduled task earlier versions registered');
   const scopeOption = (value: string): Scope => {
     if (value !== 'user' && value !== 'project' && value !== 'file') throw new InvalidArgumentError('it must be user, project, or file.');
     return value;
@@ -401,12 +403,12 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
 
   hook
     .command('install')
-    .description('merge the SessionStart, UserPromptSubmit, PreToolUse, PostToolUseFailure, and SessionEnd hooks into a settings file (existing hooks are kept), raise cleanupPeriodDays to at least 365, and on Windows register the nightly task (which sends telemetry while telemetry is on, and pool batches only after you accept a pool covenant)')
+    .description('merge the SessionStart, UserPromptSubmit, PreToolUse, PostToolUseFailure, and SessionEnd hooks into a settings file (existing hooks are kept), raise cleanupPeriodDays to at least 365, and, on Windows, remove the nightly task an earlier version registered (oars installs no scheduler: a due sweep and send, at most about hourly, starts from the session-end hook and from any oars command; telemetry goes only while it is on, and pool batches only after you accept a pool covenant)')
     .option('--scope <scope>', 'user (~/.claude/settings.json; the default), project (./.claude/settings.json), or file (needs --file; implied by --file)', scopeOption)
     .option('--file <path>', 'the settings file for --scope file')
     .option('--keep-retention', 'leave cleanupPeriodDays as it is (the harness deletes raw transcripts older than it)')
-    .option('--schedule <mode>', 'nightly: register a Windows task that runs the full deposit and the recurrence refresh daily (a plain install on Windows does this too); off: remove it', (value: string) => {
-      if (value !== 'nightly' && value !== 'off') throw new InvalidArgumentError('it must be nightly or off.');
+    .option('--schedule <mode>', 'off: no background sweep or pool send from the session-end hook or from commands (telemetry has its own switch: oars telemetry off), and remove the task an earlier version registered; on: clear that choice; nightly is refused, because sends now ride the hook and commands', (value: string) => {
+      if (value !== 'nightly' && value !== 'off' && value !== 'on') throw new InvalidArgumentError('it must be off or on (nightly is no longer registered).');
       return value;
     })
     .action(async (_options: OptionValues, command: Command) => {
@@ -419,14 +421,14 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
           scope: scopeOf(options),
           file: text(options, 'file'),
           keepRetention: flag(options, 'keepRetention'),
-          schedule: schedule === 'nightly' || schedule === 'off' ? schedule : undefined,
+          schedule: schedule === 'nightly' || schedule === 'off' || schedule === 'on' ? schedule : undefined,
         }),
       );
     });
 
   hook
     .command('uninstall')
-    .description('remove only the hooks `install` wrote from a settings file (cleanupPeriodDays stays; `install --schedule off` removes the task)')
+    .description('remove only the hooks `install` wrote from a settings file (cleanupPeriodDays stays; it also removes the task an earlier version registered)')
     .option('--scope <scope>', 'user (the default), project, or file (needs --file; implied by --file)', scopeOption)
     .option('--file <path>', 'the settings file for --scope file')
     .action(async (_options: OptionValues, command: Command) => {
@@ -436,7 +438,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
 
   hook
     .command('status')
-    .description('what is installed in the user and project settings (and --file), and whether the nightly task is registered')
+    .description('what is installed in the user and project settings (and --file), and whether a task an earlier version registered is still there')
     .option('--file <path>', 'one more settings file to report')
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
@@ -499,6 +501,15 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
   const pool = program.command('pool').description('sign in to a pool server, deposit session skeletons (a closed list of fields, each value redacted first) and, after a yes to the raw prompt, redacted raw copies, and fetch signed reads; local capture, recall, and reads need none of it');
   const serverOption = '--server <url>';
   const serverHelp = 'the pool server, https or plain http to localhost (default: OARS_POOL_URL, else https://pool.manyoars.com)';
+
+  pool
+    .command('logout')
+    .description('revoke the credential held for this pool and remove it here; if the pool cannot be reached the local entry is still removed')
+    .option(serverOption, serverHelp)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await poolLogout(deps, { server: text(options, 'server') }));
+    });
 
   pool
     .command('login')
@@ -626,11 +637,16 @@ const execute = async (argv: string[], deps: RunDeps, observed: Observed): Promi
   }
 };
 
+/** `sessions hook uninstall` is the first step of removing the store, so it must not start a sweep that would recreate what the person is about to delete. */
+const isHookUninstall = (observed: Observed): boolean => observed.path.join(' ') === 'sessions hook uninstall';
+
 /** Runs one invocation (`argv` without the node and script entries) and returns the exit code. Telemetry records it afterward and cannot change it. */
 export const run = async (argv: string[], deps: RunDeps): Promise<ExitCode> => {
   const observed: Observed = { path: [], flags: [] };
   const startedAt = deps.now();
   const exit = await execute(argv, deps, observed);
   finishTelemetry(deps, argv, observed, startedAt, exit);
+  // Never from a gate hook (it runs before every tool call) or from `hook uninstall`; it cannot change the exit code or what the command printed.
+  if (deps.catchUp !== undefined && !isHook(argv, observed) && !isHookUninstall(observed)) await Promise.resolve().then(deps.catchUp).catch(() => undefined);
   return exit;
 };

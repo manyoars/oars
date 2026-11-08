@@ -38,7 +38,7 @@ const fetching = (id: string, host: string): unknown => {
 const fetched = async (token: string): Promise<{ bundle: Bundle; text: string }> => {
   const { status, json } = await pool.get(`/bundle/claude-code/${VERSION}/${VOCAB_VERSION}`, token);
   expect(status).toBe(200);
-  const verified = await verifyBundle(json, pool.signingKey(), 'claude-code', VERSION);
+  const verified = await verifyBundle(json, pool.pinned(), 'claude-code', VERSION);
   if (!verified.ok) throw new Error(verified.reason);
   return { bundle: verified.bundle, text: JSON.stringify(json) };
 };
@@ -95,7 +95,7 @@ describe('differencing a total against the named values', () => {
       // One account alone runs a long-tail program on the same day: five accounts hold the shape, and one holds the name.
       await post('00000000000003e8', tokens[0] ?? '', LONG_TAIL);
       const { json } = await fresh.get(`/bundle/claude-code/${VERSION}/${VOCAB_VERSION}`, tokens[0]);
-      const verified = await verifyBundle(json, fresh.signingKey(), 'claude-code', VERSION);
+      const verified = await verifyBundle(json, fresh.pinned(), 'claude-code', VERSION);
       if (!verified.ok) throw new Error(verified.reason);
       const { cells, motifs } = verified.bundle;
       expect(JSON.stringify(verified.bundle)).not.toContain(LONG_TAIL);
