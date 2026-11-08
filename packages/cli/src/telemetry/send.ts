@@ -1,4 +1,4 @@
-// The sender: the only code that sends telemetry. It runs from the nightly task, and at most once a day from an interactive command as a detached process; never on a hook path, and
+// The sender: the only code that sends telemetry. It runs from the detached sender (hook-bin.js nightly), and at most once a day from an interactive command as a detached process; never on a hook path, and
 // nothing waits for it. Before any byte leaves it calls `telemetrySendAllowed` (telemetry on, notice shown) and sends to the pool server in `OARS_POOL_URL`, else the Many Oars pool, the same default `oars pool`
 // reads and with the same rules (https, or http to this machine).
 //

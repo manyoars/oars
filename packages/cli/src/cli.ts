@@ -396,8 +396,8 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .option('--scope <scope>', 'user (~/.claude/settings.json; the default), project (./.claude/settings.json), or file (needs --file; implied by --file)', scopeOption)
     .option('--file <path>', 'the settings file for --scope file')
     .option('--keep-retention', 'leave cleanupPeriodDays as it is (the harness deletes raw transcripts older than it)')
-    .option('--schedule <mode>', 'off: kept so older scripts still run (it only removes the task an earlier version registered); nightly is refused, because sends now ride the hook and commands', (value: string) => {
-      if (value !== 'nightly' && value !== 'off') throw new InvalidArgumentError('it must be nightly or off.');
+    .option('--schedule <mode>', 'off: no background sweep or send from the session-end hook or from commands, and remove the task an earlier version registered; on: clear that choice; nightly is refused, because sends now ride the hook and commands', (value: string) => {
+      if (value !== 'nightly' && value !== 'off' && value !== 'on') throw new InvalidArgumentError('it must be off or on (nightly is no longer registered).');
       return value;
     })
     .action(async (_options: OptionValues, command: Command) => {
@@ -410,7 +410,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
           scope: scopeOf(options),
           file: text(options, 'file'),
           keepRetention: flag(options, 'keepRetention'),
-          schedule: schedule === 'nightly' || schedule === 'off' ? schedule : undefined,
+          schedule: schedule === 'nightly' || schedule === 'off' || schedule === 'on' ? schedule : undefined,
         }),
       );
     });

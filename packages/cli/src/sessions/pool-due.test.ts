@@ -1,9 +1,10 @@
 // The due check with driven time: an injected clock and starter, a temp store, no sleeps. The store is a folder under the OS temp dir, asserted before any write.
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { catchUp, SEND_EVERY_MS, startSender, storeReady, type CatchUpDeps } from './pool-due.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterStop, catchUp, recordSchedule, scheduleOptedOut, SEND_EVERY_MS, startSender, storeReady, type CatchUpDeps } from './pool-due.js';
 
 const made: string[] = [];
 afterEach(() => {
@@ -127,17 +128,96 @@ describe('the store and the sender', () => {
   it('starts node on hook-bin nightly, detached, with no stdio, and lets go of it', () => {
     const calls: { command: string; args: string[]; options: object }[] = [];
     const events: string[] = [];
-    startSender('C:\\x\\hook-bin.js', (command, args, options) => {
+    startSender('C:\x\hook-bin.js', store(), () => T0, (command, args, options) => {
       calls.push({ command, args, options });
       return {
-        on: (event, listener) => {
-          events.push(event);
-          listener();
-        },
+        on: (event) => void events.push(event),
         unref: () => void events.push('unref'),
       };
     })();
-    expect(calls).toEqual([{ command: process.execPath, args: ['C:\\x\\hook-bin.js', 'nightly'], options: { detached: true, stdio: 'ignore', windowsHide: true } }]);
+    expect(calls).toEqual([{ command: process.execPath, args: ['C:\x\hook-bin.js', 'nightly'], options: { detached: true, stdio: 'ignore', windowsHide: true } }]);
     expect(events).toEqual(['error', 'unref']);
+  });
+
+  it('writes a child that cannot start to the log, masked, and the caller sees nothing', async () => {
+    const dir = store();
+    const child = new EventEmitter();
+    startSender('hook-bin.js', dir, () => T0, () => ({ on: (event, listener) => child.on(event, listener), unref: () => undefined }))();
+    child.emit('error', new Error('spawn EACCES
+second line'));
+    await vi.waitFor(() => {
+      expect(readFileSync(join(dir, 'pool-send.log'), 'utf8')).toBe(`${new Date(T0).toISOString()} spawn EACCES
+`);
+    });
+  });
+});
+
+describe('the recorded opt-out', () => {
+  it('holds the check back while schedule.json says off, and starts again once it is cleared', async () => {
+    const dir = store();
+    writeFileSync(join(dir, 'state.json'), '{}');
+    const { deps, started } = rig(dir);
+    deps.ready = storeReady(dir);
+    await recordSchedule(dir, 'off');
+    expect(readFileSync(join(dir, 'schedule.json'), 'utf8')).toBe('{"schedule":"off"}
+');
+    expect(await scheduleOptedOut(dir)).toBe(true);
+    expect(await catchUp(deps)).toBe('not-ready');
+    expect(started).toEqual([]);
+    await recordSchedule(dir, 'on');
+    expect(existsSync(join(dir, 'schedule.json'))).toBe(false);
+    expect(await scheduleOptedOut(dir)).toBe(false);
+    expect(await catchUp(deps)).toBe('started');
+    expect(started).toEqual([T0]);
+  });
+
+  it('counts a damaged or other record as no opt-out, and clearing it twice is harmless', async () => {
+    const dir = store();
+    writeFileSync(join(dir, 'schedule.json'), 'not json');
+    expect(await scheduleOptedOut(dir)).toBe(false);
+    writeFileSync(join(dir, 'schedule.json'), '{"schedule":"nightly"}');
+    expect(await scheduleOptedOut(dir)).toBe(false);
+    writeFileSync(join(dir, 'schedule.json'), '"off"');
+    expect(await scheduleOptedOut(dir)).toBe(false);
+    await recordSchedule(dir, 'on');
+    await recordSchedule(dir, 'on');
+  });
+
+  it('creates the store folder to record an opt-out in a store not yet made', async () => {
+    const dir = join(store(), 'later');
+    await recordSchedule(dir, 'off');
+    expect(await scheduleOptedOut(dir)).toBe(true);
+  });
+});
+
+describe('the session-end hook tail', () => {
+  it('returns started while the sender it started is still running (a child that never exits), and writes nothing to stdout', async () => {
+    const dir = store();
+    writeFileSync(join(dir, 'state.json'), '{}');
+    const wrote = vi.spyOn(process.stdout, 'write');
+    const calls: string[][] = [];
+    try {
+      const result = await afterStop(dir, 'hook-bin.js', () => T0, (_command, args) => {
+        calls.push(args);
+        return { on: () => undefined, unref: () => undefined };
+      });
+      expect(result).toBe('started');
+      expect(calls).toEqual([['hook-bin.js', 'nightly']]);
+      expect(wrote).not.toHaveBeenCalled();
+    } finally {
+      wrote.mockRestore();
+    }
+  });
+
+  it('starts nothing and writes nothing when the person opted out', async () => {
+    const dir = store();
+    writeFileSync(join(dir, 'state.json'), '{}');
+    await recordSchedule(dir, 'off');
+    const calls: string[][] = [];
+    expect(await afterStop(dir, 'hook-bin.js', () => T0, (_command, args) => {
+      calls.push(args);
+      return { on: () => undefined, unref: () => undefined };
+    })).toBe('not-ready');
+    expect(calls).toEqual([]);
   });
 });

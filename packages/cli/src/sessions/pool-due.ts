@@ -6,8 +6,14 @@
 import { spawn } from 'node:child_process';
 import { appendFile, mkdir, open, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { HelperSpawn } from '../gate/hook-fill.js';
 import { errorLine } from './steps.js';
+
+/** The part of `child_process.spawn` the sender start uses, so a test can hand in a child that never starts or one that fails to. */
+export type SenderSpawn = (
+  command: string,
+  args: string[],
+  options: { detached: true; stdio: 'ignore'; windowsHide: true },
+) => { on: (event: 'error', listener: (error: Error) => void) => unknown; unref: () => void };
 
 /** The debounce: a sweep is started at most once in this long. */
 export const SEND_EVERY_MS = 60 * 60 * 1000;
@@ -26,6 +32,36 @@ export interface CatchUpDeps {
 const MARK = 'pool-due.json';
 const LOG = 'pool-send.log';
 const CLAIM = /^pool-due\.(\d+)\.claim$/;
+/** Where `--schedule off` is remembered: a file of its own in the sessions store, because `state.json` is rewritten whole by every deposit. */
+const OPT_OUT = 'schedule.json';
+
+/** True once the person ran `oars sessions hook install --schedule off` and has not run `--schedule on` since. A record that cannot be read or parsed counts as no opt-out. */
+export const scheduleOptedOut = async (storeDir: string): Promise<boolean> => {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(join(storeDir, OPT_OUT), 'utf8'));
+    return typeof parsed === 'object' && parsed !== null && Reflect.get(parsed, 'schedule') === 'off';
+  } catch {
+    return false;
+  }
+};
+
+/** Records the choice of `--schedule`: `off` writes the opt-out; `on` clears it. */
+export const recordSchedule = async (storeDir: string, mode: 'on' | 'off'): Promise<void> => {
+  if (mode === 'on') {
+    await rm(join(storeDir, OPT_OUT), { force: true });
+    return;
+  }
+  await mkdir(storeDir, { recursive: true });
+  await writeFile(join(storeDir, OPT_OUT), `${JSON.stringify({ schedule: 'off' })}
+`, { encoding: 'utf8', mode: 0o600 });
+};
+
+/** One masked line in `pool-send.log`, the place a failure of the trigger or the sender goes. Never throws. */
+const logFailure = async (storeDir: string, at: number, error: unknown): Promise<void> => {
+  const line = await errorLine(storeDir, error).catch(() => 'unknown error');
+  await mkdir(storeDir, { recursive: true }).then(() => appendFile(join(storeDir, LOG), `${new Date(at).toISOString()} ${line}
+`, 'utf8')).catch(() => undefined);
+};
 
 /** When the last sender was started; a missing, unreadable, or future mark is no mark. */
 const lastStart = async (storeDir: string, now: number): Promise<number | undefined> => {
@@ -56,7 +92,10 @@ const claim = async (storeDir: string, window: number): Promise<boolean> => {
   return true;
 };
 
-/** Never throws. */
+/**
+ * Never throws. Bound: the claim is per window and the mark is written after it, so two callers on either side of an hour boundary can both start a sender in the worst case; the send lock
+ * (`pool-send-lock.ts`) makes the second sender wait for the first, so nothing is posted twice.
+ */
 export const catchUp = async (deps: CatchUpDeps): Promise<CatchUpResult> => {
   try {
     if (!(await deps.ready())) return 'not-ready';
@@ -76,15 +115,23 @@ export const catchUp = async (deps: CatchUpDeps): Promise<CatchUpResult> => {
 };
 
 /** What the hook and the command line call: the check on the real store, clock, and spawner, with the sender being `hook-bin.js nightly`. Never throws, and returns once the sender is started. */
-export const catchUpOnStore = (storeDir: string, hookBin: string, now: () => number = Date.now, start: HelperSpawn = spawn): Promise<CatchUpResult> =>
-  catchUp({ storeDir, now, ready: storeReady(storeDir), start: startSender(hookBin, start) });
+export const catchUpOnStore = (storeDir: string, hookBin: string, now: () => number = Date.now, start: SenderSpawn = spawn): Promise<CatchUpResult> =>
+  catchUp({ storeDir, now, ready: storeReady(storeDir), start: startSender(hookBin, storeDir, now, start) });
 
-/** The store counts once `state.json` is there. */
-export const storeReady = (storeDir: string): (() => Promise<boolean>) => () => stat(join(storeDir, 'state.json')).then(() => true, () => false);
+/** What the session-end hook calls after its deposit: the same check, returning once the sender is started and writing nothing to stdout (the hook's output is its deposit's, unchanged). */
+export const afterStop = (storeDir: string, hookBin: string, now: () => number = Date.now, start: SenderSpawn = spawn): Promise<CatchUpResult> => catchUpOnStore(storeDir, hookBin, now, start);
 
-/** Starts `node <hook-bin> nightly` detached with no stdio and never waits for it, as telemetry's sender and the gate's helper are started. */
-export const startSender = (hookBin: string, start: HelperSpawn = spawn): (() => void) => () => {
+/** The store counts once `state.json` is there and the person has not opted out with `--schedule off`. */
+export const storeReady = (storeDir: string): (() => Promise<boolean>) => async () => (await stat(join(storeDir, 'state.json')).then(() => true, () => false)) && !(await scheduleOptedOut(storeDir));
+
+/**
+ * Starts `node <hook-bin> nightly` detached with no stdio and never waits for it, as telemetry's sender and the gate's helper are started. The sender inherits this process's environment. A child that cannot
+ * start (its `error` event) is written to `pool-send.log` like any other failure, and the next trigger tries again.
+ */
+export const startSender = (hookBin: string, storeDir: string, now: () => number, start: SenderSpawn = spawn): (() => void) => () => {
   const child = start(process.execPath, [hookBin, 'nightly'], { detached: true, stdio: 'ignore', windowsHide: true });
-  child.on('error', () => undefined);
+  child.on('error', (error) => {
+    void logFailure(storeDir, now(), error);
+  });
   child.unref();
 };

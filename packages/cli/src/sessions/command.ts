@@ -20,6 +20,7 @@ import { MISS_TEXT } from './recall-render.js';
 import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, inRepository, readIndex, type ContextOptions } from './hook-index.js';
 import { hookStatus, installHooks, removeSchedule, SCHEDULE_REFUSED, scheduleStatus, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
+import { recordSchedule } from './pool-due.js';
 import { serve } from './mcp.js';
 import { refreshPool, servedPool } from './pool.js';
 import { recallPool } from './recall-bundle.js';
@@ -444,13 +445,17 @@ export interface HookTarget {
 /** `--scope`, else `file` when `--file` names one, else the user settings. */
 const hookScope = (options: HookTarget): Scope => options.scope ?? (options.file === undefined ? 'user' : 'file');
 
-export const sessionsHookInstall = async (deps: SessionsDeps, options: HookTarget & { keepRetention: boolean; schedule: 'nightly' | 'off' | undefined }): Promise<Outcome> => {
+/** What `--schedule off` and `--schedule on` say: the recorded choice about the background sweep and send that the session-end hook and every command start. */
+const SENDS_OFF = 'Background sweeps and sends are off, as you chose with --schedule off. Turn them back on with: oars sessions hook install --schedule on';
+const SENDS_ON = 'Background sweeps and sends are on: a due sweep and send starts from the session-end hook and from any oars command, at most about hourly.';
+
+export const sessionsHookInstall = async (deps: SessionsDeps, options: HookTarget & { keepRetention: boolean; schedule: 'nightly' | 'off' | 'on' | undefined }): Promise<Outcome> => {
   const runtime = installOf(deps);
   // `--schedule nightly` asked for the task this version no longer registers: refused before anything is written.
   if (options.schedule === 'nightly') throw new CliError(SCHEDULE_REFUSED, ExitCode.USAGE, 'usage');
   const lines: string[] = [];
-  const document: { ok: true; install?: object; schedule?: string } = { ok: true };
-  // `--schedule off` alone (kept so older scripts still run) touches no settings file; it only removes the task.
+  const document: { ok: true; install?: object; schedule?: string; sends?: 'on' | 'off' } = { ok: true };
+  // `--schedule off` or `on` alone touches no settings file; it removes the old task and records the choice.
   if (options.schedule === undefined || options.scope !== undefined || options.file !== undefined) {
     const file = settingsPath(runtime, hookScope(options), options.file);
     const result = await installHooks(runtime, file, options.keepRetention);
@@ -462,7 +467,16 @@ export const sessionsHookInstall = async (deps: SessionsDeps, options: HookTarge
     document.schedule = removed;
     lines.push(removed);
   }
-  return { document, text: lines.join('\n') };
+  if (options.schedule !== undefined) {
+    const storeDir = deps.sessions?.storeDir;
+    if (storeDir !== undefined) await recordSchedule(storeDir, options.schedule);
+    document.sends = options.schedule;
+    // An explicit `off` that found no task still says why nothing was removed, so the output is never empty.
+    if (options.schedule === 'off' && removed === undefined) lines.push(`No scheduled task to remove${runtime.platform === 'win32' ? '' : ' (only Windows ever had one)'}.`);
+    lines.push(options.schedule === 'off' ? SENDS_OFF : SENDS_ON);
+  }
+  return { document, text: lines.join('
+') };
 };
 
 export const sessionsHookUninstall = async (deps: SessionsDeps, options: HookTarget): Promise<Outcome> => {

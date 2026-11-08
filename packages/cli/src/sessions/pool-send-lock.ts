@@ -1,4 +1,4 @@
-// One sender at a time per outbox (t884): the nightly task and `deposit --send` both take this lock, so a batch is never posted twice by two runs that overlap. The lock is a file created
+// One sender at a time per outbox (t884): the detached sender (hook-bin.js nightly) and `deposit --send` both take this lock, so a batch is never posted twice by two runs that overlap. The lock is a file created
 // with `wx` beside `sent.log`, so it holds across processes as well as inside one. A run that finds it held waits; a lock older than `staleMs` belongs to a run that died, and is taken over by one waiter only, under a guard file. The holder touches the file while it runs, so a long send (a first night of raw parts) is never mistaken for a dead run, and it removes the file only if the file still names its own run.
 import { randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, rm, stat, utimes, type FileHandle } from 'node:fs/promises';

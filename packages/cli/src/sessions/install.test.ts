@@ -405,6 +405,7 @@ const windowsWith = (dir: string, present: boolean, deleteCode = 0): InstallRunt
 
 describe('the task an earlier version registered', () => {
   const plain = { scope: 'file' as const, keepRetention: false, schedule: undefined };
+  const alone = { scope: undefined, file: undefined, keepRetention: false };
   const verbs = (): string[] => calls.map((args) => args[0] ?? '');
 
   it('is removed and reported when it is there', async () => {
@@ -496,6 +497,34 @@ describe('the task an earlier version registered', () => {
     expect(SCHEDULE_REFUSED).toContain('sends now ride the session-end hook and any oars command');
     expect(calls).toEqual([]);
     expect(existsSync(file)).toBe(false);
+  });
+
+  it('--schedule off records the opt-out and says so; --schedule on clears it', async () => {
+    const dir = scratch();
+    const store = join(dir, 'sessions');
+    const deps = { sessions: { storeDir: store, projectsRoot: join(dir, 'projects') }, install: runtimeIn(dir, 0, 'linux'), now: () => 0 };
+    const off = await sessionsHookInstall(deps, { ...alone, schedule: 'off' });
+    expect(readFileSync(join(store, 'schedule.json'), 'utf8')).toBe('{"schedule":"off"}
+');
+    expect(off.document).toMatchObject({ ok: true, sends: 'off' });
+    expect(off.text).toContain('Background sweeps and sends are off');
+    expect(off.text).toContain('--schedule on');
+    const on = await sessionsHookInstall(deps, { ...alone, schedule: 'on' });
+    expect(existsSync(join(store, 'schedule.json'))).toBe(false);
+    expect(on.document).toMatchObject({ ok: true, sends: 'on' });
+    expect(on.text).toContain('Background sweeps and sends are on');
+    expect(on.text).not.toContain('No scheduled task');
+  });
+
+  it('--schedule off on Linux or macOS says there is no task to remove, and on Windows with none says the same without the platform note', async () => {
+    const dir = scratch();
+    const deps = { sessions: undefined, install: runtimeIn(dir, 0, 'linux'), now: () => 0 };
+    const linux = await sessionsHookInstall(deps, { ...alone, schedule: 'off' });
+    expect(linux.text.split('
+')[0]).toBe('No scheduled task to remove (only Windows ever had one).');
+    const windows = await sessionsHookInstall({ ...deps, install: windowsWith(dir, false) }, { ...alone, schedule: 'off' });
+    expect(windows.text.split('
+')[0]).toBe('No scheduled task to remove.');
   });
 
   it('--schedule off alone writes no settings file and only removes the task', async () => {
