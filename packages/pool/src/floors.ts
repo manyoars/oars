@@ -5,10 +5,11 @@
 import { FIRST_ORDER_FAMILIES, type FirstOrderFamily } from '../../cli/src/sessions/read.js';
 import type { BundleFloors } from '../../cli/src/sessions/pool-wire.js';
 import type { Cell } from '../../cli/src/sessions/cells.js';
-import type { CellClass } from './cell-class.js';
+import type { Motif } from '../../cli/src/sessions/motif.js';
+import { cellClassOf, type CellClass } from './cell-class.js';
 import { bound, type Env } from './http.js';
 
-/** What a deploy that sets nothing serves at. `wrangler.jsonc` states the same two numbers, and a test holds the two together. */
+/** What a deploy that sets nothing serves at. `wrangler.jsonc` states the same three numbers, and a test holds the two together. */
 export const DEFAULT_PUBLIC_FLOOR = 5;
 export const DEFAULT_CLEAR_FLOOR = 1;
 export const DEFAULT_DISCLOSURE_FLOOR = 2;
@@ -19,7 +20,7 @@ export interface Floors {
   /**
    * The floor a `clear` cell (`cell-class.ts`) is served at when a read is at the public floor: `CLEAR_FLOOR`, 1 by default, never above `public`. A cell below the floor shows how few accounts did a thing, and a clear cell names only
    * public vocabulary, so the most it shows is that one operator used a public tool. The gap below `public` carries to every read family's floor (`cellFloor`), and the bundle states both floors. A clear cell at floor 1 counts every
-   * account, standing or not (`stored.ts`), since a floor of 1 has no k to protect; above 1 it counts the accounts that have stood, as a thresholded cell does.
+   * account, standing or not (`bundleOf`), since a floor of 1 has no k to protect; at a floor above 1 (a family's, `cellFloor`) it counts the accounts that have stood, as a thresholded cell does.
    */
   clear: number;
   /** The read families that have a floor of their own. A family not named here is served at `public`. */
@@ -77,15 +78,15 @@ const familiesOf = (value: string | undefined, warn: (line: string) => void): Fl
 };
 
 /**
- * The clear floor: a whole number from 1 to the public floor. One above the public floor would put a clear cell behind a thresholded one, which is no class split, so it is refused like any bad binding: the default
- * (1, or the public floor if that is lower) and one line. `PUBLIC_FLOOR` is already 1 or more, so the default never fails the same test.
+ * The clear floor: a whole number from 1 to the public floor, 1 when unset. A binding that is set and bad (not a whole number, 0, or above the public floor, which would put a clear cell behind a thresholded one and be no class split) fails
+ * closed to the public floor, the strictest valid value, with one line: an operator who typed `6` or `5x` to be strict must not get the loosest floor. `PUBLIC_FLOOR` is already 1 or more, so the public floor never fails the same test.
  */
 const clearFloorOf = (value: string | undefined, publicFloor: number, warn: (line: string) => void): number => {
-  const fallback = Math.min(DEFAULT_CLEAR_FLOOR, publicFloor);
-  const found = floorBinding('CLEAR_FLOOR', value, fallback, warn);
+  if (bound(value) === undefined) return Math.min(DEFAULT_CLEAR_FLOOR, publicFloor);
+  const found = floorBinding('CLEAR_FLOOR', value, publicFloor, warn);
   if (found <= publicFloor) return found;
-  warn(`CLEAR_FLOOR is ${String(found)}, above the public floor of ${String(publicFloor)}: using ${String(fallback)}.`);
-  return fallback;
+  warn(`CLEAR_FLOOR is ${String(found)}, above the public floor of ${String(publicFloor)}: using ${String(publicFloor)}.`);
+  return publicFloor;
 };
 
 /** The floors the Worker's bindings state, with the default wherever a binding is unset or bad. `warn` gets one line per binding that is bad. */
@@ -99,6 +100,12 @@ export const floorFor = (floors: Floors, family: FirstOrderFamily): number => fl
 
 /** The floor a cell of this class is served at in a pool whose floor is `floor` (a family's, or the public floor): a thresholded cell at `floor`, a clear one at `floor` less the gap `floors.clear` sits below `floors.public`, and never under 1. No gap today. */
 export const cellFloor = (floors: Floors, floor: number, cellClass: CellClass): number => (cellClass === 'clear' ? Math.max(1, floor - (floors.public - floors.clear)) : floor);
+
+/**
+ * Whether a cell is counted over every account that holds it, standing or not, in a pool whose floor is `floor`: a `clear` cell whose own floor (`cellFloor`) is 1, since a floor of 1 has no k to protect and the standing filter (S13) would hold
+ * the first read back until an account has stood. At any floor above 1, and for a `thresholded` cell, it is the accounts that have stood. The class is read when the cell is served, so a vocabulary that moves reclassifies a cell without a recount.
+ */
+export const countsEvery = (floors: Floors, floor: number, cell: Cell, motif: Motif | undefined): boolean => cellFloor(floors, floor, 'clear') <= 1 && cellClassOf(cell, motif) === 'clear';
 
 /** The floors as the signed bundle states them, in the order of the families so the same bindings sign the same bytes. A family on the public floor is not listed. */
 export const wireFloors = (floors: Floors): BundleFloors => {

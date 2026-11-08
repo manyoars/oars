@@ -19,7 +19,7 @@ import type { Store } from '../../cli/src/sessions/store.js';
 import { cellClassOf } from './cell-class.js';
 import { booksOf } from './books.js';
 import { withheldOf } from './complement.js';
-import { cellFloor, clears, floorFor, wireFloors, type Floors } from './floors.js';
+import { cellFloor, clears, clustersOf, countsEvery, floorFor, wireFloors, type Floors } from './floors.js';
 import type { StoredPool } from './stored.js';
 
 /** What a bundle derives, by name: the names are hashed into its ETag, so a change to this list moves the tag of a bundle whose cells did not change. */
@@ -84,33 +84,52 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
   // Everything the bundle states, its version and its last day included, is that of the served cells: a sub-floor cell, or a served one held back (`withheldOf`), would otherwise move `asOf` and `weeksSinceLast`, which would show that it exists.
   const held = [...cells, ...environment];
   const motifOf = new Map(motifs.map((motif) => [motif.motifId, motif]));
-  const poolsAt = new Map<number, { served: Cell[]; pool: Pool }>();
-  const poolAt = (floor: number): { served: Cell[]; pool: Pool } => {
+  // A cell is held with both counts (`stored.every`) and counted where the floor is known: over every account when its own floor is 1 (`countsEvery`), over the accounts that have stood otherwise. One object per cell counted over every
+  // account, so the cells a pool serves are the same objects wherever they are chosen; `standing` maps one back to the cell as stored.
+  const standing = new Map<Cell, Cell>();
+  const everyCounted = new Map<Cell, Cell>();
+  const countedAt = (floor: number, cell: Cell): Cell => {
+    const any = stored.every?.get(cell);
+    if (any === undefined || !countsEvery(floors, floor, cell, motifOf.get(cell.motifId))) return cell;
+    const known = everyCounted.get(cell);
+    if (known !== undefined) return known;
+    const made: Cell = { ...cell, clusters: any };
+    everyCounted.set(cell, made);
+    standing.set(made, cell);
+    return made;
+  };
+  const poolsAt = new Map<number, { served: Cell[]; held: Cell[]; pool: Pool }>();
+  const poolAt = (floor: number): { served: Cell[]; held: Cell[]; pool: Pool } => {
     const known = poolsAt.get(floor);
     if (known !== undefined) return known;
     const floorOf = (cell: Cell): number => cellFloor(floors, floor, cellClassOf(cell, motifOf.get(cell.motifId)));
-    const withheld = withheldOf(held, motifs, floorOf);
+    const countedHeld = held.map((cell) => countedAt(floor, cell));
+    const withheld = withheldOf(countedHeld, motifs, { floorOf, standingOf: (cell) => clustersOf(standing.get(cell) ?? cell) });
     // A version-free counterpart would otherwise reveal the name withheld in this bucket.
     const counterpart = (cell: Cell): string => JSON.stringify([cell.motifId, cell.grain, cell.day, cell.exposed]);
-    const withheldBuckets = new Set(cells.filter((cell) => withheld.has(cell)).map(counterpart));
+    const withheldBuckets = new Set(cells.filter((cell) => withheld.has(countedAt(floor, cell))).map(counterpart));
     for (const cell of environment) {
-      if (withheldBuckets.has(counterpart(cell))) withheld.add(cell);
+      if (withheldBuckets.has(counterpart(cell))) withheld.add(countedAt(floor, cell));
     }
-    const served = held.filter((cell) => clears(cell, floorOf(cell)) && !withheld.has(cell));
+    const served = countedHeld.filter((cell) => clears(cell, floorOf(cell)) && !withheld.has(cell));
     const kept = new Set(served);
     // `cells` holds the version-free model cells of every version too, so the bucket's own are taken by its prefix: another version's failure on a later day must not move the day.
-    const own = poolOf({ cells: cells.filter((cell) => kept.has(cell) && cell.frameBucket.startsWith(prefix)), motifs }, []);
+    const own = poolOf({ cells: cells.map((cell) => countedAt(floor, cell)).filter((cell) => kept.has(cell) && cell.frameBucket.startsWith(prefix)), motifs }, []);
     const whole = poolOf({ cells: served, motifs }, []);
-    const made = { served, pool: { ...whole, lastDay: own.lastDay ?? whole.lastDay } };
+    const made = { served, held: countedHeld, pool: { ...whole, lastDay: own.lastDay ?? whole.lastDay } };
     poolsAt.set(floor, made);
     return made;
   };
   const reads = SERVED.map(({ family, derive }) => ({ family, read: readsOf(poolAt(floorFor(floors, family)).pool, derive, floorFor(floors, family)) }));
-  const { served, pool } = poolAt(floors.public);
+  const { served, held: heldAtPublic, pool } = poolAt(floors.public);
   // The cells a family on its own floor cites, beside those the public floor serves.
   const cited = new Set(reads.filter(({ family }) => floorFor(floors, family) !== floors.public).flatMap(({ read }) => read.flatMap(({ inputs }) => inputs)));
   const shown = new Set([...served, ...[...new Set(Object.values(floors.families))].flatMap((floor) => poolAt(floor).served).filter((cell) => cited.has(cellIdOf(cell)))]);
-  const bundled = held.filter((cell) => shown.has(cell));
+  // A cell shown counted over every account, by the public floor or by a family's, is shown as that.
+  const bundled = held.flatMap((cell) => {
+    const every = everyCounted.get(cell);
+    return every !== undefined && shown.has(every) ? [every] : shown.has(cell) ? [cell] : [];
+  });
   const named = new Set(bundled.map((cell) => cell.motifId));
   return {
     format: BUNDLE_FORMAT,
@@ -124,6 +143,6 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
     reads: reads.flatMap(({ read }) => read),
     strata: [...stored.strata].sort((a, b) => compare(a.dimension, b.dimension) || compare(a.value, b.value)),
     floors: wireFloors(floors),
-    books: booksOf({ held, served: new Set(served), panel: stored.panel, panelDay: stored.panelDay, lineage: { floor: floors.public, format: BUNDLE_FORMAT, vocabVersion: VOCAB_VERSION, asOf: { pool: pool.version, day: pool.lastDay } } }),
+    books: booksOf({ held: heldAtPublic, served: new Set(served), panel: stored.panel, panelDay: stored.panelDay, lineage: { floor: floors.public, format: BUNDLE_FORMAT, vocabVersion: VOCAB_VERSION, asOf: { pool: pool.version, day: pool.lastDay } } }),
   };
 };

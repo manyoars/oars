@@ -35,11 +35,11 @@ const servedPrograms = async (pool: TestPool, token: string): Promise<string[]> 
 
 describe('one fresh account', () => {
   const deposit = async (pool: TestPool): Promise<string> => {
-    // An account that has not stood: its first counting batch is today (`access.ts`). The long-tail name is on another week, so no shape total of the two shows it beside the clear name (`complement.ts`).
+    // An account that has not stood: its first counting batch is today (`access.ts`). Both names are on one week, so the week cells of their shape are one family (`complement.ts`; `complement-split.test.ts` holds the shape rule).
     const { token } = await pool.signIn('github', stubUser('9801'), { fresh: true });
     await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
     expect((await pool.post('/v1/deposits', sampleSkeleton('0000000000009801', undefined, '2026-11-02', 'claude-code', { program: 'git', sub: 'push' }), token)).status).toBe(201);
-    expect((await pool.post('/v1/deposits', sampleSkeleton('0000000000009802', undefined, '2026-10-26', 'claude-code', { program: 'acme-deploy', sub: 'ship' }), token)).status).toBe(201);
+    expect((await pool.post('/v1/deposits', sampleSkeleton('0000000000009802', undefined, '2026-11-02', 'claude-code', { program: 'acme-deploy', sub: 'ship' }), token)).status).toBe(201);
     return token;
   };
 

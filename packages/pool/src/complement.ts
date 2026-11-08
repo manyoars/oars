@@ -1,10 +1,16 @@
 // Complementary withholding. A whole and its parts count the same steps: a week cell and the day cells of its days, and a shape cell and the named cells that share its actions. Serving the whole beside
 // all of its served parts would show the parts that are not served by subtraction, a sub-floor day or name among them. So where a served whole has a sub-floor part, one more part is withheld, the
 // smallest served one: the whole less the served parts is then a sum over at least two parts, one of them at or above the floor, which no reader can split. The whole and the other parts stay, so a thin
-// pool still serves what it can. The environment cells (`ENVIRONMENT_CELLS`, `stored.ts`) keep their own rule, every part served or the total is not (each part against its own class's floor), and their counterparts are also dropped when a bucket cell is withheld (`bundleOf`).
+// pool still serves what it can. Where a sub-floor part is held to a higher floor than its whole (a long-tail name under a clear shape), the part withheld must be at or above that higher floor on the accounts that have stood, since a clear part is served at the lower clear floor; with none, the whole is withheld. The environment cells (`ENVIRONMENT_CELLS`, `stored.ts`) keep their own rule, every part served or the total is not (each part against its own class's floor), and their counterparts are also dropped when a bucket cell is withheld (`bundleOf`).
 import { weekStartOf, type Cell } from '../../cli/src/sessions/cells.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
 import { clears, clustersOf } from './floors.js';
+
+/** What `withheldOf` needs to know of a cell: the floor it is served at, and its count of the accounts that have stood (`clusters` as stored), which a cell served on a count of every account (`countsEvery`) does not carry. */
+export interface Floorplan {
+  floorOf: (cell: Cell) => number;
+  standingOf: (cell: Cell) => number;
+}
 
 interface Family {
   whole: Cell | null;
@@ -28,7 +34,7 @@ const familyOf = (families: Map<string, Family>, key: string): Family => {
  * The served cells to leave out of a bundle, given every held cell (so a sub-floor part is seen) and the floor each cell is held to: a `clear` cell's is lower than a `thresholded` one's (`cellFloor`), and a part is sub-floor against its own. A week cell is the whole of the day cells of its motif, frame, exposure, and week; a shape
  * cell is the whole of the named cells of its actions in the same frame, grain, day, and exposure. A cell can be a part of one family and the whole of another, so the rule repeats until it adds nothing.
  */
-export const withheldOf = (held: readonly Cell[], motifs: readonly Motif[], floorOf: (cell: Cell) => number): Set<Cell> => {
+export const withheldOf = (held: readonly Cell[], motifs: readonly Motif[], { floorOf, standingOf }: Floorplan): Set<Cell> => {
   const levels = new Map(motifs.map((motif) => [motif.motifId, motif]));
   const weeks = new Map<string, Family>();
   const shapes = new Map<string, Family>();
@@ -50,9 +56,13 @@ export const withheldOf = (held: readonly Cell[], motifs: readonly Motif[], floo
     for (const { whole, parts } of families) {
       if (whole === null || !clears(whole, floorOf(whole)) || withheld.has(whole)) continue;
       if (!parts.some((part) => !clears(part, floorOf(part))) || parts.some((part) => withheld.has(part))) continue;
-      const [next] = parts.filter((part) => clears(part, floorOf(part))).sort(smallest);
-      if (next === undefined) continue;
-      withheld.add(next);
+      // A sub-floor part held to a higher floor than its whole (a long-tail name under a clear shape, which carries no identity) is not hidden by withholding a part that is served only on the whole's lower floor: the part withheld in its place
+      // must itself be at or above the floor of that sub-floor part, on the accounts that have stood, or the whole less the served parts could be that name alone. With no such part, the whole is withheld.
+      const bar = Math.max(...parts.filter((part) => !clears(part, floorOf(part))).map(floorOf));
+      const guarded = bar > floorOf(whole);
+      const [next] = parts.filter((part) => clears(part, floorOf(part)) && (!guarded || standingOf(part) >= bar)).sort(smallest);
+      if (next === undefined && !guarded) continue;
+      withheld.add(next ?? whole);
       changed = true;
     }
   }

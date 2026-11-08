@@ -65,24 +65,25 @@ describe('CLEAR_FLOOR', () => {
   it('may equal a lowered public floor, and not pass it', () => {
     expect(parse({ PUBLIC_FLOOR: '3', CLEAR_FLOOR: '3' })).toMatchObject({ floors: { clear: 3, public: 3 }, lines: [] });
     const above = parse({ PUBLIC_FLOOR: '3', CLEAR_FLOOR: '4' });
-    expect(above.floors.clear).toBe(1);
+    expect(above.floors.clear).toBe(3);
     expect(above.lines).toHaveLength(1);
     expect(above.lines[0]).toContain('CLEAR_FLOOR');
   });
 
-  it('is refused above the public floor, with the default and one line', () => {
+  it('is refused above the public floor, which it falls back to, with one line', () => {
     const { floors, lines } = parse({ CLEAR_FLOOR: '6' });
-    expect(floors.clear).toBe(1);
-    expect(lines).toEqual(['CLEAR_FLOOR is 6, above the public floor of 5: using 1.']);
+    expect(floors.clear).toBe(5);
+    expect(lines).toEqual(['CLEAR_FLOOR is 6, above the public floor of 5: using 5.']);
   });
 
-  it.each(['0', '-1', 'abc', '1.5'])('is refused for %s, with the default and one line', (value) => {
+  it.each(['0', '-1', 'abc', '1.5', '5x'])('is refused for %s, falls back to the public floor and fails closed, with one line', (value) => {
     const { floors, lines } = parse({ CLEAR_FLOOR: value });
-    expect(floors.clear).toBe(1);
-    expect(lines).toHaveLength(1);
+    expect(floors.clear).toBe(5);
+    expect(lines).toEqual([expect.stringContaining('CLEAR_FLOOR')]);
   });
 
-  it('never exceeds a public floor of 1', () => {
+  it('is 1 when unset, whatever the public floor, and never exceeds a public floor of 1', () => {
+    expect(parse({ PUBLIC_FLOOR: '3' }).floors.clear).toBe(1);
     expect(parse({ PUBLIC_FLOOR: '1' }).floors.clear).toBe(1);
   });
 });
