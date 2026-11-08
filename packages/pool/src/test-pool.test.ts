@@ -1,5 +1,6 @@
 // The pool harness itself: its requests share a keep-alive undici Agent the pool owns, which is what keeps a full `vitest run` from leaving thousands of loopback sockets in TIME_WAIT.
 import { once } from 'node:events';
+import { connect } from 'node:net';
 import { createServer, type ServerResponse } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CoreHeaders, ProxyOps } from 'miniflare';
@@ -36,26 +37,64 @@ describe('the pool harness reuses its connections', () => {
     expect(pool.connects() - before, `connects=${String(pool.connects() - before)} peak=${String(pool.peak())}`).toBe(0);
   });
 
-  // workerd closes the connection when a Worker answers before the request body has all reached it (the 404 router never reads one). A body handed on as a stream goes out as a chunk and then, apart
-  // from it, the closing chunk; on a loaded box the Worker answers in between and closes a socket the next call is about to reuse: `read ECONNRESET` in raw-serves-nothing.test.ts. The stream here
-  // closes 40 ms after its chunk, which is that load made exact; the sender must put the whole body out with its headers, so no connection is lost and none is reset.
-  it('keeps its connection when a request body arrives late and the Worker answers without reading it', async () => {
-    await pool.get('/v1/covenant');
-    const before = pool.connects();
-    for (let at = 0; at < 10; at += 1) {
-      const body = new ReadableStream<Uint8Array>({
+  // The premise, on the real workerd: it closes the connection when a Worker answers before the request body has all reached it (the 404 router never reads one), and keeps it when the body came whole
+  // with the headers. A body handed on as a stream goes out as a chunk and then, apart from it, the closing chunk, so on a loaded box the Worker answers in between and closes a socket the next call is
+  // about to reuse: `read ECONNRESET` in raw-serves-nothing.test.ts. The chunked request here holds its closing chunk back for good, which is that load made exact.
+  it('shows workerd closing a connection it answered before the body arrived, and keeping one whose body came whole', async () => {
+    const port = Number(new URL(await pool.url()).port);
+    const crlf = String.fromCharCode(13, 10);
+    /** Sends `lines` as one request on a new socket and says whether the socket was closed by workerd, or still open when the case ended it after 500 ms. */
+    const outcomeOf = (lines: string[]): Promise<string> =>
+      new Promise((resolve) => {
+        const socket = connect(port, '127.0.0.1');
+        let answered = false;
+        let ended = false;
+        socket.on('data', () => {
+          answered = true;
+        });
+        socket.on('close', () => {
+          resolve(`${answered ? 'answered' : 'unanswered'}, ${ended ? 'left open' : 'closed by workerd'}`);
+        });
+        socket.write(lines.join(crlf));
+        setTimeout(() => {
+          ended = true;
+          socket.destroy();
+        }, 500);
+      });
+    const head = ['POST /v1/raw/none HTTP/1.1', 'Host: pool.test'];
+    // The body is promised and never finishes: the Worker answers 404 without it.
+    expect(await outcomeOf([...head, 'transfer-encoding: chunked', '', '2', '{}', ''])).toBe('answered, closed by workerd');
+    expect(await outcomeOf([...head, 'content-length: 2', '', '{}'])).toBe('answered, left open');
+  });
+
+  // What the sender puts on the wire, read by a server that records it: a small string or byte body goes out with a content-length and no chunking, so its headers and body leave in one write. A stream
+  // stays chunked (the oversized-body cases hand one in on purpose), and so does a body over what one write carries.
+  it('sends a small body whole with a content-length, and leaves a stream or a large body chunked', async () => {
+    const requests: string[] = [];
+    const server = createServer((request, response) => {
+      requests.push(`${String(request.headers['content-length'])}/${String(request.headers['transfer-encoding'])}`);
+      request.resume();
+      response.end('ok');
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    const sender = keepAliveSender(() => Promise.resolve(new URL(`http://127.0.0.1:${String(typeof address === 'object' && address !== null ? address.port : 0)}`)));
+    try {
+      const stream = new ReadableStream<Uint8Array>({
         start: (controller) => {
           controller.enqueue(new TextEncoder().encode('{}'));
-          setTimeout(() => {
-            controller.close();
-          }, 40);
+          controller.close();
         },
       });
-      const answered = await pool.miniflare.dispatchFetch('http://pool.test/v1/raw/none', { method: 'POST', body, duplex: 'half' });
-      expect(answered.status).toBe(404);
-      await answered.text();
+      for (const body of ['{}', new TextEncoder().encode('{}')]) await (await sender.send('http://pool.test/', { method: 'POST', body })).text();
+      await (await sender.send('http://pool.test/', { method: 'POST', body: stream, duplex: 'half' })).text();
+      await (await sender.send('http://pool.test/', { method: 'POST', body: new Uint8Array(65 * 1024) })).text();
+      expect(requests).toEqual(['2/undefined', '2/undefined', 'undefined/chunked', 'undefined/chunked']);
+    } finally {
+      await sender.close();
+      server.close();
     }
-    expect(pool.connects() - before, `connects=${String(pool.connects() - before)}`).toBe(0);
   });
 
   // A release that Miniflare sends has no timing the test could drive, so the server here answers every call at once and holds each release until the case lets it go.
