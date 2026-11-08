@@ -32,11 +32,11 @@ const person = async (pool: TestPool, id: string): Promise<Person> => {
   const h = harness({ OARS_EXCLUSION_TERMS: terms, OARS_POOL_URL: await pool.url() });
   h.deps.sessions = staged.runtime;
   h.deps.now = settledClock;
-  // The person approves the code the command just printed, at the provider, while it waits to poll the pool.
-  h.deps.sleep = () => {
+  // The person approves the code the command just printed, at the provider, while it waits to poll the pool. The wait is stubbed, so the interval the pool holds per handle is made to pass here, as the real wait would let it.
+  h.deps.sleep = async () => {
     const issued = /USER-(\d+)/.exec(h.err.join(''))?.[1];
     if (issued !== undefined) pool.stub.approve(`device-${issued}`, stubUser(id));
-    return Promise.resolve();
+    await (await pool.db()).prepare('UPDATE login_polls SET next_at = 0').run();
   };
   await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
   const cli = (...args: string[]): Promise<ExitCode> => run(['--json', 'pool', ...args], h.deps);
