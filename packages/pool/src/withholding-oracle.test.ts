@@ -483,12 +483,15 @@ describe('the withholding oracle', () => {
 
   // `arg/none` is a part of the `keys` family (`complement.ts`, the `facet` rule), and the sum is inexact for two calls: one whose keys are all null sends a key and no value, so it is in `keys/query` and in `arg/none`, and one
   // with only an off-list key sends neither a public key nor a null, so it is in no `keys` cell. Each is held here beside keyed and keyless calls, and the oracle says whether the inexact sum ever serves what it recovers.
+  // The null call is itself `arg/none` (`argClassOf`), so its count is chosen to keep `arg/none` under the floor: 2 keyless + 2 null is 4 accounts, where 3 would make 5, a cell the oracle skips, and the case could not fail on
+  // a leak. The off-list call has a text value, so it is `arg/text`, and `arg/none` stays the 2 keyless calls.
   it.each([
-    ['a call whose only key is null', { query: null }],
-    ['a call with only an off-list key', { not_a_public_key: 'x' }],
-  ])('serves nothing that gives back arg/none beside %s', (_, odd) => {
-    const accounts = [...accountsOf(10, () => atomOf(call('WebSearch', { query: 'q' }))), ...accountsOf(2, () => atomOf(call('WebSearch', {}))), ...accountsOf(3, () => atomOf(call('WebSearch', odd)))];
+    ['a call whose only key is null', { query: null }, 2],
+    ['a call with only an off-list key', { not_a_public_key: 'x' }, 3],
+  ])('serves nothing that gives back arg/none beside %s', (_, odd, count) => {
+    const accounts = [...accountsOf(10, () => atomOf(call('WebSearch', { query: 'q' }))), ...accountsOf(2, () => atomOf(call('WebSearch', {}))), ...accountsOf(count, () => atomOf(call('WebSearch', odd)))];
     expect(servedOf(accounts)).toBeGreaterThan(0);
+    expect(heldOf(accounts).cells.some(({ clusters }) => clusters < FLOOR)).toBe(true);
     expect(leaksOf(accounts)).toEqual([]);
   });
 
