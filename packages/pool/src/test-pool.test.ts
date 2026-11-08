@@ -4,6 +4,39 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startPool, workerError, type TestPool } from './test-pool.js';
 
 // This file reads connect events on the real loopback transport, which is what it tests.
+// A connection serves one request at a time, so what keep-alive bounds is the connections opened against the most requests in flight at once, not a fixed number: Miniflare releases the
+// handles `getBindings` returns in a batched DELETE it sends 100 ms after a garbage collection, and that request can overlap the next call the test makes and need a connection of its
+// own (1 to 5 connects on a loaded CI runner). Without the keep-alive sender every request resets its connection: one connect per request, far above any overlap.
+const watchConnections = (): { connects: () => number; peak: () => number; stop: () => void } => {
+  const open = new Set<unknown>();
+  let connects = 0;
+  let peak = 0;
+  const connected = (): void => {
+    connects += 1;
+  };
+  const created = (message: unknown): void => {
+    open.add((message as { request: unknown }).request);
+    peak = Math.max(peak, open.size);
+  };
+  const finished = (message: unknown): void => {
+    open.delete((message as { request: unknown }).request);
+  };
+  subscribe('undici:client:connected', connected);
+  subscribe('undici:request:create', created);
+  subscribe('undici:request:trailers', finished);
+  subscribe('undici:request:error', finished);
+  return {
+    connects: () => connects,
+    peak: () => peak,
+    stop: () => {
+      unsubscribe('undici:client:connected', connected);
+      unsubscribe('undici:request:create', created);
+      unsubscribe('undici:request:trailers', finished);
+      unsubscribe('undici:request:error', finished);
+    },
+  };
+};
+
 describe('the pool harness reuses its connections', () => {
   let pool: TestPool;
   beforeAll(async () => {
@@ -11,40 +44,31 @@ describe('the pool harness reuses its connections', () => {
   });
   afterAll(() => pool.dispose());
 
-  it('opens at most two connections for twenty requests and twenty D1 calls', async () => {
-    let connects = 0;
-    const count = (): void => {
-      connects += 1;
-    };
-    subscribe('undici:client:connected', count);
+  it('opens no more connections than it has requests in flight at once, for twenty requests and twenty D1 calls', async () => {
+    const watch = watchConnections();
     try {
       for (let at = 0; at < 20; at += 1) {
         expect((await pool.post('/v1/deposits', '{}')).status).toBe(401);
         expect(await (await pool.db()).prepare('select 1 as one').first('one')).toBe(1);
       }
     } finally {
-      unsubscribe('undici:client:connected', count);
+      watch.stop();
     }
-    // Without the keep-alive sender Miniflare resets every connection: one connect per call, 40 here.
-    expect(connects).toBeLessThanOrEqual(2);
+    expect(watch.connects()).toBeLessThanOrEqual(watch.peak());
   });
 
   // A test process starved by a loaded box can sit idle longer than undici's default keep-alive timeout (4 s) between two calls, which closes the socket and costs a reconnect. The pause is
-  // made here, so the case does not wait for a load to make it.
+  // made here, so the case does not wait for a load to make it. An overlapping release request may need one connection of its own, which is why the bound is one below the peak.
   it('keeps its connection across a pause longer than the default keep-alive timeout', async () => {
     await pool.post('/v1/deposits', '{}');
-    let connects = 0;
-    const count = (): void => {
-      connects += 1;
-    };
-    subscribe('undici:client:connected', count);
+    const watch = watchConnections();
     try {
       await new Promise<void>((resolve) => setTimeout(resolve, 4_500));
       expect((await pool.post('/v1/deposits', '{}')).status).toBe(401);
     } finally {
-      unsubscribe('undici:client:connected', count);
+      watch.stop();
     }
-    expect(connects).toBe(0);
+    expect(watch.connects()).toBeLessThanOrEqual(watch.peak() - 1);
   });
 });
 
