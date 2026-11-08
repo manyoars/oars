@@ -194,9 +194,9 @@ export interface TestPool {
   post: (path: string, body: unknown, token?: string, headers?: { [name: string]: string }) => Promise<Answer>;
   get: (path: string, token?: string) => Promise<Answer>;
   raw: (path: string, token?: string, headers?: { [name: string]: string }) => Promise<RawAnswer>;
-  /** The sign-in the CLI performs through the pool's two login routes, with the provider's approval given at the stub between them. */
   /** Makes a handle's next poll due now, as if the provider's interval had passed: the pool holds the interval per handle, and a poll right after a start comes early. */
   due: (handle: string) => Promise<void>;
+  /** The sign-in the CLI performs through the pool's two login routes, with the provider's approval given at the stub between them. */
   signIn: (provider: string, user: StubUser) => Promise<{ token: string; account: string; signingKey: unknown }>;
   stub: StubProvider;
   signingKey: () => { kty: string; crv: string; x: string };

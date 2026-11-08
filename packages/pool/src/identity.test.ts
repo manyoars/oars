@@ -187,9 +187,14 @@ describe.each(FLOWS)('the $provider brokered sign-in', ({ provider, clientId, de
     Buffer.from(provider === 'github' ? 'google' : 'github').copy(swapped, nameAt);
     const later = Buffer.from(bytes);
     later.writeBigUInt64BE(later.readBigUInt64BE(nameAt + nameLength) + 3_600_000n, nameAt + nameLength);
+    // Each tampered handle gets a due row of its own, so the pool's record lookup would let it through: only the seal's tag can turn it away.
+    const db = await pool.db();
+    for (const tampered of [swapped.toString('base64url'), later.toString('base64url')]) {
+      await db.prepare('INSERT INTO login_polls (handle_hash, next_at, interval_sec, expires_at) VALUES (?, 0, 5, ?)').bind(createHash('sha256').update(tampered).digest('hex'), Date.now() + 600_000).run();
+    }
     const before = pool.stub.calls.length;
-    expect(await poll(swapped.toString('base64url'))).toMatchObject({ status: 401, json: { error: 'invalid_handle' } });
-    expect(await poll(later.toString('base64url'))).toMatchObject({ status: 401, json: { error: 'invalid_handle' } });
+    expect(await poll(swapped.toString('base64url'))).toMatchObject({ status: 401, json: { error: 'invalid_handle', message: expect.stringContaining('did not issue') } });
+    expect(await poll(later.toString('base64url'))).toMatchObject({ status: 401, json: { error: 'invalid_handle', message: expect.stringContaining('did not issue') } });
     expect(pool.stub.calls.length).toBe(before);
     // The handle itself is untouched and still signs in.
     expect(await poll(handle)).toMatchObject({ status: 200, json: { status: 'authorized' } });
