@@ -244,7 +244,7 @@ describe.each(FLOWS)('the $provider brokered sign-in', ({ provider, clientId, de
     pool.stub.approve(device, stubUser('403'));
     pool.stub.statused.set(userUrl, status);
     const db = await pool.db();
-    const before = (await db.prepare('SELECT COUNT(*) AS n FROM tokens').first('n')) as number;
+    const before = Number(await db.prepare('SELECT COUNT(*) AS n FROM tokens').first('n'));
     try {
       expect(await poll(handle)).toMatchObject({ status: 502, json: { error: 'provider_error' } });
     } finally {
