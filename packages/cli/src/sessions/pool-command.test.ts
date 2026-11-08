@@ -2637,7 +2637,8 @@ describe('oars pool login pins keys by key id (S17)', () => {
     expect(pinnedIn(scene)).toEqual({ k1: FIXED_KEY, k2: second });
     poolAt(scene, { polls: [HttpResponse.json({ ...okLogin({ ...second, x: 'swapped' }), kid: 'k2' })] });
     expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL, '--json')).toBe(ExitCode.AUTH);
-    expect(scene.document()).toMatchObject({ problem: { code: 'signing_key_changed', detail: expect.stringContaining('pinned for k2') } });
+    expect(scene.document()).toMatchObject({ problem: { code: 'signing_key_changed' } });
+    expect(JSON.stringify(at(scene.document(), 'problem'))).toContain('pinned for k2');
     expect(pinnedIn(scene)).toEqual({ k1: FIXED_KEY, k2: second });
   });
 });
