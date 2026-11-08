@@ -292,3 +292,28 @@ describe('a request blob repeats what other lines hold', () => {
     expect(lines[1]).not.toContain('lamp routine');
   });
 });
+
+describe('a tool definition a request blob carries', () => {
+  const definition = { name: 'Lamp', description: 'Lights the blue lamp.', input_schema: { type: 'object', properties: { level: { type: 'string', description: 'How bright the blue lamp burns' } } } };
+  const blob = { type: 'api-request-blob', hash: 'b2', message: { role: 'user', content: [{ type: 'tool_reference', tool: { definition } }, { type: 'text', text: 'typed words' }] } };
+
+  it('replaces the descriptions the way the request shape does, and keeps the name and the schema keys', () => {
+    const out = run(blob);
+    expect(text(out)).not.toContain('lamp');
+    expect(at(out, 'message', 'content', 0, 'tool', 'definition', 'name')).toBe('Lamp');
+    expect(at(out, 'message', 'content', 0, 'tool', 'definition', 'description')).toMatch(/^\[injected tool-definition [0-9a-f]{12}\]$/);
+    expect(at(out, 'message', 'content', 0, 'tool', 'definition', 'input_schema', 'properties', 'level', 'description')).toMatch(/^\[injected tool-definition /);
+    expect(at(out, 'message', 'content', 0, 'tool', 'definition', 'input_schema', 'properties', 'level', 'type')).toBe('string');
+    expect(at(out, 'message', 'content', 1, 'text')).toBe('typed words');
+  });
+
+  it('gives the description the hash it has on the request shape', () => {
+    const shape = run({ type: 'api-request-shape', shape: { tools: [definition] } });
+    expect(at(run(blob), 'message', 'content', 0, 'tool', 'definition', 'description')).toBe(at(shape, 'shape', 'tools', 0, 'description'));
+  });
+
+  it('leaves a block with a tool that has no definition', () => {
+    const plain = { type: 'api-request-blob', message: { role: 'user', content: [{ type: 'tool_reference', tool: { name: 'Lamp' } }, { type: 'tool_reference', tool: 'Lamp' }] } };
+    expect(run(plain)).toBe(plain);
+  });
+});

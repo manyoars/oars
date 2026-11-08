@@ -60,8 +60,12 @@ const LEADING_REMINDERS = /^\s*(?:<system-reminder>[\s\S]*?<\/system-reminder>\s
 
 type TextRule = (text: string) => string;
 
+/** The descriptions of a tool, its schema's included, become blocks; its name and the schema's keys and types stay. */
+const toolDescriptions = (key: string) => (value: Json): Json =>
+  mapStrings(value, 'tool', (text, name) => (name === 'description' ? blocksIn(key, 'tool-definition')(text, name) : text));
+
 /** The text blocks of a message's content: `text` runs on the message's own text, `result` on the text of a tool result. */
-const mapContent = (content: Json | undefined, text: TextRule, result: TextRule): Json | undefined => {
+const mapContent = (content: Json | undefined, text: TextRule, result: TextRule, definition: (tool: Json) => Json): Json | undefined => {
   if (typeof content === 'string') return text(content);
   if (!Array.isArray(content)) return content;
   const items = content.map((block): Json => {
@@ -71,8 +75,14 @@ const mapContent = (content: Json | undefined, text: TextRule, result: TextRule)
       return next === block['text'] ? block : { ...block, text: next };
     }
     if (block['type'] === 'tool_result') {
-      const inner = mapContent(block['content'], result, result);
+      const inner = mapContent(block['content'], result, result, definition);
       return inner === block['content'] || inner === undefined ? block : { ...block, content: inner };
+    }
+    // A request blob also carries the loaded definition of one tool, the text its request shape holds as `shape.tools`.
+    const tool = block['tool'];
+    if (isObject(tool) && isObject(tool['definition'])) {
+      const next = definition(tool['definition']);
+      return next === tool['definition'] ? block : { ...block, tool: { ...tool, definition: next } };
     }
     return block;
   });
@@ -92,7 +102,7 @@ const messageRule = (key: string, position: Position, known: ReadonlySet<string>
   const repeated: TextRule = (text) => (known.has(normalize(text)) ? markerOf(key, 'meta', text) : leading(text));
   const anywhere: TextRule = (text) => text.replace(REMINDER, (block) => markerOf(key, 'system-reminder', block));
   return (message) => {
-    const content = mapContent(message['content'], position === 'meta' ? whole : position === 'blob' ? repeated : leading, anywhere);
+    const content = mapContent(message['content'], position === 'meta' ? whole : position === 'blob' ? repeated : leading, anywhere, toolDescriptions(key));
     return content === message['content'] || content === undefined ? message : { ...message, content };
   };
 };
@@ -189,8 +199,7 @@ export const injectedRule = (key: string, known: ReadonlySet<string> = new Set()
       case 'api-request-shape':
         return withField(line, 'shape', (shape) => {
           if (!isObject(shape)) return shape;
-          const described = (text: string, name: string): string => (name === 'description' ? blocksIn(key, 'tool-definition')(text, name) : text);
-          return withField(withField(shape, 'system', (system) => mapStrings(system, 'system', blocksIn(key, 'system-prompt'))), 'tools', (tools) => mapStrings(tools, 'tools', described));
+          return withField(withField(shape, 'system', (system) => mapStrings(system, 'system', blocksIn(key, 'system-prompt'))), 'tools', toolDescriptions(key));
         });
       case 'system':
         // The hook output a stop-hook summary carries: what a hook printed, its error text, and the command line it ran.
