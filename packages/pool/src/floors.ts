@@ -9,7 +9,7 @@ import type { Motif } from '../../cli/src/sessions/motif.js';
 import { cellClassOf, type CellClass } from './cell-class.js';
 import { bound, type Env } from './http.js';
 
-/** What a deploy that sets nothing serves at. `wrangler.jsonc` states the same three numbers, and a test holds the two together. */
+/** What a deploy that sets nothing serves at. `wrangler.jsonc` states the same three numbers, and a test holds the three together. */
 export const DEFAULT_PUBLIC_FLOOR = 5;
 export const DEFAULT_CLEAR_FLOOR = 1;
 export const DEFAULT_DISCLOSURE_FLOOR = 2;
@@ -98,7 +98,7 @@ export const floorsOf = (env: Pick<Env, 'PUBLIC_FLOOR' | 'DISCLOSURE_FLOOR' | 'C
 /** The floor a read family is served at. */
 export const floorFor = (floors: Floors, family: FirstOrderFamily): number => floors.families[family] ?? floors.public;
 
-/** The floor a cell of this class is served at in a pool whose floor is `floor` (a family's, or the public floor): a thresholded cell at `floor`, a clear one at `floor` less the gap `floors.clear` sits below `floors.public`, and never under 1. No gap today. */
+/** The floor a cell of this class is served at in a pool whose floor is `floor` (a family's, or the public floor): a thresholded cell at `floor`, a clear one at `floor` less the gap `floors.clear` sits below `floors.public`, and never under 1. */
 export const cellFloor = (floors: Floors, floor: number, cellClass: CellClass): number => (cellClass === 'clear' ? Math.max(1, floor - (floors.public - floors.clear)) : floor);
 
 /**

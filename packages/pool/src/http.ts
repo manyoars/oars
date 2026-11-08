@@ -58,7 +58,7 @@ export interface Env {
   PUBLIC_FLOOR?: string;
   /** How many clusters must hold a signature's hash before its text may be requested. A whole number of at least 1; unset, or anything else, is 2. */
   DISCLOSURE_FLOOR?: string;
-  /** How many clusters a `clear` cell (closed public vocabulary and client hashes only) needs to be served. A whole number from 1 to `PUBLIC_FLOOR`; unset, or anything else, is 1. */
+  /** How many clusters a `clear` cell (closed public vocabulary and client hashes only) needs to be served. 1 when unset; set to anything but a whole number from 1 to `PUBLIC_FLOOR`, the public floor, with one line logged (fails closed). */
   CLEAR_FLOOR?: string;
   /** Public floors for single read families, `live=3,tool-day=8`. A name that is not a served read family refuses the whole list. */
   PUBLIC_FLOOR_FAMILIES?: string;
