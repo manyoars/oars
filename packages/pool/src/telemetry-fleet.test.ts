@@ -200,6 +200,13 @@ describe('the fleet read, from the nightly rollup, on the Worker', () => {
     expect(asked.json).toEqual(plain.json);
   }, 60_000);
 
+  it('lets an anonymous read be cached for an hour and never lets a signed-in read be', async () => {
+    const plain = await pool.raw('/v1/telemetry/fleet');
+    const signedIn = await pool.raw('/v1/telemetry/fleet', 'a-token');
+    expect(plain.headers.get('cache-control')).toBe('public, max-age=3600');
+    expect(signedIn.headers.get('cache-control')).toBe('private, no-store');
+  }, 60_000);
+
   describe('the operator’s read', () => {
     const operatorGet = (token?: string): Promise<{ status: number; json: unknown }> => pool.get('/v1/telemetry/operator', token);
 
