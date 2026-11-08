@@ -17,7 +17,7 @@ import { appendRecall, readRecalls } from './recall-object.js';
 import { deriveConsequences, formatRecallCounts, recallCounts } from './recall-consequence.js';
 import { pull, pullRefusal, type PullInput } from './recall-reads.js';
 import { MISS_TEXT } from './recall-render.js';
-import { EMPTY_RECALL, emptyBooks, nothingFoundLines } from './empty-state.js';
+import { EMPTY_RECALL, emptyBooks, nothingFoundLines, savedListNote } from './empty-state.js';
 import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, inRepository, readIndex, type ContextOptions } from './hook-index.js';
 import { ensureSchedule, hookStatus, installHooks, recordSchedule, SCHEDULE_LEFT_OFF, scheduleOptedOut, scheduleStatus, setSchedule, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
@@ -32,7 +32,7 @@ import { FAMILIES } from './read.js';
 import { formatNotReadable, notReadable } from './read-readable.js';
 import { formatReads, isFamily, parseSlice, selectReads } from './read-rows.js';
 import { CAPTURE_VERSION, OLDEST_READABLE_CAPTURE, type StepRow } from './schema.js';
-import { deposit, frozenSessions, loadStore, readCalls, readRedactDomains, readSaved, readSkeletons, skippedFolders, slugOf, type SessionsRuntime, type SkippedScope, type Store } from './store.js';
+import { deposit, frozenSessions, loadStore, paths, readCalls, readRedactDomains, readSaved, readSkeletons, skippedFolders, slugOf, type SessionsRuntime, type SkippedScope, type Store } from './store.js';
 import { formatStepCounters, inputKey, newContext, readSteps, stampKey, runDeposit, runStep, stepCounters, stuckSteps, tryLog, type StuckStep } from './steps.js';
 import { formatSelfBaseline, selfBaseline as selfBaselineOf, type SelfBaselineResult } from './baseline.js';
 import { staleBatchesAnywhere } from './pool-outbox.js';
@@ -81,6 +81,8 @@ export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: stri
   const lines = [
     `Deposited ${String(result.sessions)} sessions and ${String(result.subagents)} subagent transcripts (${String(result.lines)} lines, ${String(result.badLines)} unparseable) as ${String(result.observations)} observations; ${String(result.unchanged)} files unchanged.`,
     `Read ${String(result.folders.length)} folders; skipped ${String(result.skippedFolders)} not on the allowlist.`,
+    // The list an earlier run saved decides what a plain deposit reads; the run says so instead of looking like "every source".
+    ...savedListNote(read, allow, paths(runtime.storeDir).state),
     ...Object.entries(result.sources).flatMap(([name, counts]) => [
       ...(counts.read === 0 ? [] : [`Read ${String(counts.read)} ${sourceLabel(name, table)} sessions.`]),
       ...counts.unreadable.map((reason) => `${sourceLabel(name, table)} store not read: ${reason}`),

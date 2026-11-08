@@ -25,3 +25,18 @@ export const nothingFoundLines = (result: DepositResult, runtime: SessionsRuntim
   ];
   return ['Found no sessions. Looked in:', ...places.map((place) => `  ${place}`), 'Run it after a coding-agent session has run on this machine, or see oars work first with `oars sessions try`.'];
 };
+
+/** Entries named in the note before it says "and N more". */
+const NOTE_ENTRIES = 5;
+
+/**
+ * One line when this run read from entries it was not given: they came from the list an earlier deposit saved (`state.json`), so a plain
+ * `oars sessions deposit` is not reading every source. `applied` is what the run reads, `given` what it was handed.
+ */
+export const savedListNote = (applied: readonly string[], given: readonly string[], file: string): string[] => {
+  const saved = applied.filter((entry) => !given.includes(entry));
+  if (saved.length === 0) return [];
+  const shown = saved.slice(0, NOTE_ENTRIES).join(', ');
+  const more = saved.length > NOTE_ENTRIES ? `, and ${String(saved.length - NOTE_ENTRIES)} more` : '';
+  return [`Used the --allow list saved by an earlier run (${shown}${more}), kept in ${file}. Name folders with --allow to change it.`];
+};

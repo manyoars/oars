@@ -4,8 +4,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
-import { EMPTY_RECALL, emptyBooks } from './empty-state.js';
+import { EMPTY_RECALL, emptyBooks, savedListNote } from './empty-state.js';
 import { MISS_TEXT } from './recall-render.js';
+import { paths } from './store.js';
 import { cleanup, stage } from './test-support.js';
 
 afterEach(() => {
@@ -76,5 +77,26 @@ describe('empty states', () => {
     out.length = 0;
     expect(await run(['sessions', 'books', '--by', 'pull'], deps)).toBe(ExitCode.OK);
     expect(out.join('')).toContain(emptyBooks('pulls'));
+  });
+
+  it('a plain deposit that applies a saved --allow list says so and names where it is saved; without a saved list it says nothing', async () => {
+    const staged = stage();
+    const h = harness();
+    h.deps.sessions = staged.runtime;
+    expect(await run(['sessions', 'deposit'], h.deps)).toBe(ExitCode.OK);
+    expect(h.out.join('')).not.toContain('saved by an earlier run');
+    h.out.length = 0;
+    expect(await run(['sessions', 'deposit', '--allow', 'proj'], h.deps)).toBe(ExitCode.OK);
+    expect(h.out.join('')).not.toContain('saved by an earlier run');
+    h.out.length = 0;
+    expect(await run(['sessions', 'deposit'], h.deps)).toBe(ExitCode.OK);
+    const text = h.out.join('');
+    expect(text).toContain(`Used the --allow list saved by an earlier run (proj), kept in ${paths(staged.storeDir).state}.`);
+    expect(text.indexOf('not on the allowlist.')).toBeLessThan(text.indexOf('saved by an earlier run'));
+  });
+
+  it('the saved-list note shortens a long list', () => {
+    const entries = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
+    expect(savedListNote(entries, ['a'], 'state.json')).toEqual(['Used the --allow list saved by an earlier run (b, c, d, e, f, and 1 more), kept in state.json. Name folders with --allow to change it.']);
   });
 });
