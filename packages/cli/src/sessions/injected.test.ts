@@ -221,3 +221,35 @@ describe('through the redactor', () => {
     expect(redactTranscript(`${loud}\n`).text).toMatch(MARK);
   });
 });
+
+describe('Claude Code hook summaries', () => {
+  it('replaces the hook output of a stop-hook summary and keeps its counts, level, and tool id', () => {
+    const line = {
+      type: 'system',
+      subtype: 'stop_hook_summary',
+      hookCount: 2,
+      level: 'suggestion',
+      toolUseID: 'toolu_1',
+      preventedContinuation: false,
+      hookInfos: [{ command: `run-the-lamp ${FILLER}`, durationMs: 12 }],
+      hookErrors: [`failed: ${FILLER}`],
+      hookAdditionalContext: [FILLER],
+    };
+    const out = run(line);
+    expect(text(out)).not.toContain('haiku');
+    expect(at(out, 'hookInfos', 0, 'command')).toMatch(/^\[injected hook-summary [0-9a-f]{12}\]$/);
+    expect(at(out, 'hookInfos', 0, 'durationMs')).toBe(12);
+    expect(at(out, 'hookErrors', 0)).toMatch(/^\[injected hook-summary /);
+    expect(at(out, 'hookAdditionalContext', 0)).toMatch(/^\[injected hook-summary /);
+    expect(out).toMatchObject({ type: 'system', subtype: 'stop_hook_summary', hookCount: 2, level: 'suggestion', toolUseID: 'toolu_1', preventedContinuation: false });
+  });
+
+  it('leaves a system line of another subtype, and a summary with no hook output', () => {
+    const duration = { type: 'system', subtype: 'turn_duration', durationMs: 5, hookErrors: [FILLER] };
+    expect(run(duration)).toBe(duration);
+    const quiet = { type: 'system', subtype: 'stop_hook_summary', hookCount: 0 };
+    expect(run(quiet)).toBe(quiet);
+    const bare = { type: 'system' };
+    expect(run(bare)).toBe(bare);
+  });
+});

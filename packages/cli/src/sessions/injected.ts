@@ -133,6 +133,8 @@ const codexMessage = (key: string, payload: JsonObject): JsonObject => {
 const codexFields = (key: string, payload: JsonObject): JsonObject =>
   CODEX_FIELDS.reduce((acc, name) => withField(acc, name, (value) => mapStrings(value, name, blocksIn(key, name.replaceAll('_', '-')))), payload);
 
+const HOOK_SUMMARY_FIELDS = ['hookAdditionalContext', 'hookErrors', 'hookInfos'] as const;
+
 /** The rule for one machine: every injected block of a decoded transcript line becomes `[injected <kind> <hash>]`, hashed under `key`. */
 export const injectedRule = (key: string): InjectedRule => {
   const userMessage = messageRule(key, false);
@@ -157,6 +159,11 @@ export const injectedRule = (key: string): InjectedRule => {
           const described = (text: string, name: string): string => (name === 'description' ? blocksIn(key, 'tool-definition')(text, name) : text);
           return withField(withField(shape, 'system', (system) => mapStrings(system, 'system', blocksIn(key, 'system-prompt'))), 'tools', (tools) => mapStrings(tools, 'tools', described));
         });
+      case 'system':
+        // The hook output a stop-hook summary carries: what a hook printed, its error text, and the command line it ran.
+        return line['subtype'] === 'stop_hook_summary'
+          ? HOOK_SUMMARY_FIELDS.reduce((acc, name) => withField(acc, name, (value) => mapStrings(value, name, blocksIn(key, 'hook-summary'))), line)
+          : line;
       case 'session_meta':
       case 'turn_context':
         return withField(line, 'payload', (payload) => (isObject(payload) ? codexFields(key, payload) : payload));
