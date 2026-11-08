@@ -254,12 +254,10 @@ describe('the public text states facts only', () => {
   it('the package metadata is findable: a short description, the site as homepage, and keywords', () => {
     expect(description.length).toBeLessThan(200);
     expect(manifest().homepage).toBe('https://manyoars.com/');
-    const keywords = manifest().keywords;
-    expect(keywords).toEqual(expect.any(Array));
-    // The lint rule bans assertions, so narrow with the guard the test just proved.
-    if (!Array.isArray(keywords)) throw new Error('keywords is not an array');
-    expect(keywords.length).toBeGreaterThanOrEqual(6);
-    expect(keywords.length).toBeLessThanOrEqual(10);
+    expect(manifest().keywords).toEqual(expect.any(Array));
+    const keywordCount = String(manifest().keywords).split(',').length;
+    expect(keywordCount).toBeGreaterThanOrEqual(6);
+    expect(keywordCount).toBeLessThanOrEqual(10);
   });
 
   it.each([['packages/cli/README.md', join(cliFolder, 'README.md')], ['README.md', join(root, 'README.md')]])('%s says raw/ is unredacted, what the harness sends, where <config> is, and that accounts are not open', (_name, file) => {
