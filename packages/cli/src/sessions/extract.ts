@@ -7,8 +7,8 @@ import { posix } from 'node:path';
 import { ACTION_TABLES, actionOf, shellOf, type ActionTable, type CanonicalAction } from './actions.js';
 import { exploreCount, strataOf } from './strata.js';
 import { closedFrame, frameIdOf, repoFilesFromIndex, repoSizeOf, stackOf, utcDay } from './frame.js';
-import { argClassOf, targetClassOf } from './call-shape.js';
-import { LITERAL, type RepoSize } from './public-vocabulary.js';
+import { argClassOf, argFeaturesOf, argValuesOf, changeKindOf, targetClassOf, type ComparedCall } from './call-shape.js';
+import { CLOSED_ARG_VALUES, LITERAL, type RepoSize } from './public-vocabulary.js';
 import { linkSteps } from './graph.js';
 import { callIdentity, shellIdentity, UNREAD_SHELL, type WordOfCommand } from './identity.js';
 import type { Redactor } from './redact.js';
@@ -1478,6 +1478,8 @@ export const captureSession = (input: ExtractInput): Capture => {
   const skeletonLines: SkeletonLine[] = [];
   const toolById = new Map<string | undefined, string>();
   const callById = new Map<string, { call: ToolObservation; at: number | undefined; plan: readonly PlannedCommit[] }>();
+  // The last call of each tool in each prompt, so the next one states what changed. Its raw input is held only while this transcript is read.
+  const lastCall = new Map<string, ComparedCall>();
   // Packages named so far in this file, by package and version, so a call's `first` mark is true once per version.
   const seenPackages = new Set<string>();
   // A Read of a manifest shows its names in the result, so the call waits here for it, by tool_use id.
@@ -1758,6 +1760,13 @@ export const captureSession = (input: ExtractInput): Capture => {
         // Who made the call, from its own line: the model is not the prompt's majority, and a line inside a skill's run names the skill (the first line after the run does not).
         const callModel = requested !== undefined && requested !== '' ? requested : realMessageModel;
         const callSkill = truthy(o.attributionSkill) ? String(o.attributionSkill) : undefined;
+        // Depth reads below the repository root, else the working folder, as the target's hash does; a relative value is taken from the working folder first.
+        const argFeatures = argFeaturesOf(native, toolInput, lineRoot ?? lineCwd, lineCwd);
+        const argValues = argValuesOf(native, toolInput, CLOSED_ARG_VALUES);
+        const compared: ComparedCall = { input: toolInput, target: aimed.target, features: argFeatures, values: argValues };
+        const lastKey = `${String(cur?.index ?? null)}\n${String(side)}\n${stored}`;
+        const before = lastCall.get(lastKey);
+        lastCall.set(lastKey, compared);
         const call: ToolObservation = {
           kind: 'tool',
           cv: CAPTURE_VERSION,
@@ -1776,6 +1785,9 @@ export const captureSession = (input: ExtractInput): Capture => {
           // The class reads the key the target is hashed on (relative to the repository or the cwd), never the absolute path: the folders above a repository say nothing about the file.
           targetClass: targetClassOf(aimed.key, aimed.base),
           argClass: argClassOf(toolInput),
+          argFeatures,
+          ...(argValues.length === 0 ? {} : { argValues }),
+          ...(before === undefined ? {} : { changeKind: changeKindOf(before, compared) }),
           durationMs: null,
           toolUseId: id ?? null,
           harnessVersion: version ?? null,

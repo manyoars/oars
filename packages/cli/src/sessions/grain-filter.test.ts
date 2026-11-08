@@ -1,7 +1,7 @@
 // Rule 6: weekly cells and day cells share one table. A read of days answers from day cells alone and a read of weeks from week cells alone, so a table holding both grains gives each read
 // the answer it gives holding only its own grain.
 import { describe, expect, it } from 'vitest';
-import type { Cell, Pool } from './cells.js';
+import { cellIdOf, type Cell, type Pool } from './cells.js';
 import { tools } from './order-fixture.js';
 import { error, frame, poolFrom, prompt, session, store, tool } from './pool-fixture.js';
 import { deriveFirstOrder } from './pool.js';
@@ -49,7 +49,7 @@ const shaped = (framed: boolean): Store => {
     sessions: rows.map(([id]) => session(id)),
     prompts: rows.map(([id, day]) => prompt(id, 0, { frame: frame({ day: framed ? day : null }) })),
     tools: rows.flatMap(([id, day]) =>
-      Array.from({ length: 20 }, (_, n) => tool(id, n, 'Read', { prompt: 0, keys: ['path'], status: n < 3 ? 'error' : 'ok', ts: `${day}T10:00:00.000Z` })),
+      Array.from({ length: 20 }, (_, n) => tool(id, n, 'Read', { prompt: 0, keys: ['file_path'], status: n < 3 ? 'error' : 'ok', ts: `${day}T10:00:00.000Z` })),
     ),
   });
 };
@@ -71,24 +71,27 @@ describe('a grain filter on every read', () => {
   it.each([
     ['live', deriveLive],
     ['tool-day', deriveToolDay],
-    ['call shape', deriveCallShape],
   ] as const)('answers the day read %s from day cells alone', (_name, derive) => {
     expect(answers(derive, both)).toEqual(answers(derive, days));
   });
 
-  it('answers call shape from day cells alone, with a read that cites them', () => {
+  it('answers call shape from week cells alone, citing the cells that count the shape by its key names', () => {
     const dated = shaped(true);
     const all = poolFrom(dated);
-    const dayCells = only(all, 'day');
     const shape = (pool: Pool) => deriveCallShape({ pool, store: dated });
     const [read] = shape(all);
     expect(read).toMatchObject({ family: 'fit', n: 9, value: { failed: 9, calls: 60 } });
-    expect(read?.inputs.length).toBeGreaterThan(0);
-    expect(shape(all)).toEqual(shape(dayCells));
-    expect(shape(only(all, 'week'))).toEqual([]);
+    const cited = (read?.inputs ?? []).map((id) => all.cells.find((cell) => cellIdOf(cell) === id));
+    expect(cited).toHaveLength(2);
+    for (const cell of cited) {
+      expect(cell?.grain).toBe('week');
+      expect(all.motifs.get(cell?.motifId ?? '')?.cls).toBe('shape:file.read/keys/file_path');
+    }
+    expect(shape(all)).toEqual(shape(only(all, 'week')));
+    expect(shape(only(all, 'day'))).toEqual([]);
   });
 
-  it('gives call shape nothing to cite when the frames of its failures have no day: a day cell exists for a known day only', () => {
+  it('gives call shape nothing to cite when the frames of its failures have no day: its shape cells are in no known week', () => {
     const undated = shaped(false);
     expect(fitReads(undated)).toHaveLength(1);
     expect(deriveCallShape({ pool: poolFrom(undated), store: undated })).toEqual([]);
@@ -105,6 +108,7 @@ describe('a grain filter on every read', () => {
 
   it.each([
     ['fit', deriveFit],
+    ['call shape', deriveCallShape],
     ['change', deriveChange],
     ['adoption', deriveAdoption],
     ['cost', deriveCost],

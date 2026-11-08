@@ -451,13 +451,13 @@ describe('the version-3 capture records (Item 1, on errors-a.jsonl)', () => {
     ]);
     const [ok, shellError, error] = capture.tools;
     // The fixture's assistant lines carry no cwd, so the target hashes the path as written (relative to the line's cwd when it has one).
-    expect(ok).toEqual({ ...base, steps: ok?.steps, n: 0, ts: '2026-05-28T20:26:49.000Z', tool: 'Read', status: 'ok', target: targetOf('Read', { file_path: '/work/app/src/main.ts' }, undefined, 'salt', redact).target, targetBase: 'cwd', targetClass: 'source', argClass: ['path'], keys: ['file_path'], durationMs: 5000, toolUseId: 't1', prompt: 0 });
+    expect(ok).toEqual({ ...base, steps: ok?.steps, n: 0, ts: '2026-05-28T20:26:49.000Z', tool: 'Read', status: 'ok', target: targetOf('Read', { file_path: '/work/app/src/main.ts' }, undefined, 'salt', redact).target, targetBase: 'cwd', targetClass: 'source', argClass: ['path'], argFeatures: [{ key: 'file_path', valueSize: '9-32', pathDepth: 'outside', extension: 'source', dirKind: 'other' }], keys: ['file_path'], durationMs: 5000, toolUseId: 't1', prompt: 0 });
     // A Bash result is an error by its exit code even when is_error is false.
     expect(shellError).toMatchObject({ tool: 'Bash', status: 'error', keys: ['command'], durationMs: 2000, toolUseId: 't2', prompt: 0 });
     expect(error).toMatchObject({ tool: 'Write', status: 'error', keys: ['content', 'file_path'], toolUseId: 't3', prompt: 0 });
     expect(capture.tools[4]?.keys).toEqual(['file_path', 'new_string', 'old_string']);
     expect(capture.tools[6]).toMatchObject({ toolUseId: 't7', prompt: 1 });
-    expect(capture.tools[7]).toEqual({ ...base, steps: capture.tools[7]?.steps, n: 7, ts: '2026-05-28T20:27:45.000Z', tool: 'Grep', status: 'none', target: targetOf('Grep', { path: 'src' }, undefined, 'salt', redact).target, targetBase: 'cwd', targetClass: 'other', argClass: ['path', 'pattern'], keys: ['path', 'pattern'], durationMs: null, toolUseId: 't9', prompt: 2 });
+    expect(capture.tools[7]).toEqual({ ...base, steps: capture.tools[7]?.steps, n: 7, ts: '2026-05-28T20:27:45.000Z', tool: 'Grep', status: 'none', target: targetOf('Grep', { path: 'src' }, undefined, 'salt', redact).target, targetBase: 'cwd', targetClass: 'other', argClass: ['path', 'pattern'], argFeatures: [{ key: 'path', valueSize: '1-8', pathDepth: '0', extension: 'none', dirKind: 'root' }, { key: 'pattern', valueSize: '1-8', patternFeatures: ['literal'] }], keys: ['path', 'pattern'], durationMs: null, toolUseId: 't9', prompt: 2 });
   });
 
   it('keeps each error line unnormalized, keyed by toolUseId, with the calls before it', () => {
