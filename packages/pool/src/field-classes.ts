@@ -1,4 +1,4 @@
-// The pool's class table: one row per field a format 3 batch carries, naming how the pool treats its value. `docs/pool.md`'s wire field register carries the same classes and `field-classes.test.ts` keeps the two equal.
+// The pool's class table: one row per field a format 3 or 4 batch carries, naming how the pool treats its value. `docs/pool.md`'s wire field register carries the same classes and `field-classes.test.ts` keeps the two equal.
 // A class changes by a deploy of this file, never by a client release: the client redacts and sends every other value as it is (`wireName` in `pool-wire.ts`).
 import { isPublicMcpTool, PUBLIC_INPUT_KEYS, PUBLIC_FLAGS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SKILLS, PUBLIC_SUBCOMMANDS, publicModel, publicVersion } from '../../cli/src/sessions/public-vocabulary.js';
 
@@ -28,8 +28,8 @@ export const FIELD_CLASSES: { readonly [field: string]: FieldRow } = {
   cls: { class: 'clear' },
   day: { class: 'clear' },
   deltaKind: { class: 'clear' },
-  dirKind: { class: 'clear' },
   deltas: { class: 'clear' },
+  dirKind: { class: 'clear' },
   durationMs: { class: 'clear' },
   edges: { class: 'clear' },
   editFollowed: { class: 'clear' },

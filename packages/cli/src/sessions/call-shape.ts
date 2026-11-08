@@ -128,10 +128,25 @@ const sizeOf = (value: unknown): ValueSize => {
 
 const depthOf = (folders: number): PathDepth => (folders <= 2 ? PATH_DEPTHS[folders] ?? '0' : folders <= 4 ? '3-4' : folders <= 8 ? '5-8' : 'over-8');
 
-/** A path value's folders and name below the working folder, or null for an absolute path outside it. Only the counts and classes below leave this function. */
-const partsBelow = (value: string, cwd: string | undefined): string[] | null => {
-  const path = value.replace(/\\/g, '/');
-  const base = cwd?.replace(/\\/g, '/').replace(/\/+$/, '');
+/** A path with its `.` and `..` parts resolved, so a path that climbs out of a folder reads as outside it. */
+const resolved = (path: string): string => {
+  const kept: string[] = [];
+  for (const part of path.split('/')) {
+    if (part === '..') kept.pop();
+    else if (part !== '' && part !== '.') kept.push(part);
+  }
+  return `${path.startsWith('/') ? '/' : ''}${kept.join('/')}`;
+};
+
+/**
+ * A path value's folders and name below the base folder, or null for an absolute path outside it. A relative value is taken from the cwd before it is measured, so a relative and an absolute path to one file read the same
+ * when the cwd is a folder inside the repository. Only the counts and classes below leave this function.
+ */
+const partsBelow = (value: string, root: string | undefined, cwd: string | undefined): string[] | null => {
+  const base = root?.replace(/\\/g, '/').replace(/\/+$/, '');
+  const given = value.replace(/\\/g, '/');
+  const from = cwd?.replace(/\\/g, '/').replace(/\/+$/, '');
+  const path = ABSOLUTE.test(given) || from === undefined || from === '' ? given : resolved(`${from}/${given}`);
   const below = base !== undefined && base !== '' && path.toLowerCase().startsWith(`${base.toLowerCase()}/`) ? path.slice(base.length + 1) : ABSOLUTE.test(path) ? null : path;
   return below === null ? null : below.split('/').filter((part) => part !== '' && part !== '.');
 };
@@ -182,11 +197,11 @@ const patternFeaturesOf = (pattern: string, glob: boolean): PatternFeature[] => 
 };
 
 /**
- * The features of each argument of a call (layer 1), sorted by key: its value's size, and for a path its depth below the working folder, its extension class, and its folder kind, and for a pattern what it uses. A Glob call's
+ * The features of each argument of a call (layer 1), sorted by key: its value's size, and for a path its depth below the repository root (else the working folder), its extension class, and its folder kind, and for a pattern what it uses. A Glob call's
  * `pattern` and a `glob`, `include`, or `exclude` argument read as globs; any other pattern as a regular expression. A boolean and a null have no features (a boolean goes as a closed value, `argValuesOf`). The values are read
  * here and go no further: every field is a member of a closed list.
  */
-export const argFeaturesOf = (native: string, input: { readonly [key: string]: unknown }, cwd: string | undefined): ArgFeature[] =>
+export const argFeaturesOf = (native: string, input: { readonly [key: string]: unknown }, root: string | undefined, cwd?: string): ArgFeature[] =>
   Object.keys(input)
     .sort()
     .flatMap((key): ArgFeature[] => {
@@ -196,7 +211,7 @@ export const argFeaturesOf = (native: string, input: { readonly [key: string]: u
       const feature: ArgFeature = { key, valueSize: sizeOf(value) };
       if (typeof value === 'string' && kind === 'path') {
         // An absolute path outside the working folder names folders above it, so its depth is `outside` and its folder kind `other`: only its own name's extension is read.
-        const parts = partsBelow(value, cwd);
+        const parts = partsBelow(value, root, cwd);
         feature.extension = extensionOf(parts === null ? value.replace(/^.*[\\/]/, '') : (parts.at(-1) ?? ''));
         feature.pathDepth = parts === null ? 'outside' : depthOf(parts.length - 1);
         feature.dirKind = parts === null ? 'other' : dirKindOf(parts.slice(0, -1));

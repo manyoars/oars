@@ -39,6 +39,22 @@ describe('value features', () => {
     expect(argFeaturesOf('Read', { file_path: 'tests/fixtures/rows.csv' }, '/w')[0]).toMatchObject({ pathDepth: '2', extension: 'data', dirKind: 'test' });
   });
 
+  it('measures a relative path from the cwd, so it reads as the absolute path to the same file does', () => {
+    const root = '/w';
+    const cwd = '/w/packages/app';
+    const relative = argFeaturesOf('Read', { file_path: 'src/ui/button.ts' }, root, cwd);
+    const absolute = argFeaturesOf('Read', { file_path: '/w/packages/app/src/ui/button.ts' }, root, cwd);
+    expect(relative).toEqual(absolute);
+    expect(relative[0]).toMatchObject({ pathDepth: '3-4', extension: 'source', dirKind: 'source' });
+    // The cwd is the root, or none is given: a relative path is measured as it stands.
+    expect(argFeaturesOf('Read', { file_path: 'src/ui/button.ts' }, root, root)[0]).toMatchObject({ pathDepth: '2' });
+    expect(argFeaturesOf('Read', { file_path: 'src/ui/button.ts' }, root)[0]).toMatchObject({ pathDepth: '2' });
+    // A relative path that climbs out of the root names folders above it, as an absolute one does.
+    expect(argFeaturesOf('Read', { file_path: '../../../etc/app.conf' }, root, cwd)[0]).toMatchObject({ pathDepth: 'outside', dirKind: 'other' });
+    // A Windows cwd and root, and a `.` part.
+    expect(argFeaturesOf('Read', { file_path: './src/a.ts' }, 'C:\\w', 'C:\\w\\pkg')[0]).toMatchObject({ pathDepth: '2' });
+  });
+
   it('state a pattern by what it uses, as a regular expression or, for Glob and a glob key, as a glob', () => {
     expect(argFeaturesOf('Grep', { pattern: '^(foo|ba[rz])\\.ts$' }, '/w')[0]?.patternFeatures).toEqual(['alternation', 'anchor', 'class', 'escape', 'group']);
     expect(argFeaturesOf('Grep', { pattern: 'plainword' }, '/w')[0]?.patternFeatures).toEqual(['literal']);

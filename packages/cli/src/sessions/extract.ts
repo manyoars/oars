@@ -1760,8 +1760,8 @@ export const captureSession = (input: ExtractInput): Capture => {
         // Who made the call, from its own line: the model is not the prompt's majority, and a line inside a skill's run names the skill (the first line after the run does not).
         const callModel = requested !== undefined && requested !== '' ? requested : realMessageModel;
         const callSkill = truthy(o.attributionSkill) ? String(o.attributionSkill) : undefined;
-        // Depth reads below the repository root, else the working folder, as the target's hash does.
-        const argFeatures = argFeaturesOf(native, toolInput, lineRoot ?? lineCwd);
+        // Depth reads below the repository root, else the working folder, as the target's hash does; a relative value is taken from the working folder first.
+        const argFeatures = argFeaturesOf(native, toolInput, lineRoot ?? lineCwd, lineCwd);
         const argValues = argValuesOf(native, toolInput, CLOSED_ARG_VALUES);
         const compared: ComparedCall = { input: toolInput, target: aimed.target, features: argFeatures, values: argValues };
         const lastKey = `${String(cur?.index ?? null)}\n${String(side)}\n${stored}`;
