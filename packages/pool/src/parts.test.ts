@@ -4,9 +4,9 @@ import { describe, expect, it } from 'vitest';
 import { BIG_CALLS, bigSkeleton } from '../../cli/src/sessions/pool-fixture.js';
 import { canonicalBytes, partsOf } from '../../cli/src/sessions/pool-outbox.js';
 import { parseSkeleton } from '../../cli/src/sessions/pool-wire.js';
-import { receivePart } from './parts.js';
+import { MAX_STAGED_BATCHES, receivePart, STAGED_MAX_AGE_MS } from './parts.js';
 import type { Bound, Env } from './http.js';
-import { startPool, stubUser, type Answer, type TestPool } from './test-pool.js';
+import { poolDbOf, startPool, stubUser, textOf, type Answer, type TestPool } from './test-pool.js';
 
 const CAP = 1024 * 1024;
 
@@ -229,11 +229,12 @@ describe('a deposit past the request cap', () => {
       const rows: Row[] = [];
       const prepare = (sql: string) => ({
         bind: (...values: (string | number | null)[]): Bound => ({
-          first: () => Promise.resolve(null),
+          first: () => Promise.resolve({ held: 0 }),
           all: () => Promise.resolve({ results: [...rows].sort((a, b) => a.part - b.part) }),
           run: () => {
             if (sql.startsWith('INSERT')) rows.push({ part: Number(values[2]), count: Number(values[3]), body: String(values[4]), deposit: null });
-            if (sql.startsWith('DELETE')) rows.length = 0;
+            // The age sweep (`batch IN`) finds nothing in a staging this young; only a batch's own forget clears it.
+            if (sql.startsWith('DELETE') && !sql.includes('batch IN')) rows.length = 0;
             return Promise.resolve({ meta: { changes: 1 } });
           },
         }),
@@ -340,6 +341,128 @@ describe('a deposit past the request cap', () => {
       expect((await send(huge, pieces)).at(-1)).toMatchObject({ status: 413, json: { error: 'too_large' } });
       expect((await send('not json', ['not ', 'json'])).at(-1)).toMatchObject({ status: 400, json: { error: 'closed_vocabulary' } });
       expect(await rows(pool, 'SELECT COUNT(*) AS count FROM deposit_parts')).toBe(0);
+    } finally {
+      await pool.dispose();
+    }
+  }, 120_000);
+});
+
+describe('staging is bounded (S12, t958)', () => {
+  const stage = (pool: TestPool, token: string, batch: string, index = 1, count = 2): Promise<Answer> => pool.post('/v1/deposits', 'x', token, partHeaders(batch, index, count));
+  const batchOf = (n: number): string => sha(`unfinished batch ${String(n)}`);
+
+  it('refuses a new batch past the per-account cap of unfinished ones with a 429 JSON refusal, keeps what is held, and leaves another account alone', async () => {
+    const pool = await startPool();
+    try {
+      const token = await signedIn(pool, '9101');
+      for (let at = 0; at < MAX_STAGED_BATCHES; at += 1) expect((await stage(pool, token, batchOf(at))).status).toBe(202);
+      const refused = await pool.send('/v1/deposits', { method: 'POST', body: 'x' }, token, partHeaders(batchOf(MAX_STAGED_BATCHES), 1, 2));
+      expect(refused).toMatchObject({ status: 429, json: { error: 'staging_full' } });
+      expect(refused.headers.get('retry-after')).toBe(String(STAGED_MAX_AGE_MS / 1000));
+      expect(await rows(pool, 'SELECT COUNT(DISTINCT batch) AS count FROM deposit_parts')).toBe(MAX_STAGED_BATCHES);
+      // Another account has its own room.
+      expect((await stage(pool, await signedIn(pool, '9102'), batchOf(0))).status).toBe(202);
+    } finally {
+      await pool.dispose();
+    }
+  }, 120_000);
+
+  it('holds the cap when first parts of distinct batches arrive together, since the count and the insert are one statement', async () => {
+    // Miniflare runs one request at a time here, so the burst is scripted: every insert waits until all of them have made their reads, as parallel requests do.
+    const pool = await startPool();
+    try {
+      await signedIn(pool, '9107');
+      const db = await pool.db();
+      const account = String(await db.prepare('SELECT id FROM accounts').first('id'));
+      const burst = MAX_STAGED_BATCHES + 8;
+      let arrived = 0;
+      let release: () => void = () => undefined;
+      const together = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const env: Env = {
+        DB: poolDbOf(db, async (sql) => {
+          if (!sql.startsWith('INSERT INTO deposit_parts')) return;
+          arrived += 1;
+          if (arrived === burst) release();
+          await together;
+        }),
+      };
+      const answers = await Promise.all(
+        Array.from({ length: burst }, (_, at) => receivePart(new Request('http://pool.test/v1/deposits', { method: 'POST', headers: partHeaders(batchOf(at), 1, 2), body: 'x' }), env, account, 'a-secret', 'x', () => Promise.resolve(new Response('stored', { status: 201 })))),
+      );
+      expect(await rows(pool, 'SELECT COUNT(DISTINCT batch) AS count FROM deposit_parts')).toBe(MAX_STAGED_BATCHES);
+      expect(answers.filter((answer) => answer.status === 202)).toHaveLength(MAX_STAGED_BATCHES);
+      expect(answers.filter((answer) => answer.status === 429)).toHaveLength(8);
+    } finally {
+      await pool.dispose();
+    }
+  }, 120_000);
+
+  it('lets a batch already held take its next part at the cap, and finish', async () => {
+    const pool = await startPool();
+    try {
+      const token = await signedIn(pool, '9108');
+      const big = canonicalBytes(bigSkeleton('0000000000000002', BIG_CALLS));
+      const parts = partsOf(big, Math.ceil(big.length / 2));
+      expect(parts).toHaveLength(2);
+      const real = sha(big);
+      for (let at = 0; at < MAX_STAGED_BATCHES - 1; at += 1) expect((await stage(pool, token, batchOf(at))).status).toBe(202);
+      expect((await pool.post('/v1/deposits', parts[0] ?? '', token, partHeaders(real, 1, 2))).status).toBe(202);
+      expect(await stage(pool, token, batchOf(99))).toMatchObject({ status: 429, json: { error: 'staging_full' } });
+      expect(await pool.post('/v1/deposits', parts[1] ?? '', token, partHeaders(real, 2, 2))).toMatchObject({ status: 201, json: { ok: true, id: '0000000000000002' } });
+    } finally {
+      await pool.dispose();
+    }
+  }, 120_000);
+
+  it('does not count a finished batch against the cap, since its marker holds no body', async () => {
+    const pool = await startPool();
+    try {
+      const token = await signedIn(pool, '9103');
+      const db = await pool.db();
+      for (let at = 0; at < MAX_STAGED_BATCHES; at += 1) {
+        await db.prepare("INSERT INTO deposit_parts (account, batch, part, count, body, deposit) VALUES (?, ?, 1, 2, '', 'done')").bind(String(await db.prepare('SELECT id FROM accounts').first('id')), batchOf(at)).run();
+      }
+      expect((await stage(pool, token, batchOf(99))).status).toBe(202);
+    } finally {
+      await pool.dispose();
+    }
+  }, 120_000);
+
+  it('sweeps an unfinished batch older than the stated age on the account\'s own next staging write, and keeps a younger one, a finished marker, and another account\'s rows', async () => {
+    const pool = await startPool();
+    try {
+      const token = await signedIn(pool, '9104');
+      const other = await signedIn(pool, '9105');
+      const db = await pool.db();
+      expect((await stage(pool, token, batchOf(1))).status).toBe(202);
+      expect((await stage(pool, token, batchOf(2))).status).toBe(202);
+      expect((await stage(pool, other, batchOf(3))).status).toBe(202);
+      const old = Date.now() - STAGED_MAX_AGE_MS - 1000;
+      await db.prepare('UPDATE deposit_parts SET staged_at = ?').bind(old).run();
+      await db.prepare('UPDATE deposit_parts SET staged_at = ? WHERE batch = ?').bind(Date.now(), batchOf(2)).run();
+      await db.prepare("INSERT INTO deposit_parts (account, batch, part, count, body, deposit, staged_at) SELECT account, ?, 1, 2, '', 'done', ? FROM deposit_parts WHERE batch = ? LIMIT 1").bind(batchOf(4), old, batchOf(1)).run();
+      expect((await stage(pool, token, batchOf(5))).status).toBe(202);
+      const left = (await db.prepare('SELECT batch FROM deposit_parts ORDER BY batch').all()).results.map((row) => textOf(row, 'batch')).sort();
+      expect(left).toEqual([batchOf(2), batchOf(3), batchOf(4), batchOf(5)].sort());
+    } finally {
+      await pool.dispose();
+    }
+  }, 120_000);
+
+  it('sweeps by the batch\'s oldest part and treats a part staged before the column as old, so rows from before migration 0017 do not stay forever', async () => {
+    const pool = await startPool();
+    try {
+      const token = await signedIn(pool, '9106');
+      const db = await pool.db();
+      expect((await stage(pool, token, batchOf(1), 1, 3)).status).toBe(202);
+      expect((await stage(pool, token, batchOf(1), 2, 3)).status).toBe(202);
+      expect((await stage(pool, token, batchOf(2))).status).toBe(202);
+      await db.prepare('UPDATE deposit_parts SET staged_at = ? WHERE batch = ? AND part = 1').bind(Date.now() - STAGED_MAX_AGE_MS - 1000, batchOf(1)).run();
+      await db.prepare('UPDATE deposit_parts SET staged_at = NULL WHERE batch = ?').bind(batchOf(2)).run();
+      expect((await stage(pool, token, batchOf(3))).status).toBe(202);
+      expect(await rows(pool, 'SELECT COUNT(*) AS count FROM deposit_parts WHERE batch IN (?, ?)'.replace('?, ?', `'${batchOf(1)}', '${batchOf(2)}'`))).toBe(0);
     } finally {
       await pool.dispose();
     }

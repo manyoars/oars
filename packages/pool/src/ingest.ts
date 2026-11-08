@@ -1,5 +1,5 @@
-// Ingest (spec Section 2, "the deposit form"): a batch's skeleton becomes cell increments on the stored `index` cells, and a `contributor` record per (cell, account, UTC day) lets a
-// cell tell a new cluster from a returning one. Everything one deposit writes goes in one transaction, guarded by the deposit row that this write set, so a refused deposit writes none.
+// Ingest (spec Section 2, "the deposit form"): a batch's skeleton becomes cell increments on the stored `index` cells, and a `contributor` record per (cell, account, UTC day) is the
+// cell's holders, which `recount` (`cluster-store.ts`) clusters into the cell's held count. Everything one deposit writes goes in one transaction, guarded by the deposit row that this write set, so a refused deposit writes none.
 import { incrementsOf, type CellRow, type Increments, type StratumRow } from '../../cli/src/sessions/cell-increments.js';
 import { parseSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { fieldOf, type Bound, type Env } from './http.js';
