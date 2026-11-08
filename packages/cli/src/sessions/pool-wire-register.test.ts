@@ -1,4 +1,4 @@
-// The wire field register (docs/pool.md, "Wire field register"): one row per field a format 3 batch carries, naming its consumer, projection class, whether it re-derives from `raw/`, and its bytes on a
+// The wire field register (docs/pool.md, "Wire field register"): one row per field a format 3 or 4 batch carries, naming its consumer, projection class, whether it re-derives from `raw/`, and its bytes on a
 // fixture. "No row, no field" (direction conclusion 17.4) is this file: a field the client emits with no row fails here, and so does a row for a field the client no longer emits or whose bytes drifted.
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

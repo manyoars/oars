@@ -199,7 +199,7 @@ describe('a value this server does not know', () => {
   });
 });
 
-describe('a format 3 batch with every optional field absent', () => {
+describe('a format 4 batch with every optional field absent', () => {
   /** What an absent optional field reads as, which is what a sent null is. */
   const EMPTY: { [name: string]: unknown } = { deltas: [], timingPrint: null, languageShares: [] };
   const ABSENT_ONLY: ReadonlySet<string> = new Set(['reach', 'skill', 'edges', 'recoveryCalls', 'usageResponses', 'allocated', 'repoKey', 'orgSize', 'team', 'repoVisibility', 'hour', 'keys', 'keysDropped', 'targetClass', 'argClass', 'argFeatures', 'argValues', 'changeKind']);

@@ -173,7 +173,7 @@ const REGISTER_COVERAGE = { repoKey: '0123456789abcdef', orgSize: 'unknown', tea
 const REGISTER_REACH = { filled: true, mcp: ['github'], skills: ['commit'], plugins: ['private'] };
 const REGISTER_STEP = { status: 'ok', tokens: 3, ms: 4, remainingTokens: 2, agentType: null, parent: null, frame: 0 };
 
-/** One session at format 3 that holds every field the register names, each once or twice: the register's bytes are measured on this, and say so. */
+/** One session at format 4 that holds every field the register names, each once or twice: the register's bytes are measured on this, and say so. */
 export const REGISTER_FIXTURE = {
   format: SKELETON_FORMAT,
   vocabVersion: VOCAB_VERSION,

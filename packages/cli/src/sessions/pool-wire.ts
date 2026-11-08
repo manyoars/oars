@@ -808,7 +808,7 @@ const unknownValue = (held: Collected, at: string, sent: string): typeof OTHER =
 /** The fields a client may send a literal beside (`<field>Literal`) when the field itself says `other`: the enumerated fields, whose values a closed list holds. */
 export const ENUMERATED_FIELDS: ReadonlySet<string> = new Set(['harness', 'harnessVersion', 'model', 'effort', 'platform', 'shell', 'size', 'languages', 'frameworks', 'language', 'languageShare', 'cls', 'status', 'action', 'native', 'agentType', 'program', 'sub', 'flags', 'registry', 'name', 'version', 'server', 'tool', 'skill', 'host', 'deltaKind', 'field', 'metric', 'intervention']);
 /**
- * The fields that may be absent at format 3, by the level of the batch that holds them. An absent one reads as null, or as empty for a list, exactly as a sent null does, so a batch with all of them left out is
+ * The fields that may be absent at formats 3 and 4 (a format 3 batch reads `OPTIONAL.tool` less `FORMAT_4_TOOL_FIELDS`), by the level of the batch that holds them. An absent one reads as null, or as empty for a list, exactly as a sent null does, so a batch with all of them left out is
  * served from what remains. A field the cells need to be sound (a harness, a status, a bucket of tokens) is never here.
  */
 export const OPTIONAL = {

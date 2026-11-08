@@ -53,6 +53,10 @@ describe('value features', () => {
     expect(argFeaturesOf('Read', { file_path: '../../../etc/app.conf' }, root, cwd)[0]).toMatchObject({ pathDepth: 'outside', dirKind: 'other' });
     // A Windows cwd and root, and a `.` part.
     expect(argFeaturesOf('Read', { file_path: './src/a.ts' }, 'C:\\w', 'C:\\w\\pkg')[0]).toMatchObject({ pathDepth: '2' });
+    // A Windows drive is kept, so a path that climbs above the repository root reads as outside it, as the posix form does.
+    expect(argFeaturesOf('Read', { file_path: '../../../x' }, 'C:\\w', 'C:\\w\\pkg')[0]).toMatchObject({ pathDepth: 'outside', dirKind: 'other' });
+    // The repository root itself, as a dot, an absolute path, or one with a trailing slash, is one answer: no folders below the root.
+    for (const value of ['.', '/w', '/w/']) expect(argFeaturesOf('Glob', { path: value }, '/w', '/w')[0], value).toMatchObject({ pathDepth: '0', dirKind: 'root', extension: 'none' });
   });
 
   it('state a pattern by what it uses, as a regular expression or, for Glob and a glob key, as a glob', () => {
