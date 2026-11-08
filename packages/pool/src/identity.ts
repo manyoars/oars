@@ -184,8 +184,18 @@ const SLOW_DOWN_SEC = 5;
 /** The row key for a handle: its hash, so the table never holds a handle (which holds a device code, sealed). */
 const handleHash = (handle: string): string => createHash('sha256').update(handle).digest('hex');
 
-/** The client as the table counts it: an HMAC of its address under `PSEUDONYM_KEY`, so the table holds no address. Cloudflare sets `cf-connecting-ip` on every request that reaches the Worker. */
-const clientOf = (request: Request, pseudonymKey: string): string => createHmac('sha256', pseudonymKey).update(`login client:${request.headers.get('cf-connecting-ip') ?? 'unknown'}`).digest('hex');
+/** The first four hextets of an IPv6 address, `::` expanded, lower case: its /64, which one host holds whole and can rotate through at will. An address with a `.` (IPv4-mapped) is an IPv4 client and stays whole. */
+const prefixOf = (address: string): string => {
+  if (!address.includes(':') || address.includes('.')) return address;
+  const [head = '', tail] = address.toLowerCase().split('::');
+  const first = head === '' ? [] : head.split(':');
+  const last = tail === undefined || tail === '' ? [] : tail.split(':');
+  const filled = tail === undefined ? first : [...first, ...Array<string>(Math.max(0, 8 - first.length - last.length)).fill('0'), ...last];
+  return filled.slice(0, 4).map((hextet) => hextet.padStart(4, '0')).join(':');
+};
+
+/** The client as the table counts it: an HMAC of its address (an IPv6 one by its /64) under `PSEUDONYM_KEY`, so the table holds no address. Cloudflare sets `cf-connecting-ip` on every request that reaches the Worker. */
+const clientOf = (request: Request, pseudonymKey: string): string => createHmac('sha256', pseudonymKey).update(`login client:${prefixOf(request.headers.get('cf-connecting-ip') ?? 'unknown')}`).digest('hex');
 
 /** `POST /v1/login/start` with `{ provider }`: asks the provider for a device code with the pool's own client ID, and answers the code to type, the link, the interval and lifetime, and a handle that holds the device code sealed. */
 export const loginStart = async (request: Request, env: Env): Promise<Response> => {

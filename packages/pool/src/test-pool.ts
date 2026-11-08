@@ -226,8 +226,7 @@ export interface TestPool {
   raw: (path: string, token?: string, headers?: { [name: string]: string }) => Promise<RawAnswer>;
   /** Makes a handle's next poll due now, as if the provider's interval had passed: the pool holds the interval per handle, and a poll right after a start comes early. */
   due: (handle: string) => Promise<void>;
-  /** The sign-in the CLI performs through the pool's two login routes, with the provider's approval given at the stub between them. */
-  /** Signs the stub user in. The account has stood unless `fresh`: the floor counts only accounts that have (S13), so a test that serves a cell needs holders that have, and a test of the fetch cap or of what a fresh account does passes `fresh: true`. */
+  /** Signs the stub user in through the pool's two login routes, as the CLI does, with the provider's approval given at the stub between them. The account has stood unless `fresh`: the floor counts only accounts that have (S13), so a test that serves a cell needs holders that have, and a test of the fetch cap or of what a fresh account does passes `fresh: true`. */
   signIn: (provider: string, user: StubUser, options?: { fresh?: boolean }) => Promise<{ token: string; account: string; signingKey: unknown }>;
   stub: StubProvider;
   signingKey: () => { kty: string; crv: string; x: string };

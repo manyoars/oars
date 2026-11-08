@@ -149,7 +149,12 @@ export const telemetry = async (request: Request, env: Env & TelemetryEnv, now: 
     // The batch as it came, beside when it arrived. Nothing about the connection or a credential is read, so none of it can be kept.
     await bucket.put(key, JSON.stringify({ received, batch: body }));
   } catch {
-    // Nothing is indexed on this path, so the resend the client makes does not count the batch twice.
+    // Nothing is indexed on this path, so the resend the client makes does not count the batch twice. The slot goes back too, or each resend during an R2 outage would spend one of the install's day; a refund that fails costs the slot, no more.
+    try {
+      await env.DB.prepare('UPDATE telemetry_quota SET count = count - 1 WHERE install = ? AND day = ?').bind(checked.install, received.slice(0, 10)).run();
+    } catch {
+      // Best effort: the 503 below is the answer either way.
+    }
     return refuse(503, 'telemetry_unavailable', 'The batch could not be kept. Send it again.');
   }
   const indexed = index(

@@ -170,10 +170,12 @@ interface FakeStores {
   env: Env & TelemetryEnv;
   objects: Map<string, string>;
   points: DataPoint[];
+  /** The quota rows, keyed `install|day`. */
+  counts: Map<string, number>;
 }
 
 /** The two bindings as plain objects. `failR2` and `failIndex` make a store throw; `bare` leaves the named binding unset. */
-const fakes = (options: { failR2?: boolean; failIndex?: boolean; bare?: 'TELEMETRY' | 'TELEMETRY_EVENTS'; db?: 'down' | 'no-count' } = {}): FakeStores => {
+const fakes = (options: { failR2?: boolean; failIndex?: boolean; bare?: 'TELEMETRY' | 'TELEMETRY_EVENTS'; db?: 'down' | 'no-count' | 'no-refund' } = {}): FakeStores => {
   const objects = new Map<string, string>();
   const points: DataPoint[] = [];
   const refused = (): never => {
@@ -191,7 +193,13 @@ const fakes = (options: { failR2?: boolean; failIndex?: boolean; bare?: 'TELEMET
           return Promise.resolve({ count: counts.get(key) });
         },
         all: refused,
-        run: refused,
+        // The refund of a spent slot is the one write: `no-refund` makes it fail, as a database that is down would.
+        run: () => {
+          if (options.db === 'no-refund') return refused();
+          const key = values.join('|');
+          counts.set(key, (counts.get(key) ?? 0) - 1);
+          return Promise.resolve({ meta: { changes: 1 } });
+        },
       }),
     }),
     batch: refused,
@@ -211,7 +219,7 @@ const fakes = (options: { failR2?: boolean; failIndex?: boolean; bare?: 'TELEMET
           },
         }),
   };
-  return { env, objects, points };
+  return { env, objects, points, counts };
 };
 
 const send = (stores: FakeStores, body: unknown, now: () => number = () => Date.parse('2026-11-07T08:00:00Z'), headers: { [name: string]: string } = {}): Promise<Response> =>
@@ -289,6 +297,20 @@ describe('the telemetry handler against fake stores', () => {
     expect(answered.status).toBe(503);
     expect(fieldOf(await answered.json(), 'error')).toBe('telemetry_unavailable');
     expect(stores.points).toEqual([]);
+  });
+
+  it("refunds the install's quota slot when R2 fails, so an outage does not spend the day", async () => {
+    const stores = fakes({ failR2: true });
+    for (let resend = 0; resend < 3; resend += 1) expect((await send(stores, { install: INSTALL, events: [command()] })).status).toBe(503);
+    expect([...stores.counts.values()]).toEqual([0]);
+  });
+
+  it('still answers 503 when the refund itself fails', async () => {
+    const stores = fakes({ failR2: true, db: 'no-refund' });
+    const answered = await send(stores, { install: INSTALL, events: [command()] });
+    expect(answered.status).toBe(503);
+    expect(fieldOf(await answered.json(), 'error')).toBe('telemetry_unavailable');
+    expect([...stores.counts.values()]).toEqual([1]);
   });
 
   it('answers 503 not_configured when no bucket is bound', async () => {

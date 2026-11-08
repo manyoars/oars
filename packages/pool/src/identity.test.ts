@@ -360,6 +360,29 @@ describe('the start route per client address', () => {
     }
   }, 60_000);
 
+  it("counts an IPv6 host by its /64, so rotating through its own prefix gets no fresh window, and leaves another prefix alone", async () => {
+    const capped = await startPool({ LOGIN_STARTS_PER_HOUR: '1' });
+    try {
+      const from = (address: string): ReturnType<TestPool['post']> => capped.post('/v1/login/start', { provider: 'github' }, undefined, { 'cf-connecting-ip': address });
+      expect((await from('2001:db8:1:2::1')).status).toBe(200);
+      // The same /64 written another way (expanded, upper case) and another host inside it share the count.
+      expect((await from('2001:0DB8:0001:0002:ffff:ffff:ffff:ffff')).status).toBe(429);
+      expect((await from('2001:db8:1:2:abcd::9')).status).toBe(429);
+      // The next /64 is another client.
+      expect((await from('2001:db8:1:3::1')).status).toBe(200);
+      // `::` at either end of the address expands the same way.
+      expect((await from('2001:db8:1:4::')).status).toBe(200);
+      expect((await from('2001:db8:1:4::5')).status).toBe(429);
+      expect((await from('::1')).status).toBe(200);
+      expect((await from('::2')).status).toBe(429);
+      // An IPv4-mapped address is an IPv4 client, not one shared prefix of zeros.
+      expect((await from('::ffff:203.0.113.7')).status).toBe(200);
+      expect((await from('::ffff:203.0.113.8')).status).toBe(200);
+    } finally {
+      await capped.dispose();
+    }
+  }, 60_000);
+
   it('counts a request with no address as one client of its own', async () => {
     const capped = await startPool({ LOGIN_STARTS_PER_HOUR: '1' });
     try {
