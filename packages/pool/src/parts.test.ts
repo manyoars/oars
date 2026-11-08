@@ -6,7 +6,7 @@ import { canonicalBytes, partsOf } from '../../cli/src/sessions/pool-outbox.js';
 import { parseSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { MAX_STAGED_BATCHES, receivePart, STAGED_MAX_AGE_MS } from './parts.js';
 import type { Bound, Env } from './http.js';
-import { startPool, stubUser, textOf, type Answer, type TestPool } from './test-pool.js';
+import { poolDbOf, startPool, stubUser, textOf, type Answer, type TestPool } from './test-pool.js';
 
 const CAP = 1024 * 1024;
 
@@ -360,10 +360,57 @@ describe('staging is bounded (S12, t958)', () => {
       expect(refused).toMatchObject({ status: 429, json: { error: 'staging_full' } });
       expect(refused.headers.get('retry-after')).toBe(String(STAGED_MAX_AGE_MS / 1000));
       expect(await rows(pool, 'SELECT COUNT(DISTINCT batch) AS count FROM deposit_parts')).toBe(MAX_STAGED_BATCHES);
-      // A batch already held still takes its next part: the cap is on batches begun, not on parts. The join here is not the batch it names, which is the join's refusal and not the cap's.
-      expect(await stage(pool, token, batchOf(0), 2)).toMatchObject({ status: 400, json: { error: 'part_mismatch' } });
       // Another account has its own room.
       expect((await stage(pool, await signedIn(pool, '9102'), batchOf(0))).status).toBe(202);
+    } finally {
+      await pool.dispose();
+    }
+  }, 120_000);
+
+  it('holds the cap when first parts of distinct batches arrive together, since the count and the insert are one statement', async () => {
+    // Miniflare runs one request at a time here, so the burst is scripted: every insert waits until all of them have made their reads, as parallel requests do.
+    const pool = await startPool();
+    try {
+      await signedIn(pool, '9107');
+      const db = await pool.db();
+      const account = String(await db.prepare('SELECT id FROM accounts').first('id'));
+      const burst = MAX_STAGED_BATCHES + 8;
+      let arrived = 0;
+      let release: () => void = () => undefined;
+      const together = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const env: Env = {
+        DB: poolDbOf(db, async (sql) => {
+          if (!sql.startsWith('INSERT INTO deposit_parts')) return;
+          arrived += 1;
+          if (arrived === burst) release();
+          await together;
+        }),
+      };
+      const answers = await Promise.all(
+        Array.from({ length: burst }, (_, at) => receivePart(new Request('http://pool.test/v1/deposits', { method: 'POST', headers: partHeaders(batchOf(at), 1, 2), body: 'x' }), env, account, 'a-secret', 'x', () => Promise.resolve(new Response('stored', { status: 201 })))),
+      );
+      expect(await rows(pool, 'SELECT COUNT(DISTINCT batch) AS count FROM deposit_parts')).toBe(MAX_STAGED_BATCHES);
+      expect(answers.filter((answer) => answer.status === 202)).toHaveLength(MAX_STAGED_BATCHES);
+      expect(answers.filter((answer) => answer.status === 429)).toHaveLength(8);
+    } finally {
+      await pool.dispose();
+    }
+  }, 120_000);
+
+  it('lets a batch already held take its next part at the cap, and finish', async () => {
+    const pool = await startPool();
+    try {
+      const token = await signedIn(pool, '9108');
+      const big = canonicalBytes(bigSkeleton('0000000000000002', BIG_CALLS));
+      const parts = partsOf(big, Math.ceil(big.length / 2));
+      expect(parts).toHaveLength(2);
+      const real = sha(big);
+      for (let at = 0; at < MAX_STAGED_BATCHES - 1; at += 1) expect((await stage(pool, token, batchOf(at))).status).toBe(202);
+      expect((await pool.post('/v1/deposits', parts[0] ?? '', token, partHeaders(real, 1, 2))).status).toBe(202);
+      expect(await stage(pool, token, batchOf(99))).toMatchObject({ status: 429, json: { error: 'staging_full' } });
+      expect(await pool.post('/v1/deposits', parts[1] ?? '', token, partHeaders(real, 2, 2))).toMatchObject({ status: 201, json: { ok: true, id: '0000000000000002' } });
     } finally {
       await pool.dispose();
     }

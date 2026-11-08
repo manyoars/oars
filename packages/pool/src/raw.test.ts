@@ -1,7 +1,8 @@
 // The raw tier: an authenticated, redacted transcript goes to R2 in parts and a ledger row lands in D1; the bytes never reach D1 and nothing serves them.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { MAX_STAGED_RAW_PARTS } from './raw.js';
-import { fieldOf, startPool, stubUser, textOf, type TestPool } from './test-pool.js';
+import type { Env } from './http.js';
+import { MAX_STAGED_RAW_PARTS, rawRoute } from './raw.js';
+import { fieldOf, poolDbOf, startPool, stubUser, textOf, type TestPool } from './test-pool.js';
 
 const MEGABYTE = 1024 * 1024;
 
@@ -403,5 +404,49 @@ describe('raw staging is bounded per account (S12, t958)', () => {
     // Another account has its own room.
     const other = await member();
     expect((await pool.send(partPath(hash, 1), { method: 'PUT', body: transcript(10, 7) }, other.token, grant)).status).toBe(200);
+  }, 120_000);
+
+  it('holds the cap when new parts arrive together, since each of them read the same list before any put', async () => {
+    // Miniflare runs one request at a time here, so the burst is scripted: every put waits until all of them have listed, as parallel requests do.
+    const { token, account } = await member();
+    const bucket = await pool.rawBucket();
+    const filler = `2${'0'.repeat(63)}`;
+    for (let at = 1; at < MAX_STAGED_RAW_PARTS; at += 1) await bucket.put(`staging/${account}/${filler}/${String(at).padStart(6, '0')}`, 'x');
+    const burst = 8;
+    let listed = 0;
+    let release: () => void = () => undefined;
+    const together = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const env: Env = {
+      DB: poolDbOf(await pool.db()),
+      COVENANT_VERSION: 'v1',
+      RAW: {
+        put: async (key, value) => {
+          listed += 1;
+          if (listed === burst) release();
+          await together;
+          return bucket.put(key, new TextDecoder().decode(value));
+        },
+        get: () => Promise.resolve(null),
+        delete: (keys) => bucket.delete([...keys]),
+        list: ({ prefix, limit }) => bucket.list({ prefix, limit }),
+        createMultipartUpload: () => Promise.reject(new Error('no upload here')),
+      },
+    };
+    const hashes = await Promise.all(Array.from({ length: burst }, (_, at) => hex(transcript(10, 100 + at))));
+    const answers = await Promise.all(
+      hashes.map((hash, at) => {
+        const request = new Request(`http://pool.test${partPath(hash, 1)}`, { method: 'PUT', body: transcript(10, 100 + at), headers: { authorization: `Bearer ${token}`, ...grant } });
+        return rawRoute(request, env) ?? Promise.reject(new Error('not a raw route'));
+      }),
+    );
+    for (const answered of answers) expect([200, 429]).toContain(answered.status);
+    const page = await bucket.list({ prefix: `staging/${account}/`, limit: MAX_STAGED_RAW_PARTS });
+    expect(page.truncated).toBe(false);
+    expect(page.objects.length).toBeLessThanOrEqual(MAX_STAGED_RAW_PARTS);
+    // A part answered 200 is staged; one answered 429 left nothing behind.
+    const staged = new Set(page.objects.map(({ key }) => key));
+    for (const [at, hash] of hashes.entries()) expect(staged.has(`staging/${account}/${hash}/000001`)).toBe(answers[at]?.status === 200);
   }, 120_000);
 });

@@ -12,7 +12,7 @@ const MAX_RAW_PART_BYTES = 1024 * 1024;
 const ASSEMBLY_PART_BYTES = 5 * 1024 * 1024;
 
 /**
- * How many staged part objects one account may hold at once: R2's list page, so the check is one call. A part is at most 1 MB and the CLI's are 512 KiB (`RAW_PART_BYTES`), so an account stages at most 1,000 MB, and 500 MiB of the CLI's parts, which is a
+ * How many staged part objects one account may hold at once: R2's list page, so the check is one call. A part is at most 1 MiB and the CLI's are 512 KiB (`RAW_PART_BYTES`), so an account stages at most 1,000 MiB, and 500 MiB of the CLI's parts, which is a
  * single transcript far past any real session; a completed or refused object clears its parts, and the bucket's lifecycle rule (pool.md, raw tier) expires the rest after 7 days. A transcript of more than this many parts cannot be staged.
  */
 export const MAX_STAGED_RAW_PARTS = 1000;
@@ -91,11 +91,16 @@ const putPart = async (request: Request, env: Env, hash: string, part: number): 
   if (body.byteLength === 0) return refuse(422, 'empty_part', 'A part holds at least one byte.');
   // A part that replaces a staged one adds no object; any other needs room under the account's cap.
   const key = stagingKey(account, hash, part);
+  const full = (): Response => refuse(429, 'staging_full', `An account may stage ${String(MAX_STAGED_RAW_PARTS)} raw parts at once. Complete the objects it has begun, or wait: staged parts expire after 7 days.`, undefined, { 'retry-after': String(7 * 24 * 60 * 60) });
   const staged = (await bucket.list({ prefix: `staging/${account}/`, limit: MAX_STAGED_RAW_PARTS })).objects;
-  if (staged.length >= MAX_STAGED_RAW_PARTS && !staged.some((object) => object.key === key)) {
-    return refuse(429, 'staging_full', `An account may stage ${String(MAX_STAGED_RAW_PARTS)} raw parts at once. Complete the objects it has begun, or wait: staged parts expire after 7 days.`, undefined, { 'retry-after': String(7 * 24 * 60 * 60) });
-  }
+  const isNew = !staged.some((object) => object.key === key);
+  if (staged.length >= MAX_STAGED_RAW_PARTS && isNew) return full();
   await bucket.put(key, body);
+  // Parts that arrive together each listed before any put, so the cap is checked again on what is staged now: a new part that finds the page full takes itself back.
+  if (isNew && (await bucket.list({ prefix: `staging/${account}/`, limit: MAX_STAGED_RAW_PARTS })).truncated) {
+    await bucket.delete([key]);
+    return full();
+  }
   return answer(200, { ok: true, part });
 };
 

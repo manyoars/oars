@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { Miniflare, Request as StubRequest, Response as StubResponse } from 'miniflare';
 import { expect } from 'vitest';
+import type { Bound, PoolDb } from './http.js';
 
 interface Statement {
   first: (column?: string) => Promise<unknown>;
@@ -19,11 +20,40 @@ export interface TestDb {
 
 /** The R2 calls these tests make, named for the same reason as `TestDb`. */
 export interface TestBucket {
-  list: (options?: { prefix?: string; cursor?: string }) => Promise<{ objects: readonly { key: string }[]; truncated?: boolean; cursor?: string }>;
+  list: (options?: { prefix?: string; cursor?: string; limit?: number }) => Promise<{ objects: readonly { key: string }[]; truncated?: boolean; cursor?: string }>;
   put: (key: string, value: string) => Promise<unknown>;
   get: (key: string) => Promise<{ text: () => Promise<string>; arrayBuffer: () => Promise<ArrayBuffer> } | null>;
   delete: (keys: string[]) => Promise<void>;
 }
+
+/**
+ * The pool's D1 as `Env.DB` takes it, for a test that calls a route function directly. Miniflare runs one request at a time here, so a race between requests is scripted: `before` runs ahead of each statement's `run` and may hold it until the other requests have caught up.
+ */
+export const poolDbOf = (db: TestDb, before: (sql: string) => Promise<void> = () => Promise.resolve()): PoolDb => {
+  // One statement reaches the database at a time (a burst of parallel calls resets Miniflare's sockets), so requests interleave between statements, never inside one.
+  let turn: Promise<unknown> = Promise.resolve();
+  const alone = <T>(call: () => Promise<T>): Promise<T> => {
+    const next = turn.then(call);
+    turn = next.catch(() => undefined);
+    return next;
+  };
+  return {
+    prepare: (sql) => ({
+      bind: (...values): Bound => {
+        const statement = db.prepare(sql).bind(...values);
+        return {
+          first: () => alone(() => statement.first()),
+          all: () => alone(() => statement.all()),
+          run: async () => {
+            await before(sql);
+            return alone(async () => ({ meta: { changes: Number(fieldOf(fieldOf(await statement.run(), 'meta'), 'changes')) } }));
+          },
+        };
+      },
+    }),
+    batch: () => Promise.resolve([]),
+  };
+};
 
 export interface StubUser {
   id: string;

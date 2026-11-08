@@ -84,10 +84,6 @@ const sweep = (env: Env, account: string, now: number): Promise<unknown> =>
     .bind(account, account, now - STAGED_MAX_AGE_MS)
     .run();
 
-/** How many unfinished batches the account holds other than this one. */
-const otherUnfinished = async (env: Env, account: string, batch: string): Promise<number> =>
-  Number(fieldOf(await env.DB.prepare('SELECT COUNT(DISTINCT batch) AS held FROM deposit_parts WHERE account = ? AND deposit IS NULL AND batch <> ?').bind(account, batch).first(), 'held'));
-
 /** One part of a batch, already read and under the request cap. `secret` is the pool's `INGEST_HASH_KEY`, which seals the staged text. `store` is the path a whole deposit takes. */
 export const receivePart = async (request: Request, env: Env, account: string, secret: string, body: string, store: (text: string) => Promise<Response>): Promise<Response> => {
   const found = PART.exec(request.headers.get('oars-part') ?? '');
@@ -106,10 +102,6 @@ export const receivePart = async (request: Request, env: Env, account: string, s
     await forget(env, account, batch);
     return badPart('The parts of one batch all name the same count. Send every part again.');
   }
-  // A batch not yet begun needs room: an account holds at most `MAX_STAGED_BATCHES` unfinished ones, so staging is bounded per account and not only per batch. A part of a batch already held always passes.
-  if (before.length === 0 && (await otherUnfinished(env, account, batch)) >= MAX_STAGED_BATCHES) {
-    return refuse(429, 'staging_full', `An account may hold ${String(MAX_STAGED_BATCHES)} unfinished batches at once. Finish them, or wait: an unfinished batch is dropped after 24 hours.`, 'oars-batch', { 'retry-after': String(STAGED_MAX_AGE_MS / 1000) });
-  }
   // Staging is bounded by what the join may hold: a part that takes the held bytes past it is refused now, not when the last part arrives.
   const staged = before.filter((row) => row.part !== part).reduce((sum, row) => sum + plainBytes(row.body), new TextEncoder().encode(body).length);
   if (staged > MAX_ASSEMBLED_BYTES) {
@@ -118,8 +110,17 @@ export const receivePart = async (request: Request, env: Env, account: string, s
   }
   // A retried part lands on its own row and changes nothing. The text is sealed first: no host is written in clear, staged or not.
   const key = await sealKey(secret, account, batch);
-  await env.DB.prepare('INSERT INTO deposit_parts (account, batch, part, count, body, staged_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (account, batch, part) DO NOTHING').bind(account, batch, part, count, await seal(key, body), Date.now()).run();
+  // A batch not yet begun needs room: an account holds at most `MAX_STAGED_BATCHES` unfinished ones, so staging is bounded per account and not only per batch. The count and the insert are one statement, so parts that arrive together cannot each read room that another has taken; a part of a batch already held always passes.
+  const inserted = await env.DB.prepare(
+    'INSERT INTO deposit_parts (account, batch, part, count, body, staged_at) SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM deposit_parts WHERE account = ? AND batch = ? AND deposit IS NULL) OR (SELECT COUNT(DISTINCT batch) FROM deposit_parts WHERE account = ? AND deposit IS NULL AND batch <> ?) < ? ON CONFLICT (account, batch, part) DO NOTHING',
+  )
+    .bind(account, batch, part, count, await seal(key, body), Date.now(), account, batch, account, batch, MAX_STAGED_BATCHES)
+    .run();
   const held = await heldParts(env, account, batch);
+  // Nothing was written and this part is not already held: the cap refused it.
+  if (inserted.meta.changes === 0 && !held.some((row) => row.part === part)) {
+    return refuse(429, 'staging_full', `An account may hold ${String(MAX_STAGED_BATCHES)} unfinished batches at once. Finish them, or wait: an unfinished batch is dropped after 24 hours.`, 'oars-batch', { 'retry-after': String(STAGED_MAX_AGE_MS / 1000) });
+  }
   // Parts that arrive together each read a small `before`, so the bound that holds is on what is staged after the insert: past it, nothing of the batch stays.
   if (held.reduce((sum, row) => sum + plainBytes(row.body), 0) > MAX_ASSEMBLED_BYTES) {
     await forget(env, account, batch);
