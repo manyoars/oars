@@ -20,7 +20,7 @@ export const erasedRefusal = (): Response => refuse(403, 'erased', 'This content
 
 /** Whether a tombstone of this kind and digest stands. */
 export const isErased = async (env: Env, kind: TombstoneKind, digest: string): Promise<boolean> =>
-  (await env.DB.prepare('SELECT 1 AS held FROM erasure_tombstones WHERE kind = ? AND digest = ?').bind(kind, digest).first()) !== null;
+  fieldOf(await env.DB.prepare('SELECT 1 AS held FROM erasure_tombstones WHERE kind = ? AND digest = ?').bind(kind, digest).first(), 'held') === 1;
 
 /** Every string a JSON value holds, keys left out: a leaked value is a value. */
 const stringsOf = (value: unknown, into: Set<string>): Set<string> => {

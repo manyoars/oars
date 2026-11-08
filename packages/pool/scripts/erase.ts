@@ -1,4 +1,4 @@
-// The operator's erasure (S11). Three things can be erased from the pool and nothing else: a raw object, a deposit row that holds a leaked secret, and the content of one account named in a lawful request.
+// The operator's erasure. Three things can be erased from the pool and nothing else: a raw object, a deposit row that holds a leaked secret, and the content of one account named in a lawful request.
 // This is a script the operator runs with their own `wrangler` login (`erase-cli.ts`), never a route: the Worker has no way to erase anything and holds no token for it.
 // The ledger never deletes (migrations 0009 and 0011), so a row's content is replaced in place and the row, its counts, and its tier stay. Every step is written so a run that stops halfway runs again to the end: the
 // tombstone goes first (so nothing can come back), then the content, then the audit row.

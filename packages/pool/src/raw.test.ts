@@ -363,7 +363,7 @@ describe('a ledger row, never the bytes', () => {
     }
     // The ledger table has no column that could hold a body.
     const columns = (await db.prepare("SELECT name FROM pragma_table_info('raw_objects')").all()).results.map((row) => textOf(row, 'name'));
-    expect(columns.sort()).toEqual(['account', 'bytes', 'capture_version', 'redaction_version', 'sha256', 'stored_at']);
+    expect(columns.sort()).toEqual(['account', 'bytes', 'capture_version', 'erased_on', 'redaction_version', 'sha256', 'stored_at']);
   });
 });
 

@@ -1,4 +1,4 @@
--- Erasure (S11). The ledger never deletes (0009, 0011), so an erasure replaces content in place and leaves a tombstone, so the same content cannot come back through a later deposit, and an audit row that holds no content. Only the operator's own command writes either table.
+-- Erasure. The ledger never deletes (0009, 0011), so an erasure replaces content in place and leaves a tombstone, so the same content cannot come back through a later deposit, and an audit row that holds no content. Only the operator's own command writes either table.
 -- `kind` is what was erased: `raw-object` (digest of the R2 key), `deposit` (digest of `account/id`), or `value` (digest of a leaked value). `reason` is the class: `raw`, `leaked-secret`, or `lawful-request`. `erased_on` is the UTC date.
 CREATE TABLE erasure_tombstones (kind TEXT NOT NULL, digest TEXT NOT NULL, reason TEXT NOT NULL, erased_on TEXT NOT NULL, PRIMARY KEY (kind, digest)) STRICT, WITHOUT ROWID;
 -- One row per run of the command: how many ledger rows and R2 objects it erased. `account` is the pool's own pseudonymous id and nothing else about anyone; no content is ever written here.
