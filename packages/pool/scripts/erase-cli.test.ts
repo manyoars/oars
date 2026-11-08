@@ -14,7 +14,7 @@ interface Fake {
 }
 
 /** An `Io` whose wrangler answers like `d1 execute --json` (one successful statement changing one row, `rows` as its results) and records every call. */
-const fake = (options: { rows?: unknown[]; stdin?: string; success?: boolean } = {}): Fake => {
+const fake = (options: { rows?: unknown[]; stdin?: string; success?: boolean; answer?: (sql: string) => unknown[] } = {}): Fake => {
   const calls: string[][] = [];
   const printed: string[] = [];
   return {
@@ -26,7 +26,7 @@ const fake = (options: { rows?: unknown[]; stdin?: string; success?: boolean } =
       now: () => NOW,
       wrangler: (args) => {
         calls.push([...args]);
-        return Promise.resolve(args[0] === 'd1' ? JSON.stringify([{ results: options.rows ?? [], success: options.success ?? true, meta: { changes: 1 } }]) : '');
+        return Promise.resolve(args[0] === 'd1' ? JSON.stringify([{ results: options.answer?.(args[6] ?? '') ?? options.rows ?? [], success: options.success ?? true, meta: { changes: 1 } }]) : '');
       },
     },
   };
@@ -78,11 +78,25 @@ describe('the wrangler store', () => {
 describe('main', () => {
   it('changes nothing without --confirm and says what it would do', async () => {
     for (const argv of [['raw', `raw/${ACCOUNT}/${SHA}`], ['row', '--account', ACCOUNT, '--id', 's1'], ['row', '--account', ACCOUNT, '--id', 's1', '--value-stdin'], ['account', '--account', ACCOUNT]]) {
-      const { io, calls, printed } = fake();
+      const { io, calls, printed } = fake({ rows: [{ found: 1 }] });
       expect(await main(argv, io)).toBe(0);
-      expect(calls).toEqual([]);
+      // The only call a dry run makes is the SELECT that checks the row named.
+      expect(calls.map((call) => (call[6] ?? '').split(' ')[0])).toEqual(argv[0] === 'row' ? ['SELECT'] : []);
       expect(printed.join('\n')).toMatch(/^Would .*Nothing was changed: run again with --confirm\.$/);
     }
+  });
+
+  it('says a row does not exist in the dry run, and writes no tombstone for it when confirmed', async () => {
+    const dry = fake({ rows: [] });
+    expect(await main(['row', '--account', ACCOUNT, '--id', 'mistyped'], dry.io)).toBe(1);
+    expect(dry.printed.join('')).toContain('No deposit row for account');
+    expect(dry.calls.map((call) => (call[6] ?? '').split(' ')[0])).toEqual(['SELECT']);
+
+    const confirmed = fake({ rows: [] });
+    expect(await main(['row', '--account', ACCOUNT, '--id', 'mistyped', '--confirm'], confirmed.io)).toBe(1);
+    expect(confirmed.printed.join('')).toContain('no deposit row');
+    // One SELECT, and no INSERT, UPDATE, or DELETE: no tombstone and no audit row.
+    expect(confirmed.calls.map((call) => (call[6] ?? '').split(' ')[0])).toEqual(['SELECT']);
   });
 
   it('names the local state in its plan when --local is given', async () => {
@@ -100,14 +114,45 @@ describe('main', () => {
   });
 
   it('reads the leaked value from stdin, never from an argument, and writes only its digest', async () => {
-    const { io, calls, printed } = fake({ stdin: 'AKIAFAKEKEY0000SECRET\n', rows: [] });
+    const value = 'AKIAFAKEKEY0000SECRET';
+    const { io, calls, printed } = fake({
+      stdin: `${value}\n`,
+      answer: (sql) => {
+        if (sql.startsWith('SELECT 1 AS found')) return [{ found: 1 }];
+        if (sql.includes('FROM deposits')) return [{ account: ACCOUNT, id: 's2', skeleton: `{"program":"${value}"}`, extensions: '[]' }];
+        if (sql.includes('FROM deposit_parts')) return [{ account: ACCOUNT, batch: 'b1', part: 1, body: `{"x":"${value}"}` }];
+        if (sql.includes('FROM motifs')) return [{ motif_id: 'm1', motif: `run ${value} now` }];
+        return [];
+      },
+    });
+    expect(await main(['row', '--account', ACCOUNT, '--id', 's1', '--value-stdin', '--confirm'], io)).toBe(0);
+    // The value is on no wrangler argument at all: the rows come back and the match is made here.
+    expect(calls.flat().some((arg) => arg.includes(value))).toBe(false);
+    const sql = calls.map((call) => call[6] ?? '');
+    // Rows are changed by key, the motif by its scrubbed text, and the tombstone carries the SHA-256.
+    expect(sql).toContain(`DELETE FROM deposit_parts WHERE account = '${ACCOUNT}' AND batch = 'b1' AND part = 1`);
+    expect(sql).toContain("UPDATE motifs SET motif = 'run [erased] now' WHERE motif_id = 'm1'");
+    expect(sql.some((text) => text.startsWith('UPDATE deposits SET') && text.includes("id = 's2'"))).toBe(true);
+    expect(sql.some((text) => text.includes('INSERT OR IGNORE INTO erasure_tombstones') && text.includes("'value'"))).toBe(true);
+    expect(printed).toHaveLength(1);
+  });
+
+  it('reads a table of more than one page in key order, by cursor, and scrubs every motif that holds the value', async () => {
+    const value = 'AKIAFAKEKEY0000SECRET';
+    const motifs = Array.from({ length: 26 }, (_, at) => ({ motif_id: `m${String(at).padStart(2, '0')}`, motif: `run ${value}` }));
+    const { io, calls } = fake({
+      stdin: value,
+      answer: (sql) => {
+        if (sql.startsWith('SELECT 1 AS found')) return [{ found: 1 }];
+        if (!sql.includes('FROM motifs')) return [];
+        return sql.includes("> ('')") ? motifs.slice(0, 25) : motifs.slice(25);
+      },
+    });
     expect(await main(['row', '--account', ACCOUNT, '--id', 's1', '--value-stdin', '--confirm'], io)).toBe(0);
     const sql = calls.map((call) => call[6] ?? '');
-    // The value reaches wrangler only in the statements that look for it, and the tombstone carries its SHA-256.
-    expect(sql.some((text) => text.includes("kind, digest") && text.includes('AKIAFAKEKEY0000SECRET'))).toBe(false);
-    expect(sql.some((text) => text.includes('INSERT OR IGNORE INTO erasure_tombstones') && text.includes("'value'"))).toBe(true);
-    expect(sql.some((text) => text.includes('erasure_audit') && text.includes('AKIAFAKEKEY0000SECRET'))).toBe(false);
-    expect(printed).toHaveLength(1);
+    expect(sql.filter((text) => text.startsWith('UPDATE motifs'))).toHaveLength(26);
+    expect(sql).toContain("SELECT motif_id, motif FROM motifs WHERE (motif_id) > ('m24') ORDER BY motif_id LIMIT 25");
+    expect(calls.flat().some((arg) => arg.includes(value))).toBe(false);
   });
 
   it('erases an account', async () => {

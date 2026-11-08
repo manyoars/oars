@@ -1,5 +1,5 @@
 // `npm run erase -w packages/pool -- <what> ...`: the operator's erasure command (docs/pool.md, "Erasure"). It changes nothing until `--confirm` is given; without it, it says what it would do.
-import { eraseAccount, eraseLeakedSecret, eraseRawObject, type Erased, type EraseStore } from './erase.js';
+import { depositExists, eraseAccount, eraseLeakedSecret, eraseRawObject, type Erased, type EraseStore } from './erase.js';
 import { wranglerStore, type Target, type Wrangler } from './erase-wrangler.js';
 
 export const USAGE = [
@@ -70,7 +70,15 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
       return 0;
     }
     if (what === 'row' && options.positional.length === 1 && options.account !== undefined && options.id !== undefined) {
-      if (!options.confirm) return plan(io, `erase deposit ${options.id} of account ${options.account} in ${where}${options.valueStdin ? ', and every trace of the value read from stdin' : ''}`);
+      if (!options.confirm) {
+        // The dry run reads the row, so a mistyped selector shows here and not as a tombstone for a session that was never deposited.
+        const found = await depositExists(store, options.account, options.id);
+        if (!found && !options.valueStdin) {
+          io.print(`No deposit row for account ${options.account}, session ${options.id} in ${where}. Nothing would be erased: check the selector.`);
+          return 1;
+        }
+        return plan(io, `erase deposit ${options.id} of account ${options.account} in ${where} (${found ? 'the row exists' : 'no such row: only the value would be erased'})${options.valueStdin ? ', and every trace of the value read from stdin' : ''}`);
+      }
       const value = options.valueStdin ? (await io.stdin()).replace(/\r?\n$/, '') : undefined;
       io.print(summary(await eraseLeakedSecret(store, { account: options.account, id: options.id, ...(value === undefined ? {} : { value }) }, io.now())));
       return 0;

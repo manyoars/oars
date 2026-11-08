@@ -40,6 +40,12 @@ const textOf = (row: unknown, key: string): string => {
   return found;
 };
 
+const numberOf = (row: unknown, key: string): number => {
+  const found = fieldOf(row, key);
+  if (typeof found !== 'number') throw new Error(`no number at ${key} in a row`);
+  return found;
+};
+
 const dayOf = (now: Date): string => now.toISOString().slice(0, 10);
 
 /** The marker a deposit row holds in place of its skeleton. It parses as no skeleton, so a resend over it nets nothing. */
@@ -94,24 +100,55 @@ export interface LeakedSecret {
   value?: string;
 }
 
+/** Rows read per round trip when the command looks for a value. The match is made here, never in SQL, so the value does not reach wrangler's arguments (the process table, wrangler's logs). */
+const PAGE = 25;
+
+/** Whether the deposit row `account`/`id` exists, erased or not. The dry run asks it, and the confirmed run refuses a mistyped selector before it writes a tombstone for a session that was never deposited. */
+export const depositExists = async (store: EraseStore, accountId: string, sessionId: string): Promise<boolean> => (await store.rows('SELECT 1 AS found FROM deposits WHERE account = ? AND id = ?', [nameOf(accountId, 'the account'), nameOf(sessionId, 'the session id')])).length > 0;
+
+/** Reads a table a page at a time in key order, so the caller can look at every row without the value ever being written into a statement. */
+const scan = async (store: EraseStore, table: string, columns: readonly string[], keys: readonly string[], visit: (row: unknown) => Promise<void>, also = ''): Promise<void> => {
+  let after: (string | number)[] = keys.map(() => '');
+  for (;;) {
+    const page = await store.rows(`SELECT ${columns.join(', ')} FROM ${table} WHERE ${also}(${keys.join(', ')}) > (${keys.map(() => '?').join(', ')}) ORDER BY ${keys.join(', ')} LIMIT ${String(PAGE)}`, after);
+    for (const row of page) await visit(row);
+    if (page.length < PAGE) return;
+    after = keys.map((key) => {
+      const last: unknown = page[page.length - 1];
+      return typeof fieldOf(last, key) === 'number' ? numberOf(last, key) : textOf(last, key);
+    });
+  }
+};
+
 /**
  * Erases a deposit row that holds a leaked secret: its content is replaced by a marker in place (no row is dropped), and its key is tombstoned. With the value, every other deposit row that holds it goes the same way, the
  * motifs that name it are scrubbed of it (their counts stand), staged parts that hold it are dropped, and a tombstone of its SHA-256 makes ingest refuse a deposit that carries it again. A raw object that holds it is erased by key.
+ * A session that was never deposited is refused when no value is given: its tombstone would refuse that id forever.
  */
 export const eraseLeakedSecret = async (store: EraseStore, secret: LeakedSecret, now: Date): Promise<Erased> => {
   const account = nameOf(secret.account, 'the account');
   const id = nameOf(secret.id, 'the session id');
   const { value } = secret;
   if (value !== undefined && value.length < MIN_VALUE_LENGTH) throw new Error(`a leaked value is at least ${String(MIN_VALUE_LENGTH)} characters, or it would also match names that are not secrets`);
-  const held: { account: string; id: string }[] = [{ account, id }];
+  const named = await depositExists(store, account, id);
+  if (!named && value === undefined) throw new Error(`no deposit row for account ${account}, session ${id}: nothing was erased`);
+  const held: { account: string; id: string }[] = named ? [{ account, id }] : [];
   let rows = 0;
   if (value !== undefined) {
     await tombstone(store, 'value', await digestOf(value), 'leaked-secret', now);
     // A row holds the value as JSON wrote it, so that is the text to look for.
     const stored = JSON.stringify(value).slice(1, -1);
-    for (const row of await store.rows('SELECT account, id FROM deposits WHERE erased_on IS NULL AND (instr(skeleton, ?) > 0 OR instr(extensions, ?) > 0)', [stored, stored])) held.push({ account: textOf(row, 'account'), id: textOf(row, 'id') });
-    rows += await store.run('DELETE FROM deposit_parts WHERE instr(body, ?) > 0', [stored]);
-    rows += await store.run('UPDATE motifs SET motif = replace(motif, ?, ?) WHERE instr(motif, ?) > 0', [stored, SCRUBBED, stored]);
+    await scan(store, 'deposits', ['account', 'id', 'skeleton', 'extensions'], ['account', 'id'], (row) => {
+      if (textOf(row, 'skeleton').includes(stored) || textOf(row, 'extensions').includes(stored)) held.push({ account: textOf(row, 'account'), id: textOf(row, 'id') });
+      return Promise.resolve();
+    }, 'erased_on IS NULL AND ');
+    await scan(store, 'deposit_parts', ['account', 'batch', 'part', 'body'], ['account', 'batch', 'part'], async (row) => {
+      if (textOf(row, 'body').includes(stored)) rows += await store.run('DELETE FROM deposit_parts WHERE account = ? AND batch = ? AND part = ?', [textOf(row, 'account'), textOf(row, 'batch'), numberOf(row, 'part')]);
+    });
+    await scan(store, 'motifs', ['motif_id', 'motif'], ['motif_id'], async (row) => {
+      const motif = textOf(row, 'motif');
+      if (motif.includes(stored)) rows += await store.run('UPDATE motifs SET motif = ? WHERE motif_id = ?', [motif.replaceAll(stored, SCRUBBED), textOf(row, 'motif_id')]);
+    });
   }
   for (const one of held) rows += await dropDeposit(store, one.account, one.id, 'leaked-secret', now);
   const erased = { rows, objects: 0 };

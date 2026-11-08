@@ -182,6 +182,15 @@ describe('erasing a row that holds a leaked secret', () => {
     await expect(eraseLeakedSecret(await store(), { account: "a'; DROP TABLE x; --", id: '00000000000073aa' }, NOW)).rejects.toThrow(/not a pool id/);
   }, 60_000);
 
+  it('refuses a selector that names no deposit row, and writes no tombstone or audit row for it', async () => {
+    const { account } = await member();
+    const before = await count('SELECT COUNT(*) AS held FROM erasure_tombstones');
+    const audits = await count('SELECT COUNT(*) AS held FROM erasure_audit');
+    await expect(eraseLeakedSecret(await store(), { account, id: '00000000000077ff' }, NOW)).rejects.toThrow(/no deposit row/);
+    expect(await count('SELECT COUNT(*) AS held FROM erasure_tombstones')).toBe(before);
+    expect(await count('SELECT COUNT(*) AS held FROM erasure_audit')).toBe(audits);
+  }, 60_000);
+
   it('runs again to the end: a second run changes no row and still audits', async () => {
     const { token, account } = await member();
     expect((await pool.post('/v1/deposits', skeletonWith('00000000000074aa', 'AKIAFAKEKEY0000AGAIN'), token)).status).toBe(201);
