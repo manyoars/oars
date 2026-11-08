@@ -116,8 +116,9 @@ export const workerError = async (response: Response): Promise<Error> => {
  */
 const keepAlive = (miniflare: Miniflare): Agent => {
   // undici closes a socket idle for 4 s by default, and a test process starved by a loaded box can idle that long between two calls; each such close costs a reconnect and a TIME_WAIT
-  // socket. A pool lives for one test file, which the 30 s test and hook timeouts bound well inside ten minutes, and `dispose` closes the agent, so no socket outlives it.
-  const dispatcher = new Agent({ keepAliveTimeout: 600_000, keepAliveMaxTimeout: 600_000 });
+  // socket. Ten seconds covers the longest planned pause between calls (4.5 s) and stays below the 15 s after which workerd closes an idle socket itself, so the client never reuses a socket
+  // the server may be closing. `dispose` closes the agent, so no socket outlives a pool.
+  const dispatcher = new Agent({ keepAliveTimeout: 10_000, keepAliveMaxTimeout: 10_000 });
   miniflare.dispatchFetch = async (input, init) => {
     const forward = new StubRequest(input, init);
     const entry = await miniflare.ready;
