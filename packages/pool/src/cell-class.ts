@@ -1,8 +1,8 @@
 // The class of a cell: `clear` when every value its key names is on a public list, `thresholded` when any one is not. A cell keys on a motif (the names of its steps) and a frame bucket (`harness/versionBucket/model`), so
 // the class of a cell is the strictest class among them. A host is hashed at ingest, so a cell naming one is held to the thresholded floor as well. The class table is `field-classes.ts`; this file only reads it for a cell.
-import { ERROR_CLASS, ERROR_VERSION_CLASS, isEnvironmentCell, NO_AXES, parseShapeClass, UNKNOWN, type Cell } from '../../cli/src/sessions/cells.js';
+import { EFFORT_CLASS, ERROR_CLASS, ERROR_VERSION_CLASS, isEnvironmentCell, NO_AXES, parseShapeClass, RECOVERY_CLASS, UNKNOWN, type Cell } from '../../cli/src/sessions/cells.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
-import type { StepIdentity } from '../../cli/src/sessions/schema.js';
+import { PROMPT_CLASSES, type StepIdentity } from '../../cli/src/sessions/schema.js';
 import { classFor, isListed } from './field-classes.js';
 
 export type CellClass = 'clear' | 'thresholded';
@@ -35,16 +35,19 @@ const KEYED_FACETS: ReadonlySet<string> = new Set(['size', 'depth', 'extension',
 /**
  * A shape cell's value: the key names of a call are a long tail, so a `keys` cell is held to the thresholded floor; a layer 1 facet is clear when its key is on a public tool's pinned list and thresholded when it is a name
  * any other tool sent; every other facet is a closed list. A failed call's `error:<code>/<name>` and `error-version:<code>/<name>` class holds the step's name in `cls` with no steps behind it, so a name with
- * an identity (`action[program=... sub=...]`) is read as long tail: `motifName` has no parser, so a listed name waits for the public floor too. An action alone is clear. Every other class motif
- * (effort, recovery, a prompt class) names a closed value only.
+ * an identity (`action[program=... sub=...]`) is read as long tail: `motifName` has no parser, so a listed name waits for the public floor too (it serves less, never more). An action alone is clear, and an
+ * error class with no name is not a form the client writes, so it is thresholded. Every other class motif is clear only on a closed list: no class, an effort or recovery class (closed values), or a prompt class.
+ * Anything else, a prefix or a shape facet this file does not know, is thresholded: a class the pool cannot read is the strict one.
  */
 const shapeClear = (motif: Motif): boolean => {
   const cls = motif.cls ?? '';
-  if (cls.startsWith(ERROR_CLASS) || cls.startsWith(ERROR_VERSION_CLASS)) return !cls.slice(cls.indexOf('/')).includes('[');
+  if (cls.startsWith(ERROR_CLASS) || cls.startsWith(ERROR_VERSION_CLASS)) {
+    const name = cls.indexOf('/');
+    return name >= 0 && !cls.includes('[', name);
+  }
   const shape = parseShapeClass(cls);
-  if (shape === null) return true;
-  if (shape.facet === 'keys') return false;
-  return !KEYED_FACETS.has(shape.facet) || clearOf('key', shape.value.slice(0, shape.value.lastIndexOf('=')));
+  if (shape !== null) return shape.facet !== 'keys' && (!KEYED_FACETS.has(shape.facet) || clearOf('key', shape.value.slice(0, shape.value.lastIndexOf('='))));
+  return cls === '' || cls.startsWith(EFFORT_CLASS) || cls.startsWith(RECOVERY_CLASS) || PROMPT_CLASSES.some((prompt) => prompt === cls);
 };
 
 /** A cell whose motif is not held is `thresholded`: a class the pool cannot read is the strict one. */

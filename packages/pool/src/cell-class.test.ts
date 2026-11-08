@@ -5,7 +5,7 @@ import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames
 import { parseSkeleton, skeletonOf, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
 import type { Read } from '../../cli/src/sessions/read.js';
-import type { StepIdentity } from '../../cli/src/sessions/schema.js';
+import { PROMPT_CLASSES, type StepIdentity } from '../../cli/src/sessions/schema.js';
 import { cellClassOf, type CellClass } from './cell-class.js';
 import { bundleOf } from './derive.js';
 import { incrementsOf } from './ingest.js';
@@ -193,5 +193,33 @@ describe('a failed call\'s class cells', () => {
   it('keeps an action-only error name clear, served at one account', () => {
     expect(classOf(tail, 'error:429/', 'shell.exec')).toEqual(['clear']);
     expect(served(tail, 1)).toEqual(['error:429/shell.exec', 'error-version:429/shell.exec']);
+  });
+});
+
+// A class motif holds no steps, so its class is read from `cls` alone. Only the forms the client writes are clear; a class the pool cannot read is the strict one, never the loose one.
+describe('a class motif the pool cannot read', () => {
+  const frameBucket = 'claude-code/2.1.31x/claude-sonnet-4-5';
+  const classMotif = (cls: string): Motif => ({ motifId: 'm', level: 'named', steps: [], cls });
+  const classOf = (cls: string): CellClass => cellClassOf(cellOf('m', frameBucket, 1), classMotif(cls));
+
+  it('is thresholded for an unknown prefix, an unknown shape facet, and an error class with no name', () => {
+    expect(classOf('unknown:acme-deploy')).toBe('thresholded');
+    expect(classOf('shape:file.read/nofacet/acme')).toBe('thresholded');
+    expect(classOf('error:429')).toBe('thresholded');
+    expect(classOf('error-version:429')).toBe('thresholded');
+  });
+
+  it('stays clear for a prompt class, an effort class, a recovery class, and an action-only error name', () => {
+    for (const cls of PROMPT_CLASSES) expect(classOf(cls)).toBe('clear');
+    expect(classOf('')).toBe('clear');
+    expect(classOf('effort:high/thinking:4')).toBe('clear');
+    expect(classOf('recovery:429/file.read>shell.exec')).toBe('clear');
+    expect(classOf('error:429/shell.exec')).toBe('clear');
+  });
+
+  // A name with an identity waits for the public floor even when it is a listed program: `motifName` has no parser to rebuild the identity, and thresholded serves less, never more.
+  it('holds a listed program\'s name in an error class to the thresholded floor', () => {
+    expect(classOf('error:429/shell.exec[program=git sub=push]')).toBe('thresholded');
+    expect(classOf('error-version:429/shell.exec[program=git sub=push]')).toBe('thresholded');
   });
 });
