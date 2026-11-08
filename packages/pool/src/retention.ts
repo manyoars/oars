@@ -1,7 +1,7 @@
 // What the nightly run drops so no store the pool keeps grows without a bound: the telemetry record past `RETENTION_DAYS`, and the rows the pool's own bounds leave behind (login polls past the device code's life, login-start windows,
 // telemetry quota days). The record could not carry an R2 lifecycle rule instead: `wrangler.jsonc` has no field for one (a rule is set with `wrangler r2 bucket lifecycle` or in the dashboard), so a deploy step would be the only thing
 // holding the bound and nothing in the repo could check it. A sweep is code, and its test is the check.
-import type { Env } from './http.js';
+import { fieldOf, type Env } from './http.js';
 import { LOGIN_START_WINDOW_MS } from './identity.js';
 import { dayOf, shiftDay } from './telemetry-rollup.js';
 
@@ -39,7 +39,7 @@ export const sweepRecord = async (env: Env & SweepEnv, now: number, budget: numb
   const bucket = env.TELEMETRY;
   if (bucket === undefined) return 0;
   const cutoff = shiftDay(dayOf(now), -RETENTION_DAYS);
-  const stored = await env.DB.prepare('SELECT day FROM telemetry_sweep WHERE id = 1').first('day');
+  const stored = fieldOf(await env.DB.prepare('SELECT day FROM telemetry_sweep WHERE id = 1').bind().first(), 'day');
   // A pool with no cursor yet has kept nothing past the cutoff but what the nights since its deploy added, so it starts at the cutoff.
   let day = typeof stored === 'string' ? stored : cutoff;
   let left = budget;

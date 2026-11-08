@@ -193,8 +193,12 @@ describe.each(FLOWS)('the $provider brokered sign-in', ({ provider, clientId, de
       await db.prepare('INSERT INTO login_polls (handle_hash, next_at, interval_sec, expires_at) VALUES (?, 0, 5, ?)').bind(createHash('sha256').update(tampered).digest('hex'), Date.now() + 600_000).run();
     }
     const before = pool.stub.calls.length;
-    expect(await poll(swapped.toString('base64url'))).toMatchObject({ status: 401, json: { error: 'invalid_handle', message: expect.stringContaining('did not issue') } });
-    expect(await poll(later.toString('base64url'))).toMatchObject({ status: 401, json: { error: 'invalid_handle', message: expect.stringContaining('did not issue') } });
+    const swappedAnswer = await poll(swapped.toString('base64url'));
+    expect(swappedAnswer).toMatchObject({ status: 401, json: { error: 'invalid_handle' } });
+    expect(textOf(swappedAnswer.json, 'message')).toContain('did not issue');
+    const laterAnswer = await poll(later.toString('base64url'));
+    expect(laterAnswer).toMatchObject({ status: 401, json: { error: 'invalid_handle' } });
+    expect(textOf(laterAnswer.json, 'message')).toContain('did not issue');
     expect(pool.stub.calls.length).toBe(before);
     // The handle itself is untouched and still signs in.
     expect(await poll(handle)).toMatchObject({ status: 200, json: { status: 'authorized' } });

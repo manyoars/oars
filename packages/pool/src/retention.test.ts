@@ -56,7 +56,7 @@ const memory = (pageSize: number): { bucket: KeptBucket & SweepBucket; fill: (da
     left: (day) => under(`telemetry/${day}/`).length,
     calls: () => calls,
     bucket: {
-      list: ({ prefix, cursor: from }) => {
+      list: ({ prefix, cursor: from }: { prefix: string; cursor?: string }) => {
         calls += 1;
         const all = under(prefix);
         const start = from === undefined ? 0 : Number(from);
