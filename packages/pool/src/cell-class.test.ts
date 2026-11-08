@@ -129,7 +129,7 @@ describe('a served bundle reads the class', () => {
     // One account: the clear cell's read says the clear floor it cleared, not the public floor it never met, and the long-tail cell has no read.
     const one = reads(1);
     expect(one.length).toBeGreaterThan(0);
-    expect(new Set(one.map(({ floor, clusters }) => `${String(floor)}/${String(clusters)}`))).toEqual(new Set([`${DEFAULT_FLOORS.clear}/1`]));
+    expect(new Set(one.map(({ floor, clusters }) => `${String(floor)}/${String(clusters)}`))).toEqual(new Set([`${String(DEFAULT_FLOORS.clear)}/1`]));
     expect(new Set(reads(DEFAULT_PUBLIC_FLOOR).map(({ floor }) => floor))).toEqual(new Set([DEFAULT_FLOORS.clear, DEFAULT_PUBLIC_FLOOR]));
     for (const clusters of [1, DEFAULT_PUBLIC_FLOOR - 1, DEFAULT_PUBLIC_FLOOR]) {
       for (const read of reads(clusters)) expect(read.clusters).toBeGreaterThanOrEqual(read.floor ?? Infinity);

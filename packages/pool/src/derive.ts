@@ -122,14 +122,20 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
     poolsAt.set(floor, made);
     return made;
   };
+  const { served, held: heldAtPublic, pool } = poolAt(floors.public);
+  // The serve decision is per pool, but the bundle ships one row of a cell, and a read's input id hashes the row's `clusters`: the public pool's copy when it serves the cell, else the family's. Every family's reads are derived over that row,
+  // so each input is a cell in `cells`. The copy differs only when the two pools count a clear cell differently (every account at a floor of 1, the accounts that have stood above it), and the shipped copy never holds fewer than the floor the read states.
+  const publicCopy = new Map(served.map((cell) => [standing.get(cell) ?? cell, cell]));
+  const shippedOf = (cell: Cell): Cell => publicCopy.get(standing.get(cell) ?? cell) ?? cell;
   const reads = SERVED.map(({ family, derive }) => {
     const familyFloor = floorFor(floors, family);
     const { served: at, pool: familyPool } = poolAt(familyFloor);
-    const floorOfCell = new Map(at.map((cell) => [cellIdOf(cell), cellFloor(floors, familyFloor, cellClassOf(cell, motifOf.get(cell.motifId)))]));
+    const shipped = at.map(shippedOf);
+    const floorOfCell = new Map(shipped.map((cell) => [cellIdOf(cell), cellFloor(floors, familyFloor, cellClassOf(cell, motifOf.get(cell.motifId)))]));
+    const shippedPool = familyFloor === floors.public ? familyPool : { ...poolOf({ cells: shipped, motifs }, []), version: familyPool.version, lastDay: familyPool.lastDay };
     // A read cites only cells its pool serves, so every input has a floor; the family's own is the fallback a cited non-cell would take.
-    return { family, read: readsOf(familyPool, derive, (cellId) => floorOfCell.get(cellId) ?? familyFloor) };
+    return { family, read: readsOf(shippedPool, derive, (cellId) => floorOfCell.get(cellId) ?? familyFloor) };
   });
-  const { served, held: heldAtPublic, pool } = poolAt(floors.public);
   // The cells a family on its own floor cites, beside those the public floor serves.
   const cited = new Set(reads.filter(({ family }) => floorFor(floors, family) !== floors.public).flatMap(({ read }) => read.flatMap(({ inputs }) => inputs)));
   const shown = new Set([...served, ...[...new Set(Object.values(floors.families))].flatMap((floor) => poolAt(floor).served).filter((cell) => cited.has(cellIdOf(cell)))]);

@@ -57,6 +57,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * The weighted count of each of `keys` (cell keys, or stratum keys), from the accounts that hold it and have stood. An account has stood when its `access` is `standing`, or when its first counting batch is
  * `STANDING_AFTER_DAYS` old (`accessOf` latches the flag the first time it is read after that, and a recount can come first). A free account counts toward no floor until then, so k-1 of them
  * cannot test whether a real account holds a name (S13); their holdings are kept and count once they have stood. `now` is the pool's clock.
+ * `count` is that standing count; `any` is the same weighting over every account and is at least 1, since a key with a holder has an account (a lone young account weighs half, which rounds down to 0).
  */
 const countsOf = async (env: Env, kind: Kind, keys: string, now: number): Promise<{ key: string; count: number; any: number }[]> => {
   const [held, accounts, repoKeys, hours, counted] = await Promise.all([
@@ -100,7 +101,7 @@ const countsOf = async (env: Env, kind: Kind, keys: string, now: number): Promis
 export const heldBy = async (env: Env, account: string, kind: Kind): Promise<string[]> => (await rows(env, 'SELECT DISTINCT key FROM contributors WHERE kind = ? AND account = ?', kind, account)).map((row) => text(row, 'key'));
 
 /**
- * Writes the weighted count of each key in `keys` to its row's `clusters`. It reads what is committed, then writes after awaiting, so a recount that started earlier can write after a later one:
+ * Writes the weighted count of each key in `keys` to its row's `clusters`, and for a cell `clusters_any`. It reads what is committed, then writes after awaiting, so a recount that started earlier can write after a later one:
  * a count can lag a deposit until the next deposit that touches the key. A key with no row (a stratum a batch did not write) is left alone. A key none hold stays at the 0 it began with.
  */
 export const recount = async (env: Env, kind: Kind, keys: readonly string[], now: number = Date.now()): Promise<void> => {
