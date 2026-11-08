@@ -90,6 +90,15 @@ describe('Claude Code attachment records', () => {
     expect(out).toContain(`[injected ${kind.replaceAll('_', '-')} `);
   });
 
+  it('replaces the rendered copy of an injected attachment, and not that of a queued prompt', () => {
+    const rendered = [{ role: 'user', content: FILLER }];
+    const out = text(run({ type: 'attachment', renderedRole: 'user', rendered, attachment: { type: 'instructions', files: [] } }));
+    expect(out).toMatch(/"rendered":\[\{"role":"user","content":"\[injected instructions [0-9a-f]{12}\]"\}\]/);
+    expect(out).toContain('"renderedRole":"user"');
+    const queued = { type: 'attachment', rendered, attachment: { type: 'queued_command', prompt: FILLER } };
+    expect(run(queued)).toBe(queued);
+  });
+
   it('leaves a queued prompt, a mentioned file, and a type it does not know', () => {
     for (const kind of ['queued_command', 'file', 'edited_text_file', 'task_status', 'something_new']) {
       const line = { type: 'attachment', attachment: { type: kind, prompt: FILLER, content: FILLER } };

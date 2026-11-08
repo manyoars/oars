@@ -146,7 +146,10 @@ export const injectedRule = (key: string): InjectedRule => {
       case 'attachment': {
         const attachment = line['attachment'];
         const kind = isObject(attachment) ? attachment['type'] : undefined;
-        return typeof kind === 'string' && INJECTED_ATTACHMENTS.has(kind) ? withField(line, 'attachment', (value) => mapStrings(value, 'attachment', blocksIn(key, kind.replaceAll('_', '-')))) : line;
+        if (typeof kind !== 'string' || !INJECTED_ATTACHMENTS.has(kind)) return line;
+        // The record repeats its text as the message the model was shown (`rendered`), so that is the same block again.
+        const marked = (value: Json): Json => mapStrings(value, 'attachment', blocksIn(key, kind.replaceAll('_', '-')));
+        return withField(withField(line, 'attachment', marked), 'rendered', marked);
       }
       case 'api-request-shape':
         return withField(line, 'shape', (shape) => {
