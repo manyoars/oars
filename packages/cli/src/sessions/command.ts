@@ -475,8 +475,7 @@ export const sessionsHookInstall = async (deps: SessionsDeps, options: HookTarge
     if (options.schedule === 'off' && removed === undefined) lines.push(`No scheduled task to remove${runtime.platform === 'win32' ? '' : ' (only Windows ever had one)'}.`);
     lines.push(options.schedule === 'off' ? SENDS_OFF : SENDS_ON);
   }
-  return { document, text: lines.join('
-') };
+  return { document, text: lines.join('\n') };
 };
 
 export const sessionsHookUninstall = async (deps: SessionsDeps, options: HookTarget): Promise<Outcome> => {

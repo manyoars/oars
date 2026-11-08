@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const hookBin = fileURLToPath(new URL('../../dist/hook-bin.js', import.meta.url));
 const built = existsSync(hookBin);
@@ -30,13 +30,15 @@ const home = (): { folder: string; store: string } => {
 const stop = (folder: string): Promise<{ code: number | null; stdout: string }> =>
   new Promise((resolve, reject) => {
     const env = { PATH: process.env.PATH, APPDATA: folder, HOME: folder, USERPROFILE: folder, XDG_CONFIG_HOME: folder, OARS_TELEMETRY: '0' };
-    const child = spawn(process.execPath, [hookBin, 'stop'], { cwd: folder, env, stdio: ['pipe', 'pipe', 'ignore'], timeout: 30_000 });
+    const child = spawn(process.execPath, [hookBin, 'stop'], { cwd: tmpdir(), env, stdio: ['pipe', 'pipe', 'ignore'], timeout: 30_000 });
     let stdout = '';
     child.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk.toString('utf8');
     });
     child.on('error', reject);
-    child.on('close', (code) => resolve({ code, stdout }));
+    child.on('close', (code) => {
+      resolve({ code, stdout });
+    });
     child.stdin.end('{}');
   });
 
@@ -48,7 +50,11 @@ describe.skipIf(!built)('the built session-end hook', () => {
     expect(ran.stdout).toBe('');
     const mark: unknown = JSON.parse(readFileSync(join(store, 'pool-due.json'), 'utf8'));
     expect(typeof mark === 'object' && mark !== null ? typeof Reflect.get(mark, 'startedAt') : undefined).toBe('number');
-  });
+    // The detached sender it started writes `pool-nightly.json` as its last step; waiting for that file (a condition, not a sleep) lets the folder be removed with no process still in it.
+    await vi.waitFor(() => {
+      expect(existsSync(join(store, 'pool-nightly.json'))).toBe(true);
+    }, { timeout: 30_000, interval: 100 });
+  }, 45_000);
 
   it('writes no mark where the person opted out', async () => {
     const { folder, store } = home();

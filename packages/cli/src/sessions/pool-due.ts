@@ -52,15 +52,13 @@ export const recordSchedule = async (storeDir: string, mode: 'on' | 'off'): Prom
     return;
   }
   await mkdir(storeDir, { recursive: true });
-  await writeFile(join(storeDir, OPT_OUT), `${JSON.stringify({ schedule: 'off' })}
-`, { encoding: 'utf8', mode: 0o600 });
+  await writeFile(join(storeDir, OPT_OUT), `${JSON.stringify({ schedule: 'off' })}\n`, { encoding: 'utf8', mode: 0o600 });
 };
 
 /** One masked line in `pool-send.log`, the place a failure of the trigger or the sender goes. Never throws. */
 const logFailure = async (storeDir: string, at: number, error: unknown): Promise<void> => {
   const line = await errorLine(storeDir, error).catch(() => 'unknown error');
-  await mkdir(storeDir, { recursive: true }).then(() => appendFile(join(storeDir, LOG), `${new Date(at).toISOString()} ${line}
-`, 'utf8')).catch(() => undefined);
+  await mkdir(storeDir, { recursive: true }).then(() => appendFile(join(storeDir, LOG), `${new Date(at).toISOString()} ${line}\n`, 'utf8')).catch(() => undefined);
 };
 
 /** When the last sender was started; a missing, unreadable, or future mark is no mark. */

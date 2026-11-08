@@ -128,14 +128,14 @@ describe('the store and the sender', () => {
   it('starts node on hook-bin nightly, detached, with no stdio, and lets go of it', () => {
     const calls: { command: string; args: string[]; options: object }[] = [];
     const events: string[] = [];
-    startSender('C:\x\hook-bin.js', store(), () => T0, (command, args, options) => {
+    startSender('C:\\x\\hook-bin.js', store(), () => T0, (command, args, options) => {
       calls.push({ command, args, options });
       return {
         on: (event) => void events.push(event),
         unref: () => void events.push('unref'),
       };
     })();
-    expect(calls).toEqual([{ command: process.execPath, args: ['C:\x\hook-bin.js', 'nightly'], options: { detached: true, stdio: 'ignore', windowsHide: true } }]);
+    expect(calls).toEqual([{ command: process.execPath, args: ['C:\\x\\hook-bin.js', 'nightly'], options: { detached: true, stdio: 'ignore', windowsHide: true } }]);
     expect(events).toEqual(['error', 'unref']);
   });
 
@@ -143,11 +143,9 @@ describe('the store and the sender', () => {
     const dir = store();
     const child = new EventEmitter();
     startSender('hook-bin.js', dir, () => T0, () => ({ on: (event, listener) => child.on(event, listener), unref: () => undefined }))();
-    child.emit('error', new Error('spawn EACCES
-second line'));
+    child.emit('error', new Error('spawn EACCES\nsecond line'));
     await vi.waitFor(() => {
-      expect(readFileSync(join(dir, 'pool-send.log'), 'utf8')).toBe(`${new Date(T0).toISOString()} spawn EACCES
-`);
+      expect(readFileSync(join(dir, 'pool-send.log'), 'utf8')).toBe(`${new Date(T0).toISOString()} spawn EACCES\n`);
     });
   });
 });
@@ -159,8 +157,7 @@ describe('the recorded opt-out', () => {
     const { deps, started } = rig(dir);
     deps.ready = storeReady(dir);
     await recordSchedule(dir, 'off');
-    expect(readFileSync(join(dir, 'schedule.json'), 'utf8')).toBe('{"schedule":"off"}
-');
+    expect(readFileSync(join(dir, 'schedule.json'), 'utf8')).toBe('{"schedule":"off"}\n');
     expect(await scheduleOptedOut(dir)).toBe(true);
     expect(await catchUp(deps)).toBe('not-ready');
     expect(started).toEqual([]);

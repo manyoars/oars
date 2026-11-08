@@ -502,10 +502,9 @@ describe('the task an earlier version registered', () => {
   it('--schedule off records the opt-out and says so; --schedule on clears it', async () => {
     const dir = scratch();
     const store = join(dir, 'sessions');
-    const deps = { sessions: { storeDir: store, projectsRoot: join(dir, 'projects') }, install: runtimeIn(dir, 0, 'linux'), now: () => 0 };
+    const deps = { sessions: { storeDir: store, projectsRoot: join(dir, 'projects'), stdin: process.stdin, stdout: { write: () => true } }, install: runtimeIn(dir, 0, 'linux'), now: () => 0 };
     const off = await sessionsHookInstall(deps, { ...alone, schedule: 'off' });
-    expect(readFileSync(join(store, 'schedule.json'), 'utf8')).toBe('{"schedule":"off"}
-');
+    expect(readFileSync(join(store, 'schedule.json'), 'utf8')).toBe('{"schedule":"off"}\n');
     expect(off.document).toMatchObject({ ok: true, sends: 'off' });
     expect(off.text).toContain('Background sweeps and sends are off');
     expect(off.text).toContain('--schedule on');
@@ -520,11 +519,9 @@ describe('the task an earlier version registered', () => {
     const dir = scratch();
     const deps = { sessions: undefined, install: runtimeIn(dir, 0, 'linux'), now: () => 0 };
     const linux = await sessionsHookInstall(deps, { ...alone, schedule: 'off' });
-    expect(linux.text.split('
-')[0]).toBe('No scheduled task to remove (only Windows ever had one).');
+    expect(linux.text.split('\n')[0]).toBe('No scheduled task to remove (only Windows ever had one).');
     const windows = await sessionsHookInstall({ ...deps, install: windowsWith(dir, false) }, { ...alone, schedule: 'off' });
-    expect(windows.text.split('
-')[0]).toBe('No scheduled task to remove.');
+    expect(windows.text.split('\n')[0]).toBe('No scheduled task to remove.');
   });
 
   it('--schedule off alone writes no settings file and only removes the task', async () => {
