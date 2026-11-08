@@ -169,7 +169,7 @@ describe('the class of a layer 1 shape cell', () => {
 });
 
 describe('the cells of one facet of a shape', () => {
-  // The cells of a partition facet (`target`, `keys`, `dropped`, and a keyed facet for one key) split the same calls, so a fully served facet less another's served parts would give a sub-floor cell's exact count.
+  // The cells of a partition facet (`target`, `keys`, `dropped`, and a keyed facet for one key) do not overlap, so where a facet's parts sum to a count another read holds, a fully served facet less its served parts would give a sub-floor cell's exact count.
   const motifOf = (facet: Parameters<typeof shapeClass>[1], value: string) => classMotif(shapeClass('file.read', facet, value));
   const servedValues = (cells: [ReturnType<typeof motifOf>, number][]): string[] => {
     const stored: StoredPool = { cells: cells.map(([motif, clusters]) => cellOf(motif.motifId, clusters)), environment: [], motifs: cells.map(([motif]) => motif), strata: [] };
@@ -298,7 +298,7 @@ describe("an action's one-step shape cells", () => {
 });
 
 describe('every family of cells (`FAMILY_RULES`)', () => {
-  // A seeded generator (mulberry32) over calls of one action: each call lands in one cell of every partition facet, in the shape cell, and in one named cell, by day and by week, so the cells are consistent with one another the way a real store is.
+  // A seeded generator (mulberry32) over calls of one action: each call lands in the facet cells production gives it, in the shape cell, and in one named cell, by day and by week, so the cells are consistent with one another the way a real store is.
   const random = (seed: number): (() => number) => {
     let state = seed;
     return () => {

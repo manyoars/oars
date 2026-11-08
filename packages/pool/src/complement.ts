@@ -80,7 +80,7 @@ const smallest = (a: Cell, b: Cell): number => clustersOf(a) - clustersOf(b) || 
  * families a cell belongs to and whether it is the whole of one (a cell holding the family's total) or a part of it; a family with no whole cell has a total the reader still has from another read.
  */
 const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, motif: Motif | undefined) => Placement[] }[] = [
-  // The class cells of one facet partition (`FACET_PARTITIONS`) split the same calls of an action; the total is not a cell of the family.
+  // The class cells of one facet partition (`FACET_PARTITIONS`) split one count, named there for each facet; the total is not a cell of the family.
   {
     name: 'facet',
     placements: (cell, motif) => {
