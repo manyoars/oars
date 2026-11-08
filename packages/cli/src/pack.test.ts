@@ -244,7 +244,7 @@ describe('the public text states facts only', () => {
   it('the 0.3.0 changelog entry and both READMEs carry the gold arms exception', () => {
     const changelog = readFileSync(join(cliFolder, 'CHANGELOG.md'), 'utf8');
     const entry = changelog.slice(changelog.indexOf('## 0.3.0'), changelog.indexOf('## 0.2.0') > 0 ? changelog.indexOf('## 0.2.0') : undefined);
-    for (const text of [readFileSync(join(cliFolder, 'README.md'), 'utf8'), entry]) {
+    for (const text of [readFileSync(join(cliFolder, 'README.md'), 'utf8'), readFileSync(join(root, 'README.md'), 'utf8'), entry]) {
       expect(text).toContain('gold arms');
       expect(text).toContain('your own Claude subscription');
     }
@@ -254,10 +254,10 @@ describe('the public text states facts only', () => {
   it('the package metadata is findable: a short description, the site as homepage, and keywords', () => {
     expect(description.length).toBeLessThan(200);
     expect(manifest().homepage).toBe('https://manyoars.com/');
-    const keywords = manifest().keywords;
-    expect(Array.isArray(keywords)).toBe(true);
-    expect(Array.isArray(keywords) ? keywords.length : 0).toBeGreaterThanOrEqual(6);
-    expect(Array.isArray(keywords) ? keywords.length : 99).toBeLessThanOrEqual(10);
+    expect(manifest().keywords).toEqual(expect.any(Array));
+    const keywords = manifest().keywords as string[];
+    expect(keywords.length).toBeGreaterThanOrEqual(6);
+    expect(keywords.length).toBeLessThanOrEqual(10);
   });
 
   it.each([['packages/cli/README.md', join(cliFolder, 'README.md')], ['README.md', join(root, 'README.md')]])('%s says raw/ is unredacted, what the harness sends, where <config> is, and that accounts are not open', (_name, file) => {

@@ -3,6 +3,7 @@
   "version": "0.1.2",
   "description": "Typed client for the Many Oars public API: types generated from openapi/public.json and a thin openapi-fetch wrapper",
   "license": "Apache-2.0",
+  "homepage": "https://manyoars.com/",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/manyoars/oars.git",
