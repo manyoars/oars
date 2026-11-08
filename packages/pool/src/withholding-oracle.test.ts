@@ -274,7 +274,7 @@ const PATIENCE = 400;
  * The matrix of section 2: one column per atom that adds rank, and the (cell, column) pairs that are its rows. The universe is every account's own atoms, then the closed-list coverage (`coverageOf`), then draws from one
  * seeded stream (`candidatesOf`), and it stops only after `patience` draws in a row add no rank; `columnOf` discards an atom that emits a cell the fixture does not hold.
  */
-const matrixOf = (accounts: Accounts, patience: number): { held: Held; motifOf: ReadonlyMap<string, Motif>; pairs: { cell: Cell; column: Column; key: string }[]; kept: MatrixColumn[]; drawn: number } => {
+const matrixOf = (accounts: Accounts, patience: number): { held: Held; motifOf: ReadonlyMap<string, Motif>; pairs: { cell: Cell; column: Column; key: string }[]; kept: MatrixColumn[]; rose: number } => {
   const held = heldOf(accounts);
   const motifOf = new Map(held.pool.motifs.map((motif) => [motif.motifId, motif]));
   const keys = new Set(held.cells.map(keyOf));
@@ -305,13 +305,17 @@ const matrixOf = (accounts: Accounts, patience: number): { held: Held; motifOf: 
   };
   for (const atom of [...accounts.flat(), ...coverageOf()]) keep(atom);
   const draw = candidatesOf(held);
-  let drawn = 0;
-  for (let idle = 0; idle < patience; drawn += 1) {
+  // `rose` is the draw that last raised the rank; the sampling ended `patience` draws after it.
+  let rose = 0;
+  for (let drawn = 1, idle = 0; idle < patience; drawn += 1) {
     const atom = draw();
     if (atom === null) break;
-    idle = keep(atom) ? 0 : idle + 1;
+    if (keep(atom)) {
+      idle = 0;
+      rose = drawn;
+    } else idle += 1;
   }
-  return { held, motifOf, pairs, kept, drawn };
+  return { held, motifOf, pairs, kept, rose };
 };
 
 /**
@@ -374,8 +378,8 @@ const coverageOf = (): Atom[] => {
     [call('WebSearch', { query: 'q' }), call('WebSearch', { query: 'a longer query' })],
     [call('WebSearch', { query: 'aa' }), call('WebSearch', { query: 'bb' })],
     [call('Read', { file_path: 'src/a.ts' }), call('Read', { file_path: 'src/b.ts' })],
-    // Each closed value of each tool's argument.
-    ...[...CLOSED_ARG_VALUES].flatMap(([native, keys]) => [...keys].flatMap(([key, values]) => [...values].map((value) => [call(native, { [key]: value })]))),
+    // Each closed value of each tool's argument, sent by a call that succeeds and by one that fails: the value's cells write `failed` too, and a fixture that holds the value needs a column for it.
+    ...[...CLOSED_ARG_VALUES].flatMap(([native, keys]) => [...keys].flatMap(([key, values]) => [...values].flatMap((value) => [[call(native, { [key]: value })], [call(native, { [key]: value }, { status: 'error' })]]))),
     // Each error code, on a failed call that something follows (the `recovery:` cells) and on one that nothing follows.
     ...[...ERROR_CODES].flatMap((code) => [[call('WebSearch', { query: 'q' }, { status: 'error', errorCode: code })], [call('Read', { file_path: 'src/a.ts' }, { status: 'error', errorCode: code }), call('Bash', { command: 'ls' })]]),
   ];
@@ -487,6 +491,19 @@ describe('the withholding oracle', () => {
     expect(servedOf(accounts)).toBeGreaterThan(0);
     expect(leaksOf(accounts)).toEqual([]);
   });
+
+  // The matrix stops only when the rank has stopped rising for `PATIENCE` draws in a row. This fixture holds 141 cells, and its last rank-raising draw is past the 400 atoms the first version drew and stopped at: that fixed
+  // count left `shape:web.search/size/query=1-8 failed` with no atom, which throws as a gap in the generator.
+  it('keeps drawing while the rank rises: a fixture whose rank is still rising after 400 draws stays correct', () => {
+    const paths = ['a.ts', 'src/a.ts', 'src/lib/a.ts', 'docs/lib/a.md', 'README.md'];
+    const reads = paths.flatMap((file) => [{}, { limit: 10 }, { offset: 0 }, { limit: 2000, offset: 500 }].flatMap((extra) => accountsOf(6, () => atomOf(call('Read', { file_path: file, ...extra })))));
+    const greps = ['foo', 'foo.*bar', '^a|b$'].flatMap((pattern) => [{}, { path: 'src/a.ts' }, { '-i': true }, { output_mode: 'count' }].flatMap((extra) => accountsOf(6, () => atomOf(call('Grep', { pattern, ...extra })))));
+    const searches = ['q', 'a query of some length', 'a query that is considerably longer than thirty-two characters'].flatMap((query) => accountsOf(6, () => atomOf(call('WebSearch', { query }))));
+    const failures = [...ERROR_CODES].flatMap((code) => [{}, { limit: 10 }].flatMap((extra) => accountsOf(6, () => atomOf(call('Read', { file_path: 'src/a.ts', ...extra }, { status: 'error', errorCode: code })))));
+    const accounts = [...reads, ...greps, ...searches, ...failures];
+    expect(matrixOf(accounts, PATIENCE).rose).toBeGreaterThan(400);
+    expect(leaksOf(accounts)).toEqual([]);
+  }, 60000);
 
   it('serves nothing that gives back arg/number: keys/file_path,limit 40 beside keys/file_path,offset 3, beside arg/number 43, which is held and not served', () => {
     const path = { file_path: 'src/a.ts' };
