@@ -538,11 +538,15 @@ describe('the withholding oracle', () => {
   // a leak. The off-list call has a text value, so it is `arg/text`, and `arg/none` stays the 2 keyless calls.
   it.each([
     ['a call whose only key is null', { query: null }, 2],
+    // The off-list row is a no-leak confirmation that does not depend on the `arg/none` rule: its call sits in no `keys` cell, so the `facet` rule's `arg/none` placement neither helps nor hurts it.
     ['a call with only an off-list key', { not_a_public_key: 'x' }, 3],
   ])('serves nothing that gives back arg/none beside %s', (_, odd, count) => {
     const accounts = [...accountsOf(10, () => atomOf(call('WebSearch', { query: 'q' }))), ...accountsOf(2, () => atomOf(call('WebSearch', {}))), ...accountsOf(count, () => atomOf(call('WebSearch', odd)))];
     expect(servedOf(accounts)).toBeGreaterThan(0);
-    expect(heldOf(accounts).cells.some(({ clusters }) => clusters < FLOOR)).toBe(true);
+    const held = heldOf(accounts);
+    const clsOf = new Map(held.pool.motifs.map((motif) => [motif.motifId, motif.cls]));
+    // The cell the title names: web.search `arg/none`, held and under the floor, so the case can fail on its leak and not on some other sub-floor cell.
+    expect(held.cells.some(({ motifId, clusters }) => clsOf.get(motifId) === 'shape:web.search/arg/none' && clusters < FLOOR)).toBe(true);
     expect(leaksOf(accounts)).toEqual([]);
   });
 
