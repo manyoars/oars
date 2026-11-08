@@ -155,9 +155,12 @@ export const keepAliveSender = (entry: () => Promise<URL>): KeepAliveSender => {
       inFlight += 1;
       peak = Math.max(peak, inFlight);
     }
+    // A streamed body goes out as chunks and a closing chunk written apart from the headers. workerd closes the connection when a Worker answers before the body has all arrived, so on a loaded box
+    // the next call would find its socket reset. A body held whole goes out with its headers and a content-length in one write.
+    const body = forward.body === null ? undefined : new Uint8Array(await forward.arrayBuffer());
     let response: Response;
     try {
-      response = await fetch(new URL(`${sent.pathname}${sent.search}`, base), { method: forward.method, headers, ...(forward.body === null ? {} : { body: forward.body, duplex: 'half' }), redirect: forward.redirect, dispatcher });
+      response = await fetch(new URL(`${sent.pathname}${sent.search}`, base), { method: forward.method, headers, ...(body === undefined ? {} : { body }), redirect: forward.redirect, dispatcher });
     } finally {
       if (counted) inFlight -= 1;
     }

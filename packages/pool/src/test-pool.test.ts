@@ -36,6 +36,28 @@ describe('the pool harness reuses its connections', () => {
     expect(pool.connects() - before, `connects=${String(pool.connects() - before)} peak=${String(pool.peak())}`).toBe(0);
   });
 
+  // workerd closes the connection when a Worker answers before the request body has all reached it (the 404 router never reads one). A body handed on as a stream goes out as a chunk and then, apart
+  // from it, the closing chunk; on a loaded box the Worker answers in between and closes a socket the next call is about to reuse: `read ECONNRESET` in raw-serves-nothing.test.ts. The stream here
+  // closes 40 ms after its chunk, which is that load made exact; the sender must put the whole body out with its headers, so no connection is lost and none is reset.
+  it('keeps its connection when a request body arrives late and the Worker answers without reading it', async () => {
+    await pool.get('/v1/covenant');
+    const before = pool.connects();
+    for (let at = 0; at < 10; at += 1) {
+      const body = new ReadableStream<Uint8Array>({
+        start: (controller) => {
+          controller.enqueue(new TextEncoder().encode('{}'));
+          setTimeout(() => {
+            controller.close();
+          }, 40);
+        },
+      });
+      const answered = await pool.miniflare.dispatchFetch('http://pool.test/v1/raw/none', { method: 'POST', body, duplex: 'half' });
+      expect(answered.status).toBe(404);
+      await answered.text();
+    }
+    expect(pool.connects() - before, `connects=${String(pool.connects() - before)}`).toBe(0);
+  });
+
   // A release that Miniflare sends has no timing the test could drive, so the server here answers every call at once and holds each release until the case lets it go.
   it('sends a release that is still in flight on its own connection, so the next call reuses the one it had', async () => {
     const held: ServerResponse[] = [];
