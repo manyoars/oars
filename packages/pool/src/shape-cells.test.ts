@@ -65,3 +65,37 @@ describe('the class of a layer 1 shape cell', () => {
     expect(classOfShape('enum', 'acme_dry_run=true')).toBe('thresholded');
   });
 });
+
+describe('the cells of one facet of a shape', () => {
+  // The cells of a partition facet (`target`, `keys`, `dropped`, and a keyed facet for one key) split the same calls, so a fully served facet less another's served parts would give a sub-floor cell's exact count.
+  const motifOf = (facet: Parameters<typeof shapeClass>[1], value: string) => classMotif(shapeClass('file.read', facet, value));
+  const servedValues = (cells: [ReturnType<typeof motifOf>, number][]): string[] => {
+    const stored: StoredPool = { cells: cells.map(([motif, clusters]) => cellOf(motif.motifId, clusters)), environment: [], motifs: cells.map(([motif]) => motif), strata: [] };
+    const held = bundleOf('claude-code', '2.1.314', stored, DEFAULT_FLOORS);
+    return held.cells.map(({ motifId }) => held.motifs.find((motif) => motif.motifId === motifId)?.cls ?? '').sort();
+  };
+  const F = DEFAULT_PUBLIC_FLOOR;
+
+  it('withholds the smallest served part where a part is under the floor', () => {
+    const sub = motifOf('target', 'test');
+    const small = motifOf('target', 'doc');
+    const large = motifOf('target', 'source');
+    expect(servedValues([[sub, F - 1], [small, F], [large, F + 3]])).toEqual([large.cls]);
+  });
+
+  it('keeps every part where none is under the floor, and parts of another facet or key', () => {
+    const a = motifOf('target', 'doc');
+    const b = motifOf('target', 'source');
+    expect(servedValues([[a, F], [b, F + 3]])).toEqual([a.cls, b.cls].sort());
+    const sub = motifOf('size', 'file_path=1-8');
+    const small = motifOf('size', 'file_path=9-32');
+    const large = motifOf('size', 'file_path=33-128');
+    const otherKey = motifOf('size', 'limit=1-8');
+    const otherFacet = motifOf('depth', 'file_path=2');
+    expect(servedValues([[sub, F - 1], [small, F], [large, F + 3], [otherKey, F], [otherFacet, F]])).toEqual([large.cls, otherKey.cls, otherFacet.cls].sort());
+  });
+
+  it('withholds the only served part, so the facet shows nothing of the thin part', () => {
+    expect(servedValues([[motifOf('dropped', '1'), F - 1], [motifOf('dropped', '2'), F]])).toEqual([]);
+  });
+});
