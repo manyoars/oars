@@ -24,7 +24,7 @@ const inPool = async (bindings: { [name: string]: string }, run: (pool: TestPool
 const servedPrograms = async (pool: TestPool, token: string): Promise<string[]> => {
   const response = await pool.raw(`/bundle/claude-code/${VERSION}/${VOCAB_VERSION}`, token);
   expect(response.status).toBe(200);
-  const verified = await verifyBundle(response.json, pool.signingKey(), 'claude-code', VERSION);
+  const verified = await verifyBundle(response.json, pool.pinned(), 'claude-code', VERSION);
   if (!verified.ok) throw new Error(verified.reason);
   const served = new Set(verified.bundle.cells.map((cell) => cell.motifId));
   return verified.bundle.motifs

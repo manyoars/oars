@@ -18,6 +18,8 @@ import { DEFAULT_FLOORS } from './floors.js';
 import type { StoredPool } from './stored.js';
 
 const FLOOR = DEFAULT_FLOORS.public;
+// The oracle judges every cell against the one floor `FLOOR` (`cell.clusters >= FLOOR`), so it serves at a clear floor equal to the public one; the two-floor split is held by `floor-split.test.ts` and `cell-class.test.ts`.
+const ONE_FLOOR = { ...DEFAULT_FLOORS, clear: FLOOR };
 const CWD = '/work/app';
 const SKELETON_ID = '0123456789abcdef';
 
@@ -324,7 +326,7 @@ const matrixOf = (accounts: Accounts, patience: number): { held: Held; motifOf: 
  */
 const leaksOf = (accounts: Accounts, patience = PATIENCE): Leak[] => {
   const { held, motifOf, pairs, kept } = matrixOf(accounts, patience);
-  const served = new Set(bundleOf('claude-code', '2.1.314', held.pool, DEFAULT_FLOORS).cells.map(keyOf));
+  const served = new Set(bundleOf('claude-code', '2.1.314', held.pool, ONE_FLOOR).cells.map(keyOf));
   const rowOf = (at: number): bigint[] => kept.map(({ vector }) => vector[at] ?? 0n);
   const callRows = ACTIONS.flatMap((_, action) => [0, 1].map((status) => kept.map(({ calls }) => calls[action * 2 + status] ?? 0n)));
   const span = new Span();
@@ -453,7 +455,7 @@ describe('the withholding oracle', () => {
 
   // Two cases `determinedCells` (`shape-cells.test.ts`) stated from cells, moved here and built from calls through the route. `determinedCells` stays for its seeded census until t996's sweep replaces it.
   const grep = (input: { readonly [key: string]: unknown }): Atom => atomOf(call('Grep', input));
-  const servedOf = (accounts: Accounts): number => bundleOf('claude-code', '2.1.314', heldOf(accounts).pool, DEFAULT_FLOORS).cells.length;
+  const servedOf = (accounts: Accounts): number => bundleOf('claude-code', '2.1.314', heldOf(accounts).pool, ONE_FLOOR).cells.length;
 
   it('serves nothing that gives back a keys cell through a combination of served totals: path,pattern is the path total plus the pattern total less the calls', () => {
     const accounts = [...accountsOf(FLOOR + 5, () => grep({ path: 'src/a.ts' })), ...accountsOf(FLOOR - 1, () => grep({ path: 'src/a.ts', pattern: 'foo' })), ...accountsOf(FLOOR + 5, () => grep({ pattern: 'foo' }))];
