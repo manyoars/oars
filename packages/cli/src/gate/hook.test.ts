@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { gateHook, registryCachePath, crossingsPath, type GateHookDeps } from './hook.js';
+import { DEADLINE_ENV, DEADLINE_MS, deadlineOf, gateHook, registryCachePath, crossingsPath, type GateHookDeps } from './hook.js';
 import { indexFile } from './novelty.js';
 import { folderKey, parseRows, type CrossingRecord } from './record.js';
 import type { RegistryAnswer, RegistryReader } from './registry.js';
@@ -364,6 +364,13 @@ describe('oars gate hook: the deadline', () => {
     await gateHook(payload('npm install left-pad'), depsFor(store, { registry: reader, clock: () => 790 }));
     expect(reader).not.toHaveBeenCalled();
     expect(rowsOf(store)).toHaveLength(1);
+  });
+
+  it('keeps 800 ms unless the environment names a larger whole number of ms', () => {
+    expect(DEADLINE_MS).toBe(800);
+    expect(deadlineOf({})).toBe(DEADLINE_MS);
+    expect(deadlineOf({ [DEADLINE_ENV]: '6000' })).toBe(6000);
+    for (const given of ['', 'soon', '800', '100', '-5', '6000.5', 'Infinity']) expect(deadlineOf({ [DEADLINE_ENV]: given })).toBe(DEADLINE_MS);
   });
 });
 

@@ -24,6 +24,15 @@ export const registryCachePath = (storeDir: string): string => join(storeDir, 'g
 /** The registry ask is cut at this many ms on the process clock, less a write reserve; `hook-main.ts` ends the process a short grace after it, so the whole call is under a second. */
 export const DEADLINE_MS = 800;
 
+/** The environment variable a test sets to give a built hook more than `DEADLINE_MS`, so a loaded machine that spends the budget starting node still reaches the code under test. */
+export const DEADLINE_ENV = 'OARS_GATE_HOOK_DEADLINE_MS';
+
+/** `DEADLINE_MS`, or the value of `DEADLINE_ENV` when it is a whole number of ms above it; nothing else (a lower, empty, or malformed value) moves the deadline. */
+export const deadlineOf = (env: NodeJS.ProcessEnv): number => {
+  const given = Number(env[DEADLINE_ENV]);
+  return Number.isInteger(given) && given > DEADLINE_MS ? given : DEADLINE_MS;
+};
+
 /** A registry answer the hook kept is used for this many days. A `latest` is read "as of the crossing", so an older one is asked again. */
 export const HOOK_REGISTRY_DAYS = 1;
 /** A not-found answer is trusted this long: a name can be published any minute, and a block rests on the answer. */

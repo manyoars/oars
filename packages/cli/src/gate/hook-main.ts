@@ -5,15 +5,17 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { defaultConfigDir } from '../credentials.js';
-import { DEADLINE_MS, type GateHookDeps } from './hook.js';
+import { deadlineOf, type GateHookDeps } from './hook.js';
 import { isLocked, startFill, startHelper } from './hook-fill.js';
 import { fireRecorder } from './hook-record.js';
 import { runHookProcess } from './hook-process.js';
 import { managerReader } from './registry.js';
 import { hookEmitter } from '../telemetry/hook-emit.js';
 
-/** The process itself ends this long after `DEADLINE_MS`. */
+/** The process itself ends this long after the deadline. */
 const GRACE_MS = 100;
+
+const deadlineMs = deadlineOf(process.env);
 
 const readStdin = async (): Promise<string> => {
   process.stdin.setEncoding('utf8');
@@ -29,8 +31,8 @@ const depsFor = (stage: NonNullable<GateHookDeps['stage']>): GateHookDeps => {
     now: Date.now,
     // `performance.now()` counts from the start of the process, so node's own start is inside the budget.
     clock: () => performance.now(),
-    deadlineMs: DEADLINE_MS,
-    registry: managerReader(undefined, DEADLINE_MS),
+    deadlineMs,
+    registry: managerReader(undefined, deadlineMs),
     fill: (ask) => startFill(storeDir, ask, Date.now(), (dir, one) => { startHelper(spawn, dir, one); }),
     locked: (ask) => isLocked(storeDir, ask, Date.now()),
     stage,
@@ -45,7 +47,7 @@ await runHookProcess({
   deps: depsFor,
   exit: (code) => process.exit(code),
   write: (text) => new Promise<void>((done) => process.stdout.write(text, () => { done(); })),
-  deadlineMs: DEADLINE_MS + GRACE_MS - performance.now(),
+  deadlineMs: deadlineMs + GRACE_MS - performance.now(),
   clock: () => performance.now(),
   record: fireRecorder(emit),
 });
