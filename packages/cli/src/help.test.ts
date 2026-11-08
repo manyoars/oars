@@ -10,10 +10,10 @@ const helpOf = async (...argv: string[]): Promise<string> => {
 };
 
 describe('help text states what the code does', () => {
-  it('sessions hook install names all five hooks it writes and the nightly task that sends', async () => {
+  it('sessions hook install names all five hooks it writes and that sends ride the hook and commands', async () => {
     const text = await helpOf('sessions', 'hook', 'install');
     expect(text).toContain('merge the SessionStart, UserPromptSubmit, PreToolUse, PostToolUseFailure, and SessionEnd hooks into a settings file');
-    expect(text).toContain('on Windows register the nightly task (which sends telemetry while telemetry is on, and pool batches only after you accept a pool covenant)');
+    expect(text).toContain('on Windows, remove the nightly task an earlier version registered (oars installs no scheduler: a due sweep and send, at most about hourly, starts from the session-end hook and from any oars command; telemetry goes only while it is on, and pool batches only after you accept a pool covenant)');
   });
 
   it('pool raw --mode says off sends nothing from that folder to the pool', async () => {
