@@ -29,10 +29,10 @@ const generationOf = async (env: Env): Promise<number> => {
 };
 
 /**
- * What names this bundle: the code that derives it (the methods and the list of families it derives), the floors (both, and any a family has of its own), the harness and version asked for, and the generation of the rows. It is known without reading a row, so a conditional request
+ * What names this bundle: the code that derives it (the methods and the list of families it derives), the floors (public, clear, and disclosure, and any a family has of its own), the harness and version asked for, and the generation of the rows. It is known without reading a row, so a conditional request
  * costs no parse and an account cannot force one by sending it. Read before the rows, so a bundle is never older than the ETag it carries.
  */
-export const etagOf = (harness: string, harnessVersion: string, generation: number, families: readonly string[], floors: Floors): string => `"${contentHash([BUNDLE_FORMAT, EXTRACTOR_VERSION, METHODS, CALL_SHAPE_METHOD, families, wireFloors(floors), floors.clear, harness, harnessVersion, VOCAB_VERSION, generation])}"`;
+export const etagOf = (harness: string, harnessVersion: string, generation: number, families: readonly string[], floors: Floors): string => `"${contentHash([BUNDLE_FORMAT, EXTRACTOR_VERSION, METHODS, CALL_SHAPE_METHOD, families, wireFloors(floors), harness, harnessVersion, VOCAB_VERSION, generation])}"`;
 
 /** Whether an If-None-Match names this ETag. A proxy that compresses may weaken it to `W/"..."`, so the prefix is not compared. */
 const matches = (header: string | null, etag: string): boolean => (header ?? '').split(',').some((token) => token.trim().replace(/^W\//, '') === etag);

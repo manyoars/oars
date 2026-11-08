@@ -5,12 +5,13 @@
   "main": "src/worker.ts",
   "compatibility_date": "2026-07-01",
   "compatibility_flags": ["nodejs_compat"],
-  // The serve floors, as plain variables because a floor is public: how many clusters a cell needs to be served (5), and how many must hold a signature's hash before its text may be requested (2). A deploy changes
+  // The serve floors, as plain variables because a floor is public: how many clusters a cell needs to be served (5), how many a cell of closed public vocabulary needs (`CLEAR_FLOOR`, 1, never above the first), and how many must hold a signature's hash before its text may be requested (2). A deploy changes
   // them here or in its own copy of this file, and a change is a deploy and never a client release. `PUBLIC_FLOOR_FAMILIES` (`live=3,tool-day=8`) gives single read families a floor of their own; unset, none does.
   // The two OAuth client IDs the pool starts a provider's device flow with (docs/pool.md, "Sign-in"). A client ID is public; Google's client secret is not, and is the Worker secret `GOOGLE_CLIENT_SECRET`, declared here by name only.
   "vars": {
     "PUBLIC_FLOOR": "5",
     "DISCLOSURE_FLOOR": "2",
+    "CLEAR_FLOOR": "1",
     "GITHUB_CLIENT_ID": "Ov23liKTHzJPQeVimbnO",
     "GOOGLE_CLIENT_ID": "146886627173-pcmp8t0qg6p4n0t4cnr4236oit43eudn.apps.googleusercontent.com"
   },

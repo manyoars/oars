@@ -5,11 +5,11 @@ import { fieldOf, wranglerConfig } from './test-pool.js';
 describe('wrangler.jsonc', () => {
   const { parsed, text } = wranglerConfig();
 
-  it('commits no account id, route, custom domain, or plain variable but the two public floors and the two public client IDs', () => {
+  it('commits no account id, route, custom domain, or plain variable but the three public floors and the two public client IDs', () => {
     for (const key of ['account_id', 'route', 'routes', 'workers_dev', 'env', 'preview_urls']) expect(fieldOf(parsed, key), key).toBeUndefined();
     // A floor is public by design (it is stated in every bundle), so it is a plain variable; `floors.test.ts` holds these to the defaults in the code.
     // A client ID is public (the provider's consent screen and the device-code request show it), so the pool's two are plain variables; Google's client secret is not, and stays a Worker secret.
-    expect(Object.keys(fieldOf(parsed, 'vars') ?? {}).sort()).toEqual(['DISCLOSURE_FLOOR', 'GITHUB_CLIENT_ID', 'GOOGLE_CLIENT_ID', 'PUBLIC_FLOOR']);
+    expect(Object.keys(fieldOf(parsed, 'vars') ?? {}).sort()).toEqual(['CLEAR_FLOOR', 'DISCLOSURE_FLOOR', 'GITHUB_CLIENT_ID', 'GOOGLE_CLIENT_ID', 'PUBLIC_FLOOR']);
     expect(text).not.toMatch(/manyoars\.com|\.workers\.dev/);
   });
 

@@ -1319,6 +1319,8 @@ export interface StrataCell {
 export interface BundleFloors {
   public: number;
   disclosure: number;
+  /** The floor a cell of closed public vocabulary is served at, at most `public`. Absent in a bundle signed before the pool split its floor by cell class. */
+  clear?: number;
   families?: FamilyFloors;
 }
 
@@ -1387,7 +1389,7 @@ const isFloor = (value: unknown): value is number => typeof value === 'number' &
 
 /** The floors a bundle states, or none: a client prints what is here, so a value that is not a whole number of at least 1 is refused and not shown, while a family this client does not know is carried (in `--json`) and not printed, since `floorSentence` prints only the families this client knows (additive, section 17 rule 3). */
 const isFloors = (value: unknown): value is BundleFloors =>
-  isFields(value) && isFloor(value.public) && isFloor(value.disclosure) && (value.families === undefined || (isFields(value.families) && Object.values(value.families).every(isFloor)));
+  isFields(value) && isFloor(value.public) && isFloor(value.disclosure) && (value.clear === undefined || isFloor(value.clear)) && (value.families === undefined || (isFields(value.families) && Object.values(value.families).every(isFloor)));
 
 const isSourced = (value: unknown): value is Sourced =>
   isFields(value) && ((value.state === 'value' && typeof value.value === 'number') || (value.state === 'no source yet' && typeof value.reason === 'string'));

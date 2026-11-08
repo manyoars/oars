@@ -70,9 +70,9 @@ describe('one store at floors 3, 5, and 10', () => {
 
 describe('what the bundle and the ETag carry', () => {
   it('states both floors, and the families that have their own', () => {
-    expect(bundleOver([], at(3)).floors).toEqual({ public: 3, disclosure: 2 });
-    expect(bundleOver([], at(5, { live: 3 })).floors).toEqual({ public: 5, disclosure: 2, families: { live: 3 } });
-    expect(bundleOver([], DEFAULT_FLOORS).floors).toEqual({ public: 5, disclosure: 2 });
+    expect(bundleOver([], at(3)).floors).toEqual({ public: 3, disclosure: 2, clear: 3 });
+    expect(bundleOver([], at(5, { live: 3 })).floors).toEqual({ public: 5, disclosure: 2, clear: 5, families: { live: 3 } });
+    expect(bundleOver([], DEFAULT_FLOORS).floors).toEqual({ public: 5, disclosure: 2, clear: 1 });
   });
 
   it('gives two bundles alike but for a floor two ETags, and the same floors the same ETag', () => {
@@ -80,8 +80,12 @@ describe('what the bundle and the ETag carry', () => {
     const etag = (floors: Floors): string => etagOf(HARNESS, VERSION, 7, served, floors);
     expect(etag(at(3))).not.toBe(etag(at(5)));
     expect(etag({ ...at(5), disclosure: 3 })).not.toBe(etag(at(5)));
-    // The clear class's floor is its own field, so it names the bundle too.
+    // The clear class's floor is its own number, so it names the bundle too, and so do the bundle's two floors apart; floors that are the same numbers name the same bundle.
     expect(etag({ ...at(5), clear: 3 })).not.toBe(etag(at(5)));
+    expect(etag({ ...DEFAULT_FLOORS, clear: 2 })).not.toBe(etag(DEFAULT_FLOORS));
+    expect(etag({ ...DEFAULT_FLOORS, public: 6 })).not.toBe(etag(DEFAULT_FLOORS));
+    expect(etag({ ...DEFAULT_FLOORS })).toBe(etag(DEFAULT_FLOORS));
+    expect(bundleOver([], { ...DEFAULT_FLOORS, clear: 2 }).floors).toMatchObject({ public: 5, clear: 2 });
     expect(etag(at(5, { live: 3 }))).not.toBe(etag(at(5)));
     expect(etag(at(5, { live: 3 }))).not.toBe(etag(at(5, { live: 4 })));
     expect(etag(at(5, { live: 3, cost: 6 }))).toBe(etag(at(5, { cost: 6, live: 3 })));
@@ -188,7 +192,7 @@ describe('one family on its own floor', () => {
     const bundle = bundleOver(held, at(5, { 'tool-day': 8 }));
     expect(bundle.reads.some((read) => read.family === 'tool-day')).toBe(false);
     expect(bundle.reads.some((read) => read.family === 'live')).toBe(true);
-    expect(bundle.floors).toEqual({ public: 5, disclosure: 2, families: { 'tool-day': 8 } });
+    expect(bundle.floors).toEqual({ public: 5, disclosure: 2, clear: 5, families: { 'tool-day': 8 } });
   });
 
   // A week with a day under every floor: the days are held by 9, 7, 5, 3, and 1 accounts. At 3 the sub-floor day withholds the smallest served one (the 3), at 5 the 5, and at 10 no day is served.

@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { HARNESSES, verifyBundle, VOCAB_VERSION, type Bundle } from '../../cli/src/sessions/pool-wire.js';
 import type { Harness } from '../../cli/src/sessions/schema.js';
 import { etagOf } from './bundle.js';
-import { DEFAULT_FLOORS } from './floors.js';
+import { DEFAULT_FLOORS, floorsOf } from './floors.js';
 import { SERVED } from './derive.js';
 import { sampleSkeleton, withPairs } from './sample.js';
 import { containing, fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
@@ -605,7 +605,7 @@ describe('the ETag of a fetch', () => {
     const db = await pool.db();
     const generation = Number(await db.prepare('SELECT generation FROM pool_generation WHERE id = 1').first('generation'));
     expect(generation).toBeGreaterThan(0);
-    expect(answer.headers.get('etag')).toBe(etagOf('claude-code', VERSION, generation, [...SERVED.map(({ name }) => name), 'books'], DEFAULT_FLOORS));
+    expect(answer.headers.get('etag')).toBe(etagOf('claude-code', VERSION, generation, [...SERVED.map(({ name }) => name), 'books'], floorsOf({ CLEAR_FLOOR: '5' }, () => undefined)));
   });
 });
 

@@ -7,7 +7,7 @@ import { sampleSkeleton } from './sample.js';
 import { EARLIEST_COUNTED } from './access.js';
 import type { Harness } from '../../cli/src/sessions/schema.js';
 import { fetchBundle, WEEK_RESET } from './bundle.js';
-import { ENVIRONMENT_CELLS } from './stored.js';
+import { ENVIRONMENT_CELLS, ENVIRONMENT_PARTS } from './stored.js';
 import type { PoolDb } from './http.js';
 import { fieldOf, startPool, stubUser, type TestPool } from './test-pool.js';
 
@@ -146,10 +146,10 @@ describe('the bundle reads the stored cells', () => {
     };
     expect(await planOf(EARLIEST_COUNTED, 'acct')).toContain('USING INDEX deposits_counted');
     expect(await planOf(WEEK_RESET, '2026-W45')).toContain('USING INDEX accounts_by_fetch_week');
-    // The environment cells are found by their bucket, and the other cells of each motif through the key's index (a key starts with its motif), so no statement of the fetch scans the table.
-    const environment = await planOf(ENVIRONMENT_CELLS, 'env:', 5, 5);
-    expect(environment).toContain('USING INDEX cells_by_harness');
-    expect(environment).toMatch(/SEARCH other USING (COVERING )?INDEX sqlite_autoindex_cells_1/);
-    expect(environment).not.toContain('SCAN other');
+    // The environment cells are found by their bucket, and the parts of their motifs through the key's index (a key starts with its motif), so no statement of the fetch scans the table.
+    expect(await planOf(ENVIRONMENT_CELLS, 'env:', 1)).toContain('USING INDEX cells_by_harness');
+    const parts = await planOf(ENVIRONMENT_PARTS, '["m"]');
+    expect(parts).toMatch(/SEARCH cells USING (COVERING )?INDEX sqlite_autoindex_cells_1/);
+    expect(parts).not.toContain('SCAN cells');
   });
 });

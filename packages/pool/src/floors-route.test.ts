@@ -43,14 +43,14 @@ describe('a pool whose deploy lowers the public floor to 3', () => {
     expect((await fetched(pool, tokens[0] ?? '')).bundle.reads).toEqual([]);
     tokens.push(await depositor(pool, '8103'));
     const { bundle, etag } = await fetched(pool, tokens[0] ?? '');
-    expect(bundle.floors).toEqual({ public: 3, disclosure: 4, families: { 'tool-day': 4 } });
+    expect(bundle.floors).toEqual({ public: 3, disclosure: 4, clear: 3, families: { 'tool-day': 4 } });
     expect(bundle.reads.length).toBeGreaterThan(0);
     // The family on its own floor of 4 serves nothing at three accounts; every other read cleared 3 and says so.
     expect(bundle.reads.some((read) => read.family === 'tool-day')).toBe(false);
     expect(bundle.reads.every((read) => read.floor === 3)).toBe(true);
     expect(bundle.cells.every((cell) => cell.clusters >= 3)).toBe(true);
     const generation = Number(await (await pool.db()).prepare('SELECT generation FROM pool_generation WHERE id = 1').first('generation'));
-    expect(etag).toBe(etagOf('claude-code', VERSION, generation, [...SERVED.map(({ name }) => name), 'books'], floorsOf({ PUBLIC_FLOOR: '3', DISCLOSURE_FLOOR: '4', PUBLIC_FLOOR_FAMILIES: 'tool-day=4' }, () => undefined)));
+    expect(etag).toBe(etagOf('claude-code', VERSION, generation, [...SERVED.map(({ name }) => name), 'books'], floorsOf({ PUBLIC_FLOOR: '3', CLEAR_FLOOR: '3', DISCLOSURE_FLOOR: '4', PUBLIC_FLOOR_FAMILIES: 'tool-day=4' }, () => undefined)));
     // The fourth account lifts the family that was on 4 and no other.
     tokens.push(await depositor(pool, '8104'));
     const after = (await fetched(pool, tokens[0] ?? '')).bundle;
@@ -71,7 +71,7 @@ describe('a pool whose bindings are bad', () => {
     const tokens: string[] = [];
     for (const id of ['8201', '8202', '8203', '8204']) tokens.push(await depositor(pool, id));
     const four = (await fetched(pool, tokens[0] ?? '')).bundle;
-    expect(four.floors).toEqual({ public: 5, disclosure: 2 });
+    expect(four.floors).toEqual({ public: 5, disclosure: 2, clear: 5 });
     expect(four.reads).toEqual([]);
     expect(four.cells).toEqual([]);
     tokens.push(await depositor(pool, '8205'));

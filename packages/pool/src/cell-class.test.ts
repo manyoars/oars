@@ -5,7 +5,7 @@ import type { Motif } from '../../cli/src/sessions/motif.js';
 import type { StepIdentity } from '../../cli/src/sessions/schema.js';
 import { cellClassOf } from './cell-class.js';
 import { bundleOf } from './derive.js';
-import { DEFAULT_FLOORS, DEFAULT_PUBLIC_FLOOR } from './floors.js';
+import { DEFAULT_FLOORS, DEFAULT_PUBLIC_FLOOR, floorsOf } from './floors.js';
 import { classFor, isListed } from './field-classes.js';
 import type { StoredPool } from './stored.js';
 
@@ -80,17 +80,32 @@ describe('a served bundle reads the class', () => {
   });
   const frames = (clusters: number, floors = DEFAULT_FLOORS): string[] => bundleOf('claude-code', '2.1.314', stored(clusters), floors).cells.map((cell) => `${cell.motifId} ${cell.frameBucket}`);
 
-  it('serves a clear cell below the clear floor only when the floor says so, and a thresholded one never', () => {
-    expect(frames(DEFAULT_PUBLIC_FLOOR - 1, { ...DEFAULT_FLOORS, clear: 1 })).toEqual(['m-clear claude-code/2.1.31x/claude-sonnet-4-5']);
+  const mixed: Motif = { motifId: 'm-mixed', level: 'named', steps: [{ action: 'shell.exec', identity: git() }, { action: 'shell.exec', identity: { program: 'acme-deploy', sub: null, flags: [] } }], cls: null };
+  const withMixed = (clusters: number): StoredPool => ({ ...stored(clusters), cells: [cellOf('m-mixed', 'claude-code/2.1.31x/claude-sonnet-4-5', clusters)], motifs: [mixed] });
+
+  it('serves a clear cell held by one cluster at the default clear floor, and a thresholded one never', () => {
+    expect(frames(1)).toEqual(['m-clear claude-code/2.1.31x/claude-sonnet-4-5']);
+    expect(frames(DEFAULT_PUBLIC_FLOOR - 1)).toEqual(['m-clear claude-code/2.1.31x/claude-sonnet-4-5']);
   });
 
-  it('serves all three at the floor', () => {
+  it('withholds that clear cell when the deploy sets CLEAR_FLOOR to 5, and states both floors', () => {
+    const five = floorsOf({ CLEAR_FLOOR: '5' }, () => undefined);
+    expect(frames(1, five)).toEqual([]);
+    expect(frames(DEFAULT_PUBLIC_FLOOR - 1, five)).toEqual([]);
+    expect(bundleOf('claude-code', '2.1.314', stored(1), DEFAULT_FLOORS).floors).toEqual({ public: 5, disclosure: 2, clear: 1 });
+  });
+
+  it('serves all three at the public floor', () => {
     expect(frames(DEFAULT_PUBLIC_FLOOR)).toHaveLength(3);
   });
 
-  it('keeps one cell floor for both classes today, and states the thresholded floor on the bundle', () => {
-    expect(DEFAULT_FLOORS.clear).toBe(DEFAULT_FLOORS.public);
-    expect(frames(DEFAULT_PUBLIC_FLOOR - 1)).toEqual([]);
+  it('holds a cell with one clear part and one long-tail part to the public floor', () => {
+    const served = (clusters: number): number => bundleOf('claude-code', '2.1.314', withMixed(clusters), DEFAULT_FLOORS).cells.length;
+    expect([served(1), served(DEFAULT_PUBLIC_FLOOR - 1), served(DEFAULT_PUBLIC_FLOOR)]).toEqual([0, 0, 1]);
+  });
+
+  it('states the thresholded floor as the bundle\'s floor, and the clear floor beside it', () => {
+    expect(DEFAULT_FLOORS.clear).toBe(1);
     expect(bundleOf('claude-code', '2.1.314', stored(DEFAULT_PUBLIC_FLOOR), DEFAULT_FLOORS).floor).toBe(DEFAULT_PUBLIC_FLOOR);
   });
 });

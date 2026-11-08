@@ -4,8 +4,10 @@ import { ENVIRONMENT_BUCKET, harnessBucket, NO_AXES, type Cell, type Grain } fro
 import type { Motif, MotifLevel, WindowStep } from '../../cli/src/sessions/motif.js';
 import type { StrataCell } from '../../cli/src/sessions/pool-wire.js';
 import { bucketPrefix } from './derive.js';
-import { floorFor, type Floors } from './floors.js';
+import { cellClassOf } from './cell-class.js';
+import { cellFloor, floorFor, type Floors } from './floors.js';
 import { fieldOf, type Env } from './http.js';
+import { chunksOf } from './ingest.js';
 
 /** What a bundle is derived from: one version's cells, the version-free cells that are safe beside them, the motifs they name, and the strata that clear the floor. */
 export interface StoredPool {
@@ -56,13 +58,16 @@ const motifOf = (row: unknown): Motif => {
 };
 
 /**
- * The version-free (name, platform, shell) cells that clear the floor, for a motif only when no cell of that motif, grain, day, and exposure is under it, in any bucket or environment.
- * They count the same calls as the version cells, so a total beside only some of its parts shows the rest by subtraction: five accounts on one version and three on another make an
- * environment total of eight, and the total less the served five is the three. Every part is served or the total is not, so the difference is nothing. A cell's key starts with its
- * motif, so the subquery reads the motif's rows through the key's index.
+ * The version-free (name, platform, shell) cells that may clear a floor: those held by `clusters_any` at the lowest floor either class could serve them at (the caller's bound), a superset that `environmentOf` narrows by the cell's class.
+ * They count the same calls as the version cells, so a total beside only some of its parts shows the rest by subtraction: five accounts on one version and three on another make an environment total of eight, and the total less the
+ * served five is the three. Every part is served or the total is not (`environmentOf`), so the difference is nothing.
  */
 export const ENVIRONMENT_CELLS =
-  "SELECT motif_id, frame_bucket, grain, day, exposed, sessions, clusters, ok, failed, tokens, token_sessions, token_prompts, duration_ms FROM cells WHERE harness_bucket = ? AND sessions > 0 AND clusters >= ? AND NOT EXISTS (SELECT 1 FROM cells AS other WHERE other.key >= cells.motif_id || '/' AND other.key < cells.motif_id || '0' AND other.grain = cells.grain AND other.day = cells.day AND other.exposed = cells.exposed AND other.sessions > 0 AND other.clusters < ?)";
+  'SELECT motif_id, frame_bucket, grain, day, exposed, sessions, clusters, clusters_any, ok, failed, tokens, token_sessions, token_prompts, duration_ms FROM cells WHERE harness_bucket = ? AND sessions > 0 AND clusters_any >= ?';
+
+/** The parts of those cells: every cell of the given motifs (a JSON array of motif ids), in any bucket or environment. A cell's key starts with its motif, so the join reads each motif's rows through the key's index. */
+export const ENVIRONMENT_PARTS =
+  "SELECT cells.motif_id, cells.frame_bucket, cells.grain, cells.day, cells.exposed, cells.sessions, cells.clusters, cells.clusters_any, cells.ok, cells.failed, cells.tokens, cells.token_sessions, cells.token_prompts, cells.duration_ms FROM json_each(?) AS motif JOIN cells ON cells.key >= motif.value || '/' AND cells.key < motif.value || '0' WHERE cells.sessions > 0";
 
 /** The panel window: four weeks, in days. */
 export const PANEL_DAYS = 28;
@@ -103,6 +108,14 @@ const cellBase = (row: unknown): Omit<Cell, 'tokens'> => ({
   exposed: numberField(row, 'exposed') === 1,
 });
 
+/** A cell as held, and the count of every account that holds it, standing or not (`clusters_any`). */
+interface Held {
+  cell: Cell;
+  any: number;
+}
+
+const heldOf = (row: unknown): Held => ({ cell: cellOf(row), any: numberField(row, 'clusters_any') });
+
 const cellOf = (row: unknown): Cell => {
   const tokenSessions = coverageField(row, 'token_sessions');
   const tokenPrompts = coverageField(row, 'token_prompts');
@@ -117,25 +130,61 @@ const cellOf = (row: unknown): Cell => {
 };
 
 /**
+ * The count a cell is served on. A `clear` cell at a clear floor of 1 counts every account that holds it, standing or not, since a floor of 1 has no k to protect and the standing filter (S13) would hold the first read back until an account has
+ * stood; at any other clear floor, and for a `thresholded` cell, it is the count of the accounts that have stood. The class is read here, when the cell is served, so a vocabulary that moves reclassifies a cell without a recount.
+ */
+const countedAs = (held: Held, motifs: ReadonlyMap<string, Motif>, floors: Floors): Cell => (floors.clear <= 1 && cellClassOf(held.cell, motifs.get(held.cell.motifId)) === 'clear' ? { ...held.cell, clusters: held.any } : held.cell);
+
+/**
+ * The environment cells to serve: those that clear the floor of their own class, and only when no cell of the same motif, grain, day, and exposure, in any bucket or environment, is under the floor of its class. One sub-floor part
+ * withholds the total, because the total less its served parts would be that part. A part is sub-floor against its own class: a long-tail version, model, or shell is held to the public floor even beside a clear total, which is how the
+ * rule withholds a total that would reveal it, while a clear part at the clear floor withholds nothing.
+ */
+const environmentOf = (candidates: readonly Held[], parts: readonly Held[], motifs: ReadonlyMap<string, Motif>, floors: Floors, floor: number): Cell[] => {
+  const counted = (held: Held): Cell => countedAs(held, motifs, floors);
+  const clearsOwn = (held: Held): boolean => {
+    const cell = counted(held);
+    return cell.clusters >= cellFloor(floors, floor, cellClassOf(cell, motifs.get(cell.motifId)));
+  };
+  const under = new Set(parts.filter((part) => !clearsOwn(part)).map(({ cell }) => JSON.stringify([cell.motifId, cell.grain, cell.day, cell.exposed, cell.frameBucket])));
+  const partsOf = new Map<string, string[]>();
+  for (const { cell } of parts) {
+    const key = JSON.stringify([cell.motifId, cell.grain, cell.day, cell.exposed]);
+    partsOf.set(key, [...(partsOf.get(key) ?? []), cell.frameBucket]);
+  }
+  return candidates
+    .filter((held) => clearsOwn(held))
+    .filter(({ cell }) => (partsOf.get(JSON.stringify([cell.motifId, cell.grain, cell.day, cell.exposed])) ?? []).every((frame) => !under.has(JSON.stringify([cell.motifId, cell.grain, cell.day, cell.exposed, frame]))))
+    .map(counted);
+};
+
+/**
  * The rows a bundle is derived from. The cells come with their held counts, whatever they are, so a floor is applied when the bundle is served (`bundleOf`) and never decided here. The queries that do compare a count to a floor
  * (the environment cells, the motifs they name, and the strata) take the floor of the family that reads them, to fetch fewer rows: the environment cells are the `fit` family's, and a stratum is a bundle-level count at the public floor.
  */
 export const storedOf = async (env: Env, harness: string, harnessVersion: string, floors: Floors, now: number): Promise<StoredPool> => {
   const environmentFloor = floorFor(floors, 'fit');
+  // The lowest count an environment cell can be served on: its class's floor, the clear one when that is lower.
+  const lowest = Math.min(environmentFloor, cellFloor(floors, environmentFloor, 'clear'));
   const bucket = harnessBucket(harnessVersion);
   const prefix = bucketPrefix(harness, harnessVersion);
   const modelPrefix = `${harness}/${NO_AXES}/`;
-  const [cells, environment, motifs, strata, panel] = await Promise.all([
-    env.DB.prepare('SELECT motif_id, frame_bucket, grain, day, exposed, sessions, clusters, ok, failed, tokens, token_sessions, token_prompts, duration_ms FROM cells WHERE ((harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?) OR (harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?)) AND sessions > 0').bind(bucket, prefix.length, prefix, NO_AXES, modelPrefix.length, modelPrefix).all(),
-    env.DB.prepare(ENVIRONMENT_CELLS).bind(ENVIRONMENT_BUCKET, environmentFloor, environmentFloor).all(),
-    env.DB.prepare('SELECT motif FROM motifs WHERE motif_id IN (SELECT motif_id FROM cells WHERE ((harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?) OR (harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?)) AND sessions > 0) OR motif_id IN (SELECT motif_id FROM cells WHERE harness_bucket = ? AND sessions > 0 AND clusters >= ?)').bind(bucket, prefix.length, prefix, NO_AXES, modelPrefix.length, modelPrefix, ENVIRONMENT_BUCKET, environmentFloor).all(),
+  const [cells, candidates, motifs, strata, panel] = await Promise.all([
+    env.DB.prepare('SELECT motif_id, frame_bucket, grain, day, exposed, sessions, clusters, clusters_any, ok, failed, tokens, token_sessions, token_prompts, duration_ms FROM cells WHERE ((harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?) OR (harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?)) AND sessions > 0').bind(bucket, prefix.length, prefix, NO_AXES, modelPrefix.length, modelPrefix).all(),
+    env.DB.prepare(ENVIRONMENT_CELLS).bind(ENVIRONMENT_BUCKET, lowest).all(),
+    env.DB.prepare('SELECT motif FROM motifs WHERE motif_id IN (SELECT motif_id FROM cells WHERE ((harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?) OR (harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?)) AND sessions > 0) OR motif_id IN (SELECT motif_id FROM cells WHERE harness_bucket = ? AND sessions > 0 AND clusters_any >= ?)').bind(bucket, prefix.length, prefix, NO_AXES, modelPrefix.length, modelPrefix, ENVIRONMENT_BUCKET, lowest).all(),
     env.DB.prepare('SELECT dimension, value, sessions, clusters FROM strata WHERE clusters >= ? AND sessions > 0').bind(floors.public).all(),
     panelOf(env, now),
   ]);
+  const held = candidates.results.map(heldOf);
+  // The parts of the candidates' motifs, read after them: a candidate with no cell under its floor is the only one that is served.
+  const parts = (await Promise.all(chunksOf([...new Set(held.map(({ cell }) => cell.motifId))]).map((chunk) => env.DB.prepare(ENVIRONMENT_PARTS).bind(chunk).all()))).flatMap((page) => page.results.map(heldOf));
+  const known = motifs.results.map(motifOf);
+  const byId = new Map(known.map((motif) => [motif.motifId, motif]));
   return {
-    cells: cells.results.map(cellOf),
-    environment: environment.results.map(cellOf),
-    motifs: motifs.results.map(motifOf),
+    cells: cells.results.map(heldOf).map((one) => countedAs(one, byId, floors)),
+    environment: environmentOf(held, parts, byId, floors, environmentFloor),
+    motifs: known,
     panel: panel.accounts,
     panelDay: panel.day,
     strata: strata.results.map((row) => {

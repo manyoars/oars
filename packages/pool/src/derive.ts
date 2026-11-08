@@ -70,7 +70,7 @@ export const bucketPrefix = (harness: string, harnessVersion: string): string =>
 /**
  * What one harness's bundle at one version holds: the stored cells of its (harness, bucket), and beside them its version-free model cells and the environment cells, which key on neither. A share's denominator is the sum of the bundle's served cells (`readsOf`); only what clears the floor leaves.
  * The floors are the deploy's (`floors.ts`), applied here and nowhere else: the stored cells keep their held counts, so a floor that moves needs no redeposit. Each read family is derived from the cells served at its own floor (the public floor unless
- * `floors.families` names it), with complementary withholding computed at that floor, so a family on its own floor holds the same differencing guarantee as one on the public floor. A `clear` cell (`cell-class.ts`) is served at the floor of its class (`cellFloor`), the same number today. The bundle's `cells` are those served at the public floor,
+ * `floors.families` names it), with complementary withholding computed at that floor, so a family on its own floor holds the same differencing guarantee as one on the public floor. A `clear` cell (`cell-class.ts`) is served at the floor of its class (`cellFloor`), and a part is sub-floor against its own class's floor when a whole is withheld beside it. The bundle's `cells` are those served at the public floor,
  * and beside them any cell that a read of a family on its own floor cites, since a read must be able to be walked back to the cells it names; a family on a lower floor therefore shows its own cells and no other family's.
  */
 export const bundleOf = (harness: Harness, harnessVersion: string, stored: StoredPool, floors: Floors): Bundle => {
@@ -88,14 +88,15 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
   const poolAt = (floor: number): { served: Cell[]; pool: Pool } => {
     const known = poolsAt.get(floor);
     if (known !== undefined) return known;
-    const withheld = withheldOf(held, motifs, floor);
+    const floorOf = (cell: Cell): number => cellFloor(floors, floor, cellClassOf(cell, motifOf.get(cell.motifId)));
+    const withheld = withheldOf(held, motifs, floorOf);
     // A version-free counterpart would otherwise reveal the name withheld in this bucket.
     const counterpart = (cell: Cell): string => JSON.stringify([cell.motifId, cell.grain, cell.day, cell.exposed]);
     const withheldBuckets = new Set(cells.filter((cell) => withheld.has(cell)).map(counterpart));
     for (const cell of environment) {
       if (withheldBuckets.has(counterpart(cell))) withheld.add(cell);
     }
-    const served = held.filter((cell) => clears(cell, cellFloor(floors, floor, cellClassOf(cell, motifOf.get(cell.motifId)))) && !withheld.has(cell));
+    const served = held.filter((cell) => clears(cell, floorOf(cell)) && !withheld.has(cell));
     const kept = new Set(served);
     // `cells` holds the version-free model cells of every version too, so the bucket's own are taken by its prefix: another version's failure on a later day must not move the day.
     const own = poolOf({ cells: cells.filter((cell) => kept.has(cell) && cell.frameBucket.startsWith(prefix)), motifs }, []);
