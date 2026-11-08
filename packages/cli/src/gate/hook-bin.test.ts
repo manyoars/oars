@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { DEADLINE_ENV } from './hook.js';
 import { startFill, type FillAsk } from './hook-fill.js';
 import { folderKey } from './record.js';
 
@@ -29,7 +30,12 @@ const seededStore = (home: string): string => {
   return store;
 };
 
+// A built hook counts node's own start inside its 800 ms, and a loaded box can spend all of it there, so no sight would reach the code a case is about. Each hook is given this much
+// instead, and a case that needs a cut ask gets one the stub manager can never answer in time (`gatedNpm` waits for the test), so the cut is the test's, not the machine's speed.
+const HOOK_DEADLINE_MS = 6_000;
+
 const envFor = (home: string, pathHead?: string): NodeJS.ProcessEnv => ({
+  [DEADLINE_ENV]: String(HOOK_DEADLINE_MS),
   PATH: [pathHead, process.env.PATH].filter((part) => part !== undefined && part !== '').join(delimiter),
   APPDATA: home,
   HOME: home,
@@ -55,33 +61,50 @@ const fakeNpm = (): { folder: string; marker: string } => {
   return { folder, marker };
 };
 
-// A manager that answers 2 s late, past the hook's 650 ms cut: a script that sleeps, then prints what `npm view` prints. It logs each start and each finish, one line apiece, so a
-// run that was killed leaves a start and no finish.
-const slowNpm = (): { folder: string; log: string } => {
-  const folder = mkdtempSync(join(tmpdir(), 'oars-gate-slownpm-'));
+// A manager that cannot answer until the test lets it: a script that logs its start, waits for the `release` file (30 s at most, so a stub the hook failed to stop does not outlive the
+// run), logs its finish, and then prints what `npm view` prints (`answer`) or fails the way it does against an unreachable registry (`down`). One line a start and a finish, so a
+// run that was killed leaves a start and no finish. Nothing but the test writing `release` ends the wait, so the hook's cut ask is cut however slowly the box runs it.
+const gatedNpm = (kind: 'answer' | 'down'): { folder: string; log: string; release: string } => {
+  const folder = mkdtempSync(join(tmpdir(), `oars-gate-${kind}npm-`));
   made.push(folder);
   const log = join(folder, 'npm-starts');
+  const release = join(folder, 'release');
   const answer = '{"dist-tags.latest":"1.0.0","time.created":"2020-01-01T00:00:00.000Z"}';
-  writeFileSync(join(folder, 'npm'), `#!/bin/sh\necho started >> "${log}"\nsleep 2\necho ended >> "${log}"\necho '${answer}'\n`);
+  const posixEnd = kind === 'answer' ? `echo '${answer}'
+` : `echo 'npm error code ECONNREFUSED' >&2
+exit 1
+`;
+  const cmdEnd = kind === 'answer' ? `echo ${answer}
+` : `echo npm error code ECONNREFUSED 1>&2
+exit /b 1
+`;
+  writeFileSync(join(folder, 'npm'), `#!/bin/sh
+echo started >> "${log}"
+n=0
+while [ ! -f "${release}" ] && [ "$n" -lt 30 ]; do sleep 1; n=$((n+1)); done
+echo ended >> "${log}"
+${posixEnd}`);
   chmodSync(join(folder, 'npm'), 0o755);
-  writeFileSync(join(folder, 'npm.cmd'), `@echo off\r\necho started>> "${log}"\r\nping -n 3 127.0.0.1 >nul\r\necho ended>> "${log}"\r\necho ${answer}\r\n`);
-  return { folder, log };
-};
-
-// A manager that is down: it takes 2 s, then fails the way `npm view` does against an unreachable registry. Same log as `slowNpm`.
-const downNpm = (): { folder: string; log: string } => {
-  const folder = mkdtempSync(join(tmpdir(), 'oars-gate-downnpm-'));
-  made.push(folder);
-  const log = join(folder, 'npm-starts');
-  writeFileSync(join(folder, 'npm'), `#!/bin/sh\necho started >> "${log}"\nsleep 2\necho ended >> "${log}"\necho 'npm error code ECONNREFUSED' >&2\nexit 1\n`);
-  chmodSync(join(folder, 'npm'), 0o755);
-  writeFileSync(join(folder, 'npm.cmd'), `@echo off\r\necho started>> "${log}"\r\nping -n 3 127.0.0.1 >nul\r\necho ended>> "${log}"\r\necho npm error code ECONNREFUSED 1>&2\r\nexit /b 1\r\n`);
-  return { folder, log };
+  writeFileSync(
+    join(folder, 'npm.cmd'),
+    `@echo off
+echo started>> "${log}"
+set /a n=0
+:wait
+if exist "${release}" goto done
+set /a n+=1
+if %n% geq 30 goto done
+ping -n 2 127.0.0.1 >nul
+goto wait
+:done
+echo ended>> "${log}"
+${cmdEnd}`,
+  );
+  return { folder, log, release };
 };
 
 // The `start` `startFill` is given, run as the hook runs it but to its end: the built helper asks the manager on PATH and writes what it learns, and has finished when this returns.
-// `startFill` is the code the hook calls to take the name's lock and start the helper, so this hand-off is the real one without the race for the hook's 650 ms cut: under load a
-// hook can end before its cut (no lock, no helper) or skip its own ask, and a test that depends on the first sight reaching the lock then says nothing about what follows it.
+// `startFill` is the code the hook calls to take the name's lock and start the helper, so this hand-off is the real one without the hook's cut in front of it: the cases that go through the hook give it the longer deadline `HOOK_DEADLINE_MS` instead, and these two hold on a box too loaded for even that.
 // `startFill` swallows what `start` throws, so the helper's exit status is recorded for the test to assert after the hand-off: an assertion inside `start` could never fail it, and
 // an empty list shows `start` never ran.
 const helperRun = (home: string, pathHead: string, statuses: (number | null)[]) => (storeDir: string, ask: FillAsk): void => {
@@ -107,25 +130,18 @@ const rowsOf = (home: string): unknown[] => {
         .map((line): unknown => JSON.parse(line));
 };
 
-/** How many built-hook sights a case runs before it says no hand-off happened. */
+/** How many built-hook sights a case runs before it says no row or output came. */
 const MAX_SIGHTS = 10;
-
-// Runs the built hook's sights of one name until one hands the name off. A sight ends one of three ways: it takes the name's lock and starts the helper (the lock, or the answer the helper
-// kept, is on disk when the hook exits); it ends at its own deadline with the ask stopped (no lock, no helper, no answer: node's start or the blocking spawn used the budget); or it is
-// cut before it asks at all. The second and third leave the name unasked, and the next sight asks once itself, so a store with no lock and no kept answer sends the case to its next
-// sight, at most MAX_SIGHTS, and then fails. Returns the number of sights run, the last of which handed off.
-const sightsToHandOff = (payload: string, npm: { folder: string }, home: string, store: string): number => {
-  // What each sight left, so a failure names how every one ended instead of leaving the cause to be inferred.
-  const seen: string[] = [];
-  for (let sight = 1; sight <= MAX_SIGHTS; sight += 1) {
-    const began = Date.now();
-    const result = runHook(payload.replace('"u1"', `"u${String(sight)}"`), [], npm.folder, home);
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe('');
-    if (lockFiles(store).length > 0 || existsSync(join(store, 'gate-registry.jsonl'))) return sight;
-    seen.push(`#${String(sight)} ${String(Date.now() - began)} ms, ${String(rowsOf(home).length)} rows`);
-  }
-  return expect.unreachable(`no sight of ${String(MAX_SIGHTS)} took the lock or started the helper: ${seen.join('; ')}`);
+// Runs one built-hook sight of a name whose manager cannot answer (`gatedNpm`) and checks it handed the name off: the lock is on disk, or the helper's answer is. The hook has `HOOK_DEADLINE_MS`
+// and hands off 400 ms before it (`hook.ts`), so the hand-off sits inside a deadline that node's start on a loaded box cannot reach, and nothing here counts how many sights it takes: a
+// sight that did not hand off is the product failing, not the box being slow.
+const sightHandsOff = (payload: string, npm: { folder: string }, home: string, store: string): void => {
+  const began = Date.now();
+  const result = runHook(payload, [], npm.folder, home);
+  expect(result.status).toBe(0);
+  expect(result.stdout).toBe('');
+  const left = `${String(Date.now() - began)} ms, ${String(rowsOf(home).length)} rows, ${String(lockFiles(store).length)} locks, deadline ${String(HOOK_DEADLINE_MS)} ms`;
+  expect(lockFiles(store).length > 0 || existsSync(join(store, 'gate-registry.jsonl')), `the sight left no lock and no kept answer (${left})`).toBe(true);
 };
 
 // One sight after the hand-off, run again if the box was so loaded that the hook was ended before it wrote its row (or, when `printed` is set, before it printed): with the lock or the
@@ -191,15 +207,17 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
     expect(rows[0]).toMatchObject({ kind: 'crossing', via: 'hook', name: 'left-pad', registryState: 'not-read' });
   });
 
-  // The built hook takes the sight and starts the helper itself, as the harness runs it. `sightsToHandOff` (above) runs sights until one hands off and says what a sight can be, so the cases pin
+  // The built hook takes the sight and starts the helper itself, as the harness runs it. `sightHandsOff` (above) runs the one sight that hands off, so the cases pin
   // what follows exactly: at most two starts a sight, the helper's single finish, the lock or the cache it leaves, no start after the hand-off, and a row on every sight after it.
   it('fills the cache after a cut ask: the built hook starts the helper, and the sight after it reads found and asks nothing', async () => {
     const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install slow-lib' }, cwd: tmpdir(), permission_mode: 'default' });
-    const npm = slowNpm();
+    const npm = gatedNpm('answer');
     const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
     made.push(home);
     const store = join(home, 'oars', 'sessions');
-    const sights = sightsToHandOff(payload, npm, home, store);
+    sightHandsOff(payload, npm, home, store);
+    // The hook is gone and its own ask with it; the helper's manager, still waiting, answers now.
+    writeFileSync(npm.release, '');
     // The helper is detached: it has finished when it has logged its end, kept its answer, and let go of the lock.
     await until(() => logged(npm.log, 'ended') >= 1 && existsSync(join(store, 'gate-registry.jsonl')) && lockFiles(store).length === 0);
     expect(logged(npm.log, 'ended')).toBe(1);
@@ -207,32 +225,34 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
     expect(lockFiles(store)).toEqual([]);
     const asked = logged(npm.log, 'started');
     expect(asked).toBeGreaterThanOrEqual(1);
-    expect(asked).toBeLessThanOrEqual(2 * sights);
+    expect(asked).toBeLessThanOrEqual(2);
     sightWithRow(payload, 'u-after', npm, home);
     expect(logged(npm.log, 'started')).toBe(asked);
     // A sight ended by its deadline may leave no row, so the count is a range; the sight after the hand-off wrote one, which reads the kept answer.
     const rows = rowsOf(home);
     expect(rows.length).toBeGreaterThanOrEqual(1);
-    expect(rows.length).toBeLessThanOrEqual(sights + 1);
+    expect(rows.length).toBeLessThanOrEqual(2);
     for (const row of rows.slice(0, -1)) expect(row).toMatchObject({ registryState: 'not-read' });
     expect(rows.at(-1)).toMatchObject({ registryState: 'found' });
   }, 60_000);
 
   it('starts no new ask on later sights while the lock is held, after a down manager', async () => {
     const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install down-lib' }, cwd: tmpdir(), permission_mode: 'default' });
-    const npm = downNpm();
+    const npm = gatedNpm('down');
     const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
     made.push(home);
     const store = join(home, 'oars', 'sessions');
-    const sights = sightsToHandOff(payload, npm, home, store);
+    sightHandsOff(payload, npm, home, store);
+    // The hook is gone and its own ask with it; the helper's manager, still waiting, fails now.
+    writeFileSync(npm.release, '');
     // A failed ask keeps its lock, so the helper is done when it has logged its end with the lock still there.
     await until(() => logged(npm.log, 'ended') >= 1 && lockFiles(store).length === 1);
     expect(logged(npm.log, 'ended')).toBe(1);
     expect(lockFiles(store)).toHaveLength(1);
     const asked = logged(npm.log, 'started');
     expect(asked).toBeGreaterThanOrEqual(1);
-    expect(asked).toBeLessThanOrEqual(2 * sights);
-    // The lock is held and fresh, so neither later sight asks the manager: the log shows no start beyond the sights up to the hand-off.
+    expect(asked).toBeLessThanOrEqual(2);
+    // The lock is held and fresh, so neither later sight asks the manager: the log shows no start beyond the hook's own ask and the helper's.
     sightWithRow(payload, 'u-after-1', npm, home);
     sightWithRow(payload, 'u-after-2', npm, home);
     expect(logged(npm.log, 'started')).toBe(asked);
@@ -240,7 +260,7 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
     // A sight ended by its deadline may leave no row, so the count is a range; the two sights after the hand-off each wrote one.
     const rows = rowsOf(home);
     expect(rows.length).toBeGreaterThanOrEqual(2);
-    expect(rows.length).toBeLessThanOrEqual(sights + 2);
+    expect(rows.length).toBeLessThanOrEqual(3);
     for (const row of rows) expect(row).toMatchObject({ registryState: 'not-read' });
   }, 60_000);
 
@@ -248,7 +268,8 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
   // first sight never reaches its cut.
   it('hands a cut ask to the built helper through startFill, which fills the cache and lets go of the lock', async () => {
     const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install slow-lib' }, cwd: tmpdir(), permission_mode: 'default' });
-    const npm = slowNpm();
+    const npm = gatedNpm('answer');
+    writeFileSync(npm.release, '');
     const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
     made.push(home);
     const store = join(home, 'oars', 'sessions');
@@ -267,7 +288,8 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
 
   it('keeps the lock after a down manager answers the helper startFill started, so later sights start no ask', async () => {
     const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install down-lib' }, cwd: tmpdir(), permission_mode: 'default' });
-    const npm = downNpm();
+    const npm = gatedNpm('down');
+    writeFileSync(npm.release, '');
     const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
     made.push(home);
     const store = join(home, 'oars', 'sessions');

@@ -395,21 +395,54 @@ describe('oars gate hook: one ask per name', () => {
     expect(reader).toHaveBeenCalledTimes(2);
   });
 
-  it('stops its own ask before it hands the name over, so the manager is never asked twice at once', async () => {
+  // The process clock is fixed at 0 in these cases, so the mark (deadline less the hand-off's 400 ms) and the cut (deadline less the 150 ms write reserve) are real timers 50 and 300 ms away
+  // at a 450 ms deadline. The order of the two never changes with load: a timer due earlier runs first, and the hand-off is awaited between them.
+  it('hands the name over at the mark while its own ask is still running, then stops that ask at the cut and hands nothing over again', async () => {
     const store = folder();
     let signal: AbortSignal | undefined;
     const registry: RegistryReader = (ask) => {
       signal = ask.signal;
       return new Promise<RegistryAnswer>(() => undefined);
     };
-    const aborted: boolean[] = [];
+    const abortedAtFill: boolean[] = [];
     const fill = vi.fn<NonNullable<GateHookDeps['fill']>>(() => {
-      aborted.push(signal?.aborted ?? false);
+      abortedAtFill.push(signal?.aborted ?? false);
       return Promise.resolve();
     });
-    await gateHook(payload('npm install left-pad'), depsFor(store, { registry, clock: () => 0, deadlineMs: 400, fill }));
-    expect(signal).toBeDefined();
-    expect(aborted).toEqual([true]);
+    await gateHook(payload('npm install left-pad'), depsFor(store, { registry, clock: () => 0, deadlineMs: 450, fill }));
+    expect(fill).toHaveBeenCalledTimes(1);
+    expect(abortedAtFill).toEqual([false]);
+    expect(signal?.aborted).toBe(true);
+    expect(rowsOf(store).map((row) => row.registryState)).toEqual(['not-read']);
+  });
+
+  it('uses an answer that comes between the mark and the cut, after the hand-off already started', async () => {
+    const store = folder();
+    const registry: RegistryReader = () => new Promise<RegistryAnswer>((resolve) => { setTimeout(() => { resolve({ state: 'found', latest: '1.0.0', created: '2020-01-01T00:00:00.000Z' }); }, 150); });
+    const fill = vi.fn<NonNullable<GateHookDeps['fill']>>(() => Promise.resolve());
+    await gateHook(payload('npm install left-pad'), depsFor(store, { registry, clock: () => 0, deadlineMs: 450, fill }));
+    expect(fill).toHaveBeenCalledTimes(1);
+    expect(rowsOf(store).map((row) => row.registryState)).toEqual(['found']);
+  });
+
+  it('never starts a helper for an answer that comes before the mark', async () => {
+    const store = folder();
+    const fill = vi.fn<NonNullable<GateHookDeps['fill']>>(() => Promise.resolve());
+    await gateHook(payload('npm install left-pad'), depsFor(store, { registry: found('1.0.0'), clock: () => 0, deadlineMs: 450, fill }));
+    expect(fill).not.toHaveBeenCalled();
+    expect(rowsOf(store).map((row) => row.registryState)).toEqual(['found']);
+  });
+
+  it('hands over at once when the mark has passed by the time the ask has started, and only once', async () => {
+    const store = folder();
+    let now = 0;
+    const registry: RegistryReader = () => {
+      now = 700;
+      return new Promise<RegistryAnswer>(() => undefined);
+    };
+    const fill = vi.fn<NonNullable<GateHookDeps['fill']>>(() => Promise.resolve());
+    await gateHook(payload('npm install left-pad'), depsFor(store, { registry, clock: () => now, deadlineMs: 1000, fill }));
+    expect(fill).toHaveBeenCalledTimes(1);
   });
 
   it('cuts an ask at once when starting it used up the budget, and stops it, hands the name over, and writes the row', async () => {

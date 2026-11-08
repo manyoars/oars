@@ -41,6 +41,8 @@ export const NOT_FOUND_MS = 600_000;
 const WRITE_RESERVE_MS = 150;
 /** One call hands at most this many names to helpers; the rest wait for a later sight, so a call naming dozens cannot start dozens of processes. */
 const MAX_HELPERS = 3;
+/** What the hand-off to a helper is given before the deadline: the lock, then a blocking spawn of the helper. A loaded machine took up to about 400 ms for it. */
+const HANDOFF_BUDGET_MS = 400;
 /** An ask with less than this left is not started: it could not finish. */
 const MIN_ASK_MS = 100;
 
@@ -139,6 +141,9 @@ const within = <T>(promise: Promise<T>, ms: number): Promise<T | undefined> =>
 /** What is left for a registry ask on the process clock, less the room a row's write is given. */
 const budgetOf = (deps: Pick<GateHookDeps, 'deadlineMs' | 'clock'>): number => deps.deadlineMs - WRITE_RESERVE_MS - deps.clock();
 
+/** When a registry ask still open starts the hand-off to a helper, on the process clock: `HANDOFF_BUDGET_MS` before the deadline, so the lock and the helper's blocking spawn fit even when the machine is slow. */
+const handOffMarkOf = (deps: Pick<GateHookDeps, 'deadlineMs'>): number => deps.deadlineMs - HANDOFF_BUDGET_MS;
+
 const asAnswer = (row: RegistryRow): RegistryAnswer => ({ state: row.state, latest: row.latest, created: row.created });
 
 /** The registry state at the moment: a kept answer first, else one bounded ask. `undefined` is "not read": not asked, not askable, or not answered in time. */
@@ -152,22 +157,33 @@ const registryAnswer = async (deps: GateHookDeps, crossing: Crossing, cwd: strin
   if ((await deps.locked?.(ask).catch(() => false)) === true) return undefined;
   const stop = new AbortController();
   let answer: RegistryAnswer | undefined;
+  let handedOff = false;
+  const handOff = async (): Promise<void> => {
+    if (helpers.started >= MAX_HELPERS) return;
+    helpers.started += 1;
+    handedOff = true;
+    await deps.fill?.(ask).catch(() => undefined);
+  };
   if (budgetOf(deps) >= MIN_ASK_MS) {
     // The first sight on a fresh store has no folder yet, and the deadline's synchronous write needs one: made here, before the ask, so a cut-off hook can still leave its row.
     await mkdir(deps.storeDir, { recursive: true }).catch(() => undefined);
     hold(() => { stop.abort(); });
     const pending = deps.registry({ ...ask, signal: stop.signal });
-    // Starting the manager is a blocking spawn that can take a good part of the budget, so the cut counts what is left now, not what was left before the call: read before it, the cut
+    // Starting the manager is a blocking spawn that can take a good part of the budget, so the marks count what is left now, not what was left before the call: read before it, the cut
     // could land behind the process's own deadline, which ends the process with the ask still running.
-    answer = await within(pending, budgetOf(deps));
+    // A fast answer never pays for a helper. An ask still open at the mark has the hand-off started beside it (the lock and the helper's spawn, which also block), early enough that a
+    // loaded machine still finishes it inside the deadline; the cut after that drops nothing, because the helper already holds the name.
+    answer = await within(pending, handOffMarkOf(deps) - deps.clock());
+    if (answer === undefined) {
+      await handOff();
+      answer = await within(pending, budgetOf(deps));
+    }
   }
   if (answer === undefined) {
-    // Not answered in time: the row reads not-read, and a helper finishes the ask so the next sight reads it from the cache. This ask is stopped first, so the manager is never asked twice at once.
+    // Not answered in time: the row reads not-read, and the helper (started at the mark, or here when there was no time to reach it) finishes the ask so the next sight reads it from the cache.
+    // This ask is stopped first, so the hook's manager does not outlive the hook.
     stop.abort();
-    if (helpers.started < MAX_HELPERS) {
-      helpers.started += 1;
-      await deps.fill?.(ask).catch(() => undefined);
-    }
+    if (!handedOff) await handOff();
     return undefined;
   }
   return { answer, asked: true };
