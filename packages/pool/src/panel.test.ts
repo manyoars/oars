@@ -25,7 +25,7 @@ const deposit = async (account: string, id: string, daysAgo: number | null, over
 const booksOf = async (reader: string): Promise<Books> => {
   const { token } = await pool.signIn('github', stubUser(reader));
   const answer = await pool.raw(PATH, token);
-  const verified = await verifyBundle(answer.json, pool.signingKey(), 'claude-code', '2.1.314');
+  const verified = await verifyBundle(answer.json, pool.pinned(), 'claude-code', '2.1.314');
   if (!verified.ok || verified.bundle.books === undefined) throw new Error('no books');
   return verified.bundle.books;
 };

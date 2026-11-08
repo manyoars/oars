@@ -41,7 +41,7 @@ const determinedCells = (held: readonly Cell[], motifs: readonly Motif[], served
     const parsed = motif?.cls === null || motif?.cls === undefined ? null : parseShapeClass(motif.cls);
     if (parsed === null) continue;
     const { action, facet, value } = parsed;
-    if (facet === 'target' || facet === 'keys') relate(`${action} ${facet} ${place}`, cell, `calls ${action} ${place}`);
+    if (facet === 'target' || facet === 'keys' || (facet === 'arg' && value === 'none')) relate(`${action} ${facet === 'arg' ? 'keys' : facet} ${place}`, cell, `calls ${action} ${place}`);
     // Only a call with an unsent key has a `dropped` cell, so those cells sum to a count nothing else holds.
     if (facet === 'dropped') relate(`${action} ${facet} ${place}`, cell, `own ${action} ${facet} ${place}`);
     if (facet === 'enum') {
@@ -134,16 +134,16 @@ describe('a bundle of shape cells', () => {
     return held.cells.map(({ motifId }) => held.motifs.find((motif) => motif.motifId === motifId)?.cls ?? null).sort();
   };
 
-  it('serves the clear cells at the clear floor and the key names only at the public floor', () => {
-    expect(served(DEFAULT_PUBLIC_FLOOR - 1, { ...DEFAULT_FLOORS, clear: 1 })).toEqual([target.cls, arg.cls, dropped.cls].sort());
-    expect(served(DEFAULT_PUBLIC_FLOOR)).toEqual([target.cls, arg.cls, dropped.cls, keys.cls].sort());
+  it('serves the clear cells at the clear floor and the key names only at the public floor, and no arg cell, which the keys cells hold apart from the server', () => {
+    expect(served(DEFAULT_PUBLIC_FLOOR - 1, { ...DEFAULT_FLOORS, clear: 1 })).toEqual([target.cls, dropped.cls].sort());
+    expect(served(DEFAULT_PUBLIC_FLOOR)).toEqual([target.cls, dropped.cls, keys.cls].sort());
     expect(served(DEFAULT_PUBLIC_FLOOR - 1)).toEqual([]);
   });
 
   it('carries a fit read per served shape cell, each citing its cell', () => {
     const held = bundleOf('claude-code', '2.1.314', stored(DEFAULT_PUBLIC_FLOOR), DEFAULT_FLOORS);
     const shapes = held.reads.filter(({ family, slice }) => family === 'fit' && slice.facet !== undefined);
-    expect(shapes.map(({ slice }) => `${slice.facet ?? ''}/${slice.value ?? ''}`).sort()).toEqual(['arg/path', 'dropped/1', 'keys/file_path,limit', 'target/source']);
+    expect(shapes.map(({ slice }) => `${slice.facet ?? ''}/${slice.value ?? ''}`).sort()).toEqual(['dropped/1', 'keys/file_path,limit', 'target/source']);
     expect(shapes.every(({ inputs, value }) => inputs.length === 1 && value.failed === 1)).toBe(true);
   });
 });
@@ -223,45 +223,8 @@ describe('the keys cells that hold a key', () => {
     expect(served).toEqual([]);
   });
 
-  it('are not recovered from any combination of served totals', () => {
-    // No one family holds a single unserved part here, yet `path,pattern` is the `path` size total plus the `pattern` size total less the action's calls (the `target` cells), inclusion and exclusion over the key lists.
-    const cells: [ReturnType<typeof motifOf>, number][] = [
-      [motifOf('keys', 'path'), F + 5],
-      [motifOf('keys', 'path,pattern'), F - 1],
-      [motifOf('keys', 'pattern'), F + 5],
-      [motifOf('size', 'path=9-32'), 2 * F + 4],
-      [motifOf('size', 'pattern=9-32'), 2 * F + 4],
-      [motifOf('target', 'source'), 3 * F + 9],
-    ];
-    const stored: StoredPool = { cells: cells.map(([motif, clusters]) => cellOf(motif.motifId, clusters)), environment: [], motifs: cells.map(([motif]) => motif), strata: [] };
-    const kept = new Set(bundleOf('claude-code', '2.1.314', stored, DEFAULT_FLOORS).cells.map(({ motifId }) => motifId));
-    expect(kept.size).toBeGreaterThan(0);
-    expect(determinedCells(stored.cells, stored.motifs, (cell) => kept.has(cell.motifId))).toEqual([]);
-  });
-
-  // The same fixture with an `enum` cell as the key's only per-key facet. A boolean, and a list that names all its values, is a value of every call that sends the key, so its cells sum to the key's calls under any key name,
-  // an open list's `model` included; if the facet counted only some calls it would stand apart from the `keys` cells and the bundle would serve what they recover.
-  it.each([
-    ['an exhaustive list', 'output_mode', 'count'],
-    ['a boolean', 'replace_all', 'true'],
-    ['a boolean under the key of an open list', 'model', 'true'],
-  ])('are not recovered from the enum cell of %s, which sums to the calls that send the key', (_, key, member) => {
-    const cells: [ReturnType<typeof motifOf>, number][] = [
-      [motifOf('keys', key), F + 5],
-      [motifOf('keys', [key, 'pattern'].sort().join(',')), F - 1],
-      [motifOf('keys', 'pattern'), F + 5],
-      [motifOf('enum', `${key}=${member}`), 2 * F + 4],
-      [motifOf('size', 'pattern=9-32'), 2 * F + 4],
-      [motifOf('target', 'source'), 3 * F + 9],
-    ];
-    const stored: StoredPool = { cells: cells.map(([motif, clusters]) => cellOf(motif.motifId, clusters)), environment: [], motifs: cells.map(([motif]) => motif), strata: [] };
-    const kept = new Set(bundleOf('claude-code', '2.1.314', stored, DEFAULT_FLOORS).cells.map(({ motifId }) => motifId));
-    expect(kept.size).toBeGreaterThan(0);
-    expect(determinedCells(stored.cells, stored.motifs, (cell) => kept.has(cell.motifId))).toEqual([]);
-  });
-
   it('are all withheld in a system past the term cap, which the rank check does not run on', () => {
-    // The cells of the combination fixture above. Under the default cap the rank check keeps some of them served; under a cap below the system's terms it is skipped and every served cell goes, which is safe whatever the system holds.
+    // The cells of the combination fixture in `withholding-oracle.test.ts`. Under the default cap the rank check keeps some of them served; under a cap below the system's terms it is skipped and every served cell goes, which is safe whatever the system holds.
     const thin = motifOf('keys', 'path,pattern');
     const parts: [ReturnType<typeof motifOf>, number][] = [
       [motifOf('keys', 'path'), F + 5],
@@ -339,7 +302,7 @@ describe('every family of cells (`FAMILY_RULES`)', () => {
       return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296;
     };
   };
-  const KEY_SETS = [['path'], ['path', 'pattern'], ['pattern'], ['glob', 'path', 'pattern'], ['limit', 'path'], ['path', 'subagent_type'], ['output_mode', 'pattern']];
+  const KEY_SETS: string[][] = [['path'], ['path', 'pattern'], ['pattern'], ['glob', 'path', 'pattern'], ['limit', 'path'], ['path', 'subagent_type'], ['output_mode', 'pattern'], []];
   const MODELS = ['model-a', 'model-b'];
   const FIRST_DAY = '2026-11-02';
   const DAYS = [FIRST_DAY, '2026-11-03', '2026-11-04'];
@@ -374,7 +337,8 @@ describe('every family of cells (`FAMILY_RULES`)', () => {
       }
       // Only some calls have an unsent key, and a `dropped` cell's value starts at 1.
       if (next() < 0.4) count(classMotif(shapeClass('file.search', 'dropped', pick(['1', '2']))), day);
-      count(classMotif(shapeClass('file.search', 'keys', keys.join(','))), day);
+      // A keyless call sends no key, so it has no `keys` cell: it is the `arg/none` cell, a part of the same family.
+      count(classMotif(keys.length === 0 ? shapeClass('file.search', 'arg', 'none') : shapeClass('file.search', 'keys', keys.join(','))), day);
       for (const key of keys) {
         count(classMotif(shapeClass('file.search', 'size', `${key}=${next() < 0.8 ? '9-32' : '1-8'}`)), day);
         count(classMotif(shapeClass('file.search', 'depth', `${key}=${pick(['0', '1', '2'])}`)), day);

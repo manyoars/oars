@@ -343,7 +343,8 @@ describe('withSendLock', () => {
       for (let step = 0; step < 100 && !settled(); step += 1) {
         const before = statSync(lock).mtimeMs;
         await vi.advanceTimersByTimeAsync(times.staleMs / 4);
-        while (!settled() && statSync(lock).mtimeMs === before) await pause();
+        // Bounded, so a refresh that never lands (the red this test guards) fails the assertion below instead of polling until the test timeout and leaving the fake clock installed.
+        for (let pauses = 0; pauses < 50 && !settled() && statSync(lock).mtimeMs === before; pauses += 1) await pause();
       }
       await second;
       expect(Date.now() - started).toBeGreaterThan(times.staleMs);

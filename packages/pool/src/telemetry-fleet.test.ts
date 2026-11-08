@@ -7,6 +7,7 @@ import type { Env, PoolDb } from './http.js';
 import { anomaliesOf, fleetCells, measurablesOf, operator, OUTLIER_SCORE, type InstallDay } from './telemetry-fleet.js';
 import { dayOf, MAX_BATCHES_PER_RUN, rollupDay, rollupRecent, shiftDay, type Entry, type KeptBucket } from './telemetry-rollup.js';
 import { fieldOf, startPool, type TestPool } from './test-pool.js';
+import { type SweepBucket } from './retention.js';
 import worker from './worker.js';
 
 const DAY_MS = 86_400_000;
@@ -32,7 +33,7 @@ const keep = async (pool: TestPool, day: string, install: string, events: object
 
 interface Bindings {
   DB: Env['DB'];
-  TELEMETRY: KeptBucket;
+  TELEMETRY: KeptBucket & SweepBucket;
 }
 
 /** The nightly handler the Worker exports, run on the pool's own bindings. */
@@ -493,7 +494,7 @@ describe('the rollup', () => {
       const { bucket } = overCap();
       const rolled = await rollupRecent({ DB: db, TELEMETRY: { list: (options) => (listed.push(options.prefix), bucket.list(options)), get: bucket.get } }, Date.parse('2026-11-07T03:17:00Z'));
       expect(listed).toEqual(['telemetry/2026-11-06/']);
-      expect(rolled[1]).toEqual({ day: '2026-11-05', batches: 0, installs: 0, truncated: true, gets: 0, kept: true });
+      expect(rolled[1]).toEqual({ day: '2026-11-05', batches: 0, installs: 0, truncated: true, gets: 0, subrequests: 0, kept: true });
     });
 
     it('keeps the rows an earlier night wrote for the day it could not read whole, and writes the day it counts for the first time', async () => {

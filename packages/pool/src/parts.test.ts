@@ -45,6 +45,21 @@ describe('a deposit past the request cap', () => {
     }
   }, 60_000);
 
+  it('keeps the parts of a batch an operator\'s brake refused with a 403, so the same parts can finish once the brake lifts', async () => {
+    const pool = await startPool({ MAX_DEPOSIT_BYTES_PER_ACCOUNT: '1000' });
+    try {
+      const token = await signedIn(pool, '9011');
+      const parts = partsOf(big, Math.ceil(big.length / 2));
+      expect(parts).toHaveLength(2);
+      const answers = await sendParts(pool, token, parts, [0, 1]);
+      expect(answers[0]?.status).toBe(202);
+      expect(answers[1]).toMatchObject({ status: 403, json: { error: 'deposit_limit' } });
+      expect(await rows(pool, 'SELECT COUNT(*) AS count FROM deposit_parts')).toBe(2);
+    } finally {
+      await pool.dispose();
+    }
+  }, 60_000);
+
   it('round trips in parts as one deposit, with no loss and no double count, and a retried part changes nothing', async () => {
     const pool = await startPool();
     try {

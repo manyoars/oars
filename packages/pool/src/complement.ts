@@ -62,7 +62,7 @@ const countsOnlySome = (facet: ShapeFacet, value: string): boolean => {
  * The facets whose cells do not overlap: a call counts in at most one cell of each. `target` splits the action's calls (a call with no path reads `none`). `keys` splits the calls that sent a key, and is taken as the
  * action's calls, which it equals for a tool with a required key and which elsewhere can only withhold more. `dropped` splits only the calls with an unsent key (`ownCalls`). Per key (a value is `<key>=<member>`): `size`, `depth`,
  * `extension`, and `dir` split the calls that send the key with a value of their kind, taken as all of them, and `enum` splits them for a boolean or an exhaustive list and only its on-list values for an open one (`ownCalls`).
- * The others (`arg`, `pattern`, `change`) hold a call in several cells or none, so their cells are not parts of one count. A superset of the true equations determines more, never less, so taking a sum for a larger one only withholds more.
+ * The others (`arg`, `pattern`, `change`) hold a call in several cells or none, so their cells are not parts of one count; the one exception is `arg/none`, which the `facet` rule below places in the `keys` family. A superset of the true equations determines more, never less, so taking a sum for a larger one only withholds more.
  */
 const FACET_PARTITIONS: ReadonlyMap<ShapeFacet, boolean> = new Map([['target', false], ['keys', false], ['dropped', false], ['size', true], ['depth', true], ['extension', true], ['dir', true], ['enum', true]]);
 
@@ -85,10 +85,26 @@ const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, motif: Mot
     name: 'facet',
     placements: (cell, motif) => {
       const parsed = motif === undefined || motif.cls === null ? null : parseShapeClass(motif.cls);
-      const keyed = parsed === null ? undefined : FACET_PARTITIONS.get(parsed.facet);
-      if (parsed === null || keyed === undefined) return [];
+      if (parsed === null) return [];
+      // `arg/none` is the calls that send no value, so beside the `keys` cells (the calls that send a key) it splits the action's calls: it is a part of the `keys` family. A call whose keys are all null is in both, and a call
+      // with only an unsent key in neither; the sum is then not exact, in the direction that only withholds more (the oracle, `withholding-oracle.test.ts`, is what checks it).
+      const facet: ShapeFacet = parsed.facet === 'arg' && parsed.value === 'none' ? 'keys' : parsed.facet;
+      const keyed = FACET_PARTITIONS.get(facet);
+      if (keyed === undefined) return [];
       const key = keyed ? parsed.value.slice(0, parsed.value.indexOf('=')) : '';
-      return [{ family: facetFamilyKey(parsed.action, parsed.facet, key, cell), role: 'part', total: countsOnlySome(parsed.facet, parsed.value) ? ownCalls(parsed.action, parsed.facet, key, cell) : callsTotal(parsed.action, key, cell) }];
+      return [{ family: facetFamilyKey(parsed.action, facet, key, cell), role: 'part', total: countsOnlySome(facet, parsed.value) ? ownCalls(parsed.action, facet, key, cell) : callsTotal(parsed.action, key, cell) }];
+    },
+  },
+  // A path with no folder below the root has depth `0` and folder kind `root` (`call-shape.ts:130,174`), so a key's `depth` `0` cell and its `dir` `root` cell count the same calls: one equation, which the two facets' own
+  // families cannot state because each holds only its own facet's cells.
+  {
+    name: 'depth-dir',
+    placements: (cell, motif) => {
+      const parsed = motif === undefined || motif.cls === null ? null : parseShapeClass(motif.cls);
+      if (parsed === null || (parsed.facet !== 'depth' && parsed.facet !== 'dir')) return [];
+      const at = parsed.value.indexOf('=');
+      if (parsed.value.slice(at + 1) !== (parsed.facet === 'depth' ? '0' : 'root')) return [];
+      return [{ family: JSON.stringify(['depth-dir', parsed.action, parsed.value.slice(0, at), cell.frameBucket, cell.grain, cell.day, cell.exposed]), role: parsed.facet === 'depth' ? 'whole' : 'part' }];
     },
   },
   // The calls that send a key k are split by the `keys` cells whose list holds k, and by each per-key facet of k: the `keys` cells that hold k are parts of those facets' total.
