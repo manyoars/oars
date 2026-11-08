@@ -31,7 +31,8 @@ const git = (cwd: string, ...args: string[]) => {
 };
 
 beforeEach(() => {
-  root = realpathSync(mkdtempSync(join(tmpdir(), 'oars-hooks-')));
+  // `.native` because the runner's temp folder arrives as an 8.3 short name (C:/Users/RUNNER~1) that plain realpathSync keeps and git expands.
+  root = realpathSync.native(mkdtempSync(join(tmpdir(), 'oars-hooks-')));
   git(root, 'init', '-q', 'main');
   git(join(root, 'main'), '-c', 'user.name=T', '-c', 'user.email=t@example.test', 'commit', '-q', '--allow-empty', '-m', 'first');
 });
