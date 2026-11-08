@@ -6,11 +6,19 @@ describe('wrangler.jsonc', () => {
   const { parsed, text } = wranglerConfig();
 
   it('commits no account id, route, custom domain, or plain variable but the two public floors and the two public client IDs', () => {
-    for (const key of ['account_id', 'route', 'routes', 'workers_dev', 'env', 'preview_urls']) expect(fieldOf(parsed, key), key).toBeUndefined();
+    for (const key of ['account_id', 'route', 'routes', 'env']) expect(fieldOf(parsed, key), key).toBeUndefined();
     // A floor is public by design (it is stated in every bundle), so it is a plain variable; `floors.test.ts` holds these to the defaults in the code.
     // A client ID is public (the provider's consent screen and the device-code request show it), so the pool's two are plain variables; Google's client secret is not, and stays a Worker secret.
     expect(Object.keys(fieldOf(parsed, 'vars') ?? {}).sort()).toEqual(['BUNDLE_KEY_ID', 'DISCLOSURE_FLOOR', 'GITHUB_CLIENT_ID', 'GOOGLE_CLIENT_ID', 'PUBLIC_FLOOR']);
+    // The shipped values, pinned here because identity.test.ts reads the client IDs back from this same file, so a typo in the file would pass there.
+    expect(fieldOf(parsed, 'vars')).toMatchObject({ PUBLIC_FLOOR: '5', DISCLOSURE_FLOOR: '2', GITHUB_CLIENT_ID: 'Ov23liKTHzJPQeVimbnO', GOOGLE_CLIENT_ID: '146886627173-pcmp8t0qg6p4n0t4cnr4236oit43eudn.apps.googleusercontent.com' });
     expect(text).not.toMatch(/manyoars\.com|\.workers\.dev/);
+  });
+
+  // S5: the WAF rate rule is a zone rule and does not run on <name>.<subdomain>.workers.dev, so a reachable workers.dev address bypasses the only bound on login and telemetry.
+  it('turns off the workers.dev address and the preview URLs, so every request comes through the custom domain the rate rule covers', () => {
+    expect(fieldOf(parsed, 'workers_dev')).toBe(false);
+    expect(fieldOf(parsed, 'preview_urls')).toBe(false);
   });
 
   it('binds its one database by name, with no resource id', () => {

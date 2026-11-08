@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { FIELD_ROWS } from '../sessions/pool-outbox.js';
+import { emitEvent } from './emit.js';
 import { spoolEvents, type SpoolEvent } from './read-events.js';
 import { readSpool } from './spool.js';
 import { newTally, recordSend, recordWire, tallyBatch } from './wire.js';
@@ -100,5 +101,33 @@ describe('recording the tally and the send', () => {
     // A code that is not a code (a path, a sentence) is dropped, not stored.
     expect(written[2]).toEqual({ sent: 0, status: 400, bytes: 10 });
     expect(readSpool(dir).join('')).not.toContain('someone');
+  });
+});
+
+describe('the size of the largest telemetry events', () => {
+  // The pool sizes its telemetry body cap (`MAX_BATCH_BYTES`, packages/pool/src/telemetry.ts) from these. The two event types whose size depends on a list are measured at their schema's limit, each as the spool line the CLI writes: a
+  // `command` (path of 4 tokens and 40 flags, every token 32 characters, `schema.ts` `tokens`) and a `wire` (the register's whole field list, `FIELD_ROWS`, each with a seven-digit byte count). Every other type holds numbers and closed words.
+  const POOL_CAP_BYTES = 512 * 1024;
+  const lineOf = (type: string, fields: object): number => {
+    const { dir, emitter: made } = emitter();
+    emitEvent(made, type, fields);
+    const line = readSpool(dir)[0];
+    if (line === undefined) throw new Error(`no ${type} event was written`);
+    return Buffer.byteLength(line);
+  };
+
+  it('keeps a full 250-event batch (11 wire events, the rest commands) under the pool cap, and a wire event under 3 KB', () => {
+    const token = 'a'.repeat(32);
+    const command = lineOf('command', { path: Array.from({ length: 4 }, () => token), flags: Array.from({ length: 40 }, () => token), durationMs: 86_400_000, exitCode: 255, errorClass: 'Error' });
+    const tally = newTally();
+    tallyBatch(tally, Object.fromEntries(Object.keys(FIELD_ROWS).map((name) => [name, 'x'.repeat(1_000_000)])));
+    const { dir, emitter: made } = emitter();
+    recordWire(made, tally);
+    const wire = Buffer.byteLength(readSpool(dir)[0] ?? '');
+    expect(events(dir)[0]?.data.fields).toHaveLength(Object.keys(FIELD_ROWS).length);
+    expect(command).toBeLessThan(2 * 1024);
+    expect(wire).toBeLessThan(3 * 1024);
+    // A pass writes one `wire` event for each of the 11 harnesses at most and the rest of the 250 are commands, plus the request's own `{"install":...,"events":[...]}` frame (100 bytes with room to spare).
+    expect(11 * wire + (250 - 11) * command + 100).toBeLessThan(POOL_CAP_BYTES);
   });
 });

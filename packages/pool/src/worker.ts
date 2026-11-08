@@ -10,9 +10,12 @@ import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf } f
 import { accountOf, loginGone, loginPoll, loginStart, logout } from './identity.js';
 import { hashHosts, hashKey } from './ingest-hash.js';
 import { rawRoute } from './raw.js';
+import { depositDigest, erasedRefusal, holdsErasedValue, isErased } from './tombstones.js';
 import { telemetry, type TelemetryEnv } from './telemetry.js';
 import { fleet, operator, type OperatorEnv } from './telemetry-fleet.js';
-import { rollupRecent, type RollupEnv } from './telemetry-rollup.js';
+import { nightly } from './nightly.js';
+import type { SweepEnv } from './retention.js';
+import type { RollupEnv } from './telemetry-rollup.js';
 
 /** D1 holds at most 2 MB in one value. A body declaring more is refused unread, and one that declares nothing is measured before it is parsed. */
 const MAX_DEPOSIT_BYTES = 1024 * 1024;
@@ -52,6 +55,8 @@ const storeDeposit = async (env: Env, account: string, secret: string, text: str
   // The body is read once as it came, so a refusal is judged on what the client sent (a host that is not a name is still refused).
   const sent = parseSkeleton(body);
   if (!sent.ok) return refuse(422, 'closed_vocabulary', `${sent.field}: ${sent.reason}`, sent.field);
+  // Erased content does not come back: a session the operator erased, or any string an erasure tombstoned (a leaked secret), is refused before anything is written.
+  if ((await isErased(env, 'deposit', await depositDigest(account, sent.skeleton.id))) || (await holdsErasedValue(env, body))) return erasedRefusal();
   // Then the hosts are hashed and the body is read again: the row, the bag, the literals, the cells, and the motifs all come from the hashed form, so a clear host never reaches a write.
   const parsed = parseSkeleton(await hashHosts(await hashKey(secret), body));
   if (!parsed.ok) return refuse(422, 'closed_vocabulary', `${parsed.field}: ${parsed.reason}`, parsed.field);
@@ -127,9 +132,9 @@ const decoded = (name: string): string => {
 };
 
 export default {
-  /** The nightly cron (wrangler.jsonc): the telemetry rollup the fleet read comes from. It reads the telemetry record and writes the rollup table, nothing else. */
-  scheduled: async (controller: { scheduledTime: number }, env: Env & RollupEnv): Promise<void> => {
-    await rollupRecent(env, controller.scheduledTime);
+  /** The nightly cron (wrangler.jsonc): the telemetry rollup the fleet read comes from, then the retention sweeps (`nightly.ts`). It reads the telemetry record, writes the rollup table, and drops what has expired. */
+  scheduled: async (controller: { scheduledTime: number }, env: Env & RollupEnv & SweepEnv): Promise<void> => {
+    await nightly(env, controller.scheduledTime);
   },
   fetch: async (request: Request, env: Env & TelemetryEnv & RollupEnv & OperatorEnv): Promise<Response> => {
     const { pathname } = new URL(request.url);

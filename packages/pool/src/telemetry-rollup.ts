@@ -1,6 +1,6 @@
 // The nightly rollup: the telemetry record (the R2 batches `POST /v1/telemetry` keeps whole) read into one row per install, account, and day, which is what the fleet read and the operator's anomaly read come from.
 // Why R2 and not Analytics Engine: a Worker has a binding to write Analytics Engine but none to read it, so reading it means the SQL API with an account token held as a secret, a new moving part; the R2
-// binding is already here, and R2 is the record that outlives Analytics Engine's three months. The rollup is a pure function of a day's objects, so running it again changes nothing, and it
+// binding is already here, and R2 is the record, kept for the same 90 days as Analytics Engine. The rollup is a pure function of a day's objects, so running it again changes nothing, and it
 // reads only that: nothing here touches a deposit, a contributor, or a bundle.
 import { bucketOf, cellKey, measuresOf, type Kind, type Measure } from '../../cli/src/telemetry/measures.js';
 import { fieldOf, type Env } from './http.js';
@@ -99,6 +99,8 @@ export interface Rolled {
   truncated: boolean;
   /** Batch reads this day cost, parsed or not: what comes off the run's budget. */
   gets: number;
+  /** Subrequests this day cost (key listings, batch reads, and the one write of its rows): what `nightly` subtracts from the invocation's budget before it sizes the retention sweep. */
+  subrequests: number;
   /** True when the day's rows were left as they were because the run could not read the day whole. */
   kept: boolean;
 }
@@ -117,12 +119,14 @@ export const rollupDay = async (env: Env & RollupEnv, day: string, options: Roll
   const byInstall = new Map<string, Accumulated>();
   const budget = options.budget ?? MAX_BATCHES_PER_RUN;
   // A kept day with no reads left is cut before it starts: listing it would spend a subrequest to learn nothing the run can use.
-  if (budget <= 0 && options.keepWhenCut === true) return { day, batches: 0, installs: 0, truncated: true, gets: 0, kept: true };
+  if (budget <= 0 && options.keepWhenCut === true) return { day, batches: 0, installs: 0, truncated: true, gets: 0, subrequests: 0, kept: true };
   let batches = 0;
   let gets = 0;
+  let lists = 0;
   let truncated = false;
   let cursor: string | undefined;
   do {
+    lists += 1;
     const page = await bucket.list({ prefix: `telemetry/${day}/`, ...(cursor === undefined ? {} : { cursor }) });
     for (const { key } of page.objects) {
       if (gets >= budget) {
@@ -143,13 +147,13 @@ export const rollupDay = async (env: Env & RollupEnv, day: string, options: Roll
     cursor = truncated || !page.truncated ? undefined : page.cursor;
   } while (cursor !== undefined);
   const installs = new Set([...byInstall.values()].map((one) => one.install)).size;
-  if (truncated && options.keepWhenCut === true) return { day, batches, installs, truncated, gets, kept: true };
+  if (truncated && options.keepWhenCut === true) return { day, batches, installs, truncated, gets, subrequests: lists + gets, kept: true };
   const insert = [...byInstall.values()].map((one) =>
     env.DB.prepare('INSERT INTO telemetry_install_days (day, install, account, batches, events, measures) VALUES (?, ?, ?, ?, ?, ?)').bind(day, one.install, one.account, one.batches, one.seen.size, JSON.stringify(entriesOf(one))),
   );
   // One transaction, so a reader sees the day before or after the run, never half of it.
   await env.DB.batch([env.DB.prepare('DELETE FROM telemetry_install_days WHERE day = ?').bind(day), ...insert]);
-  return { day, batches, installs, truncated, gets, kept: false };
+  return { day, batches, installs, truncated, gets, subrequests: lists + gets + 1, kept: false };
 };
 
 /**
