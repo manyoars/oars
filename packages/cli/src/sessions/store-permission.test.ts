@@ -6,9 +6,10 @@ import { describe, expect, it, vi } from 'vitest';
 const lockStat = vi.hoisted(() => ({ eperm: false, writable: false, unreadable: false, unremovable: false }));
 
 vi.mock('node:fs/promises', () => {
-  const { appendFile, copyFile, link, mkdir, readdir, rename } = promises;
+  const { appendFile, chmod, copyFile, link, mkdir, readdir, rename } = promises;
   return {
     appendFile,
+    chmod,
     copyFile,
     link,
     mkdir,

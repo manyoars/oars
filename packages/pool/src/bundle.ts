@@ -7,16 +7,16 @@ import { accessOf } from './access.js';
 import { bundleOf, SERVED } from './derive.js';
 import { floorsOf, wireFloors, type Floors } from './floors.js';
 import { answer, bound, fieldOf, notConfigured, refuse, textField, wholeBinding, type Env } from './http.js';
-import { accountOf } from './identity.js';
+import { accountOf, keyIdOf } from './identity.js';
 import { storedOf } from './stored.js';
 import { isoWeekOf, secondsToNextWeek } from './week.js';
 
-const signed = async (bundle: Bundle, privateJwk: string): Promise<SignedBundle> => {
+const signed = async (bundle: Bundle, privateJwk: string, kid: string): Promise<SignedBundle> => {
   const parsed: unknown = JSON.parse(privateJwk);
   const key = await crypto.subtle.importKey('jwk', { kty: textField(parsed, 'kty') ?? '', crv: textField(parsed, 'crv') ?? '', x: textField(parsed, 'x') ?? '', d: textField(parsed, 'd') ?? '' }, 'Ed25519', false, ['sign']);
   const payload = JSON.stringify(bundle);
   const signature = await crypto.subtle.sign('Ed25519', key, new TextEncoder().encode(payload));
-  return { payload, signature: btoa(String.fromCharCode(...new Uint8Array(signature))) };
+  return { kid, payload, signature: btoa(String.fromCharCode(...new Uint8Array(signature))) };
 };
 
 /** One fetch a week unless the deploy sets more. */
@@ -62,6 +62,8 @@ export const fetchBundle = async (request: Request, env: Env, harness: string, h
   if (vocabVersion !== VOCAB_VERSION) return refuse(400, 'unknown_vocab_version', `This pool holds vocabulary version ${VOCAB_VERSION}.`, 'vocabVersion');
   const key = bound(env.BUNDLE_SIGNING_KEY);
   if (key === undefined) return notConfigured('BUNDLE_SIGNING_KEY');
+  const kid = keyIdOf(env);
+  if (kid === undefined) return notConfigured('BUNDLE_KEY_ID');
   const generation = await generationOf(env);
   // Read from the bindings on each request, so a deploy that moves a floor moves the ETag with it and a cached bundle is not reused across the change.
   const floors = floorsOf(env, (line) => {
@@ -81,7 +83,7 @@ export const fetchBundle = async (request: Request, env: Env, harness: string, h
   try {
     // The count is dropped when its week ends, so what stays per account is only this week's. Earlier only (`<`, and `YYYY-Www` orders): a request that computed its week just before Monday must not wipe a count already spent in the new week.
     await env.DB.prepare(WEEK_RESET).bind(week).run();
-    return answer(200, await signed(bundleOf(harness, harnessVersion, await storedOf(env, harness, harnessVersion, floors, now), floors), key), { etag });
+    return answer(200, await signed(bundleOf(harness, harnessVersion, await storedOf(env, harness, harnessVersion, floors, now), floors), key, kid), { etag });
   } catch (error) {
     // The spend came first so two fetches at once cannot both take the last, but a 304 spends nothing because it sends no bundle, and neither does a fetch that throws.
     if (capped) await env.DB.prepare('UPDATE accounts SET fetches = fetches - 1 WHERE id = ? AND fetch_week = ? AND fetches > 0').bind(account, week).run();

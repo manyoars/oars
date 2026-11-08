@@ -31,7 +31,7 @@ const depositor = async (pool: TestPool, id: string): Promise<string> => {
 const fetched = async (pool: TestPool, token: string): Promise<{ bundle: Bundle; etag: string | null }> => {
   const response = await pool.raw(PATH, token);
   expect(response.status).toBe(200);
-  const verified = await verifyBundle(response.json, pool.signingKey(), 'claude-code', VERSION);
+  const verified = await verifyBundle(response.json, pool.pinned(), 'claude-code', VERSION);
   if (!verified.ok) throw new Error(verified.reason);
   return { bundle: verified.bundle, etag: response.headers.get('etag') };
 };

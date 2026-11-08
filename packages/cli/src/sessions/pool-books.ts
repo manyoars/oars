@@ -35,7 +35,7 @@ const candidatesOf = async (storeDir: string): Promise<Candidate[]> => {
 export const lastFetchedBundle = async (storeDir: string): Promise<Bundle | undefined> => {
   const keys = await loadSignIns(storeDir, 'books');
   for (const { file, server, harness, version } of await candidatesOf(storeDir)) {
-    const key = keys.find((entry) => contentHash(entry.server) === server)?.signingKey;
+    const key = keys.find((entry) => contentHash(entry.server) === server)?.signingKeys;
     if (key === undefined || !isHarness(harness)) continue;
     let parsed: unknown;
     try {

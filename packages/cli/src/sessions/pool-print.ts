@@ -3,7 +3,7 @@
 
 /** One request as it will leave this machine. */
 export interface Outgoing {
-  method: 'GET' | 'POST' | 'PUT';
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   url: URL;
   /** Every header this code sets. The HTTP layer adds `host`, `connection`, and `content-length` itself, and `printed` lists those too. */
   headers: Array<[string, string]>;

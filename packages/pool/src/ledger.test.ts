@@ -1,5 +1,5 @@
 // The ledger plane has no expiry: the database refuses a delete of a `deposits` row or a `contributors` record, and a guard over the pool's own source fails
-// when a delete path or a scheduled trigger appears. The one scheduled trigger allowed is the telemetry rollup (worker.ts calls `rollupRecent`), whose files name no ledger table. A legally required erasure would be one new migration that drops the two `*_no_delete` triggers.
+// when a delete path or a scheduled trigger appears. The one scheduled trigger allowed is the telemetry rollup (worker.ts calls `nightly`, which runs `rollupRecent` and then the retention sweeps, t956), whose files name no ledger table. A legally required erasure would be one new migration that drops the two `*_no_delete` triggers.
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -99,10 +99,10 @@ const LEDGER_DROP = new RegExp(`\\bDROP\\s+TABLE\\s+(IF\\s+EXISTS\\s+)?${LEDGER_
 const SCHEDULED_HANDLER = /\bscheduled\s*(\(|:|=|,|\})/;
 const CRON_CONFIG = /"crons"/;
 
-// The nightly telemetry rollup is the one scheduled job: `worker.ts` may carry the handler when it runs `rollupRecent`, and the Worker config may carry the cron that fires it. The rollup reads the telemetry
+// The nightly telemetry rollup is the one scheduled job: `worker.ts` may carry the handler when it runs `nightly` (the rollup, then the retention sweep of the telemetry record and the pool's own expired rows), and the Worker config may carry the cron that fires it. The rollup reads the telemetry
 // record and writes its own table, so the files that hold it (checked by the test below) name no ledger table.
 // "Runs it" is exact: there is one `scheduled` in the file, its body is this one statement and nothing else, and the config's cron list is this one entry. Anything more (a second job in the handler, a second cron) is an offence.
-const ROLLUP_BODY = 'await rollupRecent(env, controller.scheduledTime);';
+const ROLLUP_BODY = 'await nightly(env, controller.scheduledTime);';
 const ROLLUP_CRONS = '"17 3 * * *"';
 /** The statements of the `scheduled` handler: what lies between the braces of its body, nested blocks included, or undefined when none is found. */
 const scheduledBody = (body: string): string | undefined => {
@@ -122,7 +122,7 @@ const onlyRollupCron = (body: string): boolean => {
   const arrays = [...body.matchAll(/"crons"\s*:\s*\[([^\]]*)\]/g)].map((one) => (one[1] ?? '').trim());
   return arrays.length === (body.match(/"crons"/g) ?? []).length && arrays.every((one) => one === ROLLUP_CRONS);
 };
-const ROLLUP_FILES = ['src/telemetry-rollup.ts', 'src/telemetry-fleet.ts'];
+const ROLLUP_FILES = ['src/telemetry-rollup.ts', 'src/telemetry-fleet.ts', 'src/nightly.ts', 'src/retention.ts'];
 const LEDGER_NAME = /\b(?:deposits|contributors|raw_objects)\b/i;
 
 /** What in `files` (name to text) would delete from the ledger or run it on a schedule. */
@@ -200,7 +200,7 @@ describe('the pool has no path that deletes the ledger', () => {
 
   it('lets only the telemetry rollup run on a schedule, and keeps its files clear of the ledger', () => {
     const files = poolFiles();
-    // The rollup is the one scheduled job: worker.ts carries the handler, its body is exactly the one `rollupRecent` call, and the config carries exactly its one cron.
+    // The rollup is the one scheduled job: worker.ts carries the handler, its body is exactly the one `nightly` call, and the config carries exactly its one cron.
     expect(scheduledBody(code(files['src/worker.ts'] ?? ''))).toBe(ROLLUP_BODY);
     expect(code(files['wrangler.jsonc'] ?? '')).toMatch(CRON_CONFIG);
     expect(onlyRollupCron(code(files['wrangler.jsonc'] ?? ''))).toBe(true);
@@ -219,7 +219,7 @@ describe('the pool has no path that deletes the ledger', () => {
     const handler = (statements: string): string => `export default { scheduled: async (controller: { scheduledTime: number }, env: Env): Promise<void> => { ${statements} } }`;
     expect(offences({ 'src/other.ts': handler(ROLLUP_BODY) })).toEqual(['src/other.ts: a scheduled handler']);
     expect(offences({ 'src/worker.ts': handler(ROLLUP_BODY) })).toEqual([]);
-    expect(offences({ 'src/worker.ts': 'export default { scheduled(controller, env) { await rollupRecent(env, controller.scheduledTime); } }' })).toEqual([]);
+    expect(offences({ 'src/worker.ts': 'export default { scheduled(controller, env) { await nightly(env, controller.scheduledTime); } }' })).toEqual([]);
     // A handler that also runs another job, or runs the rollup with a nested block, is an offence however it is ordered.
     expect(offences({ 'src/worker.ts': handler(`${ROLLUP_BODY} sweep(env);`) })).toEqual(['src/worker.ts: a scheduled handler']);
     expect(offences({ 'src/worker.ts': handler(`sweep(env); ${ROLLUP_BODY}`) })).toEqual(['src/worker.ts: a scheduled handler']);

@@ -315,7 +315,7 @@ export const runHook = async (
     latencyMs: ms,
     outcome: failed ? 'error' : recall?.arm === 'held' ? 'held' : outcome.hit ? 'hit' : 'miss',
     bytes: Buffer.byteLength(outcome.output ?? ''),
-    // The nightly is the scheduled task, not a harness's hook: it names no harness.
+    // The nightly is the detached sender (hook-bin.js nightly), not a harness's hook: it names no harness.
     ...frameWords(event === 'nightly' ? undefined : recall?.frame?.harness ?? HOOK_HARNESS, recall?.frame?.harnessVersion ?? stated?.harnessVersion, recall?.frame?.model ?? outcome.model ?? stated?.model),
   });
   // A push is a recall: its read is the family its query names (the `fit` push names none), and its arm is the exposure record, as a count of one.

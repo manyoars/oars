@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { covenantNotAccepted, depositsClosed, hasAccepted } from './covenant.js';
 import { answer, bodyOf, bound, fieldOf, notConfigured, refuse, type Env, type RawBucket, type RawUploadedPart } from './http.js';
 import { accountOf } from './identity.js';
+import { erasedRefusal, isErased, rawDigest } from './tombstones.js';
 
 /** One request carries at most this much, the same cap a deposit has. A transcript past it goes in parts. */
 const MAX_RAW_PART_BYTES = 1024 * 1024;
@@ -76,6 +77,9 @@ const admit = async (request: Request, env: Env): Promise<Admitted | Response> =
 
 const stored = async (env: Env, account: string, hash: string): Promise<boolean> => (await env.DB.prepare('SELECT 1 AS held FROM raw_objects WHERE account = ? AND sha256 = ?').bind(account, hash).first()) !== null;
 
+/** Whether an erasure tombstoned this object (the operator's command, docs/pool.md "Erasure"). */
+const erased = async (env: Env, account: string, hash: string): Promise<boolean> => isErased(env, 'raw-object', await rawDigest(objectKey(account, hash)));
+
 /** `PUT /v1/raw/:sha256/parts/:n`: one part, at most 1 MB. The same part sent again replaces itself, and a part for an object that already stands writes nothing. */
 const putPart = async (request: Request, env: Env, hash: string, part: number): Promise<Response> => {
   const admitted = await admit(request, env);
@@ -87,6 +91,8 @@ const putPart = async (request: Request, env: Env, hash: string, part: number): 
   // connection reset under the client on Windows (ECONNRESET, "terminated"), so a retried part would fail where it should answer 200.
   const body = await request.arrayBuffer();
   if (body.byteLength > MAX_RAW_PART_BYTES) return tooLarge();
+  // An erased object does not come back, and the check comes before the stored answer: its ledger row stands after the erasure, and a 200 `stored` would tell the client it was kept.
+  if (await erased(env, account, hash)) return erasedRefusal();
   if (await stored(env, account, hash)) return answer(200, { ok: true, stored: true });
   if (body.byteLength === 0) return refuse(422, 'empty_part', 'A part holds at least one byte.');
   // A part that replaces a staged one adds no object; any other needs room under the account's cap.
@@ -156,6 +162,7 @@ const complete = async (request: Request, env: Env, hash: string): Promise<Respo
   const admitted = await admit(request, env);
   if (admitted instanceof Response) return admitted;
   const { account, redaction, capture, bucket } = admitted;
+  if (await erased(env, account, hash)) return erasedRefusal();
   if (await stored(env, account, hash)) return answer(200, { ok: true, stored: true });
   const body = await bodyOf(request);
   const parts = wholeField(body, 'parts', 999_999);

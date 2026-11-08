@@ -1,6 +1,7 @@
-import { appendFile, mkdir, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isMissing } from './pool-outbox.js';
+import { appendOwnerOnly, mkdirOwnerOnly } from './owner-only.js';
 import { contentHash } from './read.js';
 import { bucketOf, PACKAGE_REGISTRIES, type BucketKind, type DeltaEntry, type SessionRecords } from './pool-wire.js';
 import { PRIVATE, PUBLIC_PACKAGES, publicEffort } from './public-vocabulary.js';
@@ -196,8 +197,8 @@ export const sentDeltas = async (outbox: string): Promise<Set<string>> => {
 /** Marks deltas as sent, one line each. The caller writes this only after the batch that carries them is written, so a deposit that stopped before it builds them again. */
 export const markDeltasSent = async (outbox: string, marks: readonly string[]): Promise<void> => {
   if (marks.length === 0) return;
-  await mkdir(outbox, { recursive: true });
-  await appendFile(join(outbox, MARKS_FILE), marks.map((mark) => `${mark}\n`).join(''), 'utf8');
+  await mkdirOwnerOnly(outbox);
+  await appendOwnerOnly(join(outbox, MARKS_FILE), marks.map((mark) => `${mark}\n`).join(''));
 };
 
 /** A session that passed the session gates, placed for the windows: its records, when it began, and its id. */

@@ -1,8 +1,9 @@
-// The one entry file the installed hooks and the nightly task run: `node hook-bin.js <session-start|pre-tool|post-tool|stop|nightly>`, with the
+// The one entry file the installed hooks and the detached sender run: `node hook-bin.js <session-start|pre-tool|post-tool|stop|nightly>`, with the
 // hook event JSON on stdin. It imports only the store modules (not the CLI), so a call costs little more than the node start, and it
 // always exits 0 with no output on any failure: a hook must never fail or block a session.
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { hookEmitter } from './telemetry/hook-emit.js';
 import { sendNightly } from './telemetry/send.js';
 import { HOOK_EVENTS, hookRuntime, nightlyTelemetry, runHook, type HookEvent } from './sessions/hooks.js';
@@ -25,7 +26,7 @@ const versionOf = (): string => {
   }
 };
 
-/** After the covenant is accepted, the nightly task sends what the pool outbox holds; with no server, sign-in, or acceptance it sends nothing. Loaded only here so the per-tool hooks never pay for it. It never throws. */
+/** After the covenant is accepted, the detached sender (hook-bin.js nightly) sends what the pool outbox holds; with no server, sign-in, or acceptance it sends nothing. Loaded only here so the per-tool hooks never pay for it. It never throws. */
 const nightlyPool = async (event: HookEvent): Promise<void> => {
   const { nightlyPoolDeps } = await import('./sessions/pool-nightly-deps.js');
   const { nightlyPoolSend } = await import('./sessions/pool-nightly.js');
@@ -46,7 +47,12 @@ try {
       hookEmitter(process.env, process.platform, homedir(), new URL('../package.json', import.meta.url), Date.now),
     );
     if (output !== undefined) process.stdout.write(output);
-    // The nightly task is where telemetry is sent from; it never throws, and it sends nothing unless telemetry is on and the notice was shown (the server is OARS_POOL_URL, else the Many Oars pool).
+    // The session just ended and its deposit is written: start a due sweep and send, detached, and do not wait for it (the hook stays sub-second and prints nothing more). Loaded only here so the per-tool hooks never pay for it.
+    if (event === 'stop') {
+      const { afterStop } = await import('./sessions/pool-due.js');
+      await afterStop(hookRuntime(event, process.env, process.platform, homedir(), { stdin: process.stdin, stdout: process.stdout }).storeDir, fileURLToPath(import.meta.url));
+    }
+    // The detached sender is where telemetry is sent from; it never throws, and it sends nothing unless telemetry is on and the notice was shown (the server is OARS_POOL_URL, else the Many Oars pool).
     if (event === 'nightly') {
       await sendNightly(process.env, process.platform, homedir(), Date.now);
       await nightlyPool(event);

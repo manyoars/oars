@@ -91,6 +91,9 @@ const counted = async (storeDir: string) => {
     measureSessions: measure(store, [], [], 5).last.sessions,
     recallSessions: recall(store, { error: 'order service unavailable' }, NOW).matches.map((match) => match.sessions),
     skeletons: skeletons.length,
+    // Tool calls through `books` (the failed ones) and through `verify` (every invariant check it ran): a superseded session left in either would add to them.
+    booksErrors: books(store, 'harness', NOW).reduce((total, row) => total + row.errors, 0),
+    verified: [...verifyAll(skeletons), ...verifyCaptured(store.sessions, store.tools)].reduce((total, result) => total + result.checked, 0),
     violations: [...verifyAll(skeletons), ...verifyCaptured(store.sessions, store.tools)].filter((result) => result.violations > 0),
   };
 };
@@ -159,6 +162,25 @@ describe('a trace deposited before its conversation id arrives', () => {
   });
 });
 
+describe('a nested agent of a trace deposited before its conversation id arrives', () => {
+  it('is read again once the id arrives, so its parent names the merged session and not the superseded one', async () => {
+    const root = otlpSpan({ trace: T, id: sp(1), name: 'invoke_agent support', start: 0, end: 30, attrs: { 'gen_ai.operation.name': 'invoke_agent', 'gen_ai.input.messages': user('where is my order?') } });
+    const nested = otlpSpan({ trace: T, id: sp(5), parent: sp(1), name: 'invoke_agent lookup', start: 2, end: 10, attrs: { 'gen_ai.operation.name': 'invoke_agent', 'gen_ai.agent.name': 'lookup' } });
+    const model = otlpSpan({ trace: T, id: sp(6), parent: sp(5), name: 'chat gpt-5.1', start: 3, end: 4, attrs: { 'gen_ai.operation.name': 'chat', 'gen_ai.request.model': 'gpt-5.1' } });
+    // The id arrives on a span the first deposit did not hold; the nested agent's own spans do not change.
+    const named = otlpSpan({ trace: T, id: sp(7), parent: sp(1), name: 'chat gpt-5.1', start: 11, end: 12, attrs: { 'gen_ai.operation.name': 'chat', 'gen_ai.request.model': 'gpt-5.1', 'gen_ai.conversation.id': CONVERSATION } });
+    const s = setup([{ name: 'early.jsonl', lines: [otlpRequest([root, nested, model])] }]);
+    await deposit(s.runtime, options);
+    expect((await loadStore(s.storeDir)).subagents.map((entry) => entry.parent)).toEqual([`otel-${T}`]);
+    writeFileSync(join(s.dir, 'late.jsonl'), `${JSON.stringify(otlpRequest([named]))}
+`);
+    await deposit(s.runtime, options);
+    const after = await loadStore(s.storeDir);
+    expect(after.subagents).toHaveLength(1);
+    expect(after.subagents[0]?.parent).toMatch(/^otel-conv-/u);
+  });
+});
+
 describe('order and repetition', () => {
   it('comes to the same counts when the id-bearing file is read first', async () => {
     const merged = await single();
@@ -178,7 +200,8 @@ describe('order and repetition', () => {
     await deposit(s.runtime, options);
     const log = readFileSync(paths(s.storeDir).observations, 'utf8');
     const again = await deposit(s.runtime, options);
-    expect(again).toMatchObject({ sessions: 0 });
+    // The merged session is the one file unchanged; the superseded one is recorded once and then is not a file of its own.
+    expect(again).toMatchObject({ sessions: 0, unchanged: 1 });
     expect(readFileSync(paths(s.storeDir).observations, 'utf8')).toBe(log);
     expect(await counted(s.storeDir)).toEqual(await single());
   });
