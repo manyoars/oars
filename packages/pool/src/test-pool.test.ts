@@ -39,38 +39,41 @@ describe('the pool harness reuses its connections', () => {
 
   // The premise, on the real workerd: it closes the connection when a Worker answers before the request body has all reached it (the 404 router never reads one), and keeps it when the body came whole
   // with the headers. A body handed on as a stream goes out as a chunk and then, apart from it, the closing chunk, so on a loaded box the Worker answers in between and closes a socket the next call is
-  // about to reuse: `read ECONNRESET` in raw-serves-nothing.test.ts. The chunked request here holds its closing chunk back for good, which is that load made exact.
+  // about to reuse: `read ECONNRESET` in raw-serves-nothing.test.ts. The reset can also land on the closing chunk's own write, on a connection the request itself opened. The chunked request here holds its closing chunk back for good, which is that load made exact.
   it('shows workerd closing a connection it answered before the body arrived, and keeping one whose body came whole', async () => {
     const port = Number(new URL(await pool.url()).port);
     const crlf = String.fromCharCode(13, 10);
     /**
-     * Sends `lines` as one request on a new socket and says whether workerd closed the socket. Nothing here is timed from the write: a closing socket is awaited as long as the case's own timeout
-     * allows, and a socket that must stay open is ended `holdMs` after workerd's first bytes arrive, so a starved test process cannot cut either short. A reset is an outcome that reaches `close`.
+     * Sends `lines` as one request on a new socket and says whether workerd closed the socket. Nothing here is timed: a closing socket is awaited as long as the case's own timeout allows, and a socket that
+     * must stay open proves it by carrying a second request (`reuse`): a bodyless GET written on workerd's first bytes, the case ending on the second status line. A reset is an outcome that reaches `close`.
      */
-    const outcomeOf = (lines: string[], holdMs: number | null): Promise<string> =>
+    const outcomeOf = (lines: string[], reuse: boolean): Promise<string> =>
       new Promise((resolve) => {
         const socket = connect(port, '127.0.0.1');
-        let answered = false;
-        let ended = false;
+        let received = '';
+        let followed = false;
         socket.on('error', () => undefined);
-        socket.on('data', () => {
-          if (answered) return;
-          answered = true;
-          if (holdMs === null) return;
-          setTimeout(() => {
-            ended = true;
+        socket.on('data', (chunk: Buffer) => {
+          received += chunk.toString('latin1');
+          if (!reuse) return;
+          if (!followed) {
+            followed = true;
+            socket.write(['GET /v1/raw/none HTTP/1.1', 'Host: pool.test', '', ''].join(crlf));
+          }
+          if (received.split('HTTP/1.1 ').length - 1 >= 2) {
+            resolve('answered, reused');
             socket.destroy();
-          }, holdMs);
+          }
         });
         socket.on('close', () => {
-          resolve(`${answered ? 'answered' : 'unanswered'}, ${ended ? 'left open' : 'closed by workerd'}`);
+          resolve(`${received === '' ? 'unanswered' : 'answered'}, closed by workerd`);
         });
         socket.write(lines.join(crlf));
       });
     const head = ['POST /v1/raw/none HTTP/1.1', 'Host: pool.test'];
     // The body is promised and never finishes: the Worker answers 404 without it.
-    expect(await outcomeOf([...head, 'transfer-encoding: chunked', '', '2', '{}', ''], null)).toBe('answered, closed by workerd');
-    expect(await outcomeOf([...head, 'content-length: 2', '', '{}'], 500)).toBe('answered, left open');
+    expect(await outcomeOf([...head, 'transfer-encoding: chunked', '', '2', '{}', ''], false)).toBe('answered, closed by workerd');
+    expect(await outcomeOf([...head, 'content-length: 2', '', '{}'], true)).toBe('answered, reused');
   });
 
   // What the sender puts on the wire, read by a server that records it: a small string or byte body goes out with a content-length and no chunking, so its headers and body leave in one write. A stream
@@ -96,7 +99,9 @@ describe('the pool harness reuses its connections', () => {
       for (const body of ['{}', new TextEncoder().encode('{}')]) await (await sender.send('http://pool.test/', { method: 'POST', body })).text();
       await (await sender.send('http://pool.test/', { method: 'POST', body: stream, duplex: 'half' })).text();
       await (await sender.send('http://pool.test/', { method: 'POST', body: new Uint8Array(65 * 1024) })).text();
-      expect(requests).toEqual(['2/undefined', '2/undefined', 'undefined/chunked', 'undefined/chunked']);
+      // 33,792 characters but 67,584 bytes: the limit counts bytes, so this string is over it.
+      await (await sender.send('http://pool.test/', { method: 'POST', body: 'é'.repeat(33 * 1024) })).text();
+      expect(requests).toEqual(['2/undefined', '2/undefined', 'undefined/chunked', 'undefined/chunked', 'undefined/chunked']);
     } finally {
       await sender.close();
       server.close();

@@ -110,7 +110,7 @@ export const workerError = async (response: Response): Promise<Error> => {
   return error;
 };
 
-/** The most of a request body the sender holds whole: what one loopback write carries. */
+/** The most of a request body the sender holds whole: a chosen bound, small enough that headers and body leave in one write in practice. Past it a body can reach workerd in several segments anyway. */
 const WHOLE_BODY_BYTES = 64 * 1024;
 
 export interface KeepAliveSender {
@@ -159,7 +159,7 @@ export const keepAliveSender = (entry: () => Promise<URL>): KeepAliveSender => {
       peak = Math.max(peak, inFlight);
     }
     // A body handed on as a stream goes out as chunks and a closing chunk written apart from the headers. workerd closes the connection when a Worker answers before the body has all arrived, so on a
-    // loaded box the next call would find its socket reset. A small body held whole goes out with its headers and a content-length in one write. A stream a test hands in stays a stream (it is the
+    // loaded box the next call would find its socket reset (the closing chunk's own write can be reset too, on a connection the request opened). A small body held whole goes out with its headers and a content-length in one write. A stream a test hands in stays a stream (it is the
     // case under test), and so does a body over what one write carries: the Worker answers those early on purpose.
     const held = init?.body;
     const small = typeof held === 'string' ? Buffer.byteLength(held) <= WHOLE_BODY_BYTES : held instanceof Uint8Array && held.byteLength <= WHOLE_BODY_BYTES;
