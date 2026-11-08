@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { NO_AXES, type Cell } from '../../cli/src/sessions/cells.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
+import type { Read } from '../../cli/src/sessions/read.js';
 import type { StepIdentity } from '../../cli/src/sessions/schema.js';
 import { cellClassOf } from './cell-class.js';
 import { bundleOf } from './derive.js';
@@ -102,6 +103,24 @@ describe('a served bundle reads the class', () => {
   it('holds a cell with one clear part and one long-tail part to the public floor', () => {
     const served = (clusters: number): number => bundleOf('claude-code', '2.1.314', withMixed(clusters), DEFAULT_FLOORS).cells.length;
     expect([served(1), served(DEFAULT_PUBLIC_FLOOR - 1), served(DEFAULT_PUBLIC_FLOOR)]).toEqual([0, 0, 1]);
+  });
+
+  it('states on a read the floor of the lowest class among its cells, so no read has fewer clusters than its floor', () => {
+    const weekly = (clusters: number): StoredPool => ({
+      cells: [{ ...cellOf('m-clear', 'claude-code/2.1.31x/claude-sonnet-4-5', clusters), grain: 'week', day: '2026-11-02' }, { ...cellOf('m-tail', 'claude-code/2.1.31x/claude-sonnet-4-5', clusters), grain: 'week', day: '2026-11-02' }],
+      environment: [],
+      motifs: [clearMotif, tailMotif],
+      strata: [],
+    });
+    const reads = (clusters: number): Read[] => bundleOf('claude-code', '2.1.314', weekly(clusters), DEFAULT_FLOORS).reads;
+    // One account: the clear cell's read says the clear floor it cleared, not the public floor it never met, and the long-tail cell has no read.
+    const one = reads(1);
+    expect(one.length).toBeGreaterThan(0);
+    expect(new Set(one.map(({ floor, clusters }) => `${String(floor)}/${String(clusters)}`))).toEqual(new Set([`${DEFAULT_FLOORS.clear}/1`]));
+    expect(new Set(reads(DEFAULT_PUBLIC_FLOOR).map(({ floor }) => floor))).toEqual(new Set([DEFAULT_FLOORS.clear, DEFAULT_PUBLIC_FLOOR]));
+    for (const clusters of [1, DEFAULT_PUBLIC_FLOOR - 1, DEFAULT_PUBLIC_FLOOR]) {
+      for (const read of reads(clusters)) expect(read.clusters).toBeGreaterThanOrEqual(read.floor ?? Infinity);
+    }
   });
 
   it('states the thresholded floor as the bundle\'s floor, and the clear floor beside it', () => {

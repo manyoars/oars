@@ -48,7 +48,7 @@ const NO_STORE: Store = { sessions: [], prompts: [], errors: [], subagents: [], 
  * serve nothing until a later change brings held counts for a key's `n` and `c`. Five accounts on five days of one week share each week cell and serve the week reads; a `live` cell is a day, so they serve no live read.
  * `asOf.pool`, `asOf.day`, and `weeksSinceLast` come from the served cells alone (`bundleOf`), so a sub-floor cell's size moves none of them. The first sub-floor part of a family withholds one more part, which a reader sees.
  */
-const readsOf = (pool: Pool, derive: DeriveFamily, floor: number): Read[] => {
+const readsOf = (pool: Pool, derive: DeriveFamily, floorOfCell: (cellId: string) => number): Read[] => {
   const orderOf = orderResolver([]);
   const asOf = { pool: pool.version, day: pool.lastDay };
   // A live read's baseline is a second set of cells its inputs do not cite: when the motif has none of its own in the trailing days, the baseline and the ratio against it are null and not 0.
@@ -59,8 +59,9 @@ const readsOf = (pool: Pool, derive: DeriveFamily, floor: number): Read[] => {
     const days = new Set(baselineDaysOf(String(day)));
     return shapeUnits.some(({ cell, motif: unit }) => motifName(unit) === motif && days.has(cell.day)) ? read : { ...read, value: { ...read.value, baseline: null, ratio: null } };
   };
-  // Every served read states the floor it cleared, and the floor is in its ID, so a read served at 3 and the same numbers served at 5 are two reads.
-  return derive({ pool, store: NO_STORE }).map(baselined).map((read) => makeRead({ ...read, asOf, floor }, orderOf));
+  // Every served read states the floor it cleared, and the floor is in its ID, so a read served at 3 and the same numbers served at 5 are two reads. It is the lowest floor among the cells it cites: a read on a clear cell cleared the clear floor, and
+  // `clusters` (the most of its cells) is then never below it.
+  return derive({ pool, store: NO_STORE }).map(baselined).map((read) => makeRead({ ...read, asOf, floor: Math.min(...read.inputs.map(floorOfCell)) }, orderOf));
 };
 
 const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -121,7 +122,13 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
     poolsAt.set(floor, made);
     return made;
   };
-  const reads = SERVED.map(({ family, derive }) => ({ family, read: readsOf(poolAt(floorFor(floors, family)).pool, derive, floorFor(floors, family)) }));
+  const reads = SERVED.map(({ family, derive }) => {
+    const familyFloor = floorFor(floors, family);
+    const { served: at, pool: familyPool } = poolAt(familyFloor);
+    const floorOfCell = new Map(at.map((cell) => [cellIdOf(cell), cellFloor(floors, familyFloor, cellClassOf(cell, motifOf.get(cell.motifId)))]));
+    // A read cites only cells its pool serves, so every input has a floor; the family's own is the fallback a cited non-cell would take.
+    return { family, read: readsOf(familyPool, derive, (cellId) => floorOfCell.get(cellId) ?? familyFloor) };
+  });
   const { served, held: heldAtPublic, pool } = poolAt(floors.public);
   // The cells a family on its own floor cites, beside those the public floor serves.
   const cited = new Set(reads.filter(({ family }) => floorFor(floors, family) !== floors.public).flatMap(({ read }) => read.flatMap(({ inputs }) => inputs)));

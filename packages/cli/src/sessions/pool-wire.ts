@@ -1473,7 +1473,7 @@ export interface Bundle {
   harness: Harness;
   harnessVersion: string;
   vocabVersion: string;
-  /** The public floor the pool applied (`floors.public`): every cell and read is at or above it except a family on a lower floor of its own, which states its floor on each read and in `floors.families`. */
+  /** The public floor the pool applied (`floors.public`): every cell and read is at or above it except a family on a lower floor of its own, which states its floor on each read and in `floors.families`. A clear cell is held to `floors.clear`, so a read on clear cells alone states that floor, the lowest among the cells it cites. */
   floor: number;
   asOf: ReadAsOf;
   cells: Cell[];
