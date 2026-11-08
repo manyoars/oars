@@ -1,4 +1,4 @@
-// The sender: the only code that sends telemetry. It runs from the nightly task, and at most once a day from an interactive command as a detached process; never on a hook path, and
+// The sender: the only code that sends telemetry. It runs from the detached sender (hook-bin.js nightly), and at most once a day from an interactive command as a detached process; never on a hook path, and
 // nothing waits for it. Before any byte leaves it calls `telemetrySendAllowed` (telemetry on, notice shown) and sends to the pool server in `OARS_POOL_URL`, else the Many Oars pool, the same default `oars pool`
 // reads and with the same rules (https, or http to this machine).
 //
@@ -34,7 +34,7 @@ export interface SendDeps {
 }
 
 export interface SendResult {
-  outcome: 'sent' | 'failed' | 'empty' | 'not-allowed' | 'no-server';
+  outcome: 'sent' | 'failed' | 'empty' | 'not-allowed' | 'no-server' | 'not-due';
   /** Events the server took (and that were cleared from the spool). */
   sent: number;
   /** Requests made, including one that failed. */
@@ -158,9 +158,15 @@ export const sendSpool = async (deps: SendDeps): Promise<SendResult> => {
   }
 };
 
-/** The nightly task's send, in the telemetry folder under the config folder. */
-export const sendNightly = (env: NodeJS.ProcessEnv, platform: NodeJS.Platform, home: string, now: () => number): Promise<SendResult> =>
-  sendSpool({ env, dir: join(defaultConfigDir(env, platform, home), 'oars', 'telemetry'), now });
+/**
+ * The detached sender's telemetry send, in the telemetry folder under the config folder. The sender runs up to about hourly, but telemetry goes at most once a
+ * day, on the same mark a command's daily send uses; events recorded by the runs in between wait in the spool for the next day's batch.
+ */
+export const sendNightly = async (env: NodeJS.ProcessEnv, platform: NodeJS.Platform, home: string, now: () => number): Promise<SendResult> => {
+  const dir = join(defaultConfigDir(env, platform, home), 'oars', 'telemetry');
+  if (!dueForSend(dir, now())) return { outcome: 'not-due', sent: 0, requests: 0 };
+  return sendSpool({ env, dir, now });
+};
 
 /**
  * Called after an interactive command: starts one detached send, at most once a day, when sending is allowed. The mark is written first, so two commands at

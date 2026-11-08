@@ -265,21 +265,20 @@ describe('the public text states facts only', () => {
     expect(text).toContain('raw transcripts');
     expect(text).toMatch(/unredacted/);
     expect(text).toContain('except `gold arms`, which sends redacted text through your own Claude subscription');
-    expect(text).toContain('Apart from that and telemetry (on by default, off with `oars telemetry off`, `OARS_TELEMETRY=0`, or `DO_NOT_TRACK=1`; it sends to the pool server in `OARS_POOL_URL`, else to the Many Oars pool at `pool.manyoars.com`, which is not deployed yet, so until it is a send fails and the events stay in the spool), oars itself sends nothing, except what you opted into with a pool server: after you accept its covenant, the nightly task (registered on Windows only) sends closed-vocabulary session skeletons, and, only after a separate yes to the raw prompt, a locally redacted (best-effort) copy of each full transcript; `oars pool outbox` prints what is queued when you run it, but the nightly task builds new batches and sends them in the same run without printing them first, and a folder can be switched to skeleton only or off; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.');
+    expect(text).toContain('Apart from that and telemetry (on by default, off with `oars telemetry off`, `OARS_TELEMETRY=0`, or `DO_NOT_TRACK=1`; it sends to the pool server in `OARS_POOL_URL`, else to the Many Oars pool at `pool.manyoars.com`, which is not deployed yet, so until it is a send fails and the events stay in the spool), oars itself sends nothing, except what you opted into with a pool server: after you accept its covenant, the detached sender that a session-end hook or any `oars` command starts, at most about once an hour, sends closed-vocabulary session skeletons, and, only after a separate yes to the raw prompt, a locally redacted (best-effort) copy of each full transcript; `oars pool outbox` prints what is queued when you run it, but the sender builds new batches and sends them in the same run without printing them first, and a session leaves your machine no sooner than an hour after it ends, and a folder can be switched to skeleton only or off; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.');
     expect(text).toContain(NOT_OPEN);
     expect(text).toContain('%APPDATA%');
     expect(text).toContain('~/.config');
     expect(text).toContain('session-commons/review');
   });
 
-  it('the root README gives the hook commands in the forms that run, with --scope user and --schedule off', () => {
+  it('the root README gives the hook commands in the forms that run, with --scope user', () => {
     const text = readFileSync(join(root, 'README.md'), 'utf8');
     const commands = [...text.matchAll(/`(oars sessions hook (?:install|uninstall)[^`]*)`/g)].map((match) => match[1] ?? '');
-    expect(commands.length).toBeGreaterThanOrEqual(3);
-    for (const command of commands) expect(command, command).toMatch(/--scope user|--schedule off/);
+    expect(commands.length).toBeGreaterThanOrEqual(2);
+    for (const command of commands) expect(command, command).toMatch(/--scope user/);
     expect(commands).toContain('oars sessions hook install --scope user');
     expect(commands).toContain('oars sessions hook uninstall --scope user');
-    expect(commands).toContain('oars sessions hook install --schedule off');
   });
 
   it('the root README says install raises cleanupPeriodDays and uninstall leaves it raised', () => {
