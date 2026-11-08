@@ -58,7 +58,7 @@ rather than read row by row.
 | C44 | `cli.ts:504` | `oars pool deposit`: nothing is sent without `--send` | `pool-command.ts:469` | true |
 | C45 | `cli.ts:574` | `oars telemetry off`: nothing more is recorded or sent | `consent.ts:77-79` `telemetrySendAllowed` requires enabled | true |
 | C46 | `pool-command.ts:762` (raw prompt) | a yes uploads a redacted copy of each full transcript of every folder you allowed | `pool-choices.ts:15`: a folder at `skeleton` or `off` sends no raw copy; the upload is the nightly task's, after covenant acceptance | false (omits the folder switch and when it happens) |
-| C47 | `pool-command.ts:763-764` (raw prompt) | redaction is local, best effort, and names what it cannot catch | `sessions/redact.ts`, `redact-raw.test.ts` | true |
+| C47 | `pool-command.ts:763-764` (raw prompt) | redaction is local, best effort, and names what it cannot catch | `sessions/redact.ts`, `sessions/injected.ts`, `redact-raw.test.ts`, `injected.test.ts` | true |
 | C48 | `CHANGELOG.md:12` | `oars pool outbox` prints everything queued, before the next nightly send | as C6 | false |
 | C49 | `CHANGELOG.md:13` | one send lock per outbox, so two runs never post one batch twice | t884 report residual: two waiters that clear a dead guard at once can both take over | cannot back ("never") |
 | C50 | `CHANGELOG.md:51` | telemetry is sent now, to the Many Oars pool | as C4 | false (pool not deployed) |
