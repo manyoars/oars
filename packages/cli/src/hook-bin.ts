@@ -52,7 +52,7 @@ try {
       const { catchUpOnStore } = await import('./sessions/pool-due.js');
       await catchUpOnStore(hookRuntime(event, process.env, process.platform, homedir(), { stdin: process.stdin, stdout: process.stdout }).storeDir, fileURLToPath(import.meta.url));
     }
-    // The nightly task is where telemetry is sent from; it never throws, and it sends nothing unless telemetry is on and the notice was shown (the server is OARS_POOL_URL, else the Many Oars pool).
+    // The detached sender is where telemetry is sent from; it never throws, and it sends nothing unless telemetry is on and the notice was shown (the server is OARS_POOL_URL, else the Many Oars pool).
     if (event === 'nightly') {
       await sendNightly(process.env, process.platform, homedir(), Date.now);
       await nightlyPool(event);

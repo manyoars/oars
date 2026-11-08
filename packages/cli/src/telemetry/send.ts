@@ -158,7 +158,7 @@ export const sendSpool = async (deps: SendDeps): Promise<SendResult> => {
   }
 };
 
-/** The nightly task's send, in the telemetry folder under the config folder. */
+/** The detached sender's telemetry send, in the telemetry folder under the config folder. */
 export const sendNightly = (env: NodeJS.ProcessEnv, platform: NodeJS.Platform, home: string, now: () => number): Promise<SendResult> =>
   sendSpool({ env, dir: join(defaultConfigDir(env, platform, home), 'oars', 'telemetry'), now });
 

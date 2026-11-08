@@ -54,7 +54,7 @@ export const finishTelemetry = (deps: RunDeps, argv: string[], observed: Observe
       exitCode: exit,
       ...(errorClass === undefined ? {} : { errorClass }),
     });
-    // Never from a hook: a hook has a time budget, and the send is for the nightly task and the commands a person runs.
+    // Never from a hook: a hook has a time budget, and the send is for the detached sender and the commands a person runs.
     if (!isHook(argv, observed)) startDailySend(runtime, deps.env, deps.now());
   } catch {
     // Telemetry is never allowed to change what a command does.

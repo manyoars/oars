@@ -263,14 +263,13 @@ describe('the public text states facts only', () => {
     expect(text).toContain('session-commons/review');
   });
 
-  it('the root README gives the hook commands in the forms that run, with --scope user and --schedule off', () => {
+  it('the root README gives the hook commands in the forms that run, with --scope user', () => {
     const text = readFileSync(join(root, 'README.md'), 'utf8');
     const commands = [...text.matchAll(/`(oars sessions hook (?:install|uninstall)[^`]*)`/g)].map((match) => match[1] ?? '');
-    expect(commands.length).toBeGreaterThanOrEqual(3);
-    for (const command of commands) expect(command, command).toMatch(/--scope user|--schedule off/);
+    expect(commands.length).toBeGreaterThanOrEqual(2);
+    for (const command of commands) expect(command, command).toMatch(/--scope user/);
     expect(commands).toContain('oars sessions hook install --scope user');
     expect(commands).toContain('oars sessions hook uninstall --scope user');
-    expect(commands).toContain('oars sessions hook install --schedule off');
   });
 
   it('the root README says install raises cleanupPeriodDays and uninstall leaves it raised', () => {
