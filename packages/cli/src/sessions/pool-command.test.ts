@@ -156,6 +156,7 @@ describe('the raw prompt states when and what uploads', () => {
     expect(RAW_PROMPT).not.toContain('nightly');
     expect(RAW_PROMPT).toContain('once the pool says your account accepted its covenant');
     expect(RAW_PROMPT).toContain('except a folder you set to skeleton only or off');
+    expect(RAW_PROMPT).toContain('a block in a shape the redactor does not list yet, a summary the harness writes for a session you left, a file it quotes after compaction, and the echo of a command you ran are not');
   });
 });
 

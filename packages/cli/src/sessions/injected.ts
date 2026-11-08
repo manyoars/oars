@@ -49,6 +49,8 @@ const mapStrings = (value: Json, name: string, change: (text: string, name: stri
 // Left out on purpose: the harness's fixed notices (`silent_turn_reminder`, `batching_reminder_sent`, `bash_output_audience_note`,
 // `read_truncation_notice`, `date`), which are the same wording on every machine or a bare date and hold nothing the operator wrote, and agent
 // output (`<task-notification>`, `<teammate-message>`), which is what an agent said and not an instruction.
+// Known misses, left to the other rules: the `content` of an `away_summary` system record, the `rendered` copy of a `compact_file_reference`
+// attachment (a file's text), and `<local-command-*>` blocks (the echo of a command the operator ran); `slug` and `cwd` stay readable.
 const INJECTED_ATTACHMENTS: ReadonlySet<string> = new Set([
   'instructions', 'nested_memory', 'skill_listing', 'invoked_skills', 'dynamic_skill', 'agent_listing_delta', 'deferred_tools_record', 'deferred_tools_delta',
   'mcp_instructions_delta', 'prompt_snapshot', 'hook_success', 'hook_additional_context', 'hook_blocking_error', 'hook_non_blocking_error', 'hook_cancelled',
