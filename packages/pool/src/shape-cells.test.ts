@@ -1,13 +1,99 @@
 // The pool serves a call's shape cells (layer 0): a target class, an argument class, and a count of unsent key names are closed lists, so their cells are `clear` and served at the clear floor;
 // the sorted key names are a long tail, so their cell is `thresholded` and served only at the public floor. The bundle's `fit` reads cite them.
 import { describe, expect, it } from 'vitest';
-import { NO_AXES, shapeClass, type Cell } from '../../cli/src/sessions/cells.js';
+import { NO_AXES, parseShapeClass, shapeClass, weekStartOf, type Cell } from '../../cli/src/sessions/cells.js';
 import { classMotif, namedId, shapeMotif, type Motif, type WindowStep } from '../../cli/src/sessions/motif.js';
 import { cellClassOf } from './cell-class.js';
 import { familiesOf, withheldOf } from './complement.js';
 import { bundleOf } from './derive.js';
 import { DEFAULT_FLOORS, DEFAULT_PUBLIC_FLOOR } from './floors.js';
 import type { StoredPool } from './stored.js';
+
+/**
+ * The unserved cells that the served ones determine, worked out apart from `complement.ts`. Each relation the cells hold is one equation, with the totals no cell holds as unknowns: each of `target`, `keys`, and `dropped`
+ * sums to the calls of its action; each key's `size` and `depth` cells, and the `keys` cells whose list holds the key, sum to the calls that send the key; a week cell is the sum of its day cells; and a shape cell is
+ * the sum of its named cells. With every served cell fixed, a cell is determined when no solution can move it: after reducing the equations over the unknowns to row echelon form, its column is a pivot whose
+ * row holds no other unknown.
+ */
+const determinedCells = (held: readonly Cell[], motifs: readonly Motif[], served: (cell: Cell) => boolean): Cell[] => {
+  const motifOf = new Map(motifs.map((motif) => [motif.motifId, motif]));
+  const relations = new Map<string, { head: Cell | string | null; parts: Cell[] }>();
+  const relate = (relation: string, cell: Cell, head?: string): void => {
+    const known = relations.get(relation) ?? { head: head ?? null, parts: [] };
+    relations.set(relation, known);
+    known.parts.push(cell);
+  };
+  for (const cell of held) {
+    const motif = motifOf.get(cell.motifId);
+    const place = `${cell.frameBucket} ${cell.grain} ${cell.day} ${String(cell.exposed)}`;
+    const week = `week ${cell.motifId} ${cell.frameBucket} ${String(cell.exposed)} ${weekStartOf(cell.day)}`;
+    if (cell.grain === 'week') relations.set(week, { head: cell, parts: relations.get(week)?.parts ?? [] });
+    else relate(week, cell);
+    if (motif?.level === 'shape') relations.set(`shape ${place}`, { head: cell, parts: relations.get(`shape ${place}`)?.parts ?? [] });
+    if (motif?.level === 'named') relate(`shape ${place}`, cell);
+    const parsed = motif?.cls === null || motif?.cls === undefined ? null : parseShapeClass(motif.cls);
+    if (parsed === null) continue;
+    const { action, facet, value } = parsed;
+    if (facet === 'target' || facet === 'keys' || facet === 'dropped') relate(`${action} ${facet} ${place}`, cell, `calls ${action} ${place}`);
+    if (facet === 'keys') for (const key of value.split(',')) relate(`${action} holds ${key} ${place}`, cell, `calls ${action} ${key} ${place}`);
+    if (facet === 'size' || facet === 'depth') {
+      const key = value.slice(0, value.indexOf('='));
+      relate(`${action} ${facet} ${key} ${place}`, cell, `calls ${action} ${key} ${place}`);
+    }
+  }
+  // Only the unknowns get columns: a served cell moves to the right-hand side, which the question does not depend on.
+  const columns: (Cell | string)[] = [];
+  const columnOf = new Map<Cell | string, number>();
+  const unknown = (term: Cell | string): boolean => typeof term === 'string' || !served(term);
+  const rows: number[][] = [];
+  for (const { head, parts } of relations.values()) {
+    if (head === null || parts.length === 0) continue;
+    const row = new Map<number, number>();
+    const terms: [Cell | string, number][] = [[head, 1], ...parts.map((part): [Cell, number] => [part, -1])];
+    for (const [term, coefficient] of terms) {
+      if (!unknown(term)) continue;
+      if (!columnOf.has(term)) {
+        columnOf.set(term, columns.length);
+        columns.push(term);
+      }
+      const column = columnOf.get(term) ?? -1;
+      row.set(column, (row.get(column) ?? 0) + coefficient);
+    }
+    rows.push([...row]);
+  }
+  const matrix = rows.map((sparse) => {
+    const dense = Array.from({ length: columns.length }, () => 0);
+    for (const [column, coefficient] of sparse) dense[column] = coefficient;
+    return dense;
+  });
+  const gcd = (a: number, b: number): number => (b === 0 ? Math.abs(a) : gcd(b, a % b));
+  const pivotRowOf = new Map<number, number[]>();
+  let top = 0;
+  for (let column = 0; column < columns.length; column += 1) {
+    const found = matrix.findIndex((row, index) => index >= top && row[column] !== 0);
+    if (found < 0) continue;
+    const [pivot] = matrix.splice(found, 1);
+    if (pivot === undefined) throw new Error('no pivot row');
+    matrix.splice(top, 0, pivot);
+    top += 1;
+    for (const row of matrix) {
+      const factor = row[column] ?? 0;
+      if (row === pivot || factor === 0) continue;
+      const scale = pivot[column] ?? 0;
+      for (let index = 0; index < row.length; index += 1) row[index] = (row[index] ?? 0) * scale - (pivot[index] ?? 0) * factor;
+      const divisor = row.reduce(gcd, 0) || 1;
+      for (let index = 0; index < row.length; index += 1) {
+        row[index] = (row[index] ?? 0) / divisor;
+        if (!Number.isSafeInteger(row[index])) throw new Error('a coefficient outgrew exact arithmetic');
+      }
+    }
+    pivotRowOf.set(column, pivot);
+  }
+  return [...pivotRowOf].flatMap(([column, row]) => {
+    const term = columns[column];
+    return typeof term === 'object' && row.every((coefficient, index) => index === column || coefficient === 0) ? [term] : [];
+  });
+};
 
 const bucket = `claude-code/2.1.31x/${NO_AXES}`;
 const target = classMotif(shapeClass('file.read', 'target', 'source'));
@@ -119,6 +205,23 @@ describe('the keys cells that hold a key', () => {
     const served = servedValues([[thin, F - 1], [small, F], [large, F + 10], [size, 2 * F + 9]]);
     // The smallest served `keys` part (`pattern`) goes with the facet rule; the `path` nesting then withholds `glob,path,pattern`, a second rule taking its turn after the first.
     expect(served).toEqual([size.cls]);
+  });
+
+  it('are not recovered from any combination of served totals', () => {
+    // No one family holds a single unserved part here, yet `path,pattern` is the `path` size total plus the `pattern` size total less the action's calls (`target` or `dropped`), inclusion and exclusion over the key lists.
+    const cells: [ReturnType<typeof motifOf>, number][] = [
+      [motifOf('keys', 'path'), F + 5],
+      [motifOf('keys', 'path,pattern'), F - 1],
+      [motifOf('keys', 'pattern'), F + 5],
+      [motifOf('size', 'path=9-32'), 2 * F + 4],
+      [motifOf('size', 'pattern=9-32'), 2 * F + 4],
+      [motifOf('target', 'source'), 3 * F + 9],
+      [motifOf('dropped', '0'), 3 * F + 9],
+    ];
+    const stored: StoredPool = { cells: cells.map(([motif, clusters]) => cellOf(motif.motifId, clusters)), environment: [], motifs: cells.map(([motif]) => motif), strata: [] };
+    const kept = new Set(bundleOf('claude-code', '2.1.314', stored, DEFAULT_FLOORS).cells.map(({ motifId }) => motifId));
+    expect(kept.size).toBeGreaterThan(0);
+    expect(determinedCells(stored.cells, stored.motifs, (cell) => kept.has(cell.motifId))).toEqual([]);
   });
 });
 
