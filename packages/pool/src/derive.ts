@@ -129,10 +129,17 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
     return made;
   };
   const { served, held: heldAtPublic, pool } = poolAt(floors.public);
-  // The serve decision is per pool, but the bundle ships one row of a cell, and a read's input id hashes the row's `clusters`: the public pool's copy when it serves the cell, else the family's. Every family's reads are derived over that row,
-  // so each input is a cell in `cells`. The copy differs only when the two pools count a clear cell differently (every account at a floor of 1, the accounts that have stood above it), and the shipped copy never holds fewer than the floor the read states.
-  const publicCopy = new Map(served.map((cell) => [standing.get(cell) ?? cell, cell]));
-  const shippedOf = (cell: Cell): Cell => publicCopy.get(standing.get(cell) ?? cell) ?? cell;
+  // The serve decision is per pool, but the bundle ships one row of a cell, and a read's input id hashes the row's `clusters`. The row is chosen once, before any read: the public pool's copy when it serves the cell, else the copy of the lowest
+  // family floor that serves it. Every family's reads are derived over that row, so each input is a cell in `cells`. The copies differ only when pools count a clear cell differently (every account at a clear floor of 1, the accounts that have
+  // stood above it); the lowest floor goes first because a cell counted over every account must not ship as a standing copy below the floor a read states, and that row holds at least as many clusters as any copy a higher floor would serve.
+  const rowOf = new Map<Cell, Cell>();
+  for (const floor of [floors.public, ...[...new Set(Object.values(floors.families))].sort((a, b) => a - b)]) {
+    for (const cell of poolAt(floor).served) {
+      const key = standing.get(cell) ?? cell;
+      if (!rowOf.has(key)) rowOf.set(key, cell);
+    }
+  }
+  const shippedOf = (cell: Cell): Cell => rowOf.get(standing.get(cell) ?? cell) ?? cell;
   const reads = SERVED.map(({ family, derive }) => {
     const familyFloor = floorFor(floors, family);
     const { served: at, pool: familyPool } = poolAt(familyFloor);
@@ -144,11 +151,11 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
   });
   // The cells a family on its own floor cites, beside those the public floor serves.
   const cited = new Set(reads.filter(({ family }) => floorFor(floors, family) !== floors.public).flatMap(({ read }) => read.flatMap(({ inputs }) => inputs)));
-  const shown = new Set([...served, ...[...new Set(Object.values(floors.families))].flatMap((floor) => poolAt(floor).served).filter((cell) => cited.has(cellIdOf(cell)))]);
-  // A cell shown counted over every account, by the public floor or by a family's, is shown as that.
+  const shown = new Set([...served, ...[...rowOf.values()].filter((row) => cited.has(cellIdOf(row)))]);
+  // The row shipped for a cell, by the public floor or by a family's.
   const bundled = held.flatMap((cell) => {
-    const every = everyCounted.get(cell);
-    return every !== undefined && shown.has(every) ? [every] : shown.has(cell) ? [cell] : [];
+    const row = rowOf.get(cell);
+    return row !== undefined && shown.has(row) ? [row] : [];
   });
   const named = new Set(bundled.map((cell) => cell.motifId));
   return {

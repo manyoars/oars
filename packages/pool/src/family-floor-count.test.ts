@@ -60,4 +60,14 @@ describe('every read cites a cell the bundle holds when the two pools count a ce
     expect(missing).toBe(0);
     expect(bundle.reads.flatMap((read) => read.inputs).every((input) => new Set(bundle.cells.map(cellIdOf)).has(input))).toBe(true);
   });
+
+  it('with two families on different floors below the public floor, two standing of seven accounts at CLEAR_FLOOR=3', () => {
+    // live counts the clear cell over every account (its clear floor is 1) and tool-day over the accounts that have stood (its clear floor is 2), while the public pool serves neither: one row ships, so both must cite it.
+    const bundle = bundleWith(2, 7, { CLEAR_FLOOR: '3', PUBLIC_FLOOR_FAMILIES: 'live=3,tool-day=4' });
+    for (const family of ['live', 'tool-day']) {
+      const { reads, missing } = missingInputs(bundle, family);
+      expect(reads, family).toBeGreaterThan(0);
+      expect(missing, family).toBe(0);
+    }
+  });
 });

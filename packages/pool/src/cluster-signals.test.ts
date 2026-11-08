@@ -50,6 +50,8 @@ const depositor = async (target: TestPool, id: string, keys: readonly string[], 
 
 const heldClusters = async (target: TestPool): Promise<number[]> => [...new Set((await (await target.db()).prepare('SELECT clusters FROM cells WHERE sessions > 0').all()).results.map((row) => Number(fieldOf(row, 'clusters'))))];
 
+const heldCounts = async (target: TestPool): Promise<string[]> => [...new Set((await (await target.db()).prepare('SELECT clusters, clusters_any FROM cells WHERE sessions > 0').all()).results.map((row) => `${String(fieldOf(row, 'clusters'))}/${String(fieldOf(row, 'clusters_any'))}`))];
+
 describe('the count a floor compares', () => {
   it('does not clear PUBLIC_FLOOR 5 for six accounts that share a machine’s repo keys, which six accounts cleared before', async () => {
     await inFreshPool(async (target) => {
@@ -147,6 +149,21 @@ describe('a deposit that joins an account to another', () => {
         for (const [which, key] of shared.entries()) expect((await target.post('/v1/deposits', withRepoKey(sampleSkeleton(`${String(at)}${String(which)}`.padStart(16, 'e'), { languages: ['rust'] }, '2026-11-02', 'cursor', { program: 'git', sub: 'commit' }, '3.0.0'), key), token)).status).toBe(201);
       }
       expect(await heldClusters(target)).toEqual([1]);
+    });
+  }, 180_000);
+});
+
+describe('the count of every account beside the standing one', () => {
+  it('is never below the standing count, though a fresh account whose repo keys overlap two standing accounts joins them into one cluster', async () => {
+    await inFreshPool(async (target) => {
+      // Sets of 4, 4, and 5 keys: the standing pair overlaps at 3 / 5 = 0.6 and stays two clusters, and the fresh account overlaps each at 4 / 5 = 0.8, which joins all three.
+      const keys = [1, 2, 3, 4, 5].map((at) => `00000000000000f${String(at)}`);
+      await depositor(target, '9441', [keys[0] ?? '', keys[1] ?? '', keys[2] ?? '', keys[3] ?? '']);
+      await depositor(target, '9442', [keys[0] ?? '', keys[1] ?? '', keys[2] ?? '', keys[4] ?? '']);
+      expect(await heldCounts(target)).toEqual(['2/2']);
+      await depositor(target, '9443', keys, true);
+      // The standing accounts are still two clusters; the three together are one, which the count of every account must not fall to.
+      expect(await heldCounts(target)).toEqual(['2/2']);
     });
   }, 180_000);
 });
