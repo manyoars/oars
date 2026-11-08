@@ -6,11 +6,12 @@ import { describe, expect, it } from 'vitest';
 import { ARG_CLASSES, CHANGE_KINDS, DIRECTORY_KINDS, EXTENSION_CLASSES, PATH_DEPTHS, PATTERN_FEATURES, TARGET_CLASSES, VALUE_SIZES, argClassOf, argFeaturesOf, argValuesOf, changeKindOf, targetClassOf, type ComparedCall } from '../../cli/src/sessions/call-shape.js';
 import { incrementsOf, type CellRow } from '../../cli/src/sessions/cell-increments.js';
 import { ERROR_CLASS, ERROR_VERSION_CLASS, RECOVERY_CLASS, SHAPE_CLASS, SHAPE_FACETS, parseShapeClass, type Cell } from '../../cli/src/sessions/cells.js';
-import { hashPath } from '../../cli/src/sessions/extract.js';
+import { targetOf } from '../../cli/src/sessions/extract.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
 import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from '../../cli/src/sessions/pool-fixture.js';
 import { parseSkeleton, skeletonOf } from '../../cli/src/sessions/pool-wire.js';
 import { CLOSED_ARG_VALUES } from '../../cli/src/sessions/public-vocabulary.js';
+import { makeRedactor } from '../../cli/src/sessions/redact.js';
 import { ERROR_CODES, type ToolObservation, type ToolStatus } from '../../cli/src/sessions/schema.js';
 import { bundleOf } from './derive.js';
 import { DEFAULT_FLOORS } from './floors.js';
@@ -24,15 +25,15 @@ const SKELETON_ID = '0123456789abcdef';
 const COLUMNS = ['ok', 'failed', 'sessions', 'durationMs', 'tokens', 'tokenSessions', 'tokenPrompts'] as const;
 type Column = (typeof COLUMNS)[number];
 
-/** A tool the fixtures call: its public name, canonical action, and the input key its target is hashed on. */
-const TOOLS: readonly { native: string; action: 'agent.spawn' | 'file.edit' | 'file.read' | 'file.search' | 'shell.exec' | 'web.search'; pathKey?: string }[] = [
-  { native: 'Read', action: 'file.read', pathKey: 'file_path' },
-  { native: 'Grep', action: 'file.search', pathKey: 'path' },
+/** A tool the fixtures call: its public name and canonical action. */
+const TOOLS: readonly { native: string; action: 'agent.spawn' | 'file.edit' | 'file.read' | 'file.search' | 'shell.exec' | 'web.search' }[] = [
+  { native: 'Read', action: 'file.read' },
+  { native: 'Grep', action: 'file.search' },
   { native: 'WebSearch', action: 'web.search' },
   { native: 'Bash', action: 'shell.exec' },
   { native: 'Agent', action: 'agent.spawn' },
   { native: 'Task', action: 'agent.spawn' },
-  { native: 'NotebookEdit', action: 'file.edit', pathKey: 'notebook_path' },
+  { native: 'NotebookEdit', action: 'file.edit' },
 ];
 /** The actions those tools map to: the `fit` read gives an action's calls, whatever native tool made them. */
 const ACTIONS = [...new Set(TOOLS.map(({ action }) => action))];
@@ -61,17 +62,17 @@ const atomOf = (...calls: Call[]): Atom => ({ calls, promptTokens: 5000, wallSec
 const observe = (id: string, n: number, spec: Call, before: ComparedCall | undefined): { observation: ToolObservation; compared: ComparedCall } => {
   const known = TOOLS.find(({ native }) => native === spec.tool);
   if (known === undefined) throw new Error(`no tool ${spec.tool}`);
-  const given = known.pathKey === undefined ? undefined : spec.input[known.pathKey];
-  const aimed = typeof given === 'string' ? hashPath(given, CWD, CWD, 'oracle') : undefined;
+  // The route's own `targetOf` (`extract.ts:1749`), so a shell call gets the target it gets there and a `target-changed` between two of them can fire.
+  const aimed = targetOf(spec.tool, spec.input, CWD, 'oracle', makeRedactor(), CWD);
   const features = argFeaturesOf(spec.tool, spec.input, CWD, CWD);
   const values = argValuesOf(spec.tool, spec.input, CLOSED_ARG_VALUES);
-  const compared: ComparedCall = { input: spec.input, target: aimed?.hash ?? null, features, values };
+  const compared: ComparedCall = { input: spec.input, target: aimed.target, features, values };
   const observation = tool(id, n, spec.tool, {
     status: spec.status,
-    target: aimed?.hash ?? null,
-    targetBase: aimed?.base ?? null,
+    target: aimed.target,
+    targetBase: aimed.base,
     keys: Object.keys(spec.input).sort(),
-    targetClass: targetClassOf(aimed?.key, aimed?.base ?? null),
+    targetClass: targetClassOf(aimed.key, aimed.base),
     argClass: argClassOf(spec.input),
     argFeatures: features,
     ...(values.length === 0 ? {} : { argValues: values }),
@@ -229,8 +230,11 @@ const vocabularyOf = (held: Held): { action: string; native: string; keySets: st
   });
 };
 
-/** The atoms the held cells allow, drawn from a fixed seed: key sets from the `keys` cells, values from the pool, and every status and cost variant, then run through the route. */
-const candidatesOf = (held: Held, count: number): Atom[] => {
+/**
+ * The atoms the held cells allow, one a call, from one stream of a fixed seed: key sets from the `keys` cells, values from the pool, and every status and cost variant, then run through the route. The stream has no end
+ * (the caller stops it when the rank stops rising) and gives `null` when the held cells name no key set to call with.
+ */
+const candidatesOf = (held: Held): (() => Atom | null) => {
   const random = seeded(7);
   const pick = <T>(items: readonly T[]): T => {
     const chosen = items[Math.floor(random() * items.length)];
@@ -238,8 +242,8 @@ const candidatesOf = (held: Held, count: number): Atom[] => {
     return chosen;
   };
   const vocabulary = vocabularyOf(held);
-  const atoms: Atom[] = [];
-  for (let drawn = 0; drawn < count && vocabulary.length > 0; drawn += 1) {
+  return () => {
+    if (vocabulary.length === 0) return null;
     const { native, keySets, codes } = pick(vocabulary);
     const callOf = (): Call => {
       const keys = pick(keySets);
@@ -248,9 +252,8 @@ const candidatesOf = (held: Held, count: number): Atom[] => {
       const errorCode = status === 'error' && codes.length > 0 && random() < 0.7 ? pick(codes) : undefined;
       return call(native, input, { status, ...(errorCode === undefined ? {} : { errorCode }), tokens: random() < 0.5 ? null : 5000, durationMs: random() < 0.5 ? null : 500 });
     };
-    atoms.push({ calls: random() < 0.25 ? [callOf(), callOf()] : [callOf()], promptTokens: random() < 0.5 ? null : 5000, wallSec: random() < 0.5 ? null : 3 });
-  }
-  return atoms;
+    return { calls: random() < 0.25 ? [callOf(), callOf()] : [callOf()], promptTokens: random() < 0.5 ? null : 5000, wallSec: random() < 0.5 ? null : 3 };
+  };
 };
 
 interface Leak {
@@ -258,19 +261,27 @@ interface Leak {
   column: Column;
 }
 
+/** An atom as the matrix holds it: the stored value it adds to each (cell, column) pair, and its calls of each action by status. */
+interface MatrixColumn {
+  vector: bigint[];
+  calls: bigint[];
+}
+
+/** Where the matrix stops sampling: this many atoms in a row that add no rank. The unit is an atom drawn from the held cells' own vocabulary, so a larger fixture draws more before it stops. */
+const PATIENCE = 400;
+
 /**
- * The sub-floor cells (and columns) that the cells the real `bundleOf` serves give back, for every store of the held cells' vocabulary: the cell's row is in the rational span of the served rows and the
- * rows of the action's calls. Throws on a (cell, column) pair that exists with a row of zeros, because a zero row is in every span: it would be counted as recovered when it is a gap in the generator.
+ * The matrix of section 2: one column per atom that adds rank, and the (cell, column) pairs that are its rows. The universe is every account's own atoms, then the closed-list coverage (`coverageOf`), then draws from one
+ * seeded stream (`candidatesOf`), and it stops only after `patience` draws in a row add no rank; `columnOf` discards an atom that emits a cell the fixture does not hold.
  */
-const leaksOf = (accounts: Accounts, extra = 400): Leak[] => {
+const matrixOf = (accounts: Accounts, patience: number): { held: Held; motifOf: ReadonlyMap<string, Motif>; pairs: { cell: Cell; column: Column; key: string }[]; kept: MatrixColumn[]; drawn: number } => {
   const held = heldOf(accounts);
   const motifOf = new Map(held.pool.motifs.map((motif) => [motif.motifId, motif]));
-  const served = new Set(bundleOf('claude-code', '2.1.314', held.pool, DEFAULT_FLOORS).cells.map(keyOf));
   const keys = new Set(held.cells.map(keyOf));
   const pairs = held.cells.flatMap((cell) => COLUMNS.filter((column) => writes(motifOf.get(cell.motifId), column)).map((column) => ({ cell, column, key: keyOf(cell) })));
   const index = new Map(pairs.map(({ key, column }, position) => [`${key}|${column}`, position]));
   // A pair's coefficient in an atom, and the atom's calls of each action by status: the rows the `fit` read adds.
-  const columnOf = (atom: Atom): { vector: bigint[]; calls: bigint[] } | null => {
+  const columnOf = (atom: Atom): MatrixColumn | null => {
     const emitted = emit(atom);
     const vector = pairs.map(() => 0n);
     for (const row of emitted.rows.values()) {
@@ -284,13 +295,32 @@ const leaksOf = (accounts: Accounts, extra = 400): Leak[] => {
     const calls = ACTIONS.flatMap((action) => (['ok', 'error'] as const).map((status) => BigInt(atom.calls.filter((spec) => TOOLS.find(({ native }) => native === spec.tool)?.action === action && spec.status === status).length)));
     return { vector, calls };
   };
-  const universe = [...accounts.flat(), ...candidatesOf(held, extra)];
-  const kept: { vector: bigint[]; calls: bigint[] }[] = [];
+  const kept: MatrixColumn[] = [];
   const rank = new Span();
-  for (const atom of universe) {
+  const keep = (atom: Atom): boolean => {
     const made = columnOf(atom);
-    if (made !== null && rank.add(made.vector)) kept.push(made);
+    if (made === null || !rank.add(made.vector)) return false;
+    kept.push(made);
+    return true;
+  };
+  for (const atom of [...accounts.flat(), ...coverageOf()]) keep(atom);
+  const draw = candidatesOf(held);
+  let drawn = 0;
+  for (let idle = 0; idle < patience; drawn += 1) {
+    const atom = draw();
+    if (atom === null) break;
+    idle = keep(atom) ? 0 : idle + 1;
   }
+  return { held, motifOf, pairs, kept, drawn };
+};
+
+/**
+ * The sub-floor cells (and columns) that the cells the real `bundleOf` serves give back, for every store of the held cells' vocabulary: the cell's row is in the rational span of the served rows and the
+ * rows of the action's calls. Throws on a (cell, column) pair that exists with a row of zeros, because a zero row is in every span: it would be counted as recovered when it is a gap in the generator.
+ */
+const leaksOf = (accounts: Accounts, patience = PATIENCE): Leak[] => {
+  const { held, motifOf, pairs, kept } = matrixOf(accounts, patience);
+  const served = new Set(bundleOf('claude-code', '2.1.314', held.pool, DEFAULT_FLOORS).cells.map(keyOf));
   const rowOf = (at: number): bigint[] => kept.map(({ vector }) => vector[at] ?? 0n);
   const callRows = ACTIONS.flatMap((_, action) => [0, 1].map((status) => kept.map(({ calls }) => calls[action * 2 + status] ?? 0n)));
   const span = new Span();
@@ -320,8 +350,9 @@ const COVERAGE_PATTERNS = ['a|b', '^a$', '[a-z]', 'a\\.b', '(a)', 'foo', 'a+', '
 const COVERAGE_SIZES = [0, 1, 9, 33, 129, 513, 2049, 8193];
 
 /**
- * The calls that, between them, emit every member of every closed list the cells are keyed on. This is the coverage round 8 lacked: a list member nothing here emits goes red in the meta-test below, so a new facet or
- * member is not silently outside the universe. A call whose input holds a closed value is built from `CLOSED_ARG_VALUES` itself, and a failed call from `ERROR_CODES`, so neither list can grow unseen.
+ * The calls that, between them, emit every member of every closed list the cells are keyed on. They are in the matrix's universe (`matrixOf`), so a member a fixture holds is a column the sweep has whether or not `VALUE_POOL`
+ * can draw it, and a list member nothing here emits goes red in the meta-test below, so a new facet or member is not silently outside the universe. A call whose input holds a closed value is built from
+ * `CLOSED_ARG_VALUES` itself, and a failed call from `ERROR_CODES`, so neither list can grow unseen.
  */
 const coverageOf = (): Atom[] => {
   const calls: Call[][] = [
@@ -416,7 +447,7 @@ describe('the withholding oracle', () => {
     expect(unemittedBy(withoutLimit).filter((member) => !UNREACHABLE.includes(member))).toEqual(['ARG_CLASSES/number', 'CHANGE_KINDS/key-added', 'CHANGE_KINDS/key-removed']);
   });
 
-  // The cases `determinedCells` (`shape-cells.test.ts`) stated from cells, now built from calls through the route, so the oracle is the one arbiter.
+  // Two cases `determinedCells` (`shape-cells.test.ts`) stated from cells, moved here and built from calls through the route. `determinedCells` stays for its seeded census until t996's sweep replaces it.
   const grep = (input: { readonly [key: string]: unknown }): Atom => atomOf(call('Grep', input));
   const servedOf = (accounts: Accounts): number => bundleOf('claude-code', '2.1.314', heldOf(accounts).pool, DEFAULT_FLOORS).cells.length;
 
@@ -426,8 +457,8 @@ describe('the withholding oracle', () => {
     expect(leaksOf(accounts)).toEqual([]);
   });
 
-  // The same fixture with one closed value as the key's only per-key facet. A boolean, and a list that names all its values, is a value of every call that sends the key, so its cells sum to the key's calls under any key name,
-  // an open list's `model` included; if the facet counted only some calls it would stand apart from the `keys` cells and the bundle would serve what they recover.
+  // The same fixture with one closed value beside the key. A boolean has no other per-key facet (`output_mode` also has `size`, which its string value emits), and a boolean, or a list that names all its values, is a value of every
+  // call that sends the key, so its cells sum to the key's calls under any key name, an open list's `model` included; if the facet counted only some calls it would stand apart from the `keys` cells and the bundle would serve what they recover.
   it.each([
     ['an exhaustive list', 'Grep', 'output_mode', 'count'],
     ['a boolean', 'Grep', '-i', true],
@@ -442,18 +473,32 @@ describe('the withholding oracle', () => {
 
   it('serves nothing that gives back arg/none: 12 calls of a tool, 10 with query and 2 with no input, at floor 5', () => {
     const accounts = [...accountsOf(10, () => atomOf(call('WebSearch', { query: 'q' }))), ...accountsOf(2, () => atomOf(call('WebSearch', {})))];
+    expect(servedOf(accounts)).toBeGreaterThan(0);
     expect(leaksOf(accounts)).toEqual([]);
   });
 
-  it('serves nothing that gives back arg/number: keys/file_path,limit 40 beside keys/file_path,offset 3, with arg/number 43 served', () => {
+  // `arg/none` is a part of the `keys` family (`complement.ts`, the `facet` rule), and the sum is inexact for two calls: one whose keys are all null sends a key and no value, so it is in `keys/query` and in `arg/none`, and one
+  // with only an off-list key sends neither a public key nor a null, so it is in no `keys` cell. Each is held here beside keyed and keyless calls, and the oracle says whether the inexact sum ever serves what it recovers.
+  it.each([
+    ['a call whose only key is null', { query: null }],
+    ['a call with only an off-list key', { not_a_public_key: 'x' }],
+  ])('serves nothing that gives back arg/none beside %s', (_, odd) => {
+    const accounts = [...accountsOf(10, () => atomOf(call('WebSearch', { query: 'q' }))), ...accountsOf(2, () => atomOf(call('WebSearch', {}))), ...accountsOf(3, () => atomOf(call('WebSearch', odd)))];
+    expect(servedOf(accounts)).toBeGreaterThan(0);
+    expect(leaksOf(accounts)).toEqual([]);
+  });
+
+  it('serves nothing that gives back arg/number: keys/file_path,limit 40 beside keys/file_path,offset 3, beside arg/number 43, which is held and not served', () => {
     const path = { file_path: 'src/a.ts' };
     const accounts = [...accountsOf(10, () => atomOf(call('Read', path))), ...accountsOf(40, () => atomOf(call('Read', { ...path, limit: 10 }))), ...accountsOf(3, () => atomOf(call('Read', { ...path, offset: 0 })))];
+    expect(servedOf(accounts)).toBeGreaterThan(0);
     expect(leaksOf(accounts)).toEqual([]);
   });
 
   it('serves nothing that gives back depth 1 through dir root: depth 0 and dir root count the same calls, beside the keys total and depth 2', () => {
     const at = (file: string) => atomOf(call('Read', { file_path: file }));
     const accounts = [...accountsOf(20, () => at('a.ts')), ...accountsOf(3, () => at('src/a.ts')), ...accountsOf(10, () => at('src/lib/a.ts')), ...accountsOf(20, () => at('docs/lib/a.md'))];
+    expect(servedOf(accounts)).toBeGreaterThan(0);
     expect(leaksOf(accounts)).toEqual([]);
   });
 });
