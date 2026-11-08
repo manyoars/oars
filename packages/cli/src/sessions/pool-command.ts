@@ -23,7 +23,7 @@ import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from 
 import { contentHash, FIRST_ORDER_FAMILIES } from './read.js';
 import { isObject, keptReplica, loadSignIns, numberIn, replicaFile, signInOf, signInsFile, textIn, type SignIn } from './pool-replica.js';
 import { CAPTURE_VERSION, harnessOf as sessionHarness, type Harness } from './schema.js';
-import { loadStore, readRedactDomains, readSkeletons, readState, updatePoolChoices, type SessionsRuntime } from './store.js';
+import { loadStore, localSalt, readRedactDomains, readSkeletons, readState, updatePoolChoices, type SessionsRuntime } from './store.js';
 import { runGit, type Git } from './survival.js';
 import { vocabulary } from './vocab-load.js';
 
@@ -365,6 +365,8 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   const { terms } = exclusionPaths(runtime.projectsRoot, deps.env);
   const saved = await readState(runtime.storeDir);
   const names = localNames();
+  // The key an injected block's hash is made under: this machine's salt, so the same block hashes the same in every session and the key never leaves it.
+  const injectedKey = `injected-block:${(await (runtime.accountSalt ?? localSalt)(runtime.storeDir)).salt}`;
   const allow = compileAllow(saved.allow);
   const discarded = await discardStale(outbox);
   const counts: DepositCounts = { sessions: 0, batched: 0, excluded: { folder: 0, term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, off: 0, raw: { copies: 0, bytes: 0, masked: 0 }, uncaptured: 0, notEnded: 0, refused: 0, refusedFields: [], discarded, withdrawn: 0 };
@@ -440,7 +442,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
     if (rawAllowed(saved.pool, records.main.project)) {
       let place = 0;
       for (const file of await transcriptFilesOf(runtime, records.main.project, records.main.session)) {
-        const redacted = redactTranscript(await readFile(file.path, 'utf8'), saved.redactDomains, names);
+        const redacted = redactTranscript(await readFile(file.path, 'utf8'), saved.redactDomains, names, injectedKey);
         counts.raw.bytes += (await writeRaw(outbox, key, place, redacted.text)).bytes;
         counts.raw.copies += 1;
         counts.raw.masked += redacted.masked;

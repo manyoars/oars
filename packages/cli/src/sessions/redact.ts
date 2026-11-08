@@ -1,5 +1,7 @@
+import { randomBytes } from 'node:crypto';
 import { homedir, userInfo } from 'node:os';
 import { basename } from 'node:path';
+import { injectedRule, type InjectedRule, type Json, type JsonObject } from './injected.js';
 
 // Redaction before anything is written to the session store. Deterministic and conservative: it would rather over-mask a
 // long random-looking token than let a secret through. Pattern rules first, then emails, the organization domains the
@@ -108,10 +110,6 @@ const rawRules: Redactor = (text) =>
 // misses `\nAKIA...` (no word boundary), cannot cross `\"`, and can eat the `n` of `\n` (t955, census S1, S2, S22). So a line that parses is
 // walked and every string in it redacted decoded (a string that itself holds JSON, in turn); the line is written again only if a value changed,
 // and any other text keeps the plain-text path with its bytes as they were.
-type Json = string | number | boolean | null | Json[] | JsonObject;
-interface JsonObject {
-  [key: string]: Json;
-}
 const SECRET_NAME = /password|passwd|secret|token|api[_-]?key|private[_-]?key|credential/i;
 // A count of tokens is a number under a `token` name, so a number is masked only under the names that are always a secret.
 const SECRET_NUMBER_NAME = /password|passwd|secret|api[_-]?key|private[_-]?key|credential/i;
@@ -129,7 +127,7 @@ const parseContainer = (text: string): Json[] | JsonObject | undefined => {
   }
 };
 
-const redactDecoded = (body: string, redactText: Redactor): string => {
+const redactDecoded = (body: string, redactText: Redactor, injected: InjectedRule): string => {
   // A name reaches the strings of an array under it (`"tokens": ["..."]`); an object's own keys name their values.
   const walk = (value: Json, name: string): Json => {
     if (typeof value === 'string') return SECRET_NAME.test(name) && value.length >= 4 ? '<secret>' : redactBlock(value);
@@ -146,14 +144,16 @@ const redactDecoded = (body: string, redactText: Redactor): string => {
     return value;
   };
   // The text as it was when nothing in it changed; otherwise the value written again, inside the whitespace (a `\r`, a newline) it had around it.
-  const rewrite = (text: string, parsed: Json[] | JsonObject): string => {
-    const next = walk(parsed, '');
+  // A transcript line is a top-level object: the harness's own blocks in it are marked first (their hash is of the text as written), then the rest is walked.
+  const rewrite = (text: string, parsed: Json[] | JsonObject, top: boolean): string => {
+    const marked = top && !Array.isArray(parsed) ? injected(parsed) : parsed;
+    const next = walk(marked, '');
     return next === parsed ? text : `${text.slice(0, text.length - text.trimStart().length)}${JSON.stringify(next)}${text.slice(text.trimEnd().length)}`;
   };
   // `text` is a whole document, or lines of which some are JSON: the JSON ones are walked, the runs between them take the plain-text path.
-  const redactBlock = (text: string): string => {
+  const redactBlock = (text: string, top = false): string => {
     const whole = parseContainer(text);
-    if (whole !== undefined) return rewrite(text, whole);
+    if (whole !== undefined) return rewrite(text, whole, top);
     const out: string[] = [];
     let run: string[] = [];
     for (const line of text.split('\n')) {
@@ -164,12 +164,12 @@ const redactDecoded = (body: string, redactText: Redactor): string => {
       }
       if (run.length > 0) out.push(redactText(run.join('\n')));
       run = [];
-      out.push(rewrite(line, parsed));
+      out.push(rewrite(line, parsed, top));
     }
     if (run.length > 0) out.push(redactText(run.join('\n')));
     return out.join('\n');
   };
-  return redactBlock(body);
+  return redactBlock(body, true);
 };
 
 /** How many values of a redacted text were masked: each placeholder is one. */
@@ -198,7 +198,7 @@ const nameRule = (names: readonly string[]): RegExp | undefined => {
 };
 
 /** A whole transcript body redacted for upload, and how many values were masked (placeholders added, a count and nothing else). `names` are the local usernames to mask wherever they stand as a whole word. */
-export const redactTranscript = (body: string, domains: readonly string[] = [], names: readonly string[] = []): { text: string; masked: number } => {
+export const redactTranscript = (body: string, domains: readonly string[] = [], names: readonly string[] = [], injectedKey: string = randomBytes(16).toString('hex')): { text: string; masked: number } => {
   const named = nameRule(names);
   const known = makeRedactor(domains);
   const redactText: Redactor = (text) => {
@@ -216,9 +216,9 @@ export const redactTranscript = (body: string, domains: readonly string[] = [], 
       .replace(ENVIRONMENT, '$1<env>')
       .replace(LOWER_ENVIRONMENT, '$1<env>');
   };
-  const redacted = redactDecoded(body, redactText);
+  const redacted = redactDecoded(body, redactText, injectedRule(injectedKey));
   return { text: redacted, masked: Math.max(0, placeholders(redacted) - placeholders(body)) };
 };
 
 /** The version of the rules above, stated to the pool with every raw part; a change to any rule of `redactTranscript` raises it. */
-export const REDACTION_VERSION = '2';
+export const REDACTION_VERSION = '3';
