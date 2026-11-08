@@ -1,9 +1,11 @@
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
-import { writeBatch } from './pool-outbox.js';
+import { appendOwnerOnly, mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
+import { markDeltasSent } from './pool-delta.js';
+import { markSent } from './pool-sent.js';
+import { markShown, writeBatch } from './pool-outbox.js';
 import { writeRaw } from './pool-raw.js';
 
 // The mode calls do nothing on Windows (it has no POSIX mode bits), so these checks run where the bits exist.
@@ -26,6 +28,30 @@ describe('owner-only writes (S9, S10)', () => {
     chmodSync(file, 0o644);
     await writeOwnerOnly(file, 'two');
     expect(modeOf(file)).toBe(0o600);
+  });
+
+  posix('appends 0600, and narrows a log that was wider before it appends: shown.log, sent.log, and the delta marks', async () => {
+    const file = join(root, 'log.txt');
+    await appendOwnerOnly(file, 'one\n');
+    expect(modeOf(file)).toBe(0o600);
+    chmodSync(file, 0o644);
+    await appendOwnerOnly(file, 'two\n');
+    expect(modeOf(file)).toBe(0o600);
+    expect(readFileSync(file, 'utf8')).toBe('one\ntwo\n');
+    const outbox = join(root, 'pool-outbox', 'server');
+    await markShown(outbox, 'a1', 1);
+    await markSent(outbox, 'a1', 1);
+    await markDeltasSent(outbox, ['m1']);
+    expect(modeOf(outbox)).toBe(0o700);
+    const logs = readdirSync(outbox).filter((name) => name.endsWith('.log') || name.includes('mark'));
+    expect(logs.length).toBeGreaterThanOrEqual(3);
+    for (const log of logs) {
+      chmodSync(join(outbox, log), 0o644);
+    }
+    await markShown(outbox, 'a2', 2);
+    await markSent(outbox, 'a2', 2);
+    await markDeltasSent(outbox, ['m2']);
+    for (const log of logs) expect(modeOf(join(outbox, log))).toBe(0o600);
   });
 
   posix('makes a folder 0700 with the folders it creates, and narrows one that exists', async () => {

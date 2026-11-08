@@ -1,9 +1,9 @@
 // The outbox (`oars pool deposit` and `oars pool outbox`): every batch that may leave this machine is first written here, as canonical JSON lines, and `deposit` stops. Nothing in this file
 // looks inside a batch except to name its fields, at every depth, for `--explain`; what a batch holds is the projection's business.
 import { createHash } from 'node:crypto';
-import { appendFile, readdir, readFile, rm } from 'node:fs/promises';
+import { readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
+import { appendOwnerOnly, mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
 import { SKELETON_FORMAT, VOCAB_VERSION } from './pool-wire.js';
 import { contentHash } from './read.js';
 
@@ -255,7 +255,7 @@ const shownFile = (outbox: string): string => join(outbox, 'shown.log');
 /** Records that this hash was printed, one line for each print: the lock below sends only a hash that appears here. */
 export const markShown = async (outbox: string, hash: string, at: number): Promise<void> => {
   await mkdirOwnerOnly(outbox);
-  await appendFile(shownFile(outbox), `${hash} ${new Date(at).toISOString()}\n`, { encoding: 'utf8', mode: 0o600 });
+  await appendOwnerOnly(shownFile(outbox), `${hash} ${new Date(at).toISOString()}\n`);
 };
 
 const wasShown = async (outbox: string, hash: string): Promise<boolean> => {

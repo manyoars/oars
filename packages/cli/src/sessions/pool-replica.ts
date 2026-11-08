@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 import { isMissing } from './pool-outbox.js';
-import { isBundleVersion, LEGACY_KEY_ID, verifyBundle, type Bundle, type PinnedKey, type PinnedKeys } from './pool-wire.js';
+import { isBundleVersion, isKeyId, LEGACY_KEY_ID, verifyBundle, type Bundle, type PinnedKey, type PinnedKeys } from './pool-wire.js';
 import { contentHash } from './read.js';
 import type { Harness } from './schema.js';
 
@@ -37,18 +37,19 @@ export interface SignIn {
   signingKeys: PinnedKeys;
 }
 
-/** Keys as a sign-in file or the pool's login answer states them: a `signingKeys` object by key id, or the one `signingKey` the pool names with `kid` (a file from before key ids has no `kid`, and pins under `LEGACY_KEY_ID`). */
+/** Keys as a sign-in file or the pool's login answer states them: a `signingKeys` object by key id, or the one `signingKey` the pool names with `kid` (a `kid` that is no key id, as the pool sends them, is refused; a file from before key ids has no `kid`, and pins under `LEGACY_KEY_ID`). */
 const keysOf = (value: object): PinnedKeys | undefined => {
   const set: unknown = Reflect.get(value, 'signingKeys');
   if (set === undefined) {
     const single = keyOf(Reflect.get(value, 'signingKey'));
-    return single === undefined ? undefined : { [textIn(value, 'kid') ?? LEGACY_KEY_ID]: single };
+    const kid = textIn(value, 'kid') ?? LEGACY_KEY_ID;
+    return single === undefined || !isKeyId(kid) ? undefined : { [kid]: single };
   }
   if (!isObject(set)) return undefined;
   const keys: PinnedKeys = {};
   for (const [kid, entry] of Object.entries(set)) {
     const key = keyOf(entry);
-    if (key === undefined) return undefined;
+    if (key === undefined || !isKeyId(kid)) return undefined;
     keys[kid] = key;
   }
   return Object.keys(keys).length === 0 ? undefined : keys;

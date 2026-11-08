@@ -11,7 +11,7 @@ import { checkSession, exclusionPaths, lastWritten, loadTerms, transcriptFilesOf
 import { localNames, makeRedactor, REDACTION_VERSION, redactTranscript } from './redact.js';
 import { recordSend, recordWire, newTally, tallyBatch } from '../telemetry/wire.js';
 import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, lockedBatch, markShown, outboxFolder, partsOf, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
-import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
+import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, unpinnedKid, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
 import { carriedDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { rawAllowed, sendsOf } from './pool-choices.js';
@@ -210,7 +210,7 @@ export const poolLogin = async (deps: RunDeps, options: { server?: string | unde
   const signIn = signInOf(isObject(reply.body) ? { ...reply.body, server } : undefined);
   if (signIn === undefined) throw new CliError('The pool answered a sign-in with no account, token, or signing key.', ExitCode.UNEXPECTED, LOGIN);
   const known = saved.find((entry) => entry.server === server);
-  // A key is trusted once, here, under the id the pool names it by, and never replaced: a server that swaps the key behind an id it already holds could otherwise sign anything it likes. A new id is added beside the old ones (a rotation, docs/pool.md).
+  // A key is trusted once, here, under the id the pool names it by, and never replaced: a server that swaps the key behind an id it already holds could otherwise sign anything it likes. A server cannot add an id either: a new id enters only in a release of oars (RELEASE_KEYS, docs/pool.md), so a server at this URL that names one is refused.
   const held = known?.signingKeys ?? {};
   for (const [kid, key] of Object.entries(signIn.signingKeys)) {
     if (Object.hasOwn(held, kid) && held[kid]?.x !== key.x) {
@@ -218,7 +218,13 @@ export const poolLogin = async (deps: RunDeps, options: { server?: string | unde
       throw new CliError(message, ExitCode.AUTH, LOGIN, { code: 'signing_key_changed', title: 'The pool signing key changed.', detail: message });
     }
   }
-  const pinned: SignIn = { ...signIn, signingKeys: { ...held, ...signIn.signingKeys } };
+  const unpinned = known === undefined ? undefined : unpinnedKid(held, signIn.signingKeys);
+  if (unpinned !== undefined) {
+    const message = `${server} signs with the key ${unpinned}, which this machine never pinned for it and this release of oars does not ship. Nothing was saved. Upgrade with npm install -g @manyoars/oars; if the pool really did rotate its key, remove ${server} from ${signInsFile(storeDir)} and sign in again.`;
+    throw new CliError(message, ExitCode.AUTH, LOGIN, { code: 'signing_key_unpinned', title: 'The pool signing key is not pinned.', detail: message });
+  }
+  // Only the keys already held are kept on a repeat login: a key the server offers under a released id is never stored beside the release's own.
+  const pinned: SignIn = { ...signIn, signingKeys: known === undefined ? signIn.signingKeys : held };
   await mkdirOwnerOnly(storeDir);
   await writeOwnerOnly(signInsFile(storeDir), `${JSON.stringify([...saved.filter((entry) => entry !== known), pinned])}\n`);
   return { document: { ok: true, server, account: signIn.account, expiresAt: signIn.expiresAt }, text: `Signed in to ${server} as ${signIn.account}.` };
@@ -237,15 +243,17 @@ export const poolLogout = async (deps: RunDeps, options: { server?: string | und
   const saved = await loadSignIns(storeDir, LOGOUT);
   const known = saved.find((entry) => entry.server === server);
   if (known === undefined) return { document: { ok: true, server, revoked: false, removed: false }, text: `Not signed in to ${server}.` };
+  // The request prints before it is sent with the credential masked, as every other pool request does.
+  const credential = new Masker();
+  credential.add(known.token);
   let reply: Reply | undefined;
   try {
-    reply = await ask(deps, LOGOUT, server, '/v1/login', { method: 'DELETE', token: known.token });
+    reply = await ask(deps, LOGOUT, server, '/v1/login', { method: 'DELETE', token: known.token, show: credential });
   } catch (error) {
     if (!(error instanceof CliError) || error.exitCode !== ExitCode.UNREACHABLE) throw error;
   }
   if (reply !== undefined && reply.status !== 204 && reply.status !== 401 && !poolDown(reply.status)) throw refusal(LOGOUT, reply);
-  await writeOwnerOnly(signInsFile(storeDir), `${JSON.stringify(saved.filter((entry) => entry !== known))}
-`);
+  await writeOwnerOnly(signInsFile(storeDir), `${JSON.stringify(saved.filter((entry) => entry !== known))}\n`);
   const revoked = reply?.status === 204;
   const text = revoked
     ? `Signed out of ${server}: the credential is revoked there and removed here.`
@@ -401,6 +409,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   // Accepting the covenant is a step of sending a batch: alone it would exit 0 as though something had been sent under it.
   if (options.send === undefined && options.acceptCovenant !== undefined) throw usage('--accept-covenant belongs to --send: it is accepted as a step of sending a batch. Nothing was accepted.', DEPOSIT);
   const outbox = outboxFolder(runtime.storeDir, server);
+  await mkdirOwnerOnly(outbox);
   if (options.send !== undefined) return sendBatch(deps, { outbox, server, token, hash: options.send, acceptCovenant: options.acceptCovenant, via: options.via });
   const { terms } = exclusionPaths(runtime.projectsRoot, deps.env);
   const saved = await readState(runtime.storeDir);

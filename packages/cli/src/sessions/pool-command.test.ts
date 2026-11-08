@@ -2540,7 +2540,7 @@ describe('oars pool logout (S8)', () => {
   const revoking = (scene: Scene, reply: () => Response): void => {
     server.use(
       http.delete(`${POOL}/v1/login`, ({ request }) => {
-        scene.seen.push({ url: request.url, headers: request.headers.get('authorization') ?? '', body: '', err: '' });
+        scene.seen.push({ url: request.url, headers: request.headers.get('authorization') ?? '', body: '', err: scene.h.err.join('') });
         return reply();
       }),
     );
@@ -2555,7 +2555,11 @@ describe('oars pool logout (S8)', () => {
     writeFileSync(file, `${JSON.stringify([...saved, { server: OTHER, account: 'acct_two', token: 'other-token', expiresAt: LATER, signingKey: FIXED_KEY }])}\n`);
     revoking(scene, () => new HttpResponse(null, { status: 204 }));
     expect(await scene.cli('pool', 'logout', '--server', POOL, '--json')).toBe(ExitCode.OK);
-    expect(scene.seen).toEqual([{ url: `${POOL}/v1/login`, headers: `Bearer ${POOL_TOKEN}`, body: '', err: '' }]);
+    expect(scene.seen).toHaveLength(1);
+    expect(scene.seen[0]).toMatchObject({ url: `${POOL}/v1/login`, headers: `Bearer ${POOL_TOKEN}` });
+    // The request was printed before it was sent, with the credential masked.
+    expect(scene.seen[0]?.err).toContain('DELETE ');
+    expect(scene.seen[0]?.err).not.toContain(POOL_TOKEN);
     expect(scene.document()).toEqual({ ok: true, server: POOL, revoked: true, removed: true });
     expect(serversOf(scene)).toEqual([OTHER]);
   });
@@ -2602,6 +2606,15 @@ describe('the pool account file is the owner\'s alone (S9)', () => {
   const posix = it.skipIf(process.platform === 'win32');
   const modeOf = (path: string): number => statSync(path).mode & 0o777;
 
+  posix('a deposit makes the outbox folder 0700 even before any other command has made the data folder', async () => {
+    const scene = setting();
+    await signIn(scene);
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    const root = join(scene.staged.storeDir, 'pool-outbox');
+    expect(modeOf(root)).toBe(0o700);
+    expect(modeOf(join(root, readdirSync(root)[0] ?? ''))).toBe(0o700);
+  });
+
   posix('a login narrows an account file and a data folder that were once wider, and a logout keeps them narrow', async () => {
     const scene = setting();
     const file = join(scene.staged.storeDir, 'pool-accounts.json');
@@ -2626,19 +2639,31 @@ describe('oars pool login pins keys by key id (S17)', () => {
     return Array.isArray(parsed) ? at(parsed[0], 'signingKeys') : undefined;
   };
 
-  it('pins the key under the id the pool names (k1 for a pool that names none), adds a new id beside it, and refuses a changed key behind an id it holds', async () => {
+  it('pins the key under the id the pool names (k1 for a pool that names none), refuses a new id and a changed key behind a held one, and keeps what it holds', async () => {
     const scene = setting();
     poolAt(scene, { polls: [HttpResponse.json({ ...okLogin(), kid: 'k1' })] });
     expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
     expect(pinnedIn(scene)).toEqual({ k1: FIXED_KEY });
+    // A server at the same URL that names a new id is refused: a new id enters only in a release of oars (RELEASE_KEYS), never through login.
     const second: PinnedKey = { kty: 'OKP', crv: 'Ed25519', x: 'a-second-key' };
     poolAt(scene, { polls: [HttpResponse.json({ ...okLogin(second), kid: 'k2' })] });
-    expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
-    expect(pinnedIn(scene)).toEqual({ k1: FIXED_KEY, k2: second });
-    poolAt(scene, { polls: [HttpResponse.json({ ...okLogin({ ...second, x: 'swapped' }), kid: 'k2' })] });
+    expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL, '--json')).toBe(ExitCode.AUTH);
+    expect(scene.document()).toMatchObject({ problem: { code: 'signing_key_unpinned' } });
+    expect(JSON.stringify(at(scene.document(), 'problem'))).toContain('k2');
+    expect(pinnedIn(scene)).toEqual({ k1: FIXED_KEY });
+    poolAt(scene, { polls: [HttpResponse.json({ ...okLogin({ ...FIXED_KEY, x: 'swapped' }), kid: 'k1' })] });
     expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL, '--json')).toBe(ExitCode.AUTH);
     expect(scene.document()).toMatchObject({ problem: { code: 'signing_key_changed' } });
-    expect(JSON.stringify(at(scene.document(), 'problem'))).toContain('pinned for k2');
-    expect(pinnedIn(scene)).toEqual({ k1: FIXED_KEY, k2: second });
+    expect(JSON.stringify(at(scene.document(), 'problem'))).toContain('pinned for k1');
+    expect(pinnedIn(scene)).toEqual({ k1: FIXED_KEY });
+  });
+
+  it('refuses a login whose key id is no key id, as the pool sends them, and saves nothing', async () => {
+    const scene = setting();
+    for (const kid of ['k 1', 'k1\n', 'x'.repeat(33)]) {
+      poolAt(scene, { polls: [HttpResponse.json({ ...okLogin(), kid })] });
+      expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).not.toBe(ExitCode.OK);
+    }
+    expect(existsSync(join(scene.staged.storeDir, 'pool-accounts.json'))).toBe(false);
   });
 });
