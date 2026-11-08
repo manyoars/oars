@@ -6,12 +6,12 @@ import { classMotif, namedId, shapeMotif, type Motif, type WindowStep } from '..
 import { cellClassOf } from './cell-class.js';
 import { withheldOf, type Floorplan } from './complement.js';
 import { bundleOf } from './derive.js';
-import { clustersOf, DEFAULT_FLOORS, DEFAULT_PUBLIC_FLOOR, type Floors } from './floors.js';
+import { cellFloor, clustersOf, DEFAULT_FLOORS, DEFAULT_PUBLIC_FLOOR, type Floors } from './floors.js';
 import type { StoredPool } from './stored.js';
 
-/** One floor for every cell, counted on the cell's clusters: the single-floor plan these cases state. */
 /** The clear floor set to the public one, so a clear cell is served at the public floor as a thresholded one is: the cases below test the complement and the rank check at one floor. */
 const ONE_FLOOR: Floors = { ...DEFAULT_FLOORS, clear: DEFAULT_PUBLIC_FLOOR };
+/** One floor for every cell, counted on the cell's clusters: the single-floor plan these cases state. */
 const at = (floor: number): Floorplan => ({ floorOf: () => floor, standingOf: clustersOf });
 
 /**
@@ -417,6 +417,27 @@ describe('every family of cells (`FAMILY_RULES`)', () => {
       if (determined.length > 0) broken.push(`seed ${String(seed)}: ${String(determined.length)} determined`);
     }
     expect(withheldSome).toBeGreaterThan(100);
+    expect(broken).toEqual([]);
+  });
+
+  it('leaves no unserved cell determined at the two floors, each cell judged against the floor of its own class', () => {
+    // A clear cell (a target or argument class, a listed model) is served at the clear floor of 1 and a thresholded one (a key list, a long-tail model, a custom name) at 5, so the served cells are a different set than at one floor.
+    let withheldSome = 0;
+    let split = 0;
+    const broken: string[] = [];
+    for (let seed = 1; seed <= 400; seed += 1) {
+      const { held, motifs } = bundleFrom(seed);
+      const motifOf = new Map(motifs.map((motif) => [motif.motifId, motif]));
+      const floorOf = (cell: Cell): number => cellFloor(DEFAULT_FLOORS, F, cellClassOf(cell, motifOf.get(cell.motifId)));
+      const withheld = withheldOf(held, motifs, { floorOf, standingOf: clustersOf });
+      if (withheld.size > 0) withheldSome += 1;
+      // The seed puts a cell under the public floor but at the clear floor, so a clear cell is served below 5 while a thresholded one is not.
+      if (held.some((cell) => cell.clusters < F && cell.clusters >= floorOf(cell))) split += 1;
+      const determined = determinedCells(held, motifs, (cell) => cell.clusters >= floorOf(cell) && !withheld.has(cell));
+      if (determined.length > 0) broken.push(`seed ${String(seed)}: ${String(determined.length)} determined`);
+    }
+    expect(withheldSome).toBeGreaterThan(100);
+    expect(split).toBeGreaterThan(100);
     expect(broken).toEqual([]);
   });
 
