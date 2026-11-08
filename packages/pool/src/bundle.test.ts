@@ -185,7 +185,7 @@ describe('a bundle over five accounts', () => {
     const strata = fieldOf(payload, 'strata');
     expect(JSON.stringify(strata)).toContain('typescript');
     expect(JSON.stringify({ ...(typeof payload === 'object' && payload !== null ? payload : {}), strata: undefined })).not.toContain('typescript');
-    expect(typeof json === 'object' && json !== null ? Object.keys(json).sort() : []).toEqual(['payload', 'signature']);
+    expect(typeof json === 'object' && json !== null ? Object.keys(json).sort() : []).toEqual(['kid', 'payload', 'signature']);
   });
 
   it('turns away a caller with no credential, and names a version outside the vocabulary', async () => {
@@ -741,8 +741,8 @@ describe('the bundle names its signing key (S17)', () => {
     }
     const typo = await startPool({ BUNDLE_KEY_ID: 'k 2!' });
     try {
-      const typoToken = (await typo.signIn('github', stubUser('7003'))).token;
-      expect((await typo.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, typoToken)).status).toBe(503);
+      // Checked before the handle is read, so no approval is needed to see the refusal at login.
+      expect(await typo.post('/v1/login/poll', { handle: 'any' })).toMatchObject({ status: 503, json: { error: 'not_configured' } });
     } finally {
       await typo.dispose();
     }

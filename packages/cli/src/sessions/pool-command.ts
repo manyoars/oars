@@ -217,7 +217,7 @@ export const poolLogin = async (deps: RunDeps, options: { server?: string | unde
   }
   const pinned: SignIn = { ...signIn, signingKeys: { ...held, ...signIn.signingKeys } };
   await mkdirOwnerOnly(storeDir);
-  await writeOwnerOnly(signInsFile(storeDir), `${JSON.stringify([...saved.filter((entry) => entry !== known), signIn])}\n`);
+  await writeOwnerOnly(signInsFile(storeDir), `${JSON.stringify([...saved.filter((entry) => entry !== known), pinned])}\n`);
   return { document: { ok: true, server, account: signIn.account, expiresAt: signIn.expiresAt }, text: `Signed in to ${server} as ${signIn.account}.` };
 };
 
