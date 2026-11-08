@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DEADLINE_ENV, DEADLINE_MS, deadlineOf, gateHook, registryCachePath, crossingsPath, type GateHookDeps } from './hook.js';
+import { DEADLINE_ENV, DEADLINE_MS, HANDOFF_MARK_ENV, deadlineOf, gateHook, handOffMarkOf, registryCachePath, crossingsPath, type GateHookDeps } from './hook.js';
 import { indexFile } from './novelty.js';
 import { folderKey, parseRows, type CrossingRecord } from './record.js';
 import type { RegistryAnswer, RegistryReader } from './registry.js';
@@ -430,6 +430,25 @@ describe('oars gate hook: one ask per name', () => {
     const fill = vi.fn<NonNullable<GateHookDeps['fill']>>(() => Promise.resolve());
     await gateHook(payload('npm install left-pad'), depsFor(store, { registry: found('1.0.0'), clock: () => 0, deadlineMs: 450, fill }));
     expect(fill).not.toHaveBeenCalled();
+    expect(rowsOf(store).map((row) => row.registryState)).toEqual(['found']);
+  });
+
+  it('puts the hand-off mark 400 ms before the deadline unless the environment names an earlier whole number of ms', () => {
+    expect(handOffMarkOf({}, 800)).toBe(400);
+    expect(handOffMarkOf({ [HANDOFF_MARK_ENV]: '1000' }, 30_000)).toBe(1000);
+    for (const given of ['', 'soon', '0', '-5', '1000.5', 'Infinity', '400', '5000']) expect(handOffMarkOf({ [HANDOFF_MARK_ENV]: given }, 800)).toBe(400);
+  });
+
+  it('starts the hand-off at the mark the deps name, however far off the deadline is', async () => {
+    const store = folder();
+    let answer: (found: RegistryAnswer) => void = () => undefined;
+    const registry: RegistryReader = () => new Promise<RegistryAnswer>((resolve) => { answer = resolve; });
+    const fill = vi.fn<NonNullable<GateHookDeps['fill']>>(() => Promise.resolve());
+    const hook = gateHook(payload('npm install left-pad'), depsFor(store, { registry, clock: () => 0, deadlineMs: 30_000, handOffMarkMs: 50, fill }));
+    // The deadline is 30 s away and the ask has not answered: only the mark can start the hand-off, and the ask is still open when it does.
+    await vi.waitFor(() => { expect(fill).toHaveBeenCalledTimes(1); }, { timeout: 5_000 });
+    answer({ state: 'found', latest: '1.0.0', created: '2020-01-01T00:00:00.000Z' });
+    await hook;
     expect(rowsOf(store).map((row) => row.registryState)).toEqual(['found']);
   });
 

@@ -1,12 +1,12 @@
 // The built `dist/bin.js` run as the harness runs it: `gate hook` with a payload on stdin, in a temp home. It proves the dispatch in `bin.ts` and the process-level exit 0 with
 // empty stdout, which the in-process tests cannot. Like `pack.test.ts` it reads `dist/`, which the root `check` builds before the tests run; without a build it is skipped.
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { DEADLINE_ENV } from './hook.js';
+import { DEADLINE_ENV, HANDOFF_MARK_ENV } from './hook.js';
 import { startFill, type FillAsk } from './hook-fill.js';
 import { folderKey } from './record.js';
 
@@ -31,11 +31,16 @@ const seededStore = (home: string): string => {
 };
 
 // A built hook counts node's own start inside its 800 ms, and a loaded box can spend all of it there, so no sight would reach the code a case is about. Each hook is given this much
-// instead, and a case that needs a cut ask gets one the stub manager can never answer in time (`gatedNpm` waits for the test), so the cut is the test's, not the machine's speed.
-const HOOK_DEADLINE_MS = 6_000;
+// instead. The cases that need no ask (a kept answer, a held lock, a command that is never asked) end at once whatever it is. The one that hands a name off asks a manager that
+// cannot answer (`gatedNpm` waits for the test) and starts the hand-off at `HANDOFF_MARK_MS`, so the test, not this deadline, ends that hook once the hand-off is seen: node
+// would have to take about 29 s to start for the hand-off to be missed, where the slowest start seen on a loaded box is under 5 s.
+const HOOK_DEADLINE_MS = 30_000;
+// Where the hand-off starts in a hook given `HOOK_DEADLINE_MS`, on the hook's own clock (`HANDOFF_MARK_ENV`): early, so the lock and the helper's spawn have the rest of the deadline.
+const HANDOFF_MARK_MS = 1_000;
 
 const envFor = (home: string, pathHead?: string): NodeJS.ProcessEnv => ({
   [DEADLINE_ENV]: String(HOOK_DEADLINE_MS),
+  [HANDOFF_MARK_ENV]: String(HANDOFF_MARK_MS),
   PATH: [pathHead, process.env.PATH].filter((part) => part !== undefined && part !== '').join(delimiter),
   APPDATA: home,
   HOME: home,
@@ -46,7 +51,7 @@ const envFor = (home: string, pathHead?: string): NodeJS.ProcessEnv => ({
 const runHook = (input: string, extra: readonly string[] = [], pathHead?: string, given?: string): { status: number | null; stdout: string; home: string } => {
   const home = given ?? mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
   if (given === undefined) made.push(home);
-  const result = spawnSync(process.execPath, [bin, 'gate', 'hook', ...extra], { input, encoding: 'utf8', timeout: 30_000, cwd: home, env: envFor(home, pathHead) });
+  const result = spawnSync(process.execPath, [bin, 'gate', 'hook', ...extra], { input, encoding: 'utf8', timeout: HOOK_DEADLINE_MS + 15_000, cwd: home, env: envFor(home, pathHead) });
   return { status: result.status, stdout: result.stdout, home };
 };
 
@@ -130,34 +135,31 @@ const rowsOf = (home: string): unknown[] => {
         .map((line): unknown => JSON.parse(line));
 };
 
-/** How many built-hook sights a case runs before it says no row or output came. */
-const MAX_SIGHTS = 10;
-// Runs one built-hook sight of a name whose manager cannot answer (`gatedNpm`) and checks it handed the name off: the lock is on disk, or the helper's answer is. The hook has `HOOK_DEADLINE_MS`
-// and hands off 400 ms before it (`hook.ts`), so the hand-off sits inside a deadline that node's start on a loaded box cannot reach, and nothing here counts how many sights it takes: a
-// sight that did not hand off is the product failing, not the box being slow.
-const sightHandsOff = (payload: string, npm: { folder: string }, home: string, store: string): void => {
-  const began = Date.now();
-  const result = runHook(payload, [], npm.folder, home);
-  expect(result.status).toBe(0);
-  expect(result.stdout).toBe('');
-  const left = `${String(Date.now() - began)} ms, ${String(rowsOf(home).length)} rows, ${String(lockFiles(store).length)} locks, deadline ${String(HOOK_DEADLINE_MS)} ms`;
+// Runs one built-hook sight of a name whose manager cannot answer (`gatedNpm`) and checks it handed the name off: the hook asked the manager, the helper asked it too, and the lock or the
+// helper's answer is on disk. The hook is ended by the test once the helper has started (its own ask is left waiting on the gate until `release`), so what the case asserts is the
+// hand-off the hook makes at its mark, with `HOOK_DEADLINE_MS` far enough off that the mark, not the deadline, is what starts it. Nothing counts sights or reads a wall-clock window.
+const sightHandsOff = async (payload: string, npm: { folder: string; log: string }, home: string, store: string): Promise<void> => {
+  const hook = spawn(process.execPath, [bin, 'gate', 'hook'], { cwd: home, env: envFor(home, npm.folder), stdio: ['pipe', 'ignore', 'ignore'] });
+  const ended = new Promise<void>((resolve) => { hook.once('close', () => { resolve(); }); });
+  hook.stdin.end(payload);
+  await until(() => logged(npm.log, 'started') >= 2, HOOK_DEADLINE_MS);
+  const left = `${String(logged(npm.log, 'started'))} manager starts, ${String(lockFiles(store).length)} locks, hook deadline ${String(HOOK_DEADLINE_MS)} ms, mark ${String(HANDOFF_MARK_MS)} ms`;
+  hook.kill('SIGKILL');
+  await ended;
+  expect(logged(npm.log, 'started'), `the hook and the helper it started did not both ask the manager (${left})`).toBe(2);
   expect(lockFiles(store).length > 0 || existsSync(join(store, 'gate-registry.jsonl')), `the sight left no lock and no kept answer (${left})`).toBe(true);
 };
 
-// One sight after the hand-off, run again if the box was so loaded that the hook was ended before it wrote its row (or, when `printed` is set, before it printed): with the lock or the
-// answer kept it asks nothing, so a repeat can start no manager. At most MAX_SIGHTS, then the case fails. Returns the sight's stdout, so a case that expects a note or a deny reads it.
+// One sight after the hand-off: the lock or the answer kept means the hook asks nothing and ends at once, so it writes its row (and, when `printed` is set, prints) in the one run. Returns the
+// sight's stdout, so a case that expects a note or a deny reads it.
 const sightWithRow = (payload: string, id: string, npm: { folder: string }, home: string, printed = false): string => {
-  const seen: string[] = [];
-  for (let tries = 0; tries < MAX_SIGHTS; tries += 1) {
-    const before = rowsOf(home).length;
-    const began = Date.now();
-    const result = runHook(payload.replace('"u1"', `"${id}"`), [], npm.folder, home);
-    seen.push(`#${String(tries + 1)} ${String(Date.now() - began)} ms, stdout ${String(result.stdout.length)} bytes`);
-    expect(result.status).toBe(0);
-    if (!printed) expect(result.stdout).toBe('');
-    if (rowsOf(home).length > before && (!printed || result.stdout !== '')) return result.stdout;
-  }
-  return expect.unreachable(`no row or no output in ${String(MAX_SIGHTS)} sights: ${seen.join('; ')}`);
+  const before = rowsOf(home).length;
+  const result = runHook(payload.replace('"u1"', `"${id}"`), [], npm.folder, home);
+  expect(result.status).toBe(0);
+  if (!printed) expect(result.stdout).toBe('');
+  expect(rowsOf(home).length, 'the hook wrote no row').toBe(before + 1);
+  if (printed) expect(result.stdout, 'the hook printed nothing').not.toBe('');
+  return result.stdout;
 };
 
 /** How many lines of the manager's log read `word`. */
@@ -208,32 +210,25 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
   });
 
   // The built hook takes the sight and starts the helper itself, as the harness runs it. `sightHandsOff` (above) runs the one sight that hands off, so the cases pin
-  // what follows exactly: at most two starts a sight, the helper's single finish, the lock or the cache it leaves, no start after the hand-off, and a row on every sight after it.
+  // what follows exactly: two starts (the hook's ask and the helper's), the helper finishing, the lock or the cache left, no start after the hand-off, and a row on every sight after it.
   it('fills the cache after a cut ask: the built hook starts the helper, and the sight after it reads found and asks nothing', async () => {
     const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install slow-lib' }, cwd: tmpdir(), permission_mode: 'default' });
     const npm = gatedNpm('answer');
     const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
     made.push(home);
     const store = join(home, 'oars', 'sessions');
-    sightHandsOff(payload, npm, home, store);
-    // The hook is gone and its own ask with it; the helper's manager, still waiting, answers now.
+    await sightHandsOff(payload, npm, home, store);
+    // The hook is gone; the helper's manager, still waiting, answers now (the hook's own ask ends with it on Windows and may still be waiting elsewhere, so only the helper's end is counted on).
     writeFileSync(npm.release, '');
     // The helper is detached: it has finished when it has logged its end, kept its answer, and let go of the lock.
     await until(() => logged(npm.log, 'ended') >= 1 && existsSync(join(store, 'gate-registry.jsonl')) && lockFiles(store).length === 0);
-    expect(logged(npm.log, 'ended')).toBe(1);
+    expect(logged(npm.log, 'ended')).toBeGreaterThanOrEqual(1);
     expect(existsSync(join(store, 'gate-registry.jsonl'))).toBe(true);
     expect(lockFiles(store)).toEqual([]);
-    const asked = logged(npm.log, 'started');
-    expect(asked).toBeGreaterThanOrEqual(1);
-    expect(asked).toBeLessThanOrEqual(2);
     sightWithRow(payload, 'u-after', npm, home);
-    expect(logged(npm.log, 'started')).toBe(asked);
-    // A sight ended by its deadline may leave no row, so the count is a range; the sight after the hand-off wrote one, which reads the kept answer.
-    const rows = rowsOf(home);
-    expect(rows.length).toBeGreaterThanOrEqual(1);
-    expect(rows.length).toBeLessThanOrEqual(2);
-    for (const row of rows.slice(0, -1)) expect(row).toMatchObject({ registryState: 'not-read' });
-    expect(rows.at(-1)).toMatchObject({ registryState: 'found' });
+    expect(logged(npm.log, 'started')).toBe(2);
+    // The hook that handed off was ended before it wrote a row; the sight after the hand-off wrote the only one, which reads the kept answer.
+    expect(rowsOf(home)).toMatchObject([{ registryState: 'found' }]);
   }, 60_000);
 
   it('starts no new ask on later sights while the lock is held, after a down manager', async () => {
@@ -242,26 +237,20 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
     const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
     made.push(home);
     const store = join(home, 'oars', 'sessions');
-    sightHandsOff(payload, npm, home, store);
-    // The hook is gone and its own ask with it; the helper's manager, still waiting, fails now.
+    await sightHandsOff(payload, npm, home, store);
+    // The hook is gone; the helper's manager, still waiting, fails now (the hook's own ask ends with it on Windows and may still be waiting elsewhere, so only the helper's end is counted on).
     writeFileSync(npm.release, '');
     // A failed ask keeps its lock, so the helper is done when it has logged its end with the lock still there.
     await until(() => logged(npm.log, 'ended') >= 1 && lockFiles(store).length === 1);
-    expect(logged(npm.log, 'ended')).toBe(1);
+    expect(logged(npm.log, 'ended')).toBeGreaterThanOrEqual(1);
     expect(lockFiles(store)).toHaveLength(1);
-    const asked = logged(npm.log, 'started');
-    expect(asked).toBeGreaterThanOrEqual(1);
-    expect(asked).toBeLessThanOrEqual(2);
     // The lock is held and fresh, so neither later sight asks the manager: the log shows no start beyond the hook's own ask and the helper's.
     sightWithRow(payload, 'u-after-1', npm, home);
     sightWithRow(payload, 'u-after-2', npm, home);
-    expect(logged(npm.log, 'started')).toBe(asked);
+    expect(logged(npm.log, 'started')).toBe(2);
     expect(lockFiles(store)).toHaveLength(1);
-    // A sight ended by its deadline may leave no row, so the count is a range; the two sights after the hand-off each wrote one.
-    const rows = rowsOf(home);
-    expect(rows.length).toBeGreaterThanOrEqual(2);
-    expect(rows.length).toBeLessThanOrEqual(3);
-    for (const row of rows) expect(row).toMatchObject({ registryState: 'not-read' });
+    // The hook that handed off was ended before it wrote a row; the two sights after the hand-off each wrote one.
+    expect(rowsOf(home)).toMatchObject([{ registryState: 'not-read' }, { registryState: 'not-read' }]);
   }, 60_000);
 
   // The same two outcomes through `startFill` and the built helper, without the hook's first sight: the hand-off is the code the hook calls, and this holds even on a box so loaded that the
@@ -327,16 +316,12 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
   it('does not deny the same name under the default policy: it notes it, with the holdback off so the note always shows', () => {
     const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install ghost-lib' }, cwd: tmpdir(), permission_mode: 'default' });
     const npm = { folder: missingNpm() };
-    // A hook ended after it noted the name but before it printed leaves the name noted, so a repeat in the same home stays silent: each try is a fresh home.
-    let stdout = '';
-    for (let tries = 0; tries < MAX_SIGHTS && stdout === ''; tries += 1) {
-      const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
-      made.push(home);
-      writeFileSync(join(seededStore(home), 'gate-policy.json'), '{"holdbackPercent":0}');
-      const result = runHook(payload, [], npm.folder, home);
-      expect(result.status).toBe(0);
-      stdout = result.stdout;
-    }
+    const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
+    made.push(home);
+    writeFileSync(join(seededStore(home), 'gate-policy.json'), '{"holdbackPercent":0}');
+    const result = runHook(payload, [], npm.folder, home);
+    expect(result.status).toBe(0);
+    const stdout = result.stdout;
     expect(stdout).not.toBe('');
     expect(stdout).not.toContain('deny');
     expect(JSON.parse(stdout)).toEqual({

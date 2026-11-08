@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { defaultConfigDir } from '../credentials.js';
-import { deadlineOf, type GateHookDeps } from './hook.js';
+import { deadlineOf, handOffMarkOf, type GateHookDeps } from './hook.js';
 import { isLocked, startFill, startHelper } from './hook-fill.js';
 import { fireRecorder } from './hook-record.js';
 import { runHookProcess } from './hook-process.js';
@@ -32,6 +32,7 @@ const depsFor = (stage: NonNullable<GateHookDeps['stage']>): GateHookDeps => {
     // `performance.now()` counts from the start of the process, so node's own start is inside the budget.
     clock: () => performance.now(),
     deadlineMs,
+    handOffMarkMs: handOffMarkOf(process.env, deadlineMs),
     registry: managerReader(undefined, deadlineMs),
     fill: (ask) => startFill(storeDir, ask, Date.now(), (dir, one) => { startHelper(spawn, dir, one); }),
     locked: (ask) => isLocked(storeDir, ask, Date.now()),

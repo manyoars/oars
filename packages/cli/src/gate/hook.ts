@@ -43,6 +43,17 @@ const WRITE_RESERVE_MS = 150;
 const MAX_HELPERS = 3;
 /** What the hand-off to a helper is given before the deadline: the lock, then a blocking spawn of the helper. A loaded machine took up to about 400 ms for it. */
 const HANDOFF_BUDGET_MS = 400;
+
+/** The environment variable a test sets to start the hand-off earlier than `HANDOFF_BUDGET_MS` before the deadline, so a case with a long deadline reaches the hand-off at a time the test names. */
+export const HANDOFF_MARK_ENV = 'OARS_GATE_HOOK_HANDOFF_MARK_MS';
+
+/** When a registry ask still open starts the hand-off to a helper, on the process clock: `HANDOFF_BUDGET_MS` before the deadline, so the lock and the helper's blocking spawn fit even when the machine is slow.
+ * The value of `HANDOFF_MARK_ENV` moves it earlier when it is a whole number of ms above 0 and below that; nothing else (empty, malformed, zero, or later) moves it. */
+export const handOffMarkOf = (env: NodeJS.ProcessEnv, deadlineMs: number): number => {
+  const latest = deadlineMs - HANDOFF_BUDGET_MS;
+  const given = Number(env[HANDOFF_MARK_ENV]);
+  return Number.isInteger(given) && given > 0 && given < latest ? given : latest;
+};
 /** An ask with less than this left is not started: it could not finish. */
 const MIN_ASK_MS = 100;
 
@@ -53,6 +64,8 @@ export interface GateHookDeps {
   clock: () => number;
   /** The whole hook ends by this many ms on `clock`. */
   deadlineMs: number;
+  /** When an ask still open starts the hand-off to a helper, in ms on `clock`. Absent: `HANDOFF_BUDGET_MS` before `deadlineMs`. */
+  handOffMarkMs?: number;
   /** The draw for the holdback, in [0, 1). Absent: `Math.random`. */
   random?: () => number;
   /** Asks the package manager. Absent: no question is ever asked. */
@@ -141,9 +154,6 @@ const within = <T>(promise: Promise<T>, ms: number): Promise<T | undefined> =>
 /** What is left for a registry ask on the process clock, less the room a row's write is given. */
 const budgetOf = (deps: Pick<GateHookDeps, 'deadlineMs' | 'clock'>): number => deps.deadlineMs - WRITE_RESERVE_MS - deps.clock();
 
-/** When a registry ask still open starts the hand-off to a helper, on the process clock: `HANDOFF_BUDGET_MS` before the deadline, so the lock and the helper's blocking spawn fit even when the machine is slow. */
-const handOffMarkOf = (deps: Pick<GateHookDeps, 'deadlineMs'>): number => deps.deadlineMs - HANDOFF_BUDGET_MS;
-
 const asAnswer = (row: RegistryRow): RegistryAnswer => ({ state: row.state, latest: row.latest, created: row.created });
 
 /** The registry state at the moment: a kept answer first, else one bounded ask. `undefined` is "not read": not asked, not askable, or not answered in time. */
@@ -171,9 +181,9 @@ const registryAnswer = async (deps: GateHookDeps, crossing: Crossing, cwd: strin
     const pending = deps.registry({ ...ask, signal: stop.signal });
     // Starting the manager is a blocking spawn that can take a good part of the budget, so the marks count what is left now, not what was left before the call: read before it, the cut
     // could land behind the process's own deadline, which ends the process with the ask still running.
-    // A fast answer never pays for a helper. An ask still open at the mark has the hand-off started beside it (the lock and the helper's spawn, which also block), early enough that a
+    // An answer before the mark never pays for a helper; an ask that starts after the mark hands off at once. An ask still open at the mark has the hand-off started beside it (the lock and the helper's spawn, which also block), early enough that a
     // loaded machine still finishes it inside the deadline; the cut after that drops nothing, because the helper already holds the name.
-    answer = await within(pending, handOffMarkOf(deps) - deps.clock());
+    answer = await within(pending, (deps.handOffMarkMs ?? deps.deadlineMs - HANDOFF_BUDGET_MS) - deps.clock());
     if (answer === undefined) {
       await handOff();
       answer = await within(pending, budgetOf(deps));
