@@ -507,6 +507,7 @@ describe('the task an earlier version registered', () => {
     expect(readFileSync(join(store, 'schedule.json'), 'utf8')).toBe('{"schedule":"off"}\n');
     expect(off.document).toMatchObject({ ok: true, sends: 'off' });
     expect(off.text).toContain('The background sweep and the pool send are off');
+    expect(off.text).toContain('(telemetry has its own switch: oars telemetry off)');
     expect(off.text).toContain('--schedule on');
     const on = await sessionsHookInstall(deps, { ...alone, schedule: 'on' });
     expect(existsSync(join(store, 'schedule.json'))).toBe(false);
