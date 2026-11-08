@@ -687,17 +687,19 @@ const commitCapture = async (context: DepositContext, key: string, extract: Capt
 
 /**
  * Records that a session is superseded: its capture of no turns, marked with the session that holds them now, appended as the next rev (the log is never edited), and its
- * skeleton removed, since a skeleton is derived and a reader of skeletons would count the session. The cursor records it, so a repeat deposit adds nothing.
+ * skeleton removed, since a skeleton is derived and a reader of skeletons would count the session. The cursor records it, so a repeat deposit adds nothing. The nested agents of the
+ * session are read again, since their parent is now the merged session.
  */
 const commitSupersede = async (context: DepositContext, key: string, extract: Capture, by: string, cursor: { size: number; mtimeMs: number; rev: number }): Promise<void> => {
   const files = paths(context.runtime.storeDir);
   extract.session.supersededBy = by;
   await requireHold(context.held);
-  await appendFile(files.observations, `${JSON.stringify(extract.session)}
-`, { mode: 0o600 });
+  await appendFile(files.observations, `${JSON.stringify(extract.session)}\n`, { mode: 0o600 });
   await requireHold(context.held);
   await rm(join(files.skeletons, `${extract.session.session}.json`), { force: true });
   context.state.files[key] = { ...cursor, v: CAPTURE_VERSION, s: context.salt.sid, d: context.domains, repoSize: null };
+  // A nested agent's id is `<trace>-<span>`, so it stays when its parent moves to the merged session, and its spans may not change: stale its cursor so the next read names the new parent.
+  for (const [other, entry] of Object.entries(context.state.files)) if (other.startsWith(`${key}-`)) entry.v = '';
 };
 
 /** Another deposit holds the store lock and the wait ran out: the one failure the Stop hook defers instead of counting as a failed run. */
@@ -970,7 +972,9 @@ const readSource = async (context: DepositContext, source: Source, root: string,
   counts.rejected += store.rejected;
   for (const entry of store.unreadable) noteReason(counts, entry.file, entry.reason);
   try {
-    for (const session of store.sessions) {
+    // The superseded sessions first: committing one stales the cursors of its nested agents, which are then read in this same deposit.
+    const ordered = [...store.sessions.filter((session) => session.supersededBy !== undefined), ...store.sessions.filter((session) => session.supersededBy === undefined)];
+    for (const session of ordered) {
       const key = `${source.name}/${session.id}`;
       const previous = context.state.files[key];
       // A session this store never held has nothing to supersede.
@@ -983,7 +987,8 @@ const readSource = async (context: DepositContext, source: Source, root: string,
         previous.s === context.salt.sid &&
         sameSet(previous.d, context.domains)
       ) {
-        result.unchanged += 1;
+        // A superseded session is recorded once and is no file of its own, so it is not one more file left unchanged.
+        if (session.supersededBy === undefined) result.unchanged += 1;
         continue;
       }
       let text: string;
