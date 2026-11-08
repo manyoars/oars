@@ -235,7 +235,7 @@ const valuesOf = (held: Held, accounts: Accounts): ReadonlyMap<string, unknown[]
     const member = parsed.value.slice(at + 1);
     if (parsed.facet === 'enum') add(key, member === 'true' ? true : member === 'false' ? false : member);
     // A key of an open list can also be sent a value off the list (a custom agent, a full model id): it has the key's `size` cell and no `enum` cell, so the held `size` cell is all that names it.
-    else if (OPEN_LIST_KEYS.has(key)) add(key, '~'.repeat(COVERAGE_SIZES[VALUE_SIZES.indexOf(member as (typeof VALUE_SIZES)[number])] ?? 0));
+    else if (OPEN_LIST_KEYS.has(key)) add(key, '~'.repeat(COVERAGE_SIZES[VALUE_SIZES.findIndex((size) => size === member)] ?? 0));
   }
   return new Map([...found].map(([key, values]) => [key, [...values.values()]]));
 };
@@ -366,7 +366,7 @@ const leaksOf = (accounts: Accounts, patience = PATIENCE): Leak[] => {
   const span = new Span();
   for (const row of callRows) span.add(row);
   for (const [at, { key }] of pairs.entries()) if (served.has(key)) span.add(rowOf(at));
-  const nameOf = (at: number): string => `${motifOf.get(pairs[at]?.cell.motifId ?? '')?.cls ?? pairs[at]?.cell.motifId.slice(0, 8)} ${pairs[at]?.cell.clusters} ${pairs[at]?.column}`;
+  const nameOf = (at: number): string => [motifOf.get(pairs[at]?.cell.motifId ?? '')?.cls ?? pairs[at]?.cell.motifId.slice(0, 8), String(pairs[at]?.cell.clusters), pairs[at]?.column].join(' ');
   const needsOf = (target: number): string[] => {
     const covers = (rows: number[]): boolean => {
       const made = new Span();
@@ -655,5 +655,5 @@ describe('the withholding oracle', () => {
     expect(leaksOf(accounts)).toEqual([]);
   };
   it.each(Array.from({ length: SWEEP_SEEDS }, (_, at) => at + 1).filter((seed) => !SURVIVORS.has(seed)).map((seed) => [seed]))('serves nothing that gives back a sub-floor cell in the call-built fixture of seed %i', sweepCase, 120000);
-  for (const seed of SURVIVORS) it.fails(`still gives back a sub-floor cell in the call-built fixture of seed ${seed} (a relation of the fixture's thin change vocabulary)`, () => sweepCase(seed), 120000);
+  for (const seed of SURVIVORS) it.fails(`still gives back a sub-floor cell in the call-built fixture of seed ${String(seed)} (a relation of the fixture's thin change vocabulary)`, () => { sweepCase(seed); }, 120000);
 });
