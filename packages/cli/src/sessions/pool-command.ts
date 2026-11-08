@@ -213,7 +213,10 @@ export const poolLogin = async (deps: RunDeps, options: { server?: string | unde
   // A key is trusted once, here, under the id the pool names it by, and never replaced: a server that swaps the key behind an id it already holds could otherwise sign anything it likes. A new id is added beside the old ones (a rotation, docs/pool.md).
   const held = known?.signingKeys ?? {};
   for (const [kid, key] of Object.entries(signIn.signingKeys)) {
-    if (Object.hasOwn(held, kid) && held[kid]?.x !== key.x) throw new CliError(`${server} now signs with a different key than the one pinned for ${kid} at your first login. Nothing was saved. If the pool really did change this key, remove ${server} from ${signInsFile(storeDir)} and sign in again.`, ExitCode.AUTH, LOGIN, { code: 'signing_key_changed', title: 'The pool signing key changed.' });
+    if (Object.hasOwn(held, kid) && held[kid]?.x !== key.x) {
+      const message = `${server} now signs with a different key than the one pinned for ${kid} at your first login. Nothing was saved. If the pool really did change this key, remove ${server} from ${signInsFile(storeDir)} and sign in again.`;
+      throw new CliError(message, ExitCode.AUTH, LOGIN, { code: 'signing_key_changed', title: 'The pool signing key changed.', detail: message });
+    }
   }
   const pinned: SignIn = { ...signIn, signingKeys: { ...held, ...signIn.signingKeys } };
   await mkdirOwnerOnly(storeDir);
