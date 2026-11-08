@@ -5,6 +5,7 @@
 // (`withheldOf`). The environment cells (`ENVIRONMENT_CELLS`, `stored.ts`) keep their own rule, every part served or the total is not, and their counterparts are also dropped when a bucket cell is withheld (`bundleOf`).
 import { argFeaturesOf } from '../../cli/src/sessions/call-shape.js';
 import { isEnvironmentCell, NO_AXES, parseShapeClass, weekStartOf, type Cell, type ShapeFacet } from '../../cli/src/sessions/cells.js';
+import { targetOf } from '../../cli/src/sessions/extract.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
 import { OPEN_LIST_KEYS } from '../../cli/src/sessions/public-vocabulary.js';
 import { clears, clustersOf } from './floors.js';
@@ -44,6 +45,12 @@ const ACTION_CALLS = 'action-calls';
 
 /** Whether a total (`callsTotal`) is an action's calls. */
 const isActionCalls = (total: string): boolean => total.startsWith(`["${ACTION_CALLS}"`);
+
+/** The calls of an action that have a path target, in one frame, grain, day, and exposure: the total the `target-keys` rule's two families share. */
+const pathCalls = (action: string, cell: Pick<Cell, 'frameBucket' | 'grain' | 'day' | 'exposed'>): string => JSON.stringify(['path-calls', action, cell.frameBucket, cell.grain, cell.day, cell.exposed]);
+
+/** Whether a call that sends this key has a path target, asked of the emitter (`targetOf`) so the list of path keys is not restated. */
+const sendsPath = (key: string): boolean => targetOf('', { [key]: 'x' }, undefined, '', (value) => value).target !== null;
 
 /** The tag of `ownCalls`, so no key name can make the same total and it is never an action's calls. */
 const OWN_CALLS = 'own-calls';
@@ -137,6 +144,19 @@ const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, motif: Mot
         total: callsTotal(parsed.action, key, cell),
         echoes: KEYED_FACETS.map((facet) => facetFamilyKey(parsed.action, facet, key, cell)),
       }));
+    },
+  },
+  // A call has a path target (a `target` class other than `none`) exactly when it sends a path key, so the `target` cells other than `none` and the `keys` cells that hold a path key count the same calls: one equation,
+  // which neither facet's own family states (the `target` family adds `none` and sums to the action's calls; a `keys` cell is a part of its keys' nesting families). Which keys are path keys is the emitter's own
+  // answer (`sendsPath`). A call that sends a path key with an empty or non-string value is in a `keys` cell and has no path target, so the sum can only withhold more.
+  {
+    name: 'target-keys',
+    placements: (cell, motif) => {
+      const parsed = motif === undefined || motif.cls === null ? null : parseShapeClass(motif.cls);
+      if (parsed === null) return [];
+      const withPath = parsed.facet === 'target' ? parsed.value !== 'none' : parsed.facet === 'keys' && parsed.value.split(',').some(sendsPath);
+      if (!withPath) return [];
+      return [{ family: JSON.stringify(['target-keys', parsed.action, parsed.facet, cell.frameBucket, cell.grain, cell.day, cell.exposed]), role: 'part', total: pathCalls(parsed.action, cell) }];
     },
   },
   // An action's one-step shape cells, per model (`harness/version/model`) and exposure, sum to the calls its facet cells split on the version bucket (`harness/version/-`, unexposed): the total the `fit` read gives.
