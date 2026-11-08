@@ -43,28 +43,34 @@ describe('the pool harness reuses its connections', () => {
   it('shows workerd closing a connection it answered before the body arrived, and keeping one whose body came whole', async () => {
     const port = Number(new URL(await pool.url()).port);
     const crlf = String.fromCharCode(13, 10);
-    /** Sends `lines` as one request on a new socket and says whether the socket was closed by workerd, or still open when the case ended it after 500 ms. */
-    const outcomeOf = (lines: string[]): Promise<string> =>
+    /**
+     * Sends `lines` as one request on a new socket and says whether workerd closed the socket. Nothing here is timed from the write: a closing socket is awaited as long as the case's own timeout
+     * allows, and a socket that must stay open is ended `holdMs` after workerd's first bytes arrive, so a starved test process cannot cut either short. A reset is an outcome that reaches `close`.
+     */
+    const outcomeOf = (lines: string[], holdMs: number | null): Promise<string> =>
       new Promise((resolve) => {
         const socket = connect(port, '127.0.0.1');
         let answered = false;
         let ended = false;
+        socket.on('error', () => undefined);
         socket.on('data', () => {
+          if (answered) return;
           answered = true;
+          if (holdMs === null) return;
+          setTimeout(() => {
+            ended = true;
+            socket.destroy();
+          }, holdMs);
         });
         socket.on('close', () => {
           resolve(`${answered ? 'answered' : 'unanswered'}, ${ended ? 'left open' : 'closed by workerd'}`);
         });
         socket.write(lines.join(crlf));
-        setTimeout(() => {
-          ended = true;
-          socket.destroy();
-        }, 500);
       });
     const head = ['POST /v1/raw/none HTTP/1.1', 'Host: pool.test'];
     // The body is promised and never finishes: the Worker answers 404 without it.
-    expect(await outcomeOf([...head, 'transfer-encoding: chunked', '', '2', '{}', ''])).toBe('answered, closed by workerd');
-    expect(await outcomeOf([...head, 'content-length: 2', '', '{}'])).toBe('answered, left open');
+    expect(await outcomeOf([...head, 'transfer-encoding: chunked', '', '2', '{}', ''], null)).toBe('answered, closed by workerd');
+    expect(await outcomeOf([...head, 'content-length: 2', '', '{}'], 500)).toBe('answered, left open');
   });
 
   // What the sender puts on the wire, read by a server that records it: a small string or byte body goes out with a content-length and no chunking, so its headers and body leave in one write. A stream

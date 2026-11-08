@@ -162,7 +162,7 @@ export const keepAliveSender = (entry: () => Promise<URL>): KeepAliveSender => {
     // loaded box the next call would find its socket reset. A small body held whole goes out with its headers and a content-length in one write. A stream a test hands in stays a stream (it is the
     // case under test), and so does a body over what one write carries: the Worker answers those early on purpose.
     const held = init?.body;
-    const small = typeof held === 'string' ? held.length <= WHOLE_BODY_BYTES : held instanceof Uint8Array && held.byteLength <= WHOLE_BODY_BYTES;
+    const small = typeof held === 'string' ? Buffer.byteLength(held) <= WHOLE_BODY_BYTES : held instanceof Uint8Array && held.byteLength <= WHOLE_BODY_BYTES;
     const body = forward.body === null ? undefined : small ? new Uint8Array(await forward.arrayBuffer()) : forward.body;
     let response: Response;
     try {
