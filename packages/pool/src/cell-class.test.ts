@@ -100,6 +100,19 @@ describe('a served bundle reads the class', () => {
     expect(frames(DEFAULT_PUBLIC_FLOOR)).toHaveLength(3);
   });
 
+  it('states on a read across classes the lowest of its cells floors, and the most of their clusters', () => {
+    // One motif on a listed model (a clear cell, one account) and on a long-tail model (a thresholded cell, five accounts): the adoption read groups the motif across frames and cites both cells.
+    const week = (frame: string, clusters: number): Cell => ({ ...cellOf('m-clear', frame, clusters), grain: 'week', day: '2026-11-02' });
+    const across: StoredPool = {
+      cells: [week('claude-code/2.1.31x/claude-sonnet-4-5', 1), week('claude-code/2.1.31x/acme-private-finetune-v7', DEFAULT_PUBLIC_FLOOR)],
+      environment: [],
+      motifs: [clearMotif],
+      strata: [],
+    };
+    const adoption = bundleOf('claude-code', '2.1.314', across, DEFAULT_FLOORS).reads.filter(({ family, inputs }) => family === 'adoption' && inputs.length === 2);
+    expect(adoption.map(({ floor, clusters }) => [floor, clusters])).toEqual([[DEFAULT_FLOORS.clear, DEFAULT_PUBLIC_FLOOR]]);
+  });
+
   it('holds a cell with one clear part and one long-tail part to the public floor', () => {
     const served = (clusters: number): number => bundleOf('claude-code', '2.1.314', withMixed(clusters), DEFAULT_FLOORS).cells.length;
     expect([served(1), served(DEFAULT_PUBLIC_FLOOR - 1), served(DEFAULT_PUBLIC_FLOOR)]).toEqual([0, 0, 1]);

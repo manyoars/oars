@@ -34,9 +34,9 @@ const servedPrograms = async (pool: TestPool, token: string): Promise<string[]> 
 };
 
 describe('one fresh account', () => {
-  const deposit = async (pool: TestPool): Promise<string> => {
+  const deposit = async (pool: TestPool, user = stubUser('9801')): Promise<string> => {
     // An account that has not stood: its first counting batch is today (`access.ts`). Both names are on one week, so the week cells of their shape are one family (`complement.ts`; `complement-split.test.ts` holds the shape rule).
-    const { token } = await pool.signIn('github', stubUser('9801'), { fresh: true });
+    const { token } = await pool.signIn('github', user, { fresh: true });
     await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
     expect((await pool.post('/v1/deposits', sampleSkeleton('0000000000009801', undefined, '2026-11-02', 'claude-code', { program: 'git', sub: 'push' }), token)).status).toBe(201);
     expect((await pool.post('/v1/deposits', sampleSkeleton('0000000000009802', undefined, '2026-11-02', 'claude-code', { program: 'acme-deploy', sub: 'ship' }), token)).status).toBe(201);
@@ -48,6 +48,18 @@ describe('one fresh account', () => {
       const token = await deposit(pool);
       const held = await (await pool.db()).prepare('SELECT clusters, clusters_any FROM cells WHERE sessions > 0').all();
       // The standing count is 0 for every cell it holds; the count of every account is 1.
+      expect(new Set(held.results.map((row) => `${String(fieldOf(row, 'clusters'))}/${String(fieldOf(row, 'clusters_any'))}`))).toEqual(new Set(['0/1']));
+      const programs = await servedPrograms(pool, token);
+      expect(programs).toContain('git');
+      expect(programs).not.toContain('acme-deploy');
+    });
+  }, 120_000);
+
+  it('counts a young fresh account once at the clear floor, so its clear-cell name is served', async () => {
+    await inPool({ CLEAR_FLOOR: '1' }, async (pool) => {
+      // A GitHub account made 10 days before its first deposit (2026-11-02): the cluster rule weights it half and rounds down, so the standing count of the cell is 0 and, before the fix, so was the count of every account.
+      const token = await deposit(pool, { ...stubUser('9803'), createdAt: '2026-10-23T00:00:00.000Z' });
+      const held = await (await pool.db()).prepare('SELECT clusters, clusters_any FROM cells WHERE sessions > 0').all();
       expect(new Set(held.results.map((row) => `${String(fieldOf(row, 'clusters'))}/${String(fieldOf(row, 'clusters_any'))}`))).toEqual(new Set(['0/1']));
       const programs = await servedPrograms(pool, token);
       expect(programs).toContain('git');

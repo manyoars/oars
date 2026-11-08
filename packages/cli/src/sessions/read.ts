@@ -100,7 +100,7 @@ export interface Read {
   interval: ReadInterval | null;
   asOf: ReadAsOf;
   basis: ReadBasis;
-  /** The floor this read cleared (its family's, which is the public floor unless `floors.families` names the family): every cell it counts had at least this many clusters. Stated by a pool that serves the read, and absent from a read computed on one operator's own store, which applies no public floor. */
+  /** The lowest floor among the cells it cites, each cell's being the floor of its class in the read's family (`cellFloor`): every cell it counts had at least this many clusters. Stated by a pool that serves the read, and absent from a read computed on one operator's own store, which applies no public floor. */
   floor?: number;
 }
 

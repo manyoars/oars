@@ -91,8 +91,9 @@ const countsOf = async (env: Env, kind: Kind, keys: string, now: number): Promis
     into(everyone, text(row, 'key'), holder);
     if (standing.has(account)) into(holders, text(row, 'key'), holder);
   }
-  // A key whose holders have not stood is written 0, not left at the count an earlier recount gave it. `any` counts the holders that have not stood as well: only a clear cell at a floor of 1 reads it (`stored.ts`).
-  return [...new Set(held.map((row) => text(row, 'key')))].map((key) => ({ key, count: clusterHolders(holders.get(key) ?? []).count, any: clusterHolders(everyone.get(key) ?? []).count }));
+  // A key whose holders have not stood is written 0, not left at the count an earlier recount gave it. `any` counts the holders that have not stood as well: only a clear cell at a floor of 1 reads it (`stored.ts`). It is at least 1, since a key in `held` has a holder
+  // and a lone young account weighs half, which rounds down to 0 in `clusterHolders`: a floor of 1 has no k to protect, so every account counts there.
+  return [...new Set(held.map((row) => text(row, 'key')))].map((key) => ({ key, count: clusterHolders(holders.get(key) ?? []).count, any: Math.max(1, clusterHolders(everyone.get(key) ?? []).count) }));
 };
 
 /** Every cell or stratum key `account` holds: the signals it adds (repo keys, deposit hours) are the account's, so a deposit can change the cluster of any key it holds, not only this batch's. */

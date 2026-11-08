@@ -40,7 +40,7 @@ export const SERVED: readonly { name: string; family: FirstOrderFamily; derive: 
 const NO_STORE: Store = { sessions: [], prompts: [], errors: [], subagents: [], tools: [], newerCaptures: 0 };
 
 /**
- * A served read counts only cells at or above its family's floor (`floors.ts`) that the bundle serves, so every count, sum, and denominator it holds (its `n`, a share's denominator, a sum across models or weeks, a live baseline) is a sum of served cells,
+ * A served read counts only cells at or above the floor of its class in its family (`floors.ts`) that the bundle serves, so every count, sum, and denominator it holds (its `n`, a share's denominator, a sum across models or weeks, a live baseline) is a sum of served cells,
  * and a sub-floor cell's id is in no `inputs`. Two numbers of one family's reads at one grain, set against each other, show nothing of a sub-floor cell. Across grains, a week and its days count the same steps, as do a shape and
  * its names, so a week with a sub-floor day also withholds its smallest served day, and a shape with a sub-floor name its smallest served name (`complement.ts`): the week less the served days is then a sum over at least two days,
  * one of them at or above the floor. A live baseline with no served cell of its motif is `null`, as a tool that is sub-floor is not absent.
