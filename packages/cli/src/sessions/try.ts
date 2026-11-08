@@ -18,7 +18,8 @@ const heading = (title: string, command: string): string[] => ['', `== ${title} 
 
 /**
  * Builds the demo store under the OS temp folder, runs the three commands over it with the same code `oars sessions` runs, and removes the
- * folder on the way out, success or failure. The runtime is its own: it never takes the caller's store, projects folder, or other sources,
+ * folder on the way out, success or failure (a thrown step included). A SIGINT or SIGTERM during the run skips `finally` and leaves the
+ * folder in the temp folder for the OS to clear; the run is about a second long. The runtime is its own: it never takes the caller's store, projects folder, or other sources,
  * and no command here reaches the network or a model.
  */
 export const sessionsTry = async (deps: Pick<SessionsDeps, 'now'>): Promise<Outcome> => {

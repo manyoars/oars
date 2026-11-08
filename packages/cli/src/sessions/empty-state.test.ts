@@ -99,4 +99,39 @@ describe('empty states', () => {
     const entries = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
     expect(savedListNote(entries, ['a'], 'state.json')).toEqual(['Used the --allow list saved by an earlier run (b, c, d, e, f, and 1 more), kept in state.json. Name folders with --allow to change it.']);
   });
+
+  it('a saved denial alone prints no saved-list note, and an --allow over a saved denial prints none either', async () => {
+    const staged = stage();
+    const h = harness();
+    h.deps.sessions = staged.runtime;
+    expect(await run(['sessions', 'deposit', '--deny', 'x'], h.deps)).toBe(ExitCode.OK);
+    h.out.length = 0;
+    expect(await run(['sessions', 'deposit'], h.deps)).toBe(ExitCode.OK);
+    expect(h.out.join('')).not.toContain('saved by an earlier run');
+    h.out.length = 0;
+    expect(await run(['sessions', 'deposit', '--allow', 'proj'], h.deps)).toBe(ExitCode.OK);
+    expect(h.out.join('')).not.toContain('saved by an earlier run');
+  });
+
+  it('a saved list that holds a denial names only its allow entries', async () => {
+    const staged = stage();
+    const h = harness();
+    h.deps.sessions = staged.runtime;
+    expect(await run(['sessions', 'deposit', '--allow', 'proj', '--deny', 'x'], h.deps)).toBe(ExitCode.OK);
+    h.out.length = 0;
+    expect(await run(['sessions', 'deposit'], h.deps)).toBe(ExitCode.OK);
+    expect(h.out.join('')).toContain('saved by an earlier run (proj), kept in');
+  });
+
+  it('a deposit that finds nothing lists only the sources its allowlist reads', async () => {
+    const { deps, out, staged, cursor } = bare();
+    expect(await run(['sessions', 'deposit', '--allow', 'no-such-folder'], deps)).toBe(ExitCode.OK);
+    const text = out.join('');
+    expect(text).toContain('Found no sessions. Looked in:');
+    expect(text).toContain(`  Claude Code: ${staged.projectsRoot}`);
+    expect(text).not.toContain(cursor);
+    out.length = 0;
+    expect(await run(['sessions', 'deposit', '--allow', 'cursor'], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain(`  Cursor: ${cursor} (0 sessions read)`);
+  });
 });

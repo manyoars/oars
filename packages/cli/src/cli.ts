@@ -202,6 +202,8 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       emit(deps, flag(options, 'json'), await sessionsTry(deps));
+      // The command promises no network call: drop the sender so the daily telemetry send that follows every command cannot start one.
+      if (deps.telemetry !== undefined) deps.telemetry = { dir: deps.telemetry.dir, platform: deps.telemetry.platform };
     });
 
   sessions

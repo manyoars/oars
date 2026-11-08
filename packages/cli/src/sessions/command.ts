@@ -93,7 +93,7 @@ export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: stri
       ? 'Commit survival not read this run.'
       : `Commits older than ${String(SURVIVAL_DAYS)} days: ${String(survival.survived)} survived, ${String(survival.reverted)} reverted, ${String(survival.unreachable)} unreachable, ${String(survival.unknown)} unknown.`,
     // Nothing parsed and nothing already deposited: say where it looked, so an empty result is not a silent one.
-    ...(result.sessions + result.subagents + result.unchanged === 0 ? nothingFoundLines(result, runtime, table) : []),
+    ...(result.sessions + result.subagents + result.unchanged === 0 ? nothingFoundLines(result, runtime, table, read) : []),
   ];
   return { document: { ok: true, ...result, survival }, text: lines.join('\n') };
 };
