@@ -17,8 +17,8 @@ const keysOf = (value: unknown): string[] => (typeof value === 'object' && value
 const RAW_HOME = 'raw.ts';
 /** Names that reach raw state: the R2 binding, the ledger table, the consent column, and the staging keys. */
 const RAW_STATE = /\bRAW\b|raw_objects|raw_consent|staging\//;
-/** What `raw.ts` may call on the bucket: it writes staged parts, reads them back to assemble, assembles through a multipart upload, and removes its own staged parts. It never lists or heads. */
-const BUCKET_CALLS = new Set(['put', 'get', 'delete', 'createMultipartUpload']);
+/** What `raw.ts` may call on the bucket: it writes staged parts, reads them back to assemble, assembles through a multipart upload, and removes its own staged parts. It lists one account's own staging prefix to bound it (S12), and uses the keys only to refuse a part; it never heads. */
+const BUCKET_CALLS = new Set(['put', 'get', 'delete', 'list', 'createMultipartUpload']);
 /** The only keys an answer in `raw.ts` may carry: no byte, no hash, no count of what an account holds. */
 const ANSWER_KEYS = new Set(['ok', 'stored', 'part']);
 
@@ -73,7 +73,6 @@ describe('the raw tier is reachable from the upload only', () => {
     ['stored.ts reading the bucket', { 'src/stored.ts': 'const object = await env.RAW.get(key)' }, 'src/stored.ts: touches raw state outside raw.ts'],
     ['bundle.ts reading the consent', { 'src/bundle.ts': 'SELECT raw_consent FROM accounts' }, 'src/bundle.ts: touches raw state outside raw.ts'],
     ['http.ts naming the binding twice', { 'src/http.ts': 'RAW?: RawBucket;\nconst served = env.RAW;' }, 'src/http.ts: touches raw state outside raw.ts'],
-    ['raw.ts listing the bucket', { 'src/raw.ts': 'await bucket.list({ prefix })' }, 'src/raw.ts: calls bucket.list'],
     ['raw.ts heading an object', { 'src/raw.ts': 'await bucket.head(key)' }, 'src/raw.ts: calls bucket.head'],
     ['raw.ts reading a second object', { 'src/raw.ts': 'await bucket.get(a); await bucket.get(b);' }, 'src/raw.ts: more than one bucket.get'],
     ['raw.ts answering with a Response', { 'src/raw.ts': 'return new Response(stored.body)' }, 'src/raw.ts: builds a Response of its own'],
@@ -83,8 +82,8 @@ describe('the raw tier is reachable from the upload only', () => {
     expect(offences(files)).toEqual([offence]);
   });
 
-  it('lets raw.ts stage, assemble, and answer ok', () => {
-    const text = 'await bucket.put(k, b); const s = await bucket.get(k); await bucket.createMultipartUpload(k); await bucket.delete(ks); return answer(201, { ok: true, stored: true });';
+  it('lets raw.ts stage, assemble, list its staging prefix, and answer ok', () => {
+    const text = 'await bucket.put(k, b); const s = await bucket.get(k); await bucket.createMultipartUpload(k); await bucket.delete(ks); await bucket.list({ prefix }); return answer(201, { ok: true, stored: true });';
     expect(offences({ 'src/raw.ts': text })).toEqual([]);
     expect(offences({ 'src/other.ts': '// the RAW bucket is raw.ts\'s: raw_objects' })).toEqual([]);
   });

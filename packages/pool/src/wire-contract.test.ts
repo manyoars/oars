@@ -53,7 +53,7 @@ const seedPeers = async (): Promise<void> => {
   for (let peer = 1; peer <= PEERS; peer += 1) {
     const account = `acct-peer-${String(peer)}`;
     const token = `${TOKEN}-peer-${String(peer)}`;
-    await db.prepare('INSERT INTO accounts (id, covenant) VALUES (?, ?)').bind(account, 'v1').run();
+    await db.prepare("INSERT INTO accounts (id, covenant, access) VALUES (?, ?, 'standing')").bind(account, 'v1').run();
     await db.prepare('INSERT INTO tokens (hash, account, expires_at) VALUES (?, ?, ?)').bind(createHash('sha256').update(token).digest('hex'), account, Date.now() + 600_000).run();
     expect((await pool.post('/v1/deposits', JSON.stringify(baseline(`00000000000000a${String(peer)}`)), token)).status).toBe(201);
   }
@@ -100,7 +100,7 @@ const servedCells = (json: unknown): number => {
 beforeAll(async () => {
   pool = await startPool();
   const db = await pool.db();
-  await db.prepare("INSERT INTO accounts (id, covenant) VALUES ('acct-1', 'v1')").run();
+  await db.prepare("INSERT INTO accounts (id, covenant, access) VALUES ('acct-1', 'v1', 'standing')").run();
   await db.prepare("INSERT INTO tokens (hash, account, expires_at) VALUES (?, 'acct-1', ?)").bind(createHash('sha256').update(TOKEN).digest('hex'), Date.now() + 600_000).run();
 }, 60_000);
 

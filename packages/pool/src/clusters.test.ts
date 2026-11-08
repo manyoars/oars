@@ -1,6 +1,6 @@
 // The cluster rule: accounts that share a machine, a repo-key set, or a creation window and a deposit cadence are one cluster, and a cluster of only young accounts counts half.
 import { describe, expect, it } from 'vitest';
-import { CADENCE_SHARE, CLUSTER_WINDOW_MS, clusterHolders as clusterRule, REPO_KEYS_JACCARD, REPO_KEYS_MIN, YOUNG_DAYS, YOUNG_WEIGHT, type Holder } from './clusters.js';
+import { CADENCE_MIN_DAYS, CADENCE_SHARE, CLUSTER_WINDOW_MS, clusterHolders as clusterRule, REPO_KEYS_JACCARD, REPO_KEYS_MIN, YOUNG_DAYS, YOUNG_WEIGHT, type Holder } from './clusters.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const FIRST = Date.UTC(2026, 10, 1);
@@ -19,7 +19,7 @@ const many = (count: number, over: (at: number) => Partial<Holder> = () => ({}))
 
 describe('the thresholds', () => {
   it('are named constants', () => {
-    expect([YOUNG_DAYS, YOUNG_WEIGHT, REPO_KEYS_MIN, REPO_KEYS_JACCARD, CADENCE_SHARE, CLUSTER_WINDOW_MS]).toEqual([30, 0.5, 3, 0.8, 0.9, DAY]);
+    expect([YOUNG_DAYS, YOUNG_WEIGHT, REPO_KEYS_MIN, REPO_KEYS_JACCARD, CADENCE_SHARE, CADENCE_MIN_DAYS, CLUSTER_WINDOW_MS]).toEqual([30, 0.5, 3, 0.8, 0.9, 3, DAY]);
   });
 });
 
@@ -42,7 +42,19 @@ describe('clusterRule', () => {
   });
 
   it('(c) counts five accounts created in one window that deposit in lockstep as one cluster', () => {
-    expect(clusterRule(many(5, (at) => ({ createdAt: OLD + at * 3_600_000, cadence: new Map([['2026-11-01', new Set([9])], ['2026-11-02', new Set([9])]]) }))).count).toBe(1);
+    expect(clusterRule(many(5, (at) => ({ createdAt: OLD + at * 3_600_000, cadence: new Map([['2026-11-01', new Set([9])], ['2026-11-02', new Set([9])], ['2026-11-03', new Set([9])]]) }))).count).toBe(1);
+  });
+
+  it('(c) joins on cadence only after each account has deposited on 3 distinct days: a team installing together is not a sybil cluster (t958)', () => {
+    const daysOf = (count: number): Map<string, Set<number>> => new Map(Array.from({ length: count }, (_, at) => [`2026-11-0${String(at + 1)}`, new Set([9])]));
+    const join = (left: number, right: number): number => clusterRule([holder(0, { createdAt: OLD, cadence: daysOf(left) }), holder(1, { createdAt: OLD + 3_600_000, cadence: daysOf(right) })]).count;
+    // Created the same day, one deposit each, the same hour: apart.
+    expect(join(1, 1)).toBe(2);
+    expect(join(2, 2)).toBe(2);
+    // Both at 3 days: joined. One short of it on either side: apart.
+    expect(join(3, 3)).toBe(1);
+    expect(join(3, 2)).toBe(2);
+    expect(join(2, 3)).toBe(2);
   });
 
   it('(c) keeps accounts apart when only one of the two holds', () => {
