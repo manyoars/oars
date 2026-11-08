@@ -5,13 +5,14 @@
 // (`withheldOf`). The environment cells (`ENVIRONMENT_CELLS`, `stored.ts`) keep their own rule, every part served or the total is not, and their counterparts are also dropped when a bucket cell is withheld (`bundleOf`).
 import { isEnvironmentCell, NO_AXES, parseShapeClass, weekStartOf, type Cell, type ShapeFacet } from '../../cli/src/sessions/cells.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
+import { OPEN_LIST_KEYS } from '../../cli/src/sessions/public-vocabulary.js';
 import { clears, clustersOf } from './floors.js';
 
 interface Family {
   /** The name of the `FAMILY_RULES` rule that made it. */
   rule: string;
   whole: Cell | null;
-  /** Where the family has no whole cell, the count its parts sum to that no cell holds (an action's calls, or the calls that send a key), shared by the families that sum to it: an unknown of the rank check (`determinedOf`). */
+  /** Where the family has no whole cell, the count its parts sum to that no cell holds (an action's calls, the calls that send a key, or a count of its own), shared by the families that sum to it: an unknown of the rank check (`determinedOf`). */
   total: string | null;
   parts: Cell[];
   /** The families that count the same total (`Placement.echoes`), once all are built. */
@@ -43,9 +44,25 @@ const ACTION_CALLS = 'action-calls';
 /** Whether a total (`callsTotal`) is an action's calls. */
 const isActionCalls = (total: string): boolean => total.startsWith(`["${ACTION_CALLS}"`);
 
+/** The tag of `ownCalls`, so no key name can make the same total and it is never an action's calls. */
+const OWN_CALLS = 'own-calls';
+
+/** The calls a facet's cells split where those are not all of the action's or the key's: no other cell holds this count, so the facet's equation leaves its cells free of every other family's. */
+const ownCalls = (action: string, facet: ShapeFacet, key: string, cell: Pick<Cell, 'frameBucket' | 'grain' | 'day' | 'exposed'>): string =>
+  JSON.stringify([OWN_CALLS, action, facet, key, cell.frameBucket, cell.grain, cell.day, cell.exposed]);
+
+/** Whether a facet counts only some of the calls its total would name: `dropped` only the calls with an unsent key, and the `enum` of a list that is not exhaustive only its on-list values. A boolean is always closed, under any key. */
+const countsOnlySome = (facet: ShapeFacet, value: string): boolean => {
+  if (facet === 'dropped') return true;
+  const member = value.slice(value.indexOf('=') + 1);
+  return facet === 'enum' && OPEN_LIST_KEYS.has(value.slice(0, value.indexOf('='))) && member !== 'true' && member !== 'false';
+};
+
 /**
- * The facets whose cells split the same calls of an action: each call counts in exactly one cell of `target`, `keys`, or `dropped`, and in one cell per key of `size`, `depth`, `extension`, `dir`, and `enum` (a value is
- * `<key>=<member>`). The others (`arg`, `pattern`, `change`) hold a call in several cells, so their cells are not parts of one count.
+ * The facets whose cells do not overlap: a call counts in at most one cell of each. `target` splits the action's calls (a call with no path reads `none`). `keys` splits the calls that sent a key, and is taken as the
+ * action's calls, which it equals for a tool with a required key and which elsewhere can only withhold more. `dropped` splits only the calls with an unsent key (`ownCalls`). Per key (a value is `<key>=<member>`): `size`, `depth`,
+ * `extension`, and `dir` split the calls that send the key with a value of their kind, taken as all of them, and `enum` splits them for a boolean or an exhaustive list and only its on-list values for an open one (`ownCalls`).
+ * The others (`arg`, `pattern`, `change`) hold a call in several cells or none, so their cells are not parts of one count. A superset of the true equations determines more, never less, so taking a sum for a larger one only withholds more.
  */
 const FACET_PARTITIONS: ReadonlyMap<ShapeFacet, boolean> = new Map([['target', false], ['keys', false], ['dropped', false], ['size', true], ['depth', true], ['extension', true], ['dir', true], ['enum', true]]);
 
@@ -71,7 +88,7 @@ const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, motif: Mot
       const keyed = parsed === null ? undefined : FACET_PARTITIONS.get(parsed.facet);
       if (parsed === null || keyed === undefined) return [];
       const key = keyed ? parsed.value.slice(0, parsed.value.indexOf('=')) : '';
-      return [{ family: facetFamilyKey(parsed.action, parsed.facet, key, cell), role: 'part', total: callsTotal(parsed.action, key, cell) }];
+      return [{ family: facetFamilyKey(parsed.action, parsed.facet, key, cell), role: 'part', total: countsOnlySome(parsed.facet, parsed.value) ? ownCalls(parsed.action, parsed.facet, key, cell) : callsTotal(parsed.action, key, cell) }];
     },
   },
   // The calls that send a key k are split by the `keys` cells whose list holds k, and by each per-key facet of k: the `keys` cells that hold k are parts of those facets' total.
@@ -88,15 +105,16 @@ const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, motif: Mot
       }));
     },
   },
-  // An action's one-step shape cells, one per model (`harness/version/model`), sum to the calls its shape cells split on the version bucket (`harness/version/-`): the total the `fit` read gives.
+  // An action's one-step shape cells, per model (`harness/version/model`) and exposure, sum to the calls its facet cells split on the version bucket (`harness/version/-`, unexposed): the total the `fit` read gives.
+  // A one-step shape cell counts every step and a facet cell one per call by its first step, so the two are equal only where each call has one step; elsewhere the tie can only withhold more.
   {
     name: 'action-calls',
     placements: (cell, motif) => {
       const [step, ...more] = motif?.level === 'shape' && !isEnvironmentCell(cell) ? motif.steps : [];
       if (step === undefined || more.length > 0) return [];
       const [harness, version] = cell.frameBucket.split('/');
-      const versionCell = { ...cell, frameBucket: [harness, version, NO_AXES].join('/') };
-      return [{ family: JSON.stringify(['action-calls', step.action, versionCell.frameBucket, cell.grain, cell.day, cell.exposed]), role: 'part', total: callsTotal(step.action, '', versionCell) }];
+      const versionCell = { ...cell, frameBucket: [harness, version, NO_AXES].join('/'), exposed: false };
+      return [{ family: JSON.stringify(['action-calls', step.action, versionCell.frameBucket, cell.grain, cell.day]), role: 'part', total: callsTotal(step.action, '', versionCell) }];
     },
   },
   // A week cell is the whole of the day cells of its motif, frame, exposure, and week.
@@ -131,7 +149,8 @@ const familiesOf = (held: readonly Cell[], motifs: readonly Motif[]): Family[] =
       }
     }
   }
-  for (const [family, keys] of echoed) family.echoes = [...keys].flatMap((key) => byKey.get(key) ?? []);
+  // Only a family that counts the same total echoes: a key's open-list `enum` counts fewer calls than its `keys` cells do.
+  for (const [family, keys] of echoed) family.echoes = [...keys].flatMap((key) => byKey.get(key) ?? []).filter(({ total }) => total === family.total);
   return byRule.flatMap(({ families }) => [...families.values()]);
 };
 

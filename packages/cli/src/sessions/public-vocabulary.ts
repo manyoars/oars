@@ -317,6 +317,9 @@ export const CLOSED_ARG_VALUES: ReadonlyMap<string, ReadonlyMap<string, Readonly
   Object.entries(CLOSED_ROWS).map(([tool, keys]) => [tool, new Map(Object.entries(keys).map(([key, values]) => [key, words(values)]))]),
 );
 
+/** The keys of `CLOSED_ROWS` whose list is not exhaustive: a custom agent's name or a full model id is off it and has no `enum` cell, so the key's on-list values do not sum to the calls that send it. */
+export const OPEN_LIST_KEYS: ReadonlySet<string> = words('subagent_type model');
+
 /** What a subagent type pools as when it is not a built-in: a custom agent's name is private. */
 export const CUSTOM_AGENT = 'custom';
 

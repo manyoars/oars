@@ -10,9 +10,9 @@ import { DEFAULT_FLOORS, DEFAULT_PUBLIC_FLOOR } from './floors.js';
 import type { StoredPool } from './stored.js';
 
 /**
- * The unserved cells that the served ones determine, worked out apart from `complement.ts`. Each relation the cells hold is one equation, with the totals no cell holds as unknowns: each of `target`, `keys`, and `dropped`
- * sums to the calls of its action; each key's `size` and `depth` cells, and the `keys` cells whose list holds the key, sum to the calls that send the key; a week cell is the sum of its day cells; a shape cell is
- * the sum of its named cells; and an action's one-step shape cell is its calls, which the `fit` read gives. With every served cell fixed, a cell is determined when no solution can move it: after reducing the equations over the unknowns to row echelon form, its column is a pivot whose
+ * The unserved cells that the served ones determine, worked out apart from `complement.ts`. Each relation the cells hold is one equation, with the totals no cell holds as unknowns: each of `target` and `keys`
+ * sums to the calls of its action; `dropped`, and the `enum` of an open list, sum to a count of their own that no other cell holds; each key's `size` and `depth` cells, its other `enum` cells, and the `keys` cells whose list holds the key, sum to the calls that send the key; a week cell is the sum of its day cells; a shape cell is
+ * the sum of its named cells; and an action's one-step shape cells, over models and exposure, are its calls, which the `fit` read gives. With every served cell fixed, a cell is determined when no solution can move it: after reducing the equations over the unknowns to row echelon form, its column is a pivot whose
  * row holds no other unknown.
  */
 const determinedCells = (held: readonly Cell[], motifs: readonly Motif[], served: (cell: Cell) => boolean): Cell[] => {
@@ -32,12 +32,24 @@ const determinedCells = (held: readonly Cell[], motifs: readonly Motif[], served
     const shape = `shape ${motif?.steps.map((step) => step.action).join(' ') ?? ''} ${place}`;
     if (motif?.level === 'shape') relations.set(shape, { head: cell, parts: relations.get(shape)?.parts ?? [] });
     if (motif?.level === 'named') relate(shape, cell);
-    // The `fit` read gives an action's calls: its one-step shape cell, so those calls are known where that cell is served.
-    if (motif?.level === 'shape' && motif.steps.length === 1) relate(`fit ${shape}`, cell, `calls ${motif.steps.map((step) => step.action).join(' ')} ${place}`);
+    // The `fit` read gives an action's calls: its one-step shape cells summed over models and exposure, on the version bucket the facet cells hold, so those calls are known where every such cell is served.
+    if (motif?.level === 'shape' && motif.steps.length === 1) {
+      const actions = motif.steps.map((step) => step.action).join(' ');
+      const onVersion = `${[...cell.frameBucket.split('/').slice(0, 2), NO_AXES].join('/')} ${cell.grain} ${cell.day} false`;
+      relate(`fit ${actions} ${onVersion}`, cell, `calls ${actions} ${onVersion}`);
+    }
     const parsed = motif?.cls === null || motif?.cls === undefined ? null : parseShapeClass(motif.cls);
     if (parsed === null) continue;
     const { action, facet, value } = parsed;
-    if (facet === 'target' || facet === 'keys' || facet === 'dropped') relate(`${action} ${facet} ${place}`, cell, `calls ${action} ${place}`);
+    if (facet === 'target' || facet === 'keys') relate(`${action} ${facet} ${place}`, cell, `calls ${action} ${place}`);
+    // Only a call with an unsent key has a `dropped` cell, so those cells sum to a count nothing else holds.
+    if (facet === 'dropped') relate(`${action} ${facet} ${place}`, cell, `own ${action} ${facet} ${place}`);
+    if (facet === 'enum') {
+      const key = value.slice(0, value.indexOf('='));
+      const member = value.slice(value.indexOf('=') + 1);
+      const open = (key === 'subagent_type' || key === 'model') && member !== 'true' && member !== 'false';
+      relate(`${action} ${facet} ${key} ${place}`, cell, open ? `own ${action} ${facet} ${key} ${place}` : `calls ${action} ${key} ${place}`);
+    }
     if (facet === 'keys') for (const key of value.split(',')) relate(`${action} holds ${key} ${place}`, cell, `calls ${action} ${key} ${place}`);
     if (facet === 'size' || facet === 'depth') {
       const key = value.slice(0, value.indexOf('='));
@@ -212,7 +224,7 @@ describe('the keys cells that hold a key', () => {
   });
 
   it('are not recovered from any combination of served totals', () => {
-    // No one family holds a single unserved part here, yet `path,pattern` is the `path` size total plus the `pattern` size total less the action's calls (`target` or `dropped`), inclusion and exclusion over the key lists.
+    // No one family holds a single unserved part here, yet `path,pattern` is the `path` size total plus the `pattern` size total less the action's calls (the `target` cells), inclusion and exclusion over the key lists.
     const cells: [ReturnType<typeof motifOf>, number][] = [
       [motifOf('keys', 'path'), F + 5],
       [motifOf('keys', 'path,pattern'), F - 1],
@@ -220,7 +232,6 @@ describe('the keys cells that hold a key', () => {
       [motifOf('size', 'path=9-32'), 2 * F + 4],
       [motifOf('size', 'pattern=9-32'), 2 * F + 4],
       [motifOf('target', 'source'), 3 * F + 9],
-      [motifOf('dropped', '0'), 3 * F + 9],
     ];
     const stored: StoredPool = { cells: cells.map(([motif, clusters]) => cellOf(motif.motifId, clusters)), environment: [], motifs: cells.map(([motif]) => motif), strata: [] };
     const kept = new Set(bundleOf('claude-code', '2.1.314', stored, DEFAULT_FLOORS).cells.map(({ motifId }) => motifId));
@@ -255,6 +266,35 @@ describe("an action's one-step shape cells", () => {
     const withheld = withheldOf([wide, thin, cellOf(source.motifId, 2 * F), cellOf(test.motifId, F)], [shape, source, test], F);
     expect([...withheld]).toEqual([wide]);
   });
+
+  it('sum over exposure too, so a sub-floor exposed cell is not the served target cells less the unexposed one', () => {
+    const thin = { ...onModel('model-a', F - 1), exposed: true };
+    const wide = onModel('model-a', 2 * F + 1);
+    expect([...withheldOf([wide, thin, cellOf(source.motifId, 2 * F), cellOf(test.motifId, F)], [shape, source, test], F)]).toEqual([wide]);
+  });
+
+  it('are not tied to a dropped cell, which only the calls with an unsent key reach', () => {
+    const one = classMotif(shapeClass('file.search', 'dropped', '1'));
+    const cells = [onModel('model-a', 30), cellOf(source.motifId, 20), cellOf(test.motifId, 10)];
+    expect([...withheldOf([...cells, cellOf(one.motifId, 2)], [shape, source, test, one], F)]).toEqual([]);
+    expect([...withheldOf([...cells, cellOf(one.motifId, 7)], [shape, source, test, one], F)]).toEqual([]);
+  });
+
+  const sentKey = (key: string): Motif => classMotif(shapeClass('agent.spawn', 'keys', key));
+  const valueOf = (key: string, member: string): Motif => classMotif(shapeClass('agent.spawn', 'enum', `${key}=${member}`));
+
+  it("keeps an open list's on-list values off the key's calls, which a custom agent's call is in too", () => {
+    const motifs = [sentKey('subagent_type'), valueOf('subagent_type', 'Explore')];
+    expect([...withheldOf([cellOf(motifs[0]?.motifId ?? '', 30), cellOf(motifs[1]?.motifId ?? '', 2)], motifs, F)]).toEqual([]);
+  });
+
+  it("keeps a boolean and an exhaustive list on the key's calls, under any key name", () => {
+    for (const [key, thin, rest] of [['output_mode', 'count', 'content'], ['model', 'true', 'false']] as const) {
+      const motifs = [sentKey(key), valueOf(key, thin), valueOf(key, rest)];
+      const cells = [cellOf(motifs[0]?.motifId ?? '', 30), cellOf(motifs[1]?.motifId ?? '', 2), cellOf(motifs[2]?.motifId ?? '', 28)];
+      expect([...withheldOf(cells, motifs, F)]).toEqual([cells[2]]);
+    }
+  });
 });
 
 describe('every family of cells (`FAMILY_RULES`)', () => {
@@ -268,7 +308,8 @@ describe('every family of cells (`FAMILY_RULES`)', () => {
       return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296;
     };
   };
-  const KEY_SETS = [['path'], ['path', 'pattern'], ['pattern'], ['glob', 'path', 'pattern'], ['limit', 'path']];
+  const KEY_SETS = [['path'], ['path', 'pattern'], ['pattern'], ['glob', 'path', 'pattern'], ['limit', 'path'], ['path', 'subagent_type']];
+  const MODELS = ['model-a', 'model-b'];
   const FIRST_DAY = '2026-11-02';
   const DAYS = [FIRST_DAY, '2026-11-03', '2026-11-04'];
   const named = (tool: string): Motif => {
@@ -286,10 +327,10 @@ describe('every family of cells (`FAMILY_RULES`)', () => {
       if (chosen === undefined) throw new Error('an empty list');
       return chosen;
     };
-    const counts = new Map<string, { motif: Motif; day: string; n: number }>();
-    const count = (motif: Motif, day: string): void => {
-      const key = `${motif.motifId}/${day}`;
-      counts.set(key, { motif, day, n: (counts.get(key)?.n ?? 0) + 1 });
+    const counts = new Map<string, { motif: Motif; day: string; frameBucket: string; exposed: boolean; n: number }>();
+    const count = (motif: Motif, day: string, frameBucket = bucket, exposed = false): void => {
+      const key = `${motif.motifId}/${frameBucket}/${String(exposed)}/${day}`;
+      counts.set(key, { motif, day, frameBucket, exposed, n: (counts.get(key)?.n ?? 0) + 1 });
     };
     const calls = 12 + Math.floor(next() * 36);
     // Some actions have no `target` or `dropped` cells, so only the `fit` read pins their calls.
@@ -299,23 +340,30 @@ describe('every family of cells (`FAMILY_RULES`)', () => {
       const keys = pick(KEY_SETS);
       if (pinned) {
         count(classMotif(shapeClass('file.search', 'target', pick(['source', 'test', 'doc']))), day);
-        count(classMotif(shapeClass('file.search', 'dropped', pick(['0', '1']))), day);
       }
+      // Only some calls have an unsent key, and a `dropped` cell's value starts at 1.
+      if (next() < 0.4) count(classMotif(shapeClass('file.search', 'dropped', pick(['1', '2']))), day);
       count(classMotif(shapeClass('file.search', 'keys', keys.join(','))), day);
       for (const key of keys) {
         count(classMotif(shapeClass('file.search', 'size', `${key}=${next() < 0.8 ? '9-32' : '1-8'}`)), day);
         count(classMotif(shapeClass('file.search', 'depth', `${key}=${pick(['0', '1', '2'])}`)), day);
       }
-      count(SHAPE, day);
-      count(pick(NAMES), day);
+      // A custom agent's name is off the list, so only some of the calls that send the key have a cell.
+      if (keys.includes('subagent_type') && next() < 0.6) count(classMotif(shapeClass('file.search', 'enum', `subagent_type=${pick(['Explore', 'Plan'])}`)), day);
+      // The one-step shape and named cells are per model and per exposure; the facet cells above are on the version bucket, unexposed.
+      const onModel = `claude-code/2.1.31x/${pick(MODELS)}`;
+      const exposed = next() < 0.2;
+      count(SHAPE, day, onModel, exposed);
+      count(pick(NAMES), day, onModel, exposed);
     }
     const cells: Cell[] = [];
     const weeks = new Map<string, Cell>();
-    for (const { motif, day, n } of counts.values()) {
-      cells.push({ ...cellOf(motif.motifId, n), grain: 'day', day });
-      const week = weeks.get(motif.motifId);
-      if (week === undefined) weeks.set(motif.motifId, { ...cellOf(motif.motifId, n), day: FIRST_DAY });
-      else weeks.set(motif.motifId, { ...week, clusters: week.clusters + n, sessions: week.sessions + n, ok: week.ok + n });
+    for (const { motif, day, frameBucket, exposed, n } of counts.values()) {
+      cells.push({ ...cellOf(motif.motifId, n), frameBucket, exposed, grain: 'day', day });
+      const at = `${motif.motifId}/${frameBucket}/${String(exposed)}`;
+      const week = weeks.get(at);
+      if (week === undefined) weeks.set(at, { ...cellOf(motif.motifId, n), frameBucket, exposed, day: FIRST_DAY });
+      else weeks.set(at, { ...week, clusters: week.clusters + n, sessions: week.sessions + n, ok: week.ok + n });
     }
     return { held: [...cells, ...weeks.values()], motifs: [...new Map([...counts.values()].map(({ motif }) => [motif.motifId, motif])).values()] };
   };
@@ -332,6 +380,20 @@ describe('every family of cells (`FAMILY_RULES`)', () => {
     }
     expect(withheldSome).toBeGreaterThan(100);
     expect(broken).toEqual([]);
+  });
+
+  it('withholds the same cells elsewhere with or without the dropped and open-list cells, which no other cell sums with', () => {
+    const own = (motif: Motif | undefined): boolean => motif?.cls?.includes('/dropped/') === true || motif?.cls?.includes('/enum/subagent_type=') === true;
+    const moved: string[] = [];
+    for (let seed = 1; seed <= 400; seed += 1) {
+      const { held, motifs } = bundleFrom(seed);
+      const motifOf = new Map(motifs.map((motif) => [motif.motifId, motif]));
+      const outside = held.filter((cell) => !own(motifOf.get(cell.motifId)));
+      const withheld = [...withheldOf(held, motifs, F)].filter((cell) => !own(motifOf.get(cell.motifId)));
+      const without = withheldOf(outside, motifs, F);
+      if (withheld.length !== without.size || withheld.some((cell) => !without.has(cell))) moved.push(`seed ${String(seed)}`);
+    }
+    expect(moved).toEqual([]);
   });
 
   it('never serves a key facet in full beside exactly one unserved keys cell that holds the key', () => {
