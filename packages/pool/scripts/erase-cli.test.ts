@@ -1,4 +1,5 @@
 // The command line and its wrangler store, against a fake wrangler: what it would run, with nothing run for real.
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { main, USAGE, type Io } from './erase-cli.js';
 import { inline, wranglerStore } from './erase-wrangler.js';
@@ -121,13 +122,21 @@ describe('main', () => {
         if (sql.startsWith('SELECT 1 AS found')) return [{ found: 1 }];
         if (sql.includes('FROM deposits')) return [{ account: ACCOUNT, id: 's2', skeleton: `{"program":"${value}"}`, extensions: '[]' }];
         if (sql.includes('FROM motifs')) return [{ motif_id: 'm1', motif: `run ${value} now` }];
+        if (sql.includes('FROM cells')) return [{ rowid: 4, key: `m1/claude-code/2.1.x/${value}/day/1`, harness_bucket: '2.1.x', frame_bucket: `claude-code/2.1.x/${value}` }];
+        if (sql.includes('FROM contributors')) return [{ kind: 'cell', key: `m1/claude-code/2.1.x/${value}/day/1`, account: ACCOUNT, day: '2026-11-08' }];
         return [];
       },
     });
     expect(await main(['row', '--account', ACCOUNT, '--id', 's1', '--value-stdin', '--confirm'], io)).toBe(0);
-    // The value is on no wrangler argument at all: the rows come back and the match is made here.
+    // The value is on no wrangler argument at all, though a cell and a contributor hold it: the rows come back whole and the match is made here.
     expect(calls.flat().some((arg) => arg.includes(value))).toBe(false);
     const sql = calls.map((call) => call[6] ?? '');
+    expect(sql).toContain("SELECT rowid, key, harness_bucket, frame_bucket FROM cells ORDER BY rowid LIMIT 25 OFFSET 0");
+    // A cell is changed by its rowid and a contributor by the text around the value; the marker carries 12 hex of the value's SHA-256, not the value.
+    const marker = `[erased:${createHash('sha256').update(value).digest('hex').slice(0, 12)}]`;
+    expect(sql).toContain(`UPDATE cells SET key = 'm1/claude-code/2.1.x/${marker}/day/1', harness_bucket = '2.1.x', frame_bucket = 'claude-code/2.1.x/${marker}' WHERE rowid = 4`);
+    expect(sql.some((text) => text.startsWith(`UPDATE contributors SET key = 'm1/claude-code/2.1.x/${marker}/day/1' WHERE kind = 'cell'`) && text.includes('substr(key, 1, 21)') && text.includes('length(key) = ') && text.includes('ORDER BY key LIMIT 1 OFFSET 0'))).toBe(true);
+    expect(sql.some((text) => text.startsWith('UPDATE pool_generation SET generation = generation + 1'))).toBe(true);
     // Rows are changed by key, the motif by its scrubbed text, and the tombstone carries the SHA-256.
     // Staged parts are sealed, so they are dropped by account (the named one and the one whose row held the value), never matched by text.
     expect(sql).toContain(`DELETE FROM deposit_parts WHERE account = '${ACCOUNT}' AND deposit IS NULL`);
@@ -135,6 +144,21 @@ describe('main', () => {
     expect(sql.some((text) => text.startsWith('UPDATE deposits SET') && text.includes("id = 's2'"))).toBe(true);
     expect(sql.some((text) => text.includes('INSERT OR IGNORE INTO erasure_tombstones') && text.includes("'value'"))).toBe(true);
     expect(printed).toHaveLength(1);
+  });
+
+  it('stops when the contributor record it was to change is not the one it read', async () => {
+    const value = 'AKIAFAKEKEY0000SECRET';
+    const { io, calls, printed } = fake({
+      stdin: value,
+      answer: (sql) => {
+        if (sql.startsWith('SELECT 1 AS found')) return [{ found: 1 }];
+        if (sql.startsWith('SELECT kind, key, account, day FROM contributors')) return [{ kind: 'cell', key: `m1/${value}/1`, account: ACCOUNT, day: '2026-11-08' }];
+        return [];
+      },
+    });
+    expect(await main(['row', '--account', ACCOUNT, '--id', 's1', '--value-stdin', '--confirm'], io)).toBe(1);
+    expect(printed.join('')).toContain('changed while it was read');
+    expect(calls.map((call) => call[6] ?? '').some((sql) => sql.startsWith('UPDATE contributors'))).toBe(false);
   });
 
   it('reads a table of more than one page in key order, by cursor, and scrubs every motif that holds the value', async () => {

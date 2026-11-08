@@ -120,9 +120,39 @@ const scan = async (store: EraseStore, table: string, columns: readonly string[]
   }
 };
 
+/** The columns of a cell that keep a name the pool stores in clear. */
+const CELL_TEXT = ['key', 'harness_bucket', 'frame_bucket'];
+
+/** Reads a table whole, a page at a time by `LIMIT` and `OFFSET`, and answers the rows `keep` accepts. Nothing is written while it reads, so the offsets hold, and no cursor is ever a value taken from a row. */
+const readAll = async (store: EraseStore, table: string, columns: readonly string[], order: string, keep: (row: unknown) => boolean): Promise<unknown[]> => {
+  const kept: unknown[] = [];
+  for (let offset = 0; ; offset += PAGE) {
+    const page = await store.rows(`SELECT ${columns.join(', ')} FROM ${table} ORDER BY ${order} LIMIT ${String(PAGE)} OFFSET ${String(offset)}`, []);
+    kept.push(...page.filter(keep));
+    if (page.length < PAGE) return kept;
+  }
+};
+
+/** A condition on `key` that holds the text around each occurrence of `value` and the key's length, and never the value: what names a row whose key holds the value without writing it into a statement. Positions count characters, as SQLite does. */
+const aroundOf = (key: string, value: string): { sql: string; binds: (string | number)[] } => {
+  const sql = ['length(key) = ?'];
+  const binds: (string | number)[] = [Array.from(key).length];
+  let at = 1;
+  for (const [index, piece] of key.split(value).entries()) {
+    if (index > 0) at += Array.from(value).length;
+    const length = Array.from(piece).length;
+    if (length > 0) {
+      sql.push('substr(key, ?, ?) = ?');
+      binds.push(at, length, piece);
+    }
+    at += length;
+  }
+  return { sql: sql.join(' AND '), binds };
+};
+
 /**
  * Erases a deposit row that holds a leaked secret: its content is replaced by a marker in place (no row is dropped), and its key is tombstoned. With the value, every other deposit row that holds it goes the same way, the
- * motifs, cells (key and frame bucket, where a frame's `model` is kept), and contributor records that name it are scrubbed of it (their counts stand), the unfinished staged parts of every account that held it are dropped, and a tombstone of its
+ * motifs, cells (key, harness bucket, and frame bucket, where a frame's `model` and `harnessVersion` are kept; the value becomes `[erased:<12 hex of its SHA-256>]`, so two values stay two keys), and contributor records that name it are scrubbed of it (their counts stand), the unfinished staged parts of every account that held it are dropped, and a tombstone of its
  * SHA-256 makes ingest refuse a deposit that carries it again. A raw object that holds it is erased by key.
  * A session that was never deposited is refused when no value is given: its tombstone would refuse that id forever.
  */
@@ -143,20 +173,32 @@ export const eraseLeakedSecret = async (store: EraseStore, secret: LeakedSecret,
       if (textOf(row, 'skeleton').includes(stored) || textOf(row, 'extensions').includes(stored)) held.push({ account: textOf(row, 'account'), id: textOf(row, 'id') });
       return Promise.resolve();
     }, 'erased_on IS NULL AND ');
+    let aggregates = 0;
     await scan(store, 'motifs', ['motif_id', 'motif'], ['motif_id'], async (row) => {
       const motif = textOf(row, 'motif');
-      if (motif.includes(stored)) rows += await store.run('UPDATE motifs SET motif = ? WHERE motif_id = ?', [motif.replaceAll(stored, SCRUBBED), textOf(row, 'motif_id')]);
+      if (motif.includes(stored)) aggregates += await store.run('UPDATE motifs SET motif = ? WHERE motif_id = ?', [motif.replaceAll(stored, SCRUBBED), textOf(row, 'motif_id')]);
     });
-    // A frame's `model` is a name the pool stores in clear: in the cell's key and frame bucket, and in the contributor record that names the cell. The text is replaced in place; no row moves, and no count changes.
-    await scan(store, 'cells', ['key', 'frame_bucket'], ['key'], async (row) => {
+    // A frame's `model` and `harnessVersion` are names the pool stores in clear: in the cell's key, harness bucket, and frame bucket, and in the contributor record that names the cell. Each table is read whole before any of it is written, and a row is
+    // changed by its rowid or by the text around the value, so the value is on no wrangler command line. The marker carries the first 12 hex of the value's SHA-256, so two leaked values stay two keys.
+    const marker = `[erased:${(await digestOf(value)).slice(0, 12)}]`;
+    const scrubbed = (text: string): string => text.replaceAll(stored, marker);
+    for (const row of await readAll(store, 'cells', ['rowid', 'key', 'harness_bucket', 'frame_bucket'], 'rowid', (one) => CELL_TEXT.some((column) => textOf(one, column).includes(stored)))) {
+      aggregates += await store.run('UPDATE cells SET key = ?, harness_bucket = ?, frame_bucket = ? WHERE rowid = ?', [scrubbed(textOf(row, 'key')), scrubbed(textOf(row, 'harness_bucket')), scrubbed(textOf(row, 'frame_bucket')), numberOf(row, 'rowid')]);
+    }
+    for (const row of await readAll(store, 'contributors', ['kind', 'key', 'account', 'day'], 'kind, key, account, day', (one) => textOf(one, 'key').includes(stored))) {
       const key = textOf(row, 'key');
-      const bucket = textOf(row, 'frame_bucket');
-      if (key.includes(stored) || bucket.includes(stored)) rows += await store.run('UPDATE cells SET key = ?, frame_bucket = ? WHERE key = ?', [key.replaceAll(stored, SCRUBBED), bucket.replaceAll(stored, SCRUBBED), key]);
-    });
-    await scan(store, 'contributors', ['kind', 'key', 'account', 'day'], ['kind', 'key', 'account', 'day'], async (row) => {
-      const key = textOf(row, 'key');
-      if (key.includes(stored)) rows += await store.run('UPDATE contributors SET key = ? WHERE kind = ? AND key = ? AND account = ? AND day = ?', [key.replaceAll(stored, SCRUBBED), textOf(row, 'kind'), key, textOf(row, 'account'), textOf(row, 'day')]);
-    });
+      const [kind, account, day] = [textOf(row, 'kind'), textOf(row, 'account'), textOf(row, 'day')];
+      const around = aroundOf(key, stored);
+      const shape = `kind = ? AND account = ? AND day = ? AND ${around.sql}`;
+      const binds = [kind, account, day, ...around.binds];
+      // The text around the value cannot tell apart two records that differ only in what stands where the value does (two leaked models of one length), and the statement may not hold the value to tell them: it names the record by its place in the order of that shape.
+      const place = (await store.rows(`SELECT key FROM contributors WHERE ${shape} ORDER BY key`, binds)).findIndex((one) => textOf(one, 'key') === key);
+      if (place < 0) throw new Error('a contributor record changed while it was read: run the erasure again');
+      aggregates += await store.run(`UPDATE contributors SET key = ? WHERE kind = ? AND account = ? AND day = ? AND key = (SELECT key FROM contributors WHERE ${shape} ORDER BY key LIMIT 1 OFFSET ?)`, [scrubbed(key), kind, account, day, ...binds, place]);
+    }
+    rows += aggregates;
+    // A scrub of a motif, cell, or contributor moves no count, so no trigger bumps the generation; a client holding the old ETag would be told its copy is current.
+    if (aggregates > 0) await store.run('UPDATE pool_generation SET generation = generation + 1', []);
     // Staged parts are sealed with a key the command does not hold, so their text cannot be searched. The unfinished ones of every account that held the value are dropped whole; another account's wait for its own sweep.
     for (const holder of new Set(held.map((one) => one.account).concat(account))) rows += await store.run('DELETE FROM deposit_parts WHERE account = ? AND deposit IS NULL', [holder]);
   }

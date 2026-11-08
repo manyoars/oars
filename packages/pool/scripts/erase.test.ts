@@ -26,6 +26,10 @@ const SECOND_KEY = 'AKIAFAKEKEY0000SECOND';
 /** A third and a fourth, for a value that sits in a frame's `model` and for one that sits in a staged part. */
 const MODEL_KEY = 'AKIAFAKEKEY0MODELKEY';
 const PART_KEY = 'AKIAFAKEKEY0000PARTS';
+/** Two values for two deposits that differ in nothing else, and one for a harness version that is not a semver. */
+const TWIN_A = 'AKIAFAKEKEY0TWINAAAA';
+const TWIN_B = 'AKIAFAKEKEY0TWINBBBB';
+const VERSION_KEY = 'AKIAFAKEKEY0VERSION';
 
 /** The erasure store over the pool's local D1 and raw bucket, as `wrangler --local` would reach them. */
 const storeOf = (db: TestDb, bucket: TestBucket): EraseStore => ({
@@ -56,10 +60,11 @@ const putRaw = async (token: string, bytes: Uint8Array): Promise<{ hash: string;
 const rawKeys = async (account: string): Promise<string[]> => [...(await (await pool.rawBucket()).list()).objects.map((object) => object.key)].filter((key) => key.split('/')[1] === account);
 
 /** A sample deposit whose first shell step names `program`, a name the pool stores in clear below the floor. */
-const skeletonWith = (id: string, program?: string, model?: string): unknown => {
+const skeletonWith = (id: string, program?: string, model?: string, harnessVersion?: string): unknown => {
   const text = JSON.stringify(sampleSkeleton(id));
   const named = program === undefined ? text : text.replaceAll('"program":"git"', `"program":"${program}"`);
-  return JSON.parse(model === undefined ? named : named.replaceAll('"model":"claude-opus-5-5"', `"model":"${model}"`));
+  const modeled = model === undefined ? named : named.replaceAll('"model":"claude-opus-5-5"', `"model":"${model}"`);
+  return JSON.parse(harnessVersion === undefined ? modeled : modeled.replaceAll('"harnessVersion":"2.1.314"', `"harnessVersion":"${harnessVersion}"`));
 };
 
 const all = async (sql: string, ...binds: (string | number)[]): Promise<readonly unknown[]> => (await (await pool.db()).prepare(sql).bind(...binds).all()).results;
@@ -122,42 +127,53 @@ describe('erasing a raw object', () => {
 
 describe('erasing a row that holds a leaked secret', () => {
   it('replaces the row in place, keeps the ledger and the aggregates whole, and leaves the value in no read, bundle, or raw object', async () => {
-    const { token, account } = await member();
-    const bystander = await member();
-    expect((await pool.post('/v1/deposits', skeletonWith('00000000000071aa', FAKE_KEY), token)).status).toBe(201);
-    expect((await pool.post('/v1/deposits', skeletonWith('00000000000071ab'), bystander.token)).status).toBe(201);
-    const leaked = await putRaw(token, new TextEncoder().encode(`env dump: ${FAKE_KEY}`));
-    // The value is in the pool before the erasure: the ledger row, the motifs, and the raw object.
-    expect(await dump()).toContain(FAKE_KEY);
-    expect((await (await pool.rawBucket()).get(`raw/${account}/${leaked.hash}`).then((object) => object?.text())) ?? '').toContain(FAKE_KEY);
+    // A pool whose public floor is 1 serves a single cluster's cells and motifs, so the bundle holds the value before the erasure; at the default floor it would not, and the bundle half could not go red.
+    const shared = pool;
+    pool = await startPool({ PUBLIC_FLOOR: '1' });
+    try {
+      const { token, account } = await member();
+      const bystander = await member();
+      expect((await pool.post('/v1/deposits', skeletonWith('00000000000071aa', FAKE_KEY), token)).status).toBe(201);
+      expect((await pool.post('/v1/deposits', skeletonWith('00000000000071ab'), bystander.token)).status).toBe(201);
+      const leaked = await putRaw(token, new TextEncoder().encode(`env dump: ${FAKE_KEY}`));
+      // The value is in the pool before the erasure: the ledger row, the motifs, and the raw object.
+      expect(await dump()).toContain(FAKE_KEY);
+      expect((await (await pool.rawBucket()).get(`raw/${account}/${leaked.hash}`).then((object) => object?.text())) ?? '').toContain(FAKE_KEY);
 
-    const rows = await count('SELECT COUNT(*) AS held FROM deposits');
-    const before = await aggregates();
-    const tier = await all("SELECT tier, counted_at, ingest FROM deposits WHERE id = '00000000000071aa'");
-    const sessions = await all('SELECT sessions, clusters FROM cells ORDER BY key');
+      const rows = await count('SELECT COUNT(*) AS held FROM deposits');
+      const bundleBefore = await pool.get('/bundle/claude-code/2.1.314/1', token);
+      expect(bundleBefore.status).toBe(200);
+      const before = await aggregates();
+      const tier = await all("SELECT tier, counted_at, ingest FROM deposits WHERE id = '00000000000071aa'");
+      const sessions = await all('SELECT sessions, clusters FROM cells ORDER BY key');
 
-    const run = await store();
-    expect((await eraseLeakedSecret(run, { account, id: '00000000000071aa', value: FAKE_KEY }, NOW)).rows).toBeGreaterThanOrEqual(2);
-    await eraseRawObject(run, `raw/${account}/${leaked.hash}`, NOW);
+      const run = await store();
+      expect((await eraseLeakedSecret(run, { account, id: '00000000000071aa', value: FAKE_KEY }, NOW)).rows).toBeGreaterThanOrEqual(2);
+      await eraseRawObject(run, `raw/${account}/${leaked.hash}`, NOW);
 
-    // No row is dropped; the row holds a marker, and its tier, count mark, and ingest mark stay.
-    expect(await count('SELECT COUNT(*) AS held FROM deposits')).toBe(rows);
-    expect(await all("SELECT skeleton, extensions, erased_on FROM deposits WHERE id = '00000000000071aa'")).toEqual([{ skeleton: '{"erased":"leaked-secret"}', extensions: '[]', erased_on: '2026-11-08' }]);
-    expect(await all("SELECT tier, counted_at, ingest FROM deposits WHERE id = '00000000000071aa'")).toEqual(tier);
-    // The aggregates keep their counts: the secret leaves the motif text and the cells and contributors stay as they were.
-    expect(await aggregates()).toBe(before);
-    expect(await all('SELECT sessions, clusters FROM cells ORDER BY key')).toEqual(sessions);
-    // The bystander's row is untouched.
-    expect(await count("SELECT COUNT(*) AS held FROM deposits WHERE id = '00000000000071ab' AND erased_on IS NULL")).toBe(1);
+      // No row is dropped; the row holds a marker, and its tier, count mark, and ingest mark stay.
+      expect(await count('SELECT COUNT(*) AS held FROM deposits')).toBe(rows);
+      expect(await all("SELECT skeleton, extensions, erased_on FROM deposits WHERE id = '00000000000071aa'")).toEqual([{ skeleton: '{"erased":"leaked-secret"}', extensions: '[]', erased_on: '2026-11-08' }]);
+      expect(await all("SELECT tier, counted_at, ingest FROM deposits WHERE id = '00000000000071aa'")).toEqual(tier);
+      // The aggregates keep their counts: the secret leaves the motif text and the cells and contributors stay as they were.
+      expect(await aggregates()).toBe(before);
+      expect(await all('SELECT sessions, clusters FROM cells ORDER BY key')).toEqual(sessions);
+      // The bystander's row is untouched.
+      expect(await count("SELECT COUNT(*) AS held FROM deposits WHERE id = '00000000000071ab' AND erased_on IS NULL")).toBe(1);
 
-    // A copy of the database, a signed bundle, and R2 hold the value nowhere.
-    expect(await dump()).not.toContain(FAKE_KEY);
-    const bundle = await pool.get('/bundle/claude-code/2.1.314/1', token);
-    expect(bundle.status).toBe(200);
-    expect(JSON.stringify(bundle.json)).not.toContain(FAKE_KEY);
-    expect((await Promise.all((await rawKeys(account)).map(async (key) => (await (await pool.rawBucket()).get(key).then((object) => object?.text())) ?? ''))).join('')).not.toContain(FAKE_KEY);
-    expect(await all("SELECT kind, reason, rows_erased, objects_erased FROM erasure_audit WHERE kind = 'row'")).toContainEqual(expect.objectContaining({ kind: 'row', reason: 'leaked-secret' }));
-  }, 90_000);
+      // A copy of the database, a signed bundle, and R2 hold the value nowhere.
+      expect(await dump()).not.toContain(FAKE_KEY);
+      const bundle = await pool.get('/bundle/claude-code/2.1.314/1', token);
+      expect(bundle.status).toBe(200);
+      expect(JSON.stringify(bundle.json)).not.toContain(FAKE_KEY);
+      expect(JSON.stringify(bundleBefore.json)).toContain(FAKE_KEY);
+      expect((await Promise.all((await rawKeys(account)).map(async (key) => (await (await pool.rawBucket()).get(key).then((object) => object?.text())) ?? ''))).join('')).not.toContain(FAKE_KEY);
+      expect(await all("SELECT kind, reason, rows_erased, objects_erased FROM erasure_audit WHERE kind = 'row'")).toContainEqual(expect.objectContaining({ kind: 'row', reason: 'leaked-secret' }));
+    } finally {
+      await pool.dispose();
+      pool = shared;
+    }
+  }, 120_000);
 
   it('scrubs a value that sits in the model of a frame from the cells and contributors that name it, with every count unchanged', async () => {
     const { token, account } = await member();
@@ -181,6 +197,61 @@ describe('erasing a row that holds a leaked secret', () => {
     expect(await shape()).toBe(before);
     // The bystander's cells stand, with their own model.
     expect(await count("SELECT COUNT(*) AS held FROM cells WHERE frame_bucket LIKE '%claude-opus-5-5%'")).toBeGreaterThanOrEqual(1);
+  }, 90_000);
+
+  it('keeps two leaked models apart: erasing both from otherwise identical deposits renames two cells to two keys, and loses none', async () => {
+    const { token, account } = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000080aa', undefined, TWIN_A), token)).status).toBe(201);
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000080ab', undefined, TWIN_B), token)).status).toBe(201);
+    const cells = await count('SELECT COUNT(*) AS held FROM cells');
+    const contributors = await count('SELECT COUNT(*) AS held FROM contributors');
+    const run = await store();
+    // The second erasure used to meet the first one's key on the primary key and stop, with the rows still holding the value.
+    expect((await eraseLeakedSecret(run, { account, id: '00000000000080aa', value: TWIN_A }, NOW)).rows).toBeGreaterThanOrEqual(2);
+    expect((await eraseLeakedSecret(run, { account, id: '00000000000080ab', value: TWIN_B }, NOW)).rows).toBeGreaterThanOrEqual(2);
+    expect(await count('SELECT COUNT(*) AS held FROM cells')).toBe(cells);
+    expect(await count('SELECT COUNT(*) AS held FROM contributors')).toBe(contributors);
+    const dumped = await dump();
+    expect(dumped).not.toContain(TWIN_A);
+    expect(dumped).not.toContain(TWIN_B);
+    // The marker is the first 12 hex of each value's SHA-256, so each value has its own.
+    expect(await count('SELECT COUNT(*) AS held FROM cells WHERE key LIKE ?', `%[erased:${sha(new TextEncoder().encode(TWIN_A)).slice(0, 12)}]%`)).toBeGreaterThanOrEqual(1);
+    expect(await count('SELECT COUNT(*) AS held FROM cells WHERE key LIKE ?', `%[erased:${sha(new TextEncoder().encode(TWIN_B)).slice(0, 12)}]%`)).toBeGreaterThanOrEqual(1);
+  }, 90_000);
+
+  it('scrubs a value that sits in a harness version, which the cell keeps in its harness bucket', async () => {
+    const { token, account } = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000081aa', undefined, undefined, VERSION_KEY), token)).status).toBe(201);
+    expect(await count('SELECT COUNT(*) AS held FROM cells WHERE harness_bucket LIKE ?', `%${VERSION_KEY}%`)).toBeGreaterThanOrEqual(1);
+    const cells = await count('SELECT COUNT(*) AS held FROM cells');
+    await eraseLeakedSecret(await store(), { account, id: '00000000000081aa', value: VERSION_KEY }, NOW);
+    expect(await dump()).not.toContain(VERSION_KEY);
+    expect(await count('SELECT COUNT(*) AS held FROM cells')).toBe(cells);
+  }, 90_000);
+
+  it('bumps the pool generation once when it scrubs an aggregate, so a client holding the old copy fetches the scrubbed one', async () => {
+    const { token, account } = await member();
+    const value = 'AKIAFAKEKEY0GENERATE';
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000082aa', undefined, value), token)).status).toBe(201);
+    // The row goes first, without the value, so the one change the value-erasure makes is to cells and contributors, which move no count.
+    await eraseLeakedSecret(await store(), { account, id: '00000000000082aa' }, NOW);
+    const generation = await count('SELECT generation AS held FROM pool_generation');
+    expect((await eraseLeakedSecret(await store(), { account, id: '00000000000082aa', value }, NOW)).rows).toBeGreaterThanOrEqual(2);
+    expect(await count('SELECT generation AS held FROM pool_generation')).toBe(generation + 1);
+    // Nothing left to scrub: no bump.
+    await eraseLeakedSecret(await store(), { account, id: '00000000000082aa', value }, NOW);
+    expect(await count('SELECT generation AS held FROM pool_generation')).toBe(generation + 1);
+  }, 90_000);
+
+  it('renames only the contributor record that holds the value when another differs from it in nothing else', async () => {
+    const { account } = await member();
+    const db = await pool.db();
+    const value = 'AKIAFAKEKEY0AMBIGUOUS';
+    const twin = 'AKIAFAKEKEY0AMBIGUOUT';
+    for (const key of [`cell/${twin}/x`, `cell/${value}/x`, `cell/${'B'.repeat(value.length)}/x`]) await db.prepare("INSERT INTO contributors (kind, key, account, day) VALUES ('cell', ?, 'acct_ambiguous', '2026-11-08')").bind(key).run();
+    await eraseLeakedSecret(await store(), { account, id: '00000000000083aa', value }, NOW);
+    const marker = `[erased:${sha(new TextEncoder().encode(value)).slice(0, 12)}]`;
+    expect((await all("SELECT key FROM contributors WHERE account = 'acct_ambiguous' ORDER BY key")).map((row) => String(fieldOf(row, 'key')))).toEqual([`cell/${twin}/x`, `cell/${'B'.repeat(value.length)}/x`, `cell/${marker}/x`]);
   }, 90_000);
 
   it('refuses the same value again, in any session and in the session that held it, and nothing else', async () => {
