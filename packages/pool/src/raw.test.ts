@@ -430,7 +430,10 @@ describe('raw staging is bounded per account (S12, t958)', () => {
         },
         get: () => Promise.resolve(null),
         delete: (keys) => bucket.delete([...keys]),
-        list: ({ prefix, limit }) => bucket.list({ prefix, limit }),
+        list: async ({ prefix, limit }) => {
+          const page = await bucket.list({ prefix, limit });
+          return { objects: page.objects, truncated: page.truncated === true };
+        },
         createMultipartUpload: () => Promise.reject(new Error('no upload here')),
       },
     };
