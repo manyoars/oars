@@ -5,3 +5,5 @@ CREATE TABLE login_polls (handle_hash TEXT PRIMARY KEY, next_at INTEGER NOT NULL
 CREATE TABLE login_starts (client TEXT NOT NULL, slot INTEGER NOT NULL, count INTEGER NOT NULL, PRIMARY KEY (client, slot));
 -- `telemetry_quota` counts the batches one install id has sent on one UTC day.
 CREATE TABLE telemetry_quota (install TEXT NOT NULL, day TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY (install, day));
+-- `telemetry_sweep` is the retention sweep's cursor, one row: `day` is the oldest day (UTC, `YYYY-MM-DD`) whose batches the sweep has not yet emptied. Each night resumes there until the retention cutoff, so a day too big for one night's calls, or nights the cron missed, are finished on a later night.
+CREATE TABLE telemetry_sweep (id INTEGER PRIMARY KEY CHECK (id = 1), day TEXT NOT NULL);

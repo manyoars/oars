@@ -7,14 +7,17 @@ import { answer, fieldOf, notConfigured, refuse, type Env } from './http.js';
 export const MAX_BATCH_EVENTS = 250;
 
 /**
- * What one request can put in the record, sized from what the CLI sends (`packages/cli/src/telemetry/send.ts`: at most `MAX_BATCH_EVENTS` events a request). An event is about 0.3 KB (a command with a few flags) to 1.5 KB (a command with the most flags
- * its schema admits); the largest, a `wire` event for one harness, is about 5 KB (~90 field names and two lists of counts), and a pass sends one per harness (11 at most). So a full batch of 250 with all 11 of those is about 130 KB. 256 KiB leaves
- * twice that, and is a quarter of the 1 MiB it replaces: the route takes no credential, so this is what bounds the bytes one request can write.
+ * What one request can put in the record, sized from what the CLI sends (`packages/cli/src/telemetry/send.ts`: at most `MAX_BATCH_EVENTS` events a request). The two event types whose size depends on a list are bounded by the schema
+ * (`packages/cli/src/telemetry/schema.ts`): a `command` holds at most 4 path and 40 flag tokens of 32 characters, 1,744 bytes as the spool line, and a `wire` event holds the register's field list and nothing else (`wire.ts:1-3`, `FIELD_ROWS` in
+ * `sessions/pool-outbox.ts`), 2,032 bytes with a seven-digit byte count on every field. Both are measured from the CLI's own writers in `packages/cli/src/telemetry/wire.test.ts` ("the size of the largest telemetry events"). Every other type is
+ * numbers and closed words, and a typical command event is about 0.3 KB, so a usual batch is about 75 KB. The worst a CLI can send is 11 `wire` events (one per harness) and 239 maximal commands, 429 KB, so the cap is 512 KiB: it admits that,
+ * and is half the 1 MiB it replaces. The route takes no credential, so this is what bounds the bytes one request can write.
  */
-export const MAX_BATCH_BYTES = 256 * 1024;
+export const MAX_BATCH_BYTES = 512 * 1024;
 
 /**
- * How many batches one install id may send on one UTC day. The CLI sends once a day (`dueForSend`), one request a 250 events, and a spool of 24 batches is 6,000 events, a backlog it does not reach. The id is a claim anyone can make up, so this bounds an
+ * How many batches one install id may send on one UTC day. The CLI sends once a day (`dueForSend`), one request per 250 events; a full spool (two files of 1 MiB, `SPOOL_CAP_BYTES` in `packages/cli/src/telemetry/spool.ts`) holds about 7,000
+ * events at 0.3 KB, which is 28 batches, so a full spool can pass 24 batches, and the 429 leaves the rest in the spool for the next day's send. The id is a claim anyone can make up, so this bounds an
  * honest install gone wrong, not a determined sender: the WAF rate rule (docs/pool.md, deploy step 6) is the bound on that.
  */
 export const MAX_BATCHES_PER_INSTALL_DAY = 24;

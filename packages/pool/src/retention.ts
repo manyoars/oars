@@ -8,11 +8,17 @@ import { dayOf, shiftDay } from './telemetry-rollup.js';
 /** How long a batch stays in the record. It matches Analytics Engine's three months, the other copy of the same events; the fleet and operator reads come from the rollup table and never read a batch older than the rollup's own two nights. */
 export const RETENTION_DAYS = 90;
 
-/** The sweep looks at this many days at and past the cutoff, so a night the cron missed is caught by the next. */
-const CATCH_UP_DAYS = 3;
+/** What one Worker invocation may spend in subrequests (R2 and D1 calls count); the rollup's reads and the sweep share it. */
+export const SUBREQUESTS_PER_INVOCATION = 1000;
 
-/** A day's keys are listed and deleted a page at a time (R2 takes 1,000 keys on each); this many pages bound one day's subrequests, and the next night takes the rest. */
-export const MAX_SWEEP_PAGES_PER_DAY = 20;
+/** What the nightly run keeps back from the sweep's budget for its other D1 calls: the three row sweeps, the cursor's read and write, and a margin. */
+export const RESERVED_CALLS = 10;
+
+/** The sweep's budget when the rollup failed and so reported nothing. The rollup reads 800 batches at most, so well over this many calls are left after any night it ran. */
+export const FALLBACK_BUDGET = 100;
+
+/** The calls the sweep may make after a rollup that spent `used` of the invocation's subrequests. A night the rollup used in full leaves little (or none), and the sweep takes the rest on a later night. */
+export const budgetAfter = (used: number): number => Math.max(0, SUBREQUESTS_PER_INVOCATION - used - RESERVED_CALLS);
 
 /** The part of the telemetry bucket the sweep uses. */
 export interface SweepBucket {
@@ -24,21 +30,35 @@ export interface SweepEnv {
   TELEMETRY?: SweepBucket;
 }
 
-/** Deletes the batches kept under the days at and just past the retention cutoff, and answers how many it deleted. An unbound bucket sweeps nothing. */
-export const sweepRecord = async (env: SweepEnv, now: number): Promise<number> => {
+/**
+ * Deletes the batches kept under every day at and before the retention cutoff that an earlier night has not emptied, oldest first, and answers how many it deleted. `budget` is the R2 calls it may make: a listing is one, a delete is one,
+ * and each page of a day takes both. The cursor (`telemetry_sweep`, the oldest day not yet emptied) moves past a day only once a listing of it came back empty, so a day too big for the budget, or nights the cron missed, are
+ * finished on a later night. An unbound bucket sweeps nothing. Deleting empties the listing, so the next page is the same call: no R2 cursor to carry.
+ */
+export const sweepRecord = async (env: Env & SweepEnv, now: number, budget: number): Promise<number> => {
   const bucket = env.TELEMETRY;
   if (bucket === undefined) return 0;
+  const cutoff = shiftDay(dayOf(now), -RETENTION_DAYS);
+  const stored = await env.DB.prepare('SELECT day FROM telemetry_sweep WHERE id = 1').first('day');
+  // A pool with no cursor yet has kept nothing past the cutoff but what the nights since its deploy added, so it starts at the cutoff.
+  let day = typeof stored === 'string' ? stored : cutoff;
+  let left = budget;
   let deleted = 0;
-  for (let back = 0; back < CATCH_UP_DAYS; back += 1) {
-    const prefix = `telemetry/${shiftDay(dayOf(now), -(RETENTION_DAYS + back))}/`;
-    // Deleting empties the listing, so the next page is the same call: no cursor to carry.
-    for (let page = 0; page < MAX_SWEEP_PAGES_PER_DAY; page += 1) {
-      const { objects } = await bucket.list({ prefix });
-      if (objects.length === 0) break;
-      await bucket.delete(objects.map(({ key }) => key));
-      deleted += objects.length;
+  while (day <= cutoff && left > 0) {
+    const prefix = `telemetry/${day}/`;
+    const { objects } = await bucket.list({ prefix });
+    left -= 1;
+    if (objects.length === 0) {
+      day = shiftDay(day, 1);
+      continue;
     }
+    // A page listed with no call left to delete it waits for the next night.
+    if (left === 0) break;
+    await bucket.delete(objects.map(({ key }) => key));
+    left -= 1;
+    deleted += objects.length;
   }
+  if (day !== stored) await env.DB.prepare('INSERT INTO telemetry_sweep (id, day) VALUES (1, ?) ON CONFLICT (id) DO UPDATE SET day = excluded.day').bind(day).run();
   return deleted;
 };
 

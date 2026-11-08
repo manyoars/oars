@@ -129,12 +129,15 @@ describe('POST /v1/telemetry on the Worker', () => {
     expect(sent.status).toBe(201);
   });
 
-  it('holds a batch to a cap sized from the CLI: 250 events with a dozen of the largest kind fit, and the cap is far below the old megabyte', async () => {
-    // The CLI's largest event is a `wire` event (about 5 KB: ~90 field names and two lists of counts); a command event is about 0.3 KB. `telemetry/send.ts` sends at most 250 events a request.
+  it('holds a batch to a cap sized from the CLI: the largest batch it can send (11 wire events and 239 maximal commands) fits, and the cap is half the old megabyte', async () => {
+    // The CLI's own writers measure these at 2,032 bytes (a `wire` event) and 1,744 bytes (a command at its schema's limit) in `packages/cli/src/telemetry/wire.test.ts`; the events here are larger still (a 90-name wire event with the widest
+    // counts is about 4.3 KB), so passing is conservative. `telemetry/send.ts` sends at most 250 events a request, and a pass writes one `wire` event for each of the 11 harnesses at most.
     const wire = command({ type: 'wire', data: { fields: Array.from({ length: 90 }, (_, at) => `fieldName${String(at)}xx`), present: Array.from({ length: 90 }, () => 1_000_000_000), fieldBytes: Array.from({ length: 90 }, () => 2 ** 50) } });
-    const batch = { install: 'a1b2c3d4-0000-4000-8000-00000000000b', events: [...Array.from({ length: 12 }, () => wire), ...Array.from({ length: MAX_BATCH_EVENTS - 12 }, () => command())] };
+    const token = 'a'.repeat(32);
+    const widest = command({ data: { path: [token, token, token, token], flags: Array.from({ length: 40 }, () => token), durationMs: 86_400_000, exitCode: 255 } });
+    const batch = { install: 'a1b2c3d4-0000-4000-8000-00000000000b', events: [...Array.from({ length: 11 }, () => wire), ...Array.from({ length: MAX_BATCH_EVENTS - 11 }, () => widest)] };
     expect(JSON.stringify(batch).length).toBeLessThan(MAX_BATCH_BYTES);
-    expect(MAX_BATCH_BYTES).toBeLessThanOrEqual(256 * 1024);
+    expect(MAX_BATCH_BYTES).toBeLessThanOrEqual(512 * 1024);
     expect((await pool.post('/v1/telemetry', batch)).status).toBe(201);
   });
 
