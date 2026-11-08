@@ -119,7 +119,7 @@ export interface ArgFeature {
 const SOURCE_DIRS = words('src lib app apps packages pkg cmd internal server client components pages');
 const IMAGE_EXTENSIONS = words('png jpg jpeg gif svg webp ico bmp tiff avif');
 const GLOB_ARGS = words('glob include exclude');
-const DRIVE = /^[a-z]:$/i;
+const DRIVE = /^(?:[a-z]:|~)$/i;
 const ABSOLUTE = /^(?:[a-z]:[\\/]|[\\/]|~)/i;
 
 const sizeOf = (value: unknown): ValueSize => {
@@ -129,7 +129,7 @@ const sizeOf = (value: unknown): ValueSize => {
 
 const depthOf = (folders: number): PathDepth => (folders <= 2 ? PATH_DEPTHS[folders] ?? '0' : folders <= 4 ? '3-4' : folders <= 8 ? '5-8' : 'over-8');
 
-/** A path with its `.` and `..` parts resolved, so a path that climbs out of a folder reads as outside it. A Windows drive stays, as the leading `/` of a posix path does. */
+/** A path with its `.` and `..` parts resolved, so a path that climbs out of a folder reads as outside it. A Windows drive and a leading `~` stay, as the leading `/` of a posix path does. */
 const resolved = (path: string): string => {
   const kept: string[] = [];
   for (const part of path.split('/')) {
@@ -148,7 +148,7 @@ const partsBelow = (value: string, root: string | undefined, cwd: string | undef
   const base = root?.replace(/\\/g, '/').replace(/\/+$/, '');
   const given = value.replace(/\\/g, '/');
   const from = cwd?.replace(/\\/g, '/').replace(/\/+$/, '');
-  const path = ABSOLUTE.test(given) || from === undefined || from === '' ? given : resolved(`${from}/${given}`);
+  const path = ABSOLUTE.test(given) ? resolved(given) : from === undefined || from === '' ? given : resolved(`${from}/${given}`);
   const inside = base !== undefined && base !== '';
   // The root itself (a `.` resolved against a cwd at the root, or its absolute path) has no parts below it, as the same path with a trailing slash has none.
   if (inside && path.toLowerCase() === base.toLowerCase()) return [];

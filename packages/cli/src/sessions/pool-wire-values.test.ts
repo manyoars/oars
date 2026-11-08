@@ -55,6 +55,10 @@ describe('value features', () => {
     expect(argFeaturesOf('Read', { file_path: './src/a.ts' }, 'C:\\w', 'C:\\w\\pkg')[0]).toMatchObject({ pathDepth: '2' });
     // A Windows drive is kept, so a path that climbs above the repository root reads as outside it, as the posix form does.
     expect(argFeaturesOf('Read', { file_path: '../../../x' }, 'C:\\w', 'C:\\w\\pkg')[0]).toMatchObject({ pathDepth: 'outside', dirKind: 'other' });
+    // An absolute path that climbs out of the root is outside it too, and a leading `~` is a home folder that `..` does not pop.
+    expect(argFeaturesOf('Read', { file_path: '/w/../etc/passwd' }, '/w', '/w')[0]).toMatchObject({ pathDepth: 'outside', dirKind: 'other' });
+    expect(argFeaturesOf('Read', { file_path: '/w/src/../a.ts' }, '/w', '/w')[0]).toMatchObject({ pathDepth: '0', dirKind: 'root', extension: 'source' });
+    expect(argFeaturesOf('Read', { file_path: '~/../../x' }, '/w', '/w')[0]).toMatchObject({ pathDepth: 'outside', dirKind: 'other' });
     // The repository root itself, as a dot, an absolute path, or one with a trailing slash, is one answer: no folders below the root.
     for (const value of ['.', '/w', '/w/']) expect(argFeaturesOf('Glob', { path: value }, '/w', '/w')[0], value).toMatchObject({ pathDepth: '0', dirKind: 'root', extension: 'none' });
   });
