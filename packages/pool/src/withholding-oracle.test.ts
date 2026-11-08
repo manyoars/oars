@@ -307,7 +307,7 @@ const variantsOf = (atoms: readonly Atom[], codes: readonly string[]): Atom[] =>
 };
 
 /**
- * The matrix of section 2: one column per atom that adds rank, and the (cell, column) pairs that are its rows. The universe is every account's own atoms, then the closed-list coverage (`coverageOf`), then draws from one
+ * The matrix of section 2: one column per atom that adds rank, and the (cell, column) pairs that are its rows. The universe is every account's own atoms, then their ok/error and doubled variants (`variantsOf`), then the closed-list coverage (`coverageOf`), then draws from one
  * seeded stream (`candidatesOf`), and it stops only after `patience` draws in a row add no rank; `columnOf` discards an atom that emits a cell the fixture does not hold.
  */
 const matrixOf = (accounts: Accounts, patience: number): { held: Held; motifOf: ReadonlyMap<string, Motif>; pairs: { cell: Cell; column: Column; key: string }[]; kept: MatrixColumn[]; rose: number } => {
@@ -502,7 +502,7 @@ describe('the withholding oracle', () => {
     expect(unemittedBy(withoutLimit).filter((member) => !UNREACHABLE.includes(member))).toEqual(['ARG_CLASSES/number', 'CHANGE_KINDS/key-added', 'CHANGE_KINDS/key-removed']);
   });
 
-  // Two cases the old hand census of `shape-cells.test.ts` (deleted) stated from cells, moved here and built from calls through the route; the sweep below replaces its seeded run.
+  // Two cases the old hand census of `shape-cells.test.ts` (deleted) stated from cells, moved here and built from calls through the route; the sweep below replaces its seeded run for one day, one frame, and one name per action.
   const grep = (input: { readonly [key: string]: unknown }): Atom => atomOf(call('Grep', input));
   const servedOf = (accounts: Accounts): number => bundleOf('claude-code', '2.1.314', heldOf(accounts).pool, DEFAULT_FLOORS).cells.length;
 
@@ -575,6 +575,13 @@ describe('the withholding oracle', () => {
   it('serves nothing that gives back an enum cell through the size cell of an exhaustive list: output_mode, 4 content, 8 count, and 7 files_with_matches accounts', () => {
     const send = (mode: string): Atom => grep({ output_mode: mode });
     const accounts = [...accountsOf(4, () => send('content')), ...accountsOf(8, () => send('count')), ...accountsOf(7, () => send('files_with_matches'))];
+    expect(servedOf(accounts)).toBeGreaterThan(0);
+    expect(leaksOf(accounts)).toEqual([]);
+  });
+
+  // A `target` cell under the floor is the `keys` cells that hold a path key less the served `target` cells: every call with a path key has a path target and no other call does, so `target` doc 3 is `keys/path` 23 less `target` source 20.
+  it('serves nothing that gives back a target cell through the keys cells that hold a path key: README.md from 3 accounts, src/a.ts from 20, and a pattern from 10', () => {
+    const accounts = [...accountsOf(3, () => grep({ path: 'README.md' })), ...accountsOf(20, () => grep({ path: 'src/a.ts' })), ...accountsOf(10, () => grep({ pattern: 'foo' }))];
     expect(servedOf(accounts)).toBeGreaterThan(0);
     expect(leaksOf(accounts)).toEqual([]);
   });

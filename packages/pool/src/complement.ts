@@ -83,8 +83,8 @@ const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const smallest = (a: Cell, b: Cell): number => clustersOf(a) - clustersOf(b) || compare(a.day, b.day) || compare(a.motifId, b.motifId);
 
 /**
- * Every way a cell counts inside another count, one rule each; `familiesOf` reads this table for both the local rules and the rank check. The invariant test (`shape-cells.test.ts`) states the relations from the
- * cells on its own, so a nesting this table leaves out shows there as a determined cell. A rule names the
+ * Every way a cell counts inside another count, one rule each; `familiesOf` reads this table for both the local rules and the rank check. The oracle (`withholding-oracle.test.ts`) derives the relations from the
+ * emitter, so a relation this table leaves out shows there as a leak. A rule names the
  * families a cell belongs to and whether it is the whole of one (a cell holding the family's total) or a part of it; a family with no whole cell has a total the reader still has from another read.
  */
 const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, motif: Motif | undefined) => Placement[] }[] = [
