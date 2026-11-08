@@ -59,6 +59,7 @@ describe('the publish fields', () => {
       version: '0.1.2',
       license: 'Apache-2.0',
       repository: { type: 'git', url: 'git+https://github.com/manyoars/oars.git', directory: 'packages/client' },
+      homepage: 'https://manyoars.com/',
       publishConfig: { access: 'public' },
       engines: { node: '>=24' },
     });
