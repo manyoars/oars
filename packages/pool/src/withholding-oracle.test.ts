@@ -223,7 +223,9 @@ const vocabularyOf = (held: Held): { action: string; native: string; keySets: st
 const valuesOf = (held: Held, accounts: Accounts): ReadonlyMap<string, unknown[]> => {
   const motifOf = new Map(held.pool.motifs.map((motif) => [motif.motifId, motif]));
   const found = new Map<string, Map<string, unknown>>();
-  const add = (key: string, value: unknown): void => found.set(key, (found.get(key) ?? new Map<string, unknown>()).set(JSON.stringify(value), value));
+  const add = (key: string, value: unknown): void => {
+    found.set(key, (found.get(key) ?? new Map<string, unknown>()).set(JSON.stringify(value), value));
+  };
   for (const { input } of accounts.flat().flatMap(({ calls }) => calls)) for (const [key, value] of Object.entries(input)) add(key, value);
   for (const cell of held.cells) {
     const parsed = parseShapeClass(motifOf.get(cell.motifId)?.cls ?? '');
@@ -500,7 +502,7 @@ describe('the withholding oracle', () => {
     expect(unemittedBy(withoutLimit).filter((member) => !UNREACHABLE.includes(member))).toEqual(['ARG_CLASSES/number', 'CHANGE_KINDS/key-added', 'CHANGE_KINDS/key-removed']);
   });
 
-  // Two cases `determinedCells` (`shape-cells.test.ts`) stated from cells, moved here and built from calls through the route. `determinedCells` stays for its seeded census until t996's sweep replaces it.
+  // Two cases the old hand census of `shape-cells.test.ts` (deleted) stated from cells, moved here and built from calls through the route; the sweep below replaces its seeded run.
   const grep = (input: { readonly [key: string]: unknown }): Atom => atomOf(call('Grep', input));
   const servedOf = (accounts: Accounts): number => bundleOf('claude-code', '2.1.314', heldOf(accounts).pool, DEFAULT_FLOORS).cells.length;
 
