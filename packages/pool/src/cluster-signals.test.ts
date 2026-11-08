@@ -168,6 +168,21 @@ describe('the count of every account beside the standing one', () => {
   }, 180_000);
 });
 
+describe('the pool generation beside the count of every account', () => {
+  const generationOf = async (target: TestPool): Promise<number> => Number(fieldOf(await rowOf(target, 'SELECT generation FROM pool_generation WHERE id = 1'), 'generation'));
+
+  it('moves when a recount changes only clusters_any, so a held ETag does not answer 304 with the old count', async () => {
+    await inFreshPool(async (target) => {
+      await depositor(target, '9451', ['00000000000000e1', '00000000000000e2']);
+      const before = await generationOf(target);
+      const db = await target.db();
+      // Only `clusters_any` changes: `clusters`, `sessions`, and every other served column stay as they are.
+      await db.prepare('UPDATE cells SET clusters_any = clusters_any + 1 WHERE rowid = (SELECT MIN(rowid) FROM cells)').run();
+      expect(await generationOf(target)).toBe(before + 1);
+    });
+  }, 180_000);
+});
+
 describe('provider account age', () => {
   it('stores GitHub’s created_at as the account’s provider age, and the pool’s first sight beside it', async () => {
     await inFreshPool(async (target) => {
