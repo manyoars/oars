@@ -254,8 +254,10 @@ describe('the public text states facts only', () => {
   it('the package metadata is findable: a short description, the site as homepage, and keywords', () => {
     expect(description.length).toBeLessThan(200);
     expect(manifest().homepage).toBe('https://manyoars.com/');
-    expect(manifest().keywords).toEqual(expect.any(Array));
-    const keywords = manifest().keywords as string[];
+    const keywords = manifest().keywords;
+    expect(keywords).toEqual(expect.any(Array));
+    // The lint rule bans assertions, so narrow with the guard the test just proved.
+    if (!Array.isArray(keywords)) throw new Error('keywords is not an array');
     expect(keywords.length).toBeGreaterThanOrEqual(6);
     expect(keywords.length).toBeLessThanOrEqual(10);
   });
