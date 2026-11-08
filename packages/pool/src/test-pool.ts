@@ -114,7 +114,7 @@ export interface KeepAliveSender {
   send: Miniflare['dispatchFetch'];
   /** The connections the pool's own requests have opened. Miniflare's release requests ride another Agent and are not counted. */
   connects: () => number;
-  /** The most requests the same Agent held at once, counting the one being sent: its running, pending, and queued requests, which an unread body keeps running. */
+  /** The most of the pool's own requests sent and not yet answered at once. */
   peak: () => number;
   close: () => Promise<void>;
 }
@@ -141,7 +141,7 @@ export const keepAliveSender = (entry: () => Promise<URL>): KeepAliveSender => {
   // Miniflare frees the handles `getBindings` returned in a DELETE it sends on its own schedule (100 ms after a garbage collection), so it can be in flight while a test makes its next call. An Agent opens
   // a connection for a request that finds none idle; on the calls' Agent that DELETE would take the connection the call is about to reuse and cost it a connect. Its own Agent keeps the calls' count about the calls.
   const releases = new Agent(keepAliveTimeout);
-  const occupied = (): number => Object.values(calls.stats).reduce((sum, pool) => sum + pool.running + pool.pending + pool.queued, 0);
+  let inFlight = 0;
   const send: Miniflare['dispatchFetch'] = async (input, init) => {
     const forward = new StubRequest(input, init);
     const base = await entry();
@@ -150,8 +150,17 @@ export const keepAliveSender = (entry: () => Promise<URL>): KeepAliveSender => {
     headers.set('MF-Original-URL', forward.url);
     headers.set('MF-Disable-Pretty-Error', 'true');
     const dispatcher = forward.headers.get(CoreHeaders.OP) === ProxyOps.FREE ? releases : calls;
-    if (dispatcher === calls) peak = Math.max(peak, occupied() + 1);
-    const response = await fetch(new URL(`${sent.pathname}${sent.search}`, base), { method: forward.method, headers, ...(forward.body === null ? {} : { body: forward.body, duplex: 'half' }), redirect: forward.redirect, dispatcher });
+    const counted = dispatcher === calls;
+    if (counted) {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+    }
+    let response: Response;
+    try {
+      response = await fetch(new URL(`${sent.pathname}${sent.search}`, base), { method: forward.method, headers, ...(forward.body === null ? {} : { body: forward.body, duplex: 'half' }), redirect: forward.redirect, dispatcher });
+    } finally {
+      if (counted) inFlight -= 1;
+    }
     if (response.status === 500 && response.headers.has('MF-Experimental-Error-Stack')) throw await workerError(response);
     return new StubResponse(response.body, { status: response.status, statusText: response.statusText, headers: [...response.headers.entries()] });
   };
