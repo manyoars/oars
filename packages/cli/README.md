@@ -1,8 +1,6 @@
 # @manyoars/oars
 
-The `oars` command line for Many Oars: sign in, manage API keys, and keep a local memory of your own coding-agent sessions (`oars sessions`).
-
-Accounts are not open yet: `oars login` uses the Many Oars issuer by default, and until Many Oars sign-in at `login.manyoars.com` (and its pool at `pool.manyoars.com`) is deployed it exits 2 with an error that names `login.manyoars.com`.
+oars keeps a local, searchable record of your coding agent sessions, across Claude Code, Cursor, Codex, and other harnesses. Ask it about an error and it shows the past sessions that match. More at [manyoars.com](https://manyoars.com/).
 
 Node 24 or later. ESM only.
 
@@ -18,6 +16,8 @@ Or run it once without installing:
 ```sh
 npx @manyoars/oars <command>
 ```
+
+Accounts are not open yet: `oars login` uses the Many Oars issuer by default, and until Many Oars sign-in at `login.manyoars.com` (and its pool at `pool.manyoars.com`) is deployed it exits 2 with an error that names `login.manyoars.com`.
 
 ## Commands
 
