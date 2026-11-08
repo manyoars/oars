@@ -201,9 +201,9 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .description('see recall, books, and the hook line work on made-up sessions, with no history of your own: it builds a throwaway store under your temp folder, labels everything it prints as synthetic, and deletes the store when it exits. It never reads or writes your real store')
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
-      emit(deps, flag(options, 'json'), await sessionsTry(deps));
-      // The command promises no network call: drop the sender so the daily telemetry send that follows every command cannot start one.
+      // The command promises no network call: drop the sender before it runs, so the daily telemetry send that follows every command cannot start one, whether the run returns or throws.
       if (deps.telemetry !== undefined) deps.telemetry = { dir: deps.telemetry.dir, platform: deps.telemetry.platform };
+      emit(deps, flag(options, 'json'), await sessionsTry(deps));
     });
 
   sessions

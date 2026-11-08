@@ -112,4 +112,23 @@ describe('oars sessions try', () => {
     expect(await run(['telemetry', 'status'], { ...h.deps, telemetry })).toBe(ExitCode.OK);
     expect(spawned).toEqual([dir]);
   });
+
+  it('starts no daily telemetry send when the run throws either', async () => {
+    const scratch = isolate();
+    const spawned: string[] = [];
+    const h = harness();
+    // Made before the temp folder goes missing: the telemetry folder is the test's own, not the command's.
+    const dir = mkdtempSync(join(tmpdir(), 'oars-telemetry-'));
+    scratches.push(dir);
+    expect(markNoticeShown(dir, () => 0)).toBe(true);
+    h.deps.telemetry = { dir, platform: 'linux', spawnSend: (target: string) => spawned.push(target) };
+    // A temp folder that does not exist makes the throwaway store's mkdtemp throw, which reaches the command's error path.
+    const missing = join(scratch.temp, 'missing');
+    vi.stubEnv('TEMP', missing);
+    vi.stubEnv('TMP', missing);
+    vi.stubEnv('TMPDIR', missing);
+
+    expect(await run(['sessions', 'try'], h.deps)).not.toBe(ExitCode.OK);
+    expect(spawned).toEqual([]);
+  });
 });

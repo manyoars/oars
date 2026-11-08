@@ -187,7 +187,9 @@ export const sessionsContext = async (deps: SessionsDeps, options: ContextOption
     },
     key,
   );
-  return { document: { ok: true, context: block ?? null }, text: block ?? 'Nothing recurs in this repository yet.' };
+  // Nothing to inject because the store holds no sessions at all is an empty store, not a quiet repository: say so and name the command that fills it.
+  const text = block ?? ((await loadStore(storeDir)).sessions.length === 0 ? EMPTY_RECALL : 'Nothing recurs in this repository yet.');
+  return { document: { ok: true, context: block ?? null }, text };
 };
 
 export const sessionsMcp = async (deps: SessionsDeps): Promise<void> => {
@@ -244,7 +246,9 @@ const packageBooksOutcome = async (deps: SessionsDeps, options: { sinceDays: num
   const [{ excluded }, store] = await Promise.all([scanStore(runtime, options.termsFile), loadStore(runtime.storeDir)]);
   const cutoff = options.sinceDays === undefined ? undefined : new Date(deps.now() - options.sinceDays * 86_400_000).toISOString();
   const result = packageBooks(store, new Set(excluded.map((entry) => entry.session)), vocabulary(), cutoff);
-  return { document: { ok: true, by: 'package', ...result, newerCaptures: store.newerCaptures }, text: [formatPackageBooks(result), ...newerNotice(store)].join('\n') };
+  // The same empty-store text the other `books` forms print, so it names the command that fills the store.
+  const table = store.sessions.length === 0 && store.prompts.length === 0 ? emptyBooks('public package pulls') : formatPackageBooks(result);
+  return { document: { ok: true, by: 'package', ...result, newerCaptures: store.newerCaptures }, text: [table, ...newerNotice(store)].join('\n') };
 };
 
 export const sessionsBooks = async (deps: SessionsDeps, options: { by: BooksBy | 'package'; sinceDays: number | undefined; repo?: string; termsFile?: string }): Promise<Outcome> => {
