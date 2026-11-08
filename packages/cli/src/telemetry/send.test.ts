@@ -405,6 +405,24 @@ describe('sendNightly', () => {
     expect(dueForSend(dir, 1_800_000_100_000 + 3_600_000)).toBe(false);
   });
 
+  it('posts no second batch when the sender runs again inside the day, and posts again after it', async () => {
+    const fake = await serve();
+    const { appData, dir } = folder();
+    const env = { APPDATA: appData, OARS_POOL_URL: fake.origin };
+    const start = 1_800_000_100_000;
+    appendLine(dir, eventLine(0));
+    markNoticeShown(dir, () => 0);
+    expect(await sendNightly(env, 'win32', 'C:\\unused-home', () => start)).toEqual({ outcome: 'sent', sent: 1, requests: 1 });
+    // The runs in between record their store-health and run-cost events; none of them is posted until the day is up.
+    appendLine(dir, eventLine(1));
+    expect(await sendNightly(env, 'win32', 'C:\\unused-home', () => start + 3_600_000)).toEqual({ outcome: 'not-due', sent: 0, requests: 0 });
+    expect(await sendNightly(env, 'win32', 'C:\\unused-home', () => start + 86_399_999)).toEqual({ outcome: 'not-due', sent: 0, requests: 0 });
+    expect(fake.received).toHaveLength(1);
+    expect(readSpool(dir)).toHaveLength(1);
+    expect(await sendNightly(env, 'win32', 'C:\\unused-home', () => start + 86_400_000)).toEqual({ outcome: 'sent', sent: 1, requests: 1 });
+    expect(fake.received).toHaveLength(2);
+  });
+
   it('sends nothing with telemetry off', async () => {
     const fake = await serve();
     const { appData, dir } = folder();

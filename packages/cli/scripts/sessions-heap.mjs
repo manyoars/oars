@@ -237,6 +237,9 @@ const scratch = (label) => {
  */
 const build = (dirs, sessions) => {
   generate(dirs, sessions);
+  // The first deposit leaves state.json, and any command after it would start a detached background sweep in this store; the recorded opt-out keeps one from racing the measured runs, which delete store.lock and rewrite the log.
+  mkdirSync(dirs.store, { recursive: true });
+  writeFileSync(join(dirs.store, 'schedule.json'), JSON.stringify({ schedule: 'off' }));
   const made = runCli(dirs, 8192, depositArgs);
   if (made.code !== 0) throw new Error(`building the store failed (exit ${String(made.code)}): ${made.stderr.slice(-600)}`);
   copyFileSync(join(dirs.store, 'observations.jsonl'), join(dirs.root, 'clean.jsonl'));
