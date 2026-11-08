@@ -1,10 +1,11 @@
 // The step log: `pipeline-runs.jsonl`, one row per run of a pipeline step, appended when the step ends (runtime-commons pipeline spec 3.1).
 // Local only: it sits in the store directory beside `hook-calls.jsonl`, and `measure` prints the spec 3.2 counters from it.
 import { randomUUID } from 'node:crypto';
-import { appendFile, mkdir, readFile } from 'node:fs/promises';
+import { appendFile, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { performance } from 'node:perf_hooks';
 import { CliError, ExitCode } from '../errors.js';
+import { mkdirOwnerOnly } from './owner-only.js';
 import { makeRedactor } from './redact.js';
 import { CAPTURE_VERSION, EXTRACTOR_VERSION, parseStepRow, type Step, type StepCounts, type StepRow, type StepStatus, type Trigger } from './schema.js';
 import { digest, newTrace, paths, readRedactDomains, type DepositTrace } from './store.js';
@@ -27,7 +28,7 @@ export interface StepReport {
 }
 
 export const appendStep = async (storeDir: string, row: StepRow): Promise<void> => {
-  await mkdir(storeDir, { recursive: true });
+  await mkdirOwnerOnly(storeDir);
   await appendFile(paths(storeDir).pipelineRuns, `${JSON.stringify(row)}\n`, { mode: 0o600 });
 };
 

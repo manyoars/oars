@@ -292,7 +292,7 @@ describe('a bundle from a pool older than the coverage fields (t921)', () => {
     if (!('privateKey' in pair)) throw new Error('an Ed25519 key pair');
     const signature = Buffer.from(await crypto.subtle.sign('Ed25519', pair.privateKey, new TextEncoder().encode(old))).toString('base64');
     const exported = await crypto.subtle.exportKey('jwk', pair.publicKey);
-    const verified = await verifyBundle({ payload: old, signature }, { kty: exported.kty ?? '', crv: exported.crv ?? '', x: exported.x ?? '' }, 'claude-code', '2.1.314');
+    const verified = await verifyBundle({ payload: old, signature }, { k1: { kty: exported.kty ?? '', crv: exported.crv ?? '', x: exported.x ?? '' } }, 'claude-code', '2.1.314');
     if (!verified.ok) throw new Error(verified.reason);
     expect(verified.bundle.cells.every((cell) => cell.tokenSessions === undefined && cell.tokenPrompts === undefined)).toBe(true);
     const reads = deriveCost({ pool: poolOf({ cells: verified.bundle.cells, motifs: verified.bundle.motifs }, []), store: store({}) });

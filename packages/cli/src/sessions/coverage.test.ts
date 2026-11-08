@@ -1,4 +1,4 @@
-// The coverage a deposit states (t871): the operator's two settings, read from one file on this machine, and the team band counted from the local git log. A real repository proves the count, because a fake git would only prove the fake.
+// The coverage a deposit states: the operator's two settings, read from one file on this machine, and the team band counted from the local git log. A real repository proves the count, because a fake git would only prove the fake.
 import { execFileSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
