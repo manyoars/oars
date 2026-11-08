@@ -28,6 +28,24 @@ describe('the pool harness reuses its connections', () => {
     // Without the keep-alive sender Miniflare resets every connection: one connect per call, 40 here.
     expect(connects).toBeLessThanOrEqual(2);
   });
+
+  // A test process starved by a loaded box can sit idle longer than undici's default keep-alive timeout (4 s) between two calls, which closes the socket and costs a reconnect. The pause is
+  // made here, so the case does not wait for a load to make it.
+  it('keeps its connection across a pause longer than the default keep-alive timeout', async () => {
+    await pool.post('/v1/deposits', '{}');
+    let connects = 0;
+    const count = (): void => {
+      connects += 1;
+    };
+    subscribe('undici:client:connected', count);
+    try {
+      await new Promise<void>((resolve) => setTimeout(resolve, 4_500));
+      expect((await pool.post('/v1/deposits', '{}')).status).toBe(401);
+    } finally {
+      unsubscribe('undici:client:connected', count);
+    }
+    expect(connects).toBe(0);
+  });
 });
 
 describe('a Worker exception reads as the Worker\'s own error', () => {
