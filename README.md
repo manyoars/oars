@@ -1,8 +1,8 @@
 # oars
 
-The Many Oars open-source monorepo. Apache-2.0.
+oars keeps a local, searchable record of your coding agent sessions, across Claude Code, Cursor, Codex, and other harnesses. Ask it about an error and it shows how many past sessions hit it, when, and which tools came next. More at [manyoars.com](https://manyoars.com/).
 
-Many Oars is the open-source `oars` command line and its generated client. This repository holds what a developer installs or imports:
+This is the Many Oars open-source monorepo (Apache-2.0): the `oars` command line and its generated client. It holds what a developer installs or imports:
 
 | Path | What it is | State |
 |------|------------|-------|
