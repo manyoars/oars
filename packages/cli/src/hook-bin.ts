@@ -3,6 +3,7 @@
 // always exits 0 with no output on any failure: a hook must never fail or block a session.
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { hookEmitter } from './telemetry/hook-emit.js';
 import { sendNightly } from './telemetry/send.js';
 import { HOOK_EVENTS, hookRuntime, nightlyTelemetry, runHook, type HookEvent } from './sessions/hooks.js';
@@ -46,6 +47,11 @@ try {
       hookEmitter(process.env, process.platform, homedir(), new URL('../package.json', import.meta.url), Date.now),
     );
     if (output !== undefined) process.stdout.write(output);
+    // The session just ended and its deposit is written: start a due sweep and send, detached, and do not wait for it (the hook stays sub-second and prints nothing more). Loaded only here so the per-tool hooks never pay for it.
+    if (event === 'stop') {
+      const { catchUpOnStore } = await import('./sessions/pool-due.js');
+      await catchUpOnStore(hookRuntime(event, process.env, process.platform, homedir(), { stdin: process.stdin, stdout: process.stdout }).storeDir, fileURLToPath(import.meta.url));
+    }
     // The nightly task is where telemetry is sent from; it never throws, and it sends nothing unless telemetry is on and the notice was shown (the server is OARS_POOL_URL, else the Many Oars pool).
     if (event === 'nightly') {
       await sendNightly(process.env, process.platform, homedir(), Date.now);

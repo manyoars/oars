@@ -33,7 +33,7 @@ export const observeCommand = (observed: Observed, action: Command): void => {
   observed.flags = Object.keys(given).filter((key) => action.getOptionValueSourceWithGlobals(key) === 'cli');
 };
 
-const isHook = (argv: string[], observed: Observed): boolean => {
+export const isHook = (argv: string[], observed: Observed): boolean => {
   const gateHook = (words: string[]): boolean => words[0] === 'gate' && words[1] === 'hook';
   return gateHook(observed.path) || gateHook(argv);
 };

@@ -20,7 +20,7 @@ import type { SessionsRuntime } from './sessions/store.js';
 import { telemetryOff, telemetryOn, telemetryReport, telemetryShow, telemetryStatus } from './telemetry/command.js';
 import { recordCrash } from './telemetry/crash.js';
 import { emitOf } from './telemetry/emit.js';
-import { finishTelemetry, observeCommand, type Observed } from './telemetry/observe.js';
+import { finishTelemetry, isHook, observeCommand, type Observed } from './telemetry/observe.js';
 import type { TelemetryRuntime } from './telemetry/record.js';
 
 /** Everything the CLI takes from its process, so the tests can stand in for each. */
@@ -42,6 +42,8 @@ export interface RunDeps {
   install?: InstallRuntime;
   /** Where telemetry keeps its id, settings, and spool; absent in a run that has none, which records nothing. */
   telemetry?: TelemetryRuntime | undefined;
+  /** The catch-up every command that is not a hook runs after it ends: starts a due sweep and send, detached. Absent in a run that has none. */
+  catchUp?: (() => Promise<unknown>) | undefined;
 }
 
 /** What a command produced: the `--json` document, and the line a human sees instead. */
@@ -621,5 +623,7 @@ export const run = async (argv: string[], deps: RunDeps): Promise<ExitCode> => {
   const startedAt = deps.now();
   const exit = await execute(argv, deps, observed);
   finishTelemetry(deps, argv, observed, startedAt, exit);
+  // Never from a gate hook (it runs before every tool call); it cannot change the exit code or what the command printed.
+  if (deps.catchUp !== undefined && !isHook(argv, observed)) await Promise.resolve().then(deps.catchUp).catch(() => undefined);
   return exit;
 };

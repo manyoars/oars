@@ -75,6 +75,10 @@ export const catchUp = async (deps: CatchUpDeps): Promise<CatchUpResult> => {
   }
 };
 
+/** What the hook and the command line call: the check on the real store, clock, and spawner, with the sender being `hook-bin.js nightly`. Never throws, and returns once the sender is started. */
+export const catchUpOnStore = (storeDir: string, hookBin: string, now: () => number = Date.now, start: HelperSpawn = spawn): Promise<CatchUpResult> =>
+  catchUp({ storeDir, now, ready: storeReady(storeDir), start: startSender(hookBin, start) });
+
 /** The store counts once `state.json` is there. */
 export const storeReady = (storeDir: string): (() => Promise<boolean>) => () => stat(join(storeDir, 'state.json')).then(() => true, () => false);
 
