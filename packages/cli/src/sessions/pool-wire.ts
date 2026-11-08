@@ -14,12 +14,19 @@ import { projectLanguage, projectLanguageShare } from './strata.js';
 import { ERROR_CODES, LANGUAGE_SHARES, PROMPT_INTERVENTIONS, type PromptIntervention, type Frame, type FrameStack, type Harness, type LanguageShare, type PromptClass, type PromptObservation, type PullIdentity, type SessionObservation, type ShellIdentity, type StepIdentity, type StepEdge, type StepObservation, type Strata, type ToolObservation, type ToolStatus, type Usage, type UsageField } from './schema.js';
 
 // Format 3 (step 1 of the wire): a tool carries its `errorCode` and, for a failed call, what followed it (`recoveryCalls`). Formats 1 and 2 are refused by name; nothing is deployed, so nothing is migrated.
-export const SKELETON_FORMAT = 3;
+// Format 4 (layer 1 of a call's parameters): a tool may carry `argFeatures`, `argValues`, and `changeKind`. The pool reads formats 3 and 4 (`READ_FORMATS`): a format 3 batch is read as before, and one of those
+// three names in it is a field format 3 does not know, so it goes to the bag and is served from nowhere. The table is "Formats on open" in docs/pool.md.
+export const SKELETON_FORMAT = 4;
+/** The formats the parser reads, oldest first: the client builds only the last. */
+export const READ_FORMATS = [3, SKELETON_FORMAT] as const;
+export type SkeletonFormat = (typeof READ_FORMATS)[number];
+/** The tool fields format 4 added: a format 3 batch that holds one is holding a field it does not define. */
+export const FORMAT_4_TOOL_FIELDS = ['argFeatures', 'argValues', 'changeKind'] as const;
 /**
  * The version of the field list: every field name a batch can hold (`BATCH_FIELDS` in `pool-outbox.ts`). It moves with any field added, so a server told the version knows which names a batch may carry,
  * and a test pins the list to it (`pool-wire-additive.test.ts`). A field is deprecated and left on the list, never removed (conclusion section 17, rule 3).
  */
-export const FIELD_LIST_VERSION = 8;
+export const FIELD_LIST_VERSION = 9;
 export const BUNDLE_FORMAT = 1;
 /** One constant: the pool serves only the vocabulary version the client holds. */
 export { VOCAB_VERSION };
@@ -235,7 +242,7 @@ export interface DeltaEntry {
 }
 
 export interface SessionSkeleton {
-  format: typeof SKELETON_FORMAT;
+  format: SkeletonFormat;
   /** The vocabulary version the client built the batch under: stored with it, so a read can tell a batch of an older list from a current one. */
   vocabVersion: string;
   /** `FIELD_LIST_VERSION` as the client held it: the fields a batch of this version may carry. */
@@ -778,6 +785,8 @@ export interface Extension {
 interface Collected {
   extensions: Extension[];
   others: number;
+  /** The batch's format, read first, so a field a later format added is read only in a batch of that format. */
+  format: SkeletonFormat;
 }
 
 /** The one way into the bag: an entry over `MAX_EXTENSION_BYTES` (as JSON, in UTF-8) is refused as too large at its path, whatever kind it is and whatever the deposit's own cap is. */
@@ -1198,8 +1207,12 @@ const parseValue = (held: Collected, keys: SentKeys, native: string | undefined,
   return { key, enumValue: key !== OTHER && isClosedValue(native, key, enumValue) ? enumValue : unknownValue(held, under(at, 'enumValue'), enumValue) };
 };
 
+/** The tool fields a format 3 batch may hold: format 4's three are fields it does not know. */
+const FORMAT_3_TOOL: readonly string[] = OPTIONAL.tool.filter((name) => !FORMAT_4_TOOL_FIELDS.some((added) => added === name));
+
 const parseTool = (held: Collected, harness: WireHarness, value: unknown, at: string): SkeletonTool => {
-  const raw = fieldsOf(held, value, at, ['side', 'status', 'steps'], OPTIONAL.tool);
+  const layered = held.format >= 4;
+  const raw = fieldsOf(held, value, at, ['side', 'status', 'steps'], layered ? OPTIONAL.tool : FORMAT_3_TOOL);
   const status = oneOf(held, STATUSES, raw.status, under(at, 'status'));
   const errorCode = parseErrorCode(held, status, raw.errorCode, under(at, 'errorCode'));
   const recoveryCalls = parseRecovery(held, status, raw.recoveryCalls, under(at, 'recoveryCalls'));
@@ -1209,9 +1222,9 @@ const parseTool = (held: Collected, harness: WireHarness, value: unknown, at: st
   const targetClass = raw.targetClass === undefined ? undefined : oneOf(held, TARGET_CLASSES, raw.targetClass, under(at, 'targetClass'));
   const argClass = raw.argClass === undefined ? undefined : listOf(raw.argClass, under(at, 'argClass'), (entry, entryAt) => oneOf(held, ARG_CLASSES, entry, entryAt));
   const sentKeys: SentKeys = { sent: Array.isArray(raw.keys) ? raw.keys : [], read: keys ?? [] };
-  const argFeatures = raw.argFeatures === undefined ? undefined : listOf(raw.argFeatures, under(at, 'argFeatures'), (entry, entryAt) => parseFeature(held, sentKeys, entry, entryAt));
-  const argValues = raw.argValues === undefined ? undefined : listOf(raw.argValues, under(at, 'argValues'), (entry, entryAt) => parseValue(held, sentKeys, steps[0]?.native, entry, entryAt));
-  const changeKind = raw.changeKind === undefined ? undefined : listOf(raw.changeKind, under(at, 'changeKind'), (entry, entryAt) => oneOf(held, CHANGE_KINDS, entry, entryAt));
+  const argFeatures = !layered || raw.argFeatures === undefined ? undefined : listOf(raw.argFeatures, under(at, 'argFeatures'), (entry, entryAt) => parseFeature(held, sentKeys, entry, entryAt));
+  const argValues = !layered || raw.argValues === undefined ? undefined : listOf(raw.argValues, under(at, 'argValues'), (entry, entryAt) => parseValue(held, sentKeys, steps[0]?.native, entry, entryAt));
+  const changeKind = !layered || raw.changeKind === undefined ? undefined : listOf(raw.changeKind, under(at, 'changeKind'), (entry, entryAt) => oneOf(held, CHANGE_KINDS, entry, entryAt));
   return {
     side: booleanOf(raw.side, under(at, 'side')),
     prompt: orNull(raw.prompt, under(at, 'prompt'), countOf),
@@ -1322,12 +1335,14 @@ const VOCAB_TEXT = /^[0-9A-Za-z._-]{1,32}$/;
 
 /** The skeleton in `value`, rebuilt from the fields read, with the bag of what was set aside; else the first field that is a shape error, and why. */
 export const parseSkeleton = (value: unknown): ParsedSkeleton | Refusal => {
-  const held: Collected = { extensions: [], others: 0 };
+  const held: Collected = { extensions: [], others: 0, format: SKELETON_FORMAT };
   try {
     // The earlier forms are named, since their fields would otherwise read as a list of strangers; any other format is a form this reader does not know.
-    if (isFields(value) && typeof value.format === 'number' && value.format < SKELETON_FORMAT) throw new Refused('format', `the format ${String(value.format)} form is no longer read; send format ${String(SKELETON_FORMAT)}`);
+    if (isFields(value) && typeof value.format === 'number' && value.format < READ_FORMATS[0]) throw new Refused('format', `the format ${String(value.format)} form is no longer read; send format ${String(SKELETON_FORMAT)}`);
     const raw = fieldsOf(held, value, '', ['format', 'vocabVersion', 'fieldsVersion', 'id', 'transcripts'], OPTIONAL.batch);
-    if (raw.format !== SKELETON_FORMAT) throw new Refused('format', 'not a format this version reads');
+    const format = READ_FORMATS.find((known) => known === raw.format);
+    if (format === undefined) throw new Refused('format', 'not a format this version reads');
+    held.format = format;
     const vocabVersion = textOf(raw.vocabVersion, 'vocabVersion');
     if (!VOCAB_TEXT.test(vocabVersion)) throw new Refused('vocabVersion', 'not a version');
     const fieldsVersion = countOf(raw.fieldsVersion, 'fieldsVersion');
@@ -1396,7 +1411,7 @@ export const parseSkeleton = (value: unknown): ParsedSkeleton | Refusal => {
         before += steps.length;
       });
     });
-    return { ok: true, skeleton: { format: SKELETON_FORMAT, vocabVersion, fieldsVersion, id, transcripts, timingPrint, deltas }, extensions: held.extensions, others: held.others };
+    return { ok: true, skeleton: { format, vocabVersion, fieldsVersion, id, transcripts, timingPrint, deltas }, extensions: held.extensions, others: held.others };
   } catch (error) {
     if (error instanceof Refused) return { ok: false, field: error.field, reason: error.reason };
     throw error;
