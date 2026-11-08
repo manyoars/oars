@@ -11,8 +11,8 @@ import type { StoredPool } from './stored.js';
 
 /**
  * The unserved cells that the served ones determine, worked out apart from `complement.ts`. Each relation the cells hold is one equation, with the totals no cell holds as unknowns: each of `target`, `keys`, and `dropped`
- * sums to the calls of its action; each key's `size` and `depth` cells, and the `keys` cells whose list holds the key, sum to the calls that send the key; a week cell is the sum of its day cells; and a shape cell is
- * the sum of its named cells. With every served cell fixed, a cell is determined when no solution can move it: after reducing the equations over the unknowns to row echelon form, its column is a pivot whose
+ * sums to the calls of its action; each key's `size` and `depth` cells, and the `keys` cells whose list holds the key, sum to the calls that send the key; a week cell is the sum of its day cells; a shape cell is
+ * the sum of its named cells; and an action's one-step shape cell is its calls, which the `fit` read gives. With every served cell fixed, a cell is determined when no solution can move it: after reducing the equations over the unknowns to row echelon form, its column is a pivot whose
  * row holds no other unknown.
  */
 const determinedCells = (held: readonly Cell[], motifs: readonly Motif[], served: (cell: Cell) => boolean): Cell[] => {
@@ -29,8 +29,11 @@ const determinedCells = (held: readonly Cell[], motifs: readonly Motif[], served
     const week = `week ${cell.motifId} ${cell.frameBucket} ${String(cell.exposed)} ${weekStartOf(cell.day)}`;
     if (cell.grain === 'week') relations.set(week, { head: cell, parts: relations.get(week)?.parts ?? [] });
     else relate(week, cell);
-    if (motif?.level === 'shape') relations.set(`shape ${place}`, { head: cell, parts: relations.get(`shape ${place}`)?.parts ?? [] });
-    if (motif?.level === 'named') relate(`shape ${place}`, cell);
+    const shape = `shape ${motif?.steps.map((step) => step.action).join(' ') ?? ''} ${place}`;
+    if (motif?.level === 'shape') relations.set(shape, { head: cell, parts: relations.get(shape)?.parts ?? [] });
+    if (motif?.level === 'named') relate(shape, cell);
+    // The `fit` read gives an action's calls: its one-step shape cell, so those calls are known where that cell is served.
+    if (motif?.level === 'shape' && motif.steps.length === 1) relate(`fit ${shape}`, cell, `calls ${motif.steps.map((step) => step.action).join(' ')} ${place}`);
     const parsed = motif?.cls === null || motif?.cls === undefined ? null : parseShapeClass(motif.cls);
     if (parsed === null) continue;
     const { action, facet, value } = parsed;
@@ -203,8 +206,9 @@ describe('the keys cells that hold a key', () => {
     const large = motifOf('keys', 'glob,path,pattern');
     const size = motifOf('size', 'path=9-32');
     const served = servedValues([[thin, F - 1], [small, F], [large, F + 10], [size, 2 * F + 9]]);
-    // The smallest served `keys` part (`pattern`) goes with the facet rule; the `path` nesting then withholds `glob,path,pattern`, a second rule taking its turn after the first.
-    expect(served).toEqual([size.cls]);
+    // The smallest served `keys` part (`pattern`) goes with the facet rule; the `path` nesting then withholds `glob,path,pattern`, a second rule taking its turn after the first. The action's calls, which the
+    // `fit` read gives, less the `path` size cell are then the withheld `pattern` cell, so the size cell goes too.
+    expect(served).toEqual([]);
   });
 
   it('are not recovered from any combination of served totals', () => {
@@ -222,6 +226,34 @@ describe('the keys cells that hold a key', () => {
     const kept = new Set(bundleOf('claude-code', '2.1.314', stored, DEFAULT_FLOORS).cells.map(({ motifId }) => motifId));
     expect(kept.size).toBeGreaterThan(0);
     expect(determinedCells(stored.cells, stored.motifs, (cell) => kept.has(cell.motifId))).toEqual([]);
+  });
+
+  it("are not recovered from the action's calls, which the fit read gives", () => {
+    // No `target` or `dropped` cell here, so no served cell holds the action's calls, but the `fit` read does (the action's one-step shape cell summed over models and exposure): with the `keys` cells withheld,
+    // `path` is still those calls less the `pattern` size total.
+    const served = servedValues([
+      [motifOf('keys', 'path'), F - 1],
+      [motifOf('keys', 'pattern'), F + 5],
+      [motifOf('keys', 'path,pattern'), F + 5],
+      [motifOf('size', 'path=9-32'), 2 * F + 4],
+      [motifOf('size', 'pattern=9-32'), 2 * F + 10],
+    ]);
+    expect(served).toEqual([]);
+  });
+});
+
+describe("an action's one-step shape cells", () => {
+  const F = DEFAULT_PUBLIC_FLOOR;
+  const shape = shapeMotif([{ action: 'file.search', identity: null }]);
+  const source = classMotif(shapeClass('file.search', 'target', 'source'));
+  const test = classMotif(shapeClass('file.search', 'target', 'test'));
+  const onModel = (model: string, clusters: number): Cell => ({ ...cellOf(shape.motifId, clusters), frameBucket: `claude-code/2.1.31x/${model}` });
+
+  it("sum over models to the action's calls, so a sub-floor model is not the served target cells less the other models", () => {
+    const thin = onModel('model-b', F - 1);
+    const wide = onModel('model-a', 2 * F + 1);
+    const withheld = withheldOf([wide, thin, cellOf(source.motifId, 2 * F), cellOf(test.motifId, F)], [shape, source, test], F);
+    expect([...withheld]).toEqual([wide]);
   });
 });
 
@@ -260,11 +292,15 @@ describe('every family of cells (`FAMILY_RULES`)', () => {
       counts.set(key, { motif, day, n: (counts.get(key)?.n ?? 0) + 1 });
     };
     const calls = 12 + Math.floor(next() * 36);
+    // Some actions have no `target` or `dropped` cells, so only the `fit` read pins their calls.
+    const pinned = next() >= 0.3;
     for (let call = 0; call < calls; call += 1) {
       const day = pick(DAYS);
       const keys = pick(KEY_SETS);
-      count(classMotif(shapeClass('file.search', 'target', pick(['source', 'test', 'doc']))), day);
-      count(classMotif(shapeClass('file.search', 'dropped', pick(['0', '1']))), day);
+      if (pinned) {
+        count(classMotif(shapeClass('file.search', 'target', pick(['source', 'test', 'doc']))), day);
+        count(classMotif(shapeClass('file.search', 'dropped', pick(['0', '1']))), day);
+      }
       count(classMotif(shapeClass('file.search', 'keys', keys.join(','))), day);
       for (const key of keys) {
         count(classMotif(shapeClass('file.search', 'size', `${key}=${next() < 0.8 ? '9-32' : '1-8'}`)), day);

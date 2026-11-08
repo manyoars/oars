@@ -3,7 +3,7 @@
 // smallest served one: the whole less the served parts is then a sum over at least two parts, one of them at or above the floor, which no reader can split. The whole and the other parts stay, so a thin
 // pool still serves what it can. Families also combine (the served totals of several can add and subtract to an unserved cell), so a rank check then withholds until the served cells determine no unserved one
 // (`withheldOf`). The environment cells (`ENVIRONMENT_CELLS`, `stored.ts`) keep their own rule, every part served or the total is not, and their counterparts are also dropped when a bucket cell is withheld (`bundleOf`).
-import { parseShapeClass, weekStartOf, type Cell, type ShapeFacet } from '../../cli/src/sessions/cells.js';
+import { isEnvironmentCell, NO_AXES, parseShapeClass, weekStartOf, type Cell, type ShapeFacet } from '../../cli/src/sessions/cells.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
 import { clears, clustersOf } from './floors.js';
 
@@ -31,8 +31,17 @@ interface Placement {
 /** The key of the family of one partition facet: the facet's cells for an action, key (for a keyed facet), frame, grain, day, and exposure. */
 const facetFamilyKey = (action: string, facet: ShapeFacet, key: string, cell: Cell): string => JSON.stringify(['facet', action, facet, key, cell.frameBucket, cell.grain, cell.day, cell.exposed]);
 
-/** The calls of an action (`key` empty), or of an action that send a key, in one frame, grain, day, and exposure: the total of a partition facet and of a key's nesting family. */
-const callsTotal = (action: string, key: string, cell: Cell): string => JSON.stringify(['calls', action, key, cell.frameBucket, cell.grain, cell.day, cell.exposed]);
+/**
+ * The calls of an action (`key` empty), or of an action that send a key, in one frame, grain, day, and exposure: the total of a partition facet and of a key's nesting family. An action's calls are tagged apart
+ * (`ACTION_CALLS`) because a reader has them from the `fit` read: the `action-calls` rule ties them to the action's one-step shape cells, and where no such cell is held the rank check counts them as known.
+ */
+const callsTotal = (action: string, key: string, cell: Pick<Cell, 'frameBucket' | 'grain' | 'day' | 'exposed'>): string =>
+  JSON.stringify([key === '' ? ACTION_CALLS : 'key-calls', action, key, cell.frameBucket, cell.grain, cell.day, cell.exposed]);
+
+const ACTION_CALLS = 'action-calls';
+
+/** Whether a total (`callsTotal`) is an action's calls. */
+const isActionCalls = (total: string): boolean => total.startsWith(`["${ACTION_CALLS}"`);
 
 /**
  * The facets whose cells split the same calls of an action: each call counts in exactly one cell of `target`, `keys`, or `dropped`, and in one cell per key of `size`, `depth`, `extension`, `dir`, and `enum` (a value is
@@ -77,6 +86,17 @@ const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, motif: Mot
         total: callsTotal(parsed.action, key, cell),
         echoes: KEYED_FACETS.map((facet) => facetFamilyKey(parsed.action, facet, key, cell)),
       }));
+    },
+  },
+  // An action's one-step shape cells, one per model (`harness/version/model`), sum to the calls its shape cells split on the version bucket (`harness/version/-`): the total the `fit` read gives.
+  {
+    name: 'action-calls',
+    placements: (cell, motif) => {
+      const [step, ...more] = motif?.level === 'shape' && !isEnvironmentCell(cell) ? motif.steps : [];
+      if (step === undefined || more.length > 0) return [];
+      const [harness, version] = cell.frameBucket.split('/');
+      const versionCell = { ...cell, frameBucket: [harness, version, NO_AXES].join('/') };
+      return [{ family: JSON.stringify(['action-calls', step.action, versionCell.frameBucket, cell.grain, cell.day, cell.exposed]), role: 'part', total: callsTotal(step.action, '', versionCell) }];
     },
   },
   // A week cell is the whole of the day cells of its motif, frame, exposure, and week.
@@ -228,7 +248,12 @@ const systemsOf = (families: readonly Family[]): Row[][] => {
  * determine any unserved cell (`determinedOf`), the smallest served cell of its equation that shares a family with it is withheld (any served cell of its equation where none does), and both stages repeat.
  */
 export const withheldOf = (held: readonly Cell[], motifs: readonly Motif[], floor: number): Set<Cell> => {
-  const families = familiesOf(held, motifs);
+  // The one-step shape cells tie an action's calls only where its shape cells split them, so an action with no shape cells keeps its shape cells out of this rule.
+  const every = familiesOf(held, motifs);
+  const split = new Set(every.flatMap(({ rule, total }) => (rule === 'facet' && total !== null && isActionCalls(total) ? [total] : [])));
+  const families = every.filter(({ rule, total }) => rule !== 'action-calls' || (total !== null && split.has(total)));
+  // An action's calls the `fit` read gives: through its one-step shape cells where they are held, and as known where they are not.
+  const tied = new Set(families.flatMap(({ rule, total }) => (rule === 'action-calls' && total !== null ? [total] : [])));
   const systems = systemsOf(families);
   const familiesHolding = new Map<Cell, Set<Cell>>();
   for (const { whole, parts } of families) {
@@ -240,14 +265,14 @@ export const withheldOf = (held: readonly Cell[], motifs: readonly Motif[], floo
     }
   }
   const withheld = new Set<Cell>();
-  const known = (term: Term): boolean => typeof term !== 'string' && clears(term, floor) && !withheld.has(term);
+  const known = (term: Term): boolean => (typeof term === 'string' ? isActionCalls(term) && !tied.has(term) : clears(term, floor) && !withheld.has(term));
   const systemOf = new Map<Term, Row[]>(systems.flatMap((system) => system.flatMap((row) => [...row.keys()].map((term): [Term, Row[]] => [term, system]))));
   // The cell each system withholds next, kept until a cell of that system is withheld; the systems share no cell, so each round withholds one per system.
   const choices = new Map<Row[], Cell | undefined>();
   const choiceOf = (system: Row[]): Cell | undefined =>
     [...determinedOf(system, known)]
       .map(([cell, row]) => {
-        const support = [...row.keys()].filter((term): term is Cell => term !== cell && known(term));
+        const support = [...row.keys()].filter((term): term is Cell => typeof term !== 'string' && term !== cell && known(term));
         const near = support.filter((term) => familiesHolding.get(cell)?.has(term) === true);
         return (near.length > 0 ? near : support).sort(smallest)[0];
       })
