@@ -239,8 +239,48 @@ describe('the keys cells that hold a key', () => {
     expect(determinedCells(stored.cells, stored.motifs, (cell) => kept.has(cell.motifId))).toEqual([]);
   });
 
+  // The same fixture with an `enum` cell as the key's only per-key facet. A boolean, and a list that names all its values, is a value of every call that sends the key, so its cells sum to the key's calls under any key name,
+  // an open list's `model` included; if the facet counted only some calls it would stand apart from the `keys` cells and the bundle would serve what they recover.
+  it.each([
+    ['an exhaustive list', 'output_mode', 'count'],
+    ['a boolean', 'replace_all', 'true'],
+    ['a boolean under the key of an open list', 'model', 'true'],
+  ])('are not recovered from the enum cell of %s, which sums to the calls that send the key', (_, key, member) => {
+    const cells: [ReturnType<typeof motifOf>, number][] = [
+      [motifOf('keys', key), F + 5],
+      [motifOf('keys', [key, 'pattern'].sort().join(',')), F - 1],
+      [motifOf('keys', 'pattern'), F + 5],
+      [motifOf('enum', `${key}=${member}`), 2 * F + 4],
+      [motifOf('size', 'pattern=9-32'), 2 * F + 4],
+      [motifOf('target', 'source'), 3 * F + 9],
+    ];
+    const stored: StoredPool = { cells: cells.map(([motif, clusters]) => cellOf(motif.motifId, clusters)), environment: [], motifs: cells.map(([motif]) => motif), strata: [] };
+    const kept = new Set(bundleOf('claude-code', '2.1.314', stored, DEFAULT_FLOORS).cells.map(({ motifId }) => motifId));
+    expect(kept.size).toBeGreaterThan(0);
+    expect(determinedCells(stored.cells, stored.motifs, (cell) => kept.has(cell.motifId))).toEqual([]);
+  });
+
+  it('are all withheld in a system past the term cap, which the rank check does not run on', () => {
+    // The cells of the combination fixture above. Under the default cap the rank check keeps some of them served; under a cap below the system's terms it is skipped and every served cell goes, which is safe whatever the system holds.
+    const cells = [
+      cellOf(motifOf('keys', 'path').motifId, F + 5),
+      cellOf(motifOf('keys', 'path,pattern').motifId, F - 1),
+      cellOf(motifOf('keys', 'pattern').motifId, F + 5),
+      cellOf(motifOf('size', 'path=9-32').motifId, 2 * F + 4),
+      cellOf(motifOf('size', 'pattern=9-32').motifId, 2 * F + 4),
+      cellOf(motifOf('target', 'source').motifId, 3 * F + 9),
+    ];
+    const motifs = ['keys:path', 'keys:path,pattern', 'keys:pattern', 'size:path=9-32', 'size:pattern=9-32', 'target:source'].map((entry) => {
+      const [facet, value] = entry.split(':');
+      return motifOf(facet as Parameters<typeof shapeClass>[1], value ?? '');
+    });
+    expect(withheldOf(cells, motifs, F).size).toBeLessThan(5);
+    expect(withheldOf(cells, motifs, F, 4).size).toBe(5);
+    expect(withheldOf(cells, motifs, F, 4).has(cells[1] as Cell)).toBe(false);
+  });
+
   it("are not recovered from the action's calls, which the fit read gives", () => {
-    // No `target` or `dropped` cell here, so no served cell holds the action's calls, but the `fit` read does (the action's one-step shape cell summed over models and exposure): with the `keys` cells withheld,
+    // No `target` cell here, so no served cell holds the action's calls, but the `fit` read does (the action's one-step shape cell summed over models and exposure): with the `keys` cells withheld,
     // `path` is still those calls less the `pattern` size total.
     const served = servedValues([
       [motifOf('keys', 'path'), F - 1],
@@ -287,14 +327,6 @@ describe("an action's one-step shape cells", () => {
     const motifs = [sentKey('subagent_type'), valueOf('subagent_type', 'Explore')];
     expect([...withheldOf([cellOf(motifs[0]?.motifId ?? '', 30), cellOf(motifs[1]?.motifId ?? '', 2)], motifs, F)]).toEqual([]);
   });
-
-  it("keeps a boolean and an exhaustive list on the key's calls, under any key name", () => {
-    for (const [key, thin, rest] of [['output_mode', 'count', 'content'], ['model', 'true', 'false']] as const) {
-      const motifs = [sentKey(key), valueOf(key, thin), valueOf(key, rest)];
-      const cells = [cellOf(motifs[0]?.motifId ?? '', 30), cellOf(motifs[1]?.motifId ?? '', 2), cellOf(motifs[2]?.motifId ?? '', 28)];
-      expect([...withheldOf(cells, motifs, F)]).toEqual([cells[2]]);
-    }
-  });
 });
 
 describe('every family of cells (`FAMILY_RULES`)', () => {
@@ -308,7 +340,7 @@ describe('every family of cells (`FAMILY_RULES`)', () => {
       return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296;
     };
   };
-  const KEY_SETS = [['path'], ['path', 'pattern'], ['pattern'], ['glob', 'path', 'pattern'], ['limit', 'path'], ['path', 'subagent_type']];
+  const KEY_SETS = [['path'], ['path', 'pattern'], ['pattern'], ['glob', 'path', 'pattern'], ['limit', 'path'], ['path', 'subagent_type'], ['output_mode', 'pattern']];
   const MODELS = ['model-a', 'model-b'];
   const FIRST_DAY = '2026-11-02';
   const DAYS = [FIRST_DAY, '2026-11-03', '2026-11-04'];
@@ -333,7 +365,7 @@ describe('every family of cells (`FAMILY_RULES`)', () => {
       counts.set(key, { motif, day, frameBucket, exposed, n: (counts.get(key)?.n ?? 0) + 1 });
     };
     const calls = 12 + Math.floor(next() * 36);
-    // Some actions have no `target` or `dropped` cells, so only the `fit` read pins their calls.
+    // Some actions have no `target` cells, so only the `fit` read pins their calls.
     const pinned = next() >= 0.3;
     for (let call = 0; call < calls; call += 1) {
       const day = pick(DAYS);
@@ -348,6 +380,8 @@ describe('every family of cells (`FAMILY_RULES`)', () => {
         count(classMotif(shapeClass('file.search', 'size', `${key}=${next() < 0.8 ? '9-32' : '1-8'}`)), day);
         count(classMotif(shapeClass('file.search', 'depth', `${key}=${pick(['0', '1', '2'])}`)), day);
       }
+      // An exhaustive list: every call that sends the key has one `enum` cell, for the value it sent.
+      if (keys.includes('output_mode')) count(classMotif(shapeClass('file.search', 'enum', `output_mode=${pick(['content', 'count'])}`)), day);
       // A custom agent's name is off the list, so only some of the calls that send the key have a cell.
       if (keys.includes('subagent_type') && next() < 0.6) count(classMotif(shapeClass('file.search', 'enum', `subagent_type=${pick(['Explore', 'Plan'])}`)), day);
       // The one-step shape and named cells are per model and per exposure; the facet cells above are on the version bucket, unexposed.
@@ -397,7 +431,7 @@ describe('every family of cells (`FAMILY_RULES`)', () => {
   });
 
   it('never serves a key facet in full beside exactly one unserved keys cell that holds the key', () => {
-    // The nesting read straight from the cells: the total of a key's `size` cells, and of its `depth` cells, is the sum of the `keys` cells that hold it.
+    // The nesting read straight from the cells: the total of a key's `size` cells, of its `depth` cells, and of its `enum` cells is the sum of the `keys` cells that hold it.
     const broken: string[] = [];
     for (let seed = 1; seed <= 400; seed += 1) {
       const { held, motifs } = bundleFrom(seed);
@@ -408,10 +442,10 @@ describe('every family of cells (`FAMILY_RULES`)', () => {
         for (const day of grain === 'day' ? DAYS : [FIRST_DAY]) {
           const here = held.filter((cell) => cell.grain === grain && cell.day === day);
           const keysCells = here.filter((cell) => classOf(cell)[0] === 'keys');
-          for (const key of ['path', 'pattern', 'glob', 'limit']) {
+          for (const key of ['path', 'pattern', 'glob', 'limit', 'output_mode']) {
             const holding = keysCells.filter((cell) => classOf(cell)[1]?.split(',').includes(key));
             const hidden = holding.filter((cell) => !served(cell)).length;
-            for (const facet of ['size', 'depth']) {
+            for (const facet of ['size', 'depth', 'enum']) {
               const facetCells = here.filter((cell) => classOf(cell)[0] === facet && classOf(cell)[1]?.startsWith(`${key}=`));
               if (facetCells.length > 0 && facetCells.every(served) && hidden === 1) broken.push(`seed ${String(seed)} ${grain} ${day} ${facet} ${key}`);
             }

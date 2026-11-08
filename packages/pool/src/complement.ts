@@ -261,29 +261,37 @@ const systemsOf = (families: readonly Family[]): Row[][] => {
   return [...systems.values()];
 };
 
+/** The terms (cells and totals) of one system past which the rank check does not run (`withheldOf`). */
+export const MAX_SYSTEM_TERMS = 5000;
+
 /**
  * The served cells to leave out of a bundle, given every held cell (so a sub-floor part is seen) and the floor. First the local rules (`withholdLocally`); then the rank check, because served totals combine
  * across families (a sub-floor `keys` cell is one key's `size` total plus another's less the action's calls, though no one family holds it alone). Every family states one linear equation, and while the served cells
  * determine any unserved cell (`determinedOf`), the smallest served cell of its equation that shares a family with it is withheld (any served cell of its equation where none does), and both stages repeat.
+ * A system of more than `maxTerms` terms is not eliminated, because the work grows faster than its size: measured, a long-tail action of 4,000 `keys` cells took 1.8 s and one of 13,000 took 10 s, against a Worker's CPU
+ * limit. Nothing can be shown determined or not in such a system, so every served cell of it is withheld, which is safe and costs only that action's cells for that day.
  */
-export const withheldOf = (held: readonly Cell[], motifs: readonly Motif[], floor: number): Set<Cell> => {
+export const withheldOf = (held: readonly Cell[], motifs: readonly Motif[], floor: number, maxTerms = MAX_SYSTEM_TERMS): Set<Cell> => {
   // The one-step shape cells tie an action's calls only where its shape cells split them, so an action with no shape cells keeps its shape cells out of this rule.
   const every = familiesOf(held, motifs);
   const split = new Set(every.flatMap(({ rule, total }) => (rule === 'facet' && total !== null && isActionCalls(total) ? [total] : [])));
   const families = every.filter(({ rule, total }) => rule !== 'action-calls' || (total !== null && split.has(total)));
   // An action's calls the `fit` read gives: through its one-step shape cells where they are held, and as known where they are not.
   const tied = new Set(families.flatMap(({ rule, total }) => (rule === 'action-calls' && total !== null ? [total] : [])));
-  const systems = systemsOf(families);
-  const familiesHolding = new Map<Cell, Set<Cell>>();
-  for (const { whole, parts } of families) {
-    const members = whole === null ? parts : [whole, ...parts];
-    for (const cell of members) {
-      const near = familiesHolding.get(cell) ?? new Set<Cell>();
-      familiesHolding.set(cell, near);
-      for (const member of members) near.add(member);
-    }
+  const allSystems = systemsOf(families);
+  const termsOf = (system: readonly Row[]): Set<Term> => new Set(system.flatMap((row) => [...row.keys()]));
+  const systems = allSystems.filter((system) => termsOf(system).size <= maxTerms);
+  // The member set of each family, and the families each cell is in, so "shares a family" is a lookup and no cell holds a set of its neighbors (a family of thousands of `keys` cells would square).
+  const membersOf = new Map<Family, Set<Cell>>();
+  const familiesOfCell = new Map<Cell, Family[]>();
+  for (const family of families) {
+    const members = new Set(family.whole === null ? family.parts : [family.whole, ...family.parts]);
+    membersOf.set(family, members);
+    for (const cell of members) familiesOfCell.set(cell, [...(familiesOfCell.get(cell) ?? []), family]);
   }
+  const sharesFamily = (cell: Cell, other: Cell): boolean => (familiesOfCell.get(cell) ?? []).some((family) => membersOf.get(family)?.has(other) === true);
   const withheld = new Set<Cell>();
+  // A cell is served when it clears `floor`, the public floor. `derive.ts` serves a `clear` cell at `cellFloor`, which `Floors.clear` can set lower, so a lower `clear` also needs this test changed (it would count a served clear cell as unknown and under-withhold).
   const known = (term: Term): boolean => (typeof term === 'string' ? isActionCalls(term) && !tied.has(term) : clears(term, floor) && !withheld.has(term));
   const systemOf = new Map<Term, Row[]>(systems.flatMap((system) => system.flatMap((row) => [...row.keys()].map((term): [Term, Row[]] => [term, system]))));
   // The cell each system withholds next, kept until a cell of that system is withheld; the systems share no cell, so each round withholds one per system.
@@ -292,7 +300,7 @@ export const withheldOf = (held: readonly Cell[], motifs: readonly Motif[], floo
     [...determinedOf(system, known)]
       .map(([cell, row]) => {
         const support = [...row.keys()].filter((term): term is Cell => typeof term !== 'string' && term !== cell && known(term));
-        const near = support.filter((term) => familiesHolding.get(cell)?.has(term) === true);
+        const near = support.filter((term) => sharesFamily(cell, term));
         return (near.length > 0 ? near : support).sort(smallest)[0];
       })
       .find((cell) => cell !== undefined);
@@ -308,7 +316,13 @@ export const withheldOf = (held: readonly Cell[], motifs: readonly Motif[], floo
       choices.set(system, choice);
       return choice === undefined ? [] : [choice];
     });
-    if (next.length === 0) return withheld;
+    if (next.length === 0) break;
     for (const cell of next) withheld.add(cell);
   }
+  // The systems left out of the rank check keep none of their served cells.
+  for (const system of allSystems) {
+    if (systems.includes(system)) continue;
+    for (const term of termsOf(system)) if (typeof term !== 'string' && clears(term, floor)) withheld.add(term);
+  }
+  return withheld;
 };
