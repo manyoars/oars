@@ -776,10 +776,17 @@ const breakStale = async (lock: string, staleMs: number): Promise<void> => {
 };
 
 /**
+ * What a command a person typed waits for the store lock (`deposit --deny`, the pool choices). The background sweep starts after any command and its deposit
+ * holds the lock for the whole run, which a full re-capture stretches past 10 minutes, so a short wait made `--deny` fail right when the hold window
+ * wants it to work; two minutes is the wait the send lock gives. The hook path keeps `HOOK_LOCK`: a hook must not block a session.
+ */
+const FOREGROUND_LOCK: LockOptions = { waitMs: 120_000, staleMs: 600_000 };
+
+/**
  * Runs `work` as the only writer of `state.json` and the observations file. The SessionEnd hooks of parallel sessions and the nightly
  * run each read, extract, and rewrite `state.json`; without this one's `files` and `allow` entries are lost to another's write.
  */
-export const withLock = async <T>(storeDir: string, work: (held: LockHold) => Promise<T>, options: LockOptions = { waitMs: 10_000, staleMs: 600_000 }): Promise<T> => {
+export const withLock = async <T>(storeDir: string, work: (held: LockHold) => Promise<T>, options: LockOptions = FOREGROUND_LOCK): Promise<T> => {
   const lock = join(storeDir, 'store.lock');
   await mkdir(storeDir, { recursive: true });
   const started = Date.now();

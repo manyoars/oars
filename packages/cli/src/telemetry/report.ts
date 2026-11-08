@@ -230,7 +230,7 @@ export const textOf = (report: Report, dir: string): string => {
   const answered = fleet.status === 'answered';
   const floor = fleet.status === 'answered' ? fleet.floor : 0;
   const out = [`Your telemetry, from the spool in ${dir}.`];
-  if (report.windows.every((window) => window.cells.length === 0) && report.store === undefined) out.push('Nothing is measured in the spool yet: the hooks and nightly task record as they run.');
+  if (report.windows.every((window) => window.cells.length === 0) && report.store === undefined) out.push('Nothing is measured in the spool yet: the hooks and the detached sender record as they run.');
   for (const window of report.windows) {
     if (window.cells.length === 0) continue;
     out.push('', `Last ${String(window.days)} days`);

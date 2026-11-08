@@ -151,8 +151,9 @@ const capture = (scene: Scene): Promise<unknown> => deposit(scene.staged.runtime
 const at = (value: unknown, name: string): unknown => (typeof value === 'object' && value !== null ? Reflect.get(value, name) : undefined);
 
 describe('the raw prompt states when and what uploads', () => {
-  it('names the nightly task, covenant acceptance, and the skeleton-only/off exception', () => {
-    expect(RAW_PROMPT).toContain('the nightly task uploads');
+  it('names the sender a hook or command starts, covenant acceptance, and the skeleton-only/off exception', () => {
+    expect(RAW_PROMPT).toContain('the sender that a session-end hook or any oars command starts (at most about once an hour) uploads');
+    expect(RAW_PROMPT).not.toContain('nightly');
     expect(RAW_PROMPT).toContain('once the pool says your account accepted its covenant');
     expect(RAW_PROMPT).toContain('except a folder you set to skeleton only or off');
   });

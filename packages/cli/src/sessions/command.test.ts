@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
-import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readRecalls, recallsPath } from './recall-object.js';
 import { MISS_TEXT } from './recall-render.js';
@@ -83,6 +83,34 @@ describe('oars sessions with a Cursor store', () => {
     const keys = Array.isArray(rows) ? rows.map((row): unknown => field(row, 'key')) : [];
     expect(keys).toContain('cursor');
     expect(keys).not.toContain('edit-verify');
+  });
+});
+
+describe('oars sessions: a command waits for a sweep that holds the store lock', () => {
+  it('--deny behind a held lock succeeds once the lock file is released, after waiting longer than the hook does', async () => {
+    const { deps, staged, out } = setup();
+    mkdirSync(staged.storeDir, { recursive: true });
+    const lock = join(staged.storeDir, 'store.lock');
+    writeFileSync(lock, 'a sweep from another process');
+    // Driven clock: each read of the time moves it 5 s, and the lock is released when it passes 15 s, so the command has waited past the old 10 s limit and the release is what lets it in. No sleeps.
+    const real = Date.now.bind(Date);
+    let skew = 0;
+    let waited = 0;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => {
+      if (existsSync(lock)) skew += 5_000;
+      if (skew >= 15_000 && existsSync(lock)) {
+        waited = skew;
+        rmSync(lock);
+      }
+      return real() + skew;
+    });
+    try {
+      expect(await run(['sessions', 'deposit', '--deny', 'proj'], deps)).toBe(ExitCode.OK);
+    } finally {
+      clock.mockRestore();
+    }
+    expect(waited).toBeGreaterThanOrEqual(15_000);
+    expect(out.join('')).toContain('Deposited 0 sessions');
   });
 });
 

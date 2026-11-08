@@ -9,6 +9,7 @@ import { run } from './cli.js';
 import { defaultConfigDir, fileCredentialStore } from './credentials.js';
 import { cursorRoot } from './sessions/cursor.js';
 import { claudeEvaluator, runClaude } from './sessions/gold-arms.js';
+import { catchUpOnStore } from './sessions/pool-due.js';
 import { SOURCES } from './sessions/sources.js';
 import { spawnDetachedSend } from './telemetry/send.js';
 
@@ -31,6 +32,7 @@ process.exitCode = await run(process.argv.slice(2), {
   store: fileCredentialStore(configDir),
   telemetry: { dir: join(configDir, 'oars', 'telemetry'), platform: process.platform, spawnSend: spawnDetachedSend },
   version: readVersion(),
+  catchUp: () => catchUpOnStore(join(configDir, 'oars', 'sessions'), fileURLToPath(new URL('./hook-bin.js', import.meta.url))),
   sleep: (ms) => sleep(ms),
   random: Math.random,
   now: Date.now,
