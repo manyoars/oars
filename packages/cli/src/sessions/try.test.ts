@@ -7,7 +7,7 @@ import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
 import { MISS_TEXT } from './recall-render.js';
 import { cleanup, stage } from './test-support.js';
-import { DEMO_CWD, DEMO_ERROR } from './try-fixture.js';
+import { DEMO_CWD, DEMO_ERROR } from './try-demo.js';
 import { SYNTHETIC_LABEL, TRY_PREFIX } from './try.js';
 
 const homes: string[] = [];

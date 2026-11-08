@@ -6,7 +6,7 @@ import { PassThrough } from 'node:stream';
 import type { Outcome } from '../cli.js';
 import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsRecall, type SessionsDeps } from './command.js';
 import type { SessionsRuntime } from './store.js';
-import { DEMO_CWD, DEMO_ERROR, writeDemoSessions } from './try-fixture.js';
+import { DEMO_CWD, DEMO_ERROR, writeDemoSessions } from './try-demo.js';
 
 /** Printed once at the top and under every heading, so no line of the output can be mistaken for the reader's own history. */
 export const SYNTHETIC_LABEL = 'SYNTHETIC DATA: made-up sessions bundled with oars, not your history';
