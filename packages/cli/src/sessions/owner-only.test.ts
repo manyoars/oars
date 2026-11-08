@@ -91,7 +91,7 @@ describe('owner-only writes (S9, S10)', () => {
   });
 });
 
-describe('the store folder is the operator's alone from first use (S9)', () => {
+describe('the store folder is owner-only from first use (S9)', () => {
   posix('is made 0700 by the first hook call, step row, or store lock, not only by oars pool login', async () => {
     const byHook = join(root, 'by-hook', 'store');
     await appendHookCall(byHook, { at: '2026-11-07T00:00:00.000Z', event: 'prompt', session: null, hit: false, ms: 1, error: null });
