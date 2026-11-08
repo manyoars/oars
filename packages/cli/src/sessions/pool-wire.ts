@@ -348,7 +348,7 @@ const wireFlag = (gate: WireGate, flag: string): string => (isWireFlag(flag) && 
  * A call's key names as the wire holds them (t870): names only, never a value. A public tool (one with a pinned input list) sends the names on its list and counts the rest; any other tool sends a name only when it passes the
  * name gate, and a tool that went as `private` sends none, so a private tool's keys name no private work. `dropped` counts the distinct names not sent.
  */
-const wireKeys = (stored: readonly string[], native: string | undefined, gate: WireGate): { keys: string[]; dropped: number } => {
+export const wireKeys = (stored: readonly string[], native: string | undefined, gate: WireGate): { keys: string[]; dropped: number } => {
   const distinct = [...new Set(stored)];
   const listed = native === undefined ? undefined : TOOL_INPUT_KEYS.get(native);
   const kept = native === undefined || native === PRIVATE ? [] : distinct.filter((name) => (listed === undefined ? wireName(gate, name) !== PRIVATE : listed.has(name)));

@@ -16,7 +16,7 @@ import { deriveAdoption } from './read-adoption.js';
 import { deriveCallShape } from './read-call-shape.js';
 import { deriveChange } from './read-change.js';
 import { deriveCost } from './read-cost.js';
-import { deriveFit } from './read-fit.js';
+import { deriveFit, deriveFitShape } from './read-fit.js';
 import { deriveLive } from './read-live.js';
 import { deriveMethod } from './read-method.js';
 import { deriveNextStep } from './read-next-step.js';
@@ -35,7 +35,7 @@ import { writeAtomic, type Store } from './store.js';
 // Built on call.
 const derivers = (): { readonly [family in FirstOrderFamily]: DeriveFamily } => ({
   recovery: deriveRecovery,
-  fit: (input) => [...deriveFit(input), ...deriveCallShape(input)],
+  fit: (input) => [...deriveFit(input), ...deriveFitShape(input), ...deriveCallShape(input)],
   cost: deriveCost,
   change: deriveChange,
   live: deriveLive,

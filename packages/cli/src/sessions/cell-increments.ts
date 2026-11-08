@@ -5,7 +5,7 @@
 import { ARG_CLASSES } from './call-shape.js';
 import { bucketFields, deriveCells, ENVIRONMENT_BUCKET, isEnvironmentCell, type CellSet, type Grain } from './cells.js';
 import type { Motif } from './motif.js';
-import { bucketOf, floorOf, OTHER, projectedSteps, type SessionSkeleton, type ShellReader, type SkeletonFrame, type SkeletonPrompt, type SkeletonTool, type SkeletonTranscript } from './pool-wire.js';
+import { bucketOf, floorOf, OTHER, OPEN_GATE, projectedSteps, wireKeys, type SessionSkeleton, type ShellReader, type SkeletonFrame, type SkeletonPrompt, type SkeletonTool, type SkeletonTranscript } from './pool-wire.js';
 import { NO_RECALLS, type RecallGraph } from './recall-consequence.js';
 import { USAGE_FIELDS, harnessOf, type Frame, type Harness, type PromptClass, type PromptObservation, type SessionObservation, type StepEdge, type StepObservation, type ToolObservation, type ToolStatus, type Usage } from './schema.js';
 import type { Store } from './store.js';
@@ -101,10 +101,21 @@ export const cellsOf = (store: Store, graph: RecallGraph = NO_RECALLS): CellSet 
   return { cells, motifs: [...motifs.values()].sort((a, b) => order(a.motifId, b.motifId)) };
 };
 
-/** A local store with each shell step read as a deposit reads it (`projectedSteps`), so its named motifs are the ones the pool holds. It uses the open gate, which keeps the name shape and length but applies no redactor or exclusion term: a local read sends nothing. */
+/**
+ * A local store with each shell step read as a deposit reads it (`projectedSteps`), so its named motifs are the ones the pool holds, and each call's key names as the wire sends them (`wireKeys`), so its shape cells are too.
+ * It uses the open gate, which keeps the name shape and length but applies no redactor or exclusion term: a local read sends nothing.
+ */
 export const projectedStore = (store: Store, read: ShellReader): Store => {
   const harnesses = new Map([...store.sessions, ...store.subagents].map((session) => [session.session, harnessOf(session)]));
-  return { ...store, tools: store.tools.map((tool) => (tool.steps === undefined ? tool : { ...tool, steps: projectedSteps(tool, read, harnesses.get(tool.session) ?? 'claude-code') })) };
+  return {
+    ...store,
+    tools: store.tools.map((tool) => {
+      if (tool.steps === undefined) return tool;
+      const steps = projectedSteps(tool, read, harnesses.get(tool.session) ?? 'claude-code');
+      const { keys, dropped } = wireKeys(tool.keys, steps[0]?.native, OPEN_GATE);
+      return { ...tool, steps, keys, ...(dropped === 0 ? {} : { keysDropped: dropped }) };
+    }),
+  };
 };
 
 const NO_USAGE: Usage = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0, thinking: 0 };
@@ -214,7 +225,7 @@ const stepPlaces = ({ tools }: SkeletonTranscript): { n: number; seg: number }[]
 const toolRecords = (id: string, main: string, transcript: KnownTranscript, spawner: SkeletonTranscript | null): ToolObservation[] => {
   const own = stepPlaces(transcript);
   const spawning = spawner === null ? [] : stepPlaces(spawner);
-  return transcript.tools.map(({ side, prompt, status, durationMs, errorCode, keys, targetClass, argClass, steps }, n) => ({
+  return transcript.tools.map(({ side, prompt, status, durationMs, errorCode, keys, keysDropped, targetClass, argClass, steps }, n) => ({
     kind: 'tool',
     cv: '',
     sid: '',
@@ -228,8 +239,9 @@ const toolRecords = (id: string, main: string, transcript: KnownTranscript, spaw
     status: statusOf(status),
     target: null,
     targetBase: null,
-    // The names the wire carried, which are the only ones a skeleton-derived store ever holds; `keysDropped` is a count of names not sent and has no stored form.
+    // The names the wire carried, which are the only ones a skeleton-derived store ever holds, and the count of those it did not, at its bucket's lowest value.
     keys: keys ?? [],
+    ...(keysDropped === undefined ? {} : { keysDropped: floorOf('count', keysDropped) }),
     ...(targetClass === undefined ? {} : { targetClass }),
     ...(argClass === undefined ? {} : { argClass: ARG_CLASSES.filter((kind) => argClass.includes(kind)).sort() }),
     durationMs,

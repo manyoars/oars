@@ -75,8 +75,33 @@ export const parseRecoveryClass = (cls: string): { code: string; failed: string;
   return found === null ? null : { code: found[1] ?? '', failed: found[2] ?? '', next: found[3] ?? '' };
 };
 
-/** Whether a class motif names a prompt class, as opposed to one of the side cells (effort, or a failed call's code or what followed it). */
-export const isPromptClass = (cls: string | null): boolean => cls !== null && ![EFFORT_CLASS, ERROR_CLASS, ERROR_VERSION_CLASS, RECOVERY_CLASS].some((prefix) => cls.startsWith(prefix));
+/**
+ * The week cell of a call's shape: `shape:<action>/<facet>/<value>`, one facet of what the call held and never a value. It keeps the harness version bucket and no model, so it joins three dimensions: the call's action, the
+ * facet's value, and version. `target` is the class of the path target, `arg` one member of the argument classes (a set is one cell per member, rule 2), `dropped` the `count` bucket of key names not sent, and `keys` the
+ * sorted key names joined by commas, the call-shape method's key (a long tail, so the pool holds it to the thresholded floor). A class motif with no prompt class in it, like the others.
+ */
+export const SHAPE_CLASS = 'shape:';
+export const SHAPE_FACETS = ['target', 'arg', 'dropped', 'keys'] as const;
+export type ShapeFacet = (typeof SHAPE_FACETS)[number];
+export const shapeClass = (action: string, facet: ShapeFacet, value: string): string => `${SHAPE_CLASS}${action}/${facet}/${value}`;
+
+/** The three parts of a shape class name, or null for a name that is not one. An action name and a facet hold no `/`; the value is the rest. */
+export const parseShapeClass = (cls: string): { action: string; facet: ShapeFacet; value: string } | null => {
+  const found = /^shape:([^/]+)\/([^/]+)\/(.+)$/.exec(cls);
+  const facet = SHAPE_FACETS.find((name) => name === found?.[2]);
+  return found === null || facet === undefined ? null : { action: found[1] ?? '', facet, value: found[3] ?? '' };
+};
+
+/** The facets one call counts in: each that the record holds. A record captured before a facet existed has none of it, so it adds no cell of that facet. */
+export const shapeFacetsOf = (tool: ToolObservation): [ShapeFacet, string][] => [
+  ...(tool.targetClass === undefined ? [] : [['target', tool.targetClass] satisfies [ShapeFacet, string]]),
+  ...(tool.argClass ?? []).map((kind): [ShapeFacet, string] => ['arg', kind]),
+  ...(tool.keysDropped === undefined ? [] : [['dropped', String(bucketOf('count', tool.keysDropped))] satisfies [ShapeFacet, string]]),
+  ...(tool.keys.length === 0 ? [] : [['keys', [...tool.keys].sort().join(',')] satisfies [ShapeFacet, string]]),
+];
+
+/** Whether a class motif names a prompt class, as opposed to one of the side cells (effort, a failed call's code or what followed it, or a call's shape). */
+export const isPromptClass = (cls: string | null): boolean => cls !== null && ![EFFORT_CLASS, ERROR_CLASS, ERROR_VERSION_CLASS, RECOVERY_CLASS, SHAPE_CLASS].some((prefix) => cls.startsWith(prefix));
 
 /** The frame bucket of a cell that joins no axis. */
 export const NO_AXES = '-';
@@ -273,6 +298,18 @@ export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): Cell
       const tally = tallyAt(motif, versionBucketOf(frame), 'week', weekStartOf(frame.day ?? UNKNOWN), false);
       tally.sessions.add(first.parent);
       tally.failed += 1;
+    }
+    // Each call's shape, by its first step's action: a week cell per facet it holds, counted by the call's own status.
+    for (const [at, tool] of line.entries()) {
+      const action = calls[at]?.steps[0]?.action ?? 'other';
+      for (const [facet, value] of shapeFacetsOf(tool)) {
+        const motif = classMotif(shapeClass(action, facet, value));
+        motifs.set(motif.motifId, motif);
+        const tally = tallyAt(motif, versionBucketOf(frame), 'week', weekStartOf(frame.day ?? UNKNOWN), false);
+        tally.sessions.add(first.parent);
+        if (tool.status === 'ok') tally.ok += 1;
+        if (tool.status === 'error') tally.failed += 1;
+      }
     }
     // The failed calls by their `errorCode` (t868). Rule 6: a day cell exists for a known day only.
     const failedDay = frame.day ?? UNKNOWN;

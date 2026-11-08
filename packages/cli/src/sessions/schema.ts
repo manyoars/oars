@@ -503,6 +503,8 @@ export interface ToolObservation {
   targetBase: TargetBase | null;
   /** The input's key names, sorted. Class A (EXTRACTOR 11). */
   keys: string[];
+  /** How many key names the wire did not send (off a public tool's pinned list, or kept `private` by the gate). Never captured: set only on a record the wire projection made (`projectedStore`) or read back from a skeleton, so a local read and the pool count one `dropped` cell. */
+  keysDropped?: number;
   /** The class of the call's path target (`targetClassOf`): a member of `TARGET_CLASSES`, `none` for a call with no path target. Absent on a record captured before CAPTURE 22. Class P: a closed list, never the path or its base name. */
   targetClass?: TargetClass;
   /** The classes of the call's arguments (`argClassOf`), a sorted set of `ARG_CLASSES` members, `['none']` for a call with no argument value. Absent on a record captured before CAPTURE 22. Class P: never a value. */

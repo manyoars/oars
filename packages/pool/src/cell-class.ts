@@ -1,6 +1,6 @@
 // The class of a cell: `clear` when every value its key names is on a public list, `thresholded` when any one is not. A cell keys on a motif (the names of its steps) and a frame bucket (`harness/versionBucket/model`), so
 // the class of a cell is the strictest class among them. A host is hashed at ingest, so a cell naming one is held to the thresholded floor as well. The class table is `field-classes.ts`; this file only reads it for a cell.
-import { isEnvironmentCell, NO_AXES, UNKNOWN, type Cell } from '../../cli/src/sessions/cells.js';
+import { isEnvironmentCell, NO_AXES, parseShapeClass, UNKNOWN, type Cell } from '../../cli/src/sessions/cells.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
 import type { StepIdentity } from '../../cli/src/sessions/schema.js';
 import { classFor, isListed } from './field-classes.js';
@@ -29,5 +29,9 @@ const identityClear = (identity: StepIdentity): boolean => {
   return identity.host === null || clearOf('host', identity.host);
 };
 
+/** A shape cell's value: the key names of a call are a long tail, so a `keys` cell is held to the thresholded floor; every other facet is a closed list. A class motif that is no shape names nothing here. */
+const shapeClear = (motif: Motif): boolean => parseShapeClass(motif.cls ?? '')?.facet !== 'keys';
+
 /** A cell whose motif is not held is `thresholded`: a class the pool cannot read is the strict one. */
-export const cellClassOf = (cell: Cell, motif: Motif | undefined): CellClass => (motif !== undefined && frameClear(cell.frameBucket) && motif.steps.every((step) => identityClear(step.identity)) ? 'clear' : 'thresholded');
+export const cellClassOf = (cell: Cell, motif: Motif | undefined): CellClass =>
+  motif !== undefined && frameClear(cell.frameBucket) && motif.steps.every((step) => identityClear(step.identity)) && shapeClear(motif) ? 'clear' : 'thresholded';
