@@ -80,7 +80,7 @@ export const workerError = async (response: Response): Promise<Error> => {
 };
 
 /**
- * Miniflare 4 sends every `dispatchFetch` with `reset: true`, so undici closes the socket after each response: one loopback socket in TIME_WAIT for every request a test makes, and for every D1 or R2 call it makes through `getBindings` too, because the proxy client holds this same function. A full run opened about 9,000 and left about 5,400 in TIME_WAIT (Linux), enough to exhaust the dynamic port range when gates run together (t909, t930).
+ * Miniflare 4 sends every `dispatchFetch` with `reset: true`, so undici closes the socket after each response: one loopback socket in TIME_WAIT for every request a test makes, and for every D1 or R2 call it makes through `getBindings` too, because the proxy client holds this same function. A full run opened about 9,000 and left about 5,400 in TIME_WAIT (Linux), enough to exhaust the dynamic port range when several test runs share one machine.
  * This sends the same request on Node's keep-alive pool instead, with the two headers Miniflare's own dispatcher adds.
  */
 const keepAlive = (miniflare: Miniflare): void => {

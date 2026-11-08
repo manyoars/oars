@@ -1,4 +1,4 @@
-// The pool harness itself: its requests share Node's keep-alive pool, which is what keeps a full `vitest run` from leaving thousands of loopback sockets in TIME_WAIT (t930).
+// The pool harness itself: its requests share Node's keep-alive pool, which is what keeps a full `vitest run` from leaving thousands of loopback sockets in TIME_WAIT.
 import { subscribe, unsubscribe } from 'node:diagnostics_channel';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startPool, workerError, type TestPool } from './test-pool.js';
