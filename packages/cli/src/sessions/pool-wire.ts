@@ -251,12 +251,15 @@ export const MIN_TIMED_CALLS = 50;
 export const SESSION_IDLE_HOURS = 6;
 const HOUR_MS = 60 * 60 * 1000;
 
+/** No session leaves this machine sooner than this after it ends, whatever `session_idle_hours` is: time for `oars sessions deposit --deny` or a delete to act on it first. Today the longer idle window governs; this is the floor under it. */
+export const HOLD_WINDOW_MS = HOUR_MS;
+
 /**
  * Whether a session's batch may be built at `now`: no transcript of it, main or subagent, has gained a line for `SESSION_IDLE_HOURS`. A transcript gains a line when capture sees it change, which
  * stamps a new `rev` in epoch milliseconds, but a transcript can grow after the last capture, so `written` (the newest write to any raw file of the session, 0 when none is known) counts too: the
  * session was last active at the later of the two. A subagent that died without an end marker holds its session back at most that long.
  */
-export const hasEnded = (records: SessionRecords, now: number, written: number): boolean => now - Math.max(written, ...records.transcripts.map(({ session }) => session.rev)) >= SESSION_IDLE_HOURS * HOUR_MS;
+export const hasEnded = (records: SessionRecords, now: number, written: number, idleMs: number = SESSION_IDLE_HOURS * HOUR_MS): boolean => now - Math.max(written, ...records.transcripts.map(({ session }) => session.rev)) >= Math.max(idleMs, HOLD_WINDOW_MS);
 
 const groupBy = <T, K>(items: readonly T[], keyOf: (item: T) => K): Map<K, T[]> => {
   const groups = new Map<K, T[]>();
