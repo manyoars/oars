@@ -14,6 +14,7 @@ import { gateInstall, gatePolicy, gateReplay, gateReport, gateUninstall } from '
 import { DEADLINE_MS, gateHook } from './gate/hook.js';
 import { managerReader } from './gate/registry.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
+import { sessionsTry } from './sessions/try.js';
 import { poolCoverage, poolDeposit, poolFetch, poolLogin, poolOutbox, poolRaw } from './sessions/pool-command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
@@ -195,6 +196,16 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
         flag(options, 'json'),
         await sessionsDeposit(sessionDeps(deps), { allow: list(options, 'allow'), allowFiles: list(options, 'allowFile'), deny: list(options, 'deny'), redactDomains: list(options, 'redactDomain') }),
       );
+    });
+
+  sessions
+    .command('try')
+    .description('see recall, books, and the hook line work on made-up sessions, with no history of your own: it builds a throwaway store under your temp folder, labels everything it prints as synthetic, and deletes the store when it exits. It never reads or writes your real store')
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      // The command promises no network call: drop the sender before it runs, so the daily telemetry send that follows every command cannot start one, whether the run returns or throws.
+      if (deps.telemetry !== undefined) deps.telemetry = { dir: deps.telemetry.dir, platform: deps.telemetry.platform };
+      emit(deps, flag(options, 'json'), await sessionsTry(deps));
     });
 
   sessions

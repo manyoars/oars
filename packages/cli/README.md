@@ -17,6 +17,8 @@ Or run it once without installing:
 npx @manyoars/oars <command>
 ```
 
+No coding-agent history yet? `oars sessions try` runs recall, books, and the hook line over made-up sessions in a throwaway store under your temp folder, labeled synthetic and deleted on exit, and never touches your own store.
+
 Accounts are not open yet: `oars login` uses the Many Oars issuer by default, and until Many Oars sign-in at `login.manyoars.com` (and its pool at `pool.manyoars.com`) is deployed it exits 2 with an error that names `login.manyoars.com`.
 
 ## Commands
