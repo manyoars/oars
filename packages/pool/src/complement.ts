@@ -7,7 +7,7 @@ import { parseShapeClass, weekStartOf, type Cell, type ShapeFacet } from '../../
 import type { Motif } from '../../cli/src/sessions/motif.js';
 import { clears, clustersOf } from './floors.js';
 
-export interface Family {
+interface Family {
   /** The name of the `FAMILY_RULES` rule that made it. */
   rule: string;
   whole: Cell | null;
@@ -49,10 +49,11 @@ const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const smallest = (a: Cell, b: Cell): number => clustersOf(a) - clustersOf(b) || compare(a.day, b.day) || compare(a.motifId, b.motifId);
 
 /**
- * Every way a cell counts inside another count, one rule each; `familiesOf` and the invariant test (`shape-cells.test.ts`) both read this table, so a new nesting cannot be left out of either. A rule names the
+ * Every way a cell counts inside another count, one rule each; `familiesOf` reads this table for both the local rules and the rank check. The invariant test (`shape-cells.test.ts`) states the relations from the
+ * cells on its own, so a nesting this table leaves out shows there as a determined cell. A rule names the
  * families a cell belongs to and whether it is the whole of one (a cell holding the family's total) or a part of it; a family with no whole cell has a total the reader still has from another read.
  */
-export const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, motif: Motif | undefined) => Placement[] }[] = [
+const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, motif: Motif | undefined) => Placement[] }[] = [
   // The class cells of one facet partition (`FACET_PARTITIONS`) split the same calls of an action; the total is not a cell of the family.
   {
     name: 'facet',
@@ -92,7 +93,7 @@ export const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, mot
 ];
 
 /** Every family of the held cells, built from `FAMILY_RULES`. */
-export const familiesOf = (held: readonly Cell[], motifs: readonly Motif[]): Family[] => {
+const familiesOf = (held: readonly Cell[], motifs: readonly Motif[]): Family[] => {
   const levels = new Map(motifs.map((motif) => [motif.motifId, motif]));
   // One map per rule, so the families come out in the table's order: the facet and nesting rules, then the week and the shape rules, which a withheld part can feed in turn.
   const byRule = FAMILY_RULES.map((rule) => ({ rule, families: new Map<string, Family>() }));

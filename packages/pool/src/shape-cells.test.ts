@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { NO_AXES, parseShapeClass, shapeClass, weekStartOf, type Cell } from '../../cli/src/sessions/cells.js';
 import { classMotif, namedId, shapeMotif, type Motif, type WindowStep } from '../../cli/src/sessions/motif.js';
 import { cellClassOf } from './cell-class.js';
-import { familiesOf, withheldOf } from './complement.js';
+import { withheldOf } from './complement.js';
 import { bundleOf } from './derive.js';
 import { DEFAULT_FLOORS, DEFAULT_PUBLIC_FLOOR } from './floors.js';
 import type { StoredPool } from './stored.js';
@@ -196,7 +196,7 @@ describe('the keys cells that hold a key', () => {
     return held.cells.map(({ motifId }) => held.motifs.find((motif) => motif.motifId === motifId)?.cls ?? '').sort();
   };
 
-  it('are parts of that key facets, so a sub-floor keys cell is not recovered from a key size cell', () => {
+  it("are parts of that key's facets, so a sub-floor keys cell is not recovered from the key's size cell", () => {
     // Every `path` value falls in one size bucket, so that facet has no sub-floor part; its total less the served keys cells that hold `path` would be the sub-floor `path,pattern` cell.
     const thin = motifOf('keys', 'path,pattern');
     const small = motifOf('keys', 'pattern');
@@ -284,26 +284,22 @@ describe('every family of cells (`FAMILY_RULES`)', () => {
     return { held: [...cells, ...weeks.values()], motifs: [...new Map([...counts.values()].map(({ motif }) => [motif.motifId, motif])).values()] };
   };
 
-  it('never serves a whole beside exactly one part that is under the floor or withheld', () => {
+  it('leaves no unserved cell that a combination of served cells determines', () => {
     let withheldSome = 0;
     const broken: string[] = [];
     for (let seed = 1; seed <= 400; seed += 1) {
       const { held, motifs } = bundleFrom(seed);
       const withheld = withheldOf(held, motifs, F);
       if (withheld.size > 0) withheldSome += 1;
-      const served = (cell: Cell): boolean => cell.clusters >= F && !withheld.has(cell);
-      for (const { rule, whole, parts } of familiesOf(held, motifs)) {
-        const hidden = parts.filter((part) => !served(part));
-        // A family with no whole cell has its total in another read, so a served part stands for it.
-        if ((whole === null ? parts.some(served) : served(whole)) && hidden.length === 1) broken.push(`${rule} ${hidden.map((part) => (part.clusters < F ? 'sub' : 'withheld')).join()}`);
-      }
+      const determined = determinedCells(held, motifs, (cell) => cell.clusters >= F && !withheld.has(cell));
+      if (determined.length > 0) broken.push(`seed ${String(seed)}: ${String(determined.length)} determined`);
     }
     expect(withheldSome).toBeGreaterThan(100);
     expect(broken).toEqual([]);
   });
 
   it('never serves a key facet in full beside exactly one unserved keys cell that holds the key', () => {
-    // The nesting read straight from the cells, not from the table: the total of a key's `size` cells is the sum of the `keys` cells that hold it.
+    // The nesting read straight from the cells: the total of a key's `size` cells, and of its `depth` cells, is the sum of the `keys` cells that hold it.
     const broken: string[] = [];
     for (let seed = 1; seed <= 400; seed += 1) {
       const { held, motifs } = bundleFrom(seed);
@@ -315,10 +311,12 @@ describe('every family of cells (`FAMILY_RULES`)', () => {
           const here = held.filter((cell) => cell.grain === grain && cell.day === day);
           const keysCells = here.filter((cell) => classOf(cell)[0] === 'keys');
           for (const key of ['path', 'pattern', 'glob', 'limit']) {
-            const sizes = here.filter((cell) => classOf(cell)[0] === 'size' && classOf(cell)[1]?.startsWith(`${key}=`));
             const holding = keysCells.filter((cell) => classOf(cell)[1]?.split(',').includes(key));
             const hidden = holding.filter((cell) => !served(cell)).length;
-            if (sizes.length > 0 && sizes.every(served) && hidden === 1) broken.push(`seed ${String(seed)} ${grain} ${day} ${key}`);
+            for (const facet of ['size', 'depth']) {
+              const facetCells = here.filter((cell) => classOf(cell)[0] === facet && classOf(cell)[1]?.startsWith(`${key}=`));
+              if (facetCells.length > 0 && facetCells.every(served) && hidden === 1) broken.push(`seed ${String(seed)} ${grain} ${day} ${facet} ${key}`);
+            }
           }
         }
       }
