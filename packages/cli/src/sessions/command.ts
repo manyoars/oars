@@ -19,7 +19,7 @@ import { pull, pullRefusal, type PullInput } from './recall-reads.js';
 import { MISS_TEXT } from './recall-render.js';
 import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, inRepository, readIndex, type ContextOptions } from './hook-index.js';
-import { ensureSchedule, hookStatus, installHooks, recordSchedule, SCHEDULE_LEFT_OFF, scheduleOptedOut, scheduleStatus, setSchedule, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
+import { hookStatus, installHooks, removeSchedule, SCHEDULE_REFUSED, scheduleStatus, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
 import { serve } from './mcp.js';
 import { refreshPool, servedPool } from './pool.js';
 import { recallPool } from './recall-bundle.js';
@@ -446,28 +446,21 @@ const hookScope = (options: HookTarget): Scope => options.scope ?? (options.file
 
 export const sessionsHookInstall = async (deps: SessionsDeps, options: HookTarget & { keepRetention: boolean; schedule: 'nightly' | 'off' | undefined }): Promise<Outcome> => {
   const runtime = installOf(deps);
+  // `--schedule nightly` asked for the task this version no longer registers: refused before anything is written.
+  if (options.schedule === 'nightly') throw new CliError(SCHEDULE_REFUSED, ExitCode.USAGE, 'usage');
   const lines: string[] = [];
   const document: { ok: true; install?: object; schedule?: string } = { ok: true };
-  // `--schedule` alone touches no settings file: it names the task, not the hooks.
+  // `--schedule off` alone (kept so older scripts still run) touches no settings file; it only removes the task.
   if (options.schedule === undefined || options.scope !== undefined || options.file !== undefined) {
     const file = settingsPath(runtime, hookScope(options), options.file);
     const result = await installHooks(runtime, file, options.keepRetention);
     document.install = result;
     lines.push(`Installed ${result.installed.join(', ')} hooks in ${file}.`, result.retention);
   }
-  // Without `--schedule`, Windows gets the nightly task too; `--schedule off` is the opt-out, and it sticks until `--schedule nightly`.
-  if (options.schedule !== undefined || runtime.platform === 'win32') {
-    const storeDir = deps.sessions?.storeDir;
-    const optedOut = options.schedule === undefined && storeDir !== undefined && (await scheduleOptedOut(storeDir));
-    let line = SCHEDULE_LEFT_OFF;
-    if (options.schedule !== undefined) {
-      line = await setSchedule(runtime, options.schedule);
-      await recordSchedule(storeDir, options.schedule);
-    } else if (!optedOut) {
-      line = await ensureSchedule(runtime);
-    }
-    document.schedule = line;
-    lines.push(line);
+  const removed = await removeSchedule(runtime);
+  if (removed !== undefined) {
+    document.schedule = removed;
+    lines.push(removed);
   }
   return { document, text: lines.join('\n') };
 };
@@ -476,8 +469,9 @@ export const sessionsHookUninstall = async (deps: SessionsDeps, options: HookTar
   const runtime = installOf(deps);
   const file = settingsPath(runtime, hookScope(options), options.file);
   const result = await uninstallHooks(file);
+  const removed = await removeSchedule(runtime);
   const text = result.removed.length === 0 ? `No Many Oars hooks in ${file}.` : `Removed ${result.removed.join(', ')} hooks from ${file}; other settings and hooks are untouched (cleanupPeriodDays is left as it is).`;
-  return { document: { ok: true, ...result }, text };
+  return { document: { ok: true, ...result, ...(removed === undefined ? {} : { schedule: removed }) }, text: removed === undefined ? text : `${text}\n${removed}` };
 };
 
 export const sessionsHookStatus = async (deps: SessionsDeps, options: { file: string | undefined }): Promise<Outcome> => {
@@ -485,5 +479,5 @@ export const sessionsHookStatus = async (deps: SessionsDeps, options: { file: st
   const files = await hookStatus(runtime, options.file);
   const schedule = await scheduleStatus(runtime);
   const lines = files.map((item) => `${item.scope}: ${item.file}: ${item.installed.length === 0 ? 'no hooks' : item.installed.join(', ')} (cleanupPeriodDays ${String(item.retentionDays)})`);
-  return { document: { ok: true, files, schedule }, text: [...lines, schedule].join('\n') };
+  return { document: { ok: true, files, ...(schedule === undefined ? {} : { schedule }) }, text: (schedule === undefined ? lines : [...lines, schedule]).join('\n') };
 };

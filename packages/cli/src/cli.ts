@@ -380,7 +380,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
       emit(deps, flag(options, 'json'), await sessionsGoldArms(sessionDeps(deps), { file }));
     });
 
-  const hook = sessions.command('hook').description('install the recall hooks into a Claude Code settings file, and the nightly deposit task');
+  const hook = sessions.command('hook').description('install the recall hooks into a Claude Code settings file, and remove the scheduled task earlier versions registered');
   const scopeOption = (value: string): Scope => {
     if (value !== 'user' && value !== 'project' && value !== 'file') throw new InvalidArgumentError('it must be user, project, or file.');
     return value;
@@ -392,11 +392,11 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
 
   hook
     .command('install')
-    .description('merge the SessionStart, UserPromptSubmit, PreToolUse, PostToolUseFailure, and SessionEnd hooks into a settings file (existing hooks are kept), raise cleanupPeriodDays to at least 365, and on Windows register the nightly task (which sends telemetry while telemetry is on, and pool batches only after you accept a pool covenant)')
+    .description('merge the SessionStart, UserPromptSubmit, PreToolUse, PostToolUseFailure, and SessionEnd hooks into a settings file (existing hooks are kept), raise cleanupPeriodDays to at least 365, and, on Windows, remove the nightly task an earlier version registered (oars installs no scheduler: a due sweep and send, at most about hourly, starts from the session-end hook and from any oars command; telemetry goes only while it is on, and pool batches only after you accept a pool covenant)')
     .option('--scope <scope>', 'user (~/.claude/settings.json; the default), project (./.claude/settings.json), or file (needs --file; implied by --file)', scopeOption)
     .option('--file <path>', 'the settings file for --scope file')
     .option('--keep-retention', 'leave cleanupPeriodDays as it is (the harness deletes raw transcripts older than it)')
-    .option('--schedule <mode>', 'nightly: register a Windows task that runs the full deposit and the recurrence refresh daily (a plain install on Windows does this too); off: remove it', (value: string) => {
+    .option('--schedule <mode>', 'off: kept so older scripts still run (it only removes the task an earlier version registered); nightly is refused, because sends now ride the hook and commands', (value: string) => {
       if (value !== 'nightly' && value !== 'off') throw new InvalidArgumentError('it must be nightly or off.');
       return value;
     })
@@ -417,7 +417,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
 
   hook
     .command('uninstall')
-    .description('remove only the hooks `install` wrote from a settings file (cleanupPeriodDays stays; `install --schedule off` removes the task)')
+    .description('remove only the hooks `install` wrote from a settings file (cleanupPeriodDays stays; it also removes the task an earlier version registered)')
     .option('--scope <scope>', 'user (the default), project, or file (needs --file; implied by --file)', scopeOption)
     .option('--file <path>', 'the settings file for --scope file')
     .action(async (_options: OptionValues, command: Command) => {
@@ -427,7 +427,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
 
   hook
     .command('status')
-    .description('what is installed in the user and project settings (and --file), and whether the nightly task is registered')
+    .description('what is installed in the user and project settings (and --file), and whether a task an earlier version registered is still there')
     .option('--file <path>', 'one more settings file to report')
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
