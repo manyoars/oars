@@ -10,6 +10,7 @@ import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf } f
 import { accountOf, loginGone, loginPoll, loginStart } from './identity.js';
 import { hashHosts, hashKey } from './ingest-hash.js';
 import { rawRoute } from './raw.js';
+import { depositDigest, erasedRefusal, holdsErasedValue, isErased } from './tombstones.js';
 import { telemetry, type TelemetryEnv } from './telemetry.js';
 import { fleet, operator, type OperatorEnv } from './telemetry-fleet.js';
 import { rollupRecent, type RollupEnv } from './telemetry-rollup.js';
@@ -52,6 +53,8 @@ const storeDeposit = async (env: Env, account: string, secret: string, text: str
   // The body is read once as it came, so a refusal is judged on what the client sent (a host that is not a name is still refused).
   const sent = parseSkeleton(body);
   if (!sent.ok) return refuse(422, 'closed_vocabulary', `${sent.field}: ${sent.reason}`, sent.field);
+  // Erased content does not come back: a session the operator erased, or any string an erasure tombstoned (a leaked secret), is refused before anything is written.
+  if ((await isErased(env, 'deposit', await depositDigest(account, sent.skeleton.id))) || (await holdsErasedValue(env, body))) return erasedRefusal();
   // Then the hosts are hashed and the body is read again: the row, the bag, the literals, the cells, and the motifs all come from the hashed form, so a clear host never reaches a write.
   const parsed = parseSkeleton(await hashHosts(await hashKey(secret), body));
   if (!parsed.ok) return refuse(422, 'closed_vocabulary', `${parsed.field}: ${parsed.reason}`, parsed.field);
