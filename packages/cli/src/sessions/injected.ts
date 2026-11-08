@@ -101,7 +101,7 @@ const messageRule = (key: string, position: Position, known: ReadonlySet<string>
     return run === null ? text : `${run[0].replace(REMINDER, (block) => markerOf(key, 'system-reminder', block))}${text.slice(run[0].length)}`;
   };
   // A request blob repeats earlier messages and carries no `isMeta`: a text block that is the text of a meta message or an injected attachment
-  // is marked under the same kind as its first line, so the hash matches.
+  // is marked `meta`, whatever kind its first line carries; the hash is the same, so the two lines still match on the hash.
   const repeated: TextRule = (text) => (known.has(normalize(text)) ? markerOf(key, 'meta', text) : leading(text));
   const anywhere: TextRule = (text) => text.replace(REMINDER, (block) => markerOf(key, 'system-reminder', block));
   return (message) => {
@@ -151,6 +151,7 @@ const codexMessage = (key: string, payload: JsonObject): JsonObject => {
 const codexFields = (key: string, payload: JsonObject): JsonObject =>
   CODEX_FIELDS.reduce((acc, name) => withField(acc, name, (value) => mapStrings(value, name, blocksIn(key, name.replaceAll('_', '-')))), payload);
 
+const ORIGIN_TEXT = ['body', 'handback'] as const;
 const HOOK_SUMMARY_FIELDS = ['hookAdditionalContext', 'hookErrors', 'hookInfos'] as const;
 
 const textsOf = (content: Json | undefined): string[] => {
@@ -185,10 +186,15 @@ export const injectedRule = (key: string, known: ReadonlySet<string> = new Set()
   const userMessage = messageRule(key, 'typed', known);
   const metaMessage = messageRule(key, 'meta', known);
   const blobMessage = messageRule(key, 'blob', known);
+  // A meta line's `origin` says where the injected text came from; its `body` and `handback` are that text again, while `kind` stays readable.
+  const originText = (origin: Json): Json => {
+    if (!isObject(origin)) return origin;
+    return ORIGIN_TEXT.reduce((acc, name) => withField(acc, name, (value) => mapStrings(value, name, blocksIn(key, 'meta'))), origin);
+  };
   return (line) => {
     switch (line['type']) {
       case 'user':
-        return withMessage(line, 'message', line['isMeta'] === true ? metaMessage : userMessage);
+        return line['isMeta'] === true ? withField(withMessage(line, 'message', metaMessage), 'origin', originText) : withMessage(line, 'message', userMessage);
       case 'api-request-blob':
         return withMessage(line, 'message', blobMessage);
       case 'attachment': {

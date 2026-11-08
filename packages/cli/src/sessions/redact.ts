@@ -219,7 +219,7 @@ export const redactTranscript = (body: string, domains: readonly string[] = [], 
   // A request blob repeats messages other lines hold, so what those lines carry is collected before any line is marked.
   const repeated = new Set<string>();
   const whole = parseContainer(body);
-  for (const parsed of whole !== undefined ? [whole] : body.split(String.fromCharCode(10)).map(parseContainer)) if (parsed !== undefined && !Array.isArray(parsed)) learnInjected(parsed, repeated);
+  for (const parsed of whole !== undefined ? [whole] : body.split('\n').map(parseContainer)) if (parsed !== undefined && !Array.isArray(parsed)) learnInjected(parsed, repeated);
   const redacted = redactDecoded(body, redactText, injectedRule(injectedKey, repeated));
   return { text: redacted, masked: Math.max(0, placeholders(redacted) - placeholders(body)) };
 };

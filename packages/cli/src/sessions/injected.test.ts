@@ -64,6 +64,18 @@ describe('Claude Code user lines', () => {
     expect(at(run(caveat), 'message', 'content')).toMatch(/^\[injected meta /);
   });
 
+  it('replaces the body and handback of the origin of a meta line, and keeps the origin kind', () => {
+    const origin = { kind: 'peer', body: 'Fold the paper boat before the green lamp is lit', handback: 'Return the orange kettle to the shelf at dusk' };
+    const line = { type: 'user', isMeta: true, origin, message: { role: 'user', content: 'Remember the orange kettle is for tea only' } };
+    const out = run(line);
+    expect(at(out, 'origin', 'body')).toMatch(/^\[injected meta [0-9a-f]{12}\]$/);
+    expect(at(out, 'origin', 'handback')).toMatch(/^\[injected meta [0-9a-f]{12}\]$/);
+    expect(at(out, 'origin', 'kind')).toBe('peer');
+    expect(run(out)).toBe(out);
+    const typed = { type: 'user', origin, message: { role: 'user', content: 'please list the files' } };
+    expect(run(typed)).toBe(typed);
+  });
+
   it('does not touch a message that is not the user role or has no message', () => {
     expect(run({ type: 'user' })).toEqual({ type: 'user' });
     const assistant = { type: 'user', message: { role: 'assistant', content: reminder(FILLER) } };
