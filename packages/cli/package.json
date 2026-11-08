@@ -1,7 +1,19 @@
 {
   "name": "@manyoars/oars",
   "version": "0.4.0",
-  "description": "The oars CLI: sign in, manage API keys, and keep a local memory of your own coding-agent sessions on your machine. The session commands upload nothing except what `gold arms` sends through your own Claude subscription; telemetry (on by default) and the nightly pool send after you accept a pool covenant are described in the README",
+  "description": "A local, searchable record of your coding agent sessions. Reads Claude Code, Cursor, Codex, Copilot CLI, Gemini CLI, and more, and keeps the record on your machine.",
+  "homepage": "https://manyoars.com/",
+  "keywords": [
+    "claude-code",
+    "codex",
+    "cursor",
+    "gemini-cli",
+    "coding-agents",
+    "agent-memory",
+    "session-history",
+    "mcp",
+    "cli"
+  ],
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

@@ -78,6 +78,8 @@ describe('login, deposit, and fetch against a local server', () => {
     for (const one of people) {
       expect(await one.cli('login', '--provider', 'github')).toBe(ExitCode.OK);
       expect(one.last()).toMatchObject({ ok: true, server: await pool.url() });
+      // The floor counts accounts that have stood (S13): this one has, as a person who has deposited for 90 days has.
+      await (await pool.db()).prepare("UPDATE accounts SET access = 'standing'").run();
 
       // The four invented sessions in the fixture folder are built into the outbox, and `deposit` itself sends nothing.
       expect(await one.cli('deposit')).toBe(ExitCode.OK);

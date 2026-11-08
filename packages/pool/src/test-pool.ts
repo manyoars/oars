@@ -3,8 +3,10 @@ import { createHash, webcrypto } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
-import { convertV4MiniflareOptions, Miniflare, Request as StubRequest, Response as StubResponse } from 'miniflare';
+import { convertV4MiniflareOptions, CoreHeaders, Miniflare, ProxyOps, Request as StubRequest, Response as StubResponse } from 'miniflare';
+import { Agent, buildConnector } from 'undici';
 import { expect } from 'vitest';
+import type { Bound, PoolDb } from './http.js';
 
 interface Statement {
   first: (column?: string) => Promise<unknown>;
@@ -19,11 +21,40 @@ export interface TestDb {
 
 /** The R2 calls these tests make, named for the same reason as `TestDb`. */
 export interface TestBucket {
-  list: (options?: { prefix?: string; cursor?: string }) => Promise<{ objects: readonly { key: string }[]; truncated?: boolean; cursor?: string }>;
+  list: (options?: { prefix?: string; cursor?: string; limit?: number }) => Promise<{ objects: readonly { key: string }[]; truncated?: boolean; cursor?: string }>;
   put: (key: string, value: string) => Promise<unknown>;
   get: (key: string) => Promise<{ text: () => Promise<string>; arrayBuffer: () => Promise<ArrayBuffer> } | null>;
   delete: (keys: string[]) => Promise<void>;
 }
+
+/**
+ * The pool's D1 as `Env.DB` takes it, for a test that calls a route function directly. Miniflare runs one request at a time here, so a race between requests is scripted: `before` runs ahead of each statement's `run` and may hold it until the other requests have caught up.
+ */
+export const poolDbOf = (db: TestDb, before: (sql: string) => Promise<void> = () => Promise.resolve()): PoolDb => {
+  // One statement reaches the database at a time (a burst of parallel calls resets Miniflare's sockets), so requests interleave between statements, never inside one.
+  let turn: Promise<unknown> = Promise.resolve();
+  const alone = <T>(call: () => Promise<T>): Promise<T> => {
+    const next = turn.then(call);
+    turn = next.catch(() => undefined);
+    return next;
+  };
+  return {
+    prepare: (sql) => ({
+      bind: (...values): Bound => {
+        const statement = db.prepare(sql).bind(...values);
+        return {
+          first: () => alone(() => statement.first()),
+          all: () => alone(() => statement.all()),
+          run: async () => {
+            await before(sql);
+            return alone(async () => ({ meta: { changes: Number(fieldOf(fieldOf(await statement.run(), 'meta'), 'changes')) } }));
+          },
+        };
+      },
+    }),
+    batch: () => Promise.resolve([]),
+  };
+};
 
 export interface StubUser {
   id: string;
@@ -79,21 +110,67 @@ export const workerError = async (response: Response): Promise<Error> => {
   return error;
 };
 
+export interface KeepAliveSender {
+  send: Miniflare['dispatchFetch'];
+  /** The connections the pool's own requests have opened. Miniflare's release requests ride another Agent and are not counted. */
+  connects: () => number;
+  /** The most of the pool's own requests sent and not yet answered at once. */
+  peak: () => number;
+  close: () => Promise<void>;
+}
+
 /**
- * Miniflare sends every `dispatchFetch` with `reset: true`, so undici closes the socket after each response: one loopback socket in TIME_WAIT for every request a test makes, and for every D1 or R2 call it makes through `getBindings` too, because the proxy client holds this same function. A full run opened about 9,000 and left about 5,400 in TIME_WAIT (Linux), enough to exhaust the dynamic port range when several test runs share one machine.
- * This sends the same request on Node's keep-alive pool instead, with the two headers Miniflare's own dispatcher adds.
+ * Miniflare sends every `dispatchFetch` with `reset: true`, so undici closes the socket after each response: one loopback socket in TIME_WAIT for every request a test makes, and for every D1 or R2 call it makes through `getBindings` too, because the proxy client holds this same function. A full run opened about 9,000 and left about 5,400 in TIME_WAIT (Linux), enough to exhaust the dynamic port range when gates run together.
+ * This sends the same request on a keep-alive undici Agent the pool owns instead, with the two headers Miniflare's own dispatcher adds. `entry` names the server the request goes to.
  */
-const keepAlive = (miniflare: Miniflare): void => {
-  miniflare.dispatchFetch = async (input, init) => {
+export const keepAliveSender = (entry: () => Promise<URL>): KeepAliveSender => {
+  // undici closes a socket idle for 4 s by default, and a test process starved by a loaded box can idle that long between two calls; each such close costs a reconnect and a TIME_WAIT
+  // socket. Ten seconds covers the longest planned pause between calls (4.5 s) and stays below the 15 s after which workerd closes an idle socket itself, so the client never reuses a socket
+  // the server may be closing. `close` closes both agents, so no socket outlives a pool.
+  const keepAliveTimeout = { keepAliveTimeout: 10_000, keepAliveMaxTimeout: 10_000 };
+  const connector = buildConnector({});
+  let connects = 0;
+  let peak = 0;
+  const calls = new Agent({
+    ...keepAliveTimeout,
+    connect: (options, callback) => {
+      connects += 1;
+      connector(options, callback);
+    },
+  });
+  // Miniflare frees the handles `getBindings` returned in a DELETE it sends on its own schedule (100 ms after a garbage collection), so it can be in flight while a test makes its next call. An Agent opens
+  // a connection for a request that finds none idle; on the calls' Agent that DELETE would take the connection the call is about to reuse and cost it a connect. Its own Agent keeps the calls' count about the calls.
+  const releases = new Agent(keepAliveTimeout);
+  let inFlight = 0;
+  const send: Miniflare['dispatchFetch'] = async (input, init) => {
     const forward = new StubRequest(input, init);
-    const entry = await miniflare.ready;
+    const base = await entry();
     const sent = new URL(forward.url);
     const headers = new Headers([...forward.headers.entries()]);
     headers.set('MF-Original-URL', forward.url);
     headers.set('MF-Disable-Pretty-Error', 'true');
-    const response = await fetch(new URL(`${sent.pathname}${sent.search}`, entry), { method: forward.method, headers, ...(forward.body === null ? {} : { body: forward.body, duplex: 'half' }), redirect: forward.redirect });
+    const dispatcher = forward.headers.get(CoreHeaders.OP) === ProxyOps.FREE ? releases : calls;
+    const counted = dispatcher === calls;
+    if (counted) {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+    }
+    let response: Response;
+    try {
+      response = await fetch(new URL(`${sent.pathname}${sent.search}`, base), { method: forward.method, headers, ...(forward.body === null ? {} : { body: forward.body, duplex: 'half' }), redirect: forward.redirect, dispatcher });
+    } finally {
+      if (counted) inFlight -= 1;
+    }
     if (response.status === 500 && response.headers.has('MF-Experimental-Error-Stack')) throw await workerError(response);
     return new StubResponse(response.body, { status: response.status, statusText: response.statusText, headers: [...response.headers.entries()] });
+  };
+  return {
+    send,
+    connects: () => connects,
+    peak: () => peak,
+    close: async () => {
+      await Promise.all([calls.close(), releases.close()]);
+    },
   };
 };
 
@@ -191,8 +268,13 @@ export interface TestPool {
   get: (path: string, token?: string) => Promise<Answer>;
   raw: (path: string, token?: string, headers?: { [name: string]: string }) => Promise<RawAnswer>;
   /** The sign-in the CLI performs through the pool's two login routes, with the provider's approval given at the stub between them. */
-  signIn: (provider: string, user: StubUser) => Promise<{ token: string; account: string; signingKey: unknown }>;
+  /** Signs the stub user in. The account has stood unless `fresh`: the floor counts only accounts that have (S13), so a test that serves a cell needs holders that have, and a test of the fetch cap or of what a fresh account does passes `fresh: true`. */
+  signIn: (provider: string, user: StubUser, options?: { fresh?: boolean }) => Promise<{ token: string; account: string; signingKey: unknown }>;
   stub: StubProvider;
+  /** The connections the pool's own requests have opened (see `KeepAliveSender`). */
+  connects: () => number;
+  /** The most requests the pool's own requests had in flight at once (see `KeepAliveSender`). */
+  peak: () => number;
   signingKey: () => { kty: string; crv: string; x: string };
   dispose: () => Promise<void>;
 }
@@ -241,7 +323,8 @@ export const startPool = async (bindings: { [name: string]: string } = {}, optio
       outboundService: stub.outbound,
     }),
   );
-  keepAlive(miniflare);
+  const sender = keepAliveSender(() => miniflare.ready);
+  miniflare.dispatchFetch = sender.send;
   await miniflare.ready;
   const db = async (): Promise<TestDb> => (await miniflare.getBindings<{ DB: TestDb }>()).DB;
   const bucket = async (): Promise<TestBucket> => (await miniflare.getBindings<{ TELEMETRY: TestBucket }>()).TELEMETRY;
@@ -277,15 +360,21 @@ export const startPool = async (bindings: { [name: string]: string } = {}, optio
     get,
     raw,
     stub,
-    signIn: async (provider, user) => {
+    connects: sender.connects,
+    peak: sender.peak,
+    signIn: async (provider, user, options = {}) => {
       const started = await post('/v1/login/start', { provider });
       const issued = /USER-(\d+)/.exec(textOf(started.json, 'userCode'))?.[1];
       stub.approve(`device-${issued ?? ''}`, user);
       const signedIn = await post('/v1/login/poll', { handle: textOf(started.json, 'handle') });
+      if (options.fresh !== true) await (await db()).prepare("UPDATE accounts SET access = 'standing' WHERE id = ?").bind(textOf(signedIn.json, 'account')).run();
       return { token: textOf(signedIn.json, 'token'), account: textOf(signedIn.json, 'account'), signingKey: fieldOf(signedIn.json, 'signingKey') };
     },
     signingKey: () => ({ kty: 'OKP', crv: 'Ed25519', x: key.x }),
-    dispose: () => miniflare.dispose(),
+    dispose: async () => {
+      await miniflare.dispose();
+      await sender.close();
+    },
   };
 };
 
@@ -303,4 +392,3 @@ export const stubUser = (id: string): StubUser => {
   const slot = /^\d+$/.test(id) ? Number(id) : Number.parseInt(createHash('sha256').update(id).digest('hex').slice(0, 6), 16);
   return { id, login: `login-of-${id}`, email: `person-${id}@example.test`, createdAt: new Date(Date.UTC(2015, 0, 1) + (slot % 1200) * 3 * 24 * 60 * 60 * 1000).toISOString() };
 };
-

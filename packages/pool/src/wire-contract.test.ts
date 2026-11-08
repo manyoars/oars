@@ -53,7 +53,7 @@ const seedPeers = async (): Promise<void> => {
   for (let peer = 1; peer <= PEERS; peer += 1) {
     const account = `acct-peer-${String(peer)}`;
     const token = `${TOKEN}-peer-${String(peer)}`;
-    await db.prepare('INSERT INTO accounts (id, covenant) VALUES (?, ?)').bind(account, 'v1').run();
+    await db.prepare("INSERT INTO accounts (id, covenant, access) VALUES (?, ?, 'standing')").bind(account, 'v1').run();
     await db.prepare('INSERT INTO tokens (hash, account, expires_at) VALUES (?, ?, ?)').bind(createHash('sha256').update(token).digest('hex'), account, Date.now() + 600_000).run();
     expect((await pool.post('/v1/deposits', JSON.stringify(baseline(`00000000000000a${String(peer)}`)), token)).status).toBe(201);
   }
@@ -100,7 +100,7 @@ const servedCells = (json: unknown): number => {
 beforeAll(async () => {
   pool = await startPool();
   const db = await pool.db();
-  await db.prepare("INSERT INTO accounts (id, covenant) VALUES ('acct-1', 'v1')").run();
+  await db.prepare("INSERT INTO accounts (id, covenant, access) VALUES ('acct-1', 'v1', 'standing')").run();
   await db.prepare("INSERT INTO tokens (hash, account, expires_at) VALUES (?, 'acct-1', ?)").bind(createHash('sha256').update(TOKEN).digest('hex'), Date.now() + 600_000).run();
 }, 60_000);
 
@@ -199,10 +199,10 @@ describe('a value this server does not know', () => {
   });
 });
 
-describe('a format 3 batch with every optional field absent', () => {
+describe('a format 4 batch with every optional field absent', () => {
   /** What an absent optional field reads as, which is what a sent null is. */
   const EMPTY: { [name: string]: unknown } = { deltas: [], timingPrint: null, languageShares: [] };
-  const ABSENT_ONLY: ReadonlySet<string> = new Set(['reach', 'skill', 'edges', 'recoveryCalls', 'usageResponses', 'allocated', 'repoKey', 'orgSize', 'team', 'repoVisibility', 'hour', 'keys', 'keysDropped', 'targetClass', 'argClass']);
+  const ABSENT_ONLY: ReadonlySet<string> = new Set(['reach', 'skill', 'edges', 'recoveryCalls', 'usageResponses', 'allocated', 'repoKey', 'orgSize', 'team', 'repoVisibility', 'hour', 'keys', 'keysDropped', 'targetClass', 'argClass', 'argFeatures', 'argValues', 'changeKind']);
 
   // Each level of the wire with its optional names and where it sits; a level added to OPTIONAL fails the length check below until it is listed here.
   const LEVELS_OPTIONAL: readonly (readonly [readonly string[], (string | number)[]])[] = [

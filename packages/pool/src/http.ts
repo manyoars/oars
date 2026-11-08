@@ -30,6 +30,8 @@ export interface RawBucket {
   put: (key: string, value: ArrayBuffer) => Promise<unknown>;
   get: (key: string) => Promise<{ arrayBuffer: () => Promise<ArrayBuffer> } | null>;
   delete: (keys: readonly string[]) => Promise<void>;
+  /** One page of keys under a prefix, at most `limit` (R2 gives 1,000 at most). */
+  list: (options: { prefix: string; limit: number }) => Promise<{ objects: readonly { key: string }[]; truncated: boolean }>;
   createMultipartUpload: (key: string) => Promise<RawMultipart>;
 }
 

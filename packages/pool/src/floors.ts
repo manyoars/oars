@@ -18,6 +18,7 @@ export interface Floors {
    * The floor a `clear` cell (`cell-class.ts`) is served at when a read is at the public floor. It is the public floor today, because a cell below the floor shows how few accounts did a thing, so serving a clear cell lower is the owner's decision and a change
    * to this field with no client release. It has no binding of its own: `floorsOf` sets it to `public`. The gap below `public` carries to every read family's floor (`cellFloor`), and the bundle states `public`, which a clear cell's floor is never above.
    * The version-free environment cells stay at the `fit` family's floor whatever `clear` is: `storedOf` fetches them (and their motifs) at that floor, and the `ENVIRONMENT_CELLS` rule is written for it, so a lower `clear` also needs a change in `stored.ts` before a clear environment cell is served below it.
+   * `withheldOf` (`complement.ts`) counts a cell as served when it clears the public floor, so a `clear` below `public` also needs that test changed, or the rank check under-withholds.
    */
   clear: number;
   /** The read families that have a floor of their own. A family not named here is served at `public`. */
@@ -97,7 +98,7 @@ export const wireFloors = (floors: Floors): BundleFloors => {
 
 /**
  * The count a cell clears a floor with: its verified-distinct clusters of accounts, not its accounts (`clusters.ts`, "Clusters" in docs/pool.md), a weighting and never a cap. The stored `clusters` column
- * is that count, written by `recount` (`cluster-store.ts`) after every deposit, so the SQL in `stored.ts` that compares the column to a floor to fetch fewer rows and this function, which the bundle's own
+ * is that count of the accounts that have stood (a free account that has not counts toward no floor, S13), written by `recount` (`cluster-store.ts`) after every deposit, so the SQL in `stored.ts` that compares the column to a floor to fetch fewer rows and this function, which the bundle's own
  * decision uses, read one number. A served read carries it in its `clusters` field.
  */
 export const clustersOf = (cell: Cell): number => cell.clusters;

@@ -3,6 +3,7 @@
 // count to their `clusters` column, the one number a floor compares in SQL (`stored.ts`) and in code (`floors.ts`). Nothing here refuses, drops, or hides an account or a deposit.
 import type { SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { clusterHolders, type Holder } from './clusters.js';
+import { STANDING_AFTER_DAYS } from './access.js';
 import { fieldOf, type Bound, type Env } from './http.js';
 import { chunksOf } from './ingest.js';
 
@@ -48,14 +49,23 @@ const into = <Value>(map: Map<string, Value[]>, key: string, value: Value): void
 /** The accounts that hold any of `keys`, as the subquery every signal read starts from. */
 const HOLDING = (kind: Kind): string => `SELECT account FROM contributors WHERE kind = '${kind}' AND key IN (SELECT value FROM json_each(?))`;
 
-/** The weighted count of each of `keys` (cell keys, or stratum keys), from every account that holds it. */
-const countsOf = async (env: Env, kind: Kind, keys: string): Promise<{ key: string; count: number }[]> => {
-  const [held, accounts, repoKeys, hours] = await Promise.all([
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The weighted count of each of `keys` (cell keys, or stratum keys), from the accounts that hold it and have stood. An account has stood when its `access` is `standing`, or when its first counting batch is
+ * `STANDING_AFTER_DAYS` old (`accessOf` latches the flag the first time it is read after that, and a recount can come first). A free account counts toward no floor until then, so k-1 of them
+ * cannot test whether a real account holds a name (S13); their holdings are kept and count once they have stood. `now` is the pool's clock.
+ */
+const countsOf = async (env: Env, kind: Kind, keys: string, now: number): Promise<{ key: string; count: number }[]> => {
+  const [held, accounts, repoKeys, hours, counted] = await Promise.all([
     rows(env, `SELECT key, account, MIN(day) AS first_day FROM contributors WHERE kind = ? AND key IN (SELECT value FROM json_each(?)) GROUP BY key, account`, kind, keys),
-    rows(env, `SELECT id, first_seen, provider_created FROM accounts WHERE id IN (${HOLDING(kind)})`, keys),
+    rows(env, `SELECT id, first_seen, provider_created, access FROM accounts WHERE id IN (${HOLDING(kind)})`, keys),
     rows(env, `SELECT account, repo_key FROM account_repo_keys WHERE account IN (${HOLDING(kind)})`, keys),
     rows(env, `SELECT account, day, hour FROM deposit_hours WHERE account IN (${HOLDING(kind)})`, keys),
+    rows(env, `SELECT account, MIN(counted_at) AS first FROM deposits WHERE counted_at IS NOT NULL AND tier <> 'none' AND account IN (${HOLDING(kind)}) GROUP BY account`, keys),
   ]);
+  const firstCounted = new Map<string, number | undefined>(counted.map((row) => [text(row, 'account'), whole(row, 'first')]));
+  const standing = new Set(accounts.filter((row) => fieldOf(row, 'access') === 'standing' || (firstCounted.get(text(row, 'id')) ?? Infinity) <= now - STANDING_AFTER_DAYS * DAY_MS).map((row) => text(row, 'id')));
   const created = new Map<string, number | undefined>(accounts.map((row) => [text(row, 'id'), whole(row, 'provider_created') ?? whole(row, 'first_seen')]));
   const keysOf = new Map<string, string[]>();
   for (const row of repoKeys) into(keysOf, text(row, 'account'), text(row, 'repo_key'));
@@ -68,6 +78,7 @@ const countsOf = async (env: Env, kind: Kind, keys: string): Promise<{ key: stri
   const holders = new Map<string, Holder[]>();
   for (const row of held) {
     const account = text(row, 'account');
+    if (!standing.has(account)) continue;
     into(holders, text(row, 'key'), {
       account,
       repoKeys: keysOf.get(account) ?? [],
@@ -76,7 +87,8 @@ const countsOf = async (env: Env, kind: Kind, keys: string): Promise<{ key: stri
       cadence: cadence.get(account) ?? new Map<string, Set<number>>(),
     });
   }
-  return [...holders].map(([key, found]) => ({ key, count: clusterHolders(found).count }));
+  // A key whose holders have not stood is written 0, not left at the count an earlier recount gave it.
+  return [...new Set(held.map((row) => text(row, 'key')))].map((key) => ({ key, count: clusterHolders(holders.get(key) ?? []).count }));
 };
 
 /** Every cell or stratum key `account` holds: the signals it adds (repo keys, deposit hours) are the account's, so a deposit can change the cluster of any key it holds, not only this batch's. */
@@ -86,9 +98,9 @@ export const heldBy = async (env: Env, account: string, kind: Kind): Promise<str
  * Writes the weighted count of each key in `keys` to its row's `clusters`. It reads what is committed, then writes after awaiting, so a recount that started earlier can write after a later one:
  * a count can lag a deposit until the next deposit that touches the key. A key with no row (a stratum a batch did not write) is left alone. A key none hold stays at the 0 it began with.
  */
-export const recount = async (env: Env, kind: Kind, keys: readonly string[]): Promise<void> => {
+export const recount = async (env: Env, kind: Kind, keys: readonly string[], now: number = Date.now()): Promise<void> => {
   for (const chunk of chunksOf(keys)) {
-    const counts = await countsOf(env, kind, chunk);
+    const counts = await countsOf(env, kind, chunk, now);
     for (const part of chunksOf(counts)) {
       await env.DB.prepare(
         `UPDATE ${TABLE[kind]} SET clusters = counts.count FROM (SELECT json_extract(value, '$.key') AS key, json_extract(value, '$.count') AS count FROM json_each(?)) AS counts WHERE ${TABLE[kind]}.key = counts.key`,
