@@ -5,7 +5,9 @@
 // (`withheldOf`). Where a sub-floor part is held to a higher floor than its whole (a long-tail name under a clear shape), the part withheld must be at or above that higher floor on the accounts that have stood, since a clear part is served at the lower clear floor; with none, the whole is withheld. The same holds for a total no cell holds (an action's calls,
 // which its one-step shape cells sum to over models, a long-tail model beside a listed one): with no such part, the smallest served part of each other family that counts that total is withheld, and a family with neither a whole nor a total is left alone.
 // The environment cells (`environmentOf`, `stored.ts`) keep their own rule, every part served or the total is not (each part against its own class's floor), and their counterparts are also dropped when a bucket cell is withheld (`bundleOf`).
+import { argFeaturesOf } from '../../cli/src/sessions/call-shape.js';
 import { isEnvironmentCell, NO_AXES, parseShapeClass, weekStartOf, type Cell, type ShapeFacet } from '../../cli/src/sessions/cells.js';
+import { targetOf } from '../../cli/src/sessions/extract.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
 import { OPEN_LIST_KEYS } from '../../cli/src/sessions/public-vocabulary.js';
 import { clears, clustersOf } from './floors.js';
@@ -52,6 +54,12 @@ const ACTION_CALLS = 'action-calls';
 /** Whether a total (`callsTotal`) is an action's calls. */
 const isActionCalls = (total: string): boolean => total.startsWith(`["${ACTION_CALLS}"`);
 
+/** The calls of an action that have a path target, in one frame, grain, day, and exposure: the total the `target-keys` rule's two families share. */
+const pathCalls = (action: string, cell: Pick<Cell, 'frameBucket' | 'grain' | 'day' | 'exposed'>): string => JSON.stringify(['path-calls', action, cell.frameBucket, cell.grain, cell.day, cell.exposed]);
+
+/** Whether a call that sends this key has a path target, asked of the emitter (`targetOf`) so the list of path keys is not restated. */
+const sendsPath = (key: string): boolean => targetOf('', { [key]: 'x' }, undefined, '', (value) => value).target !== null;
+
 /** The tag of `ownCalls`, so no key name can make the same total and it is never an action's calls. */
 const OWN_CALLS = 'own-calls';
 
@@ -83,8 +91,8 @@ const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const smallest = (a: Cell, b: Cell): number => clustersOf(a) - clustersOf(b) || compare(a.day, b.day) || compare(a.motifId, b.motifId);
 
 /**
- * Every way a cell counts inside another count, one rule each; `familiesOf` reads this table for both the local rules and the rank check. The invariant test (`shape-cells.test.ts`) states the relations from the
- * cells on its own, so a nesting this table leaves out shows there as a determined cell. A rule names the
+ * Every way a cell counts inside another count, one rule each; `familiesOf` reads this table for both the local rules and the rank check. The oracle (`withholding-oracle.test.ts`) derives the relations from the
+ * emitter, so a relation this table leaves out shows there as a leak. A rule names the
  * families a cell belongs to and whether it is the whole of one (a cell holding the family's total) or a part of it; a family with no whole cell has a total the reader still has from another read.
  */
 const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, motif: Motif | undefined) => Placement[] }[] = [
@@ -115,6 +123,23 @@ const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, motif: Mot
       return [{ family: JSON.stringify(['depth-dir', parsed.action, parsed.value.slice(0, at), cell.frameBucket, cell.grain, cell.day, cell.exposed]), role: parsed.facet === 'depth' ? 'whole' : 'part' }];
     },
   },
+  // A key's `size` cell is the whole of its `enum` cells whose member's length falls in that size, for a boolean-free exhaustive list: every call that sends the key sends a listed value, so the calls in a size are the calls of
+  // the members of that length. `files_with_matches` alone is 18 characters, so `size output_mode=9-32` and `enum output_mode=files_with_matches` count the same calls. An open list is not such a whole: an off-list value
+  // has a size and no `enum` cell (`countsOnlySome`).
+  {
+    name: 'enum-size',
+    placements: (cell, motif) => {
+      const parsed = motif === undefined || motif.cls === null ? null : parseShapeClass(motif.cls);
+      if (parsed === null || (parsed.facet !== 'size' && parsed.facet !== 'enum')) return [];
+      const at = parsed.value.indexOf('=');
+      const key = parsed.value.slice(0, at);
+      const member = parsed.value.slice(at + 1);
+      if (parsed.facet === 'enum' && (countsOnlySome('enum', parsed.value) || member === 'true' || member === 'false')) return [];
+      // The size the emitter itself gives the member, so the buckets are not restated here.
+      const size = parsed.facet === 'size' ? member : argFeaturesOf('', { [key]: member }, undefined)[0]?.valueSize;
+      return [{ family: JSON.stringify(['enum-size', parsed.action, key, size, cell.frameBucket, cell.grain, cell.day, cell.exposed]), role: parsed.facet === 'size' ? 'whole' : 'part' }];
+    },
+  },
   // The calls that send a key k are split by the `keys` cells whose list holds k, and by each per-key facet of k: the `keys` cells that hold k are parts of those facets' total.
   {
     name: 'key-nesting',
@@ -127,6 +152,19 @@ const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, motif: Mot
         total: callsTotal(parsed.action, key, cell),
         echoes: KEYED_FACETS.map((facet) => facetFamilyKey(parsed.action, facet, key, cell)),
       }));
+    },
+  },
+  // A call has a path target (a `target` class other than `none`) exactly when it sends a path key, so the `target` cells other than `none` and the `keys` cells that hold a path key count the same calls: one equation,
+  // which neither facet's own family states (the `target` family adds `none` and sums to the action's calls; a `keys` cell is a part of its keys' nesting families). Which keys are path keys is the emitter's own
+  // answer (`sendsPath`). A call that sends a path key with an empty or non-string value is in a `keys` cell and has no path target, so the sum can only withhold more.
+  {
+    name: 'target-keys',
+    placements: (cell, motif) => {
+      const parsed = motif === undefined || motif.cls === null ? null : parseShapeClass(motif.cls);
+      if (parsed === null) return [];
+      const withPath = parsed.facet === 'target' ? parsed.value !== 'none' : parsed.facet === 'keys' && parsed.value.split(',').some(sendsPath);
+      if (!withPath) return [];
+      return [{ family: JSON.stringify(['target-keys', parsed.action, parsed.facet, cell.frameBucket, cell.grain, cell.day, cell.exposed]), role: 'part', total: pathCalls(parsed.action, cell) }];
     },
   },
   // An action's one-step shape cells, per model (`harness/version/model`) and exposure, sum to the calls its facet cells split on the version bucket (`harness/version/-`, unexposed): the total the `fit` read gives.
