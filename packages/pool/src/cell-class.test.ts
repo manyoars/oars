@@ -1,11 +1,14 @@
 // t900 Item 3: the pool reads the class table. A value on the public list is `clear`, one off it takes the field's `longTail` class, and a served read takes the class of the cell it counts.
 import { describe, expect, it } from 'vitest';
 import { NO_AXES, type Cell } from '../../cli/src/sessions/cells.js';
+import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from '../../cli/src/sessions/pool-fixture.js';
+import { parseSkeleton, skeletonOf, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
 import type { Read } from '../../cli/src/sessions/read.js';
 import type { StepIdentity } from '../../cli/src/sessions/schema.js';
-import { cellClassOf } from './cell-class.js';
+import { cellClassOf, type CellClass } from './cell-class.js';
 import { bundleOf } from './derive.js';
+import { incrementsOf } from './ingest.js';
 import { DEFAULT_FLOORS, DEFAULT_PUBLIC_FLOOR, floorsOf } from './floors.js';
 import { classFor, isListed } from './field-classes.js';
 import type { StoredPool } from './stored.js';
@@ -139,5 +142,56 @@ describe('a served bundle reads the class', () => {
   it('states the thresholded floor as the bundle\'s floor, and the clear floor beside it', () => {
     expect(DEFAULT_FLOORS.clear).toBe(1);
     expect(bundleOf('claude-code', '2.1.314', stored(DEFAULT_PUBLIC_FLOOR), DEFAULT_FLOORS).floor).toBe(DEFAULT_PUBLIC_FLOOR);
+  });
+});
+
+// A failed call's `error:<code>/<name>` and `error-version:<code>/<name>` cells hold the step's identity in the class name with no steps behind it, so the class has to be read from the name.
+describe('a failed call\'s class cells', () => {
+  const failedSkeleton = (identity: StepIdentity): SessionSkeleton => {
+    const framed = frame({ day: '2026-11-01' });
+    const shell = step(0, 0, 'shell.exec', { native: 'Bash', status: 'error', identity });
+    const [only] = sessionsFrom(
+      store({ sessions: [session('s1', { frame: framed })], prompts: [prompt('s1', 0, { frame: framed })], tools: [tool('s1', 0, 'Bash', { status: 'error', errorCode: '429', steps: [shell] })] }),
+    );
+    const built = only === undefined ? null : skeletonOf(only, '0000000000000001', storedNames, printOf);
+    if (built === null) throw new Error('no skeleton');
+    return built;
+  };
+  const storedOfFailed = (identity: StepIdentity, clusters: number): StoredPool => {
+    const parsed = parseSkeleton(JSON.parse(JSON.stringify(failedSkeleton(identity))));
+    if (!parsed.ok) throw new Error('skeleton refused');
+    const { cells, motifs } = incrementsOf(parsed.skeleton);
+    // The same motif is held once however many cells name it.
+    const held = [...new Map(motifs.map((motif) => [motif.motifId, motif])).values()];
+    return {
+      cells: [...cells.values()].map((row): Cell => ({ motifId: row.motifId, frameBucket: row.frameBucket, grain: row.grain, day: row.day, sessions: row.sessions, clusters, ok: row.ok, failed: row.failed, tokens: row.tokens, durationMs: row.durationMs, exposed: row.exposed === 1 })),
+      environment: [],
+      motifs: held,
+      strata: [],
+    };
+  };
+  const served = (identity: StepIdentity, clusters: number): string[] =>
+    bundleOf('claude-code', '2.1.314', storedOfFailed(identity, clusters), DEFAULT_FLOORS).motifs.map((motif) => motif.cls ?? '').filter((cls) => cls.startsWith('error'));
+  const namedIn = (held: string[]): string[] => held.filter((cls) => cls.includes('acme-deploy'));
+  const classOf = (identity: StepIdentity, prefix: string, name: string): CellClass[] => {
+    const { cells, motifs } = storedOfFailed(identity, 1);
+    return cells.flatMap((cell) => {
+      const motif = motifs.find(({ motifId }) => motifId === cell.motifId);
+      return (motif?.cls ?? '').startsWith(prefix) && (motif?.cls ?? '').endsWith(name) ? [cellClassOf(cell, motif)] : [];
+    });
+  };
+  const tail: StepIdentity = { program: 'acme-deploy', sub: 'ship', flags: [] };
+
+  it('holds a long-tail name in an error or error-version class to the thresholded floor', () => {
+    expect(classOf(tail, 'error:429/', 'ship]')).toEqual(['thresholded']);
+    expect(classOf(tail, 'error-version:429/', 'ship]')).toEqual(['thresholded']);
+    expect(namedIn(served(tail, 1))).toEqual([]);
+    expect(namedIn(served(tail, DEFAULT_PUBLIC_FLOOR - 1))).toEqual([]);
+    expect(namedIn(served(tail, DEFAULT_PUBLIC_FLOOR))).toHaveLength(2);
+  });
+
+  it('keeps an action-only error name clear, served at one account', () => {
+    expect(classOf(tail, 'error:429/', 'shell.exec')).toEqual(['clear']);
+    expect(served(tail, 1)).toEqual(['error:429/shell.exec', 'error-version:429/shell.exec']);
   });
 });

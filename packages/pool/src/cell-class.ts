@@ -1,6 +1,6 @@
 // The class of a cell: `clear` when every value its key names is on a public list, `thresholded` when any one is not. A cell keys on a motif (the names of its steps) and a frame bucket (`harness/versionBucket/model`), so
 // the class of a cell is the strictest class among them. A host is hashed at ingest, so a cell naming one is held to the thresholded floor as well. The class table is `field-classes.ts`; this file only reads it for a cell.
-import { isEnvironmentCell, NO_AXES, parseShapeClass, UNKNOWN, type Cell } from '../../cli/src/sessions/cells.js';
+import { ERROR_CLASS, ERROR_VERSION_CLASS, isEnvironmentCell, NO_AXES, parseShapeClass, UNKNOWN, type Cell } from '../../cli/src/sessions/cells.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
 import type { StepIdentity } from '../../cli/src/sessions/schema.js';
 import { classFor, isListed } from './field-classes.js';
@@ -34,10 +34,14 @@ const KEYED_FACETS: ReadonlySet<string> = new Set(['size', 'depth', 'extension',
 
 /**
  * A shape cell's value: the key names of a call are a long tail, so a `keys` cell is held to the thresholded floor; a layer 1 facet is clear when its key is on a public tool's pinned list and thresholded when it is a name
- * any other tool sent; every other facet is a closed list. A class motif that is no shape names nothing here.
+ * any other tool sent; every other facet is a closed list. A failed call's `error:<code>/<name>` and `error-version:<code>/<name>` class holds the step's name in `cls` with no steps behind it, so a name with
+ * an identity (`action[program=... sub=...]`) is read as long tail: `motifName` has no parser, so a listed name waits for the public floor too. An action alone is clear. Every other class motif
+ * (effort, recovery, a prompt class) names a closed value only.
  */
 const shapeClear = (motif: Motif): boolean => {
-  const shape = parseShapeClass(motif.cls ?? '');
+  const cls = motif.cls ?? '';
+  if (cls.startsWith(ERROR_CLASS) || cls.startsWith(ERROR_VERSION_CLASS)) return !cls.slice(cls.indexOf('/')).includes('[');
+  const shape = parseShapeClass(cls);
   if (shape === null) return true;
   if (shape.facet === 'keys') return false;
   return !KEYED_FACETS.has(shape.facet) || clearOf('key', shape.value.slice(0, shape.value.lastIndexOf('=')));
