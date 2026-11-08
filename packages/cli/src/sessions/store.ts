@@ -35,6 +35,7 @@ import { callPositions, captureSession, type Capture, type SubagentOrigin } from
 import { foldToolRows, withoutReplays } from './fold.js';
 import { asRepoSize, type RepoSize } from './public-vocabulary.js';
 import { makeRepoIdentity, makeRepoRoot } from './repo-root.js';
+import { mkdirOwnerOnly } from './owner-only.js';
 import { makeRedactor, type Redactor } from './redact.js';
 import {
   CAPTURE_VERSION,
@@ -788,7 +789,7 @@ const FOREGROUND_LOCK: LockOptions = { waitMs: 120_000, staleMs: 600_000 };
  */
 export const withLock = async <T>(storeDir: string, work: (held: LockHold) => Promise<T>, options: LockOptions = FOREGROUND_LOCK): Promise<T> => {
   const lock = join(storeDir, 'store.lock');
-  await mkdir(storeDir, { recursive: true });
+  await mkdirOwnerOnly(storeDir);
   const started = Date.now();
   // The token names this claim, so a holder whose lock was broken cannot delete the next holder's lock when it ends.
   const token = `${String(process.pid)} ${randomUUID()}`;

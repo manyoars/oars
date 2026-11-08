@@ -10,6 +10,7 @@
   // The two OAuth client IDs the pool starts a provider's device flow with (docs/pool.md, "Sign-in"). A client ID is public; Google's client secret is not, and is the Worker secret `GOOGLE_CLIENT_SECRET`, declared here by name only.
   "vars": {
     "PUBLIC_FLOOR": "5",
+    "BUNDLE_KEY_ID": "k1",
     "DISCLOSURE_FLOOR": "2",
     "GITHUB_CLIENT_ID": "Ov23liKTHzJPQeVimbnO",
     "GOOGLE_CLIENT_ID": "146886627173-pcmp8t0qg6p4n0t4cnr4236oit43eudn.apps.googleusercontent.com"

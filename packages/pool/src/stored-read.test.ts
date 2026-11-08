@@ -39,7 +39,7 @@ describe('the bundle reads the stored cells', () => {
       const before = await own.raw(PATH, token);
       expect(before.status).toBe(200);
       // Served something, or an empty bundle before and after would pass this test for nothing.
-      const verified = await verifyBundle(before.json, own.signingKey(), 'claude-code', '2.1.314');
+      const verified = await verifyBundle(before.json, own.pinned(), 'claude-code', '2.1.314');
       if (!verified.ok) throw new Error(verified.reason);
       expect(verified.bundle.cells.length).toBeGreaterThan(0);
       expect(verified.bundle.reads.length).toBeGreaterThan(0);

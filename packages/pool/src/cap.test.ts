@@ -49,7 +49,7 @@ describe('fetch_cap: fetches per account per ISO week', () => {
     const { token } = await pool.signIn('github', stubUser('2101'), { fresh: true });
     const first = await pool.raw(PATH, token);
     expect(first.status).toBe(200);
-    const verified = await verifyBundle(first.json, pool.signingKey(), 'claude-code', '2.1.314');
+    const verified = await verifyBundle(first.json, pool.pinned(), 'claude-code', '2.1.314');
     if (!verified.ok) throw new Error(verified.reason);
     expect(verified.bundle.reads.length).toBeGreaterThan(0);
     expect(verified.bundle.cells.length).toBeGreaterThan(0);
