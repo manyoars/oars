@@ -262,21 +262,20 @@ describe('the keys cells that hold a key', () => {
 
   it('are all withheld in a system past the term cap, which the rank check does not run on', () => {
     // The cells of the combination fixture above. Under the default cap the rank check keeps some of them served; under a cap below the system's terms it is skipped and every served cell goes, which is safe whatever the system holds.
-    const cells = [
-      cellOf(motifOf('keys', 'path').motifId, F + 5),
-      cellOf(motifOf('keys', 'path,pattern').motifId, F - 1),
-      cellOf(motifOf('keys', 'pattern').motifId, F + 5),
-      cellOf(motifOf('size', 'path=9-32').motifId, 2 * F + 4),
-      cellOf(motifOf('size', 'pattern=9-32').motifId, 2 * F + 4),
-      cellOf(motifOf('target', 'source').motifId, 3 * F + 9),
+    const thin = motifOf('keys', 'path,pattern');
+    const parts: [ReturnType<typeof motifOf>, number][] = [
+      [motifOf('keys', 'path'), F + 5],
+      [thin, F - 1],
+      [motifOf('keys', 'pattern'), F + 5],
+      [motifOf('size', 'path=9-32'), 2 * F + 4],
+      [motifOf('size', 'pattern=9-32'), 2 * F + 4],
+      [motifOf('target', 'source'), 3 * F + 9],
     ];
-    const motifs = ['keys:path', 'keys:path,pattern', 'keys:pattern', 'size:path=9-32', 'size:pattern=9-32', 'target:source'].map((entry) => {
-      const [facet, value] = entry.split(':');
-      return motifOf(facet as Parameters<typeof shapeClass>[1], value ?? '');
-    });
+    const cells = parts.map(([motif, clusters]) => cellOf(motif.motifId, clusters));
+    const motifs = parts.map(([motif]) => motif);
     expect(withheldOf(cells, motifs, F).size).toBeLessThan(5);
     expect(withheldOf(cells, motifs, F, 4).size).toBe(5);
-    expect(withheldOf(cells, motifs, F, 4).has(cells[1] as Cell)).toBe(false);
+    expect([...withheldOf(cells, motifs, F, 4)].some((cell) => cell.motifId === thin.motifId)).toBe(false);
   });
 
   it("are not recovered from the action's calls, which the fit read gives", () => {
