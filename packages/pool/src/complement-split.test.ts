@@ -2,8 +2,8 @@
 // a served clear part, with a long-tail part under the public floor, would let a reader subtract what is served from the total and read the long-tail part: so the total is served only when a served part that clears the public floor (on the
 // accounts that have stood) is withheld in its place, and is withheld itself when there is none.
 import { describe, expect, it } from 'vitest';
-import type { Cell } from '../../cli/src/sessions/cells.js';
-import { namedId, shapeMotif, type Motif, type WindowStep } from '../../cli/src/sessions/motif.js';
+import { NO_AXES, shapeClass, type Cell } from '../../cli/src/sessions/cells.js';
+import { classMotif, namedId, shapeMotif, type Motif, type WindowStep } from '../../cli/src/sessions/motif.js';
 import { bundleOf } from './derive.js';
 import { DEFAULT_FLOORS, floorsOf } from './floors.js';
 import type { StoredPool } from './stored.js';
@@ -75,3 +75,32 @@ describe('a shape total whose clear part is already withheld for its week, at a 
   });
 });
 
+
+describe("an action's calls beside a long-tail model's one-step shape cell, which no cell totals", () => {
+  // The one-step shape cells of an action, per model, sum to the calls its `target` cells split (the `action-calls` family): a family with no whole cell, whose parts mix classes by model.
+  const BUCKET = `claude-code/2.1.31x/${NO_AXES}`;
+  const ACTION_SHAPE = shapeMotif([{ action: 'file.search', identity: null }]);
+  const SOURCE = classMotif(shapeClass('file.search', 'target', 'source'));
+  const LISTED = 'claude-code/2.1.31x/claude-sonnet-4-5';
+  const PRIVATE = 'claude-code/2.1.31x/acme-private-finetune-v7';
+  const OTHER = 'claude-code/2.1.31x/acme-other-finetune-v9';
+  const WEEK_CELL = (motif: Motif, frameBucket: string, standing: number, any: number): { cell: Cell; any: number } => ({
+    cell: { motifId: motif.motifId, frameBucket, grain: 'week', day: WEEK, sessions: any, clusters: standing, ok: any, failed: 0, tokens: 0, durationMs: 0, exposed: false },
+    any,
+  });
+  const servedFrom = (held: { cell: Cell; any: number }[]): string[] => {
+    const stored: StoredPool = { cells: held.map(({ cell }) => cell), every: new Map(held.map(({ cell, any }) => [cell, any])), environment: [], motifs: [ACTION_SHAPE, SOURCE], strata: [] };
+    return bundleOf('claude-code', '2.1.314', stored, DEFAULT_FLOORS).cells.map((cell) => `${cell.motifId === SOURCE.motifId ? 'target' : 'shape'} ${cell.frameBucket.split('/')[2] ?? ''}`).sort();
+  };
+
+  it("does not serve the target total when the only part that could hide a sub-floor model's cell is a fresh account's own", () => {
+    // A: a fresh account's call on a listed model (clear, counted over every account). B: one standing account's call on a private model (thresholded, under 5). The target cell counts both: 2 less A's 1 would be B alone.
+    const held = [WEEK_CELL(ACTION_SHAPE, LISTED, 0, 1), WEEK_CELL(ACTION_SHAPE, PRIVATE, 1, 1), WEEK_CELL(SOURCE, BUCKET, 1, 2)];
+    expect(servedFrom(held)).toEqual(['shape claude-sonnet-4-5']);
+  });
+
+  it('serves the target total, with the model cell that clears the public floor on standing accounts withheld in its place, when there is one', () => {
+    const held = [WEEK_CELL(ACTION_SHAPE, LISTED, 0, 1), WEEK_CELL(ACTION_SHAPE, PRIVATE, 1, 1), WEEK_CELL(ACTION_SHAPE, OTHER, 6, 6), WEEK_CELL(SOURCE, BUCKET, 7, 8)];
+    expect(servedFrom(held)).toEqual(['shape claude-sonnet-4-5', 'target -']);
+  });
+});

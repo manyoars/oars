@@ -2,7 +2,8 @@
 // all of its served parts would show the parts that are not served by subtraction, a sub-floor day or name among them. So where a served whole has a sub-floor part, one more part is withheld, the
 // smallest served one: the whole less the served parts is then a sum over at least two parts, one of them at or above the floor, which no reader can split. The whole and the other parts stay, so a thin
 // pool still serves what it can. Families also combine (the served totals of several can add and subtract to an unserved cell), so a rank check then withholds until the served cells determine no unserved one
-// (`withheldOf`). Where a sub-floor part is held to a higher floor than its whole (a long-tail name under a clear shape), the part withheld must be at or above that higher floor on the accounts that have stood, since a clear part is served at the lower clear floor; with none, the whole is withheld.
+// (`withheldOf`). Where a sub-floor part is held to a higher floor than its whole (a long-tail name under a clear shape), the part withheld must be at or above that higher floor on the accounts that have stood, since a clear part is served at the lower clear floor; with none, the whole is withheld. The same holds for a total no cell holds (an action's calls,
+// which its one-step shape cells sum to over models, a long-tail model beside a listed one): with no such part, the smallest served part of each other family that counts that total is withheld, and a family with neither a whole nor a total is left alone.
 // The environment cells (`ENVIRONMENT_CELLS`, `stored.ts`) keep their own rule, every part served or the total is not (each part against its own class's floor), and their counterparts are also dropped when a bucket cell is withheld (`bundleOf`).
 import { isEnvironmentCell, NO_AXES, parseShapeClass, weekStartOf, type Cell, type ShapeFacet } from '../../cli/src/sessions/cells.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
@@ -166,19 +167,23 @@ const familiesOf = (held: readonly Cell[], motifs: readonly Motif[]): Family[] =
  * withheld, its smallest served one, in two cases: it holds a sub-floor part and none of its parts is withheld yet, or exactly one of its parts is unserved, sub-floor or withheld by another family. A withheld part is at or
  * above the floor but still hides a count another family protects, so a family that leaves it as the one unserved part would give it back by subtraction, and the sub-floor cell it shields with it. The whole of a family
  * stays when it has one. A cell can be a part of one family and the whole of another, so the rule repeats until it adds nothing. Where a lone unserved part has no served part beside it, the whole is withheld instead:
- * it is that part's count.
+ * it is that part's count. A family with neither a whole nor a total states no count to subtract from, so it is left alone.
  *
- * A sub-floor part held to a higher floor than its whole (a long-tail name under a clear shape, which carries no identity) is not hidden by withholding a part that is served only on the whole's lower floor: a part that hides
- * it, withheld already or withheld now, must itself be at or above that bar on the accounts that have stood (`Floorplan.standingOf`), or the whole less the served parts could be that name alone. With none, the whole is withheld.
+ * A sub-floor part held to a higher floor than the lowest of its family (a long-tail name under a clear shape, which carries no identity; a long-tail model beside a listed one in an action's one-step shape cells) is not
+ * hidden by withholding a part that is served only on that lower floor: a part that hides it, withheld already or withheld now, must itself be at or above that bar on the accounts that have stood (`Floorplan.standingOf`),
+ * or the count less the served parts could be that part alone. With none, a family with a whole withholds the whole; a family with a total no cell holds (the calls its parts sum to) withholds the smallest served part of
+ * each family that counts the same total, since a reader reads that total from those cells (`byTotal`).
  */
-const withholdLocally = (families: readonly Family[], withheld: Set<Cell>, { floorOf, standingOf }: Floorplan): void => {
+const withholdLocally = (families: readonly Family[], byTotal: ReadonlyMap<string, readonly Family[]>, withheld: Set<Cell>, { floorOf, standingOf }: Floorplan): void => {
   const served = (cell: Cell): boolean => clears(cell, floorOf(cell));
   for (let changed = true; changed; ) {
     changed = false;
-    for (const { whole, parts, echoes } of families) {
+    for (const family of families) {
+      const { whole, total, parts, echoes } = family;
+      if (whole === null && total === null) continue;
       if (whole !== null && (!served(whole) || withheld.has(whole))) continue;
       const bar = Math.max(0, ...parts.filter((part) => !served(part)).map(floorOf));
-      const guarded = whole !== null && bar > floorOf(whole);
+      const guarded = bar > (whole === null ? parts.reduce((lowest, part) => Math.min(lowest, floorOf(part)), Infinity) : floorOf(whole));
       // In a guarded family a part withheld on a lower floor does not hide the sub-floor part.
       const hides = (part: Cell): boolean => !guarded || standingOf(part) >= bar;
       const unserved = parts.filter((part) => !served(part) || withheld.has(part));
@@ -191,8 +196,12 @@ const withholdLocally = (families: readonly Family[], withheld: Set<Cell>, { flo
         continue;
       }
       if (guarded) {
-        withheld.add(whole);
-        changed = true;
+        // The total is read from the other families that count it, each of which gives up its smallest served part unless one of its parts is withheld already.
+        const gone = whole !== null ? [whole] : (byTotal.get(total ?? '') ?? []).flatMap((other) => (other === family || other.parts.some((part) => withheld.has(part)) ? [] : other.parts.filter((part) => served(part)).sort(smallest).slice(0, 1)));
+        for (const cell of gone) {
+          withheld.add(cell);
+          changed = true;
+        }
         continue;
       }
       if (unserved.length !== 1) continue;
@@ -300,6 +309,9 @@ export const withheldOf = (held: readonly Cell[], motifs: readonly Motif[], plan
   const families = every.filter(({ rule, total }) => rule !== 'action-calls' || (total !== null && split.has(total)));
   // An action's calls the `fit` read gives: through its one-step shape cells where they are held, and as known where they are not.
   const tied = new Set(families.flatMap(({ rule, total }) => (rule === 'action-calls' && total !== null ? [total] : [])));
+  // The families that count each total no cell holds, so a family whose total a sub-floor part hides can reach the others that give it away (`withholdLocally`).
+  const byTotal = new Map<string, Family[]>();
+  for (const family of families) if (family.total !== null) byTotal.set(family.total, [...(byTotal.get(family.total) ?? []), family]);
   const allSystems = systemsOf(families);
   const termsOf = (system: readonly Row[]): Set<Term> => new Set(system.flatMap((row) => [...row.keys()]));
   const systems = allSystems.filter((system) => termsOf(system).size <= maxTerms);
@@ -327,7 +339,7 @@ export const withheldOf = (held: readonly Cell[], motifs: readonly Motif[], plan
       })
       .find((cell) => cell !== undefined);
   for (let seen = 0; ; ) {
-    withholdLocally(families, withheld, plan);
+    withholdLocally(families, byTotal, withheld, plan);
     for (const cell of [...withheld].slice(seen)) {
       const system = systemOf.get(cell);
       if (system !== undefined) choices.delete(system);
