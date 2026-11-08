@@ -302,8 +302,8 @@ describe('a request blob repeats what other lines hold', () => {
 });
 
 describe('a tool definition a request blob carries', () => {
-  const definition = { name: 'Lamp', description: 'Lights the blue lamp.', input_schema: { type: 'object', properties: { level: { type: 'string', description: 'How bright the blue lamp burns' } } } };
-  const blob = { type: 'api-request-blob', hash: 'b2', message: { role: 'user', content: [{ type: 'tool_reference', tool: { definition } }, { type: 'text', text: 'typed words' }] } };
+  const definition: JsonObject = { name: 'Lamp', description: 'Lights the blue lamp.', input_schema: { type: 'object', properties: { level: { type: 'string', description: 'How bright the blue lamp burns' } } } };
+  const blob: JsonObject = { type: 'api-request-blob', hash: 'b2', message: { role: 'user', content: [{ type: 'tool_reference', tool: { definition } }, { type: 'text', text: 'typed words' }] } };
 
   it('replaces the descriptions the way the request shape does, and keeps the name and the schema keys', () => {
     const out = run(blob);
