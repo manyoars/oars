@@ -2550,8 +2550,9 @@ describe('oars pool logout (S8)', () => {
     const scene = setting();
     await signIn(scene);
     const file = join(scene.staged.storeDir, 'pool-accounts.json');
-    const saved: unknown = JSON.parse(readFileSync(file, 'utf8'));
-    writeFileSync(file, `${JSON.stringify([...(Array.isArray(saved) ? saved : []), { server: OTHER, account: 'acct_two', token: 'other-token', expiresAt: LATER, signingKey: FIXED_KEY }])}\n`);
+    const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'));
+    const saved: unknown[] = Array.isArray(parsed) ? parsed : [];
+    writeFileSync(file, `${JSON.stringify([...saved, { server: OTHER, account: 'acct_two', token: 'other-token', expiresAt: LATER, signingKey: FIXED_KEY }])}\n`);
     revoking(scene, () => new HttpResponse(null, { status: 204 }));
     expect(await scene.cli('pool', 'logout', '--server', POOL, '--json')).toBe(ExitCode.OK);
     expect(scene.seen).toEqual([{ url: `${POOL}/v1/login`, headers: `Bearer ${POOL_TOKEN}`, body: '', err: '' }]);
