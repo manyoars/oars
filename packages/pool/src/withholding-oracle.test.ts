@@ -222,7 +222,11 @@ const vocabularyOf = (held: Held): { action: string; native: string; keySets: st
 /** The atoms the held cells allow, drawn from a fixed seed: key sets from the `keys` cells, values from the pool, and every status and cost variant, then run through the route. */
 const candidatesOf = (held: Held, count: number): Atom[] => {
   const random = seeded(7);
-  const pick = <T>(items: readonly T[]): T => items[Math.floor(random() * items.length)] as T;
+  const pick = <T>(items: readonly T[]): T => {
+    const chosen = items[Math.floor(random() * items.length)];
+    if (chosen === undefined) throw new Error('nothing to pick from');
+    return chosen;
+  };
   const vocabulary = vocabularyOf(held);
   const atoms: Atom[] = [];
   for (let drawn = 0; drawn < count && vocabulary.length > 0; drawn += 1) {
