@@ -48,9 +48,9 @@ describe('the telemetry record', () => {
     const day = shiftDay(today, -RETENTION_DAYS);
     const lists: string[] = [];
     const stub: SweepBucket = {
-      list: (options) => {
+      list: async (options) => {
         lists.push(options.prefix);
-        return bucket.list(options);
+        return { objects: [...(await bucket.list(options)).objects] };
       },
       delete: (batch) => bucket.delete(batch),
     };
@@ -93,7 +93,7 @@ describe('the rows of the pool\'s own bounds', () => {
     await put(day, 'after-failure');
     const failing = {
       DB: { prepare: () => { throw new Error('the database is down'); }, batch: () => Promise.reject(new Error('down')) },
-      TELEMETRY: { list: (options: { prefix: string }) => bucket.list(options), get: () => Promise.reject(new Error('down')), delete: (batch: string[]) => bucket.delete(batch) },
+      TELEMETRY: { list: async (options: { prefix: string }) => ({ objects: [...(await bucket.list(options)).objects], truncated: false }), get: () => Promise.reject(new Error('down')), delete: (batch: string[]) => bucket.delete(batch) },
     };
     await expect(worker.scheduled({ scheduledTime: NOW }, failing)).rejects.toThrow('the database is down');
     expect(await keys()).not.toContain(`telemetry/${day}/after-failure.json`);
