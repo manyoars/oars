@@ -149,7 +149,7 @@ export default {
     if (request.method === 'GET') {
       if (pathname === '/v1/covenant') return covenantStatus(request, env);
       // Not a deposit and not signed in: percentiles over installs, served only where at least the public floor reports. No query is read.
-      if (pathname === '/v1/telemetry/fleet') return fleet(env, Date.now());
+      if (pathname === '/v1/telemetry/fleet') return fleet(env, Date.now(), !request.headers.has('authorization'));
       // The operator's anomaly read, behind a secret the deploy sets: never served to users.
       if (pathname === '/v1/telemetry/operator') return operator(request, env, Date.now());
       const route = BUNDLE.exec(pathname);

@@ -3,8 +3,9 @@ import { createHash, webcrypto } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
-import { Miniflare, Request as StubRequest, Response as StubResponse } from 'miniflare';
+import { convertV4MiniflareOptions, Miniflare, Request as StubRequest, Response as StubResponse } from 'miniflare';
 import { expect } from 'vitest';
+import type { Bound, PoolDb } from './http.js';
 
 interface Statement {
   first: (column?: string) => Promise<unknown>;
@@ -19,11 +20,40 @@ export interface TestDb {
 
 /** The R2 calls these tests make, named for the same reason as `TestDb`. */
 export interface TestBucket {
-  list: (options?: { prefix?: string; cursor?: string }) => Promise<{ objects: readonly { key: string }[]; truncated?: boolean; cursor?: string }>;
+  list: (options?: { prefix?: string; cursor?: string; limit?: number }) => Promise<{ objects: readonly { key: string }[]; truncated?: boolean; cursor?: string }>;
   put: (key: string, value: string) => Promise<unknown>;
   get: (key: string) => Promise<{ text: () => Promise<string>; arrayBuffer: () => Promise<ArrayBuffer> } | null>;
   delete: (keys: string[]) => Promise<void>;
 }
+
+/**
+ * The pool's D1 as `Env.DB` takes it, for a test that calls a route function directly. Miniflare runs one request at a time here, so a race between requests is scripted: `before` runs ahead of each statement's `run` and may hold it until the other requests have caught up.
+ */
+export const poolDbOf = (db: TestDb, before: (sql: string) => Promise<void> = () => Promise.resolve()): PoolDb => {
+  // One statement reaches the database at a time (a burst of parallel calls resets Miniflare's sockets), so requests interleave between statements, never inside one.
+  let turn: Promise<unknown> = Promise.resolve();
+  const alone = <T>(call: () => Promise<T>): Promise<T> => {
+    const next = turn.then(call);
+    turn = next.catch(() => undefined);
+    return next;
+  };
+  return {
+    prepare: (sql) => ({
+      bind: (...values): Bound => {
+        const statement = db.prepare(sql).bind(...values);
+        return {
+          first: () => alone(() => statement.first()),
+          all: () => alone(() => statement.all()),
+          run: async () => {
+            await before(sql);
+            return alone(async () => ({ meta: { changes: Number(fieldOf(fieldOf(await statement.run(), 'meta'), 'changes')) } }));
+          },
+        };
+      },
+    }),
+    batch: () => Promise.resolve([]),
+  };
+};
 
 export interface StubUser {
   id: string;
@@ -80,7 +110,7 @@ export const workerError = async (response: Response): Promise<Error> => {
 };
 
 /**
- * Miniflare 4 sends every `dispatchFetch` with `reset: true`, so undici closes the socket after each response: one loopback socket in TIME_WAIT for every request a test makes, and for every D1 or R2 call it makes through `getBindings` too, because the proxy client holds this same function. A full run opened about 9,000 and left about 5,400 in TIME_WAIT (Linux), enough to exhaust the dynamic port range when gates run together (t909, t930).
+ * Miniflare sends every `dispatchFetch` with `reset: true`, so undici closes the socket after each response: one loopback socket in TIME_WAIT for every request a test makes, and for every D1 or R2 call it makes through `getBindings` too, because the proxy client holds this same function. A full run opened about 9,000 and left about 5,400 in TIME_WAIT (Linux), enough to exhaust the dynamic port range when gates run together (t909, t930).
  * This sends the same request on Node's keep-alive pool instead, with the two headers Miniflare's own dispatcher adds.
  */
 const keepAlive = (miniflare: Miniflare): void => {
@@ -197,7 +227,8 @@ export interface TestPool {
   /** Makes a handle's next poll due now, as if the provider's interval had passed: the pool holds the interval per handle, and a poll right after a start comes early. */
   due: (handle: string) => Promise<void>;
   /** The sign-in the CLI performs through the pool's two login routes, with the provider's approval given at the stub between them. */
-  signIn: (provider: string, user: StubUser) => Promise<{ token: string; account: string; signingKey: unknown }>;
+  /** Signs the stub user in. The account has stood unless `fresh`: the floor counts only accounts that have (S13), so a test that serves a cell needs holders that have, and a test of the fetch cap or of what a fresh account does passes `fresh: true`. */
+  signIn: (provider: string, user: StubUser, options?: { fresh?: boolean }) => Promise<{ token: string; account: string; signingKey: unknown }>;
   stub: StubProvider;
   signingKey: () => { kty: string; crv: string; x: string };
   dispose: () => Promise<void>;
@@ -232,18 +263,21 @@ export const startPool = async (bindings: { [name: string]: string } = {}, optio
   const config = wranglerConfig();
   const stub = stubProvider();
   const key = await generatedKey();
-  const miniflare = new Miniflare({
-    name: 'pool',
-    modules: [{ type: 'ESModule', path: 'worker.js', contents }],
-    compatibilityDate: config.compatibilityDate,
-    compatibilityFlags: config.compatibilityFlags,
-    d1Databases: { DB: 'pool-test' },
-    // The bindings wrangler.jsonc names. Miniflare's local Analytics Engine accepts a write and keeps nothing, so a test reads what the Worker wrote to it through a fake (telemetry.test.ts).
-    r2Buckets: { TELEMETRY: 'telemetry-test', ...(options.raw === false ? {} : { RAW: 'oars-pool-raw' }) },
-    analyticsEngineDatasets: { TELEMETRY_EVENTS: { dataset: 'oars_telemetry' } },
-    bindings: { ...clientIds(config.parsed), GOOGLE_CLIENT_SECRET: TEST_GOOGLE_SECRET, PSEUDONYM_KEY: 'a-test-pseudonym-key', INGEST_HASH_KEY: 'a-test-ingest-hash-key', BUNDLE_SIGNING_KEY: key.jwk, COVENANT_VERSION: 'v1', FETCH_CAP: '1000', LOGIN_STARTS_PER_HOUR: '1000', ...bindings },
-    outboundService: stub.outbound,
-  });
+  // Miniflare 5 takes a new options shape; the v4 shape this harness was written in converts with the package's own function.
+  const miniflare = new Miniflare(
+    convertV4MiniflareOptions({
+      name: 'pool',
+      modules: [{ type: 'ESModule', path: 'worker.js', contents }],
+      compatibilityDate: config.compatibilityDate,
+      compatibilityFlags: config.compatibilityFlags,
+      d1Databases: { DB: 'pool-test' },
+      // The bindings wrangler.jsonc names. Miniflare's local Analytics Engine accepts a write and keeps nothing, so a test reads what the Worker wrote to it through a fake (telemetry.test.ts).
+      r2Buckets: { TELEMETRY: 'telemetry-test', ...(options.raw === false ? {} : { RAW: 'oars-pool-raw' }) },
+      analyticsEngineDatasets: { TELEMETRY_EVENTS: { dataset: 'oars_telemetry' } },
+      bindings: { ...clientIds(config.parsed), GOOGLE_CLIENT_SECRET: TEST_GOOGLE_SECRET, PSEUDONYM_KEY: 'a-test-pseudonym-key', INGEST_HASH_KEY: 'a-test-ingest-hash-key', BUNDLE_SIGNING_KEY: key.jwk, COVENANT_VERSION: 'v1', FETCH_CAP: '1000', LOGIN_STARTS_PER_HOUR: '1000', ...bindings },
+      outboundService: stub.outbound,
+    }),
+  );
   keepAlive(miniflare);
   await miniflare.ready;
   const db = async (): Promise<TestDb> => (await miniflare.getBindings<{ DB: TestDb }>()).DB;
@@ -285,13 +319,14 @@ export const startPool = async (bindings: { [name: string]: string } = {}, optio
     raw,
     stub,
     due,
-    signIn: async (provider, user) => {
+    signIn: async (provider, user, options = {}) => {
       const started = await post('/v1/login/start', { provider });
       const issued = /USER-(\d+)/.exec(textOf(started.json, 'userCode'))?.[1];
       stub.approve(`device-${issued ?? ''}`, user);
       const handle = textOf(started.json, 'handle');
       await due(handle);
       const signedIn = await post('/v1/login/poll', { handle });
+      if (options.fresh !== true) await (await db()).prepare("UPDATE accounts SET access = 'standing' WHERE id = ?").bind(textOf(signedIn.json, 'account')).run();
       return { token: textOf(signedIn.json, 'token'), account: textOf(signedIn.json, 'account'), signingKey: fieldOf(signedIn.json, 'signingKey') };
     },
     signingKey: () => ({ kty: 'OKP', crv: 'Ed25519', x: key.x }),
@@ -313,4 +348,3 @@ export const stubUser = (id: string): StubUser => {
   const slot = /^\d+$/.test(id) ? Number(id) : Number.parseInt(createHash('sha256').update(id).digest('hex').slice(0, 6), 16);
   return { id, login: `login-of-${id}`, email: `person-${id}@example.test`, createdAt: new Date(Date.UTC(2015, 0, 1) + (slot % 1200) * 3 * 24 * 60 * 60 * 1000).toISOString() };
 };
-

@@ -46,7 +46,7 @@ afterAll(async () => {
 
 describe('fetch_cap: fetches per account per ISO week', () => {
   it('serves the whole bundle to the account that fetches, then answers 429 with Retry-After at the next week', async () => {
-    const { token } = await pool.signIn('github', stubUser('2101'));
+    const { token } = await pool.signIn('github', stubUser('2101'), { fresh: true });
     const first = await pool.raw(PATH, token);
     expect(first.status).toBe(200);
     const verified = await verifyBundle(first.json, pool.signingKey(), 'claude-code', '2.1.314');
@@ -63,20 +63,20 @@ describe('fetch_cap: fetches per account per ISO week', () => {
   });
 
   it('counts per account, not per harness version: a second version is the second fetch', async () => {
-    const { token } = await pool.signIn('github', stubUser('2102'));
+    const { token } = await pool.signIn('github', stubUser('2102'), { fresh: true });
     expect((await pool.raw(PATH, token)).status).toBe(200);
     expect((await pool.raw(`/bundle/claude-code/2.2.0/${VOCAB_VERSION}`, token)).status).toBe(429);
   });
 
   it('counts per account, not per harness: a second harness is the second fetch', async () => {
-    const { token } = await pool.signIn('github', stubUser('2109'));
+    const { token } = await pool.signIn('github', stubUser('2109'), { fresh: true });
     expect((await pool.raw(PATH, token)).status).toBe(200);
     expect((await pool.raw(`/bundle/cursor/2.1.314/${VOCAB_VERSION}`, token)).status).toBe(429);
   });
 
   it('keeps the count per account: another account still has its own fetch', async () => {
-    const one = await pool.signIn('github', stubUser('2103'));
-    const two = await pool.signIn('github', stubUser('2104'));
+    const one = await pool.signIn('github', stubUser('2103'), { fresh: true });
+    const two = await pool.signIn('github', stubUser('2104'), { fresh: true });
     expect((await pool.raw(PATH, one.token)).status).toBe(200);
     expect((await pool.raw(PATH, one.token)).status).toBe(429);
     expect((await pool.raw(PATH, two.token)).status).toBe(200);
@@ -86,9 +86,9 @@ describe('fetch_cap: fetches per account per ISO week', () => {
     const two = await startPool({ FETCH_CAP: '2' });
     const junk = await startPool({ FETCH_CAP: 'many' });
     try {
-      const { token } = await two.signIn('github', stubUser('2105'));
+      const { token } = await two.signIn('github', stubUser('2105'), { fresh: true });
       expect([(await two.raw(PATH, token)).status, (await two.raw(PATH, token)).status, (await two.raw(PATH, token)).status]).toEqual([200, 200, 429]);
-      const other = await junk.signIn('github', stubUser('2106'));
+      const other = await junk.signIn('github', stubUser('2106'), { fresh: true });
       expect([(await junk.raw(PATH, other.token)).status, (await junk.raw(PATH, other.token)).status]).toEqual([200, 429]);
     } finally {
       await two.dispose();
@@ -97,13 +97,13 @@ describe('fetch_cap: fetches per account per ISO week', () => {
   }, 60_000);
 
   it('spends exactly one of two fetches made at once', async () => {
-    const { token } = await pool.signIn('github', stubUser('2107'));
+    const { token } = await pool.signIn('github', stubUser('2107'), { fresh: true });
     const answers = await Promise.all([pool.raw(PATH, token), pool.raw(PATH, token)]);
     expect(answers.map(({ status }) => status).sort()).toEqual([200, 429]);
   });
 
   it('spends nothing on a refusal before the spend: an unknown harness, a bad version, a bad vocabulary, no signing key', async () => {
-    const { token, account } = await pool.signIn('github', stubUser('2108'));
+    const { token, account } = await pool.signIn('github', stubUser('2108'), { fresh: true });
     expect((await pool.raw(`/bundle/acme/2.1.314/${VOCAB_VERSION}`, token)).status).toBe(400);
     expect((await pool.raw(`/bundle/claude-code/acme/${VOCAB_VERSION}`, token)).status).toBe(400);
     expect((await pool.raw('/bundle/claude-code/2.1.314/9', token)).status).toBe(400);
@@ -125,7 +125,7 @@ describe('fetch_cap: fetches per account per ISO week', () => {
 
 describe('across an ISO week boundary', () => {
   it('starts the count again in a new week: a count left in an earlier week is replaced by this fetch', async () => {
-    const { token, account } = await pool.signIn('github', stubUser('2201'));
+    const { token, account } = await pool.signIn('github', stubUser('2201'), { fresh: true });
     await (await pool.db()).prepare('UPDATE accounts SET fetch_week = ?, fetches = 1 WHERE id = ?').bind('2020-W53', account).run();
     expect((await pool.raw(PATH, token)).status).toBe(200);
     expect(await tally(pool, account)).toEqual({ week: isoWeekOf(Date.now()), fetches: 1 });
@@ -133,7 +133,7 @@ describe('across an ISO week boundary', () => {
   });
 
   it('refuses a count spent in this week, and an account at the cap is not counted further', async () => {
-    const { token, account } = await pool.signIn('github', stubUser('2202'));
+    const { token, account } = await pool.signIn('github', stubUser('2202'), { fresh: true });
     await (await pool.db()).prepare('UPDATE accounts SET fetch_week = ?, fetches = 1 WHERE id = ?').bind(isoWeekOf(Date.now()), account).run();
     expect((await pool.raw(PATH, token)).status).toBe(429);
     expect((await tally(pool, account)).fetches).toBe(1);
@@ -142,8 +142,8 @@ describe('across an ISO week boundary', () => {
   it('answers an account past its cap before it reads the pool: an index row that would break a parse is not met', async () => {
     const bare = await startPool({ FETCH_CAP: '' });
     try {
-      const { token, account } = await bare.signIn('github', stubUser('2205'));
-      const other = await bare.signIn('github', stubUser('2206'));
+      const { token, account } = await bare.signIn('github', stubUser('2205'), { fresh: true });
+      const other = await bare.signIn('github', stubUser('2206'), { fresh: true });
       const db = await bare.db();
       await db.prepare('UPDATE accounts SET fetch_week = ?, fetches = 1 WHERE id = ?').bind(isoWeekOf(Date.now()), account).run();
       await damageIndex(db);
@@ -158,8 +158,8 @@ describe('across an ISO week boundary', () => {
   }, 60_000);
 
   it('leaves a count already spent in a later week: a request that computed its week before Monday does not wipe it', async () => {
-    const early = await pool.signIn('github', stubUser('2207'));
-    const ahead = await pool.signIn('github', stubUser('2208'));
+    const early = await pool.signIn('github', stubUser('2207'), { fresh: true });
+    const ahead = await pool.signIn('github', stubUser('2208'), { fresh: true });
     // A week after this one stands for the account that already fetched in the new week while this request still holds the old one.
     await (await pool.db()).prepare('UPDATE accounts SET fetch_week = ?, fetches = 1 WHERE id = ?').bind('2999-W01', ahead.account).run();
     expect((await pool.raw(PATH, early.token)).status).toBe(200);
@@ -167,15 +167,15 @@ describe('across an ISO week boundary', () => {
   });
 
   it('does not rewrite a later week\'s count when its own request holds the earlier week', async () => {
-    const ahead = await pool.signIn('github', stubUser('2209'));
+    const ahead = await pool.signIn('github', stubUser('2209'), { fresh: true });
     await (await pool.db()).prepare('UPDATE accounts SET fetch_week = ?, fetches = 1 WHERE id = ?').bind('2999-W01', ahead.account).run();
     expect((await pool.raw(PATH, ahead.token)).status).toBe(429);
     expect(await tally(pool, ahead.account)).toEqual({ week: '2999-W01', fetches: 1 });
   });
 
   it('drops every earlier week\'s count when a fetch is served, so only this week is kept per account', async () => {
-    const stale = await pool.signIn('github', stubUser('2203'));
-    const fresh = await pool.signIn('github', stubUser('2204'));
+    const stale = await pool.signIn('github', stubUser('2203'), { fresh: true });
+    const fresh = await pool.signIn('github', stubUser('2204'), { fresh: true });
     await (await pool.db()).prepare('UPDATE accounts SET fetch_week = ?, fetches = 1 WHERE id = ?').bind('2020-W01', stale.account).run();
     expect((await pool.raw(PATH, fresh.token)).status).toBe(200);
     expect(await tally(pool, stale.account)).toEqual({ week: null, fetches: 0 });
@@ -186,7 +186,7 @@ describe('a fetch that fails', () => {
   it('gives back the fetch it spent: the account had no bundle, and a 304 spends none for the same reason', async () => {
     const own = await startPool({ FETCH_CAP: '' });
     try {
-      const { token, account } = await own.signIn('github', stubUser('2601'));
+      const { token, account } = await own.signIn('github', stubUser('2601'), { fresh: true });
       // A read that throws: the index tables are gone, past the routes.
       await (await own.db()).prepare('DROP TABLE cells').run();
       await expect(own.raw(PATH, token)).rejects.toThrow();
@@ -199,7 +199,7 @@ describe('a fetch that fails', () => {
 
 describe('a 304 spends none', () => {
   it('answers a conditional request with 304 and the same ETag, at the cap and with the count unchanged', async () => {
-    const { token, account } = await pool.signIn('github', stubUser('2301'));
+    const { token, account } = await pool.signIn('github', stubUser('2301'), { fresh: true });
     const first = await pool.raw(PATH, token);
     const etag = etagOf(first.headers);
     expect((await pool.raw(PATH, token)).status).toBe(429);
@@ -213,22 +213,22 @@ describe('a 304 spends none', () => {
   });
 
   it('matches a weakened ETag, as a proxy that compresses sends it, and one of several listed', async () => {
-    const { token } = await pool.signIn('github', stubUser('2302'));
+    const { token } = await pool.signIn('github', stubUser('2302'), { fresh: true });
     const etag = etagOf((await pool.raw(PATH, token)).headers);
     expect((await pool.raw(PATH, token, { 'if-none-match': `W/${etag}` })).status).toBe(304);
     expect((await pool.raw(PATH, token, { 'if-none-match': `"other", ${etag}` })).status).toBe(304);
   });
 
   it('is not served to a caller with no credential', async () => {
-    const { token } = await pool.signIn('github', stubUser('2303'));
+    const { token } = await pool.signIn('github', stubUser('2303'), { fresh: true });
     const etag = etagOf((await pool.raw(PATH, token)).headers);
     expect((await pool.raw(PATH, undefined, { 'if-none-match': etag })).status).toBe(401);
   });
 
   it('sends the bundle when the ETag is that of another version, and that spends a fetch', async () => {
-    const { token } = await pool.signIn('github', stubUser('2304'));
+    const { token } = await pool.signIn('github', stubUser('2304'), { fresh: true });
     const etag = etagOf((await pool.raw(PATH, token)).headers);
-    const other = await pool.signIn('github', stubUser('2306'));
+    const other = await pool.signIn('github', stubUser('2306'), { fresh: true });
     expect((await pool.raw(`/bundle/claude-code/2.2.0/${VOCAB_VERSION}`, other.token, { 'if-none-match': etag })).status).toBe(200);
     expect((await tally(pool, other.account)).fetches).toBe(1);
   });
@@ -237,7 +237,7 @@ describe('a 304 spends none', () => {
     const bare = await startPool();
     try {
       await deposit(bare, '2401');
-      const { token } = await bare.signIn('github', stubUser('2402'));
+      const { token } = await bare.signIn('github', stubUser('2402'), { fresh: true });
       const etag = etagOf((await bare.raw(PATH, token)).headers);
       const db = await bare.db();
       // The generation triggers are dropped so the damaged row does not move the ETag: only a read of the pool would find it.
@@ -254,7 +254,7 @@ describe('the ETag follows the rows', () => {
   it('moves when a deposit lands or a held one changes, and stays when the same session is sent again', async () => {
     const own = await startPool();
     try {
-      const etag = async (id: string): Promise<string> => etagOf((await own.raw(PATH, (await own.signIn('github', stubUser(id))).token)).headers);
+      const etag = async (id: string): Promise<string> => etagOf((await own.raw(PATH, (await own.signIn('github', stubUser(id), { fresh: true })).token)).headers);
       const before = await etag('2501');
       const token = await deposit(own, '2502');
       const after = await etag('2503');
@@ -280,7 +280,7 @@ describe('the ETag follows the rows', () => {
   it('differs by harness version', async () => {
     const own = await startPool();
     try {
-      const { token } = await own.signIn('github', stubUser('2507'));
+      const { token } = await own.signIn('github', stubUser('2507'), { fresh: true });
       const one = etagOf((await own.raw(PATH, token)).headers);
       const two = etagOf((await own.raw(`/bundle/claude-code/2.2.0/${VOCAB_VERSION}`, token)).headers);
       expect(one).not.toBe(two);

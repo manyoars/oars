@@ -14,6 +14,8 @@ export const REPO_KEYS_MIN = 3;
 export const REPO_KEYS_JACCARD = 0.8;
 /** Two accounts deposit in lockstep when, on this share of the days either deposited, both deposited in the same hour. */
 export const CADENCE_SHARE = 0.9;
+/** Cadence joins two accounts only when each has deposited on at least this many distinct days: one shared hour on a first day is what a team installing together does, and no live data argues for a faster join (t958). */
+export const CADENCE_MIN_DAYS = 3;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -53,8 +55,8 @@ const sameHour = (a: ReadonlySet<number> | undefined, b: ReadonlySet<number> | u
 
 const inLockstep = (a: Holder, b: Holder): boolean => {
   if (a.createdAt === undefined || b.createdAt === undefined || Math.abs(a.createdAt - b.createdAt) > CLUSTER_WINDOW_MS) return false;
+  if (a.cadence.size < CADENCE_MIN_DAYS || b.cadence.size < CADENCE_MIN_DAYS) return false;
   const days = new Set([...a.cadence.keys(), ...b.cadence.keys()]);
-  if (days.size === 0) return false;
   let together = 0;
   for (const day of days) if (sameHour(a.cadence.get(day), b.cadence.get(day))) together += 1;
   return together >= CADENCE_SHARE * days.size;

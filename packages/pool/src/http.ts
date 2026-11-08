@@ -30,6 +30,8 @@ export interface RawBucket {
   put: (key: string, value: ArrayBuffer) => Promise<unknown>;
   get: (key: string) => Promise<{ arrayBuffer: () => Promise<ArrayBuffer> } | null>;
   delete: (keys: readonly string[]) => Promise<void>;
+  /** One page of keys under a prefix, at most `limit` (R2 gives 1,000 at most). */
+  list: (options: { prefix: string; limit: number }) => Promise<{ objects: readonly { key: string }[]; truncated: boolean }>;
   createMultipartUpload: (key: string) => Promise<RawMultipart>;
 }
 
@@ -66,8 +68,9 @@ export interface Env {
   MAX_DEPOSIT_BYTES_PER_ACCOUNT?: string;
 }
 
-/** The response headers this worker sets: the ETag of a bundle and the `Retry-After` of a spent cap. */
+/** The response headers this worker sets: the ETag of a bundle, the `Retry-After` of a spent cap, and the `Cache-Control` of the fleet read. */
 export interface AnswerHeaders {
+  'cache-control'?: string;
   etag?: string;
   'retry-after'?: string;
 }
