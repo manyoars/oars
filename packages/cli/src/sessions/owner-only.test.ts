@@ -97,7 +97,7 @@ describe('the store folder is owner-only from first use (S9)', () => {
     await appendHookCall(byHook, { at: '2026-11-07T00:00:00.000Z', event: 'prompt', session: null, hit: false, ms: 1, error: null });
     expect(modeOf(byHook)).toBe(0o700);
     const byStep = join(root, 'by-step', 'store');
-    await appendStep(byStep, { at: '2026-11-07T00:00:00.000Z', run: 'r', trigger: 'manual', step: 'deposit', status: 'ok', ms: 1, in: {}, out: {}, cv: '1', ev: '1' });
+    await appendStep(byStep, { at: '2026-11-07T00:00:00.000Z', run: 'r', trigger: 'manual', step: 'deposit', status: 'ok', ms: 1, in: {}, out: {}, cv: '1', ev: '1', key: null, error: null });
     expect(modeOf(byStep)).toBe(0o700);
     const byLock = join(root, 'by-lock', 'store');
     await withLock(byLock, () => Promise.resolve(undefined));
