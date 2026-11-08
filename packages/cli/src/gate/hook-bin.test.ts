@@ -201,7 +201,6 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
     const npm = fakeNpm();
     const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
     made.push(home);
-    // Run again when a loaded box ended the hook before it wrote: nothing here asks the manager, so a repeat can start none.
     expect(sightWithRow(payload, 'u1', npm, home)).toBe('');
     expect(existsSync(npm.marker)).toBe(false);
     const rows = rowsOf(home);
