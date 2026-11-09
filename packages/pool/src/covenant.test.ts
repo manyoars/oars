@@ -1,7 +1,9 @@
 // Deposits closed by default: the gate is at the server, because a live URL is reachable by anyone and a CLI check would not hold.
+import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
 import { covenantAccept, covenantStatus } from './covenant.js';
+import { COVENANT_TEXTS } from './covenant-texts.js';
 import type { Env } from './http.js';
 import { sampleSkeleton } from './sample.js';
 import { fieldOf, poolDbOf, startPool, stubUser, textOf, type TestDb, type TestPool } from './test-pool.js';
@@ -80,15 +82,15 @@ describe('with COVENANT_VERSION set', () => {
 
   it('refuses an account that has not accepted it, by name, and stores nothing', async () => {
     const { token } = await pool.signIn('github', stubUser('3001'));
-    expect(await pool.get('/v1/covenant', token)).toEqual({ status: 200, json: { version: 'v2', accepted: false } });
+    expect(await pool.get('/v1/covenant', token)).toEqual({ status: 200, json: { version: 'v2', accepted: false, screen: null } });
     expect(await pool.post('/v1/deposits', sampleSkeleton('0000000000003001'), token)).toMatchObject({ status: 403, json: { error: 'covenant_not_accepted' } });
     expect(await storedCount(pool)).toBe(0);
     expect((await pool.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, token)).status).toBe(200);
   });
 
   it('names the version with no sign-in, and asks a caller with no account to sign in before depositing', async () => {
-    expect(await pool.get('/v1/covenant')).toEqual({ status: 200, json: { version: 'v2', accepted: false } });
-    expect(await pool.get('/v1/covenant', 'a-wrong-token')).toEqual({ status: 200, json: { version: 'v2', accepted: false } });
+    expect(await pool.get('/v1/covenant')).toEqual({ status: 200, json: { version: 'v2', accepted: false, screen: null } });
+    expect(await pool.get('/v1/covenant', 'a-wrong-token')).toEqual({ status: 200, json: { version: 'v2', accepted: false, screen: null } });
     expect((await pool.post('/v1/deposits', sampleSkeleton('0000000000003002'))).status).toBe(401);
     expect((await pool.post('/v1/covenant/accept', { version: 'v2' })).status).toBe(401);
   });
@@ -96,7 +98,7 @@ describe('with COVENANT_VERSION set', () => {
   it('takes a deposit once the account has accepted that version', async () => {
     const { token } = await pool.signIn('github', stubUser('3003'));
     expect((await pool.post('/v1/covenant/accept', { version: 'v2' }, token)).status).toBe(200);
-    expect(await pool.get('/v1/covenant', token)).toEqual({ status: 200, json: { version: 'v2', accepted: true } });
+    expect(await pool.get('/v1/covenant', token)).toEqual({ status: 200, json: { version: 'v2', accepted: true, screen: null } });
     expect((await pool.post('/v1/deposits', sampleSkeleton('0000000000003003'), token)).status).toBe(201);
     // A second accept changes nothing and still answers yes, so a rerun of `deposit --accept-covenant` does not fail.
     expect((await pool.post('/v1/covenant/accept', { version: 'v2' }, token)).status).toBe(200);
@@ -113,7 +115,7 @@ describe('with COVENANT_VERSION set', () => {
     const { token, account } = await pool.signIn('github', stubUser('3005'));
     const db = await pool.db();
     await db.prepare('UPDATE accounts SET covenant = ? WHERE id = ?').bind('v1', account).run();
-    expect(await pool.get('/v1/covenant', token)).toEqual({ status: 200, json: { version: 'v2', accepted: false } });
+    expect(await pool.get('/v1/covenant', token)).toEqual({ status: 200, json: { version: 'v2', accepted: false, screen: null } });
     expect(await pool.post('/v1/deposits', sampleSkeleton('0000000000003005'), token)).toMatchObject({ status: 403, json: { error: 'covenant_not_accepted' } });
   });
 });
@@ -203,5 +205,59 @@ describe('the covenant record', () => {
     const db = await pool.db();
     expect((await covenantAccept(askFor('/v1/covenant/accept', token, { version: 'v9' }), envFor(db, 'v9'))).status).toBe(200);
     expect((await served(db)).filter((row) => row.version === 'v9')).toHaveLength(1);
+  });
+});
+
+/** A stand-in for a covenant, under a placeholder version: the wording of the real text is not in this file, and a test of the screen needs only its shape. */
+const FIXTURE_VERSION = 'fixture-1';
+const FIXTURE_LINK = 'https://pool.test/covenant/fixture-1';
+const FIXTURE_PHRASE = 'I AGREE TO THE FIXTURE';
+const FIXTURE_TEXT = ['FIXTURE COVENANT fixture-1', '', 'This text stands in for a covenant in a test.', '', `Full text: ${FIXTURE_LINK}`, '', `To accept, type: ${FIXTURE_PHRASE}`].join('\n');
+const FIXTURES: ReadonlyMap<string, string> = new Map([[FIXTURE_VERSION, FIXTURE_TEXT]]);
+
+describe('the covenant screen', () => {
+  let pool: TestPool;
+  let nextUser = 5000;
+
+  beforeAll(async () => {
+    pool = await startPool({ COVENANT_VERSION: 'v2' });
+  }, 60_000);
+
+  afterAll(async () => {
+    await pool.dispose();
+  });
+
+  const statusOf = async (version: string, texts: ReadonlyMap<string, string>): Promise<unknown> => {
+    const { token } = await pool.signIn('github', stubUser(String((nextUser += 1))));
+    return (await covenantStatus(askFor('/v1/covenant', token), envFor(await pool.db(), version), texts)).json();
+  };
+
+  it('serves the text of the version in force with its link, its phrase, and the hash of that text', async () => {
+    expect(await statusOf(FIXTURE_VERSION, FIXTURES)).toEqual({
+      version: FIXTURE_VERSION,
+      accepted: false,
+      screen: { text: FIXTURE_TEXT, link: FIXTURE_LINK, phrase: FIXTURE_PHRASE, sha256: createHash('sha256').update(FIXTURE_TEXT).digest('hex') },
+    });
+  });
+
+  it('says so when no file holds the version in force, so the client has nothing to accept', async () => {
+    expect(await statusOf('no-file-for-this', FIXTURES)).toEqual({ version: 'no-file-for-this', accepted: false, screen: null });
+  });
+
+  it('serves no screen for a text that names no link or no phrase: a screen that cannot say how to accept is no screen', async () => {
+    const lines = FIXTURE_TEXT.split('\n');
+    const noLink = new Map([[FIXTURE_VERSION, lines.filter((line) => !line.startsWith('Full text:')).join('\n')]]);
+    const noPhrase = new Map([[FIXTURE_VERSION, lines.filter((line) => !line.startsWith('To accept, type:')).join('\n')]]);
+    expect(await statusOf(FIXTURE_VERSION, noLink)).toMatchObject({ screen: null });
+    expect(await statusOf(FIXTURE_VERSION, noPhrase)).toMatchObject({ screen: null });
+  });
+
+  it('ships only texts that can be served: each one names its link and its phrase', async () => {
+    for (const [version, text] of COVENANT_TEXTS) expect(await statusOf(version, COVENANT_TEXTS), version).toMatchObject({ screen: { text } });
+  });
+
+  it('serves no screen from the shipped texts for a version they do not hold, and the live route says the same', async () => {
+    expect(COVENANT_TEXTS.has('v2')).toBe(false);
+    expect(await pool.get('/v1/covenant')).toEqual({ status: 200, json: { version: 'v2', accepted: false, screen: null } });
   });
 });

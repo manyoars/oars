@@ -1,4 +1,6 @@
 // The covenant gate. It lives at the server because a live URL is reachable by anyone and a CLI check would not hold: with no COVENANT_VERSION nothing can deposit, and once one is set an account must have accepted exactly that version.
+import { createHash } from 'node:crypto';
+import { COVENANT_TEXTS } from './covenant-texts.js';
 import { answer, bodyOf, bound, refuse, textField, type Bound, type Env } from './http.js';
 import { accountOf } from './identity.js';
 
@@ -18,13 +20,35 @@ export const hasAccepted = async (env: Env, account: string, version: string): P
  */
 export const servedOf = (env: Env, version: string): Bound => env.DB.prepare('INSERT OR IGNORE INTO covenant_served (version, first_served_at) VALUES (?, ?)').bind(version, Date.now());
 
-/** `GET /v1/covenant`: the version is public, so it answers with no sign-in, and `accepted` is then simply false. */
-export const covenantStatus = async (request: Request, env: Env): Promise<Response> => {
+/** What a person is shown before they accept: the text exactly as displayed, the full-text link and the phrase to type (both read from that text), and the hash of the text, which the acceptance names. */
+export interface Screen {
+  text: string;
+  link: string;
+  phrase: string;
+  sha256: string;
+}
+
+/** The two lines a screen must carry, so the client prints and asks for what the text itself states. */
+const LINK_LINE = /^Full text: (\S+)$/m;
+const PHRASE_LINE = /^To accept, type: (.+)$/m;
+
+export const sha256Of = (text: string): string => createHash('sha256').update(text).digest('hex');
+
+/** The screen for a version, or `null` when no text is held for it or the text names no link or phrase: with no screen nothing can be shown, so nothing can be accepted. */
+export const screenOf = (version: string, texts: ReadonlyMap<string, string>): Screen | null => {
+  const text = texts.get(version);
+  const link = text === undefined ? undefined : LINK_LINE.exec(text)?.[1];
+  const phrase = text === undefined ? undefined : PHRASE_LINE.exec(text)?.[1];
+  return text === undefined || link === undefined || phrase === undefined ? null : { text, link, phrase, sha256: sha256Of(text) };
+};
+
+/** `GET /v1/covenant`: the version is public, so it answers with no sign-in, and `accepted` is then simply false. The screen rides with it, from a file in this package keyed by version, so a change of text is a pool deploy and never a client release. */
+export const covenantStatus = async (request: Request, env: Env, texts: ReadonlyMap<string, string> = COVENANT_TEXTS): Promise<Response> => {
   const version = bound(env.COVENANT_VERSION);
   if (version === undefined) return answer(200, { version: null, accepted: false });
   await servedOf(env, version).run();
   const account = await accountOf(request, env);
-  return answer(200, { version, accepted: account !== undefined && (await hasAccepted(env, account, version)) });
+  return answer(200, { version, accepted: account !== undefined && (await hasAccepted(env, account, version)), screen: screenOf(version, texts) });
 };
 
 /** `POST /v1/covenant/accept`: naming the version is the acceptance, so a client that read an older one cannot accept a newer one it never saw. */
