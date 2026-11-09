@@ -1,7 +1,7 @@
 // `oars pool hold pull` (`machine-pull.ts`): the trusted machine admits what a VM held on its branches. Each case runs against bare repositories in a temp folder that stand for the private repositories, with the branches made by git plumbing as
 // the VM makes them; GitHub's visibility record is injected, so nothing reaches a network.
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Outcome } from '../cli.js';
@@ -158,5 +158,96 @@ describe('oars pool hold pull: who may hold', () => {
     expect(out.document).toMatchObject({ admitted: [], refused: [{ repo: OTHER_REPO, branch: `oars-hold/${MACHINE}/${ID}`, reason: 'machine_repo' }, { repo: REPO, branch: 'oars-hold/stray', reason: 'branch_name' }] });
     expect(existsSync(s.outbox)).toBe(false);
     expect(branchesOf(s, OTHER_REPO)).toHaveLength(1);
+  }, SLOW);
+});
+
+/** A stamp this client did not build under, in the form a real one has: the batch's own vocabulary version, then eight hex digits. */
+const OLDER = `v${REGISTER_FIXTURE.vocabVersion}-00000000`;
+
+const without = (files: { [file: string]: string }, name: string): { [file: string]: string } => Object.fromEntries(Object.entries(files).filter(([file]) => file !== name));
+
+const pulledOf = (s: Scene): unknown => JSON.parse(readFileSync(join(s.outbox, 'pulled.json'), 'utf8'));
+
+describe('oars pool hold pull: the stamp', () => {
+  it('files a batch under its branch\'s stamp, a differing one under its own folder, and records each id and stamp in pulled.json', async () => {
+    const s = await scene();
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, { ...goodFiles(s), stamp: `${OLDER}\n` });
+    hold(s, REPO, `oars-hold/${MACHINE}/${OTHER_ID}`, goodFiles(s, OTHER_ID));
+    const out = await pull(s);
+    expect(out.document).toMatchObject({ admitted: [{ id: ID, stamp: OLDER }, { id: OTHER_ID, stamp: currentStamp() }], refused: [] });
+    expect(filed(s, OLDER)).toHaveLength(1);
+    expect(filed(s)).toHaveLength(1);
+    expect(pulledOf(s)).toEqual({ [ID]: OLDER, [OTHER_ID]: currentStamp() });
+  }, SLOW);
+
+  it('keeps and reports a branch whose stamp is path-like, names another vocabulary than its batch, or is missing, and writes nothing', async () => {
+    const s = await scene();
+    const third = '00000000000000aa';
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, { ...goodFiles(s), stamp: '../../escape\n' });
+    hold(s, REPO, `oars-hold/${MACHINE}/${OTHER_ID}`, { ...goodFiles(s, OTHER_ID), stamp: 'v99-00000000\n' });
+    hold(s, REPO, `oars-hold/${MACHINE}/${third}`, without(goodFiles(s, third), 'stamp'));
+    const out = await pull(s);
+    expect(out.document).toMatchObject({ admitted: [], refused: [{ branch: `oars-hold/${MACHINE}/${third}`, reason: 'stamp_invalid' }, { branch: `oars-hold/${MACHINE}/${ID}`, reason: 'stamp_invalid' }, { branch: `oars-hold/${MACHINE}/${OTHER_ID}`, reason: 'stamp_invalid' }] });
+    expect(existsSync(s.outbox)).toBe(false);
+    expect(branchesOf(s, REPO)).toHaveLength(3);
+  }, SLOW);
+
+  it('reports a refused batch of a differing stamp under its own reason with the cause, and a format the pool would refuse stays on its branch', async () => {
+    const s = await scene();
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, { ...goodFiles(s), stamp: `${OLDER}\n`, 'batch.json': canonicalBytes({ ...REGISTER_FIXTURE, id: ID, format: 99 }) });
+    const out = await pull(s);
+    expect(out.document).toMatchObject({ admitted: [], refused: [{ branch: `oars-hold/${MACHINE}/${ID}`, reason: 'differing_stamp' }] });
+    expect(out.text).toContain('differing_stamp: batch_invalid: format');
+    expect(existsSync(s.outbox)).toBe(false);
+    expect(branchesOf(s, REPO)).toHaveLength(1);
+  }, SLOW);
+
+  it('stops before any fetch when pulled.json is not a list of ids and stamps', async () => {
+    const s = await scene();
+    mkdirSync(s.outbox, { recursive: true });
+    writeFileSync(join(s.outbox, 'pulled.json'), '[1, 2');
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, goodFiles(s));
+    await expect(pull(s)).rejects.toThrow(/not a list of ids and stamps/u);
+    expect(s.network).toEqual([]);
+    expect(filed(s)).toEqual([]);
+  }, SLOW);
+
+  it('removes the copy of an id held under another stamp once the new one is durable, and pulled.json names the new stamp', async () => {
+    const s = await scene();
+    const first = hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, { ...goodFiles(s), stamp: `${OLDER}\n` }, 1_700_000_000);
+    await pull(s);
+    expect(filed(s, OLDER)).toHaveLength(1);
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, goodFiles(s), 1_700_000_100, first);
+    const out = await pull(s);
+    expect(out.document).toMatchObject({ admitted: [{ id: ID, stamp: currentStamp() }] });
+    expect(filed(s, OLDER)).toEqual([]);
+    expect(filed(s)).toHaveLength(1);
+    expect(pulledOf(s)).toEqual({ [ID]: currentStamp() });
+  }, SLOW);
+});
+
+describe('oars pool hold pull: the terms', () => {
+  it('keeps and reports a branch whose terms digest is of another list or is missing, even with a matching stamp, and writes nothing', async () => {
+    const s = await scene();
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, { ...goodFiles(s), terms: `${termsDigest(s.salt, [...TERMS, 'a newer term'])}\n` });
+    hold(s, REPO, `oars-hold/${MACHINE}/${OTHER_ID}`, without(goodFiles(s, OTHER_ID), 'terms'));
+    const out = await pull(s);
+    expect(out.document).toMatchObject({ admitted: [], refused: [{ branch: `oars-hold/${MACHINE}/${ID}`, reason: 'terms_stale' }, { branch: `oars-hold/${MACHINE}/${OTHER_ID}`, reason: 'terms_stale' }] });
+    expect(existsSync(s.outbox)).toBe(false);
+    expect(branchesOf(s, REPO)).toHaveLength(2);
+  }, SLOW);
+
+  it('admits a branch whose list is this machine\'s own in another order and case', async () => {
+    const s = await scene();
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, { ...goodFiles(s), terms: `${termsDigest(s.salt, ['PROJECT X', 'Acme Corp', ''])}\n` });
+    expect((await pull(s)).document).toMatchObject({ admitted: [{ id: ID }], refused: [] });
+  }, SLOW);
+
+  it('refuses the whole run, before any fetch, when this machine has no term list', async () => {
+    const s = await scene([RECORD], '');
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, goodFiles(s));
+    await expect(pull(s)).rejects.toThrow(/no exclusion terms/iu);
+    expect(s.network).toEqual([]);
+    expect(existsSync(s.outbox)).toBe(false);
   }, SLOW);
 });

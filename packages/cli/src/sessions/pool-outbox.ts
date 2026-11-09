@@ -316,7 +316,8 @@ const staleFolders = async (outbox: string, stamp: string): Promise<string[]> =>
   return names;
 };
 
-const STAMP_FOLDER = /^v[^./]+-[0-9a-f]{8}$/;
+/** The name of a stamp folder: a vocabulary version, then eight hex digits of the field list and format. No dot or slash, so a name that matches is one path segment. */
+export const STAMP_FOLDER = /^v[^./]+-[0-9a-f]{8}$/;
 
 const batchesIn = async (folder: string): Promise<number> => (await namesIn(folder)).filter((name) => BATCH_FILE.test(name)).length;
 
