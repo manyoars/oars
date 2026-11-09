@@ -22,7 +22,7 @@ import { slugOf } from './allow.js';
 import { hookRowOf } from './codex-hook.js';
 import { parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey, type SkeletonFrame } from './pool-wire.js';
 import { contentHash } from './read.js';
-import { deposit, loadStore, localSalt, updatePoolChoices } from './store.js';
+import { deposit, loadStore, localSalt, paths, updatePoolChoices, type PoolChoices } from './store.js';
 import { spoolEvents } from '../telemetry/read-events.js';
 import { addProject, cleanup, NOW, payloadOf, settledClock, stage, TEST_FLOOR, type Staged } from './test-support.js';
 
@@ -586,6 +586,9 @@ const atTerminal = (scene: Scene, ...lines: string[]): void => {
   Object.assign(scene.staged.stdin, { isTTY: true });
   for (const line of lines) scene.staged.stdin.write(`${line}\n`);
 };
+
+/** The pool choices as the store reads them now. */
+const choicesOf = (scene: Scene): Promise<PoolChoices> => updatePoolChoices(scene.staged.storeDir, () => undefined);
 
 /** A scene with one clean session captured, signed in, and its batch written to the outbox. */
 const batched = async (): Promise<Scene> => {
@@ -1349,6 +1352,32 @@ describe('oars pool deposit --send', () => {
       const accepted = pool.requests.find((request) => request.url.pathname === '/v1/covenant/accept');
       expect(JSON.parse(accepted?.body ?? '{}')).toEqual({ version: 'v1', textSha256: SCREEN.sha256, input: 'typed', client: `oars/${scene.h.deps.version}` });
       expect(paths(pool)).toEqual(['/v1/covenant', '/v1/covenant/accept', '/v1/deposits']);
+    });
+
+    it('asks the raw question again when the covenant accepted is not the one the saved yes was given under', async () => {
+      const scene = await batched();
+      await updatePoolChoices(scene.staged.storeDir, (choices) => {
+        choices.rawConsent = 'granted';
+        choices.rawConsentVersion = 'v0';
+      });
+      const hash = await printedAndHash(scene);
+      atTerminal(scene, SCREEN.phrase);
+      await poolDeposit(scene.h.deps, sendOptions(hash, wire(acceptRoutes()).via));
+      expect(await choicesOf(scene)).toMatchObject({ rawConsent: null, rawConsentVersion: null });
+      expect(scene.h.err.join('')).toContain('no longer applies');
+    });
+
+    it('keeps a saved yes that was given under the covenant being accepted', async () => {
+      const scene = await batched();
+      await updatePoolChoices(scene.staged.storeDir, (choices) => {
+        choices.rawConsent = 'granted';
+        choices.rawConsentVersion = 'v1';
+      });
+      const hash = await printedAndHash(scene);
+      atTerminal(scene, SCREEN.phrase);
+      await poolDeposit(scene.h.deps, sendOptions(hash, wire(acceptRoutes()).via));
+      expect(await choicesOf(scene)).toMatchObject({ rawConsent: 'granted', rawConsentVersion: 'v1' });
+      expect(scene.h.err.join('')).not.toContain('no longer applies');
     });
 
     it('accepts nothing on any other phrase, and says what to type', async () => {
@@ -2551,6 +2580,7 @@ describe('oars pool deposit: the raw copy (t884)', () => {
     await signIn(scene);
     await updatePoolChoices(scene.staged.storeDir, (choices) => {
       choices.rawConsent = consent;
+      choices.rawConsentVersion = consent === 'granted' ? 'v1' : null;
       Object.assign(choices.folders, folders);
     });
     return scene;
@@ -2643,6 +2673,7 @@ describe('oars pool deposit: the raw copy (t884)', () => {
     await signIn(scene);
     await updatePoolChoices(scene.staged.storeDir, (choices) => {
       choices.rawConsent = 'granted';
+      choices.rawConsentVersion = 'v1';
     });
     expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
     const bodies = rawFiles(scene).map((name) => readFileSync(join(scene.staged.storeDir, 'pool-outbox', name), 'utf8'));
@@ -2729,6 +2760,7 @@ describe('oars pool outbox after the nightly send (t884 fix round)', () => {
     await signIn(scene);
     await updatePoolChoices(scene.staged.storeDir, (choices) => {
       choices.rawConsent = 'granted';
+      choices.rawConsentVersion = 'v1';
     });
     await scene.cli('pool', 'deposit', '--server', POOL);
   };
@@ -2784,14 +2816,62 @@ describe('oars pool outbox after the nightly send (t884 fix round)', () => {
 });
 
 describe('oars pool raw (t884)', () => {
-  it('shows the prompt until it is answered, records the answer, and can change it', async () => {
+  const covenantIs = (version: string | null): void => {
+    server.use(http.get(`${POOL}/v1/covenant`, () => HttpResponse.json({ version, accepted: false, screen: null })));
+  };
+
+  it('states the sale and training use in the prompt it shows', async () => {
     const scene = setting();
+    expect(await scene.cli('pool', 'raw')).toBe(ExitCode.OK);
+    expect(scene.h.out.join('')).toContain('Many Oars Co. may sell these copies and use them to train AI models, and it may let anyone it sells them to do the same.');
+  });
+
+  it('stores a yes with the covenant version in force, and a no with none', async () => {
+    const scene = setting({ OARS_POOL_URL: POOL });
+    covenantIs('v1');
+    expect(await scene.cli('pool', 'raw', '--consent', 'yes')).toBe(ExitCode.OK);
+    expect(await choicesOf(scene)).toMatchObject({ rawConsent: 'granted', rawConsentVersion: 'v1' });
+    expect(await scene.cli('pool', 'raw', '--consent', 'no')).toBe(ExitCode.OK);
+    expect(await choicesOf(scene)).toMatchObject({ rawConsent: 'declined', rawConsentVersion: null });
+  });
+
+  it('records no yes while the pool has published no covenant, or cannot say which it is', async () => {
+    const scene = setting({ OARS_POOL_URL: POOL });
+    covenantIs(null);
+    expect(await scene.cli('pool', 'raw', '--consent', 'yes')).toBe(ExitCode.AUTH);
+    server.use(http.get(`${POOL}/v1/covenant`, () => new HttpResponse('down', { status: 500 })));
+    expect(await scene.cli('pool', 'raw', '--consent', 'yes')).not.toBe(ExitCode.OK);
+    expect(await choicesOf(scene)).toMatchObject({ rawConsent: null, rawConsentVersion: null });
+  });
+
+  it('reads a saved yes with no version, from before the prompt named the sale, as not asked', async () => {
+    const scene = setting();
+    mkdirSync(scene.staged.storeDir, { recursive: true });
+    writeFileSync(paths(scene.staged.storeDir).state, JSON.stringify({ files: {}, redactDomains: [], allow: [], pool: { rawConsent: 'granted', folders: {} } }));
+    expect(await choicesOf(scene)).toMatchObject({ rawConsent: null, rawConsentVersion: null });
+    expect(await scene.cli('pool', 'raw')).toBe(ExitCode.OK);
+    expect(scene.h.out.join('')).toContain('not answered yet: only skeletons go to the pool');
+    expect(scene.h.out.join('')).toContain('may sell these copies');
+  });
+
+  it('honors a saved yes that carries the covenant version, and a saved no whatever it carries', async () => {
+    const scene = setting();
+    mkdirSync(scene.staged.storeDir, { recursive: true });
+    writeFileSync(paths(scene.staged.storeDir).state, JSON.stringify({ files: {}, redactDomains: [], allow: [], pool: { rawConsent: 'granted', rawConsentVersion: 'v1', folders: {} } }));
+    expect(await choicesOf(scene)).toMatchObject({ rawConsent: 'granted', rawConsentVersion: 'v1' });
+    writeFileSync(paths(scene.staged.storeDir).state, JSON.stringify({ files: {}, redactDomains: [], allow: [], pool: { rawConsent: 'declined', folders: {} } }));
+    expect(await choicesOf(scene)).toMatchObject({ rawConsent: 'declined', rawConsentVersion: null });
+  });
+
+  it('shows the prompt until it is answered, records the answer, and can change it', async () => {
+    const scene = setting({ OARS_POOL_URL: POOL });
     expect(await scene.cli('pool', 'raw')).toBe(ExitCode.OK);
     const shown = scene.h.out.join('');
     expect(shown).toContain('best effort');
     for (const unsafe of ['a host with no dot', 'quoted file contents and command output', 'a secret split across lines', 'images and attachments', 'a JSON env value', 'a common-word account name is masked everywhere', 'a public host name outside a link', 'your username written another way', 'an IPv6 address with a zone or inside a longer word', "another person's hyphenated name in a project folder path"]) expect(shown).toContain(unsafe);
     expect(shown).toContain('not answered yet: only skeletons go to the pool');
     scene.h.out.length = 0;
+    covenantIs('v1');
     expect(await scene.cli('pool', 'raw', '--consent', 'yes')).toBe(ExitCode.OK);
     expect(scene.h.out.join('')).toContain('yes: redacted raw copies leave');
     expect(scene.h.out.join('')).not.toContain('best effort');

@@ -58,6 +58,7 @@ const scene = async (consent: 'granted' | 'declined' | null, env: NodeJS.Process
   await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
   await updatePoolChoices(staged.storeDir, (choices) => {
     choices.rawConsent = consent;
+    choices.rawConsentVersion = consent === 'granted' ? 'v1' : null;
   });
   if (signedIn) writeFileSync(join(staged.storeDir, 'pool-accounts.json'), JSON.stringify([{ server: POOL, account: 'acct_one', token: 'a-pool-token', expiresAt: LATER, signingKey: { kty: 'OKP', crv: 'Ed25519', x: 'k' } }]));
   return { staged, deps: h.deps };

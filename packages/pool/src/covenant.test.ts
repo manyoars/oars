@@ -176,7 +176,7 @@ describe('the covenant record', () => {
     expect(await db.prepare('SELECT covenant FROM accounts WHERE id = ?').bind(account).first('covenant')).toBe('v3');
   });
 
-  const proofOf = async (db: TestDb, account: string): Promise<unknown[]> =>
+  const proofOf = async (db: TestDb, account: string): Promise<readonly unknown[]> =>
     (await db.prepare('SELECT version, text_sha256, input, client FROM covenant_acceptances WHERE account = ? ORDER BY version').bind(account).all()).results;
 
   it('records which text the person saw, how they accepted, and with which client', async () => {
@@ -210,8 +210,8 @@ describe('the covenant record', () => {
   ])('refuses an acceptance that does not state its %s, and records nothing', async (field, user) => {
     const { token, account } = await pool.signIn('github', stubUser(user));
     const db = await pool.db();
-    const { [field]: omitted, ...rest } = acceptanceOf('v2');
-    expect(omitted).toBeDefined();
+    const rest = Object.fromEntries(Object.entries(acceptanceOf('v2')).filter(([name]) => name !== field));
+    expect(Object.keys(rest)).toHaveLength(3);
     expect(await pool.post('/v1/covenant/accept', rest, token)).toMatchObject({ status: 400, json: { error: 'missing_field', field } });
     expect(await proofOf(db, account)).toEqual([]);
   });

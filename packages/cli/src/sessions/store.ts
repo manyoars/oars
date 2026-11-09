@@ -106,9 +106,13 @@ export interface State {
   pool: PoolChoices;
 }
 
-/** The answer to the raw-copy prompt (`granted`, `declined`, or not asked yet) and the per-folder switches (an `--allow`-style entry mapped to what it may send). */
+/**
+ * The answer to the raw-copy prompt (`granted`, `declined`, or not asked yet) and the per-folder switches (an `--allow`-style entry mapped to what it may send).
+ * A yes carries the covenant version in force when it was given, because the prompt names the sale and training use that covenant states. A yes with no version predates that wording and reads as not asked.
+ */
 export interface PoolChoices {
   rawConsent: 'granted' | 'declined' | null;
+  rawConsentVersion: string | null;
   folders: { [entry: string]: FolderSend };
 }
 export type FolderSend = 'skeleton' | 'off';
@@ -184,12 +188,14 @@ export const readState = async (storeDir: string): Promise<State> => {
       const pool = isRecord(parsed.pool) ? parsed.pool : {};
       const folders: PoolChoices['folders'] = {};
       if (isRecord(pool.folders)) for (const [entry, mode] of Object.entries(pool.folders)) if (mode === 'skeleton' || mode === 'off') folders[entry] = mode;
-      return { files, redactDomains: domains, allow, pool: { rawConsent: pool.rawConsent === 'granted' || pool.rawConsent === 'declined' ? pool.rawConsent : null, folders } };
+      const yesVersion = typeof pool.rawConsentVersion === 'string' && pool.rawConsentVersion !== '' ? pool.rawConsentVersion : null;
+      const granted = pool.rawConsent === 'granted' && yesVersion !== null;
+      return { files, redactDomains: domains, allow, pool: { rawConsent: granted ? 'granted' : pool.rawConsent === 'declined' ? 'declined' : null, rawConsentVersion: granted ? yesVersion : null, folders } };
     }
   } catch (error) {
     if (!isMissing(error) && !(error instanceof SyntaxError)) throw error;
   }
-  return { files: {}, redactDomains: [], allow: [], pool: { rawConsent: null, folders: {} } };
+  return { files: {}, redactDomains: [], allow: [], pool: { rawConsent: null, rawConsentVersion: null, folders: {} } };
 };
 
 /** Changes the pool choices under the store lock, so a deposit running at the same time keeps them (it writes the state it read). */

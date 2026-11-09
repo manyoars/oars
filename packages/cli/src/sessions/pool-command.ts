@@ -291,6 +291,15 @@ const openCovenant = async (deps: RunDeps, server: string, token: string, accept
   const body = { version, textSha256: createHash('sha256').update(screen.text).digest('hex'), input: 'typed', client: `oars/${deps.version}` };
   const accepted = await ask(deps, DEPOSIT, server, '/v1/covenant/accept', { token, body }, via);
   if (accepted.status !== 200) throw refusal(DEPOSIT, accepted);
+  // A yes to the raw prompt belongs to the covenant it was given under, and a covenant can change what that prompt covers: accepting another version asks the raw question again.
+  const reset = { done: false };
+  await updatePoolChoices(runtimeOf(deps).storeDir, (choices) => {
+    if (choices.rawConsent !== 'granted' || choices.rawConsentVersion === version) return;
+    choices.rawConsent = null;
+    choices.rawConsentVersion = null;
+    reset.done = true;
+  });
+  if (reset.done) deps.io.stderr('Your earlier yes to the raw prompt was given under another covenant, so it no longer applies. Run oars pool raw to read the prompt and answer again.\n');
 };
 
 /** What the pool shows before a person accepts: the covenant's text as displayed, its full-text link, and the phrase the text asks to be typed. */
@@ -722,11 +731,24 @@ const RAW = 'pool-raw';
 /** The raw prompt, in plain words: shown by `oars pool raw` until it is answered, and what the detached sender relies on. Redaction is best effort and the text says so. */
 export const RAW_PROMPT = [
   'Raw transcripts are separate from the covenant. If you say yes, then once the pool says your account accepted its covenant, the sender that a session-end hook or any oars command starts (at most about once an hour) uploads a redacted copy of each full transcript of every folder you allowed, beside its skeleton, except a folder you set to skeleton only or off.',
+  'Many Oars Co. may sell these copies and use them to train AI models, and it may let anyone it sells them to do the same.',
   'Redaction runs on this machine, before anything is queued, and it is best effort: it masks secret shapes it knows, emails, your username, home paths, environment values, and hosts, and it can miss a secret that has no recognizable shape or a name written in prose.',
   'It also does not catch a host with no dot, a public host name outside a link, quoted file contents and command output, a secret split across lines, images and attachments, a JSON env value, your username written another way, another person\'s hyphenated name in a project folder path, or an IPv6 address with a zone or inside a longer word, and a common-word account name is masked everywhere it appears.',
   'The blocks the harness adds on its own (instruction files, memory, skill lists, the system prompt) are replaced by a short marker, but a block in a shape the redactor does not list yet, a summary the harness writes for a session you left, a file it quotes after compaction, the echo of a command you ran, a reminder the harness puts in the middle of a message, and what an agent reports back are not, and stay as written; the project folder name and working directory on each line also stay readable, apart from the masking above.',
   'Say no, or say nothing, and only skeletons go to the pool. Change your mind any time: oars pool raw --consent yes|no. A no stops later sends only; it cannot recall what was already sent.',
 ].join('\n');
+
+/** The covenant version the pool has in force (`GET /v1/covenant` is public). With none published a yes cannot be tied to a covenant, so nothing is recorded. */
+const covenantInForce = async (deps: RunDeps): Promise<string> => {
+  const reply = await ask(deps, RAW, poolServer(deps.env, RAW), '/v1/covenant', {});
+  if (reply.status !== 200 || !isObject(reply.body)) throw refusal(RAW, reply);
+  const version = textIn(reply.body, 'version');
+  if (version === undefined) {
+    const title = 'This pool has not published its covenant, so a yes to the raw prompt cannot be tied to one. Nothing was recorded.';
+    throw new CliError(title, ExitCode.AUTH, RAW, { code: 'deposits_closed', title, status: 403 });
+  }
+  return version;
+};
 
 /** `oars pool raw`: shows the raw prompt and the answer so far; `--consent yes|no` records the answer; `--folder <entry> --mode all|skeleton|off` sets what one folder may send. */
 export const poolRaw = async (deps: RunDeps, options: { consent?: string | undefined; folder?: string | undefined; mode?: string | undefined }): Promise<Outcome> => {
@@ -735,8 +757,13 @@ export const poolRaw = async (deps: RunDeps, options: { consent?: string | undef
   if ((options.folder === undefined) !== (options.mode === undefined)) throw usage('--folder and --mode go together: --folder <folder or glob> --mode all|skeleton|off.', RAW);
   if (options.mode !== undefined && options.mode !== 'all' && options.mode !== 'skeleton' && options.mode !== 'off') throw usage('--mode takes all, skeleton, or off.', RAW);
   const { folder, mode } = options;
+  // A yes is tied to the covenant in force when it is given, so the pool is asked which that is before anything is stored. A no needs none.
+  const covenant = options.consent === 'yes' ? await covenantInForce(deps) : null;
   const choices = await updatePoolChoices(runtime.storeDir, (current) => {
-    if (options.consent !== undefined) current.rawConsent = options.consent === 'yes' ? 'granted' : 'declined';
+    if (options.consent !== undefined) {
+      current.rawConsent = options.consent === 'yes' ? 'granted' : 'declined';
+      current.rawConsentVersion = covenant;
+    }
     if (folder !== undefined) {
       if (mode === 'all') Reflect.deleteProperty(current.folders, folder);
       else if (mode === 'skeleton' || mode === 'off') current.folders[folder] = mode;
