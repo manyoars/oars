@@ -325,13 +325,15 @@ const ROLLOUT_HEAD_KINDS: ReadonlySet<string> = new Set(['session_meta', 'turn_c
 /** Payload types the reader reads as carrying no turn: the usage event, an aborted turn (one the operator interrupted gives a prompt record, so it is no longer head-only), and the `response_item` messages of injected context (a prompt is the `event_msg` user_message). */
 const ROLLOUT_HEAD_EVENTS: ReadonlySet<string> = new Set(['token_count', 'turn_aborted']);
 const ROLLOUT_HEAD_ITEMS: ReadonlySet<string> = new Set(['message']);
+/** An assistant `response_item` message is a turn, which the reader reads from `event_msg` only: a rollout whose turns moved to it is a moved form, not an empty one. */
+const isAssistantItem = (record: { payload?: unknown }): boolean => typeof record.payload === 'object' && record.payload !== null && 'role' in record.payload && record.payload.role === 'assistant';
 export const rolloutHeadOnly = (text: string): boolean =>
   holdsOnlyRecords(text, (record) => {
     if (ROLLOUT_HEAD_KINDS.has(record.type)) return true;
     const payload = record.payload;
     const kind = typeof payload === 'object' && payload !== null && 'type' in payload ? payload.type : undefined;
     if (typeof kind !== 'string') return false;
-    return (record.type === 'event_msg' && ROLLOUT_HEAD_EVENTS.has(kind)) || (record.type === 'response_item' && ROLLOUT_HEAD_ITEMS.has(kind));
+    return (record.type === 'event_msg' && ROLLOUT_HEAD_EVENTS.has(kind)) || (record.type === 'response_item' && ROLLOUT_HEAD_ITEMS.has(kind) && !isAssistantItem(record));
   });
 
 /**

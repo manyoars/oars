@@ -365,6 +365,14 @@ export const otelSessions = (spans: readonly Span[]): OtelSession[] => {
     else held.push(span);
   }
 
+  // A GenAI attribute (or an operation-leading name) on any span of a unit's trace marks its session, even an ordinary child span that is no model or tool span: a renamed attribute there is a moved form, not an empty session.
+  const genaiUnits = new Set<Unit>();
+  for (const span of spans) {
+    if (!isGenAi(span)) continue;
+    const owner = ownerOf(span);
+    if (owner !== undefined) genaiUnits.add(owner);
+  }
+
   const out = new Map<string, { lines: Obj[]; mtime: number; spans: number; subagent: OtelSession['subagent']; file: string; genai: boolean }>();
   const framework = (unit: Unit): string => unit.span.framework;
   const orderedUnits = [...unitOf.values()].sort((a, b) => startOf(a.span) - startOf(b.span) || a.span.order - b.span.order);
@@ -501,7 +509,7 @@ export const otelSessions = (spans: readonly Span[]): OtelSession[] => {
     entry.lines.push(...pieces.map((piece) => piece.line));
     // The unit's own span counts once, though it is also a model or tool span when the earliest root of an agentless trace is one.
     entry.spans += 1 + mine.filter((span) => span !== unit.span).length;
-    if (isGenAi(unit.span) || mine.some(isGenAi)) entry.genai = true;
+    if (isGenAi(unit.span) || mine.some(isGenAi) || genaiUnits.has(unit)) entry.genai = true;
   }
   return [...out.entries()].map(([id, held]) => ({ id, size: held.spans, mtimeMs: held.mtime, lines: held.lines, subagent: held.subagent, file: held.file, genai: held.genai }));
 };

@@ -135,6 +135,8 @@ describe('the readers name every head kind their format defines', () => {
     const meta = rec('session_meta', {});
     expect(rolloutHeadOnly(`${meta}\n${rec('response_item', { type: 'message', role: 'user' })}\n`)).toBe(true);
     expect(rolloutHeadOnly(`${meta}\n${rec('event_msg', { type: 'token_count' })}\n${rec('event_msg', { type: 'turn_aborted' })}\n`)).toBe(true);
+    // An assistant message is a turn the reader does not read from a `response_item`: a rollout whose turns moved there is unreadable, not empty.
+    expect(rolloutHeadOnly(`${meta}\n${rec('response_item', { type: 'message', role: 'assistant' })}\n`)).toBe(false);
     expect(rolloutHeadOnly(`${meta}\n${rec('event_msg', { type: 'mystery' })}\n`)).toBe(false);
     expect(rolloutHeadOnly(`${meta}\n${rec('response_item', { type: 'mystery' })}\n`)).toBe(false);
     expect(rolloutHeadOnly(`${meta}\n${rec('event_msg', {})}\n`)).toBe(false);

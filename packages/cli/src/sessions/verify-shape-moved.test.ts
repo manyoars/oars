@@ -120,11 +120,13 @@ describe('sessionsVerify, a file the Gemini or OTel reader drops while it holds 
       { name: 'http.jsonl', lines: [otlpRequest([http('d'.repeat(32), { 'http.request.method': 'GET', 'http.response.status_code': 200 })])] },
       // The attribute was renamed (`gen_ai.op`) and the name leads with no operation: a moved form.
       { name: 'renamed.jsonl', lines: [otlpRequest([http('e'.repeat(32), { 'gen_ai.op': 'chat' })])] },
+      // The renamed attribute sits on a child span under an ordinary HTTP root: still a moved form, not an empty session.
+      { name: 'renamed-child.jsonl', lines: [otlpRequest([http('f'.repeat(32), {}), otlpSpan({ trace: 'f'.repeat(32), id: '0000000000000002', parent: '0000000000000001', name: 'GET /health', start: 1, end: 9, attrs: { 'gen_ai.op': 'chat' } })])] },
       // Other signals in the same folder.
       { name: 'metrics.jsonl', lines: [{ resourceMetrics: [{ scopeMetrics: [{ metrics: [] }] }] }] },
       { name: 'logs.jsonl', lines: [{ resourceLogs: [{ scopeLogs: [{ logRecords: [] }] }] }] },
     ]);
-    expect((await verifyCounts(staged, { otel })).otel).toEqual({ seen: 2, yielded: 1, unreadable: 1 });
+    expect((await verifyCounts(staged, { otel })).otel).toEqual({ seen: 3, yielded: 1, unreadable: 2 });
   });
 
   it('deposits the same bytes with the dropped files present as without them', async () => {
