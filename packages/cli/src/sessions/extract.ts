@@ -40,6 +40,7 @@ import {
   type ToolObservation,
   type ToolPull,
   USAGE_FIELDS,
+  type MessageUsage,
   type Usage,
   type UsageField,
   type UsageKey,
@@ -275,6 +276,13 @@ const readUsage = (message: Obj): LineUsage | undefined => {
     hasThinking: thinking !== undefined,
     observed: reported.filter(([, value]) => value !== undefined).map(([field]) => field),
   };
+};
+
+/** The usage categories a line reported, as the fields of a `MessageUsage`; a category the source left out is not written. */
+const reportedUsage = (line: LineUsage): Pick<MessageUsage, 'input' | 'cacheWrite' | 'cacheRead' | 'output' | 'thinking'> => {
+  const fields: Pick<MessageUsage, 'input' | 'cacheWrite' | 'cacheRead' | 'output' | 'thinking'> = {};
+  for (const field of USAGE_FIELDS) if (line.observed.includes(field)) fields[field] = line.usage[field];
+  return fields;
 };
 
 const toSeconds = (timestamp: string | undefined): number | undefined => {
@@ -1498,6 +1506,9 @@ export const captureSession = (input: ExtractInput): Capture => {
   const callsPerResponse = new Map<string, number>();
   const outputPerResponse = new Map<string, number>();
   const seenResponses = new Set<string>();
+  /** The distinct messages that reported usage, by message key, and the tool-use ids each made (kept apart so a call on a line before the first usage line is still tied). */
+  const messageGroups = new Map<string, MessageUsage>();
+  const callsOfMessage = new Map<string, string[]>();
   let promptFingerprint: string | null = null;
   let cur: Current | undefined;
   // The setup, funnel, and trust shape. A subagent's run is the parent's, so it has no run of its own alone.
@@ -1624,6 +1635,11 @@ export const captureSession = (input: ExtractInput): Capture => {
       if (text !== '' && !side) {
         session.userTurns += 1;
       }
+    }
+    // A message is the unit usage belongs to: the same id on every content-block line is one message, and a replayed line is the same one again.
+    const messageKey = type === 'assistant' && role === 'assistant' ? str(message.id) || str(o.requestId) || `line ${String(position)}` : undefined;
+    if (messageKey !== undefined && lineUsage !== undefined && !messageGroups.has(messageKey)) {
+      messageGroups.set(messageKey, { id: str(message.id) || str(o.requestId) || null, calls: [], ...(side ? { side: true } : {}), ...reportedUsage(lineUsage) });
     }
     if (type === 'assistant' && role === 'assistant') {
       session.assistantTurns += 1;
@@ -1801,6 +1817,7 @@ export const captureSession = (input: ExtractInput): Capture => {
           ...(manifest === undefined ? {} : { manifest }),
         };
         tools.push(call);
+        if (id !== undefined && messageKey !== undefined) callsOfMessage.set(messageKey, [...(callsOfMessage.get(messageKey) ?? []), id]);
         if (id !== undefined) callById.set(id, { call, at: lineSeconds, plan: shell?.commitPlan ?? [] });
       } else if (blockType === 'tool_result') {
         const text = resultText(block);
@@ -1901,6 +1918,8 @@ export const captureSession = (input: ExtractInput): Capture => {
       frameId,
     }));
   }
+  for (const [key, group] of messageGroups) group.calls = callsOfMessage.get(key) ?? [];
+  if (messageGroups.size > 0) session.messageUsage = [...messageGroups.values()];
   // The strata: the file's evidence once, and each prompt's own `explore` from one pass over the calls. The size is the one the frame holds, so a re-capture that carries `repoSize` keeps `repoFiles` too.
   const packageNames = tools.flatMap((call) => [...(call.packages ?? []).map((pkg) => pkg.package), ...(call.manifest?.seen ?? []), ...(call.manifest?.added ?? [])]);
   const fileStrata = strataOf({ paths: framePaths, packages: packageNames, size });

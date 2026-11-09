@@ -142,6 +142,27 @@ export interface Usage {
   thinking: number;
 }
 
+/**
+ * One model message's token counts (class L: numbers and ids only, never content). Claude Code writes a message over several content-block lines that each repeat the same `usage`, so
+ * a message is counted once, keyed by its `message.id` (else the line's `requestId`); a Codex response is keyed by the response id the reader gives it. The counts belong to the
+ * message and are never split across its tool calls: `calls` lists the tool-use ids the message made, and a later read can allocate. A category the source did not report is absent,
+ * never a zero. Summing these over a session record gives the deduplicated total for the file, `side` entries included.
+ */
+export interface MessageUsage {
+  /** The message id, else the request id; null when the line holds neither (each such line is its own message). */
+  id: string | null;
+  /** The tool-use ids of the calls this message made, in order; empty when it made none. */
+  calls: string[];
+  /** True for a message on a sidechain line of a main transcript, which the session's `usage` total leaves out. */
+  side?: true;
+  input?: number;
+  cacheWrite?: number;
+  cacheRead?: number;
+  output?: number;
+  /** From `output_tokens_details.thinking_tokens` (Codex: the reasoning output tokens); absent when the source did not report it. */
+  thinking?: number;
+}
+
 /** The five usage categories, in the order a record lists the ones it observed. */
 export const USAGE_FIELDS = ['input', 'cacheWrite', 'cacheRead', 'output', 'thinking'] as const;
 export type UsageField = (typeof USAGE_FIELDS)[number];
@@ -301,6 +322,8 @@ export interface SessionObservation {
   usageObserved?: UsageField[];
   /** How many responses reported any usage (class P); compare with `assistantTurns` or `turns` for the share a sum covers. Same absence rule as `usageObserved`. */
   usageResponses?: number;
+  /** One entry per distinct model message that reported usage, in file order (CAPTURE 28); see `MessageUsage`. Absent when the file reports no usage, and on a record captured before version 28. */
+  messageUsage?: MessageUsage[];
   /** What the transcript shows of the setup the session ran with (class A); absent when it shows none, and on a record captured before version 12. */
   setup?: SessionSetup;
   /** The tool names at each funnel stage the transcript shows (class A); same absence rules. */
