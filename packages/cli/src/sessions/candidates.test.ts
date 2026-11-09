@@ -187,6 +187,12 @@ describe('the configured hook events', () => {
     expect((await snap(join(root, 'h'))).hooks).toEqual({ SessionStart: 4, PreToolUse: 2, Stop: 2 });
   });
 
+  it('counts an event the harness added later under its own name', async () => {
+    repo(join(root, 'h1'));
+    write(join(claudeDir, 'settings.json'), hooks('PostToolBatch', 'UserPromptExpansion', 'PreModelSwitch', 'PostModelSwitch', 'DirectoryAdded', 'MessageDisplay'));
+    expect((await snap(join(root, 'h1'))).hooks).toEqual({ PostToolBatch: 2, UserPromptExpansion: 2, PreModelSwitch: 2, PostModelSwitch: 2, DirectoryAdded: 2, MessageDisplay: 2 });
+  });
+
   it('folds an event name outside the closed list into other, so no free text is stored', async () => {
     repo(join(root, 'h2'));
     write(join(claudeDir, 'settings.json'), hooks('my-private-event'));

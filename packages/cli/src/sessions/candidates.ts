@@ -17,11 +17,12 @@ export const CANDIDATE_RECORD_VERSION = 1;
 export const INSTRUCTION_POSITIONS = ['working', 'parent', 'above', 'mainCheckout', 'user'] as const;
 export type InstructionPosition = (typeof INSTRUCTION_POSITIONS)[number];
 
-/** Claude Code's hook events. A name not on this list is counted as `other`, so a settings file cannot put free text in a record. */
+/** Claude Code's hook events, the 33 in the installed harness's own list (2.1.319). A name not on this list is counted as `other`, so a settings file cannot put free text in a record. */
 export const HOOK_EVENT_NAMES = [
   'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest', 'PermissionDenied', 'Notification', 'UserPromptSubmit', 'SessionStart', 'SessionEnd', 'Stop', 'StopFailure',
   'SubagentStart', 'SubagentStop', 'TaskCreated', 'TaskCompleted', 'TeammateIdle', 'InstructionsLoaded', 'ConfigChange', 'CwdChanged', 'FileChanged', 'WorktreeCreate', 'WorktreeRemove',
   'PreCompact', 'PostCompact', 'Elicitation', 'ElicitationResult', 'Setup',
+  'PostToolBatch', 'UserPromptExpansion', 'PreModelSwitch', 'PostModelSwitch', 'DirectoryAdded', 'MessageDisplay',
 ] as const;
 export type HookEventName = (typeof HOOK_EVENT_NAMES)[number] | 'other';
 
