@@ -233,7 +233,7 @@ export const SWEEP_PAGE_CALLS = 4;
 /**
  * The raw copies a withdrawal reaches (GDPR Articles 7(3) and 17(1)(b)): every held object of an account that withdrew its yes, and every one stored before the yes it gave again after. An account whose yes stands has the objects that were stored
  * before that yes (`raw_consent` is the time of the first yes after the last withdrawal: a withdrawal clears it, and a yes said again or restated for a new covenant version keeps it, so a re-grant never reaches the copies it covers); one with no yes standing has them all, even one that finished while the withdrawal was being written. Raw bytes are opaque, so the whole copy goes. For each object the tombstone goes first (so the same bytes
- * cannot be taken again as already stored), then the object, then the mark on its ledger row, which keeps the hash, the byte count, and the date, as the operator's `erase raw` does. A run that stops halfway runs again to the end, and one with nothing left does nothing.
+ * cannot be taken again as already stored), then the object, then the mark on its ledger row, which keeps the hash, the byte count, and the date, as the operator's `erase raw` does. A run that stops halfway runs again to the end, and one with nothing left does nothing. A night that erased anything writes one `erasure_audit` row (kind `raw-object`, reason `consent-withdrawn`, the object count, no account).
  * `calls` is the subrequests it may spend; it answers how many objects it erased. The nightly cron runs it (`nightly.ts`), so no operator has to type it.
  */
 export const sweepWithdrawnRaw = async (env: Env, now: number, calls: number): Promise<number> => {
@@ -258,6 +258,8 @@ export const sweepWithdrawnRaw = async (env: Env, now: number, calls: number): P
     erased += held.length;
     if (held.length < SWEEP_PAGE) break;
   }
+  // One audit row for the night, as every operator erasure writes one (docs/pool.md, "The audit"). It is the one call past the pages, inside the margin `RESERVED_CALLS` holds back; a night that erased nothing writes none.
+  if (erased > 0) await env.DB.prepare("INSERT INTO erasure_audit (kind, reason, erased_on, rows_erased, objects_erased, account) VALUES ('raw-object', 'consent-withdrawn', ?, 0, ?, NULL)").bind(day, erased).run();
   return erased;
 };
 
