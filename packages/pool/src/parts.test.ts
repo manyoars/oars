@@ -6,13 +6,13 @@ import { canonicalBytes, partsOf } from '../../cli/src/sessions/pool-outbox.js';
 import { parseSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { MAX_STAGED_BATCHES, receivePart, STAGED_MAX_AGE_MS } from './parts.js';
 import type { Bound, Env } from './http.js';
-import { poolDbOf, startPool, stubUser, textOf, type Answer, type TestPool } from './test-pool.js';
+import { acceptanceOf, poolDbOf, startPool, stubUser, textOf, type Answer, type TestPool } from './test-pool.js';
 
 const CAP = 1024 * 1024;
 
 const signedIn = async (pool: TestPool, id: string): Promise<string> => {
   const { token } = await pool.signIn('github', stubUser(id));
-  await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+  await pool.post('/v1/covenant/accept', acceptanceOf('v1'), token);
   return token;
 };
 

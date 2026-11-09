@@ -51,19 +51,35 @@ export const covenantStatus = async (request: Request, env: Env, texts: Readonly
   return answer(200, { version, accepted: account !== undefined && (await hasAccepted(env, account, version)), screen: screenOf(version, texts) });
 };
 
-/** `POST /v1/covenant/accept`: naming the version is the acceptance, so a client that read an older one cannot accept a newer one it never saw. */
-export const covenantAccept = async (request: Request, env: Env): Promise<Response> => {
+/** The longest `input` or `client` an acceptance may state: a name and a version, so a row stays small whatever a caller sends. */
+const PROOF_FIELD_MAX = 64;
+
+/**
+ * `POST /v1/covenant/accept`: naming the version is the acceptance, so a client that read an older one cannot accept a newer one it never saw. The record exists to prove which text the person accepted, so the pool accepts only a version whose text it holds, and only when the body names the hash of that text (the text the client printed above the prompt), how the person answered, and the client.
+ * With no text held an acceptance would prove nothing, so it is refused the way deposits are with no covenant at all.
+ */
+export const covenantAccept = async (request: Request, env: Env, texts: ReadonlyMap<string, string> = COVENANT_TEXTS): Promise<Response> => {
   const version = bound(env.COVENANT_VERSION);
   if (version === undefined) return depositsClosed();
   const account = await accountOf(request, env);
   if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
-  const named = textField(await bodyOf(request), 'version');
+  const body = await bodyOf(request);
+  const named = textField(body, 'version');
   if (named === undefined) return refuse(400, 'missing_field', 'An acceptance names its version.', 'version');
   if (named !== version) return refuse(409, 'covenant_version', `The covenant in force is ${version}, not ${named}.`, 'version');
-  // One transaction: the history row and the column the gate reads change together, and a repeat of a version on record keeps its first time (`OR IGNORE`). A client that accepts without reading first still leaves the version's start on record.
+  const screen = screenOf(version, texts);
+  if (screen === null) return depositsClosed();
+  const shown = textField(body, 'textSha256');
+  if (shown === undefined) return refuse(400, 'missing_field', 'An acceptance names the hash of the text it showed.', 'textSha256');
+  if (shown !== screen.sha256) return refuse(409, 'covenant_text', `The text you saw is not the text of covenant ${version}.`, 'textSha256');
+  const input = textField(body, 'input');
+  if (input === undefined || input.length > PROOF_FIELD_MAX) return refuse(400, 'missing_field', `An acceptance states how the person answered, in at most ${PROOF_FIELD_MAX} characters.`, 'input');
+  const client = textField(body, 'client');
+  if (client === undefined || client.length > PROOF_FIELD_MAX) return refuse(400, 'missing_field', `An acceptance names its client, in at most ${PROOF_FIELD_MAX} characters.`, 'client');
+  // One transaction: the history row and the column the gate reads change together, and a repeat of a version on record keeps its first time and its first proof (`OR IGNORE`). A client that accepts without reading first still leaves the version's start on record.
   await env.DB.batch([
     servedOf(env, version),
-    env.DB.prepare('INSERT OR IGNORE INTO covenant_acceptances (account, version, accepted_at) VALUES (?, ?, ?)').bind(account, version, Date.now()),
+    env.DB.prepare('INSERT OR IGNORE INTO covenant_acceptances (account, version, accepted_at, text_sha256, input, client) VALUES (?, ?, ?, ?, ?, ?)').bind(account, version, Date.now(), shown, input, client),
     env.DB.prepare('UPDATE accounts SET covenant = ? WHERE id = ?').bind(version, account),
   ]);
   return answer(200, { ok: true, version });

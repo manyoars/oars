@@ -7,7 +7,7 @@ import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { sampleSkeleton } from './sample.js';
-import { fieldOf, startPool, stubUser, type TestPool } from './test-pool.js';
+import { acceptanceOf, fieldOf, startPool, stubUser, type TestPool } from './test-pool.js';
 
 const here = (relative: string): URL => new URL(relative, import.meta.url);
 
@@ -31,7 +31,7 @@ const count = async (table: 'deposits' | 'contributors'): Promise<number> => {
 describe('the server refuses a ledger delete', () => {
   it('aborts a DELETE of a deposits row or a contributors record and keeps the rows', async () => {
     const { token } = await pool.signIn('github', stubUser('8601'));
-    await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+    await pool.post('/v1/covenant/accept', acceptanceOf('v1'), token);
     expect((await pool.post('/v1/deposits', sampleSkeleton('0000000000008601'), token)).status).toBe(201);
     const deposits = await count('deposits');
     const contributors = await count('contributors');
@@ -49,7 +49,7 @@ describe('the server refuses a ledger delete', () => {
 
   it('aborts a DELETE of a raw_objects row too: the raw tier\'s ledger row is never deleted', async () => {
     const { token, account } = await pool.signIn('github', stubUser('8603'));
-    await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+    await pool.post('/v1/covenant/accept', acceptanceOf('v1'), token);
     const grant = { 'oars-redaction-version': '1', 'oars-capture-version': 'cap-1', 'oars-raw-consent': 'granted' };
     // The pool checks the hash, so the path carries the SHA-256 of the three bytes.
     const hash = createHash('sha256').update(new Uint8Array([1, 2, 3])).digest('hex');
@@ -67,7 +67,7 @@ describe('the server refuses a ledger delete', () => {
   // production D1's setting is unverified, so the source guard below keeps its REPLACE rule either way.
   it('does not run the delete trigger for a row an INSERT OR REPLACE removes', async () => {
     const { token } = await pool.signIn('github', stubUser('8602'));
-    await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+    await pool.post('/v1/covenant/accept', acceptanceOf('v1'), token);
     expect((await pool.post('/v1/deposits', sampleSkeleton('0000000000008602'), token)).status).toBe(201);
     const db = await pool.db();
     const held = async (): Promise<unknown> => fieldOf(await db.prepare("SELECT COUNT(*) AS held FROM deposits WHERE id = '0000000000008602'").first(), 'held');

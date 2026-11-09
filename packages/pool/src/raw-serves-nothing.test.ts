@@ -5,7 +5,7 @@ import { basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RAW_ROUTES } from './raw.js';
-import { fieldOf, startPool, stubUser, type TestPool } from './test-pool.js';
+import { acceptanceOf, fieldOf, startPool, stubUser, type TestPool } from './test-pool.js';
 
 const here = (relative: string): URL => new URL(relative, import.meta.url);
 
@@ -100,7 +100,7 @@ describe('no route serves a raw byte, a hash, or a count', () => {
 
   it('answers 404 to every method on every raw path but the two uploads, and puts no stored byte in any answer', async () => {
     const { token } = await pool.signIn('github', stubUser('8801'));
-    await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+    await pool.post('/v1/covenant/accept', acceptanceOf('v1'), token);
     const marker = 'SERVE-MARKER-must-never-come-back';
     const bytes = new TextEncoder().encode(marker.repeat(10));
     const hash = Buffer.from(await crypto.subtle.digest('SHA-256', bytes)).toString('hex');
@@ -130,7 +130,7 @@ describe('no route serves a raw byte, a hash, or a count', () => {
     }
     // The routes that do answer carry no raw figure: the covenant status is its two fields.
     const status = await pool.get('/v1/covenant', token);
-    expect(keysOf(status.json)).toEqual(['accepted', 'version']);
+    expect(keysOf(status.json)).toEqual(['accepted', 'screen', 'version']);
     expect(fieldOf(status.json, 'accepted')).toBe(true);
   }, 60_000);
 });

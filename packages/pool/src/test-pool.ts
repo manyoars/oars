@@ -2,11 +2,13 @@
 import { createHash, webcrypto } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { build } from 'esbuild';
+import { build, type PluginBuild } from 'esbuild';
 import { convertV4MiniflareOptions, CoreHeaders, Miniflare, ProxyOps, Request as StubRequest, Response as StubResponse } from 'miniflare';
 import { Agent, buildConnector } from 'undici';
 import { expect } from 'vitest';
 import type { Bound, PoolDb } from './http.js';
+
+export { acceptanceOf } from './test-covenant-texts.js';
 
 interface Statement {
   first: (column?: string) => Promise<unknown>;
@@ -321,7 +323,9 @@ const clientIds = (parsed: object): { [name: string]: string } => {
  * public tool keep meaning what they say; a test of the split passes its own `CLEAR_FLOOR` (`floor-split.test.ts`), and the default of 1 is `wrangler.jsonc`'s.
  */
 export const startPool = async (bindings: { [name: string]: string } = {}, options: { raw?: boolean } = {}): Promise<TestPool> => {
-  const bundled = await build({ entryPoints: [fileIn('./worker.ts')], bundle: true, write: false, format: 'esm', platform: 'node', conditions: ['workerd', 'worker'], external: ['node:*'] });
+  // The Worker bundles the stand-in covenant texts for `v1` and `v2` in place of the shipped ones: the pool refuses an acceptance for a version it holds no text for, and the shipped module holds none until a covenant's wording is settled.
+  const standIn = { name: 'stand-in-covenant-texts', setup: (builder: PluginBuild): void => builder.onResolve({ filter: /(^|\/)covenant-texts\.js$/ }, () => ({ path: fileIn('./test-covenant-texts.ts') })) };
+  const bundled = await build({ entryPoints: [fileIn('./worker.ts')], bundle: true, write: false, format: 'esm', platform: 'node', conditions: ['workerd', 'worker'], external: ['node:*'], plugins: [standIn] });
   const contents = bundled.outputFiles[0]?.text;
   if (contents === undefined) throw new Error('the bundle is empty');
   const config = wranglerConfig();
