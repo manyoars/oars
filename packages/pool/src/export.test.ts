@@ -67,6 +67,8 @@ const seed = async (account: string, tag: string): Promise<void> => {
       .bind(account, `${tag}-s${String(n)}`, skeleton(`${tag}-s${String(n)}`), 1_700_000_000_000 + n, `ingest-${tag}-${String(n)}`)
       .run();
   }
+  // One deposit carries the provenance migration 0025 stamps: the machine that sent it, its class and launcher, and what the batch claimed.
+  await db.prepare("UPDATE deposits SET machine = ?, host_class = 'vps', launcher = 'scheduled', claimed_host_class = 'cloud', claimed_launcher = 'cron' WHERE account = ? AND id = ?").bind(`machine-${tag}`, account, `${tag}-s1`).run();
   await db.prepare("INSERT INTO deposits (account, id, skeleton, tier, extensions, deltas, erased_on) VALUES (?, ?, ?, 'skeleton', '[]', '[]', '2026-11-01')").bind(account, `${tag}-gone`, '{"erased":"lawful-request"}').run();
   await db.prepare('INSERT INTO raw_objects (account, sha256, bytes, capture_version, redaction_version, stored_at) VALUES (?, ?, 11, ?, ?, ?)').bind(account, sha256(`${tag}-held`), 'cap-1', 'red-1', 1_700_000_100_000).run();
   await db.prepare('INSERT INTO raw_objects (account, sha256, bytes, capture_version, redaction_version, stored_at, erased_on) VALUES (?, ?, 7, ?, ?, ?, ?)').bind(account, sha256(`${tag}-erased`), 'cap-1', 'red-1', 1_700_000_200_000, '2026-11-02').run();
@@ -97,7 +99,8 @@ describe('GET /v1/account/export', () => {
     expect((await pool.post('/v1/covenant/accept', acceptanceOf('v1'), theirs.token)).status).toBe(200);
     const enrolled = await pool.post('/v1/machines/enroll', { hostClass: 'vps', launcher: 'scheduled', label: 'my box', allowRepos: ['acme/api'] }, mine.token);
     await pool.post('/v1/machines/enroll', { hostClass: 'vps', launcher: 'scheduled', label: 'their box' }, theirs.token);
-    await db.prepare('UPDATE accounts SET raw_consent = ? WHERE id = ?').bind(1_700_000_300_000, mine.account).run();
+    await db.prepare('UPDATE accounts SET raw_consent = ?, raw_consent_version = ?, raw_consent_withdrawn_at = ?, raw_consent_withdrawn_version = ? WHERE id = ?').bind(1_700_000_300_000, 'v2', 1_700_000_350_000, 'v1', mine.account).run();
+    await db.prepare('UPDATE machines SET last_deposit_day = ?, key_days = ? WHERE account = ?').bind('2026-11-05', 30, mine.account).run();
     await seed(mine.account, 'mine');
     await seed(theirs.account, 'theirs');
 
@@ -110,9 +113,9 @@ describe('GET /v1/account/export', () => {
     expect(text).not.toContain(textOf(enrolled.json, 'token'));
     expect(text).not.toContain(sha256(textOf(enrolled.json, 'token')));
 
-    expect(rowsOf(pages, 'account')).toEqual([expect.objectContaining({ id: mine.account, rawConsent: 1_700_000_300_000, access: 'standing' })]);
+    expect(rowsOf(pages, 'account')).toEqual([expect.objectContaining({ id: mine.account, rawConsent: 1_700_000_300_000, rawConsentVersion: 'v2', rawConsentWithdrawnAt: 1_700_000_350_000, rawConsentWithdrawnVersion: 'v1', access: 'standing' })]);
     expect(rowsOf(pages, 'covenant')).toEqual([expect.objectContaining({ version: 'v1', textSha256: acceptanceOf('v1').textSha256, input: acceptanceOf('v1').input, client: acceptanceOf('v1').client })]);
-    expect(rowsOf(pages, 'machines')).toEqual([expect.objectContaining({ id: textOf(fieldOf(enrolled.json, 'machine'), 'id'), label: 'my box', hostClass: 'vps', launcher: 'scheduled', allowRepos: ['acme/api'], state: 'pending' })]);
+    expect(rowsOf(pages, 'machines')).toEqual([expect.objectContaining({ id: textOf(fieldOf(enrolled.json, 'machine'), 'id'), label: 'my box', hostClass: 'vps', launcher: 'scheduled', allowRepos: ['acme/api'], state: 'pending', lastDepositDay: '2026-11-05', keyDays: 30 })]);
     expect(rowsOf(pages, 'repoKeys')).toEqual([{ repoKey: 'repo-mine' }]);
     expect(rowsOf(pages, 'depositHours')).toEqual([
       { day: '2026-11-01', hour: 9 },
@@ -136,7 +139,7 @@ describe('GET /v1/account/export', () => {
     // Deposits come as stored, the erased one as it now reads, marked.
     const deposits = rowsOf(pages, 'deposits');
     expect(deposits).toHaveLength(4);
-    expect(deposits).toContainEqual({ id: 'mine-s1', tier: 'skeleton', countedAt: 1_700_000_000_001, format: 2, vocabVersion: 'vocab-1', fieldsVersion: 3, extensions: [], otherValues: 0, deltas: [], ingest: 'ingest-mine-1', skeleton: { id: 'mine-s1', harness: 'claude-code' }, tombstone: null });
+    expect(deposits).toContainEqual({ id: 'mine-s1', tier: 'skeleton', countedAt: 1_700_000_000_001, format: 2, vocabVersion: 'vocab-1', fieldsVersion: 3, extensions: [], otherValues: 0, deltas: [], ingest: 'ingest-mine-1', skeleton: { id: 'mine-s1', harness: 'claude-code' }, tombstone: null, machine: 'machine-mine', hostClass: 'vps', launcher: 'scheduled', claimedHostClass: 'cloud', claimedLauncher: 'cron' });
     expect(deposits).toContainEqual(expect.objectContaining({ id: 'mine-gone', skeleton: { erased: 'lawful-request' }, tombstone: '2026-11-01' }));
   }, 60_000);
 
@@ -203,7 +206,7 @@ describe('GET /v1/account/export', () => {
   it('writes nothing', async () => {
     const { token, account } = await pool.signIn('github', stubUser('5409'));
     await seed(account, 'quiet');
-    const count = async (): Promise<number> => Number(fieldOf(await db.prepare('SELECT (SELECT COUNT(*) FROM tokens) + (SELECT COUNT(*) FROM deposits) + (SELECT COUNT(*) FROM raw_objects) + (SELECT COUNT(*) FROM covenant_acceptances) + (SELECT COUNT(*) FROM machines) + (SELECT COUNT(*) FROM covenant_served) AS n').first(), 'n'));
+    const count = async (): Promise<number> => Number(fieldOf(await db.prepare('SELECT (SELECT COUNT(*) FROM tokens) + (SELECT COUNT(*) FROM deposits) + (SELECT COUNT(*) FROM raw_objects) + (SELECT COUNT(*) FROM covenant_acceptances) + (SELECT COUNT(*) FROM machines) + (SELECT COUNT(*) FROM covenant_served) + (SELECT COUNT(*) FROM accounts) + (SELECT COUNT(*) FROM deposit_parts) + (SELECT COUNT(*) FROM erasure_audit) + (SELECT COUNT(*) FROM telemetry_install_days) + (SELECT COUNT(*) FROM account_repo_keys) + (SELECT COUNT(*) FROM deposit_hours) AS n').first(), 'n'));
     const before = await count();
     await everyPage(token);
     expect(await count()).toBe(before);

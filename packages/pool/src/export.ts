@@ -1,4 +1,4 @@
-// An account's copy of what the pool holds about it (GDPR Articles 15(3) and 20): `GET /v1/account/export`, a cursor-paged JSON read of every table that carries the account's own rows, and `GET /v1/account/export/raw/:hash`, one raw object of the account's own.
+// An account's copy of what the pool holds about it (GDPR Articles 15(3) and 20): `GET /v1/account/export`, a cursor-paged JSON read of every table that carries the account's own rows except `contributors` (shared totals, Article 15(4)), and `GET /v1/account/export/raw/:hash`, one raw object of the account's own.
 // Both are account-only (a machine key is refused before they run) and write nothing. The account always comes from the sign-in, never from the cursor or the path, so no request can reach another account's row.
 // Pooled derived cells and bundle reads are shared totals, not the account's own records, and are not here. No credential is: a token appears as when it ends, a machine as its record without its key hashes.
 import { answer, fieldOf, notConfigured, refuse, type Env } from './http.js';
@@ -57,13 +57,13 @@ const json = (row: unknown, name: string): unknown => {
 const SECTIONS: readonly Section[] = [
   {
     name: 'account',
-    select: 'id, covenant, raw_consent, access, source, first_seen, provider_created, fetch_week, fetches',
+    select: 'id, covenant, raw_consent, access, source, first_seen, provider_created, fetch_week, fetches, raw_consent_version, raw_consent_withdrawn_at, raw_consent_withdrawn_version',
     table: 'accounts',
     owner: 'id',
     order: ['id'],
     keyed: ['id'],
     page: SMALL_PAGE,
-    view: (row) => ({ id: text(row, 'id'), covenant: text(row, 'covenant'), rawConsent: count(row, 'raw_consent'), access: text(row, 'access'), source: text(row, 'source'), firstSeen: count(row, 'first_seen'), providerCreated: count(row, 'provider_created'), fetchWeek: text(row, 'fetch_week'), fetches: count(row, 'fetches') }),
+    view: (row) => ({ id: text(row, 'id'), covenant: text(row, 'covenant'), rawConsent: count(row, 'raw_consent'), access: text(row, 'access'), source: text(row, 'source'), firstSeen: count(row, 'first_seen'), providerCreated: count(row, 'provider_created'), fetchWeek: text(row, 'fetch_week'), fetches: count(row, 'fetches'), rawConsentVersion: text(row, 'raw_consent_version'), rawConsentWithdrawnAt: count(row, 'raw_consent_withdrawn_at'), rawConsentWithdrawnVersion: text(row, 'raw_consent_withdrawn_version') }),
   },
   // When a sign-in ends and nothing else: the hash that is the credential's only stored form is not selected.
   { name: 'tokens', select: 'rowid AS n, expires_at', table: 'tokens', owner: 'account', order: ['rowid'], keyed: ['n'], page: SMALL_PAGE, view: (row) => ({ expiresAt: count(row, 'expires_at') }) },
@@ -80,7 +80,7 @@ const SECTIONS: readonly Section[] = [
   // Every machine the account enrolled, a revoked one too, as its record: the key hashes (`key_hash`, `retired_hash`) are credential material and are not selected.
   {
     name: 'machines',
-    select: 'id, label, host_class, launcher, allow_repos, state, expires_at, fingerprint_hash, created_at, activated_at, rotated_at',
+    select: 'id, label, host_class, launcher, allow_repos, state, expires_at, fingerprint_hash, created_at, activated_at, rotated_at, last_deposit_day, key_days',
     table: 'machines',
     owner: 'account',
     order: ['id'],
@@ -98,6 +98,8 @@ const SECTIONS: readonly Section[] = [
       createdAt: count(row, 'created_at'),
       activatedAt: count(row, 'activated_at'),
       rotatedAt: count(row, 'rotated_at'),
+      lastDepositDay: text(row, 'last_deposit_day'),
+      keyDays: count(row, 'key_days'),
     }),
   },
   { name: 'repoKeys', select: 'repo_key', table: 'account_repo_keys', owner: 'account', order: ['repo_key'], keyed: ['repo_key'], page: SMALL_PAGE, view: (row) => ({ repoKey: text(row, 'repo_key') }) },
@@ -130,7 +132,7 @@ const SECTIONS: readonly Section[] = [
   // A deposit as it now reads: an erased one holds the marker the erasure left, and `tombstone` is the day it was erased.
   {
     name: 'deposits',
-    select: 'id, tier, counted_at, format, vocab_version, fields_version, extensions, other_values, deltas, ingest, skeleton, erased_on',
+    select: 'id, tier, counted_at, format, vocab_version, fields_version, extensions, other_values, deltas, ingest, skeleton, erased_on, machine, host_class, launcher, claimed_host_class, claimed_launcher',
     table: 'deposits',
     owner: 'account',
     order: ['id'],
@@ -149,6 +151,11 @@ const SECTIONS: readonly Section[] = [
       ingest: text(row, 'ingest'),
       skeleton: json(row, 'skeleton'),
       tombstone: text(row, 'erased_on'),
+      machine: text(row, 'machine'),
+      hostClass: text(row, 'host_class'),
+      launcher: text(row, 'launcher'),
+      claimedHostClass: text(row, 'claimed_host_class'),
+      claimedLauncher: text(row, 'claimed_launcher'),
     }),
   },
 ];
