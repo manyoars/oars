@@ -281,6 +281,12 @@ const CREDENTIAL_FLAGS = words(
     '--password --passwd --pass --pwd --passphrase --secret --client-secret --client_secret --secret-key --secret_key --secret-access-key ' +
     '--api-key --apikey --api_key --private-key --auth --authorization --credential --credentials',
 );
+// A prefixed spelling (`--db-password`, `--github-token`, `--stripe_api_key`) is a credential by its last word, in either separator; `--tokenizer` and `--customer` are not.
+const CREDENTIAL_SUFFIX = /(?:^|[-_])(?:token|password|passwd|pwd|passphrase|secret|credentials?)$|(?:api|private|secret|access)[-_]key$/;
+const isCredentialFlag = (flag: string): boolean => {
+  const lower = flag.toLowerCase();
+  return CREDENTIAL_FLAGS.has(lower) || CREDENTIAL_SUFFIX.test(lower);
+};
 
 // The one-letter flags whose next word is a name. Any other one-letter flag may be a switch followed by a positional (`-i needle`) or take a credential (`-p`), so its next word is not read.
 const SHORT_NAME_FLAGS = words('-k');
@@ -297,7 +303,7 @@ const flagValueNames = (args: readonly CommandWord[]): string[] => {
     if (word.text === '--') break;
     const joined = JOINED_LONG_FLAG.exec(word.text);
     const flag = joined?.[1] ?? word.text;
-    if (TEXT_FLAGS.has(flag) || CREDENTIAL_FLAGS.has(flag.toLowerCase()) || !FLAG_TOKEN.test(flag)) continue;
+    if (TEXT_FLAGS.has(flag) || isCredentialFlag(flag) || !FLAG_TOKEN.test(flag)) continue;
     const next = flag.startsWith('--') || SHORT_NAME_FLAGS.has(flag) ? args[at + 1] : undefined;
     const value = joined === null ? (next !== undefined && (next.quoted || !next.text.startsWith('-')) ? next.text : undefined) : joined[2];
     if (value !== undefined && FLAG_VALUE_NAME.test(value)) found.push(value);

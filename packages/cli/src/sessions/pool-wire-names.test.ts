@@ -144,6 +144,20 @@ describe('what is dropped from the names', () => {
     for (const value of ['hunter2', 'invoice_total', 'meuser']) expect(bytesOf(skeleton)).not.toContain(value);
   });
 
+  it('never reads the value of a prefixed credential flag, by its last word, in either separator', () => {
+    const skeleton = skeletonOfLines(
+      { redact, terms: [] },
+      call('a', 'Bash', { command: 'deploy --db-password dbpassvalue --github-token ghtokenvalue --tokenizer bert_control' }),
+      call('b', 'Bash', { command: 'deploy --mysql-password mysqlvalue --vault-token vaultvalue --db_passphrase phrasevalue --stripe-api-key stripevalue --customer cust_control' }),
+      call('c', 'Bash', { command: 'deploy --ssh_private_key sshvalue --aws-secret-access-key awsvalue --db-pwd pwdvalue --app_credentials credvalue --region eu_control' }),
+    );
+    const [first, second, third] = toolsOf(skeleton);
+    expect(first?.names).toEqual(names('flag', 'bert_control'));
+    expect(second?.names).toEqual(names('flag', 'cust_control'));
+    expect(third?.names).toEqual(names('flag', 'eu_control'));
+    for (const value of ['dbpassvalue', 'ghtokenvalue', 'mysqlvalue', 'vaultvalue', 'phrasevalue', 'stripevalue', 'sshvalue', 'awsvalue', 'pwdvalue', 'credvalue']) expect(bytesOf(skeleton)).not.toContain(value);
+  });
+
   it('reads no flag value after a credential-named flag in the name read itself', () => {
     const w = (text: string) => ({ text, quoted: false });
     const read = (...args: ReturnType<typeof w>[]) => argNamesOf('Bash', { command: 'x' }, '/w', '/w', [{ before: [], head: w('tool'), args }], CLOSED_ARG_VALUES);
