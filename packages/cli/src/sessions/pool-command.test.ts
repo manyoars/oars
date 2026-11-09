@@ -2336,6 +2336,42 @@ describe('wire policing in telemetry', () => {
     expect(readSpool(dir).join('')).not.toContain(TERM);
   });
 
+  describe('covenant-shown', () => {
+    const refused = async (reply: Reply): Promise<string> => {
+      const scene = await batched();
+      const dir = watched(scene);
+      const hash = await printedAndHash(scene);
+      const pool = wire({ 'GET /v1/covenant': reply, 'POST /v1/covenant/accept': answer(200, { ok: true, version: 'v1' }), 'POST /v1/deposits': answer(201, { ok: true }) });
+      await poolDeposit(scene.h.deps, sendOptions(hash, pool.via)).catch(() => undefined);
+      return dir;
+    };
+
+    it('records the version the CLI tells the operator to read, and no other field', async () => {
+      const dir = await refused(answer(200, { version: 'v1', accepted: false }));
+      expect(spooled(dir, 'covenant-shown').map((event) => event.data)).toEqual([{ version: 'v1' }]);
+    });
+
+    it('records nothing when the covenant is already accepted, or the pool is closed', async () => {
+      expect(spooled(await refused(answer(200, { version: 'v1', accepted: true })), 'covenant-shown')).toEqual([]);
+      expect(spooled(await refused(answer(200, { version: null })), 'covenant-shown')).toEqual([]);
+    });
+
+    it('records nothing for a version the operator accepts in the same run', async () => {
+      const scene = await batched();
+      const dir = watched(scene);
+      const hash = await printedAndHash(scene);
+      const pool = wire({ 'GET /v1/covenant': answer(200, { version: 'v1', accepted: false }), 'POST /v1/covenant/accept': answer(200, { ok: true, version: 'v1' }), 'POST /v1/deposits': answer(201, { ok: true }) });
+      await poolDeposit(scene.h.deps, { ...sendOptions(hash, pool.via), acceptCovenant: 'v1' });
+      expect(spooled(dir, 'covenant-shown')).toEqual([]);
+    });
+
+    it('keeps a version text that is not a short word out of the spool', async () => {
+      const dir = await refused(answer(200, { version: '/home/someone/private covenant', accepted: false }));
+      expect(spooled(dir, 'covenant-shown').map((event) => event.data)).toEqual([{}]);
+      expect(readSpool(dir).join('')).not.toContain('someone');
+    });
+  });
+
   it('records a taken send with its bytes, and a refused one with the pool\'s code', async () => {
     const scene = await batched();
     const dir = watched(scene);

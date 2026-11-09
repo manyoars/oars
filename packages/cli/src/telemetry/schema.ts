@@ -82,6 +82,10 @@ const hex =
 const CODE = /^[a-z][a-z0-9_]{0,39}$/;
 const code: Rule = (value) => (typeof value === 'string' && CODE.test(value) ? value : undefined);
 
+/** A covenant version as the pool names it: a short word of letters, digits, dots, underscores, and hyphens. A text off that shape (the pool is any server the operator names) is dropped, not trimmed. */
+const COVENANT_VERSION = /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/;
+const covenantVersion: Rule = (value) => (typeof value === 'string' && COVENANT_VERSION.test(value) ? value : undefined);
+
 const rules = (fields: { [name: string]: Rule }): FieldRules => new Map(Object.entries(fields));
 
 const DAY_MS = 86_400_000;
@@ -192,6 +196,8 @@ const EVENTS: ReadonlyMap<string, FieldRules> = new Map([
   ['wire-send', rules({ sent: whole(1), status: whole(599), code, bytes: whole(HUGE) })],
   // The install's first run, sent once where the first-run notice is shown (docs/telemetry.md).
   ['first-run', rules({ ci: oneOf(CI_WORDS), surface: oneOf(SURFACE_WORDS) })],
+  // The CLI told the operator which covenant to read and accept: the version and nothing else.
+  ['covenant-shown', rules({ version: covenantVersion })],
 ]);
 
 export const EVENT_TYPES: readonly string[] = [...EVENTS.keys()];

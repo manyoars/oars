@@ -44,7 +44,7 @@ const spoolOf = (feed: (record: (type: string, fields: object) => void) => void)
 
 describe('the closed schema', () => {
   it('knows each event type, one line per type', () => {
-    expect(EVENT_TYPES).toEqual(['command', 'hook', 'recall', 'deposit', 'fetch', 'store-health', 'run-cost', 'crash', 'wire', 'wire-send', 'first-run']);
+    expect(EVENT_TYPES).toEqual(['command', 'hook', 'recall', 'deposit', 'fetch', 'store-health', 'run-cost', 'crash', 'wire', 'wire-send', 'first-run', 'covenant-shown']);
   });
 
   it('names every harness the pool serves, and every read family a recall serves', () => {

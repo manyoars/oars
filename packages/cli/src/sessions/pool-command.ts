@@ -279,6 +279,7 @@ const openCovenant = async (deps: RunDeps, server: string, token: string, accept
   }
   if (Reflect.get(reply.body, 'accepted') !== true) {
     const title = `Read covenant ${version} of this pool, then rerun with --accept-covenant ${version}.`;
+    emitOf(deps)('covenant-shown', { version });
     throw new CliError(title, ExitCode.AUTH, DEPOSIT, { code: 'covenant_not_accepted', title, status: 403 });
   }
 };
