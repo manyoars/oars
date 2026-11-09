@@ -1,5 +1,5 @@
 // `OARS_EXCLUSION_TERMS_INLINE`: the terms a machine's enrollment put in one variable go to an owner-only file in the store, and `OARS_EXCLUSION_TERMS` names that file. The store is a temp folder and the test confirms it before it writes.
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadTerms } from './exclusion.js';
@@ -38,6 +38,15 @@ describe('withInlineTerms', () => {
     await withInlineTerms({ OARS_EXCLUSION_TERMS_INLINE: 'first' }, storeDir);
     await withInlineTerms({ OARS_EXCLUSION_TERMS_INLINE: 'second\n' }, storeDir);
     expect(readFileSync(inlineTermsFile(storeDir), 'utf8')).toBe('second\n');
+  });
+
+  it('replaces the file by a rename, so a reader never sees it empty, and leaves no staging file', async () => {
+    const storeDir = store();
+    await withInlineTerms({ OARS_EXCLUSION_TERMS_INLINE: 'first' }, storeDir);
+    const before = statSync(inlineTermsFile(storeDir), { bigint: true }).ino;
+    await withInlineTerms({ OARS_EXCLUSION_TERMS_INLINE: 'second' }, storeDir);
+    expect(statSync(inlineTermsFile(storeDir), { bigint: true }).ino).not.toBe(before);
+    expect(readdirSync(storeDir).filter((name) => name.startsWith('exclusion-terms-inline.txt'))).toEqual(['exclusion-terms-inline.txt']);
   });
 
   it('wins over a file named by OARS_EXCLUSION_TERMS, since the enrollment is where the operator stated the terms', async () => {

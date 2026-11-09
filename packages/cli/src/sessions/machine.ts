@@ -1,6 +1,7 @@
 // What makes a runtime a machine: a cloud VM, a VPS, or a self-hosted runner that builds its session's deposit batch at every Stop. The gate is one variable, `OARS_HOST_CLASS`, set to a class
 // other than `local`; a laptop never sets it, so it keeps its own hooks and its end-of-session gate untouched. The rest of the enrollment block (launcher, machine id, allowed repositories,
 // salts, exclusion terms) is read where it is used; this file holds the names, the gate, and the install-time parsing of the block.
+import { rename } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 import { mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
@@ -93,6 +94,9 @@ export const withInlineTerms = async (env: NodeJS.ProcessEnv, storeDir: string):
   if (inline === undefined || inline.trim() === '') return env;
   const file = inlineTermsFile(storeDir);
   await mkdirOwnerOnly(storeDir);
-  await writeOwnerOnly(file, inline.endsWith('\n') ? inline : `${inline}\n`);
+  // Written beside the file and renamed onto it: a Stop still in its gates reads the old list or the new one, never a half-written one that would fail closed and withdraw its batch.
+  const staged = `${file}.${String(process.pid)}`;
+  await writeOwnerOnly(staged, inline.endsWith('\n') ? inline : `${inline}\n`);
+  await rename(staged, file);
   return { ...env, OARS_EXCLUSION_TERMS: file };
 };

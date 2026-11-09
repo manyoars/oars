@@ -3,7 +3,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
+import { harness } from '../test-support.js';
 import { sessionsHookInstall, sessionsHookUninstall } from './command.js';
 import { groupsOf, hasOwn, hooksOf, MACHINE_COMMAND, readSettings, type InstallRuntime } from './install.js';
 import { machineOf } from './machine.js';
@@ -198,5 +200,26 @@ describe('the machine gate', () => {
     expect(machineOf({ OARS_HOST_CLASS: 'laptop' })).toBeUndefined();
     expect(machineOf({ OARS_HOST_CLASS: 'cloud', OARS_ALLOW_REPOS: ' Acme/Api\nacme/web ', OARS_MACHINE: 'm1' })).toEqual({ hostClass: 'cloud', launcher: undefined, machine: 'm1', allowRepos: ['acme/api', 'acme/web'] });
     expect(machineOf({ OARS_HOST_CLASS: 'hosted' })?.allowRepos).toEqual([]);
+  });
+});
+
+describe('hook install --machine through the command line', () => {
+  it('--scope project --machine writes the host-independent command, with no path of the installing machine', async () => {
+    const dir = scratch();
+    const { deps } = harness();
+    deps.install = runtimeIn(dir);
+    expect(await run(['sessions', 'hook', 'install', '--scope', 'project', '--machine'], deps)).toBe(ExitCode.OK);
+    const hooks = hooksOf(await readSettings(join(dir, 'repo', '.claude', 'settings.json')));
+    expect(groupsOf(hooks, 'Stop')).toEqual([{ hooks: [{ type: 'command', command: MACHINE_COMMAND, timeout: 10 }] }]);
+  });
+
+  it('--env and --terms-file reach the user-scope enrollment block', async () => {
+    const dir = scratch();
+    const termsFile = join(dir, 'terms', 'exclude.txt');
+    const { deps } = harness();
+    deps.install = runtimeIn(dir);
+    const argv = ['sessions', 'hook', 'install', '--scope', 'user', '--machine', '--env', 'OARS_HOST_CLASS=vps', '--env', 'OARS_EXCLUSION_TERMS_INLINE=acme corp', '--terms-file', termsFile];
+    expect(await run(argv, deps)).toBe(ExitCode.OK);
+    expect((await readSettings(join(dir, 'user', 'settings.json'))).env).toEqual({ OARS_HOST_CLASS: 'vps', OARS_EXCLUSION_TERMS: termsFile });
   });
 });
