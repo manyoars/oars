@@ -152,7 +152,7 @@ const heldBy = async (request: Request, env: Env, now: number): Promise<Held | R
   if (state === 'revoked') return refuse(401, 'machine_revoked', 'The account revoked this machine.');
   const expiresAt = Number(fieldOf(row, 'expires_at'));
   if (expiresAt <= now) {
-    return state === 'pending' ? refuse(401, 'token_expired', 'This enrollment token went unused for 24 hours. Enroll the machine again.') : refuse(401, 'machine_expired', 'This machine key has expired. Enroll the machine again.');
+    return state === 'pending' ? refuse(401, 'token_expired', 'This enrollment token went unused past its life. Enroll the machine again.') : refuse(401, 'machine_expired', 'This machine key has expired. Enroll the machine again.');
   }
   return { view: viewOf(row, now), keyHash: hash, rotated: fieldOf(row, 'rotated_at') !== null };
 };

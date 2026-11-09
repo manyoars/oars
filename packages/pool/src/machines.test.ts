@@ -34,7 +34,7 @@ describe('the machines table', () => {
     expect(made.token).toMatch(/^[0-9a-f]{64}$/);
     const row = await db.prepare('SELECT * FROM machines WHERE id = ?').bind(made.machine.id).first();
     expect(row).toMatchObject({ id: made.machine.id, account, key_hash: sha256(made.token), retired_hash: null, label: 'build box', host_class: 'vps', launcher: 'scheduled', allow_repos: '["acme/api"]', state: 'pending', expires_at: before + TOKEN_LIFE_MS, fingerprint_hash: null, activated_at: null, rotated_at: null });
-    // Nothing in the row, the table, or its index holds the token itself.
+    // Nothing in the row holds the token itself.
     for (const value of Object.values(row ?? {})) expect(String(value)).not.toContain(made.token);
     expect(fieldOf(row, 'key_hash')).not.toBe(made.token);
   });
@@ -108,7 +108,7 @@ const enrolled = async (accountToken: string, declared: object = {}): Promise<{ 
 const activate = (key?: string): ReturnType<TestPool['post']> => pool.post('/v1/machines/activate', {}, key);
 const rotate = (key?: string): ReturnType<TestPool['post']> => pool.post('/v1/machines/rotate', {}, key);
 const rowOf = async (id: string): Promise<unknown> => (await pool.db()).prepare('SELECT * FROM machines WHERE id = ?').bind(id).first();
-const setRow = async (id: string, column: 'expires_at' | 'state', value: string | number): Promise<void> => {
+const setRow = async (id: string, column: 'expires_at' | 'state' | 'created_at', value: string | number): Promise<void> => {
   await (await pool.db()).prepare(`UPDATE machines SET ${column} = ? WHERE id = ?`).bind(value, id).run();
 };
 
@@ -200,6 +200,17 @@ describe('POST /v1/machines/rotate', () => {
     expect(await rotate(key)).toMatchObject({ status: 401, json: { error: 'token_retired' } });
   });
 
+  it('keeps only the latest replaced key: after two rotations the first token is unknown and the second is retired', async () => {
+    const { token } = await pool.signIn('github', stubUser('4322'));
+    const first = await enrolled(token, { hostClass: 'vps' });
+    await activate(first.key);
+    const second = textOf((await rotate(first.key)).json, 'key');
+    const third = textOf((await rotate(second)).json, 'key');
+    expect(await activate(first.key)).toMatchObject({ status: 401, json: { error: 'unauthorized' } });
+    expect(await activate(second)).toMatchObject({ status: 401, json: { error: 'token_retired' } });
+    expect(await activate(third)).toMatchObject({ status: 200, json: { rotate: false } });
+  });
+
   it('refuses a token not yet activated, and a cloud key, which has nowhere to keep a rotated key', async () => {
     const { token } = await pool.signIn('github', stubUser('4322'));
     const pending = await enrolled(token, { hostClass: 'vps' });
@@ -243,6 +254,15 @@ describe('GET /v1/machines', () => {
     ]);
     const text = JSON.stringify(answered.json);
     for (const secret of [live.key, waiting.key, sha256(live.key), sha256(waiting.key), 'key_hash', 'retired_hash']) expect(text).not.toContain(secret);
+  });
+
+  it('lists newest first, by when each was enrolled', async () => {
+    const { token } = await pool.signIn('github', stubUser('4333'));
+    const [oldest, newest, middle] = [await enrolled(token), await enrolled(token), await enrolled(token)];
+    await setRow(oldest.id, 'created_at', 1000);
+    await setRow(newest.id, 'created_at', 3000);
+    await setRow(middle.id, 'created_at', 2000);
+    expect((await listed(token)).map((machine) => textOf(machine, 'id'))).toEqual([newest.id, middle.id, oldest.id]);
   });
 
   it('lists nothing for an account with no machines, and is the account credential\'s alone', async () => {
