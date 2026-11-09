@@ -491,14 +491,15 @@ content is stored.
 | `hooks` | configured hook events, a count per event name from the harness's closed list; a name not on it counts as `other` |
 | `repoLevels`, `mainLevels` | how many folders up the repository root and the main checkout sit (`null` when there is none), so a loaded file's level can be placed in a position when the status is derived |
 
-`load-status.jsonl` is a versioned derivation (`v`, now 1) and is recomputed from the snapshot and the loaded set the transcript logs, so a change to the rule needs no new capture.
+`load-status.jsonl` is a versioned derivation (`v`, now 2) and is recomputed from the snapshot and the loaded set the transcript logs, so a change to the rule needs no new capture.
 Each kind gets one label:
 
 | Label | Meaning |
 |-------|---------|
 | `loaded` | the transcript shows a file loaded from that position, whatever the snapshot counted |
 | `miss` | a file existed there, the rule loads files from that position, and the transcript shows none |
-| `absent` | no file the rule would load existed there; a file the harness skips by design counts as absent too |
+| `excluded` | a file existed where the harness skips by design (the main checkout's root from a nested linked worktree, or above the repository root for Codex), so its silence is no miss |
+| `absent` | no file existed there |
 | `unknown` | it cannot be decided: a session with no snapshot (never `absent`), a harness with no measured rule, a position the rule could not be measured at, and any skill or hook count above zero, since no rule for those is measured |
 
 The rule is measured, not read from a harness's documentation: a live session per case on a temporary tree, reading only that session's own log (Claude Code 2.1.319, Codex 0.167.0).

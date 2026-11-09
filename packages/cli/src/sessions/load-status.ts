@@ -6,11 +6,11 @@
 import { INSTRUCTION_POSITIONS, positionOfLevel, readCandidates, type CandidateSnapshot, type InstructionPosition } from './candidates.js';
 import type { LoadedInstructions, SessionObservation } from './schema.js';
 
-export const LOAD_STATUS_VERSION = 1;
+export const LOAD_STATUS_VERSION = 2;
 export const LOAD_STATUS_FILE = 'load-status.jsonl';
 
-/** `loaded` the log shows it. `miss` a file existed, the rule loads it, the log does not show it. `absent` no file the rule would load existed. `unknown` this cannot be decided. */
-export type LoadLabel = 'loaded' | 'miss' | 'absent' | 'unknown';
+/** `loaded` the log shows it. `miss` a file existed, the rule loads it, the log does not show it. `excluded` a file existed where the rule skips by design. `absent` no file existed there. `unknown` this cannot be decided. */
+export type LoadLabel = 'loaded' | 'miss' | 'excluded' | 'absent' | 'unknown';
 
 export interface LoadStatus {
   v: number;
@@ -76,8 +76,8 @@ const instructionLabel = (position: InstructionPosition, snapshot: CandidateSnap
   if (present === 0) return 'absent';
   const rule = rules[position];
   if (rule === 'unmeasured') return 'unknown';
-  // A file the harness does not read by design is not a candidate, so it is no miss.
-  return rule === 'load' ? 'miss' : 'absent';
+  // A file the harness does not read by design is not a candidate, so it is no miss; it is not absent either, since it exists.
+  return rule === 'load' ? 'miss' : 'excluded';
 };
 
 /** Skills and hooks have no measured rule, and a harness logs them too rarely to read their silence, so a count above zero cannot be called either way. */
