@@ -164,6 +164,8 @@ describe('the raw prompt states when and what uploads', () => {
   it('names the sender a hook or command starts, covenant acceptance, and the skeleton-only/off exception', () => {
     expect(RAW_PROMPT).toContain('the sender that a session-end hook or any oars command starts (at most about once an hour) uploads');
     expect(RAW_PROMPT).not.toContain('nightly');
+    expect(RAW_PROMPT).toContain('A no stops later sends, and the pool erases the raw copies it already holds for you within a day.');
+    expect(RAW_PROMPT).not.toContain('cannot recall');
     expect(RAW_PROMPT).toContain('once the pool says your account accepted its covenant');
     expect(RAW_PROMPT).toContain('except a folder you set to skeleton only or off');
     expect(RAW_PROMPT).toContain('a block in a shape the redactor does not list yet, a summary the harness writes for a session you left, a file it quotes after compaction, the echo of a command you ran, a reminder the harness puts in the middle of a message, and what an agent reports back are not, and stay as written; the project folder name and working directory on each line also stay readable, apart from the masking above.');
@@ -3071,6 +3073,8 @@ describe('oars pool raw (t884)', () => {
       expect(await scene.cli('pool', 'raw', '--consent', 'no')).toBe(ExitCode.OK);
       expect(pool.calls).toHaveLength(1);
       expect(scene.h.out.join('')).toContain('The pool was told');
+      expect(scene.h.out.join('')).toContain('erases the raw copies it already holds within a day');
+      expect(scene.h.out.join('')).not.toContain('not erased');
     });
 
     it('keeps the local no and exits nonzero when the pool refuses the credential', async () => {
