@@ -28,6 +28,8 @@ export interface MachineChildDeps {
   sleep: (ms: number) => Promise<void>;
   /** The transcript's size, or `undefined` when it cannot be read. */
   size: (path: string) => Promise<number | undefined>;
+  /** Whether the session's repository is on the operator's allow list (`machine-repo.ts`); a session that is not is neither captured nor built. */
+  allowed: (input: ChildInput) => Promise<boolean>;
   /** Captures the transcript (and its subagents) into the session store. */
   capture: (input: ChildInput) => Promise<void>;
   /** Builds the session's batch into the outbox, with the gates. */
@@ -96,8 +98,9 @@ const takeDirty = async (outbox: string): Promise<ChildInput[]> => {
   });
 };
 
-/** One session: wait for the transcript to settle, capture it, build its batch. */
+/** One session: check its repository against the allow list, wait for the transcript to settle, capture it, build its batch. A session off the list is not captured, so its transcript is never copied into the store; nothing is withdrawn either. */
 const extract = async (deps: MachineChildDeps, input: ChildInput): Promise<void> => {
+  if (!(await deps.allowed(input))) return;
   await settle(input.transcript, deps, deps.settle);
   await deps.capture(input);
   await deps.build(input);

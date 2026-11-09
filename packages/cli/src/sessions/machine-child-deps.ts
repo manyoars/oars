@@ -3,23 +3,31 @@
 import { stat } from 'node:fs/promises';
 import { basename } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { machineChild, parseChildInput } from './machine-child.js';
+import { machineChild, parseChildInput, type SettleTimes } from './machine-child.js';
 import { DEPOSIT, poolDeposit, poolServer } from './pool-command.js';
+import { machineOf, withInlineTerms } from './machine.js';
+import { repoAllowed } from './machine-repo.js';
 import { logFailure } from './pool-due.js';
 import { nightlyPoolDeps } from './pool-nightly-deps.js';
 import { outboxFolder } from './pool-outbox.js';
 import { depositSession, type SessionsRuntime } from './store.js';
+import { runGit } from './survival.js';
 
-/** Runs the child for one Stop's forwarded input (`text`, the one argument `machine-stop.ts` passes). */
-export const runMachineChild = async (env: NodeJS.ProcessEnv, sessions: SessionsRuntime, version: string, now: () => number, text: string): Promise<void> => {
+/** Runs the child for one Stop's forwarded input (`text`, the one argument `machine-stop.ts` passes). `settle` replaces the settle wait's times, which a test shortens. */
+export const runMachineChild = async (env: NodeJS.ProcessEnv, sessions: SessionsRuntime, version: string, now: () => number, text: string, settle?: SettleTimes): Promise<void> => {
   const input = parseChildInput(text);
   if (input === undefined) return;
-  const deps = nightlyPoolDeps(env, sessions, version, now);
   try {
+    // The terms the enrollment put in one variable are written to an owner-only file first, so every gate below reads the term file the way it always does.
+    const deps = nightlyPoolDeps(await withInlineTerms(env, sessions.storeDir), sessions, version, now);
+    const allowRepos = machineOf(env)?.allowRepos ?? [];
     await machineChild(
       {
         outbox: outboxFolder(sessions.storeDir, poolServer(env, DEPOSIT)),
         now,
+        ...(settle === undefined ? {} : { settle }),
+        // The operator's repository list: the child builds a session only for a repository `origin` names on it.
+        allowed: (forwarded) => repoAllowed(allowRepos, forwarded.cwd, runGit),
         sleep: async (ms) => {
           await sleep(ms);
         },

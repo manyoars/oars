@@ -99,6 +99,7 @@ describe('machineChild', () => {
   const deps = (outbox: string, log: string[], extra: Partial<MachineChildDeps> = {}): MachineChildDeps => ({
     outbox,
     ...clockOf(() => 1),
+    allowed: () => Promise.resolve(true),
     capture: (given) => {
       log.push(`capture ${given.session}`);
       return Promise.resolve();
@@ -117,6 +118,31 @@ describe('machineChild', () => {
     expect(log).toEqual(['capture a', 'build a']);
     expect(existsSync(join(outbox, 'send.lock'))).toBe(false);
     expect(existsSync(join(outbox, 'send.dirty'))).toBe(false);
+  });
+
+  it('builds nothing for a session whose repository is off the allow list: no wait, no capture, no build', async () => {
+    const outbox = outboxFolder();
+    const log: string[] = [];
+    const asked: (string | undefined)[] = [];
+    const guarded = deps(outbox, log, {
+      settle: TIMES,
+      allowed: (given) => {
+        asked.push(given.cwd);
+        return Promise.resolve(given.session === 'on');
+      },
+      size: () => {
+        log.push('size');
+        return Promise.resolve(1);
+      },
+    });
+    expect(await machineChild(guarded, { ...input('off'), cwd: '/srv/off' })).toBe('built');
+    expect(log).toEqual([]);
+    expect(await machineChild(guarded, { ...input('on'), cwd: '/srv/on' })).toBe('built');
+    expect(log).toContain('capture on');
+    expect(log).toContain('build on');
+    expect(log).not.toContain('capture off');
+    expect(asked).toEqual(['/srv/off', '/srv/on']);
+    expect(existsSync(join(outbox, 'send.lock'))).toBe(false);
   });
 
   it('waits for the transcript to settle before each extraction', async () => {

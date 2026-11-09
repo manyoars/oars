@@ -1,7 +1,7 @@
 // What makes a runtime a machine: a cloud VM, a VPS, or a self-hosted runner that builds its session's deposit batch at every Stop. The gate is one variable, `OARS_HOST_CLASS`, set to a class
 // other than `local`; a laptop never sets it, so it keeps its own hooks and its end-of-session gate untouched. The rest of the enrollment block (launcher, machine id, allowed repositories,
 // salts, exclusion terms) is read where it is used; this file holds the names, the gate, and the install-time parsing of the block.
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 import { mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
 
@@ -78,4 +78,21 @@ export const enrollmentOf = async (pairs: readonly string[], termsFile: string |
   Reflect.deleteProperty(env, 'OARS_EXCLUSION_TERMS_INLINE');
   env.OARS_EXCLUSION_TERMS = termsPath;
   return { env, termsPath };
+};
+
+/** Where a machine's child keeps the terms it was given in `OARS_EXCLUSION_TERMS_INLINE`: in the store, owner-only. */
+export const inlineTermsFile = (storeDir: string): string => join(storeDir, 'exclusion-terms-inline.txt');
+
+/**
+ * A machine whose enrollment put the exclusion terms in one variable (a cloud environment has no file to point at) gets them written, owner-only, into its store at every Stop, with `OARS_EXCLUSION_TERMS` pointed at that file, so the
+ * file is always the variable's current value. The inline terms win over a file named by `OARS_EXCLUSION_TERMS`, because the enrollment is where the operator stated them. With no inline terms (unset or blank) `env` is returned as it is,
+ * and a machine with no term file at all fails closed, as everywhere. The given `env` is not changed.
+ */
+export const withInlineTerms = async (env: NodeJS.ProcessEnv, storeDir: string): Promise<NodeJS.ProcessEnv> => {
+  const inline = env.OARS_EXCLUSION_TERMS_INLINE;
+  if (inline === undefined || inline.trim() === '') return env;
+  const file = inlineTermsFile(storeDir);
+  await mkdirOwnerOnly(storeDir);
+  await writeOwnerOnly(file, inline.endsWith('\n') ? inline : `${inline}\n`);
+  return { ...env, OARS_EXCLUSION_TERMS: file };
 };
