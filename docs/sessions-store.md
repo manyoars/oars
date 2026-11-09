@@ -503,9 +503,9 @@ Each kind gets one label:
 |-------|---------|
 | `loaded` | the transcript shows a file loaded from that position, whatever the snapshot counted |
 | `miss` | a file existed there, the rule loads files from that position, and the transcript shows none |
-| `excluded` | a file existed where the harness skips by design (a folder from the worktree up to and including the main checkout's root, for a nested linked worktree, or above the repository root for Codex; a settings file above the working folder, whose hooks did not run), so its silence is no miss |
+| `excluded` | a file existed where the harness skips by design (in the folders above the worktree, up to and including that checkout's root, for a nested linked worktree, or above the repository root for Codex; a settings file above the working folder, whose hooks did not run), so its silence is no miss |
 | `absent` | no file existed there |
-| `unknown` | it cannot be decided: a session with no snapshot (never `absent`), a file present when the transcript holds no loaded set (also at a position the rule skips), a harness with no measured rule, a position the rule could not be measured at, a skill count above zero, and a hook count above zero outside the folders above the working folder: the log names each skill and each Stop hook but gives no source for either, and the snapshot holds kinds and counts only, so it has no name or command to join them against |
+| `unknown` | it cannot be decided: a session with no snapshot (never `absent`), a file present when the transcript holds no loaded set (also at a position the rule skips), a harness with no measured rule, a position the rule was not measured at, a skill count above zero, and a hook count above zero outside the folders above the working folder: the log names each skill and each Stop hook but gives no source for either, and the snapshot holds kinds and counts only, so it has no name or command to join them against |
 
 The rule is measured, not read from a harness's documentation: a live session per case on a temporary tree, reading only that session's own log (Claude Code 2.1.319, Codex 0.167.0).
 

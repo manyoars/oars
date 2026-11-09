@@ -509,7 +509,7 @@ export const otelSessions = (spans: readonly Span[]): OtelSession[] => {
     entry.lines.push(...pieces.map((piece) => piece.line));
     // The unit's own span counts once, though it is also a model or tool span when the earliest root of an agentless trace is one.
     entry.spans += 1 + mine.filter((span) => span !== unit.span).length;
-    if (isGenAi(unit.span) || mine.some(isGenAi) || genaiUnits.has(unit)) entry.genai = true;
+    if (mine.some(isGenAi) || genaiUnits.has(unit)) entry.genai = true;
   }
   return [...out.entries()].map(([id, held]) => ({ id, size: held.spans, mtimeMs: held.mtime, lines: held.lines, subagent: held.subagent, file: held.file, genai: held.genai }));
 };
