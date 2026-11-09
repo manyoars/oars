@@ -144,6 +144,17 @@ describe("a machine's last deposit day", () => {
     expect(await lastDayOf(other.id)).toBeNull();
   });
 
+  it('lists the day of the last deposit, null before a first one', async () => {
+    const { token } = await accountOn('4625');
+    const machine = await machineOf(token, { hostClass: 'vps', launcher: 'scheduled' });
+    const listed = async (): Promise<unknown> => fieldOf((await pool.get('/v1/machines', token)).json, 'machines');
+    expect(await listed()).toMatchObject([{ id: machine.id, lastDepositDay: null }]);
+    const before = today();
+    expect((await pool.post('/v1/deposits', sampleSkeleton('00000000000a0030'), machine.key)).status).toBe(201);
+    const [row] = (await listed()) as { lastDepositDay: string }[];
+    expect([before, today()]).toContain(row?.lastDepositDay);
+  });
+
   it('does not move for a deposit the operator brake refuses', async () => {
     const braked = await startPool({ MAX_DEPOSITS_PER_ACCOUNT: '1' });
     try {
@@ -157,6 +168,7 @@ describe("a machine's last deposit day", () => {
       await (await braked.db()).prepare('UPDATE machines SET last_deposit_day = ? WHERE id = ?').bind('2000-01-01', id).run();
       expect(await braked.post('/v1/deposits', sampleSkeleton('00000000000a0023'), key)).toMatchObject({ status: 403, json: { error: 'deposit_limit' } });
       expect(await (await braked.db()).prepare('SELECT last_deposit_day FROM machines WHERE id = ?').bind(id).first('last_deposit_day')).toBe('2000-01-01');
+      expect(fieldOf((await braked.get('/v1/machines', token)).json, 'machines')).toMatchObject([{ id, lastDepositDay: '2000-01-01' }]);
       // A session already held is replaced, not added, so the brake lets it through and the day moves.
       const before = today();
       expect((await braked.post('/v1/deposits', sampleSkeleton('00000000000a0022'), key)).status).toBe(201);
