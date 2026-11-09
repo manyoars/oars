@@ -41,6 +41,7 @@ import {
   type ToolPull,
   USAGE_FIELDS,
   type MessageUsage,
+  type PlanWindow,
   type Usage,
   type UsageField,
   type UsageKey,
@@ -283,6 +284,21 @@ const reportedUsage = (line: LineUsage): Pick<MessageUsage, 'input' | 'cacheWrit
   const fields: Pick<MessageUsage, 'input' | 'cacheWrite' | 'cacheRead' | 'output' | 'thinking'> = {};
   for (const field of USAGE_FIELDS) if (line.observed.includes(field)) fields[field] = line.usage[field];
   return fields;
+};
+
+const planWindowOf = (raw: unknown): PlanWindow | undefined => {
+  if (!isObj(raw)) return undefined;
+  const usedPercent = num(raw.usedPercent);
+  const windowMinutes = num(raw.windowMinutes);
+  return usedPercent === undefined ? undefined : { usedPercent, ...(windowMinutes === undefined ? {} : { windowMinutes }) };
+};
+
+/** The plan share a Codex line carries (`rateLimits`, written by `rolloutLines`), or undefined when it carries none. */
+const planOf = (line: Obj): MessageUsage['plan'] => {
+  const limits = isObj(line.rateLimits) ? line.rateLimits : undefined;
+  const primary = planWindowOf(limits?.primary);
+  const secondary = planWindowOf(limits?.secondary);
+  return primary === undefined && secondary === undefined ? undefined : { ...(primary === undefined ? {} : { primary }), ...(secondary === undefined ? {} : { secondary }) };
 };
 
 const toSeconds = (timestamp: string | undefined): number | undefined => {
@@ -1639,7 +1655,8 @@ export const captureSession = (input: ExtractInput): Capture => {
     // A message is the unit usage belongs to: the same id on every content-block line is one message, and a replayed line is the same one again.
     const messageKey = type === 'assistant' && role === 'assistant' ? str(message.id) || str(o.requestId) || `line ${String(position)}` : undefined;
     if (messageKey !== undefined && lineUsage !== undefined && !messageGroups.has(messageKey)) {
-      messageGroups.set(messageKey, { id: str(message.id) || str(o.requestId) || null, calls: [], ...(side ? { side: true } : {}), ...reportedUsage(lineUsage) });
+      const plan = planOf(o);
+      messageGroups.set(messageKey, { id: str(message.id) || str(o.requestId) || null, calls: [], ...(side ? { side: true } : {}), ...reportedUsage(lineUsage), ...(plan === undefined ? {} : { plan }) });
     }
     if (type === 'assistant' && role === 'assistant') {
       session.assistantTurns += 1;

@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { rolloutLines } from './codex.js';
 import { captureSession } from './extract.js';
 import { makeRedactor } from './redact.js';
 import type { MessageUsage } from './schema.js';
@@ -132,5 +133,64 @@ describe('messageUsage across a deposit, subagent transcripts included', () => {
     const total = sum([...(main?.messageUsage ?? []), ...(sub?.messageUsage ?? [])]);
     expect(total.output).toBe(22);
     expect(total.output).not.toBe(3 * 20 + 2 * 2);
+  });
+});
+
+// Codex: the same entries, read from the lines `rolloutLines` writes. The source is `token_count`, the event already read for usage, which also holds `rate_limits`.
+describe('messageUsage on a Codex session', () => {
+  const T = (second: number): string => `2026-06-01T10:00:${String(second).padStart(2, '0')}.000Z`;
+  const entry = (second: number, type: string, payload: object): object => ({ timestamp: T(second), type, payload });
+  const limits = { primary: { used_percent: 12.5, window_minutes: 300, resets_at: 1790000000 }, secondary: { used_percent: 40, window_minutes: 10080, resets_at: 1790500000 }, plan_type: 'plus' };
+  const count = (second: number, input: number, cached: number, output: number, reasoning: number, total: number, rateLimits?: object): object =>
+    entry(second, 'event_msg', {
+      type: 'token_count',
+      info: {
+        total_token_usage: { input_tokens: input, cached_input_tokens: cached, output_tokens: output, reasoning_output_tokens: reasoning, total_tokens: total },
+        last_token_usage: { input_tokens: input, cached_input_tokens: cached, cache_write_input_tokens: 10, output_tokens: output, reasoning_output_tokens: reasoning, total_tokens: total },
+      },
+      ...(rateLimits === undefined ? {} : { rate_limits: rateLimits }),
+    });
+  const codexCapture = (entries: readonly object[]) => {
+    const text = rolloutLines(entries.map((value) => JSON.stringify(value)).join('\n'), 'sess').map((value) => JSON.stringify(value)).join('\n');
+    return captureSession({ text, harness: 'codex', session: 'codex-x', project: 'p', rev: 1, at: 'x', bytes: text.length, redact });
+  };
+  const head = [
+    entry(0, 'session_meta', { id: 'sess-1', session_id: 'sess-1', timestamp: T(0), cwd: '/work/app', originator: 'codex_cli_rs', cli_version: '0.50.0' }),
+    entry(1, 'turn_context', { model: 'gpt-5-codex', cwd: '/work/app' }),
+    entry(2, 'event_msg', { type: 'user_message', message: 'go' }),
+  ];
+  const say = (second: number, message: string): object => entry(second, 'event_msg', { type: 'agent_message', message });
+
+  it('records a response with rate limits, one without, and a repeated event once', () => {
+    const { session } = codexCapture([
+      ...head,
+      say(3, 'one'),
+      count(4, 1000, 400, 200, 50, 1200, limits),
+      count(5, 1000, 400, 200, 50, 1200, { ...limits, primary: { used_percent: 99 } }),
+      say(6, 'two'),
+      count(7, 500, 100, 80, 0, 600),
+    ]);
+    expect(session.messageUsage).toEqual([
+      { id: 'sess-1-resp1', calls: [], input: 590, cacheWrite: 10, cacheRead: 400, output: 200, thinking: 50, plan: { primary: { usedPercent: 12.5, windowMinutes: 300 }, secondary: { usedPercent: 40, windowMinutes: 10080 } } },
+      { id: 'sess-1-resp2', calls: [], input: 390, cacheWrite: 10, cacheRead: 100, output: 80, thinking: 0 },
+    ]);
+    // The second response had no rate-limit block: the field is absent, not zero.
+    expect(session.messageUsage?.[1]).not.toHaveProperty('plan');
+    expect(session.usage.output).toBe(280);
+  });
+
+  it('keeps a window that reports only a percent, and one window alone', () => {
+    const { session } = codexCapture([...head, say(3, 'one'), count(4, 10, 0, 5, 0, 15, { secondary: { used_percent: 3 }, primary: { window_minutes: 300 } })]);
+    expect(session.messageUsage?.[0]?.plan).toEqual({ secondary: { usedPercent: 3 } });
+  });
+
+  it('writes no plan for an empty or non-numeric rate-limit block', () => {
+    const { session } = codexCapture([...head, say(3, 'one'), count(4, 10, 0, 5, 0, 15, { primary: { used_percent: 'high' }, secondary: null })]);
+    expect(session.messageUsage?.[0]).not.toHaveProperty('plan');
+  });
+
+  it('records nothing for a session whose events hold no usage', () => {
+    const { session } = codexCapture([...head, say(3, 'one'), entry(4, 'event_msg', { type: 'token_count', info: null, rate_limits: limits })]);
+    expect(session).not.toHaveProperty('messageUsage');
   });
 });

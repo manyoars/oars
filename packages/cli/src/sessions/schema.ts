@@ -161,6 +161,14 @@ export interface MessageUsage {
   output?: number;
   /** From `output_tokens_details.thinking_tokens` (Codex: the reasoning output tokens); absent when the source did not report it. */
   thinking?: number;
+  /** Codex only: the plan share used as the response's event reported it. Absent when the event held no rate-limit block, never a zero. */
+  plan?: { primary?: PlanWindow; secondary?: PlanWindow };
+}
+
+/** One plan window a Codex event reports (`rate_limits.primary` or `.secondary`): the percent used and the window's length in minutes when given. */
+export interface PlanWindow {
+  usedPercent: number;
+  windowMinutes?: number;
 }
 
 /** The five usage categories, in the order a record lists the ones it observed. */
