@@ -11,6 +11,15 @@ export interface Target {
   local: boolean;
 }
 
+/** Where an object is written to be read: a scratch path, a stream of its bytes in bounded pieces, and its removal. The command's own are real files (`erase-files.ts`); the tests' are in memory. */
+export interface ObjectFiles {
+  /** A path for one object, in a folder of this run's own. */
+  temp: () => Promise<string>;
+  read: (path: string) => AsyncIterable<Uint8Array>;
+  /** Removes the file; one that is not there is not an error. */
+  remove: (path: string) => Promise<void>;
+}
+
 type Bind = string | number | null;
 
 const literal = (value: Bind): string => {
@@ -40,7 +49,7 @@ const resultOf = (printed: string): unknown => {
   return first;
 };
 
-export const wranglerStore = (wrangler: Wrangler, target: Target): EraseStore => {
+export const wranglerStore = (wrangler: Wrangler, target: Target, files: ObjectFiles): EraseStore => {
   const where = target.local ? '--local' : '--remote';
   const execute = async (sql: string, binds: readonly Bind[]): Promise<unknown> => resultOf(await wrangler(['d1', 'execute', target.database, where, '--json', '--command', inline(sql, binds)]));
   return {
@@ -54,6 +63,24 @@ export const wranglerStore = (wrangler: Wrangler, target: Target): EraseStore =>
     },
     deleteObject: async (key) => {
       await wrangler(['r2', 'object', 'delete', `${target.bucket}/${key}`, where]);
+    },
+    // Wrangler writes the object to a scratch file (`--file`; `--pipe` would put it all in a buffer here), the stream reads that file a piece at a time, and the file goes when the stream ends or is left.
+    readObject: async (key) => {
+      const file = await files.temp();
+      try {
+        await wrangler(['r2', 'object', 'get', `${target.bucket}/${key}`, '--file', file, where]);
+      } catch (error) {
+        await files.remove(file);
+        if (/does not exist/i.test(String(error))) return null;
+        throw error;
+      }
+      return (async function* pieces() {
+        try {
+          yield* files.read(file);
+        } finally {
+          await files.remove(file);
+        }
+      })();
     },
   };
 };
