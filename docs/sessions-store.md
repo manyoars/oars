@@ -516,7 +516,7 @@ The rule is measured, not read from a harness's documentation: a live session pe
 | user level only | loaded | not measured |
 | `CLAUDE.local.md`, `.claude/CLAUDE.md`, or a `.claude/rules/*.md` file in the working folder | loaded (each by its entry type) | not measured |
 | skill in the working folder, a parent folder, the repository root of a linked worktree, or the user level | loaded; the log lists each skill by name, with no source | not measured |
-| settings hook in the working folder (`settings.json` or `settings.local.json`) | ran, and left no record | not measured |
+| settings hook in the working folder (`settings.json` or `settings.local.json`) | ran; a silent `SessionStart` hook left no record, and a Stop hook is listed by command with no source | not measured |
 | settings hook in a parent folder, the repository root, or the main checkout of a linked worktree | did not run | not measured |
 
 A linked worktree under `<repo>/.claude/worktrees/` is the common shape for parallel agent sessions. The harnesses read the worktree's own copy of a tracked file and skip the main

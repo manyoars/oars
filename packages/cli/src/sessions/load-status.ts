@@ -4,7 +4,7 @@
 // The rule is what a fixture measured for each harness, not what a harness documents: a live session per case on a temp tree, reading only that session's own log. Each position
 // is one of `load` (the harness read a file there), `skip` (it did not, by design), or `unmeasured` (the case was not measured). What was not measured stays `unknown`.
 //
-// What a log can show decides which kind gets a loaded or missed label. A transcript names each instruction file it loaded, so those kinds do. It lists each skill by name and each Stop hook by command, with no source for either, and only when the session offers the Skill tool; a hook that prints nothing leaves no line. The snapshot holds
+// What a log can show decides which kind gets a loaded or missed label. A transcript names each instruction file it loaded, so those kinds do. It lists each skill by name (only when the session offers the Skill tool) and each Stop hook by command, with no source for either; a hook that prints nothing leaves no line. The snapshot holds
 // kinds and counts only, so it has no name or command to join against, and a skill or hook that exists stays `unknown`. A hook in a folder above the working folder is the one by-design skip measured for them: those settings files do not run.
 import { positionOfLevel, readCandidates, type CandidateSnapshot, type HookEventCounts, type HookSource, type InstructionPosition, type WorkingKind } from './candidates.js';
 import type { LoadedInstructions, SessionObservation } from './schema.js';
@@ -129,7 +129,7 @@ const countLabel = (count: number): LoadLabel => (count === 0 ? 'absent' : 'unkn
 
 const total = (counts: HookEventCounts): number => Object.values(counts).reduce((sum, count) => sum + count, 0);
 
-/** A hook is `absent` at zero. Above zero the log cannot show it ran, so it is `unknown`, except where the rule skips its settings file by design. */
+/** A hook is `absent` at zero. Above zero the log gives no source and the snapshot holds only counts, so it is `unknown`, except where the rule skips its settings file by design. */
 const hookLabel = (counts: HookEventCounts, skippedByDesign: boolean): LoadLabel => {
   if (total(counts) === 0) return 'absent';
   return skippedByDesign ? 'excluded' : 'unknown';

@@ -212,7 +212,7 @@ export const snapshotCandidates = async ({ cwd, claudeDir }: { cwd: string; clau
   const hooks: HookSourceCounts = { user: {}, working: {}, ancestors: {} };
   await addHookCounts(join(claudeDir, 'settings.json'), hooks.user);
   const aboveFolders = chain.slice(1, (levels.repoLevels ?? 0) + 1);
-  for (const dir of [...(levels.repoLevels === null ? [] : aboveFolders), ...mainRoot]) {
+  for (const dir of [...aboveFolders, ...mainRoot]) {
     if (!isConfigParent(dir)) await addSettingsHooks(dir, hooks.ancestors);
   }
   if (!isConfigParent(cwd)) await addSettingsHooks(cwd, hooks.working);

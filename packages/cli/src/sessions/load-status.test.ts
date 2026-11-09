@@ -96,7 +96,7 @@ describe('the measured Claude Code rule for the other kinds', () => {
     expect(got.files).toEqual({ local: 'unknown', dotClaude: 'absent', rules: 'loaded' });
   });
 
-  it('labels a hook in a folder above the working folder excluded, and one in the working folder or user level unknown, as the log cannot show it', () => {
+  it('labels a hook in a folder above the working folder excluded, and one in the working folder or user level unknown, as the log gives no source and the snapshot holds only counts', () => {
     const cases: [string, Partial<CandidateSnapshot['hooks']>, LoadStatus['hooks']][] = [
       ['the working folder settings', { working: { SessionStart: 1 } }, { user: 'absent', working: 'unknown', ancestors: 'absent' }],
       ['the local settings in the working folder', { working: { Stop: 1 } }, { user: 'absent', working: 'unknown', ancestors: 'absent' }],
@@ -110,7 +110,7 @@ describe('the measured Claude Code rule for the other kinds', () => {
     }
   });
 
-  it('keeps a skill unknown whichever position holds it: the log lists skills in total, with no source', () => {
+  it('keeps a skill unknown whichever position holds it: the log gives no source and the snapshot holds only counts', () => {
     const worktreeRoot = snapshot({}, 0, 3, { skills: { project: 1, user: 0 } });
     expect(loadStatusOf({ session: 's', harness: 'claude-code', snapshot: worktreeRoot, loaded: { user: 0, levels: [] } }).skills).toEqual({ project: 'unknown', user: 'absent' });
   });
