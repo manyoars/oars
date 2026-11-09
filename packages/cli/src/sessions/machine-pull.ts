@@ -1,5 +1,6 @@
 // `oars pool hold pull`: admission of the batches a cloud VM held on `oars-hold/<machine>/<id>` branches of its own private repository (the VM side is `machine-hold.ts`). The trusted machine does it, and treats every branch as input
-// from outside: anything able to push a branch can write one, the session's own agent included. A branch that fails any gate is reported with its reason, writes nothing to the outbox, and stays where it is; branches are never deleted here.
+// from outside: anything able to push a branch can write one, the session's own agent included. A branch that fails any gate is reported with its reason, writes nothing to the outbox, and stays where it is; the branch of an admitted batch is deleted
+// from here (the VM's proxy refuses deletions), and only after the batch and its `pulled.json` entry are durable.
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Outcome, RunDeps } from '../cli.js';
@@ -59,6 +60,8 @@ export interface PullAdmission {
   branch: string;
   id: string;
   stamp: string;
+  /** Whether the branch is gone from the repository. False when it moved after it was fetched (a newer push is kept and the next pull admits it) or the remote refused the delete; the batch is admitted either way. */
+  branchDeleted: boolean;
 }
 
 class Refused extends Error {
@@ -87,6 +90,8 @@ const BRANCH = /^oars-hold\/([^/]+)\/([0-9a-f]{16})$/u;
 const tipsOf = async (ports: PullPorts, parent: string, repo: string): Promise<Tip[]> => {
   const scratch = await mkdtemp(join(parent, 'repo-'));
   await ports.git(scratch, ['init', '--bare', '--quiet']);
+  // A depth-1 fetch of a pattern that matches nothing fails, and with branches deleted as they are admitted that is the usual state of a repository: ask first, and fetch only when a held branch is there.
+  if ((await ports.net(scratch, ['ls-remote', '--heads', ports.remoteOf(repo), 'refs/heads/oars-hold/*'])).trim() === '') return [];
   await ports.net(scratch, ['fetch', '--quiet', '--no-tags', '--depth=1', ports.remoteOf(repo), '+refs/heads/oars-hold/*:refs/held/*']);
   const listing = await ports.git(scratch, ['for-each-ref', '--format=%(refname:strip=2)%09%(objectname)%09%(committerdate:unix)', 'refs/held/']);
   return listing
@@ -156,6 +161,19 @@ const underStamp = async <T>(stamp: string, work: () => Promise<T>): Promise<T> 
   }
 };
 
+/**
+ * Deletes the branch the batch came from, but only while it still points at the tip that was read: a push that landed since is a newer state of the session and is left for the next pull. The remote's own text is never kept, since it can carry
+ * the remote's URL. Answers whether the branch is gone.
+ */
+const deleteBranch = async (ports: PullPorts, tip: Tip): Promise<boolean> => {
+  try {
+    await ports.net(tip.scratch, ['push', '--quiet', `--force-with-lease=refs/heads/${tip.branch}:${tip.sha}`, ports.remoteOf(tip.repo), `:refs/heads/${tip.branch}`]);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 /** One tip through its gates; answers the admission, or throws `Refused` with the first gate that failed. Nothing is written before the batch is through every gate. */
 const admit = async (run: Pulling, tip: Tip, id: string, machine: string): Promise<PullAdmission> => {
   const record = run.machines.find((known) => known.machine === machine);
@@ -181,13 +199,14 @@ const admit = async (run: Pulling, tip: Tip, id: string, machine: string): Promi
   for (const folder of await readdir(run.outbox)) {
     if (folder !== stamp && STAMP_FOLDER.test(folder)) await removeBatchOf(run.outbox, id, folder);
   }
-  return { repo: tip.repo, branch: tip.branch, id, stamp };
+  // The batch and `pulled.json` are durable, so the branch is no longer the only copy; a crash before this line leaves it for the next pull to replace the same id.
+  return { repo: tip.repo, branch: tip.branch, id, stamp, branchDeleted: await deleteBranch(run.ports, tip) };
 };
 
 const summary = (admitted: readonly PullAdmission[], refused: readonly PullRefusal[]): string =>
   [
-    `Admitted ${String(admitted.length)} ${admitted.length === 1 ? 'batch' : 'batches'}; refused ${String(refused.length)}. A refused branch stays where it is.`,
-    ...admitted.map((entry) => `  admitted ${entry.branch} (${entry.repo}) as ${entry.id} under ${entry.stamp}`),
+    `Admitted ${String(admitted.length)} ${admitted.length === 1 ? 'batch' : 'batches'}; refused ${String(refused.length)}. A refused branch stays where it is; an admitted one is deleted.`,
+    ...admitted.map((entry) => `  admitted ${entry.branch} (${entry.repo}) as ${entry.id} under ${entry.stamp}${entry.branchDeleted ? '' : ' (branch kept: it moved since it was read, or the repository refused the delete)'}`),
     ...refused.map((entry) => `  refused ${entry.branch ?? 'the repository'} (${entry.repo}): ${entry.reason}: ${entry.detail}`),
   ].join('\n');
 

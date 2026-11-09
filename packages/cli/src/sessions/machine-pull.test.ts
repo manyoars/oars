@@ -1,7 +1,7 @@
 // `oars pool hold pull` (`machine-pull.ts`): the trusted machine admits what a VM held on its branches. Each case runs against bare repositories in a temp folder that stand for the private repositories, with the branches made by git plumbing as
 // the VM makes them; GitHub's visibility record is injected, so nothing reaches a network.
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { http, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -122,6 +122,9 @@ describe('oars pool hold pull: who may hold', () => {
     hold(s, OTHER_REPO, `oars-hold/${MACHINE}/${OTHER_ID}`, goodFiles(s, OTHER_ID));
     const first = await pull(s);
     expect(first.document).toMatchObject({ admitted: [{ id: ID }, { id: OTHER_ID }], refused: [] });
+    // Admitting deletes the branches, so the VMs push again.
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, goodFiles(s));
+    hold(s, OTHER_REPO, `oars-hold/${MACHINE}/${OTHER_ID}`, goodFiles(s, OTHER_ID));
     s.network.length = 0;
     const second = await pull(s, (repo) => Promise.resolve(repo === REPO ? 'public' : 'private'));
     expect(second.document).toMatchObject({ admitted: [{ repo: OTHER_REPO }], refused: [{ repo: REPO, reason: 'repo_public' }] });
@@ -194,7 +197,8 @@ describe('oars pool hold pull: who may hold', () => {
       ],
     });
     expect(filed(s)).toHaveLength(1);
-    expect(branchesOf(s, REPO)).toHaveLength(4);
+    // The admitted branch is gone; the three that name no known machine stay.
+    expect(branchesOf(s, REPO)).toHaveLength(3);
   }, SLOW);
 
   it('lets the newest tip of an id speak for it: when it is refused, an older tip of the id is a duplicate and not admitted in its place', async () => {
@@ -347,7 +351,7 @@ describe('oars pool hold pull: the branch file is untrusted', () => {
     expect(out.document).toMatchObject({ admitted: [{ id: ID }], refused: [{ branch: `oars-hold/${MACHINE}/${NOT_AN_ID}`, reason: 'branch_name' }] });
     expect(filed(s)).toHaveLength(1);
     expect(filed(s)[0]).toMatch(new RegExp(`^${ID}\\.`, 'u'));
-    expect(branchesOf(s, REPO)).toHaveLength(2);
+    expect(branchesOf(s, REPO)).toEqual([`oars-hold/${MACHINE}/${NOT_AN_ID}`]);
   }, SLOW);
 
   it('refuses a valid file nested too deeply to walk, and the branches after it are still pulled', async () => {
@@ -357,7 +361,7 @@ describe('oars pool hold pull: the branch file is untrusted', () => {
     const out = await pull(s);
     expect(out.document).toMatchObject({ admitted: [{ id: OTHER_ID }], refused: [{ branch: `oars-hold/${MACHINE}/${ID}`, reason: 'batch_invalid', detail: 'batch.json is nested too deeply' }] });
     expect(filed(s)).toHaveLength(1);
-    expect(branchesOf(s, REPO)).toHaveLength(2);
+    expect(branchesOf(s, REPO)).toEqual([`oars-hold/${MACHINE}/${ID}`]);
   }, SLOW);
 
   it('refuses a branch with no batch.json, writes nothing, and leaves the branch', async () => {
@@ -450,5 +454,72 @@ describe('the command', () => {
     expect(existsSync(trace)).toBe(false);
     await pull(s);
     expect(existsSync(trace)).toBe(true);
+  }, SLOW);
+});
+
+describe('oars pool hold pull: deleting what was admitted', () => {
+  it('deletes the branch of an admitted batch once the batch and its pulled.json entry are durable, and keeps the branch of a refused one', async () => {
+    const s = await scene();
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, goodFiles(s));
+    hold(s, REPO, `oars-hold/${MACHINE}/${OTHER_ID}`, { ...goodFiles(s, OTHER_ID), terms: 'not-the-digest\n' });
+    const out = await pull(s);
+    expect(out.document).toMatchObject({ admitted: [{ id: ID, branchDeleted: true }], refused: [{ reason: 'terms_stale' }] });
+    expect(branchesOf(s, REPO)).toEqual([`oars-hold/${MACHINE}/${OTHER_ID}`]);
+    expect(pulledOf(s)).toEqual({ [ID]: currentStamp() });
+    expect(filed(s)).toHaveLength(1);
+    expect(out.text).toContain(`admitted oars-hold/${MACHINE}/${ID}`);
+  }, SLOW);
+
+  it('pulls a repository whose branches were all deleted by the last pull, or that never held one, without reporting it unreadable', async () => {
+    const s = await scene([{ ...RECORD, allowRepos: [REPO, OTHER_REPO] }]);
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, goodFiles(s));
+    hold(s, OTHER_REPO, 'main', { README: 'a repository with no held branch\n' });
+    await pull(s);
+    expect(branchesOf(s, REPO)).toEqual([]);
+    const again = await pull(s);
+    expect(again.document).toMatchObject({ ok: true, admitted: [], refused: [] });
+    expect(again.text).toContain('Admitted 0 batches; refused 0.');
+  }, SLOW);
+
+  it('leaves the branch when a crash comes before pulled.json is written, and the next pull admits the same id again and deletes it', async () => {
+    const s = await scene();
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, goodFiles(s));
+    // A folder where the staged file is written makes that write throw.
+    mkdirSync(join(s.outbox, 'pulled.json.tmp'), { recursive: true });
+    await expect(pull(s)).rejects.toThrow();
+    expect(branchesOf(s, REPO)).toEqual([`oars-hold/${MACHINE}/${ID}`]);
+    expect(s.network.some((line) => line.startsWith('push'))).toBe(false);
+    rmSync(join(s.outbox, 'pulled.json.tmp'), { recursive: true });
+    const again = await pull(s);
+    expect(again.document).toMatchObject({ admitted: [{ id: ID, branchDeleted: true }] });
+    expect(filed(s)).toHaveLength(1);
+    expect(branchesOf(s, REPO)).toEqual([]);
+  }, SLOW);
+
+  it('keeps a branch that moved after it was fetched, so a newer push is not lost, and reports it as kept', async () => {
+    const s = await scene();
+    const first = hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, goodFiles(s));
+    const moving: Git = (root, args, stdin) => {
+      s.network.push(args.join(' '));
+      if (args[0] === 'push') hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, { ...goodFiles(s), stamp: `${currentStamp()}\n` }, 1_700_000_100, first);
+      return runNetGit(root, args, stdin);
+    };
+    const out = await holdPull(s.h.deps, {}, { visibility: PRIVATE, git: runGit, net: moving, remoteOf: (repo) => bareOf(s, repo) });
+    expect(out.document).toMatchObject({ admitted: [{ id: ID, branchDeleted: false }], refused: [] });
+    expect(branchesOf(s, REPO)).toEqual([`oars-hold/${MACHINE}/${ID}`]);
+    expect(gitIn(bareOf(s, REPO), ['rev-parse', `refs/heads/oars-hold/${MACHINE}/${ID}`]).trim()).not.toBe(first);
+    expect(out.text).toContain('branch kept');
+  }, SLOW);
+
+  it('admits the batch and reports the branch kept when the remote refuses the delete, and never repeats the remote\'s text', async () => {
+    const s = await scene();
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, goodFiles(s));
+    const refusing: Git = (root, args, stdin) => (args[0] === 'push' ? Promise.reject(new Error('remote: https://x-access-token:secret@github.com/acme/widgets.git deletion refused')) : runNetGit(root, args, stdin));
+    const out = await holdPull(s.h.deps, {}, { visibility: PRIVATE, git: runGit, net: refusing, remoteOf: (repo) => bareOf(s, repo) });
+    expect(out.document).toMatchObject({ admitted: [{ id: ID, branchDeleted: false }] });
+    expect(JSON.stringify(out)).not.toContain('secret');
+    expect(filed(s)).toHaveLength(1);
+    expect(pulledOf(s)).toEqual({ [ID]: currentStamp() });
+    expect(branchesOf(s, REPO)).toEqual([`oars-hold/${MACHINE}/${ID}`]);
   }, SLOW);
 });
