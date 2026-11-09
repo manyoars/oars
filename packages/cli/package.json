@@ -1,6 +1,6 @@
 {
   "name": "@manyoars/oars",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "The oars CLI: sign in, manage API keys, and keep a local memory of your own coding-agent sessions on your machine. The session commands upload nothing except what `gold arms` sends through your own Claude subscription; telemetry (on by default) and the nightly pool send after you accept a pool covenant are described in the README",
   "license": "Apache-2.0",
   "repository": {
