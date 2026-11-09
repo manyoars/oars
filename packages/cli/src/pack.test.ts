@@ -272,6 +272,14 @@ describe('the public text states facts only', () => {
     expect(text).toContain('session-commons/review');
   });
 
+  // The package page is read before install, so its account of what telemetry records matches the first-run notice (`NOTICE` in telemetry/consent.ts).
+  it('packages/cli/README.md says each command records whether it ran in CI, one first-run event, and the covenant version a deposit stops on', () => {
+    const text = readFileSync(join(cliFolder, 'README.md'), 'utf8');
+    expect(text).toContain('a closed error class, whether it ran in CI (a closed word), the oars version');
+    expect(text).toContain('Each install also records one `first-run` event, on its first run (whether it ran in CI and how this copy was installed, as closed words), and a deposit that stops for an acceptance records a `covenant-shown` event holding only the covenant version.');
+    expect(text).toContain('Nothing else is recorded');
+  });
+
   it('the root README gives the hook commands in the forms that run, with --scope user', () => {
     const text = readFileSync(join(root, 'README.md'), 'utf8');
     const commands = [...text.matchAll(/`(oars sessions hook (?:install|uninstall)[^`]*)`/g)].map((match) => match[1] ?? '');
