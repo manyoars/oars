@@ -25,8 +25,8 @@ const HELD = row({ arm: 'held', at: '2026-11-04T10:05:00.000Z', from: 3, to: 4 }
 
 const calls = (): ReturnType<typeof tool>[] => [0, 1, 2, 3].map((n) => tool('s1', n, 'Read', { prompt: 0, steps: [step(n, 0, 'file.read', { native: 'Read' })] }));
 
-const built = (recalls: readonly Recall[]): SessionSkeleton => {
-  const [only] = sessionsFrom(store({ sessions: [session('s1', { frame: framed })], prompts: [prompt('s1', 0, { frame: framed })], tools: calls() }));
+const built = (recalls: readonly Recall[], tools: ReturnType<typeof tool>[] = calls()): SessionSkeleton => {
+  const [only] = sessionsFrom(store({ sessions: [session('s1', { frame: framed })], prompts: [prompt('s1', 0, { frame: framed })], tools }));
   const skeleton = only === undefined ? null : skeletonOf(only, '0123456789abcdef', storedNames, printOf, [], OPEN_GATE, NO_COVERAGE, recommendationsOf(recalls, 's1'));
   if (skeleton === null) throw new Error('no skeleton');
   return structuredClone(skeleton);
@@ -77,9 +77,20 @@ describe('the recommendations a deposit carries', () => {
     ['a window that ends before it starts', { from: 3, to: 1 }, 'recommendations[0].to'],
     ['a window that is no count', { from: -1 }, 'recommendations[0].from'],
     ['a pool version that is no version', { poolVersion: 'a b' }, 'recommendations[0].poolVersion'],
+    ['a window past every call the main run holds', { from: 5, to: 9 }, 'recommendations[0].to'],
   ])('refuses %s', (_name, change, field) => {
     const skeleton = built([SHOWN]);
     expect(parseSkeleton({ ...skeleton, recommendations: (skeleton.recommendations ?? []).map((entry) => ({ ...entry, ...change })) })).toMatchObject({ ok: false, field });
+  });
+
+  it('counts a window among the main run\'s calls that are not sidechain, so one that reaches only into the sidechain calls is refused', () => {
+    // Four calls, the last one sidechain: the held row's window ends at 4, which the four calls would allow, but the line the windows are counted on holds three.
+    const sidechained = [...calls().slice(0, 3), tool('s1', 3, 'Read', { prompt: 0, side: true, steps: [step(3, 0, 'file.read', { native: 'Read' })] })];
+    const skeleton = built([HELD], sidechained);
+    expect(skeleton.transcripts[0]?.tools).toHaveLength(4);
+    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toMatchObject({ ok: false, field: 'recommendations[0].to' });
+    // The same window over four calls that are all on the line is carried.
+    expect(sent(built([HELD])).recommendations).toEqual([{ id: HELD.id, arm: 'held', poolVersion: VERSION, from: 3, to: 4 }]);
   });
 
   it('reads an arm off its list as other and bags it', () => {

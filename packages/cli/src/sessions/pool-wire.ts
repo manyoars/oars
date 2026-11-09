@@ -1450,9 +1450,10 @@ export const parseSkeleton = (value: unknown): ParsedSkeleton | Refusal => {
     const transcripts = listOf(raw.transcripts, 'transcripts', (entry, entryAt) => parseTranscript(held, entry, entryAt));
     if (transcripts.length === 0) throw new Refused('transcripts', 'empty');
     const recommendations = format < 6 ? [] : listOrEmpty(raw.recommendations, 'recommendations', (entry, entryAt) => parseRecommendation(held, entry, entryAt));
-    // Positions are the only ordinals on the wire, so a window must lie within the main run's calls.
+    // Positions are the only ordinals on the wire, so a window must lie within the main run's own calls: the ones that are not sidechain, which is the line the windows were counted on.
+    const mainCalls = (transcripts[0]?.tools ?? []).filter(({ side }) => !side).length;
     recommendations.forEach(({ to }, index) => {
-      if (to > (transcripts[0]?.tools.length ?? 0)) throw new Refused(`recommendations[${String(index)}].to`, 'past the main run\'s calls');
+      if (to > mainCalls) throw new Refused(`recommendations[${String(index)}].to`, 'past the main run\'s calls');
     });
     // A counting batch is what lifts the fetch cap, so a deposit has to hold something to derive from.
     if (transcripts.every(({ prompts, tools }) => prompts.length === 0 && tools.length === 0)) throw new Refused('transcripts', 'holds no prompt and no tool');
