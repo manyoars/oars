@@ -204,6 +204,14 @@ describe('messageUsage on a Codex session', () => {
     expect(session.usage.output).toBe(280);
   });
 
+  it('writes no cache category the event did not report, and its absence stays out of usageObserved', () => {
+    const older = entry(4, 'event_msg', { type: 'token_count', info: { last_token_usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 }, total_token_usage: { total_tokens: 120 } } });
+    const { session } = codexCapture([...head, say(3, 'one'), older]);
+    expect(session.messageUsage).toEqual([{ id: 'sess-1-resp1', calls: [], input: 100, output: 20 }]);
+    expect(session.messageUsage?.[0]).not.toHaveProperty('cacheRead');
+    expect(session.messageUsage?.[0]).not.toHaveProperty('cacheWrite');
+  });
+
   it('keeps a window that reports only a percent, and one window alone', () => {
     const { session } = codexCapture([...head, say(3, 'one'), count(4, 10, 0, 5, 0, 15, { secondary: { used_percent: 3 }, primary: { window_minutes: 300 } })]);
     expect(session.messageUsage?.[0]?.plan).toEqual({ secondary: { usedPercent: 3 } });
@@ -270,7 +278,7 @@ describe('messageUsage on the version path', () => {
     const staged = stage('proj');
     expect(staged.storeDir.startsWith(staged.root)).toBe(true);
     expect(staged.storeDir.startsWith(appData)).toBe(false);
-    const plain =line({ type: 'assistant', uuid: 'p', timestamp: '2026-06-01T00:00:01.000Z', message: { id: 'msg_p', role: 'assistant', content: [{ type: 'text', text: 'x' }] } });
+    const plain = line({ type: 'assistant', uuid: 'p', timestamp: '2026-06-01T00:00:01.000Z', message: { id: 'msg_p', role: 'assistant', content: [{ type: 'text', text: 'x' }] } });
     addProject(staged, 'proj', 'usage-none', [user, plain]);
     await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
     expect((await loadStore(staged.storeDir)).sessions.find((entry) => entry.session === 'usage-none')).not.toHaveProperty('messageUsage');
