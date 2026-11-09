@@ -741,7 +741,6 @@ const transcriptOf = (
   return { merkleRoot: root.merkleRoot, leaves: root.leaves, harness, frame: transcriptFrame, frames, spawnedIn: spawner?.index ?? null, prompts: framedPrompts, tools: steppedTools };
 };
 
-/** The hash a batch's timing print is made with, over the durations in call order: the client's `contentHash` (D1's `hP`). */
 /**
  * The recommendations of one session, from the local rows after `deriveConsequences` has given each its window. Only a row that showed or withheld something is carried: a miss recommended nothing, so it is neither shown nor held, and
  * a row with no window has no calls to place. They go in window order, then by id, so one store builds one batch.
@@ -751,6 +750,7 @@ export const recommendationsOf = (recalls: readonly Recall[], session: string): 
     .flatMap(({ sid, id, arm, poolVersion, answer, consequence }) => (sid === session && answer.kind === 'hit' && consequence !== undefined ? [{ id, arm, poolVersion, from: consequence.window.from, to: consequence.window.to }] : []))
     .sort((a, b) => a.from - b.from || a.to - b.to || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
+/** The hash a batch's timing print is made with, over the durations in call order: the client's `contentHash` (D1's `hP`). */
 export type Print = (durations: readonly number[]) => string;
 
 /**
