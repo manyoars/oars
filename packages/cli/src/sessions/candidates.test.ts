@@ -287,6 +287,17 @@ describe('readCandidates', () => {
     expect(read.get('one')?.instructions.working).toBe(1);
   });
 
+  it('skips a line of the current version that lacks the count groups, so a later join never reads a missing one', async () => {
+    const store = join(root, 'store');
+    const lacking = (missing: 'instructions' | 'skills' | 'hooks'): string => {
+      const groups = { instructions: {}, skills: {}, hooks: {} };
+      const kept = Object.fromEntries(Object.entries(groups).filter(([name]) => name !== missing));
+      return JSON.stringify({ v: 1, session: missing, at: 'a', harness: 'claude-code', ...kept, repoLevels: 0, mainLevels: null });
+    };
+    write(join(store, CANDIDATES_FILE), `${JSON.stringify({ v: 1, session: 'bare' })}\n${lacking('instructions')}\n${lacking('skills')}\n${lacking('hooks')}\n${JSON.stringify({ v: 1, session: 'null-group', instructions: null, skills: {}, hooks: {} })}\n`);
+    expect((await readCandidates(store)).size).toBe(0);
+  });
+
   it('rethrows a read error that is not a missing file', async () => {
     const store = join(root, 'store');
     mkdirSync(join(store, CANDIDATES_FILE), { recursive: true });

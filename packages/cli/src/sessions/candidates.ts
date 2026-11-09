@@ -187,7 +187,12 @@ export const recordCandidates = async (storeDir: string, { session, cwd, claudeD
   }
 };
 
-const isSnapshot = (value: unknown): value is CandidateSnapshot => isObject(value) && Reflect.get(value, 'v') === CANDIDATE_RECORD_VERSION && typeof Reflect.get(value, 'session') === 'string';
+/** A line of this version with its three count groups: one without them (hand-edited, or written badly) would throw in the join, outside its guard. */
+const isSnapshot = (value: unknown): value is CandidateSnapshot =>
+  isObject(value) &&
+  Reflect.get(value, 'v') === CANDIDATE_RECORD_VERSION &&
+  typeof Reflect.get(value, 'session') === 'string' &&
+  ['instructions', 'skills', 'hooks'].every((group) => isObject(Reflect.get(value, group)));
 
 const parsedLine = (line: string): unknown => {
   try {
