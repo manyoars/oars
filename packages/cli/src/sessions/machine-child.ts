@@ -1,4 +1,4 @@
-// What the detached child of a machine Stop does (`hook-bin.js machine-child <input>`, started by `machine-stop.ts`): capture the session's transcript, then build its batch into the outbox. One child at a time per outbox, on the send
+// What the detached child of a machine Stop does (`hook-bin.js machine-child <input>`, started by `machine-stop.ts`): capture the session's transcript, build its batch into the outbox, then hold the batch on the session's own branch. One child at a time per outbox, on the send
 // lock: a Stop that finds the lock held writes the dirty mark (`send.dirty`, one input per line) and leaves, and the holder takes the mark and runs those sessions too before it lets go, so the last Stop of a burst is
 // always built from the transcript as it ended. Before each extraction the child waits for the transcript to stop growing, because Stop can fire while the harness is still writing the last lines.
 import { rename, readFile, rm, stat } from 'node:fs/promises';
@@ -35,6 +35,8 @@ export interface MachineChildDeps {
   capture: (input: ChildInput) => Promise<void>;
   /** Builds the session's batch into the outbox, with the gates. */
   build: (input: ChildInput) => Promise<void>;
+  /** Commits the batch just built to the session's holding branch and pushes it (`machine-hold.ts`); a refused push is the step's own log row, not a throw. */
+  hold: (input: ChildInput) => Promise<void>;
   settle?: SettleTimes;
   lock?: Partial<LockTimes>;
 }
@@ -103,12 +105,13 @@ const takeDirty = async (outbox: string): Promise<ChildInput[]> => {
   });
 };
 
-/** One session: check its repository against the allow list, wait for the transcript to settle, capture it, build its batch. A session off the list is not captured, so its transcript is never copied into the store; nothing is withdrawn either. */
+/** One session: check its repository against the allow list, wait for the transcript to settle, capture it, build its batch, and hold the batch. A session off the list is not captured, so its transcript is never copied into the store; nothing is withdrawn either. */
 const extract = async (deps: MachineChildDeps, input: ChildInput): Promise<void> => {
   if (!(await deps.allowed(input))) return;
   await settle(input.transcript, deps, deps.settle);
   await deps.capture(input);
   await deps.build(input);
+  await deps.hold(input);
 };
 
 /** Takes the lock without waiting and runs `work`, then every session marked dirty meanwhile; `false` when another child holds it. The first failure is rethrown once every session has had its turn. */

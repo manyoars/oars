@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
 
-export const NOTICE_CODES = ['vocabulary_expired'] as const;
+export const NOTICE_CODES = ['vocabulary_expired', 'hold_unconfigured'] as const;
 export type NoticeCode = (typeof NOTICE_CODES)[number];
 
 export interface NoticeEntry {
@@ -26,6 +26,7 @@ export const noticeFile = (storeDir: string): string => join(storeDir, NOTICE);
 
 /** What the person is told for each code: what stopped, what is kept, and the one step. */
 const TEXT: { [code in NoticeCode]: string } = {
+  hold_unconfigured: 'oars on this machine holds nothing: OARS_MACHINE or OARS_SESSION_SALT is missing from its enrollment, so no session reaches its hold branch and the data of its sessions is lost. Run oars pool enroll --hold-only on your own machine and set the printed block in this environment.',
   vocabulary_expired: 'oars on this machine is out of date, so it builds no deposit batches: its closed vocabulary is past its age limit. The sessions stay on this machine. Upgrade with npm install -g @manyoars/oars.',
 };
 
