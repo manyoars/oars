@@ -1,0 +1,77 @@
+// Layer 2 of a call's parameters: the names a call touched (file basenames, the project's directory names, environment variable names, flag values that are names, a custom agent's name), sent as the
+// names they are with no floor, and what is dropped from them. Every name here is invented.
+import { describe, expect, it } from 'vitest';
+import { argNamesOf, type ArgName } from './call-shape.js';
+import { captureSession } from './extract.js';
+import { printOf, sessionsFrom, store, storedNames } from './pool-fixture.js';
+import { skeletonOf, type SessionSkeleton, type WireGate } from './pool-wire.js';
+import { CLOSED_ARG_VALUES } from './public-vocabulary.js';
+import { makeRedactor } from './redact.js';
+
+const redact = makeRedactor();
+const line = (type: string, content: unknown, cwd = '/w'): string => JSON.stringify({ type, timestamp: '2026-06-10T00:00:00.000Z', cwd, message: { role: type, model: 'claude-opus-5-5', content } });
+const call = (id: string, name: string, input: object, cwd = '/w'): string => line('assistant', [{ type: 'tool_use', id, name, input }], cwd);
+
+const captured = (...lines: string[]) => captureSession({ text: [line('user', 'go'), ...lines].join('\n'), session: 's1', project: 'p', rev: 1, at: '', bytes: 0, redact });
+const skeletonOfLines = (gate: WireGate, ...lines: string[]): SessionSkeleton => {
+  const held = captured(...lines);
+  const [only] = sessionsFrom(store({ sessions: [held.session], prompts: [], tools: held.tools }));
+  const skeleton = only === undefined ? null : skeletonOf(only, '0123456789abcdef', storedNames, printOf, [], gate);
+  if (skeleton === null) throw new Error('no skeleton');
+  return skeleton;
+};
+const toolsOf = (skeleton: SessionSkeleton) => skeleton.transcripts[0]?.tools ?? [];
+const names = (kind: ArgName['kind'], ...list: string[]): ArgName[] => list.map((name) => ({ kind, name }));
+
+describe('name tokens of a call', () => {
+  it('reads the file basename and the directory names below the root of a path value', () => {
+    expect(argNamesOf('Read', { file_path: '/w/src/billing/ledger-core.ts', limit: 200 }, '/w', '/w', [], CLOSED_ARG_VALUES)).toEqual([...names('file', 'ledger-core.ts'), ...names('dir', 'billing', 'src')]);
+    // A relative path is taken from the cwd, as its depth is.
+    expect(argNamesOf('Read', { file_path: 'ui/button.tsx' }, '/w', '/w/packages/app', [], CLOSED_ARG_VALUES)).toEqual([...names('file', 'button.tsx'), ...names('dir', 'app', 'packages', 'ui')]);
+    // A folder argument names a directory, never a file.
+    expect(argNamesOf('Grep', { pattern: 'x', path: 'src/payments' }, '/w', '/w', [], CLOSED_ARG_VALUES)).toEqual(names('dir', 'payments', 'src'));
+  });
+
+  it('sends the basename of a path outside the root and none of the folders above it', () => {
+    expect(argNamesOf('Read', { file_path: '/home/someone/notes/plan.md' }, '/w', '/w', [], CLOSED_ARG_VALUES)).toEqual(names('file', 'plan.md'));
+    expect(argNamesOf('Read', { file_path: 'C:\\Users\\someone\\notes\\plan.md' }, 'C:\\w', 'C:\\w', [], CLOSED_ARG_VALUES)).toEqual(names('file', 'plan.md'));
+    expect(argNamesOf('Read', { file_path: '../../../etc/app.conf' }, '/w', '/w/pkg', [], CLOSED_ARG_VALUES)).toEqual(names('file', 'app.conf'));
+  });
+
+  it('reads environment variable names from assignments, references, and an env object, never a value', () => {
+    const words = (...texts: string[]) => texts.map((text) => ({ text, quoted: false }));
+    const command = { before: words('PGHOST=db.internal', 'PORT=5432'), head: { text: 'pytest', quoted: false }, args: [...words('-k', 'test_checkout'), { text: 'echo $BUILD_ID and ${REGION}x', quoted: true }] };
+    expect(argNamesOf('Bash', { command: 'x' }, '/w', '/w', [command], CLOSED_ARG_VALUES)).toEqual([...names('env', 'BUILD_ID', 'PGHOST', 'PORT', 'REGION'), ...names('flag', 'test_checkout')]);
+    expect(argNamesOf('mcp__x__run', { env: { API_BASE: 'https://x', LOG_LEVEL: 'debug' } }, '/w', '/w', [], CLOSED_ARG_VALUES)).toEqual(names('env', 'API_BASE', 'LOG_LEVEL'));
+  });
+
+  it('reads a flag value that is a name, and not one that is text, a path, a number, or a variable', () => {
+    const w = (text: string, quoted = false) => ({ text, quoted });
+    const read = (...args: ReturnType<typeof w>[]) => argNamesOf('Bash', { command: 'x' }, '/w', '/w', [{ before: [], head: w('tool'), args }], CLOSED_ARG_VALUES);
+    expect(read(w('-k'), w('test_login'), w('--project'), w('billing-web'), w('--region=eu_west'), w('--shard'), w('3'))).toEqual(names('flag', 'billing-web', 'eu_west', 'test_login'));
+    expect(read(w('-m'), w('shipping'), w('--out'), w('dist/app.js'), w('--home'), w('$HOME'), w('--name'), w('two words', true))).toEqual(names('env', 'HOME'));
+    // A short cluster and a joined value carry no flag name of their own.
+    expect(read(w('-am'), w('shipping'), w('-ftest_x'))).toEqual([]);
+  });
+
+  it('reads a custom agent name, and not a built-in one', () => {
+    expect(argNamesOf('Agent', { subagent_type: 'ledger-auditor', prompt: 'go' }, '/w', '/w', [], CLOSED_ARG_VALUES)).toEqual(names('agent', 'ledger-auditor'));
+    expect(argNamesOf('Agent', { subagent_type: 'Explore', prompt: 'go' }, '/w', '/w', [], CLOSED_ARG_VALUES)).toEqual([]);
+  });
+
+  it('sends the names of a captured call on the wire, sorted and single, after the one gate', () => {
+    const open: WireGate = { redact, terms: [] };
+    const skeleton = skeletonOfLines(
+      open,
+      call('a', 'Read', { file_path: '/w/src/billing/ledger-core.ts' }),
+      call('b', 'Read', { file_path: '/w/src/billing/ledger-core.ts' }),
+      call('c', 'Bash', { command: 'PGHOST=db pytest -k test_checkout --junitxml report.xml && echo $BUILD_ID' }),
+      call('d', 'Agent', { subagent_type: 'ledger-auditor', prompt: 'go', description: 'audit' }),
+    );
+    const [read, again, bash, agent] = toolsOf(skeleton);
+    expect(read?.names).toEqual([...names('file', 'ledger-core.ts'), ...names('dir', 'billing', 'src')]);
+    expect(again?.names).toEqual(read?.names);
+    expect(bash?.names).toEqual([...names('env', 'BUILD_ID', 'PGHOST'), ...names('flag', 'report.xml', 'test_checkout')]);
+    expect(agent?.names).toEqual(names('agent', 'ledger-auditor'));
+  });
+});

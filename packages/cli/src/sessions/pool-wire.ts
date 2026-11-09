@@ -4,7 +4,7 @@
 
 import { ACTION_TABLES, CANONICAL_ACTIONS, mcpOf, type CanonicalAction } from './actions.js';
 import { CLOSED_ARG_VALUES, CUSTOM_AGENT, FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRIVATE, publicEffort, publicVersion, PUBLIC_PACKAGES, projectedAgentType, PUBLIC_FLAGS, REPO_SIZES, TOOL_INPUT_KEYS, VOCAB_VERSION, type RepoSize } from './public-vocabulary.js';
-import { ARG_CLASSES, CHANGE_KINDS, DIRECTORY_KINDS, EXTENSION_CLASSES, PATH_DEPTHS, PATTERN_FEATURES, TARGET_CLASSES, VALUE_SIZES, type ArgClass, type ArgFeature, type ArgValue, type ChangeKind, type DirectoryKind, type ExtensionClass, type PathDepth, type PatternFeature, type TargetClass, type ValueSize } from './call-shape.js';
+import { ARG_CLASSES, CHANGE_KINDS, DIRECTORY_KINDS, EXTENSION_CLASSES, NAME_KINDS, PATH_DEPTHS, PATTERN_FEATURES, TARGET_CLASSES, VALUE_SIZES, type ArgClass, type ArgFeature, type ArgName, type ArgValue, type ChangeKind, type DirectoryKind, type ExtensionClass, type PathDepth, type PatternFeature, type TargetClass, type ValueSize } from './call-shape.js';
 import type { Cell } from './cells.js';
 import type { Redactor } from './redact.js';
 import type { Motif } from './motif.js';
@@ -115,6 +115,8 @@ export interface SkeletonTool {
   argValues?: SkeletonArgValue[];
   /** What changed from the previous call of the same tool in the same prompt (layer 1), a sorted set of `CHANGE_KINDS` members. Absent on the first such call and on a call captured before it. */
   changeKind?: Array<ChangeKind | typeof OTHER>;
+  /** The name tokens of the call's values (layer 2), sorted by kind and name: file, directory, and variable names, flag values that are names, a custom agent's name. Each passed the one gate (`wireName`); never a value. Absent when none is sent. */
+  names?: ArgName[];
   steps: SkeletonStep[];
 }
 
@@ -415,6 +417,16 @@ export const wireValues = (stored: readonly ArgValue[] | undefined, sent: Readon
 /** A call's change kinds as the wire sends them: the closed-list members, in the list's order. */
 export const wireChange = (stored: readonly ChangeKind[] | undefined): ChangeKind[] => CHANGE_KINDS.filter((kind) => stored?.includes(kind) === true);
 
+/**
+ * A call's name tokens as the wire sends them (layer 2): every stored token whose kind is on the closed list, through the one gate (`wireName`): a token the operator's exclusion terms or the redactor's secret shapes match, or that has no name shape,
+ * is dropped and counted in `dropped`. No floor, no threshold: a name is sent as it is.
+ */
+export const wireNames = (stored: readonly ArgName[] | undefined, gate: WireGate): { names: ArgName[]; dropped: number } => {
+  const known = (stored ?? []).filter(({ kind }) => NAME_KINDS.includes(kind));
+  const names = known.filter(({ name }) => wireName(gate, name) !== PRIVATE);
+  return { names, dropped: known.length - names.length };
+};
+
 /** The basename of a program as capture read it: a path never goes on the wire. */
 const basenameOf = (program: string): string => program.replace(/^.*[\\/]/, '');
 
@@ -650,6 +662,7 @@ const transcriptOf = (
     const argFeatures = wireFeatures(tool.argFeatures, sent);
     const argValues = wireValues(tool.argValues, sent, steps[0]?.native);
     const changeKind = wireChange(tool.changeKind);
+    const { names } = wireNames(tool.names, gate);
     steppedTools.push({
       side,
       prompt: promptPosition,
@@ -664,6 +677,7 @@ const transcriptOf = (
       ...(argFeatures.length === 0 ? {} : { argFeatures }),
       ...(argValues.length === 0 ? {} : { argValues }),
       ...(changeKind.length === 0 ? {} : { changeKind }),
+      ...(names.length === 0 ? {} : { names }),
       steps,
     });
   }

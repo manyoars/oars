@@ -19,7 +19,7 @@ const captured = (...lines: string[]) => captureSession({ text: [line('user', 'g
 const skeletonOfLines = (...lines: string[]): SessionSkeleton => {
   const held = captured(...lines);
   const [only] = sessionsFrom(store({ sessions: [held.session], prompts: [], tools: held.tools }));
-  const skeleton = only === undefined ? null : skeletonOf(only, '0123456789abcdef', storedNames, printOf);
+  const skeleton = only === undefined ? null : skeletonOf(only, '0123456789abcdef', storedNames, printOf, [], { redact, terms: [] });
   if (skeleton === null) throw new Error('no skeleton');
   return skeleton;
 };
@@ -135,7 +135,7 @@ describe('closed values', () => {
     expect(argValuesOf('Agent', { subagent_type: 'acme-reviewer', prompt: 'look' }, CLOSED_ARG_VALUES)).toEqual([]);
   });
 
-  it('send a built-in subagent type and never a custom agent name', () => {
+  it('send a built-in subagent type as a closed value, and a custom agent as a name token and never a closed value', () => {
     const skeleton = skeletonOfLines(call('t1', 'Agent', { subagent_type: 'Explore', prompt: 'p', run_in_background: true }), call('t2', 'Agent', { subagent_type: 'acme-reviewer', prompt: 'p' }));
     const [builtIn, custom] = toolsOf(skeleton);
     expect(builtIn?.argValues).toEqual([
@@ -143,7 +143,8 @@ describe('closed values', () => {
       { key: 'subagent_type', enumValue: 'Explore' },
     ]);
     expect(custom).not.toHaveProperty('argValues');
-    expect(JSON.stringify(skeleton)).not.toContain('acme-reviewer');
+    expect(custom?.names).toEqual([{ kind: 'agent', name: 'acme-reviewer' }]);
+    expect(builtIn).not.toHaveProperty('names');
   });
 
   it('read a value off the list as other and keep it in the bag, so the pool serves nothing from it', () => {

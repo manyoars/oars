@@ -7,7 +7,7 @@ import { posix } from 'node:path';
 import { ACTION_TABLES, actionOf, shellOf, type ActionTable, type CanonicalAction } from './actions.js';
 import { exploreCount, strataOf } from './strata.js';
 import { closedFrame, frameIdOf, repoFilesFromIndex, repoSizeOf, stackOf, utcDay } from './frame.js';
-import { argClassOf, argFeaturesOf, argValuesOf, changeKindOf, targetClassOf, type ComparedCall } from './call-shape.js';
+import { argClassOf, argFeaturesOf, argNamesOf, argValuesOf, changeKindOf, targetClassOf, type CommandWords, type ComparedCall } from './call-shape.js';
 import { CLOSED_ARG_VALUES, LITERAL, type RepoSize } from './public-vocabulary.js';
 import { linkSteps } from './graph.js';
 import { callIdentity, shellIdentity, UNREAD_SHELL, type WordOfCommand } from './identity.js';
@@ -636,6 +636,9 @@ type ShellLink = 'and' | 'pipe' | 'break' | 'end';
 export interface ShellCommand {
   program: string;
   args: ShellWord[];
+  /** The words before the program (assignments, wrappers, block words) and the program's own word, as written: the name read takes variable names from them. */
+  before: ShellWord[];
+  head: ShellWord;
   read: boolean;
   /** How the next command joins this one. */
   link: ShellLink;
@@ -658,6 +661,8 @@ export interface PlannedCommit {
 }
 
 export interface ShellRead {
+  /** Every command's words, for the name read (`argNamesOf`). */
+  words: CommandWords[];
   segments: ShellSegment[];
   /** The same commands as `segments`, in public names, apart from a pull's package name, which is kept as it is after redaction, with the redacted text they compare by. */
   steps: ShellStepRead[];
@@ -942,10 +947,11 @@ const readCommands = (tokens: readonly ShellToken[], depth = 0): ShellCommand[] 
   const owned = new Map<number, number>();
   const close = (): void => {
     const real = afterPrelude(words);
+    const before = words.slice(0, words.length - real.length);
     words = [];
     const [head, ...args] = real;
     const program = head === undefined ? null : programOf(head);
-    if (program === null) return;
+    if (program === null || head === undefined) return;
     const previous = commands.at(-1);
     if (previous !== undefined) previous.link = linkOf(pending);
     // The tokens say which way each group goes, so they are walked in order: an open pushes, a close pops, and a pipe after that close hides the group.
@@ -959,7 +965,7 @@ const readCommands = (tokens: readonly ShellToken[], depth = 0): ShellCommand[] 
     });
     owned.clear();
     pending = [];
-    commands.push({ program, args, read: true, link: 'end', hidden: false });
+    commands.push({ program, args, before, head, read: true, link: 'end', hidden: false });
   };
   for (const token of tokens) {
     if (typeof token === 'string') {
@@ -1264,6 +1270,7 @@ export const readShell = (command: string, redact: Redactor): ShellRead => {
     for (const pull of pullsOfCommand(program, args).filter(present)) pulls.set(JSON.stringify(pull), pull);
   }
   return {
+    words: commands.map(({ before, head, args }) => ({ before, head, args })),
     segments: kept.map((held) => ({ run: runOf(held), read: held.read })),
     steps: kept.map((held) => ({ identity: shellIdentity(held.program, held.args, pullsOfCommand(held.program, held.args).filter(present), redact), read: held.read, run: runOf(held) })),
     pulls: [...pulls.values()],
@@ -1797,6 +1804,7 @@ export const captureSession = (input: ExtractInput): Capture => {
         // Depth reads below the repository root, else the working folder, as the target's hash does; a relative value is taken from the working folder first.
         const argFeatures = argFeaturesOf(native, toolInput, lineRoot ?? lineCwd, lineCwd);
         const argValues = argValuesOf(native, toolInput, CLOSED_ARG_VALUES);
+        const names = argNamesOf(native, toolInput, lineRoot ?? lineCwd, lineCwd, shell?.words ?? [], CLOSED_ARG_VALUES);
         const compared: ComparedCall = { input: toolInput, target: aimed.target, features: argFeatures, values: argValues };
         const lastKey = `${String(cur?.index ?? null)}\n${String(side)}\n${stored}`;
         const before = lastCall.get(lastKey);
@@ -1821,6 +1829,7 @@ export const captureSession = (input: ExtractInput): Capture => {
           argClass: argClassOf(toolInput),
           argFeatures,
           ...(argValues.length === 0 ? {} : { argValues }),
+          ...(names.length === 0 ? {} : { names }),
           ...(before === undefined ? {} : { changeKind: changeKindOf(before, compared) }),
           durationMs: null,
           toolUseId: id ?? null,

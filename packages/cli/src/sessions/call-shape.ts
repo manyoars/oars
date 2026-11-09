@@ -241,6 +241,107 @@ export const argValuesOf = (native: string, input: { readonly [key: string]: unk
       return typeof value === 'string' && closed.get(native)?.get(key)?.has(value) === true ? [{ key, enumValue: value }] : [];
     });
 
+/** What kind of name a token is: a file's name, a folder's name below the session root, an environment variable's name, a flag's value that is a name, or a custom agent's name. */
+export const NAME_KINDS = ['file', 'dir', 'env', 'flag', 'agent'] as const;
+export type NameKind = (typeof NAME_KINDS)[number];
+
+/** One name token (layer 2): the kind and the name as it was written. The wire sends it through its one gate (`wireName`). */
+export interface ArgName {
+  kind: NameKind;
+  name: string;
+}
+
+/** A word of a shell command as the tokenizer read it. */
+export interface CommandWord {
+  text: string;
+  quoted: boolean;
+}
+
+/** A shell command's words as the name read takes them: those before the program (assignments, wrappers), the program's own word, and its arguments. */
+export interface CommandWords {
+  before: readonly CommandWord[];
+  head: CommandWord;
+  args: readonly CommandWord[];
+}
+
+const DIR_ARGS = words('cwd workdir directory dir path');
+const ENV_ARGS = words('env environment envs');
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const ENV_ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=/;
+const ENV_REFERENCE = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*))/g;
+// A long flag with its value joined (`--region=eu`), or a flag word on its own: a long flag, or one short letter. A cluster (`-am`) or a short flag with its value attached holds no flag name of its own.
+const JOINED_LONG_FLAG = /^(--[A-Za-z][A-Za-z0-9_-]*)=(.*)$/s;
+const FLAG_TOKEN = /^(?:--[A-Za-z][A-Za-z0-9_-]*|-[A-Za-z])$/;
+const FLAG_VALUE_NAME = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
+// The flags whose value is text, a message or a query or an expression, and so no name even when it is one word.
+const TEXT_FLAGS = words('-m --message --body --title --description --comment --text --query --data --eval -e --command --subject --notes');
+
+/** The values of a command's flags that are names: the next word of a flag (or the value joined to a long one) when it is a single identifier-like word, and the flag is not one that takes text. */
+const flagValueNames = (args: readonly CommandWord[]): string[] => {
+  const found: string[] = [];
+  for (let at = 0; at < args.length; at += 1) {
+    const word = args[at];
+    if (word === undefined || word.quoted) continue;
+    if (word.text === '--') break;
+    const joined = JOINED_LONG_FLAG.exec(word.text);
+    const flag = joined?.[1] ?? word.text;
+    if (TEXT_FLAGS.has(flag) || !FLAG_TOKEN.test(flag)) continue;
+    const next = args[at + 1];
+    const value = joined === null ? (next !== undefined && (next.quoted || !next.text.startsWith('-')) ? next.text : undefined) : joined[2];
+    if (value !== undefined && FLAG_VALUE_NAME.test(value)) found.push(value);
+  }
+  return found;
+};
+
+const isPlainObject = (value: unknown): value is { readonly [key: string]: unknown } => typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/**
+ * The name tokens of a call (layer 2), read from the values layer 1 reads: the file basename of each path value and the directory names of its segments below the root (else the working folder), never a segment above it, so an account
+ * or home folder is not here; the variable names a shell command assigns (`VAR=` before its program), references (`$VAR`, `${VAR}`), or an `env` object holds; a flag value that is a name; and a custom agent's `subagent_type`.
+ * Never a value: an assignment's value, a message, a path, and a number are read for the name and go no further. Sorted by kind, then name, and single. The wire sends each through its one gate.
+ */
+export const argNamesOf = (
+  native: string,
+  input: { readonly [key: string]: unknown },
+  root: string | undefined,
+  cwd: string | undefined,
+  commands: readonly CommandWords[],
+  closed: ReadonlyMap<string, ReadonlyMap<string, ReadonlySet<string>>>,
+): ArgName[] => {
+  const held = new Map<string, ArgName>();
+  const add = (kind: NameKind, name: string): void => {
+    if (name !== '') held.set(`${kind}\0${name}`, { kind, name });
+  };
+  for (const [key, value] of Object.entries(input)) {
+    const lower = key.toLowerCase();
+    if (typeof value === 'string' && PATH_ARGS.has(lower)) {
+      const parts = partsBelow(value, root, cwd);
+      const inside = (parts ?? []).filter((part) => part !== '..');
+      const folderArg = DIR_ARGS.has(lower);
+      // Above the root a segment is the machine's, not the project's: only a file's own name is read from such a path.
+      if (parts === null) {
+        if (!folderArg) add('file', value.replace(/^.*[\\/]/, ''));
+        continue;
+      }
+      for (const folder of folderArg ? inside : inside.slice(0, -1)) add('dir', folder);
+      if (!folderArg) add('file', inside.at(-1) ?? '');
+    } else if (ENV_ARGS.has(lower) && isPlainObject(value)) {
+      for (const name of Object.keys(value)) if (ENV_NAME.test(name)) add('env', name);
+    } else if (lower === 'subagent_type' && typeof value === 'string' && closed.get(native)?.get(key)?.has(value) === false) add('agent', value);
+  }
+  for (const { before, head, args } of commands) {
+    for (const word of before) {
+      const assigned = word.quoted ? null : ENV_ASSIGNMENT.exec(word.text)?.[1];
+      if (assigned !== undefined && assigned !== null) add('env', assigned);
+    }
+    for (const word of [...before, head, ...args]) {
+      for (const match of word.text.matchAll(ENV_REFERENCE)) add('env', match[1] ?? match[2] ?? '');
+    }
+    for (const name of flagValueNames(args)) add('flag', name);
+  }
+  return [...held.values()].sort((a, b) => NAME_KINDS.indexOf(a.kind) - NAME_KINDS.indexOf(b.kind) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+};
+
 /**
  * What changed from the previous call of the same tool in the same prompt, as a closed set (layer 1): `same` when nothing did; else any of a key added, a key removed, a kept key's value whose features or closed value
  * changed (`feature-changed`), a kept key's value that changed while its features did not (`value-changed`), and the target (`target-changed`). The first call of a tool in a prompt has none.
