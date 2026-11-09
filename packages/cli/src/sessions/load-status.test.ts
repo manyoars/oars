@@ -1,9 +1,9 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CANDIDATES_FILE, type CandidateSnapshot, type InstructionCounts } from './candidates.js';
-import { LOAD_STATUS_FILE, LOAD_STATUS_VERSION, loadStatusLines, loadStatusOf, loadedInstructionsOf, type LoadLabel, type LoadStatus } from './load-status.js';
+import { LOAD_STATUS_VERSION, loadStatusLines, loadStatusOf, loadedInstructionsOf, type LoadLabel, type LoadStatus } from './load-status.js';
 import type { LoadedInstructions, SessionObservation } from './schema.js';
 import { createShape } from './session-shape.js';
 
@@ -214,10 +214,5 @@ describe('loadStatusLines', () => {
   it('reads every session as unknown when the snapshots cannot be read', async () => {
     mkdirSync(join(store, CANDIDATES_FILE));
     expect(rowsOf(await loadStatusLines(store, [session('s')]))).toMatchObject([{ instructions: { working: 'unknown' } }]);
-  });
-
-  it('names a file the store keeps beside the log', () => {
-    writeFileSync(join(store, LOAD_STATUS_FILE), 'x');
-    expect(readFileSync(join(store, LOAD_STATUS_FILE), 'utf8')).toBe('x');
   });
 });
