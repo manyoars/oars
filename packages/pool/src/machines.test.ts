@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Env } from './http.js';
-import { createMachine, TOKEN_LIFE_MS } from './machines.js';
+import { createMachine, KEY_LIFE_MS, TOKEN_LIFE_MS } from './machines.js';
 import { anyNumber, anyText, fieldOf, matching, poolDbOf, startPool, stubUser, textOf, type TestPool } from './test-pool.js';
 
 const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex');
@@ -97,5 +97,121 @@ describe('POST /v1/machines/enroll', () => {
     const before = await (await pool.db()).prepare('SELECT COUNT(*) AS count FROM machines').first('count');
     expect(await pool.post('/v1/machines/enroll', GOOD, machineKey)).toMatchObject({ status: 403, json: { error: 'deposit_only' } });
     expect(await (await pool.db()).prepare('SELECT COUNT(*) AS count FROM machines').first('count')).toBe(before);
+  });
+});
+
+/** Enrolls a machine as the signed-in account and returns its token and id. */
+const enrolled = async (accountToken: string, declared: object = {}): Promise<{ key: string; id: string }> => {
+  const answered = await pool.post('/v1/machines/enroll', { ...GOOD, ...declared }, accountToken);
+  return { key: textOf(answered.json, 'token'), id: textOf(fieldOf(answered.json, 'machine'), 'id') };
+};
+const activate = (key?: string): ReturnType<TestPool['post']> => pool.post('/v1/machines/activate', {}, key);
+const rotate = (key?: string): ReturnType<TestPool['post']> => pool.post('/v1/machines/rotate', {}, key);
+const rowOf = async (id: string): Promise<unknown> => (await pool.db()).prepare('SELECT * FROM machines WHERE id = ?').bind(id).first();
+const setRow = async (id: string, column: 'expires_at' | 'state', value: string | number): Promise<void> => {
+  await (await pool.db()).prepare(`UPDATE machines SET ${column} = ? WHERE id = ?`).bind(value, id).run();
+};
+
+describe('POST /v1/machines/activate', () => {
+  it('binds a pending token as the machine key: active, 90 days out, and a cloud runtime is told it need not rotate', async () => {
+    const { token } = await pool.signIn('github', stubUser('4310'));
+    const { key, id } = await enrolled(token);
+    const before = Date.now();
+    const answered = await activate(key);
+    expect(answered).toMatchObject({ status: 200, json: { rotate: false, machine: { id, hostClass: 'cloud', label: 'my cloud env', state: 'active' } } });
+    const expiresAt = Number(fieldOf(fieldOf(answered.json, 'machine'), 'expiresAt'));
+    expect(expiresAt - before).toBeGreaterThanOrEqual(KEY_LIFE_MS);
+    expect(expiresAt - before).toBeLessThan(KEY_LIFE_MS + 60_000);
+    expect(await rowOf(id)).toMatchObject({ state: 'active', key_hash: sha256(key), expires_at: expiresAt, activated_at: anyNumber(), retired_hash: null });
+  });
+
+  it('answers {machine, rotate: false} again on an already active cloud key, and moves nothing', async () => {
+    const { token } = await pool.signIn('github', stubUser('4311'));
+    const { key, id } = await enrolled(token);
+    const first = await activate(key);
+    expect(first).toMatchObject({ status: 200, json: { rotate: false, machine: { id, state: 'active' } } });
+    const rowAfterFirst = await rowOf(id);
+    // Every fresh VM of a proxy-held runtime presents the same active key as a first use.
+    for (let session = 0; session < 3; session += 1) expect(await activate(key)).toEqual(first);
+    expect(await rowOf(id)).toEqual(rowAfterFirst);
+  });
+
+  it('answers {machine, rotate: true} again on an active, unrotated key of a durable class, so a machine that died before rotating is not bricked', async () => {
+    const { token } = await pool.signIn('github', stubUser('4312'));
+    for (const hostClass of ['vps', 'ci']) {
+      const { key, id } = await enrolled(token, { hostClass });
+      expect(await activate(key)).toMatchObject({ status: 200, json: { rotate: true, machine: { id, state: 'active' } } });
+      const rowAfterFirst = await rowOf(id);
+      expect(await activate(key)).toMatchObject({ status: 200, json: { rotate: true, machine: { id, state: 'active' } } });
+      expect(await rowOf(id)).toEqual(rowAfterFirst);
+    }
+  });
+
+  it('refuses a token that rotation retired on any class but cloud, and the key that replaced it is active and not rotated again', async () => {
+    const { token } = await pool.signIn('github', stubUser('4313'));
+    for (const hostClass of ['vps', 'ci']) {
+      const { key: spent } = await enrolled(token, { hostClass });
+      await activate(spent);
+      const fresh = textOf((await rotate(spent)).json, 'key');
+      expect(await activate(spent)).toMatchObject({ status: 401, json: { error: 'token_retired' } });
+      expect(await activate(fresh)).toMatchObject({ status: 200, json: { rotate: false, machine: { state: 'active' } } });
+    }
+  });
+
+  it('refuses a token unused for 24 hours, a key past its 90 days, a revoked machine, and a bearer that is no machine key', async () => {
+    const { token } = await pool.signIn('github', stubUser('4314'));
+    const stale = await enrolled(token);
+    await setRow(stale.id, 'expires_at', Date.now() - 1);
+    expect(await activate(stale.key)).toMatchObject({ status: 401, json: { error: 'token_expired' } });
+    expect(await rowOf(stale.id)).toMatchObject({ state: 'pending' });
+    const lapsed = await enrolled(token);
+    await activate(lapsed.key);
+    await setRow(lapsed.id, 'expires_at', Date.now() - 1);
+    expect(await activate(lapsed.key)).toMatchObject({ status: 401, json: { error: 'machine_expired' } });
+    const revoked = await enrolled(token);
+    await activate(revoked.key);
+    await setRow(revoked.id, 'state', 'revoked');
+    expect(await activate(revoked.key)).toMatchObject({ status: 401, json: { error: 'machine_revoked' } });
+    for (const bearer of [undefined, 'not-a-key', token]) expect(await activate(bearer)).toMatchObject({ status: 401, json: { error: 'unauthorized' } });
+  });
+});
+
+describe('POST /v1/machines/rotate', () => {
+  it('answers a fresh key for an active durable machine, retires the token hash, and keeps the expiry', async () => {
+    const { token } = await pool.signIn('github', stubUser('4320'));
+    const { key, id } = await enrolled(token, { hostClass: 'vps' });
+    await activate(key);
+    const before = await rowOf(id);
+    const answered = await rotate(key);
+    expect(answered).toMatchObject({ status: 200, json: { key: matching(/^[0-9a-f]{64}$/), machine: { id, state: 'active', expiresAt: fieldOf(before, 'expires_at') } } });
+    const fresh = textOf(answered.json, 'key');
+    expect(fresh).not.toBe(key);
+    const after = await rowOf(id);
+    expect(after).toMatchObject({ key_hash: sha256(fresh), retired_hash: sha256(key), rotated_at: anyNumber(), expires_at: fieldOf(before, 'expires_at') });
+    // Neither key is in the row in the clear.
+    for (const value of Object.values(after ?? {})) expect([key, fresh].some((secret) => String(value).includes(secret))).toBe(false);
+  });
+
+  it('refuses a token that rotation already spent, with the same refusal at rotate as at activate', async () => {
+    const { token } = await pool.signIn('github', stubUser('4321'));
+    const { key } = await enrolled(token, { hostClass: 'vps' });
+    await activate(key);
+    await rotate(key);
+    expect(await rotate(key)).toMatchObject({ status: 401, json: { error: 'token_retired' } });
+  });
+
+  it('refuses a token not yet activated, and a cloud key, which has nowhere to keep a rotated key', async () => {
+    const { token } = await pool.signIn('github', stubUser('4322'));
+    const pending = await enrolled(token, { hostClass: 'vps' });
+    expect(await rotate(pending.key)).toMatchObject({ status: 409, json: { error: 'not_activated' } });
+    const cloud = await enrolled(token);
+    await activate(cloud.key);
+    expect(await rotate(cloud.key)).toMatchObject({ status: 409, json: { error: 'not_rotatable' } });
+    expect(await rowOf(cloud.id)).toMatchObject({ key_hash: sha256(cloud.key), retired_hash: null, rotated_at: null });
+  });
+
+  it('wants a machine key: no credential, an unknown one, and the account credential are 401', async () => {
+    const { token } = await pool.signIn('github', stubUser('4323'));
+    for (const bearer of [undefined, 'not-a-key', token]) expect(await rotate(bearer)).toMatchObject({ status: 401, json: { error: 'unauthorized' } });
   });
 });

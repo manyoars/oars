@@ -104,3 +104,79 @@ export const enroll = async (request: Request, env: Env): Promise<Response> => {
   if (declared instanceof Response) return declared;
   return answer(201, await createMachine(env, account, declared, Date.now()));
 };
+
+/** A value the table holds from a closed list. Every write came through that list, so a value off it is a corrupt row, and the route fails rather than answer it. */
+const closed = <T extends string>(names: readonly T[], column: string, value: string | undefined): T => {
+  const found = names.find((name) => name === value);
+  if (found === undefined) throw new Error(`machines.${column} holds ${String(value)}, which is on no list`);
+  return found;
+};
+
+/** A repository list as the table keeps it: a JSON array of text. */
+const reposOf = (stored: string | undefined): string[] => {
+  const parsed: unknown = JSON.parse(stored ?? '[]');
+  return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === 'string') : [];
+};
+
+/** A live machine as its presented key finds it: what the account sees, the hash the key is held as now, and whether a rotation has happened. */
+interface Held {
+  view: MachineView;
+  keyHash: string;
+  rotated: boolean;
+}
+
+/** The machine a request's bearer is the key of, or the refusal for it. A token a rotation replaced, a token or key past its life, and a revoked machine are each refused by name, so a client can tell a dead credential from one that never was. */
+const heldBy = async (request: Request, env: Env, now: number): Promise<Held | Response> => {
+  const key = bearerOf(request);
+  if (key === undefined) return refuse(401, 'unauthorized', 'Present the machine key as a bearer credential.');
+  const hash = hashToken(key);
+  const row = await env.DB.prepare('SELECT * FROM machines WHERE key_hash = ? OR retired_hash = ?').bind(hash, hash).first();
+  if (row === null) return refuse(401, 'unauthorized', 'No machine has this key.');
+  if (textField(row, 'retired_hash') === hash) return refuse(401, 'token_retired', 'A rotation replaced this token. Use the key it returned.');
+  const state = textField(row, 'state');
+  if (state === 'revoked') return refuse(401, 'machine_revoked', 'The account revoked this machine.');
+  const expiresAt = Number(fieldOf(row, 'expires_at'));
+  if (expiresAt <= now) {
+    return state === 'pending' ? refuse(401, 'token_expired', 'This enrollment token went unused for 24 hours. Enroll the machine again.') : refuse(401, 'machine_expired', 'This machine key has expired. Enroll the machine again.');
+  }
+  const view: MachineView = {
+    id: textField(row, 'id') ?? '',
+    label: textField(row, 'label') ?? '',
+    hostClass: closed(ENROLLED_HOST_CLASSES, 'host_class', textField(row, 'host_class')),
+    launcher: closed(LAUNCHERS, 'launcher', textField(row, 'launcher')),
+    allowRepos: reposOf(textField(row, 'allow_repos')),
+    state: closed(['pending', 'active'] as const, 'state', state),
+    expiresAt,
+    createdAt: Number(fieldOf(row, 'created_at')),
+  };
+  return { view, keyHash: hash, rotated: fieldOf(row, 'rotated_at') !== null };
+};
+
+/** What activation answers: the machine, and whether the caller should now trade the key for a fresh one. Only a runtime that can keep the result (any class but `cloud`) is told to, and only until it has. */
+const activated = (held: Held): Response => answer(200, { machine: held.view, rotate: held.view.hostClass !== 'cloud' && !held.rotated });
+
+/** `POST /v1/machines/activate`: the first use of a token binds it as the machine's key, and any later use of a live key answers the same way. */
+export const activate = async (request: Request, env: Env): Promise<Response> => {
+  const now = Date.now();
+  const first = await heldBy(request, env, now);
+  if (first instanceof Response) return first;
+  if (first.view.state === 'active') return activated(first);
+  // `AND state = 'pending'` lets the first of two uses at once bind the key; the other changes nothing and reads the same row.
+  await env.DB.prepare("UPDATE machines SET state = 'active', activated_at = ?, expires_at = ? WHERE id = ? AND state = 'pending'").bind(now, now + KEY_LIFE_MS, first.view.id).run();
+  const bound = await heldBy(request, env, now);
+  return bound instanceof Response ? bound : activated(bound);
+};
+
+/** `POST /v1/machines/rotate`: an active key of a durable runtime is traded for a fresh one that never sat in a secret store. The old hash is kept as retired so the spent token is refused by name, and the key's expiry does not move. */
+export const rotate = async (request: Request, env: Env): Promise<Response> => {
+  const now = Date.now();
+  const held = await heldBy(request, env, now);
+  if (held instanceof Response) return held;
+  if (held.view.state !== 'active') return refuse(409, 'not_activated', 'Activate the token before rotating it.');
+  if (held.view.hostClass === 'cloud') return refuse(409, 'not_rotatable', 'A cloud runtime keeps its token as its key: it has nowhere to keep a rotated one.');
+  const key = mint();
+  // `AND key_hash = ?` makes the first of two rotations at once win: the other finds its token already replaced.
+  const replaced = await env.DB.prepare('UPDATE machines SET key_hash = ?, retired_hash = ?, rotated_at = ? WHERE id = ? AND key_hash = ?').bind(hashToken(key), held.keyHash, now, held.view.id, held.keyHash).run();
+  if (replaced.meta.changes === 0) return refuse(401, 'token_retired', 'A rotation replaced this token. Use the key it returned.');
+  return answer(200, { machine: held.view, key });
+};

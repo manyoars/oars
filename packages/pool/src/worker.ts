@@ -9,7 +9,7 @@ import { heldBy, recount, repoKeysOf, signalStatements } from './cluster-store.j
 import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf } from './ingest.js';
 import { accountOf, loginGone, loginPoll, loginStart, logout } from './identity.js';
 import { hashHosts, hashKey } from './ingest-hash.js';
-import { machineScope, enroll } from './machines.js';
+import { activate, enroll, machineScope, rotate } from './machines.js';
 import { rawRoute } from './raw.js';
 import { depositDigest, erasedRefusal, holdsErasedValue, isErased } from './tombstones.js';
 import { telemetry, type TelemetryEnv } from './telemetry.js';
@@ -150,6 +150,9 @@ export const ROUTES: readonly Route[] = [
   { method: 'DELETE', path: '/v1/login', machine: false, handle: logout },
   { method: 'POST', path: '/v1/covenant/accept', machine: false, handle: covenantAccept },
   { method: 'POST', path: '/v1/machines/enroll', machine: false, handle: enroll },
+  // A machine key activates and rotates itself: it is the only credential these two routes read.
+  { method: 'POST', path: '/v1/machines/activate', machine: true, handle: activate },
+  { method: 'POST', path: '/v1/machines/rotate', machine: true, handle: rotate },
   { method: 'GET', path: '/v1/covenant', machine: true, handle: covenantStatus },
   // Not a deposit and not signed in: percentiles over installs, served only where at least the public floor reports. No query is read.
   { method: 'GET', path: '/v1/telemetry/fleet', machine: false, handle: (request, env) => fleet(env, Date.now(), !request.headers.has('authorization')) },
