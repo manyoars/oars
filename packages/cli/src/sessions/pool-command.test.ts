@@ -2658,8 +2658,15 @@ describe('oars pool deposit: the raw copy (t884)', () => {
     await updatePoolChoices(scene.staged.storeDir, (choices) => {
       choices.rawConsentVersion = 'v0';
     });
-    server.use(http.get(`${POOL}/v1/covenant`, () => HttpResponse.json({ version: 'v1', accepted: true, screen: null })));
+    const askedWith: (string | null)[] = [];
+    server.use(
+      http.get(`${POOL}/v1/covenant`, ({ request }) => {
+        askedWith.push(request.headers.get('authorization'));
+        return HttpResponse.json({ version: 'v1', accepted: true, screen: null });
+      }),
+    );
     expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    expect(askedWith).toEqual([null]);
     expect(rawFiles(scene)).toEqual([]);
     expect(outboxFiles(scene).length).toBeGreaterThan(0);
     expect(scene.h.out.join('').split('\n').filter((line) => line.includes('oars pool raw --consent yes') && line.includes('v0'))).toHaveLength(1);

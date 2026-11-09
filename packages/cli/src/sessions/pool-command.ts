@@ -443,21 +443,21 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
   }
 };
 
-/**
- * `oars pool deposit`: every session in the store that passes both session gates is built into a canonical batch in the outbox, and the command stops: nothing is sent. The gates run before any projection does: the folder
- * allowlist, then the exclusion check. A session that fails either, or has no raw to scan, is counted and never built. A session is built only once it has ended: no transcript of it, main or subagent, has gained a line (the later of its capture
- * and its raw file's last write) for `session_idle_hours` (6 hours). One that has not is counted under `notEnded`, and any batch of it from an earlier pass is withdrawn. `--send <hash>` is the lock in `sendBatch`.
- */
-/** The covenant version the pool names, or `undefined` when it cannot be asked or names none. */
-const covenantOrUndefined = async (deps: RunDeps, server: string, token: string): Promise<string | undefined> => {
+/** The covenant version the pool names, or `undefined` when it cannot be asked or names none. The route is public, so no credential goes with it. */
+const covenantOrUndefined = async (deps: RunDeps, server: string): Promise<string | undefined> => {
   try {
-    const reply = await ask(deps, DEPOSIT, server, '/v1/covenant', { token });
+    const reply = await ask(deps, DEPOSIT, server, '/v1/covenant', {});
     return reply.status === 200 && isObject(reply.body) ? textIn(reply.body, 'version') : undefined;
   } catch {
     return undefined;
   }
 };
 
+/**
+ * `oars pool deposit`: every session in the store that passes both session gates is built into a canonical batch in the outbox, and the command stops: no session data is sent. The gates run before any projection does: the folder
+ * allowlist, then the exclusion check. A session that fails either, or has no raw to scan, is counted and never built. A session is built only once it has ended: no transcript of it, main or subagent, has gained a line (the later of its capture
+ * and its raw file's last write) for `session_idle_hours` (6 hours). One that has not is counted under `notEnded`, and any batch of it from an earlier pass is withdrawn. `--send <hash>` is the lock in `sendBatch`.
+ */
 export const poolDeposit = async (deps: RunDeps, options: { server?: string | undefined; acceptCovenant?: string | undefined; send?: string | undefined; via?: Sender | undefined; git?: Git | undefined; covenant?: string | undefined }): Promise<Outcome> => {
   const runtime = runtimeOf(deps);
   const server = poolServer(deps.env, DEPOSIT, options.server);
@@ -473,7 +473,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   const { terms } = exclusionPaths(runtime.projectsRoot, deps.env);
   const saved = await readState(runtime.storeDir);
   // A yes to the raw prompt counts only for the covenant it was given under, so an interactive build asks the pool which is in force; the nightly already knows and passes it. A pool that cannot be asked, or names none, leaves it unknown and the build goes on as before.
-  const covenant = options.covenant ?? (saved.pool.rawConsent === 'granted' ? await covenantOrUndefined(deps, server, token) : undefined);
+  const covenant = options.covenant ?? (saved.pool.rawConsent === 'granted' ? await covenantOrUndefined(deps, server) : undefined);
   const names = localNames();
   // The key an injected block's hash is made under: this machine's salt, so the same block hashes the same in every session and the key never leaves it.
   const injectedKey = `injected-block:${(await localSalt(runtime.storeDir)).salt}`;

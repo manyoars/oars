@@ -277,7 +277,7 @@ describe('the public text states facts only', () => {
   });
 
   // The package page is read before install, so its account of what telemetry records matches the first-run notice (`NOTICE` in telemetry/consent.ts).
-  it('packages/cli/README.md says each command records whether it ran in CI, one first-run event, and the covenant version a deposit stops on', () => {
+  it('packages/cli/README.md says each command records whether it ran in CI, one first-run event, and the covenant version each time the screen is shown', () => {
     const text = readFileSync(join(cliFolder, 'README.md'), 'utf8');
     expect(text).toContain('a closed error class, whether it ran in CI (a closed word), the oars version');
     expect(text).toContain('Each install also records one `first-run` event, on its first run (whether it ran in CI and how this copy was installed, as closed words), and one `covenant-shown` event, holding only the covenant version, each time the covenant screen is shown at a terminal, whether or not the person then accepts.');
