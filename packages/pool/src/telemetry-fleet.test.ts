@@ -179,6 +179,19 @@ describe('the fleet read, from the nightly rollup, on the Worker', () => {
     expect((await (await pool.db()).prepare('SELECT batches, events FROM telemetry_install_days').all()).results).toEqual(rows.results);
   }, 60_000);
 
+  it('rolls a first-run event into one cell on its install-day: the surface in the metric, a hit only for a run in CI, once however many batches carried it', async () => {
+    const firstRun = { v: 1, id: 'x', at: '2026-11-09T12:00:00.000Z', type: 'first-run', cli: '0.4.0', os: 'linux', data: { ci: 'github-actions', surface: 'npx' } };
+    await keep(pool, daysAgo(1), uuid(7), [firstRun, hook(100)]);
+    await keep(pool, daysAgo(1), uuid(7), [firstRun]);
+    await nightly(pool);
+    const row = await (await pool.db()).prepare('SELECT events, measures FROM telemetry_install_days').first();
+    const cells: unknown = JSON.parse(String(fieldOf(row, 'measures')));
+    expect(fieldOf(row, 'events')).toBe(2);
+    expect(Array.isArray(cells) ? cells.filter((cell: unknown) => String(fieldOf(cell, 'metric')).startsWith('first-run.')) : []).toEqual([
+      { metric: 'first-run.npx', dimension: 'cli', value: '0.4.0', kind: 'rate', n: 1, hits: 1, buckets: [] },
+    ]);
+  }, 60_000);
+
   it('skips an object that is not a batch and an install id that is not an install, and keeps a cell cap on a row', async () => {
     const bucket = await pool.bucket();
     await bucket.put(`telemetry/${daysAgo(1)}/junk.json`, 'not json');

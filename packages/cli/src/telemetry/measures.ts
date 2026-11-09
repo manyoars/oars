@@ -2,6 +2,7 @@
 // A measure is one observation in a cell: a latency in milliseconds, or a yes/no that rates are made from. The cell is (metric, dimension, value): `hook.pre-tool.latency` at harness
 // `claude-code`, version `2.1.5`. The reader is tolerant on purpose: the pool reads batches kept whole from any client, so a value that does not fit is skipped, never trusted.
 import { isHarness } from '../sessions/pool-wire.js';
+import { CI_WORDS, SURFACE_WORDS } from './schema.js';
 
 /** A latency in a cell, or a yes (1) or no (0) that a rate is made from. */
 export type Kind = 'latency' | 'rate';
@@ -90,6 +91,21 @@ const storeMeasures = (event: unknown, data: unknown): Measure[] => {
   const failed = fieldOf(data, 'verifyFailed');
   if (!unread && typeof failed === 'number' && Number.isSafeInteger(failed) && failed >= 0) found.push(rate('store.verifyFailure', 'cli', version, failed > 0));
   return found;
+};
+
+/**
+ * The cell of a `first-run` event: one yes (the first run was in CI) or no under the oars version, in a metric named for the listing surface (`first-run.npx`), so the pool's rollup holds each install's
+ * first-run day, its surface, and whether it ran in CI. `measuresOf` leaves it out on purpose: a rate over one event is no measure of the program, so the user's own report has no use for it. A word off
+ * the closed lists reads as `unknown` or not-CI, and the install is still counted.
+ */
+export const firstRunMeasures = (event: unknown): Measure[] => {
+  if (fieldOf(event, 'type') !== 'first-run') return [];
+  const data = fieldOf(event, 'data');
+  const surface = fieldOf(data, 'surface');
+  const ci = fieldOf(data, 'ci');
+  const known = typeof surface === 'string' && SURFACE_WORDS.some((word) => word === surface) ? surface : 'unknown';
+  const inCi = typeof ci === 'string' && ci !== 'none' && CI_WORDS.some((word) => word === ci);
+  return [rate(`first-run.${known}`, 'cli', valueOf(fieldOf(event, 'cli')), inCi)];
 };
 
 /** What one event measures; an event of a type nothing measures, or that is not an object, measures nothing. */
