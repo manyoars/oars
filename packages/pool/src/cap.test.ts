@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { harnessBucket } from '../../cli/src/sessions/cells.js';
 import { verifyBundle, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
 import { sampleSkeleton } from './sample.js';
-import { fieldOf, startPool, stubUser, type TestDb, type TestPool } from './test-pool.js';
+import { acceptanceOf, fieldOf, startPool, stubUser, type TestDb, type TestPool } from './test-pool.js';
 import { isoWeekOf } from './week.js';
 
 const PATH = `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`;
@@ -12,7 +12,7 @@ let pool: TestPool;
 
 const deposit = async (target: TestPool, id: string): Promise<string> => {
   const { token } = await target.signIn('github', stubUser(id));
-  await target.post('/v1/covenant/accept', { version: 'v1' }, token);
+  await target.post('/v1/covenant/accept', acceptanceOf('v1'), token);
   expect((await target.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0')), token)).status).toBe(201);
   return token;
 };

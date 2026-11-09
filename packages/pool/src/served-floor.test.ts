@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { verifyBundle, VOCAB_VERSION, type Bundle } from '../../cli/src/sessions/pool-wire.js';
 import { DEFAULT_PUBLIC_FLOOR } from './floors.js';
 import { sampleSkeleton } from './sample.js';
-import { startPool, stubUser, type TestPool } from './test-pool.js';
+import { acceptanceOf, startPool, stubUser, type TestPool } from './test-pool.js';
 
 const VERSION = '2.1.314';
 const LONG_TAIL = 'acme-deploy';
@@ -21,7 +21,7 @@ afterAll(async () => {
 
 const signedIn = async (id: string): Promise<string> => {
   const { token } = await pool.signIn('github', stubUser(id));
-  await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+  await pool.post('/v1/covenant/accept', acceptanceOf('v1'), token);
   return token;
 };
 
@@ -88,7 +88,7 @@ describe('differencing a total against the named values', () => {
       const tokens: string[] = [];
       for (let at = 0; at < DEFAULT_PUBLIC_FLOOR; at += 1) {
         const { token } = await fresh.signIn('github', stubUser(String(8400 + at)));
-        await fresh.post('/v1/covenant/accept', { version: 'v1' }, token);
+        await fresh.post('/v1/covenant/accept', acceptanceOf('v1'), token);
         tokens.push(token);
         await post(String(at + 200).padStart(16, '0'), token, 'git');
       }

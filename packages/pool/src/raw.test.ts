@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Env } from './http.js';
 import { MAX_STAGED_RAW_PARTS, rawRoute } from './raw.js';
-import { fieldOf, poolDbOf, startPool, stubUser, textOf, type TestPool } from './test-pool.js';
+import { acceptanceOf, fieldOf, poolDbOf, startPool, stubUser, textOf, type TestPool } from './test-pool.js';
 
 const MEGABYTE = 1024 * 1024;
 
@@ -41,7 +41,7 @@ interface Account {
 const member = async (target: TestPool = pool): Promise<Account> => {
   next += 1;
   const { token, account } = await target.signIn('github', stubUser(String(next)));
-  expect((await target.post('/v1/covenant/accept', { version: 'v1' }, token)).status).toBe(200);
+  expect((await target.post('/v1/covenant/accept', acceptanceOf('v1'), token)).status).toBe(200);
   return { token, account };
 };
 
@@ -373,7 +373,7 @@ describe('no limits on contribution', () => {
     try {
       next += 1;
       const { token, account } = await limited.signIn('github', stubUser(String(next)));
-      await limited.post('/v1/covenant/accept', { version: 'v1' }, token);
+      await limited.post('/v1/covenant/accept', acceptanceOf('v1'), token);
       for (let at = 1; at <= 3; at += 1) {
         const bytes = transcript(2000 + at, at);
         const hash = await hex(bytes);

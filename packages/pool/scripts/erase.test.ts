@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { sampleSkeleton } from '../src/sample.js';
-import { fieldOf, startPool, stubUser, type TestBucket, type TestDb, type TestPool } from '../src/test-pool.js';
+import { acceptanceOf, fieldOf, startPool, stubUser, type TestBucket, type TestDb, type TestPool } from '../src/test-pool.js';
 import { eraseAccount, eraseLeakedSecret, eraseRawObject, type EraseStore } from './erase.js';
 
 let pool: TestPool;
@@ -43,7 +43,7 @@ const store = async (): Promise<EraseStore> => storeOf(await pool.db(), await po
 const member = async (): Promise<{ token: string; account: string }> => {
   next += 1;
   const { token, account } = await pool.signIn('github', stubUser(String(next)));
-  expect((await pool.post('/v1/covenant/accept', { version: 'v1' }, token)).status).toBe(200);
+  expect((await pool.post('/v1/covenant/accept', acceptanceOf('v1'), token)).status).toBe(200);
   return { token, account };
 };
 
