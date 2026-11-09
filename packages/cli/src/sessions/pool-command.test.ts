@@ -3023,6 +3023,91 @@ describe('oars pool raw (t884)', () => {
     });
   });
 
+  describe('a no reaches the pool (GDPR Article 7(3))', () => {
+    const WITHDRAW = `${POOL}/v1/consent/raw`;
+    /** The pool's answer to the withdrawal, with the credential it carried and the answer the store held when it arrived. */
+    const withdrawing = (scene: Scene, reply: () => Response): { calls: Array<{ authorization: string; stored: string | null }> } => {
+      const calls: Array<{ authorization: string; stored: string | null }> = [];
+      server.use(
+        http.delete(WITHDRAW, async ({ request }) => {
+          calls.push({ authorization: request.headers.get('authorization') ?? '', stored: (await choicesOf(scene)).rawConsent });
+          return reply();
+        }),
+      );
+      return { calls };
+    };
+    const yes = async (scene: Scene): Promise<void> => {
+      await updatePoolChoices(scene.staged.storeDir, (choices) => {
+        choices.rawConsent = 'granted';
+        choices.rawConsentVersion = 'v1';
+      });
+    };
+
+    it('saves the local answer first, then tells the pool with the account credential', async () => {
+      const scene = setting({ OARS_POOL_URL: POOL });
+      await signIn(scene);
+      await yes(scene);
+      const pool = withdrawing(scene, () => HttpResponse.json({ ok: true }));
+      expect(await scene.cli('pool', 'raw', '--consent', 'no', '--json')).toBe(ExitCode.OK);
+      expect(pool.calls).toEqual([{ authorization: `Bearer ${POOL_TOKEN}`, stored: 'declined' }]);
+      expect(scene.document()).toMatchObject({ ok: true, rawConsent: 'declined', pool: 'told' });
+    });
+
+    it('keeps the local no, says the pool was not told, and exits nonzero when it cannot be reached, and a rerun tells it', async () => {
+      const scene = setting({ OARS_POOL_URL: POOL });
+      await signIn(scene);
+      await yes(scene);
+      server.use(http.delete(WITHDRAW, () => HttpResponse.error()));
+      const refused = await refusalOf(poolRaw(scene.h.deps, { consent: 'no' }));
+      expect(refused.message).toContain('was not told');
+      expect(refused.message).toContain('again');
+      expect(await choicesOf(scene)).toMatchObject({ rawConsent: 'declined', rawConsentVersion: null });
+      expect(await scene.cli('pool', 'raw', '--consent', 'no')).toBe(ExitCode.UNREACHABLE);
+      const pool = withdrawing(scene, () => HttpResponse.json({ ok: true }));
+      expect(await scene.cli('pool', 'raw', '--consent', 'no')).toBe(ExitCode.OK);
+      expect(pool.calls).toHaveLength(1);
+      expect(scene.h.out.join('')).toContain('The pool was told');
+    });
+
+    it('keeps the local no and exits nonzero when the pool refuses the credential', async () => {
+      const scene = setting({ OARS_POOL_URL: POOL });
+      await signIn(scene);
+      withdrawing(scene, () => HttpResponse.json({ error: 'unauthorized', message: 'Sign in with oars pool login first.' }, { status: 401 }));
+      const refused = await refusalOf(poolRaw(scene.h.deps, { consent: 'no' }));
+      expect(refused.message).toContain('was not told');
+      expect(await choicesOf(scene)).toMatchObject({ rawConsent: 'declined' });
+      expect(await scene.cli('pool', 'raw', '--consent', 'no')).toBe(ExitCode.AUTH);
+    });
+
+    it('keeps the local no and exits nonzero when the sign-in has lapsed, calling nothing', async () => {
+      const scene = setting({ OARS_POOL_URL: POOL });
+      await signIn(scene);
+      writeFileSync(join(scene.staged.storeDir, 'pool-accounts.json'), JSON.stringify([{ server: POOL, account: 'acct_one', token: POOL_TOKEN, expiresAt: 1, signingKey: FIXED_KEY }]));
+      const pool = withdrawing(scene, () => HttpResponse.json({ ok: true }));
+      const refused = await refusalOf(poolRaw(scene.h.deps, { consent: 'no' }));
+      expect(refused.message).toContain('was not told');
+      expect(refused.message).toContain('oars pool login');
+      expect(pool.calls).toEqual([]);
+      expect(await choicesOf(scene)).toMatchObject({ rawConsent: 'declined' });
+    });
+
+    it('has no account to tell when this machine never signed in, and says so', async () => {
+      const scene = setting({ OARS_POOL_URL: POOL });
+      expect(await scene.cli('pool', 'raw', '--consent', 'no', '--json')).toBe(ExitCode.OK);
+      expect(scene.document()).toMatchObject({ rawConsent: 'declined', pool: 'no-account' });
+    });
+
+    it('sends nothing to the withdrawal route for a yes', async () => {
+      const scene = setting({ OARS_POOL_URL: POOL });
+      await signIn(scene);
+      covenantIs('v1');
+      const pool = withdrawing(scene, () => HttpResponse.json({ ok: true }));
+      atTerminal(scene, RAW_PHRASE);
+      expect(await scene.cli('pool', 'raw', '--consent', 'yes')).toBe(ExitCode.OK);
+      expect(pool.calls).toEqual([]);
+    });
+  });
+
   it('sets and clears a folder switch, and refuses a half-given or unknown option', async () => {
     const scene = setting();
     expect(await scene.cli('pool', 'raw', '--folder', 'proj', '--mode', 'off')).toBe(ExitCode.OK);

@@ -405,9 +405,10 @@ export const postBatch = async (deps: RunDeps, options: { server: string; token:
  * One redacted raw copy to the pool: its parts by PUT, then the completion, which the pool checks against the SHA-256 in the path. Every request states the redaction and capture versions and that the person said yes to the raw prompt;
  * the caller sends only for a person who did. A part sent again replaces itself, and one for an object that stands writes nothing, so a copy that failed halfway is sent again whole.
  */
-export const postRaw = async (deps: RunDeps, options: { server: string; token: string; hash: string; body: string; bytes: number; via: Sender }): Promise<void> => {
-  const { server, token, hash, body, bytes, via } = options;
-  const extra: Array<[string, string]> = [['oars-redaction-version', REDACTION_VERSION], ['oars-capture-version', CAPTURE_VERSION], ['oars-raw-consent', 'granted']];
+export const postRaw = async (deps: RunDeps, options: { server: string; token: string; hash: string; body: string; bytes: number; consent: string; via: Sender }): Promise<void> => {
+  const { server, token, hash, body, bytes, consent, via } = options;
+  // The yes names the covenant version it answered: the pool takes it only for the version in force.
+  const extra: Array<[string, string]> = [['oars-redaction-version', REDACTION_VERSION], ['oars-capture-version', CAPTURE_VERSION], ['oars-raw-consent', 'granted'], ['oars-raw-consent-version', consent]];
   const parts = rawParts(body);
   for (const [at, piece] of parts.entries()) {
     const reply = await ask(deps, DEPOSIT, server, `/v1/raw/${hash}/parts/${String(at + 1)}`, { token, bytes: piece, method: 'PUT', type: 'application/x-ndjson', extra }, via);
@@ -831,6 +832,33 @@ To say yes, type exactly: ${RAW_PHRASE}
   return covenant;
 };
 
+/**
+ * After a no is saved here, tells the pool so it stops accepting raw copies from this account and records the withdrawal (GDPR Article 7(3)). A machine with no sign-in at this pool has no account there to tell, which is no failure.
+ * Anything else that keeps the pool from being told (unreachable, a lapsed sign-in, a refusal) throws, with the saved answer standing: the command exits nonzero and a rerun retries.
+ */
+const withdrawAtPool = async (deps: RunDeps): Promise<'told' | 'no-account'> => {
+  const server = poolServer(deps.env, RAW);
+  const entry = (await loadSignIns(runtimeOf(deps).storeDir, RAW)).find((found) => found.server === server);
+  if (entry === undefined) return 'no-account';
+  const notTold = (why: string, exitCode: ExitCode, problem?: CliError['problem']): CliError => {
+    const title = `Your no is saved here, so no raw copy leaves this machine, but the pool at ${server} was not told: ${why} Run oars pool raw --consent no again to retry.`;
+    return new CliError(title, exitCode, RAW, { ...problem, title });
+  };
+  if (entry.expiresAt <= deps.now()) throw notTold('your sign-in has lapsed. Run oars pool login first.', ExitCode.AUTH);
+  let reply: Reply | undefined;
+  try {
+    reply = await ask(deps, RAW, server, '/v1/consent/raw', { method: 'DELETE', token: entry.token });
+  } catch (error) {
+    if (!(error instanceof CliError) || error.exitCode !== ExitCode.UNREACHABLE) throw error;
+    throw notTold(`${error.message}.`, ExitCode.UNREACHABLE);
+  }
+  if (reply.status !== 200) {
+    const refused = refusal(RAW, reply);
+    throw notTold(`${refused.message}`, refused.exitCode, refused.problem);
+  }
+  return 'told';
+};
+
 /** `oars pool raw`: shows the raw prompt and the answer so far; `--consent yes|no` records the answer; `--folder <entry> --mode all|skeleton|off` sets what one folder may send. */
 export const poolRaw = async (deps: RunDeps, options: { consent?: string | undefined; folder?: string | undefined; mode?: string | undefined }): Promise<Outcome> => {
   const runtime = runtimeOf(deps);
@@ -850,10 +878,13 @@ export const poolRaw = async (deps: RunDeps, options: { consent?: string | undef
       else if (mode === 'skeleton' || mode === 'off') current.folders[folder] = mode;
     }
   });
+  // The local answer is saved above, so a pool that cannot be told leaves it standing and the command fails: a rerun retries.
+  const told = options.consent === 'no' ? await withdrawAtPool(deps) : undefined;
   const answer = choices.rawConsent === null ? 'not answered yet: only skeletons go to the pool' : choices.rawConsent === 'granted' ? `yes, given under covenant ${choices.rawConsentVersion ?? 'none'}: redacted raw copies leave while that covenant is in force` : 'no: only skeletons go to the pool';
   const switched = Object.entries(choices.folders).map(([entry, set]) => `  ${entry}: ${set === 'off' ? 'nothing sent to the pool' : 'skeletons only'}`);
-  const lines = [...(choices.rawConsent === null ? [RAW_PROMPT, ''] : []), `Raw copies: ${answer}.`, ...(switched.length === 0 ? [] : ['Folders switched down:', ...switched])];
-  return { document: { ok: true, rawConsent: choices.rawConsent, rawConsentVersion: choices.rawConsentVersion, folders: choices.folders }, text: lines.join('\n') };
+  const toldLine = told === 'told' ? ['The pool was told: it no longer accepts raw copies from this account, and keeps a record of the withdrawal. Copies it already holds are not erased by this yet.'] : told === 'no-account' ? ['This machine holds no sign-in to the pool, so it told the pool nothing. If you said yes from another machine, sign in with oars pool login and run this again.'] : [];
+  const lines = [...(choices.rawConsent === null ? [RAW_PROMPT, ''] : []), `Raw copies: ${answer}.`, ...toldLine, ...(switched.length === 0 ? [] : ['Folders switched down:', ...switched])];
+  return { document: { ok: true, rawConsent: choices.rawConsent, rawConsentVersion: choices.rawConsentVersion, folders: choices.folders, ...(told === undefined ? {} : { pool: told }) }, text: lines.join('\n') };
 };
 
 const COVERAGE = 'pool-coverage';
