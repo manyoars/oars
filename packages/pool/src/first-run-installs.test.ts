@@ -15,7 +15,7 @@ const forVersion = (version: string): string => {
   return SQL.replace(EDIT, `SELECT '${version}' AS named`);
 };
 
-const run = async (db: TestDb, sql: string): Promise<unknown[]> => (await db.prepare(sql).all()).results;
+const run = async (db: TestDb, sql: string): Promise<readonly unknown[]> => (await db.prepare(sql).all()).results;
 
 /** The cell the rollup keeps for a first run (`firstRunMeasures`): the surface in the metric, a hit for a run in CI. */
 const firstRun = (surface: string, inCi: boolean): object => ({ metric: `first-run.${surface}`, dimension: 'cli', value: '0.4.0', kind: 'rate', n: 1, hits: inCi ? 1 : 0, buckets: [] });
@@ -80,7 +80,8 @@ describe('queries/first-run-installs.sql', () => {
   it('prints one row of nulls and zeros for a version the pool never served, and no verdict column', async () => {
     const rows = await run(db, forVersion('v0'));
     expect(rows).toEqual([{ version: 'v0', start_day: null, surface: '(all)', first_run_installs: 0, ci_installs: 0, non_ci_installs: 0 }]);
-    expect(Object.keys(Object(rows[0]))).toEqual(['version', 'start_day', 'surface', 'first_run_installs', 'ci_installs', 'non_ci_installs']);
+    const first = rows[0];
+    expect(typeof first === 'object' && first !== null ? Object.keys(first) : []).toEqual(['version', 'start_day', 'surface', 'first_run_installs', 'ci_installs', 'non_ci_installs']);
   });
 
   it('prints the first-run counts and nothing that joins to an account, a deposit, or an install id', async () => {

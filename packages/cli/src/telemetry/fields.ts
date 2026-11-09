@@ -33,7 +33,7 @@ export const recallFields = (recall: Recall, families: readonly string[], legacy
   arm: recall.arm,
 });
 
-/** A provider's own variable and the word it earns. Order is the precedence: most providers also set `CI`, which on its own reads `other`. */
+/** A provider's own variable and the word it is read as. Order is the precedence: most providers also set `CI`, which on its own reads `other`. */
 const CI_PROVIDERS: readonly (readonly [string, CiWord])[] = [
   ['GITHUB_ACTIONS', 'github-actions'],
   ['GITLAB_CI', 'gitlab-ci'],
