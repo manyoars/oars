@@ -300,6 +300,7 @@ describe('withdrawing the raw yes (GDPR Article 7(3))', () => {
   const body = transcript(100, 9);
   const none = { 'oars-redaction-version': '1', 'oars-capture-version': 'cap-7' };
   const withdraw = (token?: string, target: TestPool = pool): ReturnType<TestPool['send']> => target.send('/v1/consent/raw', { method: 'DELETE' }, token);
+  const say = (payload: unknown, token?: string, target: TestPool = pool): ReturnType<TestPool['send']> => target.send('/v1/consent/raw', { method: 'PUT', body: JSON.stringify(payload) }, token);
   const recordOf = async (account: string): Promise<unknown> =>
     (await pool.db()).prepare('SELECT raw_consent, raw_consent_version, raw_consent_withdrawn_at, raw_consent_withdrawn_version FROM accounts WHERE id = ?').bind(account).first();
 
@@ -364,15 +365,41 @@ describe('withdrawing the raw yes (GDPR Article 7(3))', () => {
     expect(await rowsOf(account)).toHaveLength(1);
   });
 
-  it('takes a later yes for the version in force, and the earlier withdrawal stays on record', async () => {
+  it('refuses a request stating granted after a withdrawal: a stale yes on another machine cannot undo it', async () => {
+    const { token, account } = await member();
+    expect((await pool.send(partPath(hash, 1), { method: 'PUT', body }, token, grant)).status).toBe(200);
+    expect((await withdraw(token)).status).toBe(200);
+    const sent = await pool.send(partPath(hash, 2), { method: 'PUT', body }, token, grant);
+    expect([sent.status, fieldOf(sent.json, 'error')]).toEqual([403, 'raw_consent_withdrawn']);
+    expect(fieldOf(await recordOf(account), 'raw_consent')).toBeNull();
+  });
+
+  it('takes a later yes only through PUT /v1/consent/raw, and the earlier withdrawal stays on record', async () => {
     const { token, account } = await member();
     expect((await pool.send(partPath(hash, 1), { method: 'PUT', body }, token, grant)).status).toBe(200);
     expect((await withdraw(token)).status).toBe(200);
     const withdrawn = await recordOf(account);
-    expect((await pool.send(partPath(hash, 2), { method: 'PUT', body }, token, grant)).status).toBe(200);
+    const said = await say({ version: 'v1' }, token);
+    expect([said.status, said.json]).toEqual([200, { ok: true, version: 'v1' }]);
+    expect((await pool.send(partPath(hash, 2), { method: 'PUT', body }, token, none)).status).toBe(200);
     const row = await recordOf(account);
     expect(fieldOf(row, 'raw_consent_version')).toBe('v1');
     expect([fieldOf(row, 'raw_consent_withdrawn_at'), fieldOf(row, 'raw_consent_withdrawn_version')]).toEqual([fieldOf(withdrawn, 'raw_consent_withdrawn_at'), 'v1']);
+  });
+
+  it('PUT /v1/consent/raw records a first yes with its version, and refuses a version not in force, a missing one, a missing sign-in, and a closed pool', async () => {
+    const { token, account } = await member();
+    expect((await say({ version: 'v1' }, token)).status).toBe(200);
+    expect(fieldOf(await recordOf(account), 'raw_consent_version')).toBe('v1');
+    const other = await say({ version: 'v0' }, token);
+    expect([other.status, fieldOf(other.json, 'error')]).toEqual([409, 'covenant_version']);
+    const missing = await say({}, token);
+    expect([missing.status, fieldOf(missing.json, 'error')]).toEqual([400, 'missing_field']);
+    const anon = await say({ version: 'v1' });
+    expect([anon.status, fieldOf(anon.json, 'error')]).toEqual([401, 'unauthorized']);
+    const { token: shut } = await closed.signIn('github', stubUser('9903'));
+    const shutOut = await say({ version: 'v1' }, shut, closed);
+    expect([shutOut.status, fieldOf(shutOut.json, 'error')]).toEqual([403, 'deposits_closed']);
   });
 });
 

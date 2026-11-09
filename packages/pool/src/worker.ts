@@ -10,7 +10,7 @@ import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf } f
 import { accountOf, loginGone, loginPoll, loginStart, logout } from './identity.js';
 import { hashHosts, hashKey } from './ingest-hash.js';
 import { activate, enroll, list, machineScope, revoke, rotate } from './machines.js';
-import { rawRoute, withdrawRawConsent } from './raw.js';
+import { grantRawConsent, rawRoute, withdrawRawConsent } from './raw.js';
 import { depositDigest, erasedRefusal, holdsErasedValue, isErased } from './tombstones.js';
 import { telemetry, type TelemetryEnv } from './telemetry.js';
 import { fleet, operator, type OperatorEnv } from './telemetry-fleet.js';
@@ -159,6 +159,8 @@ export const ROUTES: readonly Route[] = [
   { method: 'GET', path: '/v1/covenant', machine: true, handle: (request, env) => covenantStatus(request, env) },
   // The account takes its raw yes back (GDPR Article 7(3)). Account-only: a machine key never speaks for a person's consent.
   { method: 'DELETE', path: '/v1/consent/raw', machine: false, handle: withdrawRawConsent },
+  // The one way to record a yes after a withdrawal: a header on a raw request cannot.
+  { method: 'PUT', path: '/v1/consent/raw', machine: false, handle: grantRawConsent },
   // Not a deposit and not signed in: percentiles over installs, served only where at least the public floor reports. No query is read.
   { method: 'GET', path: '/v1/telemetry/fleet', machine: false, handle: (request, env) => fleet(env, Date.now(), !request.headers.has('authorization')) },
   // The operator's anomaly read, behind a secret the deploy sets: never served to users.

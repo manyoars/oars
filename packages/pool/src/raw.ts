@@ -2,7 +2,7 @@
 // The server cannot verify redaction. It takes the client's word that the bytes were redacted (and hosts masked) before they were sent, and it runs no scanner.
 import { createHash } from 'node:crypto';
 import { covenantNotAccepted, depositsClosed, hasAccepted } from './covenant.js';
-import { answer, bodyOf, bound, fieldOf, notConfigured, refuse, type Env, type RawBucket, type RawUploadedPart } from './http.js';
+import { answer, bodyOf, bound, fieldOf, notConfigured, refuse, textField, type Env, type RawBucket, type RawUploadedPart } from './http.js';
 import { accountOf } from './identity.js';
 import { erasedRefusal, isErased, rawDigest } from './tombstones.js';
 
@@ -57,13 +57,15 @@ const withdrawnYes = (): Response => refuse(403, 'raw_consent_withdrawn', 'This 
 
 /**
  * Raw consent is its own answer, apart from the covenant, and it answers one covenant version (GDPR Article 7(1)): a yes counts only for the version in force. Stating it with the version it answered records it, and after that a request need not repeat it;
- * one that states anything but `granted` is a refusal. A yes with no version, in the request or in the row, reads as not asked, and one for another version is stale. After a withdrawal (`withdrawRawConsent`) the raw routes refuse by name until a new yes.
+ * one that states anything but `granted` is a refusal. A yes with no version, in the request or in the row, reads as not asked, and one for another version is stale. After a withdrawal (`withdrawRawConsent`) the raw routes refuse by name, whatever the header says, until a new yes through `grantRawConsent`.
  */
 const consented = async (request: Request, env: Env, account: string, covenant: string): Promise<Response | undefined> => {
   const stated = request.headers.get(CONSENT_HEADER);
   const row = await env.DB.prepare('SELECT raw_consent, raw_consent_version, raw_consent_withdrawn_at FROM accounts WHERE id = ?').bind(account).first();
   const standing = typeof fieldOf(row, 'raw_consent') === 'number';
   const held = fieldOf(row, 'raw_consent_version');
+  // A withdrawal holds whatever a request says (GDPR Article 7(3)): the client states `granted` on every raw request from any machine with a local yes, so the header cannot be what undoes it. Only PUT /v1/consent/raw records a yes after a withdrawal.
+  if (!standing && typeof fieldOf(row, 'raw_consent_withdrawn_at') === 'number') return withdrawnYes();
   if (stated === 'granted') {
     const answered = versionOf(request, CONSENT_VERSION_HEADER);
     if (answered === undefined) return notAsked();
@@ -72,7 +74,7 @@ const consented = async (request: Request, env: Env, account: string, covenant: 
     return undefined;
   }
   if (stated !== null) return notAsked();
-  if (!standing) return typeof fieldOf(row, 'raw_consent_withdrawn_at') === 'number' ? withdrawnYes() : notAsked();
+  if (!standing) return notAsked();
   if (typeof held !== 'string') return notAsked();
   return held === covenant ? undefined : staleYes(covenant);
 };
@@ -208,6 +210,22 @@ export const withdrawRawConsent = async (request: Request, env: Env): Promise<Re
   // One statement, and a SET expression reads the row as it was, so the version withdrawn is the one the yes answered. With no yes standing it matches no row.
   await env.DB.prepare('UPDATE accounts SET raw_consent_withdrawn_at = ?, raw_consent_withdrawn_version = raw_consent_version, raw_consent = NULL, raw_consent_version = NULL WHERE id = ? AND raw_consent IS NOT NULL').bind(Date.now(), account).run();
   return answer(200, { ok: true });
+};
+
+/**
+ * `PUT /v1/consent/raw`: the account says yes to raw copies for the covenant version in force, the one way to record a yes after a withdrawal. A person types the phrase at a terminal first (the client's side); the pool records which version the yes answers.
+ * Account only. The withdrawal columns stay, because they are the record an erasure reads.
+ */
+export const grantRawConsent = async (request: Request, env: Env): Promise<Response> => {
+  const version = bound(env.COVENANT_VERSION);
+  if (version === undefined) return depositsClosed();
+  const account = await accountOf(request, env);
+  if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
+  const named = textField(await bodyOf(request), 'version');
+  if (named === undefined) return refuse(400, 'missing_field', 'A raw yes names the covenant version it answers.', 'version');
+  if (named !== version) return refuse(409, 'covenant_version', `The covenant in force is ${version}, not ${named}.`, 'version');
+  await env.DB.prepare('UPDATE accounts SET raw_consent = ?, raw_consent_version = ? WHERE id = ?').bind(Date.now(), version, account).run();
+  return answer(200, { ok: true, version });
 };
 
 /** The raw routes, or undefined for a request that is not one. */
