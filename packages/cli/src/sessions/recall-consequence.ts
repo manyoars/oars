@@ -44,6 +44,7 @@ const outcomeOf = (prompt: PromptObservation | undefined): RecallOutcome => ({
   stopped: prompt?.stopped ?? null,
   commits: prompt?.commits ?? null,
   redo: prompt?.redo ?? null,
+  intervention: prompt?.intervention ?? null,
 });
 
 const consequenceOf = (recall: Recall, session: string, line: readonly ToolObservation[], position: number, harness: Harness, prompts: ReadonlyMap<string, PromptObservation>): RecallConsequence => {

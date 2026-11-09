@@ -3,7 +3,7 @@
 import { createHash } from 'node:crypto';
 import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Frame } from './schema.js';
+import type { Frame, PromptIntervention } from './schema.js';
 
 const RECALLS_FILE = 'recalls.jsonl';
 
@@ -98,6 +98,11 @@ export interface RecallOutcome {
   stopped: string | null;
   commits: number | null;
   redo: boolean | null;
+  /**
+   * What the next human prompt did to this prompt's work, beside the values above and never in place of them: `revert` when that prompt ran a git undo or asked for one. Only the next prompt is read, so a
+   * later reversion, or one in another session, leaves this at `none`. Null when the prompt was derived before the value existed.
+   */
+  intervention: PromptIntervention | null;
 }
 
 /** Derived from the capture records, never captured live. */
