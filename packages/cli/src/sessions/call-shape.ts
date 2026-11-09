@@ -271,19 +271,20 @@ const ENV_ARGS = words('env environment envs');
 const VARIABLE_NAME = '[A-Za-z_][A-Za-z0-9_]*';
 const ENV_NAME = new RegExp(`^${VARIABLE_NAME}$`);
 const ENV_ASSIGNMENT = new RegExp(`^(${VARIABLE_NAME})=`);
-// A PowerShell scope word before the name (`$env:NAME`, `$script:NAME`) is not part of it, in any case.
-const WHOLE_REFERENCE = new RegExp(`^(?:\\$(?:(?:env|script|global|local|private|using):)?(${VARIABLE_NAME})|\\$\\{(?:(?:env|script|global|local|private|using):)?(${VARIABLE_NAME})\\}|%(${VARIABLE_NAME})%)$`, 'i');
+// A PowerShell scope word before the name (`$env:NAME`, `$script:NAME`, `$global:NAME`) is not part of it, in any case. Only these three: any other word before a colon (`$local:x`, `$private:x`) is an ordinary POSIX variable and its text after the colon is not a name.
+const WHOLE_REFERENCE = new RegExp(`^(?:\\$(?:(?:env|script|global):)?(${VARIABLE_NAME})|\\$\\{(?:(?:env|script|global):)?(${VARIABLE_NAME})\\})$`, 'i');
 /**
- * The one rule for a variable reference: a word names a variable only when its raw source, quotes included, is exactly one reference: `$NAME`, `${NAME}`, a PowerShell `$env:NAME` or scope form (`$script:NAME`), or `%NAME%`,
- * bare or in double quotes. Every other word is literal: a `$` inside a longer word, a quote, a command substitution, or an escape names nothing, which sends less and never more. The tokenizer reads each word through this.
+ * The one rule for a variable reference: a word names a variable only when its raw source, quotes included, is exactly one reference: `$NAME`, `${NAME}`, or a PowerShell `$env:NAME` or scope form (`$script:NAME`, `$global:NAME`),
+ * bare or in double quotes. Every other word is literal: a `$` inside a longer word, a quote, a command substitution, an escape, and `%NAME%` (no POSIX shell or PowerShell expands it) name nothing, which sends less and never more.
+ * The tokenizer reads each word through this.
  */
 export const variableOf = (raw: string): string | undefined => {
   const match = WHOLE_REFERENCE.exec(/^"(.*)"$/s.exec(raw)?.[1] ?? raw);
-  return match?.[1] ?? match?.[2] ?? match?.[3];
+  return match?.[1] ?? match?.[2];
 };
-// A path that is exactly a home folder (`/home/jsmith`, `C:\Users\jsmith`, the WSL mount of one, `/mnt/c/Users/jsmith`, Git Bash's `/c/Users/jsmith`, or an immutable distribution's `/var/home/jsmith`): its last segment is the machine's
-// account name, not a file.
-const HOME_FOLDER = /^(?:[A-Za-z]:|[\\/]mnt[\\/][A-Za-z]|[\\/][A-Za-z]|[\\/]var)?[\\/](?:home|users)[\\/][^\\/]+[\\/]*$/i;
+// A path that is exactly a home folder, on any mount or distribution (`/home/jsmith`, `C:\Users\jsmith`, `/mnt/c/Users/jsmith`, `/c/Users/jsmith`, `/var/home/jsmith`, `/export/home/jsmith`, `\\wsl.localhost\Ubuntu\home\jsmith`): its last
+// segment is the machine's account name, not a file. The test runs only on a path outside the session root, so the folders above `home` or `users` need no list.
+const HOME_FOLDER = /(?:^|[\\/])(?:home|users)[\\/][^\\/]+[\\/]*$/i;
 // A long flag with its value joined (`--region=eu`), or a flag word on its own: a long flag, or one short letter. A cluster (`-am`) or a short flag with its value attached holds no flag name of its own.
 const JOINED_LONG_FLAG = /^(--[A-Za-z][A-Za-z0-9_-]*)=(.*)$/s;
 const FLAG_TOKEN = /^(?:--[A-Za-z][A-Za-z0-9_-]*|-[A-Za-z])$/;

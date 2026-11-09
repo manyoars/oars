@@ -147,9 +147,12 @@ describe('what is dropped from the names', () => {
       call('i', 'Read', { file_path: '/mnt/d/Users/jsmith-acct/' }),
       call('j', 'Read', { file_path: '/c/Users/jsmith-acct' }),
       call('k', 'Read', { file_path: '/var/home/jsmith-acct' }),
+      call('l', 'Read', { file_path: '\\\\wsl.localhost\\Ubuntu\\home\\jsmith-acct' }),
+      call('m', 'Read', { file_path: '//wsl$/Ubuntu/home/jsmith-acct' }),
+      call('n', 'Read', { file_path: '/export/home/jsmith-acct' }),
     );
-    const [lower, windows, mac, drive, home, profile, below, wsl, wslSlash, gitBash, immutable] = toolsOf(skeleton);
-    for (const folder of [lower, windows, mac, drive, wsl, wslSlash, gitBash, immutable]) expect(folder).not.toHaveProperty('names');
+    const [lower, windows, mac, drive, home, profile, below, wsl, wslSlash, gitBash, immutable, wslShare, wslDollar, exportHome] = toolsOf(skeleton);
+    for (const folder of [lower, windows, mac, drive, wsl, wslSlash, gitBash, immutable, wslShare, wslDollar, exportHome]) expect(folder).not.toHaveProperty('names');
     expect(home?.names).toEqual(names('file', 'plan.md'));
     expect(profile?.names).toEqual(names('file', 'roadmap.md'));
     // A file in the home folder is a file: only the folder is the account name.
@@ -382,13 +385,89 @@ describe('what is dropped from the names', () => {
   });
 
   it('reads the name of every whole-word reference form, and of nothing else', () => {
-    const forms = ['$BUILD_ID', '${BUILD_ID}', '"$BUILD_ID"', '"${BUILD_ID}"', '$env:BUILD_ID', '$ENV:BUILD_ID', '${env:BUILD_ID}', '$script:BUILD_ID', '$Global:BUILD_ID', '%BUILD_ID%', '"%BUILD_ID%"'];
+    const forms = ['$BUILD_ID', '${BUILD_ID}', '"$BUILD_ID"', '"${BUILD_ID}"', '$env:BUILD_ID', '$ENV:BUILD_ID', '${env:BUILD_ID}', '$script:BUILD_ID', '$Global:BUILD_ID', '"${Script:BUILD_ID}"'];
     const skeleton = skeletonOfLines({ redact, terms: [] }, ...forms.map((form, at) => call(`r${String(at)}`, 'Bash', { command: `deploy --region ${form}` })));
     const tools = toolsOf(skeleton);
     expect(tools).toHaveLength(forms.length);
     for (const [at, form] of forms.entries()) expect(tools[at]?.names, form).toEqual(names('env', 'BUILD_ID'));
     // Not the scope word, and not a name taken from a longer word.
-    for (const value of ['"name":"env"', '"name":"script"', '"name":"Global"']) expect(bytesOf(skeleton)).not.toContain(value);
+    for (const value of ['"name":"env"', '"name":"script"', '"name":"Global"', '"name":"Script"']) expect(bytesOf(skeleton)).not.toContain(value);
+  });
+
+  it('reads no name out of a percent-wrapped word: no POSIX shell and no PowerShell expands it, so it is a literal', () => {
+    const skeleton = skeletonOfLines(
+      { redact, terms: [] },
+      call('a', 'Bash', { command: 'mysql --password %hunter2% --region eu_control' }),
+      call('b', 'Bash', { command: 'mysql --password "%hunter2%" --region eu_control' }),
+      call('c', 'Bash', { command: 'wp search-replace %site_name% acme' }),
+      call('d', 'Bash', { command: 'deploy --region eu_control %BUILD_ID% "%BUILD_ID%"' }),
+    );
+    const tools = toolsOf(skeleton);
+    for (const tool of [tools[0], tools[1], tools[3]]) expect(tool?.names).toEqual(names('flag', 'eu_control'));
+    expect(tools[2]?.names ?? []).toEqual([]);
+    for (const value of ['hunter2', 'site_name', 'BUILD_ID']) expect(bytesOf(skeleton)).not.toContain(value);
+  });
+
+  it('reads no name after a scope word that is an ordinary POSIX variable name, and still reads the three PowerShell scopes the form lists', () => {
+    const skeleton = skeletonOfLines(
+      { redact, terms: [] },
+      call('a', 'Bash', { command: 'mysql --password $local:hunter2 --region eu_control' }),
+      call('b', 'Bash', { command: 'curl -u $private:hunter3 https://example.test' }),
+      call('c', 'Bash', { command: 'docker run -v $local:secret_mount img' }),
+      call('d', 'Bash', { command: 'mysql --password ${using:hunter4} --region eu_control' }),
+      call('e', 'Bash', { command: 'mysql --password $env:hunter5' }),
+      call('f', 'Bash', { command: 'deploy --region $script:SCRIPT_REGION $global:GLOBAL_ZONE ${env:ENV_ZONE}' }),
+    );
+    const tools = toolsOf(skeleton);
+    expect(tools[0]?.names).toEqual(names('flag', 'eu_control'));
+    expect(tools[1]?.names ?? []).toEqual([]);
+    expect(tools[2]?.names ?? []).toEqual([]);
+    expect(tools[3]?.names).toEqual(names('flag', 'eu_control'));
+    // `mysql --password $env:hunter5` still sends hunter5 as a variable name: `$env:` is a form the rule lists, and on a POSIX shell its text after the colon is read.
+    expect(tools[4]?.names).toEqual(names('env', 'hunter5'));
+    expect(tools[5]?.names).toEqual(names('env', 'ENV_ZONE', 'GLOBAL_ZONE', 'SCRIPT_REGION'));
+    for (const value of ['hunter2', 'hunter3', 'hunter4', 'secret_mount', '"name":"local"', '"name":"private"', '"name":"using"']) expect(bytesOf(skeleton)).not.toContain(value);
+  });
+
+  it('keeps a command substitution inside double quotes in one word, so a quote inside it cannot flip the quote state and bare a single-quoted variable', () => {
+    const skeleton = skeletonOfLines(
+      { redact, terms: [] },
+      call('a', 'Bash', { command: `echo "$(echo "it's" 'a $hunter2 b')"` }),
+      call('b', 'Bash', { command: `echo "$(git log --format="it's" && git commit -m 'charge $customer_name twice')"` }),
+      call('c', 'Bash', { command: 'echo "`echo "it\'s" \'a $hunter3 b\'`"' }),
+      call('d', 'Bash', { command: `echo "$(echo "$(echo "it's")" 'x $hunter4 y')"` }),
+      call('e', 'Bash', { command: `echo "\${x:-"it's"}" 'a $hunter5 b'` }),
+    );
+    for (const tool of toolsOf(skeleton)) expect(tool.names ?? []).toEqual([]);
+    for (const value of ['hunter2', 'customer_name', 'hunter3', 'hunter4', 'hunter5']) expect(bytesOf(skeleton)).not.toContain(value);
+  });
+
+  it('reads a substitution that never closes as the text it is, and a command that opens thousands of them in bounded work', () => {
+    const skeleton = skeletonOfLines(
+      { redact, terms: [] },
+      call('a', 'Bash', { command: `echo ${'"$('.repeat(50000)} ' $hunter2 '` }),
+      call('b', 'Bash', { command: 'echo "`' + '"`'.repeat(50000) + ` ' $hunter3 '` }),
+      // PowerShell's backtick escapes the dollar and is no opener: the flag after it is still read.
+      call('c', 'Bash', { command: 'Write-Output "abc`$hunter4" --region eu_ps' }),
+    );
+    const tools = toolsOf(skeleton);
+    expect(tools[2]?.names).toEqual(names('flag', 'eu_ps'));
+    for (const value of ['hunter2', 'hunter3', 'hunter4']) expect(bytesOf(skeleton)).not.toContain(value);
+  });
+
+  it('reads a backslash pair as a pair, so the second backslash does not escape the quote after it', () => {
+    const skeleton = skeletonOfLines(
+      { redact, terms: [] },
+      call('a', 'Bash', { command: String.raw`grep "C:\\" f && echo "it's" && git commit -m 'charge $customer_name twice'` }),
+      call('b', 'Bash', { command: String.raw`echo "C:\\" "it's" ' $hunter2 '` }),
+      call('c', 'Bash', { command: String.raw`echo a\\'b $hunter3 c'` }),
+      call('d', 'Bash', { command: String.raw`echo "C:\\" "$BUILD_ID"` }),
+    );
+    const tools = toolsOf(skeleton);
+    for (const tool of tools.slice(0, 3)) expect(tool.names ?? []).toEqual([]);
+    for (const value of ['customer_name', 'hunter2', 'hunter3']) expect(bytesOf(skeleton)).not.toContain(value);
+    // The control: the double-quoted reference after a pair is a real one.
+    expect(tools[3]?.names).toEqual(names('env', 'BUILD_ID'));
   });
 
   it('reads no flag value after a credential-named flag in the name read itself', () => {
@@ -457,5 +536,46 @@ describe('a variable reference inside a word', () => {
         });
       }
     }
+  }
+});
+
+// The quote state of a command is what decides whether text is a bare word: single-quoted text that the reader takes for bare words turns `$hunter2` into a name. Every piece below can move that state when it is read wrongly, so each is
+// set before a single-quoted planted reference, glued to it and apart from it, and a control reference after it must still be read.
+describe('a piece that can move the quote state, before a single-quoted reference', () => {
+  // `controlled: false` marks a piece after which the words of the command are not read at all: a group that closes (`$(...)` unquoted) ends the command, and the words after it start one whose head is the quoted target, which names no program.
+  const MOVERS: readonly { kind: string; piece: string; controlled?: boolean }[] = [
+    { kind: 'an apostrophe inside double quotes', piece: `"it's"` },
+    { kind: 'an escaped double quote then an apostrophe inside double quotes', piece: String.raw`"say \"it's\""` },
+    { kind: 'a backslash pair inside double quotes', piece: String.raw`"C:\\"` },
+    { kind: 'a backslash pair outside quotes', piece: String.raw`C:\\` },
+    { kind: 'a backslash pair before a quote', piece: String.raw`a\\'b'` },
+    { kind: 'a backslash pair before a double-quoted piece', piece: String.raw`a\\"b"` },
+    { kind: 'an escaped apostrophe outside quotes', piece: String.raw`it\'s` },
+    { kind: 'an escaped double quote outside quotes', piece: String.raw`say\"hi` },
+    { kind: 'an ANSI-C string holding an escaped apostrophe', piece: String.raw`$'it\'s'` },
+    { kind: 'a command substitution holding quotes', piece: `$(echo "it's")`, controlled: false },
+    { kind: 'a command substitution in double quotes holding quotes', piece: `"$(echo "it's")"` },
+    { kind: 'a command substitution in double quotes holding a double quote inside single quotes', piece: `"$(echo 'a"b')"` },
+    { kind: 'two nested command substitutions in double quotes', piece: `"$(echo "$(echo "it's")")"` },
+    { kind: 'a backtick substitution holding quotes', piece: '`echo "it\'s"`' },
+    { kind: 'a backtick substitution in double quotes holding quotes', piece: '"`echo "it\'s"`"' },
+    { kind: 'a command substitution in double quotes holding a backslash pair', piece: String.raw`"$(echo "C:\\")"` },
+    { kind: 'a parameter expansion in double quotes holding a double-quoted apostrophe', piece: `"\${x:-"it's"}"` },
+    { kind: 'a parameter expansion in double quotes holding a substitution that holds quotes', piece: `"\${x:-"$(echo "it's")"}"` },
+    { kind: 'an escaped dollar before a parenthesis in double quotes', piece: String.raw`"\$(it"` },
+  ];
+  const TARGETS: readonly string[] = [`' $hunter2 '`, `'$hunter2'`, `'a $hunter2 b'`];
+  const SEPARATORS: readonly string[] = [' ', ''];
+
+  for (const mover of MOVERS) {
+    it(`reads no name out of a single-quoted reference after ${mover.kind}, and still reads a double-quoted reference after it`, () => {
+      const commands = TARGETS.flatMap((target) => SEPARATORS.map((separator) => `mysql --region eu_control ${mover.piece}${separator}${target} "$BUILD_ID"`));
+      const skeleton = skeletonOfLines({ redact, terms: [] }, ...commands.map((command, at) => call(`m${String(at)}`, 'Bash', { command })));
+      const tools = toolsOf(skeleton);
+      expect(tools).toHaveLength(commands.length);
+      const expected = mover.controlled === false ? names('flag', 'eu_control') : [...names('env', 'BUILD_ID'), ...names('flag', 'eu_control')];
+      commands.forEach((command, at) => expect(tools[at]?.names, command).toEqual(expected));
+      expect(JSON.stringify(skeleton)).not.toContain('hunter2');
+    });
   }
 });

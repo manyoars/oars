@@ -746,6 +746,48 @@ const redactCommand = (command: string, redact: Redactor): string =>
 const MASK = /^<(?:secret|email|org-domain)>/;
 const ONLY_MASKS = /^(?:<(?:secret|email|org-domain)>)+$/;
 
+/** Where the single-quoted text that opens at `open` ends: the closing quote, or the end of the text. Bash's ANSI-C string (`$'it\'s'`) honors a backslash, so its `\'` is inside it; any other single-quoted text ends at the next `'`. */
+const singleQuotedEnd = (text: string, open: number): number => {
+  const ansi = text.charAt(open - 1) === '$';
+  let end = open + 1;
+  while (end < text.length && text.charAt(end) !== "'") end += ansi && text.charAt(end) === '\\' ? 2 : 1;
+  return Math.min(end, text.length);
+};
+
+/** What closes each opener that can hold quotes of its own inside a double-quoted piece: a command substitution (`$(`, a backtick) or a parameter expansion (`${x:-"a b"}`). */
+const CLOSERS: ReadonlyMap<string, string> = new Map([
+  ['$(', ')'],
+  ['${', '}'],
+  ['`', '`'],
+]);
+
+/**
+ * Where the substitution or expansion that began just before `from`, closed by `first`, ends: past its closing character, or -1 when it never closes (PowerShell's backtick is an escape, not an opener, and a torn command has no end).
+ * Whatever quoting it holds is its own: a quote inside it never ends the double-quoted piece that carries it, so a quote cannot move the reader's state. An explicit stack keeps a crafted command that nests without end from
+ * overflowing the call stack, and `budget` (characters left to scan across one read) keeps one that opens thousands of them from costing a scan to the end of the text each.
+ */
+const substitutionEnd = (text: string, from: number, first: string, budget: { left: number }): number => {
+  const stack: string[] = [first];
+  let at = from;
+  // Inside a double-quoted piece or an expansion a single quote and a bare parenthesis are text; inside a substitution they quote and group.
+  while (at < text.length && stack.length > 0 && budget.left > 0) {
+    budget.left -= 1;
+    const char = text.charAt(at);
+    const top = stack.at(-1);
+    const opener = CLOSERS.get(char === '$' ? char + text.charAt(at + 1) : char);
+    at += 1;
+    if (char === '\\') at += 1;
+    else if (char === top) stack.pop();
+    else if (opener !== undefined) {
+      stack.push(opener);
+      at += char === '$' ? 1 : 0;
+    } else if (char === '"') stack.push('"');
+    else if (char === "'" && (top === ')' || top === '`')) at = singleQuotedEnd(text, at - 1) + 1;
+    else if (char === '(' && (top === ')' || top === '`')) stack.push(')');
+  }
+  return stack.length === 0 ? at : -1;
+};
+
 const tokenize = (text: string): ShellToken[] => {
   const tokens: ShellToken[] = [];
   let word = '';
@@ -755,6 +797,7 @@ const tokenize = (text: string): ShellToken[] => {
   let at = 0;
   // Where the word's raw source starts in `text`: a word that is exactly one variable reference carries that variable, and any other word carries none, whatever its quotes and `$` marks hold.
   let start = -1;
+  const budget = { left: 16 * text.length + 1024 };
   const flush = (): void => {
     if (started && redirected) redirected = false;
     else if (started && !quoted && (word === '{' || word === '}')) tokens.push(word === '{' ? 'open' : 'close');
@@ -780,11 +823,7 @@ const tokenize = (text: string): ShellToken[] => {
     const next = text.charAt(at + 1);
     const here = at;
     if (char === "'") {
-      // Bash's ANSI-C string (`$'it\'s'`) honors a backslash, so its `\'` is inside it; any other single-quoted text ends at the next `'`.
-      const ansi = text.charAt(at - 1) === '$';
-      let end = at + 1;
-      while (end < text.length && text.charAt(end) !== "'") end += ansi && text.charAt(end) === '\\' ? 2 : 1;
-      const stop = Math.min(end, text.length);
+      const stop = singleQuotedEnd(text, at);
       word += text.slice(at + 1, stop);
       quoted = true;
       started = true;
@@ -794,17 +833,34 @@ const tokenize = (text: string): ShellToken[] => {
       started = true;
       at += 1;
       while (at < text.length && text.charAt(at) !== '"') {
-        if (text.charAt(at) === '\\' && text.charAt(at + 1) === '\n') {
+        const inner = text.charAt(at);
+        const after = text.charAt(at + 1);
+        const opener = inner === '$' ? inner + after : inner;
+        const closer = CLOSERS.get(opener);
+        const end = closer === undefined ? -1 : substitutionEnd(text, at + opener.length, closer, budget);
+        if (inner === '\\' && (after === '\\' || after === '$' || after === '`')) {
+          // A backslash pair is one escaped backslash, so the second never escapes the quote after it; an escaped dollar or backtick opens nothing.
+          word += inner + after;
           at += 2;
-        } else if (text.charAt(at) === '\\' && text.charAt(at + 1) === '"') {
+        } else if (inner === '\\' && after === '\n') {
+          at += 2;
+        } else if (inner === '\\' && after === '"') {
           word += '"';
           at += 2;
+        } else if (end >= 0) {
+          // A command substitution stays whole in this word: a quote inside it is its own, and never closes this piece. One that never closes is read as the text it is.
+          word += text.slice(at, end);
+          at = end;
         } else {
-          word += text.charAt(at);
+          word += inner;
           at += 1;
         }
       }
       at += 1;
+    } else if (char === '\\' && next === '\\') {
+      word += '\\\\';
+      started = true;
+      at += 2;
     } else if ((char === '\\' || char === '`') && next === '\n') {
       at += 2;
     } else if (char === '\\' && next !== '' && /[\s&|;()<>'"]/.test(next)) {
