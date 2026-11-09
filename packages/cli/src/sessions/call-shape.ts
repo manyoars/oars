@@ -255,8 +255,8 @@ export interface ArgName {
 export interface CommandWord {
   text: string;
   quoted: boolean;
-  /** Some part of the word sat in single quotes: no shell expands a `$name` there, so the word holds no variable reference. A mixed word is skipped whole, which sends less, never more. */
-  literal?: boolean;
+  /** The variable the whole word references: set only when the word's raw source, quotes included, is exactly one reference (`variableOf`). Every other word holds none, whatever `$` it contains. */
+  variable?: string;
 }
 
 /** A shell command's words as the name read takes them: those before the program (assignments, wrappers), the program's own word, and its arguments. */
@@ -268,13 +268,19 @@ export interface CommandWords {
 
 const DIR_ARGS = words('cwd workdir directory dir path');
 const ENV_ARGS = words('env environment envs');
-const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const ENV_ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=/;
-// PowerShell's `$env:NAME` (and `${env:NAME}`) is read first, so it names the variable and not the word `env`. A `$` after a backslash or a PowerShell backtick is escaped, so it names nothing (`abc\$tail`), and one
-// after another `$` is the shell's process id with literal text behind it (`$$name`); an even run of backslashes before a real expansion is skipped too, which sends less, never more.
-const ENV_REFERENCE = /(?<![\\`$])\$\{?[Ee][Nn][Vv]:([A-Za-z_][A-Za-z0-9_]*)|(?<![\\`$])\$(?:\{([A-Za-z_][A-Za-z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*))/g;
-/** The variable names a piece of text references, in order. The tokenizer reads a word through this once per piece, so a `$` and its name that sit in different pieces (`$"x"`, `abc"$"x`) name nothing. */
-export const variableNames = (text: string): string[] => [...text.matchAll(ENV_REFERENCE)].map((match) => match[1] ?? match[2] ?? match[3] ?? '');
+const VARIABLE_NAME = '[A-Za-z_][A-Za-z0-9_]*';
+const ENV_NAME = new RegExp(`^${VARIABLE_NAME}$`);
+const ENV_ASSIGNMENT = new RegExp(`^(${VARIABLE_NAME})=`);
+// A PowerShell scope word before the name (`$env:NAME`, `$script:NAME`) is not part of it, in any case.
+const WHOLE_REFERENCE = new RegExp(`^(?:\\$(?:(?:env|script|global|local|private|using):)?(${VARIABLE_NAME})|\\$\\{(?:(?:env|script|global|local|private|using):)?(${VARIABLE_NAME})\\}|%(${VARIABLE_NAME})%)$`, 'i');
+/**
+ * The one rule for a variable reference: a word names a variable only when its raw source, quotes included, is exactly one reference: `$NAME`, `${NAME}`, a PowerShell `$env:NAME` or scope form (`$script:NAME`), or `%NAME%`,
+ * bare or in double quotes. Every other word is literal: a `$` inside a longer word, a quote, a command substitution, or an escape names nothing, which sends less and never more. The tokenizer reads each word through this.
+ */
+export const variableOf = (raw: string): string | undefined => {
+  const match = WHOLE_REFERENCE.exec(/^"(.*)"$/s.exec(raw)?.[1] ?? raw);
+  return match?.[1] ?? match?.[2] ?? match?.[3];
+};
 // A path that is exactly a home folder (`/home/jsmith`, `C:\Users\jsmith`, or the WSL mount of one, `/mnt/c/Users/jsmith`): its last segment is the machine's account name, not a file.
 const HOME_FOLDER = /^(?:[A-Za-z]:|[\\/]mnt[\\/][A-Za-z])?[\\/](?:home|users)[\\/][^\\/]+[\\/]*$/i;
 // A long flag with its value joined (`--region=eu`), or a flag word on its own: a long flag, or one short letter. A cluster (`-am`) or a short flag with its value attached holds no flag name of its own.
@@ -365,10 +371,7 @@ export const argNamesOf = (
       const assigned = word.quoted ? null : ENV_ASSIGNMENT.exec(word.text)?.[1];
       if (assigned !== undefined && assigned !== null) add('env', assigned);
     }
-    for (const word of [...before, head, ...args]) {
-      if (word.literal === true) continue;
-      for (const name of variableNames(word.text)) add('env', name);
-    }
+    for (const word of [...before, head, ...args]) if (word.variable !== undefined) add('env', word.variable);
     for (const name of flagValueNames(head, args)) add('flag', name);
   }
   return [...held.values()].sort((a, b) => NAME_KINDS.indexOf(a.kind) - NAME_KINDS.indexOf(b.kind) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));

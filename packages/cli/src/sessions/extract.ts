@@ -7,7 +7,7 @@ import { posix } from 'node:path';
 import { ACTION_TABLES, actionOf, shellOf, type ActionTable, type CanonicalAction } from './actions.js';
 import { exploreCount, strataOf } from './strata.js';
 import { closedFrame, frameIdOf, repoFilesFromIndex, repoSizeOf, stackOf, utcDay } from './frame.js';
-import { argClassOf, argFeaturesOf, argNamesOf, argValuesOf, changeKindOf, targetClassOf, variableNames, type CommandWords, type ComparedCall } from './call-shape.js';
+import { argClassOf, argFeaturesOf, argNamesOf, argValuesOf, changeKindOf, targetClassOf, variableOf, type CommandWords, type ComparedCall } from './call-shape.js';
 import { CLOSED_ARG_VALUES, LITERAL, type RepoSize } from './public-vocabulary.js';
 import { linkSteps } from './graph.js';
 import { callIdentity, shellIdentity, UNREAD_SHELL, type WordOfCommand } from './identity.js';
@@ -746,33 +746,26 @@ const redactCommand = (command: string, redact: Redactor): string =>
 const MASK = /^<(?:secret|email|org-domain)>/;
 const ONLY_MASKS = /^(?:<(?:secret|email|org-domain)>)+$/;
 
-/**
- * The one rule for a variable reference: it is read only when its `$`, its optional `{`, and its whole name sit in one piece of the word, a piece being the unquoted or double-quoted run between two quote marks or a line
- * continuation. A word whose pieces together read a name that no single piece reads alone (`$"x"`, `abc$"x"`, `abc"$"x`, `$ab"cd"`, `${"x"}`) is literal, which sends less and never more. `cuts` are the offsets in `word` where a piece ended.
- */
-const splitsReference = (word: string, cuts: readonly number[]): boolean => {
-  const edges = [0, ...cuts, word.length];
-  const pieces = edges.slice(1).map((end, at) => word.slice(edges[at], end));
-  return variableNames(word).join(' ') !== pieces.flatMap(variableNames).join(' ');
-};
-
 const tokenize = (text: string): ShellToken[] => {
   const tokens: ShellToken[] = [];
   let word = '';
   let quoted = false;
-  let literal = false;
   let started = false;
   let redirected = false;
-  let cuts: number[] = [];
+  let at = 0;
+  // Where the word's raw source starts in `text`: a word that is exactly one variable reference carries that variable, and any other word carries none, whatever its quotes and `$` marks hold.
+  let start = -1;
   const flush = (): void => {
     if (started && redirected) redirected = false;
     else if (started && !quoted && (word === '{' || word === '}')) tokens.push(word === '{' ? 'open' : 'close');
-    else if (started) tokens.push(literal || splitsReference(word, cuts) ? { text: word, quoted, literal: true } : { text: word, quoted });
+    else if (started) {
+      const variable = variableOf(text.slice(start, at));
+      tokens.push(variable === undefined ? { text: word, quoted } : { text: word, quoted, variable });
+    }
     word = '';
     quoted = false;
-    literal = false;
     started = false;
-    cuts = [];
+    start = -1;
   };
   const op = (token: ShellOp): void => {
     flush();
@@ -782,32 +775,26 @@ const tokenize = (text: string): ShellToken[] => {
     if (token === '\n' && (last === undefined || last === '&&' || last === '||' || last === '|' || last === '\n')) return;
     tokens.push(token);
   };
-  let at = 0;
   while (at < text.length) {
     const char = text.charAt(at);
     const next = text.charAt(at + 1);
+    const here = at;
     if (char === "'") {
-      // Bash's ANSI-C string (`$'it\'s'`) honors a backslash, so its `\'` is inside it; any other single-quoted text ends at the next `'`. A `$` that an escape put before the quote is read the same way, which keeps more text
-      // inside the string, never less.
+      // Bash's ANSI-C string (`$'it\'s'`) honors a backslash, so its `\'` is inside it; any other single-quoted text ends at the next `'`.
       const ansi = text.charAt(at - 1) === '$';
       let end = at + 1;
       while (end < text.length && text.charAt(end) !== "'") end += ansi && text.charAt(end) === '\\' ? 2 : 1;
       const stop = Math.min(end, text.length);
       word += text.slice(at + 1, stop);
       quoted = true;
-      literal = true;
       started = true;
       at = stop + 1;
     } else if (char === '"') {
-      // A `$` right before the opening quote makes a locale string (`$"..."`), which is never read, the way an ANSI-C string is not.
-      if (word.endsWith('$')) literal = true;
       quoted = true;
       started = true;
-      cuts.push(word.length);
       at += 1;
       while (at < text.length && text.charAt(at) !== '"') {
         if (text.charAt(at) === '\\' && text.charAt(at + 1) === '\n') {
-          cuts.push(word.length);
           at += 2;
         } else if (text.charAt(at) === '\\' && text.charAt(at + 1) === '"') {
           word += '"';
@@ -818,9 +805,7 @@ const tokenize = (text: string): ShellToken[] => {
         }
       }
       at += 1;
-      cuts.push(word.length);
     } else if ((char === '\\' || char === '`') && next === '\n') {
-      cuts.push(word.length);
       at += 2;
     } else if (char === '\\' && next !== '' && /[\s&|;()<>'"]/.test(next)) {
       word += next;
@@ -873,6 +858,7 @@ const tokenize = (text: string): ShellToken[] => {
       started = true;
       at += 1;
     }
+    if (started && start < 0) start = here;
   }
   flush();
   return tokens;

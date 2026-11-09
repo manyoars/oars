@@ -1,7 +1,7 @@
 // Layer 2 of a call's parameters: the names a call touched (file basenames, the project's directory names, environment variable names, flag values that are names, a custom agent's name), sent as the
 // names they are with no floor, and what is dropped from them. Every name here is invented.
 import { describe, expect, it } from 'vitest';
-import { argNamesOf, type ArgName } from './call-shape.js';
+import { argNamesOf, type ArgName, type CommandWord } from './call-shape.js';
 import { captureSession } from './extract.js';
 import { printOf, sessionsFrom, store, storedNames } from './pool-fixture.js';
 import { FIELD_ROWS } from './pool-outbox.js';
@@ -41,21 +41,27 @@ describe('name tokens of a call', () => {
 
   it('reads environment variable names from assignments, references, and an env object, never a value', () => {
     const words = (...texts: string[]) => texts.map((text) => ({ text, quoted: false }));
-    const command = { before: words('PGHOST=db.internal', 'PORT=5432'), head: { text: 'pytest', quoted: false }, args: [...words('-k', 'test_checkout'), { text: 'echo $BUILD_ID and ${REGION}x', quoted: true }] };
+    // The tokenizer marks a word that is exactly a reference (`$BUILD_ID`, `"${REGION}"`) with the variable's name; a word that merely holds one, such as the quoted sentence here, carries none and reads nothing.
+    const reference = (text: string, quoted: boolean, variable: string): CommandWord => ({ text, quoted, variable });
+    const command = {
+      before: words('PGHOST=db.internal', 'PORT=5432'),
+      head: { text: 'pytest', quoted: false },
+      args: [...words('-k', 'test_checkout'), reference('$BUILD_ID', false, 'BUILD_ID'), reference('${REGION}', true, 'REGION'), { text: 'echo $SENTENCE_ONLY', quoted: true }],
+    };
     expect(argNamesOf('Bash', { command: 'x' }, '/w', '/w', [command], CLOSED_ARG_VALUES)).toEqual([...names('env', 'BUILD_ID', 'PGHOST', 'PORT', 'REGION'), ...names('flag', 'test_checkout')]);
     expect(argNamesOf('mcp__x__run', { env: { API_BASE: 'https://x', LOG_LEVEL: 'debug' } }, '/w', '/w', [], CLOSED_ARG_VALUES)).toEqual(names('env', 'API_BASE', 'LOG_LEVEL'));
   });
 
   it('reads a flag value that is a name, and not one that is text, a path, a number, or a variable', () => {
-    const w = (text: string, quoted = false) => ({ text, quoted });
-    const read = (...args: ReturnType<typeof w>[]) => argNamesOf('Bash', { command: 'x' }, '/w', '/w', [{ before: [], head: w('tool'), args }], CLOSED_ARG_VALUES);
+    const w = (text: string, quoted = false, variable?: string): CommandWord => (variable === undefined ? { text, quoted } : { text, quoted, variable });
+    const read = (...args: CommandWord[]) => argNamesOf('Bash', { command: 'x' }, '/w', '/w', [{ before: [], head: w('tool'), args }], CLOSED_ARG_VALUES);
     expect(read(w('--project'), w('billing-web'), w('--region=eu_west'), w('--shard'), w('3'))).toEqual(names('flag', 'billing-web', 'eu_west'));
     // `-k` names a test selection on pytest, and reads nothing on another program.
-    const readOn = (head: string, ...args: ReturnType<typeof w>[]) => argNamesOf('Bash', { command: 'x' }, '/w', '/w', [{ before: [], head: w(head), args }], CLOSED_ARG_VALUES);
+    const readOn = (head: string, ...args: CommandWord[]) => argNamesOf('Bash', { command: 'x' }, '/w', '/w', [{ before: [], head: w(head), args }], CLOSED_ARG_VALUES);
     expect(readOn('pytest', w('-k'), w('test_login'))).toEqual(names('flag', 'test_login'));
     expect(readOn('PYTEST.EXE', w('-k'), w('test_login'))).toEqual(names('flag', 'test_login'));
     expect(readOn('tool', w('-k'), w('test_login'))).toEqual([]);
-    expect(read(w('-m'), w('shipping'), w('--out'), w('dist/app.js'), w('--home'), w('$HOME'), w('--name'), w('two words', true))).toEqual(names('env', 'HOME'));
+    expect(read(w('-m'), w('shipping'), w('--out'), w('dist/app.js'), w('--home'), w('$HOME', false, 'HOME'), w('--name'), w('two words', true))).toEqual(names('env', 'HOME'));
     // A short cluster and a joined value carry no flag name of their own.
     expect(read(w('-am'), w('shipping'), w('-ftest_x'))).toEqual([]);
   });
@@ -339,6 +345,34 @@ describe('what is dropped from the names', () => {
     for (const value of ['hunter2', 'hunter3', 'hunter4', 'hunter5', 'hunter6', 'customer_name', 'charge']) expect(bytesOf(skeleton)).not.toContain(value);
   });
 
+  it('reads no variable name out of single-quoted text inside a command substitution, in any shell, since a word is a reference only when it is exactly one', () => {
+    const skeleton = skeletonOfLines(
+      { redact, terms: [] },
+      call('a', 'Bash', { command: `echo "$(mysql --password 'abc$hunter2')"` }),
+      call('b', 'Bash', { command: `curl -H "X: $(vault read 'k$opaquetoken')" https://example.test` }),
+      call('c', 'Bash', { command: 'echo "`mysql --password \'abc$hunter4\'`"' }),
+      call('d', 'Bash', { command: `Write-Output "$(Get-Thing 'abc$hunter5')"` }),
+      call('e', 'Bash', { command: `git commit -m "$(printf '%s' 'charge $customer_name twice')"` }),
+      call('f', 'Bash', { command: 'deploy --region eu_control prefix-$PREFIXED_NAME ${PORT_DEFAULT:-8080} "a $SENTENCE_NAME b"' }),
+      call('g', 'Bash', { command: 'deploy --region eu_control FOO_ASSIGNED=$ASSIGNED_VALUE' }),
+    );
+    const tools = toolsOf(skeleton);
+    for (const tool of tools.slice(0, 5)) expect(tool?.names ?? []).toEqual([]);
+    expect(tools[5]?.names).toEqual(names('flag', 'eu_control'));
+    expect(tools[6]?.names).toEqual(names('flag', 'eu_control'));
+    for (const value of ['hunter2', 'opaquetoken', 'hunter4', 'hunter5', 'customer_name', 'PREFIXED_NAME', 'PORT_DEFAULT', 'SENTENCE_NAME', 'ASSIGNED_VALUE']) expect(bytesOf(skeleton)).not.toContain(value);
+  });
+
+  it('reads the name of every whole-word reference form, and of nothing else', () => {
+    const forms = ['$BUILD_ID', '${BUILD_ID}', '"$BUILD_ID"', '"${BUILD_ID}"', '$env:BUILD_ID', '$ENV:BUILD_ID', '${env:BUILD_ID}', '$script:BUILD_ID', '$Global:BUILD_ID', '%BUILD_ID%', '"%BUILD_ID%"'];
+    const skeleton = skeletonOfLines({ redact, terms: [] }, ...forms.map((form, at) => call(`r${String(at)}`, 'Bash', { command: `deploy --region ${form}` })));
+    const tools = toolsOf(skeleton);
+    expect(tools).toHaveLength(forms.length);
+    forms.forEach((form, at) => expect(tools[at]?.names, form).toEqual(names('env', 'BUILD_ID')));
+    // Not the scope word, and not a name taken from a longer word.
+    for (const value of ['"name":"env"', '"name":"script"', '"name":"Global"']) expect(bytesOf(skeleton)).not.toContain(value);
+  });
+
   it('reads no flag value after a credential-named flag in the name read itself', () => {
     const w = (text: string) => ({ text, quoted: false });
     const read = (...args: ReturnType<typeof w>[]) => argNamesOf('Bash', { command: 'x' }, '/w', '/w', [{ before: [], head: w('tool'), args }], CLOSED_ARG_VALUES);
@@ -351,61 +385,59 @@ describe('what is dropped from the names', () => {
   });
 });
 
-// The rule for a variable reference: it is read only when its `$`, its optional `{`, and its whole name sit in one unquoted or double-quoted piece of the word, and the word holds no piece that no shell expands. Every word below is
-// built from two pieces (and an empty one between them) of each kind, with the reference cut at every position, so a form the tokenizer joins into a name is a failing row here, not a new case to list.
-describe('a variable reference whose dollar and name sit in different pieces of a word', () => {
+// The rule for a variable reference: a word names a variable only when its raw source, quotes included, is exactly one reference (`$NAME`, `${NAME}`, or either in double quotes), so no quote, substitution, or longer word can join a
+// fragment of text into a name. Every word below is built from two pieces (and a piece between them) of each kind, with the reference cut at every position, then set inside each wrapper that holds a command, so a form that reads a
+// name it should not is a failing row here, not a new case to list.
+describe('a variable reference inside a word', () => {
   interface PieceKind {
     kind: string;
     wrap: (text: string) => string;
-    expands: boolean;
   }
   const PIECE_KINDS: readonly PieceKind[] = [
-    { kind: 'unquoted', wrap: (text) => text, expands: true },
-    { kind: 'single-quoted', wrap: (text) => `'${text}'`, expands: false },
-    { kind: 'double-quoted', wrap: (text) => `"${text}"`, expands: true },
-    { kind: 'ANSI-C', wrap: (text) => `$'${text}'`, expands: false },
-    { kind: 'locale', wrap: (text) => `$"${text}"`, expands: false },
+    { kind: 'unquoted', wrap: (text) => text },
+    { kind: 'single-quoted', wrap: (text) => `'${text}'` },
+    { kind: 'double-quoted', wrap: (text) => `"${text}"` },
+    { kind: 'ANSI-C', wrap: (text) => `$'${text}'` },
+    { kind: 'locale', wrap: (text) => `$"${text}"` },
   ];
-  const MIDDLES: readonly { text: string; expands: boolean }[] = [
-    { text: '', expands: true },
-    { text: '""', expands: true },
-    { text: "''", expands: false },
-    { text: '$""', expands: false },
-  ];
+  const MIDDLES: readonly string[] = ['', '""', "''", '$""'];
   // A padded variant puts text on both sides of the reference, so a `$` sits at the start, the middle, and the end of a piece.
   const PADS: readonly (readonly [string, string])[] = [
     ['', ''],
     ['ab', '-z'],
   ];
+  // Where the word sits. In a command substitution the word is an argument of its own command, so a whole reference there is a real one; inside double quotes, or glued to a backtick, it is part of a longer word.
+  const WRAPPERS: readonly { kind: string; wrap: (word: string) => string; whole: boolean }[] = [
+    { kind: 'no wrapper', wrap: (word) => word, whole: true },
+    { kind: 'a command substitution', wrap: (word) => `$(cmd ${word})`, whole: true },
+    { kind: 'backticks', wrap: (word) => `\`cmd ${word}\``, whole: false },
+    { kind: 'a command substitution in double quotes', wrap: (word) => `"$(cmd ${word})"`, whole: false },
+    { kind: 'backticks in double quotes', wrap: (word) => `"\`cmd ${word}\`"`, whole: false },
+  ];
   const SECRET = 'hunter2';
+  const ACCEPTED = new Set([`$${SECRET}`, `\${${SECRET}}`, `"$${SECRET}"`, `"\${${SECRET}}"`]);
 
-  for (const first of PIECE_KINDS) {
-    for (const second of PIECE_KINDS) {
-      it(`reads a variable only from one piece, for ${first.kind} then ${second.kind}`, () => {
-        const rows = new Map<string, boolean>();
-        for (const template of [`$${SECRET}`, `\${${SECRET}}`]) {
-          for (let split = 0; split <= template.length; split += 1) {
-            for (const [pre, post] of PADS) {
-              for (const middle of MIDDLES) {
-                const word = first.wrap(pre + template.slice(0, split)) + middle.text + second.wrap(template.slice(split) + post);
-                // The reference is whole when no quote mark falls inside the `$`, the `{`, and the name (the closing `}` is not part of what is read, as `${PORT:-8080}` shows): at either end of the template, or when both
-                // pieces are plain text with nothing between them.
-                const whole = split === 0 || split >= template.replace(/}$/, '').length || (first.kind === 'unquoted' && second.kind === 'unquoted' && middle.text === '');
-                rows.set(word, whole && first.expands && second.expands && middle.expands);
-              }
+  for (const wrapper of WRAPPERS) {
+    for (const first of PIECE_KINDS) {
+      for (const second of PIECE_KINDS) {
+        it(`reads a variable only from a word that is exactly a reference, for ${first.kind} then ${second.kind} in ${wrapper.kind}`, () => {
+          const words = new Set<string>();
+          for (const template of [`$${SECRET}`, `\${${SECRET}}`]) {
+            for (let split = 0; split <= template.length; split += 1) {
+              for (const [pre, post] of PADS) for (const middle of MIDDLES) words.add(first.wrap(pre + template.slice(0, split)) + middle + second.wrap(template.slice(split) + post));
             }
           }
-        }
-        const words = [...rows.keys()];
-        const skeleton = skeletonOfLines({ redact, terms: [] }, ...words.map((word, at) => call(`c${String(at)}`, 'Bash', { command: `mysql --password ${word} --region eu_control` })));
-        const tools = toolsOf(skeleton);
-        expect(tools).toHaveLength(words.length);
-        words.forEach((word, at) => {
-          const reads = rows.get(word) === true;
-          expect(tools[at]?.names, word).toEqual(reads ? [...names('env', SECRET), ...names('flag', 'eu_control')] : names('flag', 'eu_control'));
-          if (!reads) for (const part of [SECRET, 'hunt', 'er2']) expect(JSON.stringify(tools[at]), word).not.toContain(part);
+          const list = [...words];
+          const skeleton = skeletonOfLines({ redact, terms: [] }, ...list.map((word, at) => call(`c${String(at)}`, 'Bash', { command: `mysql --region eu_control --password ${wrapper.wrap(word)}` })));
+          const tools = toolsOf(skeleton);
+          expect(tools).toHaveLength(list.length);
+          list.forEach((word, at) => {
+            const reads = wrapper.whole && ACCEPTED.has(word);
+            expect(tools[at]?.names, word).toEqual(reads ? [...names('env', SECRET), ...names('flag', 'eu_control')] : names('flag', 'eu_control'));
+            if (!reads) for (const part of [SECRET, 'hunt', 'er2']) expect(JSON.stringify(tools[at]), word).not.toContain(part);
+          });
         });
-      });
+      }
     }
   }
 });
