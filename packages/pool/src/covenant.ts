@@ -73,9 +73,9 @@ export const covenantAccept = async (request: Request, env: Env, texts: Readonly
   if (shown === undefined) return refuse(400, 'missing_field', 'An acceptance names the hash of the text it showed.', 'textSha256');
   if (shown !== screen.sha256) return refuse(409, 'covenant_text', `The text you saw is not the text of covenant ${version}.`, 'textSha256');
   const input = textField(body, 'input');
-  if (input === undefined || input.length > PROOF_FIELD_MAX) return refuse(400, 'missing_field', `An acceptance states how the person answered, in at most ${PROOF_FIELD_MAX} characters.`, 'input');
+  if (input === undefined || input.length > PROOF_FIELD_MAX) return refuse(400, 'missing_field', `An acceptance states how the person answered, in at most ${String(PROOF_FIELD_MAX)} characters.`, 'input');
   const client = textField(body, 'client');
-  if (client === undefined || client.length > PROOF_FIELD_MAX) return refuse(400, 'missing_field', `An acceptance names its client, in at most ${PROOF_FIELD_MAX} characters.`, 'client');
+  if (client === undefined || client.length > PROOF_FIELD_MAX) return refuse(400, 'missing_field', `An acceptance names its client, in at most ${String(PROOF_FIELD_MAX)} characters.`, 'client');
   // One transaction: the history row and the column the gate reads change together, and a repeat of a version on record keeps its first time and its first proof (`OR IGNORE`). A client that accepts without reading first still leaves the version's start on record.
   await env.DB.batch([
     servedOf(env, version),

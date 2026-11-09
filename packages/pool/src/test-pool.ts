@@ -324,7 +324,7 @@ const clientIds = (parsed: object): { [name: string]: string } => {
  */
 export const startPool = async (bindings: { [name: string]: string } = {}, options: { raw?: boolean } = {}): Promise<TestPool> => {
   // The Worker bundles the stand-in covenant texts for `v1` and `v2` in place of the shipped ones: the pool refuses an acceptance for a version it holds no text for, and the shipped module holds none until a covenant's wording is settled.
-  const standIn = { name: 'stand-in-covenant-texts', setup: (builder: PluginBuild): void => builder.onResolve({ filter: /(^|\/)covenant-texts\.js$/ }, () => ({ path: fileIn('./test-covenant-texts.ts') })) };
+  const standIn = { name: 'stand-in-covenant-texts', setup: (builder: PluginBuild): void => { builder.onResolve({ filter: /(^|\/)covenant-texts\.js$/ }, () => ({ path: fileIn('./test-covenant-texts.ts') })); } };
   const bundled = await build({ entryPoints: [fileIn('./worker.ts')], bundle: true, write: false, format: 'esm', platform: 'node', conditions: ['workerd', 'worker'], external: ['node:*'], plugins: [standIn] });
   const contents = bundled.outputFiles[0]?.text;
   if (contents === undefined) throw new Error('the bundle is empty');

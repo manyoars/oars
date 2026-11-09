@@ -151,6 +151,15 @@ const capture = (scene: Scene): Promise<unknown> => deposit(scene.staged.runtime
 
 const at = (value: unknown, name: string): unknown => (typeof value === 'object' && value !== null ? Reflect.get(value, name) : undefined);
 
+async function refusalOf(promise: Promise<unknown>): Promise<{ message: string; problem: unknown }> {
+  try {
+    await promise;
+  } catch (error) {
+    if (error instanceof Error) return { message: error.message, problem: Reflect.get(error, 'problem') };
+  }
+  throw new Error('the call was not refused');
+}
+
 describe('the raw prompt states when and what uploads', () => {
   it('names the sender a hook or command starts, covenant acceptance, and the skeleton-only/off exception', () => {
     expect(RAW_PROMPT).toContain('the sender that a session-end hook or any oars command starts (at most about once an hour) uploads');
@@ -1386,7 +1395,9 @@ describe('oars pool deposit --send', () => {
         const hash = await printedAndHash(scene);
         const pool = wire(acceptRoutes());
         atTerminal(scene, typed);
-        await expect(poolDeposit(scene.h.deps, sendOptions(hash, pool.via)), typed).rejects.toMatchObject({ problem: { code: 'covenant_not_accepted' }, message: expect.stringContaining(SCREEN.phrase) });
+        const refusal = await refusalOf(poolDeposit(scene.h.deps, sendOptions(hash, pool.via)));
+        expect(refusal.message, typed).toContain(SCREEN.phrase);
+        expect(refusal.problem, typed).toMatchObject({ code: 'covenant_not_accepted' });
         expect(paths(pool), typed).toEqual(['/v1/covenant']);
       }
     });
@@ -1406,7 +1417,9 @@ describe('oars pool deposit --send', () => {
       const hash = await printedAndHash(scene);
       const pool = wire(acceptRoutes());
       scene.staged.stdin.write(`${SCREEN.phrase}\n`);
-      await expect(poolDeposit(scene.h.deps, sendOptions(hash, pool.via))).rejects.toMatchObject({ problem: { code: 'covenant_not_accepted' }, message: expect.stringContaining('terminal') });
+      const refusal = await refusalOf(poolDeposit(scene.h.deps, sendOptions(hash, pool.via)));
+      expect(refusal.message).toContain('terminal');
+      expect(refusal.problem).toMatchObject({ code: 'covenant_not_accepted' });
       expect(paths(pool)).toEqual(['/v1/covenant']);
       expect(scene.h.err.join('')).not.toContain(SCREEN.text);
     });
@@ -1416,7 +1429,8 @@ describe('oars pool deposit --send', () => {
       const hash = await printedAndHash(scene);
       const pool = wire(acceptRoutes());
       scene.staged.stdin.write(`${SCREEN.phrase}\n`);
-      await expect(poolDeposit(scene.h.deps, { ...sendOptions(hash, pool.via), acceptCovenant: 'v1' })).rejects.toMatchObject({ message: expect.stringContaining('--accept-covenant') });
+      const refusal = await refusalOf(poolDeposit(scene.h.deps, { ...sendOptions(hash, pool.via), acceptCovenant: 'v1' }));
+      expect(refusal.message).toContain('--accept-covenant');
       expect(paths(pool)).toEqual(['/v1/covenant']);
     });
 
@@ -1438,7 +1452,8 @@ describe('oars pool deposit --send', () => {
       const hash = await printedAndHash(scene);
       const pool = wire(acceptRoutes());
       atTerminal(scene, SCREEN.phrase);
-      await expect(poolDeposit(scene.h.deps, { ...sendOptions(hash, pool.via), acceptCovenant: 'v0' })).rejects.toMatchObject({ message: expect.stringContaining('v1') });
+      const refusal = await refusalOf(poolDeposit(scene.h.deps, { ...sendOptions(hash, pool.via), acceptCovenant: 'v0' }));
+      expect(refusal.message).toContain('v1');
       expect(paths(pool)).toEqual(['/v1/covenant']);
       expect(scene.h.err.join('')).not.toContain(SCREEN.text);
     });
@@ -1448,7 +1463,9 @@ describe('oars pool deposit --send', () => {
       const hash = await printedAndHash(scene);
       const pool = wire(acceptRoutes(answer(200, { version: 'v1', accepted: false, screen: null })));
       atTerminal(scene, SCREEN.phrase);
-      await expect(poolDeposit(scene.h.deps, sendOptions(hash, pool.via))).rejects.toMatchObject({ problem: { code: 'covenant_not_accepted' }, message: expect.stringContaining('no text') });
+      const refusal = await refusalOf(poolDeposit(scene.h.deps, sendOptions(hash, pool.via)));
+      expect(refusal.message).toContain('no text');
+      expect(refusal.problem).toMatchObject({ code: 'covenant_not_accepted' });
       expect(paths(pool)).toEqual(['/v1/covenant']);
     });
 
