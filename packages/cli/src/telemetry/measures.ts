@@ -2,7 +2,7 @@
 // A measure is one observation in a cell: a latency in milliseconds, or a yes/no that rates are made from. The cell is (metric, dimension, value): `hook.pre-tool.latency` at harness
 // `claude-code`, version `2.1.5`. The reader is tolerant on purpose: the pool reads batches kept whole from any client, so a value that does not fit is skipped, never trusted.
 import { isHarness } from '../sessions/pool-wire.js';
-import { CI_WORDS, SURFACE_WORDS } from './schema.js';
+import { CI_WORDS, SURFACE_WORDS } from './words.js';
 
 /** A latency in a cell, or a yes (1) or no (0) that a rate is made from. */
 export type Kind = 'latency' | 'rate';

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ciWord, frameWords, harnessWord, surfaceWord } from './fields.js';
-import { CI_WORDS, SURFACE_WORDS } from './schema.js';
+import { CI_WORDS, SURFACE_WORDS } from './words.js';
 
 describe('frameWords', () => {
   it('names the harness from the closed list, and any other name as other', () => {

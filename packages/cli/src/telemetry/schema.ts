@@ -6,6 +6,7 @@ import { ExitCode } from '../errors.js';
 import { FIELD_ROWS } from '../sessions/pool-outbox.js';
 import { OTHER, HARNESSES } from '../sessions/pool-wire.js';
 import { LITERAL, publicModel, publicVersion } from '../sessions/public-vocabulary.js';
+import { CI_WORDS, SURFACE_WORDS } from './words.js';
 
 /** Bumped when an event type or field changes meaning; every spooled event carries it. */
 export const SCHEMA_VERSION = 1;
@@ -93,14 +94,6 @@ const DAY_MS = 86_400_000;
 /** What went wrong, as a closed word chosen from the exit code; the error's own text never comes here. */
 export const ERROR_CLASSES = ['usage', 'auth', 'invalid', 'conflict', 'rate-limited', 'unreachable', 'capped', 'unexpected'] as const;
 export type ErrorClass = (typeof ERROR_CLASSES)[number];
-
-/** Whether a run was in CI and by which provider: the word is chosen from the provider's own variable (`ciWord` in `fields.ts`), so the variable's value never reaches the spool. `other` is a bare `CI`. */
-export const CI_WORDS = ['none', 'github-actions', 'gitlab-ci', 'circleci', 'travis-ci', 'jenkins', 'buildkite', 'azure-pipelines', 'bitbucket', 'teamcity', 'appveyor', 'codebuild', 'other'] as const;
-export type CiWord = (typeof CI_WORDS)[number];
-
-/** How this copy of oars arrived, from the folder it runs in and the package manager that started it (`surfaceWord` in `fields.ts`); the path itself never reaches the spool. A folder it cannot place is `unknown`. */
-export const SURFACE_WORDS = ['npm-global', 'npx', 'claude-plugin', 'codex-plugin', 'gemini-extension', 'unknown'] as const;
-export type SurfaceWord = (typeof SURFACE_WORDS)[number];
 
 /** Which hook fired: the six session hooks, and `gate` for `oars gate hook`. */
 export const HOOK_NAMES = ['session-start', 'prompt', 'pre-tool', 'post-tool', 'stop', 'nightly', 'gate'] as const;

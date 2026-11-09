@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { cellKey, firstRunMeasures, measuresOf } from './measures.js';
 
@@ -36,5 +39,22 @@ describe('the first-run cell', () => {
     expect(firstRunMeasures(hook({}))).toEqual([]);
     expect(firstRunMeasures('first-run')).toEqual([]);
     expect(measuresOf(firstRun({ ci: 'none', surface: 'npx' }))).toEqual([]);
+  });
+});
+
+describe('what the pool Worker imports', () => {
+  // The pool's rollup imports this module, and the Worker has no file system: no file it reaches by a value import (a type import is erased) may import a `node:` module. A word list the rollup needs sits in a leaf module for this.
+  it('reaches no `node:` module from measures.ts', () => {
+    const reached = new Map<string, string[]>();
+    const walk = (file: string): void => {
+      if (reached.has(file)) return;
+      const specifiers = [...readFileSync(file, 'utf8').matchAll(/^(?:import|export)(?!\s+type\b)\s[^;]*?from\s+'([^']+)'/gm)].map((match) => match[1] ?? '');
+      reached.set(file, specifiers);
+      for (const specifier of specifiers) if (specifier.startsWith('.')) walk(resolve(dirname(file), specifier.replace(/\.js$/, '.ts')));
+    };
+    walk(fileURLToPath(new URL('./measures.ts', import.meta.url)));
+    const nodeImports = [...reached].flatMap(([file, specifiers]) => specifiers.filter((specifier) => specifier.startsWith('node:')).map((specifier) => `${file.replaceAll('\\', '/').split('/src/')[1] ?? file} imports ${specifier}`));
+    expect(reached.size).toBeGreaterThan(1);
+    expect(nodeImports).toEqual([]);
   });
 });
