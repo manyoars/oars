@@ -6,6 +6,7 @@ import type { ExitCode } from '../errors.js';
 import { consentOf, markNoticeShown, NOTICE } from './consent.js';
 import { recordEvent } from './record.js';
 import { startDailySend } from './send.js';
+import { ciWord } from './fields.js';
 import { errorClassOf } from './schema.js';
 
 export interface Observed {
@@ -49,7 +50,7 @@ export const finishTelemetry = (deps: RunDeps, argv: string[], observed: Observe
     if (!consent.noticeShown && !isHook(argv, observed) && markNoticeShown(runtime.dir, deps.now)) {
       deps.io.stderr(`${NOTICE}\n`);
       // Once per install: the notice is shown once, and nothing is recorded or sent from a folder that could not claim it.
-      recordEvent(context, 'first-run', {});
+      recordEvent(context, 'first-run', { ci: ciWord(deps.env) });
     }
     const errorClass = errorClassOf(exit);
     recordEvent(context, 'command', {
@@ -57,6 +58,7 @@ export const finishTelemetry = (deps: RunDeps, argv: string[], observed: Observe
       flags: observed.flags,
       durationMs: Math.max(0, deps.now() - startedAt),
       exitCode: exit,
+      ci: ciWord(deps.env),
       ...(errorClass === undefined ? {} : { errorClass }),
     });
     // Never from a hook: a hook has a time budget, and the send is for the detached sender and the commands a person runs.

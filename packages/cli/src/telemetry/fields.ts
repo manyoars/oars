@@ -2,7 +2,7 @@
 // The schema still checks every value; these functions are what make a value fit it (a private model name becomes `other`, not a dropped field).
 import type { Recall } from '../sessions/recall-object.js';
 import { HARNESSES, OTHER } from '../sessions/pool-wire.js';
-import { modelWord, versionWord } from './schema.js';
+import { modelWord, versionWord, type CiWord } from './schema.js';
 
 /** The harness every hook oars installs runs under (Claude Code); one spelling for the session hooks and the gate hook, so the two emitters cannot drift. */
 export const HOOK_HARNESS = 'claude-code';
@@ -31,3 +31,28 @@ export const recallFields = (recall: Recall, families: readonly string[], legacy
   tokens: recall.answer.tokens,
   arm: recall.arm,
 });
+
+/** A provider's own variable and the word it earns. Order is the precedence: most providers also set `CI`, which on its own reads `other`. */
+const CI_PROVIDERS: readonly (readonly [string, CiWord])[] = [
+  ['GITHUB_ACTIONS', 'github-actions'],
+  ['GITLAB_CI', 'gitlab-ci'],
+  ['CIRCLECI', 'circleci'],
+  ['TRAVIS', 'travis-ci'],
+  ['JENKINS_URL', 'jenkins'],
+  ['BUILDKITE', 'buildkite'],
+  ['TF_BUILD', 'azure-pipelines'],
+  ['BITBUCKET_BUILD_NUMBER', 'bitbucket'],
+  ['TEAMCITY_VERSION', 'teamcity'],
+  ['APPVEYOR', 'appveyor'],
+  ['CODEBUILD_BUILD_ID', 'codebuild'],
+];
+
+/** A variable counts when it holds anything but the words a shell uses for no (an empty value, `0`, `false`, `no`, `off`). */
+const NOT_SET = new Set(['', '0', 'false', 'no', 'off']);
+const isSet = (value: string | undefined): boolean => value !== undefined && !NOT_SET.has(value.toLowerCase());
+
+/** Whether this run is in CI, as a closed word read from the environment's variable names. Only the name decides the word: the value is tested and dropped, never returned. */
+export const ciWord = (env: NodeJS.ProcessEnv): CiWord => {
+  for (const [variable, word] of CI_PROVIDERS) if (isSet(env[variable])) return word;
+  return isSet(env.CI) ? 'other' : 'none';
+};

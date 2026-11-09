@@ -38,6 +38,8 @@ const spooled = (dir: string): { type: string; data: object }[] =>
     return { type: String(type), data: typeof data === 'object' && data !== null ? data : {} };
   });
 
+const dataField = (event: { data: object }, name: string): unknown => Reflect.get(event.data, name);
+
 const firstRuns = (dir: string): object[] => spooled(dir).filter((event) => event.type === 'first-run').map((event) => event.data);
 
 describe('the first-run event', () => {
@@ -94,3 +96,30 @@ describe('the first-run event', () => {
     expect(readSpool(dir)).toEqual([]);
   });
 });
+
+describe('the ci field', () => {
+  it('rides on the first-run event and on every command event, as a closed word', async () => {
+    const { deps, dir } = setup({ GITHUB_ACTIONS: 'true' });
+    await run(['--version'], deps);
+    await run(['--version'], deps);
+    expect(spooled(dir).map((event) => [event.type, dataField(event, 'ci')])).toEqual([
+      ['first-run', 'github-actions'],
+      ['command', 'github-actions'],
+      ['command', 'github-actions'],
+    ]);
+  });
+
+  it('reads none when no CI variable is set', async () => {
+    const { deps, dir } = setup();
+    await run(['--version'], deps);
+    expect(spooled(dir).map((event) => dataField(event, 'ci'))).toEqual(['none', 'none']);
+  });
+
+  it('never puts the value of the variable in the spool', async () => {
+    const { deps, dir } = setup({ CI: '/home/someone/secret-value' });
+    await run(['--version'], deps);
+    expect(readSpool(dir).join(' ')).not.toContain('secret-value');
+    expect(spooled(dir).map((event) => dataField(event, 'ci'))).toEqual(['other', 'other']);
+  });
+});
+

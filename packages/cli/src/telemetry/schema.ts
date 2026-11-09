@@ -90,6 +90,10 @@ const DAY_MS = 86_400_000;
 export const ERROR_CLASSES = ['usage', 'auth', 'invalid', 'conflict', 'rate-limited', 'unreachable', 'capped', 'unexpected'] as const;
 export type ErrorClass = (typeof ERROR_CLASSES)[number];
 
+/** Whether a run was in CI and by which provider: the word is chosen from the provider's own variable (`ciWord` in `fields.ts`), so the variable's value never reaches the spool. `other` is a bare `CI`. */
+export const CI_WORDS = ['none', 'github-actions', 'gitlab-ci', 'circleci', 'travis-ci', 'jenkins', 'buildkite', 'azure-pipelines', 'bitbucket', 'teamcity', 'appveyor', 'codebuild', 'other'] as const;
+export type CiWord = (typeof CI_WORDS)[number];
+
 /** Which hook fired: the six session hooks, and `gate` for `oars gate hook`. */
 export const HOOK_NAMES = ['session-start', 'prompt', 'pre-tool', 'post-tool', 'stop', 'nightly', 'gate'] as const;
 /** What a hook came to: it found something, found nothing, found something and held it back (the unexposed arm), or failed. */
@@ -117,7 +121,7 @@ const WIRE_LENGTH = WIRE_NAMES.size;
 
 /** One line per event type. */
 const EVENTS: ReadonlyMap<string, FieldRules> = new Map([
-  ['command', rules({ path: tokens(4), flags: tokens(40), durationMs: whole(DAY_MS), exitCode: whole(255), errorClass: oneOf(ERROR_CLASSES) })],
+  ['command', rules({ path: tokens(4), flags: tokens(40), durationMs: whole(DAY_MS), exitCode: whole(255), errorClass: oneOf(ERROR_CLASSES), ci: oneOf(CI_WORDS) })],
   ['hook', rules({ name: oneOf(HOOK_NAMES), latencyMs: whole(DAY_MS), outcome: oneOf(HOOK_OUTCOMES), bytes: whole(BYTES), harness: oneOf(WIRE_HARNESSES), harnessVersion: MODEL_OR_VERSION(versionWord), model: MODEL_OR_VERSION(modelWord) })],
   [
     'recall',
@@ -183,7 +187,7 @@ const EVENTS: ReadonlyMap<string, FieldRules> = new Map([
   // One send of one batch: whether the pool took it, the HTTP status, and the code of its refusal.
   ['wire-send', rules({ sent: whole(1), status: whole(599), code, bytes: whole(HUGE) })],
   // The install's first run, sent once where the first-run notice is shown (docs/telemetry.md).
-  ['first-run', rules({})],
+  ['first-run', rules({ ci: oneOf(CI_WORDS) })],
 ]);
 
 export const EVENT_TYPES: readonly string[] = [...EVENTS.keys()];
