@@ -593,6 +593,7 @@ const UNACCEPTED = answer(200, { version: 'v1', accepted: false, screen: SCREEN 
 /** Makes the run a terminal and types each line into it; a run with none of this has stdin that is not a terminal. */
 const atTerminal = (scene: Scene, ...lines: string[]): void => {
   Object.assign(scene.staged.stdin, { isTTY: true });
+  Object.assign(scene.staged.runtime, { stderr: { isTTY: true } });
   for (const line of lines) scene.staged.stdin.write(`${line}\n`);
 };
 
@@ -1469,12 +1470,37 @@ describe('oars pool deposit --send', () => {
       expect(paths(pool)).toEqual(['/v1/covenant']);
     });
 
-    it('asks for nothing when the account has already accepted, and a flag then accepts nothing either', async () => {
+    it('asks for nothing when the account has already accepted, and a flag that names the version then changes nothing', async () => {
       const scene = await batched();
       const hash = await printedAndHash(scene);
       const pool = wire(acceptRoutes(answer(200, { version: 'v1', accepted: true, screen: SCREEN })));
+      atTerminal(scene);
       await poolDeposit(scene.h.deps, { ...sendOptions(hash, pool.via), acceptCovenant: 'v1' });
       expect(paths(pool)).toEqual(['/v1/covenant', '/v1/deposits']);
+      expect(scene.h.err.join('')).not.toContain(SCREEN.text);
+    });
+
+    it('refuses the flag for an account that has already accepted when it is off a terminal or names another version', async () => {
+      for (const [terminal, flag, message] of [[false, 'v1', 'not one'], [true, 'v0', 'v1']] as const) {
+        const scene = await batched();
+        const hash = await printedAndHash(scene);
+        const pool = wire(acceptRoutes(answer(200, { version: 'v1', accepted: true, screen: SCREEN })));
+        if (terminal) atTerminal(scene);
+        const refusal = await refusalOf(poolDeposit(scene.h.deps, { ...sendOptions(hash, pool.via), acceptCovenant: flag }));
+        expect(refusal.message).toContain(message);
+        expect(paths(pool)).toEqual(['/v1/covenant']);
+      }
+    });
+
+    it('is not at a terminal when stderr is not one, since the screen is written there: the typed phrase accepts nothing', async () => {
+      const scene = await batched();
+      const hash = await printedAndHash(scene);
+      const pool = wire(acceptRoutes());
+      atTerminal(scene, SCREEN.phrase);
+      Object.assign(scene.staged.runtime, { stderr: { isTTY: false } });
+      const refusal = await refusalOf(poolDeposit(scene.h.deps, sendOptions(hash, pool.via)));
+      expect(refusal.problem).toMatchObject({ code: 'covenant_not_accepted' });
+      expect(paths(pool)).toEqual(['/v1/covenant']);
       expect(scene.h.err.join('')).not.toContain(SCREEN.text);
     });
 

@@ -77,6 +77,8 @@ export interface SessionsRuntime {
   evaluator?: GoldEvaluator | undefined;
   stdin: NodeJS.ReadableStream;
   stdout: { write: (text: string) => unknown };
+  /** Only its `isTTY` is read: the covenant screen is written to stderr, so a person is at a terminal only when stderr is one too. */
+  stderr?: { isTTY?: boolean | undefined } | undefined;
 }
 
 interface FileState {
