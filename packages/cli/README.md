@@ -177,7 +177,7 @@ Replay is local and read-only on your transcripts; it writes `crossings.jsonl` a
 
 ### pool
 
-`oars pool` uses the Many Oars pool, `https://pool.manyoars.com`, which is live, or a pool server you name with `--server <url>` or `OARS_POOL_URL`. Every other command works without it.
+`oars pool` uses the Many Oars pool, `https://pool.manyoars.com`, which is live (deposits there are closed until its covenant is published), or a pool server you name with `--server <url>` or `OARS_POOL_URL`. Every other command works without it.
 
 - `oars pool login --provider github|google` signs in by the provider's device flow, run here, and prints every request before it sends it. `OARS_GITHUB_CLIENT_ID` (or `OARS_GOOGLE_CLIENT_ID` and `OARS_GOOGLE_CLIENT_SECRET`) must be set; an unset one stops the command before anything is sent and names the variable.
 - `oars pool deposit` writes a batch of session skeletons (a closed list of fields, each value redacted first; a host is hashed by the pool on arrival) to an outbox for each session that passes your folder allowlist and the exclusion check, and stops: it sends nothing itself. `--send <hash>` sends one batch that `outbox` printed and that is unchanged on disk, once this account has accepted the pool covenant (`--accept-covenant <version>`, or an earlier acceptance); before that it reads the covenant, sends no batch, and exits 3 with `covenant_not_accepted`. A hash that was never shown, or a batch that changed, is refused before any request. The nightly task is the other sender: after the pool says your account accepted its covenant, it sends new batches, and raw copies only if you said yes to the raw prompt (`oars pool raw --consent yes`). With no sign-in, no acceptance, or an unreachable server it sends nothing.

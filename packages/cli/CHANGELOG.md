@@ -6,7 +6,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 
 ## 0.4.1 (2026-11-09)
 
-Text only, no change in behavior. The telemetry notice, `oars telemetry status`, the `oars login` error, and the package README said the Many Oars pool at `pool.manyoars.com` was not deployed. It is live, and the text now says so. The notice also now names two things 0.4.0 always sent without naming: the harness name and version and the model name on hook events, and the lists of harness versions and model names in the session store snapshot. Which fields are sent, the telemetry default, and the consent flow are unchanged; `oars telemetry off`, `OARS_TELEMETRY=0`, and `DO_NOT_TRACK=1` still turn it off.
+Text only, no change in behavior. The telemetry notice, `oars telemetry status`, the `oars login` error, and the package README said or implied the Many Oars pool at `pool.manyoars.com` was not deployed. It is live, and the notice and README now say so. The notice also now names two things 0.4.0 always sent without naming: the harness name and version and the model name on hook events, and the lists of harness versions and model names in the session store snapshot. Which fields are sent, the telemetry default, and the consent flow are unchanged; `oars telemetry off`, `OARS_TELEMETRY=0`, and `DO_NOT_TRACK=1` still turn it off.
 
 ## 0.4.0 (2026-11-07)
 
