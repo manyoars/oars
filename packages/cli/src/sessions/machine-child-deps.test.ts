@@ -1,15 +1,17 @@
 // The machine child end to end over a real store and a real git repository: the repository `origin` names must be on `OARS_ALLOW_REPOS` for a session to be captured and built, the terms in `OARS_EXCLUSION_TERMS_INLINE` gate it, and an
 // expired client builds nothing. The store is a temp folder and APPDATA is the same folder; each test confirms the store path is under the temp folder before it runs.
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { machineIdOf } from './machine-ids.js';
+import { derivedSalt, machineIdOf } from './machine-ids.js';
 import { inlineTermsFile } from './machine.js';
 import { runMachineChild } from './machine-child-deps.js';
 import { messageOf, noticeFile } from './machine-notice.js';
 import { machineStop } from './machine-stop.js';
+import { localSalt, paths } from './store.js';
 import { addProject, cleanup, stage, type Staged } from './test-support.js';
 
 const made: string[] = [];
@@ -21,7 +23,7 @@ afterEach(() => {
 const SESSION = '99999999-9999-4999-8999-000000000001';
 const NO_WAIT = { quietMs: 0, maxMs: 0, pollMs: 1 };
 
-const lineOf = (content: string): string => JSON.stringify({ type: 'user', sessionId: SESSION, cwd: '/w', timestamp: '2026-05-01T01:00:00Z', permissionMode: 'default', message: { role: 'user', content } });
+const lineOf = (content: string, cwd = '/w'): string => JSON.stringify({ type: 'user', sessionId: SESSION, cwd, timestamp: '2026-05-01T01:00:00Z', permissionMode: 'default', message: { role: 'user', content } });
 
 interface Scene {
   staged: Staged;
@@ -213,4 +215,31 @@ describe('runMachineChild: the holding route', () => {
     expect(batches(given.staged)).toEqual([]);
     expect(branchesIn(bare)).toEqual([]);
   }, 60_000);
+});
+
+/** The `repo` of the session the child captured, read from the store's log. */
+const capturedRepo = (storeDir: string): unknown => {
+  const records = readFileSync(paths(storeDir).observations, 'utf8').split('\n').filter((entry) => entry !== '').map((entry): unknown => JSON.parse(entry));
+  const session = records.find((record) => typeof record === 'object' && record !== null && Reflect.get(record, 'kind') === 'session');
+  return typeof session === 'object' && session !== null ? Reflect.get(session, 'repo') : undefined;
+};
+
+const keyUnder = (salt: string): string => createHash('sha256').update(`${salt}\nrepo:origin:github.com/owner/name`).digest('hex').slice(0, 16);
+
+describe('runMachineChild: the repository key', () => {
+  it("hashes the session's repository under OARS_REPO_SALT, the enrollment's derived salt, and not under the store's own", async () => {
+    const given = scene('https://github.com/owner/name');
+    writeFileSync(given.transcript, `${lineOf('a plain request', given.repo)}\n`);
+    await run(given, { OARS_ALLOW_REPOS: 'owner/name', OARS_REPO_SALT: 'an-enrollment-repo-salt', ...TERMS });
+    expect(capturedRepo(given.staged.storeDir)).toBe(keyUnder('an-enrollment-repo-salt'));
+  });
+
+  it('with no OARS_REPO_SALT, or a blank one, hashes it under the salt derived from its own store salt', async () => {
+    for (const env of [{}, { OARS_REPO_SALT: '  ' }]) {
+      const given = scene('https://github.com/owner/name');
+      writeFileSync(given.transcript, `${lineOf('a plain request', given.repo)}\n`);
+      await run(given, { OARS_ALLOW_REPOS: 'owner/name', ...env, ...TERMS });
+      expect(capturedRepo(given.staged.storeDir)).toBe(keyUnder(derivedSalt((await localSalt(given.staged.storeDir)).salt, 'repoKey/1')));
+    }
+  });
 });
