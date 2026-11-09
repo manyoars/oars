@@ -4,7 +4,7 @@
 // The rule is what a fixture measured for each harness, not what a harness documents: a live session per case on a temp tree, reading only that session's own log. Each position
 // is one of `load` (the harness read a file there), `skip` (it did not, by design), or `unmeasured` (the case was not measured). What was not measured stays `unknown`.
 //
-// What a log can show decides which kind gets a loaded or missed label. A transcript names each instruction file it loaded, so those kinds do. It lists each skill by name (only when the session offers the Skill tool) and each Stop hook by command, with no source for either; a hook that prints nothing leaves no line. The snapshot holds
+// What a log can show decides which kind gets a loaded or missed label. A transcript names each instruction file it loaded, so those kinds do. It lists each skill by name (only when the session offers the Skill tool) and each Stop hook by command, with no source for either; a `SessionStart` hook that prints nothing leaves no line. The snapshot holds
 // kinds and counts only, so it has no name or command to join against, and a skill or hook that exists stays `unknown`. A hook in a folder above the working folder is the one by-design skip measured for them: those settings files do not run.
 import { positionOfLevel, readCandidates, type CandidateSnapshot, type HookEventCounts, type HookSource, type InstructionPosition, type WorkingKind } from './candidates.js';
 import type { LoadedInstructions, SessionObservation } from './schema.js';
