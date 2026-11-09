@@ -857,6 +857,8 @@ const tokenize = (text: string, opaqueFrom?: number, dialect: ShellDialect = 'po
     const next = text.charAt(at + 1);
     const here = at;
     if ((char === "'" || char === '"') && !quoted && JOINED_PREFIX.test(word)) joined = true;
+    // An unquoted backtick opens a substitution whose end the reader does not scan for: an escaped quote inside it reads as a bare one, so every word that starts after it is opaque, as after a substitution inside double quotes.
+    if (!powershell && char === '`') opaque = opaque < 0 ? at : Math.min(opaque, at);
     if (char === "'") {
       const stop = singleQuotedEnd(text, at, !powershell);
       word += text.slice(at + 1, stop);
@@ -881,6 +883,8 @@ const tokenize = (text: string, opaqueFrom?: number, dialect: ShellDialect = 'po
         } else if (inner === escape && after === '\n') {
           at += 2;
         } else if (inner === escape && after === '"') {
+          // POSIX reads the escaped quote as data, but the same text under PowerShell (a Codex call is stored as `Bash` whatever shell ran it) ends the string there, so every word after it may be read with the quote state inverted.
+          if (!powershell) opaque = opaque < 0 ? at : Math.min(opaque, at);
           word += '"';
           at += 2;
         } else if (end >= 0) {
