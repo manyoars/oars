@@ -2,11 +2,11 @@
 import { describe, expect, it } from 'vitest';
 import { brake } from './http.js';
 import { sampleSkeleton } from './sample.js';
-import { fieldOf, startPool, stubUser, textOf, type Answer, type TestPool } from './test-pool.js';
+import { acceptanceOf, fieldOf, startPool, stubUser, textOf, type Answer, type TestPool } from './test-pool.js';
 
 const signedIn = async (pool: TestPool, id: string): Promise<string> => {
   const { token } = await pool.signIn('github', stubUser(id));
-  await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+  await pool.post('/v1/covenant/accept', acceptanceOf('v1'), token);
   return token;
 };
 

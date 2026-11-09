@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type { RunDeps } from '../cli.js';
 import { machineOf } from './machine.js';
 import { ask, DEPOSIT, isObject, networkSender, poolDeposit, poolServer, postBatch, postRaw, runtimeOf, signedIn, textIn, vocabularyExpired, type Sender } from './pool-command.js';
+import { rawStale } from './pool-choices.js';
 import { heldBatches, lockedBatch, outboxFolder } from './pool-outbox.js';
 import { heldRaw } from './pool-raw.js';
 import { withSendLock } from './pool-send-lock.js';
@@ -19,6 +20,8 @@ export interface NightlyPool {
   /** Batches and raw copies this night sent. */
   batches: number;
   raw: number;
+  /** Set when a raw yes was held back because it was given under another covenant than the one in force; `oars pool raw --consent yes` answers for the covenant now in force. The sender prints nothing, so this note is where it shows. */
+  rawHeld?: true;
 }
 
 const record = async (storeDir: string, result: NightlyPool, at: number): Promise<void> => {
@@ -26,10 +29,10 @@ const record = async (storeDir: string, result: NightlyPool, at: number): Promis
   await writeFile(join(storeDir, 'pool-nightly.json'), `${JSON.stringify({ at: new Date(at).toISOString(), ...result })}\n`, 'utf8').catch(() => undefined);
 };
 
-/** Whether the pool says this account has accepted the covenant now in force. Anything else, a closed pool and a refusal included, is no. */
-const accepted = async (deps: RunDeps, server: string, token: string, via: Sender): Promise<boolean> => {
+/** The covenant version in force when the pool says this account has accepted it. Anything else, a closed pool and a refusal included, is `undefined`. */
+const accepted = async (deps: RunDeps, server: string, token: string, via: Sender): Promise<string | undefined> => {
   const reply = await ask(deps, DEPOSIT, server, '/v1/covenant', { token }, via);
-  return reply.status === 200 && isObject(reply.body) && textIn(reply.body, 'version') !== undefined && Reflect.get(reply.body, 'accepted') === true;
+  return reply.status === 200 && isObject(reply.body) && Reflect.get(reply.body, 'accepted') === true ? textIn(reply.body, 'version') : undefined;
 };
 
 const night = async (deps: RunDeps, net: Sender, tally: NightlyPool): Promise<NightlyPool> => {
@@ -50,13 +53,14 @@ const night = async (deps: RunDeps, net: Sender, tally: NightlyPool): Promise<Ni
     return none('not-signed-in');
   }
   if (vocabularyExpired(deps) !== undefined) return none('failed');
-  if (!(await accepted(deps, server, token, net))) return none('not-accepted');
+  const version = await accepted(deps, server, token, net);
+  if (version === undefined) return none('not-accepted');
   const outbox = outboxFolder(storeDir, server);
   tally.outcome = 'sent';
   // One sender at a time per outbox, the lock `deposit --send` takes: a second run waits, then finds `sent.log` full and sends nothing twice.
   await withSendLock(outbox, async () => {
     // The outbox is built only for an account that has accepted, then sent: the same gates `oars pool deposit` runs, so nothing queues that a person could not print.
-    await poolDeposit(deps, { server });
+    await poolDeposit(deps, { server, covenant: version });
     const done = await sentHashes(outbox);
     for (const batch of (await heldBatches(outbox)).batches) {
       if (done.has(batch.hash)) continue;
@@ -68,7 +72,9 @@ const night = async (deps: RunDeps, net: Sender, tally: NightlyPool): Promise<Ni
       tally.batches += 1;
     }
     // Raw goes only with its own yes, read again here so an answer changed since the build wins.
-    if ((await readState(storeDir)).pool.rawConsent === 'granted') {
+    const choices = (await readState(storeDir)).pool;
+    if (rawStale(choices, version)) tally.rawHeld = true;
+    if (choices.rawConsent === 'granted' && !rawStale(choices, version)) {
       for (const copy of (await heldRaw(outbox)).copies) {
         if (done.has(copy.hash) || copy.bytes === 0) continue;
         await postRaw(deps, { server, token, hash: copy.hash, body: copy.body, bytes: copy.bytes, via: net });

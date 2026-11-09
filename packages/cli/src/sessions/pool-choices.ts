@@ -11,5 +11,8 @@ export const sendsOf = (choices: PoolChoices, project: string): Sends => {
   return modes.includes('skeleton') ? 'skeleton' : 'all';
 };
 
-/** Whether a raw copy of this folder's sessions may be built: raw consent granted, and the folder neither skeleton only nor off. */
-export const rawAllowed = (choices: PoolChoices, project: string): boolean => choices.rawConsent === 'granted' && sendsOf(choices, project) === 'all';
+/** Whether a yes to the raw prompt is held back because it was given under another covenant than the one in force. With no version known (a build that asked no pool) nothing is held back: nothing leaves then, and the sender checks again. */
+export const rawStale = (choices: PoolChoices, version: string | undefined): boolean => choices.rawConsent === 'granted' && version !== undefined && choices.rawConsentVersion !== version;
+
+/** Whether a raw copy of this folder's sessions may be built: raw consent granted for the covenant in force, and the folder neither skeleton only nor off. */
+export const rawAllowed = (choices: PoolChoices, project: string, version?: string): boolean => choices.rawConsent === 'granted' && !rawStale(choices, version) && sendsOf(choices, project) === 'all';

@@ -3,13 +3,15 @@
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
+import { http, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it } from 'vitest';
-import { harness, type Harness } from '../test-support.js';
+import { harness, server, useServer, type Harness } from '../test-support.js';
 import { poolDeposit } from './pool-command.js';
 import { contentHash } from './read.js';
-import { deposit } from './store.js';
+import { deposit, updatePoolChoices } from './store.js';
 import { addProject, cleanup, stage, type Staged } from './test-support.js';
 
+useServer();
 afterEach(cleanup);
 
 const POOL = 'https://pool.test';
@@ -275,5 +277,27 @@ describe('deltas on a machine', () => {
     const given = await scene({ OARS_HOST_CLASS: 'cloud' }, weeks);
     expect(await document(given)).toMatchObject({ batched: 10 });
     expect(carried(given.staged)).toBe(0);
+  });
+
+  it('queues no raw copy for a yes given under another covenant than the one in force, and does for the current one', async () => {
+    const rawCopies = (given: Scene): string[] => {
+      const root = join(given.staged.storeDir, 'pool-outbox');
+      return existsSync(root) ? readdirSync(root, { recursive: true, encoding: 'utf8' }).filter((name) => name.endsWith('.redacted')) : [];
+    };
+    const given = await scene({ OARS_HOST_CLASS: 'vps', OARS_MACHINE: 'm-1' }, ONE);
+    await updatePoolChoices(given.staged.storeDir, (choices) => {
+      choices.rawConsent = 'granted';
+      choices.rawConsentVersion = 'v0';
+    });
+    const inForce = (version: string): void => {
+      server.use(http.get(`${POOL}/v1/covenant`, () => HttpResponse.json({ version, accepted: true, screen: null })));
+    };
+    inForce('v1');
+    await poolDeposit(given.h.deps, { server: POOL });
+    expect(batches(given.staged)).toHaveLength(1);
+    expect(rawCopies(given)).toEqual([]);
+    inForce('v0');
+    await poolDeposit(given.h.deps, { server: POOL });
+    expect(rawCopies(given).length).toBeGreaterThan(0);
   });
 });

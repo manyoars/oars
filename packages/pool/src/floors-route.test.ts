@@ -5,7 +5,7 @@ import { etagOf } from './bundle.js';
 import { SERVED } from './derive.js';
 import { floorsOf } from './floors.js';
 import { sampleSkeleton } from './sample.js';
-import { startPool, stubUser, type TestPool } from './test-pool.js';
+import { acceptanceOf, startPool, stubUser, type TestPool } from './test-pool.js';
 
 const VERSION = '2.1.314';
 const PATH = `/bundle/claude-code/${VERSION}/${VOCAB_VERSION}`;
@@ -23,7 +23,7 @@ const poolWith = async (bindings: { [name: string]: string }): Promise<TestPool>
 
 const depositor = async (pool: TestPool, id: string): Promise<string> => {
   const { token } = await pool.signIn('github', stubUser(id));
-  await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+  await pool.post('/v1/covenant/accept', acceptanceOf('v1'), token);
   expect((await pool.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0')), token)).status).toBe(201);
   return token;
 };

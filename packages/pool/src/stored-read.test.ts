@@ -9,7 +9,7 @@ import type { Harness } from '../../cli/src/sessions/schema.js';
 import { fetchBundle, WEEK_RESET } from './bundle.js';
 import { ENVIRONMENT_CELLS, ENVIRONMENT_PARTS } from './stored.js';
 import type { PoolDb } from './http.js';
-import { fieldOf, startPool, stubUser, type TestPool } from './test-pool.js';
+import { acceptanceOf, fieldOf, startPool, stubUser, type TestPool } from './test-pool.js';
 
 const PATH = `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`;
 
@@ -25,7 +25,7 @@ afterAll(async () => {
 
 const depositor = async (target: TestPool, id: string, extra = 0, harness: Harness = 'claude-code'): Promise<string> => {
   const { token } = await target.signIn('github', stubUser(id));
-  await target.post('/v1/covenant/accept', { version: 'v1' }, token);
+  await target.post('/v1/covenant/accept', acceptanceOf('v1'), token);
   for (let session = 0; session <= extra; session += 1) expect((await target.post('/v1/deposits', sampleSkeleton(`${session === 0 ? '' : String(session)}${id}`.padStart(16, '0'), undefined, '2026-11-01', harness), token)).status).toBe(201);
   return token;
 };

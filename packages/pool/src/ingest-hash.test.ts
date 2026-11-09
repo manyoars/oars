@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { textField } from './http.js';
 import { sampleSkeleton } from './sample.js';
-import { startPool, stubUser, type Answer, type TestPool } from './test-pool.js';
+import { acceptanceOf, startPool, stubUser, type Answer, type TestPool } from './test-pool.js';
 
 const HOST = 'internal.corp.example';
 const LITERAL_HOST = 'literal.corp.example';
@@ -22,7 +22,7 @@ const withHosts = (id: string, host = HOST): unknown => {
 
 const signedIn = async (pool: TestPool, id: string): Promise<string> => {
   const { token } = await pool.signIn('github', stubUser(id));
-  await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+  await pool.post('/v1/covenant/accept', acceptanceOf('v1'), token);
   return token;
 };
 
