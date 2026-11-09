@@ -257,6 +257,8 @@ export interface CommandWord {
   quoted: boolean;
   /** The variable the whole word references: set only when the word's raw source, quotes included, is exactly one reference (`variableOf`). Every other word holds none, whatever `$` it contains. */
   variable?: string;
+  /** The word starts at or after the command's first single quote or heredoc marker (`tokenize`): no variable, assignment, or flag value is read from it. */
+  opaque?: true;
 }
 
 /** A shell command's words as the name read takes them: those before the program (assignments, wrappers), the program's own word, and its arguments. */
@@ -327,12 +329,14 @@ const flagValueNames = (head: CommandWord, args: readonly CommandWord[]): string
   const found: string[] = [];
   for (let at = 0; at < args.length; at += 1) {
     const word = args[at];
-    if (word === undefined || word.quoted) continue;
+    // A word after the command's first single quote or heredoc marker may be literal text the reader took for words, so neither its joined value nor the word after it is a name.
+    if (word === undefined || word.quoted || word.opaque === true) continue;
     if (word.text === '--') break;
     const joined = JOINED_LONG_FLAG.exec(word.text);
     const flag = joined?.[1] ?? word.text;
     if (TEXT_FLAGS.has(flag) || isCredentialFlag(flag) || !FLAG_TOKEN.test(flag)) continue;
-    const next = flag.startsWith('--') || (pytest && SHORT_NAME_FLAGS.has(flag)) ? args[at + 1] : undefined;
+    const after = flag.startsWith('--') || (pytest && SHORT_NAME_FLAGS.has(flag)) ? args[at + 1] : undefined;
+    const next = after?.opaque === true ? undefined : after;
     const value = joined === null ? (next !== undefined && (next.quoted || !next.text.startsWith('-')) ? next.text : undefined) : joined[2];
     if (value !== undefined && FLAG_VALUE_NAME.test(value)) found.push(value);
   }
@@ -378,7 +382,7 @@ export const argNamesOf = (
   }
   for (const { before, head, args } of commands) {
     for (const word of before) {
-      const assigned = word.quoted ? null : ENV_ASSIGNMENT.exec(word.text)?.[1];
+      const assigned = word.quoted || word.opaque === true ? null : ENV_ASSIGNMENT.exec(word.text)?.[1];
       if (assigned !== undefined && assigned !== null) add('env', assigned);
     }
     for (const word of [...before, head, ...args]) if (word.variable !== undefined) add('env', word.variable);

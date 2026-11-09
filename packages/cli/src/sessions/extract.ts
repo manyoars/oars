@@ -788,7 +788,14 @@ const substitutionEnd = (text: string, from: number, first: string, budget: { le
   return stack.length === 0 ? at : -1;
 };
 
-const tokenize = (text: string): ShellToken[] => {
+/**
+ * The first single quote or heredoc marker of a command. An unexpanded `$name` can only come from single-quoted text or a heredoc body, so a word that starts before this point is read as the shell reads it, and every
+ * word at or after it is opaque: it holds no variable and no flag value, whatever the reader made of the quotes before it. A true reference after the point sends no name, which sends less and never more.
+ */
+const OPAQUE_POINT = /'|<</;
+
+/** `opaqueFrom` is where that point sits in `text` (-1 for none, 0 for a text that is opaque throughout, as a word an opaque word holds is). */
+const tokenize = (text: string, opaqueFrom = text.search(OPAQUE_POINT)): ShellToken[] => {
   const tokens: ShellToken[] = [];
   let word = '';
   let quoted = false;
@@ -802,8 +809,13 @@ const tokenize = (text: string): ShellToken[] => {
     if (started && redirected) redirected = false;
     else if (started && !quoted && (word === '{' || word === '}')) tokens.push(word === '{' ? 'open' : 'close');
     else if (started) {
-      const variable = variableOf(text.slice(start, at));
-      tokens.push(variable === undefined ? { text: word, quoted } : { text: word, quoted, variable });
+      const held: ShellWord = { text: word, quoted };
+      if (opaqueFrom >= 0 && start >= opaqueFrom) held.opaque = true;
+      else {
+        const variable = variableOf(text.slice(start, at));
+        if (variable !== undefined) held.variable = variable;
+      }
+      tokens.push(held);
     }
     word = '';
     quoted = false;
@@ -993,7 +1005,8 @@ const shellArgument = (program: string, args: readonly ShellWord[]): readonly Sh
   const flag = args.findIndex((word) => !word.quoted && isCommandFlag(program, word.text));
   const first = flag < 0 ? undefined : args[flag + 1];
   if (first === undefined) return null;
-  return JOINING_SHELLS.has(program) && !first.quoted ? args.slice(flag + 1) : tokenize(first.text);
+  // The argument's own text is read for its own first quote or marker, unless the word is opaque already: then nothing in it is read.
+  return JOINING_SHELLS.has(program) && !first.quoted ? args.slice(flag + 1) : tokenize(first.text, first.opaque === true ? 0 : undefined);
 };
 
 /** How many shells deep a command is read. Real commands nest two or three; the cap keeps a torn or hostile one from exhausting the stack. */
@@ -1327,7 +1340,16 @@ const commitPlanOf = (commands: readonly ShellCommand[]): PlannedCommit[] =>
   });
 
 /** Every simple command of a shell call, in order, after the bodies are dropped and the command is redacted. `oars gate` reads the same commands as capture. */
-export const shellCommands = (command: string, redact: Redactor): ShellCommand[] => readCommands(tokenize(redactCommand(dropBodies(command.replace(/\r\n/g, '\n')), redact)));
+export const shellCommands = (command: string, redact: Redactor): ShellCommand[] => {
+  const whole = command.replace(/\r\n/g, '\n');
+  const kept = dropBodies(whole);
+  const text = redactCommand(kept, redact);
+  // The opaque point is the whole command's first single quote or heredoc marker. Dropping a body or redacting can remove it and leave a later one in its place, and the words between would read as before it: when the first point
+  // moved or a point is gone, the whole text is opaque.
+  const points = (held: string): number => held.match(/'|<</g)?.length ?? 0;
+  const moved = kept.search(OPAQUE_POINT) !== whole.search(OPAQUE_POINT) || points(text) !== points(kept);
+  return readCommands(tokenize(text, moved ? 0 : undefined));
+};
 
 /** A shell call's segments, pulls, and the commits it holds, from the command alone. The command is redacted before anything is kept. */
 export const readShell = (command: string, redact: Redactor): ShellRead => {

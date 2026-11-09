@@ -295,13 +295,14 @@ describe('what is dropped from the names', () => {
   it('reads no variable name out of single-quoted text, which no shell expands, and still reads one outside single quotes', () => {
     const skeleton = skeletonOfLines(
       { redact, terms: [] },
-      call('a', 'Bash', { command: "mysql --password 'abc$hunter2' --region eu_control" }),
-      call('b', 'Bash', { command: "deploy --token 'x$opaquetoken' --customer cust_control" }),
+      // The controls come before the first single quote: a flag value after one is not read (the quote state after it is the reader's to get wrong).
+      call('a', 'Bash', { command: "mysql --region eu_control --password 'abc$hunter2'" }),
+      call('b', 'Bash', { command: "deploy --customer cust_control --token 'x$opaquetoken'" }),
       call('c', 'Bash', { command: "curl -u me:'abc$hunter4' https://example.test" }),
       call('d', 'Bash', { command: "git commit -m 'charge $customer_name twice'" }),
       call('e', 'Bash', { command: "awk '{print $account_id}' notes.txt" }),
       call('f', 'Bash', { command: 'deploy --region "$BUILD_ID"' }),
-      call('g', 'Bash', { command: 'bash -c "mysql --password \'abc$hunter6\' --region eu_inner"' }),
+      call('g', 'Bash', { command: 'bash -c "mysql --region eu_inner --password \'abc$hunter6\'"' }),
       call('h', 'Bash', { command: 'curl --token $API_TOKEN x' }),
     );
     const [mysql, deploy, curl, commit, awk, control, inner, expanded] = toolsOf(skeleton);
@@ -326,7 +327,7 @@ describe('what is dropped from the names', () => {
       call('c', 'Bash', { command: 'deploy --token x\\$opaquetoken --customer cust_control' }),
       call('d', 'Bash', { command: 'git commit -m "charge \\$customer_name twice"' }),
       call('e', 'Bash', { command: 'deploy --region "$BUILD_ID"' }),
-      call('f', 'Bash', { command: "mysql --password $'it\\'s $hunter7 and more' --region eu_ansi" }),
+      call('f', 'Bash', { command: "mysql --region eu_ansi --password $'it\\'s $hunter7 and more'" }),
       call('g', 'Bash', { command: 'Write-Output "abc`$hunter8" --region eu_ps' }),
       call('h', 'Bash', { command: 'echo $$hunter9 --region eu_pid' }),
       call('i', 'Bash', { command: 'git commit -m $\'subject\\n$ansi_value\' --amend' }),
@@ -542,8 +543,7 @@ describe('a variable reference inside a word', () => {
 // The quote state of a command is what decides whether text is a bare word: single-quoted text that the reader takes for bare words turns `$hunter2` into a name. Every piece below can move that state when it is read wrongly, so each is
 // set before a single-quoted planted reference, glued to it and apart from it, and a control reference after it must still be read.
 describe('a piece that can move the quote state, before a single-quoted reference', () => {
-  // `controlled: false` marks a piece after which the words of the command are not read at all: a group that closes (`$(...)` unquoted) ends the command, and the words after it start one whose head is the quoted target, which names no program.
-  const MOVERS: readonly { kind: string; piece: string; controlled?: boolean }[] = [
+  const MOVERS: readonly { kind: string; piece: string }[] = [
     { kind: 'an apostrophe inside double quotes', piece: `"it's"` },
     { kind: 'an escaped double quote then an apostrophe inside double quotes', piece: String.raw`"say \"it's\""` },
     { kind: 'a backslash pair inside double quotes', piece: String.raw`"C:\\"` },
@@ -553,7 +553,7 @@ describe('a piece that can move the quote state, before a single-quoted referenc
     { kind: 'an escaped apostrophe outside quotes', piece: String.raw`it\'s` },
     { kind: 'an escaped double quote outside quotes', piece: String.raw`say\"hi` },
     { kind: 'an ANSI-C string holding an escaped apostrophe', piece: String.raw`$'it\'s'` },
-    { kind: 'a command substitution holding quotes', piece: `$(echo "it's")`, controlled: false },
+    { kind: 'a command substitution holding quotes', piece: `$(echo "it's")` },
     { kind: 'a command substitution in double quotes holding quotes', piece: `"$(echo "it's")"` },
     { kind: 'a command substitution in double quotes holding a double quote inside single quotes', piece: `"$(echo 'a"b')"` },
     { kind: 'two nested command substitutions in double quotes', piece: `"$(echo "$(echo "it's")")"` },
@@ -567,15 +567,53 @@ describe('a piece that can move the quote state, before a single-quoted referenc
   const TARGETS: readonly string[] = [`' $hunter2 '`, `'$hunter2'`, `'a $hunter2 b'`];
   const SEPARATORS: readonly string[] = [' ', ''];
 
+  // A reference or flag value after the command's first single quote or heredoc marker is not read, whatever the reader made of the quotes before it: an unexpanded `$name` can only come from single-quoted text or a heredoc body, so the
+  // words that follow that point are the ones a misread can turn literal. The controls before the point are still read: a reference that precedes it, and a flag value (`--region eu_control`).
   for (const mover of MOVERS) {
-    it(`reads no name out of a single-quoted reference after ${mover.kind}, and still reads a double-quoted reference after it`, () => {
-      const commands = TARGETS.flatMap((target) => SEPARATORS.map((separator) => `mysql --region eu_control ${mover.piece}${separator}${target} "$BUILD_ID"`));
+    it(`reads no name out of a single-quoted reference after ${mover.kind}, none from a double-quoted reference after it, and still reads the controls before it`, () => {
+      const commands = TARGETS.flatMap((target) => SEPARATORS.map((separator) => `mysql --region eu_control "$BUILD_ID" ${mover.piece}${separator}${target} "$LATE_ID"`));
       const skeleton = skeletonOfLines({ redact, terms: [] }, ...commands.map((command, at) => call(`m${String(at)}`, 'Bash', { command })));
       const tools = toolsOf(skeleton);
       expect(tools).toHaveLength(commands.length);
-      const expected = mover.controlled === false ? names('flag', 'eu_control') : [...names('env', 'BUILD_ID'), ...names('flag', 'eu_control')];
-      for (const [at, command] of commands.entries()) expect(tools[at]?.names, command).toEqual(expected);
-      expect(JSON.stringify(skeleton)).not.toContain('hunter2');
+      for (const [at, command] of commands.entries()) expect(tools[at]?.names, command).toEqual([...names('env', 'BUILD_ID'), ...names('flag', 'eu_control')]);
+      for (const value of ['hunter2', 'LATE_ID']) expect(JSON.stringify(skeleton)).not.toContain(value);
     });
   }
+
+  // Whole commands the pieces above do not reach: a `$` that the reader pairs with a quote it does not expand, a substitution the reader closes early (a `case` arm, a comment, a brace holding a quote), a scan that runs out, a quote that
+  // opens on one line and closes on a later one, and a heredoc the line reader misses. Each puts a reference or a flag value in literal text after that point, so neither may cross.
+  const WHOLE: readonly { kind: string; command: string }[] = [
+    { kind: 'an escaped dollar before a single-quoted backslash', command: String.raw`echo \$'C:\' 'a $hunter2 b'` },
+    { kind: 'two dollars before a single-quoted backslash', command: String.raw`echo $$'C:\' 'a $hunter2 b'` },
+    { kind: 'an escaped dollar before a single-quoted backslash, with a flag target', command: String.raw`echo \$'C:\' 'a --customer acme_value b'` },
+    { kind: 'a case arm inside a substitution', command: `echo "$(case x in x) echo "it's";; esac)" 'q $hunter2 r'` },
+    { kind: 'a case arm inside a substitution, with a flag target', command: `echo "$(case x in x) echo "it's";; esac)" 'a --customer acme_value b'` },
+    { kind: 'a parenthesis in a comment inside a substitution', command: ['echo "$(echo a # )', `echo "it's" 'x $hunter2 y')"`].join('\n') },
+    { kind: 'a brace holding a quote inside a substitution', command: `echo "$(echo \${x:-'}'} "it's")" 'a $hunter2 b'` },
+    { kind: 'a scan that runs out of budget', command: `echo ${'"$('.repeat(50000)} "$(echo "it's")" 'a $hunter2 b'` },
+    { kind: 'a heredoc marker inside a quote that spans lines', command: ["echo 'a", '<<X', " b'", 'X', "echo 'c $hunter2 d'"].join('\n') },
+    { kind: 'a heredoc opened on the line that closes a quote, holding a reference', command: ['python -c "', 'print(1)', '" <<"EOF"', 'mysql --password $body_literal', 'EOF'].join('\n') },
+    { kind: 'a heredoc opened on the line that closes a quote, holding a flag', command: ['python -c "', 'print(1)', '" <<"EOF"', 'mysql --customer acme_value', 'EOF'].join('\n') },
+  ];
+  for (const { kind, command } of WHOLE) {
+    it(`sends no name from the literal text after ${kind}`, () => {
+      const skeleton = skeletonOfLines({ redact, terms: [] }, call('w', 'Bash', { command }));
+      expect(toolsOf(skeleton)[0]?.names ?? [], command).toEqual([]);
+      for (const planted of ['hunter2', 'acme_value', 'body_literal']) expect(JSON.stringify(skeleton), command).not.toContain(planted);
+    });
+  }
+
+  it('reads a reference before the first single quote and a reference before the first heredoc marker, and no reference after either', () => {
+    const skeleton = skeletonOfLines(
+      { redact, terms: [] },
+      call('a', 'Bash', { command: `mysql --region "$BUILD_ID" -e 'select 1' "$LATE_ID"` }),
+      call('b', 'Bash', { command: ['cat "$BUILD_ID" <<EOF', 'body', 'EOF', 'echo "$LATE_ID"'].join('\n') }),
+      call('c', 'Bash', { command: `echo 'x' --customer acme_value` }),
+    );
+    const tools = toolsOf(skeleton);
+    expect(tools[0]?.names).toEqual(names('env', 'BUILD_ID'));
+    expect(tools[1]?.names).toEqual(names('env', 'BUILD_ID'));
+    expect(tools[2]?.names ?? []).toEqual([]);
+    for (const value of ['LATE_ID', 'acme_value']) expect(JSON.stringify(skeleton)).not.toContain(value);
+  });
 });
