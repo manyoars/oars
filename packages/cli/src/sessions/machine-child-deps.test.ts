@@ -198,6 +198,14 @@ describe('runMachineChild: the holding route', () => {
     expect(JSON.parse(readFileSync(noticeFile(noMachine.staged.storeDir), 'utf8'))).toMatchObject({ entries: [{ code: 'hold_unconfigured' }] });
   }, 60_000);
 
+  it('tells the person once for a machine with OARS_HOST_CLASS alone, before any gate: no list, no id, no salt, and nothing built or logged', async () => {
+    const given = scene('https://github.com/owner/name');
+    await runMachineChild({ OARS_HOST_CLASS: 'cloud', APPDATA: given.staged.root }, given.staged.runtime, '0.0.0-test', Date.now, stopText(given), NO_WAIT);
+    expect(JSON.parse(readFileSync(noticeFile(given.staged.storeDir), 'utf8'))).toMatchObject({ entries: [{ code: 'hold_unconfigured' }] });
+    expect(batches(given.staged)).toEqual([]);
+    expect(existsSync(join(given.staged.storeDir, 'pool-send.log'))).toBe(false);
+  });
+
   it('holds nothing of a session a gate kept out', async () => {
     const given = scene('https://github.com/owner/name', 'a request naming zorblax');
     const bare = withBare(given);

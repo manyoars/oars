@@ -18,15 +18,12 @@ import { runGit } from './survival.js';
 
 /**
  * Holds the session's batch on its branch in the session's own repository (`machine-hold.ts`). A machine holds only when its enrollment gave it a machine id (the branch's `<machine>`) and `OARS_SESSION_SALT` (the key of the terms digest); one
- * enrolled without them builds into its outbox as before. A session whose batch a gate withdrew has none in the outbox, so nothing is held for it.
+ * enrolled without them builds into its outbox as before, and `runMachineChild` has told the person (before any gate, so a session a gate withdrew or a build that threw is told too). A session whose batch a gate withdrew has none in the outbox, so nothing is held for it.
  */
 const holdSession = async (env: NodeJS.ProcessEnv, gated: NodeJS.ProcessEnv, sessions: SessionsRuntime, now: () => number, machine: MachineConfig | undefined, forwarded: ChildInput): Promise<void> => {
   if (machine === undefined) return;
   const { machine: name, sessionSalt: salt } = machine;
-  if (name === undefined || salt === undefined) {
-    await recordNotice(sessions.storeDir, 'hold_unconfigured', now());
-    return;
-  }
+  if (name === undefined || salt === undefined) return;
   const id = machineKeyOf(machine, basename(forwarded.transcript, '.jsonl'));
   const held = await heldBatchOf(outboxFolder(sessions.storeDir, poolServer(env, DEPOSIT)), id);
   if (held === undefined) return;
@@ -53,6 +50,8 @@ export const runMachineChild = async (env: NodeJS.ProcessEnv, sessions: Sessions
       return;
     }
     const machine = machineOf(env);
+    // A machine that cannot hold loses its session's data unseen, so the person is told at every Stop, before the work that can fail or withdraw: the next Stop prints it once.
+    if (machine !== undefined && (machine.machine === undefined || machine.sessionSalt === undefined)) await recordNotice(sessions.storeDir, 'hold_unconfigured', now());
     const allowRepos = machine?.allowRepos ?? [];
     await machineChild(
       {
