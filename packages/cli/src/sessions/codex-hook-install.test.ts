@@ -1,21 +1,30 @@
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { run } from '../cli.js';
+import { defaultConfigDir } from '../credentials.js';
 import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
 import { sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall } from './command.js';
 import { CODEX_TRUST_NOTICE, codexHookStatus, codexHooksFile, installCodexHook, uninstallCodexHook, type CodexInstall } from './codex-hook-install.js';
 import { readSettings, type InstallRuntime, type Json } from './install.js';
 
-afterEach(removeTestDirs);
+afterEach(() => {
+  vi.unstubAllEnvs();
+  removeTestDirs();
+});
 
 const SCRATCH = resolve(tmpdir(), 'oars-scratch');
 const EVENTS = ['SessionStart', 'PostToolUse', 'PostModelRequest'];
 
 const stage = (): { dir: string; codex: CodexInstall; deps: { sessions: undefined; install: InstallRuntime; now: () => number } } => {
   const dir = mkdtempSync(join(tmpdir(), 'oars-codex-install-'));
+  // Store safety: the store path is under this temp folder before anything runs, so the run(...) route can reach no real store.
+  vi.stubEnv('APPDATA', join(dir, 'appdata'));
+  vi.stubEnv('XDG_CONFIG_HOME', join(dir, 'config'));
+  const storeDir = join(defaultConfigDir(process.env, process.platform, dir), 'oars', 'sessions');
+  if (!storeDir.startsWith(dir)) throw new Error(`The store path ${storeDir} is outside the temp folder ${dir}.`);
   const codex = { home: join(dir, 'codex'), nodePath: resolve(SCRATCH, 'node', 'node.exe'), hookBin: resolve(SCRATCH, 'dist', 'sessions', 'codex-hook-bin.js') };
   const install: InstallRuntime = { platform: 'linux', nodePath: codex.nodePath, hookBin: '', userSettings: join(dir, 'settings.json'), cwd: dir, codex, schtasks: () => Promise.resolve({ code: 0, output: '' }) };
   return { dir, codex, deps: { sessions: undefined, install, now: () => 0 } };
