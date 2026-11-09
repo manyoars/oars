@@ -289,12 +289,11 @@ const CREDENTIAL_FLAGS = words(
     '--password --passwd --pass --pwd --passphrase --secret --client-secret --client_secret --secret-key --secret_key --secret-access-key ' +
     '--api-key --apikey --api_key --private-key --auth --authorization --credential --credentials',
 );
-// A prefixed spelling (`--db-password`, `--db-pass`, `--github-token`, `--vendor_api_key`) is a credential by its last word, in either separator; `--tokenizer`, `--customer`, `--bypass`, and `--compass` are not.
+// A prefixed spelling (`--db-password`, `--db-pass`, `--github-token`, `--vendor_api_key`, `--clientSecret`) is a credential by its last word, in either separator or in camelCase; `--tokenizer`, `--customer`, `--bypass`, and
+// `--compass` are not.
 const CREDENTIAL_SUFFIX = /(?:^|[-_])(?:token|password|passwd|pass|pwd|passphrase|secret|credentials?)$|(?:api|private|secret|access)[-_]key$/;
-const isCredentialFlag = (flag: string): boolean => {
-  const lower = flag.toLowerCase();
-  return CREDENTIAL_FLAGS.has(lower) || CREDENTIAL_SUFFIX.test(lower);
-};
+const isCredentialFlag = (flag: string): boolean =>
+  CREDENTIAL_FLAGS.has(flag.toLowerCase()) || CREDENTIAL_SUFFIX.test(flag.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase());
 
 // The one-letter flags whose next word is a name, and only on the program that gives them that meaning: `-k` selects tests on pytest, and is a passphrase on `openssl` and a switch on `curl` and `du`. Any other one-letter flag may be a
 // switch followed by a positional (`-i needle`) or take a credential (`-p`), so its next word is not read.

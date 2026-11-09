@@ -243,6 +243,20 @@ describe('what is dropped from the names', () => {
     for (const value of ['dbpassvalue', 'joinedvalue', 'barevalue', 'upperpassvalue']) expect(bytesOf(skeleton)).not.toContain(value);
   });
 
+  it('never reads the value of a camelCase credential flag, and still reads a camelCase flag that is not one', () => {
+    const skeleton = skeletonOfLines(
+      { redact, terms: [] },
+      call('a', 'Bash', { command: 'deploy --clientSecret opaquevalue1 --dbPassword opaquevalue2 --region eu_control' }),
+      call('b', 'Bash', { command: 'deploy --githubToken opaquevalue3 --privateKey opaquevalue4 --tokenizerName bert_control' }),
+      call('c', 'Bash', { command: 'deploy --secretKey opaquevalue5 --dbPass=opaquevalue6 --ApiKey opaquevalue7 --customerName cust_control' }),
+    );
+    const [first, second, third] = toolsOf(skeleton);
+    expect(first?.names).toEqual(names('flag', 'eu_control'));
+    expect(second?.names).toEqual(names('flag', 'bert_control'));
+    expect(third?.names).toEqual(names('flag', 'cust_control'));
+    for (let number = 1; number <= 7; number += 1) expect(bytesOf(skeleton)).not.toContain(`opaquevalue${number}`);
+  });
+
   it('reads no variable name out of single-quoted text, which no shell expands, and still reads one outside single quotes', () => {
     const skeleton = skeletonOfLines(
       { redact, terms: [] },
