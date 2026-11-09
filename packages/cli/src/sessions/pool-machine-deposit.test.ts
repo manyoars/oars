@@ -223,7 +223,9 @@ describe('deltas on a machine', () => {
       await deposit(given.staged.runtime, { allow: [FOLDER], redactDomains: [], now: Date.now });
     };
     /** Starts over at the outbox, so the second Stop rebuilds the delta from the history alone: no kept batch, no mark. */
-    const forget = (given: Scene): void => rmSync(join(given.staged.storeDir, 'pool-outbox'), { recursive: true, force: true });
+    const forget = (given: Scene): void => {
+      rmSync(join(given.staged.storeDir, 'pool-outbox'), { recursive: true, force: true });
+    };
 
     it('skips the scan of a session it remembers: a term added to it still leaves it in the history inside the window', async () => {
       const given = await scene({ OARS_HOST_CLASS: 'vps' }, weeks);
