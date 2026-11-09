@@ -1,10 +1,11 @@
 // `oars pool enroll --hold-only`: the whole configuration a cloud VM needs to hold its deposit in its own private repository, printed as one env block, with no pool credential (the pool may not exist yet).
 // The trusted machine mints the machine id, derives the two salts from its own (so a local capture and a VM's key one repository the same way), reads its term file, and refuses any repository that is not
 // private: a hold branch is exactly as readable as the repository it sits in.
-import { createHmac, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import type { Outcome, RunDeps } from '../cli.js';
 import { CliError, ExitCode } from '../errors.js';
 import { exclusionPaths, loadTerms } from './exclusion.js';
+import { derivedSalt } from './machine-ids.js';
 import { HOST_CLASSES } from './machine.js';
 import { mkdirOwnerOnly } from './owner-only.js';
 import { runtimeOf } from './pool-command.js';
@@ -46,7 +47,6 @@ export const githubVisibility = (get: typeof fetch, token: string | undefined): 
   }
 };
 
-const derived = (localKey: string, purpose: string): string => createHmac('sha256', localKey).update(purpose).digest('hex');
 
 const quoted = (value: string): string => `"${value.replace(/[\\"]/gu, '\\$&')}"`;
 
@@ -97,8 +97,8 @@ export const poolEnroll = async (deps: RunDeps, options: EnrollOptions, visibili
     OARS_LAUNCHER: launcher,
     OARS_MACHINE: randomBytes(8).toString('hex'),
     OARS_ALLOW_REPOS: repos.join(','),
-    OARS_REPO_SALT: derived(localKey, 'repoKey/1'),
-    OARS_SESSION_SALT: derived(localKey, 'sessionId/1'),
+    OARS_REPO_SALT: derivedSalt(localKey, 'repoKey/1'),
+    OARS_SESSION_SALT: derivedSalt(localKey, 'sessionId/1'),
     OARS_EXCLUSION_TERMS_INLINE: terms.join('\n'),
   };
   const lines = Object.entries(env).map(([name, value]) => `${name}=${name === 'OARS_EXCLUSION_TERMS_INLINE' ? quoted(value) : value}`);

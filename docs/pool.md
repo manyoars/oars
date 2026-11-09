@@ -210,7 +210,7 @@ An unknown field name a client sends lands in the `extensions` bag of the deposi
 | `harnessVersion` | `fit` and `change` per harness version bucket | clear (public releases); thresholded (long tail) | yes | 78 |
 | `host` | `adoption` and `fit` per web host | hashed at ingest | yes | 19 |
 | `hour` | future per-hour-of-day read of when work happens (stated, served by nothing yet); joins no cell | clear | yes | 27 |
-| `id` | the ledger's replace-on-redeposit key; no read | clear (an opaque client hash, per account) | yes | 23 |
+| `id` | the ledger's replace-on-redeposit key; no read | clear (an opaque client hash, per account; a machine's is the first 16 hex digits of an HMAC of the session's name, with its `cse_` or `session_` prefix stripped, under the account's session salt) | yes | 23 |
 | `identity` | container for what a step called: `fit` and `adoption` read its members | clear | yes | 71 |
 | `input` | `cost`: tokens per prompt class, model, and week | clear (bucket) | yes | 9 |
 | `key` | `fit` by call shape: the sent key a value feature or closed value belongs to, one of the call's `keys`; the pool refuses one the call did not send, and its shape cell is held to the thresholded floor unless the key is on a public tool's pinned list | clear (public list); thresholded (long tail) | yes | 57 |

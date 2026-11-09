@@ -21,15 +21,19 @@ import { runGit } from './survival.js';
  * enrolled without them builds into its outbox as before. A session whose batch a gate withdrew has none in the outbox, so nothing is held for it.
  */
 const holdSession = async (env: NodeJS.ProcessEnv, gated: NodeJS.ProcessEnv, sessions: SessionsRuntime, now: () => number, machine: MachineConfig | undefined, forwarded: ChildInput): Promise<void> => {
-  const salt = env.OARS_SESSION_SALT?.trim();
-  if (machine?.machine === undefined || salt === undefined || salt === '') return;
+  if (machine === undefined) return;
+  const { machine: name, sessionSalt: salt } = machine;
+  if (name === undefined || salt === undefined) {
+    await recordNotice(sessions.storeDir, 'hold_unconfigured', now());
+    return;
+  }
   const id = machineKeyOf(machine, basename(forwarded.transcript, '.jsonl'));
   const held = await heldBatchOf(outboxFolder(sessions.storeDir, poolServer(env, DEPOSIT)), id);
   if (held === undefined) return;
   const terms = await loadTerms(exclusionPaths(sessions.projectsRoot, gated).terms);
   await holdBatch(
     { git: runGit, net: runNetGit, log: (error) => logFailure(sessions.storeDir, now(), error) },
-    { cwd: forwarded.cwd, allowRepos: machine.allowRepos, machine: machine.machine, id, batch: held.bytes, stamp: currentStamp(), terms, salt },
+    { cwd: forwarded.cwd, allowRepos: machine.allowRepos, machine: name, id, batch: held.bytes, stamp: currentStamp(), terms, salt },
   );
 };
 
@@ -40,7 +44,9 @@ export const runMachineChild = async (env: NodeJS.ProcessEnv, sessions: Sessions
   try {
     // The terms the enrollment put in one variable are written to an owner-only file first, so every gate below reads the term file the way it always does.
     const gated = await withInlineTerms(env, sessions.storeDir);
-    const deps = nightlyPoolDeps(gated, sessions, version, now);
+    const repoSalt = env.OARS_REPO_SALT?.trim();
+    const keyed = repoSalt === undefined || repoSalt === '' ? sessions : { ...sessions, repoSalt };
+    const deps = nightlyPoolDeps(gated, keyed, version, now);
     // A client past its vocabulary's age builds no batch and its sessions wait. The child has no terminal, so the next Stop tells the person, from the notice file; nothing is captured or built until the client is upgraded.
     if (vocabularyExpired(deps) !== undefined) {
       await recordNotice(sessions.storeDir, 'vocabulary_expired', now());
@@ -60,7 +66,7 @@ export const runMachineChild = async (env: NodeJS.ProcessEnv, sessions: Sessions
         },
         size: (path) => stat(path).then((found) => found.size, () => undefined),
         capture: async (forwarded) => {
-          await depositSession(sessions, forwarded.transcript, now);
+          await depositSession(keyed, forwarded.transcript, now);
         },
         // The store names a session by its transcript's file name, which is what the Stop's session is on every harness this build runs under.
         build: async (forwarded) => {

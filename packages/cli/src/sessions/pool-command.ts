@@ -23,6 +23,7 @@ import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from 
 import { contentHash, FIRST_ORDER_FAMILIES } from './read.js';
 import { isObject, keptReplica, loadSignIns, numberIn, replicaFile, signInOf, signInsFile, textIn, type SignIn } from './pool-replica.js';
 import { CAPTURE_VERSION, harnessOf as sessionHarness, type Harness } from './schema.js';
+import { machineIdOf } from './machine-ids.js';
 import { machineOf, type MachineConfig } from './machine.js';
 import { loadStore, localSalt, readRedactDomains, readSkeletons, readState, updatePoolChoices, type SessionsRuntime } from './store.js';
 import { runGit, type Git } from './survival.js';
@@ -398,8 +399,9 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
 
 const machineAccount = (machine: MachineConfig): string => `machine:${machine.machine ?? machine.hostClass}`;
 
-/** The outbox key, and the skeleton `id`, of a machine's session: its own name stands in for the account, which a machine has none of. The holding route names its branch by the same key. */
-export const machineKeyOf = (machine: MachineConfig, session: string): string => contentHash([machineAccount(machine), session]);
+/** The outbox key, and the skeleton `id`, of a machine's session: from the environment's session salt (per account, not per machine), else its own name standing in for the account, which a machine has none of. The holding route names its branch by the same key. */
+export const machineKeyOf = (machine: MachineConfig, session: string): string =>
+  machine.sessionSalt === undefined ? contentHash([machineAccount(machine), session]) : machineIdOf(machine.sessionSalt, machine.remoteSession ?? session);
 
 /**
  * `oars pool deposit`: every session in the store that passes both session gates is built into a canonical batch in the outbox, and the command stops: nothing is sent. The gates run before any projection does: the folder

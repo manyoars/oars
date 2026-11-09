@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { machineIdOf } from './machine-ids.js';
 import { inlineTermsFile } from './machine.js';
 import { runMachineChild } from './machine-child-deps.js';
 import { messageOf, noticeFile } from './machine-notice.js';
@@ -60,7 +61,8 @@ describe('runMachineChild: the repository allow list', () => {
     expect(batches(given.staged)).toHaveLength(1);
     expect(existsSync(join(given.staged.storeDir, 'raw'))).toBe(true);
     expect(existsSync(join(given.staged.storeDir, 'pool-send.log'))).toBe(false);
-    expect(existsSync(noticeFile(given.staged.storeDir))).toBe(false);
+    // This enrollment gave no machine salt, so nothing is held and the person is told once; the batch is built all the same.
+    expect(JSON.parse(readFileSync(noticeFile(given.staged.storeDir), 'utf8'))).toMatchObject({ entries: [{ code: 'hold_unconfigured' }] });
   });
 
   it('builds nothing for a repository off the list, and does not capture the session either', async () => {
@@ -172,6 +174,7 @@ describe('runMachineChild: the holding route', () => {
     const [, stamp = '', name = ''] = file.split(/[/\\]/u);
     expect(name).toMatch(/^[0-9a-f]{16}\.[0-9a-f]{64}\.jsonl$/u);
     const id = name.slice(0, 16);
+    expect(id).toBe(machineIdOf('a-derived-session-salt', SESSION));
     expect(branchesIn(bare)).toEqual([`refs/heads/oars-hold/m-1/${id}`]);
     const show = (path: string): string => execFileSync('git', ['-C', bare, 'show', `refs/heads/oars-hold/m-1/${id}:${path}`], { encoding: 'utf8' });
     expect(readFileSync(join(given.staged.storeDir, 'pool-outbox', file), 'utf8')).toBe(show('batch.json'));
@@ -186,11 +189,13 @@ describe('runMachineChild: the holding route', () => {
     await run(noSalt, { OARS_ALLOW_REPOS: 'owner/name', ...TERMS });
     expect(batches(noSalt.staged)).toHaveLength(1);
     expect(branchesIn(noSaltBare)).toEqual([]);
+    expect(JSON.parse(readFileSync(noticeFile(noSalt.staged.storeDir), 'utf8'))).toMatchObject({ entries: [{ code: 'hold_unconfigured' }] });
     const noMachine = scene('https://github.com/owner/name');
     const noMachineBare = withBare(noMachine);
     await run(noMachine, { ...HOLD, OARS_MACHINE: '' });
     expect(batches(noMachine.staged)).toHaveLength(1);
     expect(branchesIn(noMachineBare)).toEqual([]);
+    expect(JSON.parse(readFileSync(noticeFile(noMachine.staged.storeDir), 'utf8'))).toMatchObject({ entries: [{ code: 'hold_unconfigured' }] });
   }, 60_000);
 
   it('holds nothing of a session a gate kept out', async () => {
