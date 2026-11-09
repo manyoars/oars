@@ -155,7 +155,7 @@ describe('hook install --machine at user scope', () => {
     expect(readFileSync(termsFile, 'utf8')).toBe('new corp\n');
   });
 
-  it('a re-install that names OARS_EXCLUSION_TERMS drops the earlier inline terms, and the other way round', async () => {
+  it('a re-install that names OARS_EXCLUSION_TERMS drops the earlier inline terms, and the other way around', async () => {
     const dir = scratch();
     const file = join(dir, 'user', 'settings.json');
     const named = join(dir, 'terms', 'named.txt');

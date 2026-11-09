@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { messageOf, noticeFile, recordNotice } from './machine-notice.js';
 
 // Both programs run: a machine's installed command starts `oars-hook`, which only imports `hook-bin.js`, so a missing import there leaves every Stop a silent exit 0 that `hook-bin.js` alone would never show.
@@ -87,8 +87,8 @@ describe.skipIf(!built)('the built machine Stop hook', () => {
     });
 
     // The route a real Stop takes after `machineStop` detaches: every case above sends `{}`, which starts no child, so without this one a hook that never reaches `machine-child` still passes.
-    it('runs machine-child to completion: a repository on the allow list, with inline terms, builds one batch into the outbox', async () => {
-      const { folder, store } = home();
+    /** A repository on the allow list with one session in the harness's folder, and the Stop's forwarded input for it. */
+    const fixture = (folder: string): { extra: { [name: string]: string }; input: string } => {
       const repo = join(folder, 'work', 'widgets');
       mkdirSync(repo, { recursive: true });
       execFileSync('git', ['init', '-q', repo]);
@@ -97,11 +97,34 @@ describe.skipIf(!built)('the built machine Stop hook', () => {
       const transcript = join(folder, '.claude', 'projects', 'zz-widgets', `${id}.jsonl`);
       mkdirSync(join(folder, '.claude', 'projects', 'zz-widgets'), { recursive: true });
       writeFileSync(transcript, `${JSON.stringify({ type: 'user', sessionId: id, cwd: repo, timestamp: '2026-05-01T01:00:00Z', permissionMode: 'default', message: { role: 'user', content: 'a plain request' } })}\n`);
-      const extra = { OARS_HOST_CLASS: 'vps', OARS_ALLOW_REPOS: 'acme/widgets', OARS_EXCLUSION_TERMS_INLINE: 'zorblax' };
-      const ran = await machineChild(program, folder, extra, JSON.stringify({ session_id: id, transcript_path: transcript, cwd: repo }));
-      expect(ran).toEqual({ code: 0, stdout: '' });
+      return { extra: { OARS_HOST_CLASS: 'vps', OARS_ALLOW_REPOS: 'acme/widgets', OARS_EXCLUSION_TERMS_INLINE: 'zorblax' }, input: JSON.stringify({ session_id: id, transcript_path: transcript, cwd: repo }) };
+    };
+    const outboxNames = (store: string): string[] => {
       const outbox = join(store, 'pool-outbox');
-      expect(existsSync(outbox) ? readdirSync(outbox, { recursive: true, encoding: 'utf8' }).filter((name) => name.endsWith('.jsonl')) : []).toHaveLength(1);
+      return existsSync(outbox) ? readdirSync(outbox, { recursive: true, encoding: 'utf8' }) : [];
+    };
+
+    it('runs machine-child to completion: a repository on the allow list, with inline terms, builds one batch into the outbox', async () => {
+      const { folder, store } = home();
+      const { extra, input } = fixture(folder);
+      const ran = await machineChild(program, folder, extra, input);
+      expect(ran).toEqual({ code: 0, stdout: '' });
+      expect(outboxNames(store).filter((name) => name.endsWith('.jsonl'))).toHaveLength(1);
     }, 60_000);
+
+    // The whole route of a real Stop: the program's own `stop --machine` starts the detached child, which builds the batch after the hook has returned. Waited on its condition (a batch, and the child's lock let go), never a fixed sleep.
+    it('a Stop with a real session starts the detached child, which builds one batch', async () => {
+      const { folder, store } = home();
+      const { extra, input } = fixture(folder);
+      expect(await stop(program, folder, extra, input)).toEqual({ code: 0, stdout: '' });
+      await vi.waitFor(
+        () => {
+          const names = outboxNames(store);
+          expect(names.filter((name) => name.endsWith('.jsonl'))).toHaveLength(1);
+          expect(names.some((name) => name.endsWith('send.lock'))).toBe(false);
+        },
+        { timeout: 60_000, interval: 250 },
+      );
+    }, 70_000);
   });
 });
