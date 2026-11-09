@@ -262,7 +262,7 @@ describe('what is dropped from the names', () => {
     expect(first?.names).toEqual(names('flag', 'eu_control'));
     expect(second?.names).toEqual(names('flag', 'bert_control'));
     expect(third?.names).toEqual(names('flag', 'cust_control'));
-    for (let number = 1; number <= 7; number += 1) expect(bytesOf(skeleton)).not.toContain(`opaquevalue${number}`);
+    for (let number = 1; number <= 7; number += 1) expect(bytesOf(skeleton)).not.toContain(`opaquevalue${String(number)}`);
   });
 
   it('reads no variable name out of single-quoted text, which no shell expands, and still reads one outside single quotes', () => {
@@ -397,7 +397,7 @@ describe('a variable reference whose dollar and name sit in different pieces of 
           }
         }
         const words = [...rows.keys()];
-        const skeleton = skeletonOfLines({ redact, terms: [] }, ...words.map((word, at) => call(`c${at}`, 'Bash', { command: `mysql --password ${word} --region eu_control` })));
+        const skeleton = skeletonOfLines({ redact, terms: [] }, ...words.map((word, at) => call(`c${String(at)}`, 'Bash', { command: `mysql --password ${word} --region eu_control` })));
         const tools = toolsOf(skeleton);
         expect(tools).toHaveLength(words.length);
         words.forEach((word, at) => {
