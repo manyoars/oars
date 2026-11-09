@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { argNamesOf, type ArgName } from './call-shape.js';
 import { captureSession } from './extract.js';
 import { printOf, sessionsFrom, store, storedNames } from './pool-fixture.js';
-import { skeletonOf, type SessionSkeleton, type WireGate } from './pool-wire.js';
+import { bucketOf, skeletonOf, type SessionSkeleton, type WireGate } from './pool-wire.js';
 import { CLOSED_ARG_VALUES } from './public-vocabulary.js';
 import { makeRedactor } from './redact.js';
 
@@ -73,5 +73,63 @@ describe('name tokens of a call', () => {
     expect(again?.names).toEqual(read?.names);
     expect(bash?.names).toEqual([...names('env', 'BUILD_ID', 'PGHOST'), ...names('flag', 'report.xml', 'test_checkout')]);
     expect(agent?.names).toEqual(names('agent', 'ledger-auditor'));
+  });
+});
+
+describe('what is dropped from the names', () => {
+  const bytesOf = (skeleton: SessionSkeleton): string => JSON.stringify(skeleton);
+
+  it('drops a name that holds an exclusion term, counts it, and keeps a control name of the same call', () => {
+    const skeleton = skeletonOfLines({ redact, terms: ['globex'] }, call('a', 'Read', { file_path: '/w/src/globex-billing/plan.md' }));
+    const [only] = toolsOf(skeleton);
+    expect(only?.names).toEqual([...names('file', 'plan.md'), ...names('dir', 'src')]);
+    expect(only?.namesDropped).toBe(bucketOf('count', 1));
+    expect(bytesOf(skeleton)).not.toContain('globex');
+  });
+
+  it('drops a credential-shaped name, counts it, and keeps a control name of the same call', () => {
+    const skeleton = skeletonOfLines({ redact, terms: [] }, call('a', 'Read', { file_path: '/w/src/AKIAABCDEFGHIJKLMNOP/plan.md' }));
+    const [only] = toolsOf(skeleton);
+    expect(only?.names).toEqual([...names('file', 'plan.md'), ...names('dir', 'src')]);
+    expect(only?.namesDropped).toBe(bucketOf('count', 1));
+    expect(bytesOf(skeleton)).not.toContain('AKIAABCDEFGHIJKLMNOP');
+  });
+
+  it('sends no folder above the session root: the home folder is the operating system account name', () => {
+    const skeleton = skeletonOfLines({ redact, terms: [] }, call('a', 'Read', { file_path: '/home/jsmith-acct/notes/plan.md' }), call('b', 'Read', { file_path: 'C:\\Users\\jsmith-acct\\notes\\plan.md' }), call('c', 'Read', { file_path: '/w/src/ledger.ts' }));
+    const [outside, windows, inside] = toolsOf(skeleton);
+    expect(outside?.names).toEqual(names('file', 'plan.md'));
+    expect(windows?.names).toEqual(names('file', 'plan.md'));
+    expect(inside?.names).toEqual([...names('file', 'ledger.ts'), ...names('dir', 'src')]);
+    expect(bytesOf(skeleton)).not.toContain('jsmith-acct');
+    expect(bytesOf(skeleton)).not.toContain('notes');
+  });
+
+  it('counts a name the wire shape refuses, and sends neither a count nor a name when nothing was dropped', () => {
+    const skeleton = skeletonOfLines({ redact, terms: [] }, call('a', 'Read', { file_path: '/w/src/Q3 plan.md' }), call('b', 'Read', { file_path: '/w/src/plan.md' }));
+    const [spaced, plain] = toolsOf(skeleton);
+    expect(spaced?.names).toEqual(names('dir', 'src'));
+    expect(spaced?.namesDropped).toBe(bucketOf('count', 1));
+    expect(plain).not.toHaveProperty('namesDropped');
+    expect(bytesOf(skeleton)).not.toContain('Q3 plan');
+  });
+
+  it('never reads the value of a credential-named flag as a name, in either spelling of the flag', () => {
+    const skeleton = skeletonOfLines(
+      { redact, terms: [] },
+      call('a', 'Bash', { command: 'deploy --token opaquetokenone --region=eu_west' }),
+      call('b', 'Bash', { command: 'deploy --token=opaquetokentwo --password hunterthree --api-key=keyfour --secret=sfive --client-secret sixsix --customer=globex' }),
+    );
+    const [spaced, joined] = toolsOf(skeleton);
+    expect(spaced?.names).toEqual(names('flag', 'eu_west'));
+    expect(joined?.names).toEqual(names('flag', 'globex'));
+    for (const value of ['opaquetokenone', 'opaquetokentwo', 'hunterthree', 'keyfour', 'sfive', 'sixsix']) expect(bytesOf(skeleton)).not.toContain(value);
+  });
+
+  it('reads no flag value after a credential-named flag in the name read itself', () => {
+    const w = (text: string) => ({ text, quoted: false });
+    const read = (...args: ReturnType<typeof w>[]) => argNamesOf('Bash', { command: 'x' }, '/w', '/w', [{ before: [], head: w('tool'), args }], CLOSED_ARG_VALUES);
+    expect(read(w('--token'), w('abc'), w('--api-key'), w('def'), w('--apikey=ghi'), w('--access-token'), w('jkl'), w('--passwd=mno'), w('--private-key'), w('pqr'))).toEqual([]);
+    expect(read(w('--customer=globex'), w('--tokenizer'), w('bert'))).toEqual(names('flag', 'bert', 'globex'));
   });
 });

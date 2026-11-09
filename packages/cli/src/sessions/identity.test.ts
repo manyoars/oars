@@ -120,14 +120,28 @@ describe('identity holds public names, and a skill-run, host, and pull name afte
 
   // A flag's value that is one word is a name token (layer 2): it crosses as a name with its kind, and is no value anywhere else, so every other class P field and every step is read without `names`.
   it.each([
-    ['a flag with its value apart', 'git push --token abcvalue', 'abcvalue'],
     ['a value beside a private package on a runner', 'npx acme-private-tool --customer=globex', 'globex'],
+    ['a value of a flag that names a region', 'git push --region eu_west', 'eu_west'],
   ])('keeps %s as a name token and nowhere else', (_name, command, value) => {
     const failed = captured([{ name: 'Bash', input: { command }, failure: `boom: ${command}` }]);
     expect(failed.errorLines).toHaveLength(1);
     expect(failed.tools[0]?.names).toEqual([{ kind: 'flag', name: value }]);
     expect(pooled(failed, ['names'])).not.toContain(value);
     expect(stepsText(failed)).not.toContain(value);
+  });
+
+  // The secret-shape check knows only the shapes of credentials it has seen, so an opaque token would pass it. The value after a credential-named flag is no name, in either spelling of the flag.
+  it.each([
+    ['apart from its flag', 'git push --token abcvalue'],
+    ['joined to its flag', 'git push --token=abcvalue'],
+    ['after a password flag', 'mysql --password abcvalue'],
+    ['after an api key flag', 'curl-wrap --api-key=abcvalue'],
+  ])('sends the value of a credential-named flag %s nowhere, not even as a name', (_name, command) => {
+    const failed = captured([{ name: 'Bash', input: { command }, failure: `boom: ${command}` }]);
+    expect(failed.errorLines).toHaveLength(1);
+    expect(failed.tools[0]?.names).toBeUndefined();
+    expect(pooled(failed)).not.toContain('abcvalue');
+    expect(stepsText(failed)).not.toContain('abcvalue');
   });
 
   it('masks a private program and takes no flags from it', () => {

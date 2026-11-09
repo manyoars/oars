@@ -275,8 +275,14 @@ const FLAG_TOKEN = /^(?:--[A-Za-z][A-Za-z0-9_-]*|-[A-Za-z])$/;
 const FLAG_VALUE_NAME = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
 // The flags whose value is text, a message or a query or an expression, and so no name even when it is one word.
 const TEXT_FLAGS = words('-m --message --body --title --description --comment --text --query --data --eval -e --command --subject --notes');
+// The flags whose value is a credential, so never a name however word-like it is: the redactor only knows the shapes of the credentials it has seen, and an opaque token is none of them.
+const CREDENTIAL_FLAGS = words(
+  '--token --access-token --accesstoken --access_token --auth-token --authtoken --auth_token --api-token --apitoken --api_token --refresh-token --bearer --bearer-token --id-token ' +
+    '--password --passwd --pass --pwd --passphrase --secret --client-secret --client_secret --secret-key --secret_key --secret-access-key ' +
+    '--api-key --apikey --api_key --private-key --auth --authorization --credential --credentials',
+);
 
-/** The values of a command's flags that are names: the next word of a flag (or the value joined to a long one) when it is a single identifier-like word, and the flag is not one that takes text. */
+/** The values of a command's flags that are names: the next word of a flag (or the value joined to a long one) when it is a single identifier-like word, and the flag is not one that takes text or a credential. */
 const flagValueNames = (args: readonly CommandWord[]): string[] => {
   const found: string[] = [];
   for (let at = 0; at < args.length; at += 1) {
@@ -285,7 +291,7 @@ const flagValueNames = (args: readonly CommandWord[]): string[] => {
     if (word.text === '--') break;
     const joined = JOINED_LONG_FLAG.exec(word.text);
     const flag = joined?.[1] ?? word.text;
-    if (TEXT_FLAGS.has(flag) || !FLAG_TOKEN.test(flag)) continue;
+    if (TEXT_FLAGS.has(flag) || CREDENTIAL_FLAGS.has(flag.toLowerCase()) || !FLAG_TOKEN.test(flag)) continue;
     const next = args[at + 1];
     const value = joined === null ? (next !== undefined && (next.quoted || !next.text.startsWith('-')) ? next.text : undefined) : joined[2];
     if (value !== undefined && FLAG_VALUE_NAME.test(value)) found.push(value);

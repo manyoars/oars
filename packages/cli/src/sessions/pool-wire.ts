@@ -24,7 +24,7 @@ export type SkeletonFormat = (typeof READ_FORMATS)[number];
 /** The tool fields format 4 added: a format 3 batch that holds one is holding a field it does not define. */
 export const FORMAT_4_TOOL_FIELDS = ['argFeatures', 'argValues', 'changeKind'] as const;
 /** The tool fields format 5 added: a batch of format 4 or 3 that holds one is holding a field it does not define. */
-export const FORMAT_5_TOOL_FIELDS = ['names'] as const;
+export const FORMAT_5_TOOL_FIELDS = ['names', 'namesDropped'] as const;
 /**
  * The version of the field list: every field name a batch can hold (`BATCH_FIELDS` in `pool-outbox.ts`). It moves with any field added, so a server told the version knows which names a batch may carry,
  * and a test pins the list to it (`pool-wire-additive.test.ts`). A field is deprecated and left on the list, never removed (conclusion section 17, rule 3).
@@ -120,6 +120,8 @@ export interface SkeletonTool {
   changeKind?: Array<ChangeKind | typeof OTHER>;
   /** The name tokens of the call's values (layer 2), sorted by kind and name: file, directory, and variable names, flag values that are names, a custom agent's name. Each passed the one gate (`wireName`); never a value. Absent when none is sent. */
   names?: SkeletonArgName[];
+  /** A `count` bucket of the name tokens the call held that were not sent: one the redactor changes, an exclusion term matches, or that has no name shape. Absent when none was dropped; never the names. */
+  namesDropped?: number;
   steps: SkeletonStep[];
 }
 
@@ -671,7 +673,7 @@ const transcriptOf = (
     const argFeatures = wireFeatures(tool.argFeatures, sent);
     const argValues = wireValues(tool.argValues, sent, steps[0]?.native);
     const changeKind = wireChange(tool.changeKind);
-    const { names } = wireNames(tool.names, gate);
+    const { names, dropped: namesDropped } = wireNames(tool.names, gate);
     steppedTools.push({
       side,
       prompt: promptPosition,
@@ -687,6 +689,7 @@ const transcriptOf = (
       ...(argValues.length === 0 ? {} : { argValues }),
       ...(changeKind.length === 0 ? {} : { changeKind }),
       ...(names.length === 0 ? {} : { names }),
+      ...(namesDropped === 0 ? {} : { namesDropped: bucketOf('count', namesDropped) }),
       steps,
     });
   }
@@ -842,7 +845,7 @@ export const OPTIONAL = {
   frame: ['harnessVersion', 'model', 'effort', 'day', 'shell', 'reach', 'repoKey', 'orgSize', 'team', 'repoVisibility', 'hour'],
   stack: ['size', 'languageShares'],
   prompt: ['wallSec', 'explore', 'usageResponses', 'intervention'],
-  tool: ['prompt', 'durationMs', 'errorCode', 'recoveryCalls', 'keys', 'keysDropped', 'targetClass', 'argClass', 'argFeatures', 'argValues', 'changeKind', 'names'],
+  tool: ['prompt', 'durationMs', 'errorCode', 'recoveryCalls', 'keys', 'keysDropped', 'targetClass', 'argClass', 'argFeatures', 'argValues', 'changeKind', 'names', 'namesDropped'],
   step: ['tokens', 'ms', 'allocated', 'parent', 'skill', 'edges', 'remainingTokens'],
   transcript: ['spawnedIn'],
 } as const satisfies { readonly [level: string]: readonly string[] };
@@ -1262,6 +1265,7 @@ const parseTool = (held: Collected, harness: WireHarness, value: unknown, at: st
   const argValues = !layered || raw.argValues === undefined ? undefined : listOf(raw.argValues, under(at, 'argValues'), (entry, entryAt) => parseValue(held, sentKeys, steps[0]?.native, entry, entryAt));
   const changeKind = !layered || raw.changeKind === undefined ? undefined : listOf(raw.changeKind, under(at, 'changeKind'), (entry, entryAt) => oneOf(held, CHANGE_KINDS, entry, entryAt));
   const names = !named || raw.names === undefined ? undefined : listOf(raw.names, under(at, 'names'), (entry, entryAt) => parseName(held, entry, entryAt));
+  const namesDropped = !named || raw.namesDropped === undefined ? undefined : bucketIn('count', raw.namesDropped, under(at, 'namesDropped'));
   return {
     side: booleanOf(raw.side, under(at, 'side')),
     prompt: orNull(raw.prompt, under(at, 'prompt'), countOf),
@@ -1277,6 +1281,7 @@ const parseTool = (held: Collected, harness: WireHarness, value: unknown, at: st
     ...(argValues === undefined ? {} : { argValues }),
     ...(changeKind === undefined ? {} : { changeKind }),
     ...(names === undefined ? {} : { names }),
+    ...(namesDropped === undefined ? {} : { namesDropped }),
     steps,
   };
 };

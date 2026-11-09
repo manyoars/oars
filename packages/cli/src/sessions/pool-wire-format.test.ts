@@ -15,7 +15,7 @@ const built = (): SessionSkeleton => {
     argFeatures: [{ key: 'pattern', valueSize: '1-8', patternFeatures: ['anchor'] }],
     argValues: [{ key: 'output_mode', enumValue: 'count' }],
     changeKind: ['value-changed'],
-    names: [{ kind: 'dir', name: 'billing' }, { kind: 'file', name: 'plan.md' }],
+    names: [{ kind: 'dir', name: 'billing' }, { kind: 'file', name: 'plan.md' }, { kind: 'file', name: 'Q3 plan.md' }],
     steps: [step(0, 0, 'file.search', { native: 'Grep' })],
   });
   const [only] = sessionsFrom(store({ sessions: [session('s1', { frame: framed })], prompts: [prompt('s1', 0, { frame: framed })], tools: [grep] }));

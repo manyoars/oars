@@ -71,10 +71,10 @@ describe('the leak test: a private name in a path, a program, a package, an argu
     const text = scanned(named);
     for (const bytes of [PLANTED.toLowerCase(), 'acme-deploy', 'feat/']) expect(text).not.toContain(bytes);
     const apartFromNames = scanned(new Set([...named, 'names']));
-    for (const bytes of ['abc123', 'secret.ts']) {
-      expect(apartFromNames).not.toContain(bytes);
-      expect(text).toContain(bytes);
-    }
+    for (const bytes of ['abc123', 'secret.ts']) expect(apartFromNames).not.toContain(bytes);
+    // A file's name crosses as a name token. The value after a credential-named flag (`--token abc123`) is no name and crosses nowhere.
+    expect(text).toContain('secret.ts');
+    expect(text).not.toContain('abc123');
     expect(JSON.stringify(shellIdentities(skeleton))).toContain('"program":"acme-deploy"');
     expect(JSON.stringify(shellIdentities(skeleton))).toContain(`"name":"${PLANTED.toLowerCase()}-pkg"`);
   });

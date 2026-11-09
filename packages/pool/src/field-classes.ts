@@ -71,6 +71,7 @@ export const FIELD_CLASSES: { readonly [field: string]: FieldRow } = {
   ms: { class: 'clear' },
   name: { class: 'clear', longTail: 'thresholded' },
   names: { class: 'clear' },
+  namesDropped: { class: 'clear' },
   native: { class: 'clear', longTail: 'thresholded' },
   next: { class: 'clear' },
   orgSize: { class: 'clear' },
