@@ -2,7 +2,8 @@
 // The schema still checks every value; these functions are what make a value fit it (a private model name becomes `other`, not a dropped field).
 import type { Recall } from '../sessions/recall-object.js';
 import { HARNESSES, OTHER } from '../sessions/pool-wire.js';
-import { modelWord, versionWord, type CiWord } from './schema.js';
+import { fileURLToPath } from 'node:url';
+import { modelWord, versionWord, type CiWord, type SurfaceWord } from './schema.js';
 
 /** The harness every hook oars installs runs under (Claude Code); one spelling for the session hooks and the gate hook, so the two emitters cannot drift. */
 export const HOOK_HARNESS = 'claude-code';
@@ -56,3 +57,36 @@ export const ciWord = (env: NodeJS.ProcessEnv): CiWord => {
   for (const [variable, word] of CI_PROVIDERS) if (isSet(env[variable])) return word;
   return isSet(env.CI) ? 'other' : 'none';
 };
+
+/** The harness stores a plugin or extension lands in, matched on the folder names the harness uses under its home. */
+const HARNESS_STORES: readonly (readonly [string, SurfaceWord])[] = [
+  ['/.claude/plugins/', 'claude-plugin'],
+  ['/.codex/plugins/', 'codex-plugin'],
+  ['/.gemini/extensions/', 'gemini-extension'],
+];
+
+/** Where a package manager keeps a global install: npm and Node's own prefix (`lib/node_modules`, Windows `npm/node_modules`), pnpm, yarn, and bun. */
+const GLOBAL_FOLDERS: readonly string[] = ['/lib/node_modules/', '/npm/node_modules/', '/pnpm/global/', '/yarn/global/node_modules/', '/.bun/install/global/'];
+
+/** npm's own folder for a package run once (`npx`), which no other tool uses. */
+const NPX_FOLDER = '/_npx/';
+/** The folders pnpm (`dlx`) and bun (`bunx-<id>-<package>`) run a package from: names common enough that only a package manager's own agent makes them count. */
+const RUNNER_FOLDERS = /\/(dlx|bunx-[^/]*)\//;
+const PACKAGE_MANAGER_AGENT = /^(npm|pnpm|yarn|bun)\//;
+
+/**
+ * How this copy arrived, as a closed word, from the folder oars runs in and `npm_config_user_agent` and from nothing else. A harness store is read first (a plugin can carry its own
+ * `node_modules`), then a package runner, then a global install; a folder that fits none reads `unknown`, never a guess. The agent only confirms a runner: a package manager that started the
+ * process says its name there, and a folder called `dlx` with no such agent is not a runner.
+ */
+export const surfaceWord = (installPath: string, userAgent: string | undefined): SurfaceWord => {
+  const path = `/${installPath.split(String.fromCharCode(92)).join('/').toLowerCase()}`;
+  const store = HARNESS_STORES.find(([folder]) => path.includes(folder));
+  if (store !== undefined) return store[1];
+  if (path.includes(NPX_FOLDER)) return 'npx';
+  if (RUNNER_FOLDERS.test(path) && userAgent !== undefined && PACKAGE_MANAGER_AGENT.test(userAgent)) return 'npx';
+  return GLOBAL_FOLDERS.some((folder) => path.includes(folder)) ? 'npm-global' : 'unknown';
+};
+
+/** The folder this module runs from: inside the package wherever it was installed (a symlinked bin resolves to its real folder). */
+export const installFolder = (): string => fileURLToPath(import.meta.url);

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { run, type RunDeps } from '../cli.js';
 import { defaultConfigDir } from '../credentials.js';
 import { harness } from '../test-support.js';
+import { finishTelemetry } from './observe.js';
 import { readSpool } from './spool.js';
 
 const roots: string[] = [];
@@ -120,6 +121,44 @@ describe('the ci field', () => {
     await run(['--version'], deps);
     expect(readSpool(dir).join(' ')).not.toContain('secret-value');
     expect(spooled(dir).map((event) => dataField(event, 'ci'))).toEqual(['other', 'other']);
+  });
+});
+
+describe('the surface field', () => {
+  const finish = (made: Made, installPath: string): void => {
+    finishTelemetry(made.deps, ['--version'], { path: [], flags: [] }, made.deps.now(), 0, installPath);
+  };
+
+  it('rides on the first-run event only, as the word for where this copy was installed', () => {
+    const made = setup();
+    finish(made, '/usr/lib/node_modules/@manyoars/oars/dist/bin.js');
+    finish(made, '/usr/lib/node_modules/@manyoars/oars/dist/bin.js');
+    expect(spooled(made.dir).map((event) => [event.type, dataField(event, 'surface')])).toEqual([
+      ['first-run', 'npm-global'],
+      ['command', undefined],
+      ['command', undefined],
+    ]);
+  });
+
+  it('reads the package manager agent from the run environment, so a package runner reads as npx', () => {
+    const made = setup({ npm_config_user_agent: 'pnpm/9.12.0 npm/? node/v22.11.0 linux x64' });
+    finish(made, '/home/someone/.cache/pnpm/dlx/abc123/19c2/node_modules/@manyoars/oars/dist/bin.js');
+    expect(firstRuns(made.dir)).toEqual([{ ci: 'none', surface: 'npx' }]);
+  });
+
+  it('reads unknown for a copy it cannot place, which is what a run from this source tree is', async () => {
+    const made = setup();
+    await run(['--version'], made.deps);
+    expect(firstRuns(made.dir)).toEqual([{ ci: 'none', surface: 'unknown' }]);
+  });
+
+  it('never puts the path or the agent in the spool', () => {
+    const made = setup({ npm_config_user_agent: 'npm/10.9.0 node/v22.11.0 secret-agent-text' });
+    finish(made, '/home/someone-private/.npm/_npx/abc/node_modules/@manyoars/oars/dist/bin.js');
+    const spool = readSpool(made.dir).join(' ');
+    expect(spool).not.toContain('someone-private');
+    expect(spool).not.toContain('secret-agent-text');
+    expect(firstRuns(made.dir)).toEqual([{ ci: 'none', surface: 'npx' }]);
   });
 });
 

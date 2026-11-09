@@ -94,6 +94,10 @@ export type ErrorClass = (typeof ERROR_CLASSES)[number];
 export const CI_WORDS = ['none', 'github-actions', 'gitlab-ci', 'circleci', 'travis-ci', 'jenkins', 'buildkite', 'azure-pipelines', 'bitbucket', 'teamcity', 'appveyor', 'codebuild', 'other'] as const;
 export type CiWord = (typeof CI_WORDS)[number];
 
+/** How this copy of oars arrived, from the folder it runs in and the package manager that started it (`surfaceWord` in `fields.ts`); the path itself never reaches the spool. A folder it cannot place is `unknown`. */
+export const SURFACE_WORDS = ['npm-global', 'npx', 'claude-plugin', 'codex-plugin', 'gemini-extension', 'unknown'] as const;
+export type SurfaceWord = (typeof SURFACE_WORDS)[number];
+
 /** Which hook fired: the six session hooks, and `gate` for `oars gate hook`. */
 export const HOOK_NAMES = ['session-start', 'prompt', 'pre-tool', 'post-tool', 'stop', 'nightly', 'gate'] as const;
 /** What a hook came to: it found something, found nothing, found something and held it back (the unexposed arm), or failed. */
@@ -187,7 +191,7 @@ const EVENTS: ReadonlyMap<string, FieldRules> = new Map([
   // One send of one batch: whether the pool took it, the HTTP status, and the code of its refusal.
   ['wire-send', rules({ sent: whole(1), status: whole(599), code, bytes: whole(HUGE) })],
   // The install's first run, sent once where the first-run notice is shown (docs/telemetry.md).
-  ['first-run', rules({ ci: oneOf(CI_WORDS) })],
+  ['first-run', rules({ ci: oneOf(CI_WORDS), surface: oneOf(SURFACE_WORDS) })],
 ]);
 
 export const EVENT_TYPES: readonly string[] = [...EVENTS.keys()];

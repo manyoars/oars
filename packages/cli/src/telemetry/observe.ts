@@ -6,7 +6,7 @@ import type { ExitCode } from '../errors.js';
 import { consentOf, markNoticeShown, NOTICE } from './consent.js';
 import { recordEvent } from './record.js';
 import { startDailySend } from './send.js';
-import { ciWord } from './fields.js';
+import { ciWord, installFolder, surfaceWord } from './fields.js';
 import { errorClassOf } from './schema.js';
 
 export interface Observed {
@@ -39,8 +39,11 @@ export const isHook = (argv: string[], observed: Observed): boolean => {
   return gateHook(observed.path) || gateHook(argv);
 };
 
-/** Prints the notice on the first run that is not a hook, then records the event. Never throws and never changes what the command did. */
-export const finishTelemetry = (deps: RunDeps, argv: string[], observed: Observed, startedAt: number, exit: ExitCode): void => {
+/**
+ * Prints the notice on the first run that is not a hook, then records the event. Never throws and never changes what the command did. `installPath` is where this copy runs from; only a test names it,
+ * and it is read inside the guard because it is needed on a first run only.
+ */
+export const finishTelemetry = (deps: RunDeps, argv: string[], observed: Observed, startedAt: number, exit: ExitCode, installPath?: string): void => {
   try {
     const runtime = deps.telemetry;
     if (runtime === undefined) return;
@@ -50,7 +53,7 @@ export const finishTelemetry = (deps: RunDeps, argv: string[], observed: Observe
     if (!consent.noticeShown && !isHook(argv, observed) && markNoticeShown(runtime.dir, deps.now)) {
       deps.io.stderr(`${NOTICE}\n`);
       // Once per install: the notice is shown once, and nothing is recorded or sent from a folder that could not claim it.
-      recordEvent(context, 'first-run', { ci: ciWord(deps.env) });
+      recordEvent(context, 'first-run', { ci: ciWord(deps.env), surface: surfaceWord(installPath ?? installFolder(), deps.env.npm_config_user_agent) });
     }
     const errorClass = errorClassOf(exit);
     recordEvent(context, 'command', {
