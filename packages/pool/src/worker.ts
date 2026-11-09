@@ -9,7 +9,7 @@ import { heldBy, recount, repoKeysOf, signalStatements } from './cluster-store.j
 import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf } from './ingest.js';
 import { accountOf, loginGone, loginPoll, loginStart, logout } from './identity.js';
 import { hashHosts, hashKey } from './ingest-hash.js';
-import { activate, enroll, machineScope, rotate } from './machines.js';
+import { activate, enroll, list, machineScope, revoke, rotate } from './machines.js';
 import { rawRoute } from './raw.js';
 import { depositDigest, erasedRefusal, holdsErasedValue, isErased } from './tombstones.js';
 import { telemetry, type TelemetryEnv } from './telemetry.js';
@@ -150,6 +150,9 @@ export const ROUTES: readonly Route[] = [
   { method: 'DELETE', path: '/v1/login', machine: false, handle: logout },
   { method: 'POST', path: '/v1/covenant/accept', machine: false, handle: covenantAccept },
   { method: 'POST', path: '/v1/machines/enroll', machine: false, handle: enroll },
+  // The account lists and revokes its machines; a machine key may do neither.
+  { method: 'GET', path: '/v1/machines', machine: false, handle: list },
+  { method: 'DELETE', path: '/v1/machines/:id', machine: false, handle: (request, env, [id]) => revoke(request, env, decoded(id ?? '')) },
   // A machine key activates and rotates itself: it is the only credential these two routes read.
   { method: 'POST', path: '/v1/machines/activate', machine: true, handle: activate },
   { method: 'POST', path: '/v1/machines/rotate', machine: true, handle: rotate },

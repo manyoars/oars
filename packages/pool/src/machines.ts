@@ -118,6 +118,21 @@ const reposOf = (stored: string | undefined): string[] => {
   return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === 'string') : [];
 };
 
+/** A row of a machine that is not revoked, as the account sees it: `expired` once the credential held has run out. */
+const viewOf = (row: unknown, now: number): MachineView => {
+  const expiresAt = Number(fieldOf(row, 'expires_at'));
+  return {
+    id: textField(row, 'id') ?? '',
+    label: textField(row, 'label') ?? '',
+    hostClass: closed(ENROLLED_HOST_CLASSES, 'host_class', textField(row, 'host_class')),
+    launcher: closed(LAUNCHERS, 'launcher', textField(row, 'launcher')),
+    allowRepos: reposOf(textField(row, 'allow_repos')),
+    state: expiresAt <= now ? 'expired' : closed(['pending', 'active'] as const, 'state', textField(row, 'state')),
+    expiresAt,
+    createdAt: Number(fieldOf(row, 'created_at')),
+  };
+};
+
 /** A live machine as its presented key finds it: what the account sees, the hash the key is held as now, and whether a rotation has happened. */
 interface Held {
   view: MachineView;
@@ -139,17 +154,7 @@ const heldBy = async (request: Request, env: Env, now: number): Promise<Held | R
   if (expiresAt <= now) {
     return state === 'pending' ? refuse(401, 'token_expired', 'This enrollment token went unused for 24 hours. Enroll the machine again.') : refuse(401, 'machine_expired', 'This machine key has expired. Enroll the machine again.');
   }
-  const view: MachineView = {
-    id: textField(row, 'id') ?? '',
-    label: textField(row, 'label') ?? '',
-    hostClass: closed(ENROLLED_HOST_CLASSES, 'host_class', textField(row, 'host_class')),
-    launcher: closed(LAUNCHERS, 'launcher', textField(row, 'launcher')),
-    allowRepos: reposOf(textField(row, 'allow_repos')),
-    state: closed(['pending', 'active'] as const, 'state', state),
-    expiresAt,
-    createdAt: Number(fieldOf(row, 'created_at')),
-  };
-  return { view, keyHash: hash, rotated: fieldOf(row, 'rotated_at') !== null };
+  return { view: viewOf(row, now), keyHash: hash, rotated: fieldOf(row, 'rotated_at') !== null };
 };
 
 /** What activation answers: the machine, and whether the caller should now trade the key for a fresh one. Only a runtime that can keep the result (any class but `cloud`) is told to, and only until it has. */
@@ -179,4 +184,21 @@ export const rotate = async (request: Request, env: Env): Promise<Response> => {
   const replaced = await env.DB.prepare('UPDATE machines SET key_hash = ?, retired_hash = ?, rotated_at = ? WHERE id = ? AND key_hash = ?').bind(hashToken(key), held.keyHash, now, held.view.id, held.keyHash).run();
   if (replaced.meta.changes === 0) return refuse(401, 'token_retired', 'A rotation replaced this token. Use the key it returned.');
   return answer(200, { machine: held.view, key });
+};
+
+/** `GET /v1/machines`: the account's machines, newest first, as the account sees them. Revoked ones are gone from the list. */
+export const list = async (request: Request, env: Env): Promise<Response> => {
+  const account = await accountOf(request, env);
+  if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
+  const { results } = await env.DB.prepare("SELECT * FROM machines WHERE account = ? AND state <> 'revoked' ORDER BY created_at DESC, id").bind(account).all();
+  const now = Date.now();
+  return answer(200, { machines: results.map((row) => viewOf(row, now)) });
+};
+
+/** `DELETE /v1/machines/:id`: revokes one of the account's machines, effective on the machine's next request. The row stays, so the key is refused as revoked and not as unknown. Another account's machine and one already revoked look the same: no such machine. */
+export const revoke = async (request: Request, env: Env, id: string): Promise<Response> => {
+  const account = await accountOf(request, env);
+  if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
+  const revoked = await env.DB.prepare("UPDATE machines SET state = 'revoked' WHERE id = ? AND account = ? AND state <> 'revoked'").bind(id, account).run();
+  return revoked.meta.changes === 1 ? new Response(null, { status: 204 }) : refuse(404, 'not_found', 'None of this account\'s machines has this id.');
 };

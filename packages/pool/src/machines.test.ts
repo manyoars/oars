@@ -215,3 +215,89 @@ describe('POST /v1/machines/rotate', () => {
     for (const bearer of [undefined, 'not-a-key', token]) expect(await rotate(bearer)).toMatchObject({ status: 401, json: { error: 'unauthorized' } });
   });
 });
+
+const revoke = (id: string, bearer?: string): ReturnType<TestPool['send']> => pool.send(`/v1/machines/${id}`, { method: 'DELETE' }, bearer);
+const listed = async (bearer?: string): Promise<unknown[]> => {
+  const machines = fieldOf((await pool.get('/v1/machines', bearer)).json, 'machines');
+  return Array.isArray(machines) ? machines.map((machine: unknown) => machine) : [];
+};
+
+describe('GET /v1/machines', () => {
+  it('lists the caller\'s machines as views with their state, never a hash or a key, and not another account\'s', async () => {
+    const mine = await pool.signIn('github', stubUser('4330'));
+    const theirs = await pool.signIn('github', stubUser('4331'));
+    const waiting = await enrolled(mine.token, { label: 'waiting', hostClass: 'vps', allowRepos: [] });
+    const live = await enrolled(mine.token, { label: 'live' });
+    await activate(live.key);
+    const lapsed = await enrolled(mine.token, { label: 'lapsed', hostClass: 'ci' });
+    await activate(lapsed.key);
+    await setRow(lapsed.id, 'expires_at', Date.now() - 1);
+    await enrolled(theirs.token, { label: 'not mine' });
+    const answered = await pool.get('/v1/machines', mine.token);
+    expect(answered.status).toBe(200);
+    const machines = (await listed(mine.token)).sort((left, right) => textOf(left, 'label').localeCompare(textOf(right, 'label')));
+    expect(machines).toMatchObject([
+      { id: lapsed.id, label: 'lapsed', hostClass: 'ci', launcher: 'orchestrated', state: 'expired', allowRepos: ['acme/api', 'acme/web'], expiresAt: anyNumber(), createdAt: anyNumber() },
+      { id: live.id, label: 'live', hostClass: 'cloud', state: 'active' },
+      { id: waiting.id, label: 'waiting', hostClass: 'vps', state: 'pending', allowRepos: [] },
+    ]);
+    const text = JSON.stringify(answered.json);
+    for (const secret of [live.key, waiting.key, sha256(live.key), sha256(waiting.key), 'key_hash', 'retired_hash']) expect(text).not.toContain(secret);
+  });
+
+  it('lists nothing for an account with no machines, and is the account credential\'s alone', async () => {
+    const { token } = await pool.signIn('github', stubUser('4332'));
+    expect(await pool.get('/v1/machines', token)).toMatchObject({ status: 200, json: { machines: [] } });
+    for (const bearer of [undefined, 'not-a-credential']) expect(await pool.get('/v1/machines', bearer)).toMatchObject({ status: 401, json: { error: 'unauthorized' } });
+    const { key } = await enrolled(token);
+    expect(await pool.get('/v1/machines', key)).toMatchObject({ status: 403, json: { error: 'deposit_only' } });
+    await activate(key);
+    expect(await pool.get('/v1/machines', key)).toMatchObject({ status: 403, json: { error: 'deposit_only' } });
+  });
+});
+
+describe('DELETE /v1/machines/:id', () => {
+  it('revokes the caller\'s machine: 204, gone from the list, and its key is refused at the next use', async () => {
+    const { token } = await pool.signIn('github', stubUser('4340'));
+    const live = await enrolled(token, { hostClass: 'vps' });
+    await activate(live.key);
+    const waiting = await enrolled(token);
+    const kept = await enrolled(token);
+    expect(await revoke(live.id, token)).toMatchObject({ status: 204, json: null });
+    expect(await revoke(waiting.id, token)).toMatchObject({ status: 204, json: null });
+    expect(await rowOf(live.id)).toMatchObject({ state: 'revoked' });
+    expect((await listed(token)).map((machine) => textOf(machine, 'id'))).toEqual([kept.id]);
+    expect(await activate(live.key)).toMatchObject({ status: 401, json: { error: 'machine_revoked' } });
+    expect(await rotate(live.key)).toMatchObject({ status: 401, json: { error: 'machine_revoked' } });
+    expect(await activate(waiting.key)).toMatchObject({ status: 401, json: { error: 'machine_revoked' } });
+    // A repeat finds nothing to revoke, and the machine left alone still works.
+    expect(await revoke(live.id, token)).toMatchObject({ status: 404, json: { error: 'not_found' } });
+    expect(await activate(kept.key)).toMatchObject({ status: 200 });
+  });
+
+  it('cannot reach another account\'s machine: it is not listed, and revoking it is 404 and changes nothing', async () => {
+    const mine = await pool.signIn('github', stubUser('4341'));
+    const theirs = await pool.signIn('github', stubUser('4342'));
+    const stranger = await enrolled(theirs.token, { label: 'not mine' });
+    await activate(stranger.key);
+    expect(await listed(mine.token)).toEqual([]);
+    expect(await revoke(stranger.id, mine.token)).toMatchObject({ status: 404, json: { error: 'not_found' } });
+    expect(await revoke('no-such-machine', mine.token)).toMatchObject({ status: 404, json: { error: 'not_found' } });
+    expect(await rowOf(stranger.id)).toMatchObject({ state: 'active' });
+    expect(await activate(stranger.key)).toMatchObject({ status: 200, json: { machine: { id: stranger.id, state: 'active' } } });
+    expect(await revoke(stranger.id, theirs.token)).toMatchObject({ status: 204 });
+  });
+
+  it('wants the account credential: no credential and an unknown one are 401, and a machine key is 403 deposit_only and revokes nothing', async () => {
+    const { token } = await pool.signIn('github', stubUser('4343'));
+    const first = await enrolled(token);
+    const second = await enrolled(token);
+    await activate(first.key);
+    for (const bearer of [undefined, 'not-a-credential']) expect(await revoke(first.id, bearer)).toMatchObject({ status: 401, json: { error: 'unauthorized' } });
+    // Its own key, another machine's key, and a token not yet activated.
+    const attempts: Array<[string, string]> = [[first.id, first.key], [second.id, first.key], [first.id, second.key]];
+    for (const [id, bearer] of attempts) expect(await revoke(id, bearer)).toMatchObject({ status: 403, json: { error: 'deposit_only' } });
+    expect(await rowOf(first.id)).toMatchObject({ state: 'active' });
+    expect(await rowOf(second.id)).toMatchObject({ state: 'pending' });
+  });
+});
