@@ -162,8 +162,8 @@ describe('the value of a credential flag', () => {
   const CREDENTIALS: readonly { command: string; template: string; value: string }[] = [
     { command: 'deploy-tool --token zq_token_apart', template: 'deploy-tool --token <text>', value: 'zq_token_apart' },
     { command: 'deploy-tool --token=zq_token_joined', template: 'deploy-tool --token=<text>', value: 'zq_token_joined' },
-    // A quote inside the word makes the whole word quoted, so the flag name goes unsaid here until the tokenizer records the unquoted `--flag=` prefix; the value never crosses either way.
-    { command: 'deploy-tool --token="zq_token_joined_quoted"', template: 'deploy-tool <text>', value: 'zq_token_joined_quoted' },
+    // The tokenizer records the unquoted `--flag=` prefix, so the flag name is kept and its quoted value is the text slot; the value never crosses.
+    { command: 'deploy-tool --token="zq_token_joined_quoted"', template: 'deploy-tool --token=<text>', value: 'zq_token_joined_quoted' },
     { command: 'deploy-tool --token 7391062', template: 'deploy-tool --token <text>', value: '7391062' },
     { command: 'deploy-tool --token https://zq.example/zq_token_url', template: 'deploy-tool --token <text>', value: 'zq_token_url' },
     { command: 'deploy-tool --db-password zq_password_apart', template: 'deploy-tool <flag> <text>', value: 'zq_password_apart' },
@@ -179,6 +179,11 @@ describe('the value of a credential flag', () => {
       expect(JSON.stringify(skeleton), value).not.toContain(value);
     });
   }
+
+  it('reads a double-quoted value joined to an assignment or a long flag as it reads an unquoted one', () => {
+    expect(sent('API_REGION="zq_eu" ./deploy.sh')).toEqual(['<path>']);
+    expect(sent('deploy-tool --region="zq_eu_control" --limit="5"')).toEqual(['deploy-tool <flag> --limit=<num>']);
+  });
 
   it('reads the value of a flag that is not a credential as a slot of its own shape', () => {
     expect(sent('deploy-tool --token zq_a --limit 5')).toEqual(['deploy-tool --token <text> --limit <num>']);

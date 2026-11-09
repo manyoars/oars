@@ -730,3 +730,31 @@ describe('a PowerShell command', () => {
     expect(escaped?.names ?? []).toEqual([]);
   });
 });
+
+describe('a double-quoted value joined to an assignment or a long flag', () => {
+  // A quote inside the word used to make the whole word quoted, so the name before the `=` went unsaid. The prefix is as written, so the name and the joined value are read as for an unquoted word; a credential flag's value never is.
+  it('reads the variable an assignment names and the value a long flag carries, with the quotes around the value', () => {
+    const skeleton = skeletonOfLines(
+      { redact, terms: [] },
+      call('a', 'Bash', { command: 'API_REGION="eu" ./deploy.sh' }),
+      call('b', 'Bash', { command: 'tool --region="eu_control"' }),
+      call('c', 'Bash', { command: 'tool --token="zq_secret_value" --password="zq_pass_value" --region="eu_control"' }),
+    );
+    const [assigned, joined, credential] = toolsOf(skeleton);
+    expect(assigned?.names).toEqual(names('env', 'API_REGION'));
+    expect(joined?.names).toEqual(names('flag', 'eu_control'));
+    expect(credential?.names).toEqual(names('flag', 'eu_control'));
+    for (const value of ['zq_secret_value', 'zq_pass_value']) expect(JSON.stringify(skeleton)).not.toContain(value);
+  });
+
+  it('reads no value from a single quote or a substitution after the `=`, where literal text begins', () => {
+    const skeleton = skeletonOfLines(
+      { redact, terms: [] },
+      call('a', 'Bash', { command: "tool --region='eu_single'" }),
+      call('b', 'Bash', { command: 'tool --region="$(echo eu_sub)"' }),
+      call('c', 'Bash', { command: "API_REGION='eu' ./deploy.sh" }),
+    );
+    expect(toolsOf(skeleton).map((tool) => tool.names ?? [])).toEqual([[], [], []]);
+    for (const value of ['eu_single', 'eu_sub']) expect(JSON.stringify(skeleton)).not.toContain(value);
+  });
+});

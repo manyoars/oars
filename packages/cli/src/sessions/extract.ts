@@ -797,6 +797,8 @@ const substitutionEnd = (text: string, from: number, first: string, budget: { le
  * these are where literal text begins in either shell, so a word that starts before this point is read as the shell reads it, and every word at or after it is opaque: it holds no variable and no flag value, whatever the reader made
  * of the quotes before it. The point does not depend on the dialect, since a harness may run a PowerShell command and not say so (Codex, a nested `pwsh -c`); a PowerShell form in a POSIX command is rare, and the point only sends less.
  */
+/** What an unquoted word holds before its first quote when it is an assignment or a joined long flag: `API_REGION=` and `--region=`, with whatever unquoted text follows the `=`. */
+const JOINED_PREFIX = /^(?:[A-Za-z_][A-Za-z0-9_]*|--[A-Za-z][A-Za-z0-9_-]*)=/;
 const OPAQUE_POINT = /['‘-„]|<<|<#|--%/;
 
 /** The shell a command is written for, which decides its escapes alone: a call whose tool the harness's `shells` table maps to `powershell` (Claude Code's `PowerShell`, and the `powershell` that Copilot, Pi, and Gemini name) reads a backslash as plain and a backtick as the escape, every other call by POSIX's. */
@@ -814,6 +816,8 @@ const tokenize = (text: string, opaqueFrom?: number, dialect: ShellDialect = 'po
   const escape = powershell ? '`' : '\\';
   let word = '';
   let quoted = false;
+  // The word's raw source starts with an unquoted `NAME=` or `--flag=` before its first quote: the prefix is as written, whatever the quote makes of the rest.
+  let joined = false;
   let started = false;
   let redirected = false;
   let at = 0;
@@ -829,11 +833,14 @@ const tokenize = (text: string, opaqueFrom?: number, dialect: ShellDialect = 'po
       else {
         const variable = variableOf(text.slice(start, at));
         if (variable !== undefined) held.variable = variable;
+        // A single quote or a substitution after the `=` is an opaque point inside the word (the value is literal text there), so only a plain double-quoted value is read.
+        if (joined && (opaque < 0 || opaque >= at)) held.joined = true;
       }
       tokens.push(held);
     }
     word = '';
     quoted = false;
+    joined = false;
     started = false;
     start = -1;
   };
@@ -849,6 +856,7 @@ const tokenize = (text: string, opaqueFrom?: number, dialect: ShellDialect = 'po
     const char = text.charAt(at);
     const next = text.charAt(at + 1);
     const here = at;
+    if ((char === "'" || char === '"') && !quoted && JOINED_PREFIX.test(word)) joined = true;
     if (char === "'") {
       const stop = singleQuotedEnd(text, at, !powershell);
       word += text.slice(at + 1, stop);
@@ -978,7 +986,7 @@ const afterPrelude = (words: readonly ShellWord[]): readonly ShellWord[] => {
   for (;;) {
     const word = words[at];
     if (word === undefined) return [];
-    if (word.quoted) return words.slice(at);
+    if (word.quoted && word.joined !== true) return words.slice(at);
     const name = programOf(word) ?? word.text;
     if (BLOCK_WORDS.has(word.text.toLowerCase()) || ASSIGNMENT.test(word.text)) at += 1;
     else if (assignsCommand(words, at)) at += 2;
