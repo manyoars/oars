@@ -897,13 +897,15 @@ export const poolRaw = async (deps: RunDeps, options: { consent?: string | undef
   // A yes is tied to the covenant in force when it is given, so the pool is asked which that is before anything is stored. A no needs none.
   const covenant = options.consent === 'yes' ? await typedYes(deps) : null;
   const heardYes = covenant === null ? undefined : await grantAtPool(deps, covenant);
-  // What this machine held before the save: a no on a signed-out machine that held a yes leaves the pool's yes standing.
+  // What this machine held before the save: a no on a signed-out machine that held a yes, or whose earlier no never reached the pool, leaves the pool's yes standing.
   const before = { yes: false };
   const choices = await updatePoolChoices(runtime.storeDir, (current) => {
-    before.yes = current.rawConsent === 'granted';
+    before.yes = current.rawConsent === 'granted' || current.withdrawalPending;
     if (options.consent !== undefined) {
       current.rawConsent = options.consent === 'yes' ? 'granted' : 'declined';
       current.rawConsentVersion = covenant;
+      // A no the pool has not heard stays pending until it does; a yes replaces whatever the pool was owed.
+      current.withdrawalPending = options.consent === 'no' && before.yes;
     }
     if (folder !== undefined) {
       if (mode === 'all') Reflect.deleteProperty(current.folders, folder);
@@ -912,6 +914,12 @@ export const poolRaw = async (deps: RunDeps, options: { consent?: string | undef
   });
   // The local answer is saved above, so a pool that cannot be told leaves it standing and the command fails: a rerun retries.
   const told = options.consent === 'no' ? await withdrawAtPool(deps, before.yes) : heardYes;
+  // The pool heard the withdrawal: nothing is owed it any more.
+  if (told === 'told' && options.consent === 'no') {
+    await updatePoolChoices(runtime.storeDir, (current) => {
+      current.withdrawalPending = false;
+    });
+  }
   const answer = choices.rawConsent === null ? 'not answered yet: only skeletons go to the pool' : choices.rawConsent === 'granted' ? `yes, given under covenant ${choices.rawConsentVersion ?? 'none'}: redacted raw copies leave while that covenant is in force` : 'no: only skeletons go to the pool';
   const switched = Object.entries(choices.folders).map(([entry, set]) => `  ${entry}: ${set === 'off' ? 'nothing sent to the pool' : 'skeletons only'}`);
   const toldLine =
