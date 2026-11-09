@@ -212,6 +212,13 @@ describe('messageUsage on a Codex session', () => {
     expect(session.messageUsage?.[0]).not.toHaveProperty('cacheWrite');
   });
 
+  it('records one entry for a response with two tool calls, with the response whole counts and both call ids in order', () => {
+    const fn = (second: number, id: string): object => entry(second, 'response_item', { type: 'function_call', call_id: id, name: 'shell', arguments: JSON.stringify({ command: ['ls'] }) });
+    const { session } = codexCapture([...head, say(3, 'one'), fn(4, 'call_a'), fn(5, 'call_b'), count(6, 1000, 400, 200, 50, 1200, limits)]);
+    expect(session.messageUsage).toHaveLength(1);
+    expect(session.messageUsage?.[0]).toMatchObject({ id: 'sess-1-resp1', calls: ['call_a', 'call_b'], input: 590, cacheRead: 400, cacheWrite: 10, output: 200, thinking: 50 });
+  });
+
   it('keeps a window that reports only a percent, and one window alone', () => {
     const { session } = codexCapture([...head, say(3, 'one'), count(4, 10, 0, 5, 0, 15, { secondary: { used_percent: 3 }, primary: { window_minutes: 300 } })]);
     expect(session.messageUsage?.[0]?.plan).toEqual({ secondary: { usedPercent: 3 } });
