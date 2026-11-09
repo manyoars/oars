@@ -4,7 +4,7 @@
 
 ## What happens
 
-- On the first run that is not a hook, `oars` prints a notice on stderr, once, and records that it did. A hook (`oars gate hook`, `hook-bin.js`) never prints it, and a hook's stdout is the same with telemetry as without.
+- On the first run that is not a hook, `oars` prints a notice on stderr, once, records that it did, and leaves one `first-run` event (below): the one event an install sends once and never again. A hook (`oars gate hook`, `hook-bin.js`) never prints the notice or sends that event, and a hook's stdout is the same with telemetry as without.
 - Each CLI command, and each fire of a hook (the bare `oars gate hook` included), then leaves an event in a spool: `<config>/oars/telemetry/events.jsonl` (`<config>` is `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `~/.config` elsewhere). The spool is append-only and capped at 1 MiB; at the cap the file becomes `events.1.jsonl`, replacing the one before, so the two spool files together hold at most 2 MiB. Rotation is best-effort: two oars processes that rotate at the same moment can drop the events of one rotated file. Two first runs at the same moment share one install id.
 - The detached sender (`hook-bin.js nightly`, started by a session-end hook or a command) leaves a `store-health` and a `run-cost` event, `oars pool deposit` leaves a `wire` event for each harness it built batches for and `--send` a `wire-send` event for each send, and a failure oars did not plan for leaves a `crash` event. Each is described below.
 - Recording never throws and never changes a command's exit code or output. A spool that cannot be written costs nothing but the event.
@@ -34,11 +34,39 @@ One per CLI command, written when it ends.
 | `durationMs` | How long the command took, in milliseconds. |
 | `exitCode` | The exit code (0 to 255). |
 | `errorClass` | Present on a non-zero exit: one of `usage`, `auth`, `invalid`, `conflict`, `rate-limited`, `unreachable`, `capped`, `unexpected`, chosen from the exit code. The error's text is never read. |
+| `ci` | Whether the command ran in CI: the closed word described under `first-run`, `none` when no CI variable is set. |
 
 An invented example:
 
 ```json
-{"v":1,"id":"3f2b8c1e-5d4a-4b7e-9c10-2a6f8e1d7b43","at":"2026-11-06T14:03:22.418Z","type":"command","cli":"0.4.0","os":"win32","data":{"path":["pool","fetch"],"flags":["server","harnessVersion"],"durationMs":412,"exitCode":10,"errorClass":"capped"}}
+{"v":1,"id":"3f2b8c1e-5d4a-4b7e-9c10-2a6f8e1d7b43","at":"2026-11-06T14:03:22.418Z","type":"command","cli":"0.4.0","os":"win32","data":{"path":["pool","fetch"],"flags":["server","harnessVersion"],"durationMs":412,"exitCode":10,"errorClass":"capped","ci":"none"}}
+```
+
+### `first-run`
+
+One per install, written on the run that prints the first-run notice, so a count of these events is a count of installs that ran, not of downloads. It is also written when `oars telemetry on` is the first command, since that command prints the notice. It is not written by a hook, by an install that has turned telemetry off (`oars telemetry off`, `OARS_TELEMETRY=0`, or `DO_NOT_TRACK=1`), or when the telemetry folder cannot be written. An install whose `install-id` file was deleted while its `settings.json` was kept sends none, because the notice is already recorded as shown.
+
+| Field | What it holds |
+|---|---|
+| `ci` | Whether this run was in CI, as one closed word: `none`, `github-actions`, `gitlab-ci`, `circleci`, `travis-ci`, `jenkins`, `buildkite`, `azure-pipelines`, `bitbucket`, `teamcity`, `appveyor`, `codebuild`, or `other` (a bare `CI` variable with no provider variable beside it). The word is chosen from which variable names are set, such as `GITHUB_ACTIONS`; a variable's value is tested and dropped, never recorded. |
+| `surface` | How this copy arrived: `npm-global`, `npx`, `claude-plugin`, `codex-plugin`, `gemini-extension`, or `unknown`. The word is chosen from the folder `oars` runs from and the package manager that started it (`npm_config_user_agent`); neither is recorded. A harness store is recognized by its folder name (`.claude/plugins`, `.codex/plugins`, `.gemini/extensions`), so a store under any other name reads `unknown`, as does any folder that fits none of the words. |
+
+The event carries no path, user name, or environment value, and nothing joins it to an account or a deposit. The pool's nightly rollup keeps one cell for it per install and day (`first-run.<surface>`, a yes when the run was in CI), which is how a saved query counts installs since a covenant version was first served (`packages/pool/queries/first-run-installs.sql`). `oars telemetry report` does not show that cell, and a fleet read serves it only where at least the public floor of installs report it.
+
+```json
+{"v":1,"id":"3f2b8c1e-5d4a-4b7e-9c10-2a6f8e1d7b43","at":"2026-11-06T14:03:22.001Z","type":"first-run","cli":"0.4.0","os":"linux","data":{"ci":"none","surface":"npx"}}
+```
+
+### `covenant-shown`
+
+One each time a deposit to the pool stops because the covenant is not yet accepted: the CLI names the version to read and rerun with `--accept-covenant <version>`. It holds the version and nothing else, so a count of these is a count of times the covenant was put in front of an operator, which a server log of `GET /v1/covenant` cannot say (that route is read by a signed-out `curl` too). It is not written when the covenant is already accepted or when deposits are closed.
+
+| Field | What it holds |
+|---|---|
+| `version` | The covenant version the pool named, a short word such as `2026-11-10`; anything else is dropped. |
+
+```json
+{"v":1,"id":"3f2b8c1e-5d4a-4b7e-9c10-2a6f8e1d7b43","at":"2026-11-06T14:05:10.250Z","type":"covenant-shown","cli":"0.4.0","os":"linux","data":{"version":"2026-11-10"}}
 ```
 
 ### `hook`
@@ -173,7 +201,7 @@ Later releases add event types here, one section each.
 
 ## What is never recorded or sent
 
-No session content, prompt text, tool output, file path, directory name, URL, argument value, flag value, error message, environment variable, hostname, username, or account. The command path and flag names are the names the program itself declares, never text you typed after them, so `oars sessions recall --error "my private message"` records the flag name `error` and nothing of the message.
+No session content, prompt text, tool output, file path, directory name, URL, argument value, flag value, error message, environment variable, hostname, username, or account. The `ci` and `surface` words are the closest the schema comes to any of these, and each is a choice from a fixed list made from a variable's name or a folder's name, never the value or the path. The command path and flag names are the names the program itself declares, never text you typed after them, so `oars sessions recall --error "my private message"` records the flag name `error` and nothing of the message.
 
 ## The schema is the control
 
