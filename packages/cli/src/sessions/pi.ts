@@ -79,7 +79,7 @@ export interface PiStore {
   sessions: PiSession[];
   /** The session as transcript text for `captureSession`; throws when the file cannot be read or holds no parseable line. */
   transcript: (session: PiSession) => Promise<string>;
-  /** True when the file holds only its header (`piHeadOnly`); `sessions verify` counts such a file as empty, not unreadable. */
+  /** True when the file holds only its header and entries that carry no turn (`piHeadOnly`); `sessions verify` counts such a file as empty, not unreadable. */
   headOnly: (session: PiSession) => Promise<boolean>;
   /** Files skipped because their id is not a safe file name (it names a skeleton), counted so the skip is never silent. */
   rejected: number;

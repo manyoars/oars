@@ -284,10 +284,10 @@ const linesOf = (session: OpencodeSession, rows: { [column: string]: unknown }[]
   return { lines, bad };
 };
 
-/** Opens the OpenCode store under `root`; undefined when it holds no database, so a machine without OpenCode is skipped silently. A database that cannot be read throws. */
 /** The `session_message` types the format defines that are not a prompt and not read (the header comment): a session of these alone was opened and left. */
 const NO_TURN_ROWS: ReadonlySet<string> = new Set(['location-switched', 'synthetic', 'system', 'skill', 'compaction', 'idle', 'agent-switched', 'model-switched']);
 
+/** Opens the OpenCode store under `root`; undefined when it holds no database, so a machine without OpenCode is skipped silently. A database that cannot be read throws. */
 export const openOpencodeStore = async (root: string): Promise<OpencodeStore | undefined> => {
   const file = join(root, DATABASE);
   if (!existsSync(file)) return undefined;

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { sessionsVerify } from './command.js';
 import { chatHeadOnly } from './vscode-copilot.js';
 import { eventHeadOnly } from './copilot.js';
-import { rolloutHeadOnly } from './codex.js';
+import { rolloutHeadOnly, rolloutOwnText } from './codex.js';
 import { piHeadOnly } from './pi.js';
 import { outcomeOf } from './harness-files.js';
 import { addProject, cleanup, copilotEvent, NOW, ocUser, OTLP_BASE, piEntry, piHeader, rolloutLine, stage, stageCodex, stageCopilot, stageOpencode, stagePi, stageVscode } from './test-support.js';
@@ -161,8 +161,21 @@ describe('sessionsVerify, more head-only forms are empty', () => {
     addProject(staged, 'p', 'mode', [JSON.stringify({ type: 'permission-mode', permissionMode: 'default' }), JSON.stringify({ type: 'file-history-snapshot', messageId: 'm', snapshot: {}, isSnapshotUpdate: false })]);
     addProject(staged, 'p', 'attach', [JSON.stringify({ type: 'attachment', attachment: { type: 'hook_success' } })]);
     addProject(staged, 'p', 'system', [JSON.stringify({ type: 'system', subtype: 'informational', content: 'x' })]);
+    addProject(staged, 'p', 'cost', [JSON.stringify({ type: 'permission-mode', permissionMode: 'default' }), JSON.stringify({ type: 'cost-state', startTime: OTLP_BASE, modelUsage: {} })]);
     addProject(staged, 'p', 'moved', [JSON.stringify({ type: 'permission-mode', permissionMode: 'default' }), JSON.stringify(MOVED[0])]);
     expect((await verify(staged, {}))['claude-code']).toEqual({ seen: 2, yielded: 1, unreadable: 1 });
+  });
+
+  it('Codex: the records a subagent or fork inherited are not part of the head-only test', () => {
+    const rec = (type: string, payload: object, ordinal?: number): string => JSON.stringify({ type, payload, ...(ordinal === undefined ? {} : { ordinal }) });
+    const prompt = rec('event_msg', { type: 'user_message', message: 'fix the build' });
+    const sub = [rec('session_meta', { subagent_history_start_ordinal: 2 }, 0), rec('event_msg', { type: 'user_message', message: 'old' }, 1), rec('event_msg', { type: 'token_count' }, 2)].join('\n');
+    expect(rolloutHeadOnly(rolloutOwnText(sub))).toBe(true);
+    expect(rolloutHeadOnly(sub)).toBe(false);
+    const fork = [rec('session_meta', { forked_from_id: 'p' }), prompt, rec('event_msg', { type: 'mystery' })].join('\n');
+    // Nothing copied from the parent that does not match stays, and a torn line stays whatever the parent holds.
+    expect(rolloutHeadOnly(rolloutOwnText(fork, [rec('session_meta', {}), prompt].join('\n')))).toBe(false);
+    expect(rolloutOwnText(`${rec('session_meta', {})}\nnot json`, prompt)).toContain('not json');
   });
 
   it('Codex: injected context and token_count after the head are empty; an unknown payload is unreadable', async () => {
@@ -176,6 +189,20 @@ describe('sessionsVerify, more head-only forms are empty', () => {
       { id: C, lines: [meta(C), rolloutLine(T(1), 'event_msg', { type: 'mystery' })] },
     ]);
     expect((await verify(staged, { codex: home })).codex).toEqual({ seen: 2, yielded: 1, unreadable: 1 });
+  });
+
+  it('Codex: a fork that holds only the copied prompt of its parent and no turn of its own is empty, not unreadable', async () => {
+    const staged = stage();
+    rmSync(join(staged.projectsRoot, 'proj'), { recursive: true });
+    mkdirSync(staged.projectsRoot, { recursive: true });
+    const meta = (id: string, extra: object = {}): unknown => rolloutLine(T(0), 'session_meta', { session_id: id, id, timestamp: T(0), cwd: WORK, originator: 'codex_cli_rs', cli_version: '0.50.0', ...extra });
+    const prompt = rolloutLine(T(2), 'event_msg', { type: 'user_message', message: 'fix the build' });
+    const home = stageCodex(staged.root, [
+      { id: A, lines: [meta(A), prompt] },
+      // A copied fork (no `history_base`) whose own history is the replayed prompt and nothing after it.
+      { id: B, lines: [meta(B, { forked_from_id: A }), prompt] },
+    ]);
+    expect((await verify(staged, { codex: home })).codex).toEqual({ seen: 1, yielded: 1, unreadable: 0 });
   });
 
   it('Copilot: session.start then session.error is empty; an unknown record is unreadable', async () => {

@@ -95,6 +95,8 @@ describe('sessionsVerify, a file the Gemini or OTel reader drops while it holds 
       { id: C, slug: 'legacy-renamed', projectRoot: WORK, legacy: true, lines: whole(C, { turns: [{ id: 'u1', type: 'user', content: [{ text: 'fix the build' }] }] }) },
       // A prompt whose parts no longer carry `text`.
       { id: D, slug: 'no-text', projectRoot: WORK, lines: [geminiHead(D), { id: 'u1', timestamp: T(1), type: 'user', content: [{ body: 'fix the build' }] }] },
+      // Routine: a prompt of an image alone (`inlineData`, `fileData`) is a known part kind.
+      { id: F, slug: 'image-only', projectRoot: WORK, lines: [geminiHead(F), { id: 'u1', timestamp: T(1), type: 'user', content: [{ inlineData: { mimeType: 'image/png', data: 'AA==' } }, { fileData: { fileUri: 'gs://x/y.png' } }] }] },
       // Routine: a legacy chat with an empty messages list.
       { id: E, slug: 'legacy-quit', projectRoot: WORK, legacy: true, lines: whole(E, { messages: [] }) },
     ]);

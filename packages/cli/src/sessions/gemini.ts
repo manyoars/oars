@@ -494,15 +494,15 @@ const holdsNothing = (text: string, id: string): boolean => {
 /** The message types the CLI writes (chatRecordingService.ts): a prompt, a response, and the notices that carry no turn. */
 const KNOWN_MESSAGE_TYPES: ReadonlySet<string> = new Set(['user', 'gemini', 'info', 'warning', 'error']);
 
-/** True when a prompt carries parts and none of them is a `text` or a `functionResponse`: the parts' key moved. */
+/** True when a prompt carries parts and none of them is a `text`, a `functionResponse`, or an `inlineData` or `fileData` (an image-only prompt): the parts' key moved. */
 const holdsUnreadParts = (message: Obj): boolean => {
   const parts = partsOf(message.content);
-  return message.type === 'user' && parts.length > 0 && !parts.some((part) => typeof part.text === 'string' || 'functionResponse' in part);
+  return message.type === 'user' && parts.length > 0 && !parts.some((part) => typeof part.text === 'string' || 'functionResponse' in part || 'inlineData' in part || 'fileData' in part);
 };
 
 /**
  * True when a chat dropped as holding nothing held records in a shape the reader does not know, not a launch and quit. Four shapes: a folded message of a type outside the known ones,
- * or a prompt or response with no `content`; a prompt whose parts carry no `text` or `functionResponse`; a line that is an object but not a head, `$set`, `$patch`, `$rewindTo`, or a
+ * or a prompt or response with no `content`; a prompt whose parts carry no `text`, `functionResponse`, `inlineData`, or `fileData`; a line that is an object but not a head, `$set`, `$patch`, `$rewindTo`, or a
  * message with a string `id` (`foldChat` discards it); and a legacy `.json` head with no `messages` list (a line-format head carries none).
  */
 const holdsMovedShape = (text: string, file: string): boolean => {

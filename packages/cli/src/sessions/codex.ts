@@ -349,6 +349,51 @@ const toolNames = (list: unknown): string[] =>
 /** The approval policy as the permission mode: a string, or the tag of an externally tagged object (`{granular: {...}}`, protocol.rs:1181), which `mode()` keeps if documented and stores as `other` if not. */
 const approvalMode = (policy: unknown): string | undefined => (isObj(policy) ? Object.keys(policy)[0] : str(policy));
 
+/** The parent's records (not its `session_meta`) as the keys a copied fork's leading records are matched against. */
+const parentKeys = (parent: string): string[] =>
+  parent
+    .split('\n')
+    .map((raw) => parse(raw))
+    .filter((parsed): parsed is Obj => isObj(parsed) && isObj(parsed.payload) && parsed.type !== 'session_meta')
+    .map((parsed) => JSON.stringify([parsed.type, parsed.payload]));
+
+/** True for a `session_meta` of a Copied fork whose parent text is known: the leading records equal to the parent's are its copied history, in either mode. */
+const copiesParent = (payload: Obj, parentText: string | undefined): parentText is string =>
+  parentText !== undefined && str(payload.forked_from_id) !== undefined && !isObj(payload.history_base);
+
+/**
+ * The rollout with the history it inherited removed (the records below a subagent's `subagent_history_start_ordinal`, and a Copied fork's leading
+ * copy of its parent), by the same two rules `rolloutLines` applies, so the head-only test sees only what the session itself wrote. Lines that are not
+ * a JSON object with a payload stay, as a torn line must still count.
+ */
+export const rolloutOwnText = (text: string, parentText?: string): string => {
+  let inherited: number | undefined;
+  let copied: { keys: string[]; at: number } | null = null;
+  let seenMeta = false;
+  return text
+    .split('\n')
+    .filter((raw) => {
+      const entry = parse(raw);
+      if (!isObj(entry) || !isObj(entry.payload)) return true;
+      const ordinal = num(entry.ordinal);
+      if (inherited !== undefined && ordinal !== undefined && ordinal < inherited) return false;
+      if (entry.type !== 'session_meta' && copied !== null) {
+        if (copied.keys[copied.at] === JSON.stringify([entry.type, entry.payload])) {
+          copied.at += 1;
+          return false;
+        }
+        copied = null;
+      }
+      if (entry.type === 'session_meta' && !seenMeta) {
+        seenMeta = true;
+        inherited = num(entry.payload.subagent_history_start_ordinal);
+        if (inherited === undefined && copiesParent(entry.payload, parentText)) copied = { keys: parentKeys(parentText), at: 0 };
+      }
+      return true;
+    })
+    .join('\n');
+};
+
 /** One rollout as the lines `captureSession` reads. */
 export const rolloutLines = (text: string, fallbackId: string, parentText?: string): Obj[] => {
   const nonblank = text.split('\n').filter((raw) => raw.trim() !== '');
@@ -503,12 +548,6 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
       settleMcp(id, failed ? (text === '' ? 'dynamic tool call failed' : text) : undefined, when);
     }
   };
-  const parentKeys = (parent: string): string[] =>
-    parent
-      .split('\n')
-      .map((raw) => parse(raw))
-      .filter((parsed): parsed is Obj => isObj(parsed) && isObj(parsed.payload) && parsed.type !== 'session_meta')
-      .map((parsed) => JSON.stringify([parsed.type, parsed.payload]));
   for (const raw of text.split('\n')) {
     const entry = parse(raw);
     if (!isObj(entry) || !isObj(entry.payload)) continue;
@@ -539,7 +578,7 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
       for (const name of declared) dynamicNames.add(name);
       inherited = num(payload.subagent_history_start_ordinal);
       paginated = payload.history_mode === 'paginated';
-      if (inherited === undefined && parentText !== undefined && str(payload.forked_from_id) !== undefined && !isObj(payload.history_base)) copied = { keys: parentKeys(parentText), at: 0 };
+      if (inherited === undefined && copiesParent(payload, parentText)) copied = { keys: parentKeys(parentText), at: 0 };
     } else if (type === 'turn_context') {
       model = str(payload.model) ?? model;
       // The policy rides every later line as `permissionMode`, the key a Claude Code user line carries.
@@ -756,6 +795,11 @@ export const openCodexStore = async (root: string): Promise<CodexStore | undefin
     origin.mtimeMs = Math.max(origin.mtimeMs, own.mtimeMs);
     sessions.delete(id);
   }
+  // A Copied fork's history is found by matching it against the parent's lineage as of the fork's start; a parent outside the store (or unreadable) leaves it whole.
+  const parentTextOf = async (session: CodexSession): Promise<string | undefined> => {
+    const parent = session.forkedFrom === null ? undefined : sessions.get(session.forkedFrom);
+    return parent === undefined ? undefined : lineageText(parent, session.started).catch(() => undefined);
+  };
   const ordered = [...sessions.values()].sort((a, b) => a.mtimeMs - b.mtimeMs || a.id.localeCompare(b.id));
   return {
     sessions: ordered,
@@ -764,12 +808,10 @@ export const openCodexStore = async (root: string): Promise<CodexStore | undefin
     transcript: async (session) => {
       // A rollout that vanished after it was listed (Codex compresses an old one) fails with its reason, which names no path.
       const text = await lineageText(session);
-      // A Copied fork's history is found by matching it against the parent's lineage as of the fork's start; a parent outside the store (or unreadable) leaves it whole.
-      const parent = session.forkedFrom === null ? undefined : sessions.get(session.forkedFrom);
-      const parentText = parent === undefined ? undefined : await lineageText(parent, session.started).catch(() => undefined);
+      const parentText = await parentTextOf(session);
       const lines = [...rolloutLines(text, session.id, parentText).map((line) => JSON.stringify(line)), ...rolloutBadLines(text)];
       return lines.join('\n') + (lines.length === 0 ? '' : '\n');
     },
-    headOnly: async (session) => rolloutHeadOnly(await lineageText(session)),
+    headOnly: async (session) => rolloutHeadOnly(rolloutOwnText(await lineageText(session), await parentTextOf(session))),
   };
 };
