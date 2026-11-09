@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { rolloutLines } from './codex.js';
-import { captureSession } from './extract.js';
+import { captureSession, isObj, type Obj } from './extract.js';
 import { makeRedactor } from './redact.js';
 import { CAPTURE_VERSION, type MessageUsage } from './schema.js';
 import { deposit, loadStore, paths } from './store.js';
@@ -17,9 +17,9 @@ const capture = (lines: readonly string[]) => {
   return captureSession({ text, session: 's', project: 'p', rev: 1, at: 'x', bytes: text.length, redact });
 };
 
-const parseObject = (text: string): { [key: string]: unknown } => {
+const parseObject = (text: string): Obj => {
   const value: unknown = JSON.parse(text);
-  return typeof value === 'object' && value !== null ? { ...value } : {};
+  return isObj(value) ? value : {};
 };
 
 const USAGE = { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 30, cache_creation_input_tokens: 40, output_tokens_details: { thinking_tokens: 5 } };
@@ -268,7 +268,9 @@ describe('messageUsage on the version path', () => {
 
   it('re-extraction of a session with no usage data still records nothing', async () => {
     const staged = stage('proj');
-    const plain = line({ type: 'assistant', uuid: 'p', timestamp: '2026-06-01T00:00:01.000Z', message: { id: 'msg_p', role: 'assistant', content: [{ type: 'text', text: 'x' }] } });
+    expect(staged.storeDir.startsWith(staged.root)).toBe(true);
+    expect(staged.storeDir.startsWith(appData)).toBe(false);
+    const plain =line({ type: 'assistant', uuid: 'p', timestamp: '2026-06-01T00:00:01.000Z', message: { id: 'msg_p', role: 'assistant', content: [{ type: 'text', text: 'x' }] } });
     addProject(staged, 'proj', 'usage-none', [user, plain]);
     await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
     expect((await loadStore(staged.storeDir)).sessions.find((entry) => entry.session === 'usage-none')).not.toHaveProperty('messageUsage');

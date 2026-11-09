@@ -26,6 +26,7 @@ const batchOf = (messageUsage: MessageUsage[] | undefined) => {
     tools: [tool('s1', 0, 'Bash', { toolUseId: 'toolu_leak_probe', steps: [step(0, 0, 'shell.exec', { native: 'Bash', identity: { program: 'git', sub: 'push', flags: [], pulls: [] } })] })],
   });
   const [only] = sessionsFrom(from);
+  expect(only?.main.messageUsage).toEqual(messageUsage);
   const built = only === undefined ? null : skeletonOf(only, '0123456789abcdef', storedNames, printOf);
   if (built === null) throw new Error('no skeleton');
   return built;
