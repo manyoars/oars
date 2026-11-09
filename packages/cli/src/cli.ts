@@ -16,6 +16,9 @@ import { managerReader } from './gate/registry.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
 import { sessionsTry } from './sessions/try.js';
 import { githubVisibility, poolEnroll } from './sessions/machine-enroll.js';
+import { runNetGit } from './sessions/machine-hold.js';
+import { holdPull } from './sessions/machine-pull.js';
+import { runGit } from './sessions/survival.js';
 import { poolCoverage, poolDeposit, poolFetch, poolLogin, poolLogout, poolOutbox, poolRaw } from './sessions/pool-command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
@@ -549,6 +552,19 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
       const options: OptionValues = command.optsWithGlobals();
       const token = deps.env.GH_TOKEN ?? deps.env.GITHUB_TOKEN;
       emit(deps, flag(options, 'json'), await poolEnroll(deps, { holdOnly: flag(options, 'holdOnly'), hostClass: text(options, 'hostClass'), launcher: text(options, 'launcher'), allowRepos: list(options, 'allowRepos') }, githubVisibility(fetch, token)));
+    });
+
+  pool
+    .command('hold')
+    .description('the trusted machine\'s side of the holding route')
+    .command('pull')
+    .description('on the trusted machine, read the oars-hold/* branch tips of every enrolled machine\'s private repositories (each repository\'s visibility is checked again on every run) and admit each batch that passes every gate to the outbox; a branch that does not is reported and left where it is. Uses this machine\'s own git credential and GH_TOKEN or GITHUB_TOKEN for the visibility check')
+    .option(serverOption, serverHelp)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      const token = deps.env.GH_TOKEN ?? deps.env.GITHUB_TOKEN;
+      const ports = { visibility: githubVisibility(fetch, token), git: runGit, net: runNetGit, remoteOf: (repo: string) => `https://github.com/${repo}.git` };
+      emit(deps, flag(options, 'json'), await holdPull(deps, { server: text(options, 'server') }, ports));
     });
 
   pool
