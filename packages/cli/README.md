@@ -128,7 +128,7 @@ An `--allow` entry is a folder (or its slug), a folder prefix with a trailing sl
 
 #### Recall in a running session: hooks
 
-`oars sessions hook install` writes five entries into one Claude Code settings file. Each is a deterministic, local, fail-open call into the store (no model, no network); an error inside a hook exits 0 with no output, so a hook never blocks or fails a session.
+`oars sessions hook install` writes five entries into one Claude Code settings file. With `--machine` it writes only the `Stop` and `SessionEnd` entries instead (for a VPS or cloud machine; `--env NAME=value` and `--terms-file <path>` go with it), described in the paragraph below the install examples. Each is a deterministic, local, fail-open call into the store (no model, no network); an error inside a hook exits 0 with no output, so a hook never blocks or fails a session.
 
 | Event | Does | Timeout written at install |
 |---|---|---|
@@ -150,7 +150,7 @@ oars sessions hook status                               # user, project, and a t
 oars sessions hook uninstall --scope user               # removes only the entries install wrote
 ```
 
-Install merges: existing hooks (a Stop hook that rotates sessions, say) stay, even inside a group that also holds ours or under a name that contains `hook-bin`; re-running replaces only its own entries (the commands ending `hook-bin.js" <session-start|post-tool|stop>`), and a per-turn `Stop` entry of ours from the first build is removed. A settings file that exists but cannot be read is an error that changes nothing. The harness deletes raw transcripts after `cleanupPeriodDays` (30 when unset), which would erase what `deposit` reads, so install raises it to at least 365 in the file it writes, prints the old and new value, and never lowers a higher one. `--keep-retention` leaves it alone and says so. Uninstall does not touch `cleanupPeriodDays`. For a `claude --settings <file>` launch, install into that file with `--scope file`.
+Install merges: existing hooks (a Stop hook that rotates sessions, say) stay, even inside a group that also holds ours or under a name that contains `hook-bin`; re-running replaces only its own entries (the commands ending `hook-bin.js" <session-start|post-tool|stop>`), and a per-turn `Stop` entry of ours from the first build is removed. A settings file that exists but cannot be read is an error that changes nothing. `oars sessions hook install --machine` writes only the `Stop` and `SessionEnd` entries of a cloud VM, a VPS, or a runner (`--scope project` or `--scope user`), and it and a plain install each leave the other's entries alone; `--env NAME=value` (user scope) writes the enrollment block into that file's `env`, and `--terms-file <path>` moves the inline exclusion terms into an owner-only file. See `docs/sessions-store.md`. The harness deletes raw transcripts after `cleanupPeriodDays` (30 when unset), which would erase what `deposit` reads, so install raises it to at least 365 in the file it writes, prints the old and new value, and never lowers a higher one. `--keep-retention` leaves it alone and says so. Uninstall does not touch `cleanupPeriodDays`. For a `claude --settings <file>` launch, install into that file with `--scope file`.
 
 #### Sends ride the hook and your commands
 

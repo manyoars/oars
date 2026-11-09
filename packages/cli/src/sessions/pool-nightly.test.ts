@@ -1,4 +1,5 @@
 // The nightly send (t884 Item 4): after the covenant is accepted the nightly task builds the outbox and sends new batches and, with its own yes, the redacted raw parts. Acceptance is the consent, so with none (or no server, or no sign-in) it sends nothing.
+import { tmpdir } from 'node:os';
 import { existsSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { open, stat } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -237,7 +238,9 @@ describe('the nightly pool send', () => {
     const before = bytes(person.staged);
 
     // The same store as the person's, so the held batch is there, signed in, with the covenant accepted: only the machine setting differs.
-    const machine = harness({ OARS_EXCLUSION_TERMS: join(person.staged.root, 'terms.txt'), OARS_POOL_URL: POOL, OARS_HOST_CLASS: 'vps' });
+    const machine = harness({ OARS_EXCLUSION_TERMS: join(person.staged.root, 'terms.txt'), OARS_POOL_URL: POOL, OARS_HOST_CLASS: 'vps', APPDATA: person.staged.root });
+    // The machine night must not reach a real store: the store is a temp folder.
+    if (!person.staged.storeDir.startsWith(tmpdir())) throw new Error('the test store is not under the temp folder');
     machine.deps.sessions = person.staged.runtime;
     machine.deps.now = settledClock;
     const pool = wire(OK_RAW);

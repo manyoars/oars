@@ -2,7 +2,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import { messageOf, noticeFile, recordNotice, takeNotice } from './machine-notice.js';
+import { messageOf, NOTICE_INTERVAL_MS, noticeFile, recordNotice, takeNotice } from './machine-notice.js';
 import { cleanup, stage } from './test-support.js';
 
 afterEach(cleanup);
@@ -25,8 +25,26 @@ describe('recordNotice', () => {
   it('keeps one entry per code: a repeat replaces its time', async () => {
     const storeDir = store();
     await recordNotice(storeDir, 'vocabulary_expired', 1000);
-    await recordNotice(storeDir, 'vocabulary_expired', 2000);
-    expect(JSON.parse(readFileSync(noticeFile(storeDir), 'utf8'))).toEqual({ entries: [{ code: 'vocabulary_expired', at: 2000 }] });
+    await recordNotice(storeDir, 'vocabulary_expired', 1000 + NOTICE_INTERVAL_MS);
+    expect(JSON.parse(readFileSync(noticeFile(storeDir), 'utf8'))).toEqual({ entries: [{ code: 'vocabulary_expired', at: 1000 + NOTICE_INTERVAL_MS }] });
+  });
+
+  it('writes a code at most once a day, so a VM does not print the same message at every Stop', async () => {
+    const storeDir = store();
+    await recordNotice(storeDir, 'vocabulary_expired', 1000);
+    expect(takeNotice(storeDir)).toMatch(/out of date/);
+    await recordNotice(storeDir, 'vocabulary_expired', 1000 + NOTICE_INTERVAL_MS - 1);
+    expect(takeNotice(storeDir)).toBeUndefined();
+    await recordNotice(storeDir, 'vocabulary_expired', 1000 + NOTICE_INTERVAL_MS);
+    expect(takeNotice(storeDir)).toMatch(/out of date/);
+  });
+
+  it('writes again when the clock moved backward, instead of staying quiet until it catches up', async () => {
+    const storeDir = store();
+    await recordNotice(storeDir, 'vocabulary_expired', 5000);
+    expect(takeNotice(storeDir)).toMatch(/out of date/);
+    await recordNotice(storeDir, 'vocabulary_expired', 4000);
+    expect(takeNotice(storeDir)).toMatch(/out of date/);
   });
 
   it('makes the store folder when the machine has captured nothing yet', async () => {

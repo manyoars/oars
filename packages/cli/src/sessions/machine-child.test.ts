@@ -1,6 +1,6 @@
 // The machine child: the settle wait before each extraction (on a clock the test drives), and the single flight on the send lock with the dirty mark. The outbox is a temp folder; no store and no pool is touched.
 // Two races are closed on purpose, and each is driven here at the exact point: `stat` and `open` of node's file system are wrapped so a test can act between two of the child's own steps.
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, type PathLike } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, statSync, rmSync, writeFileSync, type PathLike } from 'node:fs';
 import type * as fsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -183,6 +183,8 @@ describe('machineChild', () => {
     expect(await machineChild(deps(outbox, log), input('b'))).toBe('marked');
     expect(await machineChild(deps(outbox, log), input('a'))).toBe('marked');
     expect(readFileSync(join(outbox, 'send.dirty'), 'utf8').trim().split('\n')).toHaveLength(3);
+    // The mark holds a transcript path and a folder: owner-only.
+    if (process.platform !== 'win32') expect(statSync(join(outbox, 'send.dirty')).mode & 0o777).toBe(0o600);
     expect(log).toEqual(['capture a', 'build a']);
     release();
     expect(await holder).toBe('built');
