@@ -295,7 +295,8 @@ export const deriveSession = (capture: SessionCapture, redact: Redactor): Derive
       example: cut(error.line, ERROR_EXAMPLE_CHARS),
       toolUseId: error.toolUseId,
       next: tools.slice(error.after, error.after + 2).map((tool) => tool.tool),
-      editFollowed: tools.slice(error.after, error.after + 6).some((tool) => EDITS.has(tool.tool)),
+      // `isEdit` skips an edit whose own result was an error, so the stored row and `recoveryCalls` (the wire's value) read one rule.
+      editFollowed: tools.slice(error.after, error.after + 6).some(isEdit),
       prompt: error.prompt,
       cls: error.prompt === null ? null : (classOf.get(error.prompt) ?? null),
     }),

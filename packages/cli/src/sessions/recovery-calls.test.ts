@@ -26,7 +26,7 @@ describe('recoveryCallsOf', () => {
     expect(recoveryCallsOf(calls, 0)).toEqual({ next: ['file.write', 'file.edit'], editFollowed: true });
   });
 
-  it('reads no edit when every edit in the window failed, for a skeleton call as well as a stored one', () => {
+  it('reads no edit when every edit in the window failed', () => {
     const calls = [call('shell.exec', 'error'), call('file.edit', 'error'), call('file.write', 'error'), call('file.search')];
     expect(recoveryCallsOf(calls, 0)?.editFollowed).toBe(false);
   });
