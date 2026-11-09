@@ -184,6 +184,16 @@ describe('fail-open', () => {
     expect(String(note?.error)).not.toContain(store.home);
   });
 
+  it('masks every absolute path in the note, in either form, whether or not it sits under the home folder', async () => {
+    const store = stageHook();
+    const message = [`EACCES: open ${store.home}/a`, 'and /var/lib/oars/b', String.raw`and C:\Users\someone\c.txt,`, String.raw`then \\host\share\d`].join(' ');
+    const runtime = { ...store.runtime, append: () => Promise.reject(new Error(message)) };
+    await runCodexHook(JSON.stringify(payloadOf('PostToolUse')), runtime);
+    const error = String(store.notes()[0]?.error);
+    for (const leaked of [store.home, store.root, '/var/lib', 'someone', 'host']) expect(error).not.toContain(leaked);
+    expect(error).toBe('EACCES: open <path> and <path> and <path>, then <path>');
+  });
+
   it('resolves with a note when the input is not JSON or not an object', async () => {
     const store = stageHook();
     await expect(runCodexHook('not json', store.runtime)).resolves.toBeUndefined();

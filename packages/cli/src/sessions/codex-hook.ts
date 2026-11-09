@@ -238,6 +238,16 @@ export interface CodexHookRuntime {
   append: (file: string, text: string) => Promise<void>;
 }
 
+/**
+ * Reduces every absolute path in a note to `<path>`: a POSIX path, a drive path, or a UNC path, whether or not it sits under the home
+ * folder (a failure's message can name any folder, and no path enters a row or a note). The hook's own home goes first, with the rest of
+ * its token, so a home with spaces in it leaves no tail.
+ */
+const maskPaths = (text: string, home: string): string => {
+  const own = home === '' ? text : text.split(home).map((piece, index) => (index === 0 ? piece : piece.replace(/^[^\s'"`,;)]*/, ''))).join('<path>');
+  return own.replace(/(?:[A-Za-z]:[\\/]|\\\\|(?<![\w.~<>-])\/)[^\s'"`,;)]*/g, '<path>');
+};
+
 const parse = (text: string): Obj => {
   const parsed: unknown = JSON.parse(text);
   if (!isObj(parsed)) throw new Error('The hook input is not an object.');
@@ -271,6 +281,7 @@ export const runCodexHook = async (stdin: string, runtime: CodexHookRuntime): Pr
   }
   if (!wrote && !failed) return;
   const ms = Math.round(performance.now() - started);
-  const error = failed ? await errorLine(runtime.storeDir, failure).catch(() => 'unknown error') : null;
+  const masked = new Error(maskPaths(failure instanceof Error ? failure.message : String(failure), runtime.home));
+  const error = failed ? await errorLine(runtime.storeDir, masked).catch(() => 'unknown error') : null;
   await tryLog(() => appendHookCall(runtime.storeDir, { at: new Date(runtime.now()).toISOString(), event: 'codex-record', session, hit: wrote, ms, error }));
 };
