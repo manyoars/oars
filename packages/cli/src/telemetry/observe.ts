@@ -4,7 +4,7 @@ import type { Command } from 'commander';
 import type { RunDeps } from '../cli.js';
 import type { ExitCode } from '../errors.js';
 import { consentOf, markNoticeShown, NOTICE } from './consent.js';
-import { recordEvent } from './record.js';
+import { recordEvent, type TelemetryRuntime } from './record.js';
 import { startDailySend } from './send.js';
 import { ciWord, installFolder, surfaceWord } from './fields.js';
 import { errorClassOf } from './schema.js';
@@ -40,6 +40,18 @@ export const isHook = (argv: string[], observed: Observed): boolean => {
 };
 
 /**
+ * The `first-run` event, from the one place that shows the notice. `installPath` is where this copy runs from; only a test names it, and it is read here because it is needed on a first run only.
+ * Never throws: `oars telemetry on`, which shows the notice itself, calls it outside `finishTelemetry`'s guard.
+ */
+export const recordFirstRun = (deps: RunDeps, runtime: TelemetryRuntime, installPath?: string): void => {
+  try {
+    recordEvent({ ...runtime, version: deps.version, now: deps.now }, 'first-run', { ci: ciWord(deps.env), surface: surfaceWord(installPath ?? installFolder(), deps.env.npm_config_user_agent) });
+  } catch {
+    // Telemetry is never allowed to change what a command does.
+  }
+};
+
+/**
  * Prints the notice on the first run that is not a hook, then records the event. Never throws and never changes what the command did. `installPath` is where this copy runs from; only a test names it,
  * and it is read inside the guard because it is needed on a first run only.
  */
@@ -53,7 +65,7 @@ export const finishTelemetry = (deps: RunDeps, argv: string[], observed: Observe
     if (!consent.noticeShown && !isHook(argv, observed) && markNoticeShown(runtime.dir, deps.now)) {
       deps.io.stderr(`${NOTICE}\n`);
       // Once per install: the notice is shown once, and nothing is recorded or sent from a folder that could not claim it.
-      recordEvent(context, 'first-run', { ci: ciWord(deps.env), surface: surfaceWord(installPath ?? installFolder(), deps.env.npm_config_user_agent) });
+      recordFirstRun(deps, runtime, installPath);
     }
     const errorClass = errorClassOf(exit);
     recordEvent(context, 'command', {

@@ -133,7 +133,9 @@ describe('the off switches', () => {
     expect(out.join('')).toContain(NOTICE);
     expect(consentOf({}, dir).noticeShown).toBe(true);
     await run(['--version'], deps);
-    expect(events(dir).map((event) => field(event, 'data', 'path'))).toEqual([['telemetry', 'on'], []]);
+    // `on` also sends the one `first-run` event, since it showed the notice (first-run.test.ts).
+    expect(commandEvents(dir).map((event) => field(event, 'data', 'path'))).toEqual([['telemetry', 'on'], []]);
+    expect(events(dir).map((event) => String(Reflect.get(Object(event), 'type')))).toEqual(['first-run', 'command', 'command']);
   });
 
   it('`--json on` carries the notice it records as shown, so a reader of the document sees it', async () => {

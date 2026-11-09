@@ -98,6 +98,48 @@ describe('the first-run event', () => {
   });
 });
 
+describe('`oars telemetry on` as the first command', () => {
+  // `on` prints the notice itself and records it shown, so the run that follows finds the notice already shown: the event has to be sent from `on`.
+  it('is spooled once, before that run\'s command event, as it is by any other first command', async () => {
+    const { deps, dir } = setup();
+    expect(await run(['telemetry', 'on'], deps)).toBe(0);
+    expect(spooled(dir).map((event) => event.type)).toEqual(['first-run', 'command']);
+    expect(firstRuns(dir)).toEqual([{ ci: 'none', surface: 'unknown' }]);
+  });
+
+  it('is not spooled again by later runs, or by `on` run again', async () => {
+    const { deps, dir } = setup();
+    await run(['telemetry', 'on'], deps);
+    await run(['telemetry', 'on'], deps);
+    await run(['--version'], deps);
+    expect(firstRuns(dir)).toHaveLength(1);
+  });
+
+  it('is not spooled when an earlier run already showed the notice', async () => {
+    const { deps, dir } = setup();
+    await run(['--version'], deps);
+    await run(['telemetry', 'on'], deps);
+    expect(firstRuns(dir)).toHaveLength(1);
+    expect(spooled(dir).map((event) => event.type)).toEqual(['first-run', 'command', 'command']);
+  });
+
+  it('is spooled when `off` came first and `on` turns telemetry back on, since `off` shows no notice', async () => {
+    const { deps, dir } = setup();
+    await run(['telemetry', 'off'], deps);
+    await run(['telemetry', 'on'], deps);
+    expect(firstRuns(dir)).toHaveLength(1);
+  });
+
+  it.each([
+    ['OARS_TELEMETRY=0', { OARS_TELEMETRY: '0' }],
+    ['DO_NOT_TRACK=1', { DO_NOT_TRACK: '1' }],
+  ])('is not spooled when %s keeps telemetry off in this shell', async (_name, env) => {
+    const { deps, dir } = setup(env);
+    expect(await run(['telemetry', 'on'], deps)).toBe(0);
+    expect(spooled(dir)).toEqual([]);
+  });
+});
+
 describe('the ci field', () => {
   it('rides on the first-run event and on every command event, as a closed word', async () => {
     const { deps, dir } = setup({ GITHUB_ACTIONS: 'true' });
