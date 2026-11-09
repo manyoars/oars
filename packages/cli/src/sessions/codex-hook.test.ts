@@ -194,6 +194,46 @@ describe('fail-open', () => {
     expect(error).toBe('EACCES: open <path> and <path> and <path>, then <path>');
   });
 
+  it('notes a fixed message for input that is not JSON, holding none of the input', async () => {
+    const store = stageHook();
+    await runCodexHook('{"a":MARKER_SECRET}', store.runtime);
+    const [note] = store.notes();
+    expect(note?.error).toBe('The hook input is not JSON.');
+    expect(JSON.stringify(store.notes())).not.toContain('MARKER_SECRET');
+  });
+
+  it('leaves the folder walk to a call the consent gate allows, so a denied folder is never walked', async () => {
+    const store = stageHook();
+    store.saveState(JSON.stringify({ allow: ['!codex'] }));
+    const walked: string[] = [];
+    const repoRoot = (cwd: string): string | null => {
+      walked.push(cwd);
+      return null;
+    };
+    await runCodexHook(JSON.stringify(payloadOf('SessionStart', { cwd: join(store.root, 'denied') })), { ...store.runtime, repoRoot });
+    expect(walked).toEqual([]);
+    expect(store.rows()).toEqual([]);
+    store.saveState(JSON.stringify({ allow: [] }));
+    await runCodexHook(JSON.stringify(payloadOf('SessionStart', { cwd: join(store.root, 'allowed') })), { ...store.runtime, repoRoot });
+    expect(walked).toEqual([join(store.root, 'allowed')]);
+    expect(store.rows()).toHaveLength(1);
+  });
+
+  it('writes a row with one append, a complete line ending in a newline', async () => {
+    const store = stageHook();
+    const calls: Array<{ file: string; text: string }> = [];
+    const append = (file: string, text: string): Promise<void> => {
+      calls.push({ file, text });
+      return Promise.resolve();
+    };
+    await runCodexHook(JSON.stringify(payloadOf('PostToolUse')), { ...store.runtime, append });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.file).toBe(join(store.storeDir, 'hook-rows.jsonl'));
+    expect(calls[0]?.text.endsWith('\n')).toBe(true);
+    expect(calls[0]?.text.split('\n')).toHaveLength(2);
+    expect(() => JSON.parse(calls[0]?.text ?? '')).not.toThrow();
+  });
+
   it('resolves with a note when the input is not JSON or not an object', async () => {
     const store = stageHook();
     await expect(runCodexHook('not json', store.runtime)).resolves.toBeUndefined();

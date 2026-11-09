@@ -236,6 +236,8 @@ export interface CodexHookRuntime {
   now: () => number;
   /** The lockless append; a failure reaches the note in `hook-calls.jsonl` and no partial row is left. */
   append: (file: string, text: string) => Promise<void>;
+  /** The repo-root lookup for the folder class; a test stands in for it. */
+  repoRoot?: (cwd: string) => string | null;
 }
 
 /**
@@ -248,8 +250,14 @@ const maskPaths = (text: string, home: string): string => {
   return own.replace(/(?:[A-Za-z]:[\\/]|\\\\|(?<![\w.~<>-])\/)[^\s'"`,;)]*/g, '<path>');
 };
 
+// JSON.parse's message quotes the input, and the note must hold none of it, so the failure is a fixed line.
 const parse = (text: string): Obj => {
-  const parsed: unknown = JSON.parse(text);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error('The hook input is not JSON.');
+  }
   if (!isObj(parsed)) throw new Error('The hook input is not an object.');
   return parsed;
 };
@@ -268,12 +276,15 @@ export const runCodexHook = async (stdin: string, runtime: CodexHookRuntime): Pr
   try {
     const payload = parse(stdin);
     session = str(payload.session_id);
-    const row = hookRowOf(payload, new Date(runtime.now()).toISOString(), runtime.home);
-    if (row !== undefined && mayRecord(await savedList(runtime.storeDir), str(payload.cwd))) {
-      const line = `${JSON.stringify(row)}\n`;
-      await mkdirOwnerOnly(runtime.storeDir);
-      await runtime.append(paths(runtime.storeDir).hookRows, line);
-      wrote = true;
+    // The gate comes first, so a denied folder is never walked for its repo root.
+    if (mayRecord(await savedList(runtime.storeDir), str(payload.cwd))) {
+      const row = hookRowOf(payload, new Date(runtime.now()).toISOString(), runtime.home, runtime.repoRoot);
+      if (row !== undefined) {
+        const line = `${JSON.stringify(row)}\n`;
+        await mkdirOwnerOnly(runtime.storeDir);
+        await runtime.append(paths(runtime.storeDir).hookRows, line);
+        wrote = true;
+      }
     }
   } catch (thrown) {
     failed = true;
