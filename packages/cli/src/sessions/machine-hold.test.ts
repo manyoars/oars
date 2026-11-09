@@ -1,6 +1,6 @@
 // The hold commit of a machine's batch (`machine-hold.ts`): the terms digest, and the commit made with git plumbing in a real repository in a temp folder. Nothing reads the network or the store.
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -205,6 +205,17 @@ describe('holdBatch', () => {
     expect(logged).toHaveLength(1);
     expect(String(logged[0])).not.toContain(input.batch);
     expect(git(bare, 'for-each-ref').trim()).toBe('');
+  }, SLOW);
+
+  it("does not run the session repository's own pre-push hook, so a project's check neither runs per Stop nor refuses the hold push", async () => {
+    const { bare, repo } = vmWithRemote();
+    const ran = join(repo, 'pre-push-ran');
+    writeFileSync(join(repo, '.git', 'hooks', 'pre-push'), `#!/bin/sh\necho ran >> '${ran.replaceAll('\\', '/')}'\nexit 1\n`, { mode: 0o755 });
+    const input = inputFor(repo);
+    expect(await holdBatch(depsFor(), input)).toBe('pushed');
+    expect(existsSync(ran)).toBe(false);
+    expect(git(bare, 'show', `${heldIn(bare, holdBranch('m1', input.id))}:batch.json`)).toBe(input.batch);
+    expect(logged).toEqual([]);
   }, SLOW);
 
   it('pushes nothing for a repository that left the list', async () => {

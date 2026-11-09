@@ -108,7 +108,8 @@ export const holdBatch = async (deps: HoldDeps, input: HoldInput): Promise<HoldR
   for (let attempt = 1; attempt <= HOLD_ATTEMPTS; attempt += 1) {
     const commit = await holdCommit(deps.git, input, parent);
     if (commit === undefined) return 'skipped';
-    const accepted = await deps.net(cwd, ['push', 'origin', `${commit}:refs/heads/${branch}`]).then(() => true, () => false);
+    // `--no-verify`: the session repository's own `pre-push` hook (husky, or a `core.hooksPath` its install step set) is the project's, not ours, and could run its checks at every Stop under the send lock or refuse every hold push, losing the batch with the VM.
+    const accepted = await deps.net(cwd, ['push', '--no-verify', 'origin', `${commit}:refs/heads/${branch}`]).then(() => true, () => false);
     if (accepted) {
       // Bookkeeping only: a failure here must not turn an accepted push into a retry.
       await deps.git(cwd, ['update-ref', seen, commit]).catch(() => undefined);
