@@ -21,6 +21,7 @@ import { session as sessionRow } from './pool-fixture.js';
 import { slugOf } from './allow.js';
 import { hookRowOf } from './codex-hook.js';
 import { parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey, type SkeletonFrame } from './pool-wire.js';
+import { appendRecall, makeRecall, type Recall } from './recall-object.js';
 import { contentHash } from './read.js';
 import { deposit, loadStore, localSalt, paths, updatePoolChoices, type PoolChoices } from './store.js';
 import { spoolEvents } from '../telemetry/read-events.js';
@@ -548,6 +549,69 @@ describe('the Codex recording hook rows stay local', () => {
       expect(read(held.scene, name)).not.toContain('codex-sess');
     }
     expect(held.scene.sent()).not.toContain('codex-sess');
+  });
+});
+
+// The deposit reads the local recall rows itself (`readRecalls`, then `deriveConsequences` over the store, then `recommendationsOf`), so this goes through the command: a test that calls `recommendationsOf` directly would stay green if the deposit stopped passing its result on.
+describe('the recommendations a deposit carries come from the local recall rows', () => {
+  const WITH_ROWS = '88888888-8888-4888-8888-888888888888';
+  const WITHOUT_ROWS = '99999999-9999-4999-8999-999999999999';
+  const VERSION = '2026-05-30T03:00:00.000Z';
+  interface Carried {
+    reads: number;
+    recommendations?: { id: string; arm: string; poolVersion: string; from: number; to: number }[];
+  }
+  const stamp = (n: number): string => `2026-06-01T00:00:0${String(n)}.000Z`;
+  const line = (session: string, n: number): string =>
+    JSON.stringify({
+      type: n === 0 ? 'user' : 'assistant',
+      uuid: `${session}-${String(n)}`,
+      parentUuid: n === 0 ? null : `${session}-${String(n - 1)}`,
+      isSidechain: false,
+      sessionId: session,
+      cwd: '/w',
+      timestamp: stamp(n),
+      version: '2.1.300',
+      message: n === 0 ? { role: 'user', content: 'read it' } : { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: `t${String(n)}`, name: 'Read', input: { file_path: `/w/${String(n)}.ts` } }] },
+    });
+  const recall = (arm: 'shown' | 'held', at: string): Recall =>
+    makeRecall({ sid: WITH_ROWS, at, frame: null, mode: 'push', query: { form: 'pattern', prefix: [`shape-${arm}`] }, poolVersion: VERSION, arm, reads: ['r1'], rendered: 'advice', names: ['file.read'], evidence: [] });
+
+  /** The first session reads three files and the second two, the recall rows are written to the store folder before the deposit, and the batches the command queued come back by the reads they hold (a batch's id is a keyed hash, not the session's). */
+  const deposited = async (rows: readonly Recall[]): Promise<{ [reads: number]: Carried }> => {
+    const scene = setting();
+    rmSync(join(scene.staged.projectsRoot, 'proj'), { recursive: true, force: true });
+    addProject(scene.staged, 'proj', WITH_ROWS, [0, 1, 2, 3].map((n) => line(WITH_ROWS, n)));
+    addProject(scene.staged, 'proj', WITHOUT_ROWS, [0, 1, 2].map((n) => line(WITHOUT_ROWS, n)));
+    await capture(scene);
+    for (const row of rows) await appendRecall(scene.staged.storeDir, row);
+    await signIn(scene);
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    const batches = batchBytes(scene).map((bytes): Carried => {
+      const parsed = parseSkeleton(JSON.parse(bytes));
+      if (!parsed.ok) throw new Error(`${parsed.field}: ${parsed.reason}`);
+      return { reads: parsed.skeleton.transcripts[0]?.tools.length ?? 0, ...(parsed.skeleton.recommendations === undefined ? {} : { recommendations: parsed.skeleton.recommendations }) };
+    });
+    return Object.fromEntries(batches.map((batch) => [batch.reads, batch]));
+  };
+
+  it('puts one shown and one held row on the session they belong to, with their windows, and nothing on a session with no row', async () => {
+    // A row's window opens on the first call stamped after it: the shown row sits before the first read, the held row between the first and the second.
+    const shown = recall('shown', '2026-06-01T00:00:00.500Z');
+    const held = recall('held', '2026-06-01T00:00:01.500Z');
+    const batches = await deposited([held, shown]);
+    expect(Object.keys(batches)).toEqual(['2', '3']);
+    expect(batches[3]?.recommendations).toEqual([
+      { id: shown.id, arm: 'shown', poolVersion: VERSION, from: 0, to: 3 },
+      { id: held.id, arm: 'held', poolVersion: VERSION, from: 1, to: 3 },
+    ]);
+    expect(batches[2]).not.toHaveProperty('recommendations');
+  });
+
+  it('puts nothing on any session when the store holds no row, so the pool reads every cell unknown', async () => {
+    const batches = await deposited([]);
+    expect(Object.keys(batches)).toEqual(['2', '3']);
+    for (const batch of Object.values(batches)) expect(batch).not.toHaveProperty('recommendations');
   });
 });
 
