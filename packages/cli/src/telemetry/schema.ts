@@ -182,6 +182,8 @@ const EVENTS: ReadonlyMap<string, FieldRules> = new Map([
   ],
   // One send of one batch: whether the pool took it, the HTTP status, and the code of its refusal.
   ['wire-send', rules({ sent: whole(1), status: whole(599), code, bytes: whole(HUGE) })],
+  // The install's first run, sent once where the first-run notice is shown (docs/telemetry.md).
+  ['first-run', rules({})],
 ]);
 
 export const EVENT_TYPES: readonly string[] = [...EVENTS.keys()];

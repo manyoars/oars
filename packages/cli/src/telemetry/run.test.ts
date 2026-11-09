@@ -38,6 +38,9 @@ const setup = (env: NodeJS.ProcessEnv = {}): Made => {
 
 const events = (dir: string): unknown[] => readSpool(dir).map((line): unknown => JSON.parse(line));
 
+/** The command events: the run that shows the notice also spools a first-run event, which has its own tests (first-run.test.ts). */
+const commandEvents = (dir: string): unknown[] => events(dir).filter((event) => Reflect.get(Object(event), 'type') === 'command');
+
 /** Walks `keys` down an untyped JSON value. */
 const field = (value: unknown, ...keys: string[]): unknown => keys.reduce((found, key): unknown => (typeof found === 'object' && found !== null ? Reflect.get(found, key) : undefined), value);
 
@@ -206,7 +209,7 @@ describe('command events', () => {
     let tick = Date.parse('2026-11-06T10:00:00Z');
     deps.now = () => (tick += 7);
     expect(await run(['sessions', 'recall', '--error', 'x', '--json'], deps)).toBe(1);
-    const [event] = events(dir);
+    const [event] = commandEvents(dir);
     expect(field(event, 'data')).toMatchObject({ path: ['sessions', 'recall'], flags: ['error', 'json'], exitCode: 1, errorClass: 'unexpected' });
     expect(Number(field(event, 'data', 'durationMs'))).toBeGreaterThan(0);
   });
@@ -215,7 +218,7 @@ describe('command events', () => {
     const { deps, dir } = setup();
     await run(['telemetry', 'status'], deps);
     await run(['not-a-command', '/home/someone/private'], deps);
-    const [ok, usage] = events(dir);
+    const [ok, usage] = commandEvents(dir);
     expect(field(ok, 'data')).toMatchObject({ path: ['telemetry', 'status'], flags: [], exitCode: 0 });
     expect(field(ok, 'data', 'errorClass')).toBeUndefined();
     expect(field(usage, 'data')).toMatchObject({ path: [], exitCode: 2, errorClass: 'usage' });
