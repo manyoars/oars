@@ -29,7 +29,7 @@ export const FORMAT_5_TOOL_FIELDS = ['names', 'namesDropped'] as const;
  * The version of the field list: every field name a batch can hold (`BATCH_FIELDS` in `pool-outbox.ts`). It moves with any field added, so a server told the version knows which names a batch may carry,
  * and a test pins the list to it (`pool-wire-additive.test.ts`). A field is deprecated and left on the list, never removed (conclusion section 17, rule 3).
  */
-export const FIELD_LIST_VERSION = 10;
+export const FIELD_LIST_VERSION = 11;
 export const BUNDLE_FORMAT = 1;
 /** One constant: the pool serves only the vocabulary version the client holds. */
 export { VOCAB_VERSION };
@@ -180,6 +180,19 @@ export type Team = (typeof TEAMS)[number];
 export const REPO_VISIBILITIES = ['public', 'private', 'unknown'] as const;
 export type RepoVisibility = (typeof REPO_VISIBILITIES)[number];
 
+/** Where a session ran, as a trusted machine states it for a batch it admitted: the five host classes an enrollment knows (`HOST_CLASSES` in `machine.ts`, not imported: the pool bundles this file). */
+export const CLAIMED_HOST_CLASSES = ['local', 'vps', 'cloud', 'ci', 'hosted'] as const;
+export type ClaimedHostClass = (typeof CLAIMED_HOST_CLASSES)[number];
+/** What started the session, as an enrollment declares it. */
+export const CLAIMED_LAUNCHERS = ['interactive', 'orchestrated', 'scheduled', 'ci', 'hosted-run', 'unknown'] as const;
+export type ClaimedLauncher = (typeof CLAIMED_LAUNCHERS)[number];
+
+/** The host class and launcher the trusted machine states for a batch a cloud VM held: a claim of the depositor's own machine, never a fact the pool stamped. `other` is a value this reader does not know. */
+export interface Claimed {
+  hostClass: ClaimedHostClass | typeof OTHER;
+  launcher: ClaimedLauncher | typeof OTHER;
+}
+
 /** What the pool can state about whom a deposit covers. It is not a filter: no read uses it. Anything not read locally is `unknown`. */
 export interface Coverage {
   orgSize: OrgSize;
@@ -266,6 +279,8 @@ export interface SessionSkeleton {
   transcripts: SkeletonTranscript[];
   /** One for the batch: a hash of the main transcript's non-null call durations in call order, only with `MIN_TIMED_CALLS` of them; a subagent's calls never join it. */
   timingPrint: string | null;
+  /** Only on a batch a trusted machine admitted from a held branch: the machine writes it from its own enrollment record, never the client that built the batch. */
+  claimed?: Claimed;
   /** The batch's client-built delta entries (Section 2, "Deltas"): changes between the client's own before and after windows, each carried once, by the batch of the session that filled the after window. */
   deltas: DeltaEntry[];
 }
@@ -844,7 +859,7 @@ export const ENUMERATED_FIELDS: ReadonlySet<string> = new Set(['harness', 'harne
  * served from what remains. A field the cells need to be sound (a harness, a status, a bucket of tokens) is never here.
  */
 export const OPTIONAL = {
-  batch: ['timingPrint', 'deltas'],
+  batch: ['timingPrint', 'deltas', 'claimed'],
   frame: ['harnessVersion', 'model', 'effort', 'day', 'shell', 'reach', 'repoKey', 'orgSize', 'team', 'repoVisibility', 'hour'],
   stack: ['size', 'languageShares'],
   prompt: ['wallSec', 'explore', 'usageResponses', 'intervention'],
@@ -996,6 +1011,12 @@ const parseReach = (held: Collected, value: unknown, at: string): Reach => {
   };
   if (!filled && reach.mcp.length + reach.skills.length + reach.plugins.length > 0) throw new Refused(at, 'an unfilled reach lists nothing');
   return reach;
+};
+
+/** A claim, each member held to its closed list. */
+const parseClaimed = (held: Collected, value: unknown, at: string): Claimed => {
+  const raw = fieldsOf(held, value, at, ['hostClass', 'launcher']);
+  return { hostClass: oneOf(held, CLAIMED_HOST_CLASSES, raw.hostClass, under(at, 'hostClass')), launcher: oneOf(held, CLAIMED_LAUNCHERS, raw.launcher, under(at, 'launcher')) };
 };
 
 /** Sixteen lowercase hex characters and nothing else, so no path or remote text can ride in a repo key. */
@@ -1457,7 +1478,8 @@ export const parseSkeleton = (value: unknown): ParsedSkeleton | Refusal => {
         before += steps.length;
       });
     });
-    return { ok: true, skeleton: { format, vocabVersion, fieldsVersion, id, transcripts, timingPrint, deltas }, extensions: held.extensions, others: held.others };
+    const claimed = raw.claimed === undefined ? {} : { claimed: parseClaimed(held, raw.claimed, 'claimed') };
+    return { ok: true, skeleton: { format, vocabVersion, fieldsVersion, id, transcripts, timingPrint, deltas, ...claimed }, extensions: held.extensions, others: held.others };
   } catch (error) {
     if (error instanceof Refused) return { ok: false, field: error.field, reason: error.reason };
     throw error;
