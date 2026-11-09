@@ -1,4 +1,4 @@
-// The nightly send (t884 Item 4). After the person has accepted the pool's covenant, the nightly task builds the outbox and sends what is new: skeleton batches, and, only after a yes to the raw prompt, the locally redacted raw copies.
+// The detached sender (`hook-bin.js nightly`). After the person has accepted the pool's covenant, the sender builds the outbox and sends what is new: skeleton batches, and, only after a yes to the raw prompt, the locally redacted raw copies.
 // Acceptance is the consent: this module never accepts a covenant, and with an unusable server URL, no sign-in, or no acceptance it makes one request at most (the covenant read) and sends nothing. `oars pool outbox` still prints everything that is queued.
 // It never throws, and what it records is counts and an outcome word, never a path, a host, or a byte of a transcript.
 import { writeFile } from 'node:fs/promises';

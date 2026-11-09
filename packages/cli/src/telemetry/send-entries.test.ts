@@ -1,4 +1,4 @@
-// The two built entries that send: `dist/hook-bin.js nightly` (the nightly task) and `dist/telemetry/send-main.js <folder>` (the detached daily send), run as processes against a fake pool
+// The two built entries that send: `dist/hook-bin.js nightly` (the detached sender) and `dist/telemetry/send-main.js <folder>` (the detached daily send), run as processes against a fake pool
 // on loopback, plus the detached start's spawn arguments. The in-process tests of `send.ts` cannot show that the wiring exists: delete the nightly line in `hook-bin.ts`, or send on every
 // hook event, or point the spawn at the wrong file, and they stay green. Like `gate/hook-bin.test.ts` this reads `dist/`, which the root `check` builds before the tests run; without a build
 // it is skipped. Every run sets APPDATA (and the other config roots) to a temp folder.

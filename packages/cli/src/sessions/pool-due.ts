@@ -107,8 +107,7 @@ export const catchUp = async (deps: CatchUpDeps): Promise<CatchUpResult> => {
     return 'started';
   } catch (error) {
     // The mark is already written when the start itself failed; the debounce holds until SEND_EVERY_MS after the mark, and the next trigger after that retries.
-    const line = await errorLine(deps.storeDir, error).catch(() => 'unknown error');
-    await mkdir(deps.storeDir, { recursive: true }).then(() => appendFile(join(deps.storeDir, LOG), `${new Date(deps.now()).toISOString()} ${line}\n`, 'utf8')).catch(() => undefined);
+    await logFailure(deps.storeDir, deps.now(), error);
     return 'failed';
   }
 };

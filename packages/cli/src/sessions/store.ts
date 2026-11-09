@@ -1207,7 +1207,7 @@ const rawRelatives = async (dir: string, path: string[]): Promise<string[]> => {
   return found.sort();
 };
 
-const HOOK_LOCK: LockOptions = { waitMs: 3_000, staleMs: 600_000 };
+const HOOK_LOCK: LockOptions = { waitMs: 500, staleMs: 600_000 };
 
 export type SessionDeposit = 'deposited' | 'unchanged' | 'not-allowed' | 'missing' | 'deferred';
 
@@ -1219,7 +1219,7 @@ export type SessionDeposit = 'deposited' | 'unchanged' | 'not-allowed' | 'missin
  */
 export const depositSession = async (runtime: SessionsRuntime, transcript: string, now: () => number, trace?: DepositTrace): Promise<SessionDeposit> => {
   try {
-    // The hook path waits 3 s for the lock, well under the harness's 30 s ceiling on the hook (install.ts), so a SessionEnd behind the nightly deposit cannot hold session exit.
+    // The hook path waits under a second for the lock, well under the harness's 30 s ceiling on the hook (install.ts), so a SessionEnd behind the sender's sweep cannot hold session exit; `deferSession` covers a lock still held.
     return await withLock(runtime.storeDir, (held) => depositSessionLocked(runtime, transcript, now, held, trace), HOOK_LOCK);
   } catch (error) {
     if (!(error instanceof StoreLockedError)) throw error;
