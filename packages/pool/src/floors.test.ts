@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { FIRST_ORDER_FAMILIES } from '../../cli/src/sessions/read.js';
 import type { Cell } from '../../cli/src/sessions/cells.js';
-import { cellFloor, clears, clustersOf, DEFAULT_DISCLOSURE_FLOOR, DEFAULT_FLOORS, DEFAULT_PUBLIC_FLOOR, floorFor, floorsOf, wireFloors } from './floors.js';
+import { cellFloor, clears, clustersOf, DEFAULT_CLEAR_FLOOR, DEFAULT_DISCLOSURE_FLOOR, DEFAULT_FLOORS, DEFAULT_PUBLIC_FLOOR, floorFor, floorsOf, wireFloors } from './floors.js';
 import { wranglerConfig, fieldOf } from './test-pool.js';
 
 const parse = (env: Parameters<typeof floorsOf>[0]): { floors: ReturnType<typeof floorsOf>; lines: string[] } => {
@@ -12,14 +12,14 @@ const parse = (env: Parameters<typeof floorsOf>[0]): { floors: ReturnType<typeof
 };
 
 describe('the defaults', () => {
-  it('are 5 and 2, and wrangler.jsonc states the same two numbers', () => {
-    expect([DEFAULT_PUBLIC_FLOOR, DEFAULT_DISCLOSURE_FLOOR]).toEqual([5, 2]);
-    expect(fieldOf(wranglerConfig().parsed, 'vars')).toMatchObject({ PUBLIC_FLOOR: String(DEFAULT_PUBLIC_FLOOR), DISCLOSURE_FLOOR: String(DEFAULT_DISCLOSURE_FLOOR) });
+  it('are 5, 1, and 2, and wrangler.jsonc states the same three numbers', () => {
+    expect([DEFAULT_PUBLIC_FLOOR, DEFAULT_CLEAR_FLOOR, DEFAULT_DISCLOSURE_FLOOR]).toEqual([5, 1, 2]);
+    expect(fieldOf(wranglerConfig().parsed, 'vars')).toMatchObject({ PUBLIC_FLOOR: String(DEFAULT_PUBLIC_FLOOR), CLEAR_FLOOR: String(DEFAULT_CLEAR_FLOOR), DISCLOSURE_FLOOR: String(DEFAULT_DISCLOSURE_FLOOR) });
   });
 
   it('are what unset bindings give, with nothing logged', () => {
     expect(parse({})).toEqual({ floors: DEFAULT_FLOORS, lines: [] });
-    expect(parse({ PUBLIC_FLOOR: '', DISCLOSURE_FLOOR: '', PUBLIC_FLOOR_FAMILIES: '' })).toEqual({ floors: DEFAULT_FLOORS, lines: [] });
+    expect(parse({ PUBLIC_FLOOR: '', CLEAR_FLOOR: '', DISCLOSURE_FLOOR: '', PUBLIC_FLOOR_FAMILIES: '' })).toEqual({ floors: DEFAULT_FLOORS, lines: [] });
   });
 });
 
@@ -36,6 +36,7 @@ describe.each([
   it('does not let the other binding move', () => {
     const { floors } = parse({ [binding]: '9' });
     expect(floors[key === 'public' ? 'disclosure' : 'public']).toBe(key === 'public' ? 2 : 5);
+    expect(floors.clear).toBe(1);
   });
 
   it.each(['abc', '5.5', '5x', '0x5', '1e1', '+5', ' ', '٣', '9007199254740993', 'Infinity', 'NaN', '[5]'])('takes the default for the malformed value %j, with one line naming the binding', (value) => {
@@ -53,6 +54,37 @@ describe.each([
 
   it('reads a value with surrounding blanks as the number it holds', () => {
     expect(parse({ [binding]: ' 4 ' }).floors[key]).toBe(4);
+  });
+});
+
+describe('CLEAR_FLOOR', () => {
+  it.each(['1', '2', '5'])('takes the valid value %s, and logs nothing', (value) => {
+    expect(parse({ CLEAR_FLOOR: value })).toMatchObject({ floors: { clear: Number(value), public: 5 }, lines: [] });
+  });
+
+  it('may equal a lowered public floor, and not pass it', () => {
+    expect(parse({ PUBLIC_FLOOR: '3', CLEAR_FLOOR: '3' })).toMatchObject({ floors: { clear: 3, public: 3 }, lines: [] });
+    const above = parse({ PUBLIC_FLOOR: '3', CLEAR_FLOOR: '4' });
+    expect(above.floors.clear).toBe(3);
+    expect(above.lines).toHaveLength(1);
+    expect(above.lines[0]).toContain('CLEAR_FLOOR');
+  });
+
+  it('is refused above the public floor, which it falls back to, with one line', () => {
+    const { floors, lines } = parse({ CLEAR_FLOOR: '6' });
+    expect(floors.clear).toBe(5);
+    expect(lines).toEqual(['CLEAR_FLOOR is 6, above the public floor of 5: using 5.']);
+  });
+
+  it.each(['0', '-1', 'abc', '1.5', '5x'])('is refused for %s, falls back to the public floor and fails closed, with one line', (value) => {
+    const { floors, lines } = parse({ CLEAR_FLOOR: value });
+    expect(floors.clear).toBe(5);
+    expect(lines).toEqual([expect.stringContaining('CLEAR_FLOOR')]);
+  });
+
+  it('is 1 when unset, whatever the public floor, and never exceeds a public floor of 1', () => {
+    expect(parse({ PUBLIC_FLOOR: '3' }).floors.clear).toBe(1);
+    expect(parse({ PUBLIC_FLOOR: '1' }).floors.clear).toBe(1);
   });
 });
 
@@ -100,8 +132,8 @@ describe('PUBLIC_FLOOR_FAMILIES', () => {
 
 describe('what the bundle states', () => {
   it('names both floors and only the families on a floor of their own', () => {
-    expect(wireFloors(DEFAULT_FLOORS)).toEqual({ public: 5, disclosure: 2 });
-    expect(wireFloors({ public: 3, disclosure: 2, clear: 3, families: { 'tool-day': 8, live: 3, cost: 6 } })).toEqual({ public: 3, disclosure: 2, families: { cost: 6, 'tool-day': 8 } });
+    expect(wireFloors(DEFAULT_FLOORS)).toEqual({ public: 5, disclosure: 2, clear: 1 });
+    expect(wireFloors({ public: 3, disclosure: 2, clear: 3, families: { 'tool-day': 8, live: 3, cost: 6 } })).toEqual({ public: 3, disclosure: 2, clear: 3, families: { cost: 6, 'tool-day': 8 } });
   });
 
   it('is the same bytes for the same bindings, whatever order the families were written in', () => {
@@ -124,12 +156,17 @@ describe('the one place a cell\'s count is taken', () => {
 });
 
 describe('the floor of a cell\'s class', () => {
-  it('is the read\'s floor for both classes while the clear floor is the public floor', () => {
-    expect([cellFloor(DEFAULT_FLOORS, 5, 'clear'), cellFloor(DEFAULT_FLOORS, 5, 'thresholded'), cellFloor(DEFAULT_FLOORS, 8, 'clear')]).toEqual([5, 5, 8]);
+  it('is the clear floor for a clear cell at the public floor, and the read\'s floor for a thresholded one', () => {
+    expect([cellFloor(DEFAULT_FLOORS, 5, 'clear'), cellFloor(DEFAULT_FLOORS, 5, 'thresholded'), cellFloor(DEFAULT_FLOORS, 3, 'clear')]).toEqual([1, 5, 1]);
   });
 
-  it('follows the public floor with the clear floor, which has no binding of its own', () => {
-    expect(floorsOf({ PUBLIC_FLOOR: '3' }, () => undefined).clear).toBe(3);
+  it('is the read\'s floor for both classes when the clear floor is the public floor', () => {
+    const one = { ...DEFAULT_FLOORS, clear: 5 };
+    expect([cellFloor(one, 5, 'clear'), cellFloor(one, 5, 'thresholded'), cellFloor(one, 8, 'clear')]).toEqual([5, 5, 8]);
+  });
+
+  it('reads the clear floor from its binding', () => {
+    expect(floorsOf({ PUBLIC_FLOOR: '3', CLEAR_FLOOR: '2' }, () => undefined).clear).toBe(2);
   });
 
   it('takes the gap below the public floor to every read\'s floor, and never goes under 1', () => {

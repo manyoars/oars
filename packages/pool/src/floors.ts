@@ -1,31 +1,33 @@
-// The serve floors. A floor is configuration the deploy sets on the Worker, never a constant in the code and never a client release: `PUBLIC_FLOOR` is how many clusters a cell needs before a bundle serves it or a read counts it,
+// The serve floors. A floor is configuration the deploy sets on the Worker, never a constant in the code and never a client release: `PUBLIC_FLOOR` is how many clusters a cell needs before a bundle serves it or a read counts it
+// (a `thresholded` cell, any part of which is outside the closed public vocabulary), `CLEAR_FLOOR` is the same for a `clear` cell (closed public vocabulary and client hashes only, `cell-class.ts`),
 // `DISCLOSURE_FLOOR` is how many clusters must hold a signature's hash before its text may be requested, and `PUBLIC_FLOOR_FAMILIES` sets the public floor for single read families. Cells are stored with their held
 // counts and the floor is applied when a bundle is served (`bundleOf`), so a deploy that moves a floor needs no redeposit and no re-derive by hand.
 import { FIRST_ORDER_FAMILIES, type FirstOrderFamily } from '../../cli/src/sessions/read.js';
 import type { BundleFloors } from '../../cli/src/sessions/pool-wire.js';
 import type { Cell } from '../../cli/src/sessions/cells.js';
-import type { CellClass } from './cell-class.js';
+import type { Motif } from '../../cli/src/sessions/motif.js';
+import { cellClassOf, type CellClass } from './cell-class.js';
 import { bound, type Env } from './http.js';
 
-/** What a deploy that sets nothing serves at. `wrangler.jsonc` states the same two numbers, and a test holds the two together. */
+/** What a deploy that sets nothing serves at. `wrangler.jsonc` states the same three numbers, and a test holds the three together. */
 export const DEFAULT_PUBLIC_FLOOR = 5;
+export const DEFAULT_CLEAR_FLOOR = 1;
 export const DEFAULT_DISCLOSURE_FLOOR = 2;
 
 export interface Floors {
   public: number;
   disclosure: number;
   /**
-   * The floor a `clear` cell (`cell-class.ts`) is served at when a read is at the public floor. It is the public floor today, because a cell below the floor shows how few accounts did a thing, so serving a clear cell lower is the owner's decision and a change
-   * to this field with no client release. It has no binding of its own: `floorsOf` sets it to `public`. The gap below `public` carries to every read family's floor (`cellFloor`), and the bundle states `public`, which a clear cell's floor is never above.
-   * The version-free environment cells stay at the `fit` family's floor whatever `clear` is: `storedOf` fetches them (and their motifs) at that floor, and the `ENVIRONMENT_CELLS` rule is written for it, so a lower `clear` also needs a change in `stored.ts` before a clear environment cell is served below it.
-   * `withheldOf` (`complement.ts`) counts a cell as served when it clears the public floor, so a `clear` below `public` also needs that test changed, or the rank check under-withholds.
+   * The floor a `clear` cell (`cell-class.ts`) is served at when a read is at the public floor: `CLEAR_FLOOR`, 1 by default, never above `public`. A cell below the floor shows how few accounts did a thing, and a clear cell names only
+   * public vocabulary, so the most it shows is that one operator used a public tool. The gap below `public` carries to every read family's floor (`cellFloor`), and the bundle states both floors. A clear cell at floor 1 counts every
+   * account, standing or not (`bundleOf`), since a floor of 1 has no k to protect; at a floor above 1 (a family's, `cellFloor`) it counts the accounts that have stood, as a thresholded cell does.
    */
   clear: number;
   /** The read families that have a floor of their own. A family not named here is served at `public`. */
   families: Partial<Record<FirstOrderFamily, number>>;
 }
 
-export const DEFAULT_FLOORS: Floors = { public: DEFAULT_PUBLIC_FLOOR, disclosure: DEFAULT_DISCLOSURE_FLOOR, clear: DEFAULT_PUBLIC_FLOOR, families: {} };
+export const DEFAULT_FLOORS: Floors = { public: DEFAULT_PUBLIC_FLOOR, disclosure: DEFAULT_DISCLOSURE_FLOOR, clear: DEFAULT_CLEAR_FLOOR, families: {} };
 
 const WHOLE = /^[1-9]\d*$/;
 
@@ -75,17 +77,35 @@ const familiesOf = (value: string | undefined, warn: (line: string) => void): Fl
   return found;
 };
 
+/**
+ * The clear floor: a whole number from 1 to the public floor, 1 when unset. A binding that is set and bad (not a whole number, 0, or above the public floor, which would put a clear cell behind a thresholded one and be no class split) fails
+ * closed to the public floor, the strictest valid value, with one line: an operator who typed `6` or `5x` to be strict must not get the loosest floor. `PUBLIC_FLOOR` is already 1 or more, so the public floor never fails the same test.
+ */
+const clearFloorOf = (value: string | undefined, publicFloor: number, warn: (line: string) => void): number => {
+  if (bound(value) === undefined) return Math.min(DEFAULT_CLEAR_FLOOR, publicFloor);
+  const found = floorBinding('CLEAR_FLOOR', value, publicFloor, warn);
+  if (found <= publicFloor) return found;
+  warn(`CLEAR_FLOOR is ${String(found)}, above the public floor of ${String(publicFloor)}: using ${String(publicFloor)}.`);
+  return publicFloor;
+};
+
 /** The floors the Worker's bindings state, with the default wherever a binding is unset or bad. `warn` gets one line per binding that is bad. */
-export const floorsOf = (env: Pick<Env, 'PUBLIC_FLOOR' | 'DISCLOSURE_FLOOR' | 'PUBLIC_FLOOR_FAMILIES'>, warn: (line: string) => void): Floors => {
+export const floorsOf = (env: Pick<Env, 'PUBLIC_FLOOR' | 'DISCLOSURE_FLOOR' | 'CLEAR_FLOOR' | 'PUBLIC_FLOOR_FAMILIES'>, warn: (line: string) => void): Floors => {
   const floor = floorBinding('PUBLIC_FLOOR', env.PUBLIC_FLOOR, DEFAULT_PUBLIC_FLOOR, warn);
-  return { public: floor, disclosure: floorBinding('DISCLOSURE_FLOOR', env.DISCLOSURE_FLOOR, DEFAULT_DISCLOSURE_FLOOR, warn), clear: floor, families: familiesOf(env.PUBLIC_FLOOR_FAMILIES, warn) };
+  return { public: floor, disclosure: floorBinding('DISCLOSURE_FLOOR', env.DISCLOSURE_FLOOR, DEFAULT_DISCLOSURE_FLOOR, warn), clear: clearFloorOf(env.CLEAR_FLOOR, floor, warn), families: familiesOf(env.PUBLIC_FLOOR_FAMILIES, warn) };
 };
 
 /** The floor a read family is served at. */
 export const floorFor = (floors: Floors, family: FirstOrderFamily): number => floors.families[family] ?? floors.public;
 
-/** The floor a cell of this class is served at in a pool whose floor is `floor` (a family's, or the public floor): a thresholded cell at `floor`, a clear one at `floor` less the gap `floors.clear` sits below `floors.public`, and never under 1. No gap today. */
+/** The floor a cell of this class is served at in a pool whose floor is `floor` (a family's, or the public floor): a thresholded cell at `floor`, a clear one at `floor` less the gap `floors.clear` sits below `floors.public`, and never under 1. */
 export const cellFloor = (floors: Floors, floor: number, cellClass: CellClass): number => (cellClass === 'clear' ? Math.max(1, floor - (floors.public - floors.clear)) : floor);
+
+/**
+ * Whether a cell is counted over every account that holds it, standing or not, in a pool whose floor is `floor`: a `clear` cell whose own floor (`cellFloor`) is 1, since a floor of 1 has no k to protect and the standing filter (S13) would hold
+ * the first read back until an account has stood. At any floor above 1, and for a `thresholded` cell, it is the accounts that have stood. The class is read when the cell is served, so a vocabulary that moves reclassifies a cell without a recount.
+ */
+export const countsEvery = (floors: Floors, floor: number, cell: Cell, motif: Motif | undefined): boolean => cellFloor(floors, floor, 'clear') <= 1 && cellClassOf(cell, motif) === 'clear';
 
 /** The floors as the signed bundle states them, in the order of the families so the same bindings sign the same bytes. A family on the public floor is not listed. */
 export const wireFloors = (floors: Floors): BundleFloors => {
@@ -93,7 +113,7 @@ export const wireFloors = (floors: Floors): BundleFloors => {
     const own = floors.families[family];
     return own === undefined || own === floors.public ? [] : [[family, own] as const];
   });
-  return { public: floors.public, disclosure: floors.disclosure, ...(families.length === 0 ? {} : { families: Object.fromEntries(families) }) };
+  return { public: floors.public, disclosure: floors.disclosure, clear: floors.clear, ...(families.length === 0 ? {} : { families: Object.fromEntries(families) }) };
 };
 
 /**

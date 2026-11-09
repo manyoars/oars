@@ -316,7 +316,10 @@ const clientIds = (parsed: object): { [name: string]: string } => {
   return { GITHUB_CLIENT_ID: textOf(vars, 'GITHUB_CLIENT_ID'), GOOGLE_CLIENT_ID: textOf(vars, 'GOOGLE_CLIENT_ID') };
 };
 
-/** `raw: false` leaves the R2 binding out, the way a pool deployed before its bucket exists looks. */
+/**
+ * `raw: false` leaves the R2 binding out, the way a pool deployed before its bucket exists looks. A test pool serves clear cells at the thresholded floor (`CLEAR_FLOOR` the `PUBLIC_FLOOR` it is given, else 5), so the many tests that count accounts against `PUBLIC_FLOOR` with a
+ * public tool keep meaning what they say; a test of the split passes its own `CLEAR_FLOOR` (`floor-split.test.ts`), and the default of 1 is `wrangler.jsonc`'s.
+ */
 export const startPool = async (bindings: { [name: string]: string } = {}, options: { raw?: boolean } = {}): Promise<TestPool> => {
   const bundled = await build({ entryPoints: [fileIn('./worker.ts')], bundle: true, write: false, format: 'esm', platform: 'node', conditions: ['workerd', 'worker'], external: ['node:*'] });
   const contents = bundled.outputFiles[0]?.text;
@@ -335,7 +338,7 @@ export const startPool = async (bindings: { [name: string]: string } = {}, optio
       // The bindings wrangler.jsonc names. Miniflare's local Analytics Engine accepts a write and keeps nothing, so a test reads what the Worker wrote to it through a fake (telemetry.test.ts).
       r2Buckets: { TELEMETRY: 'telemetry-test', ...(options.raw === false ? {} : { RAW: 'oars-pool-raw' }) },
       analyticsEngineDatasets: { TELEMETRY_EVENTS: { dataset: 'oars_telemetry' } },
-      bindings: { ...clientIds(config.parsed), GOOGLE_CLIENT_SECRET: TEST_GOOGLE_SECRET, PSEUDONYM_KEY: 'a-test-pseudonym-key', INGEST_HASH_KEY: 'a-test-ingest-hash-key', BUNDLE_SIGNING_KEY: key.jwk, COVENANT_VERSION: 'v1', FETCH_CAP: '1000', LOGIN_STARTS_PER_HOUR: '1000', ...bindings },
+      bindings: { ...clientIds(config.parsed), GOOGLE_CLIENT_SECRET: TEST_GOOGLE_SECRET, PSEUDONYM_KEY: 'a-test-pseudonym-key', INGEST_HASH_KEY: 'a-test-ingest-hash-key', BUNDLE_SIGNING_KEY: key.jwk, COVENANT_VERSION: 'v1', FETCH_CAP: '1000', LOGIN_STARTS_PER_HOUR: '1000', CLEAR_FLOOR: /^[1-9]\d*$/.test(bindings.PUBLIC_FLOOR ?? '') ? (bindings.PUBLIC_FLOOR ?? '5') : '5', ...bindings },
       outboundService: stub.outbound,
     }),
   );

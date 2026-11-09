@@ -10,14 +10,18 @@ import { targetOf } from '../../cli/src/sessions/extract.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
 import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from '../../cli/src/sessions/pool-fixture.js';
 import { parseSkeleton, skeletonOf } from '../../cli/src/sessions/pool-wire.js';
-import { CLOSED_ARG_VALUES } from '../../cli/src/sessions/public-vocabulary.js';
+import { CLOSED_ARG_VALUES, OPEN_LIST_KEYS } from '../../cli/src/sessions/public-vocabulary.js';
 import { makeRedactor } from '../../cli/src/sessions/redact.js';
 import { ERROR_CODES, type ToolObservation, type ToolStatus } from '../../cli/src/sessions/schema.js';
 import { bundleOf } from './derive.js';
-import { DEFAULT_FLOORS } from './floors.js';
+import { cellClassOf } from './cell-class.js';
+import { DEFAULT_FLOORS, cellFloor, type Floors } from './floors.js';
 import type { StoredPool } from './stored.js';
 
 const FLOOR = DEFAULT_FLOORS.public;
+// The sweep runs on two configurations: `ONE_FLOOR` (a clear floor equal to the public one, the leg the arg/none fixtures can fail on, since at the shipped clear floor of 1 a clear arg/none at 2 to 4 accounts clears its own floor)
+// and `DEFAULT_FLOORS` (clear 1, what deploys), where each cell is judged against its own class's floor. `floor-split.test.ts` and `cell-class.test.ts` are point cases and sweep nothing.
+const ONE_FLOOR = { ...DEFAULT_FLOORS, clear: FLOOR };
 const CWD = '/work/app';
 const SKELETON_ID = '0123456789abcdef';
 
@@ -200,20 +204,6 @@ const seeded = (seed: number): (() => number) => {
   };
 };
 
-/** The values a key can take when a candidate call is built: enough of each closed list (path depth, extension, folder kind, size) for the held cells to pick from. */
-const VALUE_POOL: ReadonlyMap<string, readonly unknown[]> = new Map<string, readonly unknown[]>([
-  ['file_path', ['a.ts', 'src/a.ts', 'src/lib/a.ts', 'docs/lib/a.md', 'README.md', 'test/a.test.ts', 'a/b/c/d/e/f.json']],
-  ['path', ['a.ts', 'src/a.ts', 'src/lib/a.ts', 'docs/lib/a.md', 'README.md']],
-  ['pattern', ['foo', 'foo.*bar', '^a|b$']],
-  ['query', ['q', 'a query of some length', 'a query that is considerably longer than thirty-two characters']],
-  ['limit', [10, 2000]],
-  ['offset', [0, 500]],
-  ['head_limit', [10, 2000]],
-  ['output_mode', ['count']],
-  ['-i', [true, false]],
-  ['model', [true, 'sonnet']],
-]);
-
 /** The held cells' own vocabulary: for each action, the key sets its `keys` cells name, and whether a keyless call is held (`arg/none`). */
 const vocabularyOf = (held: Held): { action: string; native: string; keySets: string[][]; codes: string[] }[] => {
   const motifOf = new Map(held.pool.motifs.map((motif) => [motif.motifId, motif]));
@@ -231,10 +221,34 @@ const vocabularyOf = (held: Held): { action: string; native: string; keySets: st
 };
 
 /**
- * The atoms the held cells allow, one a call, from one stream of a fixed seed: key sets from the `keys` cells, values from the pool, and every status and cost variant, then run through the route. The stream has no end
- * (the caller stops it when the rank stops rising) and gives `null` when the held cells name no key set to call with.
+ * What a key can be sent, from the held cells and not from a list of ours: the values of the held `enum` cells (a boolean for `true` and `false`, else the member as the string it was), and the values the fixture's own
+ * calls send under the key, which are the calls that made the other held cells (`size`, `depth`, `extension`, `dir`, `pattern`).
  */
-const candidatesOf = (held: Held): (() => Atom | null) => {
+const valuesOf = (held: Held, accounts: Accounts): ReadonlyMap<string, unknown[]> => {
+  const motifOf = new Map(held.pool.motifs.map((motif) => [motif.motifId, motif]));
+  const found = new Map<string, Map<string, unknown>>();
+  const add = (key: string, value: unknown): void => {
+    found.set(key, (found.get(key) ?? new Map<string, unknown>()).set(JSON.stringify(value), value));
+  };
+  for (const { input } of accounts.flat().flatMap(({ calls }) => calls)) for (const [key, value] of Object.entries(input)) add(key, value);
+  for (const cell of held.cells) {
+    const parsed = parseShapeClass(motifOf.get(cell.motifId)?.cls ?? '');
+    if (parsed === null || (parsed.facet !== 'enum' && parsed.facet !== 'size')) continue;
+    const at = parsed.value.indexOf('=');
+    const key = parsed.value.slice(0, at);
+    const member = parsed.value.slice(at + 1);
+    if (parsed.facet === 'enum') add(key, member === 'true' ? true : member === 'false' ? false : member);
+    // A key of an open list can also be sent a value off the list (a custom agent, a full model id): it has the key's `size` cell and no `enum` cell, so the held `size` cell is all that names it.
+    else if (OPEN_LIST_KEYS.has(key)) add(key, '~'.repeat(COVERAGE_SIZES[VALUE_SIZES.findIndex((size) => size === member)] ?? 0));
+  }
+  return new Map([...found].map(([key, values]) => [key, [...values.values()]]));
+};
+
+/**
+ * The atoms the held cells allow, one a call, from one stream of a fixed seed: key sets from the `keys` cells, values from `valuesOf`, and every status and cost variant (the costs above the wire buckets, so a drawn
+ * call's cost is never bucketed to 0), then run through the route. The stream has no end (the caller stops it when the rank stops rising) and gives `null` when the held cells name no key set to call with.
+ */
+const candidatesOf = (held: Held, accounts: Accounts): (() => Atom | null) => {
   const random = seeded(7);
   const pick = <T>(items: readonly T[]): T => {
     const chosen = items[Math.floor(random() * items.length)];
@@ -242,12 +256,13 @@ const candidatesOf = (held: Held): (() => Atom | null) => {
     return chosen;
   };
   const vocabulary = vocabularyOf(held);
+  const values = valuesOf(held, accounts);
   return () => {
     if (vocabulary.length === 0) return null;
     const { native, keySets, codes } = pick(vocabulary);
     const callOf = (): Call => {
       const keys = pick(keySets);
-      const input = Object.fromEntries([...keys, ...(random() < 0.15 ? ['not_a_public_key'] : [])].map((key) => [key, pick(VALUE_POOL.get(key) ?? ['x'])]));
+      const input = Object.fromEntries([...keys, ...(random() < 0.15 ? ['not_a_public_key'] : [])].map((key) => [key, key === 'not_a_public_key' ? 'x' : pick(values.get(key) ?? [])]));
       const status = pick<ToolStatus>(['ok', 'ok', 'error', 'none']);
       const errorCode = status === 'error' && codes.length > 0 && random() < 0.7 ? pick(codes) : undefined;
       return call(native, input, { status, ...(errorCode === undefined ? {} : { errorCode }), tokens: random() < 0.5 ? null : 5000, durationMs: random() < 0.5 ? null : 500 });
@@ -259,6 +274,8 @@ const candidatesOf = (held: Held): (() => Atom | null) => {
 interface Leak {
   cell: string;
   column: Column;
+  /** Served (cell, column) pairs that still cover the row when no one of them can be dropped (greedy, in held order): what a reader needs, so a red names its relation. */
+  needs: string[];
 }
 
 /** An atom as the matrix holds it: the stored value it adds to each (cell, column) pair, and its calls of each action by status. */
@@ -271,7 +288,30 @@ interface MatrixColumn {
 const PATIENCE = 400;
 
 /**
- * The matrix of section 2: one column per atom that adds rank, and the (cell, column) pairs that are its rows. The universe is every account's own atoms, then the closed-list coverage (`coverageOf`), then draws from one
+ * The fixture's own calls sent again with every ok/error assignment, once as they are and once as a pair of the same call twice, at the unit cost (tokens 5000, 500 ms): a cell that tallies `failed` (a `change` cell, whose second call is the one that fails) needs
+ * an atom whose call failed, and a random draw rarely sends the same call twice in a row. An atom that emits a cell the fixture does not hold is discarded, as any other.
+ */
+const variantsOf = (atoms: readonly Atom[], codes: readonly string[]): Atom[] => {
+  const seen = new Set<string>();
+  return atoms.flatMap((atom) =>
+    [atom.calls, ...atom.calls.map((one) => [one, one])].flatMap((calls) => {
+      const statuses = calls.length === 1 ? [['ok'], ['error']] : [['ok', 'ok'], ['ok', 'error'], ['error', 'ok'], ['error', 'error']];
+      return statuses.flatMap((assigned) =>
+        // A failed call is sent without an error code and with each code the fixture holds.
+        [undefined, ...codes].flatMap((code) => {
+          const made = { ...atom, calls: calls.map((one, at) => call(one.tool, one.input, assigned[at] === 'error' ? { status: 'error', ...(code === undefined ? {} : { errorCode: code }) } : {})) };
+          const key = JSON.stringify([made.calls, made.promptTokens, made.wallSec]);
+          if (seen.has(key) || (code !== undefined && !assigned.includes('error'))) return [];
+          seen.add(key);
+          return [made];
+        }),
+      );
+    }),
+  );
+};
+
+/**
+ * The matrix of section 2: one column per atom that adds rank, and the (cell, column) pairs that are its rows. The universe is every account's own atoms, then their ok/error and doubled variants (`variantsOf`), then the closed-list coverage (`coverageOf`), then draws from one
  * seeded stream (`candidatesOf`), and it stops only after `patience` draws in a row add no rank; `columnOf` discards an atom that emits a cell the fixture does not hold.
  */
 const matrixOf = (accounts: Accounts, patience: number): { held: Held; motifOf: ReadonlyMap<string, Motif>; pairs: { cell: Cell; column: Column; key: string }[]; kept: MatrixColumn[]; rose: number } => {
@@ -303,8 +343,8 @@ const matrixOf = (accounts: Accounts, patience: number): { held: Held; motifOf: 
     kept.push(made);
     return true;
   };
-  for (const atom of [...accounts.flat(), ...coverageOf()]) keep(atom);
-  const draw = candidatesOf(held);
+  for (const atom of [...accounts.flat(), ...variantsOf(accounts.flat(), vocabularyOf(held)[0]?.codes ?? []), ...coverageOf()]) keep(atom);
+  const draw = candidatesOf(held, accounts);
   // `rose` is the draw that last raised the rank; the sampling ended `patience` draws after it.
   let rose = 0;
   for (let drawn = 1, idle = 0; idle < patience; drawn += 1) {
@@ -322,23 +362,45 @@ const matrixOf = (accounts: Accounts, patience: number): { held: Held; motifOf: 
  * The sub-floor cells (and columns) that the cells the real `bundleOf` serves give back, for every store of the held cells' vocabulary: the cell's row is in the rational span of the served rows and the
  * rows of the action's calls. Throws on a (cell, column) pair that exists with a row of zeros, because a zero row is in every span: it would be counted as recovered when it is a gap in the generator.
  */
-const leaksOf = (accounts: Accounts, patience = PATIENCE): Leak[] => {
-  const { held, motifOf, pairs, kept } = matrixOf(accounts, patience);
-  const served = new Set(bundleOf('claude-code', '2.1.314', held.pool, DEFAULT_FLOORS).cells.map(keyOf));
+const leaksOf = (accounts: Accounts, floors: Floors, matrix = matrixOf(accounts, PATIENCE)): Leak[] => {
+  const { held, motifOf, pairs, kept } = matrix;
+  const served = new Set(bundleOf('claude-code', '2.1.314', held.pool, floors).cells.map(keyOf));
   const rowOf = (at: number): bigint[] => kept.map(({ vector }) => vector[at] ?? 0n);
   const callRows = ACTIONS.flatMap((_, action) => [0, 1].map((status) => kept.map(({ calls }) => calls[action * 2 + status] ?? 0n)));
   const span = new Span();
   for (const row of callRows) span.add(row);
   for (const [at, { key }] of pairs.entries()) if (served.has(key)) span.add(rowOf(at));
+  const nameOf = (at: number): string => [motifOf.get(pairs[at]?.cell.motifId ?? '')?.cls ?? pairs[at]?.cell.motifId.slice(0, 8), String(pairs[at]?.cell.clusters), pairs[at]?.column].join(' ');
+  const needsOf = (target: number): string[] => {
+    const covers = (rows: number[]): boolean => {
+      const made = new Span();
+      for (const row of callRows) made.add(row);
+      for (const at of rows) made.add(rowOf(at));
+      return made.covers(rowOf(target));
+    };
+    let need = pairs.flatMap(({ key }, at) => (served.has(key) ? [at] : []));
+    for (const at of [...need]) {
+      const rest = need.filter((other) => other !== at);
+      if (covers(rest)) need = rest;
+    }
+    return need.map(nameOf);
+  };
   const leaks: Leak[] = [];
   for (const [at, { cell, column, key }] of pairs.entries()) {
     const row = rowOf(at);
     if (row.every((value) => value === 0n)) throw new Error(`no atom gives ${motifOf.get(cell.motifId)?.cls ?? key} ${column}: a gap in the generator`);
-    if (served.has(key) || cell.clusters >= FLOOR) continue;
-    if (span.covers(row)) leaks.push({ cell: `${motifOf.get(cell.motifId)?.cls ?? cell.motifId} ${cell.frameBucket} ${cell.grain}`, column });
+    if (served.has(key) || cell.clusters >= cellFloor(floors, FLOOR, cellClassOf(cell, motifOf.get(cell.motifId)))) continue;
+    if (span.covers(row)) leaks.push({ cell: `${motifOf.get(cell.motifId)?.cls ?? cell.motifId} ${cell.frameBucket} ${cell.grain}`, column, needs: needsOf(at) });
   }
   return leaks;
 };
+
+/** The two configurations the sweep runs on: one floor for every class (the leg the arg/none fixtures can fail on), and the floors this pool ships (a clear cell at its own, lower floor). */
+const FLOORINGS: readonly (readonly [string, Floors])[] = [['one floor', ONE_FLOOR], ['the default floors', DEFAULT_FLOORS]];
+
+/** The leaks of the held cells at each configuration, by its name; the matrix does not depend on the floors, so it is built once. */
+const leaksAtEach = (accounts: Accounts, matrix = matrixOf(accounts, PATIENCE)): { [name: string]: Leak[] } => Object.fromEntries(FLOORINGS.map(([name, floors]) => [name, leaksOf(accounts, floors, matrix)]));
+const NO_LEAKS = { 'one floor': [], 'the default floors': [] };
 
 /** `count` accounts that each send the same call. */
 const accountsOf = (count: number, make: (account: number) => Atom): Accounts => Array.from({ length: count }, (_, account) => [make(account)]);
@@ -354,7 +416,7 @@ const COVERAGE_PATTERNS = ['a|b', '^a$', '[a-z]', 'a\\.b', '(a)', 'foo', 'a+', '
 const COVERAGE_SIZES = [0, 1, 9, 33, 129, 513, 2049, 8193];
 
 /**
- * The calls that, between them, emit every member of every closed list the cells are keyed on. They are in the matrix's universe (`matrixOf`), so a member a fixture holds is a column the sweep has whether or not `VALUE_POOL`
+ * The calls that, between them, emit every member of every closed list the cells are keyed on. They are in the matrix's universe (`matrixOf`), so a member a fixture holds is a column the sweep has whether or not `valuesOf`
  * can draw it, and a list member nothing here emits goes red in the meta-test below, so a new facet or member is not silently outside the universe. A call whose input holds a closed value is built from
  * `CLOSED_ARG_VALUES` itself, and a failed call from `ERROR_CODES`, so neither list can grow unseen.
  */
@@ -451,14 +513,14 @@ describe('the withholding oracle', () => {
     expect(unemittedBy(withoutLimit).filter((member) => !UNREACHABLE.includes(member))).toEqual(['ARG_CLASSES/number', 'CHANGE_KINDS/key-added', 'CHANGE_KINDS/key-removed']);
   });
 
-  // Two cases `determinedCells` (`shape-cells.test.ts`) stated from cells, moved here and built from calls through the route. `determinedCells` stays for its seeded census until t996's sweep replaces it.
+  // Two cases the old hand census of `shape-cells.test.ts` (deleted) stated from cells, moved here and built from calls through the route; the sweep below replaces its seeded run for one day, one frame, and one name per action.
   const grep = (input: { readonly [key: string]: unknown }): Atom => atomOf(call('Grep', input));
-  const servedOf = (accounts: Accounts): number => bundleOf('claude-code', '2.1.314', heldOf(accounts).pool, DEFAULT_FLOORS).cells.length;
+  const servedOf = (accounts: Accounts): number => bundleOf('claude-code', '2.1.314', heldOf(accounts).pool, ONE_FLOOR).cells.length;
 
   it('serves nothing that gives back a keys cell through a combination of served totals: path,pattern is the path total plus the pattern total less the calls', () => {
     const accounts = [...accountsOf(FLOOR + 5, () => grep({ path: 'src/a.ts' })), ...accountsOf(FLOOR - 1, () => grep({ path: 'src/a.ts', pattern: 'foo' })), ...accountsOf(FLOOR + 5, () => grep({ pattern: 'foo' }))];
     expect(servedOf(accounts)).toBeGreaterThan(0);
-    expect(leaksOf(accounts)).toEqual([]);
+    expect(leaksAtEach(accounts)).toEqual(NO_LEAKS);
   });
 
   // The same fixture with one closed value beside the key. A boolean has no other per-key facet (`output_mode` also has `size`, which its string value emits), and a boolean, or a list that names all its values, is a value of every
@@ -472,13 +534,13 @@ describe('the withholding oracle', () => {
     const send = (input: { readonly [key: string]: unknown }): Atom => atomOf(call(native, input));
     const accounts = [...accountsOf(FLOOR + 5, () => send({ [key]: value })), ...accountsOf(FLOOR - 1, () => send({ [key]: value, [other]: 'foo' })), ...accountsOf(FLOOR + 5, () => send({ [other]: 'foo' }))];
     expect(servedOf(accounts)).toBeGreaterThan(0);
-    expect(leaksOf(accounts)).toEqual([]);
+    expect(leaksAtEach(accounts)).toEqual(NO_LEAKS);
   });
 
   it('serves nothing that gives back arg/none: 12 calls of a tool, 10 with query and 2 with no input, at floor 5', () => {
     const accounts = [...accountsOf(10, () => atomOf(call('WebSearch', { query: 'q' }))), ...accountsOf(2, () => atomOf(call('WebSearch', {})))];
     expect(servedOf(accounts)).toBeGreaterThan(0);
-    expect(leaksOf(accounts)).toEqual([]);
+    expect(leaksAtEach(accounts)).toEqual(NO_LEAKS);
   });
 
   // `arg/none` is a part of the `keys` family (`complement.ts`, the `facet` rule), and the sum is inexact for two calls: one whose keys are all null sends a key and no value, so it is in `keys/query` and in `arg/none`, and one
@@ -487,12 +549,16 @@ describe('the withholding oracle', () => {
   // a leak. The off-list call has a text value, so it is `arg/text`, and `arg/none` stays the 2 keyless calls.
   it.each([
     ['a call whose only key is null', { query: null }, 2],
+    // The off-list row is a no-leak confirmation that does not depend on the `arg/none` rule: its call sits in no `keys` cell, so the `facet` rule's `arg/none` placement neither helps nor hurts it.
     ['a call with only an off-list key', { not_a_public_key: 'x' }, 3],
   ])('serves nothing that gives back arg/none beside %s', (_, odd, count) => {
     const accounts = [...accountsOf(10, () => atomOf(call('WebSearch', { query: 'q' }))), ...accountsOf(2, () => atomOf(call('WebSearch', {}))), ...accountsOf(count, () => atomOf(call('WebSearch', odd)))];
     expect(servedOf(accounts)).toBeGreaterThan(0);
-    expect(heldOf(accounts).cells.some(({ clusters }) => clusters < FLOOR)).toBe(true);
-    expect(leaksOf(accounts)).toEqual([]);
+    const held = heldOf(accounts);
+    const clsOf = new Map(held.pool.motifs.map((motif) => [motif.motifId, motif.cls]));
+    // The cell the title names: web.search `arg/none`, held and under the floor, so the case can fail on its leak and not on some other sub-floor cell.
+    expect(held.cells.some(({ motifId, clusters }) => clsOf.get(motifId) === 'shape:web.search/arg/none' && clusters < FLOOR)).toBe(true);
+    expect(leaksAtEach(accounts)).toEqual(NO_LEAKS);
   });
 
   // The matrix stops only when the rank has stopped rising for `PATIENCE` draws in a row. This fixture holds 141 cells, and its last rank-raising draw is past the 400 atoms the first version drew and stopped at: that fixed
@@ -504,21 +570,111 @@ describe('the withholding oracle', () => {
     const searches = ['q', 'a query of some length', 'a query that is considerably longer than thirty-two characters'].flatMap((query) => accountsOf(6, () => atomOf(call('WebSearch', { query }))));
     const failures = [...ERROR_CODES].flatMap((code) => [{}, { limit: 10 }].flatMap((extra) => accountsOf(6, () => atomOf(call('Read', { file_path: 'src/a.ts', ...extra }, { status: 'error', errorCode: code })))));
     const accounts = [...reads, ...greps, ...searches, ...failures];
-    expect(matrixOf(accounts, PATIENCE).rose).toBeGreaterThan(400);
-    expect(leaksOf(accounts)).toEqual([]);
+    const matrix = matrixOf(accounts, PATIENCE);
+    expect(matrix.rose).toBeGreaterThan(400);
+    expect(leaksAtEach(accounts, matrix)).toEqual(NO_LEAKS);
   }, 60000);
 
   it('serves nothing that gives back arg/number: keys/file_path,limit 40 beside keys/file_path,offset 3, beside arg/number 43, which is held and not served', () => {
     const path = { file_path: 'src/a.ts' };
     const accounts = [...accountsOf(10, () => atomOf(call('Read', path))), ...accountsOf(40, () => atomOf(call('Read', { ...path, limit: 10 }))), ...accountsOf(3, () => atomOf(call('Read', { ...path, offset: 0 })))];
     expect(servedOf(accounts)).toBeGreaterThan(0);
-    expect(leaksOf(accounts)).toEqual([]);
+    expect(leaksAtEach(accounts)).toEqual(NO_LEAKS);
+  });
+
+  // t993's fixture, the review's finding: `files_with_matches` (18 characters) is the only member of the exhaustive `output_mode` list in size `9-32`, so `enum output_mode=files_with_matches` always equals `size output_mode=9-32`.
+  // Served, `keys/output_mode` 19 less `enum` count 8 and `size` 9-32 7 is the withheld `content` 4. No noise call closes it: it holds in every store.
+  it('serves nothing that gives back an enum cell through the size cell of an exhaustive list: output_mode, 4 content, 8 count, and 7 files_with_matches accounts', () => {
+    const send = (mode: string): Atom => grep({ output_mode: mode });
+    const accounts = [...accountsOf(4, () => send('content')), ...accountsOf(8, () => send('count')), ...accountsOf(7, () => send('files_with_matches'))];
+    expect(servedOf(accounts)).toBeGreaterThan(0);
+    expect(leaksAtEach(accounts)).toEqual(NO_LEAKS);
+  });
+
+  // A `target` cell under the floor is the `keys` cells that hold a path key less the served `target` cells: every call with a path key has a path target and no other call does, so `target` doc 3 is `keys/path` 23 less `target` source 20.
+  it('serves nothing that gives back a target cell through the keys cells that hold a path key: README.md from 3 accounts, src/a.ts from 20, and a pattern from 10', () => {
+    const accounts = [...accountsOf(3, () => grep({ path: 'README.md' })), ...accountsOf(20, () => grep({ path: 'src/a.ts' })), ...accountsOf(10, () => grep({ pattern: 'foo' }))];
+    expect(servedOf(accounts)).toBeGreaterThan(0);
+    expect(leaksAtEach(accounts)).toEqual(NO_LEAKS);
   });
 
   it('serves nothing that gives back depth 1 through dir root: depth 0 and dir root count the same calls, beside the keys total and depth 2', () => {
     const at = (file: string) => atomOf(call('Read', { file_path: file }));
     const accounts = [...accountsOf(20, () => at('a.ts')), ...accountsOf(3, () => at('src/a.ts')), ...accountsOf(10, () => at('src/lib/a.ts')), ...accountsOf(20, () => at('docs/lib/a.md'))];
     expect(servedOf(accounts)).toBeGreaterThan(0);
-    expect(leaksOf(accounts)).toEqual([]);
+    expect(leaksAtEach(accounts)).toEqual(NO_LEAKS);
   });
+
+  // The seeded sweep: each seed builds a fixture from calls, one tool, a served entry of keyed calls, a keyless entry under the floor (the `arg/none` cell), and one to three more entries of random key sets and counts,
+  // some under the floor. The values come from the closed lists (`CLOSED_ARG_VALUES`) and a few strings and numbers of different kinds, and the costs are above the wire buckets (tokens 1000 and up, durations
+  // 100 ms and up), so a call's cost is never bucketed to 0. Every fixture is asked what the real bundle gives back; none of them states a relation.
+  const closedOf = (native: string, key: string): string[] => [...(CLOSED_ARG_VALUES.get(native)?.get(key) ?? [])];
+  const SWEEP_TOOLS: readonly { native: string; keys: readonly (readonly [string, readonly unknown[]])[] }[] = [
+    { native: 'Grep', keys: [['pattern', ['foo', 'foo.*bar', 'a.b', 'a|b', 'a+']], ['path', ['src/a.ts', 'src/b.ts', 'docs/lib/a.md']], ['glob', ['**/*.ts', '*.ts', 'src', '{a,b}', '[ab]']], ['output_mode', closedOf('Grep', 'output_mode')], ['-i', [true, false]], ['head_limit', [10, 2000]]] },
+    { native: 'Read', keys: [['file_path', ['a.ts', 'src/a.ts', 'src/b.ts', 'src/lib/a.ts']], ['limit', [10, 2000]], ['offset', [0, 500]]] },
+    { native: 'WebSearch', keys: [['query', ['q', 'a query of some length']], ['allowed_domains', [['a.test'], ['a.test', 'b.test']]], ['blocked_domains', [['b.test'], ['b.test', 'c.test']]]] },
+    { native: 'Agent', keys: [['description', ['do it', 'a description of some length']], ['subagent_type', [...closedOf('Agent', 'subagent_type'), 'my-agent']], ['model', [...closedOf('Agent', 'model'), 'claude-x-1']], ['run_in_background', [true, false]]] },
+  ];
+  const sweepOf = (seed: number): Accounts => {
+    const random = seeded(seed * 7919);
+    const pick = <T>(items: readonly T[]): T => {
+      const chosen = items[Math.floor(random() * items.length)];
+      if (chosen === undefined) throw new Error('nothing to pick from');
+      return chosen;
+    };
+    const { native, keys } = pick(SWEEP_TOOLS);
+    const entry = (accounts: number, keyed: boolean): Accounts => {
+      const chosen = keyed ? keys.filter(() => random() < 0.5) : [];
+      const sent = keyed && chosen.length === 0 ? [pick(keys)] : chosen;
+      const base = sent.map(([key, values]) => [key, pick(values)] as const);
+      // One-account noise. The accounts after the first send a different value of one key each (`at` cycles through the keys, and the value goes round the menu as the cycle repeats), so no key stands in for the calls
+      // that send it (`pattern glob=wildcard` would count exactly the calls that send `glob`) and every menu value is sent. The first `sent.length` of them also leave out the next key, so each key has a call without it
+      // whose other keys are sent (seed 17: the only key set that held `glob` also held `path`, so `size glob` less `target doc` was `target source`). The key sets of the value cells stay held in every case.
+      const inputOf = (account: number): { readonly [key: string]: unknown } => {
+        const changed = (account - 1) % sent.length;
+        const step = 1 + Math.floor((account - 1) / sent.length);
+        return Object.fromEntries(
+          base.flatMap(([key, value], at) => {
+            if (account >= 1 && account <= sent.length && sent.length > 1 && account % sent.length === at) return [];
+            const values = sent[at]?.[1] ?? [];
+            return [[key, account >= 1 && changed === at ? (values[(values.indexOf(value) + step) % values.length] ?? value) : value] as const];
+          }),
+        );
+      };
+      const status = random() < 0.85 ? 'ok' : 'error';
+      const one = (input: { readonly [key: string]: unknown }): Call => call(native, input, { status, ...(status === 'error' && random() < 0.5 ? { errorCode: pick([...ERROR_CODES]) } : {}), tokens: pick([null, 1000, 5000, 70000]), durationMs: pick([null, 100, 500, 9000]) });
+      // A doubled call repeats its input, except in the first three accounts, whose second call differs in a different way each (the next account's input, a key left out, and a value stepped). With only repeats,
+      // `change same` is every session of two calls (seed 18: `tokenPrompts` less `tokenSessions`), and with one kind of difference that kind's cells are every session of two calls less the repeats (seeds 10 and 16).
+      const secondOf = (account: number): { readonly [key: string]: unknown } => {
+        const entries = Object.entries(inputOf(account));
+        const [first] = entries;
+        const menu = first === undefined ? [] : (keys.find(([key]) => key === first[0])?.[1] ?? []);
+        if (account === 0) return inputOf(1);
+        if (account === 1) return Object.fromEntries(entries.slice(0, -1));
+        if (account === 2 && first !== undefined) return Object.fromEntries([[first[0], menu[(menu.indexOf(first[1]) + 1) % menu.length] ?? first[1]], ...entries.slice(1)]);
+        return inputOf(account);
+      };
+      const paired = accounts >= 4 && random() < 0.25;
+      return accountsOf(accounts, (account) => ({ calls: paired ? [one(inputOf(account)), one(secondOf(account))] : [one(inputOf(account))], promptTokens: pick([null, 5000]), wallSec: pick([null, 3]) }));
+    };
+    const more = Array.from({ length: 1 + Math.floor(random() * 3) }, () => entry(pick([1, 2, 3, 4, 4, 5, 6, 8, 11]), true));
+    return [...entry(FLOOR + 6 + Math.floor(random() * 6), true), ...entry(1 + Math.floor(random() * (FLOOR - 1)), false), ...more.flat()];
+  };
+
+  // A relation that survives the noise is reported with its numbers and kept as a case that must keep failing (`it.fails`), so the oracle stays as it is and a change that closes it says so. Seed 5 (`file.read`):
+  // `change/target-changed` and `change/feature-changed` sessions are the sessions of the `depth file_path` cells (6, 15, 8) less `edit-verify` (31) plus `target/none` (5), because every pair in the fixture that
+  // changes the target also changes its depth, and the universe holds no two paths of one depth in a pair.
+  // Seed 28 (`file.search`) leaks at the default floors only, not at one floor: the `keys/-i,output_mode,pattern` cell (thresholded, under 5 accounts) is determined by `target/none` (21), the `edit-verify` sessions (24), and the clear
+  // `pattern=literal` (3) and `pattern=wildcard` (1) cells, which the clear floor of 1 serves and one floor of 5 does not. Reported as a leak of the shipped floors for the rank-check brief, not moved to one floor and no floor changed.
+  const SURVIVORS = new Set([5, 28]);
+  const SWEEP_SEEDS = 30;
+  const sweepCase = (seed: number): void => {
+    const accounts = sweepOf(seed);
+    const held = heldOf(accounts);
+    expect(servedOf(accounts)).toBeGreaterThan(0);
+    expect(held.cells.some(({ clusters }) => clusters < FLOOR)).toBe(true);
+    expect(leaksAtEach(accounts)).toEqual(NO_LEAKS);
+  };
+  it.each(Array.from({ length: SWEEP_SEEDS }, (_, at) => at + 1).filter((seed) => !SURVIVORS.has(seed)).map((seed) => [seed]))('serves nothing that gives back a sub-floor cell in the call-built fixture of seed %i', sweepCase, 120000);
+  for (const seed of SURVIVORS) it.fails(`still gives back a sub-floor cell in the call-built fixture of seed ${String(seed)} (a relation of the fixture's thin change vocabulary)`, () => { sweepCase(seed); }, 120000);
 });

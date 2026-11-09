@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { HARNESSES, verifyBundle, VOCAB_VERSION, type Bundle } from '../../cli/src/sessions/pool-wire.js';
 import type { Harness } from '../../cli/src/sessions/schema.js';
 import { etagOf } from './bundle.js';
-import { DEFAULT_FLOORS } from './floors.js';
+import { DEFAULT_FLOORS, floorsOf } from './floors.js';
 import { SERVED } from './derive.js';
 import { sampleSkeleton, withPairs } from './sample.js';
 import { containing, fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
@@ -605,15 +605,15 @@ describe('the ETag of a fetch', () => {
     const db = await pool.db();
     const generation = Number(await db.prepare('SELECT generation FROM pool_generation WHERE id = 1').first('generation'));
     expect(generation).toBeGreaterThan(0);
-    expect(answer.headers.get('etag')).toBe(etagOf('claude-code', VERSION, generation, [...SERVED.map(({ name }) => name), 'books'], DEFAULT_FLOORS));
+    expect(answer.headers.get('etag')).toBe(etagOf('claude-code', VERSION, generation, [...SERVED.map(({ name }) => name), 'books'], floorsOf({ CLEAR_FLOOR: '5' }, () => undefined)));
   });
 });
 
 describe('fit by platform and shell', () => {
   // The cell is version-free, so it joins every version of a motif in a week: a total that is the sum of the version cells it sits beside. Served beside only some of them, its difference
   // from the served ones would be the others, so it is served only when no cell of its motif, week, and exposure is under the floor.
-  const inFreshPool = async (run: (spread: TestPool) => Promise<void>): Promise<void> => {
-    const spread = await startPool();
+  const inFreshPool = async (run: (spread: TestPool) => Promise<void>, bindings: { [name: string]: string } = {}): Promise<void> => {
+    const spread = await startPool(bindings);
     try {
       await run(spread);
     } finally {
@@ -637,7 +637,7 @@ describe('fit by platform and shell', () => {
   const environmentReads = (bundle: Bundle) => bundle.reads.filter((read) => read.family === 'fit' && read.slice.platform !== undefined);
   const environmentCells = (bundle: Bundle) => bundle.cells.filter((cell) => cell.frameBucket.startsWith('env:'));
 
-  it('serves a read per (name, platform, shell) at five accounts and none at four', async () => {
+  it('serves a read per (name, platform, shell) at five accounts and none at four, with the clear floor at the public floor', async () => {
     await inFreshPool(async (spread) => {
       for (const id of ['5001', '5002', '5003']) await depositFrom(spread, id, VERSION);
       const four = await bundleFrom(spread, await depositFrom(spread, '5004', VERSION));
@@ -654,7 +654,16 @@ describe('fit by platform and shell', () => {
       // The read's one input is the env cell the bundle holds.
       expect(read?.inputs).toHaveLength(1);
       expect(environmentCells(five).map((cell) => cell.frameBucket)).toEqual(['env:linux:bash']);
-    });
+    }, { CLEAR_FLOOR: '5' });
+  }, 60_000);
+
+  it('serves the read of a clear (name, platform, shell) from the first account, at the default clear floor of 1', async () => {
+    await inFreshPool(async (spread) => {
+      const one = await bundleFrom(spread, await depositFrom(spread, '5401', VERSION));
+      expect(environmentReads(one).map((read) => [read.slice, read.clusters])).toEqual([[{ motif: 'shell.exec[program=git sub=push]', level: 'named', platform: 'linux', shell: 'bash' }, 1]]);
+      expect(environmentCells(one).map((cell) => cell.frameBucket)).toEqual(['env:linux:bash']);
+      expect(one.floors).toMatchObject({ public: 5, clear: 1 });
+    }, { CLEAR_FLOOR: '1' });
   }, 60_000);
 
   it('does not serve the version-free total beside a version cell under the floor, so no difference exposes it', async () => {
@@ -686,7 +695,7 @@ describe('fit by platform and shell', () => {
     });
   }, 120_000);
 
-  it('does not serve the version-free total beside an environment cell under the floor: five accounts on one shell and three on another', async () => {
+  it('does not serve the version-free total beside an environment cell under the floor: five accounts on one shell and three on another, with the clear floor at the public floor', async () => {
     await inFreshPool(async (spread) => {
       for (const id of ['5301', '5302', '5303', '5304']) await depositFrom(spread, id, VERSION);
       const token = await depositFrom(spread, '5305', VERSION);
@@ -701,7 +710,17 @@ describe('fit by platform and shell', () => {
       for (const id of ['5314', '5315']) await depositFrom(spread, id, VERSION, '2026-11-02', 'powershell');
       const whole = await bundleFrom(spread, token);
       expect(environmentCells(whole).map((cell) => [cell.frameBucket, cell.sessions])).toEqual([['env:linux:bash', 5], ['env:linux:powershell', 5]]);
-    });
+    }, { CLEAR_FLOOR: '5' });
+  }, 120_000);
+
+  it('serves the total beside five accounts on one shell and three on another when every part is clear and at the clear floor of 1', async () => {
+    await inFreshPool(async (spread) => {
+      for (const id of ['5321', '5322', '5323', '5324']) await depositFrom(spread, id, VERSION);
+      const token = await depositFrom(spread, '5325', VERSION);
+      for (const id of ['5331', '5332', '5333']) await depositFrom(spread, id, VERSION, '2026-11-02', 'powershell');
+      // Each part is a clear cell at or above the clear floor, so none is a sub-floor part the total could reveal.
+      expect(environmentCells(await bundleFrom(spread, token)).map((cell) => [cell.frameBucket, cell.sessions])).toEqual([['env:linux:bash', 5], ['env:linux:powershell', 3]]);
+    }, { CLEAR_FLOOR: '1' });
   }, 120_000);
 
   // The environment cells take no part in the bucket's own reads: a week that only another version holds is not a week of this bundle's pool, so it cannot move a read that says how long ago.

@@ -1,114 +1,18 @@
 // The pool serves a call's shape cells (layer 0): a target class, an argument class, and a count of unsent key names are closed lists, so their cells are `clear` and served at the clear floor;
 // the sorted key names are a long tail, so their cell is `thresholded` and served only at the public floor. The bundle's `fit` reads cite them.
 import { describe, expect, it } from 'vitest';
-import { NO_AXES, parseShapeClass, shapeClass, weekStartOf, type Cell } from '../../cli/src/sessions/cells.js';
+import { NO_AXES, shapeClass, type Cell } from '../../cli/src/sessions/cells.js';
 import { classMotif, namedId, shapeMotif, type Motif, type WindowStep } from '../../cli/src/sessions/motif.js';
 import { cellClassOf } from './cell-class.js';
-import { withheldOf } from './complement.js';
+import { withheldOf, type Floorplan } from './complement.js';
 import { bundleOf } from './derive.js';
-import { DEFAULT_FLOORS, DEFAULT_PUBLIC_FLOOR } from './floors.js';
+import { clustersOf, DEFAULT_FLOORS, DEFAULT_PUBLIC_FLOOR, type Floors } from './floors.js';
 import type { StoredPool } from './stored.js';
 
-/**
- * The unserved cells that the served ones determine, worked out apart from `complement.ts`. Each relation the cells hold is one equation, with the totals no cell holds as unknowns: each of `target` and `keys`
- * sums to the calls of its action; `dropped`, and the `enum` of an open list, sum to a count of their own that no other cell holds; each key's `size` and `depth` cells, its other `enum` cells, and the `keys` cells whose list holds the key, sum to the calls that send the key; a week cell is the sum of its day cells; a shape cell is
- * the sum of its named cells; and an action's one-step shape cells, over models and exposure, are its calls, which the `fit` read gives. With every served cell fixed, a cell is determined when no solution can move it: after reducing the equations over the unknowns to row echelon form, its column is a pivot whose
- * row holds no other unknown.
- */
-const determinedCells = (held: readonly Cell[], motifs: readonly Motif[], served: (cell: Cell) => boolean): Cell[] => {
-  const motifOf = new Map(motifs.map((motif) => [motif.motifId, motif]));
-  const relations = new Map<string, { head: Cell | string | null; parts: Cell[] }>();
-  const relate = (relation: string, cell: Cell, head?: string): void => {
-    const known = relations.get(relation) ?? { head: head ?? null, parts: [] };
-    relations.set(relation, known);
-    known.parts.push(cell);
-  };
-  for (const cell of held) {
-    const motif = motifOf.get(cell.motifId);
-    const place = `${cell.frameBucket} ${cell.grain} ${cell.day} ${String(cell.exposed)}`;
-    const week = `week ${cell.motifId} ${cell.frameBucket} ${String(cell.exposed)} ${weekStartOf(cell.day)}`;
-    if (cell.grain === 'week') relations.set(week, { head: cell, parts: relations.get(week)?.parts ?? [] });
-    else relate(week, cell);
-    const shape = `shape ${motif?.steps.map((step) => step.action).join(' ') ?? ''} ${place}`;
-    if (motif?.level === 'shape') relations.set(shape, { head: cell, parts: relations.get(shape)?.parts ?? [] });
-    if (motif?.level === 'named') relate(shape, cell);
-    // The `fit` read gives an action's calls: its one-step shape cells summed over models and exposure, on the version bucket the facet cells hold, so those calls are known where every such cell is served.
-    if (motif?.level === 'shape' && motif.steps.length === 1) {
-      const actions = motif.steps.map((step) => step.action).join(' ');
-      const onVersion = `${[...cell.frameBucket.split('/').slice(0, 2), NO_AXES].join('/')} ${cell.grain} ${cell.day} false`;
-      relate(`fit ${actions} ${onVersion}`, cell, `calls ${actions} ${onVersion}`);
-    }
-    const parsed = motif?.cls === null || motif?.cls === undefined ? null : parseShapeClass(motif.cls);
-    if (parsed === null) continue;
-    const { action, facet, value } = parsed;
-    if (facet === 'target' || facet === 'keys' || (facet === 'arg' && value === 'none')) relate(`${action} ${facet === 'arg' ? 'keys' : facet} ${place}`, cell, `calls ${action} ${place}`);
-    // Only a call with an unsent key has a `dropped` cell, so those cells sum to a count nothing else holds.
-    if (facet === 'dropped') relate(`${action} ${facet} ${place}`, cell, `own ${action} ${facet} ${place}`);
-    if (facet === 'enum') {
-      const key = value.slice(0, value.indexOf('='));
-      const member = value.slice(value.indexOf('=') + 1);
-      const open = (key === 'subagent_type' || key === 'model') && member !== 'true' && member !== 'false';
-      relate(`${action} ${facet} ${key} ${place}`, cell, open ? `own ${action} ${facet} ${key} ${place}` : `calls ${action} ${key} ${place}`);
-    }
-    if (facet === 'keys') for (const key of value.split(',')) relate(`${action} holds ${key} ${place}`, cell, `calls ${action} ${key} ${place}`);
-    if (facet === 'size' || facet === 'depth') {
-      const key = value.slice(0, value.indexOf('='));
-      relate(`${action} ${facet} ${key} ${place}`, cell, `calls ${action} ${key} ${place}`);
-    }
-  }
-  // Only the unknowns get columns: a served cell moves to the right-hand side, which the question does not depend on.
-  const columns: (Cell | string)[] = [];
-  const columnOf = new Map<Cell | string, number>();
-  const unknown = (term: Cell | string): boolean => typeof term === 'string' || !served(term);
-  const rows: [number, number][][] = [];
-  for (const { head, parts } of relations.values()) {
-    if (head === null || parts.length === 0) continue;
-    const row = new Map<number, number>();
-    const terms: [Cell | string, number][] = [[head, 1], ...parts.map((part): [Cell, number] => [part, -1])];
-    for (const [term, coefficient] of terms) {
-      if (!unknown(term)) continue;
-      if (!columnOf.has(term)) {
-        columnOf.set(term, columns.length);
-        columns.push(term);
-      }
-      const column = columnOf.get(term) ?? -1;
-      row.set(column, (row.get(column) ?? 0) + coefficient);
-    }
-    rows.push([...row]);
-  }
-  const matrix = rows.map((sparse) => {
-    const dense = Array.from({ length: columns.length }, () => 0);
-    for (const [column, coefficient] of sparse) dense[column] = coefficient;
-    return dense;
-  });
-  const gcd = (a: number, b: number): number => (b === 0 ? Math.abs(a) : gcd(b, a % b));
-  const pivotRowOf = new Map<number, number[]>();
-  let top = 0;
-  for (let column = 0; column < columns.length; column += 1) {
-    const found = matrix.findIndex((row, index) => index >= top && row[column] !== 0);
-    if (found < 0) continue;
-    const [pivot] = matrix.splice(found, 1);
-    if (pivot === undefined) throw new Error('no pivot row');
-    matrix.splice(top, 0, pivot);
-    top += 1;
-    for (const row of matrix) {
-      const factor = row[column] ?? 0;
-      if (row === pivot || factor === 0) continue;
-      const scale = pivot[column] ?? 0;
-      for (let index = 0; index < row.length; index += 1) row[index] = (row[index] ?? 0) * scale - (pivot[index] ?? 0) * factor;
-      const divisor = row.reduce(gcd, 0) || 1;
-      for (let index = 0; index < row.length; index += 1) {
-        row[index] = (row[index] ?? 0) / divisor;
-        if (!Number.isSafeInteger(row[index])) throw new Error('a coefficient outgrew exact arithmetic');
-      }
-    }
-    pivotRowOf.set(column, pivot);
-  }
-  return [...pivotRowOf].flatMap(([column, row]) => {
-    const term = columns[column];
-    return typeof term === 'object' && row.every((coefficient, index) => index === column || coefficient === 0) ? [term] : [];
-  });
-};
+/** The clear floor set to the public one, so a clear cell is served at the public floor as a thresholded one is: the cases below test the complement and the rank check at one floor. */
+const ONE_FLOOR: Floors = { ...DEFAULT_FLOORS, clear: DEFAULT_PUBLIC_FLOOR };
+/** One floor for every cell, counted on the cell's clusters: the single-floor plan these cases state. */
+const at = (floor: number): Floorplan => ({ floorOf: () => floor, standingOf: clustersOf });
 
 const bucket = `claude-code/2.1.31x/${NO_AXES}`;
 const target = classMotif(shapeClass('file.read', 'target', 'source'));
@@ -137,7 +41,7 @@ describe('a bundle of shape cells', () => {
   it('serves the clear cells at the clear floor and the key names only at the public floor, and no arg cell, which the keys cells hold apart from the server', () => {
     expect(served(DEFAULT_PUBLIC_FLOOR - 1, { ...DEFAULT_FLOORS, clear: 1 })).toEqual([target.cls, dropped.cls].sort());
     expect(served(DEFAULT_PUBLIC_FLOOR)).toEqual([target.cls, dropped.cls, keys.cls].sort());
-    expect(served(DEFAULT_PUBLIC_FLOOR - 1)).toEqual([]);
+    expect(served(DEFAULT_PUBLIC_FLOOR - 1, ONE_FLOOR)).toEqual([]);
   });
 
   it('carries a fit read per served shape cell, each citing its cell', () => {
@@ -173,7 +77,7 @@ describe('the cells of one facet of a shape', () => {
   const motifOf = (facet: Parameters<typeof shapeClass>[1], value: string) => classMotif(shapeClass('file.read', facet, value));
   const servedValues = (cells: [ReturnType<typeof motifOf>, number][]): string[] => {
     const stored: StoredPool = { cells: cells.map(([motif, clusters]) => cellOf(motif.motifId, clusters)), environment: [], motifs: cells.map(([motif]) => motif), strata: [] };
-    const held = bundleOf('claude-code', '2.1.314', stored, DEFAULT_FLOORS);
+    const held = bundleOf('claude-code', '2.1.314', stored, ONE_FLOOR);
     return held.cells.map(({ motifId }) => held.motifs.find((motif) => motif.motifId === motifId)?.cls ?? '').sort();
   };
   const F = DEFAULT_PUBLIC_FLOOR;
@@ -207,7 +111,7 @@ describe('the keys cells that hold a key', () => {
   const F = DEFAULT_PUBLIC_FLOOR;
   const servedValues = (cells: [ReturnType<typeof motifOf>, number][]): string[] => {
     const stored: StoredPool = { cells: cells.map(([motif, clusters]) => ({ ...cellOf(motif.motifId, clusters) })), environment: [], motifs: cells.map(([motif]) => motif), strata: [] };
-    const held = bundleOf('claude-code', '2.1.314', stored, DEFAULT_FLOORS);
+    const held = bundleOf('claude-code', '2.1.314', stored, ONE_FLOOR);
     return held.cells.map(({ motifId }) => held.motifs.find((motif) => motif.motifId === motifId)?.cls ?? '').sort();
   };
 
@@ -232,13 +136,13 @@ describe('the keys cells that hold a key', () => {
       [motifOf('keys', 'pattern'), F + 5],
       [motifOf('size', 'path=9-32'), 2 * F + 4],
       [motifOf('size', 'pattern=9-32'), 2 * F + 4],
-      [motifOf('target', 'source'), 3 * F + 9],
+      [motifOf('target', 'none'), 3 * F + 9],
     ];
     const cells = parts.map(([motif, clusters]) => cellOf(motif.motifId, clusters));
     const motifs = parts.map(([motif]) => motif);
-    expect(withheldOf(cells, motifs, F).size).toBeLessThan(5);
-    expect(withheldOf(cells, motifs, F, 4).size).toBe(5);
-    expect([...withheldOf(cells, motifs, F, 4)].some((cell) => cell.motifId === thin.motifId)).toBe(false);
+    expect(withheldOf(cells, motifs, at(F)).size).toBeLessThan(5);
+    expect(withheldOf(cells, motifs, at(F), 4).size).toBe(5);
+    expect([...withheldOf(cells, motifs, at(F), 4)].some((cell) => cell.motifId === thin.motifId)).toBe(false);
   });
 
   it("are not recovered from the action's calls, which the fit read gives", () => {
@@ -265,21 +169,21 @@ describe("an action's one-step shape cells", () => {
   it("sum over models to the action's calls, so a sub-floor model is not the served target cells less the other models", () => {
     const thin = onModel('model-b', F - 1);
     const wide = onModel('model-a', 2 * F + 1);
-    const withheld = withheldOf([wide, thin, cellOf(source.motifId, 2 * F), cellOf(test.motifId, F)], [shape, source, test], F);
+    const withheld = withheldOf([wide, thin, cellOf(source.motifId, 2 * F), cellOf(test.motifId, F)], [shape, source, test], at(F));
     expect([...withheld]).toEqual([wide]);
   });
 
   it('sum over exposure too, so a sub-floor exposed cell is not the served target cells less the unexposed one', () => {
     const thin = { ...onModel('model-a', F - 1), exposed: true };
     const wide = onModel('model-a', 2 * F + 1);
-    expect([...withheldOf([wide, thin, cellOf(source.motifId, 2 * F), cellOf(test.motifId, F)], [shape, source, test], F)]).toEqual([wide]);
+    expect([...withheldOf([wide, thin, cellOf(source.motifId, 2 * F), cellOf(test.motifId, F)], [shape, source, test], at(F))]).toEqual([wide]);
   });
 
   it('are not tied to a dropped cell, which only the calls with an unsent key reach', () => {
     const one = classMotif(shapeClass('file.search', 'dropped', '1'));
     const cells = [onModel('model-a', 30), cellOf(source.motifId, 20), cellOf(test.motifId, 10)];
-    expect([...withheldOf([...cells, cellOf(one.motifId, 2)], [shape, source, test, one], F)]).toEqual([]);
-    expect([...withheldOf([...cells, cellOf(one.motifId, 7)], [shape, source, test, one], F)]).toEqual([]);
+    expect([...withheldOf([...cells, cellOf(one.motifId, 2)], [shape, source, test, one], at(F))]).toEqual([]);
+    expect([...withheldOf([...cells, cellOf(one.motifId, 7)], [shape, source, test, one], at(F))]).toEqual([]);
   });
 
   const sentKey = (key: string): Motif => classMotif(shapeClass('agent.spawn', 'keys', key));
@@ -287,7 +191,7 @@ describe("an action's one-step shape cells", () => {
 
   it("keeps an open list's on-list values off the key's calls, which a custom agent's call is in too", () => {
     const motifs = [sentKey('subagent_type'), valueOf('subagent_type', 'Explore')];
-    expect([...withheldOf([cellOf(motifs[0]?.motifId ?? '', 30), cellOf(motifs[1]?.motifId ?? '', 2)], motifs, F)]).toEqual([]);
+    expect([...withheldOf([cellOf(motifs[0]?.motifId ?? '', 30), cellOf(motifs[1]?.motifId ?? '', 2)], motifs, at(F))]).toEqual([]);
   });
 });
 
@@ -365,20 +269,6 @@ describe('every family of cells (`FAMILY_RULES`)', () => {
     return { held: [...cells, ...weeks.values()], motifs: [...new Map([...counts.values()].map(({ motif }) => [motif.motifId, motif])).values()] };
   };
 
-  it('leaves no unserved cell that a combination of served cells determines', () => {
-    let withheldSome = 0;
-    const broken: string[] = [];
-    for (let seed = 1; seed <= 400; seed += 1) {
-      const { held, motifs } = bundleFrom(seed);
-      const withheld = withheldOf(held, motifs, F);
-      if (withheld.size > 0) withheldSome += 1;
-      const determined = determinedCells(held, motifs, (cell) => cell.clusters >= F && !withheld.has(cell));
-      if (determined.length > 0) broken.push(`seed ${String(seed)}: ${String(determined.length)} determined`);
-    }
-    expect(withheldSome).toBeGreaterThan(100);
-    expect(broken).toEqual([]);
-  });
-
   it('withholds the same cells elsewhere with or without the dropped and open-list cells, which no other cell sums with', () => {
     const own = (motif: Motif | undefined): boolean => motif?.cls?.includes('/dropped/') === true || motif?.cls?.includes('/enum/subagent_type=') === true;
     const moved: string[] = [];
@@ -386,8 +276,8 @@ describe('every family of cells (`FAMILY_RULES`)', () => {
       const { held, motifs } = bundleFrom(seed);
       const motifOf = new Map(motifs.map((motif) => [motif.motifId, motif]));
       const outside = held.filter((cell) => !own(motifOf.get(cell.motifId)));
-      const withheld = [...withheldOf(held, motifs, F)].filter((cell) => !own(motifOf.get(cell.motifId)));
-      const without = withheldOf(outside, motifs, F);
+      const withheld = [...withheldOf(held, motifs, at(F))].filter((cell) => !own(motifOf.get(cell.motifId)));
+      const without = withheldOf(outside, motifs, at(F));
       if (withheld.length !== without.size || withheld.some((cell) => !without.has(cell))) moved.push(`seed ${String(seed)}`);
     }
     expect(moved).toEqual([]);
@@ -398,7 +288,7 @@ describe('every family of cells (`FAMILY_RULES`)', () => {
     const broken: string[] = [];
     for (let seed = 1; seed <= 400; seed += 1) {
       const { held, motifs } = bundleFrom(seed);
-      const withheld = withheldOf(held, motifs, F);
+      const withheld = withheldOf(held, motifs, at(F));
       const served = (cell: Cell): boolean => cell.clusters >= F && !withheld.has(cell);
       const classOf = (cell: Cell): string[] => (motifs.find((motif) => motif.motifId === cell.motifId)?.cls ?? '').replace('shape:file.search/', '').split('/');
       for (const grain of ['day', 'week'] as const) {

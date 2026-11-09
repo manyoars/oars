@@ -2,11 +2,21 @@
 // all of its served parts would show the parts that are not served by subtraction, a sub-floor day or name among them. So where a served whole has a sub-floor part, one more part is withheld, the
 // smallest served one: the whole less the served parts is then a sum over at least two parts, one of them at or above the floor, which no reader can split. The whole and the other parts stay, so a thin
 // pool still serves what it can. Families also combine (the served totals of several can add and subtract to an unserved cell), so a rank check then withholds until the served cells determine no unserved one
-// (`withheldOf`). The environment cells (`ENVIRONMENT_CELLS`, `stored.ts`) keep their own rule, every part served or the total is not, and their counterparts are also dropped when a bucket cell is withheld (`bundleOf`).
+// (`withheldOf`). Where a sub-floor part is held to a higher floor than its whole (a long-tail name under a clear shape), the part withheld must be at or above that higher floor on the accounts that have stood, since a clear part is served at the lower clear floor; with none, the whole is withheld. The same holds for a total no cell holds (an action's calls,
+// which its one-step shape cells sum to over models, a long-tail model beside a listed one): with no such part, the smallest served part of each other family that counts that total is withheld, and a family with neither a whole nor a total is left alone.
+// The environment cells (`environmentOf`, `stored.ts`) keep their own rule, every part served or the total is not (each part against its own class's floor), and their counterparts are also dropped when a bucket cell is withheld (`bundleOf`).
+import { argFeaturesOf } from '../../cli/src/sessions/call-shape.js';
 import { isEnvironmentCell, NO_AXES, parseShapeClass, weekStartOf, type Cell, type ShapeFacet } from '../../cli/src/sessions/cells.js';
+import { targetOf } from '../../cli/src/sessions/extract.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
 import { OPEN_LIST_KEYS } from '../../cli/src/sessions/public-vocabulary.js';
 import { clears, clustersOf } from './floors.js';
+
+/** What `withheldOf` needs to know of a cell: the floor it is served at, and its count of the accounts that have stood (`clusters` as stored), which a cell served on a count of every account (`countsEvery`) does not carry. */
+export interface Floorplan {
+  floorOf: (cell: Cell) => number;
+  standingOf: (cell: Cell) => number;
+}
 
 interface Family {
   /** The name of the `FAMILY_RULES` rule that made it. */
@@ -44,6 +54,12 @@ const ACTION_CALLS = 'action-calls';
 /** Whether a total (`callsTotal`) is an action's calls. */
 const isActionCalls = (total: string): boolean => total.startsWith(`["${ACTION_CALLS}"`);
 
+/** The calls of an action that have a path target, in one frame, grain, day, and exposure: the total the `target-keys` rule's two families share. */
+const pathCalls = (action: string, cell: Pick<Cell, 'frameBucket' | 'grain' | 'day' | 'exposed'>): string => JSON.stringify(['path-calls', action, cell.frameBucket, cell.grain, cell.day, cell.exposed]);
+
+/** Whether a call that sends this key has a path target, asked of the emitter (`targetOf`) so the list of path keys is not restated. */
+const sendsPath = (key: string): boolean => targetOf('', { [key]: 'x' }, undefined, '', (value) => value).target !== null;
+
 /** The tag of `ownCalls`, so no key name can make the same total and it is never an action's calls. */
 const OWN_CALLS = 'own-calls';
 
@@ -75,8 +91,8 @@ const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const smallest = (a: Cell, b: Cell): number => clustersOf(a) - clustersOf(b) || compare(a.day, b.day) || compare(a.motifId, b.motifId);
 
 /**
- * Every way a cell counts inside another count, one rule each; `familiesOf` reads this table for both the local rules and the rank check. The invariant test (`shape-cells.test.ts`) states the relations from the
- * cells on its own, so a nesting this table leaves out shows there as a determined cell. A rule names the
+ * Every way a cell counts inside another count, one rule each; `familiesOf` reads this table for both the local rules and the rank check. The oracle (`withholding-oracle.test.ts`) derives the relations from the
+ * emitter, so a relation this table leaves out shows there as a leak. A rule names the
  * families a cell belongs to and whether it is the whole of one (a cell holding the family's total) or a part of it; a family with no whole cell has a total the reader still has from another read.
  */
 const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, motif: Motif | undefined) => Placement[] }[] = [
@@ -107,6 +123,23 @@ const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, motif: Mot
       return [{ family: JSON.stringify(['depth-dir', parsed.action, parsed.value.slice(0, at), cell.frameBucket, cell.grain, cell.day, cell.exposed]), role: parsed.facet === 'depth' ? 'whole' : 'part' }];
     },
   },
+  // A key's `size` cell is the whole of its `enum` cells whose member's length falls in that size, for a boolean-free exhaustive list: every call that sends the key sends a listed value, so the calls in a size are the calls of
+  // the members of that length. `files_with_matches` alone is 18 characters, so `size output_mode=9-32` and `enum output_mode=files_with_matches` count the same calls. An open list is not such a whole: an off-list value
+  // has a size and no `enum` cell (`countsOnlySome`).
+  {
+    name: 'enum-size',
+    placements: (cell, motif) => {
+      const parsed = motif === undefined || motif.cls === null ? null : parseShapeClass(motif.cls);
+      if (parsed === null || (parsed.facet !== 'size' && parsed.facet !== 'enum')) return [];
+      const at = parsed.value.indexOf('=');
+      const key = parsed.value.slice(0, at);
+      const member = parsed.value.slice(at + 1);
+      if (parsed.facet === 'enum' && (countsOnlySome('enum', parsed.value) || member === 'true' || member === 'false')) return [];
+      // The size the emitter itself gives the member, so the buckets are not restated here.
+      const size = parsed.facet === 'size' ? member : argFeaturesOf('', { [key]: member }, undefined)[0]?.valueSize;
+      return [{ family: JSON.stringify(['enum-size', parsed.action, key, size, cell.frameBucket, cell.grain, cell.day, cell.exposed]), role: parsed.facet === 'size' ? 'whole' : 'part' }];
+    },
+  },
   // The calls that send a key k are split by the `keys` cells whose list holds k, and by each per-key facet of k: the `keys` cells that hold k are parts of those facets' total.
   {
     name: 'key-nesting',
@@ -119,6 +152,19 @@ const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, motif: Mot
         total: callsTotal(parsed.action, key, cell),
         echoes: KEYED_FACETS.map((facet) => facetFamilyKey(parsed.action, facet, key, cell)),
       }));
+    },
+  },
+  // A call has a path target (a `target` class other than `none`) exactly when it sends a path key, so the `target` cells other than `none` and the `keys` cells that hold a path key count the same calls: one equation,
+  // which neither facet's own family states (the `target` family adds `none` and sums to the action's calls; a `keys` cell is a part of its keys' nesting families). Which keys are path keys is the emitter's own
+  // answer (`sendsPath`). A call that sends a path key with an empty or non-string value is in a `keys` cell and has no path target, so the sum can only withhold more.
+  {
+    name: 'target-keys',
+    placements: (cell, motif) => {
+      const parsed = motif === undefined || motif.cls === null ? null : parseShapeClass(motif.cls);
+      if (parsed === null) return [];
+      const withPath = parsed.facet === 'target' ? parsed.value !== 'none' : parsed.facet === 'keys' && parsed.value.split(',').some(sendsPath);
+      if (!withPath) return [];
+      return [{ family: JSON.stringify(['target-keys', parsed.action, parsed.facet, cell.frameBucket, cell.grain, cell.day, cell.exposed]), role: 'part', total: pathCalls(parsed.action, cell) }];
     },
   },
   // An action's one-step shape cells, per model (`harness/version/model`) and exposure, sum to the calls its facet cells split on the version bucket (`harness/version/-`, unexposed): the total the `fit` read gives.
@@ -171,28 +217,50 @@ const familiesOf = (held: readonly Cell[], motifs: readonly Motif[]): Family[] =
 };
 
 /**
- * The local rules, one family at a time. A family (`FAMILY_RULES`) needs one more part withheld, its smallest served one, in two cases: it holds a sub-floor part and none of its parts is withheld yet, or exactly
- * one of its parts is unserved, sub-floor or withheld by another family. A withheld part is at or above the floor but still hides a count another family protects, so a family that leaves it as the one unserved
- * part would give it back by subtraction, and the sub-floor cell it shields with it. The whole of a family stays when it has one. A cell can be a part of one family and the whole of another, so the rule repeats
- * until it adds nothing. Where a lone unserved part has no served part beside it, the whole is withheld instead: it is that part's count.
+ * The local rules, one family at a time. A cell is served when it clears its own floor (`Floorplan.floorOf`): a `clear` cell's is lower than a `thresholded` one's (`cellFloor`). A family (`FAMILY_RULES`) needs one more part
+ * withheld, its smallest served one, in two cases: it holds a sub-floor part and none of its parts is withheld yet, or exactly one of its parts is unserved, sub-floor or withheld by another family. A withheld part is at or
+ * above the floor but still hides a count another family protects, so a family that leaves it as the one unserved part would give it back by subtraction, and the sub-floor cell it shields with it. The whole of a family
+ * stays when it has one. A cell can be a part of one family and the whole of another, so the rule repeats until it adds nothing. Where a lone unserved part has no served part beside it, the whole is withheld instead:
+ * it is that part's count. A family with neither a whole nor a total states no count to subtract from, so it is left alone.
+ *
+ * A sub-floor part held to a higher floor than the lowest of its family (a long-tail name under a clear shape, which carries no identity; a long-tail model beside a listed one in an action's one-step shape cells) is not
+ * hidden by withholding a part that is served only on that lower floor: a part that hides it, withheld already or withheld now, must itself be at or above that bar on the accounts that have stood (`Floorplan.standingOf`),
+ * or the count less the served parts could be that part alone. With none, a family with a whole withholds the whole; a family with a total no cell holds (the calls its parts sum to) withholds the smallest served part of
+ * each family that counts the same total, since a reader reads that total from those cells (`byTotal`).
  */
-const withholdLocally = (families: readonly Family[], withheld: Set<Cell>, floor: number): void => {
+const withholdLocally = (families: readonly Family[], byTotal: ReadonlyMap<string, readonly Family[]>, withheld: Set<Cell>, { floorOf, standingOf }: Floorplan): void => {
+  const served = (cell: Cell): boolean => clears(cell, floorOf(cell));
   for (let changed = true; changed; ) {
     changed = false;
-    for (const { whole, parts, echoes } of families) {
-      if (whole !== null && (!clears(whole, floor) || withheld.has(whole))) continue;
-      const unserved = parts.filter((part) => !clears(part, floor) || withheld.has(part));
-      const thin = parts.some((part) => !clears(part, floor)) && !parts.some((part) => withheld.has(part));
+    for (const family of families) {
+      const { whole, total, parts, echoes } = family;
+      if (whole === null && total === null) continue;
+      if (whole !== null && (!served(whole) || withheld.has(whole))) continue;
+      const bar = Math.max(0, ...parts.filter((part) => !served(part)).map(floorOf));
+      const guarded = bar > (whole === null ? parts.reduce((lowest, part) => Math.min(lowest, floorOf(part)), Infinity) : floorOf(whole));
+      // In a guarded family a part withheld on a lower floor does not hide the sub-floor part.
+      const hides = (part: Cell): boolean => !guarded || standingOf(part) >= bar;
+      const unserved = parts.filter((part) => !served(part) || withheld.has(part));
+      const thin = parts.some((part) => !served(part)) && !parts.some((part) => withheld.has(part) && hides(part));
       if (!thin && unserved.length !== 1) continue;
-      const [next] = parts.filter((part) => clears(part, floor) && !withheld.has(part)).sort(smallest);
+      const [next] = parts.filter((part) => served(part) && !withheld.has(part) && hides(part)).sort(smallest);
       if (next !== undefined) {
         withheld.add(next);
         changed = true;
         continue;
       }
+      if (guarded) {
+        // The total is read from the other families that count it, each of which gives up its smallest served part unless one of its parts is withheld already.
+        const gone = whole !== null ? [whole] : (byTotal.get(total ?? '') ?? []).flatMap((other) => (other === family || other.parts.some((part) => withheld.has(part)) ? [] : other.parts.filter((part) => served(part)).sort(smallest).slice(0, 1)));
+        for (const cell of gone) {
+          withheld.add(cell);
+          changed = true;
+        }
+        continue;
+      }
       if (unserved.length !== 1) continue;
       // With no served part left to join it, a lone unserved part equals its whole, so the whole goes too; and it equals the total that the families echoing it count, so each of those gives up its smallest served part.
-      for (const gone of [whole, ...echoes.map((echo) => echo.parts.filter((part) => clears(part, floor) && !withheld.has(part)).sort(smallest)[0])]) {
+      for (const gone of [whole, ...echoes.map((echo) => echo.parts.filter((part) => served(part) && !withheld.has(part)).sort(smallest)[0])]) {
         if (gone === null || gone === undefined || withheld.has(gone)) continue;
         withheld.add(gone);
         changed = true;
@@ -281,19 +349,23 @@ const systemsOf = (families: readonly Family[]): Row[][] => {
 export const MAX_SYSTEM_TERMS = 5000;
 
 /**
- * The served cells to leave out of a bundle, given every held cell (so a sub-floor part is seen) and the floor. First the local rules (`withholdLocally`); then the rank check, because served totals combine
+ * The served cells to leave out of a bundle, given every held cell (so a sub-floor part is seen) and the floor each cell is held to (`Floorplan`). First the local rules (`withholdLocally`); then the rank check, because served totals combine
  * across families (a sub-floor `keys` cell is one key's `size` total plus another's less the action's calls, though no one family holds it alone). Every family states one linear equation, and while the served cells
  * determine any unserved cell (`determinedOf`), the smallest served cell of its equation that shares a family with it is withheld (any served cell of its equation where none does), and both stages repeat.
  * A system of more than `maxTerms` terms is not eliminated, because the work grows faster than its size: measured, a long-tail action of 4,000 `keys` cells took 1.8 s and one of 13,000 took 10 s, against a Worker's CPU
  * limit. Nothing can be shown determined or not in such a system, so every served cell of it is withheld, which is safe and costs that action's facet, one-step shape, and named cells, day and week, for that week and version bucket.
  */
-export const withheldOf = (held: readonly Cell[], motifs: readonly Motif[], floor: number, maxTerms = MAX_SYSTEM_TERMS): Set<Cell> => {
+export const withheldOf = (held: readonly Cell[], motifs: readonly Motif[], plan: Floorplan, maxTerms = MAX_SYSTEM_TERMS): Set<Cell> => {
+  const { floorOf } = plan;
   // The one-step shape cells tie an action's calls only where its shape cells split them, so an action with no shape cells keeps its shape cells out of this rule.
   const every = familiesOf(held, motifs);
   const split = new Set(every.flatMap(({ rule, total }) => (rule === 'facet' && total !== null && isActionCalls(total) ? [total] : [])));
   const families = every.filter(({ rule, total }) => rule !== 'action-calls' || (total !== null && split.has(total)));
   // An action's calls the `fit` read gives: through its one-step shape cells where they are held, and as known where they are not.
   const tied = new Set(families.flatMap(({ rule, total }) => (rule === 'action-calls' && total !== null ? [total] : [])));
+  // The families that count each total no cell holds, so a family whose total a sub-floor part hides can reach the others that give it away (`withholdLocally`).
+  const byTotal = new Map<string, Family[]>();
+  for (const family of families) if (family.total !== null) byTotal.set(family.total, [...(byTotal.get(family.total) ?? []), family]);
   const allSystems = systemsOf(families);
   const termsOf = (system: readonly Row[]): Set<Term> => new Set(system.flatMap((row) => [...row.keys()]));
   const systems = allSystems.filter((system) => termsOf(system).size <= maxTerms);
@@ -307,8 +379,8 @@ export const withheldOf = (held: readonly Cell[], motifs: readonly Motif[], floo
   }
   const sharesFamily = (cell: Cell, other: Cell): boolean => (familiesOfCell.get(cell) ?? []).some((family) => membersOf.get(family)?.has(other) === true);
   const withheld = new Set<Cell>();
-  // A cell is served when it clears `floor`, the public floor. `derive.ts` serves a `clear` cell at `cellFloor`, which `Floors.clear` can set lower, so a lower `clear` also needs this test changed (it would count a served clear cell as unknown and under-withhold).
-  const known = (term: Term): boolean => (typeof term === 'string' ? isActionCalls(term) && !tied.has(term) : clears(term, floor) && !withheld.has(term));
+  // A cell is served when it clears its own floor, so a `clear` cell below the public floor is known to the rank check as served.
+  const known = (term: Term): boolean => (typeof term === 'string' ? isActionCalls(term) && !tied.has(term) : clears(term, floorOf(term)) && !withheld.has(term));
   const systemOf = new Map<Term, Row[]>(systems.flatMap((system) => system.flatMap((row) => [...row.keys()].map((term): [Term, Row[]] => [term, system]))));
   // The cell each system withholds next, kept until a cell of that system is withheld; the systems share no cell, so each round withholds one per system.
   const choices = new Map<Row[], Cell | undefined>();
@@ -321,7 +393,7 @@ export const withheldOf = (held: readonly Cell[], motifs: readonly Motif[], floo
       })
       .find((cell) => cell !== undefined);
   for (let seen = 0; ; ) {
-    withholdLocally(families, withheld, floor);
+    withholdLocally(families, byTotal, withheld, plan);
     for (const cell of [...withheld].slice(seen)) {
       const system = systemOf.get(cell);
       if (system !== undefined) choices.delete(system);
@@ -338,7 +410,7 @@ export const withheldOf = (held: readonly Cell[], motifs: readonly Motif[], floo
   // The systems left out of the rank check keep none of their served cells.
   for (const system of allSystems) {
     if (systems.includes(system)) continue;
-    for (const term of termsOf(system)) if (typeof term !== 'string' && clears(term, floor)) withheld.add(term);
+    for (const term of termsOf(system)) if (typeof term !== 'string' && clears(term, floorOf(term))) withheld.add(term);
   }
   return withheld;
 };

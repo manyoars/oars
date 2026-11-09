@@ -66,7 +66,7 @@ export const booksLines = (bundle: Bundle | undefined): string[] => {
 
 /** The totals as flat numbers for the health batch to read; a field with no source is null and never 0, and a bundle with no books gives null. */
 export interface BooksTotals {
-  /** Lineage (section 17 rule 6): the floor the served count was held to, the day it was as of, and the day the panel was counted, which a 304 can leave days old. */
+  /** Lineage (section 17 rule 6): the thresholded floor (`floors.public`; a clear cell is held to `floors.clear`) the served count was held to, the day it was as of, and the day the panel was counted, which a 304 can leave days old. */
   floor: number;
   asOfDay: string | null;
   panelDay: string | null;
