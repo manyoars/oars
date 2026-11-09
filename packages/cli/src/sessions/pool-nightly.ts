@@ -4,6 +4,7 @@
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { RunDeps } from '../cli.js';
+import { CliError } from '../errors.js';
 import { machineOf } from './machine.js';
 import { ask, DEPOSIT, isObject, networkSender, poolDeposit, poolServer, postBatch, postRaw, runtimeOf, signedIn, textIn, vocabularyExpired, type Sender } from './pool-command.js';
 import { rawStale } from './pool-choices.js';
@@ -20,6 +21,8 @@ export interface NightlyPool {
   /** Batches and raw copies this night sent. */
   batches: number;
   raw: number;
+  /** Pulled batches the pool refused for its closed vocabulary or its format this night: each stays in the outbox, unsent, and is asked again the next night. Set only when there were some. */
+  refused?: number;
   /** Set when a raw yes was held back because it was given under another covenant than the one in force; `oars pool raw --consent yes` answers for the covenant now in force. The sender prints nothing, so this note is where it shows. */
   rawHeld?: true;
 }
@@ -34,6 +37,9 @@ const accepted = async (deps: RunDeps, server: string, token: string, via: Sende
   const reply = await ask(deps, DEPOSIT, server, '/v1/covenant', { token }, via);
   return reply.status === 200 && isObject(reply.body) && Reflect.get(reply.body, 'accepted') === true ? textIn(reply.body, 'version') : undefined;
 };
+
+/** The pool's 422 for a value or a format its closed vocabulary does not read (a format older than it reads is the same code, on the field `format`). */
+const isVocabularyRefusal = (error: unknown): boolean => error instanceof CliError && error.problem.code === 'closed_vocabulary';
 
 const night = async (deps: RunDeps, net: Sender, tally: NightlyPool): Promise<NightlyPool> => {
   const none = (outcome: NightlyOutcome): NightlyPool => ({ outcome, batches: 0, raw: 0 });
@@ -69,7 +75,16 @@ const night = async (deps: RunDeps, net: Sender, tally: NightlyPool): Promise<Ni
         // Acceptance is the consent, so nothing was printed first; the file is still read and hashed again just before the request.
         const locked = await lockedBatch(outbox, batch.hash, { requireShown: false, stamp: batch.stamp });
         if (!locked.ok) continue;
-        await postBatch(deps, { server, token, bytes: locked.bytes, hash: batch.hash, via: net });
+        try {
+          await postBatch(deps, { server, token, bytes: locked.bytes, hash: batch.hash, via: net });
+        } catch (error) {
+          // A pulled batch cannot be rebuilt (its raw is gone), and one the pool no longer reads must not stop the batches after it on every night: it stays, unsent and unmarked, and the note counts it.
+          if (batch.pulled && isVocabularyRefusal(error)) {
+            tally.refused = (tally.refused ?? 0) + 1;
+            continue;
+          }
+          throw error;
+        }
         await markSent(outbox, batch.hash, deps.now());
         tally.batches += 1;
       }

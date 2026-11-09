@@ -20,6 +20,7 @@ const LATER = Date.parse('2099-01-01T00:00:00Z');
 const OLD = 'v1-0a0a0a0a';
 const OLDER = 'v0-0b0b0b0b';
 const KEY = '0123456789abcdef';
+const OTHER_KEY = 'fedcba9876543210';
 const LOCAL_KEY = '1111111111111111';
 
 const answer = (status: number, body: unknown = {}): Reply => ({ status, body, headers: new Headers() });
@@ -219,5 +220,73 @@ describe('the send reads every stamp pulled.json lists', () => {
     const night = await nightlyPoolSend(s.deps, pool.via);
     expect(night.outcome).toBe('sent');
     expect(posted(pool).filter((body) => body.includes(`"id":"${KEY}"`))).toEqual([]);
+  });
+});
+
+/** A pool that refuses the deposit naming `refusedId` with `refusal`, and takes every other. */
+const refusing = (refusedId: string, refusal: Reply): Pool => {
+  const requests: Outgoing[] = [];
+  return {
+    requests,
+    via: (request) => {
+      requests.push(request);
+      if (request.url.pathname === '/v1/covenant') return Promise.resolve(OPEN);
+      return Promise.resolve(String(request.body).includes(`"id":"${refusedId}"`) ? refusal : answer(201, { ok: true }));
+    },
+  };
+};
+
+describe('a refused pulled batch is kept, unsent, and reported', () => {
+  const REFUSALS: Array<[string, Reply]> = [
+    ['closed_vocabulary', answer(422, { error: 'closed_vocabulary', message: 'pulled[0].name: not a public package', field: 'pulled[0].name' })],
+    ['format', answer(422, { error: 'closed_vocabulary', message: 'format: the format 2 form is no longer read; send format 3', field: 'format' })],
+  ];
+
+  it.each(REFUSALS)('keeps the batch the pool refused for %s, sends the next one, deletes nothing, and says so in the night\'s note', async (_name, refusal) => {
+    const s = await scene();
+    const refused = await admit(s, KEY, OLD);
+    const next = await admit(s, OTHER_KEY, OLD);
+    const pool = refusing(KEY, refusal);
+    const night = await nightlyPoolSend(s.deps, pool.via);
+    expect(night).toMatchObject({ outcome: 'sent', refused: 1 });
+    expect(JSON.parse(readFileSync(join(s.staged.storeDir, 'pool-nightly.json'), 'utf8'))).toMatchObject({ refused: 1 });
+    expect(posted(pool).filter((body) => body.includes(`"id":"${OTHER_KEY}"`))).toHaveLength(1);
+    const sent = [...(await sentLog(s.outbox)).keys()];
+    expect(sent).toContain(next);
+    expect(sent).not.toContain(refused);
+    expect(folderOf(s, OLD)).toEqual([`${KEY}.${refused}.jsonl`, `${OTHER_KEY}.${next}.jsonl`]);
+    expect(pulledJson(s)).toEqual({ [KEY]: OLD });
+  });
+
+  it('asks again on the next pass, and reports it again', async () => {
+    const s = await scene();
+    await admit(s, KEY, OLD);
+    const refusal = REFUSALS[0]?.[1] ?? answer(500);
+    expect(await nightlyPoolSend(s.deps, refusing(KEY, refusal).via)).toMatchObject({ refused: 1 });
+    expect(await nightlyPoolSend(s.deps, refusing(KEY, refusal).via)).toMatchObject({ refused: 1 });
+    expect(pulledJson(s)).toEqual({ [KEY]: OLD });
+  });
+
+  it('leaves the batch in place when `deposit --send` is refused, and marks nothing sent', async () => {
+    const s = await scene();
+    const hash = await admit(s, KEY, OLD);
+    await poolOutbox(s.deps, { server: POOL });
+    const refusal = REFUSALS[0]?.[1] ?? answer(500);
+    await expect(poolDeposit(s.deps, { server: POOL, send: hash, via: refusing(KEY, refusal).via })).rejects.toThrow(/not a public package/u);
+    expect([...(await sentLog(s.outbox)).keys()]).not.toContain(hash);
+    expect(pulledJson(s)).toEqual({ [KEY]: OLD });
+    expect(folderOf(s, OLD)).toEqual([`${KEY}.${hash}.jsonl`]);
+  });
+
+  it('still ends the night for a refusal of a batch this machine built, and for any other refusal of a pulled one', async () => {
+    const s = await scene();
+    await admit(s, KEY, OLD);
+    const server = answer(500, { error: 'internal', message: 'The pool failed.' });
+    expect(await nightlyPoolSend(s.deps, refusing(KEY, server).via)).toMatchObject({ outcome: 'failed' });
+    const local = await scene();
+    const refusal = REFUSALS[0]?.[1] ?? answer(500);
+    const night = await nightlyPoolSend(local.deps, (request) => Promise.resolve(request.url.pathname === '/v1/covenant' ? OPEN : refusal));
+    expect(night).toMatchObject({ outcome: 'failed' });
+    expect(night).not.toHaveProperty('refused');
   });
 });
