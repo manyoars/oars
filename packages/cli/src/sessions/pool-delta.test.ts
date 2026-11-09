@@ -363,6 +363,14 @@ describe('the deltas a deposit carries', () => {
     expect(carriedDeltas('other', sessions, marks).get('a4')?.entries).toHaveLength(1);
   });
 
+  it('keeps a held delta for the one session named as rebuilt, with no mark to write, and for no other', () => {
+    const sessions = [...before(), ...after()];
+    const held = new Set(carriedDeltas('acct', sessions, new Set()).get('a4')?.marks);
+    expect(carriedDeltas('acct', sessions, held, 'a4').get('a4')).toEqual({ entries: carriedDeltas('acct', sessions, new Set()).get('a4')?.entries, marks: [] });
+    expect(carriedDeltas('acct', sessions, held, 'b1').size).toBe(0);
+    expect(carriedDeltas('acct', sessions, new Set(), 'a4').get('a4')?.marks).toHaveLength(1);
+  });
+
   it('builds the same delta whatever the order the sessions come in, so a rebuilt session carries the same one', () => {
     const sessions = [...before(), ...after()];
     expect(carriedDeltas('acct', [...sessions].reverse(), new Set())).toEqual(carriedDeltas('acct', sessions, new Set()));

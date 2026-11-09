@@ -221,8 +221,9 @@ export interface Carried {
 /**
  * The deltas not yet sent, by the id of the session that filled their after window: that session's batch carries them, and the mark is the window's index, so it holds whichever session fills. A delta whose mark is held is dropped, so a rebuilt session, or a batch written
  * again under the same key, builds none it already carried. Nothing is marked here: the caller marks them once the batch is written.
+ * `rebuilt` is the one session a machine's Stop builds again while it is still open: it keeps the deltas it already carried, so the batch that replaces its own still holds them, and only the marks not yet written are returned for it.
  */
-export const carriedDeltas = (account: string, sessions: readonly Gated[], sent: ReadonlySet<string>): Map<string, Carried> => {
+export const carriedDeltas = (account: string, sessions: readonly Gated[], sent: ReadonlySet<string>, rebuilt?: string): Map<string, Carried> => {
   const carried = new Map<string, Carried>();
   for (const { index, before, after, filler } of windowsOf(sessions)) {
     const entries: DeltaEntry[] = [];
@@ -233,9 +234,10 @@ export const carriedDeltas = (account: string, sessions: readonly Gated[], sent:
       after.slice(0, DELTA_MIN_SESSIONS).map(({ records }) => records),
     )) {
       const mark = deltaMark(account, entry, index);
-      if (sent.has(mark)) continue;
+      const written = sent.has(mark);
+      if (written && filler.id !== rebuilt) continue;
       entries.push(entry);
-      marks.push(mark);
+      if (!written) marks.push(mark);
     }
     if (entries.length > 0) carried.set(filler.id, { entries, marks });
   }

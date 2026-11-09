@@ -121,6 +121,13 @@ describe('deltas on a machine', () => {
       return Array.isArray(deltas) && deltas.length > 0;
     }).length;
 
+  /** The marks written so far, one per line, from the outbox's log. */
+  const marksOf = (staged: Staged): string[] => {
+    const root = join(staged.storeDir, 'pool-outbox');
+    const found = existsSync(root) ? readdirSync(root, { recursive: true, encoding: 'utf8' }).filter((name) => name.endsWith('deltas-sent.log')) : [];
+    return found.flatMap((name) => readFileSync(join(root, name), 'utf8').split('\n').filter((line) => line !== ''));
+  };
+
   it('a vps machine carries the delta its own history shows', async () => {
     const given = await scene({ OARS_HOST_CLASS: 'vps' }, weeks);
     expect(await document(given)).toMatchObject({ batched: 10 });
@@ -133,6 +140,19 @@ describe('deltas on a machine', () => {
     expect(await document(given, { session: sid(24) })).toMatchObject({ sessions: 1, batched: 1, withdrawn: 0 });
     expect(carried(given.staged)).toBe(1);
     expect(batches(given.staged)).toHaveLength(1);
+  });
+
+  it("a vps machine's next Stop for the same open session still carries the delta, and the mark log is unchanged", async () => {
+    const given = await scene({ OARS_HOST_CLASS: 'vps' }, weeks);
+    expect(await document(given, { session: sid(24) })).toMatchObject({ batched: 1 });
+    expect(carried(given.staged)).toBe(1);
+    const written = marksOf(given.staged);
+    expect(written).not.toEqual([]);
+    // The Stop and the SessionEnd both rebuild the open session; a rebuild that dropped the delta would leave the filler's batch with none.
+    expect(await document(given, { session: sid(24) })).toMatchObject({ batched: 1, withdrawn: 0 });
+    expect(carried(given.staged)).toBe(1);
+    expect(batches(given.staged)).toHaveLength(1);
+    expect(marksOf(given.staged)).toEqual(written);
   });
 
   it("a vps machine's Stop for a session outside the windows' fill carries no delta and builds the named session alone", async () => {

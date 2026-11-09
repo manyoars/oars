@@ -489,7 +489,8 @@ export const poolDeposit = async (
   // A delta is built from the sessions that passed, carried by the batch of the session that filled its after window, and marked sent only once that batch is written: a deposit that stops first builds it again.
   // A cloud machine has no history of its own to compare a window against (every VM starts clean), so it carries none.
   const placed = machine?.hostClass === 'cloud' ? [] : [...ready.map(({ records }) => records), ...history].flatMap((records) => placedOf(records) ?? []);
-  const carried = carriedDeltas(account, placed, await sentDeltas(outbox));
+  // A machine builds the open session at every Stop and SessionEnd, so the session it names keeps the delta its earlier batch carried; any other deposit builds it once.
+  const carried = carriedDeltas(account, placed, await sentDeltas(outbox), machine === undefined ? undefined : options.session);
   // The coverage bands (t871): the operator's two settings, read here, and the team band counted from the local git log. Nothing is looked up, and anything unread goes as unknown.
   const coverageOf = makeCoverage(runtime, await readCoverageSetting(runtime.storeDir), options.git ?? runGit);
   for (const { records, key } of ready) {
