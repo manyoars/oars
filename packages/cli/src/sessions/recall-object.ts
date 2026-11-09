@@ -53,7 +53,7 @@ export interface RecallAnswer {
   bytes?: number;
   /** What the asker saw, or for a held recall would have seen. It holds structured fields only (`recall-render.ts`). */
   rendered: string;
-  /** The closed names a follow can match: canonical actions, in the order shown. */
+  /** The closed names a name match can find: canonical actions, in the order shown. */
   names: string[];
 }
 

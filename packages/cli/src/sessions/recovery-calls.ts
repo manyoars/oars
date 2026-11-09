@@ -1,4 +1,4 @@
-// What followed a failed call, in closed vocabulary: the actions of up to the next 5 calls of the same prompt, and whether an edit was among them. Pure and Worker-safe (types only),
+// What followed a failed call, in closed vocabulary: the actions of up to the next 5 calls of the same prompt, and whether a write that did not fail was among them. Pure and Worker-safe (types only),
 // so the client's skeleton, a local read, and the pool's ingest compute it from the same list of calls. These are what followed, never a fix, and `editFollowed` is not success: it says a file write
 // came back without an error, not that the file is right.
 import type { CanonicalAction } from './actions.js';
