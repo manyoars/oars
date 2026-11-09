@@ -347,6 +347,8 @@ describe('erasing one account under a lawful request', () => {
     expect(await all('SELECT label, allow_repos FROM machines WHERE account = ?', account)).toEqual([{ label: '[erased]', allow_repos: '[]' }]);
     expect(await all('SELECT id, key_hash FROM machines WHERE account = ?', account)).toEqual(hashes);
     expect(await all('SELECT label FROM machines WHERE account = ?', other.account)).toEqual([{ label: 'their box' }]);
+    expect((await eraseAccount(await store(), account, NOW)).rows).toBe(0);
+    expect(await all("SELECT rows_erased FROM erasure_audit WHERE kind = 'account' AND account = ? ORDER BY id DESC LIMIT 1", account)).toEqual([{ rows_erased: 0 }]);
   }, 60_000);
 
   it('drops the account\'s staged parts', async () => {

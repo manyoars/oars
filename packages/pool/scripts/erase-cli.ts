@@ -8,7 +8,7 @@ export const USAGE = [
   '  row --account <id> --id <session>   replace a deposit row that holds a leaked secret with a marker and tombstone it',
   '        [--value-stdin]               also read the leaked value from stdin: scrub it from aggregates, erase every row that holds it,',
   '                                      and make ingest refuse it again (only its SHA-256 is kept)',
-  '  account --account <id>              erase one account\'s deposit rows and raw objects (a lawful request); aggregate counts stay',
+  '  account --account <id>              erase one account\'s deposit rows and raw objects and scrub its machines\' labels and allow lists (a lawful request); aggregate counts stay',
   'Options: --confirm (without it nothing is changed), --local (the local wrangler state instead of the account\'s)',
   `Runs with the wrangler login already on this machine against D1 database "oars-pool" and R2 bucket "oars-pool-raw".`,
 ].join('\n');
@@ -84,7 +84,7 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
       return 0;
     }
     if (what === 'account' && options.positional.length === 1 && options.account !== undefined && options.id === undefined) {
-      if (!options.confirm) return plan(io, `erase every deposit row and raw object of account ${options.account} in ${where}`);
+      if (!options.confirm) return plan(io, `erase every deposit row and raw object of account ${options.account} in ${where}, and scrub the label and allow list of its machines`);
       io.print(summary(await eraseAccount(store, options.account, io.now())));
       return 0;
     }

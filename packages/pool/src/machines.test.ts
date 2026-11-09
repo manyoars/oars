@@ -201,7 +201,7 @@ describe('POST /v1/machines/rotate', () => {
   });
 
   it('keeps only the latest replaced key: after two rotations the first token is unknown and the second is retired', async () => {
-    const { token } = await pool.signIn('github', stubUser('4322'));
+    const { token } = await pool.signIn('github', stubUser('4324'));
     const first = await enrolled(token, { hostClass: 'vps' });
     await activate(first.key);
     const second = textOf((await rotate(first.key)).json, 'key');

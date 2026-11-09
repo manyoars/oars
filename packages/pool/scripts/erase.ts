@@ -215,8 +215,8 @@ export const eraseLeakedSecret = async (store: EraseStore, secret: LeakedSecret,
 export const eraseAccount = async (store: EraseStore, accountId: string, now: Date): Promise<Erased> => {
   const account = nameOf(accountId, 'the account');
   let rows = await store.run('DELETE FROM deposit_parts WHERE account = ?', [account]);
-  // A machine's label and allow list are free text and repository names the account typed: they are scrubbed in place, and the row stays because its hashes are what refuse the key.
-  rows += await store.run("UPDATE machines SET label = '[erased]', allow_repos = '[]' WHERE account = ?", [account]);
+  // A machine's label and allow list are free text and repository names the account typed: they are scrubbed in place, and the row stays because its hashes are what refuse the key. The guard keeps a rerun at zero rows, as every other step does.
+  rows += await store.run("UPDATE machines SET label = '[erased]', allow_repos = '[]' WHERE account = ? AND (label <> '[erased]' OR allow_repos <> '[]')", [account]);
   for (const row of await store.rows('SELECT id FROM deposits WHERE account = ? AND erased_on IS NULL', [account])) rows += await dropDeposit(store, account, textOf(row, 'id'), 'lawful-request', now);
   let objects = 0;
   for (const row of await store.rows('SELECT sha256 FROM raw_objects WHERE account = ? AND erased_on IS NULL', [account])) objects += await dropObject(store, account, textOf(row, 'sha256'), 'lawful-request', now);

@@ -56,7 +56,7 @@ export const createMachine = async (env: Env, account: string, machine: NewMachi
   return { machine: { id, ...machine, state: 'pending', expiresAt, createdAt: now }, token };
 };
 
-/** The one place a machine key's scope is decided: a key deposits and reads the covenant, activates and rotates itself, and does nothing else. `allowed` is the matched route's own word on it (`ROUTES` in `worker.ts`), so a route added without one is closed to a machine key. A bearer that is no machine's key is none of this check's business. */
+/** The one place a machine key's scope is decided: a key deposits, reads the covenant, posts telemetry, and activates and rotates itself, and does nothing else. `allowed` is the matched route's own word on it (`ROUTES` in `worker.ts`), so a route added without one is closed to a machine key. A bearer that is no machine's key is none of this check's business. */
 export const machineScope = async (request: Request, env: Env, allowed: boolean): Promise<Response | undefined> => {
   const token = bearerOf(request);
   if (allowed || token === undefined) return undefined;
