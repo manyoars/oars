@@ -353,7 +353,7 @@ export const startPool = async (bindings: { [name: string]: string } = {}, optio
   const db = async (): Promise<TestDb> => (await miniflare.getBindings<{ DB: TestDb }>()).DB;
   const bucket = async (): Promise<TestBucket> => (await miniflare.getBindings<{ TELEMETRY: TestBucket }>()).TELEMETRY;
   const database = await db();
-  // One batch, not one round trip per statement: the migrations are about 150 lines, and a round trip is what stretches when the machine is busy, so the setup hook no longer grows with the load.
+  // One batch, not one round trip per statement: the migrations are about 90 statements, so the hook no longer pays one round trip per statement when the machine is busy.
   const statements: Statement[] = [];
   for (const file of readdirSync(fileIn('../migrations')).sort()) {
     for (const line of readFileSync(fileIn(`../migrations/${file}`), 'utf8').split('\n')) if (line.trim() !== '' && !line.startsWith('--')) statements.push(database.prepare(line));
