@@ -281,7 +281,7 @@ const CREDENTIAL_FLAGS = words(
     '--password --passwd --pass --pwd --passphrase --secret --client-secret --client_secret --secret-key --secret_key --secret-access-key ' +
     '--api-key --apikey --api_key --private-key --auth --authorization --credential --credentials',
 );
-// A prefixed spelling (`--db-password`, `--github-token`, `--stripe_api_key`) is a credential by its last word, in either separator; `--tokenizer` and `--customer` are not.
+// A prefixed spelling (`--db-password`, `--github-token`, `--vendor_api_key`) is a credential by its last word, in either separator; `--tokenizer` and `--customer` are not.
 const CREDENTIAL_SUFFIX = /(?:^|[-_])(?:token|password|passwd|pwd|passphrase|secret|credentials?)$|(?:api|private|secret|access)[-_]key$/;
 const isCredentialFlag = (flag: string): boolean => {
   const lower = flag.toLowerCase();
