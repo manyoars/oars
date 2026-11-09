@@ -37,8 +37,12 @@ export interface SourceStore {
   sessions: SourceSession[];
   /** The session as transcript text for `captureSession`; throws when it cannot be read. */
   transcript: (session: SourceSession) => string | Promise<string>;
+  /** True when the session's file holds only the harness's own head records and no turn, so `sessions verify` counts it as empty, not unreadable; absent when the format has no such form. */
+  headOnly?: (session: SourceSession) => boolean | Promise<boolean>;
   /** Sessions skipped because their id is not a safe file name, counted so the skip is never silent. */
   rejected: number;
+  /** Files the reader dropped before they were sessions that held records in a shape it does not know; only `sessions verify` reads it, as seen and unreadable. Absent when the format has no such drop. */
+  shapeMoved?: number;
   /** Items that could not be inspected, warned about once each and never fatal; `reason` names no path. */
   unreadable: readonly { file: string; reason: string }[];
   /** The file to blame when `transcript` throws for a session; the store's own file when a source keeps one. */
@@ -109,6 +113,7 @@ const codex: Source = {
         ...(session.parent === null ? {} : { subagent: { parent: `codex-${session.parent}`, agentType: session.agentRole, spawnedBy: null } }),
       })),
       transcript: async (session) => await store.transcript(need(byId.get(session.id))),
+      headOnly: async (session) => await store.headOnly(need(byId.get(session.id))),
       rejected: store.rejected,
       unreadable: store.unreadable,
       where: (session) => byId.get(session.id)?.file ?? root,
@@ -130,6 +135,7 @@ const copilot: Source = {
     return {
       sessions: store.sessions.map((session) => ({ id: session.id, folder: session.folder, size: session.size, mtimeMs: session.mtimeMs })),
       transcript: async (session) => await store.transcript(need(byId.get(session.id))),
+      headOnly: async (session) => await store.headOnly(need(byId.get(session.id))),
       rejected: store.rejected,
       unreadable: store.unreadable,
       where: (session) => byId.get(session.id)?.file ?? root,
@@ -158,6 +164,7 @@ const gemini: Source = {
       })),
       transcript: async (session) => await store.transcript(need(byId.get(session.id))),
       rejected: store.rejected,
+      shapeMoved: store.shapeMoved,
       unreadable: store.unreadable,
       where: (session) => byId.get(session.id)?.file ?? root,
       close: () => undefined,
@@ -205,6 +212,7 @@ const opencode: Source = {
         ...(session.parent === null ? {} : { subagent: { parent: `opencode-${session.parent}`, agentType: session.agent, spawnedBy: null } }),
       })),
       transcript: (session) => store.transcript(need(byId.get(session.id))),
+      headOnly: (session) => store.headOnly(need(byId.get(session.id))),
       rejected: store.rejected,
       unreadable: [],
       where: () => join(root, 'opencode.db'),
@@ -226,6 +234,7 @@ const pi: Source = {
     return {
       sessions: store.sessions.map((session) => ({ id: session.id, folder: session.folder, size: session.size, mtimeMs: session.mtimeMs })),
       transcript: async (session) => await store.transcript(need(byId.get(session.id))),
+      headOnly: async (session) => await store.headOnly(need(byId.get(session.id))),
       rejected: store.rejected,
       unreadable: store.unreadable,
       where: (session) => byId.get(session.id)?.file ?? root,
@@ -247,6 +256,7 @@ const vscodeCopilot: Source = {
     return {
       sessions: store.sessions.map((session) => ({ id: session.id, folder: session.folder, size: session.size, mtimeMs: session.mtimeMs })),
       transcript: async (session) => await store.transcript(need(byId.get(session.id))),
+      headOnly: async (session) => await store.headOnly(need(byId.get(session.id))),
       rejected: store.rejected,
       unreadable: store.unreadable,
       where: (session) => byId.get(session.id)?.files[0] ?? root,
@@ -273,7 +283,9 @@ const otel: Source = {
         ...store.superseded.map((entry) => ({ id: entry.id, folder: null, size: 0, mtimeMs: 0, supersededBy: entry.by })),
       ],
       transcript: (session) => (session.supersededBy === undefined ? store.transcript(need(byId.get(session.id))) : ''),
+      headOnly: (session) => session.supersededBy === undefined && store.headOnly(need(byId.get(session.id))),
       rejected: store.rejected,
+      shapeMoved: store.shapeMoved,
       unreadable: store.unreadable,
       where: (session) => byId.get(session.id)?.file ?? root,
       close: () => undefined,

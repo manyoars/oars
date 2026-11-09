@@ -157,6 +157,21 @@ const spansOf = (request: unknown, order: { next: number }, file: string): Span[
   return spans;
 };
 
+/**
+ * True when a request holds something the reader found no span in: no `resourceSpans` list, or a span that is not an object or lacks `traceId` or `spanId`. An export with an
+ * empty list is routine (nothing was traced) and is not this.
+ */
+const holdsUnreadSpans = (request: unknown): boolean => {
+  // A metrics or logs export in the same folder is another signal, not a moved trace.
+  if (isObj(request) && ('resourceMetrics' in request || 'resourceLogs' in request)) return false;
+  if (!isObj(request) || !Array.isArray(request.resourceSpans)) return true;
+  return request.resourceSpans.some((resource) =>
+    (isObj(resource) && Array.isArray(resource.scopeSpans) ? resource.scopeSpans : []).some((scoped) =>
+      (isObj(scoped) && Array.isArray(scoped.spans) ? scoped.spans : []).some((raw) => !isObj(raw) || str(raw.traceId) === undefined || str(raw.spanId) === undefined),
+    ),
+  );
+};
+
 /** The requests of one file: the whole text as one JSON value (a `.json` file), else one request a line (the file exporter's JSON Lines). Throws when nothing parses. */
 const requestsOf = (text: string): { requests: unknown[]; bad: string[] } => {
   const whole = parse(text);
@@ -233,7 +248,11 @@ export interface OtelSession {
   lines: Obj[];
   subagent: { parent: string; agentType: string | null; spawnedBy: string | null } | undefined;
   file: string;
+  /** True when a span of the session holds a `gen_ai.*` attribute or a name leading with an operation. A session with none (ordinary HTTP spans) is a known form with no turn. */
+  genai: boolean;
 }
+
+const isGenAi = (span: Span): boolean => Object.keys(span.attrs).some((key) => key.startsWith('gen_ai.')) || ops(span) !== '';
 
 /** The id a trace's own session takes, and the one nested agents build on: the trace id when it is a plain id, else a digest of it. */
 const tracePart = (trace: string): string => (/^[A-Za-z0-9]{1,64}$/.test(trace) ? trace : digest(trace));
@@ -346,7 +365,15 @@ export const otelSessions = (spans: readonly Span[]): OtelSession[] => {
     else held.push(span);
   }
 
-  const out = new Map<string, { lines: Obj[]; mtime: number; spans: number; subagent: OtelSession['subagent']; file: string }>();
+  // A GenAI attribute (or an operation-leading name) on any span of a unit's trace marks its session, even an ordinary child span that is no model or tool span: a renamed attribute there is a moved form, not an empty session.
+  const genaiUnits = new Set<Unit>();
+  for (const span of spans) {
+    if (!isGenAi(span)) continue;
+    const owner = ownerOf(span);
+    if (owner !== undefined) genaiUnits.add(owner);
+  }
+
+  const out = new Map<string, { lines: Obj[]; mtime: number; spans: number; subagent: OtelSession['subagent']; file: string; genai: boolean }>();
   const framework = (unit: Unit): string => unit.span.framework;
   const orderedUnits = [...unitOf.values()].sort((a, b) => startOf(a.span) - startOf(b.span) || a.span.order - b.span.order);
   // A directly nested agent is a call of the parent, though no tool span says so; grouped by the unit that owns its parent span, in one pass.
@@ -360,7 +387,7 @@ export const otelSessions = (spans: readonly Span[]): OtelSession[] => {
     else held.push(child.span);
   }
   for (const unit of orderedUnits) {
-    const entry = out.get(unit.session) ?? { lines: [], mtime: 0, spans: 0, subagent: undefined, file: unit.span.file };
+    const entry = out.get(unit.session) ?? { lines: [], mtime: 0, spans: 0, subagent: undefined, file: unit.span.file, genai: false };
     out.set(unit.session, entry);
     if (unit.spawn !== undefined) {
       const agentName = str(unit.span.attrs['gen_ai.agent.name']);
@@ -482,8 +509,9 @@ export const otelSessions = (spans: readonly Span[]): OtelSession[] => {
     entry.lines.push(...pieces.map((piece) => piece.line));
     // The unit's own span counts once, though it is also a model or tool span when the earliest root of an agentless trace is one.
     entry.spans += 1 + mine.filter((span) => span !== unit.span).length;
+    if (mine.some(isGenAi) || genaiUnits.has(unit)) entry.genai = true;
   }
-  return [...out.entries()].map(([id, held]) => ({ id, size: held.spans, mtimeMs: held.mtime, lines: held.lines, subagent: held.subagent, file: held.file }));
+  return [...out.entries()].map(([id, held]) => ({ id, size: held.spans, mtimeMs: held.mtime, lines: held.lines, subagent: held.subagent, file: held.file, genai: held.genai }));
 };
 
 /** A trace session found in the folder, before its lines are read. */
@@ -495,6 +523,7 @@ export interface OtelFound {
   mtimeMs: number;
   subagent: OtelSession['subagent'];
   file: string;
+  genai: boolean;
 }
 
 export interface OtelStore {
@@ -502,7 +531,11 @@ export interface OtelStore {
   /** The single-trace sessions a conversation id has folded into a merged one (`supersededSessions`). */
   superseded: { id: string; by: string }[];
   transcript: (session: OtelFound) => string;
+  /** True when a session with no turn holds no GenAI span (ordinary HTTP spans): a known form, so `sessions verify` counts it as empty, not unreadable. */
+  headOnly: (session: OtelFound) => boolean;
   rejected: number;
+  /** Files that held a request but gave no span because the request's shape is not one the reader knows. Read only by `sessions verify`; selection is unchanged. */
+  shapeMoved: number;
   unreadable: { file: string; reason: string }[];
 }
 
@@ -514,11 +547,12 @@ export const openOtelStore = async (root: string): Promise<OtelStore | undefined
     names = (await readdir(root)).filter((name) => /\.jsonl?$/i.test(name)).sort();
   } catch (error) {
     if (missing(error)) return undefined;
-    return { sessions: [], superseded: [], transcript: () => '', rejected: 0, unreadable: [{ file: root, reason: reasonOf(error, root) }] };
+    return { sessions: [], superseded: [], transcript: () => '', headOnly: () => false, rejected: 0, shapeMoved: 0, unreadable: [{ file: root, reason: reasonOf(error, root) }] };
   }
   const unreadable: { file: string; reason: string }[] = [];
   const spans: Span[] = [];
   const order = { next: 0 };
+  let shapeMoved = 0;
   // The torn lines of each file stay with that file: a session that came from it counts them, else the file is named.
   const torn = new Map<string, string[]>();
   for (const name of names) {
@@ -527,9 +561,11 @@ export const openOtelStore = async (root: string): Promise<OtelStore | undefined
       if (!(await stat(file)).isFile()) continue;
       const { requests, bad } = requestsOf(await readFile(file, 'utf8'));
       if (bad.length > 0) torn.set(file, bad);
+      const before = spans.length;
       for (const request of requests) {
         spans.push(...spansOf(request, order, file));
       }
+      if (spans.length === before && requests.some(holdsUnreadSpans)) shapeMoved += 1;
     } catch (error) {
       unreadable.push({ file, reason: reasonOf(error, file) });
     }
@@ -545,7 +581,7 @@ export const openOtelStore = async (root: string): Promise<OtelStore | undefined
       continue;
     }
     lines.set(session.id, session.lines);
-    sessions.push({ id: session.id, folder: null, size: session.size, mtimeMs: session.mtimeMs, subagent: session.subagent, file: session.file });
+    sessions.push({ id: session.id, folder: null, size: session.size, mtimeMs: session.mtimeMs, subagent: session.subagent, file: session.file, genai: session.genai });
   }
   sessions.sort((a, b) => a.mtimeMs - b.mtimeMs || a.id.localeCompare(b.id));
   const tornOf = new Map<string, string[]>();
@@ -557,7 +593,9 @@ export const openOtelStore = async (root: string): Promise<OtelStore | undefined
   return {
     sessions,
     superseded,
+    headOnly: (session) => !session.genai,
     rejected,
+    shapeMoved,
     unreadable,
     transcript: (session) => {
       const held = lines.get(session.id) ?? [];

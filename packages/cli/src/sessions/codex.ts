@@ -55,6 +55,7 @@ import { basename, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { PassThrough, pipeline } from 'node:stream';
 import { createZstdDecompress, zstdDecompressSync } from 'node:zlib';
+import { holdsOnlyRecords } from './head-only.js';
 import { INTERRUPT_MARKER, SHAPE_TOOLS_LINE } from './session-shape.js';
 
 /** The Codex home for an environment; a test passes its own so it never reads the real one. */
@@ -104,6 +105,8 @@ export interface CodexStore {
   sessions: CodexSession[];
   /** The session as transcript text for `captureSession`; throws when the file cannot be read. */
   transcript: (session: CodexSession) => Promise<string>;
+  /** True when the rollout holds only head records (`rolloutHeadOnly`); `sessions verify` counts such a file as empty, not unreadable. */
+  headOnly: (session: CodexSession) => Promise<boolean>;
   /** Files skipped because their id is not a safe file name (it names a skeleton), counted so the skip is never silent. */
   rejected: number;
   /** Files that could not be inspected, reported once each and never fatal; the reason names no path, so a log line built from it leaks none. */
@@ -291,10 +294,12 @@ const rateLimitsOf = (payload: Obj): Obj | undefined => {
 const usageOf = (info: unknown): Obj | undefined => {
   const last = isObj(info) && isObj(info.last_token_usage) ? info.last_token_usage : undefined;
   if (last === undefined) return undefined;
-  const input = num(last.input_tokens) ?? 0;
+  const reportedInput = num(last.input_tokens);
+  const input = reportedInput ?? 0;
   const reportedCached = num(last.cached_input_tokens);
   const cached = Math.min(reportedCached ?? 0, input);
-  const output = num(last.output_tokens) ?? 0;
+  const reportedOutput = num(last.output_tokens);
+  const output = reportedOutput ?? 0;
   // A zero total means Codex recorded none, so no usage is written rather than a measured zero.
   if (input === 0 && output === 0) return undefined;
   const reasoning = num(last.reasoning_output_tokens);
@@ -303,17 +308,33 @@ const usageOf = (info: unknown): Obj | undefined => {
   // Codex counts cached and written tokens both inside `input_tokens` (input 100 = cached 40 + write 60, codex-api/src/sse/responses.rs:889-911); capture's
   // `input` excludes cache reads and creation, as the Claude Code path's does, so each token is counted once.
   return {
-    input_tokens: Math.max(input - cached - written, 0),
-    // A category the event left out stays out (older rollouts carry no cache keys), so it is neither a zero entry nor an observed field.
+    // A category the event left out stays out (a partial event, or an older rollout with no cache keys), so it is neither a zero entry nor an observed field.
+    ...(reportedInput === undefined ? {} : { input_tokens: Math.max(input - cached - written, 0) }),
     ...(reportedCached === undefined ? {} : { cache_read_input_tokens: cached }),
     ...(reportedWritten === undefined ? {} : { cache_creation_input_tokens: written }),
-    output_tokens: output,
+    ...(reportedOutput === undefined ? {} : { output_tokens: output }),
     ...(reasoning === undefined ? {} : { output_tokens_details: { thinking_tokens: reasoning } }),
   };
 };
 
 /** The non-blank lines of a rollout that are not JSON (a torn write), kept so `captureSession` counts them and the deposit line reports them. */
 export const rolloutBadLines = (text: string): string[] => text.split('\n').filter((raw) => raw.trim() !== '' && parse(raw) === undefined);
+
+/** Rollout record types that carry no turn by design: the header and the per-turn context. A rollout of these alone is a session started and quit. */
+const ROLLOUT_HEAD_KINDS: ReadonlySet<string> = new Set(['session_meta', 'turn_context']);
+/** Payload types the reader reads as carrying no turn: the usage event, an aborted turn (one the operator interrupted gives a prompt record, so it is no longer head-only), and the `response_item` messages of injected context (a prompt is the `event_msg` user_message). */
+const ROLLOUT_HEAD_EVENTS: ReadonlySet<string> = new Set(['token_count', 'turn_aborted']);
+const ROLLOUT_HEAD_ITEMS: ReadonlySet<string> = new Set(['message']);
+/** An assistant `response_item` message is a turn, which the reader reads from `event_msg` only: a rollout whose turns moved to it is a moved form, not an empty one. */
+const isAssistantItem = (record: { [key: string]: unknown }): boolean => typeof record.payload === 'object' && record.payload !== null && 'role' in record.payload && record.payload.role === 'assistant';
+export const rolloutHeadOnly = (text: string): boolean =>
+  holdsOnlyRecords(text, (record) => {
+    if (ROLLOUT_HEAD_KINDS.has(record.type)) return true;
+    const payload = record.payload;
+    const kind = typeof payload === 'object' && payload !== null && 'type' in payload ? payload.type : undefined;
+    if (typeof kind !== 'string') return false;
+    return (record.type === 'event_msg' && ROLLOUT_HEAD_EVENTS.has(kind)) || (record.type === 'response_item' && ROLLOUT_HEAD_ITEMS.has(kind) && !isAssistantItem(record));
+  });
 
 /**
  * The names in a list of tool declarations: each entry's `name` (a `DynamicToolSpec` function, dynamic_tools.rs; an `additional_tools` or
@@ -327,6 +348,51 @@ const toolNames = (list: unknown): string[] =>
 
 /** The approval policy as the permission mode: a string, or the tag of an externally tagged object (`{granular: {...}}`, protocol.rs:1181), which `mode()` keeps if documented and stores as `other` if not. */
 const approvalMode = (policy: unknown): string | undefined => (isObj(policy) ? Object.keys(policy)[0] : str(policy));
+
+/** The parent's records (not its `session_meta`) as the keys a copied fork's leading records are matched against. */
+const parentKeys = (parent: string): string[] =>
+  parent
+    .split('\n')
+    .map((raw) => parse(raw))
+    .filter((parsed): parsed is Obj => isObj(parsed) && isObj(parsed.payload) && parsed.type !== 'session_meta')
+    .map((parsed) => JSON.stringify([parsed.type, parsed.payload]));
+
+/** True for a `session_meta` of a Copied fork whose parent text is known: the leading records equal to the parent's are its copied history, in either mode. */
+const copiesParent = (payload: Obj, parentText: string | undefined): parentText is string =>
+  parentText !== undefined && str(payload.forked_from_id) !== undefined && !isObj(payload.history_base);
+
+/**
+ * The rollout with the history it inherited removed (the records below a subagent's `subagent_history_start_ordinal`, and a Copied fork's leading
+ * copy of its parent), by the same two rules `rolloutLines` applies, so the head-only test sees only what the session itself wrote. Lines that are not
+ * a JSON object with a payload stay, as a torn line must still count.
+ */
+export const rolloutOwnText = (text: string, parentText?: string): string => {
+  let inherited: number | undefined;
+  let copied: { keys: string[]; at: number } | null = null;
+  let seenMeta = false;
+  return text
+    .split('\n')
+    .filter((raw) => {
+      const entry = parse(raw);
+      if (!isObj(entry) || !isObj(entry.payload)) return true;
+      const ordinal = num(entry.ordinal);
+      if (inherited !== undefined && ordinal !== undefined && ordinal < inherited) return false;
+      if (entry.type !== 'session_meta' && copied !== null) {
+        if (copied.keys[copied.at] === JSON.stringify([entry.type, entry.payload])) {
+          copied.at += 1;
+          return false;
+        }
+        copied = null;
+      }
+      if (entry.type === 'session_meta' && !seenMeta) {
+        seenMeta = true;
+        inherited = num(entry.payload.subagent_history_start_ordinal);
+        if (inherited === undefined && copiesParent(entry.payload, parentText)) copied = { keys: parentKeys(parentText), at: 0 };
+      }
+      return true;
+    })
+    .join('\n');
+};
 
 /** One rollout as the lines `captureSession` reads. */
 export const rolloutLines = (text: string, fallbackId: string, parentText?: string): Obj[] => {
@@ -482,12 +548,6 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
       settleMcp(id, failed ? (text === '' ? 'dynamic tool call failed' : text) : undefined, when);
     }
   };
-  const parentKeys = (parent: string): string[] =>
-    parent
-      .split('\n')
-      .map((raw) => parse(raw))
-      .filter((parsed): parsed is Obj => isObj(parsed) && isObj(parsed.payload) && parsed.type !== 'session_meta')
-      .map((parsed) => JSON.stringify([parsed.type, parsed.payload]));
   for (const raw of text.split('\n')) {
     const entry = parse(raw);
     if (!isObj(entry) || !isObj(entry.payload)) continue;
@@ -518,7 +578,7 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
       for (const name of declared) dynamicNames.add(name);
       inherited = num(payload.subagent_history_start_ordinal);
       paginated = payload.history_mode === 'paginated';
-      if (inherited === undefined && parentText !== undefined && str(payload.forked_from_id) !== undefined && !isObj(payload.history_base)) copied = { keys: parentKeys(parentText), at: 0 };
+      if (inherited === undefined && copiesParent(payload, parentText)) copied = { keys: parentKeys(parentText), at: 0 };
     } else if (type === 'turn_context') {
       model = str(payload.model) ?? model;
       // The policy rides every later line as `permissionMode`, the key a Claude Code user line carries.
@@ -735,6 +795,11 @@ export const openCodexStore = async (root: string): Promise<CodexStore | undefin
     origin.mtimeMs = Math.max(origin.mtimeMs, own.mtimeMs);
     sessions.delete(id);
   }
+  // A Copied fork's history is found by matching it against the parent's lineage as of the fork's start; a parent outside the store (or unreadable) leaves it whole.
+  const parentTextOf = async (session: CodexSession): Promise<string | undefined> => {
+    const parent = session.forkedFrom === null ? undefined : sessions.get(session.forkedFrom);
+    return parent === undefined ? undefined : lineageText(parent, session.started).catch(() => undefined);
+  };
   const ordered = [...sessions.values()].sort((a, b) => a.mtimeMs - b.mtimeMs || a.id.localeCompare(b.id));
   return {
     sessions: ordered,
@@ -743,11 +808,10 @@ export const openCodexStore = async (root: string): Promise<CodexStore | undefin
     transcript: async (session) => {
       // A rollout that vanished after it was listed (Codex compresses an old one) fails with its reason, which names no path.
       const text = await lineageText(session);
-      // A Copied fork's history is found by matching it against the parent's lineage as of the fork's start; a parent outside the store (or unreadable) leaves it whole.
-      const parent = session.forkedFrom === null ? undefined : sessions.get(session.forkedFrom);
-      const parentText = parent === undefined ? undefined : await lineageText(parent, session.started).catch(() => undefined);
+      const parentText = await parentTextOf(session);
       const lines = [...rolloutLines(text, session.id, parentText).map((line) => JSON.stringify(line)), ...rolloutBadLines(text)];
       return lines.join('\n') + (lines.length === 0 ? '' : '\n');
     },
+    headOnly: async (session) => rolloutHeadOnly(rolloutOwnText(await lineageText(session), await parentTextOf(session))),
   };
 };

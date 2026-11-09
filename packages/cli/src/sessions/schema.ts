@@ -30,6 +30,9 @@
 // reads, not moved ones. A Copilot CLI session with rotated `events.N.jsonl` archives is now read as one session, so its `prompts`, `tools`, `lines`, and skeleton move; one
 // with no archives is unchanged. EXTRACTOR stays 11. A version-16 store's next deposit captures every transcript again from the harness or `raw/`.
 //
+// Version 31 (CAPTURE 31) writes a Codex `token_count` event's `input` and `output` only when the event reported them, as the cache categories already were, so a partial event leaves the other
+// unobserved and not a measured zero (`usageObserved`). It changes a stored value of a Codex session; an older store's next deposit captures every transcript again.
+//
 // Version 30 (CAPTURE 30) adds the optional `local`, `dotClaude`, and `rules` counts to `loadedInstructions`: how many `CLAUDE.local.md`, `.claude/CLAUDE.md`, and `.claude/rules/` files the transcript shows
 // loaded from the working folder. It changes no other value; an older store's next deposit captures every transcript again, and a record from before then reads those three as unknown.
 //
@@ -109,7 +112,7 @@ import type { RepoSize } from './public-vocabulary.js';
 import type { SessionFunnel, SessionSetup, SessionTrust } from './session-shape.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '30';
+export const CAPTURE_VERSION = '31';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;

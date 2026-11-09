@@ -30,6 +30,7 @@
 import { open, readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, posix, win32 } from 'node:path';
+import { holdsOnlyKinds } from './head-only.js';
 
 /** Pi expands a leading ~ in its path settings (config.ts:614, utils/paths.ts:134-137). */
 const expandHome = (path: string, home: string): string => (path === '~' ? home : /^~[/\\]/.test(path) ? join(home, path.slice(2)) : path);
@@ -78,6 +79,8 @@ export interface PiStore {
   sessions: PiSession[];
   /** The session as transcript text for `captureSession`; throws when the file cannot be read or holds no parseable line. */
   transcript: (session: PiSession) => Promise<string>;
+  /** True when the file holds only its header and entries that carry no turn (`piHeadOnly`); `sessions verify` counts such a file as empty, not unreadable. */
+  headOnly: (session: PiSession) => Promise<boolean>;
   /** Files skipped because their id is not a safe file name (it names a skeleton), counted so the skip is never silent. */
   rejected: number;
   /** Sessions that could not be inspected, reported once each and never fatal; the reason names no path. */
@@ -100,6 +103,10 @@ const missing = (error: unknown): boolean => error instanceof Error && 'code' in
 
 /** The non-blank lines that are not JSON (a torn write), kept so `captureSession` counts them and the deposit line reports them. */
 export const piBadLines = (text: string): string[] => text.split('\n').filter((raw) => raw.trim() !== '' && parse(raw) === undefined);
+
+/** The session header and the ten entry kinds the format defines that carry no turn (the list at the top of this file). A file of them alone is a session started and quit. */
+const PI_HEAD_KINDS: ReadonlySet<string> = new Set(['session', 'model_change', 'thinking_level_change', 'usage', 'compaction', 'branch_summary', 'custom', 'custom_message', 'context_edit', 'label', 'session_info']);
+export const piHeadOnly = (text: string): boolean => holdsOnlyKinds(text, PI_HEAD_KINDS);
 
 /** A time in milliseconds, or undefined when it is not an absolute time after 2000. */
 const MIN_MS = Date.parse('2000-01-01T00:00:00Z');
@@ -323,7 +330,7 @@ export const openPiStore = async (base: string): Promise<PiStore | undefined> =>
     folders = await readdir(base, { withFileTypes: true });
   } catch (error) {
     if (missing(error)) return undefined;
-    return { sessions: [], transcript: () => Promise.reject(new Error('no sessions')), rejected: 0, unreadable: [{ file: base, reason: reasonOf(error, base) }] };
+    return { sessions: [], transcript: () => Promise.reject(new Error('no sessions')), headOnly: () => Promise.resolve(false), rejected: 0, unreadable: [{ file: base, reason: reasonOf(error, base) }] };
   }
   const sessions: PiSession[] = [];
   let rejected = 0;
@@ -364,6 +371,7 @@ export const openPiStore = async (base: string): Promise<PiStore | undefined> =>
     sessions,
     rejected,
     unreadable,
+    headOnly: async (session) => piHeadOnly(await readFile(session.file, 'utf8')),
     transcript: async (session) => {
       const text = await readFile(session.file, 'utf8');
       const lines = [...piLines(text, session.id).map((line) => JSON.stringify(line)), ...piBadLines(text)];
