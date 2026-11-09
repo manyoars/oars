@@ -1034,7 +1034,7 @@ export const poolExport = async (deps: RunDeps, options: { server?: string | und
   let saved = 0;
   const rawFolder = join(folder, 'raw');
   if (options.raw === true) await mkdirOwnerOnly(rawFolder);
-  if (options.raw === true && standing.length > 0) {
+  if (options.raw === true) {
     for (const hash of standing) {
       const reply = await ask(deps, EXPORT, server, `/v1/account/export/raw/${hash}`, { token, show: credential, binary: true }, options.via);
       if (reply.status !== 200) failures.push({ what: `raw object ${hash} (${answered(reply)})`, reply });
@@ -1062,8 +1062,8 @@ export const poolExport = async (deps: RunDeps, options: { server?: string | und
   // The same for raw copies: one whose object the pool has since erased must not read as a copy of something it still holds. Only a file named like a SHA-256 is ours to remove.
   if (options.raw === true) {
     const held = new Set(standing);
-    for (const name of await readdir(join(folder, 'raw'))) {
-      if (/^[0-9a-f]{64}$/.test(name) && !held.has(name)) await rm(join(folder, 'raw', name));
+    for (const name of await readdir(rawFolder)) {
+      if (/^[0-9a-f]{64}$/.test(name) && !held.has(name)) await rm(join(rawFolder, name));
     }
   }
   const ledger = standing.length + erased;
