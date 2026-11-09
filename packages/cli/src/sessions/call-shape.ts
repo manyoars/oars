@@ -241,6 +241,156 @@ export const argValuesOf = (native: string, input: { readonly [key: string]: unk
       return typeof value === 'string' && closed.get(native)?.get(key)?.has(value) === true ? [{ key, enumValue: value }] : [];
     });
 
+/** What kind of name a token is: a file's name, a folder's name below the session root, an environment variable's name, a flag's value that is a name, or a custom agent's name. */
+export const NAME_KINDS = ['file', 'dir', 'env', 'flag', 'agent'] as const;
+export type NameKind = (typeof NAME_KINDS)[number];
+
+/** One name token (layer 2): the kind and the name as it was written. The wire sends it through its one gate (`wireName`). */
+export interface ArgName {
+  kind: NameKind;
+  name: string;
+}
+
+/** A word of a shell command as the tokenizer read it. */
+export interface CommandWord {
+  text: string;
+  quoted: boolean;
+  /** The variable the whole word references: set only when the word's raw source, quotes included, is exactly one reference (`variableOf`). Every other word holds none, whatever `$` it contains. */
+  variable?: string;
+  /** The word starts at or after the command's opaque point (`tokenize`): no variable, assignment, or flag value is read from it. */
+  opaque?: true;
+}
+
+/** A shell command's words as the name read takes them: those before the program (assignments, wrappers), the program's own word, and its arguments. */
+export interface CommandWords {
+  before: readonly CommandWord[];
+  head: CommandWord;
+  args: readonly CommandWord[];
+}
+
+const DIR_ARGS = words('cwd workdir directory dir path');
+const ENV_ARGS = words('env environment envs');
+const VARIABLE_NAME = '[A-Za-z_][A-Za-z0-9_]*';
+const ENV_NAME = new RegExp(`^${VARIABLE_NAME}$`);
+const ENV_ASSIGNMENT = new RegExp(`^(${VARIABLE_NAME})=`);
+// A PowerShell scope word before the name (`$env:NAME`, `$script:NAME`, `$global:NAME`) is not part of it, in any case. Only these three: any other word before a colon (`$local:x`, `$private:x`) is an ordinary POSIX variable and its text after the colon is not a name.
+const WHOLE_REFERENCE = new RegExp(`^(?:\\$(?:(?:env|script|global):)?(${VARIABLE_NAME})|\\$\\{(?:(?:env|script|global):)?(${VARIABLE_NAME})\\})$`, 'i');
+/**
+ * The one rule for a variable reference: a word names a variable only when its raw source, quotes included, is exactly one reference: `$NAME`, `${NAME}`, or a PowerShell `$env:NAME` or scope form (`$script:NAME`, `$global:NAME`),
+ * bare or in double quotes. Every other word is literal: a `$` inside a longer word, a quote, a command substitution, an escape, and `%NAME%` (no POSIX shell or PowerShell expands it) name nothing, which sends less and never more.
+ * The tokenizer reads each word through this.
+ */
+export const variableOf = (raw: string): string | undefined => {
+  const match = WHOLE_REFERENCE.exec(/^"(.*)"$/s.exec(raw)?.[1] ?? raw);
+  return match?.[1] ?? match?.[2];
+};
+// A path that is exactly a home folder, on any mount or distribution (`/home/jsmith`, `C:\Users\jsmith`, `/mnt/c/Users/jsmith`, `/c/Users/jsmith`, `/var/home/jsmith`, `/export/home/jsmith`, `\\wsl.localhost\Ubuntu\home\jsmith`): its last
+// segment is the machine's account name, not a file. The test runs only on a path outside the session root, so the folders above `home` or `users` need no list.
+const HOME_FOLDER = /(?:^|[\\/])(?:home|users)[\\/][^\\/]+[\\/]*$/i;
+// A long flag with its value joined (`--region=eu`), or a flag word on its own: a long flag, or one short letter. A cluster (`-am`) or a short flag with its value attached holds no flag name of its own.
+const JOINED_LONG_FLAG = /^(--[A-Za-z][A-Za-z0-9_-]*)=(.*)$/s;
+const FLAG_TOKEN = /^(?:--[A-Za-z][A-Za-z0-9_-]*|-[A-Za-z])$/;
+const FLAG_VALUE_NAME = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
+// The flags whose value is text, a message or a query or an expression, and so no name even when it is one word.
+const TEXT_FLAGS = words('-m --message --body --title --description --comment --text --query --data --eval -e --command --subject --notes');
+// The flags whose value is a credential, so never a name however word-like it is: the redactor only knows the shapes of the credentials it has seen, and an opaque token is none of them.
+const CREDENTIAL_FLAGS = words(
+  '--token --access-token --accesstoken --access_token --auth-token --authtoken --auth_token --api-token --apitoken --api_token --refresh-token --bearer --bearer-token --id-token ' +
+    '--password --passwd --pass --mysqlpass --pwd --passphrase --secret --client-secret --client_secret --secret-key --secret_key --secret-access-key ' +
+    '--api-key --apikey --api_key --private-key --auth --authorization --credential --credentials',
+);
+// A prefixed spelling is a credential by its last word: set off by a separator or a capital letter (`--db-password`, `--db-pass`, `--vendor_api_key`, `--clientSecret`, `--AWSSecret`), or joined to what precedes it for the words
+// that are rarely the end of anything else (`--dbpassword`, `--githubtoken`, `--clientsecret`). `pass` needs the separator, so `--bypass` and `--compass` are not credentials, and neither are `--tokenizer`, `--customer`, `--sort-key`,
+// and a bare `--key`. The list is finite: a credential under a name that fits none of these shapes still reads as a name.
+const CREDENTIAL_SUFFIX =
+  /(?:^|[-_])(?:token|password|passwd|pass|pwd|passphrase|secret|credentials?|cookie)$|(?:password|passwd|passphrase|secret|token)$|(?:api|private|secret|access|encryption|signing|master|license|shared|session)[-_]key$/;
+const isCredentialFlag = (flag: string): boolean =>
+  CREDENTIAL_FLAGS.has(flag.toLowerCase()) ||
+  CREDENTIAL_SUFFIX.test(
+    flag
+      .replace(/([A-Z]+)([A-Z][a-z])/g, '$1-$2')
+      .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+      .toLowerCase(),
+  );
+
+// The one-letter flags whose next word is a name, and only on the program that gives them that meaning: `-k` selects tests on pytest, and is a passphrase on `openssl` and a switch on `curl` and `du`. Any other one-letter flag may be a
+// switch followed by a positional (`-i needle`) or take a credential (`-p`), so its next word is not read.
+const SHORT_NAME_FLAGS = words('-k');
+const PYTEST_PROGRAMS = words('pytest py.test');
+const runsPytest = (head: CommandWord, args: readonly CommandWord[]): boolean =>
+  PYTEST_PROGRAMS.has(head.text.replace(/^.*[\\/]/, '').replace(/\.exe$/i, '').toLowerCase()) || args.some((word, at) => !word.quoted && word.text === '-m' && args[at + 1]?.text === 'pytest');
+
+/**
+ * The values of a command's flags that are names: the next word of a long flag (or of `-k` on pytest), or the value joined to a long one, when it is a single identifier-like word, and the flag is not one that takes
+ * text or a credential. A long boolean flag followed by a positional is still read as if the positional were its value.
+ */
+const flagValueNames = (head: CommandWord, args: readonly CommandWord[]): string[] => {
+  const pytest = runsPytest(head, args);
+  const found: string[] = [];
+  for (let at = 0; at < args.length; at += 1) {
+    const word = args[at];
+    // A word after the command's opaque point (`tokenize`) may be literal text the reader took for words, so neither its joined value nor the word after it is a name.
+    if (word === undefined || word.quoted || word.opaque === true) continue;
+    if (word.text === '--') break;
+    const joined = JOINED_LONG_FLAG.exec(word.text);
+    const flag = joined?.[1] ?? word.text;
+    if (TEXT_FLAGS.has(flag) || isCredentialFlag(flag) || !FLAG_TOKEN.test(flag)) continue;
+    const after = flag.startsWith('--') || (pytest && SHORT_NAME_FLAGS.has(flag)) ? args[at + 1] : undefined;
+    const next = after?.opaque === true ? undefined : after;
+    const value = joined === null ? (next !== undefined && (next.quoted || !next.text.startsWith('-')) ? next.text : undefined) : joined[2];
+    if (value !== undefined && FLAG_VALUE_NAME.test(value)) found.push(value);
+  }
+  return found;
+};
+
+const isPlainObject = (value: unknown): value is { readonly [key: string]: unknown } => typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/**
+ * The name tokens of a call (layer 2), read from the values layer 1 reads: the file basename of each path value and the directory names of its segments below the root (else the working folder), never a segment above it, so an account
+ * or home folder is not here; the variable names a shell command assigns (`VAR=` before its program), references (`$VAR`, `${VAR}`), or an `env` object holds; a flag value that is a name; and a custom agent's `subagent_type`.
+ * Never a value: an assignment's value, a message, a path, and a number are read for the name and go no further. Sorted by kind, then name, and single. The wire sends each through its one gate.
+ */
+export const argNamesOf = (
+  native: string,
+  input: { readonly [key: string]: unknown },
+  root: string | undefined,
+  cwd: string | undefined,
+  commands: readonly CommandWords[],
+  closed: ReadonlyMap<string, ReadonlyMap<string, ReadonlySet<string>>>,
+): ArgName[] => {
+  const held = new Map<string, ArgName>();
+  const add = (kind: NameKind, name: string): void => {
+    if (name !== '') held.set(`${kind}\0${name}`, { kind, name });
+  };
+  for (const [key, value] of Object.entries(input)) {
+    const lower = key.toLowerCase();
+    if (typeof value === 'string' && PATH_ARGS.has(lower)) {
+      // A value that starts with a variable (`$HOME/notes`, `%USERPROFILE%\notes`) is anchored where the variable points, not at the cwd, so it is read as outside the root.
+      const parts = /^[$%]/.test(value) ? null : partsBelow(value, root, cwd);
+      const inside = (parts ?? []).filter((part) => part !== '..');
+      const folderArg = DIR_ARGS.has(lower);
+      // Above the root a segment is the machine's, not the project's: only a file's own name is read from such a path, and not even that when the path is a home folder, whose name is the account's.
+      if (parts === null) {
+        if (!folderArg && !HOME_FOLDER.test(value)) add('file', value.replace(/^.*[\\/]/, ''));
+        continue;
+      }
+      for (const folder of folderArg ? inside : inside.slice(0, -1)) add('dir', folder);
+      if (!folderArg) add('file', inside.at(-1) ?? '');
+    } else if (ENV_ARGS.has(lower) && isPlainObject(value)) {
+      for (const name of Object.keys(value)) if (ENV_NAME.test(name)) add('env', name);
+    } else if (lower === 'subagent_type' && typeof value === 'string' && closed.get(native)?.get(key)?.has(value) === false) add('agent', value);
+  }
+  for (const { before, head, args } of commands) {
+    for (const word of before) {
+      const assigned = word.quoted || word.opaque === true ? null : ENV_ASSIGNMENT.exec(word.text)?.[1];
+      if (assigned !== undefined && assigned !== null) add('env', assigned);
+    }
+    for (const word of [...before, head, ...args]) if (word.variable !== undefined) add('env', word.variable);
+    for (const name of flagValueNames(head, args)) add('flag', name);
+  }
+  return [...held.values()].sort((a, b) => NAME_KINDS.indexOf(a.kind) - NAME_KINDS.indexOf(b.kind) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+};
+
 /**
  * What changed from the previous call of the same tool in the same prompt, as a closed set (layer 1): `same` when nothing did; else any of a key added, a key removed, a kept key's value whose features or closed value
  * changed (`feature-changed`), a kept key's value that changed while its features did not (`value-changed`), and the target (`target-changed`). The first call of a tool in a prompt has none.
