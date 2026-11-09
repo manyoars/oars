@@ -15,7 +15,7 @@ import { DEADLINE_MS, gateHook } from './gate/hook.js';
 import { managerReader } from './gate/registry.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
 import { sessionsTry } from './sessions/try.js';
-import { githubVisibility, poolEnroll } from './sessions/machine-enroll.js';
+import { githubVisibility, poolEnroll, poolMachineRevoke, poolMachines } from './sessions/machine-enroll.js';
 import { poolCoverage, poolDeposit, poolFetch, poolLogin, poolLogout, poolOutbox, poolRaw } from './sessions/pool-command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
@@ -552,6 +552,24 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
       const options: OptionValues = command.optsWithGlobals();
       const token = deps.env.GH_TOKEN ?? deps.env.GITHUB_TOKEN;
       emit(deps, flag(options, 'json'), await poolEnroll(deps, { holdOnly: flag(options, 'holdOnly'), hostClass: text(options, 'hostClass'), launcher: text(options, 'launcher'), allowRepos: list(options, 'allowRepos'), name: text(options, 'name'), days: text(options, 'days'), server: text(options, 'server') }, githubVisibility(fetch, token)));
+    });
+
+  const machines = pool
+    .command('machines')
+    .description('list the machines enrolled with the pool: label, id, host class, launcher, state, last deposit day, and expiry; needs oars pool login')
+    .option(serverOption, serverHelp)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await poolMachines(deps, { server: text(options, 'server') }));
+    });
+  machines
+    .command('revoke')
+    .argument('<id>', 'the machine\'s id, as oars pool machines lists it')
+    .description('revoke one machine: its key is refused from its next request')
+    .option(serverOption, serverHelp)
+    .action(async (id: string, _options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await poolMachineRevoke(deps, id, { server: text(options, 'server') }));
     });
 
   pool

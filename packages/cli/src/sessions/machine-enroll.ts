@@ -198,3 +198,51 @@ const askToEnroll = async (deps: RunDeps, server: string, token: string, declare
   if (reply.status !== 201) throw refusal(STEP, reply);
   return enrolledOf(reply.body);
 };
+
+const MACHINES = 'pool-machines';
+
+/** One of the account's machines as `GET /v1/machines` lists it, kept to what a line prints. */
+interface Listed {
+  id: string;
+  label: string;
+  hostClass: string;
+  launcher: string;
+  state: string;
+  lastDepositDay: string | null;
+  expiresAt: number;
+}
+
+const listedOf = (row: unknown): Listed => {
+  const [id, label, hostClass, launcher, state] = ['id', 'label', 'hostClass', 'launcher', 'state'].map((name) => (isObject(row) ? textIn(row, name) : undefined));
+  const expiresAt = isObject(row) ? numberIn(row, 'expiresAt') : undefined;
+  if (id === undefined || label === undefined || hostClass === undefined || launcher === undefined || state === undefined || expiresAt === undefined) {
+    throw new CliError('The pool listed a machine this client cannot read.', ExitCode.UNEXPECTED, MACHINES);
+  }
+  return { id, label, hostClass, launcher, state, lastDepositDay: isObject(row) ? (textIn(row, 'lastDepositDay') ?? null) : null, expiresAt };
+};
+
+/** `oars pool machines`: the account's machines, one line each, with the id `machines revoke` takes. */
+export const poolMachines = async (deps: RunDeps, options: { server?: string | undefined }): Promise<Outcome> => {
+  const { storeDir } = runtimeOf(deps);
+  const server = poolServer(deps.env, MACHINES, options.server);
+  const { token } = await signedIn(deps, storeDir, server, MACHINES);
+  const reply = await ask(deps, MACHINES, server, '/v1/machines', { token });
+  const rows: unknown = isObject(reply.body) ? Reflect.get(reply.body, 'machines') : undefined;
+  if (reply.status !== 200 || !Array.isArray(rows)) throw refusal(MACHINES, reply);
+  const machines = rows.map(listedOf);
+  const lines = machines.map(
+    (one) => `${one.label}  ${one.id}  ${one.hostClass}  ${one.launcher}  ${one.state}  last deposit ${one.lastDepositDay ?? 'never'}  expires ${new Date(one.expiresAt).toISOString().slice(0, 10)}`,
+  );
+  return { document: { ok: true, server, machines }, text: machines.length === 0 ? `No machines are enrolled with ${server}. oars pool enroll adds one.` : lines.join('\n') };
+};
+
+/** `oars pool machines revoke <id>`: effective on the machine's next request. The pool answers 404 for an id that is not this account's and for one already revoked. */
+export const poolMachineRevoke = async (deps: RunDeps, id: string, options: { server?: string | undefined }): Promise<Outcome> => {
+  const { storeDir } = runtimeOf(deps);
+  const server = poolServer(deps.env, MACHINES, options.server);
+  const { token } = await signedIn(deps, storeDir, server, MACHINES);
+  const reply = await ask(deps, MACHINES, server, `/v1/machines/${encodeURIComponent(id)}`, { method: 'DELETE', token });
+  if (reply.status === 404) throw new CliError(`No machine ${id} to revoke: it is not one of this account's machines, or it is already revoked. oars pool machines lists them.`, ExitCode.USAGE, MACHINES);
+  if (reply.status !== 204) throw refusal(MACHINES, reply);
+  return { document: { ok: true, server, revoked: id }, text: `Revoked machine ${id}. Its key is refused from its next request.` };
+};
