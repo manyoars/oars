@@ -42,11 +42,14 @@ const gitIn = (dir: string, ...args: string[]): string => execFileSync('git', ['
 const commitIn = (dir: string, name: string): string => {
   writeFileSync(join(dir, name), name);
   gitIn(dir, 'add', name);
-  gitIn(dir, 'commit', '-m', `add ${name}`);
-  return gitIn(dir, 'rev-parse', '--short=8', 'HEAD');
+  // `core.abbrev=8` makes the commit's own summary line (`[main 1a2b3c4d] add x`) carry the eight-character sha, so no `rev-parse` process is spawned to read it back.
+  const made = gitIn(dir, '-c', 'core.abbrev=8', 'commit', '-m', `add ${name}`);
+  const sha = /^\[[^\]]+ ([0-9a-f]{8})\]/.exec(made)?.[1];
+  if (sha === undefined) throw new Error(`no sha in the commit summary: ${made}`);
+  return sha;
 };
 
-// Every test starts from the same one-commit repository, and building it costs four git processes (init, add, commit, rev-parse). Under load process creation is what
+// Every test starts from the same one-commit repository, and building it costs three git processes (init, add, commit). Under load process creation is what
 // slows, and that bill was paid in each of ~40 tests until a slow one ran past its timeout; so it is paid once and each test copies the folder, which spawns nothing.
 let template = '';
 beforeAll(() => {
