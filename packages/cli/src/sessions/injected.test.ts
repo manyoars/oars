@@ -74,6 +74,8 @@ describe('Claude Code user lines', () => {
     expect(run(out)).toBe(out);
     const typed = { type: 'user', origin, message: { role: 'user', content: 'please list the files' } };
     expect(run(typed)).toBe(typed);
+    const odd = { type: 'user', isMeta: true, origin: 'x', message: { role: 'user', content: '' } };
+    expect(run(odd)).toBe(odd);
   });
 
   it('does not touch a message that is not the user role or has no message', () => {
