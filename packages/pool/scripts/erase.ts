@@ -209,12 +209,14 @@ export const eraseLeakedSecret = async (store: EraseStore, secret: LeakedSecret,
 };
 
 /**
- * Erases one account's content under a lawful request: every deposit row it holds is replaced by the marker and tombstoned, every raw object it holds is deleted and tombstoned, and its staged parts are dropped. What stays is
+ * Erases one account's content under a lawful request: every deposit row it holds is replaced by the marker and tombstoned, every raw object it holds is deleted and tombstoned, its staged parts are dropped, and the label and allow list of its machines are scrubbed. What stays is
  * the account's contribution to the aggregates (cells, strata, and the contributor records that tell a returning cluster from a new one): opting out removes nothing from them.
  */
 export const eraseAccount = async (store: EraseStore, accountId: string, now: Date): Promise<Erased> => {
   const account = nameOf(accountId, 'the account');
   let rows = await store.run('DELETE FROM deposit_parts WHERE account = ?', [account]);
+  // A machine's label and allow list are free text and repository names the account typed: they are scrubbed in place, and the row stays because its hashes are what refuse the key.
+  rows += await store.run("UPDATE machines SET label = '[erased]', allow_repos = '[]' WHERE account = ?", [account]);
   for (const row of await store.rows('SELECT id FROM deposits WHERE account = ? AND erased_on IS NULL', [account])) rows += await dropDeposit(store, account, textOf(row, 'id'), 'lawful-request', now);
   let objects = 0;
   for (const row of await store.rows('SELECT sha256 FROM raw_objects WHERE account = ? AND erased_on IS NULL', [account])) objects += await dropObject(store, account, textOf(row, 'sha256'), 'lawful-request', now);
