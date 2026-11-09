@@ -214,6 +214,7 @@ describe('messageUsage on a Codex session', () => {
     expect(session.messageUsage).toEqual([{ id: 'sess-1-resp1', calls: [], input: 100, output: 20 }]);
     expect(session.messageUsage?.[0]).not.toHaveProperty('cacheRead');
     expect(session.messageUsage?.[0]).not.toHaveProperty('cacheWrite');
+    expect(session.usageObserved).toEqual(['input', 'output']);
   });
 
   it('records one entry for a response with two tool calls, with the response whole counts and both call ids in order', () => {
@@ -304,6 +305,6 @@ describe('messageUsage on the version path', () => {
     const plain = line({ type: 'assistant', uuid: 'p', timestamp: '2026-06-01T00:00:01.000Z', message: { id: 'msg_p', role: 'assistant', content: [{ type: 'text', text: 'x' }] } });
     addProject(staged, 'proj', 'usage-none', [user, plain]);
     await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
-    expect((await loadStore(staged.storeDir)).sessions.find((entry) => entry.session === 'usage-none')).not.toHaveProperty('messageUsage');
+    expect((await loadStore(staged.storeDir, undefined, KEEP)).sessions.find((entry) => entry.session === 'usage-none')).not.toHaveProperty('messageUsage');
   });
 });

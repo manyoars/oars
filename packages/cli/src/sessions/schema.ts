@@ -32,7 +32,7 @@
 //
 // Version 28 (CAPTURE 28) adds the optional `messageUsage` to the session record: one entry per distinct model message (a Claude Code `message.id`, a Codex response), holding that message's token counts,
 // the ids of the tool calls it made, and, for Codex, the plan percent used and window length when the event held a rate-limit block (`MessageUsage`). Numbers and ids only; the counts are never split across the
-// message's calls. It changes no value captured before and EXTRACTOR stays as it is. A version-27 store's next deposit captures every transcript again, and a session recorded before then has no `messageUsage`
+// message's calls. For a Codex event that did not report a cache category, that category is no longer observed, so `usageObserved` omits it and the skeleton and pool wire send null where they sent a zero bucket; no other value changes and EXTRACTOR stays as it is. A version-27 store's next deposit captures every transcript again, and a session recorded before then has no `messageUsage`
 // until it is: nothing reads the field back into the older record. A file that reports no usage gets none either way.
 //
 // Version 27 (CAPTURE 27) adds three optional fields to a tool call (`call-shape.ts`), each computed from the input at capture and stored as closed-list members, never a value: `argFeatures` (per key, the value's size and,
