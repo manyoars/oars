@@ -73,7 +73,7 @@ describe('token usage stays out of the raw copy', () => {
     addProject(staged, 'proj', 'usage-raw', lines);
     await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
     // The derived field exists in the local log, so the assertions below test something that could have leaked.
-    expect((await loadStore(staged.storeDir)).sessions.find((entry) => entry.session === 'usage-raw')?.messageUsage).toHaveLength(1);
+    expect((await loadStore(staged.storeDir, undefined, { messageUsage: true })).sessions.find((entry) => entry.session === 'usage-raw')?.messageUsage).toHaveLength(1);
 
     const files = await transcriptFilesOf(staged.runtime, 'proj', 'usage-raw');
     expect(files).toHaveLength(1);

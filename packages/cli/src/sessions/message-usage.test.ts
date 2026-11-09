@@ -11,6 +11,8 @@ import { deposit, loadStore, paths } from './store.js';
 import { addProject, cleanup, NOW, stage } from './test-support.js';
 
 const redact = makeRedactor();
+/** A read that keeps the entries: `loadStore` drops them by default, since nothing reads them yet. */
+const KEEP = { messageUsage: true };
 const line = (value: object): string => JSON.stringify(value);
 const capture = (lines: readonly string[]) => {
   const text = lines.join('\n');
@@ -150,7 +152,7 @@ describe('messageUsage across a deposit, subagent transcripts included', () => {
     writeFileSync(join(subagents, 'agent-x.meta.json'), JSON.stringify({ agentType: 'Explore', toolUseId: 't1' }));
 
     await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
-    const store = await loadStore(staged.storeDir);
+    const store = await loadStore(staged.storeDir, undefined, KEEP);
     const main = store.sessions.find((entry) => entry.session === 'usage-main');
     const sub = store.subagents.find((entry) => entry.session === 'usage-main~agent-x');
     expect(main?.messageUsage).toHaveLength(1);
@@ -255,7 +257,7 @@ describe('messageUsage on the version path', () => {
     addProject(staged, 'proj', 'usage-main', [user, block(1, 'msg_1', call('t1'))]);
     const options = { allow: ['proj'], redactDomains: [], now: () => NOW };
     await deposit(staged.runtime, options);
-    expect((await loadStore(staged.storeDir)).sessions.find((entry) => entry.session === 'usage-main')?.messageUsage).toHaveLength(1);
+    expect((await loadStore(staged.storeDir, undefined, KEEP)).sessions.find((entry) => entry.session === 'usage-main')?.messageUsage).toHaveLength(1);
 
     // Make the store what version 27 wrote: no field on the record, the old stamp on the record and in the state.
     const file = paths(staged.storeDir).observations;
@@ -271,14 +273,26 @@ describe('messageUsage on the version path', () => {
     if (typeof files !== 'object' || files === null) throw new Error('the state holds no files');
     for (const held of Object.values(files)) Reflect.set(Object(held), 'v', '27');
     writeFileSync(paths(staged.storeDir).state, JSON.stringify(state));
-    const before = (await loadStore(staged.storeDir)).sessions.find((entry) => entry.session === 'usage-main');
+    const before = (await loadStore(staged.storeDir, undefined, KEEP)).sessions.find((entry) => entry.session === 'usage-main');
     expect(before).toMatchObject({ cv: '27' });
     expect(before).not.toHaveProperty('messageUsage');
 
     const again = await deposit(staged.runtime, options);
     expect(again.sessions).toBeGreaterThan(0);
-    const after = (await loadStore(staged.storeDir)).sessions.find((entry) => entry.session === 'usage-main');
+    const after = (await loadStore(staged.storeDir, undefined, KEEP)).sessions.find((entry) => entry.session === 'usage-main');
     expect(after).toMatchObject({ cv: CAPTURE_VERSION, messageUsage: [{ id: 'msg_1', calls: ['t1'], input: 10, output: 20 }] });
+  });
+
+  it('a default read drops the entries from the record, and the option keeps them', async () => {
+    const staged = stage('proj');
+    expect(staged.storeDir.startsWith(staged.root)).toBe(true);
+    expect(staged.storeDir.startsWith(appData)).toBe(false);
+    addProject(staged, 'proj', 'usage-main', [user, block(1, 'msg_1', call('t1'))]);
+    await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
+    const plain = (await loadStore(staged.storeDir)).sessions.find((entry) => entry.session === 'usage-main');
+    expect(plain).toBeDefined();
+    expect(plain).not.toHaveProperty('messageUsage');
+    expect((await loadStore(staged.storeDir, undefined, KEEP)).sessions.find((entry) => entry.session === 'usage-main')).toHaveProperty('messageUsage');
   });
 
   it('re-extraction of a session with no usage data still records nothing', async () => {
