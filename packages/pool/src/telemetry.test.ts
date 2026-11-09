@@ -130,7 +130,7 @@ describe('POST /v1/telemetry on the Worker', () => {
   });
 
   it('holds a batch to a cap sized from the CLI: the largest batch it can send (11 wire events and 239 maximal commands) fits, and the cap is half the old megabyte', async () => {
-    // The CLI's own writers measure these at 2,254 bytes (a `wire` event) and 1,767 bytes (a command at its schema's limit) in `packages/cli/src/telemetry/wire.test.ts`; the events here are larger still (a 90-name wire event with the widest
+    // The CLI's own writers measure these at 2,254 bytes (a `wire` event) and 1,783 bytes (a command at its schema's limit) in `packages/cli/src/telemetry/wire.test.ts`; the events here are larger still (a 90-name wire event with the widest
     // counts is about 4.3 KB), so passing is conservative. `telemetry/send.ts` sends at most 250 events a request, and a pass writes one `wire` event for each of the 11 harnesses at most.
     const wire = command({ type: 'wire', data: { fields: Array.from({ length: 90 }, (_, at) => `fieldName${String(at)}xx`), present: Array.from({ length: 90 }, () => 1_000_000_000), fieldBytes: Array.from({ length: 90 }, () => 2 ** 50) } });
     const token = 'a'.repeat(32);
