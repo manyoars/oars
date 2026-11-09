@@ -12,7 +12,7 @@ import { makeCoverage, readCoverageSetting, writeCoverageSetting } from './cover
 import { checkSession, exclusionPaths, lastWritten, loadTerms, transcriptFilesOf, type Reason } from './exclusion.js';
 import { localNames, makeRedactor, REDACTION_VERSION, redactTranscript } from './redact.js';
 import { recordSend, recordWire, newTally, tallyBatch } from '../telemetry/wire.js';
-import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, lockedBatch, machineKeys, markShown, noteMachineKey, outboxFolder, partsOf, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
+import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, lockedBatch, machineKeys, markShown, noteMachineKey, outboxFolder, partsOf, pulledAt, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
 import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, unpinnedKid, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
 import { carriedDeltas, heldDeltas, keptDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
@@ -611,7 +611,7 @@ export const poolDeposit = async (
   // The batch of a session or account this store no longer holds goes too. A machine builds one session at a time and nothing here has the others in hand, so it sweeps nothing: nothing is withdrawn but what a gate refused.
   if (machine === undefined) {
     // The batches a machine's Stop built in this outbox are not this pass's to withdraw: their keys cannot be recomputed here. The key log is read after the folder is listed, so a batch a machine writes during the sweep is already in it.
-    counts.withdrawn += await removeBatchesExcept(outbox, async () => new Set([...built, ...(await machineKeys(outbox))]));
+    counts.withdrawn += await removeBatchesExcept(outbox, async () => new Set([...built, ...(await machineKeys(outbox)), ...(await pulledAt(outbox))]));
     await removeRawExcept(outbox, new Set([...rawKept, ...(await machineKeys(outbox))]));
   }
   await scanned.save();

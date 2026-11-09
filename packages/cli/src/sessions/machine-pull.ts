@@ -1,6 +1,6 @@
 // `oars pool hold pull`: admission of the batches a cloud VM held on `oars-hold/<machine>/<id>` branches of its own private repository (the VM side is `machine-hold.ts`). The trusted machine does it, and treats every branch as input
 // from outside: anything able to push a branch can write one, the session's own agent included. A branch that fails any gate is reported with its reason, writes nothing to the outbox, and stays where it is; branches are never deleted here.
-import { mkdtemp, readFile, readdir, rename, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Outcome, RunDeps } from '../cli.js';
 import { CliError, ExitCode } from '../errors.js';
@@ -8,9 +8,8 @@ import { exclusionPaths, loadTerms } from './exclusion.js';
 import { termsDigest } from './machine-hold.js';
 import { readMachines, type MachineRecord, type Visibility } from './machine-enroll.js';
 import { derivedSalt } from './machine-ids.js';
-import { isMissing, writeOwnerOnly } from './owner-only.js';
 import { poolServer, runtimeOf } from './pool-command.js';
-import { BATCH_FIELDS, STAMP_FOLDER, currentStamp, fieldsOf, outboxFolder, removeBatchOf, writeBatch } from './pool-outbox.js';
+import { BATCH_FIELDS, STAMP_FOLDER, currentStamp, fieldsOf, outboxFolder, readPulled, removeBatchOf, writeBatch, writePulled, type Pulled } from './pool-outbox.js';
 import { CLAIMED_HOST_CLASSES, CLAIMED_LAUNCHERS, parseSkeleton, type SessionSkeleton } from './pool-wire.js';
 import { localSalt } from './store.js';
 import type { Git } from './survival.js';
@@ -116,7 +115,7 @@ interface Pulling {
   /** This machine's own exclusion terms, lowercased, as `loadTerms` reads them. */
   list: readonly string[];
   /** `pulled.json` as it stands: each admitted `id` and the stamp folder it is filed under. */
-  pulled: { [id: string]: string };
+  pulled: Pulled;
 }
 
 /** Whether any string or key in `value` holds one of `terms`, compared lowercased the way the local gate compares a transcript. */
@@ -166,35 +165,6 @@ const underStamp = async <T>(stamp: string, work: () => Promise<T>): Promise<T> 
     if (error instanceof Refused && stamp !== currentStamp()) throw new Refused('differing_stamp', `${error.reason}: ${error.message}`);
     throw error;
   }
-};
-
-const PULLED = 'pulled.json';
-
-const readPulled = async (outbox: string): Promise<{ [id: string]: string }> => {
-  let text: string;
-  try {
-    text = await readFile(join(outbox, PULLED), 'utf8');
-  } catch (error) {
-    if (isMissing(error)) return {};
-    throw error;
-  }
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    value = undefined;
-  }
-  if (typeof value !== 'object' || value === null || Array.isArray(value) || !Object.values(value).every((stamp) => typeof stamp === 'string')) {
-    throw new CliError(`${join(outbox, PULLED)} is not a list of ids and stamps. Move it aside and pull again; nothing was fetched.`, ExitCode.INVALID, STEP);
-  }
-  return Object.fromEntries(Object.entries(value).map(([id, stamp]) => [id, String(stamp)]));
-};
-
-/** Staged and renamed, so a crash leaves the whole old file or the whole new one. */
-const writePulled = async (outbox: string, pulled: { [id: string]: string }): Promise<void> => {
-  const staged = join(outbox, `${PULLED}.tmp`);
-  await writeOwnerOnly(staged, `${JSON.stringify(Object.fromEntries(Object.entries(pulled).sort(([a], [b]) => (a < b ? -1 : 1))), null, 2)}\n`);
-  await rename(staged, join(outbox, PULLED));
 };
 
 /** One tip through its gates; answers the admission, or throws `Refused` with the first gate that failed. Nothing is written before the batch is through every gate. */
@@ -249,7 +219,7 @@ export const holdPull = async (deps: RunDeps, options: { server?: string | undef
   const terms = await loadTerms(termsFile);
   if (terms.length === 0) throw new CliError(`No exclusion terms in ${termsFile}: every branch would be unverifiable. Nothing was fetched.`, ExitCode.USAGE, STEP);
   const sessionSalt = derivedSalt((await (runtime.accountSalt ?? localSalt)(runtime.storeDir)).salt, 'sessionId/1');
-  const pulled = await readPulled(outbox);
+  const pulled = await readPulled(outbox, STEP);
   const scratch = await mkdtemp(join(runtime.storeDir, 'hold-pull-'));
   try {
     const tips: Tip[] = [];

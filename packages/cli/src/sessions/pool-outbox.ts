@@ -1,8 +1,9 @@
 // The outbox (`oars pool deposit` and `oars pool outbox`): every batch that may leave this machine is first written here, as canonical JSON lines, and `deposit` stops. Nothing in this file
 // looks inside a batch except to name its fields, at every depth, for `--explain`; what a batch holds is the projection's business.
 import { createHash } from 'node:crypto';
-import { readdir, readFile, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readdir, readFile, rename, rm } from 'node:fs/promises';
+import { basename, join } from 'node:path';
+import { CliError, ExitCode } from '../errors.js';
 import { appendOwnerOnly, mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
 import { SKELETON_FORMAT, VOCAB_VERSION } from './pool-wire.js';
 import { contentHash } from './read.js';
@@ -334,6 +335,48 @@ export const lockedBatch = async (outbox: string, hash: string, options: { stamp
   return bytes === undefined ? { ok: false, code: 'batch_changed' } : { ok: true, file, bytes };
 };
 
+const PULLED = 'pulled.json';
+
+/** The batches `oars pool hold pull` admitted and has not seen sent: each `id` (the outbox key) and the stamp folder it is filed under. */
+export interface Pulled {
+  [id: string]: string;
+}
+
+/** `pulled.json` as it stands; none when the file is missing. A file that is not a list of ids and stamps fails the command that reads it, so nothing is pruned or sent on a guess. */
+export const readPulled = async (outbox: string, step: string): Promise<Pulled> => {
+  let text: string;
+  try {
+    text = await readFile(join(outbox, PULLED), 'utf8');
+  } catch (error) {
+    if (isMissing(error)) return {};
+    throw error;
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    value = undefined;
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value) || !Object.values(value).every((stamp) => typeof stamp === 'string')) {
+    throw new CliError(`${join(outbox, PULLED)} is not a list of ids and stamps. Move it aside and run the command again; nothing was changed.`, ExitCode.INVALID, step);
+  }
+  return Object.fromEntries(Object.entries(value).map(([id, stamp]) => [id, String(stamp)]));
+};
+
+/** Staged and renamed, so a crash leaves the whole old file or the whole new one. */
+export const writePulled = async (outbox: string, pulled: Pulled): Promise<void> => {
+  await mkdirOwnerOnly(outbox);
+  const staged = join(outbox, `${PULLED}.tmp`);
+  await writeOwnerOnly(staged, `${JSON.stringify(Object.fromEntries(Object.entries(pulled).sort(([a], [b]) => (a < b ? -1 : 1))), null, 2)}\n`);
+  await rename(staged, join(outbox, PULLED));
+};
+
+const POOL_STEP = 'pool-outbox';
+
+/** The keys `pulled.json` lists at this stamp: the batches of that folder that no local build made and no stale pass may touch. */
+export const pulledAt = async (outbox: string, stamp: string = currentStamp()): Promise<Set<string>> =>
+  new Set(Object.entries(await readPulled(outbox, POOL_STEP)).filter(([, at]) => at === stamp).map(([id]) => id));
+
 /** Folders of an outbox other than the current stamp's: batches built under another vocabulary, field list, or skeleton format. */
 const staleFolders = async (outbox: string, stamp: string): Promise<string[]> => {
   const names: string[] = [];
@@ -346,12 +389,20 @@ const staleFolders = async (outbox: string, stamp: string): Promise<string[]> =>
 /** The name of a stamp folder: a vocabulary version, then eight hex digits of the field list and format. No dot or slash, so a name that matches is one path segment. */
 export const STAMP_FOLDER = /^v[^./]+-[0-9a-f]{8}$/;
 
-const batchesIn = async (folder: string): Promise<number> => (await namesIn(folder)).filter((name) => BATCH_FILE.test(name)).length;
+/** The keys of the batch files in one folder. */
+const keysIn = async (folder: string): Promise<string[]> => (await namesIn(folder)).flatMap((name) => BATCH_FILE.exec(name)?.[1] ?? []);
 
-/** Batches in one server's outbox that were built under another vocabulary, field list, or skeleton format: never printed, never sent. */
+/** The batch files of one stale folder, and which of them a stale pass may touch: a key `pulled.json` lists at this folder's stamp is spared, by key and not by folder, so a local batch sharing the folder is still stale. */
+const staleIn = async (folder: string, pulled: Pulled): Promise<string[]> => {
+  const stamp = basename(folder);
+  return (await keysIn(folder)).filter((key) => pulled[key] !== stamp);
+};
+
+/** Batches in one server's outbox that were built under another vocabulary, field list, or skeleton format: never printed, never sent. A pulled batch is not one of them, at the stamp it is listed under. */
 export const staleBatches = async (outbox: string, stamp: string = currentStamp()): Promise<number> => {
+  const pulled = await readPulled(outbox, POOL_STEP);
   let count = 0;
-  for (const folder of await staleFolders(outbox, stamp)) count += await batchesIn(folder);
+  for (const folder of await staleFolders(outbox, stamp)) count += (await staleIn(folder, pulled)).length;
   return count;
 };
 
@@ -363,10 +414,24 @@ export const staleBatchesAnywhere = async (storeDir: string, stamp: string = cur
   return count;
 };
 
-/** Removes one server's stale batches, and returns how many there were. */
+/** Removes one server's stale batches, and returns how many there were. A folder that holds a pulled batch loses only the files of the others; one that holds none goes whole. */
 export const discardStale = async (outbox: string, stamp: string = currentStamp()): Promise<number> => {
-  const count = await staleBatches(outbox, stamp);
-  for (const folder of await staleFolders(outbox, stamp)) await rm(folder, { recursive: true, force: true });
+  const pulled = await readPulled(outbox, POOL_STEP);
+  let count = 0;
+  for (const folder of await staleFolders(outbox, stamp)) {
+    const listed = Object.values(pulled).includes(basename(folder));
+    if (!listed) {
+      count += (await keysIn(folder)).length;
+      await rm(folder, { recursive: true, force: true });
+      continue;
+    }
+    const stale = await staleIn(folder, pulled);
+    for (const name of await namesIn(folder)) {
+      const found = BATCH_FILE.exec(name);
+      if (found === null || stale.includes(found[1] ?? '')) await rm(join(folder, name), { recursive: true, force: true });
+    }
+    count += stale.length;
+  }
   return count;
 };
 
