@@ -617,3 +617,52 @@ describe('a piece that can move the quote state, before a single-quoted referenc
     for (const value of ['LATE_ID', 'acme_value']) expect(JSON.stringify(skeleton)).not.toContain(value);
   });
 });
+
+// PowerShell is not POSIX: a backslash is an ordinary character in and out of quotes, a backtick is the escape, `$'` opens no ANSI-C string, and a single quote is doubled, not escaped. A command read with POSIX escapes loses its quote
+// state at `"C:\"`, so the words after it are swallowed (less sent) or, where text is literal, turned into bare words. The rows run under the `PowerShell` tool.
+describe('a PowerShell command', () => {
+  const POWERSHELL = String.raw;
+  // Literal text after a quote the POSIX reader would pair wrongly: no reference and no flag value in it may cross.
+  const LITERAL: readonly { kind: string; command: string }[] = [
+    { kind: 'a trailing backslash in double quotes, then a single-quoted reference', command: POWERSHELL`Write-Output "C:\" "it's" ' $hunter2 '` },
+    { kind: 'a backtick-escaped quote, then a single-quoted reference', command: 'Write-Output "a`"b" "it\'s" \' $hunter2 \'' },
+    { kind: 'a backtick-escaped apostrophe, then a single-quoted reference', command: "Write-Output it`'s 'a $hunter2 b'" },
+    { kind: 'a backslash before a single-quoted piece, then a single-quoted reference', command: POWERSHELL`Write-Output C:\'a b' 'c $hunter2 d'` },
+    { kind: 'a dollar before a single-quoted backslash, then a single-quoted reference', command: POWERSHELL`Write-Output $'C:\' 'a $hunter2 b'` },
+    { kind: 'a trailing backslash in double quotes, then a single-quoted flag', command: POWERSHELL`Write-Output "C:\" "it's" 'a --customer acme_value b'` },
+    { kind: 'a backtick-escaped apostrophe, then a single-quoted flag', command: "Write-Output it`'s 'a --customer acme_value b'" },
+    // No single quote in the command, so the opaque point does not apply: the double-quoted literal is one word in PowerShell.
+    { kind: 'a trailing backslash in double quotes, then a double-quoted flag', command: POWERSHELL`Write-Output "C:\" "--customer acme_value"` },
+    { kind: 'a trailing backslash in double quotes, then a double-quoted reference with an escaped dollar', command: 'Write-Output "C:\\" "`$hunter2" "`$ref_literal"' },
+  ];
+  for (const { kind, command } of LITERAL) {
+    it(`sends no name from the literal text after ${kind}`, () => {
+      const skeleton = skeletonOfLines({ redact, terms: [] }, call('p', 'PowerShell', { command }));
+      expect(toolsOf(skeleton)[0]?.names ?? [], command).toEqual([]);
+      for (const planted of ['hunter2', 'acme_value', 'ref_literal']) expect(JSON.stringify(skeleton), command).not.toContain(planted);
+    });
+  }
+
+  // What PowerShell really reads, which the POSIX reader loses. Each command is a real one and its name is data: sending it is the point of reading it in the shell's own rules. None holds a single quote: a flag value after one is not
+  // read, so the single-quote forms (`it`'s`, `$'C:\'`) are rows of the table above, where no name crosses.
+  const REAL: readonly { kind: string; command: string; expected: ArgName[] }[] = [
+    { kind: 'a trailing backslash in double quotes', command: POWERSHELL`Write-Output "C:\" --region eu_control`, expected: names('flag', 'eu_control') },
+    { kind: 'a trailing backslash then a double-quoted reference', command: POWERSHELL`Write-Output "C:\" "$BUILD_ID"`, expected: names('env', 'BUILD_ID') },
+    { kind: 'a backtick-escaped quote in double quotes', command: 'Write-Output "a`"b" --region eu_control', expected: names('flag', 'eu_control') },
+    { kind: 'a backslash before a single-quoted piece', command: POWERSHELL`Write-Output C:\ --region eu_control`, expected: names('flag', 'eu_control') },
+    { kind: 'a trailing backslash inside a subexpression', command: POWERSHELL`Write-Output "$(Get-Item "C:\x\")" --region eu_control`, expected: names('flag', 'eu_control') },
+  ];
+  for (const { kind, command, expected } of REAL) {
+    it(`reads the name after ${kind}`, () => {
+      const skeleton = skeletonOfLines({ redact, terms: [] }, call('p', 'PowerShell', { command }));
+      expect(toolsOf(skeleton)[0]?.names, command).toEqual(expected);
+    });
+  }
+
+  it('still reads a POSIX command run under the Bash tool by POSIX rules', () => {
+    const skeleton = skeletonOfLines({ redact, terms: [] }, call('b', 'Bash', { command: String.raw`echo "C:\\" --region eu_control` }), call('c', 'Bash', { command: String.raw`echo "C:\" --region eu_ignored` }));
+    const [pair, escaped] = toolsOf(skeleton);
+    expect(pair?.names).toEqual(names('flag', 'eu_control'));
+    expect(escaped?.names ?? []).toEqual([]);
+  });
+});

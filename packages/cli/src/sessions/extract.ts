@@ -747,8 +747,8 @@ const MASK = /^<(?:secret|email|org-domain)>/;
 const ONLY_MASKS = /^(?:<(?:secret|email|org-domain)>)+$/;
 
 /** Where the single-quoted text that opens at `open` ends: the closing quote, or the end of the text. Bash's ANSI-C string (`$'it\'s'`) honors a backslash, so its `\'` is inside it; any other single-quoted text ends at the next `'`. */
-const singleQuotedEnd = (text: string, open: number): number => {
-  const ansi = text.charAt(open - 1) === '$';
+const singleQuotedEnd = (text: string, open: number, ansiC = true): number => {
+  const ansi = ansiC && text.charAt(open - 1) === '$';
   let end = open + 1;
   while (end < text.length && text.charAt(end) !== "'") end += ansi && text.charAt(end) === '\\' ? 2 : 1;
   return Math.min(end, text.length);
@@ -766,9 +766,11 @@ const CLOSERS: ReadonlyMap<string, string> = new Map([
  * Whatever quoting it holds is its own: a quote inside it never ends the double-quoted piece that carries it, so a quote cannot move the reader's state. An explicit stack keeps a crafted command that nests without end from
  * overflowing the call stack, and `budget` (characters left to scan across one read) keeps one that opens thousands of them from costing a scan to the end of the text each.
  */
-const substitutionEnd = (text: string, from: number, first: string, budget: { left: number }): number => {
+const substitutionEnd = (text: string, from: number, first: string, budget: { left: number }, powershell: boolean): number => {
   const stack: string[] = [first];
   let at = from;
+  // PowerShell's escape is the backtick, and a backslash is an ordinary character there.
+  const escape = powershell ? '`' : '\\';
   // Inside a double-quoted piece or an expansion a single quote and a bare parenthesis are text; inside a substitution they quote and group.
   while (at < text.length && stack.length > 0 && budget.left > 0) {
     budget.left -= 1;
@@ -776,13 +778,13 @@ const substitutionEnd = (text: string, from: number, first: string, budget: { le
     const top = stack.at(-1);
     const opener = CLOSERS.get(char === '$' ? char + text.charAt(at + 1) : char);
     at += 1;
-    if (char === '\\') at += 1;
+    if (char === escape) at += 1;
     else if (char === top) stack.pop();
     else if (opener !== undefined) {
       stack.push(opener);
       at += char === '$' ? 1 : 0;
     } else if (char === '"') stack.push('"');
-    else if (char === "'" && (top === ')' || top === '`')) at = singleQuotedEnd(text, at - 1) + 1;
+    else if (char === "'" && (top === ')' || top === '`')) at = singleQuotedEnd(text, at - 1, !powershell) + 1;
     else if (char === '(' && (top === ')' || top === '`')) stack.push(')');
   }
   return stack.length === 0 ? at : -1;
@@ -794,9 +796,15 @@ const substitutionEnd = (text: string, from: number, first: string, budget: { le
  */
 const OPAQUE_POINT = /'|<</;
 
+/** The shell a command is written for: a `PowerShell` tool call reads its quotes and escapes by PowerShell's rules, every other call by POSIX's. */
+type ShellDialect = 'posix' | 'powershell';
+
 /** `opaqueFrom` is where that point sits in `text` (-1 for none, 0 for a text that is opaque throughout, as a word an opaque word holds is). */
-const tokenize = (text: string, opaqueFrom = text.search(OPAQUE_POINT)): ShellToken[] => {
+const tokenize = (text: string, opaqueFrom = text.search(OPAQUE_POINT), dialect: ShellDialect = 'posix'): ShellToken[] => {
   const tokens: ShellToken[] = [];
+  // PowerShell's escape is the backtick, a backslash is an ordinary character in and out of quotes, `$'` is no ANSI-C string, and a backtick opens no substitution.
+  const powershell = dialect === 'powershell';
+  const escape = powershell ? '`' : '\\';
   let word = '';
   let quoted = false;
   let started = false;
@@ -835,7 +843,7 @@ const tokenize = (text: string, opaqueFrom = text.search(OPAQUE_POINT)): ShellTo
     const next = text.charAt(at + 1);
     const here = at;
     if (char === "'") {
-      const stop = singleQuotedEnd(text, at);
+      const stop = singleQuotedEnd(text, at, !powershell);
       word += text.slice(at + 1, stop);
       quoted = true;
       started = true;
@@ -848,15 +856,15 @@ const tokenize = (text: string, opaqueFrom = text.search(OPAQUE_POINT)): ShellTo
         const inner = text.charAt(at);
         const after = text.charAt(at + 1);
         const opener = inner === '$' ? inner + after : inner;
-        const closer = CLOSERS.get(opener);
-        const end = closer === undefined ? -1 : substitutionEnd(text, at + opener.length, closer, budget);
-        if (inner === '\\' && (after === '\\' || after === '$' || after === '`')) {
+        const closer = powershell && inner === '`' ? undefined : CLOSERS.get(opener);
+        const end = closer === undefined ? -1 : substitutionEnd(text, at + opener.length, closer, budget, powershell);
+        if (inner === escape && (after === escape || after === '$' || after === '`')) {
           // A backslash pair is one escaped backslash, so the second never escapes the quote after it; an escaped dollar or backtick opens nothing.
           word += inner + after;
           at += 2;
-        } else if (inner === '\\' && after === '\n') {
+        } else if (inner === escape && after === '\n') {
           at += 2;
-        } else if (inner === '\\' && after === '"') {
+        } else if (inner === escape && after === '"') {
           word += '"';
           at += 2;
         } else if (end >= 0) {
@@ -869,13 +877,13 @@ const tokenize = (text: string, opaqueFrom = text.search(OPAQUE_POINT)): ShellTo
         }
       }
       at += 1;
-    } else if (char === '\\' && next === '\\') {
+    } else if (!powershell && char === '\\' && next === '\\') {
       word += '\\\\';
       started = true;
       at += 2;
-    } else if ((char === '\\' || char === '`') && next === '\n') {
+    } else if ((char === escape || char === '`') && next === '\n') {
       at += 2;
-    } else if (char === '\\' && next !== '' && /[\s&|;()<>'"]/.test(next)) {
+    } else if (char === escape && next !== '' && (powershell || /[\s&|;()<>'"]/.test(next))) {
       word += next;
       started = true;
       at += 2;
@@ -1340,7 +1348,7 @@ const commitPlanOf = (commands: readonly ShellCommand[]): PlannedCommit[] =>
   });
 
 /** Every simple command of a shell call, in order, after the bodies are dropped and the command is redacted. `oars gate` reads the same commands as capture. */
-export const shellCommands = (command: string, redact: Redactor): ShellCommand[] => {
+export const shellCommands = (command: string, redact: Redactor, dialect: ShellDialect = 'posix'): ShellCommand[] => {
   const whole = command.replace(/\r\n/g, '\n');
   const kept = dropBodies(whole);
   const text = redactCommand(kept, redact);
@@ -1348,12 +1356,12 @@ export const shellCommands = (command: string, redact: Redactor): ShellCommand[]
   // moved or a point is gone, the whole text is opaque.
   const points = (held: string): number => held.match(/'|<</g)?.length ?? 0;
   const moved = kept.search(OPAQUE_POINT) !== whole.search(OPAQUE_POINT) || points(text) !== points(kept);
-  return readCommands(tokenize(text, moved ? 0 : undefined));
+  return readCommands(tokenize(text, moved ? 0 : undefined, dialect));
 };
 
 /** A shell call's segments, pulls, and the commits it holds, from the command alone. The command is redacted before anything is kept. */
-export const readShell = (command: string, redact: Redactor): ShellRead => {
-  const commands = shellCommands(command, redact);
+export const readShell = (command: string, redact: Redactor, dialect: ShellDialect = 'posix'): ShellRead => {
+  const commands = shellCommands(command, redact, dialect);
   const kept = commands.slice(-SEGMENTS_PER_CALL_MAX);
   const pulls = new Map<string, ToolPull>();
   for (const { program, args } of commands) {
@@ -1878,7 +1886,7 @@ export const captureSession = (input: ExtractInput): Capture => {
         else if (name === 'WebSearch' && str(toolInput.query) !== undefined && str(toolInput.query) !== '') searches.add(redact(str(toolInput.query) ?? ''));
         else if (SHELL.has(name)) session.bashCmds += 1;
         const aimed = targetOf(name, toolInput, lineCwd, salt, redact, lineRoot);
-        const shell = SHELL.has(name) || named.action === 'shell.exec' ? readShell(str(toolInput.command) ?? '', redact) : undefined;
+        const shell = SHELL.has(name) || named.action === 'shell.exec' ? readShell(str(toolInput.command) ?? '', redact, name === 'PowerShell' ? 'powershell' : 'posix') : undefined;
         for (const held of shell?.steps ?? []) framePrograms.add(held.identity.program);
         drafts.push(draftsOf(actions, named, native, shell, aimed.target, toolInput, redact));
         responseOfCall.push(response);
