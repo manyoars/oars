@@ -128,7 +128,7 @@ An `--allow` entry is a folder (or its slug), a folder prefix with a trailing sl
 
 #### Recall in a running session: hooks
 
-`oars sessions hook install` writes five entries into one Claude Code settings file. Each is a deterministic, local, fail-open call into the store (no model, no network); an error inside a hook exits 0 with no output, so a hook never blocks or fails a session.
+`oars sessions hook install` writes five entries into one Claude Code settings file. With `--machine` it writes only the `Stop` and `SessionEnd` entries instead (for a VPS or cloud machine; `--env NAME=value` and `--terms-file <path>` go with it), described in the paragraph below the install examples. Each is a deterministic, local, fail-open call into the store (no model, no network); an error inside a hook exits 0 with no output, so a hook never blocks or fails a session.
 
 | Event | Does | Timeout written at install |
 |---|---|---|
