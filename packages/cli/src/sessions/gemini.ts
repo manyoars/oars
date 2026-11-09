@@ -494,9 +494,27 @@ const holdsNothing = (text: string, id: string): boolean => {
 /** The message types the CLI writes (chatRecordingService.ts): a prompt, a response, and the notices that carry no turn. */
 const KNOWN_MESSAGE_TYPES: ReadonlySet<string> = new Set(['user', 'gemini', 'info', 'warning', 'error']);
 
-/** True when a chat dropped as holding nothing held a message of a type the reader does not know, or a prompt or response with no `content`: a moved shape, not a launch and quit. */
-const holdsMovedShape = (text: string): boolean =>
-  foldChat(text).messages.some((message) => typeof message.type !== 'string' || !KNOWN_MESSAGE_TYPES.has(message.type) || ((message.type === 'user' || message.type === 'gemini') && !('content' in message)));
+/** True when a prompt carries parts and none of them is a `text` or a `functionResponse`: the parts' key moved. */
+const holdsUnreadParts = (message: Obj): boolean => {
+  const parts = partsOf(message.content);
+  return message.type === 'user' && parts.length > 0 && !parts.some((part) => typeof part.text === 'string' || 'functionResponse' in part);
+};
+
+/**
+ * True when a chat dropped as holding nothing held records in a shape the reader does not know, not a launch and quit. Four shapes: a folded message of a type outside the known ones,
+ * or a prompt or response with no `content`; a prompt whose parts carry no `text` or `functionResponse`; a line that is an object but not a head, `$set`, `$patch`, `$rewindTo`, or a
+ * message with a string `id` (`foldChat` discards it); and a legacy `.json` head with no `messages` list (a line-format head carries none).
+ */
+const holdsMovedShape = (text: string, file: string): boolean => {
+  const whole = wholeObject(text);
+  if (whole !== undefined && extname(file) === '.json' && !Array.isArray(whole.messages)) return true;
+  const records = whole === undefined ? lineTexts(text).map(parse) : [whole];
+  const unplaced = records.some((record) => isObj(record) && str(record.sessionId) === undefined && str(record.id) === undefined && !isObj(record.$set) && !isObj(record.$patch) && typeof record.$rewindTo !== 'string');
+  if (unplaced) return true;
+  return foldChat(text).messages.some(
+    (message) => typeof message.type !== 'string' || !KNOWN_MESSAGE_TYPES.has(message.type) || ((message.type === 'user' || message.type === 'gemini') && !('content' in message)) || holdsUnreadParts(message),
+  );
+};
 
 /** A chat file found in the store: `start` and `stem` order the files of one id, `dir` is its project folder, and `directories` the workspace its chat names. */
 interface Found {
@@ -560,7 +578,7 @@ export const openGeminiStore = async (root: string): Promise<GeminiStore | undef
       }
       // Every new chat appends a head (geminiChat.ts:453), so a launch and quit, or a /clear, leaves a file with nothing in it: no session, and not an unreadable one.
       if (holdsNothing(text, named)) {
-        if (holdsMovedShape(text)) shapeMoved += 1;
+        if (holdsMovedShape(text, file)) shapeMoved += 1;
         return;
       }
       const session: GeminiSession = { id, folder, file, size: info.size, mtimeMs: Math.floor(info.mtimeMs), parent };
