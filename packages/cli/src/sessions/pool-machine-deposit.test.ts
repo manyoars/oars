@@ -104,6 +104,15 @@ describe('poolDeposit on a machine', () => {
     expect(existsSync(plain)).toBe(true);
   });
 
+  it('remembers the sessions it did not build, so the next Stop does not scan them again', async () => {
+    const two = [...ONE, { id: sid(2), day: '02', mode: 'default' }];
+    const given = await scene({ OARS_HOST_CLASS: 'cloud' }, two);
+    await document(given, { session: sid(1) });
+    const remembered: unknown = JSON.parse(readFileSync(join(given.staged.storeDir, 'machine-scan-cache.json'), 'utf8'));
+    expect(JSON.stringify(remembered)).toContain(sid(2));
+    expect(JSON.stringify(remembered)).not.toContain(sid(1));
+  });
+
   it('applies the gates unchanged: a folder off the allow list is built into nothing', async () => {
     const given = await scene({ OARS_HOST_CLASS: 'vps' }, ONE);
     const state = join(given.staged.storeDir, 'state.json');

@@ -24,6 +24,7 @@ import { contentHash, FIRST_ORDER_FAMILIES } from './read.js';
 import { isObject, keptReplica, loadSignIns, numberIn, replicaFile, signInOf, signInsFile, textIn, type SignIn } from './pool-replica.js';
 import { CAPTURE_VERSION, harnessOf as sessionHarness, type Harness } from './schema.js';
 import { machineOf } from './machine.js';
+import { scanCache } from './machine-scan-cache.js';
 import { loadStore, localSalt, readRedactDomains, readSkeletons, readState, updatePoolChoices, type SessionsRuntime } from './store.js';
 import { runGit, type Git } from './survival.js';
 import { vocabulary } from './vocab-load.js';
@@ -428,7 +429,10 @@ export const poolDeposit = async (
   const discarded = await discardStale(outbox);
   const counts: DepositCounts = { sessions: 0, batched: 0, excluded: { folder: 0, term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, off: 0, raw: { copies: 0, bytes: 0, masked: 0 }, uncaptured: 0, notEnded: 0, refused: 0, refusedFields: [], discarded, withdrawn: 0 };
   // The one gate on a name: the operator's redactor and exclusion terms (t881). Everything else the pool classes itself.
-  const gate: WireGate = { redact: makeRedactor(await readRedactDomains(runtime.storeDir)), terms: await loadTerms(terms) };
+  const termList = await loadTerms(terms);
+  const gate: WireGate = { redact: makeRedactor(await readRedactDomains(runtime.storeDir)), terms: termList };
+  // A Stop that names a session reads the others only to fill windows: a pass of the gate one of them made in the last minutes is not repeated.
+  const scanned = await scanCache(runtime.storeDir, contentHash(termList), deps.now);
   const built = new Set<string>();
   const rawKept = new Set<string>();
   // The bytes of the batches written in this pass: telemetry counts them, and the command's own document does not carry them.
@@ -466,6 +470,10 @@ export const poolDeposit = async (
       }
       continue;
     }
+    if (!named && scanned.fresh(records.main.project, records.main.session)) {
+      history.push(records);
+      continue;
+    }
     const verdict = await checkSession(runtime, terms, records.main.project, records.main.session);
     if (verdict.reason !== 'clean') {
       if (named) {
@@ -475,6 +483,7 @@ export const poolDeposit = async (
       continue;
     }
     if (!named) {
+      scanned.note(records.main.project, records.main.session);
       history.push(records);
       continue;
     }
@@ -537,6 +546,7 @@ export const poolDeposit = async (
     counts.withdrawn += await removeBatchesExcept(outbox, new Set([...built, ...theirs]));
     await removeRawExcept(outbox, new Set([...rawKept, ...theirs]));
   }
+  await scanned.save();
   counts.refusedFields = [...refusedFields].sort();
   recordWire(deps, wireTally);
   const { folder, term, noRaw, noTerms, unreadable } = counts.excluded;
