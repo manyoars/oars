@@ -4,6 +4,7 @@
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { RunDeps } from '../cli.js';
+import { machineOf } from './machine.js';
 import { ask, DEPOSIT, isObject, networkSender, poolDeposit, poolServer, postBatch, postRaw, runtimeOf, signedIn, textIn, vocabularyExpired, type Sender } from './pool-command.js';
 import { heldBatches, lockedBatch, outboxFolder } from './pool-outbox.js';
 import { heldRaw } from './pool-raw.js';
@@ -11,7 +12,7 @@ import { withSendLock } from './pool-send-lock.js';
 import { markSent, sentHashes } from './pool-sent.js';
 import { readState } from './store.js';
 
-export type NightlyOutcome = 'no-server' | 'not-signed-in' | 'not-accepted' | 'failed' | 'sent';
+export type NightlyOutcome = 'no-server' | 'machine' | 'not-signed-in' | 'not-accepted' | 'failed' | 'sent';
 
 export interface NightlyPool {
   outcome: NightlyOutcome;
@@ -39,6 +40,8 @@ const night = async (deps: RunDeps, net: Sender, tally: NightlyPool): Promise<Ni
   } catch {
     return none('no-server');
   }
+  // A machine's batches wait in the outbox: its Stop builds them for open sessions and allow-listed repositories only, and none of that is checked here, so this sender must never post them.
+  if (machineOf(deps.env) !== undefined) return none('machine');
   const { storeDir } = runtimeOf(deps);
   let token: string;
   try {
