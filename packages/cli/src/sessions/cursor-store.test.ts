@@ -22,8 +22,9 @@ const options = (allow: string[]) => ({ allow, redactDomains: [], now: () => NOW
 
 /**
  * The synthetic Cursor `User` folder (three SQLite files and the workspace folders they name) is built once: a deposit only reads it, and
- * building it per test is the file work that a loaded Windows run stretched past the 30 s limit. Each test still gets its own projects
- * root and store, because a deposit writes there. A test that edits the Cursor store builds its own with `ownStaged`.
+ * building it per test is avoidable file work, and one loaded Windows run of this file passed the 30 s limit (the cause was not
+ * reproduced). Each test still gets its own projects root and store, because a deposit writes there. A test that edits the Cursor store
+ * builds its own with `ownStaged`.
  */
 let sharedRoot = '';
 let sharedUser = '';
