@@ -1,6 +1,6 @@
 // Commit survival against real git repositories in a temp folder: the states are git's answers, so a fake git would prove nothing about them.
 import { execFileSync, spawn } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -46,12 +46,23 @@ const commitIn = (dir: string, name: string): string => {
   return gitIn(dir, 'rev-parse', '--short=8', 'HEAD');
 };
 
+// Every test starts from the same one-commit repository, and building it costs four git processes (init, add, commit, rev-parse). Under load process creation is what
+// slows, and that bill was paid in each of ~40 tests until a slow one ran past its timeout; so it is paid once and each test copies the folder, which spawns nothing.
+let template = '';
+beforeAll(() => {
+  template = mkdtempSync(join(tmpdir(), 'oars-survival-template-'));
+  gitIn(template, 'init', '-q', '-b', 'main');
+  commitIn(template, 'first');
+});
+afterAll(() => {
+  removeHeld(template);
+});
+
 /** A repository whose `origin/main` is the checked-out `main`, moved by `publish`. */
 const makeRepo = (): string => {
   const dir = mkdtempSync(join(tmpdir(), 'oars-survival-'));
   dirs.push(dir);
-  gitIn(dir, 'init', '-q', '-b', 'main');
-  commitIn(dir, 'first');
+  cpSync(template, dir, { recursive: true });
   return dir;
 };
 
