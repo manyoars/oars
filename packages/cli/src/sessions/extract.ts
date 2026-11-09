@@ -800,7 +800,7 @@ const OPAQUE_POINT = /'|<</;
  */
 const POWERSHELL_POINT = /['‘-„]|<<|<#|--%/;
 
-/** The shell a command is written for: a `PowerShell` tool call reads its quotes and escapes by PowerShell's rules, every other call by POSIX's. */
+/** The shell a command is written for: a call whose tool the harness's `shells` table maps to `powershell` (Claude Code's `PowerShell`, and the `powershell` that Copilot, Pi, and Gemini name) reads its escapes by PowerShell's rules, every other call by POSIX's. */
 type ShellDialect = 'posix' | 'powershell';
 
 const pointOf = (dialect: ShellDialect): RegExp => (dialect === 'powershell' ? POWERSHELL_POINT : OPAQUE_POINT);
@@ -1898,7 +1898,7 @@ export const captureSession = (input: ExtractInput): Capture => {
         else if (name === 'WebSearch' && str(toolInput.query) !== undefined && str(toolInput.query) !== '') searches.add(redact(str(toolInput.query) ?? ''));
         else if (SHELL.has(name)) session.bashCmds += 1;
         const aimed = targetOf(name, toolInput, lineCwd, salt, redact, lineRoot);
-        const shell = SHELL.has(name) || named.action === 'shell.exec' ? readShell(str(toolInput.command) ?? '', redact, name === 'PowerShell' ? 'powershell' : 'posix') : undefined;
+        const shell = SHELL.has(name) || named.action === 'shell.exec' ? readShell(str(toolInput.command) ?? '', redact, shellName === 'powershell' ? 'powershell' : 'posix') : undefined;
         for (const held of shell?.steps ?? []) framePrograms.add(held.identity.program);
         drafts.push(draftsOf(actions, named, native, shell, aimed.target, toolInput, redact));
         responseOfCall.push(response);

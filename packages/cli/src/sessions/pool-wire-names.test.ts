@@ -8,20 +8,23 @@ import { FIELD_ROWS } from './pool-outbox.js';
 import { bucketOf, skeletonOf, type SessionSkeleton, type WireGate } from './pool-wire.js';
 import { CLOSED_ARG_VALUES } from './public-vocabulary.js';
 import { makeRedactor } from './redact.js';
+import type { Harness } from './schema.js';
 
 const redact = makeRedactor();
 const line = (type: string, content: unknown, cwd = '/w'): string => JSON.stringify({ type, timestamp: '2026-06-10T00:00:00.000Z', cwd, message: { role: type, model: 'claude-opus-5-5', content } });
 const call = (id: string, name: string, input: object, cwd = '/w'): string => line('assistant', [{ type: 'tool_use', id, name, input }], cwd);
 
-const captured = (...lines: string[]) => captureSession({ text: [line('user', 'go'), ...lines].join('\n'), session: 's1', project: 'p', rev: 1, at: '', bytes: 0, redact });
-const skeletonOfLines = (gate: WireGate, ...lines: string[]): SessionSkeleton => {
-  const held = captured(...lines);
+const capturedUnder = (harness: Harness, ...lines: string[]) => captureSession({ text: [line('user', 'go'), ...lines].join('\n'), session: 's1', project: 'p', rev: 1, at: '', bytes: 0, redact, harness });
+const captured = (...lines: string[]) => capturedUnder('claude-code', ...lines);
+const skeletonUnder = (harness: Harness, gate: WireGate, ...lines: string[]): SessionSkeleton => {
+  const held = capturedUnder(harness, ...lines);
   const [only] = sessionsFrom(store({ sessions: [held.session], prompts: [], tools: held.tools }));
   const skeleton = only === undefined ? null : skeletonOf(only, '0123456789abcdef', storedNames, printOf, [], gate);
   if (skeleton === null) throw new Error('no skeleton');
   return skeleton;
 };
-const toolsOf = (skeleton: SessionSkeleton) => skeleton.transcripts[0]?.tools ?? [];
+const skeletonOfLines = (gate: WireGate, ...lines: string[]): SessionSkeleton => skeletonUnder('claude-code', gate, ...lines);
+const toolsOf= (skeleton: SessionSkeleton) => skeleton.transcripts[0]?.tools ?? [];
 const names = (kind: ArgName['kind'], ...list: string[]): ArgName[] => list.map((name) => ({ kind, name }));
 
 describe('name tokens of a call', () => {
@@ -644,6 +647,7 @@ describe('a PowerShell command', () => {
     { kind: 'a reversed single typographic quote around a flag', command: 'Write-Output ‛a --customer acme_value b’' },
     { kind: 'double typographic quotes around a flag', command: 'Write-Output “a --customer acme_value b”' },
     { kind: 'a low double typographic quote around a reference', command: 'Write-Output „a $hunter2 b”' },
+    { kind: 'a left double typographic quote around a reference', command: 'Write-Output “a $hunter2 b”' },
     { kind: 'a stop-parsing token before a reference', command: 'Write-Output --% $hunter2' },
     { kind: 'a stop-parsing token before a flag', command: 'Write-Output --% --customer acme_value' },
     { kind: 'a here-string holding a reference', command: ["Write-Output @'", 'a $hunter2 b', "'@"].join('\n') },
@@ -652,12 +656,20 @@ describe('a PowerShell command', () => {
     { kind: 'a double-quoted flag after a comment inside a subexpression', command: ['Write-Output "$(Get-X # )', '" --customer acme_value ")"'].join('\n') },
     { kind: 'a trailing backslash in double quotes, then a double-quoted reference with an escaped dollar', command: 'Write-Output "C:\\" "`$hunter2" "`$ref_literal"' },
   ];
+  // A PowerShell call reaches the reader under three shapes: Claude Code's own `PowerShell` tool, and the `Bash` block that Copilot and Pi write for their `powershell` tool, with the harness's own name kept in `native`.
+  const SHELLS: readonly { harness: Harness; line: (command: string) => string }[] = [
+    { harness: 'claude-code', line: (command) => call('p', 'PowerShell', { command }) },
+    { harness: 'copilot', line: (command) => line('assistant', [{ type: 'tool_use', id: 'p', name: 'Bash', native: 'powershell', input: { command } }]) },
+    { harness: 'pi', line: (command) => line('assistant', [{ type: 'tool_use', id: 'p', name: 'Bash', native: 'powershell', input: { command } }]) },
+  ];
   for (const { kind, command } of LITERAL) {
-    it(`sends no name from the literal text after ${kind}`, () => {
-      const skeleton = skeletonOfLines({ redact, terms: [] }, call('p', 'PowerShell', { command }));
-      expect(toolsOf(skeleton)[0]?.names ?? [], command).toEqual([]);
-      for (const planted of ['hunter2', 'acme_value', 'ref_literal']) expect(JSON.stringify(skeleton), command).not.toContain(planted);
-    });
+    for (const shell of SHELLS) {
+      it(`sends no name from the literal text after ${kind}, under ${shell.harness}`, () => {
+        const skeleton = skeletonUnder(shell.harness, { redact, terms: [] }, shell.line(command));
+        expect(toolsOf(skeleton)[0]?.names ?? [], command).toEqual([]);
+        for (const planted of ['hunter2', 'acme_value', 'ref_literal']) expect(JSON.stringify(skeleton), command).not.toContain(planted);
+      });
+    }
   }
 
   // What PowerShell really reads, which the POSIX reader loses. Each command is a real one and its name is data: sending it is the point of reading it in the shell's own rules. None holds a single quote: a flag value after one is not
