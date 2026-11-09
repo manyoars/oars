@@ -574,7 +574,7 @@ describe('a piece that can move the quote state, before a single-quoted referenc
       const tools = toolsOf(skeleton);
       expect(tools).toHaveLength(commands.length);
       const expected = mover.controlled === false ? names('flag', 'eu_control') : [...names('env', 'BUILD_ID'), ...names('flag', 'eu_control')];
-      commands.forEach((command, at) => expect(tools[at]?.names, command).toEqual(expected));
+      for (const [at, command] of commands.entries()) expect(tools[at]?.names, command).toEqual(expected);
       expect(JSON.stringify(skeleton)).not.toContain('hunter2');
     });
   }
