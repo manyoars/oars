@@ -1,8 +1,8 @@
-// The built `dist/hook-bin.js stop --machine` and `dist/oars-hook.js stop --machine` (the program the installed command names), run as the Stop hook of a cloud machine runs it: without `OARS_HOST_CLASS` it exits 0, prints nothing, and starts nothing, so a laptop that has the machine hook installed keeps its own
-// behaviour. With the class set it exits 0 and prints nothing too, and the detached child it starts is `machine-child`, which a missing transcript ends at once. Like `hook-bin-stop.test.ts` it reads `dist/`, which the root
-// `check` builds before the tests run; without a build it is skipped. APPDATA and HOME are a temp folder, and the test confirms the store path is under it before it runs.
-import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+// The built `dist/hook-bin.js` and `dist/oars-hook.js` (the program the installed command names), run as the hook of a cloud machine runs them. `stop --machine` without `OARS_HOST_CLASS` exits 0, prints nothing, and starts nothing, so a laptop that has the machine hook
+// installed keeps its own behavior; with the class set and no session in its input it exits 0 and starts no child; a notice the last child left is printed once. `machine-child <input>`, the detached child a Stop starts, runs to completion over a temp store with a real
+// repository on the allow list and builds one batch into the outbox. Like `hook-bin-stop.test.ts` it reads `dist/`, which the root `check` builds before the tests run; without a build it is skipped. APPDATA, HOME, and USERPROFILE are a temp folder, and the test confirms the store path is under it before it runs.
+import { execFileSync, spawn } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,6 +43,21 @@ const stop = (program: string, folder: string, extra: { [name: string]: string }
     child.stdin.end(stdin);
   });
 
+/** `<program> machine-child <input>` run to completion, as the Stop's detached child runs it: the folder is HOME, as `machineStop` sets the child's cwd to it. The settle wait is real, so this takes the transcript's quiet time (2 s). */
+const machineChild = (program: string, folder: string, extra: { [name: string]: string }, input: string): Promise<{ code: number | null; stdout: string }> =>
+  new Promise((resolve, reject) => {
+    const env = { PATH: process.env.PATH, APPDATA: folder, HOME: folder, USERPROFILE: folder, XDG_CONFIG_HOME: folder, OARS_TELEMETRY: '0', ...extra };
+    const child = spawn(process.execPath, [program, 'machine-child', input], { cwd: folder, env, stdio: ['ignore', 'pipe', 'ignore'], timeout: 60_000 });
+    let stdout = '';
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString('utf8');
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      resolve({ code, stdout });
+    });
+  });
+
 describe.skipIf(!built)('the built machine Stop hook', () => {
   describe.each(PROGRAMS)('dist/%s', (file) => {
     const program = programOf(file);
@@ -70,5 +85,23 @@ describe.skipIf(!built)('the built machine Stop hook', () => {
       expect(first.stdout).toBe(JSON.stringify({ systemMessage: messageOf([{ code: 'vocabulary_expired', at: 1 }]) }));
       expect(await stop(program, folder, { OARS_HOST_CLASS: 'cloud' }, '{}')).toEqual({ code: 0, stdout: '' });
     });
+
+    // The route a real Stop takes after `machineStop` detaches: every case above sends `{}`, which starts no child, so without this one a hook that never reaches `machine-child` still passes.
+    it('runs machine-child to completion: a repository on the allow list, with inline terms, builds one batch into the outbox', async () => {
+      const { folder, store } = home();
+      const repo = join(folder, 'work', 'widgets');
+      mkdirSync(repo, { recursive: true });
+      execFileSync('git', ['init', '-q', repo]);
+      execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://github.com/acme/widgets']);
+      const id = '99999999-9999-4999-8999-000000000001';
+      const transcript = join(folder, '.claude', 'projects', 'zz-widgets', `${id}.jsonl`);
+      mkdirSync(join(folder, '.claude', 'projects', 'zz-widgets'), { recursive: true });
+      writeFileSync(transcript, `${JSON.stringify({ type: 'user', sessionId: id, cwd: repo, timestamp: '2026-05-01T01:00:00Z', permissionMode: 'default', message: { role: 'user', content: 'a plain request' } })}\n`);
+      const extra = { OARS_HOST_CLASS: 'vps', OARS_ALLOW_REPOS: 'acme/widgets', OARS_EXCLUSION_TERMS_INLINE: 'zorblax' };
+      const ran = await machineChild(program, folder, extra, JSON.stringify({ session_id: id, transcript_path: transcript, cwd: repo }));
+      expect(ran).toEqual({ code: 0, stdout: '' });
+      const outbox = join(store, 'pool-outbox');
+      expect(existsSync(outbox) ? readdirSync(outbox, { recursive: true, encoding: 'utf8' }).filter((name) => name.endsWith('.jsonl')) : []).toHaveLength(1);
+    }, 60_000);
   });
 });
