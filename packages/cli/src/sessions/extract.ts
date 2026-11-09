@@ -795,12 +795,22 @@ const substitutionEnd = (text: string, from: number, first: string, budget: { le
  * word at or after it is opaque: it holds no variable and no flag value, whatever the reader made of the quotes before it. A true reference after the point sends no name, which sends less and never more.
  */
 const OPAQUE_POINT = /'|<</;
+/**
+ * PowerShell reads more forms as literal text: the typographic single and double quotes (U+2018 to U+201E) are quotes, `<#` opens a block comment, and `--%` makes the rest of the line literal. Each is a point as `'` and `<<` are.
+ */
+const POWERSHELL_POINT = /['‘-„]|<<|<#|--%/;
 
 /** The shell a command is written for: a `PowerShell` tool call reads its quotes and escapes by PowerShell's rules, every other call by POSIX's. */
 type ShellDialect = 'posix' | 'powershell';
 
-/** `opaqueFrom` is where that point sits in `text` (-1 for none, 0 for a text that is opaque throughout, as a word an opaque word holds is). */
-const tokenize = (text: string, opaqueFrom = text.search(OPAQUE_POINT), dialect: ShellDialect = 'posix'): ShellToken[] => {
+const pointOf = (dialect: ShellDialect): RegExp => (dialect === 'powershell' ? POWERSHELL_POINT : OPAQUE_POINT);
+
+/**
+ * `opaqueFrom` is where that point sits in `text` (-1 for none, 0 for a text that is opaque throughout, as a word an opaque word holds is); left out, it is the first point of the dialect. A substitution opened inside double quotes
+ * lowers it to where it opens, since its end is read by a scan that can close early: every word that starts after it is opaque.
+ */
+const tokenize = (text: string, opaqueFrom?: number, dialect: ShellDialect = 'posix'): ShellToken[] => {
+  let opaque = opaqueFrom ?? text.search(pointOf(dialect));
   const tokens: ShellToken[] = [];
   // PowerShell's escape is the backtick, a backslash is an ordinary character in and out of quotes, `$'` is no ANSI-C string, and a backtick opens no substitution.
   const powershell = dialect === 'powershell';
@@ -818,7 +828,7 @@ const tokenize = (text: string, opaqueFrom = text.search(OPAQUE_POINT), dialect:
     else if (started && !quoted && (word === '{' || word === '}')) tokens.push(word === '{' ? 'open' : 'close');
     else if (started) {
       const held: ShellWord = { text: word, quoted };
-      if (opaqueFrom >= 0 && start >= opaqueFrom) held.opaque = true;
+      if (opaque >= 0 && start >= opaque) held.opaque = true;
       else {
         const variable = variableOf(text.slice(start, at));
         if (variable !== undefined) held.variable = variable;
@@ -857,6 +867,7 @@ const tokenize = (text: string, opaqueFrom = text.search(OPAQUE_POINT), dialect:
         const after = text.charAt(at + 1);
         const opener = inner === '$' ? inner + after : inner;
         const closer = powershell && inner === '`' ? undefined : CLOSERS.get(opener);
+        if (closer === ')' || closer === '`') opaque = opaque < 0 ? at : Math.min(opaque, at);
         const end = closer === undefined ? -1 : substitutionEnd(text, at + opener.length, closer, budget, powershell);
         if (inner === escape && (after === escape || after === '$' || after === '`')) {
           // A backslash pair is one escaped backslash, so the second never escapes the quote after it; an escaped dollar or backtick opens nothing.
@@ -1347,15 +1358,16 @@ const commitPlanOf = (commands: readonly ShellCommand[]): PlannedCommit[] =>
     return [{ quiet: git.args.some((word) => !word.quoted && QUIET.test(word.text)), readBack: isReadBack(commands, at, git.scope) }];
   });
 
-/** Every simple command of a shell call, in order, after the bodies are dropped and the command is redacted. `oars gate` reads the same commands as capture. */
+/** Every simple command of a shell call, in order, after the bodies are dropped and the command is redacted. Capture passes the dialect of the tool; `gate/checks.ts:524` and `projection.ts:95` call it with the POSIX default. */
 export const shellCommands = (command: string, redact: Redactor, dialect: ShellDialect = 'posix'): ShellCommand[] => {
   const whole = command.replace(/\r\n/g, '\n');
   const kept = dropBodies(whole);
   const text = redactCommand(kept, redact);
   // The opaque point is the whole command's first single quote or heredoc marker. Dropping a body or redacting can remove it and leave a later one in its place, and the words between would read as before it: when the first point
   // moved or a point is gone, the whole text is opaque.
-  const points = (held: string): number => held.match(/'|<</g)?.length ?? 0;
-  const moved = kept.search(OPAQUE_POINT) !== whole.search(OPAQUE_POINT) || points(text) !== points(kept);
+  const point = pointOf(dialect);
+  const points = (held: string): number => held.match(new RegExp(point.source, 'g'))?.length ?? 0;
+  const moved = kept.search(point) !== whole.search(point) || points(text) !== points(kept);
   return readCommands(tokenize(text, moved ? 0 : undefined, dialect));
 };
 

@@ -328,7 +328,7 @@ describe('what is dropped from the names', () => {
       call('d', 'Bash', { command: 'git commit -m "charge \\$customer_name twice"' }),
       call('e', 'Bash', { command: 'deploy --region "$BUILD_ID"' }),
       call('f', 'Bash', { command: "mysql --region eu_ansi --password $'it\\'s $hunter7 and more'" }),
-      call('g', 'Bash', { command: 'Write-Output "abc`$hunter8" --region eu_ps' }),
+      call('g', 'Bash', { command: 'Write-Output --region eu_ps "abc`$hunter8"' }),
       call('h', 'Bash', { command: 'echo $$hunter9 --region eu_pid' }),
       call('i', 'Bash', { command: 'git commit -m $\'subject\\n$ansi_value\' --amend' }),
     );
@@ -449,7 +449,7 @@ describe('what is dropped from the names', () => {
       call('a', 'Bash', { command: `echo ${'"$('.repeat(50000)} ' $hunter2 '` }),
       call('b', 'Bash', { command: 'echo "`' + '"`'.repeat(50000) + ` ' $hunter3 '` }),
       // PowerShell's backtick escapes the dollar and is no opener: the flag after it is still read.
-      call('c', 'Bash', { command: 'Write-Output "abc`$hunter4" --region eu_ps' }),
+      call('c', 'Bash', { command: 'Write-Output --region eu_ps "abc`$hunter4"' }),
     );
     const tools = toolsOf(skeleton);
     expect(tools[2]?.names).toEqual(names('flag', 'eu_ps'));
@@ -594,6 +594,10 @@ describe('a piece that can move the quote state, before a single-quoted referenc
     { kind: 'a heredoc marker inside a quote that spans lines', command: ["echo 'a", '<<X', " b'", 'X', "echo 'c $hunter2 d'"].join('\n') },
     { kind: 'a heredoc opened on the line that closes a quote, holding a reference', command: ['python -c "', 'print(1)', '" <<"EOF"', 'mysql --password $body_literal', 'EOF'].join('\n') },
     { kind: 'a heredoc opened on the line that closes a quote, holding a flag', command: ['python -c "', 'print(1)', '" <<"EOF"', 'mysql --customer acme_value', 'EOF'].join('\n') },
+    { kind: 'a comment holding a reference and a flag', command: ['echo x # $hunter2 --customer acme_value', 'ls y'].join('\n') },
+    { kind: 'a double-quoted flag after a case arm inside a substitution', command: `echo "$(case x in x) echo " --customer acme_value ";; esac)"` },
+    { kind: 'a double-quoted flag after a parenthesis in a comment inside a substitution', command: ['echo "$(echo a # )', 'echo " --customer acme_value ")"'].join('\n') },
+    { kind: 'a double-quoted flag after a backtick substitution', command: 'echo "`echo a`" " --customer acme_value "' },
   ];
   for (const { kind, command } of WHOLE) {
     it(`sends no name from the literal text after ${kind}`, () => {
@@ -633,6 +637,19 @@ describe('a PowerShell command', () => {
     { kind: 'a backtick-escaped apostrophe, then a single-quoted flag', command: "Write-Output it`'s 'a --customer acme_value b'" },
     // No single quote in the command, so the opaque point does not apply: the double-quoted literal is one word in PowerShell.
     { kind: 'a trailing backslash in double quotes, then a double-quoted flag', command: POWERSHELL`Write-Output "C:\" "--customer acme_value"` },
+    { kind: 'a block comment holding a flag and a reference', command: ['<#', 'note', 'mysql --customer acme_value $hunter2', '#>', 'Get-Item x'].join('\n') },
+    { kind: 'a left single typographic quote around a reference', command: 'Write-Output ‘a $hunter2 b’' },
+    { kind: 'a left single typographic quote around a flag', command: 'Write-Output ‘a --customer acme_value b’' },
+    { kind: 'a low single typographic quote around a flag', command: 'Write-Output ‚a --customer acme_value b’' },
+    { kind: 'a reversed single typographic quote around a flag', command: 'Write-Output ‛a --customer acme_value b’' },
+    { kind: 'double typographic quotes around a flag', command: 'Write-Output “a --customer acme_value b”' },
+    { kind: 'a low double typographic quote around a reference', command: 'Write-Output „a $hunter2 b”' },
+    { kind: 'a stop-parsing token before a reference', command: 'Write-Output --% $hunter2' },
+    { kind: 'a stop-parsing token before a flag', command: 'Write-Output --% --customer acme_value' },
+    { kind: 'a here-string holding a reference', command: ["Write-Output @'", 'a $hunter2 b', "'@"].join('\n') },
+    { kind: 'an expandable here-string holding a flag', command: ['Write-Output @"', 'mysql --customer acme_value', '"@'].join('\n') },
+    { kind: 'a comment holding a reference and a flag', command: ['Write-Output x # $hunter2 --customer acme_value', 'Get-Item y'].join('\n') },
+    { kind: 'a double-quoted flag after a comment inside a subexpression', command: ['Write-Output "$(Get-X # )', '" --customer acme_value ")"'].join('\n') },
     { kind: 'a trailing backslash in double quotes, then a double-quoted reference with an escaped dollar', command: 'Write-Output "C:\\" "`$hunter2" "`$ref_literal"' },
   ];
   for (const { kind, command } of LITERAL) {
@@ -650,7 +667,7 @@ describe('a PowerShell command', () => {
     { kind: 'a trailing backslash then a double-quoted reference', command: POWERSHELL`Write-Output "C:\" "$BUILD_ID"`, expected: names('env', 'BUILD_ID') },
     { kind: 'a backtick-escaped quote in double quotes', command: 'Write-Output "a`"b" --region eu_control', expected: names('flag', 'eu_control') },
     { kind: 'a backslash before a single-quoted piece', command: POWERSHELL`Write-Output C:\ --region eu_control`, expected: names('flag', 'eu_control') },
-    { kind: 'a trailing backslash inside a subexpression', command: POWERSHELL`Write-Output "$(Get-Item "C:\x\")" --region eu_control`, expected: names('flag', 'eu_control') },
+    { kind: 'a trailing backslash inside a subexpression', command: POWERSHELL`Write-Output --region eu_control "$(Get-Item "C:\x\")"`, expected: names('flag', 'eu_control') },
   ];
   for (const { kind, command, expected } of REAL) {
     it(`reads the name after ${kind}`, () => {
