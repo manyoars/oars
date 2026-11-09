@@ -253,6 +253,33 @@ describe('what is dropped from the names', () => {
     expect(bytesOf(skeleton)).toContain('BUILD_ID');
   });
 
+  it('reads no variable name out of a dollar that is not an expansion: an escaped one, a doubled one, an ANSI-C string, and still reads a real one', () => {
+    const skeleton = skeletonOfLines(
+      { redact, terms: [] },
+      call('a', 'Bash', { command: 'mysql --password abc\\$hunter2 --region eu_control' }),
+      call('b', 'Bash', { command: 'mysql --password "abc\\$hunter3" --region eu_control' }),
+      call('c', 'Bash', { command: 'deploy --token x\\$opaquetoken --customer cust_control' }),
+      call('d', 'Bash', { command: 'git commit -m "charge \\$customer_name twice"' }),
+      call('e', 'Bash', { command: 'deploy --region "$BUILD_ID"' }),
+      call('f', 'Bash', { command: "mysql --password $'it\\'s $hunter7 and more' --region eu_ansi" }),
+      call('g', 'Bash', { command: 'Write-Output "abc`$hunter8" --region eu_ps' }),
+      call('h', 'Bash', { command: 'echo $$hunter9 --region eu_pid' }),
+      call('i', 'Bash', { command: 'git commit -m $\'subject\\n$ansi_value\' --amend' }),
+    );
+    const [escaped, quoted, token, commit, control, ansi, backtick, doubled, plain] = toolsOf(skeleton);
+    expect(escaped?.names).toEqual(names('flag', 'eu_control'));
+    expect(quoted?.names).toEqual(names('flag', 'eu_control'));
+    expect(token?.names).toEqual(names('flag', 'cust_control'));
+    expect(commit?.names ?? []).toEqual([]);
+    expect(control?.names).toEqual(names('env', 'BUILD_ID'));
+    expect(ansi?.names).toEqual(names('flag', 'eu_ansi'));
+    expect(backtick?.names).toEqual(names('flag', 'eu_ps'));
+    expect(doubled?.names).toEqual(names('flag', 'eu_pid'));
+    expect(plain?.names ?? []).toEqual([]);
+    for (const value of ['hunter2', 'hunter3', 'opaquetoken', 'customer_name', 'hunter7', 'hunter8', 'hunter9', 'ansi_value']) expect(bytesOf(skeleton)).not.toContain(value);
+    expect(bytesOf(skeleton)).toContain('BUILD_ID');
+  });
+
   it('reads no flag value after a credential-named flag in the name read itself', () => {
     const w = (text: string) => ({ text, quoted: false });
     const read = (...args: ReturnType<typeof w>[]) => argNamesOf('Bash', { command: 'x' }, '/w', '/w', [{ before: [], head: w('tool'), args }], CLOSED_ARG_VALUES);

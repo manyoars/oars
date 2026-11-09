@@ -775,8 +775,12 @@ const tokenize = (text: string): ShellToken[] => {
     const char = text.charAt(at);
     const next = text.charAt(at + 1);
     if (char === "'") {
-      const end = text.indexOf("'", at + 1);
-      const stop = end < 0 ? text.length : end;
+      // Bash's ANSI-C string (`$'it\'s'`) honors a backslash, so its `\'` is inside it; any other single-quoted text ends at the next `'`. A `$` that an escape put before the quote is read the same way, which keeps more text
+      // inside the string, never less.
+      const ansi = text.charAt(at - 1) === '$';
+      let end = at + 1;
+      while (end < text.length && text.charAt(end) !== "'") end += ansi && text.charAt(end) === '\\' ? 2 : 1;
+      const stop = Math.min(end, text.length);
       word += text.slice(at + 1, stop);
       quoted = true;
       literal = true;
