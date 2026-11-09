@@ -542,10 +542,9 @@ export const poolDeposit = async (
   }
   // The batch of a session or account this store no longer holds goes too. A machine builds one session at a time and nothing here has the others in hand, so it sweeps nothing: nothing is withdrawn but what a gate refused.
   if (machine === undefined) {
-    // The batches a machine's Stop built in this outbox are not this pass's to withdraw: their keys cannot be recomputed here.
-    const theirs = await machineKeys(outbox);
-    counts.withdrawn += await removeBatchesExcept(outbox, new Set([...built, ...theirs]));
-    await removeRawExcept(outbox, new Set([...rawKept, ...theirs]));
+    // The batches a machine's Stop built in this outbox are not this pass's to withdraw: their keys cannot be recomputed here. The key log is read after the folder is listed, so a batch a machine writes during the sweep is already in it.
+    counts.withdrawn += await removeBatchesExcept(outbox, async () => new Set([...built, ...(await machineKeys(outbox))]));
+    await removeRawExcept(outbox, new Set([...rawKept, ...(await machineKeys(outbox))]));
   }
   await scanned.save();
   counts.refusedFields = [...refusedFields].sort();

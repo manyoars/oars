@@ -207,12 +207,15 @@ const namesIn = async (folder: string): Promise<string[]> => {
 };
 
 /** Removes every batch under this stamp whose session is not in `kept`, and returns how many went. A session that fails a gate, leaves the allowlist, or is gone from the store never enters the outbox, so an earlier pass's batch of it cannot stay. */
-export const removeBatchesExcept = async (outbox: string, kept: ReadonlySet<string>, stamp: string = currentStamp(), only?: string): Promise<number> => {
+export const removeBatchesExcept = async (outbox: string, kept: ReadonlySet<string> | (() => Promise<ReadonlySet<string>>), stamp: string = currentStamp(), only?: string): Promise<number> => {
   const folder = join(outbox, stamp);
   let removed = 0;
-  for (const name of await namesIn(folder)) {
+  const names = await namesIn(folder);
+  // A reader is asked once the names are in hand: a key it reads then covers every batch listed above.
+  const keep = typeof kept === 'function' ? await kept() : kept;
+  for (const name of names) {
     const found = BATCH_FILE.exec(name);
-    if (found !== null && !kept.has(found[1] ?? '') && (only === undefined || found[1] === only)) {
+    if (found !== null && !keep.has(found[1] ?? '') && (only === undefined || found[1] === only)) {
       await rm(join(folder, name), { force: true });
       removed += 1;
     }
