@@ -109,10 +109,11 @@ The format a batch states decides what the deposit route reads from it. The clie
 
 | Batch holds | Action at the deposit route |
 |---|---|
-| `format` 5 | read, the tool fields `argFeatures`, `argValues`, `changeKind`, `names`, and `namesDropped` included |
-| `format` 4 | read as before; a `names` or `namesDropped` in it is a field format 4 does not define, so it goes to the extensions bag and counts in no cell, and the parsed batch keeps `format` 4 |
-| `format` 3 | read as before; an `argFeatures`, `argValues`, `changeKind`, `names`, or `namesDropped` in it is a field format 3 does not define, so it goes to the extensions bag and counts in no cell, and the parsed batch keeps `format` 3 |
-| `format` 1 or 2 | 422 `closed_vocabulary` naming `format`: "the format n form is no longer read; send format 5" |
+| `format` 6 | read, the tool fields `argFeatures`, `argValues`, `changeKind`, `names`, and `namesDropped` and the batch field `recommendations` included |
+| `format` 5 | read as before; a `recommendations` in it is a field format 5 does not define, so it goes to the extensions bag and counts in no cell, and the parsed batch keeps `format` 5 |
+| `format` 4 | read as before; a `names`, `namesDropped`, or `recommendations` in it is a field format 4 does not define, so it goes to the extensions bag and counts in no cell, and the parsed batch keeps `format` 4 |
+| `format` 3 | read as before; an `argFeatures`, `argValues`, `changeKind`, `names`, `namesDropped`, or `recommendations` in it is a field format 3 does not define, so it goes to the extensions bag and counts in no cell, and the parsed batch keeps `format` 3 |
+| `format` 1 or 2 | 422 `closed_vocabulary` naming `format`: "the format n form is no longer read; send format 6" |
 | any other `format` | 422 `closed_vocabulary` naming `format`: not a format this version reads |
 
 ## What a bundle serves
@@ -192,9 +193,9 @@ A cluster counts 1, or 0.5 when every account in it was under 30 days old at its
 
 ## Wire field register
 
-One row per field a format 3, 4, or 5 batch carries (section 17 of the direction conclusion, rules 2 to 4): no row, no field. `consumer` is the read family that reads the field today, or the future read that is stated for it. The class is the field's projection class at formats 3, 4, and 5: `clear` (a closed or public list, or a hash the client made that the pool uses only as an opaque key), `thresholded` (held always, served once a public floor of clusters report the same value; `PUBLIC_FLOOR`, 5 by default, see "Serve floors" below), `hashed at ingest` (the pool hashes the value on arrival under `INGEST_HASH_KEY`, a Worker secret), or `raw tier` (stored, never served); no skeleton field is `raw tier`. The client sends a long-tail name after redaction and the server holds it in clear; only a host is hashed at ingest. `Re-derives` says whether a deposit of the field can be built again from the local store (`raw/`) while the store exists, with new consent. A field marked `no` is a constant of the client build.
+One row per field a format 3, 4, 5, or 6 batch carries (section 17 of the direction conclusion, rules 2 to 4): no row, no field. `consumer` is the read family that reads the field today, or the future read that is stated for it. The class is the field's projection class at formats 3, 4, 5, and 6: `clear` (a closed or public list, or a hash the client made that the pool uses only as an opaque key), `thresholded` (held always, served once a public floor of clusters report the same value; `PUBLIC_FLOOR`, 5 by default, see "Serve floors" below), `hashed at ingest` (the pool hashes the value on arrival under `INGEST_HASH_KEY`, a Worker secret), or `raw tier` (stored, never served); no skeleton field is `raw tier`. The client sends a long-tail name after redaction and the server holds it in clear; only a host is hashed at ingest. `Re-derives` says whether a deposit of the field can be built again from the local store (`raw/`) while the store exists, with new consent. A field marked `no` is a constant of the client build.
 
-`Bytes` is measured, not estimated: the canonical bytes of one invented session (`REGISTER_FIXTURE` in `packages/cli/src/sessions/pool-fixture.ts`: one transcript with its frames, one prompt, two calls, five steps, one delta), summed over every place the field occurs. A container's bytes are its braces, brackets, and commas, and its members' bytes are theirs, so the column adds up to the batch less 9<!-- figure:envelope --> bytes of top-level braces, commas, and newline (3,772<!-- figure:register --> bytes in all; the test pins both figures). A real session holds more steps, so read the column as the shape of the cost, not its size. `pool-wire-register.test.ts` parses this table and fails on a field the client emits with no row, a row for a field it does not emit, and a bytes figure that no longer matches the fixture.
+`Bytes` is measured, not estimated: the canonical bytes of one invented session (`REGISTER_FIXTURE` in `packages/cli/src/sessions/pool-fixture.ts`: one transcript with its frames, one prompt, two calls, five steps, one delta, one recommendation), summed over every place the field occurs. A container's bytes are its braces, brackets, and commas, and its members' bytes are theirs, so the column adds up to the batch less 10<!-- figure:envelope --> bytes of top-level braces, commas, and newline (3,889<!-- figure:register --> bytes in all; the test pins both figures). A real session holds more steps, so read the column as the shape of the cost, not its size. `pool-wire-register.test.ts` parses this table and fails on a field the client emits with no row, a row for a field it does not emit, and a bytes figure that no longer matches the fixture.
 
 An unknown field name a client sends lands in the `extensions` bag of the deposit, not in a row. The bag is ledger class, kept and never served, joined to no read, and left out of every bundle (`wire-contract.test.ts`). A field, a literal, or a value over 8 KiB (`MAX_EXTENSION_BYTES`, as JSON) gets a 422 `too large` at its path, whatever its kind; a newer client's larger structure belongs in a new format version, not an extension.
 
@@ -206,6 +207,7 @@ An unknown field name a client sends lands in the `extensions` bag of the deposi
 | `argClass` | `fit` by call shape (one `arg` shape cell per member): which kinds of value a call's arguments held (`path`, `url`, `pattern`, `command`, `number`, `flag`, `text`, `none`), a sorted set, so a path-taking call reads apart from a pattern-taking one without a value | clear | yes | 55 |
 | `argFeatures` | `fit` by call shape: the container of a call's value features, one per sent key, never the value (the `size`, `depth`, `extension`, `dir`, and `pattern` shape cells read its members); format 4 | clear | yes | 42 |
 | `argValues` | `fit` by call shape: the container of a call's closed values, one per sent key (the `enum` shape cell reads its members); format 4 | clear | yes | 17 |
+| `arm` | exposure: whether a recommendation reached the asker (`shown`) or was withheld by the holdback (`held`), one of a closed list; the local row's arm, never what was shown; format 6 | clear | yes | 13 |
 | `cacheRead` | `cost`: tokens per prompt class, model, and week | clear (bucket) | yes | 13 |
 | `cacheWrite` | `cost`: tokens per prompt class, model, and week | clear (bucket) | yes | 14 |
 | `change` | future change-effect read: how a config change moved calls per session or thinking tokens (stored in the ledger, served by nothing) | clear (bucket) | yes | 11 |
@@ -232,11 +234,12 @@ An unknown field name a client sends lands in the `extensions` bag of the deposi
 | `frame` | container for where a session ran: every cell key reads its members | clear | yes | 86 |
 | `frames` | container for the distinct frames a transcript's steps ran in: a step's `frame` is a position in it, so every per-step cell key reads a member | clear | yes | 26 |
 | `frameworks` | the `framework` stratum | clear (public list) | yes | 45 |
+| `from` | exposure: the first call of a recommendation's window, a position in the main run's calls that are not sidechain; with `to`, the calls a recommendation covers; no text and no time; format 6 | clear | yes | 8 |
 | `harness` | every bundle is per harness; the action table a step is checked against | clear | yes | 92 |
 | `harnessVersion` | `fit` and `change` per harness version bucket | clear (public releases); thresholded (long tail) | yes | 78 |
 | `host` | `adoption` and `fit` per web host | hashed at ingest | yes | 19 |
 | `hour` | future per-hour-of-day read of when work happens (stated, served by nothing yet); joins no cell | clear | yes | 27 |
-| `id` | the ledger's replace-on-redeposit key; no read | clear (an opaque client hash, per account; a machine's is the first 16 hex digits of an HMAC of the session's name, with its `cse_` or `session_` prefix stripped, under the account's session salt) | yes | 23 |
+| `id` | the ledger's replace-on-redeposit key; no read | clear (an opaque client hash, per account; a machine's is the first 16 hex digits of an HMAC of the session's name, with its `cse_` or `session_` prefix stripped, under the account's session salt; in a recommendation, the local row's own id, a hash of its session, time, mode, query, and pool version) | yes | 46 |
 | `identity` | container for what a step called: `fit` and `adoption` read its members | clear | yes | 71 |
 | `input` | `cost`: tokens per prompt class, model, and week | clear (bucket) | yes | 9 |
 | `key` | `fit` by call shape: the sent key a value feature or closed value belongs to, one of the call's `keys`; the pool refuses one the call did not send, and its shape cell is held to the thresholded floor unless the key is on a public tool's pinned list | clear (public list); thresholded (long tail) | yes | 57 |
@@ -266,11 +269,13 @@ An unknown field name a client sends lands in the `extensions` bag of the deposi
 | `patternFeatures` | `fit` by call shape (one `pattern` shape cell per member): what a pattern argument uses (`alternation`, `anchor`, `class`, `escape`, `group`, `literal`, `quantifier`, `recursive`, `wildcard`), a sorted set, never the pattern | clear | yes | 29 |
 | `platform` | the `env:<platform>:<shell>` cell of `fit` | clear | yes | 54 |
 | `plugins` | future `adoption` of plugins in reach (always `private` today, since no plugin list is pinned): the count of plugins, never a name | clear | yes | 42 |
+| `poolVersion` | exposure: the deposit time of the pool snapshot a recommendation answered from, as the local row holds it; format 6 | clear | yes | 40 |
 | `program` | `fit` and `adoption` per shell program | clear (public list); thresholded (long tail) | yes | 15 |
 | `prompt` | ties a call to its prompt, so `cost` reads the prompt's class for it | clear | yes | 20 |
 | `prompts` | container for a transcript's prompts: `cost` reads their class, tokens, and wall time | clear | yes | 21 |
 | `pulls` | `adoption` of a pulled package | clear | yes | 14 |
 | `reach` | container for the MCP servers, skills, and plugins in reach of a session: the denominator of `adoption` and `fit` per server and skill | clear | yes | 26 |
+| `recommendations` | exposure: the recommendations the main session was shown or held back from, each an id, an arm, the pool version it answered from, and a window of calls; never the query, the text shown, or the evidence. Absent when the session had none, which the pool reads as unknown exposure, never as unexposed; format 6 | clear | yes | 26 |
 | `recoveryCalls` | container for what followed a failed call (`next`, `editFollowed`), present on a call that did not succeed: the `recovery` family reads its members | clear | yes | 19 |
 | `registry` | `adoption` of a pulled package per registry; the future change-effect read for a package delta | clear | yes | 32 |
 | `remainingTokens` | future remaining-work read (the `next-step` form named under What a bundle serves) | clear (bucket) | yes | 95 |
@@ -292,6 +297,7 @@ An unknown field name a client sends lands in the `extensions` bag of the deposi
 | `targetClass` | `fit` by call shape (the `target` shape cell): the class of the path a call touched (`source`, `test`, `config`, `doc`, `lockfile`, `generated`, `data`, `none`, `other`), derived at capture from the target's base and the path's suffix; the path and its base name never go | clear | yes | 42 |
 | `thinking` | `cost`: tokens per prompt class; the (effort, thinking) cell | clear (bucket) | yes | 12 |
 | `timingPrint` | none stated: no read, check, or later brief names it (see the t873 report) | clear (an opaque client hash) | yes | 18 |
+| `to` | exposure: the end of a recommendation's window, one past its last call, a position in the main run's calls that are not sidechain; format 6 | clear | yes | 6 |
 | `tokens` | `cost`: tokens per step in a class cell | clear (bucket) | yes | 50 |
 | `tool` | `fit` and `adoption` per public MCP tool | clear (public list); thresholded (long tail) | yes | 18 |
 | `tools` | container for the calls of a transcript: `tool-day`, `fit`, and `method` read their members | clear | yes | 38 |

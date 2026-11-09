@@ -52,10 +52,10 @@ describe('the recommendations a deposit carries', () => {
     expect(sent(built([HELD, SHOWN])).recommendations?.map(({ arm }) => arm)).toEqual(['shown', 'held']);
   });
 
-  it('sends nothing for a session with no row, and the parse reads that as an empty list', () => {
+  it('sends nothing for a session with no row, and the parse holds nothing either: absent is the one way to say none', () => {
     const skeleton = built([]);
     expect('recommendations' in skeleton).toBe(false);
-    expect(sent(skeleton).recommendations).toEqual([]);
+    expect('recommendations' in sent(skeleton)).toBe(false);
   });
 
   it('does not carry a miss, which recommended nothing, or another session\'s row', () => {
@@ -68,7 +68,7 @@ describe('the recommendations a deposit carries', () => {
   it('puts a recommendations list in a batch of format 5 into the bag, as a field that format does not define', () => {
     const parsed = parseSkeleton({ ...JSON.parse(JSON.stringify(built([SHOWN]))), format: 5, fieldsVersion: 10 });
     if (!parsed.ok) throw new Error(parsed.reason);
-    expect(parsed.skeleton.recommendations).toEqual([]);
+    expect('recommendations' in parsed.skeleton).toBe(false);
     expect(parsed.extensions.map(({ at }) => at)).toEqual(['recommendations']);
   });
 
@@ -78,15 +78,13 @@ describe('the recommendations a deposit carries', () => {
     ['a window that is no count', { from: -1 }, 'recommendations[0].from'],
     ['a pool version that is no version', { poolVersion: 'a b' }, 'recommendations[0].poolVersion'],
   ])('refuses %s', (_name, change, field) => {
-    const body = JSON.parse(JSON.stringify(built([SHOWN]))) as { recommendations: object[] };
-    body.recommendations = [{ ...body.recommendations[0], ...change }];
-    expect(parseSkeleton(body)).toMatchObject({ ok: false, field });
+    const skeleton = built([SHOWN]);
+    expect(parseSkeleton({ ...skeleton, recommendations: (skeleton.recommendations ?? []).map((entry) => ({ ...entry, ...change })) })).toMatchObject({ ok: false, field });
   });
 
   it('reads an arm off its list as other and bags it', () => {
-    const body = JSON.parse(JSON.stringify(built([SHOWN]))) as { recommendations: object[] };
-    body.recommendations = [{ ...body.recommendations[0], arm: 'sampled' }];
-    const parsed = parseSkeleton(body);
+    const skeleton = built([SHOWN]);
+    const parsed = parseSkeleton({ ...skeleton, recommendations: (skeleton.recommendations ?? []).map((entry) => ({ ...entry, arm: 'sampled' })) });
     if (!parsed.ok) throw new Error(parsed.reason);
     expect(parsed.skeleton.recommendations?.[0]?.arm).toBe('other');
     expect(parsed.extensions.map(({ at }) => at)).toEqual(['recommendations[0].arm']);

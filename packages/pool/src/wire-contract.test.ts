@@ -125,14 +125,14 @@ describe('the versions a deposit carries', () => {
     expect(await rowOf()).toMatchObject({ format: SKELETON_FORMAT, vocab_version: '99', fields_version: FIELD_LIST_VERSION + 3 });
   });
 
-  it('keep the names of a format 5 call in the stored skeleton, and still accept a format 4 batch, in which names and namesDropped are fields format 4 does not define', async () => {
+  it('keep the names of a format 6 call in the stored skeleton, and still accept a format 4 batch, in which names and namesDropped are fields format 4 does not define', async () => {
     const names = [{ kind: 'dir', name: 'billing' }, { kind: 'file', name: 'plan.md' }];
     const named = baseline();
     Object.assign(holder(named, 'transcripts', 0, 'tools', 0), { names, namesDropped: 1 });
     expect((await post(named)).status).toBe(201);
     const stored = await rowOf();
     expect(JSON.parse(stored.skeleton)).toMatchObject({ transcripts: [{ tools: [{ names, namesDropped: 1 }] }] });
-    expect(stored).toMatchObject({ format: 5, extensions: '[]', other_values: 0 });
+    expect(stored).toMatchObject({ format: 6, extensions: '[]', other_values: 0 });
 
     const older = { ...baseline(), format: 4 };
     expect((await post(older)).status).toBe(201);
@@ -218,9 +218,9 @@ describe('a value this server does not know', () => {
   });
 });
 
-describe('a format 5 batch with every optional field absent', () => {
+describe('a format 6 batch with every optional field absent', () => {
   /** What an absent optional field reads as, which is what a sent null is. */
-  const EMPTY: { [name: string]: unknown } = { deltas: [], timingPrint: null, languageShares: [] };
+  const EMPTY: { [name: string]: unknown } = { deltas: [], recommendations: [], timingPrint: null, languageShares: [] };
   const ABSENT_ONLY: ReadonlySet<string> = new Set(['reach', 'skill', 'edges', 'recoveryCalls', 'usageResponses', 'allocated', 'repoKey', 'orgSize', 'team', 'repoVisibility', 'hour', 'keys', 'keysDropped', 'targetClass', 'argClass', 'argFeatures', 'argValues', 'changeKind', 'names', 'namesDropped']);
 
   // Each level of the wire with its optional names and where it sits; a level added to OPTIONAL fails the length check below until it is listed here.

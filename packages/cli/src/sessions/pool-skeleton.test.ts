@@ -288,8 +288,8 @@ describe('what a batch sends in place of a count', () => {
 
   it('puts an empty `deltas` on the form, and refuses an entry that is not one', () => {
     const whole = sample();
-    expect(whole).toMatchObject({ format: 5, deltas: [] });
+    expect(whole).toMatchObject({ format: 6, deltas: [] });
     expect(parseSkeleton({ ...whole, deltas: [{}] })).toMatchObject({ ok: false, field: 'deltas[0].deltaKind' });
-    expect(parseSkeleton({ ...whole, format: 1 })).toMatchObject({ ok: false, field: 'format', reason: 'the format 1 form is no longer read; send format 5' });
+    expect(parseSkeleton({ ...whole, format: 1 })).toMatchObject({ ok: false, field: 'format', reason: 'the format 1 form is no longer read; send format 6' });
   });
 });

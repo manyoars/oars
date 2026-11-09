@@ -1516,7 +1516,7 @@ export const parseSkeleton = (value: unknown): ParsedSkeleton | Refusal => {
         before += steps.length;
       });
     });
-    return { ok: true, skeleton: { format, vocabVersion, fieldsVersion, id, transcripts, timingPrint, deltas, recommendations }, extensions: held.extensions, others: held.others };
+    return { ok: true, skeleton: { format, vocabVersion, fieldsVersion, id, transcripts, timingPrint, deltas, ...(recommendations.length === 0 ? {} : { recommendations }) }, extensions: held.extensions, others: held.others };
   } catch (error) {
     if (error instanceof Refused) return { ok: false, field: error.field, reason: error.reason };
     throw error;

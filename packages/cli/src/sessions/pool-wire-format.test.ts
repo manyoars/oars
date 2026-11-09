@@ -31,19 +31,19 @@ const layerOne = (skeleton: SessionSkeleton): string[] =>
     .sort();
 
 describe('the wire formats', () => {
-  it('builds format 5 and reads formats 3, 4, and 5, refusing any other', () => {
-    expect(SKELETON_FORMAT).toBe(5);
-    expect(READ_FORMATS).toEqual([3, 4, 5]);
-    expect(built().format).toBe(5);
-    expect(parseSkeleton({ ...built(), format: 6 })).toMatchObject({ ok: false, field: 'format', reason: 'not a format this version reads' });
-    expect(parseSkeleton({ ...built(), format: 2 })).toMatchObject({ ok: false, field: 'format', reason: 'the format 2 form is no longer read; send format 5' });
+  it('builds format 6 and reads formats 3, 4, 5, and 6, refusing any other', () => {
+    expect(SKELETON_FORMAT).toBe(6);
+    expect(READ_FORMATS).toEqual([3, 4, 5, 6]);
+    expect(built().format).toBe(6);
+    expect(parseSkeleton({ ...built(), format: 7 })).toMatchObject({ ok: false, field: 'format', reason: 'not a format this version reads' });
+    expect(parseSkeleton({ ...built(), format: 2 })).toMatchObject({ ok: false, field: 'format', reason: 'the format 2 form is no longer read; send format 6' });
   });
 
-  it('reads the format 4 and format 5 fields of a format 5 batch, keeps its format, and keeps the names with their kinds', () => {
+  it('reads the format 4 and format 5 fields of a format 6 batch, keeps its format, and keeps the names with their kinds', () => {
     const parsed = parseSkeleton(built());
     if (!parsed.ok) throw new Error(parsed.reason);
     expect(parsed).toMatchObject({ others: 0, extensions: [] });
-    expect(parsed.skeleton.format).toBe(5);
+    expect(parsed.skeleton.format).toBe(6);
     expect(parsed.skeleton.transcripts[0]?.tools[0]).toMatchObject({ argFeatures: [{ key: 'pattern', valueSize: '1-8', patternFeatures: ['anchor'] }], argValues: [{ key: 'output_mode', enumValue: 'count' }], changeKind: ['value-changed'], names: NAMES });
     expect(layerOne(parsed.skeleton)).toEqual(['shape:file.search/change/value-changed', 'shape:file.search/enum/output_mode=count', 'shape:file.search/pattern/pattern=anchor', 'shape:file.search/size/pattern=1-8']);
   });

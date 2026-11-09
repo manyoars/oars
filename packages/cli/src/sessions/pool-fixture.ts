@@ -180,6 +180,7 @@ export const REGISTER_FIXTURE = {
   fieldsVersion: FIELD_LIST_VERSION,
   id: '0123456789abcdef',
   deltas: [{ deltaKind: 'removed', field: 'package', name: 'typescript', registry: 'npm', metric: 'callsPerSession', change: -2 }],
+  recommendations: [{ id: 'fedcba9876543210', arm: 'shown', poolVersion: '2026-11-03T03:00:00.000Z', from: 0, to: 1 }],
   timingPrint: null,
   transcripts: [
     {
