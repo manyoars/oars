@@ -1,4 +1,4 @@
-// What an erasure leaves behind (migration 0018) and the check ingest makes against it. The Worker only reads the table: the operator's own command (`scripts/erase.ts`) writes it, so no route can erase anything.
+// What an erasure leaves behind (migration 0018) and the check ingest makes against it. The Worker writes only `raw-object` tombstones (the nightly withdrawal sweep, `raw.ts`), never `account`, and the tombstones are append-only (0018); every other kind comes from the operator's own command (`scripts/erase.ts`), so no route can erase anything else.
 // The digests live here so the Worker and the command cannot drift apart.
 import { fieldOf, refuse, type Env } from './http.js';
 
