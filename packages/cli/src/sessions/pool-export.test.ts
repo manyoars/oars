@@ -146,6 +146,13 @@ describe('oars pool export', () => {
     expect(outcome.document).toMatchObject({ raw: { requested: false, saved: 0 } });
   });
 
+  it('hints at --raw only when some ledger object stands', async () => {
+    const standing = await scene().run(pool({ '/v1/account/export': page('rawLedger', [ledgerRow('kept bytes')], null) }));
+    expect(standing.text).toContain('run again with --raw');
+    const gone = await scene().run(pool({ '/v1/account/export': page('rawLedger', [ledgerRow('gone bytes', '2026-11-02')], null) }));
+    expect(gone.text).not.toContain('--raw');
+  });
+
   it('with --raw fetches each ledger object that stands, checks its hash, and keeps its bytes as sent', async () => {
     const s = scene();
     const bytes = 'a redacted line\nand another\n';

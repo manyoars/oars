@@ -972,7 +972,7 @@ export const poolExport = async (deps: RunDeps, options: { server?: string | und
     if (found !== null && Number(found[1]) > pages) await rm(join(folder, name));
   }
   const ledger = standing.length + erased;
-  const rawNote = options.raw === true ? (erased > 0 ? ` ${plural(erased, 'raw object')} listed in the ledger ${erased === 1 ? 'was' : 'were'} erased, so no copy of ${erased === 1 ? 'it' : 'them'} remains.` : '') : ledger > 0 ? ` The ledger lists ${plural(ledger, 'raw object')}: run again with --raw to save your copies of the ${standing.length === 1 ? 'one' : 'ones'} that stand.` : '';
+  const rawNote = options.raw === true ? (erased > 0 ? ` ${plural(erased, 'raw object')} listed in the ledger ${erased === 1 ? 'was' : 'were'} erased, so no copy of ${erased === 1 ? 'it' : 'them'} remains.` : '') : standing.length > 0 ? ` The ledger lists ${plural(ledger, 'raw object')}: run again with --raw to save your copies of the ${standing.length === 1 ? 'one' : 'ones'} that stand.` : '';
   return {
     document: { ok: true, server, folder, pages, rows, raw: { requested: options.raw === true, saved, erased } },
     text: `Saved your pool export to ${folder}: ${[...counts, plural(rows, 'row')].join(', ')}.${rawNote}`,

@@ -59,8 +59,8 @@ const sourceFiles = (): { [name: string]: string } =>
       .map((file) => [`src/${file}`, readFileSync(here(file), 'utf8')]),
   );
 
-describe('the raw tier is reachable from the upload only', () => {
-  it('finds raw state only in raw.ts, and the bucket used only to stage, assemble, and clean up', () => {
+describe('the raw tier is reachable from the upload (raw.ts) and the owner copy (export.ts) only', () => {
+  it('finds raw state only in raw.ts and export.ts, and the bucket used only to stage, assemble, and clean up', () => {
     const files = sourceFiles();
     // Check the scan reached the files that serve: derive, stored, bundle, and the route table.
     for (const name of ['src/raw.ts', 'src/export.ts', 'src/derive.ts', 'src/stored.ts', 'src/bundle.ts', 'src/worker.ts', 'src/http.ts']) expect(Object.keys(files), name).toContain(name);

@@ -1,4 +1,4 @@
-// An account's copy of what the pool holds about it (GDPR Articles 15(3) and 20): `GET /v1/account/export`, a cursor-paged JSON read of every table that carries the account's own rows, and `GET /v1/account/export/raw/:sha256`, one raw object of the account's own.
+// An account's copy of what the pool holds about it (GDPR Articles 15(3) and 20): `GET /v1/account/export`, a cursor-paged JSON read of every table that carries the account's own rows, and `GET /v1/account/export/raw/:hash`, one raw object of the account's own.
 // Both are account-only (a machine key is refused before they run) and write nothing. The account always comes from the sign-in, never from the cursor or the path, so no request can reach another account's row.
 // Pooled derived cells and bundle reads are shared totals, not the account's own records, and are not here. No credential is: a token appears as when it ends, a machine as its record without its key hashes.
 import { answer, fieldOf, notConfigured, refuse, type Env } from './http.js';
@@ -216,7 +216,7 @@ export const exportPage = async (request: Request, env: Env): Promise<Response> 
 
 const SHA256 = /^[0-9a-f]{64}$/;
 
-/** `GET /v1/account/export/raw/:sha256`: one raw object the account deposited, byte for byte. Another account's object, one the pool never held, and one whose bytes are gone all answer 404, so the answer says nothing about who holds what; a tombstoned one answers 410, because the account's own ledger already says it was erased. */
+/** `GET /v1/account/export/raw/:hash`: one raw object the account deposited, byte for byte. Another account's object, one the pool never held, and one whose bytes are gone all answer 404, so the answer says nothing about who holds what; a tombstoned one answers 410, because the account's own ledger already says it was erased. */
 export const exportRaw = async (request: Request, env: Env, hash: string): Promise<Response> => {
   const account = await accountOf(request, env);
   if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');

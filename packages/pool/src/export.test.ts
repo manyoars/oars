@@ -1,4 +1,4 @@
-// A signed-in person's copy of what the pool holds about their account (GDPR Articles 15(3) and 20): `GET /v1/account/export`, paged, and `GET /v1/account/export/raw/:sha256`, one raw object of their own. Both read and write nothing.
+// A signed-in person's copy of what the pool holds about their account (GDPR Articles 15(3) and 20): `GET /v1/account/export`, paged, and `GET /v1/account/export/raw/:hash`, one raw object of their own. Both read and write nothing.
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { acceptanceOf, fieldOf, startPool, stubUser, textOf, type TestDb, type TestPool } from './test-pool.js';
@@ -127,7 +127,7 @@ describe('GET /v1/account/export', () => {
     expect(rowsOf(pages, 'rawLedger')).toHaveLength(2);
     // Token metadata is a count of when each credential ends, never the credential or its hash.
     const tokens = rowsOf(pages, 'tokens');
-    expect(tokens.length).toBeGreaterThanOrEqual(1);
+    expect(tokens).toHaveLength(1);
     for (const row of tokens) expect(Object.keys(row === null || typeof row !== 'object' ? {} : row).sort()).toEqual(['expiresAt']);
     // Deposits come as stored, the erased one as it now reads, marked.
     const deposits = rowsOf(pages, 'deposits');
@@ -150,6 +150,22 @@ describe('GET /v1/account/export', () => {
     for (const page of small) expect(page.rows.length).toBeLessThanOrEqual(1);
     // The last page ends the cursor.
     expect(small.at(-1)?.next).toBeNull();
+  }, 60_000);
+
+  it('holds a deposits page to 10 rows however many are asked for, and the cursor yields the rest', async () => {
+    const { token, account } = await pool.signIn('github', stubUser('5410'));
+    for (let n = 1; n <= 11; n += 1) {
+      const id = `cap-${String(n).padStart(2, '0')}`;
+      await db.prepare("INSERT INTO deposits (account, id, skeleton, tier, extensions, deltas) VALUES (?, ?, ?, 'skeleton', '[]', '[]')").bind(account, id, skeleton(id)).run();
+    }
+    // Asking for 1000 still gets the 10-deposit cap, and the 11th waits behind the cursor.
+    for (const limit of [undefined, 1000]) {
+      const pages = (await everyPage(token, limit)).filter((page) => page.section === 'deposits');
+      expect(pages.map((page) => page.rows.length), String(limit)).toEqual([10, 1]);
+      expect(pages[0]?.next, String(limit)).not.toBeNull();
+      expect(rowsOf(pages, 'deposits').map((row) => textOf(row, 'id')), String(limit)).toHaveLength(11);
+      expect(pages[1]?.rows.map((row) => textOf(row, 'id')), String(limit)).toEqual(['cap-11']);
+    }
   }, 60_000);
 
   it('answers an account with nothing held as a short export and not an error', async () => {
@@ -206,7 +222,7 @@ const rawCopy = async (path: string, token?: string): Promise<{ status: number; 
   return { status: sent.status, bytes: Buffer.from(await sent.arrayBuffer()), headers: sent.headers };
 };
 
-describe('GET /v1/account/export/raw/:sha256', () => {
+describe('GET /v1/account/export/raw/:hash', () => {
   const put = async (account: string, text: string): Promise<string> => {
     const hash = sha256(text);
     await (await pool.rawBucket()).put(`raw/${account}/${hash}`, text);
