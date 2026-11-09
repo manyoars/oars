@@ -1429,8 +1429,6 @@ const parseRecommendation = (held: Collected, value: unknown, at: string): Skele
   return { id, arm: oneOf(held, RECOMMENDATION_ARMS, raw.arm, under(at, 'arm')), poolVersion, from, to };
 };
 
-
-
 /** The skeleton in `value`, rebuilt from the fields read, with the bag of what was set aside; else the first field that is a shape error, and why. */
 export const parseSkeleton = (value: unknown): ParsedSkeleton | Refusal => {
   const held: Collected = { extensions: [], others: 0, format: SKELETON_FORMAT };
