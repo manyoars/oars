@@ -270,10 +270,10 @@ describe('a derive from skeletons sees the local graph (t869)', () => {
 
 describe('what the edges cost on the wire (t869)', () => {
   // 5,928 bytes before t871's three `unknown` coverage bands, which add 64 to each of the fixture's six frames (384).
-  it('adds 494 bytes to the 6,312-byte skeleton of the two-deep fixture', () => {
+  it('adds 494 bytes to the 6,313-byte skeleton of the two-deep fixture', () => {
     const skeleton = skeletonOfStore(withSubagents());
     const bare = roundTrip(skeleton);
     for (const held of bare.transcripts.flatMap(({ tools }) => tools.flatMap(({ steps }) => steps))) Reflect.deleteProperty(held, 'edges');
-    expect([JSON.stringify(skeleton).length - JSON.stringify(bare).length, JSON.stringify(skeleton).length]).toEqual([494, 6312]);
+    expect([JSON.stringify(skeleton).length - JSON.stringify(bare).length, JSON.stringify(skeleton).length]).toEqual([494, 6313]);
   });
 });

@@ -12,6 +12,10 @@ import type { PullEcosystem, PullIdentity, ShellIdentity, StepIdentity, ToolPull
 export interface WordOfCommand {
   text: string;
   quoted: boolean;
+  /** The variable the whole word references, set only when its raw source is exactly one reference (`$NAME`, `"${NAME}"`); a `$` anywhere else in a word is text. */
+  variable?: string;
+  /** The word starts at or after the command's opaque point (`tokenize`), where a misread quote can turn literal text into words: the name read takes no variable, assignment, or flag value from it. */
+  opaque?: true;
 }
 
 const orLiteral = (name: string, allowed: ReadonlySet<string>): string => (allowed.has(name) ? name : LITERAL);

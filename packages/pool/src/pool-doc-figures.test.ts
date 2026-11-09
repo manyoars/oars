@@ -1,5 +1,5 @@
 // Every size or count figure in docs/pool.md that the code determines is computed here and compared with the number the doc prints (t913). A merge or a
-// new field that moves a size now fails this test, so the doc is fixed before review. The figure sits in the doc as `887,140<!-- figure:skeleton -->`; a
+// new field that moves a size now fails this test, so the doc is fixed before review. The figure sits in the doc as `887,141<!-- figure:skeleton -->`; a
 // rounded one names its step, `1,900<!-- figure:sample~100 -->`, and must equal the computed value rounded to that step, so it stays true within its rounding.
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

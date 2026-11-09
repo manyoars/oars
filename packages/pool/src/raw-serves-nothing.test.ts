@@ -104,7 +104,7 @@ describe('no route serves a raw byte, a hash, or a count', () => {
     const marker = 'SERVE-MARKER-must-never-come-back';
     const bytes = new TextEncoder().encode(marker.repeat(10));
     const hash = Buffer.from(await crypto.subtle.digest('SHA-256', bytes)).toString('hex');
-    const headers = { 'oars-redaction-version': '1', 'oars-capture-version': 'cap-1', 'oars-raw-consent': 'granted' };
+    const headers = { 'oars-redaction-version': '1', 'oars-capture-version': 'cap-1', 'oars-raw-consent': 'granted', 'oars-raw-consent-version': 'v1' };
     const part = await pool.send(`/v1/raw/${hash}/parts/1`, { method: 'PUT', body: bytes }, token, headers);
     const done = await pool.send(`/v1/raw/${hash}/complete`, { method: 'POST', body: JSON.stringify({ parts: 1, bytes: bytes.length }) }, token, headers);
     expect([part.status, done.status]).toEqual([200, 201]);
