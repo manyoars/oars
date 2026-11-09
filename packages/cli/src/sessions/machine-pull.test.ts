@@ -3,9 +3,10 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { http, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Outcome } from '../cli.js';
-import { harness, type Harness } from '../test-support.js';
+import { run, type Outcome } from '../cli.js';
+import { harness, server, useServer, type Harness } from '../test-support.js';
 import { derivedSalt } from './machine-ids.js';
 import type { MachineRecord, Visibility } from './machine-enroll.js';
 import { termsDigest, runNetGit } from './machine-hold.js';
@@ -20,6 +21,7 @@ import { cleanup, stage, type Staged } from './test-support.js';
 // Each case runs a dozen git processes, which a Windows runner starts slowly.
 const SLOW = 60_000;
 
+useServer();
 afterEach(cleanup);
 
 const MACHINE = '1111111111111111';
@@ -154,6 +156,52 @@ describe('oars pool hold pull: who may hold', () => {
     expect(branchesOf(s, REPO)).toEqual([`oars-hold/${OTHER_MACHINE}/${ID}`]);
   }, SLOW);
 
+  it('reports a repository whose branches cannot be fetched with a fixed detail, and still pulls the other repository', async () => {
+    const s = await scene([{ ...RECORD, allowRepos: [REPO, OTHER_REPO] }]);
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, goodFiles(s));
+    // OTHER_REPO has no bare repository: its remote names a path that does not exist.
+    const out = await pull(s);
+    expect(out.document).toMatchObject({ admitted: [{ repo: REPO, id: ID }], refused: [{ repo: OTHER_REPO, reason: 'repo_unreadable', detail: 'its branches could not be fetched (check this machine\'s git credential for the repository)' }] });
+    expect(out.text).not.toContain('Command failed');
+    expect(out.text).not.toContain(s.remotes);
+    expect(filed(s)).toHaveLength(1);
+  }, SLOW);
+
+  it('reads a machines.jsonl line that is not a record as no machine: not JSON, a missing field, or a repository that is not owner/name', async () => {
+    const s = await scene();
+    const NOT_JSON = '3333333333333333';
+    const NO_FIELD = '4444444444444444';
+    const NO_OWNER = '5555555555555555';
+    const line = (machine: string, shape: { [name: string]: unknown } = {}): string => JSON.stringify({ machine, hostClass: 'cloud', launcher: 'orchestrated', allowRepos: [REPO], ...shape });
+    writeFileSync(
+      join(s.staged.storeDir, 'machines.jsonl'),
+      [line(NOT_JSON).slice(0, -1), line(NO_FIELD, { launcher: undefined }), line(NO_OWNER, { allowRepos: ['not-a-repo'] }), line(MACHINE)].map((text) => `${text}\n`).join(''),
+    );
+    for (const machine of [NOT_JSON, NO_FIELD, NO_OWNER]) hold(s, REPO, `oars-hold/${machine}/${ID}${machine.slice(0, 1)}`, goodFiles(s, `${ID}${machine.slice(0, 1)}`));
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, goodFiles(s));
+    const out = await pull(s);
+    expect(out.document).toMatchObject({
+      admitted: [{ id: ID }],
+      refused: [
+        { branch: `oars-hold/${NOT_JSON}/${ID}3`, reason: 'unknown_machine' },
+        { branch: `oars-hold/${NO_FIELD}/${ID}4`, reason: 'unknown_machine' },
+        { branch: `oars-hold/${NO_OWNER}/${ID}5`, reason: 'unknown_machine' },
+      ],
+    });
+    expect(filed(s)).toHaveLength(1);
+    expect(branchesOf(s, REPO)).toHaveLength(4);
+  }, SLOW);
+
+  it('lets the newest tip of an id speak for it: when it is refused, an older tip of the id is a duplicate and not admitted in its place', async () => {
+    const s = await scene([RECORD, { ...RECORD, machine: OTHER_MACHINE }], 'typescript\n');
+    const terms = `${termsDigest(s.salt, ['typescript'])}\n`;
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, { ...goodFiles(s), terms }, 1_700_000_000);
+    hold(s, REPO, `oars-hold/${OTHER_MACHINE}/${ID}`, { ...goodFiles(s), terms }, 1_700_000_500);
+    const out = await pull(s);
+    expect(out.document).toMatchObject({ admitted: [], refused: [{ branch: `oars-hold/${OTHER_MACHINE}/${ID}`, reason: 'a38_term' }, { branch: `oars-hold/${MACHINE}/${ID}`, reason: 'duplicate_id' }] });
+    expect(existsSync(s.outbox)).toBe(false);
+  }, SLOW);
+
   it('refuses a branch in a repository its machine was not enrolled for, and one whose name is not a machine and an id', async () => {
     const s = await scene([RECORD, { ...RECORD, machine: OTHER_MACHINE, allowRepos: [OTHER_REPO] }]);
     hold(s, OTHER_REPO, `oars-hold/${MACHINE}/${ID}`, goodFiles(s));
@@ -167,6 +215,9 @@ describe('oars pool hold pull: who may hold', () => {
 
 /** A stamp this client did not build under, in the form a real one has: the batch's own vocabulary version, then eight hex digits. */
 const OLDER = `v${REGISTER_FIXTURE.vocabVersion}-00000000`;
+
+/** Text a branch's stamp carries, which a report must not repeat. */
+const STAMP_MARKER = 'markerzq';
 
 const without = (files: { [file: string]: string }, name: string): { [file: string]: string } => Object.fromEntries(Object.entries(files).filter(([file]) => file !== name));
 
@@ -188,10 +239,12 @@ describe('oars pool hold pull: the stamp', () => {
     const s = await scene();
     const third = '00000000000000aa';
     hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, { ...goodFiles(s), stamp: '../../escape\n' });
-    hold(s, REPO, `oars-hold/${MACHINE}/${OTHER_ID}`, { ...goodFiles(s, OTHER_ID), stamp: 'v99-00000000\n' });
+    hold(s, REPO, `oars-hold/${MACHINE}/${OTHER_ID}`, { ...goodFiles(s, OTHER_ID), stamp: `v99-${STAMP_MARKER}-00000000\n` });
     hold(s, REPO, `oars-hold/${MACHINE}/${third}`, without(goodFiles(s, third), 'stamp'));
     const out = await pull(s);
     expect(out.document).toMatchObject({ admitted: [], refused: [{ branch: `oars-hold/${MACHINE}/${third}`, reason: 'stamp_invalid' }, { branch: `oars-hold/${MACHINE}/${ID}`, reason: 'stamp_invalid' }, { branch: `oars-hold/${MACHINE}/${OTHER_ID}`, reason: 'stamp_invalid' }] });
+    expect(out.text).not.toContain(STAMP_MARKER);
+    expect(out.text).not.toContain('v99');
     expect(existsSync(s.outbox)).toBe(false);
     expect(branchesOf(s, REPO)).toHaveLength(3);
   }, SLOW);
@@ -278,6 +331,25 @@ describe('oars pool hold pull: the branch file is untrusted', () => {
     expect(branchesOf(s, REPO)).toEqual([`oars-hold/${MACHINE}/${ID}`]);
   }, SLOW);
 
+  it('refuses a valid file nested too deeply to walk, and the branches after it are still pulled', async () => {
+    const s = await scene();
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, { ...goodFiles(s), 'batch.json': `${'['.repeat(200_000)}${']'.repeat(200_000)}` }, 1_700_000_100);
+    hold(s, REPO, `oars-hold/${MACHINE}/${OTHER_ID}`, goodFiles(s, OTHER_ID), 1_700_000_000);
+    const out = await pull(s);
+    expect(out.document).toMatchObject({ admitted: [{ id: OTHER_ID }], refused: [{ branch: `oars-hold/${MACHINE}/${ID}`, reason: 'batch_invalid', detail: 'batch.json is nested too deeply' }] });
+    expect(filed(s)).toHaveLength(1);
+    expect(branchesOf(s, REPO)).toHaveLength(2);
+  }, SLOW);
+
+  it('refuses a branch with no batch.json, writes nothing, and leaves the branch', async () => {
+    const s = await scene();
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, without(goodFiles(s), 'batch.json'));
+    const out = await pull(s);
+    expect(out.document).toMatchObject({ admitted: [], refused: [{ branch: `oars-hold/${MACHINE}/${ID}`, reason: 'unreadable_file' }] });
+    expect(existsSync(s.outbox)).toBe(false);
+    expect(branchesOf(s, REPO)).toHaveLength(1);
+  }, SLOW);
+
   it.each([
     { what: 'a string', terms: ['typescript'] },
     { what: 'a key', terms: ['deltaKind'] },
@@ -320,5 +392,25 @@ describe('oars pool hold pull: claimed', () => {
     expect(out.document).toMatchObject({ admitted: [], refused: [{ branch: `oars-hold/${MACHINE}/${ID}`, reason: 'machine_record' }] });
     expect(existsSync(s.outbox)).toBe(false);
     expect(branchesOf(s, REPO)).toHaveLength(1);
+  }, SLOW);
+});
+
+describe('the command', () => {
+  it.each(['GH_TOKEN', 'GITHUB_TOKEN'])('runs through the CLI: the repository record is asked for with %s, a repository that is public now is refused, and nothing is fetched', async (name) => {
+    const s = await scene();
+    s.h.deps.env[name] = 'a-test-token';
+    const seen: (string | null)[] = [];
+    server.use(
+      http.get('https://api.github.com/repos/acme/widgets', ({ request }) => {
+        seen.push(request.headers.get('authorization'));
+        return HttpResponse.json({ private: false });
+      }),
+    );
+    const code = await run(['pool', 'hold', 'pull', '--json'], s.h.deps);
+    expect(code).toBe(0);
+    expect(seen).toEqual(['Bearer a-test-token']);
+    // A fetch of the repository would add a `repo_unreadable` row here, since nothing answers at its real address.
+    expect(JSON.parse(s.h.out.join(''))).toEqual({ ok: true, admitted: [], refused: [{ repo: REPO, reason: 'repo_public', detail: 'the repository is public now: its branches were not read' }] });
+    expect(existsSync(s.outbox)).toBe(false);
   }, SLOW);
 });

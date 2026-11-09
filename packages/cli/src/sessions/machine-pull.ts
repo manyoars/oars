@@ -140,15 +140,21 @@ const skeletonOf = async (run: Pulling, tip: Tip, id: string): Promise<SessionSk
     throw new Refused('batch_invalid', 'batch.json is not JSON');
   }
   // None of these details repeats a value of the file: a branch is written by whoever could push it, and its text must not reach a log.
-  const names = fieldsOf(batch);
-  if (names.includes('claimed')) throw new Refused('claimed_present', 'the batch holds a claimed field, which only this machine writes');
-  if (names.some((name) => !BATCH_FIELDS.includes(name))) throw new Refused('field_unknown', 'the batch holds a field outside the batch field list');
-  const parsed = parseSkeleton(value);
-  if (!parsed.ok) throw new Refused('batch_invalid', `${parsed.field}: ${parsed.reason}`);
-  if (parsed.extensions.length > 0) throw new Refused('off_list', `${String(parsed.extensions.length)} value or field off the current lists, at ${parsed.extensions.slice(0, 3).map(({ at }) => at).join(', ')}`);
-  if (parsed.skeleton.id !== id) throw new Refused('id_mismatch', `the batch names ${parsed.skeleton.id}, the branch ${id}`);
-  if (holdsTerm(value, run.list)) throw new Refused('a38_term', 'a string or key of the batch holds a term of the exclusion list of this machine');
-  return parsed.skeleton;
+  // `JSON.parse` takes a file nested far deeper than the recursive walks below can follow, and a RangeError out of one of them would end the whole pull.
+  try {
+    const names = fieldsOf(batch);
+    if (names.includes('claimed')) throw new Refused('claimed_present', 'the batch holds a claimed field, which only this machine writes');
+    if (names.some((name) => !BATCH_FIELDS.includes(name))) throw new Refused('field_unknown', 'the batch holds a field outside the batch field list');
+    const parsed = parseSkeleton(value);
+    if (!parsed.ok) throw new Refused('batch_invalid', `${parsed.field}: ${parsed.reason}`);
+    if (parsed.extensions.length > 0) throw new Refused('off_list', `${String(parsed.extensions.length)} value or field off the current lists, at ${parsed.extensions.slice(0, 3).map(({ at }) => at).join(', ')}`);
+    if (parsed.skeleton.id !== id) throw new Refused('id_mismatch', `the batch names ${parsed.skeleton.id}, the branch ${id}`);
+    if (holdsTerm(value, run.list)) throw new Refused('a38_term', 'a string or key of the batch holds a term of the exclusion list of this machine');
+    return parsed.skeleton;
+  } catch (error) {
+    if (error instanceof RangeError) throw new Refused('batch_invalid', 'batch.json is nested too deeply');
+    throw error;
+  }
 };
 
 /** A refusal of a batch built under another stamp is reported as that, with the cause: an older vocabulary or field list is the usual reason a file fails the reader or the closed lists now. */
@@ -207,7 +213,7 @@ const admit = async (run: Pulling, tip: Tip, id: string, machine: string): Promi
   if (held !== run.terms) throw new Refused('terms_stale', held === undefined ? 'the branch holds no terms digest' : 'the branch was gated under another exclusion term list than this machine\'s');
   const skeleton = await underStamp(stamp, () => skeletonOf(run, tip, id));
   // The stamp's version names the vocabulary the batch was built under: a file that says otherwise is not what its stamp claims.
-  if (stamp.slice(0, -9) !== `v${skeleton.vocabVersion}`) throw new Refused('stamp_invalid', `the stamp ${stamp} does not name the batch's vocabulary version ${skeleton.vocabVersion}`);
+  if (stamp.slice(0, -9) !== `v${skeleton.vocabVersion}`) throw new Refused('stamp_invalid', 'the stamp does not name the batch\'s vocabulary version');
   // The order is the batch, then pulled.json, then the older copy: a crash between them leaves the next pull to replace the same id.
   await writeBatch(run.outbox, id, { ...skeleton, claimed: { hostClass, launcher } }, stamp);
   run.pulled[id] = stamp;
@@ -227,7 +233,7 @@ const summary = (admitted: readonly PullAdmission[], refused: readonly PullRefus
 
 /**
  * Pulls what every enrolled machine held. Each repository on any machine's list is checked against GitHub's record again on every run, and one that is no longer private is refused and reported, its branches unread. The branches that
- * remain are taken newest first, so of two that name one `id` the newer commit is admitted and the other is reported; each branch must name a machine this one enrolled, for that repository.
+ * remain are taken newest first, and the newest of an `id` alone speaks for it: an older branch of that `id` is reported as a duplicate whether or not the newest was admitted; each branch must name a machine this one enrolled, for that repository.
  */
 export const holdPull = async (deps: RunDeps, options: { server?: string | undefined }, ports: PullPorts): Promise<Outcome> => {
   const runtime = runtimeOf(deps);
@@ -254,8 +260,9 @@ export const holdPull = async (deps: RunDeps, options: { server?: string | undef
       }
       try {
         tips.push(...(await tipsOf(ports, scratch, repo)));
-      } catch (error) {
-        refused.push({ repo, reason: 'repo_unreadable', detail: `its branches could not be fetched: ${error instanceof Error ? error.message.split('\n')[0] ?? '' : ''}` });
+      } catch {
+        // The git error text carries the command line and the remote's URL, so the report gives a fixed cause instead.
+        refused.push({ repo, reason: 'repo_unreadable', detail: 'its branches could not be fetched (check this machine\'s git credential for the repository)' });
       }
     }
     const run: Pulling = { ports, outbox, machines, terms: termsDigest(sessionSalt, terms), list: terms, pulled };
@@ -266,8 +273,9 @@ export const holdPull = async (deps: RunDeps, options: { server?: string | undef
         if (named === null) throw new Refused('branch_name', 'the branch is not oars-hold/<machine>/<id>');
         const [, machine = '', id = ''] = named;
         if (taken.has(id)) throw new Refused('duplicate_id', `a newer branch already supplied ${id}`);
-        admitted.push(await admit(run, tip, id, machine));
+        // Taken before the gates: the newest tip of an `id` alone speaks for it, so when it is refused an older one is not admitted in its place.
         taken.add(id);
+        admitted.push(await admit(run, tip, id, machine));
       } catch (error) {
         refused.push(refusalOf(tip, error));
       }
