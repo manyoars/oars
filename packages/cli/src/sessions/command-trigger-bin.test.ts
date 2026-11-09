@@ -13,9 +13,14 @@ const pkg = fileURLToPath(new URL('../../package.json', import.meta.url));
 const built = existsSync(bin);
 
 const made: string[] = [];
-afterEach(() => {
-  for (const folder of made.splice(0)) rmSync(folder, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
-});
+// The detached sender writes its last file and then exits, and on Windows the folder stays held until the process is gone, which a loaded machine delays past any fixed retry count: wait for the condition that matters, the folder can be removed.
+afterEach(async () => {
+  for (const folder of made.splice(0)) {
+    await vi.waitFor(() => {
+      rmSync(folder, { recursive: true, force: true });
+    }, { timeout: 30_000, interval: 250 });
+  }
+}, 45_000);
 
 const version = (): string => {
   const parsed: unknown = JSON.parse(readFileSync(pkg, 'utf8'));
