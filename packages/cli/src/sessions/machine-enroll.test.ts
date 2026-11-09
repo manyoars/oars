@@ -1,6 +1,6 @@
 // `oars pool enroll --hold-only`: the whole configuration a cloud VM needs to hold its deposit in its own private repository, printed as one env block, with no pool credential. The visibility check is injected, so no test
 // reaches a network; the real check is tried against a stand-in `fetch`.
-import { existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHmac } from 'node:crypto';
 import { http, HttpResponse } from 'msw';
@@ -11,7 +11,7 @@ import { githubVisibility, poolEnroll, type EnrollOptions, type Visibility } fro
 import { termsDigest } from './machine-hold.js';
 import { loadTerms } from './exclusion.js';
 import { machineOf } from './machine.js';
-import { localSalt } from './store.js';
+import { localSalt, sidOf } from './store.js';
 import { cleanup, stage, type Staged } from './test-support.js';
 
 useServer();
@@ -100,12 +100,47 @@ describe('oars pool enroll --hold-only', () => {
     await refusal(poolEnroll(h.deps, OPTIONS, () => Promise.resolve('unknown')), /acme\/widgets.*could not/u);
   });
 
-  it('needs no pool credential and writes nothing to the store beyond its salt', async () => {
+  it('needs no pool credential and writes to the store only its salt and the machine record', async () => {
     const { staged, h } = scene('zorblax\n');
     await poolEnroll(h.deps, OPTIONS, PRIVATE);
-    expect(readdirSync(staged.storeDir)).toEqual(['salt']);
+    expect(readdirSync(staged.storeDir).sort()).toEqual(['machines.jsonl', 'salt']);
     expect(existsSync(join(staged.storeDir, 'pool-accounts.json'))).toBe(false);
     expect(h.out).toEqual([]);
+  });
+
+  it('derives both salts from the salt the store captures with, the account salt where one is set', async () => {
+    const { staged, h } = scene('zorblax\n');
+    h.deps.sessions = { ...staged.runtime, accountSalt: () => Promise.resolve({ salt: 'the-account-salt', sid: sidOf('the-account-salt') }) };
+    const block = blockOf((await poolEnroll(h.deps, OPTIONS, PRIVATE)).text);
+    expect(block).toMatchObject({ OARS_REPO_SALT: hmac('the-account-salt', 'repoKey/1'), OARS_SESSION_SALT: hmac('the-account-salt', 'sessionId/1') });
+  });
+
+  it('records each machine it prints, owner-only: id, class, launcher, and repositories, one line per enrollment', async () => {
+    const { staged, h } = scene('zorblax\n');
+    const first = blockOf((await poolEnroll(h.deps, OPTIONS, PRIVATE)).text);
+    const second = blockOf((await poolEnroll(h.deps, { ...OPTIONS, hostClass: 'vps', launcher: 'scheduled', allowRepos: ['acme/gadgets'] }, PRIVATE)).text);
+    const file = join(staged.storeDir, 'machines.jsonl');
+    const rows = readFileSync(file, 'utf8').trimEnd().split('\n').map((line): unknown => JSON.parse(line));
+    expect(rows).toEqual([
+      { machine: first.OARS_MACHINE, hostClass: 'cloud', launcher: 'orchestrated', allowRepos: ['acme/widgets', 'acme/gadgets'] },
+      { machine: second.OARS_MACHINE, hostClass: 'vps', launcher: 'scheduled', allowRepos: ['acme/gadgets'] },
+    ]);
+    expect(first.OARS_MACHINE).not.toBe(second.OARS_MACHINE);
+    if (process.platform !== 'win32') expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(readdirSync(staged.storeDir).sort()).toEqual(['machines.jsonl', 'salt']);
+  });
+
+  it('records nothing for an enrollment it refuses, whichever check refuses it, and leaves an earlier record as it was', async () => {
+    const { staged, h } = scene('zorblax\n');
+    const file = join(staged.storeDir, 'machines.jsonl');
+    await refusal(poolEnroll(h.deps, OPTIONS, () => Promise.resolve('public')), /public/u);
+    await refusal(poolEnroll(h.deps, OPTIONS, () => Promise.resolve('unknown')), /could not/u);
+    await refusal(poolEnroll(h.deps, { ...OPTIONS, launcher: 'by-hand' }, PRIVATE), /--launcher/u);
+    expect(existsSync(file)).toBe(false);
+    await poolEnroll(h.deps, OPTIONS, PRIVATE);
+    const kept = readFileSync(file, 'utf8');
+    await refusal(poolEnroll(h.deps, OPTIONS, (repo) => Promise.resolve(repo === 'acme/gadgets' ? 'public' : 'private')), /public/u);
+    expect(readFileSync(file, 'utf8')).toBe(kept);
   });
 
   it('refuses before anything is checked: an empty or missing term list, no repository, a name that is not owner/name, a class that is not a machine, a full enrollment', async () => {

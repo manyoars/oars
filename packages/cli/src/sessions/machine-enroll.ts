@@ -2,12 +2,14 @@
 // The trusted machine mints the machine id, derives the two salts from its own (so a local capture and a VM's key one repository the same way), reads its term file, and refuses any repository that is not
 // private: a hold branch is exactly as readable as the repository it sits in.
 import { randomBytes } from 'node:crypto';
+import { readFile, rename } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { Outcome, RunDeps } from '../cli.js';
 import { CliError, ExitCode } from '../errors.js';
 import { exclusionPaths, loadTerms } from './exclusion.js';
 import { derivedSalt } from './machine-ids.js';
 import { HOST_CLASSES } from './machine.js';
-import { mkdirOwnerOnly } from './owner-only.js';
+import { mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
 import { runtimeOf } from './pool-command.js';
 import { localSalt } from './store.js';
 
@@ -47,8 +49,27 @@ export const githubVisibility = (get: typeof fetch, token: string | undefined): 
   }
 };
 
+/** The trusted machine's record of the machines it enrolled, one JSON line each. Admission of a hold branch (cloud self-deposit, B2b) reads it as the source of `claimed` and refuses a machine id it does not hold. */
+export const machinesFile = (storeDir: string): string => join(storeDir, 'machines.jsonl');
 
-const quoted = (value: string): string => `"${value.replace(/[\\"]/gu, '\\$&')}"`;
+/** What an enrollment records about its machine. */
+export interface MachineRecord {
+  machine: string;
+  hostClass: string;
+  launcher: string;
+  allowRepos: readonly string[];
+}
+
+/** Appends `record` as one line. The new file is staged beside the old one, owner-only, and renamed onto its name, so a reader sees the old list or the new one, and a crash leaves the old one. */
+const recordMachine = async (storeDir: string, record: MachineRecord): Promise<void> => {
+  const file = machinesFile(storeDir);
+  const earlier = await readFile(file, 'utf8').catch(() => '');
+  const staged = `${file}.${String(process.pid)}`;
+  await writeOwnerOnly(staged, `${earlier}${JSON.stringify(record)}\n`);
+  await rename(staged, file);
+};
+
+const quoted =(value: string): string => `"${value.replace(/[\\"]/gu, '\\$&')}"`;
 
 const classOf = (given: string | undefined): (typeof HOST_CLASSES)[number] => {
   const found = HOST_CLASSES.find((name) => name === given && name !== 'local');
@@ -91,7 +112,7 @@ export const poolEnroll = async (deps: RunDeps, options: EnrollOptions, visibili
   }
   if (refused.length > 0) throw usage(`Refusing to enroll: every repository must be private.\n${refused.join('\n')}`);
   await mkdirOwnerOnly(runtime.storeDir);
-  const localKey = (await localSalt(runtime.storeDir)).salt;
+  const localKey = (await (runtime.accountSalt ?? localSalt)(runtime.storeDir)).salt;
   const env = {
     OARS_HOST_CLASS: hostClass,
     OARS_LAUNCHER: launcher,
@@ -101,6 +122,8 @@ export const poolEnroll = async (deps: RunDeps, options: EnrollOptions, visibili
     OARS_SESSION_SALT: derivedSalt(localKey, 'sessionId/1'),
     OARS_EXCLUSION_TERMS_INLINE: terms.join('\n'),
   };
+  // Recorded after every check has passed and before the block is printed: a block the operator can copy always names a machine the trusted side knows.
+  await recordMachine(runtime.storeDir, { machine: env.OARS_MACHINE, hostClass, launcher, allowRepos: repos });
   const lines = Object.entries(env).map(([name, value]) => `${name}=${name === 'OARS_EXCLUSION_TERMS_INLINE' ? quoted(value) : value}`);
   const text = [
     `Hold-only enrollment for ${String(repos.length)} private ${repos.length === 1 ? 'repository' : 'repositories'}. No pool credential was used or needed.`,
