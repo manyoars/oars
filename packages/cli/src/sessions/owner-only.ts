@@ -5,7 +5,7 @@ import { appendFile, chmod, mkdir, writeFile } from 'node:fs/promises';
 
 const POSIX = process.platform !== 'win32';
 
-const isMissing = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ENOENT';
+export const isMissing = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ENOENT';
 
 /** Narrows a file that exists to 0600 before bytes go into it; a file not made yet is created 0600 by the write itself. */
 const narrow = async (file: string): Promise<void> => {

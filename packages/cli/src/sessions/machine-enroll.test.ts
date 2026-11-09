@@ -1,6 +1,6 @@
 // `oars pool enroll --hold-only`: the whole configuration a cloud VM needs to hold its deposit in its own private repository, printed as one env block, with no pool credential. The visibility check is injected, so no test
 // reaches a network; the real check is tried against a stand-in `fetch`.
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHmac } from 'node:crypto';
 import { http, HttpResponse } from 'msw';
@@ -141,6 +141,15 @@ describe('oars pool enroll --hold-only', () => {
     const kept = readFileSync(file, 'utf8');
     await refusal(poolEnroll(h.deps, OPTIONS, (repo) => Promise.resolve(repo === 'acme/gadgets' ? 'public' : 'private')), /public/u);
     expect(readFileSync(file, 'utf8')).toBe(kept);
+  });
+
+  it('rejects, and replaces nothing, when machines.jsonl exists but cannot be read', async () => {
+    const { staged, h } = scene('zorblax\n');
+    const file = join(staged.storeDir, 'machines.jsonl');
+    mkdirSync(file, { recursive: true });
+    await expect(poolEnroll(h.deps, OPTIONS, PRIVATE)).rejects.toMatchObject({ code: 'EISDIR' });
+    expect(statSync(file).isDirectory()).toBe(true);
+    expect(readdirSync(staged.storeDir).sort()).toEqual(['machines.jsonl', 'salt']);
   });
 
   it('refuses before anything is checked: an empty or missing term list, no repository, a name that is not owner/name, a class that is not a machine, a full enrollment', async () => {

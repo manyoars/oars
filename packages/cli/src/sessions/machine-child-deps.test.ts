@@ -235,7 +235,7 @@ describe('runMachineChild: the repository key', () => {
   });
 
   it('with no OARS_REPO_SALT, or a blank one, hashes it under the salt derived from its own store salt', async () => {
-    const envs: Record<string, string>[] = [{}, { OARS_REPO_SALT: '  ' }];
+    const envs: { [name: string]: string }[] = [{}, { OARS_REPO_SALT: '  ' }];
     for (const env of envs) {
       const given = scene('https://github.com/owner/name');
       writeFileSync(given.transcript, `${lineOf('a plain request', given.repo)}\n`);

@@ -9,7 +9,7 @@ import { CliError, ExitCode } from '../errors.js';
 import { exclusionPaths, loadTerms } from './exclusion.js';
 import { derivedSalt } from './machine-ids.js';
 import { HOST_CLASSES } from './machine.js';
-import { mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
+import { isMissing, mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
 import { runtimeOf } from './pool-command.js';
 import { localSalt } from './store.js';
 
@@ -63,13 +63,16 @@ export interface MachineRecord {
 /** Appends `record` as one line. The new file is staged beside the old one, owner-only, and renamed onto its name, so a reader sees the old list or the new one, and a crash leaves the old one. */
 const recordMachine = async (storeDir: string, record: MachineRecord): Promise<void> => {
   const file = machinesFile(storeDir);
-  const earlier = await readFile(file, 'utf8').catch(() => '');
+  const earlier = await readFile(file, 'utf8').catch((error: unknown) => {
+    if (isMissing(error)) return '';
+    throw error;
+  });
   const staged = `${file}.${String(process.pid)}`;
   await writeOwnerOnly(staged, `${earlier}${JSON.stringify(record)}\n`);
   await rename(staged, file);
 };
 
-const quoted =(value: string): string => `"${value.replace(/[\\"]/gu, '\\$&')}"`;
+const quoted = (value: string): string => `"${value.replace(/[\\"]/gu, '\\$&')}"`;
 
 const classOf = (given: string | undefined): (typeof HOST_CLASSES)[number] => {
   const found = HOST_CLASSES.find((name) => name === given && name !== 'local');
