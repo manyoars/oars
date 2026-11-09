@@ -9,7 +9,7 @@ import { eventHeadOnly } from './copilot.js';
 import { rolloutHeadOnly } from './codex.js';
 import { piHeadOnly } from './pi.js';
 import { outcomeOf } from './harness-files.js';
-import { addProject, cleanup, copilotEvent, NOW, OTLP_BASE, piEntry, piHeader, rolloutLine, stage, stageCodex, stageCopilot, stagePi, stageVscode } from './test-support.js';
+import { addProject, cleanup, copilotEvent, NOW, ocUser, OTLP_BASE, piEntry, piHeader, rolloutLine, stage, stageCodex, stageCopilot, stageOpencode, stagePi, stageVscode } from './test-support.js';
 
 afterEach(cleanup);
 
@@ -199,5 +199,20 @@ describe('sessionsVerify, more head-only forms are empty', () => {
       { id: C, cwd: WORK, lines: [piHeader({ id: C, cwd: WORK }), piEntry('mystery', 'e1', null, T(1))] },
     ]);
     expect((await verify(staged, { pi: join(home, 'sessions') })).pi).toEqual({ seen: 2, yielded: 1, unreadable: 1 });
+  });
+});
+
+describe('sessionsVerify, an OpenCode session of rows that carry no turn', () => {
+  it('a session holding only a location-switched row is empty; one holding a row of no known type is unreadable', async () => {
+    const staged = stage();
+    rmSync(join(staged.projectsRoot, 'proj'), { recursive: true });
+    mkdirSync(staged.projectsRoot, { recursive: true });
+    const row = (id: string, type: string, data: object) => ({ id, type, seq: 1, created: OTLP_BASE + 1, data });
+    const opencode = await stageOpencode(staged.root, [
+      { id: 'ses_good', directory: WORK, created: OTLP_BASE, updated: OTLP_BASE + 9, messages: [ocUser('m1', 1, OTLP_BASE + 1, 'fix the build')] },
+      { id: 'ses_switch', directory: WORK, created: OTLP_BASE, updated: OTLP_BASE + 9, messages: [row('m2', 'location-switched', { location: { directory: WORK }, previous: { location: { directory: '/work/old' } } })] },
+      { id: 'ses_moved', directory: WORK, created: OTLP_BASE, updated: OTLP_BASE + 9, messages: [row('m3', 'note', { body: 'fix the build' })] },
+    ]);
+    expect((await verify(staged, { opencode })).opencode).toEqual({ seen: 2, yielded: 1, unreadable: 1 });
   });
 });
