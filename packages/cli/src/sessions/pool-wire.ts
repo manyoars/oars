@@ -4,7 +4,7 @@
 
 import { ACTION_TABLES, CANONICAL_ACTIONS, mcpOf, type CanonicalAction } from './actions.js';
 import { CLOSED_ARG_VALUES, CUSTOM_AGENT, FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRIVATE, publicEffort, publicVersion, PUBLIC_PACKAGES, projectedAgentType, PUBLIC_FLAGS, REPO_SIZES, TOOL_INPUT_KEYS, VOCAB_VERSION, type RepoSize } from './public-vocabulary.js';
-import { ARG_CLASSES, CHANGE_KINDS, DIRECTORY_KINDS, EXTENSION_CLASSES, NAME_KINDS, PATH_DEPTHS, PATTERN_FEATURES, TARGET_CLASSES, TEMPLATE_SLOTS, VALUE_SIZES, type ArgClass, type ArgFeature, type ArgName, type ArgValue, type ChangeKind, type DirectoryKind, type ExtensionClass, type NameKind, type PathDepth, type PatternFeature, type TargetClass, type ValueSize } from './call-shape.js';
+import { ARG_CLASSES, CHANGE_KINDS, DIFF_SHAPES, DIRECTORY_KINDS, EXTENSION_CLASSES, NAME_KINDS, PATH_DEPTHS, PATTERN_FEATURES, TARGET_CLASSES, TEMPLATE_SLOTS, VALUE_SIZES, type ArgClass, type ArgFeature, type ArgName, type ArgValue, type ChangeKind, type DiffShape, type DirectoryKind, type ExtensionClass, type NameKind, type PathDepth, type PatternFeature, type TargetClass, type ValueSize } from './call-shape.js';
 import type { Cell } from './cells.js';
 import type { Redactor } from './redact.js';
 import type { Motif } from './motif.js';
@@ -24,7 +24,7 @@ export type SkeletonFormat = (typeof READ_FORMATS)[number];
 /** The tool fields format 4 added: a format 3 batch that holds one is holding a field it does not define. */
 export const FORMAT_4_TOOL_FIELDS = ['argFeatures', 'argValues', 'changeKind'] as const;
 /** The tool fields format 5 added: a batch of format 4 or 3 that holds one is holding a field it does not define. */
-export const FORMAT_5_TOOL_FIELDS = ['names', 'namesDropped', 'templates', 'templatesDropped'] as const;
+export const FORMAT_5_TOOL_FIELDS = ['names', 'namesDropped', 'templates', 'templatesDropped', 'diffShape'] as const;
 /**
  * The version of the field list: every field name a batch can hold (`BATCH_FIELDS` in `pool-outbox.ts`). It moves with any field added, so a server told the version knows which names a batch may carry,
  * and a test pins the list to it (`pool-wire-additive.test.ts`). A field is deprecated and left on the list, never removed (conclusion section 17, rule 3).
@@ -126,6 +126,8 @@ export interface SkeletonTool {
   templates?: string[];
   /** A `count` bucket of the templates the call held that were not sent: one with a kept word the redactor changes, an exclusion term matches, or that has no name shape. Absent when none was dropped; never the templates. */
   templatesDropped?: number;
+  /** What an edit did (layer 3), a sorted set of `DIFF_SHAPES` members: the shape of the change and never its text. Absent for a call that is no edit and for one that changed nothing. */
+  diffShape?: Array<DiffShape | typeof OTHER>;
   steps: SkeletonStep[];
 }
 
@@ -435,6 +437,9 @@ export const wireValues = (stored: readonly ArgValue[] | undefined, sent: Readon
 /** A call's change kinds as the wire sends them: the closed-list members, in the list's order. */
 export const wireChange = (stored: readonly ChangeKind[] | undefined): ChangeKind[] => CHANGE_KINDS.filter((kind) => stored?.includes(kind) === true);
 
+/** A call's diff shapes as the wire sends them: the closed-list members, in the list's order. */
+export const wireDiffShape = (stored: readonly DiffShape[] | undefined): DiffShape[] => DIFF_SHAPES.filter((shape) => stored?.includes(shape) === true);
+
 /**
  * A call's name tokens as the wire sends them (layer 2): every stored token whose kind is on the closed list, through the one gate (`wireName`): a token the operator's exclusion terms or the redactor's secret shapes match, or that has no name shape,
  * is dropped and counted in `dropped`. No floor, no threshold: a name is sent as it is.
@@ -714,6 +719,7 @@ const transcriptOf = (
     const changeKind = wireChange(tool.changeKind);
     const { names, dropped: namesDropped } = wireNames(tool.names, gate);
     const { templates, dropped: templatesDropped } = wireTemplates(tool.templates, gate);
+    const diffShape = wireDiffShape(tool.diffShape);
     steppedTools.push({
       side,
       prompt: promptPosition,
@@ -732,6 +738,7 @@ const transcriptOf = (
       ...(namesDropped === 0 ? {} : { namesDropped: bucketOf('count', namesDropped) }),
       ...(templates.length === 0 ? {} : { templates }),
       ...(templatesDropped === 0 ? {} : { templatesDropped: bucketOf('count', templatesDropped) }),
+      ...(diffShape.length === 0 ? {} : { diffShape }),
       steps,
     });
   }
@@ -887,7 +894,7 @@ export const OPTIONAL = {
   frame: ['harnessVersion', 'model', 'effort', 'day', 'shell', 'reach', 'repoKey', 'orgSize', 'team', 'repoVisibility', 'hour'],
   stack: ['size', 'languageShares'],
   prompt: ['wallSec', 'explore', 'usageResponses', 'intervention'],
-  tool: ['prompt', 'durationMs', 'errorCode', 'recoveryCalls', 'keys', 'keysDropped', 'targetClass', 'argClass', 'argFeatures', 'argValues', 'changeKind', 'names', 'namesDropped', 'templates', 'templatesDropped'],
+  tool: ['prompt', 'durationMs', 'errorCode', 'recoveryCalls', 'keys', 'keysDropped', 'targetClass', 'argClass', 'argFeatures', 'argValues', 'changeKind', 'names', 'namesDropped', 'templates', 'templatesDropped', 'diffShape'],
   step: ['tokens', 'ms', 'allocated', 'parent', 'skill', 'edges', 'remainingTokens'],
   transcript: ['spawnedIn'],
 } as const satisfies { readonly [level: string]: readonly string[] };
@@ -1314,6 +1321,7 @@ const parseTool = (held: Collected, harness: WireHarness, value: unknown, at: st
   const namesDropped = !named || raw.namesDropped === undefined ? undefined : bucketIn('count', raw.namesDropped, under(at, 'namesDropped'));
   const templates = !named || raw.templates === undefined ? undefined : listOf(raw.templates, under(at, 'templates'), (entry, entryAt) => parseTemplate(held, entry, entryAt));
   const templatesDropped = !named || raw.templatesDropped === undefined ? undefined : bucketIn('count', raw.templatesDropped, under(at, 'templatesDropped'));
+  const diffShape = !named || raw.diffShape === undefined ? undefined : listOf(raw.diffShape, under(at, 'diffShape'), (entry, entryAt) => oneOf(held, DIFF_SHAPES, entry, entryAt));
   return {
     side: booleanOf(raw.side, under(at, 'side')),
     prompt: orNull(raw.prompt, under(at, 'prompt'), countOf),
@@ -1332,6 +1340,7 @@ const parseTool = (held: Collected, harness: WireHarness, value: unknown, at: st
     ...(namesDropped === undefined ? {} : { namesDropped }),
     ...(templates === undefined ? {} : { templates }),
     ...(templatesDropped === undefined ? {} : { templatesDropped }),
+    ...(diffShape === undefined ? {} : { diffShape }),
     steps,
   };
 };

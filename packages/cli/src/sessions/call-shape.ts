@@ -473,6 +473,83 @@ const templateOf = ({ head, args }: CommandWords, redact: (text: string) => stri
 /** A call's command templates, one per command in the order they run (`templateOf`). Sent through the wire's one gate, which drops a template whose kept word fails it. */
 export const templatesOf = (commands: readonly CommandWords[], redact: (text: string) => string): string[] => commands.map((command) => templateOf(command, redact));
 
+/** What an edit did, as a closed set: the shape of the change and never its text. Written in this order on the wire. */
+export const DIFF_SHAPES = ['import-added', 'import-removed', 'identifier-renamed', 'lines-added', 'lines-removed', 'lines-changed', 'whitespace-only', 'file-written'] as const;
+export type DiffShape = (typeof DIFF_SHAPES)[number];
+
+// A line that brings a module in, in the forms the common languages share: an import, a from-import, a require, an include, a using directive, and a use declaration.
+const IMPORT_LINE = /^(?:import\s|from\s+\S+\s+import\s|(?:const|let|var)\s.*=\s*require\(|#include\s|using\s+(?:static\s+)?[\w.]+\s*;?$|use\s+[\w:{}, *]+;?$)/;
+const CODE_TOKEN = /[A-Za-z_$][\w$]*|\d+|\s+|[^\w\s$]/g;
+const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
+
+const textLines = (text: string): string[] => text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== '');
+
+/** The lines of `from` that `against` does not hold, by count and in order, so a line moved or repeated is no change. */
+const unmatched = (from: readonly string[], against: readonly string[]): string[] => {
+  const spare = new Map<string, number>();
+  for (const line of against) spare.set(line, (spare.get(line) ?? 0) + 1);
+  return from.filter((line) => {
+    const held = spare.get(line) ?? 0;
+    spare.set(line, held - 1);
+    return held <= 0;
+  });
+};
+
+/** Whether `after` is `before` with names replaced: the same tokens apart from identifiers, each old name replaced by one new name and no two by the same, and no replaced name left standing in the line. */
+const isRename = (before: string, after: string): boolean => {
+  const was = Array.from(before.matchAll(CODE_TOKEN), (token) => token[0]);
+  const now = Array.from(after.matchAll(CODE_TOKEN), (token) => token[0]);
+  if (was.length !== now.length) return false;
+  const forward = new Map<string, string>();
+  const backward = new Map<string, string>();
+  for (const [at, old] of was.entries()) {
+    const next = now[at] ?? '';
+    if (old === next) continue;
+    if (!IDENTIFIER.test(old) || !IDENTIFIER.test(next) || (forward.get(old) ?? next) !== next || (backward.get(next) ?? old) !== old) return false;
+    forward.set(old, next);
+    backward.set(next, old);
+  }
+  return forward.size > 0 && !was.some((token, at) => token === now[at] && (forward.has(token) || backward.has(token)));
+};
+
+/** The shapes of one edit, from its old and new text. Whitespace alone is one shape; else the lines that differ are read as imports, renames (a removed and an added line that pair up), changed lines, and lines only added or removed. */
+const shapesOfEdit = (before: string, after: string): Set<DiffShape> => {
+  const held = new Set<DiffShape>();
+  if (before === after) return held;
+  if (before.replace(/\s+/g, '') === after.replace(/\s+/g, '')) return held.add('whitespace-only');
+  const was = textLines(before);
+  const now = textLines(after);
+  const removed = unmatched(was, now);
+  const added = unmatched(now, was);
+  for (const line of removed) if (IMPORT_LINE.test(line)) held.add('import-removed');
+  for (const line of added) if (IMPORT_LINE.test(line)) held.add('import-added');
+  const gone = removed.filter((line) => !IMPORT_LINE.test(line));
+  const come = added.filter((line) => !IMPORT_LINE.test(line));
+  // Lines that changed pair up in the order they stand, so a rename is a pair that reads as one.
+  for (const [at, line] of gone.entries()) {
+    const partner = come[at];
+    if (partner !== undefined) held.add(isRename(line, partner) ? 'identifier-renamed' : 'lines-changed');
+  }
+  if (come.length > gone.length) held.add('lines-added');
+  if (gone.length > come.length) held.add('lines-removed');
+  return held;
+};
+
+/**
+ * What a call that edits a file did, as a closed set (layer 3), never its text: a `Write` is `file-written`; an `Edit` or each entry of a `MultiEdit` is read from its old and new text (`shapesOfEdit`), and the call has the union, in the list's order.
+ * A call that is no edit, or an edit that changes nothing, has none.
+ */
+export const diffShapeOf = (tool: string, input: { readonly [key: string]: unknown }): DiffShape[] => {
+  const text = (value: unknown): string => (typeof value === 'string' ? value : '');
+  const edits = tool === 'MultiEdit' ? (Array.isArray(input.edits) ? input.edits : []) : tool === 'Edit' ? [input] : [];
+  const held = new Set<DiffShape>(tool === 'Write' ? ['file-written'] : []);
+  for (const edit of edits) {
+    if (typeof edit !== 'object' || edit === null) continue;
+    for (const shape of shapesOfEdit(text(Reflect.get(edit, 'old_string')), text(Reflect.get(edit, 'new_string')))) held.add(shape);
+  }
+  return DIFF_SHAPES.filter((shape) => held.has(shape));
+};
+
 /**
  * What changed from the previous call of the same tool in the same prompt, as a closed set (layer 1): `same` when nothing did; else any of a key added, a key removed, a kept key's value whose features or closed value
  * changed (`feature-changed`), a kept key's value that changed while its features did not (`value-changed`), and the target (`target-changed`). The first call of a tool in a prompt has none.

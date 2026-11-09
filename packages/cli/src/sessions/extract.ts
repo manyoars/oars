@@ -7,7 +7,7 @@ import { posix } from 'node:path';
 import { ACTION_TABLES, actionOf, shellOf, type ActionTable, type CanonicalAction } from './actions.js';
 import { exploreCount, strataOf } from './strata.js';
 import { closedFrame, frameIdOf, repoFilesFromIndex, repoSizeOf, stackOf, utcDay } from './frame.js';
-import { argClassOf, argFeaturesOf, argNamesOf, argValuesOf, changeKindOf, targetClassOf, templatesOf, variableOf, type CommandWords, type ComparedCall } from './call-shape.js';
+import { argClassOf, argFeaturesOf, argNamesOf, argValuesOf, changeKindOf, diffShapeOf, targetClassOf, templatesOf, variableOf, type CommandWords, type ComparedCall } from './call-shape.js';
 import { CLOSED_ARG_VALUES, LITERAL, type RepoSize } from './public-vocabulary.js';
 import { linkSteps } from './graph.js';
 import { callIdentity, shellIdentity, UNREAD_SHELL, type WordOfCommand } from './identity.js';
@@ -1914,6 +1914,8 @@ export const captureSession = (input: ExtractInput): Capture => {
         const names = argNamesOf(native, toolInput, lineRoot ?? lineCwd, lineCwd, shell?.words ?? [], CLOSED_ARG_VALUES).map(({ kind, name }) => ({ kind, name: redact(name) }));
         // A template keeps a program, a subcommand, and flags as written and every literal as a slot; its kept words are masked as a name is, and the wire gates each one again.
         const templates = templatesOf(shell?.words ?? [], redact);
+        // An edit is stored as the shapes of its change from a closed list, read from the old and new text and never kept.
+        const diffShape = diffShapeOf(name, toolInput);
         const compared: ComparedCall = { input: toolInput, target: aimed.target, features: argFeatures, values: argValues };
         const lastKey = `${String(cur?.index ?? null)}\n${String(side)}\n${stored}`;
         const before = lastCall.get(lastKey);
@@ -1940,6 +1942,7 @@ export const captureSession = (input: ExtractInput): Capture => {
           ...(argValues.length === 0 ? {} : { argValues }),
           ...(names.length === 0 ? {} : { names }),
           ...(templates.length === 0 ? {} : { templates }),
+          ...(diffShape.length === 0 ? {} : { diffShape }),
           ...(before === undefined ? {} : { changeKind: changeKindOf(before, compared) }),
           durationMs: null,
           toolUseId: id ?? null,

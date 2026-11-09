@@ -144,13 +144,13 @@ describe('the versions a deposit carries', () => {
     expect(bagged.skeleton).not.toContain('billing');
   });
 
-  it('keep the templates of a format 5 call in the stored skeleton, read a template with a literal in it as other, and bag them from a format 4 batch', async () => {
+  it('keep the templates and diff shape of a format 5 call in the stored skeleton, read a template with a literal in it as other, and bag them from a format 4 batch', async () => {
     const templates = ['git commit -m <text>', 'pytest <path> -k <ident>'];
     const templated = baseline();
-    Object.assign(holder(templated, 'transcripts', 0, 'tools', 0), { templates, templatesDropped: 2 });
+    Object.assign(holder(templated, 'transcripts', 0, 'tools', 0), { templates, templatesDropped: 2, diffShape: ['import-added', 'lines-changed'] });
     expect((await post(templated)).status).toBe(201);
     const stored = await rowOf();
-    expect(JSON.parse(stored.skeleton)).toMatchObject({ transcripts: [{ tools: [{ templates, templatesDropped: 2 }] }] });
+    expect(JSON.parse(stored.skeleton)).toMatchObject({ transcripts: [{ tools: [{ templates, templatesDropped: 2, diffShape: ['import-added', 'lines-changed'] }] }] });
     expect(stored).toMatchObject({ format: 5, extensions: '[]', other_values: 0 });
 
     // A template whose word is a literal (a quoted sentence, a path in a flag's place) is not one the wire sends: it is read as `other`, counted, and never stored.
@@ -163,10 +163,10 @@ describe('the versions a deposit carries', () => {
     expect(refused.other_values).toBeGreaterThan(0);
 
     const older = { ...baseline(), format: 4 };
-    Object.assign(holder(older, 'transcripts', 0, 'tools', 0), { templates, templatesDropped: 2 });
+    Object.assign(holder(older, 'transcripts', 0, 'tools', 0), { templates, templatesDropped: 2, diffShape: ['import-added', 'lines-changed'] });
     expect((await post(older)).status).toBe(201);
     const bagged = await rowOf();
-    expect(JSON.parse(bagged.extensions)).toEqual([{ at: 'transcripts[0].tools[0].templates', kind: 'field', value: templates }, { at: 'transcripts[0].tools[0].templatesDropped', kind: 'field', value: 2 }]);
+    expect(JSON.parse(bagged.extensions)).toEqual([{ at: 'transcripts[0].tools[0].templates', kind: 'field', value: templates }, { at: 'transcripts[0].tools[0].templatesDropped', kind: 'field', value: 2 }, { at: 'transcripts[0].tools[0].diffShape', kind: 'field', value: ['import-added', 'lines-changed'] }]);
     expect(bagged.skeleton).not.toContain('pytest');
   });
 });
@@ -247,7 +247,7 @@ describe('a value this server does not know', () => {
 describe('a format 5 batch with every optional field absent', () => {
   /** What an absent optional field reads as, which is what a sent null is. */
   const EMPTY: { [name: string]: unknown } = { deltas: [], timingPrint: null, languageShares: [] };
-  const ABSENT_ONLY: ReadonlySet<string> = new Set(['reach', 'skill', 'edges', 'recoveryCalls', 'usageResponses', 'allocated', 'repoKey', 'orgSize', 'team', 'repoVisibility', 'hour', 'keys', 'keysDropped', 'targetClass', 'argClass', 'argFeatures', 'argValues', 'changeKind', 'names', 'namesDropped', 'templates', 'templatesDropped']);
+  const ABSENT_ONLY: ReadonlySet<string> = new Set(['reach', 'skill', 'edges', 'recoveryCalls', 'usageResponses', 'allocated', 'repoKey', 'orgSize', 'team', 'repoVisibility', 'hour', 'keys', 'keysDropped', 'targetClass', 'argClass', 'argFeatures', 'argValues', 'changeKind', 'names', 'namesDropped', 'templates', 'templatesDropped', 'diffShape']);
 
   // Each level of the wire with its optional names and where it sits; a level added to OPTIONAL fails the length check below until it is listed here.
   const LEVELS_OPTIONAL: readonly (readonly [readonly string[], (string | number)[]])[] = [

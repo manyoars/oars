@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { defaultConfigDir } from '../credentials.js';
-import { TEMPLATE_SLOTS, templatesOf, type CommandWord, type CommandWords } from './call-shape.js';
+import { DIFF_SHAPES, TEMPLATE_SLOTS, templatesOf, type CommandWord, type CommandWords } from './call-shape.js';
 import { captureSession } from './extract.js';
 import { printOf, sessionsFrom, store, storedNames } from './pool-fixture.js';
 import { FIELD_ROWS } from './pool-outbox.js';
@@ -182,5 +182,73 @@ describe('the value of a credential flag', () => {
 
   it('reads the value of a flag that is not a credential as a slot of its own shape', () => {
     expect(sent('deploy-tool --token zq_a --limit 5')).toEqual(['deploy-tool --token <text> --limit <num>']);
+  });
+});
+
+describe('an edit as a diff shape', () => {
+  // Each edit is an invented one whose text carries `zq` strings; the wire holds the shape's name and none of the text, in the fields or anywhere in the bytes.
+  const edit = (old_string: string, new_string: string, id = 'e1'): string => call(id, 'Edit', { file_path: '/w/src/a.ts', old_string, new_string });
+  const shapesOf = (...lines: string[]) => toolsOf(skeletonOfLines(OPEN, ...lines))[0]?.diffShape;
+  const FIXTURE: readonly { shape: string; old: string; next: string }[] = [
+    { shape: 'import-added', old: 'const zq_total = 1;', next: "import { zqWidget } from './zq_widget';\nconst zq_total = 1;" },
+    { shape: 'import-removed', old: "import { zqWidget } from './zq_widget';\nconst zq_total = 1;", next: 'const zq_total = 1;' },
+    { shape: 'identifier-renamed', old: 'const zqOldName = compute(zqOldName);', next: 'const zqNewName = compute(zqNewName);' },
+    { shape: 'lines-added', old: 'function zq_run() {\n}', next: 'function zq_run() {\n  zq_call();\n}' },
+    { shape: 'lines-removed', old: 'function zq_run() {\n  zq_call();\n}', next: 'function zq_run() {\n}' },
+    { shape: 'lines-changed', old: 'return zq_total + 1;', next: 'return zq_total * 2;' },
+    { shape: 'whitespace-only', old: 'if (zq_ok) {\n  zq_call();\n}', next: 'if (zq_ok)\n{ zq_call(); }' },
+  ];
+  for (const { shape, old, next } of FIXTURE) {
+    it(`sends ${shape} for an edit that is only that, and none of the edited text`, () => {
+      const skeleton = skeletonOfLines(OPEN, edit(old, next));
+      expect(toolsOf(skeleton)[0]?.diffShape).toEqual([shape]);
+      expect(JSON.stringify(skeleton)).not.toContain('zq');
+    });
+  }
+
+  it('is a closed list, in this order', () => {
+    expect(DIFF_SHAPES).toEqual(['import-added', 'import-removed', 'identifier-renamed', 'lines-added', 'lines-removed', 'lines-changed', 'whitespace-only', 'file-written']);
+  });
+
+  it('sends file-written for a write, whatever it wrote, and nothing of its content', () => {
+    const skeleton = skeletonOfLines(OPEN, call('w1', 'Write', { file_path: '/w/src/b.ts', content: "import { zqWidget } from './zq_widget';\nexport const zq_secret_word = 1;\n" }));
+    expect(toolsOf(skeleton)[0]?.diffShape).toEqual(['file-written']);
+    expect(JSON.stringify(skeleton)).not.toContain('zq');
+  });
+
+  it('sends the union of a multi-edit\'s edits, in the list\'s order', () => {
+    const edits = [
+      { old_string: 'zqOldName();', new_string: 'zqNewName();' },
+      { old_string: 'let zq_a = 1;', new_string: "import zq_dep from 'zq-dep';\nlet zq_a = 1;" },
+      { old_string: 'zq_gone();\nzq_stay();', new_string: 'zq_stay();' },
+    ];
+    const skeleton = skeletonOfLines(OPEN, call('m1', 'MultiEdit', { file_path: '/w/src/a.ts', edits }));
+    expect(toolsOf(skeleton)[0]?.diffShape).toEqual(['import-added', 'identifier-renamed', 'lines-removed']);
+    expect(JSON.stringify(skeleton)).not.toContain('zq');
+  });
+
+  it('sends a changed line as changed, and a rename only when each name is replaced by its own new name throughout the line', () => {
+    expect(shapesOf(edit('zq_a = zq_b + zq_c;', 'zq_x = zq_x + zq_c;'))).toEqual(['lines-changed']);
+    expect(shapesOf(edit('zq_a = zq_b + zq_c;', 'zq_x = zq_y + zq_c;'))).toEqual(['identifier-renamed']);
+    expect(shapesOf(edit('zq_a(1);', 'zq_b(2);'))).toEqual(['lines-changed']);
+  });
+
+  it('sends a rename beside an added line, and each import form as an import', () => {
+    expect(shapesOf(edit('zqOld();\nkeep();', 'zqNew();\nkeep();\nzq_more();'))).toEqual(['identifier-renamed', 'lines-added']);
+    for (const form of ["import zq from 'zq'", 'from zq import zq_b', "const zq = require('zq')", '#include <zq.h>', 'using Zq.Lib;', 'use zq::lib;']) {
+      expect(shapesOf(edit('keep();', `${form}\nkeep();`)), form).toEqual(['import-added']);
+    }
+  });
+
+  it('sends nothing for an edit that changes nothing, a call that is no edit, or a record with no text', () => {
+    expect(shapesOf(edit('zq_same();', 'zq_same();'))).toBeUndefined();
+    expect(shapesOf(bash('git status'))).toBeUndefined();
+    expect(shapesOf(call('e2', 'Edit', { file_path: '/w/src/a.ts' }))).toBeUndefined();
+    expect(shapesOf(call('m2', 'MultiEdit', { file_path: '/w/src/a.ts', edits: ['zq_not_an_edit', { old_string: 'zq_a();', new_string: 'zq_a();' }] }))).toBeUndefined();
+    expect(shapesOf(call('m3', 'MultiEdit', { file_path: '/w/src/a.ts', edits: 'zq_text' }))).toBeUndefined();
+  });
+
+  it('is described in the field list', () => {
+    expect(FIELD_ROWS.diffShape).toContain('import-added');
   });
 });

@@ -74,6 +74,7 @@ export const FIELD_CLASSES: { readonly [field: string]: FieldRow } = {
   namesDropped: { class: 'clear' },
   templates: { class: 'clear' },
   templatesDropped: { class: 'clear' },
+  diffShape: { class: 'clear' },
   native: { class: 'clear', longTail: 'thresholded' },
   next: { class: 'clear' },
   orgSize: { class: 'clear' },

@@ -129,6 +129,7 @@ const REAL = {
           namesDropped: 1,
           templates: ['npm run <ident>'],
           templatesDropped: 1,
+          diffShape: ['import-added', 'lines-changed'],
           steps: [
             { ...STEP, allocated: true, action: 'shell.exec', native: 'Bash', identity: { program: 'npm', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] } },
             { ...STEP, action: 'mcp.call', native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' }, edges: [{ kind: 'next', target: 0 }] },
