@@ -31,7 +31,7 @@ const timesOf = (text: string, terms: string): Map<string, number> => {
   const same: unknown = typeof parsed === 'object' && parsed !== null ? Reflect.get(parsed, 'terms') : undefined;
   const listed: unknown = typeof parsed === 'object' && parsed !== null ? Reflect.get(parsed, 'passed') : undefined;
   if (same !== terms || typeof listed !== 'object' || listed === null) return new Map();
-  return new Map(Object.entries(listed).flatMap(([key, at]) => (typeof at === 'number' ? [[key, at] as [string, number]] : [])));
+  return new Map(Object.entries(listed).flatMap(([key, at]): [string, number][] => (typeof at === 'number' ? [[key, at]] : [])));
 };
 
 /** The cache for this term list (`terms` is the list's hash, so a changed list starts empty). An unreadable or damaged file is an empty cache. */

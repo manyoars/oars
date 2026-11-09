@@ -48,10 +48,13 @@ const entriesOf = (text: string): NoticeEntry[] => {
   });
 };
 
+// Compared as strings: the one code today makes a direct comparison constant to the type checker, and a second code will not.
+const sameCode = (a: string, b: string): boolean => a === b;
+
 /** The child records a condition: its entry replaces an earlier one of the same code and keeps its place, so the file lists the codes in the order they were first raised. A notice file it cannot read is rewritten. */
 export const recordNotice = async (storeDir: string, code: NoticeCode, at: number): Promise<void> => {
   const written = entriesOf(await readFile(join(storeDir, WRITTEN), 'utf8').catch(() => ''));
-  const last = written.find((entry) => entry.code === code);
+  const last = written.find((entry) => sameCode(entry.code, code));
   if (last !== undefined && at - last.at < NOTICE_INTERVAL_MS) return;
   const kept = entriesOf(await readFile(noticeFile(storeDir), 'utf8').catch(() => ''));
   // A Map keeps a key's first place when it is set again.
@@ -60,7 +63,7 @@ export const recordNotice = async (storeDir: string, code: NoticeCode, at: numbe
   const entries = [...byCode.values()];
   await mkdirOwnerOnly(storeDir);
   await writeOwnerOnly(noticeFile(storeDir), `${JSON.stringify({ entries })}\n`);
-  await writeOwnerOnly(join(storeDir, WRITTEN), `${JSON.stringify({ entries: [...written.filter((entry) => entry.code !== code), { code, at }] })}\n`);
+  await writeOwnerOnly(join(storeDir, WRITTEN), `${JSON.stringify({ entries: [...written.filter((entry) => !sameCode(entry.code, code)), { code, at }] })}\n`);
 };
 
 /** The one message for a set of entries, or `undefined` for none. */

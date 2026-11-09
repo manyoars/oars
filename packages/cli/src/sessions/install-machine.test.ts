@@ -232,7 +232,13 @@ describe('hook install --machine through the command line', () => {
 });
 
 describe('a plain install and a machine install leave each other alone', () => {
-  const commands = (groups: unknown[]): string[] => groups.flatMap((group) => (group as { hooks: { command: string }[] }).hooks.map((hook) => hook.command));
+  const commands = (groups: unknown[]): string[] => groups.flatMap((group) => {
+    const hooks: unknown = typeof group === 'object' && group !== null ? Reflect.get(group, 'hooks') : undefined;
+    return Array.isArray(hooks) ? hooks.flatMap((hook: unknown) => {
+      const command: unknown = typeof hook === 'object' && hook !== null ? Reflect.get(hook, 'command') : undefined;
+      return typeof command === 'string' ? [command] : [];
+    }) : [];
+  });
 
   it('a plain install keeps the machine Stop entry, and a machine install keeps the plain SessionEnd entry', async () => {
     const dir = scratch();
@@ -257,7 +263,7 @@ describe('a plain install and a machine install leave each other alone', () => {
     const status = await sessionsHookStatus(depsIn(dir), { file: undefined });
     expect(JSON.stringify(status.document)).toContain('"Stop"');
     const outcome = await sessionsHookUninstall(depsIn(dir), { scope: 'user', file: undefined });
-    expect((outcome.document as { removed: string[] }).removed).toContain('Stop');
+    expect(Reflect.get(outcome.document, 'removed')).toContain('Stop');
     expect(hooksOf(await readSettings(join(dir, 'user', 'settings.json')))).toEqual({});
   });
 
