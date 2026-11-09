@@ -61,14 +61,13 @@ export const finishTelemetry = (deps: RunDeps, argv: string[], observed: Observe
     if (runtime === undefined) return;
     const consent = consentOf(deps.env, runtime.dir);
     if (!consent.enabled) return;
-    const context = { ...runtime, version: deps.version, now: deps.now };
     if (!consent.noticeShown && !isHook(argv, observed) && markNoticeShown(runtime.dir, deps.now)) {
       deps.io.stderr(`${NOTICE}\n`);
       // Once per install: the notice is shown once, and nothing is recorded or sent from a folder that could not claim it.
       recordFirstRun(deps, runtime, installPath);
     }
     const errorClass = errorClassOf(exit);
-    recordEvent(context, 'command', {
+    recordEvent({ ...runtime, version: deps.version, now: deps.now }, 'command', {
       path: observed.path,
       flags: observed.flags,
       durationMs: Math.max(0, deps.now() - startedAt),

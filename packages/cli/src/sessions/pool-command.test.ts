@@ -2304,6 +2304,7 @@ describe('wire policing in telemetry', () => {
   /** Telemetry for a scene: a temp config folder (APPDATA), with the telemetry folder where main.ts puts it. */
   const watched = (scene: Scene): string => {
     scene.h.deps.env.APPDATA = scene.staged.root;
+    expect(defaultConfigDir(scene.h.deps.env, 'win32', 'C:\\unused-home')).toBe(scene.staged.root);
     const dir = join(scene.staged.root, 'oars', 'telemetry');
     scene.h.deps.telemetry = { dir, platform: 'linux' };
     return dir;

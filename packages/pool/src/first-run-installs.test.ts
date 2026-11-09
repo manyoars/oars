@@ -68,6 +68,14 @@ describe('queries/first-run-installs.sql', () => {
     expect(words).not.toContain('the install id kept without its settings file');
   });
 
+  it('names the rollup\'s read limit, since a first-run event is sent once and an install in an unread batch is lost from this count', () => {
+    const words = SQL.split(/\r?\n/)
+      .filter((line) => line.startsWith('--'))
+      .map((line) => line.replace(/^--\s?/, ''))
+      .join(' ');
+    expect(words).toContain('A day past the rollup\'s 800 batch read limit (docs/pool.md, Bounds) undercounts, and an install whose first run fell in the unread batches is not counted.');
+  });
+
   it('counts distinct first-run installs on or after the day the covenant was first served, CI runs apart, with a row for each surface', async () => {
     expect(await run(db, forVersion('v2'))).toEqual([
       { version: 'v2', start_day: '2026-11-10', surface: '(all)', first_run_installs: 5, ci_installs: 2, non_ci_installs: 3 },

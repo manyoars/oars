@@ -11,6 +11,7 @@
 --
 -- The count reads the nightly rollup (`telemetry_install_days`), so a run is counted from the night after it arrived and not before. An install that sends no first-run event (telemetry off, or the settings file kept without
 -- its install id) is not counted, and an install that is reinstalled with a new install id counts again. An install whose first-run events named two surfaces is counted under the first name alphabetically.
+-- A day past the rollup's 800 batch read limit (docs/pool.md, Bounds) undercounts, and an install whose first run fell in the unread batches is not counted.
 -- Day grain: the day is the one the batch arrived (UTC), so an install that first ran on start_day counts even if it ran before the pool served the version that day.
 -- Not joined: this count and the acceptance count (queries/covenant-funnel.sql) are two counts from one start time, with no link between an install and an account.
 WITH
