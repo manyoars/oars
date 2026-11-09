@@ -10,7 +10,7 @@ import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf } f
 import { loginGone, loginPoll, loginStart, logout } from './identity.js';
 import { hashHosts, hashKey } from './ingest-hash.js';
 import { activate, callerOf, enroll, list, machineScope, revoke, rotate, type Caller } from './machines.js';
-import { stampOf } from './provenance.js';
+import { stampOf, takeClaim } from './provenance.js';
 import { rawRoute } from './raw.js';
 import { depositDigest, erasedRefusal, holdsErasedValue, isErased } from './tombstones.js';
 import { telemetry, type TelemetryEnv } from './telemetry.js';
@@ -52,6 +52,11 @@ const storeDeposit = async (env: Env, caller: Caller, secret: string, text: stri
   } catch {
     return refuse(400, 'closed_vocabulary', 'The body is not JSON.', 'skeleton');
   }
+  // `claimed` is the pool's own to read, set apart before the skeleton is, so it is neither bagged nor parsed as one of its fields.
+  const taken = takeClaim(body, machine);
+  if (taken instanceof Response) return taken;
+  const { claim } = taken;
+  body = taken.rest;
   // The body is read once as it came, so a refusal is judged on what the client sent (a host that is not a name is still refused).
   const sent = parseSkeleton(body);
   if (!sent.ok) return refuse(422, 'closed_vocabulary', `${sent.field}: ${sent.reason}`, sent.field);
@@ -83,7 +88,7 @@ const storeDeposit = async (env: Env, caller: Caller, secret: string, text: stri
   const insert = env.DB.prepare(
     'INSERT INTO deposits (account, id, skeleton, deltas, tier, counted_at, ingest, format, vocab_version, fields_version, extensions, other_values, machine, host_class, launcher, claimed_host_class, claimed_launcher) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ((SELECT COUNT(*) FROM deposits WHERE account = ?) < ? OR EXISTS (SELECT 1 FROM deposits WHERE account = ? AND id = ?)) AND (SELECT COALESCE(SUM(LENGTH(CAST(skeleton AS BLOB)) + LENGTH(CAST(deltas AS BLOB)) + LENGTH(CAST(extensions AS BLOB))), 0) FROM deposits WHERE account = ? AND id <> ?) + ? <= ? ON CONFLICT (account, id) DO UPDATE SET skeleton = excluded.skeleton, deltas = excluded.deltas, tier = excluded.tier, ingest = excluded.ingest, format = excluded.format, vocab_version = excluded.vocab_version, fields_version = excluded.fields_version, extensions = excluded.extensions, other_values = excluded.other_values, machine = excluded.machine, host_class = excluded.host_class, launcher = excluded.launcher, claimed_host_class = excluded.claimed_host_class, claimed_launcher = excluded.claimed_launcher, counted_at = CASE WHEN ? = 0 THEN deposits.counted_at WHEN excluded.counted_at IS NULL THEN NULL ELSE COALESCE(deposits.counted_at, excluded.counted_at) END WHERE deposits.ingest = ?',
   )
-    .bind(account, skeleton.id, stored, DELTAS, tier, countedAt, ingest, skeleton.format, skeleton.vocabVersion, skeleton.fieldsVersion, bag, others, stamp.machine, stamp.hostClass, stamp.launcher, null, null, account, limit ?? UNLIMITED, account, skeleton.id, account, skeleton.id, new TextEncoder().encode(stored).length + new TextEncoder().encode(DELTAS).length + new TextEncoder().encode(bag).length, budget ?? UNLIMITED, written > 0 ? 1 : 0, previous?.ingest ?? '');
+    .bind(account, skeleton.id, stored, DELTAS, tier, countedAt, ingest, skeleton.format, skeleton.vocabVersion, skeleton.fieldsVersion, bag, others, stamp.machine, stamp.hostClass, stamp.launcher, claim?.hostClass ?? null, claim?.launcher ?? null, account, limit ?? UNLIMITED, account, skeleton.id, account, skeleton.id, new TextEncoder().encode(stored).length + new TextEncoder().encode(DELTAS).length + new TextEncoder().encode(bag).length, budget ?? UNLIMITED, written > 0 ? 1 : 0, previous?.ingest ?? '');
   // The row and every increment it writes are one transaction; the increments are guarded by the row's `ingest` mark, so a refused deposit writes none of them.
   const arrived = new Date();
   const [inserted] = await env.DB.batch([
