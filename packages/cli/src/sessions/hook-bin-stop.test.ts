@@ -53,7 +53,7 @@ const home = (): { folder: string; store: string } => {
 
 const stop = (folder: string, preload?: string): Promise<{ code: number | null; stdout: string }> =>
   new Promise((resolve, reject) => {
-    const env = { PATH: process.env.PATH, APPDATA: folder, HOME: folder, USERPROFILE: folder, XDG_CONFIG_HOME: folder, OARS_TELEMETRY: '0', ...(preload === undefined ? {} : { NODE_OPTIONS: `--require=${preload.replaceAll(sep, '/')}` }) };
+    const env = { PATH: process.env.PATH, APPDATA: folder, HOME: folder, USERPROFILE: folder, XDG_CONFIG_HOME: folder, OARS_TELEMETRY: '0', ...(preload === undefined ? {} : { NODE_OPTIONS: `--require="${preload.replaceAll(sep, '/')}"` }) };
     const child = spawn(process.execPath, [hookBin, 'stop'], { cwd: tmpdir(), env, stdio: ['pipe', 'pipe', 'ignore'], timeout: 30_000 });
     let stdout = '';
     child.stdout.on('data', (chunk: Buffer) => {
