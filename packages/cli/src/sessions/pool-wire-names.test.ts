@@ -165,6 +165,14 @@ describe('what is dropped from the names', () => {
     expect(bytesOf(skeleton)).not.toContain('Q3 plan');
   });
 
+  it('drops a name whose first character is not a letter, a digit, or an underscore, and counts it, as the register says (.github)', () => {
+    const skeleton = skeletonOfLines({ redact, terms: [] }, call('a', 'Read', { file_path: '/w/.github/workflows/ci.yml' }));
+    const [only] = toolsOf(skeleton);
+    expect(only?.names).toEqual([...names('file', 'ci.yml'), ...names('dir', 'workflows')]);
+    expect(only?.namesDropped).toBe(bucketOf('count', 1));
+    expect(bytesOf(skeleton)).not.toContain('.github');
+  });
+
   it('never reads the value of a credential-named flag as a name, in either spelling of the flag', () => {
     const skeleton = skeletonOfLines(
       { redact, terms: [] },
