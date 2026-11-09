@@ -220,7 +220,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .option('--family <name>', `one read family (${RECALL_FAMILIES.join(', ')}); only recovery and fit are narrowed by --class and --since`)
     .option('--text <text>', 'look for text in the local record')
     .option('--session <id>', 'the session asking, so what it did next can be read for this recall')
-    .option('--counts', 'print counts of recalls by mode, arm, and answer, with what followed, instead of answering (see --day)')
+    .option('--counts', 'print counts of recalls by mode, arm, and answer, with how many windows hold a call named like a shown action, instead of answering (see --day)')
     .option('--day <yyyy-mm-dd>', 'with --counts: only this UTC day')
     .option('--mcp', 'serve one recall tool over MCP on stdio instead of answering once')
     .option('--context', "print the repository's top recurring errors as a short block for injection into a session (see --cwd, --harness, --top, --max-chars)")

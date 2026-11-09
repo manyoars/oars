@@ -105,7 +105,8 @@ export interface RecallConsequence {
   /** The calls the window holds, by position, and why it ended. */
   window: { from: number; to: number; calls: number; end: 'prompt' | 'calls' | 'session' };
   motifs: string[];
-  followed: boolean;
+  /** Whether an action name the recall carried appears among the window's actions. A match on the name alone: it does not say the call took the advice, was the same use of that action, or went well. */
+  nameMatched: boolean;
   /** `tokens` is null when no call in the window measured any: an older capture has no step costs, and zero would read as a free window. */
   cost: { tokens: number | null; durationMs: number };
   outcome: RecallOutcome;
