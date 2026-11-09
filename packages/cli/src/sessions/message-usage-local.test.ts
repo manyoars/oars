@@ -66,6 +66,7 @@ describe('token usage stays out of the raw copy', () => {
     expect(process.env.APPDATA).toBe(appData);
     expect(staged.storeDir.startsWith(appData)).toBe(false);
     const usage = { input_tokens: 7771234, output_tokens: 7774567, cache_read_input_tokens: 7773456, cache_creation_input_tokens: 7772345 };
+    // The fixture is a Claude Code transcript with no plan data, so the `rateLimits`, `usedPercent`, and `windowMinutes` checks pin the names only; a Codex session has no file on this route.
     const lines = [
       JSON.stringify({ type: 'user', uuid: 'u0', timestamp: '2026-06-01T00:00:00.000Z', message: { role: 'user', content: 'go' } }),
       JSON.stringify({ type: 'assistant', uuid: 'a1', requestId: 'req-1', timestamp: '2026-06-01T00:00:01.000Z', message: { id: 'msg_1', role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: 't1', name: 'Read', input: { file_path: '/w/a.ts' } }], usage } }),

@@ -28,6 +28,8 @@ const USAGE = { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 30
 /** One assistant line of a message: the harness writes a message as one line per content block and repeats `usage` on each. */
 const block = (n: number, messageId: string, content: object, usage: object = USAGE): string =>
   line({ type: 'assistant', uuid: `a${String(n)}`, requestId: `req-${messageId}`, timestamp: `2026-06-01T00:00:0${String(n)}.000Z`, message: { id: messageId, role: 'assistant', model: 'm', content: [content], usage } });
+/** A subagent transcript's assistant lines all carry `isSidechain: true`; the entry of such a message must not be marked `side`. */
+const sidechain = (text: string): string => text.replace('"type":"assistant"', '"type":"assistant","isSidechain":true');
 const call = (id: string): object => ({ type: 'tool_use', id, name: 'Read', input: { file_path: `/w/${id}.ts` } });
 const user = line({ type: 'user', uuid: 'u0', timestamp: '2026-06-01T00:00:00.000Z', message: { role: 'user', content: 'go' } });
 
@@ -148,7 +150,7 @@ describe('messageUsage across a deposit, subagent transcripts included', () => {
     const subagents = join(staged.projectsRoot, 'proj', 'usage-main', 'subagents');
     mkdirSync(subagents, { recursive: true });
     const second = { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 };
-    writeFileSync(join(subagents, 'agent-x.jsonl'), `${[user, block(1, 'msg_a', call('ta1'), second), block(2, 'msg_a', call('ta2'), second)].join('\n')}\n`);
+    writeFileSync(join(subagents, 'agent-x.jsonl'), `${[user, sidechain(block(1, 'msg_a', call('ta1'), second)), sidechain(block(2, 'msg_a', call('ta2'), second))].join('\n')}\n`);
     writeFileSync(join(subagents, 'agent-x.meta.json'), JSON.stringify({ agentType: 'Explore', toolUseId: 't1' }));
 
     await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
