@@ -217,6 +217,7 @@ export const REGISTER_FIXTURE = {
           argFeatures: [{ key: 'command', valueSize: '9-32', patternFeatures: ['literal'] }],
           argValues: [{ key: 'run_in_background', enumValue: 'true' }],
           changeKind: ['key-added'],
+          names: [{ kind: 'env', name: 'NODE_ENV' }, { kind: 'file', name: 'plan.md' }],
           steps: [
             { ...REGISTER_STEP, allocated: true, skill: 'commit', action: 'shell.exec', native: 'Bash', identity: { program: 'npm', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] } },
             { ...REGISTER_STEP, edges: [{ kind: 'next', target: 0 }], action: 'mcp.call', native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' } },

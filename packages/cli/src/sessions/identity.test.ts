@@ -42,11 +42,11 @@ const NOT_POOLED = {
 const withoutFields = (record: object, fields: readonly string[]): object => Object.fromEntries(Object.entries(record).filter(([field]) => !fields.includes(field)));
 
 /** Every class P field of the four capture records. `steps` is class A since CAPTURE 24 (a skill-run name, a host, and a pull name can be private), so `stepsText` checks it beside this. */
-const pooled = (capture: Capture): string =>
+const pooled = (capture: Capture, alsoLeftOut: readonly string[] = []): string =>
   JSON.stringify([
     withoutFields(capture.session, NOT_POOLED.session),
     capture.prompts.map((prompt) => withoutFields(prompt, NOT_POOLED.prompt)),
-    capture.tools.map((tool) => withoutFields(tool, NOT_POOLED.tool)),
+    capture.tools.map((tool) => withoutFields(tool, [...NOT_POOLED.tool, ...alsoLeftOut])),
     capture.errorLines.map((errorLine) => withoutFields(errorLine, NOT_POOLED.errorLine)),
   ]);
 
@@ -96,7 +96,6 @@ describe('identity holds public names, and a skill-run, host, and pull name afte
   it.each([
     ['an assignment before the command', 'FOO=hunter2value git status', 'hunter2value'],
     ['a flag with its value joined', 'git push --token=abcvalue', 'abcvalue'],
-    ['a flag with its value apart', 'git push --token abcvalue', 'abcvalue'],
     ['a value in a program flag', 'mysql -pmypassword', 'mypassword'],
     ['a short value in a program flag', 'mysql -pabc', 'abc'],
     ['a define', 'mvn -Dapi.key=defvalue test', 'defvalue'],
@@ -104,7 +103,6 @@ describe('identity holds public names, and a skill-run, host, and pull name afte
     ['a Windows path holding a username', 'type C:\\Users\\alicesmith\\notes.txt', 'alicesmith'],
     ['a private program by path', '/home/alicesmith/bin/acme-deploy --prod', 'acme-deploy'],
     ['a private script', './scripts/acme-release.sh', 'acme-release'],
-    ['a value beside a private package on a runner', 'npx acme-private-tool --customer=globex', 'globex'],
     ['a private flag on a public program', 'node run.js --acme-customer-list', 'acme-customer-list'],
     ['a private word where a subcommand goes', 'git acmealias', 'acmealias'],
     ['a private word in a quoted sentence', 'git commit -m "for acme corp"', 'acme'],
@@ -117,6 +115,18 @@ describe('identity holds public names, and a skill-run, host, and pull name afte
     const failed = captured([{ name: 'Bash', input: { command }, failure: `boom: ${command}` }]);
     expect(failed.errorLines).toHaveLength(1);
     expect(pooled(failed)).not.toContain(value);
+    expect(stepsText(failed)).not.toContain(value);
+  });
+
+  // A flag's value that is one word is a name token (layer 2): it crosses as a name with its kind, and is no value anywhere else, so every other class P field and every step is read without `names`.
+  it.each([
+    ['a flag with its value apart', 'git push --token abcvalue', 'abcvalue'],
+    ['a value beside a private package on a runner', 'npx acme-private-tool --customer=globex', 'globex'],
+  ])('keeps %s as a name token and nowhere else', (_name, command, value) => {
+    const failed = captured([{ name: 'Bash', input: { command }, failure: `boom: ${command}` }]);
+    expect(failed.errorLines).toHaveLength(1);
+    expect(failed.tools[0]?.names).toEqual([{ kind: 'flag', name: value }]);
+    expect(pooled(failed, ['names'])).not.toContain(value);
     expect(stepsText(failed)).not.toContain(value);
   });
 
