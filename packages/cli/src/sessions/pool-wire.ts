@@ -8,6 +8,7 @@ import { ARG_CLASSES, CHANGE_KINDS, DIRECTORY_KINDS, EXTENSION_CLASSES, NAME_KIN
 import type { Cell } from './cells.js';
 import type { Redactor } from './redact.js';
 import type { Motif } from './motif.js';
+import type { Recall } from './recall-object.js';
 import type { Read, ReadAsOf } from './read.js';
 import { recoveryCallsOf, RECOVERY_CALLS, type RecoveryCalls } from './recovery-calls.js';
 import { projectLanguage, projectLanguageShare } from './strata.js';
@@ -17,19 +18,23 @@ import { ERROR_CODES, LANGUAGE_SHARES, PROMPT_INTERVENTIONS, type PromptInterven
 // Format 4 (layer 1 of a call's parameters): a tool may carry `argFeatures`, `argValues`, and `changeKind`. The pool reads formats 3 and 4 (`READ_FORMATS`): a format 3 batch is read as before, and one of those
 // three names in it is a field format 3 does not know, so it goes to the bag and is served from nowhere. The table is "Formats on open" in docs/pool.md.
 // Format 5 (layer 2 of a call's parameters): a tool may carry `names`, the file, directory, and variable names its values held. The pool reads formats 3, 4, and 5, and a name field in a batch of an older format goes to the bag the same way.
-export const SKELETON_FORMAT = 5;
+// Format 6 (exposure): a batch may carry `recommendations`, one entry for each recommendation the session was shown or held back from, so the pool can tell shown from held. A batch with none says nothing, and the pool reads that as unknown, never as unexposed.
+// The pool reads formats 3 to 6, and a recommendations list in an older batch goes to the bag the same way.
+export const SKELETON_FORMAT = 6;
 /** The formats the parser reads, oldest first: the client builds only the last. */
-export const READ_FORMATS = [3, 4, SKELETON_FORMAT] as const;
+export const READ_FORMATS = [3, 4, 5, SKELETON_FORMAT] as const;
 export type SkeletonFormat = (typeof READ_FORMATS)[number];
 /** The tool fields format 4 added: a format 3 batch that holds one is holding a field it does not define. */
 export const FORMAT_4_TOOL_FIELDS = ['argFeatures', 'argValues', 'changeKind'] as const;
 /** The tool fields format 5 added: a batch of format 4 or 3 that holds one is holding a field it does not define. */
 export const FORMAT_5_TOOL_FIELDS = ['names', 'namesDropped'] as const;
+/** The batch fields format 6 added: a batch of an older format that holds one is holding a field it does not define. */
+export const FORMAT_6_BATCH_FIELDS = ['recommendations'] as const;
 /**
  * The version of the field list: every field name a batch can hold (`BATCH_FIELDS` in `pool-outbox.ts`). It moves with any field added, so a server told the version knows which names a batch may carry,
  * and a test pins the list to it (`pool-wire-additive.test.ts`). A field is deprecated and left on the list, never removed (conclusion section 17, rule 3).
  */
-export const FIELD_LIST_VERSION = 10;
+export const FIELD_LIST_VERSION = 11;
 export const BUNDLE_FORMAT = 1;
 /** One constant: the pool serves only the vocabulary version the client holds. */
 export { VOCAB_VERSION };
@@ -254,6 +259,22 @@ export interface DeltaEntry {
   change: number;
 }
 
+/** Whether a recommendation reached the asker (`shown`) or was withheld by the holdback (`held`). The local row's arm, as the closed list holds it. */
+export const RECOMMENDATION_ARMS = ['shown', 'held'] as const;
+export type RecommendationArm = (typeof RECOMMENDATION_ARMS)[number];
+
+/**
+ * One recommendation of the session as the local row holds it: its `id`, the `arm` it was drawn into, the `poolVersion` it answered from, and the window of calls it covers, `from` up to but not including `to`, as positions in the
+ * main run's calls that are not sidechain (the line the local consequence window reads). It holds no text, query, or evidence. `other` is an arm this reader does not know.
+ */
+export interface SkeletonRecommendation {
+  id: string;
+  arm: RecommendationArm | typeof OTHER;
+  poolVersion: string;
+  from: number;
+  to: number;
+}
+
 export interface SessionSkeleton {
   format: SkeletonFormat;
   /** The vocabulary version the client built the batch under: stored with it, so a read can tell a batch of an older list from a current one. */
@@ -268,6 +289,8 @@ export interface SessionSkeleton {
   timingPrint: string | null;
   /** The batch's client-built delta entries (Section 2, "Deltas"): changes between the client's own before and after windows, each carried once, by the batch of the session that filled the after window. */
   deltas: DeltaEntry[];
+  /** The recommendations the main session was shown or held back from (format 6), in window order. Absent when it had none, and a pool reads absent as unknown exposure, never as unexposed. */
+  recommendations?: SkeletonRecommendation[];
 }
 
 /** A usage category's `tokens` bucket, or null when the record says the source never recorded it. A record that predates `usageObserved` reads every category as observed. */
@@ -719,13 +742,22 @@ const transcriptOf = (
 };
 
 /** The hash a batch's timing print is made with, over the durations in call order: the client's `contentHash` (D1's `hP`). */
+/**
+ * The recommendations of one session, from the local rows after `deriveConsequences` has given each its window. Only a row that showed or withheld something is carried: a miss recommended nothing, so it is neither shown nor held, and
+ * a row with no window has no calls to place. They go in window order, then by id, so one store builds one batch.
+ */
+export const recommendationsOf = (recalls: readonly Recall[], session: string): SkeletonRecommendation[] =>
+  recalls
+    .flatMap(({ sid, id, arm, poolVersion, answer, consequence }) => (sid === session && answer.kind === 'hit' && consequence !== undefined ? [{ id, arm, poolVersion, from: consequence.window.from, to: consequence.window.to }] : []))
+    .sort((a, b) => a.from - b.from || a.to - b.to || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
 export type Print = (durations: readonly number[]) => string;
 
 /**
  * The skeleton of a session; null when any record of it was captured before steps and frames, or a transcript of it has no root, which holds no closed reading to send. The batch holds the main
  * transcript's run first, then each subagent's as its own run; its `id` is the main session's, and its one `timingPrint` is over the main transcript's calls alone.
  */
-export const skeletonOf = (records: SessionRecords, id: string, read: ShellReader, print: Print, deltas: readonly DeltaEntry[] = [], gate: WireGate = OPEN_GATE, coverage: Coverage = NO_COVERAGE): SessionSkeleton | null => {
+export const skeletonOf = (records: SessionRecords, id: string, read: ShellReader, print: Print, deltas: readonly DeltaEntry[] = [], gate: WireGate = OPEN_GATE, coverage: Coverage = NO_COVERAGE, recommendations: readonly SkeletonRecommendation[] = []): SessionSkeleton | null => {
   const mainTools = byCall(records.transcripts[0]?.tools ?? []);
   const places = records.transcripts.map(({ tools }) => placesOf(tools));
   const spawners = places[0]?.calls ?? new Map<number, number>();
@@ -760,7 +792,7 @@ export const skeletonOf = (records: SessionRecords, id: string, read: ShellReade
     transcripts.push(transcript);
   }
   const durations = mainTools.flatMap(({ durationMs }) => (durationMs === null ? [] : [durationMs]));
-  return { format: SKELETON_FORMAT, vocabVersion: VOCAB_VERSION, fieldsVersion: FIELD_LIST_VERSION, id, transcripts, timingPrint: durations.length < MIN_TIMED_CALLS ? null : print(durations), deltas: [...deltas] };
+  return { format: SKELETON_FORMAT, vocabVersion: VOCAB_VERSION, fieldsVersion: FIELD_LIST_VERSION, id, transcripts, timingPrint: durations.length < MIN_TIMED_CALLS ? null : print(durations), deltas: [...deltas], ...(recommendations.length === 0 ? {} : { recommendations: recommendations.map((entry) => ({ ...entry })) }) };
 };
 
 /**
@@ -844,7 +876,7 @@ export const ENUMERATED_FIELDS: ReadonlySet<string> = new Set(['harness', 'harne
  * served from what remains. A field the cells need to be sound (a harness, a status, a bucket of tokens) is never here.
  */
 export const OPTIONAL = {
-  batch: ['timingPrint', 'deltas'],
+  batch: ['timingPrint', 'deltas', 'recommendations'],
   frame: ['harnessVersion', 'model', 'effort', 'day', 'shell', 'reach', 'repoKey', 'orgSize', 'team', 'repoVisibility', 'hour'],
   stack: ['size', 'languageShares'],
   prompt: ['wallSec', 'explore', 'usageResponses', 'intervention'],
@@ -1378,6 +1410,26 @@ export interface ParsedSkeleton {
 }
 
 const VOCAB_TEXT = /^[0-9A-Za-z._-]{1,32}$/;
+/** The deposit time of the pool a recommendation answered from: an instant, or a version word. */
+const POOL_VERSION = /^[0-9A-Za-z:.+_-]{1,40}$/;
+
+/** The batch fields a batch of format 5 or older may hold: format 6's are fields it does not know. */
+const FORMAT_5_BATCH: readonly string[] = OPTIONAL.batch.filter((name) => !FORMAT_6_BATCH_FIELDS.some((added) => added === name));
+
+/** One recommendation: a hash id, its arm off the closed list, the version it answered from, and a window that is two counts in order. Past-the-calls is checked once the transcripts are known. */
+const parseRecommendation = (held: Collected, value: unknown, at: string): SkeletonRecommendation => {
+  const raw = fieldsOf(held, value, at, ['id', 'arm', 'poolVersion', 'from', 'to']);
+  const id = textOf(raw.id, under(at, 'id'));
+  if (!ID.test(id)) throw new Refused(under(at, 'id'), 'not a hash');
+  const poolVersion = textOf(raw.poolVersion, under(at, 'poolVersion'));
+  if (!POOL_VERSION.test(poolVersion)) throw new Refused(under(at, 'poolVersion'), 'not a version');
+  const from = countOf(raw.from, under(at, 'from'));
+  const to = countOf(raw.to, under(at, 'to'));
+  if (to < from) throw new Refused(under(at, 'to'), 'ends before it starts');
+  return { id, arm: oneOf(held, RECOMMENDATION_ARMS, raw.arm, under(at, 'arm')), poolVersion, from, to };
+};
+
+
 
 /** The skeleton in `value`, rebuilt from the fields read, with the bag of what was set aside; else the first field that is a shape error, and why. */
 export const parseSkeleton = (value: unknown): ParsedSkeleton | Refusal => {
@@ -1385,7 +1437,9 @@ export const parseSkeleton = (value: unknown): ParsedSkeleton | Refusal => {
   try {
     // The earlier forms are named, since their fields would otherwise read as a list of strangers; any other format is a form this reader does not know.
     if (isFields(value) && typeof value.format === 'number' && value.format < READ_FORMATS[0]) throw new Refused('format', `the format ${String(value.format)} form is no longer read; send format ${String(SKELETON_FORMAT)}`);
-    const raw = fieldsOf(held, value, '', ['format', 'vocabVersion', 'fieldsVersion', 'id', 'transcripts'], OPTIONAL.batch);
+    // The format is read first, since which batch fields it defines depends on it.
+    const declared = isFields(value) ? READ_FORMATS.find((known) => known === value.format) : undefined;
+    const raw = fieldsOf(held, value, '', ['format', 'vocabVersion', 'fieldsVersion', 'id', 'transcripts'], declared !== undefined && declared < 6 ? FORMAT_5_BATCH : OPTIONAL.batch);
     const format = READ_FORMATS.find((known) => known === raw.format);
     if (format === undefined) throw new Refused('format', 'not a format this version reads');
     held.format = format;
@@ -1397,6 +1451,11 @@ export const parseSkeleton = (value: unknown): ParsedSkeleton | Refusal => {
     const deltas = listOrEmpty(raw.deltas, 'deltas', (entry, entryAt) => parseDelta(held, entry, entryAt));
     const transcripts = listOf(raw.transcripts, 'transcripts', (entry, entryAt) => parseTranscript(held, entry, entryAt));
     if (transcripts.length === 0) throw new Refused('transcripts', 'empty');
+    const recommendations = format < 6 ? [] : listOrEmpty(raw.recommendations, 'recommendations', (entry, entryAt) => parseRecommendation(held, entry, entryAt));
+    // Positions are the only ordinals on the wire, so a window must lie within the main run's calls.
+    recommendations.forEach(({ to }, index) => {
+      if (to > (transcripts[0]?.tools.length ?? 0)) throw new Refused(`recommendations[${String(index)}].to`, 'past the main run\'s calls');
+    });
     // A counting batch is what lifts the fetch cap, so a deposit has to hold something to derive from.
     if (transcripts.every(({ prompts, tools }) => prompts.length === 0 && tools.length === 0)) throw new Refused('transcripts', 'holds no prompt and no tool');
     // The main run's calls make the one print, so it exists exactly when the main run holds enough timed calls; a subagent's calls never decide it.
@@ -1457,7 +1516,7 @@ export const parseSkeleton = (value: unknown): ParsedSkeleton | Refusal => {
         before += steps.length;
       });
     });
-    return { ok: true, skeleton: { format, vocabVersion, fieldsVersion, id, transcripts, timingPrint, deltas }, extensions: held.extensions, others: held.others };
+    return { ok: true, skeleton: { format, vocabVersion, fieldsVersion, id, transcripts, timingPrint, deltas, recommendations }, extensions: held.extensions, others: held.others };
   } catch (error) {
     if (error instanceof Refused) return { ok: false, field: error.field, reason: error.reason };
     throw error;
