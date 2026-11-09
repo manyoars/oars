@@ -2,7 +2,7 @@
 // The store is a temp folder (`stage`), and APPDATA is the same folder; the test confirms the store path is under the temp folder before it runs.
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { harness, type Harness } from '../test-support.js';
 import { poolDeposit } from './pool-command.js';
@@ -83,6 +83,25 @@ describe('poolDeposit on a machine', () => {
     expect(batches(given.staged)).toHaveLength(1);
     expect(await document(given, { session: sid(2) })).toMatchObject({ sessions: 1, batched: 1, withdrawn: 0 });
     expect(batches(given.staged)).toHaveLength(2);
+  });
+
+  it("a person's deposit in the same outbox leaves a machine's batch where it is, and a machine's Stop leaves a person's", async () => {
+    const given = await scene({ OARS_HOST_CLASS: 'cloud' }, ONE);
+    await document(given);
+    expect(batches(given.staged)).toHaveLength(1);
+    const plain = join(given.staged.storeDir, 'pool-outbox', dirname(batches(given.staged)[0] ?? ''), `${'a'.repeat(16)}.${'b'.repeat(64)}.jsonl`);
+    writeFileSync(plain, '{}');
+    // The person's deposit: no machine configuration, signed in. Its sweep withdraws a batch of a session the store lost, and only that.
+    const person = harness({ OARS_EXCLUSION_TERMS: join(given.staged.root, 'terms.txt'), APPDATA: given.staged.root });
+    person.deps.sessions = given.staged.runtime;
+    person.deps.now = Date.now;
+    signedIn(given.staged);
+    await poolDeposit(person.deps, { server: POOL });
+    expect(batches(given.staged).filter((name) => !name.includes('a'.repeat(16)))).toHaveLength(1);
+    expect(existsSync(plain)).toBe(false);
+    writeFileSync(plain, '{}');
+    await document(given);
+    expect(existsSync(plain)).toBe(true);
   });
 
   it('applies the gates unchanged: a folder off the allow list is built into nothing', async () => {

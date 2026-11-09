@@ -22,7 +22,7 @@ import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, inRepository, readIndex, type ContextOptions } from './hook-index.js';
 import { CODEX_TRUST_NOTICE, codexHookStatus, installCodexHook, uninstallCodexHook, type CodexInstall } from './codex-hook-install.js';
 import { enrollmentOf } from './machine.js';
-import { hookStatus, installHooks, installMachineHooks, removeSchedule, SCHEDULE_REFUSED, scheduleStatus, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
+import { hookStatus, installHooks, installMachineHooks, readSettings, removeSchedule, SCHEDULE_REFUSED, scheduleStatus, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
 import { recordSchedule } from './pool-due.js';
 import { serve } from './mcp.js';
 import { refreshPool, servedPool } from './pool.js';
@@ -502,6 +502,8 @@ const installMachine = async (deps: SessionsDeps, options: HookTarget & { schedu
     result = await installMachineHooks(file, undefined);
     lines.push(`Installed ${result.installed.join(' and ')} machine hooks in ${file}. They run only where OARS_HOST_CLASS is set to a class other than local; set it, and the rest of the enrollment block, in the environment that runs the session.`);
   } else {
+    // A file that cannot be read is refused before the terms file is written.
+    await readSettings(file);
     const enrollment = await enrollmentOf(options.env ?? [], options.termsFile, runtime.cwd);
     result = await installMachineHooks(file, enrollment.env);
     lines.push(`Installed ${result.installed.join(' and ')} machine hooks and the enrollment block in ${file}, which is now readable by its owner only.`);

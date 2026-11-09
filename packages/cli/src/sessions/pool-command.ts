@@ -10,7 +10,7 @@ import { makeCoverage, readCoverageSetting, writeCoverageSetting } from './cover
 import { checkSession, exclusionPaths, lastWritten, loadTerms, transcriptFilesOf, type Reason } from './exclusion.js';
 import { localNames, makeRedactor, REDACTION_VERSION, redactTranscript } from './redact.js';
 import { recordSend, recordWire, newTally, tallyBatch } from '../telemetry/wire.js';
-import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, lockedBatch, markShown, outboxFolder, partsOf, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
+import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, lockedBatch, machineKeys, markShown, noteMachineKey, outboxFolder, partsOf, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
 import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, unpinnedKid, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
 import { carriedDeltas, heldDeltas, keptDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
@@ -512,6 +512,7 @@ export const poolDeposit = async (
       continue;
     }
     builtBytes += (await writeBatch(outbox, key, parsed.skeleton)).bytes;
+    if (machine !== undefined) await noteMachineKey(outbox, key);
     // The raw copy comes only after both gates and only with a yes to the raw prompt and a folder not at skeleton only: each transcript of the session, redacted here, before it is queued.
     if (rawAllowed(saved.pool, records.main.project)) {
       let place = 0;
@@ -531,8 +532,10 @@ export const poolDeposit = async (
   }
   // The batch of a session or account this store no longer holds goes too. A machine builds one session at a time and nothing here has the others in hand, so it sweeps nothing: nothing is withdrawn but what a gate refused.
   if (machine === undefined) {
-    counts.withdrawn += await removeBatchesExcept(outbox, built);
-    await removeRawExcept(outbox, rawKept);
+    // The batches a machine's Stop built in this outbox are not this pass's to withdraw: their keys cannot be recomputed here.
+    const theirs = await machineKeys(outbox);
+    counts.withdrawn += await removeBatchesExcept(outbox, new Set([...built, ...theirs]));
+    await removeRawExcept(outbox, new Set([...rawKept, ...theirs]));
   }
   counts.refusedFields = [...refusedFields].sort();
   recordWire(deps, wireTally);

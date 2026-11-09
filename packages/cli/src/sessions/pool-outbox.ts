@@ -274,6 +274,25 @@ export const heldBatchOf = async (outbox: string, key: string, stamp: string = c
   return undefined;
 };
 
+const machineKeysFile = (outbox: string): string => join(outbox, 'machine-keys.log');
+
+/** The batch keys a machine's Stop built, one per line. A person's `oars pool deposit` shares the outbox and cannot recompute them (the machine's name is in the key), so its sweep keeps these instead of treating them as batches of sessions the store lost. */
+export const machineKeys = async (outbox: string): Promise<Set<string>> => {
+  try {
+    return new Set((await readFile(machineKeysFile(outbox), 'utf8')).split('\n').filter((line) => line !== ''));
+  } catch (error) {
+    if (isAbsent(error)) return new Set();
+    throw error;
+  }
+};
+
+/** Notes that a machine built this key; a key already noted adds no line. */
+export const noteMachineKey = async (outbox: string, key: string): Promise<void> => {
+  if ((await machineKeys(outbox)).has(key)) return;
+  await mkdirOwnerOnly(outbox);
+  await appendOwnerOnly(machineKeysFile(outbox), `${key}\n`);
+};
+
 const shownFile = (outbox: string): string => join(outbox, 'shown.log');
 
 /** Records that this hash was printed, one line for each print: the lock below sends only a hash that appears here. */
