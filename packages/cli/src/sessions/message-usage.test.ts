@@ -211,10 +211,10 @@ describe('messageUsage on a Codex session', () => {
   it('writes no cache category the event did not report, and its absence stays out of usageObserved', () => {
     const older = entry(4, 'event_msg', { type: 'token_count', info: { last_token_usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 }, total_token_usage: { total_tokens: 120 } } });
     const { session } = codexCapture([...head, say(3, 'one'), older]);
+    expect(session.usageObserved).toEqual(['input', 'output']);
     expect(session.messageUsage).toEqual([{ id: 'sess-1-resp1', calls: [], input: 100, output: 20 }]);
     expect(session.messageUsage?.[0]).not.toHaveProperty('cacheRead');
     expect(session.messageUsage?.[0]).not.toHaveProperty('cacheWrite');
-    expect(session.usageObserved).toEqual(['input', 'output']);
   });
 
   it('records one entry for a response with two tool calls, with the response whole counts and both call ids in order', () => {
