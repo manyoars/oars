@@ -128,7 +128,7 @@ describe('no route serves a raw byte, a hash, or a count', () => {
         expect(text, `${method} ${path}`).not.toContain(marker);
       }
     }
-    // The routes that do answer carry no raw figure: the covenant status is its two fields.
+    // The routes that do answer carry no raw figure: the covenant status is its three fields.
     const status = await pool.get('/v1/covenant', token);
     expect(keysOf(status.json)).toEqual(['accepted', 'screen', 'version']);
     expect(fieldOf(status.json, 'accepted')).toBe(true);
