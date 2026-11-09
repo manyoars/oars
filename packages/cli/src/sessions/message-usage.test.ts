@@ -217,6 +217,14 @@ describe('messageUsage on a Codex session', () => {
     expect(session.messageUsage?.[0]).not.toHaveProperty('cacheWrite');
   });
 
+  it('writes no output for an event that reported input alone, and its absence stays out of usageObserved', () => {
+    const partial = entry(4, 'event_msg', { type: 'token_count', info: { last_token_usage: { input_tokens: 100 }, total_token_usage: { total_tokens: 100 } } });
+    const { session } = codexCapture([...head, say(3, 'one'), partial]);
+    expect(session.usageObserved).toEqual(['input']);
+    expect(session.messageUsage?.[0]).toEqual({ id: 'sess-1-resp1', calls: [], input: 100 });
+    expect(session.messageUsage?.[0]).not.toHaveProperty('output');
+  });
+
   it('records one entry for a response with two tool calls, with the response whole counts and both call ids in order', () => {
     const fn = (second: number, id: string): object => entry(second, 'response_item', { type: 'function_call', call_id: id, name: 'shell', arguments: JSON.stringify({ command: ['ls'] }) });
     const { session } = codexCapture([...head, say(3, 'one'), fn(4, 'call_a'), fn(5, 'call_b'), count(6, 1000, 400, 200, 50, 1200, limits)]);
