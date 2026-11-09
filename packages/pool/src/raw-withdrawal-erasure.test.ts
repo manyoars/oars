@@ -71,6 +71,20 @@ describe('the nightly cron erases the raw copies of an account that withdrew', (
     expect(await count("SELECT COUNT(*) AS held FROM erasure_tombstones WHERE kind = 'raw-object' AND reason = 'consent-withdrawn'")).toBeGreaterThanOrEqual(2);
   }, 60_000);
 
+  it('writes one audit row for a night that erased something, and none for a night that erased nothing', async () => {
+    const { token } = await member();
+    await store(token, 'first transcript to audit');
+    await store(token, 'second transcript to audit');
+    expect((await withdraw(token)).status).toBe(200);
+    const before = await count("SELECT COUNT(*) AS held FROM erasure_audit WHERE kind = 'raw-object' AND reason = 'consent-withdrawn'");
+    await night();
+    const rows = await all("SELECT objects_erased, rows_erased, account, erased_on FROM erasure_audit WHERE kind = 'raw-object' AND reason = 'consent-withdrawn' ORDER BY id DESC");
+    expect(rows).toHaveLength(before + 1);
+    expect(rows[0]).toEqual({ objects_erased: 2, rows_erased: 0, account: null, erased_on: '2026-11-10' });
+    await night(TONIGHT + 86_400_000);
+    expect(await count("SELECT COUNT(*) AS held FROM erasure_audit WHERE kind = 'raw-object' AND reason = 'consent-withdrawn'")).toBe(before + 1);
+  }, 60_000);
+
   it('refuses the same bytes afterward instead of answering that they are already stored', async () => {
     const { token } = await member();
     const bytes = new TextEncoder().encode('bytes that were erased on withdrawal');
