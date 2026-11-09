@@ -29,6 +29,10 @@ export interface MachineConfig {
   launcher: string | undefined;
   /** `OARS_MACHINE`, the opaque id minted at enrollment; absent when unset. */
   machine: string | undefined;
+  /** `OARS_SESSION_SALT`: the key of a session's skeleton `id` and of the terms digest; absent when unset. */
+  sessionSalt: string | undefined;
+  /** `CLAUDE_CODE_REMOTE_SESSION_ID`: the cloud's own name for the session; absent when unset. */
+  remoteSession: string | undefined;
   /** `OARS_ALLOW_REPOS` split on commas and whitespace, lowercased; empty means no repository is allowed. */
   allowRepos: string[];
 }
@@ -45,6 +49,8 @@ export const machineOf = (env: { [name: string]: string | undefined }): MachineC
     hostClass,
     launcher: present(env.OARS_LAUNCHER),
     machine: present(env.OARS_MACHINE),
+    sessionSalt: present(env.OARS_SESSION_SALT),
+    remoteSession: present(env.CLAUDE_CODE_REMOTE_SESSION_ID),
     allowRepos: (env.OARS_ALLOW_REPOS ?? '')
       .split(/[\s,]+/u)
       .map((entry) => entry.trim().toLowerCase())

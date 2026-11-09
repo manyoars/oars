@@ -3,13 +3,15 @@
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
+import { http, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it } from 'vitest';
-import { harness, type Harness } from '../test-support.js';
+import { harness, server, useServer, type Harness } from '../test-support.js';
 import { poolDeposit } from './pool-command.js';
 import { contentHash } from './read.js';
 import { deposit, updatePoolChoices } from './store.js';
 import { addProject, cleanup, stage, type Staged } from './test-support.js';
 
+useServer();
 afterEach(cleanup);
 
 const POOL = 'https://pool.test';
@@ -215,10 +217,15 @@ describe('deltas on a machine', () => {
       choices.rawConsent = 'granted';
       choices.rawConsentVersion = 'v0';
     });
-    await poolDeposit(given.h.deps, { server: POOL, covenant: 'v1' });
+    const inForce = (version: string): void => {
+      server.use(http.get(`${POOL}/v1/covenant`, () => HttpResponse.json({ version, accepted: true, screen: null })));
+    };
+    inForce('v1');
+    await poolDeposit(given.h.deps, { server: POOL });
     expect(batches(given.staged)).toHaveLength(1);
     expect(rawCopies(given)).toEqual([]);
-    await poolDeposit(given.h.deps, { server: POOL, covenant: 'v0' });
+    inForce('v0');
+    await poolDeposit(given.h.deps, { server: POOL });
     expect(rawCopies(given).length).toBeGreaterThan(0);
   });
 });
