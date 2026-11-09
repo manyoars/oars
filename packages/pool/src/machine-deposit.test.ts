@@ -43,6 +43,8 @@ const depositCount = async (account: string): Promise<unknown> => (await pool.db
 
 const lastDayOf = async (machine: string): Promise<unknown> => (await pool.db()).prepare('SELECT last_deposit_day FROM machines WHERE id = ?').bind(machine).first('last_deposit_day');
 
+const asList = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+
 const today = (): string => new Date().toISOString().slice(0, 10);
 
 describe('POST /v1/deposits with a machine key', () => {
@@ -147,12 +149,12 @@ describe("a machine's last deposit day", () => {
   it('lists the day of the last deposit, null before a first one', async () => {
     const { token } = await accountOn('4625');
     const machine = await machineOf(token, { hostClass: 'vps', launcher: 'scheduled' });
-    const listed = async (): Promise<unknown> => fieldOf((await pool.get('/v1/machines', token)).json, 'machines');
+    const listed = async (): Promise<unknown[]> => asList(fieldOf((await pool.get('/v1/machines', token)).json, 'machines'));
     expect(await listed()).toMatchObject([{ id: machine.id, lastDepositDay: null }]);
     const before = today();
     expect((await pool.post('/v1/deposits', sampleSkeleton('00000000000a0030'), machine.key)).status).toBe(201);
-    const [row] = (await listed()) as { lastDepositDay: string }[];
-    expect([before, today()]).toContain(row?.lastDepositDay);
+    const [row] = await listed();
+    expect([{ lastDepositDay: before }, { lastDepositDay: today() }]).toContainEqual(expect.objectContaining({ lastDepositDay: fieldOf(row, 'lastDepositDay') }));
   });
 
   it('does not move for a deposit the operator brake refuses', async () => {
