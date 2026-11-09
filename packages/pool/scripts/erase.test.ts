@@ -487,6 +487,28 @@ describe('erasing one account removes its own rows and its link to the shared to
     expect(await count('SELECT COUNT(*) AS held FROM cells WHERE key LIKE ?', '%')).toBeGreaterThan(0);
   }, 90_000);
 
+  it('still moves the generation when a run stopped before it did, because the links are not yet gone to hide it', async () => {
+    const { token, account } = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('0000000000007d01', 'stopprog'), token)).status).toBe(201);
+    const generation = await count('SELECT generation AS held FROM pool_generation');
+    const whole = await store();
+    // The run stops at the statement that moves the generation (the process dies, the network drops).
+    const stopping: EraseStore = {
+      ...whole,
+      run: (sql, binds) => (sql.startsWith('UPDATE pool_generation') ? Promise.reject(new Error('stopped')) : whole.run(sql, binds)),
+    };
+    await expect(eraseAccount(stopping, account, NOW)).rejects.toThrow('stopped');
+
+    await eraseAccount(await store(), account, NOW);
+
+    expect(await count('SELECT COUNT(*) AS held FROM contributors WHERE account = ?', account)).toBe(0);
+    expect(await count('SELECT generation AS held FROM pool_generation')).toBeGreaterThanOrEqual(generation + 1);
+    // A run that finds nothing left moves nothing more.
+    const settled = await count('SELECT generation AS held FROM pool_generation');
+    await eraseAccount(await store(), account, NOW);
+    expect(await count('SELECT generation AS held FROM pool_generation')).toBe(settled);
+  }, 90_000);
+
   it('does not move the generation for an account that held no link to a total', async () => {
     const { account } = await member();
     const generation = await count('SELECT generation AS held FROM pool_generation');
