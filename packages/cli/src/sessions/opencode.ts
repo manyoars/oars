@@ -70,6 +70,8 @@ export interface OpencodeStore {
   sessions: OpencodeSession[];
   /** The session as transcript text for `captureSession`; throws when it holds no parseable message. */
   transcript: (session: OpencodeSession) => string;
+  /** True when every row of the session is a type the format defines that carries no turn (`NO_TURN_ROWS`); `sessions verify` counts such a session as empty, not unreadable. */
+  headOnly: (session: OpencodeSession) => boolean;
   /** Sessions skipped because their id is not a safe file name (it names a skeleton), counted so the skip is never silent. */
   rejected: number;
   close: () => void;
@@ -283,6 +285,9 @@ const linesOf = (session: OpencodeSession, rows: { [column: string]: unknown }[]
 };
 
 /** Opens the OpenCode store under `root`; undefined when it holds no database, so a machine without OpenCode is skipped silently. A database that cannot be read throws. */
+/** The `session_message` types the format defines that are not a prompt and not read (the header comment): a session of these alone was opened and left. */
+const NO_TURN_ROWS: ReadonlySet<string> = new Set(['location-switched', 'synthetic', 'system', 'skill', 'compaction', 'idle', 'agent-switched', 'model-switched']);
+
 export const openOpencodeStore = async (root: string): Promise<OpencodeStore | undefined> => {
   const file = join(root, DATABASE);
   if (!existsSync(file)) return undefined;
@@ -333,6 +338,10 @@ export const openOpencodeStore = async (root: string): Promise<OpencodeStore | u
     rejected,
     close: () => {
       db.close();
+    },
+    headOnly: (session) => {
+      const types = db.prepare('select distinct type from session_message where session_id = ?').all(session.id);
+      return types.length > 0 && types.every((row) => typeof row.type === 'string' && NO_TURN_ROWS.has(row.type));
     },
     transcript: (session) => {
       const rows = db.prepare('select id, type, time_created, data from session_message where session_id = ? order by seq').all(session.id);

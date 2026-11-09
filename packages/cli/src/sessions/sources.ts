@@ -212,6 +212,7 @@ const opencode: Source = {
         ...(session.parent === null ? {} : { subagent: { parent: `opencode-${session.parent}`, agentType: session.agent, spawnedBy: null } }),
       })),
       transcript: (session) => store.transcript(need(byId.get(session.id))),
+      headOnly: (session) => store.headOnly(need(byId.get(session.id))),
       rejected: store.rejected,
       unreadable: [],
       where: () => join(root, 'opencode.db'),
