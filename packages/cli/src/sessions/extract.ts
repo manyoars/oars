@@ -1804,7 +1804,8 @@ export const captureSession = (input: ExtractInput): Capture => {
         // Depth reads below the repository root, else the working folder, as the target's hash does; a relative value is taken from the working folder first.
         const argFeatures = argFeaturesOf(native, toolInput, lineRoot ?? lineCwd, lineCwd);
         const argValues = argValuesOf(native, toolInput, CLOSED_ARG_VALUES);
-        const names = argNamesOf(native, toolInput, lineRoot ?? lineCwd, lineCwd, shell?.words ?? [], CLOSED_ARG_VALUES);
+        // A name is stored as the line's text is: masked at capture, so a credential-shaped folder or file name never reaches the store. The mask has no name shape, so the wire still drops it and counts it.
+        const names = argNamesOf(native, toolInput, lineRoot ?? lineCwd, lineCwd, shell?.words ?? [], CLOSED_ARG_VALUES).map(({ kind, name }) => ({ kind, name: redact(name) }));
         const compared: ComparedCall = { input: toolInput, target: aimed.target, features: argFeatures, values: argValues };
         const lastKey = `${String(cur?.index ?? null)}\n${String(side)}\n${stored}`;
         const before = lastCall.get(lastKey);

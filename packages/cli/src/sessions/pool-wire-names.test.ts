@@ -95,6 +95,15 @@ describe('what is dropped from the names', () => {
     expect(bytesOf(skeleton)).not.toContain('AKIAABCDEFGHIJKLMNOP');
   });
 
+  it('masks a credential-shaped name at capture, so the stored record holds none, and the wire still counts it dropped', () => {
+    const planted = call('a', 'Read', { file_path: '/w/src/AKIAABCDEFGHIJKLMNOP/plan.md' });
+    const held = captured(planted);
+    expect(JSON.stringify(held.tools)).not.toContain('AKIAABCDEFGHIJKLMNOP');
+    const skeleton = skeletonOfLines({ redact, terms: [] }, planted);
+    expect(toolsOf(skeleton)[0]?.namesDropped).toBe(bucketOf('count', 1));
+    expect(bytesOf(skeleton)).not.toContain('AKIAABCDEFGHIJKLMNOP');
+  });
+
   it('sends no folder above the session root: the home folder is the operating system account name', () => {
     const skeleton = skeletonOfLines({ redact, terms: [] }, call('a', 'Read', { file_path: '/home/jsmith-acct/notes/plan.md' }), call('b', 'Read', { file_path: 'C:\\Users\\jsmith-acct\\notes\\plan.md' }), call('c', 'Read', { file_path: '/w/src/ledger.ts' }));
     const [outside, windows, inside] = toolsOf(skeleton);
