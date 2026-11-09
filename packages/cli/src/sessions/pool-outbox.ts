@@ -207,12 +207,15 @@ const namesIn = async (folder: string): Promise<string[]> => {
 };
 
 /** Removes every batch under this stamp whose session is not in `kept`, and returns how many went. A session that fails a gate, leaves the allowlist, or is gone from the store never enters the outbox, so an earlier pass's batch of it cannot stay. */
-export const removeBatchesExcept = async (outbox: string, kept: ReadonlySet<string>, stamp: string = currentStamp(), only?: string): Promise<number> => {
+export const removeBatchesExcept = async (outbox: string, kept: ReadonlySet<string> | (() => Promise<ReadonlySet<string>>), stamp: string = currentStamp(), only?: string): Promise<number> => {
   const folder = join(outbox, stamp);
   let removed = 0;
-  for (const name of await namesIn(folder)) {
+  const names = await namesIn(folder);
+  // A reader is asked once the names are in hand: a key it reads then covers every batch listed above.
+  const keep = typeof kept === 'function' ? await kept() : kept;
+  for (const name of names) {
     const found = BATCH_FILE.exec(name);
-    if (found !== null && !kept.has(found[1] ?? '') && (only === undefined || found[1] === only)) {
+    if (found !== null && !keep.has(found[1] ?? '') && (only === undefined || found[1] === only)) {
       await rm(join(folder, name), { force: true });
       removed += 1;
     }
@@ -272,6 +275,25 @@ export const heldBatchOf = async (outbox: string, key: string, stamp: string = c
     if (bytes !== undefined) return { key, hash, file, bytes };
   }
   return undefined;
+};
+
+const machineKeysFile = (outbox: string): string => join(outbox, 'machine-keys.log');
+
+/** The batch keys a machine's Stop built, one per line. A person's `oars pool deposit` shares the outbox and cannot recompute them (the machine's name is in the key), so its sweep keeps these instead of treating them as batches of sessions the store lost. */
+export const machineKeys = async (outbox: string): Promise<Set<string>> => {
+  try {
+    return new Set((await readFile(machineKeysFile(outbox), 'utf8')).split('\n').filter((line) => line !== ''));
+  } catch (error) {
+    if (isAbsent(error)) return new Set();
+    throw error;
+  }
+};
+
+/** Notes that a machine built this key; a key already noted adds no line. */
+export const noteMachineKey = async (outbox: string, key: string): Promise<void> => {
+  if ((await machineKeys(outbox)).has(key)) return;
+  await mkdirOwnerOnly(outbox);
+  await appendOwnerOnly(machineKeysFile(outbox), `${key}\n`);
 };
 
 const shownFile = (outbox: string): string => join(outbox, 'shown.log');

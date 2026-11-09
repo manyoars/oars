@@ -145,12 +145,22 @@ describe('runMachineChild: an expired client', () => {
     expect(existsSync(noticeFile(given.staged.storeDir))).toBe(false);
   });
 
-  it('writes one entry however many Stops find it expired', async () => {
+  it('writes one entry, and only once a day, however many Stops find it expired', async () => {
     const given = scene('https://github.com/owner/name');
     await run(given, { OARS_ALLOW_REPOS: 'owner/name', ...TERMS }, () => EXPIRED);
     await run(given, { OARS_ALLOW_REPOS: 'owner/name', ...TERMS }, () => EXPIRED + 1);
     const written: unknown = JSON.parse(readFileSync(noticeFile(given.staged.storeDir), 'utf8'));
-    expect(written).toEqual({ entries: [{ code: 'vocabulary_expired', at: EXPIRED + 1 }] });
+    expect(written).toEqual({ entries: [{ code: 'vocabulary_expired', at: EXPIRED }] });
+  });
+
+  it('a failure is one line in pool-send.log, never a throw', async () => {
+    const given = scene('https://github.com/owner/name');
+    // A pool address that is plain http to another host is refused where the child names its outbox: a failure the child has to survive.
+    await run(given, { OARS_ALLOW_REPOS: 'owner/name', ...TERMS, OARS_POOL_URL: 'http://pool.example' });
+    const log = readFileSync(join(given.staged.storeDir, 'pool-send.log'), 'utf8');
+    expect(log.trimEnd().split(/\r?\n/)).toHaveLength(1);
+    expect(log).toMatch(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z .*http/);
+    expect(batches(given.staged)).toEqual([]);
   });
 });
 

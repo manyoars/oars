@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness } from '../test-support.js';
-import { sessionsHookInstall, sessionsHookUninstall } from './command.js';
+import { sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall } from './command.js';
 import { groupsOf, hasOwn, hooksOf, MACHINE_COMMAND, readSettings, type InstallRuntime } from './install.js';
 import { machineOf } from './machine.js';
 
@@ -74,7 +74,7 @@ describe('hook install --machine at project scope', () => {
     await sessionsHookInstall(depsIn(dir), { ...base, scope: 'project', machine: true });
     expect(groupsOf(hooksOf(await readSettings(file)), 'Stop')).toHaveLength(2);
     const outcome = await sessionsHookUninstall(depsIn(dir), { scope: 'project', file: undefined });
-    expect(outcome.document).toMatchObject({ ok: true, removed: ['SessionEnd'] });
+    expect(outcome.document).toMatchObject({ ok: true, removed: ['SessionEnd', 'Stop'] });
     const after = await readSettings(file);
     expect(after.model).toBe('opus');
     expect(hooksOf(after)).toEqual({ Stop: [{ hooks: [theirs] }], SessionEnd: [{ hooks: [theirs] }] });
@@ -94,6 +94,13 @@ describe('hook install --machine at project scope', () => {
     await expect(sessionsHookInstall(depsIn(dir), { ...base, machine: true, harness: 'codex' })).rejects.toThrow('do not apply');
     await expect(sessionsHookInstall(depsIn(dir), { ...base, machine: true, schedule: 'off' })).rejects.toThrow('do not apply');
     await expect(sessionsHookInstall(depsIn(dir), { ...base, env: ['OARS_HOST_CLASS=vps'] })).rejects.toThrow('belong to --machine');
+  });
+
+  it('refuses --keep-retention and --file beside --machine: it leaves the retention alone and names no file', async () => {
+    const dir = scratch();
+    await expect(sessionsHookInstall(depsIn(dir), { ...base, scope: 'user', machine: true, keepRetention: true, env: ['OARS_HOST_CLASS=vps'] })).rejects.toThrow('--keep-retention');
+    await expect(sessionsHookInstall(depsIn(dir), { ...base, scope: 'user', machine: true, file: join(dir, 'x.json'), env: ['OARS_HOST_CLASS=vps'] })).rejects.toThrow('--file');
+    expect(existsSync(join(dir, 'user', 'settings.json'))).toBe(false);
   });
 });
 
@@ -148,7 +155,7 @@ describe('hook install --machine at user scope', () => {
     expect(readFileSync(termsFile, 'utf8')).toBe('new corp\n');
   });
 
-  it('a re-install that names OARS_EXCLUSION_TERMS drops the earlier inline terms, and the other way round', async () => {
+  it('a re-install that names OARS_EXCLUSION_TERMS drops the earlier inline terms, and the other way around', async () => {
     const dir = scratch();
     const file = join(dir, 'user', 'settings.json');
     const named = join(dir, 'terms', 'named.txt');
@@ -187,7 +194,7 @@ describe('hook install --machine at user scope', () => {
     const file = join(dir, 'user', 'settings.json');
     await sessionsHookInstall(depsIn(dir), { ...base, scope: 'user', machine: true, env: ['OARS_HOST_CLASS=cloud'] });
     const outcome = await sessionsHookUninstall(depsIn(dir), { scope: 'user', file: undefined });
-    expect(outcome.document).toMatchObject({ removed: ['SessionEnd'] });
+    expect(outcome.document).toMatchObject({ removed: ['SessionEnd', 'Stop'] });
     expect(hooksOf(await readSettings(file))).toEqual({});
   });
 });
@@ -221,5 +228,52 @@ describe('hook install --machine through the command line', () => {
     const argv = ['sessions', 'hook', 'install', '--scope', 'user', '--machine', '--env', 'OARS_HOST_CLASS=vps', '--env', 'OARS_EXCLUSION_TERMS_INLINE=acme corp', '--terms-file', termsFile];
     expect(await run(argv, deps)).toBe(ExitCode.OK);
     expect((await readSettings(join(dir, 'user', 'settings.json'))).env).toEqual({ OARS_HOST_CLASS: 'vps', OARS_EXCLUSION_TERMS: termsFile });
+  });
+});
+
+describe('a plain install and a machine install leave each other alone', () => {
+  const commands = (groups: unknown[]): string[] => groups.flatMap((group) => {
+    const hooks: unknown = typeof group === 'object' && group !== null ? Reflect.get(group, 'hooks') : undefined;
+    return Array.isArray(hooks) ? hooks.flatMap((hook: unknown) => {
+      const command: unknown = typeof hook === 'object' && hook !== null ? Reflect.get(hook, 'command') : undefined;
+      return typeof command === 'string' ? [command] : [];
+    }) : [];
+  });
+
+  it('a plain install keeps the machine Stop entry, and a machine install keeps the plain SessionEnd entry', async () => {
+    const dir = scratch();
+    const file = join(dir, 'user', 'settings.json');
+    await sessionsHookInstall(depsIn(dir), { ...base, scope: 'user', machine: true, env: ['OARS_HOST_CLASS=vps'] });
+    await sessionsHookInstall(depsIn(dir), { ...base, scope: 'user' });
+    const hooks = hooksOf(await readSettings(file));
+    expect(commands(groupsOf(hooks, 'Stop'))).toEqual([MACHINE_COMMAND]);
+    expect(commands(groupsOf(hooks, 'SessionEnd'))).toHaveLength(2);
+    // The other way around: a machine install after the plain one leaves the plain SessionEnd entry.
+    await sessionsHookInstall(depsIn(dir), { ...base, scope: 'user', machine: true, env: ['OARS_HOST_CLASS=vps'] });
+    const again = hooksOf(await readSettings(file));
+    expect(commands(groupsOf(again, 'SessionEnd')).filter((command) => command.includes('hook-bin.js'))).toHaveLength(1);
+    expect(commands(groupsOf(again, 'SessionEnd')).filter((command) => command === MACHINE_COMMAND)).toHaveLength(1);
+    expect(commands(groupsOf(again, 'Stop'))).toEqual([MACHINE_COMMAND]);
+  });
+
+  it('status names Stop, and uninstall removes what both installs wrote', async () => {
+    const dir = scratch();
+    await sessionsHookInstall(depsIn(dir), { ...base, scope: 'user', machine: true, env: ['OARS_HOST_CLASS=vps'] });
+    await sessionsHookInstall(depsIn(dir), { ...base, scope: 'user' });
+    const status = await sessionsHookStatus(depsIn(dir), { file: undefined });
+    expect(JSON.stringify(status.document)).toContain('"Stop"');
+    const outcome = await sessionsHookUninstall(depsIn(dir), { scope: 'user', file: undefined });
+    expect(Reflect.get(outcome.document, 'removed')).toContain('Stop');
+    expect(hooksOf(await readSettings(join(dir, 'user', 'settings.json')))).toEqual({});
+  });
+
+  it('a settings file that cannot be read leaves no terms file written', async () => {
+    const dir = scratch();
+    const file = join(dir, 'user', 'settings.json');
+    const termsFile = join(dir, 'terms', 'exclude.txt');
+    mkdirSync(join(dir, 'user'), { recursive: true });
+    writeFileSync(file, '{ not json');
+    await expect(sessionsHookInstall(depsIn(dir), { ...base, scope: 'user', machine: true, env: ['OARS_HOST_CLASS=vps', 'OARS_EXCLUSION_TERMS_INLINE=acme'], termsFile })).rejects.toMatchObject({ exitCode: ExitCode.USAGE });
+    expect(existsSync(termsFile)).toBe(false);
   });
 });
