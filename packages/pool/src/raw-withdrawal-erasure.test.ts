@@ -118,6 +118,31 @@ describe('the nightly cron erases the raw copies of an account that withdrew', (
     ]);
   }, 60_000);
 
+  it('keeps what was stored under a yes when that yes is said again or restated for another covenant version', async () => {
+    const { token, account } = await member();
+    const pause = (): Promise<unknown> => new Promise((resolve) => setTimeout(resolve, 5));
+    const before = await store(token, 'stored before the withdrawal, again');
+    expect((await withdraw(token)).status).toBe(200);
+    await pause();
+    expect((await say(token)).status).toBe(200);
+    await pause();
+    const kept = await store(token, 'stored under the yes after the withdrawal');
+    await pause();
+    // A second typed yes from any machine does not move the start of the standing yes.
+    expect((await say(token)).status).toBe(200);
+    await pause();
+    // A yes restated for a new covenant version (the row holds an older one) does not move it either.
+    await (await pool.db()).prepare('UPDATE accounts SET raw_consent_version = ? WHERE id = ?').bind('v0', account).run();
+    const restated = await store(token, 'stored as the yes was restated');
+    await night();
+    expect(await keysOf(`raw/${account}/`)).toEqual([kept, restated].map((hash) => `raw/${account}/${hash}`).sort());
+    expect(await all('SELECT sha256, erased_on FROM raw_objects WHERE account = ? ORDER BY stored_at', account)).toEqual([
+      { sha256: before, erased_on: '2026-11-10' },
+      { sha256: kept, erased_on: null },
+      { sha256: restated, erased_on: null },
+    ]);
+  }, 60_000);
+
   it('erases an object that finished after the withdrawal was written, since no yes stands', async () => {
     const { token, account } = await member();
     const straggler = await store(token, 'finished as the withdrawal landed');
