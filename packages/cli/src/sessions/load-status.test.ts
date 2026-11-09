@@ -88,7 +88,7 @@ describe('the measured Codex rule', () => {
     expect(codex(snapshot({ working: 1 }, 1), false).working).toBe('miss');
   });
 
-  it('labels a user-level file unknown: the fixture could not measure it', () => {
+  it('labels a user-level file unknown: it was not measured (this machine has none, and measuring needs a copied login)', () => {
     expect(codex(snapshot({ user: 1 }, 0), false).user).toBe('unknown');
   });
 

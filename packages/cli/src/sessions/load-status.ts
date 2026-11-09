@@ -2,7 +2,7 @@
 // records, so a change to a rule below bumps LOAD_STATUS_VERSION and needs no new capture. `load-status.jsonl` is rewritten from them and is safe to delete.
 //
 // The rule is what a fixture measured for each harness, not what a harness documents: a live session per case on a temp tree, reading only that session's own log. Each position
-// is one of `load` (the harness read a file there), `skip` (it did not, by design), or `unmeasured` (the fixture could not run the case). What was not measured stays `unknown`.
+// is one of `load` (the harness read a file there), `skip` (it did not, by design), or `unmeasured` (the case was not measured). What was not measured stays `unknown`.
 import { INSTRUCTION_POSITIONS, positionOfLevel, readCandidates, type CandidateSnapshot, type InstructionPosition } from './candidates.js';
 import type { LoadedInstructions, SessionObservation } from './schema.js';
 
@@ -27,7 +27,7 @@ type Rules = { [position in InstructionPosition]: Rule };
 const RULES: ReadonlyMap<string, Rules> = new Map<string, Rules>([
   // Climbs past the git root to the filesystem root. A linked worktree nested inside its main checkout skips exactly that span, and the climb resumes above it.
   ['claude-code', { working: 'load', parent: 'load', above: 'load', mainCheckout: 'skip', user: 'load' }],
-  // Reads from the git root down to the working folder and stops there. The user-level file could not be measured: this machine has none.
+  // Reads from the git root down to the working folder and stops there. The user-level file was not measured: this machine has none, and measuring needs a copied login.
   ['codex', { working: 'load', parent: 'load', above: 'skip', mainCheckout: 'skip', user: 'unmeasured' }],
 ]);
 

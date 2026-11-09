@@ -1416,12 +1416,26 @@ const internTool = (tool: ToolObservation, intern: (value: string) => string): T
   ...(tool.segments === undefined ? {} : { segments: tool.segments.map((segment) => ({ ...segment, run: intern(segment.run) })) }),
 });
 
+/** What a read keeps beyond the default. */
+export type LoadOptions = {
+  /** Keep each session's `messageUsage` entries. Nothing in the store reads them yet, and on a large store they are a third more heap, so a read holds them only when asked. */
+  messageUsage?: boolean;
+};
+
+const withoutMessageUsage = (session: SessionObservation): SessionObservation => {
+  if (session.messageUsage === undefined) return session;
+  const rest = { ...session };
+  Reflect.deleteProperty(rest, 'messageUsage');
+  return rest;
+};
+
 /**
  * The store as a reader sees it: for each session only the highest `rev`. A version-3 or later session is derived here from its capture records
  * (EXTRACTOR_VERSION rules); a session whose last deposit was version 2 keeps the prompt and error lines that deposit wrote.
  * `afterFirstPass` runs between the two passes over the log: a seam for the test that compacts the log there.
+ * `options.messageUsage` keeps the per-message usage entries on each session record; without it they are dropped as the record is read.
  */
-export const loadStore = async (storeDir: string, afterFirstPass?: () => Promise<void>): Promise<Store> => {
+export const loadStore = async (storeDir: string, afterFirstPass?: () => Promise<void>, options: LoadOptions = {}): Promise<Store> => {
   // Two passes, so a superseded record is never held: the first keeps one number per session, the second keeps only the records at that rev.
   // A re-capture leaves the old copies in the log until a compaction, and holding them as well doubled the heap of every read.
   // Both passes read one open file: a lock-free reader can meet a compaction between them, and a second open would see the compacted log, where
@@ -1442,7 +1456,7 @@ export const loadStore = async (storeDir: string, afterFirstPass?: () => Promise
     for await (const line of logLines(file, held)) {
       const observation = observationOf(line);
       if (observation === undefined || observation.rev !== latest.get(observation.session)) continue;
-      if (observation.kind === 'session') of(observation.session).session = observation;
+      if (observation.kind === 'session') of(observation.session).session = options.messageUsage === true ? observation : withoutMessageUsage(observation);
       else if (observation.kind === 'user-prompt') of(observation.session).prompts.push(observation);
       else if (observation.kind === 'tool') of(observation.session).tools.push(internTool(observation, intern));
       else if (observation.kind === 'error-line') of(observation.session).errorLines.push(observation);

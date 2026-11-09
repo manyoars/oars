@@ -31,7 +31,12 @@
 // with no archives is unchanged. EXTRACTOR stays 11. A version-16 store's next deposit captures every transcript again from the harness or `raw/`.
 //
 // Version 29 (CAPTURE 29) adds the optional `loadedInstructions` to the session record: counts of the instruction files the transcript shows loaded, by level, never a path. It changes no value captured
-// before; a version-28 store's next deposit captures every transcript again, and a session recorded before then has none until it is. (28 is left to the capture that took it first.)
+// before; an older store's next deposit captures every transcript again, and a session recorded before then has none until it is.
+//
+// Version 28 (CAPTURE 28) adds the optional `messageUsage` to the session record: one entry per distinct model message (a Claude Code `message.id`, a Codex response), holding that message's token counts,
+// the ids of the tool calls it made, and, for Codex, the plan percent used and window length when the event held a rate-limit block (`MessageUsage`). Numbers and ids only; the counts are never split across the
+// message's calls. For a Codex event that did not report a cache category, that category is no longer observed, so `usageObserved` omits it and the skeleton and pool wire send null where they sent a zero bucket; no other value changes and EXTRACTOR stays as it is. A version-27 store's next deposit captures every transcript again, and a session recorded before then has no `messageUsage`
+// until it is: nothing reads the field back into the older record. A file that reports no usage gets none either way.
 //
 // Version 27 (CAPTURE 27) adds three optional fields to a tool call (`call-shape.ts`), each computed from the input at capture and stored as closed-list members, never a value: `argFeatures` (per key, the value's size and,
 // for a path, its depth, extension class, and folder kind, for a pattern what it uses), `argValues` (a boolean, or a string its tool's closed list holds), and `changeKind` (what changed from the previous call of the
@@ -143,6 +148,35 @@ export interface Usage {
   cacheRead: number;
   output: number;
   thinking: number;
+}
+
+/**
+ * One model message's token counts (class L: numbers and ids only, never content). Claude Code writes a message over several content-block lines that each repeat the same `usage`, so
+ * a message is counted once, keyed by its `message.id` (else the line's `requestId`); a Codex response is keyed by the response id the reader gives it. The counts belong to the
+ * message and are never split across its tool calls: `calls` lists the tool-use ids the message made, and a later read can allocate. A category the source did not report is absent,
+ * never a zero. Summing these over a session record gives the deduplicated total for the file, `side` entries included.
+ */
+export interface MessageUsage {
+  /** The message id, else the request id; null when the line holds neither (each such line is its own message). */
+  id: string | null;
+  /** The tool-use ids of the calls this message made, in order; empty when it made none. */
+  calls: string[];
+  /** True for a message on a sidechain line of a main transcript, which the session's `usage` total leaves out. */
+  side?: true;
+  input?: number;
+  cacheWrite?: number;
+  cacheRead?: number;
+  output?: number;
+  /** From `output_tokens_details.thinking_tokens` (Codex: the reasoning output tokens); absent when the source did not report it. */
+  thinking?: number;
+  /** Codex only: the plan share used as the response's event reported it. Absent when the event held no rate-limit block, never a zero. */
+  plan?: { primary?: PlanWindow; secondary?: PlanWindow };
+}
+
+/** One plan window a Codex event reports (`rate_limits.primary` or `.secondary`): the percent used and the window's length in minutes when given. */
+export interface PlanWindow {
+  usedPercent: number;
+  windowMinutes?: number;
 }
 
 /** The five usage categories, in the order a record lists the ones it observed. */
@@ -304,6 +338,8 @@ export interface SessionObservation {
   usageObserved?: UsageField[];
   /** How many responses reported any usage (class P); compare with `assistantTurns` or `turns` for the share a sum covers. Same absence rule as `usageObserved`. */
   usageResponses?: number;
+  /** One entry per distinct model message that reported usage, in file order (CAPTURE 28); see `MessageUsage`. Absent when the file reports no usage, and on a record captured before version 28. */
+  messageUsage?: MessageUsage[];
   /** What the transcript shows of the setup the session ran with (class A); absent when it shows none, and on a record captured before version 12. */
   setup?: SessionSetup;
   /** The tool names at each funnel stage the transcript shows (class A); same absence rules. */

@@ -23,7 +23,8 @@
 //                       That these records are persisted into the rollout is rollout/src/policy.rs:83, :91, and :137 at ac558e2.
 //   event_msg user_message {message}            a prompt (the `response_item` user messages also hold injected context, so they are not read)
 //   event_msg agent_message {message}           the assistant's text
-//   event_msg token_count {info.last_token_usage}  one model response's usage, closing the lines since the last one
+//   event_msg token_count {info.last_token_usage, rate_limits.primary/.secondary {used_percent, window_minutes}}  one model response's usage, closing the lines since the last one, and the plan share used when the event holds it
+//                       (read in preference to `token_usage_record`: it is the event already read for usage, it is the one that carries `rate_limits`, and it is on more responses)
 //   response_item function_call / local_shell_call / custom_tool_call   a tool call
 //   response_item function_call_output {call_id, output}   a shell call's outcome: the text `Exit code: N` / `Process exited with code N` then `Output:`
 //                       (the unified-exec emitter's own text, core/src/tools/events.rs:400, :416, :423; context.rs:556), the real exit code; `execution error: ...` (core/src/tools/events.rs:438) is a
@@ -270,22 +271,42 @@ const outcomeOf = (raw: unknown): { text: string; exit: number | undefined; spaw
 const failureOf = (exit: number | undefined, text: string): string | undefined =>
   exit === undefined || exit === 0 ? undefined : exit < 0 && text.trim() !== '' ? text : `Exit code ${String(exit)}\n${text}`;
 
+/** One `rate_limits` window: the plan share used and the window's length. Absent when the event holds no number for it, never a zero. */
+const windowOf = (raw: unknown): Obj | undefined => {
+  if (!isObj(raw)) return undefined;
+  const usedPercent = num(raw.used_percent);
+  if (usedPercent === undefined) return undefined;
+  const windowMinutes = num(raw.window_minutes);
+  return { usedPercent, ...(windowMinutes === undefined ? {} : { windowMinutes }) };
+};
+
+/** The event's `rate_limits.primary` and `.secondary`, or undefined when it holds neither (older rollouts and local models write none). */
+const rateLimitsOf = (payload: Obj): Obj | undefined => {
+  const limits = isObj(payload.rate_limits) ? payload.rate_limits : undefined;
+  const primary = windowOf(limits?.primary);
+  const secondary = windowOf(limits?.secondary);
+  return primary === undefined && secondary === undefined ? undefined : { ...(primary === undefined ? {} : { primary }), ...(secondary === undefined ? {} : { secondary }) };
+};
+
 const usageOf = (info: unknown): Obj | undefined => {
   const last = isObj(info) && isObj(info.last_token_usage) ? info.last_token_usage : undefined;
   if (last === undefined) return undefined;
   const input = num(last.input_tokens) ?? 0;
-  const cached = Math.min(num(last.cached_input_tokens) ?? 0, input);
+  const reportedCached = num(last.cached_input_tokens);
+  const cached = Math.min(reportedCached ?? 0, input);
   const output = num(last.output_tokens) ?? 0;
   // A zero total means Codex recorded none, so no usage is written rather than a measured zero.
   if (input === 0 && output === 0) return undefined;
   const reasoning = num(last.reasoning_output_tokens);
-  const written = num(last.cache_write_input_tokens) ?? 0;
+  const reportedWritten = num(last.cache_write_input_tokens);
+  const written = reportedWritten ?? 0;
   // Codex counts cached and written tokens both inside `input_tokens` (input 100 = cached 40 + write 60, codex-api/src/sse/responses.rs:889-911); capture's
   // `input` excludes cache reads and creation, as the Claude Code path's does, so each token is counted once.
   return {
     input_tokens: Math.max(input - cached - written, 0),
-    cache_read_input_tokens: cached,
-    cache_creation_input_tokens: written,
+    // A category the event left out stays out (older rollouts carry no cache keys), so it is neither a zero entry nor an observed field.
+    ...(reportedCached === undefined ? {} : { cache_read_input_tokens: cached }),
+    ...(reportedWritten === undefined ? {} : { cache_creation_input_tokens: written }),
     output_tokens: output,
     ...(reasoning === undefined ? {} : { output_tokens_details: { thinking_tokens: reasoning } }),
   };
@@ -528,6 +549,9 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
         if (usage !== undefined && (total === undefined || total !== lastTotal) && open !== undefined) {
           const first = open.message;
           if (isObj(first)) first.usage = usage;
+          // The plan reading rides the response's first line beside its usage, so a repeated event adds neither.
+          const rateLimits = rateLimitsOf(payload);
+          if (rateLimits !== undefined) open.rateLimits = rateLimits;
           lastTotal = total;
           response += 1;
           open = undefined;

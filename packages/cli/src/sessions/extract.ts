@@ -40,6 +40,8 @@ import {
   type ToolObservation,
   type ToolPull,
   USAGE_FIELDS,
+  type MessageUsage,
+  type PlanWindow,
   type Usage,
   type UsageField,
   type UsageKey,
@@ -275,6 +277,28 @@ const readUsage = (message: Obj): LineUsage | undefined => {
     hasThinking: thinking !== undefined,
     observed: reported.filter(([, value]) => value !== undefined).map(([field]) => field),
   };
+};
+
+/** The usage categories a line reported, as the fields of a `MessageUsage`; a category the source left out is not written. */
+const reportedUsage = (line: LineUsage): Pick<MessageUsage, 'input' | 'cacheWrite' | 'cacheRead' | 'output' | 'thinking'> => {
+  const fields: Pick<MessageUsage, 'input' | 'cacheWrite' | 'cacheRead' | 'output' | 'thinking'> = {};
+  for (const field of USAGE_FIELDS) if (line.observed.includes(field)) fields[field] = line.usage[field];
+  return fields;
+};
+
+const planWindowOf = (raw: unknown): PlanWindow | undefined => {
+  if (!isObj(raw)) return undefined;
+  const usedPercent = num(raw.usedPercent);
+  const windowMinutes = num(raw.windowMinutes);
+  return usedPercent === undefined ? undefined : { usedPercent, ...(windowMinutes === undefined ? {} : { windowMinutes }) };
+};
+
+/** The plan share a Codex line carries (`rateLimits`, written by `rolloutLines`), or undefined when it carries none. */
+const planOf = (line: Obj): MessageUsage['plan'] => {
+  const limits = isObj(line.rateLimits) ? line.rateLimits : undefined;
+  const primary = planWindowOf(limits?.primary);
+  const secondary = planWindowOf(limits?.secondary);
+  return primary === undefined && secondary === undefined ? undefined : { ...(primary === undefined ? {} : { primary }), ...(secondary === undefined ? {} : { secondary }) };
 };
 
 const toSeconds = (timestamp: string | undefined): number | undefined => {
@@ -1498,6 +1522,9 @@ export const captureSession = (input: ExtractInput): Capture => {
   const callsPerResponse = new Map<string, number>();
   const outputPerResponse = new Map<string, number>();
   const seenResponses = new Set<string>();
+  /** The distinct messages that reported usage, by message key, and the tool-use ids each made (kept apart so a call on a line before the first usage line is still tied). */
+  const messageGroups = new Map<string, MessageUsage>();
+  const callsOfMessage = new Map<string, string[]>();
   let promptFingerprint: string | null = null;
   let cur: Current | undefined;
   // The setup, funnel, and trust shape. A subagent's run is the parent's, so it has no run of its own alone.
@@ -1624,6 +1651,13 @@ export const captureSession = (input: ExtractInput): Capture => {
       if (text !== '' && !side) {
         session.userTurns += 1;
       }
+    }
+    // A message is the unit usage belongs to: the same id on every content-block line is one message, and a replayed line is the same one again.
+    // Only Claude Code and Codex report per-message counts; another harness's totals are not a message's, and a synthetic line is the harness speaking.
+    const messageKey = (harness === 'claude-code' || harness === 'codex') && messageModel !== '<synthetic>' && type === 'assistant' && role === 'assistant' ? str(message.id) || str(o.requestId) || `line ${String(position)}` : undefined;
+    if (messageKey !== undefined && lineUsage !== undefined && !messageGroups.has(messageKey)) {
+      const plan = planOf(o);
+      messageGroups.set(messageKey, { id: str(message.id) || str(o.requestId) || null, calls: [], ...(side ? { side: true } : {}), ...reportedUsage(lineUsage), ...(plan === undefined ? {} : { plan }) });
     }
     if (type === 'assistant' && role === 'assistant') {
       session.assistantTurns += 1;
@@ -1801,6 +1835,7 @@ export const captureSession = (input: ExtractInput): Capture => {
           ...(manifest === undefined ? {} : { manifest }),
         };
         tools.push(call);
+        if (id !== undefined && messageKey !== undefined) callsOfMessage.set(messageKey, [...(callsOfMessage.get(messageKey) ?? []), id]);
         if (id !== undefined) callById.set(id, { call, at: lineSeconds, plan: shell?.commitPlan ?? [] });
       } else if (blockType === 'tool_result') {
         const text = resultText(block);
@@ -1901,6 +1936,8 @@ export const captureSession = (input: ExtractInput): Capture => {
       frameId,
     }));
   }
+  for (const [key, group] of messageGroups) group.calls = callsOfMessage.get(key) ?? [];
+  if (messageGroups.size > 0) session.messageUsage = [...messageGroups.values()];
   // The strata: the file's evidence once, and each prompt's own `explore` from one pass over the calls. The size is the one the frame holds, so a re-capture that carries `repoSize` keeps `repoFiles` too.
   const packageNames = tools.flatMap((call) => [...(call.packages ?? []).map((pkg) => pkg.package), ...(call.manifest?.seen ?? []), ...(call.manifest?.added ?? [])]);
   const fileStrata = strataOf({ paths: framePaths, packages: packageNames, size });
