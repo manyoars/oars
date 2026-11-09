@@ -111,7 +111,8 @@ const storeDeposit = async (env: Env, caller: Caller, secret: string, text: stri
   // The counts the floors compare are clusters of accounts, not accounts (t937): taken once the row and its contributor records are committed, for every cell and stratum this account holds, not only this batch's: the repo keys and hours it adds belong to the account, so they can join it to another account in cells the batch never touched.
   await recount(env, 'cell', await heldBy(env, account, 'cell'));
   await recount(env, 'stratum', await heldBy(env, account, 'stratum'));
-  return answer(201, { ok: true, id: skeleton.id });
+  // A machine's key learns when it ends from every deposit it makes, so the machine can say so before it does.
+  return answer(201, { ok: true, id: skeleton.id, ...(machine === undefined ? {} : { machineExpiresAt: machine.expiresAt }) });
 };
 
 const deposit = async (request: Request, env: Env): Promise<Response> => {

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { COVENANT_TEXTS } from './covenant-texts.js';
 import { answer, bodyOf, bound, refuse, textField, type Bound, type Env } from './http.js';
 import { accountOf } from './identity.js';
+import { callerOf } from './machines.js';
 
 export const depositsClosed = (): Response => refuse(403, 'deposits_closed', 'This pool is not taking deposits: its covenant is not published.');
 
@@ -47,8 +48,10 @@ export const covenantStatus = async (request: Request, env: Env, texts: Readonly
   const version = bound(env.COVENANT_VERSION);
   if (version === undefined) return answer(200, { version: null, accepted: false });
   await servedOf(env, version).run();
-  const account = await accountOf(request, env);
-  return answer(200, { version, accepted: account !== undefined && (await hasAccepted(env, account, version)), screen: screenOf(version, texts) });
+  // A machine's key reads its account's acceptance, and learns when it ends; a key that is not live is refused by name, as at a deposit.
+  const caller = await callerOf(request, env, Date.now());
+  if (caller instanceof Response) return caller;
+  return answer(200, { version, accepted: caller !== undefined && (await hasAccepted(env, caller.account, version)), screen: screenOf(version, texts), ...(caller?.machine === undefined ? {} : { machineExpiresAt: caller.machine.expiresAt }) });
 };
 
 /** The longest `input` or `client` an acceptance may state: a name and a version, so a row stays small whatever a caller sends. */

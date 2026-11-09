@@ -21,7 +21,7 @@ describe('the machines table', () => {
   it('holds the key hash, account, label, host class, launcher, allow list, state, expiry, and fingerprint hash, and what the routes need beside them', async () => {
     const columns = (await (await pool.db()).prepare('PRAGMA table_info(machines)').all()).results.map((column) => textOf(column, 'name'));
     expect(columns.sort()).toEqual(
-      ['account', 'activated_at', 'allow_repos', 'created_at', 'expires_at', 'fingerprint_hash', 'host_class', 'id', 'key_hash', 'label', 'last_deposit_day', 'launcher', 'retired_hash', 'rotated_at', 'state'].sort(),
+      ['account', 'activated_at', 'allow_repos', 'created_at', 'expires_at', 'fingerprint_hash', 'host_class', 'id', 'key_days', 'key_hash', 'label', 'last_deposit_day', 'launcher', 'retired_hash', 'rotated_at', 'state'].sort(),
     );
   });
 

@@ -9,3 +9,5 @@ ALTER TABLE deposits ADD COLUMN claimed_host_class TEXT;
 ALTER TABLE deposits ADD COLUMN claimed_launcher TEXT;
 -- The UTC day (`YYYY-MM-DD`) of the last deposit stored with the machine's key, null until it has one. A day and not a time: the account sees when a machine last deposited, not when in the day.
 ALTER TABLE machines ADD COLUMN last_deposit_day TEXT;
+-- How many days the key lives from its activation, as enrollment asked (`days`, 1 to 365), null for the pool's default. The default lives in the code (`KEY_LIFE_MS`), so changing it moves every machine that asked for none; the token's own 24 hours are not this.
+ALTER TABLE machines ADD COLUMN key_days INTEGER;
