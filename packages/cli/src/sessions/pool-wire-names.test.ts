@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { argNamesOf, type ArgName } from './call-shape.js';
 import { captureSession } from './extract.js';
 import { printOf, sessionsFrom, store, storedNames } from './pool-fixture.js';
+import { FIELD_ROWS } from './pool-outbox.js';
 import { bucketOf, skeletonOf, type SessionSkeleton, type WireGate } from './pool-wire.js';
 import { CLOSED_ARG_VALUES } from './public-vocabulary.js';
 import { makeRedactor } from './redact.js';
@@ -257,5 +258,9 @@ describe('what is dropped from the names', () => {
     const read = (...args: ReturnType<typeof w>[]) => argNamesOf('Bash', { command: 'x' }, '/w', '/w', [{ before: [], head: w('tool'), args }], CLOSED_ARG_VALUES);
     expect(read(w('--token'), w('abc'), w('--api-key'), w('def'), w('--apikey=ghi'), w('--access-token'), w('jkl'), w('--passwd=mno'), w('--private-key'), w('pqr'))).toEqual([]);
     expect(read(w('--customer=globex'), w('--tokenizer'), w('bert'))).toEqual(names('flag', 'bert', 'globex'));
+  });
+
+  it('says in the register row of name that a name token that fails is dropped and counted, never sent as private', () => {
+    expect(FIELD_ROWS.name).toContain('a name token that fails is dropped and counted, never sent as `private`');
   });
 });
