@@ -174,6 +174,32 @@ describe('what is dropped from the names', () => {
     for (const value of ['dbpassvalue', 'ghtokenvalue', 'mysqlvalue', 'vaultvalue', 'phrasevalue', 'vendorvalue', 'sshvalue', 'awsvalue', 'pwdvalue', 'credvalue']) expect(bytesOf(skeleton)).not.toContain(value);
   });
 
+  it('reads no variable name out of single-quoted text, which no shell expands, and still reads one outside single quotes', () => {
+    const skeleton = skeletonOfLines(
+      { redact, terms: [] },
+      call('a', 'Bash', { command: "mysql --password 'abc$hunter2' --region eu_control" }),
+      call('b', 'Bash', { command: "deploy --token 'x$opaquetoken' --customer cust_control" }),
+      call('c', 'Bash', { command: "curl -u me:'abc$hunter4' https://example.test" }),
+      call('d', 'Bash', { command: "git commit -m 'charge $customer_name twice'" }),
+      call('e', 'Bash', { command: "awk '{print $account_id}' notes.txt" }),
+      call('f', 'Bash', { command: 'deploy --region "$BUILD_ID"' }),
+      call('g', 'Bash', { command: 'bash -c "mysql --password \'abc$hunter6\' --region eu_inner"' }),
+      call('h', 'Bash', { command: 'curl --token $API_TOKEN x' }),
+    );
+    const [mysql, deploy, curl, commit, awk, control, inner, expanded] = toolsOf(skeleton);
+    expect(mysql?.names).toEqual(names('flag', 'eu_control'));
+    expect(deploy?.names).toEqual(names('flag', 'cust_control'));
+    expect(curl?.names ?? []).toEqual([]);
+    expect(commit?.names ?? []).toEqual([]);
+    expect(awk?.names ?? []).toEqual([]);
+    expect(control?.names).toEqual(names('env', 'BUILD_ID'));
+    expect(inner?.names).toEqual(names('flag', 'eu_inner'));
+    // A reference outside single quotes stays a name, even as the value of a credential flag: it is the variable's name, not its value.
+    expect(expanded?.names).toEqual(names('env', 'API_TOKEN'));
+    for (const value of ['hunter2', 'opaquetoken', 'hunter4', 'customer_name', 'account_id', 'hunter6']) expect(bytesOf(skeleton)).not.toContain(value);
+    expect(bytesOf(skeleton)).toContain('BUILD_ID');
+  });
+
   it('reads no flag value after a credential-named flag in the name read itself', () => {
     const w = (text: string) => ({ text, quoted: false });
     const read = (...args: ReturnType<typeof w>[]) => argNamesOf('Bash', { command: 'x' }, '/w', '/w', [{ before: [], head: w('tool'), args }], CLOSED_ARG_VALUES);

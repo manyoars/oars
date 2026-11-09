@@ -255,6 +255,8 @@ export interface ArgName {
 export interface CommandWord {
   text: string;
   quoted: boolean;
+  /** Some part of the word sat in single quotes: no shell expands a `$name` there, so the word holds no variable reference. A mixed word is skipped whole, which sends less, never more. */
+  literal?: boolean;
 }
 
 /** A shell command's words as the name read takes them: those before the program (assignments, wrappers), the program's own word, and its arguments. */
@@ -353,6 +355,7 @@ export const argNamesOf = (
       if (assigned !== undefined && assigned !== null) add('env', assigned);
     }
     for (const word of [...before, head, ...args]) {
+      if (word.literal === true) continue;
       for (const match of word.text.matchAll(ENV_REFERENCE)) add('env', match[1] ?? match[2] ?? '');
     }
     for (const name of flagValueNames(args)) add('flag', name);

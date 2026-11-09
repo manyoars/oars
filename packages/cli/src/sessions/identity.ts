@@ -12,6 +12,8 @@ import type { PullEcosystem, PullIdentity, ShellIdentity, StepIdentity, ToolPull
 export interface WordOfCommand {
   text: string;
   quoted: boolean;
+  /** Set when any part of the word sat in single quotes, which no shell expands: a `$name` in it is text, not a variable. */
+  literal?: boolean;
 }
 
 const orLiteral = (name: string, allowed: ReadonlySet<string>): string => (allowed.has(name) ? name : LITERAL);

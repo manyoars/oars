@@ -750,14 +750,16 @@ const tokenize = (text: string): ShellToken[] => {
   const tokens: ShellToken[] = [];
   let word = '';
   let quoted = false;
+  let literal = false;
   let started = false;
   let redirected = false;
   const flush = (): void => {
     if (started && redirected) redirected = false;
     else if (started && !quoted && (word === '{' || word === '}')) tokens.push(word === '{' ? 'open' : 'close');
-    else if (started) tokens.push({ text: word, quoted });
+    else if (started) tokens.push(literal ? { text: word, quoted, literal } : { text: word, quoted });
     word = '';
     quoted = false;
+    literal = false;
     started = false;
   };
   const op = (token: ShellOp): void => {
@@ -777,6 +779,7 @@ const tokenize = (text: string): ShellToken[] => {
       const stop = end < 0 ? text.length : end;
       word += text.slice(at + 1, stop);
       quoted = true;
+      literal = true;
       started = true;
       at = stop + 1;
     } else if (char === '"') {
