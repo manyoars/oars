@@ -237,7 +237,7 @@ export const holdPull = async (deps: RunDeps, options: { server?: string | undef
   const admitted: PullAdmission[] = [];
   const refused: PullRefusal[] = [];
   if (repos.length === 0) return { document: { ok: true, admitted, refused }, text: 'No machine is enrolled: nothing to pull. oars pool enroll --hold-only enrolls one.' };
-  // An empty term file refuses everything, as the local gate does (C9): a digest of no terms would admit a branch from an environment that held none.
+  // An empty term file refuses everything, as the local gate does: a digest of no terms would admit a branch from an environment that held none.
   const termsFile = exclusionPaths(runtime.projectsRoot, deps.env).terms;
   const terms = await loadTerms(termsFile);
   if (terms.length === 0) throw new CliError(`No exclusion terms in ${termsFile}: every branch would be unverifiable. Nothing was fetched.`, ExitCode.USAGE, STEP);
