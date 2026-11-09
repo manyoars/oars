@@ -2,7 +2,7 @@
 // bundle the pool serves. Shown stays shown, held stays held, and missing stays unknown. The floors are set to 1 so one account's cells are served. Every id and version here is invented.
 import { describe, expect, it } from 'vitest';
 import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from '../../cli/src/sessions/pool-fixture.js';
-import { NO_COVERAGE, OPEN_GATE, recommendationsOf, skeletonOf, verifyBundle, VOCAB_VERSION, type Bundle, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
+import { NO_COVERAGE, OPEN_GATE, parseSkeleton, recommendationsOf, skeletonOf, verifyBundle, VOCAB_VERSION, type Bundle, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { deriveConsequences } from '../../cli/src/sessions/recall-consequence.js';
 import { makeRecall, type Recall } from '../../cli/src/sessions/recall-object.js';
 import { acceptanceOf, fieldOf, startPool, stubUser, type TestPool } from './test-pool.js';
@@ -29,7 +29,9 @@ const sentFor = (sid: string, key: string, rows: readonly Recall[]): SessionSkel
   const [only] = sessionsFrom(records);
   const built = only === undefined ? null : skeletonOf(only, key, storedNames, printOf, [], OPEN_GATE, NO_COVERAGE, recommendationsOf(deriveConsequences(records, rows), sid));
   if (built === null) throw new Error('no skeleton');
-  return JSON.parse(JSON.stringify(built)) as SessionSkeleton;
+  const parsed = parseSkeleton(JSON.parse(JSON.stringify(built)));
+  if (!parsed.ok) throw new Error(`${parsed.field}: ${parsed.reason}`);
+  return parsed.skeleton;
 };
 
 const bundleFor = async (target: TestPool, token: string): Promise<Bundle> => {
