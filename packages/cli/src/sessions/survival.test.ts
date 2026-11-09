@@ -49,16 +49,25 @@ const commitIn = (dir: string, name: string): string => {
   return sha;
 };
 
-// Every test starts from the same one-commit repository, and building it costs three git processes (init, add, commit). Under load process creation is what
-// slows, and that bill was paid in each of ~40 tests until a slow one ran past its timeout; so it is paid once and each test copies the folder, which spawns nothing.
+// Every test starts from the same one-commit repository, and building it costs three git processes (init, add, commit). Spawn count is the suspected cost under
+// load, so it is paid once and each test copies the folder, which spawns nothing.
 let template = '';
+let sharedDir = '';
+let sharedSha = '';
 beforeAll(() => {
   template = mkdtempSync(join(tmpdir(), 'oars-survival-template-'));
   gitIn(template, 'init', '-q', '-b', 'main');
   commitIn(template, 'first');
+  // One published repository for the tests that only read after setup: the code under test never writes (`GIT_OPTIONAL_LOCKS=0`), so they share it, and
+  // a test that moves a ref or needs a second distinct repository keeps `makeRepo`.
+  sharedDir = mkdtempSync(join(tmpdir(), 'oars-survival-shared-'));
+  cpSync(template, sharedDir, { recursive: true });
+  sharedSha = commitIn(sharedDir, 'shared');
+  gitIn(sharedDir, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
 });
 afterAll(() => {
   removeHeld(template);
+  removeHeld(sharedDir);
 });
 
 /** A repository whose `origin/main` is the checked-out `main`, moved by `publish`. */
@@ -68,6 +77,8 @@ const makeRepo = (): string => {
   cpSync(template, dir, { recursive: true });
   return dir;
 };
+
+const shared = (): { repo: string; sha: string } => ({ repo: sharedDir, sha: sharedSha });
 
 const publish = (dir: string): void => {
   gitIn(dir, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
@@ -129,9 +140,7 @@ describe('recordSurvival', () => {
   });
 
   it('names no commit younger than SURVIVAL_DAYS', async () => {
-    const repo = makeRepo();
-    const sha = commitIn(repo, 'young');
-    publish(repo);
+    const { repo, sha } = shared();
     const young = new Date(NOW - (SURVIVAL_DAYS - 1) * 86_400_000).toISOString();
     const { s, project } = await staged(repo, [{ sha, ts: young }]);
     expect(SURVIVAL_DAYS).toBe(7);
@@ -305,9 +314,7 @@ describe('recordSurvival', () => {
   });
 
   it('never reads a folder outside the allowlist, even one the store holds', async () => {
-    const repo = makeRepo();
-    const sha = commitIn(repo, 'private');
-    publish(repo);
+    const { repo, sha } = shared();
     const { s } = await staged(repo, [{ sha }]);
     const seen: string[] = [];
     const git: Git = (root) => {
@@ -320,9 +327,7 @@ describe('recordSurvival', () => {
   });
 
   it('reads the transcript from raw/ once the harness has cleaned it up', async () => {
-    const repo = makeRepo();
-    const sha = commitIn(repo, 'kept');
-    publish(repo);
+    const { repo, sha } = shared();
     const { s, project } = await staged(repo, [{ sha }]);
     rmSync(join(s.projectsRoot, project), { recursive: true, force: true });
     expect(await recordSurvival(s.runtime, [project], () => NOW)).toEqual({ survived: 1, reverted: 0, unreachable: 0, unknown: 0 });
@@ -347,9 +352,7 @@ describe('recordSurvival', () => {
   });
 
   it('keeps a known state when a later read fails, so a passing git failure does not undo an observation', async () => {
-    const repo = makeRepo();
-    const sha = commitIn(repo, 'kept');
-    publish(repo);
+    const { repo, sha } = shared();
     const { s, project } = await staged(repo, [{ sha }]);
     await recordSurvival(s.runtime, [project], () => NOW);
     const failing: Git = () => Promise.reject(new Error('git broke'));
@@ -358,9 +361,7 @@ describe('recordSurvival', () => {
   });
 
   it('counts a sha only once when two sessions name it, and keeps a known state over the other session unknown', async () => {
-    const repo = makeRepo();
-    const sha = commitIn(repo, 'twice');
-    publish(repo);
+    const { repo, sha } = shared();
     const { s, project } = await staged(repo, [{ sha }]);
     addProject(s, project, 'two', transcript(repo, [{ sha }]));
     await deposit(s.runtime, { allow: [project], redactDomains: [], now: () => NOW });
@@ -369,9 +370,7 @@ describe('recordSurvival', () => {
   });
 
   it('reads the repository it names, not one an inherited GIT_DIR points at', async () => {
-    const repo = makeRepo();
-    const sha = commitIn(repo, 'named');
-    publish(repo);
+    const { repo, sha } = shared();
     const other = makeRepo();
     publish(other);
     const { s, project } = await staged(repo, [{ sha }]);
@@ -386,9 +385,7 @@ describe('recordSurvival', () => {
   });
 
   it('reads a signed revert under log.showSignature, whose signature line git prints ahead of the format', async () => {
-    const repo = makeRepo();
-    const sha = commitIn(repo, 'undone');
-    publish(repo);
+    const { repo, sha } = shared();
     const { s, project } = await staged(repo, [{ sha }]);
     const full = gitIn(repo, 'rev-parse', 'HEAD');
     const revert = 'a'.repeat(40);
@@ -416,9 +413,7 @@ describe('recordSurvival', () => {
   });
 
   it('reads no commit from a sidechain call in the main transcript', async () => {
-    const repo = makeRepo();
-    const sha = commitIn(repo, 'side');
-    publish(repo);
+    const { repo, sha } = shared();
     const s = stage('unused');
     const project = slugOf(repo);
     const onSidechain = transcript(repo, [{ sha }]).map((line, index) => (index === 0 ? line : `{"isSidechain":true,${line.slice(1)}`));
@@ -430,9 +425,7 @@ describe('recordSurvival', () => {
   });
 
   it('reads no commit a subagent transcript names', async () => {
-    const repo = makeRepo();
-    const sha = commitIn(repo, 'agent');
-    publish(repo);
+    const { repo, sha } = shared();
     const s = stage('unused');
     const project = slugOf(repo);
     addProject(s, project, 'one', transcript(repo, []));
@@ -448,9 +441,7 @@ describe('recordSurvival', () => {
   describe('a transcript that names no usable cwd', () => {
     /** One old commit under a `cwd` of another project, then `after`: git must never run and the sha must read unknown. */
     const expectUnread = async (after: (repo: string, elsewhere: string) => string[]): Promise<void> => {
-      const repo = makeRepo();
-      const sha = commitIn(repo, 'kept');
-      publish(repo);
+      const { repo, sha } = shared();
       // A real repository, so that reading a cwd of another project would run git and fail this.
       const elsewhere = makeRepo();
       const s = stage('unused');
@@ -504,9 +495,7 @@ describe('who reads it', () => {
   afterEach(removeTestDirs);
 
   it('a manual deposit observes and reports it, as text and in --json', async () => {
-    const repo = makeRepo();
-    const sha = commitIn(repo, 'kept');
-    publish(repo);
+    const { repo, sha } = shared();
     const { s, project } = await staged(repo, [{ sha }]);
     const h = harness();
     h.deps.sessions = s.runtime;
@@ -520,9 +509,7 @@ describe('who reads it', () => {
   });
 
   it('a manual deposit says so when it could not read survival, and still succeeds', async () => {
-    const repo = makeRepo();
-    const sha = commitIn(repo, 'kept');
-    publish(repo);
+    const { repo, sha } = shared();
     const { s, project } = await staged(repo, [{ sha }]);
     // Reads back fine, and the append fails: the file's name is taken by a directory.
     rmSync(survivalFile(s.storeDir), { force: true });
@@ -552,9 +539,7 @@ describe('who reads it', () => {
   });
 
   it('the nightly run observes it, from the saved allowlist', async () => {
-    const repo = makeRepo();
-    const sha = commitIn(repo, 'kept');
-    publish(repo);
+    const { repo, sha } = shared();
     const { s } = await staged(repo, [{ sha }]);
     await runHook('nightly', '', s.runtime, () => NOW);
     expect(lines(s)).toEqual([{ sha, state: 'survived', day: '2026-06-30' }]);
@@ -562,9 +547,7 @@ describe('who reads it', () => {
   });
 
   it('the nightly run records one line when it could not read survival, since no one is watching it', async () => {
-    const repo = makeRepo();
-    const sha = commitIn(repo, 'kept');
-    publish(repo);
+    const { repo, sha } = shared();
     const { s } = await staged(repo, [{ sha }]);
     // Reads back fine, and the append fails: the file's name is taken by a directory.
     mkdirSync(survivalFile(s.storeDir));
@@ -573,9 +556,7 @@ describe('who reads it', () => {
   });
 
   it('the Stop hook never does: a session waits on it', async () => {
-    const repo = makeRepo();
-    const sha = commitIn(repo, 'kept');
-    publish(repo);
+    const { repo, sha } = shared();
     const { s, project } = await staged(repo, [{ sha }]);
     const file = join(s.projectsRoot, project, 'one.jsonl');
     await runHook('stop', JSON.stringify({ transcript_path: file }), s.runtime, () => NOW);
@@ -587,9 +568,7 @@ describe('books reads it', () => {
   afterEach(removeTestDirs);
 
   it('over a real deposit, with the closing line last, and no closing line when there is no row', async () => {
-    const repo = makeRepo();
-    const sha = commitIn(repo, 'kept');
-    publish(repo);
+    const { repo, sha } = shared();
     const { s, project } = await staged(repo, [{ sha }]);
     const h = harness();
     h.deps.sessions = s.runtime;
