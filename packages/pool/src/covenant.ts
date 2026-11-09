@@ -1,5 +1,5 @@
 // The covenant gate. It lives at the server because a live URL is reachable by anyone and a CLI check would not hold: with no COVENANT_VERSION nothing can deposit, and once one is set an account must have accepted exactly that version.
-import { answer, bodyOf, bound, refuse, textField, type Env } from './http.js';
+import { answer, bodyOf, bound, refuse, textField, type Bound, type Env } from './http.js';
 import { accountOf } from './identity.js';
 
 export const depositsClosed = (): Response => refuse(403, 'deposits_closed', 'This pool is not taking deposits: its covenant is not published.');
@@ -12,10 +12,17 @@ export const hasAccepted = async (env: Env, account: string, version: string): P
   return textField(row, 'covenant') === version;
 };
 
+/**
+ * The statement that records the time the pool first served a version, so the funnel's start is on record without anyone remembering a deploy step. It rides on the two routes that name the version in force and writes nothing when none is set. `INSERT OR IGNORE`
+ * writes no row once the version is there, so the first time never moves and a read after the first costs one statement that changes nothing.
+ */
+export const servedOf = (env: Env, version: string): Bound => env.DB.prepare('INSERT OR IGNORE INTO covenant_served (version, first_served_at) VALUES (?, ?)').bind(version, Date.now());
+
 /** `GET /v1/covenant`: the version is public, so it answers with no sign-in, and `accepted` is then simply false. */
 export const covenantStatus = async (request: Request, env: Env): Promise<Response> => {
   const version = bound(env.COVENANT_VERSION);
   if (version === undefined) return answer(200, { version: null, accepted: false });
+  await servedOf(env, version).run();
   const account = await accountOf(request, env);
   return answer(200, { version, accepted: account !== undefined && (await hasAccepted(env, account, version)) });
 };
@@ -29,6 +36,11 @@ export const covenantAccept = async (request: Request, env: Env): Promise<Respon
   const named = textField(await bodyOf(request), 'version');
   if (named === undefined) return refuse(400, 'missing_field', 'An acceptance names its version.', 'version');
   if (named !== version) return refuse(409, 'covenant_version', `The covenant in force is ${version}, not ${named}.`, 'version');
-  await env.DB.prepare('UPDATE accounts SET covenant = ? WHERE id = ?').bind(version, account).run();
+  // One transaction: the history row and the column the gate reads change together, and a repeat of a version on record keeps its first time (`OR IGNORE`). A client that accepts without reading first still leaves the version's start on record.
+  await env.DB.batch([
+    servedOf(env, version),
+    env.DB.prepare('INSERT OR IGNORE INTO covenant_acceptances (account, version, accepted_at) VALUES (?, ?, ?)').bind(account, version, Date.now()),
+    env.DB.prepare('UPDATE accounts SET covenant = ? WHERE id = ?').bind(version, account),
+  ]);
   return answer(200, { ok: true, version });
 };

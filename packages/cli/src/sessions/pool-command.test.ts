@@ -456,7 +456,7 @@ describe('no harness token is ever read', () => {
 
 describe('the session-start snapshot stays out of a deposit', () => {
   /** Every key the snapshot, the loaded set, or a status row owns (`skills` is a wire name too, so the byte comparison covers it). */
-  const OWNED_KEYS = ['loadedInstructions', 'repoLevels', 'mainLevels', 'mainCheckout', 'instructions', 'hooks', 'levels', 'candidates', 'loadStatus'];
+  const OWNED_KEYS = ['loadedInstructions', 'repoLevels', 'mainLevels', 'mainCheckout', 'instructions', 'hooks', 'levels', 'candidates', 'loadStatus', 'workingKinds', 'dotClaude', 'ancestors', 'local', 'rules', 'files'];
   const SALT = '0123456789abcdef0123456789abcdef';
   /** The harness's record of the instruction files it loaded: the transcript's loaded set comes from it. */
   const INSTRUCTIONS_RECORD = JSON.stringify({
@@ -465,7 +465,16 @@ describe('the session-start snapshot stays out of a deposit', () => {
     parentUuid: null,
     timestamp: '2026-05-28T20:26:42.000Z',
     version: '2.1.300',
-    attachment: { type: 'instructions', files: [{ path: '/work/app/CLAUDE.md', type: 'Project' }, { path: '/home/u/.claude/CLAUDE.md', type: 'User' }] },
+    attachment: {
+      type: 'instructions',
+      files: [
+        { path: '/work/app/CLAUDE.md', type: 'Project' },
+        { path: '/home/u/.claude/CLAUDE.md', type: 'User' },
+        { path: '/work/app/CLAUDE.local.md', type: 'Local' },
+        { path: '/work/app/.claude/CLAUDE.md', type: 'Project' },
+        { path: '/work/app/.claude/rules/style.md', type: 'Project' },
+      ],
+    },
   });
 
   /** A store signed in and deposited through the command. Both stores hold the loaded set, since the transcript carries it; only `snapshot` adds `candidates.jsonl`, which names the captured session. */
@@ -476,9 +485,9 @@ describe('the session-start snapshot stays out of a deposit', () => {
     appendFileSync(join(scene.staged.projectsRoot, 'proj', 'errors-a.jsonl'), `${INSTRUCTIONS_RECORD}\n`);
     await capture(scene);
     const held = (await loadStore(scene.staged.storeDir)).sessions.find((one) => one.loadedInstructions !== undefined);
-    expect(held?.loadedInstructions, 'the transcript produced a loaded set').toEqual({ user: 1, levels: [0] });
+    expect(held?.loadedInstructions, 'the transcript produced a loaded set').toEqual({ user: 1, levels: [0], local: 1, dotClaude: 1, rules: 1 });
     if (snapshot) {
-      const shot = { v: 1, session: held?.session, at: '2026-11-09T07:00:00.000Z', harness: 'claude-code', instructions: { working: 3, parent: 2, above: 1, mainCheckout: 5, user: 1 }, skills: { project: 4, user: 7 }, hooks: { SessionStart: 1 }, repoLevels: 2, mainLevels: 3 };
+      const shot = { v: 2, session: held?.session, at: '2026-11-09T07:00:00.000Z', harness: 'claude-code', instructions: { working: 3, parent: 2, above: 1, mainCheckout: 5, user: 1 }, workingKinds: { local: 1, dotClaude: 1, rules: 2 }, skills: { project: 4, user: 7 }, hooks: { user: {}, working: { SessionStart: 1 }, ancestors: { Stop: 1 } }, repoLevels: 2, mainLevels: 3 };
       writeFileSync(join(scene.staged.storeDir, 'candidates.jsonl'), `${JSON.stringify(shot)}\n`);
     }
     await signIn(scene);
