@@ -3,8 +3,11 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { nightlyPoolSend } from './pool-nightly.js';
+import { sentLog } from './pool-sent.js';
 import { harness } from '../test-support.js';
-import { poolDeposit } from './pool-command.js';
+import { poolDeposit, poolOutbox, type Reply, type Sender } from './pool-command.js';
+import type { Outgoing } from './pool-print.js';
 import { REGISTER_FIXTURE } from './pool-fixture.js';
 import { currentStamp, discardStale, outboxFolder, pulledAt, removeBatchesExcept, staleBatches, staleBatchesAnywhere, writeBatch } from './pool-outbox.js';
 import { deposit, updatePoolChoices } from './store.js';
@@ -18,6 +21,30 @@ const OLD = 'v1-0a0a0a0a';
 const OLDER = 'v0-0b0b0b0b';
 const KEY = '0123456789abcdef';
 const LOCAL_KEY = '1111111111111111';
+
+const answer = (status: number, body: unknown = {}): Reply => ({ status, body, headers: new Headers() });
+const OPEN = answer(200, { version: 'v1', accepted: true });
+
+interface Pool {
+  requests: Outgoing[];
+  via: Sender;
+}
+
+/** Stands in for the pool: records each request and answers from `routes` (a list is spent in order, the last standing). */
+const wire = (routes: { [route: string]: Reply | Reply[] }): Pool => {
+  const requests: Outgoing[] = [];
+  return {
+    requests,
+    via: (request) => {
+      requests.push(request);
+      const route = routes[`${request.method} ${request.url.pathname}`];
+      const reply = Array.isArray(route) ? (route.length > 1 ? route.shift() : route[0]) : route;
+      return Promise.resolve(reply ?? answer(404, { error: 'not_found', message: 'No such route.' }));
+    },
+  };
+};
+
+const ACCEPTING = { 'GET /v1/covenant': OPEN, 'POST /v1/deposits': answer(201, { ok: true }) };
 
 interface Scene {
   staged: Staged;
@@ -125,3 +152,72 @@ describe('a pulled batch survives the prune', () => {
   });
 });
 
+
+/** The deposits a pool stand-in took, as the bodies posted. */
+const posted = (pool: Pool): string[] => pool.requests.filter((request) => request.method === 'POST' && request.url.pathname === '/v1/deposits').map((request) => String(request.body));
+
+describe('the send reads every stamp pulled.json lists', () => {
+  it('sends a pulled batch filed under an older stamp once, after a stamp change and a deposit pass, and drops its entry', async () => {
+    const s = await scene();
+    const hash = await admit(s, KEY, OLD);
+    const pool = wire(ACCEPTING);
+    const first = await nightlyPoolSend(s.deps, pool.via);
+    expect(first.outcome).toBe('sent');
+    expect(posted(pool).filter((body) => body.includes(`"id":"${KEY}"`))).toHaveLength(1);
+    expect([...(await sentLog(s.outbox)).keys()]).toContain(hash);
+    expect(pulledJson(s)).toEqual({});
+    const again = wire(ACCEPTING);
+    await nightlyPoolSend(s.deps, again.via);
+    expect(posted(again).filter((body) => body.includes(`"id":"${KEY}"`))).toEqual([]);
+  });
+
+  it('sends a pulled batch filed under the current stamp and drops its entry', async () => {
+    const s = await scene();
+    const hash = await admit(s, KEY, currentStamp());
+    const pool = wire(ACCEPTING);
+    await nightlyPoolSend(s.deps, pool.via);
+    expect(posted(pool).filter((body) => body.includes(`"id":"${KEY}"`))).toHaveLength(1);
+    expect([...(await sentLog(s.outbox)).keys()]).toContain(hash);
+    expect(pulledJson(s)).toEqual({});
+  });
+
+  it('never sends a local stale batch that shares the folder with a pulled one', async () => {
+    const s = await scene();
+    await admit(s, KEY, OLD);
+    await writeBatch(s.outbox, LOCAL_KEY, pulledBatch(LOCAL_KEY), OLD);
+    const pool = wire(ACCEPTING);
+    await nightlyPoolSend(s.deps, pool.via);
+    expect(posted(pool).filter((body) => body.includes(`"id":"${LOCAL_KEY}"`))).toEqual([]);
+    expect(posted(pool).filter((body) => body.includes(`"id":"${KEY}"`))).toHaveLength(1);
+  });
+
+  it('prints a pulled batch under an older stamp in `oars pool outbox`, and sends it by `deposit --send` once it was shown', async () => {
+    const s = await scene();
+    const hash = await admit(s, KEY, OLD);
+    await writeBatch(s.outbox, LOCAL_KEY, pulledBatch(LOCAL_KEY), OLD);
+    const printed = await poolOutbox(s.deps, { server: POOL });
+    expect(printed.document).toMatchObject({ batches: [{ hash }], stale: 1 });
+    const pool = wire(ACCEPTING);
+    const sent = await poolDeposit(s.deps, { server: POOL, send: hash, via: pool.via });
+    expect(sent.document).toMatchObject({ ok: true, sent: true });
+    expect(posted(pool)).toHaveLength(1);
+    expect(pulledJson(s)).toEqual({});
+    const stale = await poolDeposit(s.deps, { server: POOL, send: hash, via: pool.via });
+    expect(stale.document).toMatchObject({ sent: false });
+  });
+
+  it('refuses a hash that sits under an older stamp but is not listed', async () => {
+    const s = await scene();
+    const { hash } = await writeBatch(s.outbox, LOCAL_KEY, pulledBatch(LOCAL_KEY), OLD);
+    await expect(poolDeposit(s.deps, { server: POOL, send: hash, via: wire(ACCEPTING).via })).rejects.toThrow(/not in the outbox|unknown|no batch/iu);
+  });
+
+  it('reads no path out of a stamp pulled.json lists that is not a stamp folder name', async () => {
+    const s = await scene();
+    listPulled(s, { [KEY]: '../../elsewhere' });
+    const pool = wire(ACCEPTING);
+    const night = await nightlyPoolSend(s.deps, pool.via);
+    expect(night.outcome).toBe('sent');
+    expect(posted(pool).filter((body) => body.includes(`"id":"${KEY}"`))).toEqual([]);
+  });
+});

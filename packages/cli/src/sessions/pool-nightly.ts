@@ -7,10 +7,10 @@ import type { RunDeps } from '../cli.js';
 import { machineOf } from './machine.js';
 import { ask, DEPOSIT, isObject, networkSender, poolDeposit, poolServer, postBatch, postRaw, runtimeOf, signedIn, textIn, vocabularyExpired, type Sender } from './pool-command.js';
 import { rawStale } from './pool-choices.js';
-import { heldBatches, lockedBatch, outboxFolder } from './pool-outbox.js';
+import { heldAcross, lockedBatch, outboxFolder } from './pool-outbox.js';
 import { heldRaw } from './pool-raw.js';
 import { withSendLock } from './pool-send-lock.js';
-import { markSent, sentHashes } from './pool-sent.js';
+import { markSent, retirePulled, sentHashes } from './pool-sent.js';
 import { readState } from './store.js';
 
 export type NightlyOutcome = 'no-server' | 'machine' | 'not-signed-in' | 'not-accepted' | 'failed' | 'sent';
@@ -62,14 +62,20 @@ const night = async (deps: RunDeps, net: Sender, tally: NightlyPool): Promise<Ni
     // The outbox is built only for an account that has accepted, then sent: the same gates `oars pool deposit` runs, so nothing queues that a person could not print.
     await poolDeposit(deps, { server, covenant: version });
     const done = await sentHashes(outbox);
-    for (const batch of (await heldBatches(outbox)).batches) {
-      if (done.has(batch.hash)) continue;
-      // Acceptance is the consent, so nothing was printed first; the file is still read and hashed again just before the request.
-      const locked = await lockedBatch(outbox, batch.hash, { requireShown: false });
-      if (!locked.ok) continue;
-      await postBatch(deps, { server, token, bytes: locked.bytes, hash: batch.hash, via: net });
-      await markSent(outbox, batch.hash, deps.now());
-      tally.batches += 1;
+    // The current stamp's batches, then those `hold pull` filed under another stamp that outlived a vocabulary or field-list change.
+    try {
+      for (const batch of (await heldAcross(outbox)).batches) {
+        if (done.has(batch.hash)) continue;
+        // Acceptance is the consent, so nothing was printed first; the file is still read and hashed again just before the request.
+        const locked = await lockedBatch(outbox, batch.hash, { requireShown: false, stamp: batch.stamp });
+        if (!locked.ok) continue;
+        await postBatch(deps, { server, token, bytes: locked.bytes, hash: batch.hash, via: net });
+        await markSent(outbox, batch.hash, deps.now());
+        tally.batches += 1;
+      }
+    } finally {
+      // A pulled batch whose hash is in `sent.log` is done, however the night ended.
+      await retirePulled(outbox, 'pool-nightly');
     }
     // Raw goes only with its own yes, read again here so an answer changed since the build wins.
     const choices = (await readState(storeDir)).pool;

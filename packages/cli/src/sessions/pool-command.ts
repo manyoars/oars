@@ -12,14 +12,14 @@ import { makeCoverage, readCoverageSetting, writeCoverageSetting } from './cover
 import { checkSession, exclusionPaths, lastWritten, loadTerms, transcriptFilesOf, type Reason } from './exclusion.js';
 import { localNames, makeRedactor, REDACTION_VERSION, redactTranscript } from './redact.js';
 import { recordSend, recordWire, newTally, tallyBatch } from '../telemetry/wire.js';
-import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, lockedBatch, machineKeys, markShown, noteMachineKey, outboxFolder, partsOf, pulledAt, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
+import { discardStale, FIELD_ROWS, fieldsOf, heldAcross, lockedAcross, machineKeys, markShown, noteMachineKey, outboxFolder, partsOf, pulledAt, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
 import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, unpinnedKid, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
 import { carriedDeltas, heldDeltas, keptDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { rawAllowed, rawStale, sendsOf } from './pool-choices.js';
 import { heldRaw, rawParts, removeRawExcept, writeRaw } from './pool-raw.js';
 import { SendLockBusy, withSendLock } from './pool-send-lock.js';
-import { markSent, sentLog } from './pool-sent.js';
+import { markSent, retirePulled, sentLog } from './pool-sent.js';
 import { shellReader } from './projection.js';
 import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
 import { contentHash, FIRST_ORDER_FAMILIES } from './read.js';
@@ -431,14 +431,18 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
     return await withSendLock(outbox, async () => {
       // The rule the nightly follows: a hash `sent.log` holds is not posted again. Read under the lock, so two runs cannot both see it unsent.
       const sentAt = (await sentLog(outbox)).get(hash);
-      if (sentAt !== undefined) return { document: { ok: true, server, hash, sent: false, sentAt }, text: `already sent ${hash} at ${sentAt}` };
-      const locked = await lockedBatch(outbox, hash);
+      if (sentAt !== undefined) {
+        await retirePulled(outbox, DEPOSIT);
+        return { document: { ok: true, server, hash, sent: false, sentAt }, text: `already sent ${hash} at ${sentAt}` };
+      }
+      const locked = await lockedAcross(outbox, hash);
       if (!locked.ok) throw refuse(locked.code, lockMessages[locked.code]);
       await openCovenant(deps, server, token, options.acceptCovenant, via);
       const bytes = await unchangedBytes(locked.file, hash);
       if (bytes === undefined) throw refuse('batch_changed', lockMessages.batch_changed);
       await postBatch(deps, { server, token, bytes, hash, via });
       await markSent(outbox, hash, deps.now());
+      await retirePulled(outbox, DEPOSIT);
       return { document: { ok: true, server, hash, sent: true }, text: `Sent batch ${hash} to ${server}.` };
     });
   } catch (error) {
@@ -654,7 +658,7 @@ export const poolOutbox = async (deps: RunDeps, options: { server?: string | und
   const server = poolServer(deps.env, OUTBOX, options.server);
   const { token } = await signedIn(deps, runtime.storeDir, server, OUTBOX);
   const outbox = outboxFolder(runtime.storeDir, server);
-  const { batches, edited } = await heldBatches(outbox);
+  const { batches, edited } = await heldAcross(outbox);
   const masker = new Masker();
   masker.add(token);
   const sent = await sentLog(outbox);

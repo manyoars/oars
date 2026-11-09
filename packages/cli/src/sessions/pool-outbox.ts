@@ -247,30 +247,58 @@ export const unchangedBytes = async (file: string, hash: string): Promise<string
 export interface Held {
   /** The session's key in the outbox (the batch's account-hashed id). */
   key: string;
+  /** The stamp folder the batch is filed under. */
+  stamp: string;
+  /** Whether `oars pool hold pull` admitted it (its key is listed in `pulled.json` at this stamp), as against a batch this machine built. */
+  pulled: boolean;
   hash: string;
   file: string;
   bytes: string;
 }
 
-/** The batches built under this client's vocabulary, field list, and skeleton format, and how many of their files no longer hash to their names. An edited file is not printed and cannot be sent: run `deposit` again to rebuild it. */
+/**
+ * The batches filed under this stamp, and how many of their files no longer hash to their names. An edited file is not printed and cannot be sent: run `deposit` again to rebuild it. Under the current stamp that is every batch this client built;
+ * under any other stamp it is only a batch `pulled.json` lists there, since anything else in that folder is stale and is never printed or sent.
+ */
 export const heldBatches = async (outbox: string, stamp: string = currentStamp()): Promise<{ batches: Held[]; edited: number }> => {
   const folder = join(outbox, stamp);
+  const listed = await pulledAt(outbox, stamp);
+  const here = stamp === currentStamp();
   const batches: Held[] = [];
   let edited = 0;
   for (const name of await namesIn(folder)) {
     const found = BATCH_FILE.exec(name);
     if (found === null) continue;
     const [, key = '', hash = ''] = found;
+    if (!here && !listed.has(key)) continue;
     const file = join(folder, name);
     const bytes = await unchangedBytes(file, hash);
     if (bytes === undefined) edited += 1;
-    else batches.push({ key, hash, file, bytes });
+    else batches.push({ key, stamp, pulled: listed.has(key), hash, file, bytes });
   }
   return { batches, edited };
 };
 
+/** The stamps a send reads: the current one, then every other stamp `pulled.json` lists. A listed name that is not a stamp folder is not a path this reads. */
+export const sendStamps = async (outbox: string): Promise<string[]> => {
+  const others = new Set(Object.values(await readPulled(outbox, POOL_STEP)).filter((stamp) => stamp !== currentStamp() && STAMP_FOLDER.test(stamp)));
+  return [currentStamp(), ...[...others].sort()];
+};
+
+/** `heldBatches` over every stamp a send reads, the current one first. */
+export const heldAcross = async (outbox: string): Promise<{ batches: Held[]; edited: number }> => {
+  const all: Held[] = [];
+  let edited = 0;
+  for (const stamp of await sendStamps(outbox)) {
+    const held = await heldBatches(outbox, stamp);
+    all.push(...held.batches);
+    edited += held.edited;
+  }
+  return { batches: all, edited };
+};
+
 /** The held batch of one session under this stamp, read whole only when its file still hashes to its name; undefined when the session has none, or its file was edited. */
-export const heldBatchOf = async (outbox: string, key: string, stamp: string = currentStamp()): Promise<Held | undefined> => {
+export const heldBatchOf = async (outbox: string, key: string, stamp: string = currentStamp()): Promise<Omit<Held, 'stamp' | 'pulled'> | undefined> => {
   const folder = join(outbox, stamp);
   for (const name of await namesIn(folder)) {
     const found = BATCH_FILE.exec(name);
@@ -326,8 +354,14 @@ export type LockRefusal = 'batch_unknown' | 'batch_not_shown' | 'batch_changed';
  * because covenant acceptance is its consent and it prints nothing; the other two checks still hold.
  */
 export const lockedBatch = async (outbox: string, hash: string, options: { stamp?: string; requireShown?: boolean } = {}): Promise<{ ok: true; file: string; bytes: string } | { ok: false; code: LockRefusal }> => {
-  const folder = join(outbox, options.stamp ?? currentStamp());
-  const name = (await namesIn(folder)).find((entry) => BATCH_FILE.exec(entry)?.[2] === hash);
+  const stamp = options.stamp ?? currentStamp();
+  const folder = join(outbox, stamp);
+  // Under any stamp but the current one, only a pulled batch is a batch: the rest of that folder is stale.
+  const listed = stamp === currentStamp() ? undefined : await pulledAt(outbox, stamp);
+  const name = (await namesIn(folder)).find((entry) => {
+    const found = BATCH_FILE.exec(entry);
+    return found?.[2] === hash && (listed === undefined || listed.has(found[1] ?? ''));
+  });
   if (name === undefined) return { ok: false, code: 'batch_unknown' };
   if (options.requireShown !== false && !(await wasShown(outbox, hash))) return { ok: false, code: 'batch_not_shown' };
   const file = join(folder, name);
@@ -376,6 +410,15 @@ const POOL_STEP = 'pool-outbox';
 /** The keys `pulled.json` lists at this stamp: the batches of that folder that no local build made and no stale pass may touch. */
 export const pulledAt = async (outbox: string, stamp: string = currentStamp()): Promise<Set<string>> =>
   new Set(Object.entries(await readPulled(outbox, POOL_STEP)).filter(([, at]) => at === stamp).map(([id]) => id));
+
+/** `lockedBatch` over every stamp a send reads: the first stamp that holds the hash answers, whether it locks or refuses. */
+export const lockedAcross = async (outbox: string, hash: string, options: { requireShown?: boolean } = {}): ReturnType<typeof lockedBatch> => {
+  for (const stamp of await sendStamps(outbox)) {
+    const locked = await lockedBatch(outbox, hash, { ...options, stamp });
+    if (locked.ok || locked.code !== 'batch_unknown') return locked;
+  }
+  return { ok: false, code: 'batch_unknown' };
+};
 
 /** Folders of an outbox other than the current stamp's: batches built under another vocabulary, field list, or skeleton format. */
 const staleFolders = async (outbox: string, stamp: string): Promise<string[]> => {
