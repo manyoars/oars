@@ -82,6 +82,25 @@ describe('sessionsVerify, a file the Gemini or OTel reader drops while it holds 
     expect((await verifyCounts(staged, { gemini })).gemini).toEqual({ seen: 3, yielded: 1, unreadable: 2 });
   });
 
+  it('Gemini: a record with no id, a legacy file whose messages key was renamed, and a prompt whose text part was renamed are seen and unreadable; a legacy quit stays out', async () => {
+    const staged = stage();
+    rmSync(join(staged.projectsRoot, 'proj'), { recursive: true });
+    mkdirSync(staged.projectsRoot, { recursive: true });
+    const whole = (id: string, over: object): string => JSON.stringify({ ...geminiHead(id), ...over });
+    const gemini = stageGemini(staged.root, [
+      { id: A, projectRoot: WORK, lines: [geminiHead(A), { id: 'u1', timestamp: T(1), type: 'user', content: [{ text: 'fix the build' }] }, { id: 'g2', timestamp: T(2), type: 'gemini', content: 'done', model: 'gemini-2.5-pro' }] },
+      // A message record whose `id` was renamed.
+      { id: B, slug: 'no-id', projectRoot: WORK, lines: [geminiHead(B), { key: 'u1', timestamp: T(1), type: 'user', content: [{ text: 'fix the build' }] }] },
+      // A legacy whole-file chat whose `messages` list was renamed.
+      { id: C, slug: 'legacy-renamed', projectRoot: WORK, legacy: true, lines: whole(C, { turns: [{ id: 'u1', type: 'user', content: [{ text: 'fix the build' }] }] }) },
+      // A prompt whose parts no longer carry `text`.
+      { id: D, slug: 'no-text', projectRoot: WORK, lines: [geminiHead(D), { id: 'u1', timestamp: T(1), type: 'user', content: [{ body: 'fix the build' }] }] },
+      // Routine: a legacy chat with an empty messages list.
+      { id: E, slug: 'legacy-quit', projectRoot: WORK, legacy: true, lines: whole(E, { messages: [] }) },
+    ]);
+    expect((await verifyCounts(staged, { gemini })).gemini).toEqual({ seen: 4, yielded: 1, unreadable: 3 });
+  });
+
   it('OTel: a file whose top key or span ids were renamed is seen and unreadable; an empty span list and a blank file stay out', async () => {
     const staged = stage();
     rmSync(join(staged.projectsRoot, 'proj'), { recursive: true });
