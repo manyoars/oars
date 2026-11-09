@@ -30,6 +30,9 @@
 // reads, not moved ones. A Copilot CLI session with rotated `events.N.jsonl` archives is now read as one session, so its `prompts`, `tools`, `lines`, and skeleton move; one
 // with no archives is unchanged. EXTRACTOR stays 11. A version-16 store's next deposit captures every transcript again from the harness or `raw/`.
 //
+// Version 29 (CAPTURE 29) adds the optional `loadedInstructions` to the session record: counts of the instruction files the transcript shows loaded, by level, never a path. It changes no value captured
+// before; a version-28 store's next deposit captures every transcript again, and a session recorded before then has none until it is. (28 is left to the capture that took it first.)
+//
 // Version 27 (CAPTURE 27) adds three optional fields to a tool call (`call-shape.ts`), each computed from the input at capture and stored as closed-list members, never a value: `argFeatures` (per key, the value's size and,
 // for a path, its depth, extension class, and folder kind, for a pattern what it uses), `argValues` (a boolean, or a string its tool's closed list holds), and `changeKind` (what changed from the previous call of the
 // same tool in the prompt). It changes no value captured before, so EXTRACTOR stays as it is; a version-26 store's next deposit captures every transcript again, and a call of an older record has none of them.
@@ -98,7 +101,7 @@ import type { RepoSize } from './public-vocabulary.js';
 import type { SessionFunnel, SessionSetup, SessionTrust } from './session-shape.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '27';
+export const CAPTURE_VERSION = '29';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
@@ -309,7 +312,7 @@ export interface SessionObservation {
   trust?: SessionTrust;
   /**
    * The instruction files the transcript shows loaded, as counts and levels, never a path (class A; `load-status.ts` joins it with the session-start snapshot). Absent when the
-   * transcript holds no such record. It adds no value older records need, since a session from before the snapshot existed labels `unknown` either way, so CAPTURE_VERSION stays.
+   * transcript holds no such record. Added at CAPTURE 29.
    */
   loadedInstructions?: LoadedInstructions;
 }
