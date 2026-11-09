@@ -22,6 +22,7 @@ const VERSION = /^[A-Za-z0-9._-]{1,64}$/;
 const REDACTION_HEADER = 'oars-redaction-version';
 const CAPTURE_HEADER = 'oars-capture-version';
 const CONSENT_HEADER = 'oars-raw-consent';
+const CONSENT_VERSION_HEADER = 'oars-raw-consent-version';
 
 const PART_ROUTE = /^\/v1\/raw\/([0-9a-f]{64})\/parts\/([1-9][0-9]{0,5})$/;
 const COMPLETE_ROUTE = /^\/v1\/raw\/([0-9a-f]{64})\/complete$/;
@@ -48,18 +49,35 @@ const versionOf = (request: Request, header: string): string | undefined => {
   return value !== null && VERSION.test(value) ? value : undefined;
 };
 
-/** Raw consent is its own answer, apart from the covenant. Stating it records it once; after that a request need not repeat it, and one that states anything but `granted` is a refusal. */
-const consented = async (request: Request, env: Env, account: string): Promise<boolean> => {
+const notAsked = (): Response => refuse(403, 'raw_consent_required', `Raw transcripts need their own consent: send ${CONSENT_HEADER}: granted and ${CONSENT_VERSION_HEADER}: <the covenant version in force> once the person has said yes.`, CONSENT_HEADER);
+
+const staleYes = (covenant: string): Response => refuse(403, 'raw_consent_stale', `The yes to raw copies was given under another covenant version. Answer again for ${covenant}: oars pool raw --consent yes.`, CONSENT_VERSION_HEADER);
+
+const withdrawnYes = (): Response => refuse(403, 'raw_consent_withdrawn', 'This account withdrew its consent to raw copies. They are accepted again only after a new yes: oars pool raw --consent yes.', CONSENT_HEADER);
+
+/**
+ * Raw consent is its own answer, apart from the covenant, and it answers one covenant version (GDPR Article 7(1)): a yes counts only for the version in force. Stating it with the version it answered records it, and after that a request need not repeat it;
+ * one that states anything but `granted` is a refusal. A yes with no version, in the request or in the row, reads as not asked, and one for another version is stale. After a withdrawal (`withdrawRawConsent`) the raw routes refuse by name until a new yes.
+ */
+const consented = async (request: Request, env: Env, account: string, covenant: string): Promise<Response | undefined> => {
   const stated = request.headers.get(CONSENT_HEADER);
+  const row = await env.DB.prepare('SELECT raw_consent, raw_consent_version, raw_consent_withdrawn_at FROM accounts WHERE id = ?').bind(account).first();
+  const standing = typeof fieldOf(row, 'raw_consent') === 'number';
+  const held = fieldOf(row, 'raw_consent_version');
   if (stated === 'granted') {
-    await env.DB.prepare('UPDATE accounts SET raw_consent = COALESCE(raw_consent, ?) WHERE id = ?').bind(Date.now(), account).run();
-    return true;
+    const answered = versionOf(request, CONSENT_VERSION_HEADER);
+    if (answered === undefined) return notAsked();
+    if (answered !== covenant) return staleYes(covenant);
+    if (!standing || held !== answered) await env.DB.prepare('UPDATE accounts SET raw_consent = ?, raw_consent_version = ? WHERE id = ?').bind(Date.now(), answered, account).run();
+    return undefined;
   }
-  if (stated !== null) return false;
-  return typeof fieldOf(await env.DB.prepare('SELECT raw_consent FROM accounts WHERE id = ?').bind(account).first(), 'raw_consent') === 'number';
+  if (stated !== null) return notAsked();
+  if (!standing) return typeof fieldOf(row, 'raw_consent_withdrawn_at') === 'number' ? withdrawnYes() : notAsked();
+  if (typeof held !== 'string') return notAsked();
+  return held === covenant ? undefined : staleYes(covenant);
 };
 
-/** Every raw request passes the same gate, in this order: the pool is open, the account is signed in and has accepted the covenant in force, the request states its redaction and capture versions, and the account has given raw consent. */
+/** Every raw request passes the same gate, in this order: the pool is open, the account is signed in and has accepted the covenant in force, the request states its redaction and capture versions, and the account has given raw consent for the covenant in force. */
 const admit = async (request: Request, env: Env): Promise<Admitted | Response> => {
   const version = bound(env.COVENANT_VERSION);
   if (version === undefined) return depositsClosed();
@@ -70,7 +88,8 @@ const admit = async (request: Request, env: Env): Promise<Admitted | Response> =
   if (redaction === undefined) return refuse(422, 'redaction_required', `State the redaction version the transcript went through in ${REDACTION_HEADER} (letters, digits, dot, dash, underscore; 64 at most).`, REDACTION_HEADER);
   const capture = versionOf(request, CAPTURE_HEADER);
   if (capture === undefined) return refuse(422, 'capture_required', `State the capture version in ${CAPTURE_HEADER} (letters, digits, dot, dash, underscore; 64 at most).`, CAPTURE_HEADER);
-  if (!(await consented(request, env, account))) return refuse(403, 'raw_consent_required', `Raw transcripts need their own consent: send ${CONSENT_HEADER}: granted once the person has said yes.`, CONSENT_HEADER);
+  const unconsented = await consented(request, env, account, version);
+  if (unconsented !== undefined) return unconsented;
   if (env.RAW === undefined) return notConfigured('RAW');
   return { account, redaction, capture, bucket: env.RAW };
 };
@@ -177,6 +196,18 @@ const complete = async (request: Request, env: Env, hash: string): Promise<Respo
     .run();
   await bucket.delete(Array.from({ length: parts }, (_, at) => stagingKey(account, hash, at + 1)));
   return answer(201, { ok: true, stored: true });
+};
+
+/**
+ * `DELETE /v1/consent/raw`: the account takes its raw yes back (GDPR Article 7(3)). It clears the yes and records the time and the covenant version the yes answered, and answers 200 whether or not a yes stood, so a retry is safe and a second withdrawal keeps the first record.
+ * It needs a sign-in and nothing else: not an open pool, not an accepted covenant, because a person can always withdraw. A raw object already held is not touched here; the record is what an erasure reads.
+ */
+export const withdrawRawConsent = async (request: Request, env: Env): Promise<Response> => {
+  const account = await accountOf(request, env);
+  if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
+  // One statement, and a SET expression reads the row as it was, so the version withdrawn is the one the yes answered. With no yes standing it matches no row.
+  await env.DB.prepare('UPDATE accounts SET raw_consent_withdrawn_at = ?, raw_consent_withdrawn_version = raw_consent_version, raw_consent = NULL, raw_consent_version = NULL WHERE id = ? AND raw_consent IS NOT NULL').bind(Date.now(), account).run();
+  return answer(200, { ok: true });
 };
 
 /** The raw routes, or undefined for a request that is not one. */
