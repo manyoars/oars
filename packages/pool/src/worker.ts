@@ -134,7 +134,7 @@ interface Route {
   method: 'GET' | 'POST' | 'DELETE';
   /** A `:name` segment matches anything but a slash, and its text reaches the handler. */
   path: string;
-  /** Whether a machine key may call it. A machine key deposits, reads the covenant, and activates and rotates itself; every other route answers it 403 `deposit_only` (`machineScope`), so a route is closed to it until it says otherwise here. */
+  /** Whether a machine key may call it. A machine key deposits, reads the covenant, activates and rotates itself, and posts telemetry (which reads no credential); every other route answers it 403 `deposit_only` (`machineScope`), so a route is closed to it until it says otherwise here. */
   machine: boolean;
   handle: (request: Request, env: PoolEnv, segments: readonly string[]) => Promise<Response> | Response;
 }
@@ -142,8 +142,8 @@ interface Route {
 /** Every route the pool serves but the raw tier's (`RAW_ROUTES`), which `rawRoute` matches itself and which a machine key may not call. The guard test walks this table. */
 export const ROUTES: readonly Route[] = [
   { method: 'POST', path: '/v1/deposits', machine: true, handle: deposit },
-  // Not a deposit: it needs no covenant, and it is answered with deposits closed.
-  { method: 'POST', path: '/v1/telemetry', machine: false, handle: (request, env) => telemetry(request, env, Date.now) },
+  // Not a deposit: it needs no covenant, and it is answered with deposits closed. It reads no credential, so a key gains nothing here; a cloud VM's agent proxy adds the network secret to every request for the pool's host, and its telemetry must not be refused.
+  { method: 'POST', path: '/v1/telemetry', machine: true, handle: (request, env) => telemetry(request, env, Date.now) },
   { method: 'POST', path: '/v1/login/start', machine: false, handle: loginStart },
   { method: 'POST', path: '/v1/login/poll', machine: false, handle: loginPoll },
   { method: 'POST', path: '/v1/login', machine: false, handle: loginGone },

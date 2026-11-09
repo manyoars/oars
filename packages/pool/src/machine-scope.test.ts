@@ -1,11 +1,11 @@
-// The machine key's scope: a key deposits, reads the covenant, and activates and rotates itself, and every other route answers it 403 `deposit_only`. The table below is the router's own route list (`ROUTES`) and the raw tier's (`RAW_ROUTES`), so a route added later is walked without anyone remembering to list it, and a route that lets a key through by mistake fails here by name.
+// The machine key's scope: a key deposits, reads the covenant, posts telemetry, and activates and rotates itself, and every other route answers it 403 `deposit_only`. The table below is the router's own route list (`ROUTES`) and the raw tier's (`RAW_ROUTES`), so a route added later is walked without anyone remembering to list it, and a route that lets a key through by mistake fails here by name.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RAW_ROUTES } from './raw.js';
 import { fieldOf, startPool, stubUser, textOf, type TestPool } from './test-pool.js';
 import { ROUTES } from './worker.js';
 
 /** The only routes a machine key may call. A route added with `machine: true` changes this list, which is a decision a reviewer should see. */
-const MACHINE_ROUTES = ['GET /v1/covenant', 'POST /v1/deposits', 'POST /v1/machines/activate', 'POST /v1/machines/rotate'];
+const MACHINE_ROUTES = ['GET /v1/covenant', 'POST /v1/deposits', 'POST /v1/machines/activate', 'POST /v1/machines/rotate', 'POST /v1/telemetry'];
 
 const HASH = 'a'.repeat(64);
 
@@ -25,7 +25,7 @@ const concrete = (path: string): string => path.replace(/:[A-Za-z]+/g, 'x');
 
 let pool: TestPool;
 let accountToken: string;
-let keys: { [state: string]: string };
+let keys: { pending: string; active: string; revoked: string };
 
 const enroll = async (): Promise<{ key: string; id: string }> => {
   const answered = await pool.post('/v1/machines/enroll', { hostClass: 'vps', launcher: 'scheduled', label: 'scope probe' }, accountToken);
