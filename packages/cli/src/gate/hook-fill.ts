@@ -86,7 +86,7 @@ export const startHelper = (spawn: HelperSpawn, storeDir: string, ask: FillAsk):
 };
 
 /**
- * Called by the hook after a cut ask: takes the lock and starts the helper. Nothing here throws into the hook: a store that cannot be written, or a helper that cannot
+ * Called by the hook at the hand-off mark, or after an ask with no time to start: takes the lock and starts the helper. Nothing here throws into the hook: a store that cannot be written, or a helper that cannot
  * start, is an answer that does not come. The lock goes when the start throws, so the next sight asks about the name again.
  */
 export const startFill = async (storeDir: string, ask: FillAsk, now: number, start: (storeDir: string, ask: FillAsk) => void): Promise<void> => {

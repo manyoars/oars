@@ -72,7 +72,7 @@ export interface GateHookDeps {
   registry?: RegistryReader;
   /** Appends text to a file. Replaceable so a full disk can be tried. */
   append?: (file: string, text: string) => Promise<void>;
-  /** Called with the name whose ask was cut or had no time to start, so a helper can finish it and fill the cache for the next sight. Absent: nothing is finished. */
+  /** Called with the name whose ask is still open at the hand-off mark, or had no time to start, so a helper can finish it and fill the cache for the next sight. Absent: nothing is finished. */
   fill?: (ask: FillAsk) => Promise<void>;
   /** Whether a helper already holds the name, which keeps the hook from asking the manager a second time. Absent: never locked. */
   locked?: (ask: FillAsk) => Promise<boolean>;
