@@ -4,7 +4,7 @@
 
 import { ACTION_TABLES, CANONICAL_ACTIONS, mcpOf, type CanonicalAction } from './actions.js';
 import { CLOSED_ARG_VALUES, CUSTOM_AGENT, FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRIVATE, publicEffort, publicVersion, PUBLIC_PACKAGES, projectedAgentType, PUBLIC_FLAGS, REPO_SIZES, TOOL_INPUT_KEYS, VOCAB_VERSION, type RepoSize } from './public-vocabulary.js';
-import { ARG_CLASSES, CHANGE_KINDS, DIRECTORY_KINDS, EXTENSION_CLASSES, PATH_DEPTHS, PATTERN_FEATURES, TARGET_CLASSES, VALUE_SIZES, type ArgClass, type ArgFeature, type ArgValue, type ChangeKind, type DirectoryKind, type ExtensionClass, type PathDepth, type PatternFeature, type TargetClass, type ValueSize } from './call-shape.js';
+import { ARG_CLASSES, CHANGE_KINDS, DIRECTORY_KINDS, EXTENSION_CLASSES, NAME_KINDS, PATH_DEPTHS, PATTERN_FEATURES, TARGET_CLASSES, VALUE_SIZES, type ArgClass, type ArgFeature, type ArgName, type ArgValue, type ChangeKind, type DirectoryKind, type ExtensionClass, type NameKind, type PathDepth, type PatternFeature, type TargetClass, type ValueSize } from './call-shape.js';
 import type { Cell } from './cells.js';
 import type { Redactor } from './redact.js';
 import type { Motif } from './motif.js';
@@ -16,17 +16,20 @@ import { ERROR_CODES, LANGUAGE_SHARES, PROMPT_INTERVENTIONS, type PromptInterven
 // Format 3 (step 1 of the wire): a tool carries its `errorCode` and, for a failed call, what followed it (`recoveryCalls`). Formats 1 and 2 are refused by name; nothing is deployed, so nothing is migrated.
 // Format 4 (layer 1 of a call's parameters): a tool may carry `argFeatures`, `argValues`, and `changeKind`. The pool reads formats 3 and 4 (`READ_FORMATS`): a format 3 batch is read as before, and one of those
 // three names in it is a field format 3 does not know, so it goes to the bag and is served from nowhere. The table is "Formats on open" in docs/pool.md.
-export const SKELETON_FORMAT = 4;
+// Format 5 (layer 2 of a call's parameters): a tool may carry `names`, the file, directory, and variable names its values held. The pool reads formats 3, 4, and 5, and a name field in a batch of an older format goes to the bag the same way.
+export const SKELETON_FORMAT = 5;
 /** The formats the parser reads, oldest first: the client builds only the last. */
-export const READ_FORMATS = [3, SKELETON_FORMAT] as const;
+export const READ_FORMATS = [3, 4, SKELETON_FORMAT] as const;
 export type SkeletonFormat = (typeof READ_FORMATS)[number];
 /** The tool fields format 4 added: a format 3 batch that holds one is holding a field it does not define. */
 export const FORMAT_4_TOOL_FIELDS = ['argFeatures', 'argValues', 'changeKind'] as const;
+/** The tool fields format 5 added: a batch of format 4 or 3 that holds one is holding a field it does not define. */
+export const FORMAT_5_TOOL_FIELDS = ['names', 'namesDropped'] as const;
 /**
  * The version of the field list: every field name a batch can hold (`BATCH_FIELDS` in `pool-outbox.ts`). It moves with any field added, so a server told the version knows which names a batch may carry,
  * and a test pins the list to it (`pool-wire-additive.test.ts`). A field is deprecated and left on the list, never removed (conclusion section 17, rule 3).
  */
-export const FIELD_LIST_VERSION = 10;
+export const FIELD_LIST_VERSION = 11;
 export const BUNDLE_FORMAT = 1;
 /** One constant: the pool serves only the vocabulary version the client holds. */
 export { VOCAB_VERSION };
@@ -115,6 +118,10 @@ export interface SkeletonTool {
   argValues?: SkeletonArgValue[];
   /** What changed from the previous call of the same tool in the same prompt (layer 1), a sorted set of `CHANGE_KINDS` members. Absent on the first such call and on a call captured before it. */
   changeKind?: Array<ChangeKind | typeof OTHER>;
+  /** The name tokens of the call's values (layer 2), sorted by kind and name: file, directory, and variable names, flag values that are names, a custom agent's name. Each passed the one gate (`wireName`); never a value. Absent when none is sent. */
+  names?: SkeletonArgName[];
+  /** A `count` bucket of the name tokens the call held that were not sent: one the redactor changes, an exclusion term matches, or that has no name shape. Absent when none was dropped; never the names. */
+  namesDropped?: number;
   steps: SkeletonStep[];
 }
 
@@ -126,6 +133,12 @@ export interface SkeletonArgFeature {
   extension?: ExtensionClass | typeof OTHER;
   dirKind?: DirectoryKind | typeof OTHER;
   patternFeatures?: Array<PatternFeature | typeof OTHER>;
+}
+
+/** One name token as the wire holds it: its kind from the closed list (`other` for one this reader does not know) and the name as sent, which has the shape of a name (`other` when it has none). */
+export interface SkeletonArgName {
+  kind: NameKind | typeof OTHER;
+  name: string;
 }
 
 /** One sent key's closed value as the wire holds it, or `other` for one off the list this reader holds. */
@@ -366,14 +379,17 @@ export const OPEN_GATE: WireGate = { redact: (text) => text, terms: [] };
 /** The redactor leaves the name and each of its underscore-delimited parts as they are: `_` is a word character to it, so a host inside `mcp__git.acme.internal__run` is invisible to a pass over the whole name. */
 const unchanged = (gate: WireGate, name: string): boolean => gate.redact(name) === name && name.split(/_+/).every((part) => gate.redact(part) === part);
 
+/** Whether a name clears the one gate: it has the name shape, the redactor leaves it as it is, and it holds none of the exclusion terms. A name token that is really the word `private` passes; only this says a name was refused. */
+const passesGate = (gate: WireGate, name: string, hasShape: (name: string) => boolean): boolean => {
+  const lower = name.toLowerCase();
+  return hasShape(name) && unchanged(gate, name) && !gate.terms.some((term) => term !== '' && lower.includes(term.toLowerCase()));
+};
+
 /**
  * A name as the wire holds it: the value itself, or `private` when it counts as redacted. A value counts as redacted when the redactor changes it, it holds an exclusion term, it fails the name shape, or it is over
  * `NAME_MAX` characters, because a secret, an employer's name, or a mis-parsed command is not a name and nothing downstream can take it back. `keys` (t870) sends its names through this same function.
  */
-export const wireName = (gate: WireGate, name: string, hasShape: (name: string) => boolean = isWireName): string => {
-  const lower = name.toLowerCase();
-  return hasShape(name) && unchanged(gate, name) && !gate.terms.some((term) => term !== '' && lower.includes(term.toLowerCase())) ? name : PRIVATE;
-};
+export const wireName = (gate: WireGate, name: string, hasShape: (name: string) => boolean = isWireName): string => (passesGate(gate, name, hasShape) ? name : PRIVATE);
 
 const FLAG_DASHES = /^-{1,2}/;
 const SHORT_FLAG = /^-[A-Za-z]$/;
@@ -429,6 +445,16 @@ export const wireValues = (stored: readonly ArgValue[] | undefined, sent: Readon
 
 /** A call's change kinds as the wire sends them: the closed-list members, in the list's order. */
 export const wireChange = (stored: readonly ChangeKind[] | undefined): ChangeKind[] => CHANGE_KINDS.filter((kind) => stored?.includes(kind) === true);
+
+/**
+ * A call's name tokens as the wire sends them (layer 2): every stored token whose kind is on the closed list, through the one gate (`wireName`): a token the operator's exclusion terms or the redactor's secret shapes match, or that has no name shape,
+ * is dropped and counted in `dropped`. No floor, no threshold: a name is sent as it is.
+ */
+export const wireNames = (stored: readonly ArgName[] | undefined, gate: WireGate): { names: ArgName[]; dropped: number } => {
+  const known = (stored ?? []).filter(({ kind }) => NAME_KINDS.includes(kind));
+  const names = known.filter(({ name }) => passesGate(gate, name, isWireName));
+  return { names, dropped: known.length - names.length };
+};
 
 /** The basename of a program as capture read it: a path never goes on the wire. */
 const basenameOf = (program: string): string => program.replace(/^.*[\\/]/, '');
@@ -665,6 +691,7 @@ const transcriptOf = (
     const argFeatures = wireFeatures(tool.argFeatures, sent);
     const argValues = wireValues(tool.argValues, sent, steps[0]?.native);
     const changeKind = wireChange(tool.changeKind);
+    const { names, dropped: namesDropped } = wireNames(tool.names, gate);
     steppedTools.push({
       side,
       prompt: promptPosition,
@@ -679,6 +706,8 @@ const transcriptOf = (
       ...(argFeatures.length === 0 ? {} : { argFeatures }),
       ...(argValues.length === 0 ? {} : { argValues }),
       ...(changeKind.length === 0 ? {} : { changeKind }),
+      ...(names.length === 0 ? {} : { names }),
+      ...(namesDropped === 0 ? {} : { namesDropped: bucketOf('count', namesDropped) }),
       steps,
     });
   }
@@ -826,7 +855,7 @@ const unknownValue = (held: Collected, at: string, sent: string): typeof OTHER =
 /** The fields a client may send a literal beside (`<field>Literal`) when the field itself says `other`: the enumerated fields, whose values a closed list holds. */
 export const ENUMERATED_FIELDS: ReadonlySet<string> = new Set(['harness', 'harnessVersion', 'model', 'effort', 'platform', 'shell', 'size', 'languages', 'frameworks', 'language', 'languageShare', 'cls', 'status', 'action', 'native', 'agentType', 'program', 'sub', 'flags', 'registry', 'name', 'version', 'server', 'tool', 'skill', 'host', 'deltaKind', 'field', 'metric', 'intervention']);
 /**
- * The fields that may be absent at formats 3 and 4 (a format 3 batch reads `OPTIONAL.tool` less `FORMAT_4_TOOL_FIELDS`), by the level of the batch that holds them. An absent one reads as null, or as empty for a list, exactly as a sent null does, so a batch with all of them left out is
+ * The fields that may be absent at formats 3, 4, and 5 (a format 4 batch reads `OPTIONAL.tool` less `FORMAT_5_TOOL_FIELDS`, and a format 3 batch also less `FORMAT_4_TOOL_FIELDS`), by the level of the batch that holds them. An absent one reads as null, or as empty for a list, exactly as a sent null does, so a batch with all of them left out is
  * served from what remains. A field the cells need to be sound (a harness, a status, a bucket of tokens) is never here.
  */
 export const OPTIONAL = {
@@ -834,7 +863,7 @@ export const OPTIONAL = {
   frame: ['harnessVersion', 'model', 'effort', 'day', 'shell', 'reach', 'repoKey', 'orgSize', 'team', 'repoVisibility', 'hour'],
   stack: ['size', 'languageShares'],
   prompt: ['wallSec', 'explore', 'usageResponses', 'intervention'],
-  tool: ['prompt', 'durationMs', 'errorCode', 'recoveryCalls', 'keys', 'keysDropped', 'targetClass', 'argClass', 'argFeatures', 'argValues', 'changeKind'],
+  tool: ['prompt', 'durationMs', 'errorCode', 'recoveryCalls', 'keys', 'keysDropped', 'targetClass', 'argClass', 'argFeatures', 'argValues', 'changeKind', 'names', 'namesDropped'],
   step: ['tokens', 'ms', 'allocated', 'parent', 'skill', 'edges', 'remainingTokens'],
   transcript: ['spawnedIn'],
 } as const satisfies { readonly [level: string]: readonly string[] };
@@ -1231,12 +1260,22 @@ const parseValue = (held: Collected, keys: SentKeys, native: string | undefined,
   return { key, enumValue: key !== OTHER && isClosedValue(native, key, enumValue) ? enumValue : unknownValue(held, under(at, 'enumValue'), enumValue) };
 };
 
-/** The tool fields a format 3 batch may hold: format 4's three are fields it does not know. */
-const FORMAT_3_TOOL: readonly string[] = OPTIONAL.tool.filter((name) => !FORMAT_4_TOOL_FIELDS.some((added) => added === name));
+/** The tool fields a format 4 batch may hold: format 5's are fields it does not know. */
+const FORMAT_4_TOOL: readonly string[] = OPTIONAL.tool.filter((name) => !FORMAT_5_TOOL_FIELDS.some((added) => added === name));
+/** The tool fields a format 3 batch may hold: format 4's three are fields it does not know too. */
+const FORMAT_3_TOOL: readonly string[] = FORMAT_4_TOOL.filter((name) => !FORMAT_4_TOOL_FIELDS.some((added) => added === name));
+
+/** A name token: its kind off the closed list, and a name that has the shape of one. Either off its list or shape reads as `other` and goes to the bag, as any value off a list does. */
+const parseName = (held: Collected, value: unknown, at: string): SkeletonArgName => {
+  const raw = fieldsOf(held, value, at, ['kind', 'name']);
+  const name = textOf(raw.name, under(at, 'name'));
+  return { kind: oneOf(held, NAME_KINDS, raw.kind, under(at, 'kind')), name: isWireName(name) ? name : unknownValue(held, under(at, 'name'), name) };
+};
 
 const parseTool = (held: Collected, harness: WireHarness, value: unknown, at: string): SkeletonTool => {
   const layered = held.format >= 4;
-  const raw = fieldsOf(held, value, at, ['side', 'status', 'steps'], layered ? OPTIONAL.tool : FORMAT_3_TOOL);
+  const named = held.format >= 5;
+  const raw = fieldsOf(held, value, at, ['side', 'status', 'steps'], named ? OPTIONAL.tool : layered ? FORMAT_4_TOOL : FORMAT_3_TOOL);
   const status = oneOf(held, STATUSES, raw.status, under(at, 'status'));
   const errorCode = parseErrorCode(held, status, raw.errorCode, under(at, 'errorCode'));
   const recoveryCalls = parseRecovery(held, status, raw.recoveryCalls, under(at, 'recoveryCalls'));
@@ -1249,6 +1288,8 @@ const parseTool = (held: Collected, harness: WireHarness, value: unknown, at: st
   const argFeatures = !layered || raw.argFeatures === undefined ? undefined : listOf(raw.argFeatures, under(at, 'argFeatures'), (entry, entryAt) => parseFeature(held, sentKeys, entry, entryAt));
   const argValues = !layered || raw.argValues === undefined ? undefined : listOf(raw.argValues, under(at, 'argValues'), (entry, entryAt) => parseValue(held, sentKeys, steps[0]?.native, entry, entryAt));
   const changeKind = !layered || raw.changeKind === undefined ? undefined : listOf(raw.changeKind, under(at, 'changeKind'), (entry, entryAt) => oneOf(held, CHANGE_KINDS, entry, entryAt));
+  const names = !named || raw.names === undefined ? undefined : listOf(raw.names, under(at, 'names'), (entry, entryAt) => parseName(held, entry, entryAt));
+  const namesDropped = !named || raw.namesDropped === undefined ? undefined : bucketIn('count', raw.namesDropped, under(at, 'namesDropped'));
   return {
     side: booleanOf(raw.side, under(at, 'side')),
     prompt: orNull(raw.prompt, under(at, 'prompt'), countOf),
@@ -1263,6 +1304,8 @@ const parseTool = (held: Collected, harness: WireHarness, value: unknown, at: st
     ...(argFeatures === undefined ? {} : { argFeatures }),
     ...(argValues === undefined ? {} : { argValues }),
     ...(changeKind === undefined ? {} : { changeKind }),
+    ...(names === undefined ? {} : { names }),
+    ...(namesDropped === undefined ? {} : { namesDropped }),
     steps,
   };
 };

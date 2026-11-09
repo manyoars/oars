@@ -2,14 +2,16 @@
 // The store is a temp folder (`stage`), and APPDATA is the same folder; the test confirms the store path is under the temp folder before it runs.
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { http, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it } from 'vitest';
-import { harness, type Harness } from '../test-support.js';
+import { harness, server, useServer, type Harness } from '../test-support.js';
 import { poolDeposit } from './pool-command.js';
 import { contentHash } from './read.js';
-import { deposit } from './store.js';
+import { deposit, updatePoolChoices } from './store.js';
 import { addProject, cleanup, stage, type Staged } from './test-support.js';
 
+useServer();
 afterEach(cleanup);
 
 const POOL = 'https://pool.test';
@@ -83,6 +85,34 @@ describe('poolDeposit on a machine', () => {
     expect(batches(given.staged)).toHaveLength(1);
     expect(await document(given, { session: sid(2) })).toMatchObject({ sessions: 1, batched: 1, withdrawn: 0 });
     expect(batches(given.staged)).toHaveLength(2);
+  });
+
+  it("a person's deposit in the same outbox leaves a machine's batch where it is, and a machine's Stop leaves a person's", async () => {
+    const given = await scene({ OARS_HOST_CLASS: 'cloud' }, ONE);
+    await document(given);
+    expect(batches(given.staged)).toHaveLength(1);
+    const plain = join(given.staged.storeDir, 'pool-outbox', dirname(batches(given.staged)[0] ?? ''), `${'a'.repeat(16)}.${'b'.repeat(64)}.jsonl`);
+    writeFileSync(plain, '{}');
+    // The person's deposit: no machine configuration, signed in. Its sweep withdraws a batch of a session the store lost, and only that.
+    const person = harness({ OARS_EXCLUSION_TERMS: join(given.staged.root, 'terms.txt'), APPDATA: given.staged.root });
+    person.deps.sessions = given.staged.runtime;
+    person.deps.now = Date.now;
+    signedIn(given.staged);
+    await poolDeposit(person.deps, { server: POOL });
+    expect(batches(given.staged).filter((name) => !name.includes('a'.repeat(16)))).toHaveLength(1);
+    expect(existsSync(plain)).toBe(false);
+    writeFileSync(plain, '{}');
+    await document(given);
+    expect(existsSync(plain)).toBe(true);
+  });
+
+  it('remembers the sessions it did not build, so the next Stop does not scan them again', async () => {
+    const two = [...ONE, { id: sid(2), day: '02', mode: 'default' }];
+    const given = await scene({ OARS_HOST_CLASS: 'cloud' }, two);
+    await document(given, { session: sid(1) });
+    const remembered: unknown = JSON.parse(readFileSync(join(given.staged.storeDir, 'machine-scan-cache.json'), 'utf8'));
+    expect(JSON.stringify(remembered)).toContain(sid(2));
+    expect(JSON.stringify(remembered)).not.toContain(sid(1));
   });
 
   it('applies the gates unchanged: a folder off the allow list is built into nothing', async () => {
@@ -188,6 +218,50 @@ describe('deltas on a machine', () => {
     expect(batches(given.staged)).toHaveLength(1);
   });
 
+  describe('the scan a Stop skips', () => {
+    /** Writes a term into the captured session `id` (as if it were said after the last Stop) and captures it. */
+    const taint = async (given: Scene, id: string): Promise<void> => {
+      addProject(given.staged, FOLDER, id, [lineOf(id, '09', 'plan').replace('a plain request', 'a zorblax request')]);
+      await deposit(given.staged.runtime, { allow: [FOLDER], redactDomains: [], now: Date.now });
+    };
+    /** Starts over at the outbox, so the second Stop rebuilds the delta from the history alone: no kept batch, no mark. */
+    const forget = (given: Scene): void => {
+      rmSync(join(given.staged.storeDir, 'pool-outbox'), { recursive: true, force: true });
+    };
+
+    it('skips the scan of a session it remembers: a term added to it still leaves it in the history inside the window', async () => {
+      const given = await scene({ OARS_HOST_CLASS: 'vps' }, weeks);
+      expect(await document(given, { session: sid(24) })).toMatchObject({ batched: 1 });
+      expect(carried(given.staged)).toBe(1);
+      await taint(given, sid(20));
+      forget(given);
+      // A scan would exclude sid(20), leave the after window one short, and carry no delta.
+      expect(await document(given, { session: sid(24) })).toMatchObject({ batched: 1 });
+      expect(carried(given.staged)).toBe(1);
+    });
+
+    it('scans again under a changed term list, so the same term leaves the history', async () => {
+      const given = await scene({ OARS_HOST_CLASS: 'vps' }, weeks);
+      expect(await document(given, { session: sid(24) })).toMatchObject({ batched: 1 });
+      await taint(given, sid(20));
+      forget(given);
+      writeFileSync(join(given.staged.root, 'terms.txt'), 'zorblax\nanother\n');
+      expect(await document(given, { session: sid(24) })).toMatchObject({ batched: 1 });
+      expect(carried(given.staged)).toBe(0);
+    });
+
+    it('still scans and withdraws a session the Stop names, though its cache entry is fresh', async () => {
+      const given = await scene({ OARS_HOST_CLASS: 'vps' }, weeks);
+      expect(await document(given, { session: sid(24) })).toMatchObject({ batched: 1 });
+      // sid(20) is remembered from that Stop; it is named now, built clean, then given a term.
+      expect(await document(given, { session: sid(20) })).toMatchObject({ batched: 1 });
+      expect(batches(given.staged)).toHaveLength(2);
+      await taint(given, sid(20));
+      expect(await document(given, { session: sid(20) })).toMatchObject({ batched: 0, withdrawn: 1, excluded: { term: 1 } });
+      expect(batches(given.staged)).toHaveLength(1);
+    });
+  });
+
   it('a read-only gate refuses an unnamed session quietly: it is not counted, withdrawn, or placed', async () => {
     const given = await scene({ OARS_HOST_CLASS: 'vps' }, weeks);
     // Built whole once, so every session has a batch; then the folder leaves the allow list and a Stop names one session.
@@ -203,5 +277,27 @@ describe('deltas on a machine', () => {
     const given = await scene({ OARS_HOST_CLASS: 'cloud' }, weeks);
     expect(await document(given)).toMatchObject({ batched: 10 });
     expect(carried(given.staged)).toBe(0);
+  });
+
+  it('queues no raw copy for a yes given under another covenant than the one in force, and does for the current one', async () => {
+    const rawCopies = (given: Scene): string[] => {
+      const root = join(given.staged.storeDir, 'pool-outbox');
+      return existsSync(root) ? readdirSync(root, { recursive: true, encoding: 'utf8' }).filter((name) => name.endsWith('.redacted')) : [];
+    };
+    const given = await scene({ OARS_HOST_CLASS: 'vps', OARS_MACHINE: 'm-1' }, ONE);
+    await updatePoolChoices(given.staged.storeDir, (choices) => {
+      choices.rawConsent = 'granted';
+      choices.rawConsentVersion = 'v0';
+    });
+    const inForce = (version: string): void => {
+      server.use(http.get(`${POOL}/v1/covenant`, () => HttpResponse.json({ version, accepted: true, screen: null })));
+    };
+    inForce('v1');
+    await poolDeposit(given.h.deps, { server: POOL });
+    expect(batches(given.staged)).toHaveLength(1);
+    expect(rawCopies(given)).toEqual([]);
+    inForce('v0');
+    await poolDeposit(given.h.deps, { server: POOL });
+    expect(rawCopies(given).length).toBeGreaterThan(0);
   });
 });

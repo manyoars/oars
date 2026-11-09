@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { sampleSkeleton } from '../src/sample.js';
-import { fieldOf, startPool, stubUser, type TestBucket, type TestDb, type TestPool } from '../src/test-pool.js';
+import { acceptanceOf, fieldOf, startPool, stubUser, type TestBucket, type TestDb, type TestPool } from '../src/test-pool.js';
 import { eraseAccount, eraseLeakedSecret, eraseRawObject, type EraseStore } from './erase.js';
 
 let pool: TestPool;
@@ -43,7 +43,7 @@ const store = async (): Promise<EraseStore> => storeOf(await pool.db(), await po
 const member = async (): Promise<{ token: string; account: string }> => {
   next += 1;
   const { token, account } = await pool.signIn('github', stubUser(String(next)));
-  expect((await pool.post('/v1/covenant/accept', { version: 'v1' }, token)).status).toBe(200);
+  expect((await pool.post('/v1/covenant/accept', acceptanceOf('v1'), token)).status).toBe(200);
   return { token, account };
 };
 
@@ -335,6 +335,21 @@ describe('erasing one account under a lawful request', () => {
     // The audit row counts and names no content.
     expect(await all("SELECT kind, reason, erased_on, rows_erased, objects_erased, account FROM erasure_audit WHERE kind = 'account'")).toEqual([{ kind: 'account', reason: 'lawful-request', erased_on: '2026-11-08', rows_erased: 2, objects_erased: 1, account }]);
   }, 90_000);
+
+  it('scrubs the label and allow list of the account\'s machines and leaves the other account\'s and the hashes', async () => {
+    const { token, account } = await member();
+    const other = await member();
+    const enroll = (bearer: string, label: string): Promise<{ status: number }> => pool.post('/v1/machines/enroll', { hostClass: 'vps', launcher: 'scheduled', label, allowRepos: ['acme/secret-repo'] }, bearer);
+    expect((await enroll(token, 'a home server')).status).toBe(201);
+    expect((await enroll(other.token, 'their box')).status).toBe(201);
+    const hashes = await all('SELECT id, key_hash FROM machines WHERE account = ?', account);
+    expect((await eraseAccount(await store(), account, NOW)).rows).toBe(1);
+    expect(await all('SELECT label, allow_repos FROM machines WHERE account = ?', account)).toEqual([{ label: '[erased]', allow_repos: '[]' }]);
+    expect(await all('SELECT id, key_hash FROM machines WHERE account = ?', account)).toEqual(hashes);
+    expect(await all('SELECT label FROM machines WHERE account = ?', other.account)).toEqual([{ label: 'their box' }]);
+    expect((await eraseAccount(await store(), account, NOW)).rows).toBe(0);
+    expect(await all("SELECT rows_erased FROM erasure_audit WHERE kind = 'account' AND account = ? ORDER BY id DESC LIMIT 1", account)).toEqual([{ rows_erased: 0 }]);
+  }, 60_000);
 
   it('drops the account\'s staged parts', async () => {
     const { token, account } = await member();

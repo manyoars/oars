@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { verifyBundle, VOCAB_VERSION, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { repoKeysOf } from './cluster-store.js';
 import { sampleSkeleton } from './sample.js';
-import { fieldOf, startPool, stubUser, type TestPool } from './test-pool.js';
+import { acceptanceOf, fieldOf, startPool, stubUser, type TestPool } from './test-pool.js';
 
 const KEY_A = '0123456789abcdef';
 const KEY_B = 'fedcba9876543210';
@@ -41,7 +41,7 @@ const fetched = async (target: TestPool, token: string): Promise<{ reads: number
 /** An account that deposits one session per repo key: `keys` of them, so its repo-key set is `keys`. The same sessions go in whatever the account, so they are the same cells. */
 const depositor = async (target: TestPool, id: string, keys: readonly string[], fresh = false): Promise<string> => {
   const { token } = await target.signIn('github', stubUser(id), { fresh });
-  await target.post('/v1/covenant/accept', { version: 'v1' }, token);
+  await target.post('/v1/covenant/accept', acceptanceOf('v1'), token);
   for (const [at, key] of keys.entries()) {
     expect((await target.post('/v1/deposits', withRepoKey(sampleSkeleton(`${String(at)}${id}`.padStart(16, '0')), key), token)).status).toBe(201);
   }
@@ -128,7 +128,7 @@ describe('the cadence rule needs 3 deposit days (t958)', () => {
     await inFreshPool(async (target) => {
       for (const id of ['9431', '9432']) {
         const { token } = await target.signIn('github', { ...stubUser(id), createdAt: '2019-03-04T05:06:07Z' });
-        await target.post('/v1/covenant/accept', { version: 'v1' }, token);
+        await target.post('/v1/covenant/accept', acceptanceOf('v1'), token);
         expect((await target.post('/v1/deposits', sampleSkeleton('00000000000000c1'), token)).status).toBe(201);
       }
       expect(await heldClusters(target)).toEqual([2]);
@@ -250,7 +250,7 @@ describe('deposit signals', () => {
   it('writes the repo keys and the hour a deposit arrived, once however often it is sent', async () => {
     await inFreshPool(async (target) => {
       const { token, account } = await target.signIn('github', stubUser('9203'));
-      await target.post('/v1/covenant/accept', { version: 'v1' }, token);
+      await target.post('/v1/covenant/accept', acceptanceOf('v1'), token);
       const db = await target.db();
       const dayBefore = new Date().toISOString().slice(0, 10);
       expect((await target.post('/v1/deposits', withRepoKey(sampleSkeleton('0000000000009203'), KEY_A), token)).status).toBe(201);
@@ -270,7 +270,7 @@ describe('deposit signals', () => {
     const target = await startPool({ COVENANT_VERSION: 'v1', MAX_DEPOSITS_PER_ACCOUNT: '1' });
     try {
       const { token } = await target.signIn('github', stubUser('9205'));
-      await target.post('/v1/covenant/accept', { version: 'v1' }, token);
+      await target.post('/v1/covenant/accept', acceptanceOf('v1'), token);
       expect((await target.post('/v1/deposits', withRepoKey(sampleSkeleton('0000000000009205'), KEY_A), token)).status).toBe(201);
       const db = await target.db();
       // Cleared after the first deposit, so a row here can only come from the refused one (its hour is the same as the first's).

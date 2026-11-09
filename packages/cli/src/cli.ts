@@ -569,8 +569,8 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
 
   pool
     .command('deposit')
-    .description('write a batch to the outbox for each session that passes the folder allowlist and the exclusion check, and stop: nothing is sent, and only counts print. --send <hash> sends one batch that oars pool outbox printed and that is unchanged, once this account has accepted the pool covenant')
-    .option('--accept-covenant <version>', 'accept this version of the pool covenant before sending (with --send)')
+    .description('write a batch to the outbox for each session that passes the folder allowlist and the exclusion check, and stop: no session data is sent, and only counts print. --send <hash> sends one batch that oars pool outbox printed and that is unchanged, once this account has accepted the pool covenant')
+    .option('--accept-covenant <version>', 'name the covenant version you expect, with --send: on a terminal the screen is shown and you type its phrase yourself, and off a terminal this is refused')
     .option('--send <hash>', 'the SHA-256 of a batch that oars pool outbox printed')
     .option(serverOption, serverHelp)
     .action(async (_options: OptionValues, command: Command) => {

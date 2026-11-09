@@ -71,7 +71,7 @@ describe('a step names its frame', () => {
     if (first === undefined) throw new Error('no step');
     Reflect.deleteProperty(first, 'frame');
     expect(parseSkeleton(raw)).toEqual({ ok: false, field: 'transcripts[0].tools[0].steps[0].frame', reason: 'missing' });
-    expect(parseSkeleton({ ...clone(midPrompt()), format: 2 })).toEqual({ ok: false, field: 'format', reason: 'the format 2 form is no longer read; send format 4' });
+    expect(parseSkeleton({ ...clone(midPrompt()), format: 2 })).toEqual({ ok: false, field: 'format', reason: 'the format 2 form is no longer read; send format 5' });
   });
 });
 

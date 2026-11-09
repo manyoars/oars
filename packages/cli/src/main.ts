@@ -71,5 +71,6 @@ process.exitCode = await run(process.argv.slice(2), {
     sourceRoots: Object.fromEntries(SOURCES.map((source) => [source.name, source.root(process.platform, process.env, homedir())])),
     stdin: process.stdin,
     stdout: process.stdout,
+    stderr: process.stderr,
   },
 });

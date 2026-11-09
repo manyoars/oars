@@ -1,4 +1,5 @@
 // The nightly send (t884 Item 4): after the covenant is accepted the nightly task builds the outbox and sends new batches and, with its own yes, the redacted raw parts. Acceptance is the consent, so with none (or no server, or no sign-in) it sends nothing.
+import { tmpdir } from 'node:os';
 import { existsSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { open, stat } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -58,6 +59,7 @@ const scene = async (consent: 'granted' | 'declined' | null, env: NodeJS.Process
   await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
   await updatePoolChoices(staged.storeDir, (choices) => {
     choices.rawConsent = consent;
+    choices.rawConsentVersion = consent === 'granted' ? 'v1' : null;
   });
   if (signedIn) writeFileSync(join(staged.storeDir, 'pool-accounts.json'), JSON.stringify([{ server: POOL, account: 'acct_one', token: 'a-pool-token', expiresAt: LATER, signingKey: { kty: 'OKP', crv: 'Ed25519', x: 'k' } }]));
   return { staged, deps: h.deps };
@@ -144,6 +146,24 @@ describe('the nightly pool send', () => {
     expect(second.requests.filter((request) => request.method !== 'GET')).toEqual([]);
   });
 
+  it('holds back raw when the yes was given under another covenant than the one in force, and sends it when the versions match', async () => {
+    const old = await scene('granted');
+    await updatePoolChoices(old.staged.storeDir, (choices) => {
+      choices.rawConsentVersion = 'v0';
+    });
+    const held = wire(OK_RAW);
+    const night = await nightlyPoolSend(old.deps, held.via);
+    expect(night).toMatchObject({ outcome: 'sent', rawHeld: true });
+    expect(JSON.parse(readFileSync(join(old.staged.storeDir, 'pool-nightly.json'), 'utf8'))).toMatchObject({ rawHeld: true });
+    expect(paths(held, 'POST').filter((path) => path === '/v1/deposits').length).toBeGreaterThan(0);
+    expect(rawPuts(held)).toEqual([]);
+    expect(outboxFiles(old.staged, '.redacted')).toEqual([]);
+    const current = await scene('granted');
+    const sent = wire(OK_RAW);
+    expect(await nightlyPoolSend(current.deps, sent.via)).not.toHaveProperty('rawHeld');
+    expect(rawPuts(sent).length).toBeGreaterThan(0);
+  });
+
   it('sends nothing when the covenant is not accepted, and builds nothing', async () => {
     for (const covenant of [answer(200, { version: 'v1', accepted: false }), answer(200, { accepted: true }), answer(403, { error: 'deposits_closed', message: 'closed' })]) {
       const here = await scene('granted');
@@ -218,7 +238,9 @@ describe('the nightly pool send', () => {
     const before = bytes(person.staged);
 
     // The same store as the person's, so the held batch is there, signed in, with the covenant accepted: only the machine setting differs.
-    const machine = harness({ OARS_EXCLUSION_TERMS: join(person.staged.root, 'terms.txt'), OARS_POOL_URL: POOL, OARS_HOST_CLASS: 'vps' });
+    const machine = harness({ OARS_EXCLUSION_TERMS: join(person.staged.root, 'terms.txt'), OARS_POOL_URL: POOL, OARS_HOST_CLASS: 'vps', APPDATA: person.staged.root });
+    // The machine night must not reach a real store: the store is a temp folder.
+    if (!person.staged.storeDir.startsWith(tmpdir())) throw new Error('the test store is not under the temp folder');
     machine.deps.sessions = person.staged.runtime;
     machine.deps.now = settledClock;
     const pool = wire(OK_RAW);

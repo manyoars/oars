@@ -102,9 +102,12 @@ export const hashToken = (token: string): string => createHash('sha256').update(
 
 const hasAccount = (row: unknown): row is { account: string } => textField(row, 'account') !== undefined;
 
+/** The bearer token a request presents, whatever it is a token of. */
+export const bearerOf = (request: Request): string | undefined => /^Bearer (.+)$/.exec(request.headers.get('authorization') ?? '')?.[1];
+
 /** The account a bearer token belongs to. Only the token's hash is stored, so a read of the database signs nobody in. */
 export const accountOf = async (request: Request, env: Env): Promise<string | undefined> => {
-  const token = /^Bearer (.+)$/.exec(request.headers.get('authorization') ?? '')?.[1];
+  const token = bearerOf(request);
   if (token === undefined) return undefined;
   const row = await env.DB.prepare('SELECT account FROM tokens WHERE hash = ? AND expires_at > ?').bind(hashToken(token), Date.now()).first();
   return hasAccount(row) ? row.account : undefined;
@@ -112,7 +115,7 @@ export const accountOf = async (request: Request, env: Env): Promise<string | un
 
 /** `DELETE /v1/login`: revokes the credential the request presents, so a copy of it signs nobody in. 204 when it was live; a revoked, expired, or unknown credential gets the usual 401. */
 export const logout = async (request: Request, env: Env): Promise<Response> => {
-  const token = /^Bearer (.+)$/.exec(request.headers.get('authorization') ?? '')?.[1];
+  const token = bearerOf(request);
   const revoked = token === undefined ? undefined : await env.DB.prepare('DELETE FROM tokens WHERE hash = ? AND expires_at > ?').bind(hashToken(token), Date.now()).run();
   return revoked?.meta.changes === 1 ? new Response(null, { status: 204 }) : refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
 };

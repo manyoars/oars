@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { batchHash, BATCH_FIELDS, canonicalBytes, currentStamp, FIELD_ROWS, fieldsOf, heldBatchOf, writeBatch } from './pool-outbox.js';
+import { batchHash, BATCH_FIELDS, canonicalBytes, currentStamp, FIELD_ROWS, fieldsOf, heldBatchOf, removeBatchesExcept, writeBatch } from './pool-outbox.js';
 import { VOCAB_VERSION } from './public-vocabulary.js';
 import { FIELD_LIST_VERSION, parseSkeleton, SKELETON_FORMAT } from './pool-wire.js';
 
@@ -126,6 +126,8 @@ const REAL = {
           argFeatures: [{ key: 'command', valueSize: '9-32', pathDepth: '1', extension: 'source', dirKind: 'test', patternFeatures: ['anchor'] }],
           argValues: [{ key: 'command', enumValue: 'true' }],
           changeKind: ['key-added'],
+          names: [{ kind: 'file', name: 'plan.md' }],
+          namesDropped: 1,
           steps: [
             { ...STEP, allocated: true, action: 'shell.exec', native: 'Bash', identity: { program: 'npm', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] } },
             { ...STEP, action: 'mcp.call', native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' }, edges: [{ kind: 'next', target: 0 }] },
@@ -161,5 +163,24 @@ describe('the stamp', () => {
     expect(currentStamp(BATCH_FIELDS, SKELETON_FORMAT + 1)).not.toBe(currentStamp());
     expect(currentStamp([...BATCH_FIELDS, 'extra'])).not.toBe(currentStamp());
     expect(currentStamp()).toBe(currentStamp(BATCH_FIELDS, SKELETON_FORMAT));
+  });
+});
+
+describe('removeBatchesExcept with a reader', () => {
+  it('asks for the kept keys only after the folder is listed, so a batch written in between is not swept', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'oars-sweep-'));
+    roots.push(root);
+    const folder = join(root, currentStamp());
+    mkdirSync(folder, { recursive: true });
+    const old = `${'a'.repeat(16)}.${'b'.repeat(64)}.jsonl`;
+    const late = `${'c'.repeat(16)}.${'d'.repeat(64)}.jsonl`;
+    writeFileSync(join(folder, old), '{}');
+    // The reader stands for the moment a machine notes its key and writes its batch: a read taken before the listing would miss both.
+    const removed = await removeBatchesExcept(root, () => {
+      writeFileSync(join(folder, late), '{}');
+      return Promise.resolve(new Set<string>());
+    });
+    expect(removed).toBe(1);
+    expect(readdirSync(folder)).toEqual([late]);
   });
 });

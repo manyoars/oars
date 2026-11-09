@@ -1,7 +1,9 @@
 // `oars pool`: the only part of the sessions code that talks to a remote. The server is the one named by flag or environment, else the Many Oars pool; nothing leaves until a command that sends is run or, after covenant acceptance, the detached sender (hook-bin.js nightly) sends. Sign-in runs the provider's device flow here and reads no harness token; a session leaves only as a skeleton of a closed list of fields, each value redacted first, and only after the exclusion check found it clean. Local capture, recall,
 // and reads never come through here.
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { createInterface } from 'node:readline';
 import type { Outcome, RunDeps } from '../cli.js';
 import { emitOf } from '../telemetry/emit.js';
 import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../errors.js';
@@ -10,11 +12,11 @@ import { makeCoverage, readCoverageSetting, writeCoverageSetting } from './cover
 import { checkSession, exclusionPaths, lastWritten, loadTerms, transcriptFilesOf, type Reason } from './exclusion.js';
 import { localNames, makeRedactor, REDACTION_VERSION, redactTranscript } from './redact.js';
 import { recordSend, recordWire, newTally, tallyBatch } from '../telemetry/wire.js';
-import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, lockedBatch, markShown, outboxFolder, partsOf, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
+import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, lockedBatch, machineKeys, markShown, noteMachineKey, outboxFolder, partsOf, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
 import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, unpinnedKid, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
 import { carriedDeltas, heldDeltas, keptDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
-import { rawAllowed, sendsOf } from './pool-choices.js';
+import { rawAllowed, rawStale, sendsOf } from './pool-choices.js';
 import { heldRaw, rawParts, removeRawExcept, writeRaw } from './pool-raw.js';
 import { SendLockBusy, withSendLock } from './pool-send-lock.js';
 import { markSent, sentLog } from './pool-sent.js';
@@ -25,6 +27,7 @@ import { isObject, keptReplica, loadSignIns, numberIn, replicaFile, signInOf, si
 import { CAPTURE_VERSION, harnessOf as sessionHarness, type Harness } from './schema.js';
 import { machineIdOf } from './machine-ids.js';
 import { machineOf, type MachineConfig } from './machine.js';
+import { scanCache } from './machine-scan-cache.js';
 import { loadStore, localSalt, readRedactDomains, readSkeletons, readState, updatePoolChoices, type SessionsRuntime } from './store.js';
 import { runGit, type Git } from './survival.js';
 import { vocabulary } from './vocab-load.js';
@@ -274,15 +277,61 @@ const openCovenant = async (deps: RunDeps, server: string, token: string, accept
     const title = 'This pool is not taking deposits: its covenant is not published.';
     throw new CliError(title, ExitCode.AUTH, DEPOSIT, { code: 'deposits_closed', title, status: 403 });
   }
-  if (accept !== undefined) {
-    const accepted = await ask(deps, DEPOSIT, server, '/v1/covenant/accept', { token, body: { version: accept } }, via);
-    if (accepted.status !== 200) throw refusal(DEPOSIT, accepted);
-    return;
+  // A flag is refused whatever the account's state: off a terminal it would be a script saying yes, and a version other than the pool's names a text this pool does not hold.
+  if (accept !== undefined && !isTerminal(deps)) throw usage('--accept-covenant does not accept for you: acceptance is a person typing the phrase at a terminal, and this is not one. Nothing was accepted.', DEPOSIT);
+  if (accept !== undefined && accept !== version) throw usage(`--accept-covenant names covenant ${accept}, but the covenant of this pool is ${version}. Nothing was accepted.`, DEPOSIT);
+  if (Reflect.get(reply.body, 'accepted') === true) return;
+  const notAccepted = (title: string): CliError => new CliError(title, ExitCode.AUTH, DEPOSIT, { code: 'covenant_not_accepted', title, status: 403 });
+  const screen = screenIn(reply.body);
+  if (screen === undefined) throw notAccepted(`The pool has no text for covenant ${version} yet, so there is nothing to show and nothing can be accepted. Nothing was accepted.`);
+  // Assent is a person typing the phrase the screen states. A flag or a script on stdin is not one, so off a terminal nothing is asked and nothing is accepted.
+  if (!isTerminal(deps)) {
+    throw notAccepted(`Covenant ${version} is not accepted for this account. Accepting it takes a person at a terminal who reads it and types its phrase: run this command from one. Nothing was accepted.`);
   }
-  if (Reflect.get(reply.body, 'accepted') !== true) {
-    const title = `Read covenant ${version} of this pool, then rerun with --accept-covenant ${version}.`;
-    emitOf(deps)('covenant-shown', { version });
-    throw new CliError(title, ExitCode.AUTH, DEPOSIT, { code: 'covenant_not_accepted', title, status: 403 });
+  deps.io.stderr(`\n${screen.text}\n\n> `);
+  emitOf(deps)('covenant-shown', { version });
+  const typed = await lineFrom(runtimeOf(deps).stdin);
+  if (typed?.trim() !== screen.phrase) throw notAccepted(`${typed === undefined ? 'No phrase was typed' : 'That was not the phrase'}. To accept covenant ${version}, type exactly: ${screen.phrase}. Nothing was accepted.`);
+  const body = { version, textSha256: createHash('sha256').update(screen.text).digest('hex'), input: 'typed', client: `oars/${deps.version}` };
+  const accepted = await ask(deps, DEPOSIT, server, '/v1/covenant/accept', { token, body }, via);
+  if (accepted.status !== 200) throw refusal(DEPOSIT, accepted);
+  // A yes to the raw prompt belongs to the covenant it was given under, and a covenant can change what that prompt covers: accepting another version asks the raw question again.
+  const reset = { done: false };
+  await updatePoolChoices(runtimeOf(deps).storeDir, (choices) => {
+    if (choices.rawConsent !== 'granted' || choices.rawConsentVersion === version) return;
+    choices.rawConsent = null;
+    choices.rawConsentVersion = null;
+    reset.done = true;
+  });
+  if (reset.done) deps.io.stderr('Your earlier yes to the raw prompt was given under another covenant, so it no longer applies. Run oars pool raw to read the prompt and answer again.\n');
+};
+
+/** What the pool shows before a person accepts: the covenant's text as displayed, its full-text link, and the phrase the text asks to be typed. */
+interface Screen {
+  text: string;
+  link: string;
+  phrase: string;
+}
+
+const screenIn = (body: object): Screen | undefined => {
+  const screen: unknown = Reflect.get(body, 'screen');
+  const text = isObject(screen) ? textIn(screen, 'text') : undefined;
+  const link = isObject(screen) ? textIn(screen, 'link') : undefined;
+  const phrase = isObject(screen) ? textIn(screen, 'phrase') : undefined;
+  return text === undefined || link === undefined || phrase === undefined ? undefined : { text, link, phrase };
+};
+
+/** A person is here when input and the screen's stream are both terminals: a typed phrase counts only for a text that reached a screen. */
+const isTerminal = (deps: RunDeps): boolean => Reflect.get(runtimeOf(deps).stdin, 'isTTY') === true && runtimeOf(deps).stderr?.isTTY === true;
+
+/** The next line a person types, or `undefined` when the input ends first. The interface is closed after it, so the terminal is released. */
+const lineFrom = async (input: NodeJS.ReadableStream): Promise<string | undefined> => {
+  const lines = createInterface({ input, terminal: false });
+  try {
+    for await (const line of lines) return line;
+    return undefined;
+  } finally {
+    lines.close();
   }
 };
 
@@ -397,6 +446,16 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
   }
 };
 
+/** The covenant version the pool names, or `undefined` when it cannot be asked or names none. The route is public, so no credential goes with it. */
+const covenantOrUndefined = async (deps: RunDeps, server: string): Promise<string | undefined> => {
+  try {
+    const reply = await ask(deps, DEPOSIT, server, '/v1/covenant', {});
+    return reply.status === 200 && isObject(reply.body) ? textIn(reply.body, 'version') : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 const machineAccount = (machine: MachineConfig): string => `machine:${machine.machine ?? machine.hostClass}`;
 
 /** The outbox key, and the skeleton `id`, of a machine's session: from the environment's session salt (per account, not per machine), else its own name standing in for the account, which a machine has none of. The holding route names its branch by the same key. */
@@ -404,13 +463,13 @@ export const machineKeyOf = (machine: MachineConfig, session: string): string =>
   machine.sessionSalt === undefined ? contentHash([machineAccount(machine), session]) : machineIdOf(machine.sessionSalt, machine.remoteSession ?? session);
 
 /**
- * `oars pool deposit`: every session in the store that passes both session gates is built into a canonical batch in the outbox, and the command stops: nothing is sent. The gates run before any projection does: the folder
+ * `oars pool deposit`: every session in the store that passes both session gates is built into a canonical batch in the outbox, and the command stops: no session data is sent. The gates run before any projection does: the folder
  * allowlist, then the exclusion check. A session that fails either, or has no raw to scan, is counted and never built. A session is built only once it has ended: no transcript of it, main or subagent, has gained a line (the later of its capture
  * and its raw file's last write) for `session_idle_hours` (6 hours). One that has not is counted under `notEnded`, and any batch of it from an earlier pass is withdrawn. `--send <hash>` is the lock in `sendBatch`.
  */
 export const poolDeposit = async (
   deps: RunDeps,
-  options: { server?: string | undefined; acceptCovenant?: string | undefined; send?: string | undefined; via?: Sender | undefined; git?: Git | undefined; session?: string | undefined },
+  options: { server?: string | undefined; acceptCovenant?: string | undefined; send?: string | undefined; via?: Sender | undefined; git?: Git | undefined; session?: string | undefined; covenant?: string | undefined },
 ): Promise<Outcome> => {
   const runtime = runtimeOf(deps);
   const server = poolServer(deps.env, DEPOSIT, options.server);
@@ -428,6 +487,8 @@ export const poolDeposit = async (
   if (options.send !== undefined) return sendBatch(deps, { outbox, server, token, hash: options.send, acceptCovenant: options.acceptCovenant, via: options.via });
   const { terms } = exclusionPaths(runtime.projectsRoot, deps.env);
   const saved = await readState(runtime.storeDir);
+  // A yes to the raw prompt counts only for the covenant it was given under, so an interactive build asks the pool which is in force; the nightly already knows and passes it. A pool that cannot be asked, or names none, leaves it unknown and the build goes on as before.
+  const covenant = options.covenant ?? (saved.pool.rawConsent === 'granted' ? await covenantOrUndefined(deps, server) : undefined);
   const names = localNames();
   // The key an injected block's hash is made under: this machine's salt, so the same block hashes the same in every session and the key never leaves it.
   const injectedKey = `injected-block:${(await localSalt(runtime.storeDir)).salt}`;
@@ -435,7 +496,10 @@ export const poolDeposit = async (
   const discarded = await discardStale(outbox);
   const counts: DepositCounts = { sessions: 0, batched: 0, excluded: { folder: 0, term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, off: 0, raw: { copies: 0, bytes: 0, masked: 0 }, uncaptured: 0, notEnded: 0, refused: 0, refusedFields: [], discarded, withdrawn: 0 };
   // The one gate on a name: the operator's redactor and exclusion terms (t881). Everything else the pool classes itself.
-  const gate: WireGate = { redact: makeRedactor(await readRedactDomains(runtime.storeDir)), terms: await loadTerms(terms) };
+  const termList = await loadTerms(terms);
+  const gate: WireGate = { redact: makeRedactor(await readRedactDomains(runtime.storeDir)), terms: termList };
+  // A Stop that names a session reads the others only to fill windows: a pass of the gate one of them made in the last minutes is not repeated.
+  const scanned = await scanCache(runtime.storeDir, contentHash(termList), deps.now);
   const built = new Set<string>();
   const rawKept = new Set<string>();
   // The bytes of the batches written in this pass: telemetry counts them, and the command's own document does not carry them.
@@ -473,6 +537,10 @@ export const poolDeposit = async (
       }
       continue;
     }
+    if (!named && scanned.fresh(records.main.project, records.main.session)) {
+      history.push(records);
+      continue;
+    }
     const verdict = await checkSession(runtime, terms, records.main.project, records.main.session);
     if (verdict.reason !== 'clean') {
       if (named) {
@@ -482,6 +550,7 @@ export const poolDeposit = async (
       continue;
     }
     if (!named) {
+      scanned.note(records.main.project, records.main.session);
       history.push(records);
       continue;
     }
@@ -518,9 +587,11 @@ export const poolDeposit = async (
       await withdraw(key);
       continue;
     }
+    // Noted before the batch is written: a person's sweep that runs between the two lines would delete a batch it cannot yet tell is a machine's.
+    if (machine !== undefined) await noteMachineKey(outbox, key);
     builtBytes += (await writeBatch(outbox, key, parsed.skeleton)).bytes;
     // The raw copy comes only after both gates and only with a yes to the raw prompt and a folder not at skeleton only: each transcript of the session, redacted here, before it is queued.
-    if (rawAllowed(saved.pool, records.main.project)) {
+    if (rawAllowed(saved.pool, records.main.project, covenant)) {
       let place = 0;
       for (const file of await transcriptFilesOf(runtime, records.main.project, records.main.session)) {
         const redacted = redactTranscript(await readFile(file.path, 'utf8'), saved.redactDomains, names, injectedKey);
@@ -538,9 +609,11 @@ export const poolDeposit = async (
   }
   // The batch of a session or account this store no longer holds goes too. A machine builds one session at a time and nothing here has the others in hand, so it sweeps nothing: nothing is withdrawn but what a gate refused.
   if (machine === undefined) {
-    counts.withdrawn += await removeBatchesExcept(outbox, built);
-    await removeRawExcept(outbox, rawKept);
+    // The batches a machine's Stop built in this outbox are not this pass's to withdraw: their keys cannot be recomputed here. The key log is read after the folder is listed, so a batch a machine writes during the sweep is already in it.
+    counts.withdrawn += await removeBatchesExcept(outbox, async () => new Set([...built, ...(await machineKeys(outbox))]));
+    await removeRawExcept(outbox, new Set([...rawKept, ...(await machineKeys(outbox))]));
   }
+  await scanned.save();
   counts.refusedFields = [...refusedFields].sort();
   recordWire(deps, wireTally);
   const { folder, term, noRaw, noTerms, unreadable } = counts.excluded;
@@ -553,6 +626,7 @@ export const poolDeposit = async (
     ...(counts.withdrawn === 0 ? [] : [`Removed ${String(counts.withdrawn)} ${counts.withdrawn === 1 ? 'batch' : 'batches'} of sessions that no longer pass the gates, have not ended, or are no longer in the store.`]),
     ...(discarded === 0 ? [] : [`Discarded ${String(discarded)} ${discarded === 1 ? 'batch' : 'batches'} built under an older vocabulary, field list, or skeleton format.`]),
     `Raw copies queued: ${String(counts.raw.copies)} (${String(counts.raw.bytes)} bytes, ${String(counts.raw.masked)} values masked). ${rawNote(saved.pool.rawConsent)}`.trim(),
+    ...(rawStale(saved.pool, covenant) ? [`Your yes to the raw prompt was given under covenant ${saved.pool.rawConsentVersion ?? 'none'}, not ${covenant ?? ''}, so no raw copy is queued. Run oars pool raw --consent yes to answer for the covenant now in force.`] : []),
     ...(counts.off === 0 ? [] : [`${String(counts.off)} ${counts.off === 1 ? 'session' : 'sessions'} in a folder switched off: nothing of them is queued.`]),
     'Run oars pool outbox to print exactly what would be sent.',
   ];
@@ -718,11 +792,24 @@ const RAW = 'pool-raw';
 /** The raw prompt, in plain words: shown by `oars pool raw` until it is answered, and what the detached sender relies on. Redaction is best effort and the text says so. */
 export const RAW_PROMPT = [
   'Raw transcripts are separate from the covenant. If you say yes, then once the pool says your account accepted its covenant, the sender that a session-end hook or any oars command starts (at most about once an hour) uploads a redacted copy of each full transcript of every folder you allowed, beside its skeleton, except a folder you set to skeleton only or off.',
+  'Many Oars Co. may sell these copies and use them to train AI models, and it may let anyone it sells them to do the same.',
   'Redaction runs on this machine, before anything is queued, and it is best effort: it masks secret shapes it knows, emails, your username, home paths, environment values, and hosts, and it can miss a secret that has no recognizable shape or a name written in prose.',
   'It also does not catch a host with no dot, a public host name outside a link, quoted file contents and command output, a secret split across lines, images and attachments, a JSON env value, your username written another way, another person\'s hyphenated name in a project folder path, or an IPv6 address with a zone or inside a longer word, and a common-word account name is masked everywhere it appears.',
   'The blocks the harness adds on its own (instruction files, memory, skill lists, the system prompt) are replaced by a short marker, but a block in a shape the redactor does not list yet, a summary the harness writes for a session you left, a file it quotes after compaction, the echo of a command you ran, a reminder the harness puts in the middle of a message, and what an agent reports back are not, and stay as written; the project folder name and working directory on each line also stay readable, apart from the masking above.',
   'Say no, or say nothing, and only skeletons go to the pool. Change your mind any time: oars pool raw --consent yes|no. A no stops later sends only; it cannot recall what was already sent.',
 ].join('\n');
+
+/** The covenant version the pool has in force (`GET /v1/covenant` is public). With none published a yes cannot be tied to a covenant, so nothing is recorded. */
+const covenantInForce = async (deps: RunDeps): Promise<string> => {
+  const reply = await ask(deps, RAW, poolServer(deps.env, RAW), '/v1/covenant', {});
+  if (reply.status !== 200 || !isObject(reply.body)) throw refusal(RAW, reply);
+  const version = textIn(reply.body, 'version');
+  if (version === undefined) {
+    const title = 'This pool has not published its covenant, so a yes to the raw prompt cannot be tied to one. Nothing was recorded.';
+    throw new CliError(title, ExitCode.AUTH, RAW, { code: 'deposits_closed', title, status: 403 });
+  }
+  return version;
+};
 
 /** `oars pool raw`: shows the raw prompt and the answer so far; `--consent yes|no` records the answer; `--folder <entry> --mode all|skeleton|off` sets what one folder may send. */
 export const poolRaw = async (deps: RunDeps, options: { consent?: string | undefined; folder?: string | undefined; mode?: string | undefined }): Promise<Outcome> => {
@@ -731,17 +818,22 @@ export const poolRaw = async (deps: RunDeps, options: { consent?: string | undef
   if ((options.folder === undefined) !== (options.mode === undefined)) throw usage('--folder and --mode go together: --folder <folder or glob> --mode all|skeleton|off.', RAW);
   if (options.mode !== undefined && options.mode !== 'all' && options.mode !== 'skeleton' && options.mode !== 'off') throw usage('--mode takes all, skeleton, or off.', RAW);
   const { folder, mode } = options;
+  // A yes is tied to the covenant in force when it is given, so the pool is asked which that is before anything is stored. A no needs none.
+  const covenant = options.consent === 'yes' ? await covenantInForce(deps) : null;
   const choices = await updatePoolChoices(runtime.storeDir, (current) => {
-    if (options.consent !== undefined) current.rawConsent = options.consent === 'yes' ? 'granted' : 'declined';
+    if (options.consent !== undefined) {
+      current.rawConsent = options.consent === 'yes' ? 'granted' : 'declined';
+      current.rawConsentVersion = covenant;
+    }
     if (folder !== undefined) {
       if (mode === 'all') Reflect.deleteProperty(current.folders, folder);
       else if (mode === 'skeleton' || mode === 'off') current.folders[folder] = mode;
     }
   });
-  const answer = choices.rawConsent === null ? 'not answered yet: only skeletons go to the pool' : choices.rawConsent === 'granted' ? 'yes: redacted raw copies leave' : 'no: only skeletons go to the pool';
+  const answer = choices.rawConsent === null ? 'not answered yet: only skeletons go to the pool' : choices.rawConsent === 'granted' ? `yes, given under covenant ${choices.rawConsentVersion ?? 'none'}: redacted raw copies leave while that covenant is in force` : 'no: only skeletons go to the pool';
   const switched = Object.entries(choices.folders).map(([entry, set]) => `  ${entry}: ${set === 'off' ? 'nothing sent to the pool' : 'skeletons only'}`);
   const lines = [...(choices.rawConsent === null ? [RAW_PROMPT, ''] : []), `Raw copies: ${answer}.`, ...(switched.length === 0 ? [] : ['Folders switched down:', ...switched])];
-  return { document: { ok: true, rawConsent: choices.rawConsent, folders: choices.folders }, text: lines.join('\n') };
+  return { document: { ok: true, rawConsent: choices.rawConsent, rawConsentVersion: choices.rawConsentVersion, folders: choices.folders }, text: lines.join('\n') };
 };
 
 const COVERAGE = 'pool-coverage';

@@ -9,7 +9,7 @@ import { PROMPT_INTERVENTIONS, type PromptIntervention } from '../../cli/src/ses
 import { CALL_SHAPE_METHOD } from '../../cli/src/sessions/read.js';
 import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from '../../cli/src/sessions/pool-fixture.js';
 import { sampleSkeleton } from './sample.js';
-import { startPool, stubUser, type TestPool } from './test-pool.js';
+import { acceptanceOf, startPool, stubUser, type TestPool } from './test-pool.js';
 
 // The fields a withheld family would read, none of them on the wire today.
 interface WithheldFields {
@@ -96,7 +96,7 @@ describe('a bundle over five accounts', () => {
     let last = '';
     for (const id of ['4001', '4002', '4003', '4004', '4005']) {
       const { token } = await pool.signIn('github', stubUser(id));
-      await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+      await pool.post('/v1/covenant/accept', acceptanceOf('v1'), token);
       expect((await pool.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0')), token)).status).toBe(201);
       last = token;
     }
@@ -142,7 +142,7 @@ describe('the recovery family in a bundle', () => {
 
   it('reads an off-list errorCode as other and keeps the value in the extensions bag, never in a cell', async () => {
     const { token } = await pool.signIn('github', stubUser('5099'));
-    await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+    await pool.post('/v1/covenant/accept', acceptanceOf('v1'), token);
     const skeleton = failingSkeleton('0000000000005099');
     const response = await pool.post('/v1/deposits', {
       ...skeleton,
@@ -157,7 +157,7 @@ describe('the recovery family in a bundle', () => {
 
   it('refuses an errorCode that is no text, and one on a call that succeeded, with the field named', async () => {
     const { token } = await pool.signIn('github', stubUser('5098'));
-    await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+    await pool.post('/v1/covenant/accept', acceptanceOf('v1'), token);
     const skeleton = failingSkeleton('0000000000005098');
     const sentWith = (index: number, errorCode: unknown) => ({
       ...skeleton,
@@ -175,7 +175,7 @@ describe('the recovery family in a bundle', () => {
     let last = '';
     for (const id of ids) {
       const { token } = await pool.signIn('github', stubUser(id));
-      await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+      await pool.post('/v1/covenant/accept', acceptanceOf('v1'), token);
       expect((await pool.post('/v1/deposits', failingSkeleton(id.padStart(16, '0')), token)).status).toBe(201);
       last = token;
     }
@@ -213,7 +213,7 @@ describe('a bundle for a harness with no version on record', () => {
     let token = '';
     for (const [id, version] of [['5001', null], ['5002', null], ['5003', null], ['5004', null], ['5101', '2.1.314'], ['5102', '2.1.314'], ['5103', '2.1.314'], ['5104', '2.1.314'], ['5105', '2.1.314']] as const) {
       ({ token } = await pool.signIn('github', stubUser(id)));
-      await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+      await pool.post('/v1/covenant/accept', acceptanceOf('v1'), token);
       expect((await pool.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0'), { languages: ['typescript'] }, '2026-11-01', 'cursor', { program: 'git', sub: 'push' }, version), token)).status).toBe(201);
     }
     const bundleAt = async (version: string) => {
@@ -229,7 +229,7 @@ describe('a bundle for a harness with no version on record', () => {
     expect(four.reads.every((read) => read.family === 'fit' && read.slice.platform !== undefined)).toBe(true);
     // A fifth account lifts the unknown bundle to the floor.
     ({ token } = await pool.signIn('github', stubUser('5005')));
-    await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+    await pool.post('/v1/covenant/accept', acceptanceOf('v1'), token);
     expect((await pool.post('/v1/deposits', sampleSkeleton('5005'.padStart(16, '0'), { languages: ['typescript'] }, '2026-11-01', 'cursor', { program: 'git', sub: 'push' }, null), token)).status).toBe(201);
     const unknown = await bundleAt('unknown');
     const families = new Set(unknown.reads.map((read) => read.family));
@@ -262,7 +262,7 @@ describe('the intervention outcome is held per prompt and served by nothing (t88
 
   it('stores the bucket on each prompt of the skeleton, and not in the extensions bag', async () => {
     const { token } = await pool.signIn('github', stubUser('6001'));
-    await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+    await pool.post('/v1/covenant/accept', acceptanceOf('v1'), token);
     expect((await pool.post('/v1/deposits', withIntervention(sampleSkeleton('0000000000006001'), 'revert'), token)).status).toBe(201);
     const db = await pool.db();
     const stored = parseSkeleton(JSON.parse(String(await db.prepare('SELECT skeleton FROM deposits').first('skeleton'))));
@@ -273,7 +273,7 @@ describe('the intervention outcome is held per prompt and served by nothing (t88
 
   it('stores user-stop on the prompt as sent (t912): the pool accepts the member and reads it as itself, not as other', async () => {
     const { token } = await pool.signIn('github', stubUser('6002'));
-    await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+    await pool.post('/v1/covenant/accept', acceptanceOf('v1'), token);
     expect((await pool.post('/v1/deposits', withIntervention(sampleSkeleton('0000000000006003'), 'user-stop'), token)).status).toBe(201);
     const db = await pool.db();
     const stored = parseSkeleton(JSON.parse(String(await db.prepare("SELECT skeleton FROM deposits WHERE id = '0000000000006003'").first('skeleton'))));
@@ -296,7 +296,7 @@ describe('the intervention outcome is held per prompt and served by nothing (t88
     let last = '';
     for (const id of ['6101', '6102', '6103', '6104', '6105']) {
       const { token } = await pool.signIn('github', stubUser(id));
-      await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+      await pool.post('/v1/covenant/accept', acceptanceOf('v1'), token);
       expect((await pool.post('/v1/deposits', withIntervention(sampleSkeleton(id.padStart(16, '0')), id === '6105' ? 'user-stop' : 'after-error'), token)).status).toBe(201);
       last = token;
     }

@@ -17,6 +17,10 @@ export interface NoticeEntry {
 }
 
 const NOTICE = 'machine-notice.json';
+// When each code was last written: the notice file is cleared when a Stop prints it, so the cap needs a record that outlives it.
+const WRITTEN = 'machine-notified.json';
+/** A code is written at most this often, so an expired client prints its message once a day, not at every Stop. */
+export const NOTICE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 export const noticeFile = (storeDir: string): string => join(storeDir, NOTICE);
 
@@ -45,8 +49,13 @@ const entriesOf = (text: string): NoticeEntry[] => {
   });
 };
 
+
 /** The child records a condition: its entry replaces an earlier one of the same code and keeps its place, so the file lists the codes in the order they were first raised. A notice file it cannot read is rewritten. */
 export const recordNotice = async (storeDir: string, code: NoticeCode, at: number): Promise<void> => {
+  const written = entriesOf(await readFile(join(storeDir, WRITTEN), 'utf8').catch(() => ''));
+  const last = written.find((entry) => entry.code === code);
+  // A clock that moved backward (`at < last.at`) writes again, rather than staying quiet until it catches up.
+  if (last !== undefined && at >= last.at && at - last.at < NOTICE_INTERVAL_MS) return;
   const kept = entriesOf(await readFile(noticeFile(storeDir), 'utf8').catch(() => ''));
   // A Map keeps a key's first place when it is set again.
   const byCode = new Map(kept.map((entry) => [entry.code, entry]));
@@ -54,6 +63,7 @@ export const recordNotice = async (storeDir: string, code: NoticeCode, at: numbe
   const entries = [...byCode.values()];
   await mkdirOwnerOnly(storeDir);
   await writeOwnerOnly(noticeFile(storeDir), `${JSON.stringify({ entries })}\n`);
+  await writeOwnerOnly(join(storeDir, WRITTEN), `${JSON.stringify({ entries: [...written.filter((entry) => entry.code !== code), { code, at }] })}\n`);
 };
 
 /** The one message for a set of entries, or `undefined` for none. */
