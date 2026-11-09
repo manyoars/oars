@@ -1,9 +1,9 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { isMissing } from './pool-outbox.js';
+import { heldBatchOf, isMissing } from './pool-outbox.js';
 import { appendOwnerOnly, mkdirOwnerOnly } from './owner-only.js';
 import { contentHash } from './read.js';
-import { bucketOf, PACKAGE_REGISTRIES, type BucketKind, type DeltaEntry, type SessionRecords } from './pool-wire.js';
+import { bucketOf, PACKAGE_REGISTRIES, parseSkeleton, type BucketKind, type DeltaEntry, type SessionRecords } from './pool-wire.js';
 import { PRIVATE, PUBLIC_PACKAGES, publicEffort } from './public-vocabulary.js';
 import { harnessOf } from './schema.js';
 
@@ -221,9 +221,8 @@ export interface Carried {
 /**
  * The deltas not yet sent, by the id of the session that filled their after window: that session's batch carries them, and the mark is the window's index, so it holds whichever session fills. A delta whose mark is held is dropped, so a rebuilt session, or a batch written
  * again under the same key, builds none it already carried. Nothing is marked here: the caller marks them once the batch is written.
- * `rebuilt` is the one session a machine's Stop builds again while it is still open: it keeps the deltas it already carried, so the batch that replaces its own still holds them, and only the marks not yet written are returned for it.
  */
-export const carriedDeltas = (account: string, sessions: readonly Gated[], sent: ReadonlySet<string>, rebuilt?: string): Map<string, Carried> => {
+export const carriedDeltas = (account: string, sessions: readonly Gated[], sent: ReadonlySet<string>): Map<string, Carried> => {
   const carried = new Map<string, Carried>();
   for (const { index, before, after, filler } of windowsOf(sessions)) {
     const entries: DeltaEntry[] = [];
@@ -234,12 +233,33 @@ export const carriedDeltas = (account: string, sessions: readonly Gated[], sent:
       after.slice(0, DELTA_MIN_SESSIONS).map(({ records }) => records),
     )) {
       const mark = deltaMark(account, entry, index);
-      const written = sent.has(mark);
-      if (written && filler.id !== rebuilt) continue;
+      if (sent.has(mark)) continue;
       entries.push(entry);
-      if (!written) marks.push(mark);
+      marks.push(mark);
     }
     if (entries.length > 0) carried.set(filler.id, { entries, marks });
   }
   return carried;
+};
+
+/** The delta entries the batch under `key` in this outbox already carries; none when it has no batch, or one this reader does not take. */
+export const heldDeltas = async (outbox: string, key: string): Promise<DeltaEntry[]> => {
+  const held = await heldBatchOf(outbox, key);
+  if (held === undefined) return [];
+  const parsed = parseSkeleton(JSON.parse(held.bytes));
+  return parsed.ok ? parsed.skeleton.deltas : [];
+};
+
+/**
+ * What a machine's Stop writes for the one open session it builds again: the deltas its own earlier batch carried, then the new ones. A session keeps exactly what its own batch carried, so the batch that replaces its own never loses a delta, and one that did
+ * not carry a held delta never takes it, whichever session fills the window now. A delta that appears in both (a batch written before its mark was) is written once.
+ */
+export const keptDeltas = (held: readonly DeltaEntry[], fresh: readonly DeltaEntry[]): DeltaEntry[] => {
+  const seen = new Set<string>();
+  return [...held, ...fresh].filter(({ deltaKind, field, name, registry, metric, change }) => {
+    const identity = JSON.stringify([deltaKind, field, name, registry, metric, change]);
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
 };

@@ -2,10 +2,11 @@
 // The store is a temp folder (`stage`), and APPDATA is the same folder; the test confirms the store path is under the temp folder before it runs.
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { harness, type Harness } from '../test-support.js';
 import { poolDeposit } from './pool-command.js';
+import { contentHash } from './read.js';
 import { deposit } from './store.js';
 import { addProject, cleanup, stage, type Staged } from './test-support.js';
 
@@ -113,13 +114,18 @@ describe('deltas on a machine', () => {
     ...[0, 1, 2, 3, 4].map((n) => ({ id: sid(10 + n), day: '01', mode: 'default' })),
     ...[0, 1, 2, 3, 4].map((n) => ({ id: sid(20 + n), day: '09', mode: 'plan' })),
   ];
+  /** The keys of the batches in the outbox that carry at least one delta (a key is the account and session hashed; a machine's account is its host class here). */
+  const carriers = (staged: Staged): string[] =>
+    batches(staged)
+      .filter((name) => {
+        const parsed: unknown = JSON.parse(readFileSync(join(staged.storeDir, 'pool-outbox', name), 'utf8'));
+        const deltas: unknown = typeof parsed === 'object' && parsed !== null ? Reflect.get(parsed, 'deltas') : undefined;
+        return Array.isArray(deltas) && deltas.length > 0;
+      })
+      .map((name) => basename(name).split('.')[0] ?? '');
   /** How many batches in the outbox carry at least one delta. */
-  const carried = (staged: Staged): number =>
-    batches(staged).filter((name) => {
-      const parsed: unknown = JSON.parse(readFileSync(join(staged.storeDir, 'pool-outbox', name), 'utf8'));
-      const deltas: unknown = typeof parsed === 'object' && parsed !== null ? Reflect.get(parsed, 'deltas') : undefined;
-      return Array.isArray(deltas) && deltas.length > 0;
-    }).length;
+  const carried = (staged: Staged): number => carriers(staged).length;
+  const keyOf = (session: string): string => contentHash(['machine:vps', session]);
 
   /** The marks written so far, one per line, from the outbox's log. */
   const marksOf = (staged: Staged): string[] => {
@@ -152,6 +158,26 @@ describe('deltas on a machine', () => {
     expect(await document(given, { session: sid(24) })).toMatchObject({ batched: 1, withdrawn: 0 });
     expect(carried(given.staged)).toBe(1);
     expect(batches(given.staged)).toHaveLength(1);
+    expect(marksOf(given.staged)).toEqual(written);
+  });
+
+  it("a session keeps the delta its own batch carried and never takes one it did not: the filler moves when an earlier session is captured late", async () => {
+    const given = await scene({ OARS_HOST_CLASS: 'vps' }, weeks);
+    expect(await document(given, { session: sid(24) })).toMatchObject({ batched: 1 });
+    expect(carried(given.staged)).toBe(1);
+    const written = marksOf(given.staged);
+    // A second session that began on day 09, captured after the first Stop (two concurrent sessions): it sorts first, so the after window now fills at sid(23).
+    addProject(given.staged, FOLDER, sid(19), [lineOf(sid(19), '09', 'plan')]);
+    await deposit(given.staged.runtime, { allow: [FOLDER], redactDomains: [], now: Date.now });
+    // The new filler's batch holds none: the delta was carried by sid(24)'s batch, and its mark is held.
+    expect(await document(given, { session: sid(23) })).toMatchObject({ batched: 1, withdrawn: 0 });
+    expect(carried(given.staged)).toBe(1);
+    expect(carriers(given.staged)).toEqual([keyOf(sid(24))]);
+    // sid(24) is no longer the filler, but its own batch carried the delta, so its next Stop rebuilds it with the delta.
+    expect(await document(given, { session: sid(24) })).toMatchObject({ batched: 1, withdrawn: 0 });
+    expect(carried(given.staged)).toBe(1);
+    expect(carriers(given.staged)).toEqual([keyOf(sid(24))]);
+    expect(batches(given.staged)).toHaveLength(2);
     expect(marksOf(given.staged)).toEqual(written);
   });
 

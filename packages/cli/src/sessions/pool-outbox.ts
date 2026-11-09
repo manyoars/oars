@@ -260,6 +260,20 @@ export const heldBatches = async (outbox: string, stamp: string = currentStamp()
   return { batches, edited };
 };
 
+/** The held batch of one session under this stamp, read whole only when its file still hashes to its name; undefined when the session has none, or its file was edited. */
+export const heldBatchOf = async (outbox: string, key: string, stamp: string = currentStamp()): Promise<Held | undefined> => {
+  const folder = join(outbox, stamp);
+  for (const name of await namesIn(folder)) {
+    const found = BATCH_FILE.exec(name);
+    if (found?.[1] !== key) continue;
+    const hash = found[2] ?? '';
+    const file = join(folder, name);
+    const bytes = await unchangedBytes(file, hash);
+    if (bytes !== undefined) return { key, hash, file, bytes };
+  }
+  return undefined;
+};
+
 const shownFile = (outbox: string): string => join(outbox, 'shown.log');
 
 /** Records that this hash was printed, one line for each print: the lock below sends only a hash that appears here. */

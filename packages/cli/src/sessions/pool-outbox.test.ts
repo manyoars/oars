@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { batchHash, BATCH_FIELDS, canonicalBytes, currentStamp, FIELD_ROWS, fieldsOf, writeBatch } from './pool-outbox.js';
+import { batchHash, BATCH_FIELDS, canonicalBytes, currentStamp, FIELD_ROWS, fieldsOf, heldBatchOf, writeBatch } from './pool-outbox.js';
 import { VOCAB_VERSION } from './public-vocabulary.js';
 import { FIELD_LIST_VERSION, parseSkeleton, SKELETON_FORMAT } from './pool-wire.js';
 
@@ -72,6 +72,18 @@ describe('the outbox', () => {
     writeFileSync(join(first.folder, 'readme.txt'), 'x');
     await writeBatch(dir, KEY, { ...BATCH, z: 'e' });
     expect(readdirSync(first.folder)).toContain('readme.txt');
+  });
+
+  it('reads the one batch of a session whole, and none of another session, an unwritten one, or an edited file', async () => {
+    const dir = temp();
+    expect(await heldBatchOf(dir, KEY)).toBeUndefined();
+    const written = await writeBatch(dir, KEY, BATCH);
+    await writeBatch(dir, OTHER, { ...BATCH, z: 'e' });
+    expect(await heldBatchOf(dir, KEY)).toEqual({ key: KEY, hash: HASH, file: join(written.folder, `${KEY}.${HASH}.jsonl`), bytes: BYTES });
+    expect((await heldBatchOf(dir, OTHER))?.bytes).toBe(canonicalBytes({ ...BATCH, z: 'e' }));
+    expect(await heldBatchOf(dir, 'cccccccccccccccc')).toBeUndefined();
+    writeFileSync(join(written.folder, `${KEY}.${HASH}.jsonl`), `${BYTES}edited`);
+    expect(await heldBatchOf(dir, KEY)).toBeUndefined();
   });
 });
 

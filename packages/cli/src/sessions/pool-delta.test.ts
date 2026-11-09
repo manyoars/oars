@@ -2,8 +2,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { carriedDeltas, DELTA_DAYS, DELTA_MIN_SESSIONS, deltaMark, deltasOf, markDeltasSent, placedOf, sentDeltas, windowsOf, type Gated } from './pool-delta.js';
-import { prompt, session, sessionsFrom, store, tool } from './pool-fixture.js';
+import { carriedDeltas, DELTA_DAYS, DELTA_MIN_SESSIONS, deltaMark, deltasOf, heldDeltas, keptDeltas, markDeltasSent, placedOf, sentDeltas, windowsOf, type Gated } from './pool-delta.js';
+import { largeSkeleton, prompt, session, sessionsFrom, store, tool } from './pool-fixture.js';
+import { writeBatch } from './pool-outbox.js';
 import type { DeltaEntry, SessionRecords } from './pool-wire.js';
 import type { Harness, ToolManifest, ToolStatus } from './schema.js';
 
@@ -313,6 +314,37 @@ describe('the once-only mark of a delta', () => {
   });
 });
 
+describe('the deltas a session already carries', () => {
+  const KEY = 'aaaaaaaaaaaaaaaa';
+  const written = async (folder: string, entries: DeltaEntry[]): Promise<void> => {
+    await writeBatch(folder, KEY, { ...largeSkeleton(KEY, 1), deltas: entries });
+  };
+
+  it('reads the entries of the batch under the key, and none for a session with no batch', async () => {
+    const folder = outbox();
+    expect(await heldDeltas(folder, KEY)).toEqual([]);
+    await written(folder, [ENTRY]);
+    expect(await heldDeltas(folder, KEY)).toEqual([ENTRY]);
+    expect(await heldDeltas(folder, 'bbbbbbbbbbbbbbbb')).toEqual([]);
+  });
+
+  it('reads none from a batch this reader does not take', async () => {
+    const folder = outbox();
+    await writeBatch(folder, KEY, { not: 'a skeleton' });
+    expect(await heldDeltas(folder, KEY)).toEqual([]);
+  });
+
+  it('keeps the held entries first and adds only the new ones, an entry in both once', () => {
+    const other: DeltaEntry = { ...ENTRY, name: 'zod' };
+    expect(keptDeltas([], [])).toEqual([]);
+    expect(keptDeltas([ENTRY], [])).toEqual([ENTRY]);
+    expect(keptDeltas([], [ENTRY])).toEqual([ENTRY]);
+    expect(keptDeltas([ENTRY], [other])).toEqual([ENTRY, other]);
+    expect(keptDeltas([ENTRY], [{ ...ENTRY }, other])).toEqual([ENTRY, other]);
+    expect(keptDeltas([ENTRY], [{ ...ENTRY, change: 3 }])).toHaveLength(2);
+  });
+});
+
 const gated = (prefix: string, count: number, shape: Shape): Gated[] =>
   Array.from({ length: count }, (_, n) => {
     const records = sessionOf(`${prefix}${String(n)}`, shape);
@@ -361,14 +393,6 @@ describe('the deltas a deposit carries', () => {
     expect(marks.size).toBe(1);
     expect(carriedDeltas('acct', sessions, marks).size).toBe(0);
     expect(carriedDeltas('other', sessions, marks).get('a4')?.entries).toHaveLength(1);
-  });
-
-  it('keeps a held delta for the one session named as rebuilt, with no mark to write, and for no other', () => {
-    const sessions = [...before(), ...after()];
-    const held = new Set(carriedDeltas('acct', sessions, new Set()).get('a4')?.marks);
-    expect(carriedDeltas('acct', sessions, held, 'a4').get('a4')).toEqual({ entries: carriedDeltas('acct', sessions, new Set()).get('a4')?.entries, marks: [] });
-    expect(carriedDeltas('acct', sessions, held, 'b1').size).toBe(0);
-    expect(carriedDeltas('acct', sessions, new Set(), 'a4').get('a4')?.marks).toHaveLength(1);
   });
 
   it('builds the same delta whatever the order the sessions come in, so a rebuilt session carries the same one', () => {
