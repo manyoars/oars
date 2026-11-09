@@ -541,7 +541,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
   pool
     .command('enroll')
     .description('enroll a machine: print the whole configuration a cloud VM needs (host class, launcher, a new machine id, the repositories, two salts derived from this machine\'s, and your exclusion terms) after checking that each repository is private (GH_TOKEN or GITHUB_TOKEN lets the check see a private one). With --hold-only that is all, and no pool credential is used; without it the pool also issues a one-time enrollment token for the machine, which needs oars pool login')
-    .option('--hold-only', 'hold in the session\'s own repository and send nothing to the pool and send nothing to the pool: no login, no token')
+    .option('--hold-only', 'hold in the session\'s own repository and send nothing to the pool: no login, no token')
     .option('--host-class <class>', 'vps, cloud, ci, or hosted')
     .option('--launcher <launcher>', 'interactive, orchestrated, or scheduled')
     .option('--allow-repos <repos>', 'the repositories the machine may hold, as owner/name; repeat the flag or separate them with commas', collect)
