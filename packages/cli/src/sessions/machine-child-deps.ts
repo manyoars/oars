@@ -1,6 +1,7 @@
 // The real parts of the machine child (`machine-child.ts`): the session store's capture, the pool's batch build, the file system and the clock. Loaded only by `hook-bin.js machine-child`, so a per-tool hook and the Stop
 // itself never pay for the store and pool modules. It never throws: a failure is one masked line in `pool-send.log`, and the next Stop builds the same batch.
 import { stat } from 'node:fs/promises';
+import { basename } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { machineChild, parseChildInput } from './machine-child.js';
 import { DEPOSIT, poolDeposit, poolServer } from './pool-command.js';
@@ -26,8 +27,9 @@ export const runMachineChild = async (env: NodeJS.ProcessEnv, sessions: Sessions
         capture: async (forwarded) => {
           await depositSession(sessions, forwarded.transcript, now);
         },
-        build: async () => {
-          await poolDeposit(deps, {});
+        // The store names a session by its transcript's file name, which is what the Stop's session is on every harness this build runs under.
+        build: async (forwarded) => {
+          await poolDeposit(deps, { session: basename(forwarded.transcript, '.jsonl') });
         },
       },
       input,

@@ -23,6 +23,7 @@ import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from 
 import { contentHash, FIRST_ORDER_FAMILIES } from './read.js';
 import { isObject, keptReplica, loadSignIns, numberIn, replicaFile, signInOf, signInsFile, textIn, type SignIn } from './pool-replica.js';
 import { CAPTURE_VERSION, harnessOf as sessionHarness, type Harness } from './schema.js';
+import { machineOf } from './machine.js';
 import { loadStore, localSalt, readRedactDomains, readSkeletons, readState, updatePoolChoices, type SessionsRuntime } from './store.js';
 import { runGit, type Git } from './survival.js';
 import { vocabulary } from './vocab-load.js';
@@ -400,10 +401,16 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
  * allowlist, then the exclusion check. A session that fails either, or has no raw to scan, is counted and never built. A session is built only once it has ended: no transcript of it, main or subagent, has gained a line (the later of its capture
  * and its raw file's last write) for `session_idle_hours` (6 hours). One that has not is counted under `notEnded`, and any batch of it from an earlier pass is withdrawn. `--send <hash>` is the lock in `sendBatch`.
  */
-export const poolDeposit = async (deps: RunDeps, options: { server?: string | undefined; acceptCovenant?: string | undefined; send?: string | undefined; via?: Sender | undefined; git?: Git | undefined }): Promise<Outcome> => {
+export const poolDeposit = async (
+  deps: RunDeps,
+  options: { server?: string | undefined; acceptCovenant?: string | undefined; send?: string | undefined; via?: Sender | undefined; git?: Git | undefined; session?: string | undefined },
+): Promise<Outcome> => {
   const runtime = runtimeOf(deps);
   const server = poolServer(deps.env, DEPOSIT, options.server);
-  const { account, token } = await signedIn(deps, runtime.storeDir, server, DEPOSIT);
+  // A machine (`OARS_HOST_CLASS`, see machine.ts) builds at every Stop and sends nothing from here, so it signs nobody in: the account part of its batch key is its own name, and the holding route's `id` replaces it.
+  const machine = machineOf(deps.env);
+  if (machine !== undefined && options.send !== undefined) throw usage('A machine builds batches into its outbox and sends none: --send is for a signed-in person.', DEPOSIT);
+  const { account, token } = machine === undefined ? await signedIn(deps, runtime.storeDir, server, DEPOSIT) : { account: `machine:${machine.machine ?? machine.hostClass}`, token: '' };
   // A client past `registry_max_age` builds no batch (spec Section 1.3): its sessions wait in `A` and nothing is lost. This comes before anything is written or sent.
   const expired = vocabularyExpired(deps);
   if (expired !== undefined) throw expired;
@@ -437,6 +444,8 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
     await removeRawExcept(outbox, new Set(), key);
   };
   for (const records of sessionsOf(await loadStore(runtime.storeDir), roots)) {
+    // The Stop of a machine builds the one session that stopped: the others in the store belong to Stops of their own, and their batches stay as they are.
+    if (options.session !== undefined && records.main.session !== options.session) continue;
     counts.sessions += 1;
     // Hashed with the account, so a redeposit replaces its own batch and two accounts' copies of one session cannot be joined.
     const key = contentHash([account, records.main.session]);
@@ -457,8 +466,8 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
       await withdraw(key);
       continue;
     }
-    // The batch of a session is built once the session and its subagents have ended; a session still in progress waits, and an earlier batch of it is withdrawn.
-    if (!hasEnded(records, deps.now(), await lastWritten(runtime, records.main.project, records.main.session))) {
+    // The batch of a session is built once the session and its subagents have ended; a session still in progress waits, and an earlier batch of it is withdrawn. A machine's Stop is the end of a turn, not of a session: its VM may be reclaimed before the session ends, so it builds the open session as it stands.
+    if (machine === undefined && !hasEnded(records, deps.now(), await lastWritten(runtime, records.main.project, records.main.session))) {
       counts.notEnded += 1;
       await withdraw(key);
       continue;
@@ -466,7 +475,8 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
     ready.push({ records, key });
   }
   // A delta is built from the sessions that passed, carried by the batch of the session that filled its after window, and marked sent only once that batch is written: a deposit that stops first builds it again.
-  const placed = ready.flatMap(({ records }) => placedOf(records) ?? []);
+  // A cloud machine has no history of its own to compare a window against (every VM starts clean), so it carries none.
+  const placed = machine?.hostClass === 'cloud' ? [] : ready.flatMap(({ records }) => placedOf(records) ?? []);
   const carried = carriedDeltas(account, placed, await sentDeltas(outbox));
   // The coverage bands (t871): the operator's two settings, read here, and the team band counted from the local git log. Nothing is looked up, and anything unread goes as unknown.
   const coverageOf = makeCoverage(runtime, await readCoverageSetting(runtime.storeDir), options.git ?? runGit);
@@ -505,9 +515,11 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
     built.add(key);
     counts.batched += 1;
   }
-  // The batch of a session or account this store no longer holds goes too.
-  counts.withdrawn += await removeBatchesExcept(outbox, built);
-  await removeRawExcept(outbox, rawKept);
+  // The batch of a session or account this store no longer holds goes too. A machine builds one session at a time and nothing here has the others in hand, so it sweeps nothing: nothing is withdrawn but what a gate refused.
+  if (machine === undefined) {
+    counts.withdrawn += await removeBatchesExcept(outbox, built);
+    await removeRawExcept(outbox, rawKept);
+  }
   counts.refusedFields = [...refusedFields].sort();
   recordWire(deps, wireTally);
   const { folder, term, noRaw, noTerms, unreadable } = counts.excluded;
