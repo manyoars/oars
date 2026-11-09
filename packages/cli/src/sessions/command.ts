@@ -20,6 +20,7 @@ import { MISS_TEXT } from './recall-render.js';
 import { EMPTY_RECALL, emptyBooks, nothingFoundLines, savedListNote } from './empty-state.js';
 import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, inRepository, readIndex, type ContextOptions } from './hook-index.js';
+import { CODEX_TRUST_NOTICE, codexHookStatus, installCodexHook, uninstallCodexHook, type CodexInstall } from './codex-hook-install.js';
 import { hookStatus, installHooks, removeSchedule, SCHEDULE_REFUSED, scheduleStatus, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
 import { recordSchedule } from './pool-due.js';
 import { serve } from './mcp.js';
@@ -451,6 +452,17 @@ const installOf = (deps: SessionsDeps): InstallRuntime => {
   return deps.install;
 };
 
+const codexOf = (deps: SessionsDeps): CodexInstall => {
+  const codex = installOf(deps).codex;
+  if (codex === undefined) throw new CliError('The Codex hook is not configured in this run.', ExitCode.UNEXPECTED, 'unexpected');
+  return codex;
+};
+
+/** `--harness codex` writes to the Codex home, so a settings-file flag beside it names a target that does not apply. */
+const refuseSettingsFlags = (options: HookTarget): void => {
+  if (options.scope !== undefined || options.file !== undefined) throw new CliError('--harness codex writes hooks.json in the Codex home; --scope and --file apply to Claude Code settings only.', ExitCode.USAGE, 'usage');
+};
+
 export interface HookTarget {
   scope: Scope | undefined;
   file: string | undefined;
@@ -463,7 +475,13 @@ const hookScope = (options: HookTarget): Scope => options.scope ?? (options.file
 const SENDS_OFF = 'The background sweep and the pool send are off, as you chose with --schedule off (telemetry has its own switch: oars telemetry off). Turn them back on with: oars sessions hook install --schedule on';
 const SENDS_ON = 'Background sweeps and sends are on: a due sweep and send starts from the session-end hook and from any oars command, at most about hourly.';
 
-export const sessionsHookInstall = async (deps: SessionsDeps, options: HookTarget & { keepRetention: boolean; schedule: 'nightly' | 'off' | 'on' | undefined }): Promise<Outcome> => {
+export const sessionsHookInstall = async (deps: SessionsDeps, options: HookTarget & { keepRetention: boolean; schedule: 'nightly' | 'off' | 'on' | undefined; harness?: 'codex' | undefined }): Promise<Outcome> => {
+  if (options.harness === 'codex') {
+    refuseSettingsFlags(options);
+    if (options.schedule !== undefined) throw new CliError('--schedule applies to the Claude Code hooks, not --harness codex.', ExitCode.USAGE, 'usage');
+    const result = await installCodexHook(codexOf(deps));
+    return { document: { ok: true, harness: 'codex', ...result, trust: 'asked by codex' }, text: `Installed ${result.installed.join(', ')} hooks in ${result.file}.\n${CODEX_TRUST_NOTICE}` };
+  }
   const runtime = installOf(deps);
   // `--schedule nightly` asked for the task this version no longer registers: refused before anything is written.
   if (options.schedule === 'nightly') throw new CliError(SCHEDULE_REFUSED, ExitCode.USAGE, 'usage');
@@ -492,7 +510,12 @@ export const sessionsHookInstall = async (deps: SessionsDeps, options: HookTarge
   return { document, text: lines.join('\n') };
 };
 
-export const sessionsHookUninstall = async (deps: SessionsDeps, options: HookTarget): Promise<Outcome> => {
+export const sessionsHookUninstall = async (deps: SessionsDeps, options: HookTarget & { harness?: 'codex' | undefined }): Promise<Outcome> => {
+  if (options.harness === 'codex') {
+    refuseSettingsFlags(options);
+    const result = await uninstallCodexHook(codexOf(deps));
+    return { document: { ok: true, harness: 'codex', ...result }, text: result.removed.length === 0 ? `No Many Oars hooks in ${result.file}.` : `Removed ${result.removed.join(', ')} hooks from ${result.file}; other hooks are untouched.` };
+  }
   const runtime = installOf(deps);
   const file = settingsPath(runtime, hookScope(options), options.file);
   const result = await uninstallHooks(file);
@@ -501,7 +524,11 @@ export const sessionsHookUninstall = async (deps: SessionsDeps, options: HookTar
   return { document: { ok: true, ...result, ...(removed === undefined ? {} : { schedule: removed }) }, text: removed === undefined ? text : `${text}\n${removed}` };
 };
 
-export const sessionsHookStatus = async (deps: SessionsDeps, options: { file: string | undefined }): Promise<Outcome> => {
+export const sessionsHookStatus = async (deps: SessionsDeps, options: { file: string | undefined; harness?: 'codex' | undefined }): Promise<Outcome> => {
+  if (options.harness === 'codex') {
+    const result = await codexHookStatus(codexOf(deps));
+    return { document: { ok: true, harness: 'codex', ...result }, text: `codex: ${result.file}: ${result.installed.length === 0 ? 'no hooks' : result.installed.join(', ')}` };
+  }
   const runtime = installOf(deps);
   const files = await hookStatus(runtime, options.file);
   const schedule = await scheduleStatus(runtime);

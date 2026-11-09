@@ -401,11 +401,18 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     return value === 'user' || value === 'project' || value === 'file' ? value : undefined;
   };
 
+  const harnessOption = (value: string): 'codex' => {
+    if (value !== 'codex') throw new InvalidArgumentError('it must be codex (Claude Code is the default and needs no flag).');
+    return value;
+  };
+  const harnessOf = (options: OptionValues): 'codex' | undefined => (text(options, 'harness') === 'codex' ? 'codex' : undefined);
+
   hook
     .command('install')
     .description('merge the SessionStart, UserPromptSubmit, PreToolUse, PostToolUseFailure, and SessionEnd hooks into a settings file (existing hooks are kept), raise cleanupPeriodDays to at least 365, and, on Windows, remove the nightly task an earlier version registered (oars installs no scheduler: a due sweep and send, at most about hourly, starts from the session-end hook and from any oars command; telemetry goes only while it is on, and pool batches only after you accept a pool covenant)')
     .option('--scope <scope>', 'user (~/.claude/settings.json; the default), project (./.claude/settings.json), or file (needs --file; implied by --file)', scopeOption)
     .option('--file <path>', 'the settings file for --scope file')
+    .option('--harness <harness>', 'codex: install the opt-in Codex recording hook in hooks.json in the Codex home instead (Codex asks you to trust it before it runs; it records tool and token rows locally while codex is allowed)', harnessOption)
     .option('--keep-retention', 'leave cleanupPeriodDays as it is (the harness deletes raw transcripts older than it)')
     .option('--schedule <mode>', 'off: no background sweep or pool send from the session-end hook or from commands (telemetry has its own switch: oars telemetry off), and remove the task an earlier version registered; on: clear that choice; nightly is refused, because sends now ride the hook and commands', (value: string) => {
       if (value !== 'nightly' && value !== 'off' && value !== 'on') throw new InvalidArgumentError('it must be off or on (nightly is no longer registered).');
@@ -422,6 +429,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
           file: text(options, 'file'),
           keepRetention: flag(options, 'keepRetention'),
           schedule: schedule === 'nightly' || schedule === 'off' || schedule === 'on' ? schedule : undefined,
+          harness: harnessOf(options),
         }),
       );
     });
@@ -431,18 +439,20 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .description('remove only the hooks `install` wrote from a settings file (cleanupPeriodDays stays; it also removes the task an earlier version registered)')
     .option('--scope <scope>', 'user (the default), project, or file (needs --file; implied by --file)', scopeOption)
     .option('--file <path>', 'the settings file for --scope file')
+    .option('--harness <harness>', 'codex: remove only the Codex recording hook from hooks.json in the Codex home', harnessOption)
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
-      emit(deps, flag(options, 'json'), await sessionsHookUninstall(sessionDeps(deps), { scope: scopeOf(options), file: text(options, 'file') }));
+      emit(deps, flag(options, 'json'), await sessionsHookUninstall(sessionDeps(deps), { scope: scopeOf(options), file: text(options, 'file'), harness: harnessOf(options) }));
     });
 
   hook
     .command('status')
     .description('what is installed in the user and project settings (and --file), and whether a task an earlier version registered is still there')
     .option('--file <path>', 'one more settings file to report')
+    .option('--harness <harness>', 'codex: report the Codex recording hook in hooks.json in the Codex home instead', harnessOption)
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
-      emit(deps, flag(options, 'json'), await sessionsHookStatus(sessionDeps(deps), { file: text(options, 'file') }));
+      emit(deps, flag(options, 'json'), await sessionsHookStatus(sessionDeps(deps), { file: text(options, 'file'), harness: harnessOf(options) }));
     });
 
   const gate = program.command('gate').description('record the install, fetch-and-run, MCP, and skill picks your agents make, live through a hook or from logs already on disk, without judging them');

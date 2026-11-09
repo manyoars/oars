@@ -5,6 +5,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 import { ACTION_TABLES } from './actions.js';
+import type { CodexInstall } from './codex-hook-install.js';
 
 export const RETENTION_FLOOR = 365;
 export const DEFAULT_RETENTION = 30;
@@ -22,6 +23,8 @@ export interface InstallRuntime {
   /** `<claude config dir>/settings.json`. */
   userSettings: string;
   cwd: string;
+  /** Where the Codex recording hook goes (`--harness codex`); absent in a run that has none. */
+  codex?: CodexInstall;
   /** Runs `schtasks` with these arguments; used only to remove the task an earlier version registered. */
   schtasks: (args: string[]) => Promise<{ code: number; output: string }>;
 }
@@ -50,7 +53,7 @@ const SPECS: readonly HookSpec[] = [
 ];
 
 /** A settings file is open-ended JSON the harness owns; only the keys named here are read or written. */
-interface Json {
+export interface Json {
   [key: string]: unknown;
 }
 
@@ -69,17 +72,18 @@ export const commandOf = (runtime: InstallRuntime, arg: string): string => {
   return `${present}IFS= read -r event; case "$event" in '') exit 0;; *'"tool_name":"Bash"'*|*'"tool_name":"PowerShell"'*) case "$event" in *'Exit code'*) ;; *) exit 0;; esac;; esac; { printf '%s\\n' "$event"; cat; } | ${launch}`;
 };
 
-const isOwnHook = (hook: unknown): boolean => isObject(hook) && typeof hook.command === 'string' && OWN_COMMAND.test(hook.command);
+const isOwnHook = (hook: unknown, own: RegExp): boolean => isObject(hook) && typeof hook.command === 'string' && own.test(hook.command);
 
-/** The groups with our entries taken out; a group that held only ours goes, one that held others keeps them. */
-const withoutOwn = (groups: unknown[]): unknown[] =>
+/** The groups with our entries taken out; a group that held only ours goes, one that held others keeps them. `own` tells ours by the command's tail. */
+export const withoutOwn = (groups: unknown[], own: RegExp = OWN_COMMAND): unknown[] =>
   groups.flatMap((group) => {
-    if (!isObject(group) || !Array.isArray(group.hooks) || !group.hooks.some(isOwnHook)) return [group];
-    const rest = group.hooks.filter((hook) => !isOwnHook(hook));
+    if (!isObject(group) || !Array.isArray(group.hooks) || !group.hooks.some((hook) => isOwnHook(hook, own))) return [group];
+    const rest = group.hooks.filter((hook) => !isOwnHook(hook, own));
     return rest.length === 0 ? [] : [{ ...group, hooks: rest }];
   });
 
-const hasOwn = (groups: unknown[]): boolean => groups.some((group) => isObject(group) && Array.isArray(group.hooks) && group.hooks.some(isOwnHook));
+export const hasOwn = (groups: unknown[], own: RegExp = OWN_COMMAND): boolean =>
+  groups.some((group) => isObject(group) && Array.isArray(group.hooks) && group.hooks.some((hook) => isOwnHook(hook, own)));
 
 export const settingsPath = (runtime: InstallRuntime, scope: Scope, file: string | undefined): string => {
   if (scope === 'user') return runtime.userSettings;
@@ -109,14 +113,14 @@ export const readSettings = async (path: string): Promise<Json> => {
   return parsed;
 };
 
-const writeSettings = async (path: string, settings: Json): Promise<void> => {
+export const writeSettings = async (path: string, settings: Json): Promise<void> => {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(settings, null, 2)}\n`);
 };
 
-const hooksOf = (settings: Json): Json => (isObject(settings.hooks) ? settings.hooks : {});
+export const hooksOf = (settings: Json): Json => (isObject(settings.hooks) ? settings.hooks : {});
 
-const groupsOf = (hooks: Json, event: string): unknown[] => {
+export const groupsOf = (hooks: Json, event: string): unknown[] => {
   const groups = hooks[event];
   return Array.isArray(groups) ? groups : [];
 };

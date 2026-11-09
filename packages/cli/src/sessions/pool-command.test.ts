@@ -19,6 +19,8 @@ import { REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.
 import type * as PoolWire from './pool-wire.js';
 import { session as sessionRow } from './pool-fixture.js';
 import { slugOf } from './allow.js';
+import { hookRowOf } from './codex-hook.js';
+import { payloadOf } from './codex-hook-support.js';
 import { parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey, type SkeletonFrame } from './pool-wire.js';
 import { contentHash } from './read.js';
 import { deposit, loadStore, localSalt, updatePoolChoices } from './store.js';
@@ -496,6 +498,40 @@ describe('the session-start snapshot stays out of a deposit', () => {
       for (const owned of OWNED_KEYS) expect(read(held.scene, name), owned).not.toContain(`"${owned}"`);
     }
     expect(existsSync(join(held.scene.staged.storeDir, 'candidates.jsonl'))).toBe(true);
+  });
+});
+
+describe('the Codex recording hook rows stay local', () => {
+  const SALT = '0123456789abcdef0123456789abcdef';
+
+  /** A store signed in and deposited through the command, optionally holding `hook-rows.jsonl` first. */
+  const deposited = async (hookRows: boolean): Promise<{ scene: Scene; batches: string[] }> => {
+    const scene = setting();
+    mkdirSync(scene.staged.storeDir, { recursive: true });
+    writeFileSync(join(scene.staged.storeDir, 'salt'), SALT);
+    await capture(scene);
+    if (hookRows) {
+      const rows = (['SessionStart', 'PostToolUse', 'PostModelRequest'] as const).map((event) => hookRowOf(payloadOf(event, { session_id: 'codex-sess' }), '2026-11-09T12:00:00.000Z', '/home/me', () => null));
+      writeFileSync(join(scene.staged.storeDir, 'hook-rows.jsonl'), rows.map((row) => `${JSON.stringify(row)}
+`).join(''));
+    }
+    await signIn(scene);
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    return { scene, batches: outboxFiles(scene) };
+  };
+
+  it('queues the same batch bytes as a store without them, and no hook row field reaches a batch or a request', async () => {
+    const control = await deposited(false);
+    const held = await deposited(true);
+    expect(control.batches.length).toBeGreaterThan(0);
+    expect(existsSync(join(held.scene.staged.storeDir, 'hook-rows.jsonl'))).toBe(true);
+    expect(held.batches).toEqual(control.batches);
+    const read = (scene: Scene, name: string): string => readFileSync(join(scene.staged.storeDir, 'pool-outbox', name), 'utf8');
+    for (const name of held.batches) {
+      expect(read(held.scene, name)).toBe(read(control.scene, name));
+      expect(read(held.scene, name)).not.toContain('codex-sess');
+    }
+    expect(held.scene.sent()).not.toContain('codex-sess');
   });
 });
 
