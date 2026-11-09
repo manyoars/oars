@@ -106,7 +106,7 @@ describe('empty states', () => {
 
   it('the saved-list note shortens a long list', () => {
     const entries = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
-    expect(savedListNote(entries, ['a'], 'state.json')).toEqual(['Used the --allow list saved by an earlier run (b, c, d, e, f, and 1 more), kept in state.json. Name folders with --allow to change it.']);
+    expect(savedListNote(entries, ['a'], 'state.json')).toEqual(['Used the --allow list saved by an earlier run (b, c, d, e, f, and 1 more), kept in state.json. `--allow` adds folders to it and `--deny` leaves one out.']);
   });
 
   it('a saved denial alone prints no saved-list note, and an --allow over a saved denial prints none either', async () => {

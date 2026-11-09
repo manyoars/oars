@@ -178,18 +178,20 @@ export const sessionsContext = async (deps: SessionsDeps, options: ContextOption
   const { storeDir } = runtimeOf(deps);
   // The manual recall verb (spec 4.1): its key is what it looks up, the repository's cwd and the harness, known before the work.
   const key = stampKey('context', options.cwd, options.harness ?? '');
-  const block = await runStep(
+  const step = await runStep(
     newContext(storeDir, deps.now, 'manual'),
     'recall',
     async () => {
       const index = (await readIndex(storeDir)) ?? buildIndex(await loadStore(storeDir), await readRedactDomains(storeDir), new Date(deps.now()).toISOString());
       const found = contextBlock(index, options);
-      return { value: found, report: { in: { query: 1 }, out: { matches: found === undefined ? 0 : 1 }, key } };
+      return { value: { found, noProjects: Object.keys(index.projects).length === 0 }, report: { in: { query: 1 }, out: { matches: found === undefined ? 0 : 1 }, key } };
     },
     key,
   );
   // Nothing to inject because the store holds no sessions at all is an empty store, not a quiet repository: say so and name the command that fills it.
-  const text = block ?? ((await loadStore(storeDir)).sessions.length === 0 ? EMPTY_RECALL : 'Nothing recurs in this repository yet.');
+  // An index that names projects answers alone; the store is loaded only when the index is empty, to tell an empty store from an index with nothing to say.
+  const block = step.found;
+  const text = block ?? (step.noProjects && (await loadStore(storeDir)).sessions.length === 0 ? EMPTY_RECALL : 'Nothing recurs in this repository yet.');
   return { document: { ok: true, context: block ?? null }, text };
 };
 

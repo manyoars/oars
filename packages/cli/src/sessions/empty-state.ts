@@ -41,5 +41,5 @@ export const savedListNote = (applied: readonly string[], given: readonly string
   if (saved.length === 0) return [];
   const shown = saved.slice(0, NOTE_ENTRIES).join(', ');
   const more = saved.length > NOTE_ENTRIES ? `, and ${String(saved.length - NOTE_ENTRIES)} more` : '';
-  return [`Used the --allow list saved by an earlier run (${shown}${more}), kept in ${file}. Name folders with --allow to change it.`];
+  return [`Used the --allow list saved by an earlier run (${shown}${more}), kept in ${file}. \`--allow\` adds folders to it and \`--deny\` leaves one out.`];
 };
