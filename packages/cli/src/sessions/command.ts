@@ -488,11 +488,13 @@ const SENDS_OFF = 'The background sweep and the pool send are off, as you chose 
 const SENDS_ON = 'Background sweeps and sends are on: a due sweep and send starts from the session-end hook and from any oars command, at most about hourly.';
 
 /** `--machine`: the Stop and SessionEnd entries for a cloud VM, a VPS, or a runner, and for a user-scope file the enrollment block too. Refused beside every flag it does not take, before anything is written. */
-const installMachine = async (deps: SessionsDeps, options: HookTarget & { schedule: 'nightly' | 'off' | 'on' | undefined; harness?: 'codex' | undefined; env?: readonly string[] | undefined; termsFile?: string | undefined }): Promise<Outcome> => {
+const installMachine = async (deps: SessionsDeps, options: HookTarget & { keepRetention?: boolean; schedule: 'nightly' | 'off' | 'on' | undefined; harness?: 'codex' | undefined; env?: readonly string[] | undefined; termsFile?: string | undefined }): Promise<Outcome> => {
   const refuse = (message: string): CliError => new CliError(message, ExitCode.USAGE, 'usage');
   if (options.harness !== undefined || options.schedule !== undefined) throw refuse('--machine writes the Stop and SessionEnd entries of a machine; --harness and --schedule do not apply to it.');
+  if (options.keepRetention === true) throw refuse('--keep-retention does not apply to --machine: a machine install leaves cleanupPeriodDays alone.');
   const scope = hookScope(options);
   if (scope === 'file') throw refuse('--machine takes --scope project (the .claude/settings.json of a repository, committed) or --scope user (the ~/.claude/settings.json of a VPS or runner).');
+  if (options.file !== undefined) throw refuse('--file does not apply to --machine: it writes the user or project settings file named by --scope.');
   const runtime = installOf(deps);
   const file = settingsPath(runtime, scope, undefined);
   const lines: string[] = [];

@@ -95,6 +95,13 @@ describe('hook install --machine at project scope', () => {
     await expect(sessionsHookInstall(depsIn(dir), { ...base, machine: true, schedule: 'off' })).rejects.toThrow('do not apply');
     await expect(sessionsHookInstall(depsIn(dir), { ...base, env: ['OARS_HOST_CLASS=vps'] })).rejects.toThrow('belong to --machine');
   });
+
+  it('refuses --keep-retention and --file beside --machine: it leaves the retention alone and names no file', async () => {
+    const dir = scratch();
+    await expect(sessionsHookInstall(depsIn(dir), { ...base, scope: 'user', machine: true, keepRetention: true, env: ['OARS_HOST_CLASS=vps'] })).rejects.toThrow('--keep-retention');
+    await expect(sessionsHookInstall(depsIn(dir), { ...base, scope: 'user', machine: true, file: join(dir, 'x.json'), env: ['OARS_HOST_CLASS=vps'] })).rejects.toThrow('--file');
+    expect(existsSync(join(dir, 'user', 'settings.json'))).toBe(false);
+  });
 });
 
 describe('hook install --machine at user scope', () => {

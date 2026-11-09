@@ -1,8 +1,9 @@
 // What the detached child of a machine Stop does (`hook-bin.js machine-child <input>`, started by `machine-stop.ts`): capture the session's transcript, then build its batch into the outbox. One child at a time per outbox, on the send
 // lock: a Stop that finds the lock held writes the dirty mark (`send.dirty`, one input per line) and leaves, and the holder takes the mark and runs those sessions too before it lets go, so the last Stop of a burst is
 // always built from the transcript as it ended. Before each extraction the child waits for the transcript to stop growing, because Stop can fire while the harness is still writing the last lines.
-import { appendFile, rename, readFile, rm, stat } from 'node:fs/promises';
+import { rename, readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { appendOwnerOnly, mkdirOwnerOnly } from './owner-only.js';
 import { SendLockBusy, withSendLock, type LockTimes } from './pool-send-lock.js';
 
 /** What a Stop forwards: the session, its transcript, and the folder it ran in (the repository the allow list is checked against). */
@@ -78,7 +79,11 @@ export const settle = async (path: string, deps: Pick<MachineChildDeps, 'now' | 
 const byLatest = (inputs: readonly ChildInput[]): ChildInput[] => [...new Map(inputs.map((input) => [input.session, input])).values()];
 
 /** One line in the wire shape a Stop forwards, so the holder reads a mark with the one parser. */
-const markDirty = (outbox: string, input: ChildInput): Promise<void> => appendFile(join(outbox, DIRTY), `${JSON.stringify({ session_id: input.session, transcript_path: input.transcript, cwd: input.cwd })}\n`, 'utf8');
+const markDirty = async (outbox: string, input: ChildInput): Promise<void> => {
+  // The mark holds a transcript path and a folder, so it is owner-only like the rest of the outbox.
+  await mkdirOwnerOnly(outbox);
+  await appendOwnerOnly(join(outbox, DIRTY), `${JSON.stringify({ session_id: input.session, transcript_path: input.transcript, cwd: input.cwd })}\n`);
+};
 
 const hasDirty = (outbox: string): Promise<boolean> => stat(join(outbox, DIRTY)).then(() => true, () => false);
 
