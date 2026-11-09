@@ -2653,6 +2653,25 @@ describe('oars pool deposit: the raw copy (t884)', () => {
     expect(rawFiles(scene).length).toBeGreaterThan(0);
   });
 
+  it('prints the one line through the deposit action when the pool is at another covenant than the yes was given under', async () => {
+    const scene = await ready('granted');
+    await updatePoolChoices(scene.staged.storeDir, (choices) => {
+      choices.rawConsentVersion = 'v0';
+    });
+    server.use(http.get(`${POOL}/v1/covenant`, () => HttpResponse.json({ version: 'v1', accepted: true, screen: null })));
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    expect(rawFiles(scene)).toEqual([]);
+    expect(outboxFiles(scene).length).toBeGreaterThan(0);
+    expect(scene.h.out.join('').split('\n').filter((line) => line.includes('oars pool raw --consent yes') && line.includes('v0'))).toHaveLength(1);
+  });
+
+  it('builds as before when the pool cannot be asked which covenant is in force', async () => {
+    const scene = await ready('granted');
+    server.use(http.get(`${POOL}/v1/covenant`, () => HttpResponse.error()));
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    expect(rawFiles(scene).length).toBeGreaterThan(0);
+  });
+
   it('writes no raw copy before an answer, after a no, or with the folder at skeleton only or off, and still writes the skeletons unless the folder is off', async () => {
     for (const [consent, folders, skeletons] of [
       [null, {}, true],
@@ -2929,8 +2948,11 @@ describe('oars pool raw (t884)', () => {
     scene.h.out.length = 0;
     covenantIs('v1');
     expect(await scene.cli('pool', 'raw', '--consent', 'yes')).toBe(ExitCode.OK);
-    expect(scene.h.out.join('')).toContain('yes: redacted raw copies leave');
+    expect(scene.h.out.join('')).toContain('yes, given under covenant v1: redacted raw copies leave while that covenant is in force');
     expect(scene.h.out.join('')).not.toContain('best effort');
+    scene.h.out.length = 0;
+    expect(await scene.cli('pool', 'raw', '--json')).toBe(ExitCode.OK);
+    expect(JSON.parse(scene.h.out.join(''))).toMatchObject({ rawConsent: 'granted', rawConsentVersion: 'v1' });
     expect(await scene.cli('pool', 'raw', '--consent', 'no')).toBe(ExitCode.OK);
     expect(scene.h.out.join('')).toContain('no: only skeletons go to the pool');
   });

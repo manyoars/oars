@@ -19,6 +19,8 @@ export interface NightlyPool {
   /** Batches and raw copies this night sent. */
   batches: number;
   raw: number;
+  /** Set when a raw yes was held back because it was given under another covenant than the one in force; `oars pool raw --consent yes` answers for the covenant now in force. The sender prints nothing, so this note is where it shows. */
+  rawHeld?: true;
 }
 
 const record = async (storeDir: string, result: NightlyPool, at: number): Promise<void> => {
@@ -68,6 +70,7 @@ const night = async (deps: RunDeps, net: Sender, tally: NightlyPool): Promise<Ni
     }
     // Raw goes only with its own yes, read again here so an answer changed since the build wins.
     const choices = (await readState(storeDir)).pool;
+    if (rawStale(choices, version)) tally.rawHeld = true;
     if (choices.rawConsent === 'granted' && !rawStale(choices, version)) {
       for (const copy of (await heldRaw(outbox)).copies) {
         if (done.has(copy.hash) || copy.bytes === 0) continue;

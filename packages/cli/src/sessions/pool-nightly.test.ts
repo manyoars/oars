@@ -151,13 +151,15 @@ describe('the nightly pool send', () => {
       choices.rawConsentVersion = 'v0';
     });
     const held = wire(OK_RAW);
-    expect((await nightlyPoolSend(old.deps, held.via)).outcome).toBe('sent');
+    const night = await nightlyPoolSend(old.deps, held.via);
+    expect(night).toMatchObject({ outcome: 'sent', rawHeld: true });
+    expect(JSON.parse(readFileSync(join(old.staged.storeDir, 'pool-nightly.json'), 'utf8'))).toMatchObject({ rawHeld: true });
     expect(paths(held, 'POST').filter((path) => path === '/v1/deposits').length).toBeGreaterThan(0);
     expect(rawPuts(held)).toEqual([]);
     expect(outboxFiles(old.staged, '.redacted')).toEqual([]);
     const current = await scene('granted');
     const sent = wire(OK_RAW);
-    await nightlyPoolSend(current.deps, sent.via);
+    expect(await nightlyPoolSend(current.deps, sent.via)).not.toHaveProperty('rawHeld');
     expect(rawPuts(sent).length).toBeGreaterThan(0);
   });
 

@@ -93,8 +93,8 @@ describe('the notice', () => {
     for (const phrase of ['A crash is recorded as the error\'s class and a hash of its stack (never its message).', 'Each pool deposit records, per batch, which fields it held and how many bytes each took', 'a wire-send event', 'the pool\'s refusal code']) expect(NOTICE).toContain(phrase);
   });
 
-  it('names the first-run event, the CI word on each command, and the covenant version a deposit stops on', () => {
-    for (const phrase of ['one event on the first run with whether it ran in CI and how this copy was installed, as closed words', 'whether each command ran in CI, as a closed word', 'the covenant version each time a deposit stops for an acceptance']) expect(NOTICE).toContain(phrase);
+  it('names the first-run event, the CI word on each command, and the covenant version the screen is shown for', () => {
+    for (const phrase of ['one event on the first run with whether it ran in CI and how this copy was installed, as closed words', 'whether each command ran in CI, as a closed word', 'the covenant version each time the covenant screen is shown at a terminal']) expect(NOTICE).toContain(phrase);
   });
 });
 

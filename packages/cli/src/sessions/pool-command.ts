@@ -448,6 +448,16 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
  * allowlist, then the exclusion check. A session that fails either, or has no raw to scan, is counted and never built. A session is built only once it has ended: no transcript of it, main or subagent, has gained a line (the later of its capture
  * and its raw file's last write) for `session_idle_hours` (6 hours). One that has not is counted under `notEnded`, and any batch of it from an earlier pass is withdrawn. `--send <hash>` is the lock in `sendBatch`.
  */
+/** The covenant version the pool names, or `undefined` when it cannot be asked or names none. */
+const covenantOrUndefined = async (deps: RunDeps, server: string, token: string): Promise<string | undefined> => {
+  try {
+    const reply = await ask(deps, DEPOSIT, server, '/v1/covenant', { token });
+    return reply.status === 200 && isObject(reply.body) ? textIn(reply.body, 'version') : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 export const poolDeposit = async (deps: RunDeps, options: { server?: string | undefined; acceptCovenant?: string | undefined; send?: string | undefined; via?: Sender | undefined; git?: Git | undefined; covenant?: string | undefined }): Promise<Outcome> => {
   const runtime = runtimeOf(deps);
   const server = poolServer(deps.env, DEPOSIT, options.server);
@@ -462,6 +472,8 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   if (options.send !== undefined) return sendBatch(deps, { outbox, server, token, hash: options.send, acceptCovenant: options.acceptCovenant, via: options.via });
   const { terms } = exclusionPaths(runtime.projectsRoot, deps.env);
   const saved = await readState(runtime.storeDir);
+  // A yes to the raw prompt counts only for the covenant it was given under, so an interactive build asks the pool which is in force; the nightly already knows and passes it. A pool that cannot be asked, or names none, leaves it unknown and the build goes on as before.
+  const covenant = options.covenant ?? (saved.pool.rawConsent === 'granted' ? await covenantOrUndefined(deps, server, token) : undefined);
   const names = localNames();
   // The key an injected block's hash is made under: this machine's salt, so the same block hashes the same in every session and the key never leaves it.
   const injectedKey = `injected-block:${(await localSalt(runtime.storeDir)).salt}`;
@@ -537,7 +549,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
     }
     builtBytes += (await writeBatch(outbox, key, parsed.skeleton)).bytes;
     // The raw copy comes only after both gates and only with a yes to the raw prompt and a folder not at skeleton only: each transcript of the session, redacted here, before it is queued.
-    if (rawAllowed(saved.pool, records.main.project, options.covenant)) {
+    if (rawAllowed(saved.pool, records.main.project, covenant)) {
       let place = 0;
       for (const file of await transcriptFilesOf(runtime, records.main.project, records.main.session)) {
         const redacted = redactTranscript(await readFile(file.path, 'utf8'), saved.redactDomains, names, injectedKey);
@@ -568,7 +580,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
     ...(counts.withdrawn === 0 ? [] : [`Removed ${String(counts.withdrawn)} ${counts.withdrawn === 1 ? 'batch' : 'batches'} of sessions that no longer pass the gates, have not ended, or are no longer in the store.`]),
     ...(discarded === 0 ? [] : [`Discarded ${String(discarded)} ${discarded === 1 ? 'batch' : 'batches'} built under an older vocabulary, field list, or skeleton format.`]),
     `Raw copies queued: ${String(counts.raw.copies)} (${String(counts.raw.bytes)} bytes, ${String(counts.raw.masked)} values masked). ${rawNote(saved.pool.rawConsent)}`.trim(),
-    ...(rawStale(saved.pool, options.covenant) ? [`Your yes to the raw prompt was given under covenant ${saved.pool.rawConsentVersion ?? 'none'}, not ${options.covenant ?? ''}, so no raw copy is queued. Run oars pool raw --consent yes to answer for the covenant now in force.`] : []),
+    ...(rawStale(saved.pool, covenant) ? [`Your yes to the raw prompt was given under covenant ${saved.pool.rawConsentVersion ?? 'none'}, not ${covenant ?? ''}, so no raw copy is queued. Run oars pool raw --consent yes to answer for the covenant now in force.`] : []),
     ...(counts.off === 0 ? [] : [`${String(counts.off)} ${counts.off === 1 ? 'session' : 'sessions'} in a folder switched off: nothing of them is queued.`]),
     'Run oars pool outbox to print exactly what would be sent.',
   ];
@@ -772,10 +784,10 @@ export const poolRaw = async (deps: RunDeps, options: { consent?: string | undef
       else if (mode === 'skeleton' || mode === 'off') current.folders[folder] = mode;
     }
   });
-  const answer = choices.rawConsent === null ? 'not answered yet: only skeletons go to the pool' : choices.rawConsent === 'granted' ? 'yes: redacted raw copies leave' : 'no: only skeletons go to the pool';
+  const answer = choices.rawConsent === null ? 'not answered yet: only skeletons go to the pool' : choices.rawConsent === 'granted' ? `yes, given under covenant ${choices.rawConsentVersion ?? 'none'}: redacted raw copies leave while that covenant is in force` : 'no: only skeletons go to the pool';
   const switched = Object.entries(choices.folders).map(([entry, set]) => `  ${entry}: ${set === 'off' ? 'nothing sent to the pool' : 'skeletons only'}`);
   const lines = [...(choices.rawConsent === null ? [RAW_PROMPT, ''] : []), `Raw copies: ${answer}.`, ...(switched.length === 0 ? [] : ['Folders switched down:', ...switched])];
-  return { document: { ok: true, rawConsent: choices.rawConsent, folders: choices.folders }, text: lines.join('\n') };
+  return { document: { ok: true, rawConsent: choices.rawConsent, rawConsentVersion: choices.rawConsentVersion, folders: choices.folders }, text: lines.join('\n') };
 };
 
 const COVERAGE = 'pool-coverage';
