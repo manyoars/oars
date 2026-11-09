@@ -4,12 +4,19 @@ import { VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
 import { covenantAccept, covenantStatus } from './covenant.js';
 import type { Env } from './http.js';
 import { sampleSkeleton } from './sample.js';
-import { poolDbOf, startPool, stubUser, type TestDb, type TestPool } from './test-pool.js';
+import { fieldOf, poolDbOf, startPool, stubUser, textOf, type TestDb, type TestPool } from './test-pool.js';
 
-const acceptances = async (db: TestDb, account: string): Promise<readonly unknown[]> =>
-  (await db.prepare('SELECT version, accepted_at AS at FROM covenant_acceptances WHERE account = ? ORDER BY version').bind(account).all()).results;
+interface Stamp {
+  version: string;
+  at: number;
+}
 
-const served = async (db: TestDb): Promise<readonly unknown[]> => (await db.prepare('SELECT version, first_served_at AS at FROM covenant_served ORDER BY version').all()).results;
+const stamps = (rows: readonly unknown[]): Stamp[] => rows.map((row) => ({ version: textOf(row, 'version'), at: Number(fieldOf(row, 'at')) }));
+
+const acceptances = async (db: TestDb, account: string): Promise<Stamp[]> =>
+  stamps((await db.prepare('SELECT version, accepted_at AS at FROM covenant_acceptances WHERE account = ? ORDER BY version').bind(account).all()).results);
+
+const served = async (db: TestDb): Promise<Stamp[]> => stamps((await db.prepare('SELECT version, first_served_at AS at FROM covenant_served ORDER BY version').all()).results);
 
 /** The route functions run against the pool's own database under another version in force; the harness's `batch` is a stub, so this one runs the statements in order. */
 const envFor = (db: TestDb, version: string): Env => ({ DB: { ...poolDbOf(db), batch: async (statements) => { const done = []; for (const statement of statements) done.push(await statement.run()); return done; } }, COVENANT_VERSION: version });
@@ -128,8 +135,8 @@ describe('the covenant record', () => {
     const before = Date.now();
     expect((await pool.post('/v1/covenant/accept', { version: 'v2' }, token)).status).toBe(200);
     const rows = await acceptances(db, account);
-    expect(rows).toEqual([{ version: 'v2', at: expect.any(Number) }]);
-    const at = Number(Reflect.get(rows[0] ?? {}, 'at'));
+    expect(rows.map((row) => row.version)).toEqual(['v2']);
+    const at = rows[0]?.at ?? 0;
     expect(at).toBeGreaterThanOrEqual(before - 1000);
     expect(at).toBeLessThanOrEqual(Date.now() + 1000);
     expect(await db.prepare('SELECT covenant FROM accounts WHERE id = ?').bind(account).first('covenant')).toBe('v2');
@@ -155,7 +162,7 @@ describe('the covenant record', () => {
     const rows = await acceptances(db, account);
     expect(rows).toHaveLength(2);
     expect(rows[0]).toEqual(earlier);
-    expect(rows[1]).toMatchObject({ version: 'v3' });
+    expect(rows[1]?.version).toBe('v3');
     expect(await db.prepare('SELECT covenant FROM accounts WHERE id = ?').bind(account).first('covenant')).toBe('v3');
   });
 
@@ -171,21 +178,22 @@ describe('the covenant record', () => {
     const db = await pool.db();
     expect(await pool.get('/v1/covenant')).toMatchObject({ status: 200 });
     const first = await served(db);
-    expect(first).toContainEqual({ version: 'v2', at: expect.any(Number) });
-    expect(first.filter((row) => Reflect.get(row as object, 'version') === 'v4')).toEqual([]);
+    expect(first.filter((row) => row.version === 'v2')).toHaveLength(1);
+    expect(first.filter((row) => row.version === 'v4')).toEqual([]);
     await new Promise((resolve) => setTimeout(resolve, 20));
     await pool.get('/v1/covenant');
     expect(await served(db)).toEqual(first);
     expect((await covenantStatus(askFor('/v1/covenant', 'none'), envFor(db, 'v4'))).status).toBe(200);
     const both = await served(db);
     expect(both).toHaveLength(first.length + 1);
-    expect(both).toEqual(expect.arrayContaining([...first, { version: 'v4', at: expect.any(Number) }]));
+    expect(both.filter((row) => row.version !== 'v4')).toEqual(first);
+    expect(both.filter((row) => row.version === 'v4')).toHaveLength(1);
   });
 
   it('counts an acceptance as a serving too: a client that knew the version still leaves its start on record', async () => {
     const { token } = await pool.signIn('github', stubUser('4005'));
     const db = await pool.db();
     expect((await covenantAccept(askFor('/v1/covenant/accept', token, { version: 'v9' }), envFor(db, 'v9'))).status).toBe(200);
-    expect(await served(db)).toEqual(expect.arrayContaining([{ version: 'v9', at: expect.any(Number) }]));
+    expect((await served(db)).filter((row) => row.version === 'v9')).toHaveLength(1);
   });
 });

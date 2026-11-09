@@ -83,6 +83,6 @@ describe('queries/covenant-funnel.sql', () => {
   it('prints a row of nulls and zeros for a version the pool never served, and no verdict column', async () => {
     const row = await run(db, forVersion('v0'));
     expect(row).toEqual({ version: 'v0', start_day: null, installs: 0, installs_before_cap: 0, accepted: 0, depositing_4w: 0 });
-    expect(Object.keys(row as object)).toEqual(['version', 'start_day', 'installs', 'installs_before_cap', 'accepted', 'depositing_4w']);
+    expect((typeof row === 'object' && row !== null ? Object.keys(row) : [])).toEqual(['version', 'start_day', 'installs', 'installs_before_cap', 'accepted', 'depositing_4w']);
   });
 });
