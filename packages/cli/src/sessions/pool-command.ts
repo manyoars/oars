@@ -854,7 +854,7 @@ const withdrawAtPool = async (deps: RunDeps): Promise<'told' | 'no-account'> => 
   }
   if (reply.status !== 200) {
     const refused = refusal(RAW, reply);
-    throw notTold(`${refused.message}`, refused.exitCode, refused.problem);
+    throw notTold(refused.message, refused.exitCode, refused.problem);
   }
   return 'told';
 };
