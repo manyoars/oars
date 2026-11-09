@@ -108,6 +108,21 @@ export const firstRunMeasures = (event: unknown): Measure[] => {
   return [rate(`first-run.${known}`, 'cli', valueOf(fieldOf(event, 'cli')), inCi)];
 };
 
+/**
+ * The cell of a `covenant-shown` event: one yes under the oars version, in a metric named for the covenant version the CLI told the operator to read (`covenant-shown.2026-11-10`), so the pool's rollup counts shows by version and
+ * day. Raw batches are swept at 90 days and a cell added later cannot count older shows, so the cell is kept from the first event. `measuresOf` leaves it out and the fleet read skips it (`isRecordOnlyMetric`): a count of shows is
+ * for the operator's query, not a measure of the program. A version that is not a word reads `other`, and a missing one `unrecorded`; the show is still counted.
+ */
+export const covenantShownMeasures = (event: unknown): Measure[] => {
+  if (fieldOf(event, 'type') !== 'covenant-shown') return [];
+  const version = valueOf(fieldOf(fieldOf(event, 'data'), 'version'));
+  return [rate(`covenant-shown.${version}`, 'cli', valueOf(fieldOf(event, 'cli')), true)];
+};
+
+/** The metrics the rollup records for the operator's queries and the fleet read never serves: a cell of one event or one count per install measures nothing across installs. */
+const RECORD_ONLY_PREFIXES: readonly string[] = ['first-run.', 'covenant-shown.'];
+export const isRecordOnlyMetric = (metric: string): boolean => RECORD_ONLY_PREFIXES.some((prefix) => metric.startsWith(prefix));
+
 /** What one event measures; an event of a type nothing measures, or that is not an object, measures nothing. */
 export const measuresOf = (event: unknown): Measure[] => {
   const type = fieldOf(event, 'type');

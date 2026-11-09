@@ -65,6 +65,8 @@ One each time a deposit to the pool stops because the covenant is not yet accept
 |---|---|
 | `version` | The covenant version the pool named, a short word such as `2026-11-10`; anything else is dropped. |
 
+The pool's nightly rollup keeps one cell for it per install, day, and covenant version (`covenant-shown.<version>`, one count per event), so shows are counted from the first event even after the raw batches are swept at 90 days. `oars telemetry report` does not show that cell and the fleet read does not serve it: it is a count for the operator, and a median over it measures nothing.
+
 ```json
 {"v":1,"id":"3f2b8c1e-5d4a-4b7e-9c10-2a6f8e1d7b43","at":"2026-11-06T14:05:10.250Z","type":"covenant-shown","cli":"0.4.0","os":"linux","data":{"version":"2026-11-10"}}
 ```

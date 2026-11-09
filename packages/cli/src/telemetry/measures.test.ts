@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { cellKey, firstRunMeasures, measuresOf } from './measures.js';
+import { cellKey, covenantShownMeasures, firstRunMeasures, isRecordOnlyMetric, measuresOf } from './measures.js';
 
 const hook = (data: object): unknown => ({ type: 'hook', data: { name: 'pre-tool', latencyMs: 10, outcome: 'hit', ...data } });
 
@@ -35,10 +35,38 @@ describe('the first-run cell', () => {
     expect(firstRunMeasures(firstRun({}, 'acme private'))).toEqual([{ metric: 'first-run.unknown', dimension: 'cli', value: 'other', kind: 'rate', x: 0 }]);
   });
 
-  it('is measured by nothing else: other events give none, and measuresOf leaves it out of the own report and the fleet read', () => {
+  it('is measured by nothing else: other events give none, and measuresOf leaves it out of the own report', () => {
     expect(firstRunMeasures(hook({}))).toEqual([]);
     expect(firstRunMeasures('first-run')).toEqual([]);
     expect(measuresOf(firstRun({ ci: 'none', surface: 'npx' }))).toEqual([]);
+  });
+});
+
+describe('the covenant-shown cell', () => {
+  const shown = (data: object, cli = '0.4.0'): unknown => ({ type: 'covenant-shown', cli, data });
+
+  it('is one yes under the oars version, in a metric named for the covenant version it showed', () => {
+    expect(covenantShownMeasures(shown({ version: '2026-11-10' }))).toEqual([{ metric: 'covenant-shown.2026-11-10', dimension: 'cli', value: '0.4.0', kind: 'rate', x: 1 }]);
+    expect(covenantShownMeasures(shown({ version: '2026-12-01' }, '0.5.1'))).toEqual([{ metric: 'covenant-shown.2026-12-01', dimension: 'cli', value: '0.5.1', kind: 'rate', x: 1 }]);
+  });
+
+  it('reads a version that is not a word as other, a missing one as unrecorded, and still counts the show', () => {
+    expect(covenantShownMeasures(shown({ version: 'acme private/1' }))[0]?.metric).toBe('covenant-shown.other');
+    expect(covenantShownMeasures(shown({}))[0]?.metric).toBe('covenant-shown.unrecorded');
+    expect(covenantShownMeasures(shown({ version: '2026-11-10' }, 'acme private'))[0]?.value).toBe('other');
+  });
+
+  it('is measured by nothing else: other events give none, and measuresOf leaves it out of the own report', () => {
+    expect(covenantShownMeasures(hook({}))).toEqual([]);
+    expect(covenantShownMeasures({ type: 'first-run', cli: '0.4.0', data: { ci: 'none', surface: 'npx' } })).toEqual([]);
+    expect(covenantShownMeasures('covenant-shown')).toEqual([]);
+    expect(measuresOf(shown({ version: '2026-11-10' }))).toEqual([]);
+  });
+
+  it('is one of the record-only metrics the fleet read skips, with the first-run cells and no other', () => {
+    expect(isRecordOnlyMetric('covenant-shown.2026-11-10')).toBe(true);
+    expect(isRecordOnlyMetric('first-run.npx')).toBe(true);
+    for (const metric of ['hook.pre-tool.hit', 'command.pool.failure', 'store.readFailure', 'covenant-shown', 'first-run']) expect(isRecordOnlyMetric(metric), metric).toBe(false);
   });
 });
 
