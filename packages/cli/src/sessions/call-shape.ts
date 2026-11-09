@@ -272,9 +272,9 @@ const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const ENV_ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=/;
 // PowerShell's `$env:NAME` (and `${env:NAME}`) is read first, so it names the variable and not the word `env`. A `$` after a backslash or a PowerShell backtick is escaped, so it names nothing (`abc\$tail`), and one
 // after another `$` is the shell's process id with literal text behind it (`$$name`); an even run of backslashes before a real expansion is skipped too, which sends less, never more.
-const ENV_REFERENCE = /(?<![\\`$])\$\{?[Ee]nv:([A-Za-z_][A-Za-z0-9_]*)|(?<![\\`$])\$(?:\{([A-Za-z_][A-Za-z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*))/g;
-// A path that is exactly a home folder (`/home/jsmith`, `C:\Users\jsmith`): its last segment is the machine's account name, not a file.
-const HOME_FOLDER = /^(?:[A-Za-z]:)?[\\/](?:home|users)[\\/][^\\/]+[\\/]*$/i;
+const ENV_REFERENCE = /(?<![\\`$])\$\{?[Ee][Nn][Vv]:([A-Za-z_][A-Za-z0-9_]*)|(?<![\\`$])\$(?:\{([A-Za-z_][A-Za-z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*))/g;
+// A path that is exactly a home folder (`/home/jsmith`, `C:\Users\jsmith`, or the WSL mount of one, `/mnt/c/Users/jsmith`): its last segment is the machine's account name, not a file.
+const HOME_FOLDER = /^(?:[A-Za-z]:|[\\/]mnt[\\/][A-Za-z])?[\\/](?:home|users)[\\/][^\\/]+[\\/]*$/i;
 // A long flag with its value joined (`--region=eu`), or a flag word on its own: a long flag, or one short letter. A cluster (`-am`) or a short flag with its value attached holds no flag name of its own.
 const JOINED_LONG_FLAG = /^(--[A-Za-z][A-Za-z0-9_-]*)=(.*)$/s;
 const FLAG_TOKEN = /^(?:--[A-Za-z][A-Za-z0-9_-]*|-[A-Za-z])$/;

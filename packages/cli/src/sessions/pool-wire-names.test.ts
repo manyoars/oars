@@ -137,9 +137,11 @@ describe('what is dropped from the names', () => {
       call('e', 'Read', { file_path: '$HOME/notes/plan.md' }),
       call('f', 'Read', { file_path: '%USERPROFILE%\\notes\\roadmap.md' }),
       call('g', 'Read', { file_path: '/home/jsmith-acct/notes.md' }),
+      call('h', 'Read', { file_path: '/mnt/c/Users/jsmith-acct' }),
+      call('i', 'Read', { file_path: '/mnt/d/Users/jsmith-acct/' }),
     );
-    const [lower, windows, mac, drive, home, profile, below] = toolsOf(skeleton);
-    for (const folder of [lower, windows, mac, drive]) expect(folder).not.toHaveProperty('names');
+    const [lower, windows, mac, drive, home, profile, below, wsl, wslSlash] = toolsOf(skeleton);
+    for (const folder of [lower, windows, mac, drive, wsl, wslSlash]) expect(folder).not.toHaveProperty('names');
     expect(home?.names).toEqual(names('file', 'plan.md'));
     expect(profile?.names).toEqual(names('file', 'roadmap.md'));
     // A file in the home folder is a file: only the folder is the account name.
@@ -148,9 +150,9 @@ describe('what is dropped from the names', () => {
   });
 
   it('reads a PowerShell environment variable by its name, and not as the word env', () => {
-    const skeleton = skeletonOfLines({ redact, terms: [] }, call('a', 'Bash', { command: 'Write-Output $env:API_REGION ${env:BUILD_ID} $Env:LOG_LEVEL' }), call('b', 'Bash', { command: 'echo $HOME ${PORT}' }));
+    const skeleton = skeletonOfLines({ redact, terms: [] }, call('a', 'Bash', { command: 'Write-Output $env:API_REGION ${env:BUILD_ID} $Env:LOG_LEVEL $ENV:API_ZONE' }), call('b', 'Bash', { command: 'echo $HOME ${PORT}' }));
     const [shell, posix] = toolsOf(skeleton);
-    expect(shell?.names).toEqual(names('env', 'API_REGION', 'BUILD_ID', 'LOG_LEVEL'));
+    expect(shell?.names).toEqual(names('env', 'API_REGION', 'API_ZONE', 'BUILD_ID', 'LOG_LEVEL'));
     expect(posix?.names).toEqual(names('env', 'HOME', 'PORT'));
   });
 
