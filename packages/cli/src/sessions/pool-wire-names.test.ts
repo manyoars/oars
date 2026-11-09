@@ -672,6 +672,41 @@ describe('a PowerShell command', () => {
     }
   }
 
+  // The opaque point does not depend on knowing the shell: Codex stores every call as `Bash` and says nothing of the shell, and a nested `pwsh -c "..."` is read by the POSIX tokenizer under either tool. PowerShell's literal forms must
+  // still keep their text out of the words, since a harness may run a PowerShell command and tell us nothing.
+  const UNTOLD: readonly { kind: string; command: string; calls: readonly { harness: Harness; tool: string }[] }[] = [
+    { kind: 'a stop-parsing token', command: 'Write-Output --% --customer acme_value', calls: [{ harness: 'codex', tool: 'Bash' }] },
+    { kind: 'single typographic quotes around a flag', command: 'Write-Output ‘a --customer acme_value b’', calls: [{ harness: 'codex', tool: 'Bash' }] },
+    { kind: 'double typographic quotes around a reference', command: 'Write-Output “a $hunter2 b”', calls: [{ harness: 'codex', tool: 'Bash' }] },
+    { kind: 'a block comment', command: ['<#', 'mysql --customer acme_value $hunter2', '#>', 'Get-Item x'].join('\n'), calls: [{ harness: 'codex', tool: 'Bash' }] },
+    { kind: 'a stop-parsing token after a launcher path', command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command "Write-Output --% --customer acme_value"`, calls: [{ harness: 'codex', tool: 'Bash' }] },
+    {
+      kind: 'a stop-parsing token inside a nested pwsh -c',
+      command: 'pwsh -c "Write-Output --% --customer acme_value"',
+      calls: [
+        { harness: 'claude-code', tool: 'Bash' },
+        { harness: 'claude-code', tool: 'PowerShell' },
+      ],
+    },
+    {
+      kind: 'typographic quotes inside a nested pwsh -c',
+      command: 'pwsh -c "Write-Output ‘a --customer acme_value b’"',
+      calls: [
+        { harness: 'claude-code', tool: 'Bash' },
+        { harness: 'claude-code', tool: 'PowerShell' },
+      ],
+    },
+  ];
+  for (const { kind, command, calls } of UNTOLD) {
+    for (const { harness, tool } of calls) {
+      it(`sends no name from the literal text after ${kind}, under ${harness} and the ${tool} tool`, () => {
+        const skeleton = skeletonUnder(harness, { redact, terms: [] }, call('u', tool, { command }));
+        expect(toolsOf(skeleton)[0]?.names ?? [], command).toEqual([]);
+        for (const planted of ['hunter2', 'acme_value']) expect(JSON.stringify(skeleton), command).not.toContain(planted);
+      });
+    }
+  }
+
   // What PowerShell really reads, which the POSIX reader loses. Each command is a real one and its name is data: sending it is the point of reading it in the shell's own rules. None holds a single quote: a flag value after one is not
   // read, so the single-quote forms (`it`'s`, `$'C:\'`) are rows of the table above, where no name crosses.
   const REAL: readonly { kind: string; command: string; expected: ArgName[] }[] = [

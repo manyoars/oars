@@ -791,26 +791,21 @@ const substitutionEnd = (text: string, from: number, first: string, budget: { le
 };
 
 /**
- * The first single quote or heredoc marker of a command. An unexpanded `$name` can only come from single-quoted text or a heredoc body, so a word that starts before this point is read as the shell reads it, and every
- * word at or after it is opaque: it holds no variable and no flag value, whatever the reader made of the quotes before it. A true reference after the point sends no name, which sends less and never more.
+ * The command's opaque point: its first single quote, heredoc marker, typographic quote (U+2018 to U+201E), block comment opener (`<#`), or stop-parsing token (`--%`). An unexpanded `$name` can only come from literal text, and
+ * these are where literal text begins in either shell, so a word that starts before this point is read as the shell reads it, and every word at or after it is opaque: it holds no variable and no flag value, whatever the reader made
+ * of the quotes before it. The point does not depend on the dialect, since a harness may run a PowerShell command and not say so (Codex, a nested `pwsh -c`); a PowerShell form in a POSIX command is rare, and the point only sends less.
  */
-const OPAQUE_POINT = /'|<</;
-/**
- * PowerShell reads more forms as literal text: the typographic single and double quotes (U+2018 to U+201E) are quotes, `<#` opens a block comment, and `--%` makes the rest of the line literal. Each is a point as `'` and `<<` are.
- */
-const POWERSHELL_POINT = /['‘-„]|<<|<#|--%/;
+const OPAQUE_POINT = /['‘-„]|<<|<#|--%/;
 
-/** The shell a command is written for: a call whose tool the harness's `shells` table maps to `powershell` (Claude Code's `PowerShell`, and the `powershell` that Copilot, Pi, and Gemini name) reads its escapes by PowerShell's rules, every other call by POSIX's. */
+/** The shell a command is written for, which decides its escapes alone: a call whose tool the harness's `shells` table maps to `powershell` (Claude Code's `PowerShell`, and the `powershell` that Copilot, Pi, and Gemini name) reads a backslash as plain and a backtick as the escape, every other call by POSIX's. */
 type ShellDialect = 'posix' | 'powershell';
 
-const pointOf = (dialect: ShellDialect): RegExp => (dialect === 'powershell' ? POWERSHELL_POINT : OPAQUE_POINT);
-
 /**
- * `opaqueFrom` is where that point sits in `text` (-1 for none, 0 for a text that is opaque throughout, as a word an opaque word holds is); left out, it is the first point of the dialect. A substitution opened inside double quotes
+ * `opaqueFrom` is where that point sits in `text` (-1 for none, 0 for a text that is opaque throughout, as a word an opaque word holds is); left out, it is the first point of the text. A substitution opened inside double quotes
  * lowers it to where it opens, since its end is read by a scan that can close early: every word that starts after it is opaque.
  */
 const tokenize = (text: string, opaqueFrom?: number, dialect: ShellDialect = 'posix'): ShellToken[] => {
-  let opaque = opaqueFrom ?? text.search(pointOf(dialect));
+  let opaque = opaqueFrom ?? text.search(OPAQUE_POINT);
   const tokens: ShellToken[] = [];
   // PowerShell's escape is the backtick, a backslash is an ordinary character in and out of quotes, `$'` is no ANSI-C string, and a backtick opens no substitution.
   const powershell = dialect === 'powershell';
@@ -1363,11 +1358,10 @@ export const shellCommands = (command: string, redact: Redactor, dialect: ShellD
   const whole = command.replace(/\r\n/g, '\n');
   const kept = dropBodies(whole);
   const text = redactCommand(kept, redact);
-  // The opaque point is the whole command's first single quote or heredoc marker. Dropping a body or redacting can remove it and leave a later one in its place, and the words between would read as before it: when the first point
+  // The command's opaque point (`tokenize`) is read on the whole command. Dropping a body or redacting can remove it and leave a later one in its place, and the words between would read as before it: when the first point
   // moved or a point is gone, the whole text is opaque.
-  const point = pointOf(dialect);
-  const points = (held: string): number => held.match(new RegExp(point.source, 'g'))?.length ?? 0;
-  const moved = kept.search(point) !== whole.search(point) || points(text) !== points(kept);
+  const points = (held: string): number => held.match(new RegExp(OPAQUE_POINT.source, 'g'))?.length ?? 0;
+  const moved = kept.search(OPAQUE_POINT) !== whole.search(OPAQUE_POINT) || points(text) !== points(kept);
   return readCommands(tokenize(text, moved ? 0 : undefined, dialect));
 };
 
