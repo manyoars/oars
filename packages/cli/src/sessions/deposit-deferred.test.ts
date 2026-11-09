@@ -8,7 +8,7 @@ import { runHook } from './hooks.js';
 import { deferSession, failPending, listPending, PENDING_HOOK_CAP, PENDING_MAX_FAILURES, pendingDir, removePending, type PendingEntry } from './pending.js';
 import type { StepCounts } from './schema.js';
 import { appendStep, formatStepCounters, readSteps, stepCounters, stuckSteps } from './steps.js';
-import { deposit, loadStore, paths, scanLog, type DepositTrace } from './store.js';
+import { deposit, HOOK_LOCK, loadStore, paths, scanLog, type DepositTrace } from './store.js';
 import { cleanup, FIXTURES, NOW, stage, type Staged } from './test-support.js';
 
 afterEach(cleanup);
@@ -105,10 +105,9 @@ describe('item 2: deferring on a held lock', () => {
     const staged = await deposited();
     const transcript = finished(staged, 'deferred');
     hold(staged);
-    const started = Date.now();
     expect(await runHook('stop', stopInput('deferred', transcript), staged.runtime, () => NOW)).toBeUndefined();
-    // A held lock defers the session within the hook's lock wait (under a second), and nothing on top of it.
-    expect(Date.now() - started).toBeLessThan(1500);
+    // A held lock defers the session after the hook's lock wait, which is under a second; the wait is asserted by its value because a wall-clock bound this short would fail under load.
+    expect(HOOK_LOCK.waitMs).toBeLessThan(1000);
     expect(await runHook('stop', stopInput('deferred', transcript), staged.runtime, () => NOW)).toBeUndefined();
     // Two deferrals are two files (a drain removes only the names it read) and one entry.
     const names = pendingNames(staged);

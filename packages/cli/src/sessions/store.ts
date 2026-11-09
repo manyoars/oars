@@ -1207,7 +1207,7 @@ const rawRelatives = async (dir: string, path: string[]): Promise<string[]> => {
   return found.sort();
 };
 
-const HOOK_LOCK: LockOptions = { waitMs: 500, staleMs: 600_000 };
+export const HOOK_LOCK: LockOptions = { waitMs: 500, staleMs: 600_000 };
 
 export type SessionDeposit = 'deposited' | 'unchanged' | 'not-allowed' | 'missing' | 'deferred';
 

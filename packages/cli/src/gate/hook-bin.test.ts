@@ -220,7 +220,7 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
     made.push(home);
     const store = join(home, 'oars', 'sessions');
     await sightHandsOff(payload, npm, home, store);
-    // The hook is gone; the helper's manager, still waiting, answers now (the killed hook's own ask ends with it on Windows, but on POSIX its orphaned stub also logs an end once released, so the helper's end is the second one there).
+    // The hook is gone; the helper's manager, still waiting, answers now (the killed hook's own ask ends with it on Windows, but on POSIX its orphaned stub also logs an end once released, so two ends are counted there).
     writeFileSync(npm.release, '');
     // The helper is detached: it has finished when it has logged its end, kept its answer, and let go of the lock.
     await until(() => logged(npm.log, 'ended') >= helperEnds && existsSync(join(store, 'gate-registry.jsonl')) && lockFiles(store).length === 0);
@@ -240,9 +240,9 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
     made.push(home);
     const store = join(home, 'oars', 'sessions');
     await sightHandsOff(payload, npm, home, store);
-    // The hook is gone; the helper's manager, still waiting, fails now (the killed hook's own ask ends with it on Windows, but on POSIX its orphaned stub also logs an end once released, so the helper's end is the second one there).
+    // The hook is gone; the helper's manager, still waiting, fails now (the killed hook's own ask ends with it on Windows, but on POSIX its orphaned stub also logs an end once released, so two ends are counted there).
     writeFileSync(npm.release, '');
-    // A failed ask keeps its lock, so the helper is done when it has logged its end with the lock still there.
+    // A failed ask keeps its lock, so the helper is done once `helperEnds` ends are logged with the lock still there.
     await until(() => logged(npm.log, 'ended') >= helperEnds && lockFiles(store).length === 1);
     expect(logged(npm.log, 'ended')).toBeGreaterThanOrEqual(helperEnds);
     expect(lockFiles(store)).toHaveLength(1);
