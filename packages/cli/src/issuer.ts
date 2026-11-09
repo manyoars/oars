@@ -13,7 +13,7 @@ const UNAVAILABLE =
 /**
  * The built-in issuer is in use only when neither `--issuer-url` nor `OARS_ISSUER_URL` named one. If that issuer does not answer
  * discovery (no answer, an error status, or a body that is not discovery JSON), the platform is not up yet, so say so (exit 2) and
- * name the pool. An issuer the developer named keeps its own error.
+ * name the sign-in host. An issuer the developer named keeps its own error.
  */
 export const discoverIssuer = async <T>(deps: RunDeps, flag: string | undefined, discover: () => Promise<T>): Promise<T> => {
   try {
