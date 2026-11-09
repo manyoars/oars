@@ -7,9 +7,10 @@ import { answer, bound, brake, notConfigured, refuse, type Env } from './http.js
 import { receivePart } from './parts.js';
 import { heldBy, recount, repoKeysOf, signalStatements } from './cluster-store.js';
 import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf } from './ingest.js';
-import { accountOf, loginGone, loginPoll, loginStart, logout } from './identity.js';
+import { loginGone, loginPoll, loginStart, logout } from './identity.js';
 import { hashHosts, hashKey } from './ingest-hash.js';
-import { activate, enroll, list, machineScope, revoke, rotate } from './machines.js';
+import { activate, callerOf, enroll, list, machineScope, revoke, rotate, type Caller } from './machines.js';
+import { stampOf, takeClaim } from './provenance.js';
 import { rawRoute } from './raw.js';
 import { depositDigest, erasedRefusal, holdsErasedValue, isErased } from './tombstones.js';
 import { telemetry, type TelemetryEnv } from './telemetry.js';
@@ -42,13 +43,20 @@ const futureDayField = ({ transcripts }: SessionSkeleton, now: number): string |
 };
 
 /** A whole batch, from the request or joined from its parts: parsed, projected, and written as one deposit. The hash key is read before the body, so a pool with none never gets here. */
-const storeDeposit = async (env: Env, account: string, secret: string, text: string): Promise<Response> => {
+const storeDeposit = async (env: Env, caller: Caller, secret: string, text: string): Promise<Response> => {
+  const { account, machine } = caller;
+  const stamp = stampOf(machine);
   let body: unknown;
   try {
     body = JSON.parse(text);
   } catch {
     return refuse(400, 'closed_vocabulary', 'The body is not JSON.', 'skeleton');
   }
+  // `claimed` is the pool's own to read, set apart before the skeleton is, so it is neither bagged nor parsed as one of its fields.
+  const taken = takeClaim(body, machine);
+  if (taken instanceof Response) return taken;
+  const { claim } = taken;
+  body = taken.rest;
   // The body is read once as it came, so a refusal is judged on what the client sent (a host that is not a name is still refused).
   const sent = parseSkeleton(body);
   if (!sent.ok) return refuse(422, 'closed_vocabulary', `${sent.field}: ${sent.reason}`, sent.field);
@@ -78,13 +86,17 @@ const storeDeposit = async (env: Env, account: string, secret: string, text: str
   const ingest = crypto.randomUUID();
   // One statement, so two deposits at once cannot both take the last of either limit. A redeposit replaces its own row: it adds no row, so it passes the count at the limit, and only its new size counts against the budget.
   const insert = env.DB.prepare(
-    'INSERT INTO deposits (account, id, skeleton, deltas, tier, counted_at, ingest, format, vocab_version, fields_version, extensions, other_values) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ((SELECT COUNT(*) FROM deposits WHERE account = ?) < ? OR EXISTS (SELECT 1 FROM deposits WHERE account = ? AND id = ?)) AND (SELECT COALESCE(SUM(LENGTH(CAST(skeleton AS BLOB)) + LENGTH(CAST(deltas AS BLOB)) + LENGTH(CAST(extensions AS BLOB))), 0) FROM deposits WHERE account = ? AND id <> ?) + ? <= ? ON CONFLICT (account, id) DO UPDATE SET skeleton = excluded.skeleton, deltas = excluded.deltas, tier = excluded.tier, ingest = excluded.ingest, format = excluded.format, vocab_version = excluded.vocab_version, fields_version = excluded.fields_version, extensions = excluded.extensions, other_values = excluded.other_values, counted_at = CASE WHEN ? = 0 THEN deposits.counted_at WHEN excluded.counted_at IS NULL THEN NULL ELSE COALESCE(deposits.counted_at, excluded.counted_at) END WHERE deposits.ingest = ?',
+    'INSERT INTO deposits (account, id, skeleton, deltas, tier, counted_at, ingest, format, vocab_version, fields_version, extensions, other_values, machine, host_class, launcher, claimed_host_class, claimed_launcher) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ((SELECT COUNT(*) FROM deposits WHERE account = ?) < ? OR EXISTS (SELECT 1 FROM deposits WHERE account = ? AND id = ?)) AND (SELECT COALESCE(SUM(LENGTH(CAST(skeleton AS BLOB)) + LENGTH(CAST(deltas AS BLOB)) + LENGTH(CAST(extensions AS BLOB))), 0) FROM deposits WHERE account = ? AND id <> ?) + ? <= ? ON CONFLICT (account, id) DO UPDATE SET skeleton = excluded.skeleton, deltas = excluded.deltas, tier = excluded.tier, ingest = excluded.ingest, format = excluded.format, vocab_version = excluded.vocab_version, fields_version = excluded.fields_version, extensions = excluded.extensions, other_values = excluded.other_values, machine = excluded.machine, host_class = excluded.host_class, launcher = excluded.launcher, claimed_host_class = excluded.claimed_host_class, claimed_launcher = excluded.claimed_launcher, counted_at = CASE WHEN ? = 0 THEN deposits.counted_at WHEN excluded.counted_at IS NULL THEN NULL ELSE COALESCE(deposits.counted_at, excluded.counted_at) END WHERE deposits.ingest = ?',
   )
-    .bind(account, skeleton.id, stored, DELTAS, tier, countedAt, ingest, skeleton.format, skeleton.vocabVersion, skeleton.fieldsVersion, bag, others, account, limit ?? UNLIMITED, account, skeleton.id, account, skeleton.id, new TextEncoder().encode(stored).length + new TextEncoder().encode(DELTAS).length + new TextEncoder().encode(bag).length, budget ?? UNLIMITED, written > 0 ? 1 : 0, previous?.ingest ?? '');
+    .bind(account, skeleton.id, stored, DELTAS, tier, countedAt, ingest, skeleton.format, skeleton.vocabVersion, skeleton.fieldsVersion, bag, others, stamp.machine, stamp.hostClass, stamp.launcher, claim?.hostClass ?? null, claim?.launcher ?? null, account, limit ?? UNLIMITED, account, skeleton.id, account, skeleton.id, new TextEncoder().encode(stored).length + new TextEncoder().encode(DELTAS).length + new TextEncoder().encode(bag).length, budget ?? UNLIMITED, written > 0 ? 1 : 0, previous?.ingest ?? '');
   // The row and every increment it writes are one transaction; the increments are guarded by the row's `ingest` mark, so a refused deposit writes none of them.
   const arrived = new Date();
   const [inserted] = await env.DB.batch([
     insert,
+    // A machine records the day of its last stored deposit. Guarded by the row's `ingest` mark like the increments, so a deposit a brake refused moves nothing.
+    ...(machine === undefined
+      ? []
+      : [env.DB.prepare('UPDATE machines SET last_deposit_day = ? WHERE id = ? AND EXISTS (SELECT 1 FROM deposits WHERE account = ? AND id = ? AND ingest = ?)').bind(arrived.toISOString().slice(0, 10), machine.id, account, skeleton.id, ingest)]),
     ...incrementStatements(env, account, skeleton.id, ingest, arrived.toISOString().slice(0, 10), next, previous?.increments),
     ...signalStatements(env, account, [account, skeleton.id, ingest], arrived, repoKeysOf(skeleton)),
   ]);
@@ -99,16 +111,19 @@ const storeDeposit = async (env: Env, account: string, secret: string, text: str
   // The counts the floors compare are clusters of accounts, not accounts (t937): taken once the row and its contributor records are committed, for every cell and stratum this account holds, not only this batch's: the repo keys and hours it adds belong to the account, so they can join it to another account in cells the batch never touched.
   await recount(env, 'cell', await heldBy(env, account, 'cell'));
   await recount(env, 'stratum', await heldBy(env, account, 'stratum'));
-  return answer(201, { ok: true, id: skeleton.id });
+  // A machine's key learns when it ends from every deposit it makes, so the machine can say so before it does.
+  return answer(201, { ok: true, id: skeleton.id, ...(machine === undefined ? {} : { machineExpiresAt: machine.expiresAt }) });
 };
 
 const deposit = async (request: Request, env: Env): Promise<Response> => {
   // The gate comes before the sign-in and the body, so a closed pool reads neither.
   const version = bound(env.COVENANT_VERSION);
   if (version === undefined) return depositsClosed();
-  const account = await accountOf(request, env);
-  if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
-  if (!(await hasAccepted(env, account, version))) return covenantNotAccepted(version);
+  // The account's own credential or a machine's key: the key deposits for its machine's account, stamped as that machine.
+  const caller = await callerOf(request, env, Date.now());
+  if (caller instanceof Response) return caller;
+  if (caller === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
+  if (!(await hasAccepted(env, caller.account, version))) return covenantNotAccepted(version);
   // A host is hashed before any write, so a pool with no key refuses here, before the body is read, rather than store one in clear.
   const secret = bound(env.INGEST_HASH_KEY);
   if (secret === undefined) return notConfigured('INGEST_HASH_KEY');
@@ -116,7 +131,7 @@ const deposit = async (request: Request, env: Env): Promise<Response> => {
   if (Number(request.headers.get('content-length')) > MAX_DEPOSIT_BYTES) return tooLarge();
   const text = await request.text();
   if (new TextEncoder().encode(text).length > MAX_DEPOSIT_BYTES) return tooLarge();
-  return request.headers.has('oars-part') ? receivePart(request, env, account, secret, text, (whole) => storeDeposit(env, account, secret, whole)) : storeDeposit(env, account, secret, text);
+  return request.headers.has('oars-part') ? receivePart(request, env, caller.account, secret, text, (whole) => storeDeposit(env, caller, secret, whole)) : storeDeposit(env, caller, secret, text);
 };
 
 /** A name that does not decode stays as it came: no vocabulary holds it, so the route refuses it by name. */
