@@ -10,7 +10,8 @@ import { exclusionPaths, loadTerms } from './exclusion.js';
 import { derivedSalt } from './machine-ids.js';
 import { HOST_CLASSES } from './machine.js';
 import { isMissing, mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
-import { runtimeOf } from './pool-command.js';
+import { ask, poolServer, refusal, runtimeOf, signedIn } from './pool-command.js';
+import { isObject, numberIn, textIn } from './pool-replica.js';
 import { localSalt } from './store.js';
 
 const STEP = 'pool-enroll';
@@ -27,6 +28,11 @@ export interface EnrollOptions {
   launcher: string | undefined;
   /** `owner/name` entries, each possibly several joined by commas or spaces. */
   allowRepos: readonly string[];
+  /** The full enrollment's label for the machine, as the pool lists it. */
+  name?: string | undefined;
+  /** `--days` as typed: how long the key lives from its activation. */
+  days?: string | undefined;
+  server?: string | undefined;
 }
 
 const usage = (message: string): CliError => new CliError(message, ExitCode.USAGE, STEP);
@@ -94,15 +100,41 @@ const reposOf = (given: readonly string[]): string[] => {
   return repos;
 };
 
+/** `--days` as the pool takes it, or left out for the pool's default. The wording is the pool's own. */
+const daysOf = (given: string | undefined): number | undefined => {
+  if (given === undefined) return undefined;
+  const days = /^\d+$/u.test(given) ? Number(given) : Number.NaN;
+  if (!Number.isSafeInteger(days) || days < 1 || days > 365) throw usage('--days is a whole number of days from 1 to 365. Nothing was checked.');
+  return days;
+};
+
+/** What the pool answered to an enrollment: the token, the time it lapses unactivated, and the machine's id there. */
+interface Enrolled {
+  token: string;
+  tokenExpiresAt: number;
+  poolId: string;
+}
+
+const enrolledOf = (body: unknown): Enrolled => {
+  const machine: unknown = isObject(body) ? Reflect.get(body, 'machine') : undefined;
+  const token = isObject(body) ? textIn(body, 'token') : undefined;
+  const poolId = isObject(machine) ? textIn(machine, 'id') : undefined;
+  const tokenExpiresAt = isObject(machine) ? numberIn(machine, 'expiresAt') : undefined;
+  if (token === undefined || poolId === undefined || tokenExpiresAt === undefined) throw new CliError('The pool did not answer the enrollment with a token and a machine.', ExitCode.UNEXPECTED, STEP);
+  return { token, tokenExpiresAt, poolId };
+};
+
 /**
  * Prints the env block for a machine that holds its deposit in its own private repository. Everything it refuses, it refuses before it asks GitHub anything: the flags, then the term list (a block with no terms
  * would exclude every session, so nothing would be held). A repository that is public, or whose record cannot be read, refuses the whole block, and the message names each such repository.
  */
 export const poolEnroll = async (deps: RunDeps, options: EnrollOptions, visibility: Visibility): Promise<Outcome> => {
-  if (!options.holdOnly) throw usage('oars pool enroll takes --hold-only for now: the enrollment that also mints a pool key is not available yet. Nothing was checked.');
   const hostClass = classOf(options.hostClass);
   const launcher = launcherOf(options.launcher);
   const repos = reposOf(options.allowRepos);
+  if (options.holdOnly && (options.days !== undefined || options.name !== undefined)) throw usage('--name and --days belong to the enrollment that asks the pool for a token; --hold-only sends nothing to the pool. Nothing was checked.');
+  const days = options.holdOnly ? undefined : daysOf(options.days);
+  if (!options.holdOnly && (options.name === undefined || options.name === '')) throw usage('--name takes the label the pool lists this machine by. Nothing was checked.');
   const runtime = runtimeOf(deps);
   const termsFile = exclusionPaths(runtime.projectsRoot, deps.env).terms;
   const terms = [...new Set(await loadTerms(termsFile))];
@@ -114,6 +146,9 @@ export const poolEnroll = async (deps: RunDeps, options: EnrollOptions, visibili
     else if (seen === 'unknown') refused.push(`  ${repo}: could not confirm it is private (the check needs a GH_TOKEN or GITHUB_TOKEN that can read it, and the repository's current name).`);
   }
   if (refused.length > 0) throw usage(`Refusing to enroll: every repository must be private.\n${refused.join('\n')}`);
+  // The pool is asked only after every repository is confirmed private, and the machine is recorded only after the pool has answered: a refusal at either leaves nothing behind.
+  const server = options.holdOnly ? '' : poolServer(deps.env, STEP, options.server);
+  const credential = options.holdOnly ? undefined : await signedIn(deps, runtime.storeDir, server, STEP);
   await mkdirOwnerOnly(runtime.storeDir);
   const localKey = (await (runtime.accountSalt ?? localSalt)(runtime.storeDir)).salt;
   const env = {
@@ -125,16 +160,41 @@ export const poolEnroll = async (deps: RunDeps, options: EnrollOptions, visibili
     OARS_SESSION_SALT: derivedSalt(localKey, 'sessionId/1'),
     OARS_EXCLUSION_TERMS_INLINE: terms.join('\n'),
   };
-  // Recorded after every check has passed and before the block is printed: a block the operator can copy always names a machine the trusted side knows.
+  const enrolled =
+    credential === undefined
+      ? undefined
+      : await askToEnroll(deps, server, credential.token, { label: options.name ?? '', hostClass, launcher, allowRepos: repos, ...(days === undefined ? {} : { days }) });
+  // Recorded after every check has passed (and the pool has answered, in a full enrollment) and before the block is printed: a block the operator can copy always names a machine the trusted side knows.
   await recordMachine(runtime.storeDir, { machine: env.OARS_MACHINE, hostClass, launcher, allowRepos: repos });
   const lines = Object.entries(env).map(([name, value]) => `${name}=${name === 'OARS_EXCLUSION_TERMS_INLINE' ? quoted(value) : value}`);
+  const count = `${String(repos.length)} private ${repos.length === 1 ? 'repository' : 'repositories'}`;
+  const block = ['', ...lines, '', 'A change to your term list needs this run again and the new block set in every environment.'];
+  if (enrolled === undefined) {
+    const text = [`Hold-only enrollment for ${count}. No pool credential was used or needed.`, 'Set these variables in the cloud environment. The block holds two salts and your exclusion terms, so treat it as a secret:', ...block].join('\n');
+    return { document: { ok: true, holdOnly: true, hostClass, launcher, machine: env.OARS_MACHINE, allowRepos: repos, env }, text };
+  }
   const text = [
-    `Hold-only enrollment for ${String(repos.length)} private ${repos.length === 1 ? 'repository' : 'repositories'}. No pool credential was used or needed.`,
+    `Enrolled ${options.name ?? ''} with the pool for ${count}.`,
+    `One-time enrollment token (shown once; it must be activated within 24 hours, by ${new Date(enrolled.tokenExpiresAt).toISOString()}, or it is useless):`,
+    `  ${enrolled.token}`,
+    'Hold it where the runtime keeps secrets: a network secret on the cloud environment (Bearer, host pool.manyoars.com), or an owner-only file on a server. Never in a repository.',
     'Set these variables in the cloud environment. The block holds two salts and your exclusion terms, so treat it as a secret:',
-    '',
-    ...lines,
-    '',
-    'A change to your term list needs this run again and the new block set in every environment.',
+    ...block,
   ].join('\n');
-  return { document: { ok: true, holdOnly: true, hostClass, launcher, machine: env.OARS_MACHINE, allowRepos: repos, env }, text };
+  return { document: { ok: true, holdOnly: false, hostClass, launcher, machine: env.OARS_MACHINE, poolMachine: enrolled.poolId, token: enrolled.token, tokenExpiresAt: enrolled.tokenExpiresAt, allowRepos: repos, env }, text };
+};
+
+interface Declared {
+  label: string;
+  hostClass: string;
+  launcher: string;
+  allowRepos: readonly string[];
+  days?: number;
+}
+
+/** `POST /v1/machines/enroll` with the account's credential. Any answer but the 201 is the pool's own refusal, and nothing is recorded. */
+const askToEnroll = async (deps: RunDeps, server: string, token: string, declared: Declared): Promise<Enrolled> => {
+  const reply = await ask(deps, STEP, server, '/v1/machines/enroll', { token, body: declared });
+  if (reply.status !== 201) throw refusal(STEP, reply);
+  return enrolledOf(reply.body);
 };

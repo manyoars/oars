@@ -148,7 +148,7 @@ const send = async (deps: RunDeps, step: string, request: Outgoing, show: Masker
 export const networkSender = (deps: RunDeps, step: string): Sender => (request) => send(deps, step, request, undefined);
 
 /** The server's named refusal, as a failure: its `error` is the problem's code in `--json`. */
-const refusal = (step: string, { status, body }: Reply): CliError => {
+export const refusal = (step: string, { status, body }: Reply): CliError => {
   const code = isObject(body) ? textIn(body, 'error') : undefined;
   const message = (isObject(body) ? textIn(body, 'message') : undefined) ?? `The pool answered HTTP ${String(status)}.`;
   return new CliError(message, exitCodeForProblem(status, code === undefined ? undefined : { code }), step, { title: message, status, ...(code === undefined ? {} : { code }) });

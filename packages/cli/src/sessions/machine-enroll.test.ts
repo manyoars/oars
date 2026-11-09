@@ -168,7 +168,8 @@ describe('oars pool enroll --hold-only', () => {
     await refusal(poolEnroll(h.deps, { ...OPTIONS, hostClass: 'local' }, watch), /--host-class/u);
     await refusal(poolEnroll(h.deps, { ...OPTIONS, hostClass: undefined }, watch), /--host-class/u);
     await refusal(poolEnroll(h.deps, { ...OPTIONS, launcher: 'by-hand' }, watch), /--launcher/u);
-    await refusal(poolEnroll(h.deps, { ...OPTIONS, holdOnly: false }, watch), /--hold-only/u);
+    await refusal(poolEnroll(h.deps, { ...OPTIONS, name: 'a label' }, watch), /--hold-only/u);
+    await refusal(poolEnroll(h.deps, { ...OPTIONS, days: '30' }, watch), /--hold-only/u);
     expect(asked).toEqual([]);
   });
 });
