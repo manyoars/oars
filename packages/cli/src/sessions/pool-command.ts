@@ -1,7 +1,9 @@
 // `oars pool`: the only part of the sessions code that talks to a remote. The server is the one named by flag or environment, else the Many Oars pool; nothing leaves until a command that sends is run or, after covenant acceptance, the detached sender (hook-bin.js nightly) sends. Sign-in runs the provider's device flow here and reads no harness token; a session leaves only as a skeleton of a closed list of fields, each value redacted first, and only after the exclusion check found it clean. Local capture, recall,
 // and reads never come through here.
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { createInterface } from 'node:readline';
 import type { Outcome, RunDeps } from '../cli.js';
 import { emitOf } from '../telemetry/emit.js';
 import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../errors.js';
@@ -272,15 +274,50 @@ const openCovenant = async (deps: RunDeps, server: string, token: string, accept
     const title = 'This pool is not taking deposits: its covenant is not published.';
     throw new CliError(title, ExitCode.AUTH, DEPOSIT, { code: 'deposits_closed', title, status: 403 });
   }
-  if (accept !== undefined) {
-    const accepted = await ask(deps, DEPOSIT, server, '/v1/covenant/accept', { token, body: { version: accept } }, via);
-    if (accepted.status !== 200) throw refusal(DEPOSIT, accepted);
-    return;
+  if (Reflect.get(reply.body, 'accepted') === true) return;
+  const notAccepted = (title: string): CliError => new CliError(title, ExitCode.AUTH, DEPOSIT, { code: 'covenant_not_accepted', title, status: 403 });
+  const screen = screenIn(reply.body);
+  if (screen === undefined) throw notAccepted(`The pool has no text for covenant ${version} yet, so there is nothing to show and nothing can be accepted. Nothing was accepted.`);
+  // Assent is a person typing the phrase the screen states. A flag or a script on stdin is not one, so off a terminal nothing is asked and nothing is accepted.
+  if (!isTerminal(deps)) {
+    if (accept !== undefined) throw usage('--accept-covenant does not accept for you: acceptance is a person typing the phrase at a terminal, and this is not one. Nothing was accepted.', DEPOSIT);
+    throw notAccepted(`Covenant ${version} is not accepted for this account. Accepting it takes a person at a terminal who reads it and types its phrase: run this command from one. Nothing was accepted.`);
   }
-  if (Reflect.get(reply.body, 'accepted') !== true) {
-    const title = `Read covenant ${version} of this pool, then rerun with --accept-covenant ${version}.`;
-    emitOf(deps)('covenant-shown', { version });
-    throw new CliError(title, ExitCode.AUTH, DEPOSIT, { code: 'covenant_not_accepted', title, status: 403 });
+  if (accept !== undefined && accept !== version) throw usage(`--accept-covenant names covenant ${accept}, but the covenant of this pool is ${version}. Nothing was accepted.`, DEPOSIT);
+  deps.io.stderr(`\n${screen.text}\n\n> `);
+  emitOf(deps)('covenant-shown', { version });
+  const typed = await lineFrom(runtimeOf(deps).stdin);
+  if (typed?.trim() !== screen.phrase) throw notAccepted(`${typed === undefined ? 'No phrase was typed' : 'That was not the phrase'}. To accept covenant ${version}, type exactly: ${screen.phrase}. Nothing was accepted.`);
+  const body = { version, textSha256: createHash('sha256').update(screen.text).digest('hex'), input: 'typed', client: `oars/${deps.version}` };
+  const accepted = await ask(deps, DEPOSIT, server, '/v1/covenant/accept', { token, body }, via);
+  if (accepted.status !== 200) throw refusal(DEPOSIT, accepted);
+};
+
+/** What the pool shows before a person accepts: the covenant's text as displayed, its full-text link, and the phrase the text asks to be typed. */
+interface Screen {
+  text: string;
+  link: string;
+  phrase: string;
+}
+
+const screenIn = (body: object): Screen | undefined => {
+  const screen: unknown = Reflect.get(body, 'screen');
+  const text = isObject(screen) ? textIn(screen, 'text') : undefined;
+  const link = isObject(screen) ? textIn(screen, 'link') : undefined;
+  const phrase = isObject(screen) ? textIn(screen, 'phrase') : undefined;
+  return text === undefined || link === undefined || phrase === undefined ? undefined : { text, link, phrase };
+};
+
+const isTerminal = (deps: RunDeps): boolean => Reflect.get(runtimeOf(deps).stdin, 'isTTY') === true;
+
+/** The next line a person types, or `undefined` when the input ends first. The interface is closed after it, so the terminal is released. */
+const lineFrom = async (input: NodeJS.ReadableStream): Promise<string | undefined> => {
+  const lines = createInterface({ input, terminal: false });
+  try {
+    for await (const line of lines) return line;
+    return undefined;
+  } finally {
+    lines.close();
   }
 };
 
