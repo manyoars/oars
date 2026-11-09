@@ -1,7 +1,7 @@
 // Gemini and OTel readers drop a file before it is a session: Gemini a chat that "holds nothing", OTel a file with no GenAI span. A file dropped while holding records
-// in a shape the reader does not know (a renamed message type, a renamed attribute) is counted by `sessions verify` as seen and unreadable; a file that is routinely
-// dropped (a launch and quit, the CLI's own context turn, an `info` message, a trace of HTTP spans) stays out. Selection is untouched: nothing deposited moves.
-import { mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+// in a shape the reader does not know (a renamed message type, a renamed key) is counted by `sessions verify` as seen and unreadable; a file that is routinely
+// dropped (a launch and quit, the CLI's own context turn, an `info` message, an export with an empty span list) stays out. Selection is untouched: nothing deposited moves.
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { sessionsVerify } from './command.js';
@@ -39,7 +39,7 @@ const geminiFiles = (withDropped: boolean) => [
     : []),
 ];
 
-const span = (trace: string, attrs: { [key: string]: unknown }, name = 'invoke_agent support'): object => otlpSpan({ trace, id: '0000000000000001', name, start: 0, end: 10, attrs });
+const span = (trace: string, attrs: { [key: string]: unknown }): object => otlpSpan({ trace, id: '0000000000000001', name: 'invoke_agent support', start: 0, end: 10, attrs });
 const otelFiles = (withDropped: boolean) => [
   {
     name: 'good.jsonl',
@@ -47,10 +47,13 @@ const otelFiles = (withDropped: boolean) => [
   },
   ...(withDropped
     ? [
-        // The GenAI attributes were renamed and the span name no longer leads with an operation: no GenAI span is found.
-        { name: 'renamed.jsonl', lines: [otlpRequest([span('b'.repeat(32), { 'gen_ai.op': 'invoke_agent', 'gen_ai.input.msgs': [{ role: 'user', text: 'fix the build' }] }, 'support run')])] },
-        // Routine: a trace of HTTP spans only.
-        { name: 'http.jsonl', lines: [otlpRequest([span('c'.repeat(32), { 'http.request.method': 'GET', 'url.path': '/health' }, 'GET /health')])] },
+        // The export's top key was renamed, so no span is found: dropped before it is a session.
+        { name: 'renamed-top.jsonl', lines: [{ resource_spans: [{ scope_spans: [{ spans: [{ traceId: 'b'.repeat(32), spanId: '0000000000000001', name: 'invoke_agent support' }] }] }] }] },
+        // A span whose ids were renamed (`trace_id`, `span_id`): no span is found either.
+        { name: 'renamed-ids.jsonl', lines: [{ resourceSpans: [{ scopeSpans: [{ spans: [{ trace_id: 'c'.repeat(32), span_id: '0000000000000001', name: 'invoke_agent support' }] }] }] }] },
+        // Routine: an export with nothing traced, and an empty file.
+        { name: 'empty-list.jsonl', lines: [{ resourceSpans: [] }] },
+        { name: 'blank.jsonl', lines: '' },
       ]
     : []),
 ];
@@ -70,9 +73,7 @@ const verifyCounts = async (staged: ReturnType<typeof stage>, roots: { [name: st
   return verified.report.harnessFiles;
 };
 
-// Skipped until the Gemini and OTel readers expose the count of files they drop that held records beyond a head (t1026 Item 7, not started).
-// OTel finding: the probe's renamed-attribute and HTTP-only files are NOT dropped (each becomes a zero-turn session), so the OTel fixture needs the real drop case first (see report).
-describe.skip('sessionsVerify, a file the Gemini or OTel reader drops while it holds records in a shape it does not know', () => {
+describe('sessionsVerify, a file the Gemini or OTel reader drops while it holds records in a shape it does not know', () => {
   it('Gemini: a renamed message type and a renamed content key are seen and unreadable; a launch and quit, a context turn, and an info message stay out', async () => {
     const staged = stage();
     rmSync(join(staged.projectsRoot, 'proj'), { recursive: true });
@@ -81,12 +82,12 @@ describe.skip('sessionsVerify, a file the Gemini or OTel reader drops while it h
     expect((await verifyCounts(staged, { gemini })).gemini).toEqual({ seen: 3, yielded: 1, unreadable: 2 });
   });
 
-  it('OTel: a file whose GenAI attributes were renamed is seen and unreadable; a trace of HTTP spans stays out', async () => {
+  it('OTel: a file whose top key or span ids were renamed is seen and unreadable; an empty span list and a blank file stay out', async () => {
     const staged = stage();
     rmSync(join(staged.projectsRoot, 'proj'), { recursive: true });
     mkdirSync(staged.projectsRoot, { recursive: true });
     const otel = stageOtel(staged.root, otelFiles(true));
-    expect((await verifyCounts(staged, { otel })).otel).toEqual({ seen: 2, yielded: 1, unreadable: 1 });
+    expect((await verifyCounts(staged, { otel })).otel).toEqual({ seen: 3, yielded: 1, unreadable: 2 });
   });
 
   it('deposits the same bytes with the dropped files present as without them', async () => {
@@ -95,10 +96,13 @@ describe.skip('sessionsVerify, a file the Gemini or OTel reader drops while it h
       rmSync(join(staged.projectsRoot, 'proj'), { recursive: true });
       mkdirSync(staged.projectsRoot, { recursive: true });
       const roots = { gemini: stageGemini(staged.root, geminiFiles(withDropped)), otel: stageOtel(staged.root, otelFiles(withDropped)) };
+      // The salt is random per store and every record carries its `sid`; the same one in both runs lets the bytes be compared.
+      mkdirSync(staged.runtime.storeDir, { recursive: true });
+      writeFileSync(join(staged.runtime.storeDir, 'salt'), 'fixed-salt-for-the-comparison');
       await deposit({ ...staged.runtime, sourceRoots: roots }, { allow: ['gemini', 'otel'], redactDomains: [], now: () => NOW });
       const stored = filesOf(staged.runtime.storeDir);
       // The temp folder differs between the two stagings; nothing else may.
-      return Object.fromEntries(Object.entries(stored).map(([path, text]) => [path, text.split(staged.root).join('<root>').replaceAll('\\\\', '/')]));
+      return Object.fromEntries(Object.entries(stored).map(([path, text]) => [path, text.split(staged.root).join('<root>').replaceAll('\\\\', '/').replace(/"mtimeMs":\d+/g, '"mtimeMs":0')]));
     };
     const without = await deposited(false);
     const withDropped = await deposited(true);

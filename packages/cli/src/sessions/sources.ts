@@ -41,6 +41,8 @@ export interface SourceStore {
   headOnly?: (session: SourceSession) => boolean | Promise<boolean>;
   /** Sessions skipped because their id is not a safe file name, counted so the skip is never silent. */
   rejected: number;
+  /** Files the reader dropped before they were sessions that held records in a shape it does not know; only `sessions verify` reads it, as seen and unreadable. Absent when the format has no such drop. */
+  shapeMoved?: number;
   /** Items that could not be inspected, warned about once each and never fatal; `reason` names no path. */
   unreadable: readonly { file: string; reason: string }[];
   /** The file to blame when `transcript` throws for a session; the store's own file when a source keeps one. */
@@ -162,6 +164,7 @@ const gemini: Source = {
       })),
       transcript: async (session) => await store.transcript(need(byId.get(session.id))),
       rejected: store.rejected,
+      shapeMoved: store.shapeMoved,
       unreadable: store.unreadable,
       where: (session) => byId.get(session.id)?.file ?? root,
       close: () => undefined,
@@ -280,6 +283,7 @@ const otel: Source = {
       ],
       transcript: (session) => (session.supersededBy === undefined ? store.transcript(need(byId.get(session.id))) : ''),
       rejected: store.rejected,
+      shapeMoved: store.shapeMoved,
       unreadable: store.unreadable,
       where: (session) => byId.get(session.id)?.file ?? root,
       close: () => undefined,

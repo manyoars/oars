@@ -73,11 +73,8 @@ describe('sessionsVerify, one yielding and one moved-shape file per harness', ()
         projectRoot: WORK,
         lines: [geminiHead(A), { id: 'u1', timestamp: T(1), type: 'user', content: [{ text: 'fix the build' }] }, { id: 'g2', timestamp: T(2), type: 'gemini', content: 'done', model: 'gemini-2.5-pro' }],
       },
-      // The reader keeps a file it cannot parse a line of; one whose records name no message type it knows is skipped as a chat that holds nothing, as a head-only file is, so it is not seen.
-      { id: B, slug: 'moved', projectRoot: WORK, lines: `${JSON.stringify(geminiHead(B))}
-{"id":"u1","type":"user","content":[{"text":
-` },
-      { id: C, slug: 'skipped', projectRoot: WORK, lines: [geminiHead(C), { id: 'u1', timestamp: T(1), type: 'human', content: [{ text: 'fix the build' }] }] },
+      // The message type was renamed: the reader drops the chat as one that holds nothing, and counts it as a file whose shape moved.
+      { id: C, slug: 'moved', projectRoot: WORK, lines: [geminiHead(C), { id: 'u1', timestamp: T(1), type: 'human', content: [{ text: 'fix the build' }] }] },
     ]);
     const grok = stageGrok(root, [
       {
@@ -141,5 +138,6 @@ describe('sessionsVerify, one yielding and one moved-shape file per harness', ()
     // Counts and harness names only: no path, session id, or content reaches the text.
     for (const secret of [root, A, B, C, 'fix the build', 'ses_good', 'ses_moved', WORK, 'moved']) expect(verified.text).not.toContain(secret);
     expect(JSON.stringify(verified.document)).not.toContain('fix the build');
+    for (const secret of [root, A, B, C, 'fix the build', 'ses_good', 'ses_moved', WORK]) expect(JSON.stringify(verified.report.harnessFiles)).not.toContain(secret);
   });
 });

@@ -26,7 +26,7 @@ export const FILE_COUNT_RULES =
   'A file counts once. It is seen when the reader opened it and it is not empty; seen files either yielded (at least one user or assistant turn came out) or are unreadable ' +
   '(the read failed, or the text gave no turn, torn or with a record of a kind the reader does not know). An empty file (nothing in it to parse), a file with no turn whose ' +
   'records are all head records its own format defines (a session started and quit), and a file skipped by a rule (an id that is not a safe file name, a revert folded into ' +
-  'its thread, a session folded into another) are not seen. Where a store is a database, a session is the unit.';
+  'its thread, a session folded into another) are not seen. A file a reader dropped before it was a session (a Gemini chat that holds nothing, an OpenTelemetry file with no span found) is seen and unreadable when it held records in a shape the reader does not know. Where a store is a database, a session is the unit.';
 
 export type FileOutcome = 'yielded' | 'unreadable' | 'empty';
 
@@ -107,6 +107,8 @@ export const harnessFileCounts = async (runtime: SessionsRuntime): Promise<Harne
       try {
         // A session folded into another is no file of its own; an item the store could not inspect is one unreadable file.
         outcomes.push(...store.unreadable.map((): FileOutcome => 'unreadable'));
+        // Files the reader dropped before they were sessions while they held records in a shape it does not know: seen, and unreadable.
+        for (let dropped = 0; dropped < (store.shapeMoved ?? 0); dropped += 1) outcomes.push('unreadable');
         for (const session of store.sessions.filter((one) => one.supersededBy === undefined)) outcomes.push(await sessionOutcome(store, session, source.harness));
       } finally {
         store.close();

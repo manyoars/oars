@@ -157,6 +157,19 @@ const spansOf = (request: unknown, order: { next: number }, file: string): Span[
   return spans;
 };
 
+/**
+ * True when a request holds something the reader found no span in: no `resourceSpans` list, or a span that is not an object or lacks `traceId` or `spanId`. An export with an
+ * empty list is routine (nothing was traced) and is not this.
+ */
+const holdsUnreadSpans = (request: unknown): boolean => {
+  if (!isObj(request) || !Array.isArray(request.resourceSpans)) return true;
+  return request.resourceSpans.some((resource) =>
+    (isObj(resource) && Array.isArray(resource.scopeSpans) ? resource.scopeSpans : []).some((scoped) =>
+      (isObj(scoped) && Array.isArray(scoped.spans) ? scoped.spans : []).some((raw) => !isObj(raw) || str(raw.traceId) === undefined || str(raw.spanId) === undefined),
+    ),
+  );
+};
+
 /** The requests of one file: the whole text as one JSON value (a `.json` file), else one request a line (the file exporter's JSON Lines). Throws when nothing parses. */
 const requestsOf = (text: string): { requests: unknown[]; bad: string[] } => {
   const whole = parse(text);
@@ -503,6 +516,8 @@ export interface OtelStore {
   superseded: { id: string; by: string }[];
   transcript: (session: OtelFound) => string;
   rejected: number;
+  /** Files that held a request but gave no span because the request's shape is not one the reader knows. Read only by `sessions verify`; selection is unchanged. */
+  shapeMoved: number;
   unreadable: { file: string; reason: string }[];
 }
 
@@ -514,11 +529,12 @@ export const openOtelStore = async (root: string): Promise<OtelStore | undefined
     names = (await readdir(root)).filter((name) => /\.jsonl?$/i.test(name)).sort();
   } catch (error) {
     if (missing(error)) return undefined;
-    return { sessions: [], superseded: [], transcript: () => '', rejected: 0, unreadable: [{ file: root, reason: reasonOf(error, root) }] };
+    return { sessions: [], superseded: [], transcript: () => '', rejected: 0, shapeMoved: 0, unreadable: [{ file: root, reason: reasonOf(error, root) }] };
   }
   const unreadable: { file: string; reason: string }[] = [];
   const spans: Span[] = [];
   const order = { next: 0 };
+  let shapeMoved = 0;
   // The torn lines of each file stay with that file: a session that came from it counts them, else the file is named.
   const torn = new Map<string, string[]>();
   for (const name of names) {
@@ -527,9 +543,11 @@ export const openOtelStore = async (root: string): Promise<OtelStore | undefined
       if (!(await stat(file)).isFile()) continue;
       const { requests, bad } = requestsOf(await readFile(file, 'utf8'));
       if (bad.length > 0) torn.set(file, bad);
+      const before = spans.length;
       for (const request of requests) {
         spans.push(...spansOf(request, order, file));
       }
+      if (spans.length === before && requests.some(holdsUnreadSpans)) shapeMoved += 1;
     } catch (error) {
       unreadable.push({ file, reason: reasonOf(error, file) });
     }
@@ -558,6 +576,7 @@ export const openOtelStore = async (root: string): Promise<OtelStore | undefined
     sessions,
     superseded,
     rejected,
+    shapeMoved,
     unreadable,
     transcript: (session) => {
       const held = lines.get(session.id) ?? [];
