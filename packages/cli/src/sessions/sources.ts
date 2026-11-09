@@ -282,6 +282,7 @@ const otel: Source = {
         ...store.superseded.map((entry) => ({ id: entry.id, folder: null, size: 0, mtimeMs: 0, supersededBy: entry.by })),
       ],
       transcript: (session) => (session.supersededBy === undefined ? store.transcript(need(byId.get(session.id))) : ''),
+      headOnly: (session) => session.supersededBy === undefined && store.headOnly(need(byId.get(session.id))),
       rejected: store.rejected,
       shapeMoved: store.shapeMoved,
       unreadable: store.unreadable,
