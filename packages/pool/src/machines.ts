@@ -133,20 +133,19 @@ const viewOf = (row: unknown, now: number): MachineView => {
   };
 };
 
-/** A live machine as its presented key finds it: what the account sees, the hash the key is held as now, and whether a rotation has happened. */
+/** A live machine as its presented key finds it: what the account sees, the account it belongs to (which the view never names), the hash the key is held as now, and whether a rotation has happened. */
 interface Held {
   view: MachineView;
+  account: string;
   keyHash: string;
   rotated: boolean;
 }
 
-/** The machine a request's bearer is the key of, or the refusal for it. A token a rotation replaced, a token or key past its life, and a revoked machine are each refused by name, so a client can tell a dead credential from one that never was. */
-const heldBy = async (request: Request, env: Env, now: number): Promise<Held | Response> => {
-  const key = bearerOf(request);
-  if (key === undefined) return refuse(401, 'unauthorized', 'Present the machine key as a bearer credential.');
+/** The machine a key is the key of, or the refusal for it; undefined when no machine has it. A token a rotation replaced, a token or key past its life, and a revoked machine are each refused by name, so a client can tell a dead credential from one that never was. */
+const heldByKey = async (env: Env, key: string, now: number): Promise<Held | Response | undefined> => {
   const hash = hashToken(key);
   const row = await env.DB.prepare('SELECT * FROM machines WHERE key_hash = ? OR retired_hash = ?').bind(hash, hash).first();
-  if (row === null) return refuse(401, 'unauthorized', 'No machine has this key.');
+  if (row === null) return undefined;
   if (textField(row, 'retired_hash') === hash) return refuse(401, 'token_retired', 'A rotation replaced this token. Use the key it returned.');
   const state = textField(row, 'state');
   if (state === 'revoked') return refuse(401, 'machine_revoked', 'The account revoked this machine.');
@@ -154,7 +153,43 @@ const heldBy = async (request: Request, env: Env, now: number): Promise<Held | R
   if (expiresAt <= now) {
     return state === 'pending' ? refuse(401, 'token_expired', 'This enrollment token went unused past its life. Enroll the machine again.') : refuse(401, 'machine_expired', 'This machine key has expired. Enroll the machine again.');
   }
-  return { view: viewOf(row, now), keyHash: hash, rotated: fieldOf(row, 'rotated_at') !== null };
+  return { view: viewOf(row, now), account: textField(row, 'account') ?? '', keyHash: hash, rotated: fieldOf(row, 'rotated_at') !== null };
+};
+
+/** The machine a request's bearer is the key of, or the refusal for it. */
+const heldBy = async (request: Request, env: Env, now: number): Promise<Held | Response> => {
+  const key = bearerOf(request);
+  if (key === undefined) return refuse(401, 'unauthorized', 'Present the machine key as a bearer credential.');
+  return (await heldByKey(env, key, now)) ?? refuse(401, 'unauthorized', 'No machine has this key.');
+};
+
+/** A live machine as a deposit stamps it. */
+export interface ActiveMachine {
+  id: string;
+  hostClass: EnrolledHostClass;
+  launcher: Launcher;
+  /** When the key ends, in milliseconds since the epoch. */
+  expiresAt: number;
+}
+
+/** Who a request is: an account, and when the credential is a machine's key, the machine it is the key of. The key acts for its machine's account. */
+export interface Caller {
+  account: string;
+  machine?: ActiveMachine;
+}
+
+/**
+ * The caller of a route that takes either credential: the account's own, or the key of an active machine. Undefined when the bearer is neither (none, or one no account and no machine holds), so the route's own refusal stands. A key that is not live is refused by name, as `heldBy` refuses it, and so is a token not yet activated.
+ */
+export const callerOf = async (request: Request, env: Env, now: number): Promise<Caller | Response | undefined> => {
+  const account = await accountOf(request, env);
+  if (account !== undefined) return { account };
+  const key = bearerOf(request);
+  const held = key === undefined ? undefined : await heldByKey(env, key, now);
+  if (held === undefined || held instanceof Response) return held;
+  if (held.view.state !== 'active') return refuse(409, 'not_activated', 'Activate the token with POST /v1/machines/activate before using it.');
+  const { id, hostClass, launcher, expiresAt } = held.view;
+  return { account: held.account, machine: { id, hostClass, launcher, expiresAt } };
 };
 
 /** What activation answers: the machine, and whether the caller should now trade the key for a fresh one. Only a runtime that can keep the result (any class but `cloud`) is told to, and only until it has. */
