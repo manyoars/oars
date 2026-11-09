@@ -6,12 +6,22 @@ import { dirname, join, resolve } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 import { ACTION_TABLES } from './actions.js';
 import type { CodexInstall } from './codex-hook-install.js';
+import { writeOwnerOnly } from './owner-only.js';
 
 export const RETENTION_FLOOR = 365;
 export const DEFAULT_RETENTION = 30;
 export const TASK_NAME = 'OarsSessionsNightly';
 // The tail of a command this module wrote; anything else in a settings file is the operator's, whatever it is called.
-const OWN_COMMAND = /hook-bin\.js" (?:session-start|prompt|pre-tool|post-tool|stop)$/;
+// The machine command is host-independent: it names no install path, only the `oars-hook` bin on PATH (see `MACHINE_COMMAND`).
+const OWN_COMMAND = /(?:hook-bin\.js" (?:session-start|prompt|pre-tool|post-tool|stop)|oars-hook stop --machine)$/;
+/**
+ * What `--machine` writes for Stop and SessionEnd. A settings file committed from one machine is read on another (a cloud VM, a runner), where the installing machine's node and `hook-bin.js` paths do not exist, so this names no path:
+ * it resolves the `oars-hook` bin on PATH, and exits 0 when there is none (a hook that cannot start must not fail the session).
+ */
+export const MACHINE_COMMAND = 'command -v oars-hook >/dev/null || exit 0; oars-hook stop --machine';
+const MACHINE_EVENTS = ['Stop', 'SessionEnd'] as const;
+// The hook body is a node start and a detach (well under a second); this is the harness's ceiling, not its budget.
+const MACHINE_TIMEOUT = 10;
 
 /** What the install needs from the machine, so a test can stand in for each. */
 export interface InstallRuntime {
@@ -180,6 +190,27 @@ export const installHooks = async (runtime: InstallRuntime, path: string, keepRe
   }
   await writeSettings(path, settings);
   return { file: path, installed: SPECS.map((spec) => spec.event), retention };
+};
+
+/**
+ * `hook install --machine`: the Stop and SessionEnd entries that run `oars-hook stop --machine`, merged with what is there (only entries of ours are replaced). With `env`, the enrollment block goes to this file's `env`
+ * block, merged with the operator's own entries, and the file is made owner-only, because it then holds the salts and the terms. A project file gets no `env`: it is committed.
+ */
+export const installMachineHooks = async (path: string, env: { [name: string]: string } | undefined): Promise<InstallResult> => {
+  const settings = await readSettings(path);
+  const hooks = hooksOf(settings);
+  for (const event of MACHINE_EVENTS) {
+    hooks[event] = [...withoutOwn(groupsOf(hooks, event)), { hooks: [{ type: 'command', command: MACHINE_COMMAND, timeout: MACHINE_TIMEOUT }] }];
+  }
+  settings.hooks = hooks;
+  if (env === undefined) {
+    await writeSettings(path, settings);
+  } else {
+    settings.env = { ...(isObject(settings.env) ? settings.env : {}), ...env };
+    await mkdir(dirname(path), { recursive: true });
+    await writeOwnerOnly(path, `${JSON.stringify(settings, null, 2)}\n`);
+  }
+  return { file: path, installed: [...MACHINE_EVENTS], retention: 'Left cleanupPeriodDays alone: a machine builds its batch at each Stop, not from a stored transcript.' };
 };
 
 export const uninstallHooks = async (path: string): Promise<{ file: string; removed: string[] }> => {
