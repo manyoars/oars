@@ -73,7 +73,7 @@ describe('POST /v1/machines/enroll', () => {
       [{ ...GOOD, launcher: undefined }, 400, 'missing_field', 'launcher'],
       [{ ...GOOD, launcher: 'cron' }, 422, 'closed_vocabulary', 'launcher'],
       [{ ...GOOD, label: undefined }, 400, 'missing_field', 'label'],
-      [{ ...GOOD, label: ' leading space' }, 422, 'invalid_field', 'label'],
+      [{ ...GOOD, label: ' padded with a space' }, 422, 'invalid_field', 'label'],
       [{ ...GOOD, label: 'a'.repeat(65) }, 422, 'invalid_field', 'label'],
       [{ ...GOOD, label: 'drop;table' }, 422, 'invalid_field', 'label'],
       [{ ...GOOD, allowRepos: 'acme/api' }, 422, 'invalid_field', 'allowRepos'],
