@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { http, HttpResponse } from 'msw';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { run, type Outcome } from '../cli.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
 import { derivedSalt } from './machine-ids.js';
@@ -22,7 +22,10 @@ import { cleanup, stage, type Staged } from './test-support.js';
 const SLOW = 60_000;
 
 useServer();
-afterEach(cleanup);
+afterEach(() => {
+  vi.unstubAllEnvs();
+  cleanup();
+});
 
 const MACHINE = '1111111111111111';
 const OTHER_MACHINE = '2222222222222222';
@@ -177,15 +180,17 @@ describe('oars pool hold pull: who may hold', () => {
       join(s.staged.storeDir, 'machines.jsonl'),
       [line(NOT_JSON).slice(0, -1), line(NO_FIELD, { launcher: undefined }), line(NO_OWNER, { allowRepos: ['not-a-repo'] }), line(MACHINE)].map((text) => `${text}\n`).join(''),
     );
-    for (const machine of [NOT_JSON, NO_FIELD, NO_OWNER]) hold(s, REPO, `oars-hold/${machine}/${ID}${machine.slice(0, 1)}`, goodFiles(s, `${ID}${machine.slice(0, 1)}`));
+    // Each id is 16 hex digits, the one shape a branch may name, so the refusal can only be the machine's.
+    const idOf = (machine: string): string => `${machine.slice(0, 1)}${ID.slice(1)}`;
+    for (const machine of [NOT_JSON, NO_FIELD, NO_OWNER]) hold(s, REPO, `oars-hold/${machine}/${idOf(machine)}`, goodFiles(s, idOf(machine)));
     hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, goodFiles(s));
     const out = await pull(s);
     expect(out.document).toMatchObject({
       admitted: [{ id: ID }],
       refused: [
-        { branch: `oars-hold/${NOT_JSON}/${ID}3`, reason: 'unknown_machine' },
-        { branch: `oars-hold/${NO_FIELD}/${ID}4`, reason: 'unknown_machine' },
-        { branch: `oars-hold/${NO_OWNER}/${ID}5`, reason: 'unknown_machine' },
+        { branch: `oars-hold/${NOT_JSON}/${idOf(NOT_JSON)}`, reason: 'unknown_machine' },
+        { branch: `oars-hold/${NO_FIELD}/${idOf(NO_FIELD)}`, reason: 'unknown_machine' },
+        { branch: `oars-hold/${NO_OWNER}/${idOf(NO_OWNER)}`, reason: 'unknown_machine' },
       ],
     });
     expect(filed(s)).toHaveLength(1);
@@ -311,6 +316,8 @@ describe('oars pool hold pull: the terms', () => {
 
 const BATCH = { ...BRANCH_BATCH, id: ID };
 const OFF_LIST = 'a-value-no-vocabulary-holds';
+/** An id the reader accepts (16 hex digits, so the only kind that reaches the comparison with the branch's), unlike ID and OTHER_ID. */
+const OFF_ID = 'deadbeefdeadbeef';
 
 /** The fixture with its second tool's status set to `status`, a value the closed list of statuses either holds or does not (the first tool carries an error code and recovery calls, which the reader refuses beside a status it reads as `other`). */
 const withStatus = (status: string): unknown => ({ ...BATCH, transcripts: BATCH.transcripts.map((transcript, at) => (at === 0 ? { ...transcript, tools: transcript.tools.map((tool, index) => (index === 1 ? { ...tool, status } : tool)) } : transcript)) });
@@ -320,15 +327,27 @@ describe('oars pool hold pull: the branch file is untrusted', () => {
     { what: 'a field outside the batch field list', batch: { ...BATCH, note: OFF_LIST }, reason: 'field_unknown' },
     { what: 'a claimed of its own', batch: { ...BATCH, claimed: { hostClass: 'cloud', launcher: 'ci' } }, reason: 'claimed_present' },
     { what: 'a value off a closed list', batch: withStatus(OFF_LIST), reason: 'off_list' },
-    { what: 'an id unlike its branch', batch: { ...BATCH, id: OTHER_ID }, reason: 'id_mismatch' },
+    { what: 'an id unlike its branch', batch: { ...BATCH, id: OFF_ID }, reason: 'id_mismatch' },
   ])('refuses $what, writes nothing, never repeats the file\'s own text, and leaves the branch', async ({ batch, reason }) => {
     const s = await scene();
     hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, { ...goodFiles(s), 'batch.json': canonicalBytes(batch) });
     const out = await pull(s);
     expect(out.document).toMatchObject({ admitted: [], refused: [{ repo: REPO, branch: `oars-hold/${MACHINE}/${ID}`, reason }] });
-    expect(out.text).not.toContain(OFF_LIST);
+    for (const marker of [OFF_LIST, OFF_ID]) expect(out.text).not.toContain(marker);
     expect(existsSync(s.outbox)).toBe(false);
     expect(branchesOf(s, REPO)).toEqual([`oars-hold/${MACHINE}/${ID}`]);
+  }, SLOW);
+
+  it('refuses a branch whose id is not the 16 hex digits the outbox keys by, though its batch names the same text, and the branch after it is still pulled', async () => {
+    const s = await scene();
+    const NOT_AN_ID = 'not-a-session-id';
+    hold(s, REPO, `oars-hold/${MACHINE}/${NOT_AN_ID}`, goodFiles(s, NOT_AN_ID), 1_700_000_100);
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, goodFiles(s), 1_700_000_000);
+    const out = await pull(s);
+    expect(out.document).toMatchObject({ admitted: [{ id: ID }], refused: [{ branch: `oars-hold/${MACHINE}/${NOT_AN_ID}`, reason: 'branch_name' }] });
+    expect(filed(s)).toHaveLength(1);
+    expect(filed(s)[0]).toMatch(new RegExp(`^${ID}\\.`, 'u'));
+    expect(branchesOf(s, REPO)).toHaveLength(2);
   }, SLOW);
 
   it('refuses a valid file nested too deeply to walk, and the branches after it are still pulled', async () => {
@@ -395,9 +414,17 @@ describe('oars pool hold pull: claimed', () => {
   }, SLOW);
 });
 
+/** Makes every git process this test starts append its trace to a file, and answers the file: it exists only once some git command ran, whatever the command was. */
+const traceGit = (s: Scene): string => {
+  const trace = join(s.staged.root, 'git-trace.log');
+  vi.stubEnv('GIT_TRACE', trace);
+  return trace;
+};
+
 describe('the command', () => {
   it.each(['GH_TOKEN', 'GITHUB_TOKEN'])('runs through the CLI: the repository record is asked for with %s, a repository that is public now is refused, and nothing is fetched', async (name) => {
     const s = await scene();
+    const trace = traceGit(s);
     s.h.deps.env[name] = 'a-test-token';
     const seen: (string | null)[] = [];
     server.use(
@@ -409,8 +436,19 @@ describe('the command', () => {
     const code = await run(['pool', 'hold', 'pull', '--json'], s.h.deps);
     expect(code).toBe(0);
     expect(seen).toEqual(['Bearer a-test-token']);
-    // A fetch of the repository would add a `repo_unreadable` row here, since nothing answers at its real address.
     expect(JSON.parse(s.h.out.join(''))).toEqual({ ok: true, admitted: [], refused: [{ repo: REPO, reason: 'repo_public', detail: 'the repository is public now: its branches were not read' }] });
+    // The command's scratch folder is gone by now, so the proof of no fetch is that no git process ran at all, not even the `git init` that precedes one.
+    expect(existsSync(trace)).toBe(false);
     expect(existsSync(s.outbox)).toBe(false);
+  }, SLOW);
+
+  it('shows the git trace the case above relies on: a pull of a private repository runs git, and the trace file appears', async () => {
+    const s = await scene();
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, goodFiles(s));
+    // After the branch is made: the setup runs git too.
+    const trace = traceGit(s);
+    expect(existsSync(trace)).toBe(false);
+    await pull(s);
+    expect(existsSync(trace)).toBe(true);
   }, SLOW);
 });

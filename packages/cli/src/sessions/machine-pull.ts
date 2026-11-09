@@ -81,7 +81,8 @@ interface Tip {
   scratch: string;
 }
 
-const BRANCH = /^oars-hold\/([^/]+)\/([^/]+)$/u;
+/** The id is the outbox key, which holds only 16 hex digits (`machineIdOf`), so a branch of any other id is refused by its name, before its file is read. */
+const BRANCH = /^oars-hold\/([^/]+)\/([0-9a-f]{16})$/u;
 
 /** The branch tips of `oars-hold/*` in one repository, each commit only: depth 1, so history is never fetched, and no tag. The scratch repository is bare and lives under `parent` until the pull ends. */
 const tipsOf = async (ports: PullPorts, parent: string, repo: string): Promise<Tip[]> => {
@@ -148,7 +149,7 @@ const skeletonOf = async (run: Pulling, tip: Tip, id: string): Promise<SessionSk
     const parsed = parseSkeleton(value);
     if (!parsed.ok) throw new Refused('batch_invalid', `${parsed.field}: ${parsed.reason}`);
     if (parsed.extensions.length > 0) throw new Refused('off_list', `${String(parsed.extensions.length)} value or field off the current lists, at ${parsed.extensions.slice(0, 3).map(({ at }) => at).join(', ')}`);
-    if (parsed.skeleton.id !== id) throw new Refused('id_mismatch', `the batch names ${parsed.skeleton.id}, the branch ${id}`);
+    if (parsed.skeleton.id !== id) throw new Refused('id_mismatch', 'the batch names another id than its branch');
     if (holdsTerm(value, run.list)) throw new Refused('a38_term', 'a string or key of the batch holds a term of the exclusion list of this machine');
     return parsed.skeleton;
   } catch (error) {
