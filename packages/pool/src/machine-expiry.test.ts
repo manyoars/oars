@@ -137,3 +137,32 @@ describe('machineExpiresAt', () => {
     expect(await pool.get('/v1/covenant', spent)).toMatchObject({ status: 401, json: { error: 'token_retired' } });
   });
 });
+
+describe('machineExpiresAt on a pool with no covenant', () => {
+  let closed: TestPool;
+
+  beforeAll(async () => {
+    closed = await startPool({ COVENANT_VERSION: '' });
+  }, 60_000);
+
+  afterAll(async () => {
+    await closed.dispose();
+  });
+
+  it('still tells a live key when it ends, and refuses a dead key by name', async () => {
+    const { token } = await closed.signIn('github', stubUser('4820'));
+    const enroll = async (): Promise<{ key: string; id: string }> => {
+      const answered = await closed.post('/v1/machines/enroll', DECLARED, token);
+      const key = textOf(answered.json, 'token');
+      await closed.post('/v1/machines/activate', {}, key);
+      return { key, id: textOf(fieldOf(answered.json, 'machine'), 'id') };
+    };
+    const live = await enroll();
+    const expiresAt = Number(fieldOf(await (await closed.db()).prepare('SELECT expires_at FROM machines WHERE id = ?').bind(live.id).first(), 'expires_at'));
+    expect(await closed.get('/v1/covenant', live.key)).toEqual({ status: 200, json: { version: null, accepted: false, machineExpiresAt: expiresAt } });
+    expect(await closed.get('/v1/covenant', token)).toEqual({ status: 200, json: { version: null, accepted: false } });
+    const lapsed = await enroll();
+    await (await closed.db()).prepare('UPDATE machines SET expires_at = ? WHERE id = ?').bind(Date.now() - 1000, lapsed.id).run();
+    expect(await closed.get('/v1/covenant', lapsed.key)).toMatchObject({ status: 401, json: { error: 'machine_expired' } });
+  });
+});

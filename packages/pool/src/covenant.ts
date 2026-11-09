@@ -46,12 +46,13 @@ export const screenOf = (version: string, texts: ReadonlyMap<string, string>): S
 /** `GET /v1/covenant`: the version is public, so it answers with no sign-in, and `accepted` is then simply false. The screen rides with it, from a file in this package keyed by version, so a change of text is a pool deploy and never a client release. */
 export const covenantStatus = async (request: Request, env: Env, texts: ReadonlyMap<string, string> = COVENANT_TEXTS): Promise<Response> => {
   const version = bound(env.COVENANT_VERSION);
-  if (version === undefined) return answer(200, { version: null, accepted: false });
-  await servedOf(env, version).run();
-  // A machine's key reads its account's acceptance, and learns when it ends; a key that is not live is refused by name, as at a deposit.
+  // A machine's key reads its account's acceptance, and learns when it ends; a key that is not live is refused by name, as at a deposit, even before a covenant is published.
   const caller = await callerOf(request, env, Date.now());
   if (caller instanceof Response) return caller;
-  return answer(200, { version, accepted: caller !== undefined && (await hasAccepted(env, caller.account, version)), screen: screenOf(version, texts), ...(caller?.machine === undefined ? {} : { machineExpiresAt: caller.machine.expiresAt }) });
+  const expires = caller?.machine === undefined ? {} : { machineExpiresAt: caller.machine.expiresAt };
+  if (version === undefined) return answer(200, { version: null, accepted: false, ...expires });
+  await servedOf(env, version).run();
+  return answer(200, { version, accepted: caller !== undefined && (await hasAccepted(env, caller.account, version)), screen: screenOf(version, texts), ...expires });
 };
 
 /** The longest `input` or `client` an acceptance may state: a name and a version, so a row stays small whatever a caller sends. */
