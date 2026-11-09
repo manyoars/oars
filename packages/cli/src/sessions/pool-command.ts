@@ -12,7 +12,7 @@ import { makeCoverage, readCoverageSetting, writeCoverageSetting } from './cover
 import { checkSession, exclusionPaths, lastWritten, loadTerms, transcriptFilesOf, type Reason } from './exclusion.js';
 import { localNames, makeRedactor, REDACTION_VERSION, redactTranscript } from './redact.js';
 import { recordSend, recordWire, newTally, tallyBatch } from '../telemetry/wire.js';
-import { discardStale, FIELD_ROWS, fieldsOf, heldAcross, lockedAcross, machineKeys, markShown, noteMachineKey, outboxFolder, partsOf, pulledAt, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
+import { discardStale, FIELD_ROWS, fieldsOf, heldAcross, lockedAcross, rescanPulled, machineKeys, markShown, noteMachineKey, outboxFolder, partsOf, pulledAt, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
 import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, unpinnedKid, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
 import { carriedDeltas, heldDeltas, keptDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
@@ -421,6 +421,9 @@ export const postRaw = async (deps: RunDeps, options: { server: string; token: s
 const rawNote = (consent: string | null): string =>
   consent === 'granted' ? '' : consent === 'declined' ? 'You answered no to the raw prompt; oars pool raw --consent yes changes it.' : 'None is queued until you answer the raw prompt with oars pool raw --consent yes.';
 
+/** The exclusion terms in force now, re-read from the term file each time it is asked: empty when the file is missing or unreadable. */
+export const currentTerms = (deps: RunDeps): Promise<string[]> => loadTerms(exclusionPaths(runtimeOf(deps).projectsRoot, deps.env).terms);
+
 /** `deposit --send <hash>`: the send lock the detached sender (hook-bin.js nightly) takes too, then a skip for a hash already in `sent.log`, then the batch lock, then the covenant (accepted here or before, or nothing is sent), then the request. The body is read and hashed again just before the request. */
 const sendBatch = async (deps: RunDeps, options: { outbox: string; server: string; token: string; hash: string; acceptCovenant: string | undefined; via: Sender | undefined }): Promise<Outcome> => {
   const { outbox, server, token, hash } = options;
@@ -435,8 +438,12 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
         await retirePulled(outbox, DEPOSIT);
         return { document: { ok: true, server, hash, sent: false, sentAt }, text: `already sent ${hash} at ${sentAt}` };
       }
+      // A pulled batch is rescanned first: one that holds a term of the file now is removed, and with no terms to check against none is sent.
+      const scan = await rescanPulled(outbox, await currentTerms(deps));
+      if (scan.removed.includes(hash)) throw refuse('term_excluded', 'This batch holds a term of your exclusion list now, so it was removed from the outbox and not sent.');
       const locked = await lockedAcross(outbox, hash);
       if (!locked.ok) throw refuse(locked.code, lockMessages[locked.code]);
+      if (!scan.open && (await heldAcross(outbox)).batches.some((batch) => batch.hash === hash && batch.pulled)) throw refuse('terms_missing', 'This batch was held by a cloud session, and your exclusion term file is missing or empty, so it cannot be checked and was not sent.');
       await openCovenant(deps, server, token, options.acceptCovenant, via);
       const bytes = await unchangedBytes(locked.file, hash);
       if (bytes === undefined) throw refuse('batch_changed', lockMessages.batch_changed);

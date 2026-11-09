@@ -6,9 +6,9 @@ import { join } from 'node:path';
 import type { RunDeps } from '../cli.js';
 import { CliError } from '../errors.js';
 import { machineOf } from './machine.js';
-import { ask, DEPOSIT, isObject, networkSender, poolDeposit, poolServer, postBatch, postRaw, runtimeOf, signedIn, textIn, vocabularyExpired, type Sender } from './pool-command.js';
+import { ask, currentTerms, DEPOSIT, isObject, networkSender, poolDeposit, poolServer, postBatch, postRaw, runtimeOf, signedIn, textIn, vocabularyExpired, type Sender } from './pool-command.js';
 import { rawStale } from './pool-choices.js';
-import { heldAcross, lockedBatch, outboxFolder } from './pool-outbox.js';
+import { heldAcross, lockedBatch, outboxFolder, rescanPulled } from './pool-outbox.js';
 import { heldRaw } from './pool-raw.js';
 import { withSendLock } from './pool-send-lock.js';
 import { markSent, retirePulled, sentHashes } from './pool-sent.js';
@@ -23,6 +23,8 @@ export interface NightlyPool {
   raw: number;
   /** Pulled batches the pool refused for its closed vocabulary or its format this night: each stays in the outbox, unsent, and is asked again the next night. Set only when there were some. */
   refused?: number;
+  /** Pulled batches removed this night because they now hold a term of the exclusion file. Set only when there were some. */
+  removed?: number;
   /** Set when a raw yes was held back because it was given under another covenant than the one in force; `oars pool raw --consent yes` answers for the covenant now in force. The sender prints nothing, so this note is where it shows. */
   rawHeld?: true;
 }
@@ -69,9 +71,12 @@ const night = async (deps: RunDeps, net: Sender, tally: NightlyPool): Promise<Ni
     await poolDeposit(deps, { server, covenant: version });
     const done = await sentHashes(outbox);
     // The current stamp's batches, then those `hold pull` filed under another stamp that outlived a vocabulary or field-list change.
+    // A pulled batch can wait as long as the covenant stays closed, so each pass reads it against the term file as it is now: one that holds a term goes, and with no terms none is sent.
+    const scan = await rescanPulled(outbox, await currentTerms(deps));
+    if (scan.removed.length > 0) tally.removed = scan.removed.length;
     try {
       for (const batch of (await heldAcross(outbox)).batches) {
-        if (done.has(batch.hash)) continue;
+        if (done.has(batch.hash) || (batch.pulled && !scan.open)) continue;
         // Acceptance is the consent, so nothing was printed first; the file is still read and hashed again just before the request.
         const locked = await lockedBatch(outbox, batch.hash, { requireShown: false, stamp: batch.stamp });
         if (!locked.ok) continue;

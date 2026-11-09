@@ -1,6 +1,6 @@
 // The life of a batch `oars pool hold pull` admitted (`pulled.json` in the outbox): it survives every prune and stale pass, is sent by the nightly loop, `--send`, and `oars pool outbox` at its own stamp, stays unsent and reported on a
 // refusal, is rescanned against the current term file on each send pass, and leaves `pulled.json` once its hash is in `sent.log`. The pool is a stand-in that records each request.
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { nightlyPoolSend } from './pool-nightly.js';
@@ -288,5 +288,72 @@ describe('a refused pulled batch is kept, unsent, and reported', () => {
     const night = await nightlyPoolSend(local.deps, (request) => Promise.resolve(request.url.pathname === '/v1/covenant' ? OPEN : refusal));
     expect(night).toMatchObject({ outcome: 'failed' });
     expect(night).not.toHaveProperty('refused');
+  });
+});
+
+describe('each send pass rescans pulled batches against the current term file', () => {
+  it('removes and reports a pulled batch that holds a term added since it was admitted, and sends the next one', async () => {
+    const s = await scene();
+    const held = await admit(s, KEY, OLD, { note: 'the zorblax project' });
+    const next = await admit(s, OTHER_KEY, OLD);
+    const pool = wire(ACCEPTING);
+    const night = await nightlyPoolSend(s.deps, pool.via);
+    expect(night).toMatchObject({ outcome: 'sent', removed: 1 });
+    expect(posted(pool).filter((body) => body.includes(`"id":"${KEY}"`))).toEqual([]);
+    expect(posted(pool).filter((body) => body.includes(`"id":"${OTHER_KEY}"`))).toHaveLength(1);
+    expect(folderOf(s, OLD)).toEqual([`${OTHER_KEY}.${next}.jsonl`]);
+    expect([...(await sentLog(s.outbox)).keys()]).not.toContain(held);
+    expect(pulledJson(s)).toEqual({});
+  });
+
+  it('matches a term in a key as well as a value, in any case', async () => {
+    const s = await scene();
+    await admit(s, KEY, OLD, { Zorblax: 'x' });
+    await admit(s, OTHER_KEY, OLD, { list: ['a', { deep: 'ZORBLAX' }] });
+    const night = await nightlyPoolSend(s.deps, wire(ACCEPTING).via);
+    expect(night).toMatchObject({ removed: 2 });
+    expect(folderOf(s, OLD)).toEqual([]);
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['empty', '\n'],
+  ])('sends none and removes none while the term file is %s', async (_name, text) => {
+    const s = await scene();
+    const kept = await admit(s, KEY, OLD, { note: 'the zorblax project' });
+    const clean = await admit(s, OTHER_KEY, currentStamp());
+    if (text === undefined) rmSync(s.termsFile);
+    else writeFileSync(s.termsFile, text);
+    const pool = wire(ACCEPTING);
+    const night = await nightlyPoolSend(s.deps, pool.via);
+    expect(night.outcome).toBe('sent');
+    expect(night).not.toHaveProperty('removed');
+    expect(posted(pool)).toEqual([]);
+    expect(folderOf(s, OLD)).toEqual([`${KEY}.${kept}.jsonl`]);
+    expect(folderOf(s, currentStamp())).toContain(`${OTHER_KEY}.${clean}.jsonl`);
+    expect(pulledJson(s)).toEqual({ [KEY]: OLD, [OTHER_KEY]: currentStamp() });
+  });
+
+  it('removes the batch `deposit --send` was asked for when it now holds a term, and sends nothing', async () => {
+    const s = await scene();
+    const hash = await admit(s, KEY, OLD, { note: 'the zorblax project' });
+    await poolOutbox(s.deps, { server: POOL });
+    const pool = wire(ACCEPTING);
+    await expect(poolDeposit(s.deps, { server: POOL, send: hash, via: pool.via })).rejects.toThrow(/exclusion list/u);
+    expect(posted(pool)).toEqual([]);
+    expect(folderOf(s, OLD)).toEqual([]);
+    expect(pulledJson(s)).toEqual({});
+  });
+
+  it('sends nothing for a pulled batch by `deposit --send`, and removes nothing, while the term file is missing', async () => {
+    const s = await scene();
+    const hash = await admit(s, KEY, OLD, { note: 'the zorblax project' });
+    await poolOutbox(s.deps, { server: POOL });
+    rmSync(s.termsFile);
+    const pool = wire(ACCEPTING);
+    await expect(poolDeposit(s.deps, { server: POOL, send: hash, via: pool.via })).rejects.toThrow(/exclusion term file is missing/u);
+    expect(posted(pool)).toEqual([]);
+    expect(folderOf(s, OLD)).toEqual([`${KEY}.${hash}.jsonl`]);
+    expect(pulledJson(s)).toEqual({ [KEY]: OLD });
   });
 });

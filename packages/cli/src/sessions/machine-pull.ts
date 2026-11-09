@@ -9,7 +9,7 @@ import { termsDigest } from './machine-hold.js';
 import { readMachines, type MachineRecord, type Visibility } from './machine-enroll.js';
 import { derivedSalt } from './machine-ids.js';
 import { poolServer, runtimeOf } from './pool-command.js';
-import { BATCH_FIELDS, STAMP_FOLDER, currentStamp, fieldsOf, outboxFolder, readPulled, removeBatchOf, writeBatch, writePulled, type Pulled } from './pool-outbox.js';
+import { BATCH_FIELDS, STAMP_FOLDER, currentStamp, fieldsOf, holdsTerm, outboxFolder, readPulled, removeBatchOf, writeBatch, writePulled, type Pulled } from './pool-outbox.js';
 import { CLAIMED_HOST_CLASSES, CLAIMED_LAUNCHERS, parseSkeleton, type SessionSkeleton } from './pool-wire.js';
 import { localSalt } from './store.js';
 import type { Git } from './survival.js';
@@ -117,17 +117,6 @@ interface Pulling {
   /** `pulled.json` as it stands: each admitted `id` and the stamp folder it is filed under. */
   pulled: Pulled;
 }
-
-/** Whether any string or key in `value` holds one of `terms`, compared lowercased the way the local gate compares a transcript. */
-const holdsTerm = (value: unknown, terms: readonly string[]): boolean => {
-  if (typeof value === 'string') {
-    const lower = value.toLowerCase();
-    return terms.some((term) => lower.includes(term));
-  }
-  if (Array.isArray(value)) return value.some((entry) => holdsTerm(entry, terms));
-  if (typeof value === 'object' && value !== null) return Object.entries(value).some(([key, entry]) => holdsTerm(key, terms) || holdsTerm(entry, terms));
-  return false;
-};
 
 /** The batch file of a tip as the skeleton the pool's own reader makes of it; throws `Refused` for anything that reader, or the branch's own name, would not take. */
 const skeletonOf = async (run: Pulling, tip: Tip, id: string): Promise<SessionSkeleton> => {

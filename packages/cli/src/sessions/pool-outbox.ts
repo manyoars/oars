@@ -407,6 +407,37 @@ export const writePulled = async (outbox: string, pulled: Pulled): Promise<void>
 
 const POOL_STEP = 'pool-outbox';
 
+/** Whether any string or key in `value` holds one of `terms`, compared lowercased the way the local gate compares a transcript. */
+export const holdsTerm = (value: unknown, terms: readonly string[]): boolean => {
+  if (typeof value === 'string') {
+    const lower = value.toLowerCase();
+    return terms.some((term) => lower.includes(term));
+  }
+  if (Array.isArray(value)) return value.some((entry) => holdsTerm(entry, terms));
+  if (typeof value === 'object' && value !== null) return Object.entries(value).some(([key, entry]) => holdsTerm(key, terms) || holdsTerm(entry, terms));
+  return false;
+};
+
+/**
+ * The exclusion rescan of a send pass: every pulled batch is read against the trusted machine's current term file, and one that now holds a term is removed, with its `pulled.json` entry, and its hash returned. A batch can wait as long as the covenant
+ * stays closed, so the terms it was admitted under may not be the terms now. With no terms (a missing or empty file) nothing can be checked: `open` is false, nothing is removed, and the caller sends no pulled batch.
+ */
+export const rescanPulled = async (outbox: string, terms: readonly string[]): Promise<{ open: boolean; removed: string[] }> => {
+  if (terms.length === 0) return { open: false, removed: [] };
+  const pulled = await readPulled(outbox, POOL_STEP);
+  const removed: string[] = [];
+  for (const [id, stamp] of Object.entries(pulled)) {
+    const held = STAMP_FOLDER.test(stamp) ? await heldBatchOf(outbox, id, stamp) : undefined;
+    // The file is canonical JSON this client wrote, and its bytes just hashed to its name.
+    if (held === undefined || !holdsTerm(JSON.parse(held.bytes), terms)) continue;
+    await rm(held.file, { force: true });
+    Reflect.deleteProperty(pulled, id);
+    removed.push(held.hash);
+  }
+  if (removed.length > 0) await writePulled(outbox, pulled);
+  return { open: true, removed };
+};
+
 /** The keys `pulled.json` lists at this stamp: the batches of that folder that no local build made and no stale pass may touch. */
 export const pulledAt = async (outbox: string, stamp: string = currentStamp()): Promise<Set<string>> =>
   new Set(Object.entries(await readPulled(outbox, POOL_STEP)).filter(([, at]) => at === stamp).map(([id]) => id));
