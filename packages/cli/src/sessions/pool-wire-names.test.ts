@@ -104,6 +104,13 @@ describe('what is dropped from the names', () => {
     expect(bytesOf(skeleton)).not.toContain('AKIAABCDEFGHIJKLMNOP');
   });
 
+  it('sends a folder really named private as a name: the sentinel is not a refusal', () => {
+    const skeleton = skeletonOfLines({ redact, terms: [] }, call('a', 'Read', { file_path: '/w/src/private/plan.md' }));
+    const [only] = toolsOf(skeleton);
+    expect(only?.names).toEqual([...names('file', 'plan.md'), ...names('dir', 'private', 'src')]);
+    expect(only).not.toHaveProperty('namesDropped');
+  });
+
   it('sends no folder above the session root: the home folder is the operating system account name', () => {
     const skeleton = skeletonOfLines({ redact, terms: [] }, call('a', 'Read', { file_path: '/home/jsmith-acct/notes/plan.md' }), call('b', 'Read', { file_path: 'C:\\Users\\jsmith-acct\\notes\\plan.md' }), call('c', 'Read', { file_path: '/w/src/ledger.ts' }));
     const [outside, windows, inside] = toolsOf(skeleton);

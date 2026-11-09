@@ -364,14 +364,17 @@ export const OPEN_GATE: WireGate = { redact: (text) => text, terms: [] };
 /** The redactor leaves the name and each of its underscore-delimited parts as they are: `_` is a word character to it, so a host inside `mcp__git.acme.internal__run` is invisible to a pass over the whole name. */
 const unchanged = (gate: WireGate, name: string): boolean => gate.redact(name) === name && name.split(/_+/).every((part) => gate.redact(part) === part);
 
+/** Whether a name clears the one gate: it has the name shape, the redactor leaves it as it is, and it holds none of the exclusion terms. A name token that is really the word `private` passes; only this says a name was refused. */
+const passesGate = (gate: WireGate, name: string, hasShape: (name: string) => boolean): boolean => {
+  const lower = name.toLowerCase();
+  return hasShape(name) && unchanged(gate, name) && !gate.terms.some((term) => term !== '' && lower.includes(term.toLowerCase()));
+};
+
 /**
  * A name as the wire holds it: the value itself, or `private` when it counts as redacted. A value counts as redacted when the redactor changes it, it holds an exclusion term, it fails the name shape, or it is over
  * `NAME_MAX` characters, because a secret, an employer's name, or a mis-parsed command is not a name and nothing downstream can take it back. `keys` (t870) sends its names through this same function.
  */
-export const wireName = (gate: WireGate, name: string, hasShape: (name: string) => boolean = isWireName): string => {
-  const lower = name.toLowerCase();
-  return hasShape(name) && unchanged(gate, name) && !gate.terms.some((term) => term !== '' && lower.includes(term.toLowerCase())) ? name : PRIVATE;
-};
+export const wireName = (gate: WireGate, name: string, hasShape: (name: string) => boolean = isWireName): string => (passesGate(gate, name, hasShape) ? name : PRIVATE);
 
 const FLAG_DASHES = /^-{1,2}/;
 const SHORT_FLAG = /^-[A-Za-z]$/;
@@ -434,7 +437,7 @@ export const wireChange = (stored: readonly ChangeKind[] | undefined): ChangeKin
  */
 export const wireNames = (stored: readonly ArgName[] | undefined, gate: WireGate): { names: ArgName[]; dropped: number } => {
   const known = (stored ?? []).filter(({ kind }) => NAME_KINDS.includes(kind));
-  const names = known.filter(({ name }) => wireName(gate, name) !== PRIVATE);
+  const names = known.filter(({ name }) => passesGate(gate, name, isWireName));
   return { names, dropped: known.length - names.length };
 };
 
