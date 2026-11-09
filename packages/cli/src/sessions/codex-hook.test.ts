@@ -78,6 +78,25 @@ describe('one row per event, from the recorded schema fixture', () => {
   });
 });
 
+describe('the names a hook payload carries', () => {
+  it('reads a Bash call as a shell call and keeps the name Bash', async () => {
+    const store = stageHook();
+    await run(store, payloadOf('PostToolUse', { tool_name: 'Bash' }));
+    expect(store.rows()[0]).toMatchObject({ action: 'shell.exec', tool: 'Bash', degraded: false });
+  });
+
+  it('reads an apply_patch call as a file edit', async () => {
+    const store = stageHook();
+    await run(store, payloadOf('PostToolUse', { tool_name: 'apply_patch' }));
+    expect(store.rows()[0]).toMatchObject({ action: 'file.edit', tool: 'apply_patch' });
+  });
+
+  it('stores a model named by a path as other, and an org/model name plain', () => {
+    const models = ['/models/private.gguf', 'C:/models/x.gguf', '~/m.gguf', './m.gguf', 'a/b/c', 'org/model'];
+    expect(models.map((model) => hookRowOf(payloadOf('PostModelRequest', { model }), 'at')?.model)).toEqual(['other', 'other', 'other', 'other', 'other', 'org/model']);
+  });
+});
+
 describe('what a row never holds', () => {
   it('holds no prompt, command, output, or path, whatever the payload carries', async () => {
     const store = stageHook();
@@ -133,12 +152,19 @@ describe('the error flag', () => {
   it('is unknown unless the response carries an exit line', () => {
     expect(errorFlagOf('Exit code: 0\nOutput:\nok')).toBe('no');
     expect(errorFlagOf('Exit code: 3\nOutput:\nboom')).toBe('yes');
-    expect(errorFlagOf('Process exited with code 1')).toBe('yes');
-    expect(errorFlagOf('exit code -1')).toBe('yes');
+    expect(errorFlagOf('Process exited with code 1\nOutput:\n')).toBe('yes');
+    expect(errorFlagOf('exit code -1\nOutput:\n')).toBe('yes');
     expect(errorFlagOf('Wall time 1 seconds\nOutput:\nthe exit code 3 was expected')).toBe('unknown');
     expect(errorFlagOf('no header here')).toBe('unknown');
+    expect(errorFlagOf('Process exited with code 1')).toBe('unknown');
     expect(errorFlagOf({ exit_code: 1 })).toBe('unknown');
     expect(errorFlagOf(undefined)).toBe('unknown');
+  });
+
+  it('reads only the header before the first Output: line, so a line the command printed decides nothing', () => {
+    expect(errorFlagOf('ok\nExit code: 0')).toBe('unknown');
+    expect(errorFlagOf('Wall time 1\nOutput:\nExit code: 1')).toBe('unknown');
+    expect(errorFlagOf('Exit code: 1\nOutput:\nExit code: 0')).toBe('yes');
   });
 
   it('records the kind of a response that is not a string', () => {

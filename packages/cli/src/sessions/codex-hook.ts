@@ -14,6 +14,9 @@ import { makeRepoRoot } from './repo-root.js';
 import { errorLine, tryLog } from './steps.js';
 import { paths } from './store.js';
 
+// The names the hook payload gives a tool that the rollout's table (`ACTION_TABLES.codex`) does not list: the hook contract says `Bash` and `apply_patch` carry `tool_input.command`.
+const HOOK_TOOLS = new Map<string, CanonicalAction>([['Bash', 'shell.exec']]);
+
 /** The events the installed entry registers, as Codex names them. */
 export const CODEX_HOOK_EVENTS = ['SessionStart', 'PostToolUse', 'PostModelRequest'] as const;
 
@@ -66,20 +69,27 @@ const str = (value: unknown): string | null => (typeof value === 'string' && val
 const count = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null);
 
 const MODEL_NAME = /^[A-Za-z0-9._:/-]{1,64}$/;
+// A model configured by path (`/models/x.gguf`, `./x`, `~/x`, `C:/x`, `a/b/c`) names a place on the machine, which no row may hold.
+const PATH_SHAPED = /^(?:[/.~]|[A-Za-z]:)|\/.*\//;
 
-/** A model name as a closed shape: the name when it is plain, else `other`. */
+/** A model name as a closed shape: the name when it is plain, else `other`. An `org/model` name is plain; a path is not. */
 const modelOf = (value: unknown): string | null => {
   const name = str(value);
-  return name === null ? null : MODEL_NAME.test(name) ? name : 'other';
+  return name === null ? null : MODEL_NAME.test(name) && !PATH_SHAPED.test(name) ? name : 'other';
 };
 
 // The three spellings Codex gives a finished command's outcome (`Exit code: N`, `Process exited with code N`, `exit code N`), at the start of a line.
 const EXIT_LINE = /^[ \t]*(?:exit code:?[ \t]*|process exited with code[ \t]+)(-?\d+)[ \t]*$/im;
 
-/** `unknown` unless the response text carries an exit line: nothing else in the payload says whether a call failed. */
+// The line a command's output begins after: the header above it is Codex's, the text below is whatever the command printed.
+const OUTPUT_MARK = /(?:^|\n)Output:\n?/;
+
+/** `unknown` unless the header Codex writes before the `Output:` line carries an exit line: the command's own text decides nothing, and a response with no such header says nothing. */
 export const errorFlagOf = (response: unknown): ErrorFlag => {
   if (typeof response !== 'string') return 'unknown';
-  const code = EXIT_LINE.exec(response)?.[1];
+  const mark = OUTPUT_MARK.exec(response);
+  if (mark === null) return 'unknown';
+  const code = EXIT_LINE.exec(response.slice(0, mark.index))?.[1];
   return code === undefined ? 'unknown' : Number(code) === 0 ? 'no' : 'yes';
 };
 
@@ -125,7 +135,8 @@ const blank = (kind: HookRow['kind'], at: string, payload: Obj): HookRow => ({
 const toolRow = (at: string, payload: Obj): HookRow => {
   const row = blank('tool', at, payload);
   const name = str(payload.tool_name);
-  const found = name === null ? undefined : actionOf(ACTION_TABLES.codex, name);
+  const aliased = name === null ? undefined : HOOK_TOOLS.get(name);
+  const found = name === null ? undefined : aliased === undefined ? actionOf(ACTION_TABLES.codex, name) : { action: aliased, native: name };
   row.toolUseId = str(payload.tool_use_id);
   row.action = found?.action ?? null;
   row.tool = found?.native ?? null;
