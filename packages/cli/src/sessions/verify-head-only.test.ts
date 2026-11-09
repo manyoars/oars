@@ -127,3 +127,77 @@ describe('sessionsVerify, a head-only file is not unreadable', () => {
     expect((await verify(staged, { 'vscode-copilot': home }))['vscode-copilot']).toEqual({ seen: 2, yielded: 1, unreadable: 1 });
   });
 });
+
+// Fix round 2 (Item 9): the head kinds each reader's own format defines and reads as carrying no turn.
+describe('the readers name every head kind their format defines', () => {
+  it('Codex: injected context, token_count, and turn_aborted are head; an unknown payload type is not', () => {
+    const rec = (type: string, payload: object): string => JSON.stringify({ type, payload });
+    const meta = rec('session_meta', {});
+    expect(rolloutHeadOnly(`${meta}\n${rec('response_item', { type: 'message', role: 'user' })}\n`)).toBe(true);
+    expect(rolloutHeadOnly(`${meta}\n${rec('event_msg', { type: 'token_count' })}\n${rec('event_msg', { type: 'turn_aborted' })}\n`)).toBe(true);
+    expect(rolloutHeadOnly(`${meta}\n${rec('event_msg', { type: 'mystery' })}\n`)).toBe(false);
+    expect(rolloutHeadOnly(`${meta}\n${rec('response_item', { type: 'mystery' })}\n`)).toBe(false);
+    expect(rolloutHeadOnly(`${meta}\n${rec('event_msg', {})}\n`)).toBe(false);
+  });
+  it('Copilot: the journal link, usage checkpoint, error, and abort records are head', () => {
+    const rec = (type: string): string => JSON.stringify({ type, data: {} });
+    for (const type of ['session.journal_link', 'session.usage_checkpoint', 'session.error', 'abort']) expect(eventHeadOnly(`${rec('session.start')}\n${rec(type)}\n`)).toBe(true);
+    expect(eventHeadOnly(`${rec('session.start')}\n${rec('session.mystery')}\n`)).toBe(false);
+  });
+  it('Pi: the ten non-turn entry kinds are head beside the header', () => {
+    const rec = (type: string): string => JSON.stringify({ type });
+    for (const type of ['model_change', 'thinking_level_change', 'usage', 'compaction', 'branch_summary', 'custom', 'custom_message', 'context_edit', 'label', 'session_info']) expect(piHeadOnly(`${rec('session')}\n${rec(type)}\n`)).toBe(true);
+    expect(piHeadOnly(`${rec('session')}\n${rec('mystery')}\n`)).toBe(false);
+  });
+});
+
+describe('sessionsVerify, more head-only forms are empty', () => {
+  it('Claude Code: permission-mode, attachment, and system with a snapshot are empty; an unknown kind beside them is unreadable', async () => {
+    const staged = stage();
+    rmSync(join(staged.projectsRoot, 'proj'), { recursive: true });
+    addProject(staged, 'p', 'good', [JSON.stringify({ type: 'user', uuid: 'u', timestamp: T(0), message: { role: 'user', content: 'hi' } })]);
+    addProject(staged, 'p', 'mode', [JSON.stringify({ type: 'permission-mode', permissionMode: 'default' }), JSON.stringify({ type: 'file-history-snapshot', messageId: 'm', snapshot: {}, isSnapshotUpdate: false })]);
+    addProject(staged, 'p', 'attach', [JSON.stringify({ type: 'attachment', attachment: { type: 'hook_success' } })]);
+    addProject(staged, 'p', 'system', [JSON.stringify({ type: 'system', subtype: 'informational', content: 'x' })]);
+    addProject(staged, 'p', 'moved', [JSON.stringify({ type: 'permission-mode', permissionMode: 'default' }), JSON.stringify(MOVED[0])]);
+    expect((await verify(staged, {}))['claude-code']).toEqual({ seen: 2, yielded: 1, unreadable: 1 });
+  });
+
+  it('Codex: injected context and token_count after the head are empty; an unknown payload is unreadable', async () => {
+    const staged = stage();
+    rmSync(join(staged.projectsRoot, 'proj'), { recursive: true });
+    mkdirSync(staged.projectsRoot, { recursive: true });
+    const meta = (id: string): unknown => rolloutLine(T(0), 'session_meta', { session_id: id, id, timestamp: T(0), cwd: WORK, originator: 'codex_cli_rs', cli_version: '0.50.0' });
+    const home = stageCodex(staged.root, [
+      { id: A, lines: [meta(A), rolloutLine(T(2), 'event_msg', { type: 'user_message', message: 'fix the build' })] },
+      { id: B, lines: [meta(B), rolloutLine(T(1), 'response_item', { type: 'message', role: 'user', content: [] }), rolloutLine(T(2), 'event_msg', { type: 'token_count', info: null }), rolloutLine(T(3), 'event_msg', { type: 'turn_aborted', reason: 'replaced' })] },
+      { id: C, lines: [meta(C), rolloutLine(T(1), 'event_msg', { type: 'mystery' })] },
+    ]);
+    expect((await verify(staged, { codex: home })).codex).toEqual({ seen: 2, yielded: 1, unreadable: 1 });
+  });
+
+  it('Copilot: session.start then session.error is empty; an unknown record is unreadable', async () => {
+    const staged = stage();
+    rmSync(join(staged.projectsRoot, 'proj'), { recursive: true });
+    mkdirSync(staged.projectsRoot, { recursive: true });
+    const start = (id: string): unknown => copilotEvent(T(0), 'session.start', { sessionId: id, copilotVersion: '1.0.105', producer: 'copilot-agent', selectedModel: 'm', startTime: T(0), version: 1, context: { cwd: WORK } });
+    const home = stageCopilot(staged.root, [
+      { id: A, lines: [start(A), copilotEvent(T(1), 'user.message', { content: 'fix the build' })] },
+      { id: B, lines: [start(B), copilotEvent(T(1), 'session.error', { message: 'boom' })] },
+      { id: C, lines: [start(C), copilotEvent(T(1), 'session.mystery', {})] },
+    ]);
+    expect((await verify(staged, { copilot: home })).copilot).toEqual({ seen: 2, yielded: 1, unreadable: 1 });
+  });
+
+  it('Pi: a header plus model_change is empty; a header plus an unknown entry is unreadable', async () => {
+    const staged = stage();
+    rmSync(join(staged.projectsRoot, 'proj'), { recursive: true });
+    mkdirSync(staged.projectsRoot, { recursive: true });
+    const home = stagePi(staged.root, [
+      { id: A, cwd: WORK, lines: [piHeader({ id: A, cwd: WORK }), piEntry('message', 'e1', null, T(1), { message: { role: 'user', content: 'fix the build', timestamp: OTLP_BASE } })] },
+      { id: B, cwd: WORK, lines: [piHeader({ id: B, cwd: WORK }), piEntry('model_change', 'e1', null, T(1), { provider: 'x', modelId: 'm' })] },
+      { id: C, cwd: WORK, lines: [piHeader({ id: C, cwd: WORK }), piEntry('mystery', 'e1', null, T(1))] },
+    ]);
+    expect((await verify(staged, { pi: join(home, 'sessions') })).pi).toEqual({ seen: 2, yielded: 1, unreadable: 1 });
+  });
+});
