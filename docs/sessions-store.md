@@ -22,6 +22,8 @@ Under `<config>/oars/sessions/` (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `
 | `recalls.jsonl` | One row per recall, pull or push, shown or held, hit or miss. Append-only, written when the recall happens. `sid`, `at`, and `query.text` are class A; the rest is class P. See "Recalls". |
 | `consequences.jsonl` | What each recall led to, by recall ID. Computed from `recalls.jsonl` and the log, rewritten by `oars sessions read` and by every whole-store deposit, and safe to delete. A pull neither reads nor writes it, except on a store with no stored pool. |
 | `reads/<pool>.jsonl` | One pool version's reads, written once and never rewritten, so a read cited by its ID stays what it was. |
+| `candidates.jsonl` | One snapshot per session start, written by the `SessionStart` hook (below): counts of what could have loaded, by closed kind. Append-only, class A, local only: it never reaches a pool batch. |
+| `load-status.jsonl` | One row per session: the snapshot joined with the files the transcript shows loaded, as a label per kind. Computed from the snapshot and the log, rewritten by every whole-store deposit, and safe to delete. Local only. |
 | `pool-outbox/<hash of server>/v<vocab>-<fields and format>/<key>.<sha256>.jsonl`, `pool-outbox/<hash of server>/shown.log`, `pool-outbox/<hash of server>/deltas-sent.log`, `pool-outbox/<hash of server>/sent.log`, `pool-outbox/<hash of server>/send.lock`, `pool-outbox/<hash of server>/raw-r<n>-c<n>/<key>.<place>.<sha256>.redacted` | Batches `oars pool deposit` built, one per session, as canonical JSON: sorted keys, no optional whitespace, UTF-8, and named for the SHA-256 of exactly those bytes. `shown.log` records which hashes `oars pool outbox` printed, and when. `deltas-sent.log` is the once-only mark of the local deltas a batch carried, one 16-hex hash a line (the account, the entry without its `change`, and the index of its after window on a fixed grid from the epoch), appended only after the batch that carries the delta is written. `deltas-sent.log` is class A and never leaves the machine. `shown.log` gates only `deposit --send`: that sends a batch only if its hash is in `shown.log` and the file still hashes to its name. The detached sender has no shown check; after covenant acceptance it sends any unchanged batch of the current stamp (the file still hashes to its name). A folder from another vocabulary version, field list, or skeleton format is stale: it is never printed or sent, `pool deposit` removes it, and `oars sessions verify` reports the count (`staleBatches`). `sent.log` records the hashes sent (by the detached sender or `--send`), which `oars pool outbox` shows as `sent: <time>` and `oars sessions verify` counts (`sentBatches`, `sentRaw`). `send.lock` is the one-sender lock the detached sender and `--send` share: a run that holds it touches it every two and a half minutes while it sends, a run that finds it waits, and one older than ten minutes untouched is taken over by one waiter at a time, under a `send.lock.takeover` guard file that re-reads the lock first, so a live lock is never moved or removed (a guard a dead taker left is cleared after ten minutes). `raw-r<n>-c<n>/` holds the redacted raw copies built under redaction version `n` and capture version `n` (one per transcript, named for the session key, the place, and the SHA-256 of the copy); a folder of another version is never sent. `verify` also reports `rawCopies` (how many copies are queued) and `rawMasked` (the placeholders in them, a count of `<secret>`, `<email>`, `<host>`, `<user>`, `<env>`, and `<org-domain>` strings, which includes any a transcript already held as literal text). Class `L`: nothing here leaves the machine until a send, which the detached sender makes only after you accepted the pool's covenant (and, for a raw copy, said yes to the raw prompt), or `oars pool deposit --send` makes after the same acceptance; telemetry events never come from this folder. See `docs/pool.md`. |
 | `pool-nightly.json` | The last pool send: when it ran, its outcome (`sent`, `not-accepted`, `not-signed-in`, `no-server`, and the like), and the counts it sent. Written at the store root by the detached sender, not in an outbox; `oars sessions verify` does not read it. Class `L`. |
 | `raw/<project>/<path>` | oars' own archive of every deposited transcript (below). |
@@ -468,6 +470,49 @@ projected; the value is stored as read (an `unattendedRun` to two decimals). The
 
 A subagent transcript has no `unattendedRun`: its run is its parent's. `unattendedRun` ends at the agent's last line, so a reply the next morning is not an overnight
 run. A wait on a permission prompt the operator approved counts toward the run: this reader sees no approval time, only the result's. A rejection ends the run at the agent's last line before it, and the agent's work after a rejection is not counted until the next human turn. The last turn of a file runs to the file's last line. A resume's replayed human line is one turn, and a line of a sidechain is not read. A compaction summary is the agent working, not a human turn. Tool names are stored as `tools` stores them (`storedToolName`: an MCP name's server part redacted).
+
+## What a session could have loaded
+
+A transcript holds the files the harness loaded, never the files that existed, and a working folder is often gone by the time anyone asks, so a later read cannot tell a file the
+harness missed from a file that was never there. The `SessionStart` hook that `oars sessions hook install` already registers therefore writes one snapshot to
+`candidates.jsonl` when a session starts. It is fail-open: any error writes nothing and the hook exits 0. Counts per closed kind only: no path, file name, skill name, or file
+content is stored.
+
+| Field | Meaning |
+|-------|---------|
+| `v`, `session`, `at`, `harness` | the record version, the session id, the start time, and the harness (Claude Code only; oars installs no Codex hook) |
+| `instructions.working` | `CLAUDE.md` files in the working folder |
+| `instructions.parent` | in a parent folder, up to and including the repository root |
+| `instructions.above` | in a folder above the repository root |
+| `instructions.mainCheckout` | for a linked worktree nested inside its main checkout, in the folders between the worktree and that checkout (a span the harnesses treat apart, below) |
+| `instructions.user` | at the user level (`~/.claude`) |
+| `skills.project`, `skills.user` | skill folders (a `SKILL.md` inside) under `.claude/skills` in the user's config folder (`user`) and in the working folder and its parents inside the repository (`project`) |
+| `hooks` | configured hook events, a count per event name from the harness's closed list; a name not on it counts as `other` |
+| `repoLevels`, `mainLevels` | how many folders up the repository root and the main checkout sit (`null` when there is none), so a loaded file's level can be placed in a position when the status is derived |
+
+`load-status.jsonl` is a versioned derivation (`v`, now 1) and is recomputed from the snapshot and the loaded set the transcript logs, so a change to the rule needs no new capture.
+Each kind gets one label:
+
+| Label | Meaning |
+|-------|---------|
+| `loaded` | the transcript shows a file loaded from that position, whatever the snapshot counted |
+| `miss` | a file existed there, the rule loads files from that position, and the transcript shows none |
+| `absent` | no file the rule would load existed there; a file the harness skips by design counts as absent too |
+| `unknown` | it cannot be decided: a session with no snapshot (never `absent`), a harness with no measured rule, a position the rule could not be measured at, and any skill or hook count above zero, since no rule for those is measured |
+
+The rule is measured, not read from a harness's documentation: a live session per case on a temporary tree, reading only that session's own log (Claude Code 2.1.319, Codex 0.167.0).
+
+| Case | Claude Code | Codex |
+|------|-------------|-------|
+| file in the working folder | loaded | loaded |
+| file in a parent folder inside the repository | loaded | loaded |
+| file above the repository root | loaded | not loaded |
+| file in the main checkout's root, session in a linked worktree nested in it | not loaded | not loaded |
+| user level only | loaded | not measured |
+
+A linked worktree under `<repo>/.claude/worktrees/` is the common shape for parallel agent sessions. The harnesses read the worktree's own copy of a tracked file and skip the main
+checkout's, so an instruction file at the main checkout's root is by design not loaded there. A file above the main checkout does load for Claude Code. Neither the snapshot nor
+the status leaves the machine.
 
 ## Motifs, cells, and reads
 
