@@ -16,7 +16,7 @@ import { managerReader } from './gate/registry.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
 import { sessionsTry } from './sessions/try.js';
 import { githubVisibility, poolEnroll } from './sessions/machine-enroll.js';
-import { poolCoverage, poolDeposit, poolFetch, poolLogin, poolLogout, poolOutbox, poolRaw } from './sessions/pool-command.js';
+import { poolCoverage, poolDeposit, poolExport, poolFetch, poolLogin, poolLogout, poolOutbox, poolRaw } from './sessions/pool-command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 import { telemetryOff, telemetryOn, telemetryReport, telemetryShow, telemetryStatus } from './telemetry/command.js';
@@ -591,6 +591,17 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       emit(deps, flag(options, 'json'), await poolOutbox(deps, { server: text(options, 'server'), explain: flag(options, 'explain') }));
+    });
+
+  pool
+    .command('export')
+    .description('save a copy of what the pool holds about your account to a folder, as JSON, one file a page, and write nothing to the pool; with --raw also save your own raw transcripts that still stand (GDPR Articles 15 and 20)')
+    .requiredOption('--out <folder>', 'the folder to save the export in; its files are owner-only, and a rerun overwrites the same ones')
+    .option('--raw', 'also fetch each raw transcript you deposited that has not been erased, into <folder>/raw')
+    .option(serverOption, serverHelp)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await poolExport(deps, { server: text(options, 'server'), out: text(options, 'out') ?? '', raw: flag(options, 'raw') }));
     });
 
   pool
