@@ -482,7 +482,7 @@ export const poolDeposit = async (
   const expired = vocabularyExpired(deps);
   if (expired !== undefined) throw expired;
   // Accepting the covenant is a step of sending a batch: alone it would exit 0 as though something had been sent under it.
-  if (options.send === undefined && options.acceptCovenant !== undefined) throw usage('--accept-covenant belongs to --send: it is accepted as a step of sending a batch. Nothing was accepted.', DEPOSIT);
+  if (options.send === undefined && options.acceptCovenant !== undefined) throw usage('--accept-covenant belongs to --send: it names the covenant version expected when a person accepts before a send. Nothing was accepted.', DEPOSIT);
   const outbox = outboxFolder(runtime.storeDir, server);
   await mkdirOwnerOnly(outbox);
   if (options.send !== undefined) return sendBatch(deps, { outbox, server, token, hash: options.send, acceptCovenant: options.acceptCovenant, via: options.via });
