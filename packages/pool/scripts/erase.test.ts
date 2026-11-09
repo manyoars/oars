@@ -16,7 +16,7 @@ afterAll(async () => {
   await pool.dispose();
 });
 
-const grant = { 'oars-redaction-version': '1', 'oars-capture-version': 'cap-1', 'oars-raw-consent': 'granted' };
+const grant = { 'oars-redaction-version': '1', 'oars-capture-version': 'cap-1', 'oars-raw-consent': 'granted', 'oars-raw-consent-version': 'v1' };
 const NOW = new Date('2026-11-08T12:00:00Z');
 
 /** An invented key shaped like a cloud access key: the value a redactor missed. */
