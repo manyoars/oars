@@ -1,10 +1,14 @@
 // `npm run erase -w packages/pool -- <what> ...`: the operator's erasure command (docs/pool.md, "Erasure"). It changes nothing until `--confirm` is given; without it, it says what it would do.
-import { depositExists, eraseAccount, eraseLeakedSecret, eraseRawObject, type Erased, type EraseStore } from './erase.js';
-import { wranglerStore, type Target, type Wrangler } from './erase-wrangler.js';
+import { depositExists, eraseAccount, eraseLeakedSecret, eraseRawObject, findRawContaining, type Erased, type EraseStore } from './erase.js';
+import { wranglerStore, type ObjectFiles, type Target, type Wrangler } from './erase-wrangler.js';
+
+export { nodeFiles } from './erase-files.js';
 
 export const USAGE = [
   'Usage: erase <what> [options]',
   '  raw <r2-key>                        delete one raw object (raw/<account>/<sha256>), tombstone it, and mark its ledger row',
+  '  raw --contains --value-stdin        find the raw objects that hold a text (a person named in a deposit), read from stdin: it prints each object\'s key, account, and size and deletes nothing;',
+  '        (--account <id> | --all-accounts)   exactly one; the keys it prints go to `raw <r2-key>`',
   '  row --account <id> --id <session>   replace a deposit row that holds a leaked secret with a marker and tombstone it',
   '        [--value-stdin]               also read the leaked value from stdin: scrub it from aggregates, erase every row that holds it,',
   '                                      and make ingest refuse it again (only its SHA-256 is kept)',
@@ -18,6 +22,8 @@ export interface Io {
   stdin: () => Promise<string>;
   print: (text: string) => void;
   wrangler: Wrangler;
+  /** Where the find writes an object to read it (`erase-files.ts`). */
+  files: ObjectFiles;
   now: () => Date;
 }
 
@@ -28,17 +34,21 @@ interface Options {
   account?: string;
   id?: string;
   valueStdin: boolean;
+  contains: boolean;
+  allAccounts: boolean;
   confirm: boolean;
   local: boolean;
 }
 
 const optionsOf = (argv: readonly string[]): Options | string => {
-  const options: Options = { positional: [], valueStdin: false, confirm: false, local: false };
+  const options: Options = { positional: [], valueStdin: false, contains: false, allAccounts: false, confirm: false, local: false };
   for (let at = 0; at < argv.length; at += 1) {
     const arg = argv[at] ?? '';
     if (arg === '--confirm') options.confirm = true;
     else if (arg === '--local') options.local = true;
     else if (arg === '--value-stdin') options.valueStdin = true;
+    else if (arg === '--contains') options.contains = true;
+    else if (arg === '--all-accounts') options.allAccounts = true;
     else if (arg === '--account' || arg === '--id') {
       const value = argv[at + 1];
       if (value === undefined || value.startsWith('--')) return `${arg} needs a value`;
@@ -61,10 +71,20 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
   }
   const [what, key, ...extra] = options.positional;
   const target: Target = { ...TARGET, local: options.local };
-  const store: EraseStore = wranglerStore(io.wrangler, target);
+  const store: EraseStore = wranglerStore(io.wrangler, target, io.files);
   const where = options.local ? 'local state' : 'the remote pool';
   try {
-    if (what === 'raw' && key !== undefined && extra.length === 0 && options.account === undefined) {
+    // The find reads and changes nothing, so it needs no --confirm. The text comes from stdin only: an argument would be in the process table and the shell's history.
+    if (what === 'raw' && options.contains && options.valueStdin && key === undefined && options.positional.length === 1) {
+      const value = (await io.stdin()).replace(/\r?\n$/, '');
+      const found = await findRawContaining(store, { ...(options.account === undefined ? {} : { account: options.account }), allAccounts: options.allAccounts }, value, (hit) => {
+        io.print(JSON.stringify(hit));
+      });
+      io.print(JSON.stringify({ objectsRead: found.read, objectsMatched: found.matched, objectsMissing: found.missing }));
+      // wrangler turns every remote 404 into a missing key, so a wrong bucket would read nothing: a missing object is a failed find, not a clean one.
+      return found.missing > 0 ? 1 : 0;
+    }
+    if (what === 'raw' && key !== undefined && extra.length === 0 && options.account === undefined && !options.contains) {
       if (!options.confirm) return plan(io, `delete raw object ${key} from ${where}`);
       io.print(summary(await eraseRawObject(store, key, io.now())));
       return 0;

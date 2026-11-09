@@ -1,9 +1,9 @@
 // The operator's erasure against a local pool under Miniflare: each kind leaves a tombstone, the same content is refused when it comes back, an audit row holds no content, and the aggregates keep their counts.
 import { createHash } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { sampleSkeleton } from '../src/sample.js';
 import { acceptanceOf, fieldOf, startPool, stubUser, type TestBucket, type TestDb, type TestPool } from '../src/test-pool.js';
-import { eraseAccount, eraseLeakedSecret, eraseRawObject, type EraseStore } from './erase.js';
+import { eraseAccount, eraseLeakedSecret, eraseRawObject, findRawContaining, holdsValue, type EraseStore, type RawHit } from './erase.js';
 
 let pool: TestPool;
 let next = 7000;
@@ -31,14 +31,33 @@ const TWIN_A = 'AKIAFAKEKEY0TWINAAAA';
 const TWIN_B = 'AKIAFAKEKEY0TWINBBBB';
 const VERSION_KEY = 'AKIAFAKEKEY0VERSION';
 
+/** The pieces handed out one at a time, as a stream: each is made only when asked for. */
+const asyncPieces = (pieces: Iterable<Uint8Array>): AsyncIterable<Uint8Array> => ({
+  [Symbol.asyncIterator]: () => {
+    const next = pieces[Symbol.iterator]();
+    return { next: () => Promise.resolve(next.next()) };
+  },
+});
+
 /** The erasure store over the pool's local D1 and raw bucket, as `wrangler --local` would reach them. */
-const storeOf = (db: TestDb, bucket: TestBucket): EraseStore => ({
+const storeOf = (db: TestDb, bucket: TestBucket, chunk = 64 * 1024): EraseStore => ({
   rows: async (sql, binds) => (await db.prepare(sql).bind(...binds).all()).results,
   run: async (sql, binds) => Number(fieldOf(fieldOf(await db.prepare(sql).bind(...binds).run(), 'meta'), 'changes')),
   deleteObject: (key) => bucket.delete([key]),
+  // The object's bytes in pieces of `chunk`, as a file read gives them: the find never holds the whole object.
+  readObject: async (key) => {
+    const found = await bucket.get(key);
+    if (found === null) return null;
+    const bytes = new Uint8Array(await found.arrayBuffer());
+    return asyncPieces(
+      (function* pieces() {
+        for (let at = 0; at < bytes.length; at += chunk) yield bytes.subarray(at, at + chunk);
+      })(),
+    );
+  },
 });
 
-const store = async (): Promise<EraseStore> => storeOf(await pool.db(), await pool.rawBucket());
+const store = async (chunk?: number): Promise<EraseStore> => storeOf(await pool.db(), await pool.rawBucket(), chunk);
 
 const member = async (): Promise<{ token: string; account: string }> => {
   next += 1;
@@ -515,5 +534,195 @@ describe('the tombstones and the audit', () => {
     await expect(db.prepare("UPDATE erasure_tombstones SET reason = 'raw'").run()).rejects.toThrow(/never changed/);
     await expect(db.prepare('DELETE FROM erasure_audit').run()).rejects.toThrow(/never deleted/);
     await expect(db.prepare("UPDATE erasure_audit SET reason = 'raw'").run()).rejects.toThrow(/never changed/);
+  }, 60_000);
+});
+
+describe('finding the raw objects that hold a text', () => {
+  /** A name a third party would ask about: said in prose, so no redactor masked it. */
+  const NAME = 'Jane Quentin Tenant';
+
+  const bytesOf = (text: string): Uint8Array => new TextEncoder().encode(text);
+
+  const find = async (selector: { account?: string; allAccounts?: boolean }, value: string, chunk?: number): Promise<{ hits: RawHit[]; read: number; matched: number; missing: number }> => {
+    const hits: RawHit[] = [];
+    const total = await findRawContaining(await store(chunk), selector, value, (hit) => hits.push(hit));
+    return { hits, ...total };
+  };
+
+  /** Pieces of a stream the way a file read gives them, counting how many were asked for. */
+  const streamOf = (bytes: Uint8Array, chunk: number, asked: { count: number }): AsyncIterable<Uint8Array> =>
+    asyncPieces(
+      (function* pieces() {
+        for (let at = 0; at < bytes.length; at += chunk) {
+          asked.count += 1;
+          yield bytes.subarray(at, at + chunk);
+        }
+      })(),
+    );
+
+  it('reports the key, account, and size of an object that holds the text, and counts what it read', async () => {
+    const holder = await member();
+    const bystander = await member();
+    const text = `{"role":"user","text":"my landlord ${NAME} said the deposit was fine"}`;
+    const held = await putRaw(holder.token, bytesOf(text));
+    await putRaw(bystander.token, bytesOf('{"role":"user","text":"nothing about anyone"}'));
+    const found = await find({ account: holder.account }, NAME);
+    expect(found).toEqual({ hits: [{ key: `raw/${holder.account}/${held.hash}`, account: holder.account, bytes: bytesOf(text).length }], read: 1, matched: 1, missing: 0 });
+  }, 60_000);
+
+  it('misses an object that does not hold it, and a near miss', async () => {
+    const { token, account } = await member();
+    await putRaw(token, bytesOf('Jane Quentin Tenan and jane quentin tenant'));
+    expect(await find({ account }, NAME)).toMatchObject({ hits: [], read: 1, matched: 0 });
+  }, 60_000);
+
+  it('looks in every account with --all-accounts, and in one account only with an account', async () => {
+    const first = await member();
+    const second = await member();
+    const third = await member();
+    const a = await putRaw(first.token, bytesOf(`first: ${NAME}`));
+    const b = await putRaw(second.token, bytesOf(`second: ${NAME}!`));
+    await putRaw(third.token, bytesOf('third: no one'));
+    const everywhere = await find({ allAccounts: true }, NAME);
+    expect(everywhere.hits.map((hit) => hit.key)).toEqual(expect.arrayContaining([`raw/${first.account}/${a.hash}`, `raw/${second.account}/${b.hash}`]));
+    expect(everywhere.hits.every((hit) => hit.key.startsWith('raw/'))).toBe(true);
+    expect(everywhere.read).toBeGreaterThanOrEqual(3);
+    expect((await find({ account: second.account }, NAME)).hits.map((hit) => hit.account)).toEqual([second.account]);
+  }, 60_000);
+
+  it('does not read an object that was erased, and counts a ledger row whose object is gone', async () => {
+    const { token, account } = await member();
+    const erased = await putRaw(token, bytesOf(`erased: ${NAME}`));
+    const lost = await putRaw(token, bytesOf(`lost: ${NAME}`));
+    await eraseRawObject(await store(), `raw/${account}/${erased.hash}`, NOW);
+    // The object vanished from R2 while its ledger row stands: the find says so and goes on.
+    await (await pool.rawBucket()).delete([`raw/${account}/${lost.hash}`]);
+    expect(await find({ account }, NAME)).toEqual({ hits: [], read: 0, matched: 0, missing: 1 });
+  }, 60_000);
+
+  it('finds a match that straddles a read boundary, at every offset', async () => {
+    const needle = [Buffer.from(NAME)];
+    for (const chunk of [1, 2, 5, 19, 64]) {
+      for (let before = 0; before <= chunk + 2; before += 1) {
+        const bytes = bytesOf(`${'x'.repeat(before)}${NAME}${'y'.repeat(chunk)}`);
+        expect(await holdsValue(streamOf(bytes, chunk, { count: 0 }), needle)).toBe(true);
+      }
+    }
+    // One byte short of the value in the last chunk, and one byte wrong, are not matches.
+    expect(await holdsValue(streamOf(bytesOf(`aaaa${NAME.slice(0, -1)}`), 5, { count: 0 }), needle)).toBe(false);
+    expect(await holdsValue(streamOf(bytesOf(`aaaa${NAME.slice(0, -1)}X`), 5, { count: 0 }), needle)).toBe(false);
+  });
+
+  it('finds a straddling match in an object read through the store', async () => {
+    const { token, account } = await member();
+    const text = `0123456789${NAME}0123456789`;
+    await putRaw(token, bytesOf(text));
+    // 7-byte reads put the name across three of them.
+    expect((await find({ account }, NAME, 7)).matched).toBe(1);
+  }, 60_000);
+
+  it('reads an object larger than its buffer a piece at a time, and stops at the first match', async () => {
+    const chunk = 64 * 1024;
+    const big = new Uint8Array(40 * chunk + 100).fill(0x61);
+    big.set(bytesOf(NAME), 3 * chunk - 5);
+    const early = { count: 0 };
+    expect(await holdsValue(streamOf(big, chunk, early), [Buffer.from(NAME)])).toBe(true);
+    // The match starts in the third piece and ends in the fourth: the other 36 pieces were never asked for.
+    expect(early.count).toBe(4);
+    const tail = new Uint8Array(40 * chunk + 100).fill(0x61);
+    tail.set(bytesOf(NAME), tail.length - NAME.length);
+    const whole = { count: 0 };
+    expect(await holdsValue(streamOf(tail, chunk, whole), [Buffer.from(NAME)])).toBe(true);
+    const sizes: number[] = [];
+    const original = Buffer.concat.bind(Buffer);
+    const concat = vi.spyOn(Buffer, 'concat').mockImplementation((list, length) => {
+      const joined = original(list, length);
+      sizes.push(joined.length);
+      return joined;
+    });
+    expect(await holdsValue(streamOf(tail, chunk, { count: 0 }), [Buffer.from(NAME)])).toBe(true);
+    // Memory is one piece and the kept tail, never the object read so far.
+    const largest = Math.max(...sizes);
+    concat.mockRestore();
+    expect(largest).toBeLessThanOrEqual(chunk + NAME.length - 1);
+    expect(whole.count).toBe(41);
+    expect(await holdsValue(streamOf(new Uint8Array(40 * chunk).fill(0x61), chunk, { count: 0 }), [Buffer.from(NAME)])).toBe(false);
+  });
+
+  it('finds a text in an object that went up in several parts', async () => {
+    const { token, account } = await member();
+    const pieces = [new Uint8Array(1024 * 1024).fill(0x61), new Uint8Array(1024 * 1024).fill(0x62), bytesOf(`tail ${NAME}`)];
+    const bytes = new Uint8Array(pieces.reduce((sum, piece) => sum + piece.length, 0));
+    let at = 0;
+    for (const piece of pieces) {
+      bytes.set(piece, at);
+      at += piece.length;
+    }
+    const hash = sha(bytes);
+    for (const [index, piece] of pieces.entries()) expect((await pool.send(`/v1/raw/${hash}/parts/${String(index + 1)}`, { method: 'PUT', body: piece }, token, grant)).status).toBe(200);
+    expect((await pool.send(`/v1/raw/${hash}/complete`, { method: 'POST', body: JSON.stringify({ parts: 3, bytes: bytes.length }) }, token, grant)).status).toBe(201);
+    expect((await find({ account }, NAME, 64 * 1024)).hits).toEqual([{ key: `raw/${account}/${hash}`, account, bytes: bytes.length }]);
+  }, 120_000);
+
+  it('matches the text as a transcript writes it: JSON escapes a quote and a backslash', async () => {
+    const { token, account } = await member();
+    const value = 'Mary "Mo" O\\Brien-Smith';
+    await putRaw(token, bytesOf(`{"text":${JSON.stringify(`hello ${value} there`)}}`));
+    expect((await find({ account }, value)).matched).toBe(1);
+    // The literal form matches too, for a transcript that is not JSON.
+    await putRaw(token, bytesOf(`plain: ${value}`));
+    expect((await find({ account }, value)).matched).toBe(2);
+  }, 60_000);
+
+  it('refuses a value under 8 characters without echoing it, and a selector with neither or both account flags', async () => {
+    const { account } = await member();
+    const refusal = await find({ account }, 'Jane Do').then(
+      () => 'no refusal',
+      (error: unknown) => (error instanceof Error ? error.message : 'not an error'),
+    );
+    expect(refusal).toMatch(/at least 8 characters/);
+    expect(refusal).not.toContain('Jane Do');
+    await expect(find({ account }, 'Jane Doe')).resolves.toMatchObject({ matched: 0 });
+    await expect(find({}, NAME)).rejects.toThrow(/exactly one of/);
+    await expect(find({ account, allAccounts: true }, NAME)).rejects.toThrow(/exactly one of/);
+    await expect(find({ account: 'not an id!' }, NAME)).rejects.toThrow(/not a pool id/);
+  });
+
+  it('only reads: the store sees SELECTs and object reads, and the database and bucket are as they were', async () => {
+    const { token, account } = await member();
+    await putRaw(token, bytesOf(`kept: ${NAME}`));
+    const before = [await dump(), await rawKeys(account)];
+    const inner = await store();
+    const seen: string[] = [];
+    const watched: EraseStore = {
+      rows: (sql, binds) => {
+        seen.push(sql);
+        return inner.rows(sql, binds);
+      },
+      run: () => Promise.reject(new Error('the find wrote to D1')),
+      deleteObject: () => Promise.reject(new Error('the find deleted from R2')),
+      readObject: (key) => {
+        seen.push(`READ ${key}`);
+        return inner.readObject(key);
+      },
+    };
+    const total = await findRawContaining(watched, { account }, NAME, () => undefined);
+    expect(total.matched).toBe(1);
+    expect(seen.filter((entry) => !entry.startsWith('READ ')).every((sql) => sql.startsWith('SELECT'))).toBe(true);
+    expect(seen.some((entry) => entry.startsWith('READ raw/'))).toBe(true);
+    expect([await dump(), await rawKeys(account)]).toEqual(before);
+    // Nothing the find asks D1 holds the text, so no wrangler argument or log carries it.
+    expect(seen.join('\n')).not.toContain(NAME);
+  }, 60_000);
+
+  it('hands the caller keys and counts, and nothing the objects said', async () => {
+    const { token, account } = await member();
+    const around = 'AROUNDTEXT-before ';
+    await putRaw(token, bytesOf(`${around}${NAME} after-AROUNDTEXT`));
+    const lines: string[] = [];
+    const total = await findRawContaining(await store(), { account }, NAME, (hit) => lines.push(JSON.stringify(hit)));
+    lines.push(JSON.stringify(total));
+    const printed = lines.join('\n');
+    for (const forbidden of [NAME, 'AROUNDTEXT', 'Quentin']) expect(printed).not.toContain(forbidden);
   }, 60_000);
 });
