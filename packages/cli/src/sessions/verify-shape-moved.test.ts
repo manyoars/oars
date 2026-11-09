@@ -115,7 +115,7 @@ describe('sessionsVerify, a file the Gemini or OTel reader drops while it holds 
     mkdirSync(staged.projectsRoot, { recursive: true });
     const http = (trace: string, attrs: { [key: string]: unknown }): object => otlpSpan({ trace, id: '0000000000000001', name: 'GET /health', start: 0, end: 10, attrs });
     const otel = stageOtel(staged.root, [
-      otelFiles(false)[0] as { name: string; lines: readonly unknown[] | string },
+      ...otelFiles(false),
       // Routine: a trace of HTTP spans from the same exporter, with no GenAI attribute and no operation in a name.
       { name: 'http.jsonl', lines: [otlpRequest([http('d'.repeat(32), { 'http.request.method': 'GET', 'http.response.status_code': 200 })])] },
       // The attribute was renamed (`gen_ai.op`) and the name leads with no operation: a moved form.
