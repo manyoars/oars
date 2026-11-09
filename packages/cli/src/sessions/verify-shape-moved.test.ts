@@ -1,4 +1,4 @@
-// Gemini and OTel readers drop a file before it is a session: Gemini a chat that "holds nothing", OTel a file with no GenAI span. A file dropped while holding records
+// Gemini and OTel readers drop a file before it is a session: Gemini a chat that "holds nothing", OTel a file with no span the reader finds. A file dropped while holding records
 // in a shape the reader does not know (a renamed message type, a renamed key) is counted by `sessions verify` as seen and unreadable; a file that is routinely
 // dropped (a launch and quit, the CLI's own context turn, an `info` message, an export with an empty span list) stays out. Selection is untouched: nothing deposited moves.
 import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -107,6 +107,24 @@ describe('sessionsVerify, a file the Gemini or OTel reader drops while it holds 
     mkdirSync(staged.projectsRoot, { recursive: true });
     const otel = stageOtel(staged.root, otelFiles(true));
     expect((await verifyCounts(staged, { otel })).otel).toEqual({ seen: 3, yielded: 1, unreadable: 2 });
+  });
+
+  it('OTel: ordinary HTTP spans and a metrics or logs export stay out; a renamed gen_ai attribute is seen and unreadable', async () => {
+    const staged = stage();
+    rmSync(join(staged.projectsRoot, 'proj'), { recursive: true });
+    mkdirSync(staged.projectsRoot, { recursive: true });
+    const http = (trace: string, attrs: { [key: string]: unknown }): object => otlpSpan({ trace, id: '0000000000000001', name: 'GET /health', start: 0, end: 10, attrs });
+    const otel = stageOtel(staged.root, [
+      otelFiles(false)[0] as { name: string; lines: readonly unknown[] | string },
+      // Routine: a trace of HTTP spans from the same exporter, with no GenAI attribute and no operation in a name.
+      { name: 'http.jsonl', lines: [otlpRequest([http('d'.repeat(32), { 'http.request.method': 'GET', 'http.response.status_code': 200 })])] },
+      // The attribute was renamed (`gen_ai.op`) and the name leads with no operation: a moved form.
+      { name: 'renamed.jsonl', lines: [otlpRequest([http('e'.repeat(32), { 'gen_ai.op': 'chat' })])] },
+      // Other signals in the same folder.
+      { name: 'metrics.jsonl', lines: [{ resourceMetrics: [{ scopeMetrics: [{ metrics: [] }] }] }] },
+      { name: 'logs.jsonl', lines: [{ resourceLogs: [{ scopeLogs: [{ logRecords: [] }] }] }] },
+    ]);
+    expect((await verifyCounts(staged, { otel })).otel).toEqual({ seen: 2, yielded: 1, unreadable: 1 });
   });
 
   it('deposits the same bytes with the dropped files present as without them', async () => {
