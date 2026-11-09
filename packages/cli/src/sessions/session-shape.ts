@@ -6,7 +6,8 @@
 // One collector per transcript, fed line by line by `captureSession`. It reads the Claude Code line shapes (a census of 2.1.312 to 2.1.318) and
 // one neutral line an adapter may write for a harness whose records are not Claude-shaped (`oars-tools`).
 
-import type { Harness } from './schema.js';
+import { loadedInstructionsOf } from './load-status.js';
+import type { Harness, LoadedInstructions } from './schema.js';
 
 type Obj = { [key: string]: unknown };
 
@@ -123,6 +124,7 @@ export interface SessionTrust {
 }
 
 export interface SessionShape {
+  loadedInstructions?: LoadedInstructions;
   setup?: SessionSetup;
   funnel?: SessionFunnel;
   trust?: SessionTrust;
@@ -164,6 +166,8 @@ export const createShape = (harness: Harness, stored: (tool: string) => string, 
   const stopCommands = new Set<string>();
   let stopSeen = false;
   const memory = new Map<string, number>();
+  let instructionFiles: { path: string; type: string }[] | undefined;
+  let cwd: string | undefined;
   const plugins = new Set<string>();
   /** Every name offered or removed, in order: the last event on a name decides which side it ends on. */
   const standing = new Map<string, 'offered' | 'removed'>();
@@ -264,6 +268,13 @@ export const createShape = (harness: Harness, stored: (tool: string) => string, 
         hooks.add(name);
         if (STOP_HOOK_RE.test(name)) stopSeen = true;
       }
+    } else if (kind === 'instructions' && instructionFiles === undefined && Array.isArray(a.files)) {
+      // The first record only: a resumed session logs the set again, and the snapshot it joins with is that session's first.
+      instructionFiles = a.files.flatMap((file: unknown) => {
+        if (!isObj(file)) return [];
+        const path = str(file.path);
+        return path === undefined ? [] : [{ path, type: str(file.type) ?? '' }];
+      });
     } else if (kind === 'nested_memory' && isObj(a.content) && typeof a.content.content === 'string') {
       // The same file comes again when the harness reloads it, so one path counts once.
       const key = str(a.path) ?? str(a.content.path) ?? `#${String(memory.size)}`;
@@ -281,6 +292,7 @@ export const createShape = (harness: Harness, stored: (tool: string) => string, 
     read(line, at) {
       // A sidechain line is a subagent's own, not the main session's setup.
       if (at.side) return;
+      cwd ??= str(line.cwd);
       const type = str(line.type);
       if (type === 'permission-mode') mode(line.permissionMode);
       else if (type === 'api-request-shape') {
@@ -358,6 +370,7 @@ export const createShape = (harness: Harness, stored: (tool: string) => string, 
       if (hookTotal > 0) setup.hookCount = hookTotal;
       if (memory.size > 0) setup.instructionBytes = [...memory.values()].reduce((sum, bytes) => sum + bytes, 0);
       if (Object.keys(setup).length > 0) out.setup = setup;
+      if (instructionFiles !== undefined && cwd !== undefined) out.loadedInstructions = loadedInstructionsOf(instructionFiles, cwd);
 
       const funnel: SessionFunnel = {};
       // Two names that redact to one form are one tool, as `tools` keys it.

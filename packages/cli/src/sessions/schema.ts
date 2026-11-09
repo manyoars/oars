@@ -222,7 +222,7 @@ export interface CaptureEnv {
 /**
  * One per transcript, captured: the `parse_sessions.py` record, minus anything that is raw content. Classes (spec Section 1.2):
  * `L` local-only: `project`, `files`. `A` account store: `session`, `parent`, `spawnedBy`, `spawnedIn`, `branches`, `urls`, `searches`, `tldrs`,
- * `confidences`, `promptFingerprint`, `repo`, `fileHashes`, `tools`, `setup`, `funnel`, `trust`, `at`, `tsFirst`, `tsLast`. `P` pooled: `kind`, `cv`, `rev`, `sid`,
+ * `confidences`, `promptFingerprint`, `repo`, `fileHashes`, `tools`, `setup`, `funnel`, `trust`, `loadedInstructions`, `at`, `tsFirst`, `tsLast`. `P` pooled: `kind`, `cv`, `rev`, `sid`,
  * the counts, `versions`, `models`, `env`, `costUsd`, `usage` (`at`, `tsFirst`, and `tsLast` at UTC day). `agentType`, `frame`, and `frameId` moved to `A` at EXTRACTOR 11:
  * a custom agent's name is private, and the joined frame is one value that links rows.
  */
@@ -307,6 +307,18 @@ export interface SessionObservation {
   funnel?: SessionFunnel;
   /** How often a human or a policy stopped the session and how long it ran alone (class A); same absence rules. */
   trust?: SessionTrust;
+  /**
+   * The instruction files the transcript shows loaded, as counts and levels, never a path (class A; `load-status.ts` joins it with the session-start snapshot). Absent when the
+   * transcript holds no such record. It adds no value older records need, since a session from before the snapshot existed labels `unknown` either way, so CAPTURE_VERSION stays.
+   */
+  loadedInstructions?: LoadedInstructions;
+}
+
+/** What a transcript shows loaded. `levels` is folders above the working folder, one entry per project file; a harness whose log has one undivided record sets `any` instead. */
+export interface LoadedInstructions {
+  user: number;
+  levels?: number[];
+  any?: boolean;
 }
 
 /**
