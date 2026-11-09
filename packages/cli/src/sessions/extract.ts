@@ -1653,7 +1653,8 @@ export const captureSession = (input: ExtractInput): Capture => {
       }
     }
     // A message is the unit usage belongs to: the same id on every content-block line is one message, and a replayed line is the same one again.
-    const messageKey = type === 'assistant' && role === 'assistant' ? str(message.id) || str(o.requestId) || `line ${String(position)}` : undefined;
+    // Only Claude Code and Codex report per-message counts; another harness's totals are not a message's, and a synthetic line is the harness speaking.
+    const messageKey = (harness === 'claude-code' || harness === 'codex') && messageModel !== '<synthetic>' && type === 'assistant' && role === 'assistant' ? str(message.id) || str(o.requestId) || `line ${String(position)}` : undefined;
     if (messageKey !== undefined && lineUsage !== undefined && !messageGroups.has(messageKey)) {
       const plan = planOf(o);
       messageGroups.set(messageKey, { id: str(message.id) || str(o.requestId) || null, calls: [], ...(side ? { side: true } : {}), ...reportedUsage(lineUsage), ...(plan === undefined ? {} : { plan }) });

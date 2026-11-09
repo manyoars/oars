@@ -102,6 +102,26 @@ describe('messageUsage on a Claude Code session', () => {
   });
 });
 
+describe('messageUsage is built for Claude Code and Codex only', () => {
+  const asHarness = (harness: 'cursor' | 'copilot') => {
+    const text = [user, block(1, 'msg_1', call('t1'))].join('\n');
+    return captureSession({ text, session: 's', project: 'p', rev: 1, at: 'x', bytes: text.length, redact, harness });
+  };
+
+  it('records nothing for a Cursor-shaped capture', () => {
+    expect(asHarness('cursor').session).not.toHaveProperty('messageUsage');
+  });
+
+  it('records nothing for a Copilot-shaped capture, whose totals are not per message', () => {
+    expect(asHarness('copilot').session).not.toHaveProperty('messageUsage');
+  });
+
+  it('records nothing for a synthetic line: the harness speaking is not a model message', () => {
+    const synthetic = line({ type: 'assistant', uuid: 'a1', timestamp: '2026-06-01T00:00:01.000Z', message: { id: 'msg_x', role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'x' }], usage: { input_tokens: 0, output_tokens: 0 } } });
+    expect(capture([user, synthetic]).session).not.toHaveProperty('messageUsage');
+  });
+});
+
 describe('messageUsage across a deposit, subagent transcripts included', () => {
   let appData: string;
   beforeEach(() => {
