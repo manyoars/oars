@@ -242,11 +242,16 @@ export interface CodexHookRuntime {
 
 /**
  * Reduces every absolute path in a note to `<path>`: a POSIX path, a drive path, or a UNC path, whether or not it sits under the home
- * folder (a failure's message can name any folder, and no path enters a row or a note). The hook's own home goes first, with the rest of
- * its token, so a home with spaces in it leaves no tail.
+ * folder (a failure's message can name any folder, and no path enters a row or a note). Three passes, widest first: a quoted run that starts
+ * with a path is masked whole, to the last matching quote on the line and with the quotes kept, so a space or an apostrophe in it leaves no
+ * tail; the hook's own home, matched in either separator and any case like the store's home scrub, goes with the rest of its token; then
+ * any bare path token.
  */
+const TOKEN_TAIL = /[^\s'"`,;)]*/.source;
 const maskPaths = (text: string, home: string): string => {
-  const own = home === '' ? text : text.split(home).map((piece, index) => (index === 0 ? piece : piece.replace(/^[^\s'"`,;)]*/, ''))).join('<path>');
+  const quoted = text.replace(/(['"`])(?:[A-Za-z]:[\\/]|\\\\|\/)[^\n]*\1/g, '$1<path>$1');
+  const pattern = home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/(?:\\\\|\/)/g, '[\\\\/]');
+  const own = home === '' ? quoted : quoted.replace(new RegExp(pattern + TOKEN_TAIL, 'gi'), '<path>');
   return own.replace(/(?:[A-Za-z]:[\\/]|\\\\|(?<![\w.~<>-])\/)[^\s'"`,;)]*/g, '<path>');
 };
 
@@ -292,7 +297,11 @@ export const runCodexHook = async (stdin: string, runtime: CodexHookRuntime): Pr
   }
   if (!wrote && !failed) return;
   const ms = Math.round(performance.now() - started);
-  const masked = new Error(maskPaths(failure instanceof Error ? failure.message : String(failure), runtime.home));
-  const error = failed ? await errorLine(runtime.storeDir, masked).catch(() => 'unknown error') : null;
+  // Built only for a failure, and inside the guard, so a message that is not a string cannot throw past the note.
+  const error = failed
+    ? await Promise.resolve()
+        .then(() => errorLine(runtime.storeDir, new Error(maskPaths(failure instanceof Error ? failure.message : String(failure), runtime.home))))
+        .catch(() => 'unknown error')
+    : null;
   await tryLog(() => appendHookCall(runtime.storeDir, { at: new Date(runtime.now()).toISOString(), event: 'codex-record', session, hit: wrote, ms, error }));
 };

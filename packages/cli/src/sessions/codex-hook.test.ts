@@ -195,6 +195,26 @@ describe('fail-open', () => {
     expect(error).toBe('EACCES: open <path> and <path> and <path>, then <path>');
   });
 
+  it('masks a quoted path whole, with a space or an apostrophe in it, and a home in either separator or case', async () => {
+    const store = stageHook();
+    const spaced = { ...store.runtime, home: String.raw`C:\Users\John Smith` };
+    const cases: Array<[string, string, string[]]> = [
+      [String.raw`ENOENT: open 'D:\My Data\oars\hook-rows.jsonl'`, "ENOENT: open '<path>'", ['Data', 'oars']],
+      [String.raw`ENOENT: open 'D:\O'Brien\x'`, "ENOENT: open '<path>'", ['Brien']],
+      ["ENOENT: open 'C:/Users/John Smith/AppData/x'", "ENOENT: open '<path>'", ['Smith', 'AppData']],
+      ['ENOENT: open C:/Users/John Smith/AppData/x', 'ENOENT: open <path>', ['Smith', 'AppData']],
+      [String.raw`ENOENT: open c:\users\john smith\AppData\x`, 'ENOENT: open <path>', ['smith', 'AppData']],
+      ['ENOENT: open "/srv/my data/x" now', 'ENOENT: open "<path>" now', ['data']],
+    ];
+    for (const [message, expected, leaked] of cases) {
+      const runtime = { ...spaced, append: () => Promise.reject(new Error(message)) };
+      await runCodexHook(JSON.stringify(payloadOf('PostToolUse')), runtime);
+      const error = String(store.notes().at(-1)?.error);
+      expect(error).toBe(expected);
+      for (const word of leaked) expect(error).not.toContain(word);
+    }
+  });
+
   it('notes a fixed message for input that is not JSON, holding none of the input', async () => {
     const store = stageHook();
     await runCodexHook('{"a":MARKER_SECRET}', store.runtime);
@@ -218,6 +238,27 @@ describe('fail-open', () => {
     await runCodexHook(JSON.stringify(payloadOf('SessionStart', { cwd: join(store.root, 'allowed') })), { ...store.runtime, repoRoot });
     expect(walked).toEqual([join(store.root, 'allowed')]);
     expect(store.rows()).toHaveLength(1);
+  });
+
+  it('walks no folder a saved folder denial names, with an otherwise allowing list', async () => {
+    const store = stageHook();
+    store.saveState(JSON.stringify({ allow: [`!${join(store.root, 'denied')}/`] }));
+    const walked: string[] = [];
+    const repoRoot = (cwd: string): string | null => {
+      walked.push(cwd);
+      return null;
+    };
+    await runCodexHook(JSON.stringify(payloadOf('SessionStart', { cwd: join(store.root, 'denied') })), { ...store.runtime, repoRoot });
+    expect(walked).toEqual([]);
+    expect(store.rows()).toEqual([]);
+  });
+
+  it('notes an unknown error when the failure message is not a string, and still resolves', async () => {
+    const store = stageHook();
+    const odd = Object.assign(new Error('x'), { message: 42 });
+    const runtime = { ...store.runtime, append: () => Promise.reject(odd) };
+    await expect(runCodexHook(JSON.stringify(payloadOf('PostToolUse')), runtime)).resolves.toBeUndefined();
+    expect(store.notes()).toMatchObject([{ event: 'codex-record', hit: false, error: 'unknown error' }]);
   });
 
   it('writes a row with one append, a complete line ending in a newline', async () => {
@@ -244,12 +285,11 @@ describe('fail-open', () => {
     expect(store.notes()).toHaveLength(2);
   });
 
-  it('leaves a codex-record note that readHookCalls reads back and measure does not count as a lookup', async () => {
+  it('leaves a codex-record note that readHookCalls reads back', async () => {
     const store = stageHook();
     await run(store, payloadOf('PostToolUse', { session_id: 'sess_1' }));
     const calls = await readHookCalls(store.storeDir);
     expect(calls).toMatchObject([{ event: 'codex-record', session: 'sess_1', hit: true }]);
-    expect(calls.filter((call) => call.event === 'session-start' || call.event === 'post-tool')).toEqual([]);
   });
 
   it('notes a row it wrote, with the session and no error', async () => {
