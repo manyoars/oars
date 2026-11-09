@@ -148,7 +148,7 @@ export const ROUTES: readonly Route[] = [
   { method: 'POST', path: '/v1/login/poll', machine: false, handle: loginPoll },
   { method: 'POST', path: '/v1/login', machine: false, handle: loginGone },
   { method: 'DELETE', path: '/v1/login', machine: false, handle: logout },
-  { method: 'POST', path: '/v1/covenant/accept', machine: false, handle: covenantAccept },
+  { method: 'POST', path: '/v1/covenant/accept', machine: false, handle: (request, env) => covenantAccept(request, env) },
   { method: 'POST', path: '/v1/machines/enroll', machine: false, handle: enroll },
   // The account lists and revokes its machines; a machine key may do neither.
   { method: 'GET', path: '/v1/machines', machine: false, handle: list },
@@ -156,7 +156,7 @@ export const ROUTES: readonly Route[] = [
   // A machine key activates and rotates itself: it is the only credential these two routes read.
   { method: 'POST', path: '/v1/machines/activate', machine: true, handle: activate },
   { method: 'POST', path: '/v1/machines/rotate', machine: true, handle: rotate },
-  { method: 'GET', path: '/v1/covenant', machine: true, handle: covenantStatus },
+  { method: 'GET', path: '/v1/covenant', machine: true, handle: (request, env) => covenantStatus(request, env) },
   // Not a deposit and not signed in: percentiles over installs, served only where at least the public floor reports. No query is read.
   { method: 'GET', path: '/v1/telemetry/fleet', machine: false, handle: (request, env) => fleet(env, Date.now(), !request.headers.has('authorization')) },
   // The operator's anomaly read, behind a secret the deploy sets: never served to users.
