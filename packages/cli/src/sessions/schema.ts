@@ -30,7 +30,9 @@
 // reads, not moved ones. A Copilot CLI session with rotated `events.N.jsonl` archives is now read as one session, so its `prompts`, `tools`, `lines`, and skeleton move; one
 // with no archives is unchanged. EXTRACTOR stays 11. A version-16 store's next deposit captures every transcript again from the harness or `raw/`.
 //
-// Version 32 (CAPTURE 32) adds the optional `names` to a tool call (`argNamesOf`, `call-shape.ts`): the name tokens its values hold, each with its kind, never a value. It changes no value captured before; an older store's next deposit captures every transcript again,
+// Version 32 (CAPTURE 32) is the machine repoKey salt: `repoKey` is derived from the machine's own salt, so every stored repoKey moves and an older store's next deposit captures every transcript again.
+//
+// Version 33 (CAPTURE 33) adds the optional `names` to a tool call (`argNamesOf`, `call-shape.ts`): the name tokens its values hold, each with its kind, never a value. It changes no value captured before; an older store's next deposit captures every transcript again,
 // and a call of an older record has none.
 //
 // Version 31 (CAPTURE 31) writes a Codex `token_count` event's `input` and `output` only when the event reported them, as the cache categories already were, so a partial event leaves the other
@@ -115,7 +117,7 @@ import type { RepoSize } from './public-vocabulary.js';
 import type { SessionFunnel, SessionSetup, SessionTrust } from './session-shape.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '32';
+export const CAPTURE_VERSION = '33';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
@@ -580,7 +582,7 @@ export interface ToolObservation {
   argFeatures?: ArgFeature[];
   /** Each argument's closed value (`argValuesOf`): a boolean, or a string on its tool's list in `CLOSED_ARG_VALUES`; a value off the list is not stored. Absent on a record captured before CAPTURE 27, and when the call held none. Class A, as `argFeatures`. */
   argValues?: ArgValue[];
-  /** The name tokens of the call's values (`argNamesOf`), sorted by kind and name: a file's name, a folder's name below the root, a variable's name, a flag value that is a name, a custom agent's name; never a value. Absent when it holds none and on a record captured before CAPTURE 32. Class A. */
+  /** The name tokens of the call's values (`argNamesOf`), sorted by kind and name: a file's name, a folder's name below the root, a variable's name, a flag value that is a name, a custom agent's name; never a value. Absent when it holds none and on a record captured before CAPTURE 33. Class A. */
   names?: ArgName[];
   /** What changed from the previous call of the same tool in the same prompt (`changeKindOf`), a sorted set of `CHANGE_KINDS` members. Absent on the first such call and on a record captured before CAPTURE 27. Class P. */
   changeKind?: ChangeKind[];
