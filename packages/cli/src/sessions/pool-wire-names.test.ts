@@ -145,9 +145,11 @@ describe('what is dropped from the names', () => {
       call('g', 'Read', { file_path: '/home/jsmith-acct/notes.md' }),
       call('h', 'Read', { file_path: '/mnt/c/Users/jsmith-acct' }),
       call('i', 'Read', { file_path: '/mnt/d/Users/jsmith-acct/' }),
+      call('j', 'Read', { file_path: '/c/Users/jsmith-acct' }),
+      call('k', 'Read', { file_path: '/var/home/jsmith-acct' }),
     );
-    const [lower, windows, mac, drive, home, profile, below, wsl, wslSlash] = toolsOf(skeleton);
-    for (const folder of [lower, windows, mac, drive, wsl, wslSlash]) expect(folder).not.toHaveProperty('names');
+    const [lower, windows, mac, drive, home, profile, below, wsl, wslSlash, gitBash, immutable] = toolsOf(skeleton);
+    for (const folder of [lower, windows, mac, drive, wsl, wslSlash, gitBash, immutable]) expect(folder).not.toHaveProperty('names');
     expect(home?.names).toEqual(names('file', 'plan.md'));
     expect(profile?.names).toEqual(names('file', 'roadmap.md'));
     // A file in the home folder is a file: only the folder is the account name.
@@ -269,6 +271,22 @@ describe('what is dropped from the names', () => {
     expect(second?.names).toEqual(names('flag', 'bert_control'));
     expect(third?.names).toEqual(names('flag', 'cust_control'));
     for (let number = 1; number <= 7; number += 1) expect(bytesOf(skeleton)).not.toContain(`opaquevalue${String(number)}`);
+  });
+
+  it('never reads the value of a credential flag written without a separator or led by an acronym, or one that names a kind of key, and still reads a flag that only looks like one', () => {
+    const skeleton = skeletonOfLines(
+      { redact, terms: [] },
+      call('a', 'Bash', { command: 'deploy --dbpassword opaquevalue1 --githubtoken opaquevalue2 --clientsecret opaquevalue3 --region eu_control' }),
+      call('b', 'Bash', { command: 'deploy --mysqlpass opaquevalue4 --DBPassword opaquevalue5 --AWSSecret opaquevalue6 --customer cust_control' }),
+      call('c', 'Bash', { command: 'deploy --encryption-key opaquevalue7 --signing-key opaquevalue8 --license-key opaquevalue9 --master-key opaquevalue10 --cookie opaquevalue11 --tokenizer bert_control' }),
+      call('d', 'Bash', { command: 'deploy --shared-key opaquevalue12 --session_key opaquevalue13 --tokenizerName bert_camel --bypass bypass_control --sort-key created_control --primary-key id_control --key key_control' }),
+    );
+    const [first, second, third, fourth] = toolsOf(skeleton);
+    expect(first?.names).toEqual(names('flag', 'eu_control'));
+    expect(second?.names).toEqual(names('flag', 'cust_control'));
+    expect(third?.names).toEqual(names('flag', 'bert_control'));
+    expect(fourth?.names).toEqual(names('flag', 'bert_camel', 'bypass_control', 'created_control', 'id_control', 'key_control'));
+    for (let number = 1; number <= 13; number += 1) expect(bytesOf(skeleton)).not.toContain(`opaquevalue${String(number)}`);
   });
 
   it('reads no variable name out of single-quoted text, which no shell expands, and still reads one outside single quotes', () => {

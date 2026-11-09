@@ -281,8 +281,9 @@ export const variableOf = (raw: string): string | undefined => {
   const match = WHOLE_REFERENCE.exec(/^"(.*)"$/s.exec(raw)?.[1] ?? raw);
   return match?.[1] ?? match?.[2] ?? match?.[3];
 };
-// A path that is exactly a home folder (`/home/jsmith`, `C:\Users\jsmith`, or the WSL mount of one, `/mnt/c/Users/jsmith`): its last segment is the machine's account name, not a file.
-const HOME_FOLDER = /^(?:[A-Za-z]:|[\\/]mnt[\\/][A-Za-z])?[\\/](?:home|users)[\\/][^\\/]+[\\/]*$/i;
+// A path that is exactly a home folder (`/home/jsmith`, `C:\Users\jsmith`, the WSL mount of one, `/mnt/c/Users/jsmith`, Git Bash's `/c/Users/jsmith`, or an immutable distribution's `/var/home/jsmith`): its last segment is the machine's
+// account name, not a file.
+const HOME_FOLDER = /^(?:[A-Za-z]:|[\\/]mnt[\\/][A-Za-z]|[\\/][A-Za-z]|[\\/]var)?[\\/](?:home|users)[\\/][^\\/]+[\\/]*$/i;
 // A long flag with its value joined (`--region=eu`), or a flag word on its own: a long flag, or one short letter. A cluster (`-am`) or a short flag with its value attached holds no flag name of its own.
 const JOINED_LONG_FLAG = /^(--[A-Za-z][A-Za-z0-9_-]*)=(.*)$/s;
 const FLAG_TOKEN = /^(?:--[A-Za-z][A-Za-z0-9_-]*|-[A-Za-z])$/;
@@ -292,14 +293,22 @@ const TEXT_FLAGS = words('-m --message --body --title --description --comment --
 // The flags whose value is a credential, so never a name however word-like it is: the redactor only knows the shapes of the credentials it has seen, and an opaque token is none of them.
 const CREDENTIAL_FLAGS = words(
   '--token --access-token --accesstoken --access_token --auth-token --authtoken --auth_token --api-token --apitoken --api_token --refresh-token --bearer --bearer-token --id-token ' +
-    '--password --passwd --pass --pwd --passphrase --secret --client-secret --client_secret --secret-key --secret_key --secret-access-key ' +
+    '--password --passwd --pass --mysqlpass --pwd --passphrase --secret --client-secret --client_secret --secret-key --secret_key --secret-access-key ' +
     '--api-key --apikey --api_key --private-key --auth --authorization --credential --credentials',
 );
-// A prefixed spelling (`--db-password`, `--db-pass`, `--github-token`, `--vendor_api_key`, `--clientSecret`) is a credential by its last word, in either separator or in camelCase; `--tokenizer`, `--customer`, `--bypass`, and
-// `--compass` are not.
-const CREDENTIAL_SUFFIX = /(?:^|[-_])(?:token|password|passwd|pass|pwd|passphrase|secret|credentials?)$|(?:api|private|secret|access)[-_]key$/;
+// A prefixed spelling is a credential by its last word: set off by a separator or a capital letter (`--db-password`, `--db-pass`, `--vendor_api_key`, `--clientSecret`, `--AWSSecret`), or joined to what precedes it for the words
+// that are rarely the end of anything else (`--dbpassword`, `--githubtoken`, `--clientsecret`). `pass` needs the separator, so `--bypass` and `--compass` are not credentials, and neither are `--tokenizer`, `--customer`, `--sort-key`,
+// and a bare `--key`. The list is finite: a credential under a name that fits none of these shapes still reads as a name.
+const CREDENTIAL_SUFFIX =
+  /(?:^|[-_])(?:token|password|passwd|pass|pwd|passphrase|secret|credentials?|cookie)$|(?:password|passwd|passphrase|secret|token)$|(?:api|private|secret|access|encryption|signing|master|license|shared|session)[-_]key$/;
 const isCredentialFlag = (flag: string): boolean =>
-  CREDENTIAL_FLAGS.has(flag.toLowerCase()) || CREDENTIAL_SUFFIX.test(flag.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase());
+  CREDENTIAL_FLAGS.has(flag.toLowerCase()) ||
+  CREDENTIAL_SUFFIX.test(
+    flag
+      .replace(/([A-Z]+)([A-Z][a-z])/g, '$1-$2')
+      .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+      .toLowerCase(),
+  );
 
 // The one-letter flags whose next word is a name, and only on the program that gives them that meaning: `-k` selects tests on pytest, and is a passphrase on `openssl` and a switch on `curl` and `du`. Any other one-letter flag may be a
 // switch followed by a positional (`-i needle`) or take a credential (`-p`), so its next word is not read.
