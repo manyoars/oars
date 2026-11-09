@@ -337,9 +337,14 @@ describe('erasing one account under a lawful request', () => {
     const theirContributors = await all('SELECT kind, key, account, day FROM contributors WHERE account = ? ORDER BY kind, key, day', other.account);
     const bundleBefore = await pool.get('/bundle/claude-code/2.1.314/1', other.token);
 
+    // The links to the totals this fixture's two deposits made: the count below is exact, so a step that stops counting a table fails here.
+    const links = await count('SELECT (SELECT COUNT(*) FROM account_repo_keys WHERE account = ?) + (SELECT COUNT(*) FROM deposit_hours WHERE account = ?) + (SELECT COUNT(*) FROM contributors WHERE account = ?) AS held', account, account, account);
+    expect(links).toBe(10);
+
     const erased = await eraseAccount(await store(), account, NOW);
     expect(erased.objects).toBe(1);
-    expect(erased.rows).toBeGreaterThanOrEqual(2);
+    // 2 deposit rows, 1 token, and the 10 links.
+    expect(erased.rows).toBe(13);
 
     // Per-account content: both rows are markers and tombstoned, the raw object is gone and tombstoned.
     expect(await all('SELECT id, skeleton, erased_on FROM deposits WHERE account = ? ORDER BY id', account)).toEqual([

@@ -1,8 +1,8 @@
 // A withdrawal of raw consent reaches the raw copies already held (GDPR Articles 7(3) and 17(1)(b), t1053): the staged parts go when the account withdraws, and the nightly cron erases its held objects. Under Miniflare with real R2 and D1.
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { Env } from './http.js';
-import { sweepWithdrawnRaw, SWEEP_PAGE_CALLS } from './raw.js';
+import type { Env, RawBucket } from './http.js';
+import { sweepWithdrawnRaw, SWEEP_PAGE_CALLS, withdrawRawConsent } from './raw.js';
 import { acceptanceOf, fieldOf, startPool, stubUser, type TestPool } from './test-pool.js';
 import worker from './worker.js';
 
@@ -187,7 +187,7 @@ describe('the nightly cron erases the raw copies of an account that withdrew', (
 });
 
 describe('a withdrawal drops the account\'s staged raw parts at once', () => {
-  it('drops its staged parts, however many pages, and leaves another account\'s staged part', async () => {
+  it('drops its staged parts and leaves another account\'s staged part', async () => {
     const mine = await member();
     const theirs = await member();
     const hash = 'a'.repeat(64);
@@ -200,6 +200,32 @@ describe('a withdrawal drops the account\'s staged raw parts at once', () => {
     expect(await keysOf(`staging/${theirs.account}/`)).toHaveLength(1);
     // A second withdrawal finds nothing left and still answers ok.
     expect((await withdraw(mine.token)).status).toBe(200);
+  }, 60_000);
+
+  it('lists again until a page comes back empty, so a withdrawal drops every page of staged parts', async () => {
+    const { token, account } = await member();
+    const pages = [['staging/a/1', 'staging/a/2'], ['staging/a/3'], []];
+    const asked: string[] = [];
+    const deleted: string[] = [];
+    // A bucket that answers two full pages and then an empty one, as R2 does once a page of 1,000 keys is deleted and more were staged.
+    const bucket: RawBucket = {
+      put: () => Promise.resolve(undefined),
+      get: () => Promise.resolve(null),
+      delete: (keys) => {
+        deleted.push(...keys);
+        return Promise.resolve();
+      },
+      list: ({ prefix }) => {
+        asked.push(prefix);
+        return Promise.resolve({ objects: (pages.shift() ?? []).map((key) => ({ key })), truncated: false });
+      },
+      createMultipartUpload: () => Promise.reject(new Error('not used')),
+    };
+    const env: Env = { ...(await pool.miniflare.getBindings<Env>()), RAW: bucket };
+    const answered = await withdrawRawConsent(new Request('https://pool.test/v1/consent/raw', { method: 'DELETE', headers: { authorization: `Bearer ${token}` } }), env);
+    expect(answered.status).toBe(200);
+    expect(asked).toEqual([`staging/${account}/`, `staging/${account}/`, `staging/${account}/`]);
+    expect(deleted).toEqual(['staging/a/1', 'staging/a/2', 'staging/a/3']);
   }, 60_000);
 
   it('answers ok on a pool with no raw bucket', async () => {

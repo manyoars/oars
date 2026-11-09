@@ -161,7 +161,7 @@ describe('the night after a rollup that used its full budget', () => {
     // The night's R2 calls, the rollup's and the sweep's, stay under the one invocation's allowance; the sweep took what the rollup left.
     expect(held.calls() - spent).toBeLessThanOrEqual(SUBREQUESTS_PER_INVOCATION - RESERVED_CALLS);
     // Two calls a page (a listing and a delete) of 100 batches each.
-    expect(held.left(cutoff)).toBe(12_000 - Math.floor(budgetAfter(810) / 2) * 100);
+    expect(held.left(cutoff)).toBe(12_000 - 8_000);
     expect(await cursor()).toBe(cutoff);
 
     await nightly(env, NOW);
