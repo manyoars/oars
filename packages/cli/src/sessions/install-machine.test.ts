@@ -132,6 +132,31 @@ describe('hook install --machine at user scope', () => {
     expect(outcome.text).toContain('OARS_EXCLUSION_TERMS');
   });
 
+  it('a re-install that moves the terms to --terms-file leaves no inline terms in the settings file', async () => {
+    const dir = scratch();
+    const file = join(dir, 'user', 'settings.json');
+    const termsFile = join(dir, 'terms', 'exclude.txt');
+    await sessionsHookInstall(depsIn(dir), { ...base, scope: 'user', machine: true, env: ['OARS_HOST_CLASS=vps', 'OARS_EXCLUSION_TERMS_INLINE=acme corp'] });
+    expect((await readSettings(file)).env).toMatchObject({ OARS_EXCLUSION_TERMS_INLINE: 'acme corp' });
+    await sessionsHookInstall(depsIn(dir), { ...base, scope: 'user', machine: true, env: ['OARS_HOST_CLASS=vps', 'OARS_EXCLUSION_TERMS_INLINE=new corp'], termsFile });
+    const { env } = await readSettings(file);
+    expect(env).toEqual({ OARS_HOST_CLASS: 'vps', OARS_EXCLUSION_TERMS: termsFile });
+    expect(readFileSync(file, 'utf8')).not.toContain('acme corp');
+    // What a Stop reads back is the new term list, not the earlier inline one.
+    expect(readFileSync(termsFile, 'utf8')).toBe('new corp\n');
+  });
+
+  it('a re-install that names OARS_EXCLUSION_TERMS drops the earlier inline terms, and the other way round', async () => {
+    const dir = scratch();
+    const file = join(dir, 'user', 'settings.json');
+    const named = join(dir, 'terms', 'named.txt');
+    await sessionsHookInstall(depsIn(dir), { ...base, scope: 'user', machine: true, env: ['OARS_HOST_CLASS=vps', 'OARS_EXCLUSION_TERMS_INLINE=acme corp'] });
+    await sessionsHookInstall(depsIn(dir), { ...base, scope: 'user', machine: true, env: ['OARS_HOST_CLASS=vps', `OARS_EXCLUSION_TERMS=${named}`] });
+    expect((await readSettings(file)).env).toEqual({ OARS_HOST_CLASS: 'vps', OARS_EXCLUSION_TERMS: named });
+    await sessionsHookInstall(depsIn(dir), { ...base, scope: 'user', machine: true, env: ['OARS_HOST_CLASS=vps', 'OARS_EXCLUSION_TERMS_INLINE=other corp'] });
+    expect((await readSettings(file)).env).toEqual({ OARS_HOST_CLASS: 'vps', OARS_EXCLUSION_TERMS_INLINE: 'other corp' });
+  });
+
   it('says so when no terms were given, because a machine with no term file excludes every session', async () => {
     const dir = scratch();
     const outcome = await sessionsHookInstall(depsIn(dir), { ...base, scope: 'user', machine: true, env: ['OARS_HOST_CLASS=ci'] });

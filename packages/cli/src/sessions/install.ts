@@ -206,7 +206,11 @@ export const installMachineHooks = async (path: string, env: { [name: string]: s
   if (env === undefined) {
     await writeSettings(path, settings);
   } else {
-    settings.env = { ...(isObject(settings.env) ? settings.env : {}), ...env };
+    const merged = { ...(isObject(settings.env) ? settings.env : {}), ...env };
+    // The terms are given once: a re-install that names one variable replaces the other. A Stop lets the inline list win, so an earlier one would silently outlive the new list and keep terms in a file the operator moved them out of.
+    if (env.OARS_EXCLUSION_TERMS !== undefined) Reflect.deleteProperty(merged, 'OARS_EXCLUSION_TERMS_INLINE');
+    if (env.OARS_EXCLUSION_TERMS_INLINE !== undefined) Reflect.deleteProperty(merged, 'OARS_EXCLUSION_TERMS');
+    settings.env = merged;
     await mkdir(dirname(path), { recursive: true });
     await writeOwnerOnly(path, `${JSON.stringify(settings, null, 2)}\n`);
   }
