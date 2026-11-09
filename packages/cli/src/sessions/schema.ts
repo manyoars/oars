@@ -356,15 +356,14 @@ export interface SessionObservation {
   loadedInstructions?: LoadedInstructions;
 }
 
-/** What a transcript shows loaded. `levels` is folders above the working folder, one entry per project file; a harness whose log has one undivided record sets `any` instead. */
+/** What a transcript shows loaded. `levels` is folders above the working folder, one entry per project file. */
 export interface LoadedInstructions {
   user: number;
-  levels?: number[];
+  levels: number[];
   /** Files loaded from the working folder, by kind; absent on a record captured before version 30. */
   local?: number;
   dotClaude?: number;
   rules?: number;
-  any?: boolean;
 }
 
 /**

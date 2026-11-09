@@ -117,35 +117,29 @@ describe('the measured Claude Code rule for the other kinds', () => {
 });
 
 describe('the measured Codex rule', () => {
-  const codex = (shot: CandidateSnapshot, any: boolean): LoadStatus['instructions'] => status('codex', shot, { user: 0, any });
-  const cases: [string, CandidateSnapshot, boolean, Partial<LoadStatus['instructions']>][] = [
-    ['working folder', snapshot({ working: 1 }, 1), true, { working: 'loaded' }],
-    ['parent inside the repo', snapshot({ parent: 1 }, 2), true, { parent: 'loaded' }],
-    ['above the git root: not read, by design', snapshot({ above: 1 }, 0), false, { above: 'excluded' }],
-    ['repo root, session in a nested linked worktree: by design', snapshot({ mainCheckout: 1 }, 0, 3), false, { mainCheckout: 'excluded' }],
-    ['the census pattern', snapshot({ working: 1, mainCheckout: 1 }, 0, 3), true, { working: 'loaded', mainCheckout: 'excluded' }],
-    ['above a nested worktree', snapshot({ above: 1 }, 0, 3), false, { above: 'excluded' }],
-    ['between a nested worktree and its main root', snapshot({ mainCheckout: 1 }, 0, 3), false, { mainCheckout: 'excluded' }],
-    ['above an outside worktree', snapshot({ above: 1 }, 0), false, { above: 'excluded' }],
-    ['a parent with no repository at all', snapshot({ above: 1 }, null), false, { above: 'excluded' }],
-    ['no file anywhere', snapshot({}, 0), false, {}],
+  const codex = (shot: CandidateSnapshot, levels: number[]): LoadStatus['instructions'] => status('codex', shot, { user: 0, levels });
+  const cases: [string, CandidateSnapshot, number[], Partial<LoadStatus['instructions']>][] = [
+    ['working folder', snapshot({ working: 1 }, 1), [0], { working: 'loaded' }],
+    ['parent inside the repo', snapshot({ parent: 1 }, 2), [1], { parent: 'loaded' }],
+    ['above the git root: not read, by design', snapshot({ above: 1 }, 0), [], { above: 'excluded' }],
+    ['repo root, session in a nested linked worktree: by design', snapshot({ mainCheckout: 1 }, 0, 3), [], { mainCheckout: 'excluded' }],
+    ['the census pattern', snapshot({ working: 1, mainCheckout: 1 }, 0, 3), [0], { working: 'loaded', mainCheckout: 'excluded' }],
+    ['above a nested worktree', snapshot({ above: 1 }, 0, 3), [], { above: 'excluded' }],
+    ['between a nested worktree and its main root', snapshot({ mainCheckout: 1 }, 0, 3), [], { mainCheckout: 'excluded' }],
+    ['above an outside worktree', snapshot({ above: 1 }, 0), [], { above: 'excluded' }],
+    ['a parent with no repository at all', snapshot({ above: 1 }, null), [], { above: 'excluded' }],
+    ['no file anywhere', snapshot({}, 0), [], {}],
   ];
-  it.each(cases)('%s', (_name, shot, any, expected) => {
-    expect(codex(shot, any)).toEqual(labels(expected));
+  it.each(cases)('%s', (_name, shot, levels, expected) => {
+    expect(codex(shot, levels)).toEqual(labels(expected));
   });
 
   it('labels a file the rule loads as a miss when the record is empty', () => {
-    expect(codex(snapshot({ working: 1 }, 1), false).working).toBe('miss');
+    expect(codex(snapshot({ working: 1 }, 1), []).working).toBe('miss');
   });
 
   it('labels a user-level file unknown: it was not measured (this machine has none, and measuring needs a copied login)', () => {
-    expect(codex(snapshot({ user: 1 }, 0), false).user).toBe('unknown');
-  });
-
-  it('labels the candidates unknown when one record covers two positions and cannot be split', () => {
-    const got = codex(snapshot({ working: 1, parent: 1 }, 1), true);
-    expect(got.working).toBe('unknown');
-    expect(got.parent).toBe('unknown');
+    expect(codex(snapshot({ user: 1 }, 0), []).user).toBe('unknown');
   });
 });
 

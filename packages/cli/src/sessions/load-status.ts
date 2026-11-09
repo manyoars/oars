@@ -7,7 +7,7 @@
 // What a log can show decides which kind gets a loaded or missed label. A transcript names each instruction file it loaded, so those kinds do. It lists skills only as one total with
 // no source, and only when the session offers the Skill tool, and it records a hook only when the hook prints or is a Stop hook (as one total over every source), so a skill or hook
 // that exists stays `unknown`. A hook in a folder above the working folder is the one by-design skip measured for them: those settings files do not run.
-import { INSTRUCTION_POSITIONS, positionOfLevel, readCandidates, type CandidateSnapshot, type HookEventCounts, type HookSource, type InstructionPosition, type WorkingKind } from './candidates.js';
+import { positionOfLevel, readCandidates, type CandidateSnapshot, type HookEventCounts, type HookSource, type InstructionPosition, type WorkingKind } from './candidates.js';
 import type { LoadedInstructions, SessionObservation } from './schema.js';
 
 export const LOAD_STATUS_VERSION = 3;
@@ -97,21 +97,16 @@ export const loadedInstructionsOf = (files: readonly { path: string; type: strin
   return { user, levels, ...kinds };
 };
 
-/** How many files the log shows loaded at a position; undefined when one undivided record covers several positions and cannot be split. */
-const seenAt = (position: InstructionPosition, snapshot: CandidateSnapshot, loaded: LoadedInstructions, rules: Rules): number | undefined => {
+/** How many files the log shows loaded at a position: the user count, or the project files whose folder level falls in the position. */
+const seenAt = (position: InstructionPosition, snapshot: CandidateSnapshot, loaded: LoadedInstructions): number => {
   if (position === 'user') return loaded.user;
-  if (loaded.levels !== undefined) return loaded.levels.filter((level) => positionOfLevel(level, snapshot) === position).length;
-  if (loaded.any !== true) return 0;
-  const candidates = INSTRUCTION_POSITIONS.filter((each) => each !== 'user' && rules[each] === 'load' && snapshot.instructions[each] > 0);
-  if (candidates.length > 1 && candidates.includes(position)) return undefined;
-  return candidates.includes(position) ? 1 : 0;
+  return loaded.levels.filter((level) => positionOfLevel(level, snapshot) === position).length;
 };
 
 const instructionLabel = (position: InstructionPosition, snapshot: CandidateSnapshot, loaded: LoadedInstructions | undefined, rules: Rules): LoadLabel => {
   const present = snapshot.instructions[position];
   if (loaded === undefined) return present === 0 ? 'absent' : 'unknown';
-  const seen = seenAt(position, snapshot, loaded, rules);
-  if (seen === undefined) return 'unknown';
+  const seen = seenAt(position, snapshot, loaded);
   // What the log shows wins over what the snapshot counted and over the rule: the file was loaded.
   if (seen > 0) return 'loaded';
   if (present === 0) return 'absent';
