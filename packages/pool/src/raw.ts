@@ -70,7 +70,7 @@ const consented = async (request: Request, env: Env, account: string, covenant: 
     const answered = versionOf(request, CONSENT_VERSION_HEADER);
     if (answered === undefined) return notAsked();
     if (answered !== covenant) return staleYes(covenant);
-    if (!standing || held !== answered) await env.DB.prepare('UPDATE accounts SET raw_consent = ?, raw_consent_version = ? WHERE id = ?').bind(Date.now(), answered, account).run();
+    if (!standing || held !== answered) await env.DB.prepare('UPDATE accounts SET raw_consent = COALESCE(raw_consent, ?), raw_consent_version = ? WHERE id = ?').bind(Date.now(), answered, account).run();
     return undefined;
   }
   if (stated !== null) return notAsked();
@@ -232,7 +232,7 @@ export const SWEEP_PAGE_CALLS = 4;
 
 /**
  * The raw copies a withdrawal reaches (GDPR Articles 7(3) and 17(1)(b)): every held object of an account that withdrew its yes, and every one stored before the yes it gave again after. An account whose yes stands has the objects that were stored
- * before that yes (`raw_consent` is its time); one with no yes standing has them all, even one that finished while the withdrawal was being written. Raw bytes are opaque, so the whole copy goes. For each object the tombstone goes first (so the same bytes
+ * before that yes (`raw_consent` is the time of the first yes after the last withdrawal: a withdrawal clears it, and a yes said again or restated for a new covenant version keeps it, so a re-grant never reaches the copies it covers); one with no yes standing has them all, even one that finished while the withdrawal was being written. Raw bytes are opaque, so the whole copy goes. For each object the tombstone goes first (so the same bytes
  * cannot be taken again as already stored), then the object, then the mark on its ledger row, which keeps the hash, the byte count, and the date, as the operator's `erase raw` does. A run that stops halfway runs again to the end, and one with nothing left does nothing.
  * `calls` is the subrequests it may spend; it answers how many objects it erased. The nightly cron runs it (`nightly.ts`), so no operator has to type it.
  */
@@ -273,7 +273,7 @@ export const grantRawConsent = async (request: Request, env: Env): Promise<Respo
   const named = textField(await bodyOf(request), 'version');
   if (named === undefined) return refuse(400, 'missing_field', 'A raw yes names the covenant version it answers.', 'version');
   if (named !== version) return refuse(409, 'covenant_version', `The covenant in force is ${version}, not ${named}.`, 'version');
-  await env.DB.prepare('UPDATE accounts SET raw_consent = ?, raw_consent_version = ? WHERE id = ?').bind(Date.now(), version, account).run();
+  await env.DB.prepare('UPDATE accounts SET raw_consent = COALESCE(raw_consent, ?), raw_consent_version = ? WHERE id = ?').bind(Date.now(), version, account).run();
   return answer(200, { ok: true, version });
 };
 
