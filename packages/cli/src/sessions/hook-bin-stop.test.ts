@@ -76,10 +76,12 @@ describe.skipIf(!built)('the built session-end hook', () => {
     const mark: unknown = JSON.parse(readFileSync(join(store, 'pool-due.json'), 'utf8'));
     expect(typeof mark === 'object' && mark !== null ? typeof Reflect.get(mark, 'startedAt') : undefined).toBe('number');
     // The detached sender writes `pool-nightly.json` as its last step and then exits; waiting for its pid to be gone (a condition, not a sleep) lets the folder be removed with no process in it.
-    await vi.waitFor(() => {
-      expect(existsSync(pidFile)).toBe(true);
+    // The preload creates the file and then writes it, so a read between the two sees an empty file: a pid counts only once it is positive (`process.kill(0, 0)` succeeds for the process group, which would never turn false).
+    const pid = await vi.waitFor(() => {
+      const written = existsSync(pidFile) ? Number(readFileSync(pidFile, 'utf8')) : 0;
+      expect(written).toBeGreaterThan(0);
+      return written;
     }, { timeout: 30_000, interval: 50 });
-    const pid = Number(readFileSync(pidFile, 'utf8'));
     await vi.waitFor(() => {
       expect(alive(pid)).toBe(false);
     }, { timeout: 30_000, interval: 50 });
