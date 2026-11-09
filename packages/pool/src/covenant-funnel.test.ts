@@ -67,7 +67,7 @@ describe('queries/covenant-funnel.sql', () => {
     const header = SQL.split(/\r?\n/)
       .filter((line) => line.startsWith('--'))
       .join(' ');
-    expect(header).toContain('--remote --json --command');
+    expect(header).toContain('--remote --json --command="$(cat queries/covenant-funnel.sql)"');
     expect(header).not.toContain('--remote --file');
   });
 
