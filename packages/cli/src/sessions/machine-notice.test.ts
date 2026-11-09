@@ -39,6 +39,14 @@ describe('recordNotice', () => {
     expect(takeNotice(storeDir)).toMatch(/out of date/);
   });
 
+  it('writes again when the clock moved backward, instead of staying quiet until it catches up', async () => {
+    const storeDir = store();
+    await recordNotice(storeDir, 'vocabulary_expired', 5000);
+    expect(takeNotice(storeDir)).toMatch(/out of date/);
+    await recordNotice(storeDir, 'vocabulary_expired', 4000);
+    expect(takeNotice(storeDir)).toMatch(/out of date/);
+  });
+
   it('makes the store folder when the machine has captured nothing yet', async () => {
     const { storeDir } = stage();
     expect(existsSync(storeDir)).toBe(false);

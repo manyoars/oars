@@ -55,7 +55,8 @@ const sameCode = (a: string, b: string): boolean => a === b;
 export const recordNotice = async (storeDir: string, code: NoticeCode, at: number): Promise<void> => {
   const written = entriesOf(await readFile(join(storeDir, WRITTEN), 'utf8').catch(() => ''));
   const last = written.find((entry) => sameCode(entry.code, code));
-  if (last !== undefined && at - last.at < NOTICE_INTERVAL_MS) return;
+  // A clock that moved backward (`at < last.at`) writes again, rather than staying quiet until it catches up.
+  if (last !== undefined && at >= last.at && at - last.at < NOTICE_INTERVAL_MS) return;
   const kept = entriesOf(await readFile(noticeFile(storeDir), 'utf8').catch(() => ''));
   // A Map keeps a key's first place when it is set again.
   const byCode = new Map(kept.map((entry) => [entry.code, entry]));

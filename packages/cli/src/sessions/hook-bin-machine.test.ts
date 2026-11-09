@@ -16,7 +16,7 @@ const built = existsSync(programOf('hook-bin.js'));
 
 const made: string[] = [];
 afterEach(() => {
-  for (const folder of made.splice(0)) rmSync(folder, { recursive: true, force: true });
+  for (const folder of made.splice(0)) rmSync(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 const home = (): { folder: string; store: string } => {

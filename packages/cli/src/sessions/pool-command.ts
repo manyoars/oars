@@ -520,8 +520,9 @@ export const poolDeposit = async (
       await withdraw(key);
       continue;
     }
-    builtBytes += (await writeBatch(outbox, key, parsed.skeleton)).bytes;
+    // Noted before the batch is written: a person's sweep that runs between the two lines would delete a batch it cannot yet tell is a machine's.
     if (machine !== undefined) await noteMachineKey(outbox, key);
+    builtBytes += (await writeBatch(outbox, key, parsed.skeleton)).bytes;
     // The raw copy comes only after both gates and only with a yes to the raw prompt and a folder not at skeleton only: each transcript of the session, redacted here, before it is queued.
     if (rawAllowed(saved.pool, records.main.project)) {
       let place = 0;

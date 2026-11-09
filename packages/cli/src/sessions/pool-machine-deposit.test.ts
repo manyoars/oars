@@ -216,6 +216,48 @@ describe('deltas on a machine', () => {
     expect(batches(given.staged)).toHaveLength(1);
   });
 
+  describe('the scan a Stop skips', () => {
+    /** Writes a term into the captured session `id` (as if it were said after the last Stop) and captures it. */
+    const taint = async (given: Scene, id: string): Promise<void> => {
+      addProject(given.staged, FOLDER, id, [lineOf(id, '09', 'plan').replace('a plain request', 'a zorblax request')]);
+      await deposit(given.staged.runtime, { allow: [FOLDER], redactDomains: [], now: Date.now });
+    };
+    /** Starts over at the outbox, so the second Stop rebuilds the delta from the history alone: no kept batch, no mark. */
+    const forget = (given: Scene): void => rmSync(join(given.staged.storeDir, 'pool-outbox'), { recursive: true, force: true });
+
+    it('skips the scan of a session it remembers: a term added to it still leaves it in the history inside the window', async () => {
+      const given = await scene({ OARS_HOST_CLASS: 'vps' }, weeks);
+      expect(await document(given, { session: sid(24) })).toMatchObject({ batched: 1 });
+      expect(carried(given.staged)).toBe(1);
+      await taint(given, sid(20));
+      forget(given);
+      // A scan would exclude sid(20), leave the after window one short, and carry no delta.
+      expect(await document(given, { session: sid(24) })).toMatchObject({ batched: 1 });
+      expect(carried(given.staged)).toBe(1);
+    });
+
+    it('scans again under a changed term list, so the same term leaves the history', async () => {
+      const given = await scene({ OARS_HOST_CLASS: 'vps' }, weeks);
+      expect(await document(given, { session: sid(24) })).toMatchObject({ batched: 1 });
+      await taint(given, sid(20));
+      forget(given);
+      writeFileSync(join(given.staged.root, 'terms.txt'), 'zorblax\nanother\n');
+      expect(await document(given, { session: sid(24) })).toMatchObject({ batched: 1 });
+      expect(carried(given.staged)).toBe(0);
+    });
+
+    it('still scans and withdraws a session the Stop names, though its cache entry is fresh', async () => {
+      const given = await scene({ OARS_HOST_CLASS: 'vps' }, weeks);
+      expect(await document(given, { session: sid(24) })).toMatchObject({ batched: 1 });
+      // sid(20) is remembered from that Stop; it is named now, built clean, then given a term.
+      expect(await document(given, { session: sid(20) })).toMatchObject({ batched: 1 });
+      expect(batches(given.staged)).toHaveLength(2);
+      await taint(given, sid(20));
+      expect(await document(given, { session: sid(20) })).toMatchObject({ batched: 0, withdrawn: 1, excluded: { term: 1 } });
+      expect(batches(given.staged)).toHaveLength(1);
+    });
+  });
+
   it('a read-only gate refuses an unnamed session quietly: it is not counted, withdrawn, or placed', async () => {
     const given = await scene({ OARS_HOST_CLASS: 'vps' }, weeks);
     // Built whole once, so every session has a batch; then the folder leaves the allow list and a Stop names one session.

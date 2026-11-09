@@ -248,7 +248,7 @@ describe('a plain install and a machine install leave each other alone', () => {
     const hooks = hooksOf(await readSettings(file));
     expect(commands(groupsOf(hooks, 'Stop'))).toEqual([MACHINE_COMMAND]);
     expect(commands(groupsOf(hooks, 'SessionEnd'))).toHaveLength(2);
-    // The other way round: a machine install after the plain one leaves the plain SessionEnd entry.
+    // The other way around: a machine install after the plain one leaves the plain SessionEnd entry.
     await sessionsHookInstall(depsIn(dir), { ...base, scope: 'user', machine: true, env: ['OARS_HOST_CLASS=vps'] });
     const again = hooksOf(await readSettings(file));
     expect(commands(groupsOf(again, 'SessionEnd')).filter((command) => command.includes('hook-bin.js'))).toHaveLength(1);
