@@ -39,6 +39,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { createInterface } from 'node:readline';
+import { holdsOnlyKinds } from './head-only.js';
 
 /** The Copilot home for an environment; a test passes its own so it never reads the real one. */
 export const copilotRoot = (env: { [name: string]: string | undefined }, home: string = homedir()): string => {
@@ -78,6 +79,8 @@ export interface CopilotStore {
   sessions: CopilotSession[];
   /** The session as transcript text for `captureSession`; throws when the file cannot be read or holds no parseable line. */
   transcript: (session: CopilotSession) => Promise<string>;
+  /** True when the log holds only head records (`eventHeadOnly`); `sessions verify` counts such a file as empty, not unreadable. */
+  headOnly: (session: CopilotSession) => Promise<boolean>;
   /** Folders skipped because their name is not a safe file name (it names a skeleton), counted so the skip is never silent. */
   rejected: number;
   /** Sessions that could not be inspected, reported once each and never fatal; the reason names no path. */
@@ -123,6 +126,10 @@ const iso = (value: unknown): string | undefined => {
 
 /** The non-blank lines that are not JSON (a torn write), kept so `captureSession` counts them and the deposit line reports them. */
 export const eventBadLines = (text: string): string[] => text.split('\n').filter((raw) => raw.trim() !== '' && parse(raw) === undefined);
+
+/** Event types that carry no turn by design: the session's own start, resume, context, model, and shutdown records. A log of these alone is a session started and quit. */
+const EVENT_HEAD_KINDS: ReadonlySet<string> = new Set(['session.start', 'session.resume', 'session.context_changed', 'session.model_change', 'session.shutdown']);
+export const eventHeadOnly = (text: string): boolean => holdsOnlyKinds(text, EVENT_HEAD_KINDS);
 
 /**
  * The exit code of a shell call: `shellExecution.exitCode` (session-events.ts, ToolExecutionCompleteData, "Experimental shell completion facts"). The
@@ -387,6 +394,12 @@ const joinFiles = (texts: readonly string[]): string => {
   return kept.join('\n') + (kept.length === 0 ? '' : '\n');
 };
 
+/** The session's events as one text; a session with no archives is read as it is, and only a rotated one has replayed events to drop. */
+const logText = async (session: CopilotSession): Promise<string> => {
+  const texts = await Promise.all([...session.archives, session.file].map((path) => readFile(path, 'utf8')));
+  return session.archives.length === 0 ? (texts[0] ?? '') : joinFiles(texts);
+};
+
 export const openCopilotStore = async (root: string): Promise<CopilotStore | undefined> => {
   const base = join(root, 'session-state');
   const unreadable: { file: string; reason: string }[] = [];
@@ -395,7 +408,7 @@ export const openCopilotStore = async (root: string): Promise<CopilotStore | und
     entries = await readdir(base, { withFileTypes: true });
   } catch (error) {
     if (missing(error)) return undefined;
-    return { sessions: [], transcript: () => Promise.reject(new Error('no sessions')), rejected: 0, unreadable: [{ file: base, reason: reasonOf(error, base) }] };
+    return { sessions: [], transcript: () => Promise.reject(new Error('no sessions')), headOnly: () => Promise.resolve(false), rejected: 0, unreadable: [{ file: base, reason: reasonOf(error, base) }] };
   }
   const sessions: CopilotSession[] = [];
   let rejected = 0;
@@ -438,10 +451,9 @@ export const openCopilotStore = async (root: string): Promise<CopilotStore | und
     sessions,
     rejected,
     unreadable,
+    headOnly: async (session) => eventHeadOnly(await logText(session)),
     transcript: async (session) => {
-      const texts = await Promise.all([...session.archives, session.file].map((path) => readFile(path, 'utf8')));
-      // A session with no archives is read as it is; only a rotated one has replayed events to drop.
-      const text = session.archives.length === 0 ? (texts[0] ?? '') : joinFiles(texts);
+      const text = await logText(session);
       const lines = [...eventLines(text, session.id).map((line) => JSON.stringify(line)), ...eventBadLines(text)];
       return lines.join('\n') + (lines.length === 0 ? '' : '\n');
     },

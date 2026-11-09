@@ -6,9 +6,10 @@ import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { compileAllow } from './allow.js';
 import { captureSession } from './extract.js';
+import { holdsOnlyKinds } from './head-only.js';
 import { makeRedactor } from './redact.js';
 import type { Harness } from './schema.js';
-import type { SourceSession } from './sources.js';
+import type { SourceSession, SourceStore } from './sources.js';
 import { listDir, mainTranscript, projectFolders, readState, sessionFolders, sourceRoots, sourcesOf, subagentTranscripts, type SessionsRuntime, type Transcript } from './store.js';
 
 export interface FileCounts {
@@ -23,17 +24,22 @@ export interface FileCounts {
 /** What the docs and the tests quote: where each kind of file goes, so `seen` is the sum of the outcomes. */
 export const FILE_COUNT_RULES =
   'A file counts once. It is seen when the reader opened it and it is not empty; seen files either yielded (at least one user or assistant turn came out) or are unreadable ' +
-  '(the read failed, or the text gave no turn, torn or in a record shape the reader does not know). An empty file (nothing in it to parse) and a file skipped by a rule ' +
-  '(an id that is not a safe file name, a revert folded into its thread, a session folded into another) are not seen. Where a store is a database, a session is the unit.';
+  '(the read failed, or the text gave no turn, torn or with a record of a kind the reader does not know). An empty file (nothing in it to parse), a file with no turn whose ' +
+  'records are all head records its own format defines (a session started and quit), and a file skipped by a rule (an id that is not a safe file name, a revert folded into ' +
+  'its thread, a session folded into another) are not seen. Where a store is a database, a session is the unit.';
 
 export type FileOutcome = 'yielded' | 'unreadable' | 'empty';
 
-/** `records` is undefined when the read itself failed. */
-export const outcomeOf = (file: { size: number; records: number | undefined }): FileOutcome => {
+/** `records` is undefined when the read itself failed; `headOnly` is the reader's word that a file with no turn holds only head records. */
+export const outcomeOf = (file: { size: number; records: number | undefined; headOnly?: boolean }): FileOutcome => {
   if (file.records === undefined) return 'unreadable';
   if (file.size === 0) return 'empty';
-  return file.records > 0 ? 'yielded' : 'unreadable';
+  if (file.records > 0) return 'yielded';
+  return file.headOnly === true ? 'empty' : 'unreadable';
 };
+
+/** The Claude Code record types that carry no turn by design: a compaction summary and a file-history snapshot. A transcript of these alone is a session started and quit. */
+const CLAUDE_HEAD_KINDS: ReadonlySet<string> = new Set(['summary', 'file-history-snapshot']);
 
 export const tally = (outcomes: readonly FileOutcome[]): FileCounts => {
   const yielded = outcomes.filter((outcome) => outcome === 'yielded').length;
@@ -61,7 +67,8 @@ const claudeOutcomes = async (runtime: SessionsRuntime, allows: (name: string) =
     for (const transcript of [...mains, ...(await subagentTranscripts(folder, await sessionFolders(folder)))]) {
       try {
         const size = (await stat(transcript.file)).size;
-        outcomes.push(outcomeOf({ size, records: recordsOf(await readFile(transcript.file, 'utf8'), 'claude-code', transcript.subagent) }));
+        const text = await readFile(transcript.file, 'utf8');
+        outcomes.push(outcomeOf({ size, records: recordsOf(text, 'claude-code', transcript.subagent), headOnly: holdsOnlyKinds(text, CLAUDE_HEAD_KINDS) }));
       } catch {
         outcomes.push('unreadable');
       }
@@ -70,9 +77,11 @@ const claudeOutcomes = async (runtime: SessionsRuntime, allows: (name: string) =
   return outcomes;
 };
 
-const sessionOutcome = async (read: (session: SourceSession) => string | Promise<string>, session: SourceSession, harness: Harness): Promise<FileOutcome> => {
+const sessionOutcome = async (store: SourceStore, session: SourceSession, harness: Harness): Promise<FileOutcome> => {
   try {
-    return outcomeOf({ size: session.size, records: recordsOf(await read(session), harness, session.subagent) });
+    const records = recordsOf(await store.transcript(session), harness, session.subagent);
+    // Asked only of a file that gave no turn: the reader is not read twice for a file that yielded.
+    return outcomeOf({ size: session.size, records, headOnly: records === 0 && (await store.headOnly?.(session)) === true });
   } catch {
     return 'unreadable';
   }
@@ -98,7 +107,7 @@ export const harnessFileCounts = async (runtime: SessionsRuntime): Promise<Harne
       try {
         // A session folded into another is no file of its own; an item the store could not inspect is one unreadable file.
         outcomes.push(...store.unreadable.map((): FileOutcome => 'unreadable'));
-        for (const session of store.sessions.filter((one) => one.supersededBy === undefined)) outcomes.push(await sessionOutcome(store.transcript, session, source.harness));
+        for (const session of store.sessions.filter((one) => one.supersededBy === undefined)) outcomes.push(await sessionOutcome(store, session, source.harness));
       } finally {
         store.close();
       }

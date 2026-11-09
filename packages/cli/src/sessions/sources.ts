@@ -37,6 +37,8 @@ export interface SourceStore {
   sessions: SourceSession[];
   /** The session as transcript text for `captureSession`; throws when it cannot be read. */
   transcript: (session: SourceSession) => string | Promise<string>;
+  /** True when the session's file holds only the harness's own head records and no turn, so `sessions verify` counts it as empty, not unreadable; absent when the format has no such form. */
+  headOnly?: (session: SourceSession) => boolean | Promise<boolean>;
   /** Sessions skipped because their id is not a safe file name, counted so the skip is never silent. */
   rejected: number;
   /** Items that could not be inspected, warned about once each and never fatal; `reason` names no path. */
@@ -109,6 +111,7 @@ const codex: Source = {
         ...(session.parent === null ? {} : { subagent: { parent: `codex-${session.parent}`, agentType: session.agentRole, spawnedBy: null } }),
       })),
       transcript: async (session) => await store.transcript(need(byId.get(session.id))),
+      headOnly: async (session) => await store.headOnly(need(byId.get(session.id))),
       rejected: store.rejected,
       unreadable: store.unreadable,
       where: (session) => byId.get(session.id)?.file ?? root,
@@ -130,6 +133,7 @@ const copilot: Source = {
     return {
       sessions: store.sessions.map((session) => ({ id: session.id, folder: session.folder, size: session.size, mtimeMs: session.mtimeMs })),
       transcript: async (session) => await store.transcript(need(byId.get(session.id))),
+      headOnly: async (session) => await store.headOnly(need(byId.get(session.id))),
       rejected: store.rejected,
       unreadable: store.unreadable,
       where: (session) => byId.get(session.id)?.file ?? root,
@@ -226,6 +230,7 @@ const pi: Source = {
     return {
       sessions: store.sessions.map((session) => ({ id: session.id, folder: session.folder, size: session.size, mtimeMs: session.mtimeMs })),
       transcript: async (session) => await store.transcript(need(byId.get(session.id))),
+      headOnly: async (session) => await store.headOnly(need(byId.get(session.id))),
       rejected: store.rejected,
       unreadable: store.unreadable,
       where: (session) => byId.get(session.id)?.file ?? root,
@@ -247,6 +252,7 @@ const vscodeCopilot: Source = {
     return {
       sessions: store.sessions.map((session) => ({ id: session.id, folder: session.folder, size: session.size, mtimeMs: session.mtimeMs })),
       transcript: async (session) => await store.transcript(need(byId.get(session.id))),
+      headOnly: async (session) => await store.headOnly(need(byId.get(session.id))),
       rejected: store.rejected,
       unreadable: store.unreadable,
       where: (session) => byId.get(session.id)?.files[0] ?? root,

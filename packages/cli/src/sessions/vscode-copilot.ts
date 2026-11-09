@@ -132,6 +132,8 @@ export interface VscodeStore {
   sessions: VscodeSession[];
   /** The session as transcript text for `captureSession`; throws when no file of it can be read or holds no parseable entry. */
   transcript: (session: VscodeSession) => Promise<string>;
+  /** True when the session's chat data holds an empty request list (`chatHeadOnly`); `sessions verify` counts such a file as empty, not unreadable. */
+  headOnly: (session: VscodeSession) => Promise<boolean>;
   /** Files skipped because their name is not a safe file name (it names a skeleton), counted so the skip is never silent. */
   rejected: number;
   /** Folders and files that could not be inspected, reported once each and never fatal; the reason names no path. */
@@ -372,6 +374,26 @@ export const chatLines = (data: Obj, fallbackId: string, folder: string | null):
   return lines;
 };
 
+/** The first of the session's files that reads, handed to `use`; the failure of the last one when none does. */
+const firstReadable = async <T>(session: VscodeSession, use: (data: Obj, text: string, jsonl: boolean) => T): Promise<T> => {
+  let failure: unknown = new Error('no file');
+  for (const file of session.files) {
+    try {
+      const text = await readFile(file, 'utf8');
+      const jsonl = file.endsWith('.jsonl');
+      // VS Code throws on an empty log ("Empty log file", objectMutationLog.ts:393) and falls back to the `.json`; the last file alone may read as an empty session.
+      if (jsonl && text.trim() === '' && file !== session.files[session.files.length - 1]) throw new Error('empty log file');
+      return use(chatData(text, jsonl), text, jsonl);
+    } catch (error) {
+      failure = error;
+    }
+  }
+  throw failure;
+};
+
+/** A session object whose request list is empty: the chat was opened and nothing was asked. Anything else with no turn (a renamed list, say) is not head-only. */
+export const chatHeadOnly = (data: Obj): boolean => Array.isArray(data.requests) && data.requests.length === 0;
+
 export const openVscodeCopilotStore = async (root: string): Promise<VscodeStore | undefined> => {
   const unreadable: { file: string; reason: string }[] = [];
   const found = new Map<string, VscodeSession>();
@@ -456,21 +478,11 @@ export const openVscodeCopilotStore = async (root: string): Promise<VscodeStore 
     sessions,
     rejected,
     unreadable,
-    transcript: async (session) => {
-      let failure: unknown = new Error('no file');
-      for (const file of session.files) {
-        try {
-          const text = await readFile(file, 'utf8');
-          const jsonl = file.endsWith('.jsonl');
-          // VS Code throws on an empty log ("Empty log file", objectMutationLog.ts:393) and falls back to the `.json`; the last file alone may read as an empty session.
-          if (jsonl && text.trim() === '' && file !== session.files[session.files.length - 1]) throw new Error('empty log file');
-          const lines = [...chatLines(chatData(text, jsonl), session.id, session.folder).map((line) => JSON.stringify(line)), ...(jsonl ? chatBadLines(text) : [])];
-          return lines.join('\n') + (lines.length === 0 ? '' : '\n');
-        } catch (error) {
-          failure = error;
-        }
-      }
-      throw failure;
-    },
+    headOnly: async (session) => await firstReadable(session, (data) => chatHeadOnly(data)),
+    transcript: async (session) =>
+      await firstReadable(session, (data, text, jsonl) => {
+        const lines = [...chatLines(data, session.id, session.folder).map((line) => JSON.stringify(line)), ...(jsonl ? chatBadLines(text) : [])];
+        return lines.join('\n') + (lines.length === 0 ? '' : '\n');
+      }),
   };
 };

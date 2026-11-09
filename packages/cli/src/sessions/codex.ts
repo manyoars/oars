@@ -55,6 +55,7 @@ import { basename, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { PassThrough, pipeline } from 'node:stream';
 import { createZstdDecompress, zstdDecompressSync } from 'node:zlib';
+import { holdsOnlyKinds } from './head-only.js';
 import { INTERRUPT_MARKER, SHAPE_TOOLS_LINE } from './session-shape.js';
 
 /** The Codex home for an environment; a test passes its own so it never reads the real one. */
@@ -104,6 +105,8 @@ export interface CodexStore {
   sessions: CodexSession[];
   /** The session as transcript text for `captureSession`; throws when the file cannot be read. */
   transcript: (session: CodexSession) => Promise<string>;
+  /** True when the rollout holds only head records (`rolloutHeadOnly`); `sessions verify` counts such a file as empty, not unreadable. */
+  headOnly: (session: CodexSession) => Promise<boolean>;
   /** Files skipped because their id is not a safe file name (it names a skeleton), counted so the skip is never silent. */
   rejected: number;
   /** Files that could not be inspected, reported once each and never fatal; the reason names no path, so a log line built from it leaks none. */
@@ -316,6 +319,10 @@ const usageOf = (info: unknown): Obj | undefined => {
 
 /** The non-blank lines of a rollout that are not JSON (a torn write), kept so `captureSession` counts them and the deposit line reports them. */
 export const rolloutBadLines = (text: string): string[] => text.split('\n').filter((raw) => raw.trim() !== '' && parse(raw) === undefined);
+
+/** Rollout record types that carry no turn by design: the header and the per-turn context. A rollout of these alone is a session started and quit. */
+const ROLLOUT_HEAD_KINDS: ReadonlySet<string> = new Set(['session_meta', 'turn_context']);
+export const rolloutHeadOnly = (text: string): boolean => holdsOnlyKinds(text, ROLLOUT_HEAD_KINDS);
 
 /**
  * The names in a list of tool declarations: each entry's `name` (a `DynamicToolSpec` function, dynamic_tools.rs; an `additional_tools` or
@@ -751,5 +758,6 @@ export const openCodexStore = async (root: string): Promise<CodexStore | undefin
       const lines = [...rolloutLines(text, session.id, parentText).map((line) => JSON.stringify(line)), ...rolloutBadLines(text)];
       return lines.join('\n') + (lines.length === 0 ? '' : '\n');
     },
+    headOnly: async (session) => rolloutHeadOnly(await lineageText(session)),
   };
 };
