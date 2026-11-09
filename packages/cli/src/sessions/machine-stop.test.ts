@@ -82,23 +82,29 @@ describe('machineStop', () => {
     ).toBe('failed');
   });
 
-  // The row's 150 ms test. The hook's body must not wait for the child, and the clock here is the test's own: the fake spawn moves it by what a real spawn costs (40 ms), and the child it hands back would hold
-  // the call for 20 s if the body waited on it. Nothing reads the real clock, so the machine's load cannot fail it; the real cost of the hook (node's start, measured in the cloud probe) is reported, not asserted.
+  // The row's 150 ms test. The clock is the test's own, so the machine's load cannot fail it: the fake spawn charges what a real spawn costs (40 ms), and the child it hands back charges 20 s for each way the body
+  // could hold the call on a child that is still running: a listener for anything but a failure to start (an exit or a close is a wait), and a child never unref'd (it keeps the hook's process alive until it ends).
+  // The real cost of the hook (node's start, measured in a cloud probe) is reported, not asserted.
   it('returns within 150 ms on a clock the test drives, with the child still running', () => {
     let clock = 0;
-    let childRunning = false;
+    let unrefs = 0;
     const spawn: SenderSpawn = () => {
       clock += 40;
-      childRunning = true;
-      return { on: () => undefined, unref: () => undefined };
+      return {
+        on: (event: string) => {
+          if (event !== 'error') clock += 20_000;
+          return undefined;
+        },
+        unref: () => {
+          unrefs += 1;
+        },
+      };
     };
     const { deps } = harness({ OARS_HOST_CLASS: 'cloud' });
-    const before = clock;
     const result = machineStop({ ...deps, spawn });
-    clock += 5;
+    if (unrefs === 0) clock += 20_000;
     expect(result).toBe('started');
-    expect(clock - before).toBeLessThanOrEqual(150);
-    expect(childRunning).toBe(true);
+    expect(clock).toBeLessThanOrEqual(150);
   });
 });
 
