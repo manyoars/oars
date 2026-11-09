@@ -130,7 +130,7 @@ describe('POST /v1/telemetry on the Worker', () => {
   });
 
   it('holds a batch to a cap sized from the CLI: the largest batch it can send (11 wire events and 239 maximal commands) fits, and the cap is half the old megabyte', async () => {
-    // The CLI's own writers measure these at 2,032 bytes (a `wire` event) and 1,744 bytes (a command at its schema's limit) in `packages/cli/src/telemetry/wire.test.ts`; the events here are larger still (a 90-name wire event with the widest
+    // The CLI's own writers measure these at 2,254 bytes (a `wire` event) and 1,767 bytes (a command at its schema's limit) in `packages/cli/src/telemetry/wire.test.ts`; the events here are larger still (a 90-name wire event with the widest
     // counts is about 4.3 KB), so passing is conservative. `telemetry/send.ts` sends at most 250 events a request, and a pass writes one `wire` event for each of the 11 harnesses at most.
     const wire = command({ type: 'wire', data: { fields: Array.from({ length: 90 }, (_, at) => `fieldName${String(at)}xx`), present: Array.from({ length: 90 }, () => 1_000_000_000), fieldBytes: Array.from({ length: 90 }, () => 2 ** 50) } });
     const token = 'a'.repeat(32);
@@ -241,6 +241,17 @@ describe('the telemetry handler against fake stores', () => {
       doubles: [1, Date.parse('2026-11-06T12:00:00.000Z'), 412, 0],
     });
     expect(stores.points[1]).toEqual({ indexes: [INSTALL], blobs: ['doctor', '0.3.0', 'win32', '', '', '', ''], doubles: [1, Date.parse('2026-11-06T12:00:00.000Z'), 0, 0] });
+  });
+
+  it('accepts the first-run and covenant-shown events with their closed words, keeps them whole, and indexes their envelope', async () => {
+    const stores = fakes();
+    const first = { v: 1, at: '2026-11-06T12:00:00.000Z', type: 'first-run', cli: '0.3.0', os: 'linux', data: { ci: 'github-actions', surface: 'npx' } };
+    const shown = { v: 1, at: '2026-11-06T12:00:01.000Z', type: 'covenant-shown', cli: '0.3.0', os: 'linux', data: { version: '2026-11-10' } };
+    const answered = await send(stores, { install: INSTALL, events: [first, shown] });
+    expect(answered.status).toBe(201);
+    expect(await answered.json()).toEqual({ ok: true, kept: 2, indexed: true });
+    expect([...stores.objects.values()].join('')).toContain('"surface":"npx"');
+    expect(stores.points.map((point) => point.blobs[0])).toEqual(['first-run', 'covenant-shown']);
   });
 
   it('keeps the R2 object when Analytics Engine fails, and says it did not index', async () => {
