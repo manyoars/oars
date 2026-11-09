@@ -86,6 +86,7 @@ describe('the nightly pool send', () => {
     expect(puts.length).toBeGreaterThan(0);
     for (const put of puts) {
       expect(header(put, 'oars-raw-consent')).toBe('granted');
+      expect(header(put, 'oars-raw-consent-version')).toBe('v1');
       expect(header(put, 'oars-redaction-version')).toBeDefined();
       expect(header(put, 'oars-capture-version')).toBeDefined();
     }

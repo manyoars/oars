@@ -50,7 +50,7 @@ describe('the server refuses a ledger delete', () => {
   it('aborts a DELETE of a raw_objects row too: the raw tier\'s ledger row is never deleted', async () => {
     const { token, account } = await pool.signIn('github', stubUser('8603'));
     await pool.post('/v1/covenant/accept', acceptanceOf('v1'), token);
-    const grant = { 'oars-redaction-version': '1', 'oars-capture-version': 'cap-1', 'oars-raw-consent': 'granted' };
+    const grant = { 'oars-redaction-version': '1', 'oars-capture-version': 'cap-1', 'oars-raw-consent': 'granted', 'oars-raw-consent-version': 'v1' };
     // The pool checks the hash, so the path carries the SHA-256 of the three bytes.
     const hash = createHash('sha256').update(new Uint8Array([1, 2, 3])).digest('hex');
     expect((await pool.send(`/v1/raw/${hash}/parts/1`, { method: 'PUT', body: new Uint8Array([1, 2, 3]) }, token, grant)).status).toBe(200);

@@ -15,6 +15,8 @@ export interface EraseStore {
   run: (sql: string, binds: readonly (string | number | null)[]) => Promise<number>;
   /** Deletes one R2 object; one that is not there is not an error. */
   deleteObject: (key: string) => Promise<void>;
+  /** One R2 object's bytes in pieces, read as a stream so a large object is never held whole; null when the object is not there. */
+  readObject: (key: string) => Promise<AsyncIterable<Uint8Array> | null>;
 }
 
 /** What one erasure removed: ledger rows and aggregate rows whose content was replaced, staged parts dropped, and raw objects deleted. */
@@ -107,10 +109,10 @@ const PAGE = 25;
 export const depositExists = async (store: EraseStore, accountId: string, sessionId: string): Promise<boolean> => (await store.rows('SELECT 1 AS found FROM deposits WHERE account = ? AND id = ?', [nameOf(accountId, 'the account'), nameOf(sessionId, 'the session id')])).length > 0;
 
 /** Reads a table a page at a time in key order, so the caller can look at every row without the value ever being written into a statement. */
-const scan = async (store: EraseStore, table: string, columns: readonly string[], keys: readonly string[], visit: (row: unknown) => Promise<void>, also = ''): Promise<void> => {
+const scan = async (store: EraseStore, table: string, columns: readonly string[], keys: readonly string[], visit: (row: unknown) => Promise<void>, also = '', alsoBinds: readonly string[] = []): Promise<void> => {
   let after: (string | number)[] = keys.map(() => '');
   for (;;) {
-    const page = await store.rows(`SELECT ${columns.join(', ')} FROM ${table} WHERE ${also}(${keys.join(', ')}) > (${keys.map(() => '?').join(', ')}) ORDER BY ${keys.join(', ')} LIMIT ${String(PAGE)}`, after);
+    const page = await store.rows(`SELECT ${columns.join(', ')} FROM ${table} WHERE ${also}(${keys.join(', ')}) > (${keys.map(() => '?').join(', ')}) ORDER BY ${keys.join(', ')} LIMIT ${String(PAGE)}`, [...alsoBinds, ...after]);
     for (const row of page) await visit(row);
     if (page.length < PAGE) return;
     after = keys.map((key) => {
@@ -223,4 +225,60 @@ export const eraseAccount = async (store: EraseStore, accountId: string, now: Da
   const erased = { rows, objects };
   await audit(store, 'account', 'lawful-request', account, erased, now);
   return erased;
+};
+
+/** A raw object that holds the text the find looked for: its R2 key, its account, and its size as the ledger recorded it. Nothing of what the object says. */
+export interface RawHit {
+  key: string;
+  account: string;
+  bytes: number;
+}
+
+/** What a find read: the objects it opened, how many held the text, and how many ledger rows named an object R2 no longer holds. */
+export interface RawFind {
+  read: number;
+  matched: number;
+  missing: number;
+}
+
+/**
+ * Whether the stream holds any of the texts, found as bytes. Only the last (longest text - 1) bytes of what was read are kept between pieces, so a match across a read boundary is found and memory holds one piece and that tail,
+ * however large the object. It stops reading at the first match. UTF-8 is self-synchronizing, so a byte match of a valid text is a match of the text.
+ */
+export const holdsValue = async (pieces: AsyncIterable<Uint8Array>, texts: readonly Buffer[]): Promise<boolean> => {
+  const keep = Math.max(...texts.map((text) => text.length)) - 1;
+  let tail = Buffer.alloc(0);
+  for await (const piece of pieces) {
+    const window = Buffer.concat([tail, piece]);
+    if (texts.some((text) => window.includes(text))) return true;
+    tail = Buffer.from(window.subarray(Math.max(0, window.length - keep)));
+  }
+  return false;
+};
+
+/**
+ * Finds the raw objects that hold `value`, for a request from a person a deposit names (GDPR Article 17: a third party does not know whose deposit it is, so `allAccounts` looks in every account). It reads each object the ledger holds
+ * and has not marked erased, one at a time and a piece at a time, and calls `found` for each object that holds the value, as it is found. It changes nothing: it runs SELECTs and object reads and no other call, and it reports keys, accounts,
+ * and sizes, never the value or a byte an object holds. The keys it reports go to `eraseRawObject`. The match is an exact substring of the bytes, in the text as given and in the form a JSON transcript writes it (the value scrub's own form).
+ */
+export const findRawContaining = async (store: EraseStore, selector: { account?: string; allAccounts?: boolean }, value: string, found: (hit: RawHit) => void): Promise<RawFind> => {
+  if ((selector.account === undefined) === (selector.allAccounts !== true)) throw new Error('name exactly one of an account and every account');
+  const account = selector.account === undefined ? undefined : nameOf(selector.account, 'the account');
+  if (value.length < MIN_VALUE_LENGTH) throw new Error(`a text to find is at least ${String(MIN_VALUE_LENGTH)} characters, or it would match objects that do not name anyone`);
+  const texts = [...new Set([value, JSON.stringify(value).slice(1, -1)])].map((text) => Buffer.from(text, 'utf8'));
+  const total = { read: 0, matched: 0, missing: 0 };
+  await scan(store, 'raw_objects', ['account', 'sha256', 'bytes'], ['account', 'sha256'], async (row) => {
+    const hit: RawHit = { key: `raw/${textOf(row, 'account')}/${textOf(row, 'sha256')}`, account: textOf(row, 'account'), bytes: numberOf(row, 'bytes') };
+    const pieces = await store.readObject(hit.key);
+    if (pieces === null) {
+      total.missing += 1;
+      return;
+    }
+    total.read += 1;
+    if (await holdsValue(pieces, texts)) {
+      total.matched += 1;
+      found(hit);
+    }
+  }, account === undefined ? 'erased_on IS NULL AND ' : 'erased_on IS NULL AND account = ? AND ', account === undefined ? [] : [account]);
+  return total;
 };

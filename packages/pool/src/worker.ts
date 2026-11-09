@@ -11,7 +11,7 @@ import { loginGone, loginPoll, loginStart, logout } from './identity.js';
 import { hashHosts, hashKey } from './ingest-hash.js';
 import { activate, callerOf, enroll, list, machineScope, revoke, rotate, type Caller } from './machines.js';
 import { stampOf, takeClaim } from './provenance.js';
-import { rawRoute } from './raw.js';
+import { grantRawConsent, rawRoute, withdrawRawConsent } from './raw.js';
 import { depositDigest, erasedRefusal, holdsErasedValue, isErased } from './tombstones.js';
 import { telemetry, type TelemetryEnv } from './telemetry.js';
 import { fleet, operator, type OperatorEnv } from './telemetry-fleet.js';
@@ -146,7 +146,7 @@ const decoded = (name: string): string => {
 type PoolEnv = Env & TelemetryEnv & RollupEnv & OperatorEnv;
 
 interface Route {
-  method: 'GET' | 'POST' | 'DELETE';
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   /** A `:name` segment matches anything but a slash, and its text reaches the handler. */
   path: string;
   /** Whether a machine key may call it. A machine key deposits, reads the covenant, activates and rotates itself, and posts telemetry (which reads no credential); every other route answers it 403 `deposit_only` (`machineScope`), so a route is closed to it until it says otherwise here. */
@@ -172,6 +172,10 @@ export const ROUTES: readonly Route[] = [
   { method: 'POST', path: '/v1/machines/activate', machine: true, handle: activate },
   { method: 'POST', path: '/v1/machines/rotate', machine: true, handle: rotate },
   { method: 'GET', path: '/v1/covenant', machine: true, handle: (request, env) => covenantStatus(request, env) },
+  // The account takes its raw yes back (GDPR Article 7(3)). Account-only: a machine key never speaks for a person's consent.
+  { method: 'DELETE', path: '/v1/consent/raw', machine: false, handle: withdrawRawConsent },
+  // The one way to record a yes after a withdrawal: a header on a raw request cannot.
+  { method: 'PUT', path: '/v1/consent/raw', machine: false, handle: grantRawConsent },
   // Not a deposit and not signed in: percentiles over installs, served only where at least the public floor reports. No query is read.
   { method: 'GET', path: '/v1/telemetry/fleet', machine: false, handle: (request, env) => fleet(env, Date.now(), !request.headers.has('authorization')) },
   // The operator's anomaly read, behind a secret the deploy sets: never served to users.
