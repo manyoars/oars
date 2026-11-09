@@ -6,7 +6,7 @@ import { poolFiles, refreshPool } from './pool.js';
 import { prompt, session, store, tool } from './pool-fixture.js';
 import { deriveConsequences, formatRecallCounts, recallCounts, recallGraphOf, WINDOW_CALLS } from './recall-consequence.js';
 import { appendRecall, makeRecall, type Recall, type RecallArm } from './recall-object.js';
-import type { PromptIntervention, StepObservation, ToolObservation } from './schema.js';
+import type { StepObservation, ToolObservation } from './schema.js';
 import { cleanup, stage } from './test-support.js';
 
 afterEach(cleanup);
@@ -57,18 +57,20 @@ describe('the consequence window', () => {
     expect(found?.motifs).toContain(shapeId([{ action: 'file.edit', identity: null }]));
     expect(found?.nameMatched).toBe(true);
     expect(found?.cost).toEqual({ tokens: null, durationMs: 42 });
-    expect(found?.outcome).toEqual({ errors: 2, verify: 'passed', stopped: null, commits: 1, redo: null, intervention: null });
+    expect(found?.outcome).toEqual({ errors: 2, verify: 'passed', stopped: null, commits: 1, redo: null, reverted: null });
     expect(Object.keys(found ?? {}).sort()).toEqual(['cost', 'motifs', 'nameMatched', 'outcome', 'window']);
   });
 
-  it('keeps the outcome the prompt first showed and sets a later reversion beside it, so a revert changes the intervention and leaves every original value readable', () => {
-    const tools = [call(0, 'Read', 0), call(2, 'Edit', 0)];
-    const withIntervention = (intervention: PromptIntervention | undefined) =>
-      deriveConsequences(store({ sessions: [session('s')], prompts: [prompt('s', 0, { errors: 2, verify: 'passed', commits: 1, ...(intervention === undefined ? {} : { intervention }) }), prompt('s', 1)], tools }), [recallAt(1)])[0]?.consequence?.outcome;
+  it('keeps the outcome the prompt first showed and sets a later reversion beside it, read from the calls: a clean `git revert` of the commit, in a later prompt or in a later session', () => {
+    const committed = [call(0, 'Read', 0), call(2, 'Bash', 0, { segments: [{ run: 'git commit', read: true }], commits: ['abc1234'] })];
+    const revert = (session: string, n: number, promptIndex: number): ToolObservation => tool(session, n, 'Bash', { ts: stamp(n), prompt: promptIndex, segments: [{ run: 'git revert abc1234', read: true }] });
+    const outcome = (sessions: ReturnType<typeof session>[], tools: ToolObservation[]) =>
+      deriveConsequences(store({ sessions, prompts: [prompt('s', 0, { errors: 2, verify: 'passed', commits: 1 }), prompt('s', 1), prompt('t', 0)], tools }), [recallAt(1)])[0]?.consequence?.outcome;
     const original = { errors: 2, verify: 'passed', stopped: null, commits: 1, redo: null };
-    expect(withIntervention('none')).toEqual({ ...original, intervention: 'none' });
-    expect(withIntervention('revert')).toEqual({ ...original, intervention: 'revert' });
-    expect(withIntervention(undefined)).toEqual({ ...original, intervention: null });
+    expect(outcome([session('s')], committed)).toEqual({ ...original, reverted: null });
+    expect(outcome([session('s')], [...committed, revert('s', 5, 1)])).toEqual({ ...original, reverted: 'later-prompt' });
+    expect(outcome([session('s', { repo: 'r' }), session('t', { repo: 'r' })], [...committed, revert('t', 100, 0)])).toEqual({ ...original, reverted: 'later-session' });
+    expect(outcome([session('s')], committed)).not.toHaveProperty('intervention');
   });
 
   it('records a match on the action name and nothing stronger: a call of that name that failed still matches, and no field calls it followed', () => {
@@ -81,7 +83,7 @@ describe('the consequence window', () => {
   it('says no name matched when no shown name appears, and states no outcome for a prompt it cannot find', () => {
     const found = consequence([call(2, 'Read', 7)], recallAt(1));
     expect(found?.nameMatched).toBe(false);
-    expect(found?.outcome).toEqual({ errors: null, verify: null, stopped: null, commits: null, redo: null, intervention: null });
+    expect(found?.outcome).toEqual({ errors: null, verify: null, stopped: null, commits: null, redo: null, reverted: null });
   });
 
   it('reads a held recall the same way, and leaves a recall with no session or an unknown one as it was', () => {

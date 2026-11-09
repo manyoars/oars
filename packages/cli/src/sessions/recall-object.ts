@@ -3,7 +3,8 @@
 import { createHash } from 'node:crypto';
 import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Frame, PromptIntervention } from './schema.js';
+import type { Reversion } from './reversion.js';
+import type { Frame } from './schema.js';
 
 const RECALLS_FILE = 'recalls.jsonl';
 
@@ -99,10 +100,10 @@ export interface RecallOutcome {
   commits: number | null;
   redo: boolean | null;
   /**
-   * What the next human prompt did to this prompt's work, beside the values above and never in place of them: `revert` when that prompt ran a git undo or asked for one. Only the next prompt is read, so a
-   * later reversion, or one in another session, leaves this at `none`. Null when the prompt was derived before the value existed.
+   * Where the nearest later clean `git revert <sha>` of a commit this prompt made ran, beside the values above and never in place of them. The sha is the whole tie, so null says none was found, not that
+   * none happened: an edit undone any other way, or a commit with no sha, is not read.
    */
-  intervention: PromptIntervention | null;
+  reverted: Reversion | null;
 }
 
 /** Derived from the capture records, never captured live. */

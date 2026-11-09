@@ -4,6 +4,7 @@
 import { motifsOf, stepsOfCall, type CountedStep } from './motif.js';
 import { bucketOf, floorOf } from './pool-wire.js';
 import type { Recall, RecallConsequence, RecallOutcome } from './recall-object.js';
+import { reversionsOf, type Reversion } from './reversion.js';
 import { harnessOf, type Harness, type PromptObservation, type ToolObservation } from './schema.js';
 import type { Store } from './store.js';
 
@@ -38,16 +39,17 @@ const positionOf = (line: readonly ToolObservation[], at: string): number => {
   return next < 0 ? line.length : next;
 };
 
-const outcomeOf = (prompt: PromptObservation | undefined): RecallOutcome => ({
+/** The values the prompt first showed, and beside them, never in place of them, the nearest later revert of a commit the prompt made (null when none is tied). */
+const outcomeOf = (prompt: PromptObservation | undefined, reverted: Reversion | null): RecallOutcome => ({
   errors: prompt?.errors ?? null,
   verify: prompt?.verify ?? null,
   stopped: prompt?.stopped ?? null,
   commits: prompt?.commits ?? null,
   redo: prompt?.redo ?? null,
-  intervention: prompt?.intervention ?? null,
+  reverted: prompt === undefined ? null : reverted,
 });
 
-const consequenceOf = (recall: Recall, session: string, line: readonly ToolObservation[], position: number, harness: Harness, prompts: ReadonlyMap<string, PromptObservation>): RecallConsequence => {
+const consequenceOf = (recall: Recall, session: string, line: readonly ToolObservation[], position: number, harness: Harness, prompts: ReadonlyMap<string, PromptObservation>, reverted: ReturnType<typeof reversionsOf>): RecallConsequence => {
   const prompt = (line[position - 1] ?? line[position])?.prompt ?? null;
   const calls: ToolObservation[] = [];
   let end: RecallConsequence['window']['end'] = 'session';
@@ -72,7 +74,7 @@ const consequenceOf = (recall: Recall, session: string, line: readonly ToolObser
     // The action name is the whole basis: a call of the shown action that failed, or did something else with it, still matches. The record holds no stronger evidence yet, so none is implied.
     nameMatched: steps.some((step) => names.has(step.action)),
     cost: { tokens: measured.length === 0 ? null : measured.reduce((sum, tokens) => sum + tokens, 0), durationMs: steps.reduce((sum, step) => sum + step.durationMs, 0) },
-    outcome: outcomeOf(prompts.get(promptKey(session, prompt))),
+    outcome: outcomeOf(prompts.get(promptKey(session, prompt)), reverted(session, prompt)),
   };
 };
 
@@ -81,12 +83,13 @@ export const deriveConsequences = (store: Store, recalls: readonly Recall[]): Re
   const lines = mainLines(store);
   const prompts = new Map(store.prompts.map((prompt) => [promptKey(prompt.session, prompt.index), prompt]));
   const sessions = new Map(store.sessions.map((session) => [session.session, session]));
+  const reverted = reversionsOf(store);
   return recalls.map((recall) => {
     const session = recall.sid === null ? undefined : sessions.get(recall.sid);
     if (session === undefined) return recall;
     const line = lines.get(session.session) ?? [];
     const position = positionOf(line, recall.at);
-    return { ...recall, n: position, consequence: consequenceOf(recall, session.session, line, position, harnessOf(session), prompts) };
+    return { ...recall, n: position, consequence: consequenceOf(recall, session.session, line, position, harnessOf(session), prompts, reverted) };
   });
 };
 
