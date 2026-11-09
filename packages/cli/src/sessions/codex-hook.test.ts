@@ -232,7 +232,7 @@ describe('fail-open', () => {
     expect(calls[0]?.file).toBe(join(store.storeDir, 'hook-rows.jsonl'));
     expect(calls[0]?.text.endsWith('\n')).toBe(true);
     expect(calls[0]?.text.split('\n')).toHaveLength(2);
-    expect(() => JSON.parse(calls[0]?.text ?? '')).not.toThrow();
+    expect(JSON.parse(calls[0]?.text ?? '') as unknown).toMatchObject({ source: 'hook' });
   });
 
   it('resolves with a note when the input is not JSON or not an object', async () => {
