@@ -291,10 +291,12 @@ const rateLimitsOf = (payload: Obj): Obj | undefined => {
 const usageOf = (info: unknown): Obj | undefined => {
   const last = isObj(info) && isObj(info.last_token_usage) ? info.last_token_usage : undefined;
   if (last === undefined) return undefined;
-  const input = num(last.input_tokens) ?? 0;
+  const reportedInput = num(last.input_tokens);
+  const input = reportedInput ?? 0;
   const reportedCached = num(last.cached_input_tokens);
   const cached = Math.min(reportedCached ?? 0, input);
-  const output = num(last.output_tokens) ?? 0;
+  const reportedOutput = num(last.output_tokens);
+  const output = reportedOutput ?? 0;
   // A zero total means Codex recorded none, so no usage is written rather than a measured zero.
   if (input === 0 && output === 0) return undefined;
   const reasoning = num(last.reasoning_output_tokens);
@@ -303,11 +305,11 @@ const usageOf = (info: unknown): Obj | undefined => {
   // Codex counts cached and written tokens both inside `input_tokens` (input 100 = cached 40 + write 60, codex-api/src/sse/responses.rs:889-911); capture's
   // `input` excludes cache reads and creation, as the Claude Code path's does, so each token is counted once.
   return {
-    input_tokens: Math.max(input - cached - written, 0),
-    // A category the event left out stays out (older rollouts carry no cache keys), so it is neither a zero entry nor an observed field.
+    // A category the event left out stays out (a partial event, or an older rollout with no cache keys), so it is neither a zero entry nor an observed field.
+    ...(reportedInput === undefined ? {} : { input_tokens: Math.max(input - cached - written, 0) }),
     ...(reportedCached === undefined ? {} : { cache_read_input_tokens: cached }),
     ...(reportedWritten === undefined ? {} : { cache_creation_input_tokens: written }),
-    output_tokens: output,
+    ...(reportedOutput === undefined ? {} : { output_tokens: output }),
     ...(reasoning === undefined ? {} : { output_tokens_details: { thinking_tokens: reasoning } }),
   };
 };

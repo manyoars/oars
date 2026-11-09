@@ -264,7 +264,7 @@ export interface DepositResult {
   missing: string[];
 }
 
-const projectFolders = async (projectsRoot: string): Promise<string[]> => {
+export const projectFolders = async (projectsRoot: string): Promise<string[]> => {
   try {
     return (await readdir(projectsRoot, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
   } catch (error) {
@@ -373,7 +373,7 @@ interface SpawnPoint {
 }
 
 /** A transcript to deposit: a main session file, or a subagent's under `<session>/subagents/` (register A24). */
-interface Transcript {
+export interface Transcript {
   file: string;
   /** `<session>`, or `<parent>~agent-x` / `<parent>~wf_y~agent-x` for a subagent. */
   session: string;
@@ -384,7 +384,7 @@ interface Transcript {
   fromRaw?: boolean;
 }
 
-const mainTranscript = (folder: string, name: string): Transcript => ({ file: join(folder, name), session: name.slice(0, -'.jsonl'.length), relative: name });
+export const mainTranscript = (folder: string, name: string): Transcript => ({ file: join(folder, name), session: name.slice(0, -'.jsonl'.length), relative: name });
 
 export const listDir = async (dir: string) => {
   try {
@@ -436,7 +436,7 @@ export const subagentFiles = async (folder: string, sessions: readonly string[])
 };
 
 // The subagent transcripts of the given sessions, each with its `.meta.json` read.
-const subagentTranscripts = async (folder: string, sessions: readonly string[]): Promise<Transcript[]> => {
+export const subagentTranscripts = async (folder: string, sessions: readonly string[]): Promise<Transcript[]> => {
   const found: Transcript[] = [];
   for (const { dir, path, parent, name } of await subagentFiles(folder, sessions)) {
     const agent = name.slice(0, -'.jsonl'.length);
@@ -936,13 +936,13 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
 };
 
 /** The table in force: the runtime's own (a test's), else every source. */
-const sourcesOf = (runtime: SessionsRuntime): readonly Source[] => runtime.sources ?? SOURCES;
+export const sourcesOf = (runtime: SessionsRuntime): readonly Source[] => runtime.sources ?? SOURCES;
 
 /** A source's name is the first `state.json` key segment, and no project folder uses it, so the Claude Code walk skips it. */
 const isSource = (table: readonly Source[], name: string): boolean => table.some((source) => source.name === name);
 
 /** The roots the runtime names, by source name; `cursorRoot` stays the alias of the Cursor entry. */
-const sourceRoots = (runtime: SessionsRuntime): Map<string, string> =>
+export const sourceRoots = (runtime: SessionsRuntime): Map<string, string> =>
   new Map(Object.entries({ ...(runtime.cursorRoot === undefined ? {} : { cursor: runtime.cursorRoot }), ...runtime.sourceRoots }));
 
 /** Reports an unreadable source store or file, once per reason: the full path for the terminal, the base name for the hook-call record. */

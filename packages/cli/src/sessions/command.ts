@@ -3,7 +3,7 @@ import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { Outcome } from '../cli.js';
 import { denialOf, parseAllowList, runAllow } from './allow.js';
-import { SOURCES, sourceLabel } from './sources.js';
+import { SOURCES, sourceLabel, type Source } from './sources.js';
 import { CliError, ExitCode } from '../errors.js';
 import { loadTerms } from './exclusion.js';
 import { EVALUATOR_MODEL, fillArms, sidecarSaver } from './gold-arms.js';
@@ -33,6 +33,7 @@ import { FAMILIES } from './read.js';
 import { formatNotReadable, notReadable } from './read-readable.js';
 import { formatReads, isFamily, parseSlice, selectReads } from './read-rows.js';
 import { CAPTURE_VERSION, OLDEST_READABLE_CAPTURE, type StepRow } from './schema.js';
+import { harnessFileCounts, type HarnessFiles } from './harness-files.js';
 import { deposit, frozenSessions, loadStore, paths, readCalls, readRedactDomains, readSaved, readSkeletons, skippedFolders, slugOf, type SessionsRuntime, type SkippedScope, type Store } from './store.js';
 import { formatStepCounters, inputKey, newContext, readSteps, stampKey, runDeposit, runStep, stepCounters, stuckSteps, tryLog, type StuckStep } from './steps.js';
 import { formatSelfBaseline, selfBaseline as selfBaselineOf, type SelfBaselineResult } from './baseline.js';
@@ -214,6 +215,12 @@ const skippedNotice = (scope: SkippedScope): string[] => {
   return [`${folders} ${transcripts}; ${one ? 'it is' : 'they are'} never read: not on the allowlist. Not captured: ${shown}${more}.`];
 };
 
+/** The three counts per harness, as numbers only: no cause, no path, no verdict. */
+const harnessFilesLines = (files: HarnessFiles, table: readonly Source[]): string[] => {
+  const rows = Object.entries(files).map(([harness, counts]) => `  ${harness === 'claude-code' ? 'Claude Code' : sourceLabel(harness, table)}: seen ${String(counts.seen)}, yielded ${String(counts.yielded)}, unreadable ${String(counts.unreadable)}`);
+  return rows.length === 0 ? [] : ['Session files per harness:', ...rows];
+};
+
 /** Scope is an extra, like the step log: a projects root this process cannot list reports an empty scope and fails neither `verify` nor `books`. */
 const scopeOf = (runtime: SessionsRuntime): Promise<SkippedScope> => skippedFolders(runtime).catch((): SkippedScope => ({ folders: 0, transcripts: 0, names: [] }));
 
@@ -307,6 +314,8 @@ export interface VerifyReport {
   scope: SkippedScope;
   /** Every session's rows 1 to 10 with a status each (spec 5.4 item 5): `pass`, `fail`, or `not run` when the row had nothing to check. */
   sessionResults: SessionVerification[];
+  /** Per harness, the session files seen, how many yielded records, and how many were unreadable (`harness-files.ts` defines them). Read from the harness's own store on this machine; nothing is sent. */
+  harnessFiles: HarnessFiles;
   /** Layer 4 at T0, local (spec 2.4): each session's raw-file match, recomputed root, and count bindings, with the count of each row of the result table. */
   audit: { counts: T0Counts; sessions: SessionAudit[] };
   /** Layer 2 at T0, local (spec 2.2): each session's week against the operator's own other weeks on its harness; `not run` below 1,000 calls or 4 baseline weeks. */
@@ -348,10 +357,12 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
     // A verify that got here has succeeded, so a verify streak is the one this run ends and is not listed.
     const stuck = stuckSteps(await readSteps(storeDir).catch((): StepRow[] => [])).filter((entry) => entry.step !== 'verify');
     const scope = await scopeOf(runtime);
+    // Like the scope, an extra: a store that cannot be read is an unreadable count inside it, and a failure outside it leaves the section out.
+    const harnessFiles = await harnessFileCounts(runtime).catch((): HarnessFiles => ({}));
     // A local count like the scope: an outbox folder that cannot be read is no reason for `verify` to fail.
     const staleBatches = await staleBatchesAnywhere(storeDir).catch(() => 0);
     const totals: OutboxTotals = await outboxTotals(storeDir).catch(() => ({ sentBatches: 0, sentRaw: 0, rawCopies: 0, rawMasked: 0 }));
-    const report: VerifyReport = { sessions: skeletons.length, unreadable, cvFrozen: frozen.size, scope, invariants: results.map((result) => ({ ...result, pass: result.violations === 0 })), stuck, sessionResults, audit, selfBaseline, staleBatches, ...totals };
+    const report: VerifyReport = { sessions: skeletons.length, unreadable, cvFrozen: frozen.size, scope, harnessFiles, invariants: results.map((result) => ({ ...result, pass: result.violations === 0 })), stuck, sessionResults, audit, selfBaseline, staleBatches, ...totals };
     const failed = [...results.filter((result) => result.violations > 0).map((result) => result.name), ...(unreadable > 0 ? ['unreadable skeletons'] : []), ...merkleFailed, ...stuck.map((entry) => `stuck: ${entry.step}`)];
     const stuckLines = stuck.map((entry) => `FAIL  ${entry.step} is stuck: key ${entry.key} failed ${String(entry.runs)} runs in a row: ${entry.error}`);
     const highWater = mine([...store.sessions, ...store.subagents]).map((session) => `${session.session}:${String(session.rev)}:${session.cv}`).sort();
@@ -360,7 +371,7 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
       failed,
       report,
       document: { ok: true, ...report, newerCaptures: store.newerCaptures },
-      text: [formatVerify(results, skeletons.length), formatAudit(audits), formatSelfBaseline(selfBaseline), ...(resultLines === '' ? [] : [resultLines]), ...(frozen.size > 0 ? [`${String(frozen.size)} cv-frozen sessions: behind the current capture version, but the transcript is gone from the harness and raw/ (or, for a Cursor session, the composer is gone from Cursor), so they cannot be captured again`] : []), ...skippedNotice(scope), ...(staleBatches > 0 ? [`${String(staleBatches)} outbox batches were built under an older vocabulary, field list, or skeleton format; they will never be sent, and oars pool deposit removes them`] : []), ...(totals.sentBatches + totals.sentRaw > 0 ? [`${String(totals.sentBatches)} outbox ${totals.sentBatches === 1 ? 'batch' : 'batches'} and ${String(totals.sentRaw)} raw ${totals.sentRaw === 1 ? 'copy were' : 'copies were'} already sent`] : []), ...(totals.rawCopies > 0 ? [`${String(totals.rawCopies)} queued raw ${totals.rawCopies === 1 ? 'copy holds' : 'copies hold'} ${String(totals.rawMasked)} placeholders (masked values, plus any a transcript already held as text)`] : []), ...newerNotice(store), ...(unreadable > 0 ? [`FAIL  ${String(unreadable)} unreadable skeleton files (torn or corrupted); redeposit to rebuild them`] : []), ...stuckLines].join('\n'),
+      text: [formatVerify(results, skeletons.length), formatAudit(audits), formatSelfBaseline(selfBaseline), ...(resultLines === '' ? [] : [resultLines]), ...(frozen.size > 0 ? [`${String(frozen.size)} cv-frozen sessions: behind the current capture version, but the transcript is gone from the harness and raw/ (or, for a Cursor session, the composer is gone from Cursor), so they cannot be captured again`] : []), ...harnessFilesLines(harnessFiles, runtime.sources ?? SOURCES), ...skippedNotice(scope), ...(staleBatches > 0 ? [`${String(staleBatches)} outbox batches were built under an older vocabulary, field list, or skeleton format; they will never be sent, and oars pool deposit removes them`] : []), ...(totals.sentBatches + totals.sentRaw > 0 ? [`${String(totals.sentBatches)} outbox ${totals.sentBatches === 1 ? 'batch' : 'batches'} and ${String(totals.sentRaw)} raw ${totals.sentRaw === 1 ? 'copy were' : 'copies were'} already sent`] : []), ...(totals.rawCopies > 0 ? [`${String(totals.rawCopies)} queued raw ${totals.rawCopies === 1 ? 'copy holds' : 'copies hold'} ${String(totals.rawMasked)} placeholders (masked values, plus any a transcript already held as text)`] : []), ...newerNotice(store), ...(unreadable > 0 ? [`FAIL  ${String(unreadable)} unreadable skeleton files (torn or corrupted); redeposit to rebuild them`] : []), ...stuckLines].join('\n'),
     };
     const cvBehind = results.find((result) => result.name === CAPTURE_INVARIANTS[0])?.violations ?? 0;
     // The key is the sessions checked, each at its rev and cv, and the code's ev (spec 4.2).

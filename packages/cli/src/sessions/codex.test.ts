@@ -370,6 +370,16 @@ describe('shell, MCP, patch, and usage outcomes', () => {
     expect(out.session.usage).toMatchObject({ input: 50, cacheRead: 20, cacheWrite: 30, output: 10 });
   });
 
+  it('writes input and output only when the event reported them, so a partial event leaves the other unobserved, not a measured zero', () => {
+    const usageOnly = (usage: object) => extractOf([meta('/work/app'), say(3, 'hello'), line(T(4), 'event_msg', { type: 'token_count', info: { last_token_usage: usage } })]).session;
+    const outputOnly = usageOnly({ output_tokens: 10 });
+    expect(outputOnly.usage).toMatchObject({ output: 10 });
+    expect(outputOnly.usageObserved).toEqual(['output']);
+    const inputOnly = usageOnly({ input_tokens: 100, cached_input_tokens: 20 });
+    expect(inputOnly.usage).toMatchObject({ input: 80, cacheRead: 20 });
+    expect(inputOnly.usageObserved).toEqual(['input', 'cacheRead']);
+  });
+
   it('cuts at 1,000 characters and redacts on the live text path (a function_call_output, not an exec_command_end)', () => {
     const long = `fail: sk-abcdefghijklmnopqrstuvwxyz0123 for alice@example.com ${'x'.repeat(1500)}`;
     const out = extractOf([meta('/work/app'), shellCall(3, 'c1', ['make']), shellOut(4, 'c1', execText(1, long))]);
