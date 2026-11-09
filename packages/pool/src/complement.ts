@@ -6,7 +6,7 @@
 // which its one-step shape cells sum to over models, a long-tail model beside a listed one): with no such part, the smallest served part of each other family that counts that total is withheld, and a family with neither a whole nor a total is left alone.
 // The environment cells (`environmentOf`, `stored.ts`) keep their own rule, every part served or the total is not (each part against its own class's floor), and their counterparts are also dropped when a bucket cell is withheld (`bundleOf`).
 import { argFeaturesOf } from '../../cli/src/sessions/call-shape.js';
-import { isEnvironmentCell, NO_AXES, parseShapeClass, weekStartOf, type Cell, type ShapeFacet } from '../../cli/src/sessions/cells.js';
+import { exposureOfCell, isEnvironmentCell, NO_AXES, parseShapeClass, weekStartOf, type Cell, type ShapeFacet } from '../../cli/src/sessions/cells.js';
 import { targetOf } from '../../cli/src/sessions/extract.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
 import { OPEN_LIST_KEYS } from '../../cli/src/sessions/public-vocabulary.js';
@@ -40,14 +40,14 @@ interface Placement {
 }
 
 /** The key of the family of one partition facet: the facet's cells for an action, key (for a keyed facet), frame, grain, day, and exposure. */
-const facetFamilyKey = (action: string, facet: ShapeFacet, key: string, cell: Cell): string => JSON.stringify(['facet', action, facet, key, cell.frameBucket, cell.grain, cell.day, cell.exposed]);
+const facetFamilyKey = (action: string, facet: ShapeFacet, key: string, cell: Cell): string => JSON.stringify(['facet', action, facet, key, cell.frameBucket, cell.grain, cell.day, exposureOfCell(cell)]);
 
 /**
  * The calls of an action (`key` empty), or of an action that send a key, in one frame, grain, day, and exposure: the total of a partition facet and of a key's nesting family. An action's calls are tagged apart
  * (`ACTION_CALLS`) because a reader has them from the `fit` read: the `action-calls` rule ties them to the action's one-step shape cells, and where no such cell is held the rank check counts them as known.
  */
-const callsTotal = (action: string, key: string, cell: Pick<Cell, 'frameBucket' | 'grain' | 'day' | 'exposed'>): string =>
-  JSON.stringify([key === '' ? ACTION_CALLS : 'key-calls', action, key, cell.frameBucket, cell.grain, cell.day, cell.exposed]);
+const callsTotal = (action: string, key: string, cell: Pick<Cell, 'frameBucket' | 'grain' | 'day' | 'exposed' | 'exposure'>): string =>
+  JSON.stringify([key === '' ? ACTION_CALLS : 'key-calls', action, key, cell.frameBucket, cell.grain, cell.day, exposureOfCell(cell)]);
 
 const ACTION_CALLS = 'action-calls';
 
@@ -55,7 +55,7 @@ const ACTION_CALLS = 'action-calls';
 const isActionCalls = (total: string): boolean => total.startsWith(`["${ACTION_CALLS}"`);
 
 /** The calls of an action that have a path target, in one frame, grain, day, and exposure: the total the `target-keys` rule's two families share. */
-const pathCalls = (action: string, cell: Pick<Cell, 'frameBucket' | 'grain' | 'day' | 'exposed'>): string => JSON.stringify(['path-calls', action, cell.frameBucket, cell.grain, cell.day, cell.exposed]);
+const pathCalls = (action: string, cell: Pick<Cell, 'frameBucket' | 'grain' | 'day' | 'exposed' | 'exposure'>): string => JSON.stringify(['path-calls', action, cell.frameBucket, cell.grain, cell.day, exposureOfCell(cell)]);
 
 /** Whether a call that sends this key has a path target, asked of the emitter (`targetOf`) so the list of path keys is not restated. */
 const sendsPath = (key: string): boolean => targetOf('', { [key]: 'x' }, undefined, '', (value) => value).target !== null;
@@ -64,8 +64,8 @@ const sendsPath = (key: string): boolean => targetOf('', { [key]: 'x' }, undefin
 const OWN_CALLS = 'own-calls';
 
 /** The calls a facet's cells split where those are not all of the action's or the key's: no other cell holds this count, so the facet's equation leaves its cells free of every other family's. */
-const ownCalls = (action: string, facet: ShapeFacet, key: string, cell: Pick<Cell, 'frameBucket' | 'grain' | 'day' | 'exposed'>): string =>
-  JSON.stringify([OWN_CALLS, action, facet, key, cell.frameBucket, cell.grain, cell.day, cell.exposed]);
+const ownCalls = (action: string, facet: ShapeFacet, key: string, cell: Pick<Cell, 'frameBucket' | 'grain' | 'day' | 'exposed' | 'exposure'>): string =>
+  JSON.stringify([OWN_CALLS, action, facet, key, cell.frameBucket, cell.grain, cell.day, exposureOfCell(cell)]);
 
 /** Whether a facet counts only some of the calls its total would name: `dropped` only the calls with an unsent key, and the `enum` of a list that is not exhaustive only its on-list values. A boolean is always closed, under any key. */
 const countsOnlySome = (facet: ShapeFacet, value: string): boolean => {
@@ -120,7 +120,7 @@ const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, motif: Mot
       if (parsed === null || (parsed.facet !== 'depth' && parsed.facet !== 'dir')) return [];
       const at = parsed.value.indexOf('=');
       if (parsed.value.slice(at + 1) !== (parsed.facet === 'depth' ? '0' : 'root')) return [];
-      return [{ family: JSON.stringify(['depth-dir', parsed.action, parsed.value.slice(0, at), cell.frameBucket, cell.grain, cell.day, cell.exposed]), role: parsed.facet === 'depth' ? 'whole' : 'part' }];
+      return [{ family: JSON.stringify(['depth-dir', parsed.action, parsed.value.slice(0, at), cell.frameBucket, cell.grain, cell.day, exposureOfCell(cell)]), role: parsed.facet === 'depth' ? 'whole' : 'part' }];
     },
   },
   // A key's `size` cell is the whole of its `enum` cells whose member's length falls in that size, for a boolean-free exhaustive list: every call that sends the key sends a listed value, so the calls in a size are the calls of
@@ -137,7 +137,7 @@ const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, motif: Mot
       if (parsed.facet === 'enum' && (countsOnlySome('enum', parsed.value) || member === 'true' || member === 'false')) return [];
       // The size the emitter itself gives the member, so the buckets are not restated here.
       const size = parsed.facet === 'size' ? member : argFeaturesOf('', { [key]: member }, undefined)[0]?.valueSize;
-      return [{ family: JSON.stringify(['enum-size', parsed.action, key, size, cell.frameBucket, cell.grain, cell.day, cell.exposed]), role: parsed.facet === 'size' ? 'whole' : 'part' }];
+      return [{ family: JSON.stringify(['enum-size', parsed.action, key, size, cell.frameBucket, cell.grain, cell.day, exposureOfCell(cell)]), role: parsed.facet === 'size' ? 'whole' : 'part' }];
     },
   },
   // The calls that send a key k are split by the `keys` cells whose list holds k, and by each per-key facet of k: the `keys` cells that hold k are parts of those facets' total.
@@ -147,7 +147,7 @@ const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, motif: Mot
       const parsed = motif === undefined || motif.cls === null ? null : parseShapeClass(motif.cls);
       if (parsed === null || parsed.facet !== 'keys') return [];
       return parsed.value.split(',').map((key) => ({
-        family: JSON.stringify(['key-nesting', parsed.action, key, cell.frameBucket, cell.grain, cell.day, cell.exposed]),
+        family: JSON.stringify(['key-nesting', parsed.action, key, cell.frameBucket, cell.grain, cell.day, exposureOfCell(cell)]),
         role: 'part' as const,
         total: callsTotal(parsed.action, key, cell),
         echoes: KEYED_FACETS.map((facet) => facetFamilyKey(parsed.action, facet, key, cell)),
@@ -164,7 +164,7 @@ const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, motif: Mot
       if (parsed === null) return [];
       const withPath = parsed.facet === 'target' ? parsed.value !== 'none' : parsed.facet === 'keys' && parsed.value.split(',').some(sendsPath);
       if (!withPath) return [];
-      return [{ family: JSON.stringify(['target-keys', parsed.action, parsed.facet, cell.frameBucket, cell.grain, cell.day, cell.exposed]), role: 'part', total: pathCalls(parsed.action, cell) }];
+      return [{ family: JSON.stringify(['target-keys', parsed.action, parsed.facet, cell.frameBucket, cell.grain, cell.day, exposureOfCell(cell)]), role: 'part', total: pathCalls(parsed.action, cell) }];
     },
   },
   // An action's one-step shape cells, per model (`harness/version/model`) and exposure, sum to the calls its facet cells split on the version bucket (`harness/version/-`, unexposed): the total the `fit` read gives.
@@ -175,19 +175,19 @@ const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, motif: Mot
       const [step, ...more] = motif?.level === 'shape' && !isEnvironmentCell(cell) ? motif.steps : [];
       if (step === undefined || more.length > 0) return [];
       const [harness, version] = cell.frameBucket.split('/');
-      const versionCell = { ...cell, frameBucket: [harness, version, NO_AXES].join('/'), exposed: false };
+      const versionCell = { ...cell, frameBucket: [harness, version, NO_AXES].join('/'), exposed: false, exposure: 'unknown' as const };
       return [{ family: JSON.stringify(['action-calls', step.action, versionCell.frameBucket, cell.grain, cell.day]), role: 'part', total: callsTotal(step.action, '', versionCell) }];
     },
   },
   // A week cell is the whole of the day cells of its motif, frame, exposure, and week.
-  { name: 'week', placements: (cell) => [{ family: JSON.stringify(['week', cell.motifId, cell.frameBucket, cell.exposed, cell.grain === 'week' ? cell.day : weekStartOf(cell.day)]), role: cell.grain === 'week' ? 'whole' : 'part' }] },
+  { name: 'week', placements: (cell) => [{ family: JSON.stringify(['week', cell.motifId, cell.frameBucket, exposureOfCell(cell), cell.grain === 'week' ? cell.day : weekStartOf(cell.day)]), role: cell.grain === 'week' ? 'whole' : 'part' }] },
   // A shape cell is the whole of the named cells of its actions in the same frame, grain, day, and exposure. A program with flags or pulls has its own rule and is left out.
   {
     name: 'shape-name',
     placements: (cell, motif) => {
       if (motif === undefined || motif.level === 'class') return [];
       if (motif.steps.some(({ identity }) => identity !== null && 'program' in identity && (identity.flags.length > 0 || (identity.pulls?.length ?? 0) > 0))) return [];
-      return [{ family: JSON.stringify(['shape-name', motif.steps.map((step) => step.action), cell.frameBucket, cell.grain, cell.day, cell.exposed]), role: motif.level === 'shape' ? 'whole' : 'part' }];
+      return [{ family: JSON.stringify(['shape-name', motif.steps.map((step) => step.action), cell.frameBucket, cell.grain, cell.day, exposureOfCell(cell)]), role: motif.level === 'shape' ? 'whole' : 'part' }];
     },
   },
 ];

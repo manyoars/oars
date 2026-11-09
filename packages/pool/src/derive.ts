@@ -1,6 +1,6 @@
 // Cells and reads (recall spec Sections 2.5 and 2.6), with the same code a local store runs. A deposit's skeleton becomes cells in `cell-increments.ts`, which ingest adds to the stored
 // ones; a bundle is derived from the stored cells, whose `clusters` is the held count of verified-distinct clusters of accounts (`clusters.ts`). Recovery is served from cells alone (what others did next after a failed call, `read-recovery-edge.ts`), and so is fit by call shape (`deriveFitShape`, from the shape cells); the signature record is left out: a skeleton holds no signature (`docs/pool.md`, "What a bundle serves").
-import { cellIdOf, harnessBucket, NO_AXES, parseShapeClass, poolOf, type Cell, type Pool } from '../../cli/src/sessions/cells.js';
+import { cellIdOf, exposureOfCell, harnessBucket, NO_AXES, parseShapeClass, poolOf, type Cell, type Pool } from '../../cli/src/sessions/cells.js';
 import { motifName, type Motif } from '../../cli/src/sessions/motif.js';
 import { BUNDLE_FORMAT, type Bundle, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
 import { makeRead, orderResolver, type FirstOrderFamily, type Read } from '../../cli/src/sessions/read.js';
@@ -114,7 +114,7 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
     const countedHeld = held.map((cell) => countedAt(floor, cell));
     const withheld = withheldOf(countedHeld, motifs, { floorOf, standingOf: (cell) => clustersOf(standing.get(cell) ?? cell) });
     // A version-free counterpart would otherwise reveal the name withheld in this bucket.
-    const counterpart = (cell: Cell): string => JSON.stringify([cell.motifId, cell.grain, cell.day, cell.exposed]);
+    const counterpart = (cell: Cell): string => JSON.stringify([cell.motifId, cell.grain, cell.day, exposureOfCell(cell)]);
     const withheldBuckets = new Set(cells.filter((cell) => withheld.has(countedAt(floor, cell))).map(counterpart));
     for (const cell of environment) {
       if (withheldBuckets.has(counterpart(cell))) withheld.add(countedAt(floor, cell));
