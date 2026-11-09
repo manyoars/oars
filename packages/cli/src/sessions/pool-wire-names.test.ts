@@ -296,6 +296,27 @@ describe('what is dropped from the names', () => {
     expect(bytesOf(skeleton)).toContain('BUILD_ID');
   });
 
+  it('reads no variable name out of a dollar that sits against a quote: a locale string, and a dollar that opens or closes a double-quoted piece', () => {
+    const skeleton = skeletonOfLines(
+      { redact, terms: [] },
+      call('a', 'Bash', { command: 'mysql --password $"hunter2" --region eu_control' }),
+      call('b', 'Bash', { command: 'mysql --password abc$"hunter3" --region eu_control' }),
+      call('c', 'Bash', { command: 'mysql --password abc"$"hunter4 --region eu_control' }),
+      call('d', 'Bash', { command: 'mysql --password "abc$"hunter5 --region eu_control' }),
+      call('e', 'Bash', { command: 'git commit -m $"charge customer_name twice"' }),
+      call('f', 'Bash', { command: 'deploy --region "$BUILD_ID"' }),
+      call('g', 'Bash', { command: 'deploy --region $BUILD_ID' }),
+      call('h', 'Bash', { command: 'deploy --region ${BUILD_ID}' }),
+      call('i', 'Bash', { command: 'mysql --password $" $hunter6" --region eu_control' }),
+    );
+    const [locale, joined, opened, closed, message, quoted, bare, braced, spaced] = toolsOf(skeleton);
+    // A locale string is never read, even when its own text starts with a space and names a variable after it.
+    for (const tool of [locale, joined, opened, closed, spaced]) expect(tool?.names).toEqual(names('flag', 'eu_control'));
+    expect(message?.names ?? []).toEqual([]);
+    for (const tool of [quoted, bare, braced]) expect(tool?.names).toEqual(names('env', 'BUILD_ID'));
+    for (const value of ['hunter2', 'hunter3', 'hunter4', 'hunter5', 'hunter6', 'customer_name', 'charge']) expect(bytesOf(skeleton)).not.toContain(value);
+  });
+
   it('reads no flag value after a credential-named flag in the name read itself', () => {
     const w = (text: string) => ({ text, quoted: false });
     const read = (...args: ReturnType<typeof w>[]) => argNamesOf('Bash', { command: 'x' }, '/w', '/w', [{ before: [], head: w('tool'), args }], CLOSED_ARG_VALUES);
@@ -306,4 +327,63 @@ describe('what is dropped from the names', () => {
   it('says in the register row of name that a name token that fails is dropped and counted, never sent as private', () => {
     expect(FIELD_ROWS.name).toContain('a name token that fails is dropped and counted, never sent as `private`');
   });
+});
+
+// The rule for a variable reference: it is read only when its `$`, its optional `{`, and its whole name sit in one unquoted or double-quoted piece of the word, and the word holds no piece that no shell expands. Every word below is
+// built from two pieces (and an empty one between them) of each kind, with the reference cut at every position, so a form the tokenizer joins into a name is a failing row here, not a new case to list.
+describe('a variable reference whose dollar and name sit in different pieces of a word', () => {
+  interface PieceKind {
+    kind: string;
+    wrap: (text: string) => string;
+    expands: boolean;
+  }
+  const PIECE_KINDS: readonly PieceKind[] = [
+    { kind: 'unquoted', wrap: (text) => text, expands: true },
+    { kind: 'single-quoted', wrap: (text) => `'${text}'`, expands: false },
+    { kind: 'double-quoted', wrap: (text) => `"${text}"`, expands: true },
+    { kind: 'ANSI-C', wrap: (text) => `$'${text}'`, expands: false },
+    { kind: 'locale', wrap: (text) => `$"${text}"`, expands: false },
+  ];
+  const MIDDLES: readonly { text: string; expands: boolean }[] = [
+    { text: '', expands: true },
+    { text: '""', expands: true },
+    { text: "''", expands: false },
+    { text: '$""', expands: false },
+  ];
+  // A padded variant puts text on both sides of the reference, so a `$` sits at the start, the middle, and the end of a piece.
+  const PADS: readonly (readonly [string, string])[] = [
+    ['', ''],
+    ['ab', '-z'],
+  ];
+  const SECRET = 'hunter2';
+
+  for (const first of PIECE_KINDS) {
+    for (const second of PIECE_KINDS) {
+      it(`reads a variable only from one piece, for ${first.kind} then ${second.kind}`, () => {
+        const rows = new Map<string, boolean>();
+        for (const template of [`$${SECRET}`, `\${${SECRET}}`]) {
+          for (let split = 0; split <= template.length; split += 1) {
+            for (const [pre, post] of PADS) {
+              for (const middle of MIDDLES) {
+                const word = first.wrap(pre + template.slice(0, split)) + middle.text + second.wrap(template.slice(split) + post);
+                // The reference is whole when no quote mark falls inside the `$`, the `{`, and the name (the closing `}` is not part of what is read, as `${PORT:-8080}` shows): at either end of the template, or when both
+                // pieces are plain text with nothing between them.
+                const whole = split === 0 || split >= template.replace(/}$/, '').length || (first.kind === 'unquoted' && second.kind === 'unquoted' && middle.text === '');
+                rows.set(word, whole && first.expands && second.expands && middle.expands);
+              }
+            }
+          }
+        }
+        const words = [...rows.keys()];
+        const skeleton = skeletonOfLines({ redact, terms: [] }, ...words.map((word, at) => call(`c${at}`, 'Bash', { command: `mysql --password ${word} --region eu_control` })));
+        const tools = toolsOf(skeleton);
+        expect(tools).toHaveLength(words.length);
+        words.forEach((word, at) => {
+          const reads = rows.get(word) === true;
+          expect(tools[at]?.names, word).toEqual(reads ? [...names('env', SECRET), ...names('flag', 'eu_control')] : names('flag', 'eu_control'));
+          if (!reads) for (const part of [SECRET, 'hunt', 'er2']) expect(JSON.stringify(tools[at]), word).not.toContain(part);
+        });
+      });
+    }
+  }
 });

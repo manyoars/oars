@@ -273,6 +273,8 @@ const ENV_ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=/;
 // PowerShell's `$env:NAME` (and `${env:NAME}`) is read first, so it names the variable and not the word `env`. A `$` after a backslash or a PowerShell backtick is escaped, so it names nothing (`abc\$tail`), and one
 // after another `$` is the shell's process id with literal text behind it (`$$name`); an even run of backslashes before a real expansion is skipped too, which sends less, never more.
 const ENV_REFERENCE = /(?<![\\`$])\$\{?[Ee][Nn][Vv]:([A-Za-z_][A-Za-z0-9_]*)|(?<![\\`$])\$(?:\{([A-Za-z_][A-Za-z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*))/g;
+/** The variable names a piece of text references, in order. The tokenizer reads a word through this once per piece, so a `$` and its name that sit in different pieces (`$"x"`, `abc"$"x`) name nothing. */
+export const variableNames = (text: string): string[] => [...text.matchAll(ENV_REFERENCE)].map((match) => match[1] ?? match[2] ?? match[3] ?? '');
 // A path that is exactly a home folder (`/home/jsmith`, `C:\Users\jsmith`, or the WSL mount of one, `/mnt/c/Users/jsmith`): its last segment is the machine's account name, not a file.
 const HOME_FOLDER = /^(?:[A-Za-z]:|[\\/]mnt[\\/][A-Za-z])?[\\/](?:home|users)[\\/][^\\/]+[\\/]*$/i;
 // A long flag with its value joined (`--region=eu`), or a flag word on its own: a long flag, or one short letter. A cluster (`-am`) or a short flag with its value attached holds no flag name of its own.
@@ -366,7 +368,7 @@ export const argNamesOf = (
     }
     for (const word of [...before, head, ...args]) {
       if (word.literal === true) continue;
-      for (const match of word.text.matchAll(ENV_REFERENCE)) add('env', match[1] ?? match[2] ?? match[3] ?? '');
+      for (const name of variableNames(word.text)) add('env', name);
     }
     for (const name of flagValueNames(head, args)) add('flag', name);
   }
