@@ -270,7 +270,10 @@ const DIR_ARGS = words('cwd workdir directory dir path');
 const ENV_ARGS = words('env environment envs');
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const ENV_ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=/;
-const ENV_REFERENCE = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*))/g;
+// PowerShell's `$env:NAME` (and `${env:NAME}`) is read first, so it names the variable and not the word `env`.
+const ENV_REFERENCE = /\$\{?[Ee]nv:([A-Za-z_][A-Za-z0-9_]*)|\$(?:\{([A-Za-z_][A-Za-z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*))/g;
+// A path that is exactly a home folder (`/home/jsmith`, `C:\Users\jsmith`): its last segment is the machine's account name, not a file.
+const HOME_FOLDER = /^(?:[A-Za-z]:)?[\\/](?:home|users)[\\/][^\\/]+[\\/]*$/i;
 // A long flag with its value joined (`--region=eu`), or a flag word on its own: a long flag, or one short letter. A cluster (`-am`) or a short flag with its value attached holds no flag name of its own.
 const JOINED_LONG_FLAG = /^(--[A-Za-z][A-Za-z0-9_-]*)=(.*)$/s;
 const FLAG_TOKEN = /^(?:--[A-Za-z][A-Za-z0-9_-]*|-[A-Za-z])$/;
@@ -340,12 +343,13 @@ export const argNamesOf = (
   for (const [key, value] of Object.entries(input)) {
     const lower = key.toLowerCase();
     if (typeof value === 'string' && PATH_ARGS.has(lower)) {
-      const parts = partsBelow(value, root, cwd);
+      // A value that starts with a variable (`$HOME/notes`, `%USERPROFILE%\notes`) is anchored where the variable points, not at the cwd, so it is read as outside the root.
+      const parts = /^[$%]/.test(value) ? null : partsBelow(value, root, cwd);
       const inside = (parts ?? []).filter((part) => part !== '..');
       const folderArg = DIR_ARGS.has(lower);
-      // Above the root a segment is the machine's, not the project's: only a file's own name is read from such a path.
+      // Above the root a segment is the machine's, not the project's: only a file's own name is read from such a path, and not even that when the path is a home folder, whose name is the account's.
       if (parts === null) {
-        if (!folderArg) add('file', value.replace(/^.*[\\/]/, ''));
+        if (!folderArg && !HOME_FOLDER.test(value)) add('file', value.replace(/^.*[\\/]/, ''));
         continue;
       }
       for (const folder of folderArg ? inside : inside.slice(0, -1)) add('dir', folder);
@@ -361,7 +365,7 @@ export const argNamesOf = (
     }
     for (const word of [...before, head, ...args]) {
       if (word.literal === true) continue;
-      for (const match of word.text.matchAll(ENV_REFERENCE)) add('env', match[1] ?? match[2] ?? '');
+      for (const match of word.text.matchAll(ENV_REFERENCE)) add('env', match[1] ?? match[2] ?? match[3] ?? '');
     }
     for (const name of flagValueNames(head, args)) add('flag', name);
   }

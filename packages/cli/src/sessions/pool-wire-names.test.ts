@@ -126,6 +126,33 @@ describe('what is dropped from the names', () => {
     expect(bytesOf(skeleton)).not.toContain('notes');
   });
 
+  it('sends no basename for a path that is exactly a home folder, and none of the folders of a path that starts with a variable', () => {
+    const skeleton = skeletonOfLines(
+      { redact, terms: [] },
+      call('a', 'Read', { file_path: '/home/jsmith-acct' }),
+      call('b', 'Read', { file_path: 'C:\\Users\\jsmith-acct' }),
+      call('c', 'Read', { file_path: '/Users/jsmith-acct/' }),
+      call('d', 'Read', { file_path: 'D:/Users/jsmith-acct' }),
+      call('e', 'Read', { file_path: '$HOME/notes/plan.md' }),
+      call('f', 'Read', { file_path: '%USERPROFILE%\\notes\\roadmap.md' }),
+      call('g', 'Read', { file_path: '/home/jsmith-acct/notes.md' }),
+    );
+    const [lower, windows, mac, drive, home, profile, below] = toolsOf(skeleton);
+    for (const folder of [lower, windows, mac, drive]) expect(folder).not.toHaveProperty('names');
+    expect(home?.names).toEqual(names('file', 'plan.md'));
+    expect(profile?.names).toEqual(names('file', 'roadmap.md'));
+    // A file in the home folder is a file: only the folder is the account name.
+    expect(below?.names).toEqual(names('file', 'notes.md'));
+    for (const value of ['jsmith-acct', '"name":"notes"', 'USERPROFILE', '"name":"$HOME"']) expect(bytesOf(skeleton)).not.toContain(value);
+  });
+
+  it('reads a PowerShell environment variable by its name, and not as the word env', () => {
+    const skeleton = skeletonOfLines({ redact, terms: [] }, call('a', 'Bash', { command: 'Write-Output $env:API_REGION ${env:BUILD_ID} $Env:LOG_LEVEL' }), call('b', 'Bash', { command: 'echo $HOME ${PORT}' }));
+    const [shell, posix] = toolsOf(skeleton);
+    expect(shell?.names).toEqual(names('env', 'API_REGION', 'BUILD_ID', 'LOG_LEVEL'));
+    expect(posix?.names).toEqual(names('env', 'HOME', 'PORT'));
+  });
+
   it('counts a name the wire shape refuses, and sends neither a count nor a name when nothing was dropped', () => {
     const skeleton = skeletonOfLines({ redact, terms: [] }, call('a', 'Read', { file_path: '/w/src/Q3 plan.md' }), call('b', 'Read', { file_path: '/w/src/plan.md' }));
     const [spaced, plain] = toolsOf(skeleton);
