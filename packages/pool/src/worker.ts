@@ -131,7 +131,7 @@ const decoded = (name: string): string => {
 type PoolEnv = Env & TelemetryEnv & RollupEnv & OperatorEnv;
 
 interface Route {
-  method: 'GET' | 'POST' | 'DELETE';
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   /** A `:name` segment matches anything but a slash, and its text reaches the handler. */
   path: string;
   /** Whether a machine key may call it. A machine key deposits, reads the covenant, activates and rotates itself, and posts telemetry (which reads no credential); every other route answers it 403 `deposit_only` (`machineScope`), so a route is closed to it until it says otherwise here. */
