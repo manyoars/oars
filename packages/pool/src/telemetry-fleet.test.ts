@@ -388,6 +388,16 @@ describe('the counting rules', () => {
     expect(measurablesOf(rows.filter((one) => one.install !== uuid(5) && one.install !== uuid(6)), daysAgo(1), DEFAULT_PUBLIC_FLOOR).firstFleetRead).toBeNull();
   });
 
+  it('serves no cell for a first-run event, and a fleet of five installs that each sent one leaves firstFleetRead null', () => {
+    // The cell is 0 or 1 per install: a median over it measures nothing, and it must not be what first serves the read.
+    const firstRuns = [1, 2, 3, 4, 5].map((at) => row(daysAgo(1), uuid(at), { entries: [entry('0.4.0', 1, at === 1 ? 1 : 0, 'rate', 'first-run.npx')] }));
+    expect(fleetCells(firstRuns, DEFAULT_PUBLIC_FLOOR)).toEqual([]);
+    expect(measurablesOf(firstRuns, daysAgo(0), DEFAULT_PUBLIC_FLOOR).firstFleetRead).toBeNull();
+    // A cell that is not a first-run cell still serves beside it.
+    const beside = firstRuns.map((one) => ({ ...one, entries: [...one.entries, entry('2.1.5', 5, 5)] }));
+    expect(fleetCells(beside, DEFAULT_PUBLIC_FLOOR).map((cell) => cell.metric)).toEqual(['hook.pre-tool.hit']);
+  });
+
   it('finds the first fleet read against the widest served window: five installs a week apart serve a 30 day cell on the day the fifth reports', () => {
     const entries = [entry('2.1.5', 3, 3)];
     const rows = [28, 21, 14, 7, 0].map((ago, at) => row(daysAgo(ago), uuid(at + 1), { entries }));

@@ -78,6 +78,8 @@ export const fleetCells = (rows: readonly InstallDay[], floor: number): FleetCel
   const cells = new Map<string, Collected>();
   for (const row of rows) {
     for (const entry of row.entries) {
+      // A first-run cell is 0 or 1 per install: the rollup keeps it for the saved query, and a median over it measures nothing.
+      if (entry.metric.startsWith('first-run.')) continue;
       const key = cellKey(entry);
       const cell = cells.get(key) ?? { head: entry, installs: new Map<string, { n: number; hits: number; histogram: Map<number, number> }>() };
       const mine = cell.installs.get(row.install) ?? { n: 0, hits: 0, histogram: new Map<number, number>() };

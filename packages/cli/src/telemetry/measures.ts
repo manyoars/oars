@@ -95,7 +95,7 @@ const storeMeasures = (event: unknown, data: unknown): Measure[] => {
 
 /**
  * The cell of a `first-run` event: one yes (the first run was in CI) or no under the oars version, in a metric named for the listing surface (`first-run.npx`), so the pool's rollup holds each install's
- * first-run day, its surface, and whether it ran in CI. `measuresOf` leaves it out on purpose: a rate over one event is no measure of the program, so the user's own report has no use for it. A word off
+ * first-run day, its surface, and whether it ran in CI. `measuresOf` leaves it out on purpose: a rate over one event is no measure of the program, so the user's own report has no use for it, and the pool's fleet read skips it for the same reason. A word off
  * the closed lists reads as `unknown` or not-CI, and the install is still counted.
  */
 export const firstRunMeasures = (event: unknown): Measure[] => {
