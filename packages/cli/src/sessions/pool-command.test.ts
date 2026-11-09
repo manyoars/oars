@@ -9,7 +9,7 @@ import { defaultConfigDir } from '../credentials.js';
 import { ExitCode } from '../errors.js';
 import { readSpool } from '../telemetry/spool.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
-import { DEFAULT_POOL_URL, networkSender, poolCoverage, poolDeposit, poolServer, RAW_PROMPT, type Reply, type Sender } from './pool-command.js';
+import { DEFAULT_POOL_URL, networkSender, poolCoverage, poolDeposit, poolRaw, poolServer, RAW_PHRASE, RAW_PROMPT, type Reply, type Sender } from './pool-command.js';
 import { localNames } from './redact.js';
 import { batchHash, canonicalBytes, FIELD_ROWS, fieldsOf, outboxFolder, writeBatch } from './pool-outbox.js';
 import { markSent, sentHashes } from './pool-sent.js';
@@ -2911,6 +2911,7 @@ describe('oars pool raw (t884)', () => {
   it('stores a yes with the covenant version in force, and a no with none', async () => {
     const scene = setting({ OARS_POOL_URL: POOL });
     covenantIs('v1');
+    atTerminal(scene, RAW_PHRASE);
     expect(await scene.cli('pool', 'raw', '--consent', 'yes')).toBe(ExitCode.OK);
     expect(await choicesOf(scene)).toMatchObject({ rawConsent: 'granted', rawConsentVersion: 'v1' });
     expect(await scene.cli('pool', 'raw', '--consent', 'no')).toBe(ExitCode.OK);
@@ -2919,6 +2920,7 @@ describe('oars pool raw (t884)', () => {
 
   it('records no yes while the pool has published no covenant, or cannot say which it is', async () => {
     const scene = setting({ OARS_POOL_URL: POOL });
+    atTerminal(scene, RAW_PHRASE);
     covenantIs(null);
     expect(await scene.cli('pool', 'raw', '--consent', 'yes')).toBe(ExitCode.AUTH);
     server.use(http.get(`${POOL}/v1/covenant`, () => new HttpResponse('down', { status: 500 })));
@@ -2954,6 +2956,7 @@ describe('oars pool raw (t884)', () => {
     expect(shown).toContain('not answered yet: only skeletons go to the pool');
     scene.h.out.length = 0;
     covenantIs('v1');
+    atTerminal(scene, RAW_PHRASE);
     expect(await scene.cli('pool', 'raw', '--consent', 'yes')).toBe(ExitCode.OK);
     expect(scene.h.out.join('')).toContain('yes, given under covenant v1: redacted raw copies leave while that covenant is in force');
     expect(scene.h.out.join('')).not.toContain('best effort');
@@ -2962,6 +2965,62 @@ describe('oars pool raw (t884)', () => {
     expect(JSON.parse(scene.h.out.join(''))).toMatchObject({ rawConsent: 'granted', rawConsentVersion: 'v1' });
     expect(await scene.cli('pool', 'raw', '--consent', 'no')).toBe(ExitCode.OK);
     expect(scene.h.out.join('')).toContain('no: only skeletons go to the pool');
+  });
+
+  it('states both the sale and the special category consent, before the answer', () => {
+    const special = 'Yes is also your explicit consent to processing any health, belief, or other special category data about you that a copy holds, for these purposes. You can withdraw it at any time with oars pool raw --consent no, and that reaches copies already sent. Your access does not depend on it.';
+    expect(RAW_PROMPT).toContain(special);
+    expect(RAW_PROMPT).toContain('Many Oars Co. may sell these copies and use them to train AI models, and it may let anyone it sells them to do the same.');
+    expect(RAW_PROMPT.indexOf(special)).toBeLessThan(RAW_PROMPT.indexOf('Say no, or say nothing'));
+  });
+
+  describe('a yes is a person typing the phrase (GDPR Articles 7 and 9(2)(a))', () => {
+    it('holds the phrase in one constant', () => {
+      expect(RAW_PHRASE).toBe('I consent to sending raw copies');
+    });
+
+    it('prints the prompt in full and the phrase it asks for, reads the phrase, and records the yes under the covenant in force', async () => {
+      const scene = setting({ OARS_POOL_URL: POOL });
+      covenantIs('v1');
+      atTerminal(scene, RAW_PHRASE);
+      expect(await scene.cli('pool', 'raw', '--consent', 'yes')).toBe(ExitCode.OK);
+      expect(scene.h.err.join('')).toContain(RAW_PROMPT);
+      expect(scene.h.err.join('')).toContain(`type exactly: ${RAW_PHRASE}`);
+      expect(await choicesOf(scene)).toMatchObject({ rawConsent: 'granted', rawConsentVersion: 'v1' });
+    });
+
+    it('records nothing for a wrong phrase, and says why', async () => {
+      const scene = setting({ OARS_POOL_URL: POOL });
+      covenantIs('v1');
+      atTerminal(scene, 'yes');
+      const refused = await refusalOf(poolRaw(scene.h.deps, { consent: 'yes' }));
+      expect(refused.message).toContain('That was not the phrase');
+      expect(refused.message).toContain(RAW_PHRASE);
+      expect(refused.message).toContain('Nothing was recorded');
+      expect(await choicesOf(scene)).toMatchObject({ rawConsent: null, rawConsentVersion: null });
+    });
+
+    it('records nothing when the terminal ends before a phrase is typed', async () => {
+      const scene = setting({ OARS_POOL_URL: POOL });
+      covenantIs('v1');
+      atTerminal(scene);
+      scene.staged.stdin.end();
+      const refused = await refusalOf(poolRaw(scene.h.deps, { consent: 'yes' }));
+      expect(refused.message).toContain('No phrase was typed');
+      expect(await choicesOf(scene)).toMatchObject({ rawConsent: null });
+    });
+
+    it('records nothing off a terminal, even with the phrase on stdin, and asks no one', async () => {
+      const scene = setting({ OARS_POOL_URL: POOL });
+      covenantIs('v1');
+      scene.staged.stdin.write(`${RAW_PHRASE}
+`);
+      const refused = await refusalOf(poolRaw(scene.h.deps, { consent: 'yes' }));
+      expect(refused.message).toContain('terminal');
+      expect(refused.message).toContain('Nothing was recorded');
+      expect(scene.h.err.join('')).not.toContain(RAW_PROMPT);
+      expect(await choicesOf(scene)).toMatchObject({ rawConsent: null });
+    });
   });
 
   it('sets and clears a folder switch, and refuses a half-given or unknown option', async () => {
