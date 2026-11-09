@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { errorFlagOf, hookRowOf, runCodexHook } from './codex-hook.js';
+import { readHookCalls } from './hook-calls.js';
 import { AT, cleanHook, payloadOf, stageHook, type HookStore } from './test-support.js';
 
 afterEach(cleanHook);
@@ -240,6 +241,14 @@ describe('fail-open', () => {
     await expect(runCodexHook('[1]', store.runtime)).resolves.toBeUndefined();
     expect(store.rows()).toEqual([]);
     expect(store.notes()).toHaveLength(2);
+  });
+
+  it('leaves a codex-record note that readHookCalls reads back and measure does not count as a lookup', async () => {
+    const store = stageHook();
+    await run(store, payloadOf('PostToolUse', { session_id: 'sess_1' }));
+    const calls = await readHookCalls(store.storeDir);
+    expect(calls).toMatchObject([{ event: 'codex-record', session: 'sess_1', hit: true }]);
+    expect(calls.filter((call) => call.event === 'session-start' || call.event === 'post-tool')).toEqual([]);
   });
 
   it('notes a row it wrote, with the session and no error', async () => {
