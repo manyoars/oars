@@ -74,6 +74,8 @@ const seed = async (account: string, tag: string): Promise<void> => {
   await db.prepare('INSERT INTO deposit_hours (account, day, hour) VALUES (?, ?, ?)').bind(account, '2026-11-01', 9).run();
   await db.prepare('INSERT INTO deposit_hours (account, day, hour) VALUES (?, ?, ?)').bind(account, '2026-11-01', 14).run();
   await db.prepare('INSERT INTO telemetry_install_days (day, install, account, batches, events, measures) VALUES (?, ?, ?, 2, 5, ?)').bind('2026-11-01', `install-${tag}`, account, '{"a":1}').run();
+  await db.prepare('INSERT INTO deposit_parts (account, batch, part, count, body, deposit, staged_at) VALUES (?, ?, 0, 3, ?, ?, 1700000400000)').bind(account, `batch-${tag}`, `body-${tag}`, `${tag}-s1`).run();
+  await db.prepare("INSERT INTO erasure_audit (kind, reason, erased_on, rows_erased, objects_erased, account) VALUES ('account', ?, '2026-11-03', 4, 2, ?)").bind(`reason-${tag}`, account).run();
 };
 
 describe('GET /v1/account/export', () => {
@@ -117,6 +119,8 @@ describe('GET /v1/account/export', () => {
       { day: '2026-11-01', hour: 14 },
     ]);
     expect(rowsOf(pages, 'telemetry')).toEqual([{ day: '2026-11-01', install: 'install-mine', batches: 2, events: 5, measures: { a: 1 } }]);
+    expect(rowsOf(pages, 'depositParts')).toEqual([{ batch: 'batch-mine', part: 0, count: 3, stagedAt: 1_700_000_400_000, deposit: 'mine-s1', body: 'body-mine' }]);
+    expect(rowsOf(pages, 'erasures')).toEqual([{ kind: 'account', reason: 'reason-mine', erasedOn: '2026-11-03', rowsErased: 4, objectsErased: 2 }]);
     // The ledger lists the held object and the tombstoned one, each by the key it is stored under.
     expect(rowsOf(pages, 'rawLedger')).toEqual(
       expect.arrayContaining([
@@ -206,7 +210,7 @@ describe('GET /v1/account/export', () => {
   }, 60_000);
 
   it('answers a machine key 403 and reads no row for it', async () => {
-    const { token } = await pool.signIn('github', stubUser('5410'));
+    const { token } = await pool.signIn('github', stubUser('5411'));
     const enrolled = await pool.post('/v1/machines/enroll', { hostClass: 'vps', launcher: 'scheduled', label: 'box' }, token);
     const key = textOf(enrolled.json, 'token');
     const refused = await pool.get('/v1/account/export', key);

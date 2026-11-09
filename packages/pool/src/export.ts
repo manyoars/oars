@@ -123,6 +123,10 @@ const SECTIONS: readonly Section[] = [
     page: SMALL_PAGE,
     view: (row, account) => ({ key: objectKey(account, text(row, 'sha256') ?? ''), sha256: text(row, 'sha256'), bytes: count(row, 'bytes'), captureVersion: text(row, 'capture_version'), redactionVersion: text(row, 'redaction_version'), storedAt: count(row, 'stored_at'), tombstone: text(row, 'erased_on') }),
   },
+  // Parts of a batch the pool staged and has not yet assembled or swept: the account's own content until then, so it is here with its body.
+  { name: 'depositParts', select: 'batch, part, count, staged_at, deposit, body', table: 'deposit_parts', owner: 'account', order: ['batch', 'part'], keyed: ['batch', 'part'], page: DEPOSIT_PAGE, view: (row) => ({ batch: text(row, 'batch'), part: count(row, 'part'), count: count(row, 'count'), stagedAt: count(row, 'staged_at'), deposit: text(row, 'deposit'), body: text(row, 'body') }) },
+  // What erasure did for the account: the audit rows keyed to it, which hold a reason, a day, and counts and no content.
+  { name: 'erasures', select: 'id, kind, reason, erased_on, rows_erased, objects_erased', table: 'erasure_audit', owner: 'account', order: ['id'], keyed: ['id'], page: SMALL_PAGE, view: (row) => ({ kind: text(row, 'kind'), reason: text(row, 'reason'), erasedOn: text(row, 'erased_on'), rowsErased: count(row, 'rows_erased'), objectsErased: count(row, 'objects_erased') }) },
   // A deposit as it now reads: an erased one holds the marker the erasure left, and `tombstone` is the day it was erased.
   {
     name: 'deposits',
