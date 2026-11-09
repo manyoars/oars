@@ -73,6 +73,11 @@ describe('the consequence window', () => {
     expect(outcome([session('s')], committed)).not.toHaveProperty('intervention');
   });
 
+  it('states no reversion for a prompt it holds no row for, even when a clean `git revert` ties to a commit that prompt made', () => {
+    const tools = [call(2, 'Bash', 7, { segments: [{ run: 'git commit', read: true }], commits: ['abc1234'] }), call(5, 'Bash', 8, { segments: [{ run: 'git revert abc1234', read: true }] })];
+    expect(consequence(tools, recallAt(1))?.outcome).toEqual({ errors: null, verify: null, stopped: null, commits: null, redo: null, reverted: null });
+  });
+
   it('records a match on the action name and nothing stronger: a call of that name that failed still matches, and no field calls it followed', () => {
     const found = consequence([call(0, 'Read', 0), call(2, 'Edit', 0, { status: 'error' })], recallAt(1));
     expect(found?.nameMatched).toBe(true);

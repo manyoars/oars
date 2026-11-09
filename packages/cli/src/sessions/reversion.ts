@@ -37,8 +37,8 @@ const whereOf = (commit: Placed, revert: Placed, repos: ReadonlyMap<string, stri
 };
 
 /**
- * Reads every clean main-line shell call once: the commits it made (with a sha) and the revert words its read segments name. A subagent's call is not on the main line, and a call whose
- * result its segment is not reported by (`read` false) could have failed behind another command, so neither is read. Returns the nearest reversion of a prompt's commits, or null for none found.
+ * Reads every clean main-line shell call once: the commits it made (with a sha) and the revert words its read segments name. A subagent's call is not on the main line, and a segment whose
+ * result the call's status does not report (`read` false) could have failed behind another command, so neither is read. Returns the nearest reversion of a prompt's commits, or null for none found.
  */
 export const reversionsOf = (store: Store): ((session: string, index: number | null) => Reversion | null) => {
   const repos = new Map(store.sessions.map((session) => [session.session, session.repo]));
