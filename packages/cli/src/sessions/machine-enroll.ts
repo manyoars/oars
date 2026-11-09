@@ -135,7 +135,7 @@ export const poolEnroll = async (deps: RunDeps, options: EnrollOptions, visibili
   if (!options.holdOnly && hostClass === 'hosted') throw usage('The pool enrolls a vps, cloud, or ci machine; a hosted run uses a per-run token, so it does not enroll. Nothing was checked.');
   const launcher = launcherOf(options.launcher);
   const repos = reposOf(options.allowRepos);
-  if (options.holdOnly && (options.days !== undefined || options.name !== undefined)) throw usage('--name and --days belong to the enrollment that asks the pool for a token; --hold-only sends nothing to the pool. Nothing was checked.');
+  if (options.holdOnly && (options.days !== undefined || options.name !== undefined || options.server !== undefined)) throw usage('--name, --days, and --server belong to the enrollment that asks the pool for a token; --hold-only sends nothing to the pool. Nothing was checked.');
   const days = options.holdOnly ? undefined : daysOf(options.days);
   if (!options.holdOnly && (options.name === undefined || options.name === '')) throw usage('--name takes the label the pool lists this machine by. Nothing was checked.');
   const runtime = runtimeOf(deps);

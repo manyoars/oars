@@ -48,7 +48,7 @@ const poolAnswering = (status: number, body: JsonBodyType, sent: Sent[]): void =
 };
 const CREATED = { machine: { id: 'pool-machine-id', label: 'night runner', expiresAt: LATER }, token: TOKEN };
 
-const blockLines = (text: string): string[] => text.split('\n').filter((line) => line.startsWith('OARS_') && !line.startsWith('OARS_MACHINE=') );
+const blockLines = (text: string): string[] => text.split('\n').filter((line) => line.startsWith('OARS_') && !line.startsWith('OARS_MACHINE='));
 
 const usageRefusal = async (call: Promise<unknown>, message: RegExp): Promise<void> => {
   await expect(call).rejects.toThrow(message);
@@ -65,7 +65,7 @@ describe('oars pool enroll (full)', () => {
     expect(full.text).toContain(TOKEN);
     expect(full.text).toContain('24 hours');
     expect(full.document).toMatchObject({ ok: true, holdOnly: false, token: TOKEN, poolMachine: 'pool-machine-id' });
-    const held = await poolEnroll(h.deps, { ...OPTIONS, holdOnly: true, name: undefined, days: undefined }, PRIVATE);
+    const held = await poolEnroll(h.deps, { ...OPTIONS, holdOnly: true, name: undefined, days: undefined, server: undefined }, PRIVATE);
     expect(blockLines(full.text)).toEqual(blockLines(held.text));
     expect(full.text).toContain('OARS_SESSION_SALT=');
     const rows = readFileSync(machinesFile(staged.storeDir), 'utf8').trimEnd().split('\n');
@@ -142,6 +142,11 @@ describe('oars pool enroll (full)', () => {
     expect(visibility).not.toHaveBeenCalled();
     expect(sent).toEqual([]);
     expect(existsSync(machinesFile(staged.storeDir))).toBe(false);
+  });
+
+  it('refuses --server with --hold-only, which sends nothing to a pool', async () => {
+    const { h } = scene();
+    await usageRefusal(poolEnroll(h.deps, { ...OPTIONS, holdOnly: true, name: undefined, days: undefined }, PRIVATE), /--server.*Nothing was checked\./u);
   });
 
   it('needs a label', async () => {
