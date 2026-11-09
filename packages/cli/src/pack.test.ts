@@ -280,7 +280,7 @@ describe('the public text states facts only', () => {
   it('packages/cli/README.md says each command records whether it ran in CI, one first-run event, and the covenant version a deposit stops on', () => {
     const text = readFileSync(join(cliFolder, 'README.md'), 'utf8');
     expect(text).toContain('a closed error class, whether it ran in CI (a closed word), the oars version');
-    expect(text).toContain('Each install also records one `first-run` event, on its first run (whether it ran in CI and how this copy was installed, as closed words), and a deposit that stops for an acceptance records a `covenant-shown` event holding only the covenant version.');
+    expect(text).toContain('Each install also records one `first-run` event, on its first run (whether it ran in CI and how this copy was installed, as closed words), and one `covenant-shown` event, holding only the covenant version, each time the covenant screen is shown at a terminal, whether or not the person then accepts.');
     expect(text).toContain('Nothing else is recorded');
   });
 

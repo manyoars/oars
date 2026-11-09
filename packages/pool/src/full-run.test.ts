@@ -89,6 +89,7 @@ describe('login, deposit, and fetch against a local server', () => {
       await expect(one.send(0)).rejects.toMatchObject({ exitCode: ExitCode.AUTH, problem: { code: 'covenant_not_accepted' } });
       // The flag only names the version this person expects; acceptance is the phrase the screen states, typed at a terminal.
       Object.assign(one.staged.stdin, { isTTY: true });
+      Object.assign(one.staged.runtime, { stderr: { isTTY: true } });
       one.staged.stdin.write(`${TEST_PHRASE}\n`);
       expect(await one.send(0, 'v1')).toMatchObject({ document: { ok: true, sent: true } });
       for (const index of [1, 2, 3]) expect(await one.send(index)).toMatchObject({ document: { ok: true, sent: true } });
