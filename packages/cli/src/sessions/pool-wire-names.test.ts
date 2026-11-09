@@ -227,6 +227,20 @@ describe('what is dropped from the names', () => {
     for (const value of ['dbpassvalue', 'ghtokenvalue', 'mysqlvalue', 'vaultvalue', 'phrasevalue', 'vendorvalue', 'sshvalue', 'awsvalue', 'pwdvalue', 'credvalue']) expect(bytesOf(skeleton)).not.toContain(value);
   });
 
+  it('never reads the value of a flag whose last word is pass, in either separator and either spelling, and still reads --bypass and --compass', () => {
+    const skeleton = skeletonOfLines(
+      { redact, terms: [] },
+      call('a', 'Bash', { command: 'deploy --db-pass dbpassvalue --bypass bypass_control' }),
+      call('b', 'Bash', { command: 'deploy --mysql_pass=joinedvalue --compass compass_control' }),
+      call('c', 'Bash', { command: 'deploy --pass barevalue --DB-PASS upperpassvalue --region eu_control' }),
+    );
+    const [spaced, joined, bare] = toolsOf(skeleton);
+    expect(spaced?.names).toEqual(names('flag', 'bypass_control'));
+    expect(joined?.names).toEqual(names('flag', 'compass_control'));
+    expect(bare?.names).toEqual(names('flag', 'eu_control'));
+    for (const value of ['dbpassvalue', 'joinedvalue', 'barevalue', 'upperpassvalue']) expect(bytesOf(skeleton)).not.toContain(value);
+  });
+
   it('reads no variable name out of single-quoted text, which no shell expands, and still reads one outside single quotes', () => {
     const skeleton = skeletonOfLines(
       { redact, terms: [] },
