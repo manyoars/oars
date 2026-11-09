@@ -4,8 +4,9 @@ import { stat } from 'node:fs/promises';
 import { basename } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { machineChild, parseChildInput, type SettleTimes } from './machine-child.js';
-import { DEPOSIT, poolDeposit, poolServer } from './pool-command.js';
+import { DEPOSIT, poolDeposit, poolServer, vocabularyExpired } from './pool-command.js';
 import { machineOf, withInlineTerms } from './machine.js';
+import { recordNotice } from './machine-notice.js';
 import { repoAllowed } from './machine-repo.js';
 import { logFailure } from './pool-due.js';
 import { nightlyPoolDeps } from './pool-nightly-deps.js';
@@ -20,6 +21,11 @@ export const runMachineChild = async (env: NodeJS.ProcessEnv, sessions: Sessions
   try {
     // The terms the enrollment put in one variable are written to an owner-only file first, so every gate below reads the term file the way it always does.
     const deps = nightlyPoolDeps(await withInlineTerms(env, sessions.storeDir), sessions, version, now);
+    // A client past its vocabulary's age builds no batch and its sessions wait. The child has no terminal, so the next Stop tells the person, from the notice file; nothing is captured or built until the client is upgraded.
+    if (vocabularyExpired(deps) !== undefined) {
+      await recordNotice(sessions.storeDir, 'vocabulary_expired', now());
+      return;
+    }
     const allowRepos = machineOf(env)?.allowRepos ?? [];
     await machineChild(
       {

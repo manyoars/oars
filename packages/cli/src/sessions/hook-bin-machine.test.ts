@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { messageOf, noticeFile, recordNotice } from './machine-notice.js';
 
 const hookBin = fileURLToPath(new URL('../../dist/hook-bin.js', import.meta.url));
 const built = existsSync(hookBin);
@@ -53,5 +54,16 @@ describe.skipIf(!built)('the built machine Stop hook', () => {
     const ran = await stop(folder, { OARS_HOST_CLASS: 'cloud' }, '{}');
     expect(ran).toEqual({ code: 0, stdout: '' });
     expect(existsSync(join(store, 'pool-due.json'))).toBe(false);
+  });
+
+  it('prints the notice the last child left as one systemMessage, once, and a laptop leaves it alone', async () => {
+    const { folder, store } = home();
+    await recordNotice(store, 'vocabulary_expired', 1);
+    expect(await stop(folder, {}, '{}')).toEqual({ code: 0, stdout: '' });
+    expect(existsSync(noticeFile(store))).toBe(true);
+    const first = await stop(folder, { OARS_HOST_CLASS: 'cloud' }, '{}');
+    expect(first.code).toBe(0);
+    expect(first.stdout).toBe(JSON.stringify({ systemMessage: messageOf([{ code: 'vocabulary_expired', at: 1 }]) }));
+    expect(await stop(folder, { OARS_HOST_CLASS: 'cloud' }, '{}')).toEqual({ code: 0, stdout: '' });
   });
 });

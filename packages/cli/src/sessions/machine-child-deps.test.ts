@@ -1,12 +1,14 @@
 // The machine child end to end over a real store and a real git repository: the repository `origin` names must be on `OARS_ALLOW_REPOS` for a session to be captured and built, the terms in `OARS_EXCLUSION_TERMS_INLINE` gate it, and an
 // expired client builds nothing. The store is a temp folder and APPDATA is the same folder; each test confirms the store path is under the temp folder before it runs.
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { inlineTermsFile } from './machine.js';
 import { runMachineChild } from './machine-child-deps.js';
+import { messageOf, noticeFile } from './machine-notice.js';
+import { machineStop } from './machine-stop.js';
 import { addProject, cleanup, stage, type Staged } from './test-support.js';
 
 const made: string[] = [];
@@ -58,6 +60,7 @@ describe('runMachineChild: the repository allow list', () => {
     expect(batches(given.staged)).toHaveLength(1);
     expect(existsSync(join(given.staged.storeDir, 'raw'))).toBe(true);
     expect(existsSync(join(given.staged.storeDir, 'pool-send.log'))).toBe(false);
+    expect(existsSync(noticeFile(given.staged.storeDir))).toBe(false);
   });
 
   it('builds nothing for a repository off the list, and does not capture the session either', async () => {
@@ -104,5 +107,45 @@ describe('runMachineChild: the inline exclusion terms', () => {
     const given = scene('https://github.com/owner/name');
     await run(given, { OARS_ALLOW_REPOS: 'owner/name' });
     expect(batches(given.staged)).toEqual([]);
+  });
+});
+
+describe('runMachineChild: an expired client', () => {
+  // Far past the vocabulary's age limit, whatever the day the suite runs.
+  const EXPIRED = Date.parse('2099-01-01T00:00:00Z');
+
+  it('writes the notice, builds and captures nothing, and the next Stop prints one systemMessage and starts its child', async () => {
+    const given = scene('https://github.com/owner/name');
+    await run(given, { OARS_ALLOW_REPOS: 'owner/name', ...TERMS }, () => EXPIRED);
+    expect(batches(given.staged)).toEqual([]);
+    expect(existsSync(join(given.staged.storeDir, 'raw'))).toBe(false);
+    expect(existsSync(noticeFile(given.staged.storeDir))).toBe(true);
+
+    const printed: string[] = [];
+    const spawned: string[][] = [];
+    const result = machineStop({
+      env: { OARS_HOST_CLASS: 'cloud' },
+      stdin: JSON.stringify({ session_id: SESSION, transcript_path: given.transcript, cwd: given.repo }),
+      hookBin: '/pkg/dist/hook-bin.js',
+      home: tmpdir(),
+      storeDir: given.staged.storeDir,
+      write: (text) => printed.push(text),
+      spawn: (_command, args) => {
+        spawned.push([...args]);
+        return { on: () => undefined, unref: () => undefined };
+      },
+    });
+    expect(result).toBe('started');
+    expect(printed).toEqual([JSON.stringify({ systemMessage: messageOf([{ code: 'vocabulary_expired', at: EXPIRED }]) })]);
+    expect(spawned).toHaveLength(1);
+    expect(existsSync(noticeFile(given.staged.storeDir))).toBe(false);
+  });
+
+  it('writes one entry however many Stops find it expired', async () => {
+    const given = scene('https://github.com/owner/name');
+    await run(given, { OARS_ALLOW_REPOS: 'owner/name', ...TERMS }, () => EXPIRED);
+    await run(given, { OARS_ALLOW_REPOS: 'owner/name', ...TERMS }, () => EXPIRED + 1);
+    const written: unknown = JSON.parse(readFileSync(noticeFile(given.staged.storeDir), 'utf8'));
+    expect(written).toEqual({ entries: [{ code: 'vocabulary_expired', at: EXPIRED + 1 }] });
   });
 });

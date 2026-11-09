@@ -1,9 +1,17 @@
-// The machine Stop's body: gated on OARS_HOST_CLASS, a detached child with its output redirected, and no wait for that child. Nothing here touches the store or a real process.
-import { describe, expect, it } from 'vitest';
+// The machine Stop's body: gated on OARS_HOST_CLASS, a detached child with its output redirected, and no wait for that child, and the notice the last child left printed once before the next child starts. No real process starts; the one
+// store here is a temp folder, and the test confirms it before it writes.
+import { existsSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { afterEach, describe, expect, it } from 'vitest';
 import { forwardedInput, machineStop, type MachineStopDeps } from './machine-stop.js';
+import { messageOf, noticeFile, recordNotice } from './machine-notice.js';
 import type { SenderSpawn } from './pool-due.js';
+import { cleanup, stage } from './test-support.js';
+
+afterEach(cleanup);
 
 interface Started {
+  order: number;
   command: string;
   args: string[];
   options: Parameters<SenderSpawn>[2];
@@ -13,10 +21,11 @@ interface Started {
 
 const INPUT = JSON.stringify({ session_id: 'session_1', transcript_path: '/home/u/.claude/projects/p/session_1.jsonl', cwd: '/work/repo', hook_event_name: 'Stop' });
 
-const harness = (env: MachineStopDeps['env'], stdin = INPUT): { deps: MachineStopDeps; started: Started[] } => {
+const harness = (env: MachineStopDeps['env'], stdin = INPUT, storeDir = '/no/such/store'): { deps: MachineStopDeps; started: Started[]; printed: string[] } => {
   const started: Started[] = [];
+  const printed: string[] = [];
   const spawn: SenderSpawn = (command, args, options) => {
-    const record: Started = { command, args, options, unrefs: 0, listeners: 0 };
+    const record: Started = { order: printed.length, command, args, options, unrefs: 0, listeners: 0 };
     started.push(record);
     return {
       on: () => {
@@ -28,7 +37,7 @@ const harness = (env: MachineStopDeps['env'], stdin = INPUT): { deps: MachineSto
       },
     };
   };
-  return { deps: { env, stdin, hookBin: '/pkg/dist/hook-bin.js', home: '/home/u', spawn }, started };
+  return { deps: { env, stdin, hookBin: '/pkg/dist/hook-bin.js', home: '/home/u', storeDir, write: (text) => printed.push(text), spawn }, started, printed };
 };
 
 describe('machineStop', () => {
@@ -90,6 +99,69 @@ describe('machineStop', () => {
     expect(result).toBe('started');
     expect(clock - before).toBeLessThanOrEqual(150);
     expect(childRunning).toBe(true);
+  });
+});
+
+describe('machineStop and the notice file', () => {
+  const store = (): string => {
+    const { storeDir } = stage();
+    if (!storeDir.startsWith(tmpdir())) throw new Error('the test store is not under the temp folder');
+    mkdirSync(storeDir, { recursive: true });
+    return storeDir;
+  };
+  const WORDS = messageOf([{ code: 'vocabulary_expired', at: 1 }]);
+
+  it('prints the notice once as one systemMessage, before it starts its child, and clears it', async () => {
+    const storeDir = store();
+    await recordNotice(storeDir, 'vocabulary_expired', 1);
+    const first = harness({ OARS_HOST_CLASS: 'cloud' }, INPUT, storeDir);
+    expect(machineStop(first.deps)).toBe('started');
+    expect(first.printed).toEqual([JSON.stringify({ systemMessage: WORDS })]);
+    // Printed before the spawn: the child's record saw the notice already written.
+    expect(first.started[0]?.order).toBe(1);
+    expect(existsSync(noticeFile(storeDir))).toBe(false);
+    const second = harness({ OARS_HOST_CLASS: 'cloud' }, INPUT, storeDir);
+    expect(machineStop(second.deps)).toBe('started');
+    expect(second.printed).toEqual([]);
+  });
+
+  it('prints nothing when there is no notice', () => {
+    const { deps, printed } = harness({ OARS_HOST_CLASS: 'cloud' }, INPUT, store());
+    machineStop(deps);
+    expect(printed).toEqual([]);
+  });
+
+  it('still tells the person on a Stop that has no session to build from', async () => {
+    const storeDir = store();
+    await recordNotice(storeDir, 'vocabulary_expired', 1);
+    const { deps, started, printed } = harness({ OARS_HOST_CLASS: 'cloud' }, '{}', storeDir);
+    expect(machineStop(deps)).toBe('no-input');
+    expect(started).toEqual([]);
+    expect(printed).toHaveLength(1);
+  });
+
+  it('is not a machine on a laptop: nothing is printed and the notice is left where it is', async () => {
+    const storeDir = store();
+    await recordNotice(storeDir, 'vocabulary_expired', 1);
+    const { deps, printed } = harness({}, INPUT, storeDir);
+    expect(machineStop(deps)).toBe('not-machine');
+    expect(printed).toEqual([]);
+    expect(existsSync(noticeFile(storeDir))).toBe(true);
+  });
+
+  it('never fails the hook over a message it cannot print: the child still starts', async () => {
+    const storeDir = store();
+    await recordNotice(storeDir, 'vocabulary_expired', 1);
+    const { deps, started } = harness({ OARS_HOST_CLASS: 'cloud' }, INPUT, storeDir);
+    expect(
+      machineStop({
+        ...deps,
+        write: () => {
+          throw new Error('EPIPE');
+        },
+      }),
+    ).toBe('started');
+    expect(started).toHaveLength(1);
   });
 });
 

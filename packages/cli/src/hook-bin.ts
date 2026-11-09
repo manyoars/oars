@@ -44,7 +44,8 @@ try {
   if (machineMode === 'stop') {
     const { machineStop } = await import('./sessions/machine-stop.js');
     const { spawn } = await import('node:child_process');
-    machineStop({ env: process.env, stdin: await readStdin(), hookBin: fileURLToPath(import.meta.url), home: homedir(), spawn });
+    const { storeDir } = hookRuntime('stop', process.env, process.platform, homedir(), { stdin: process.stdin, stdout: process.stdout });
+    machineStop({ env: process.env, stdin: await readStdin(), hookBin: fileURLToPath(import.meta.url), home: homedir(), storeDir, write: (text) => process.stdout.write(text), spawn });
   }
   if (machineMode === 'child') {
     const { runMachineChild } = await import('./sessions/machine-child-deps.js');
