@@ -443,27 +443,39 @@ export const poolDeposit = async (
     counts.withdrawn += await removeBatchOf(outbox, key);
     await removeRawExcept(outbox, new Set(), key);
   };
+  // The sessions a Stop does not name that still pass the read-only gates: they only fill the windows of a delta, and are never counted, withdrawn, or built.
+  const history: SessionRecords[] = [];
   for (const records of sessionsOf(await loadStore(runtime.storeDir), roots)) {
-    // The Stop of a machine builds the one session that stopped: the others in the store belong to Stops of their own, and their batches stay as they are.
-    if (options.session !== undefined && records.main.session !== options.session) continue;
-    counts.sessions += 1;
+    // The Stop of a machine builds the one session that stopped: the others in the store belong to Stops of their own, so their batches stay as they are. They run the three read-only gates below and no more.
+    const named = options.session === undefined || records.main.session === options.session;
+    if (named) counts.sessions += 1;
     // Hashed with the account, so a redeposit replaces its own batch and two accounts' copies of one session cannot be joined.
     const key = contentHash([account, records.main.session]);
     if (!allow.allows(records.main.project)) {
-      counts.excluded.folder += 1;
-      await withdraw(key);
+      if (named) {
+        counts.excluded.folder += 1;
+        await withdraw(key);
+      }
       continue;
     }
     // A folder switched off sends nothing from now on; what it sent before stays where it went.
     if (sendsOf(saved.pool, records.main.project) === 'off') {
-      counts.off += 1;
-      await withdraw(key);
+      if (named) {
+        counts.off += 1;
+        await withdraw(key);
+      }
       continue;
     }
     const verdict = await checkSession(runtime, terms, records.main.project, records.main.session);
     if (verdict.reason !== 'clean') {
-      counts.excluded[excludedKey(verdict.reason)] += 1;
-      await withdraw(key);
+      if (named) {
+        counts.excluded[excludedKey(verdict.reason)] += 1;
+        await withdraw(key);
+      }
+      continue;
+    }
+    if (!named) {
+      history.push(records);
       continue;
     }
     // The batch of a session is built once the session and its subagents have ended; a session still in progress waits, and an earlier batch of it is withdrawn. A machine's Stop is the end of a turn, not of a session: its VM may be reclaimed before the session ends, so it builds the open session as it stands.
@@ -476,7 +488,7 @@ export const poolDeposit = async (
   }
   // A delta is built from the sessions that passed, carried by the batch of the session that filled its after window, and marked sent only once that batch is written: a deposit that stops first builds it again.
   // A cloud machine has no history of its own to compare a window against (every VM starts clean), so it carries none.
-  const placed = machine?.hostClass === 'cloud' ? [] : ready.flatMap(({ records }) => placedOf(records) ?? []);
+  const placed = machine?.hostClass === 'cloud' ? [] : [...ready.map(({ records }) => records), ...history].flatMap((records) => placedOf(records) ?? []);
   const carried = carriedDeltas(account, placed, await sentDeltas(outbox));
   // The coverage bands (t871): the operator's two settings, read here, and the team band counted from the local git log. Nothing is looked up, and anything unread goes as unknown.
   const coverageOf = makeCoverage(runtime, await readCoverageSetting(runtime.storeDir), options.git ?? runGit);

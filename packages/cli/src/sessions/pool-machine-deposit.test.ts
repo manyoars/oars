@@ -127,6 +127,32 @@ describe('deltas on a machine', () => {
     expect(carried(given.staged)).toBe(1);
   });
 
+  it("a vps machine's Stop names one session, reads the others only to fill the windows, and builds nothing but the named one", async () => {
+    const given = await scene({ OARS_HOST_CLASS: 'vps' }, weeks);
+    // sid(24) is the fifth session of the later window: the one that fills the after window, so its batch carries the delta.
+    expect(await document(given, { session: sid(24) })).toMatchObject({ sessions: 1, batched: 1, withdrawn: 0 });
+    expect(carried(given.staged)).toBe(1);
+    expect(batches(given.staged)).toHaveLength(1);
+  });
+
+  it("a vps machine's Stop for a session outside the windows' fill carries no delta and builds the named session alone", async () => {
+    const given = await scene({ OARS_HOST_CLASS: 'vps' }, weeks);
+    expect(await document(given, { session: sid(10) })).toMatchObject({ sessions: 1, batched: 1 });
+    expect(carried(given.staged)).toBe(0);
+    expect(batches(given.staged)).toHaveLength(1);
+  });
+
+  it('a read-only gate refuses an unnamed session quietly: it is not counted, withdrawn, or placed', async () => {
+    const given = await scene({ OARS_HOST_CLASS: 'vps' }, weeks);
+    // Built whole once, so every session has a batch; then the folder leaves the allow list and a Stop names one session.
+    expect(await document(given)).toMatchObject({ batched: 10 });
+    const state = join(given.staged.storeDir, 'state.json');
+    const saved: unknown = JSON.parse(readFileSync(state, 'utf8'));
+    writeFileSync(state, JSON.stringify({ ...(typeof saved === 'object' && saved !== null ? saved : {}), allow: ['some-other-folder'] }));
+    expect(await document(given, { session: sid(24) })).toMatchObject({ sessions: 1, batched: 0, withdrawn: 1, excluded: { folder: 1 } });
+    expect(batches(given.staged)).toHaveLength(9);
+  });
+
   it('a cloud machine carries none: every VM starts clean, so it has no history to compare against', async () => {
     const given = await scene({ OARS_HOST_CLASS: 'cloud' }, weeks);
     expect(await document(given)).toMatchObject({ batched: 10 });
