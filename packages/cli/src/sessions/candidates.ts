@@ -2,7 +2,7 @@
 // the time anyone asks, so a later read cannot tell a file the harness missed from a file that was never there. The session-start hook writes this snapshot to `candidates.jsonl`.
 //
 // Kinds and counts only: no path, file name, skill name, or file content enters a record. The two levels are how many folders up the repo root and the main checkout sit, which is
-// what lets a loaded file's own level be placed in a position later. The log is append-only and apart from `observations.jsonl`, because a snapshot cannot be captured again from
+// what lets a loaded file's own level be placed in a position later. Three more instruction-file kinds are counted in the working folder alone, the only place they were measured. The log is append-only and apart from `observations.jsonl`, because a snapshot cannot be captured again from
 // a transcript the way a capture record can, and it never reaches a pool batch.
 import { mkdir, readdir, readFile, stat } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve } from 'node:path';
@@ -11,7 +11,7 @@ import { HOOK_HARNESS } from '../telemetry/fields.js';
 import { appendOwnerOnly } from './owner-only.js';
 
 export const CANDIDATES_FILE = 'candidates.jsonl';
-export const CANDIDATE_RECORD_VERSION = 1;
+export const CANDIDATE_RECORD_VERSION = 2;
 
 /** Where an instruction file sits relative to the session. `mainCheckout` is the span between a linked worktree and the main checkout that holds it, a span the harnesses treat apart. */
 export const INSTRUCTION_POSITIONS = ['working', 'parent', 'above', 'mainCheckout', 'user'] as const;
@@ -29,10 +29,21 @@ export type HookEventName = (typeof HOOK_EVENT_NAMES)[number] | 'other';
 export type InstructionCounts = { [position in InstructionPosition]: number };
 export type HookEventCounts = { [event in HookEventName]?: number };
 
+/** Instruction files beside `CLAUDE.md`, counted in the working folder only: `CLAUDE.local.md`, `.claude/CLAUDE.md`, and the `.claude/rules/` files that name no `paths` condition. */
+export const WORKING_KINDS = ['local', 'dotClaude', 'rules'] as const;
+export type WorkingKind = (typeof WORKING_KINDS)[number];
+export type WorkingKindCounts = { [kind in WorkingKind]: number };
+
+/** Where a settings file sits: the user's, the working folder's own `.claude/`, or a folder above it up to the repo root (and the main checkout root of a linked worktree). */
+export const HOOK_SOURCES = ['user', 'working', 'ancestors'] as const;
+export type HookSource = (typeof HOOK_SOURCES)[number];
+export type HookSourceCounts = { [source in HookSource]: HookEventCounts };
+
 export interface CandidateCounts {
   instructions: InstructionCounts;
+  workingKinds: WorkingKindCounts;
   skills: { project: number; user: number };
-  hooks: HookEventCounts;
+  hooks: HookSourceCounts;
   /** Folders from the working folder up to the repo root; null when no repository holds it. */
   repoLevels: number | null;
   /** Folders from the working folder up to the main checkout of a linked worktree nested inside it; null otherwise. */
@@ -47,6 +58,7 @@ export interface CandidateSnapshot extends CandidateCounts {
 }
 
 const INSTRUCTION_FILE = 'CLAUDE.md';
+const LOCAL_FILE = 'CLAUDE.local.md';
 const SKILL_FILE = 'SKILL.md';
 const EVENT_NAMES: ReadonlySet<string> = new Set(HOOK_EVENT_NAMES);
 
@@ -122,6 +134,26 @@ const skillCount = async (skillsDir: string): Promise<number> => {
   return found.filter(Boolean).length;
 };
 
+/** A rule file whose front matter carries a `paths` key loads only when a matching file is read; the measurement covered the ones without it. */
+const declaresPaths = (text: string): boolean => {
+  const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1];
+  return front?.split(/\r?\n/).some((line) => /^paths\s*:/.test(line)) === true;
+};
+
+/** How many `.md` files sit directly in a rules folder and name no `paths` condition. */
+const unconditionalRules = async (rulesDir: string): Promise<number> => {
+  let names: string[];
+  try {
+    names = await readdir(rulesDir);
+  } catch (error) {
+    if (isMissing(error)) return 0;
+    throw error;
+  }
+  const files = names.filter((name) => name.toLowerCase().endsWith('.md'));
+  const unconditional = await Promise.all(files.map(async (name) => ((await isFile(join(rulesDir, name))) ? !declaresPaths(await readFile(join(rulesDir, name), 'utf8')) : false)));
+  return unconditional.filter(Boolean).length;
+};
+
 const addHookCounts = async (file: string, counts: HookEventCounts): Promise<void> => {
   let text: string;
   try {
@@ -145,6 +177,11 @@ const addHookCounts = async (file: string, counts: HookEventCounts): Promise<voi
   }
 };
 
+const addSettingsHooks = async (dir: string, counts: HookEventCounts): Promise<void> => {
+  await addHookCounts(join(dir, '.claude', 'settings.json'), counts);
+  await addHookCounts(join(dir, '.claude', 'settings.local.json'), counts);
+};
+
 /** Counts what exists around `cwd`, under the harness's config folder `claudeDir`. It throws on anything but a missing file. */
 export const snapshotCandidates = async ({ cwd, claudeDir }: { cwd: string; claudeDir: string }): Promise<CandidateCounts> => {
   const chain = chainOf(cwd);
@@ -158,18 +195,28 @@ export const snapshotCandidates = async ({ cwd, claudeDir }: { cwd: string; clau
     if (!isConfigFolder(dir) && (await isFile(join(dir, INSTRUCTION_FILE)))) instructions[positionOfLevel(level, levels)] += 1;
   }
 
-  const projectFolders = chain.slice(0, (levels.repoLevels ?? 0) + 1).filter((dir) => !isConfigParent(dir));
+  // The working folder holds the config folder when the session runs in the home folder: its `.claude/` files are the user's, already counted.
+  const workingKinds: WorkingKindCounts = { local: (await isFile(join(cwd, LOCAL_FILE))) ? 1 : 0, dotClaude: 0, rules: 0 };
+  if (!isConfigParent(cwd)) {
+    workingKinds.dotClaude = (await isFile(join(cwd, '.claude', INSTRUCTION_FILE))) ? 1 : 0;
+    workingKinds.rules = await unconditionalRules(join(cwd, '.claude', 'rules'));
+  }
+
+  // Skills load from every folder up to the repo root, and from the main checkout root when the session runs in a linked worktree.
+  const mainRoot = levels.mainLevels === null ? [] : [chain[levels.mainLevels] ?? cwd];
+  const projectFolders = [...chain.slice(0, (levels.repoLevels ?? 0) + 1), ...mainRoot].filter((dir) => !isConfigParent(dir));
   const skills = { project: 0, user: await skillCount(join(claudeDir, 'skills')) };
   for (const dir of projectFolders) skills.project += await skillCount(join(dir, '.claude', 'skills'));
 
-  const hooks: HookEventCounts = {};
-  await addHookCounts(join(claudeDir, 'settings.json'), hooks);
-  const root = chain.at(levels.repoLevels ?? 0) ?? cwd;
-  if (!isConfigParent(root)) {
-    await addHookCounts(join(root, '.claude', 'settings.json'), hooks);
-    await addHookCounts(join(root, '.claude', 'settings.local.json'), hooks);
+  // Settings load from the user's folder and the working folder's own `.claude/`; a folder above it is skipped by design but still counted, so the skip can be told from absence.
+  const hooks: HookSourceCounts = { user: {}, working: {}, ancestors: {} };
+  await addHookCounts(join(claudeDir, 'settings.json'), hooks.user);
+  const aboveFolders = chain.slice(1, (levels.repoLevels ?? 0) + 1);
+  for (const dir of [...aboveFolders, ...mainRoot]) {
+    if (!isConfigParent(dir)) await addSettingsHooks(dir, hooks.ancestors);
   }
-  return { instructions, skills, hooks, ...levels };
+  if (!isConfigParent(cwd)) await addSettingsHooks(cwd, hooks.working);
+  return { instructions, workingKinds, skills, hooks, ...levels };
 };
 
 /**
@@ -187,12 +234,12 @@ export const recordCandidates = async (storeDir: string, { session, cwd, claudeD
   }
 };
 
-/** A line of this version with its three count groups: one without them (hand-edited, or written badly) would throw in the join, outside its guard. */
+/** A line of this version with its four count groups: one without them (hand-edited, or written badly) would throw in the join, outside its guard. */
 const isSnapshot = (value: unknown): value is CandidateSnapshot =>
   isObject(value) &&
   Reflect.get(value, 'v') === CANDIDATE_RECORD_VERSION &&
   typeof Reflect.get(value, 'session') === 'string' &&
-  ['instructions', 'skills', 'hooks'].every((group) => isObject(Reflect.get(value, group)));
+  ['instructions', 'workingKinds', 'skills', 'hooks'].every((group) => isObject(Reflect.get(value, group)));
 
 const parsedLine = (line: string): unknown => {
   try {

@@ -326,7 +326,7 @@ const ROLLOUT_HEAD_KINDS: ReadonlySet<string> = new Set(['session_meta', 'turn_c
 const ROLLOUT_HEAD_EVENTS: ReadonlySet<string> = new Set(['token_count', 'turn_aborted']);
 const ROLLOUT_HEAD_ITEMS: ReadonlySet<string> = new Set(['message']);
 /** An assistant `response_item` message is a turn, which the reader reads from `event_msg` only: a rollout whose turns moved to it is a moved form, not an empty one. */
-const isAssistantItem = (record: { payload?: unknown }): boolean => typeof record.payload === 'object' && record.payload !== null && 'role' in record.payload && record.payload.role === 'assistant';
+const isAssistantItem = (record: { [key: string]: unknown }): boolean => typeof record.payload === 'object' && record.payload !== null && 'role' in record.payload && record.payload.role === 'assistant';
 export const rolloutHeadOnly = (text: string): boolean =>
   holdsOnlyRecords(text, (record) => {
     if (ROLLOUT_HEAD_KINDS.has(record.type)) return true;

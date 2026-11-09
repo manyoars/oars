@@ -3,10 +3,13 @@
 //
 // The rule is what a fixture measured for each harness, not what a harness documents: a live session per case on a temp tree, reading only that session's own log. Each position
 // is one of `load` (the harness read a file there), `skip` (it did not, by design), or `unmeasured` (the case was not measured). What was not measured stays `unknown`.
-import { INSTRUCTION_POSITIONS, positionOfLevel, readCandidates, type CandidateSnapshot, type InstructionPosition } from './candidates.js';
+//
+// What a log can show decides which kind gets a loaded or missed label. A transcript names each instruction file it loaded, so those kinds do. It lists each skill by name (only when the session offers the Skill tool) and each Stop hook by command, with no source for either; a hook that prints nothing leaves no line. The snapshot holds
+// kinds and counts only, so it has no name or command to join against, and a skill or hook that exists stays `unknown`. A hook in a folder above the working folder is the one by-design skip measured for them: those settings files do not run.
+import { positionOfLevel, readCandidates, type CandidateSnapshot, type HookEventCounts, type HookSource, type InstructionPosition, type WorkingKind } from './candidates.js';
 import type { LoadedInstructions, SessionObservation } from './schema.js';
 
-export const LOAD_STATUS_VERSION = 2;
+export const LOAD_STATUS_VERSION = 3;
 export const LOAD_STATUS_FILE = 'load-status.jsonl';
 
 /** `loaded` the log shows it. `miss` a file existed, the rule loads it, the log does not show it. `excluded` a file existed where the rule skips by design. `absent` no file existed there. `unknown` this cannot be decided. */
@@ -17,21 +20,46 @@ export interface LoadStatus {
   session: string;
   harness: string;
   instructions: { [position in InstructionPosition]: LoadLabel };
+  /** `CLAUDE.local.md`, `.claude/CLAUDE.md`, and the unconditional `.claude/rules/` files, in the working folder. */
+  files: { [kind in WorkingKind]: LoadLabel };
   skills: { project: LoadLabel; user: LoadLabel };
-  hooks: LoadLabel;
+  hooks: { [source in HookSource]: LoadLabel };
 }
 
 type Rule = 'load' | 'skip' | 'unmeasured';
 type Rules = { [position in InstructionPosition]: Rule };
+interface HarnessRule {
+  positions: Rules;
+  /** Whether the other instruction-file kinds, in the working folder, were measured: a file the log does not show is then a `miss`. No harness skips them by design. */
+  files: boolean;
+  /** Settings files in the folders above the working folder. */
+  hooksAbove: Rule;
+}
 
-const RULES: ReadonlyMap<string, Rules> = new Map<string, Rules>([
-  // Climbs past the git root to the filesystem root. A linked worktree nested inside its main checkout skips exactly that span, and the climb resumes above it.
-  ['claude-code', { working: 'load', parent: 'load', above: 'load', mainCheckout: 'skip', user: 'load' }],
-  // Reads from the git root down to the working folder and stops there. The user-level file was not measured: this machine has none, and measuring needs a copied login.
-  ['codex', { working: 'load', parent: 'load', above: 'skip', mainCheckout: 'skip', user: 'unmeasured' }],
+const RULES: ReadonlyMap<string, HarnessRule> = new Map<string, HarnessRule>([
+  [
+    'claude-code',
+    {
+      // Climbs past the git root to the filesystem root. A linked worktree nested inside its main checkout skips exactly that span, and the climb resumes above it.
+      positions: { working: 'load', parent: 'load', above: 'load', mainCheckout: 'skip', user: 'load' },
+      files: true,
+      // Project settings come from the working folder alone: a settings file in a parent folder, the repo root, or a worktree's main checkout did not run.
+      hooksAbove: 'skip',
+    },
+  ],
+  [
+    'codex',
+    {
+      // Reads from the git root down to the working folder and stops there. The user-level file was not measured: this machine has none, and measuring needs a copied login.
+      positions: { working: 'load', parent: 'load', above: 'skip', mainCheckout: 'skip', user: 'unmeasured' },
+      files: false,
+      hooksAbove: 'unmeasured',
+    },
+  ],
 ]);
 
 const INSTRUCTION_NAME = 'claude.md';
+const LOCAL_NAME = 'claude.local.md';
 
 const segmentsOf = (path: string): string[] => {
   const parts = path.split(/[\\/]+/).filter((part) => part !== '');
@@ -39,38 +67,46 @@ const segmentsOf = (path: string): string[] => {
   return /^[A-Za-z]:$/.test(parts[0] ?? '') ? parts.map((part) => part.toLowerCase()) : parts;
 };
 
-/** The loaded set of a transcript's `instructions` record, as levels above the working folder: the path itself is read here and goes no further. */
+const sameFolder = (folder: readonly string[], other: readonly string[]): boolean => folder.length === other.length && folder.every((part, index) => part === other[index]);
+
+/**
+ * The loaded set of a transcript's `instructions` record, as levels above the working folder: the path itself is read here and goes no further. `CLAUDE.md` files are placed by level;
+ * `CLAUDE.local.md`, `.claude/CLAUDE.md`, and `.claude/rules/*.md` are counted when they sit in the working folder, the only place they were measured.
+ */
 export const loadedInstructionsOf = (files: readonly { path: string; type: string }[], cwd: string): LoadedInstructions => {
   const here = segmentsOf(cwd);
   const levels: number[] = [];
   let user = 0;
+  const kinds = { local: 0, dotClaude: 0, rules: 0 };
   for (const { path, type } of files) {
     const segments = segmentsOf(path);
-    if (segments.at(-1)?.toLowerCase() !== INSTRUCTION_NAME) continue;
-    if (type === 'User') user += 1;
-    else if (type === 'Project') {
-      const folder = segments.slice(0, -1);
-      if (folder.length <= here.length && folder.every((part, index) => part === here[index])) levels.push(here.length - folder.length);
+    const name = segments.at(-1)?.toLowerCase();
+    const folder = segments.slice(0, -1);
+    if (type === 'User') {
+      if (name === INSTRUCTION_NAME) user += 1;
+    } else if (type === 'Local') {
+      if (name === LOCAL_NAME && sameFolder(folder, here)) kinds.local += 1;
+    } else if (type === 'Project') {
+      if (name?.endsWith('.md') === true && sameFolder(folder, [...here, '.claude', 'rules'])) kinds.rules += 1;
+      else if (name === INSTRUCTION_NAME && sameFolder(folder, [...here, '.claude'])) kinds.dotClaude += 1;
+      else if (name === INSTRUCTION_NAME) {
+        if (folder.length <= here.length && folder.every((part, index) => part === here[index])) levels.push(here.length - folder.length);
+      }
     }
   }
-  return { user, levels };
+  return { user, levels, ...kinds };
 };
 
-/** How many files the log shows loaded at a position; undefined when one undivided record covers several positions and cannot be split. */
-const seenAt = (position: InstructionPosition, snapshot: CandidateSnapshot, loaded: LoadedInstructions, rules: Rules): number | undefined => {
+/** How many files the log shows loaded at a position: the user count, or the project files whose folder level falls in the position. */
+const seenAt = (position: InstructionPosition, snapshot: CandidateSnapshot, loaded: LoadedInstructions): number => {
   if (position === 'user') return loaded.user;
-  if (loaded.levels !== undefined) return loaded.levels.filter((level) => positionOfLevel(level, snapshot) === position).length;
-  if (loaded.any !== true) return 0;
-  const candidates = INSTRUCTION_POSITIONS.filter((each) => each !== 'user' && rules[each] === 'load' && snapshot.instructions[each] > 0);
-  if (candidates.length > 1 && candidates.includes(position)) return undefined;
-  return candidates.includes(position) ? 1 : 0;
+  return loaded.levels.filter((level) => positionOfLevel(level, snapshot) === position).length;
 };
 
 const instructionLabel = (position: InstructionPosition, snapshot: CandidateSnapshot, loaded: LoadedInstructions | undefined, rules: Rules): LoadLabel => {
   const present = snapshot.instructions[position];
   if (loaded === undefined) return present === 0 ? 'absent' : 'unknown';
-  const seen = seenAt(position, snapshot, loaded, rules);
-  if (seen === undefined) return 'unknown';
+  const seen = seenAt(position, snapshot, loaded);
   // What the log shows wins over what the snapshot counted and over the rule: the file was loaded.
   if (seen > 0) return 'loaded';
   if (present === 0) return 'absent';
@@ -80,8 +116,24 @@ const instructionLabel = (position: InstructionPosition, snapshot: CandidateSnap
   return rule === 'load' ? 'miss' : 'excluded';
 };
 
-/** Skills and hooks have no measured rule, and a harness logs them too rarely to read their silence, so a count above zero cannot be called either way. */
+/** A working-folder kind: the log shows how many of its files loaded, once a capture of version 30 or later recorded it. */
+const kindLabel = (present: number, seen: number | undefined, measured: boolean): LoadLabel => {
+  if (seen === undefined) return present === 0 ? 'absent' : 'unknown';
+  if (seen > 0) return 'loaded';
+  if (present === 0) return 'absent';
+  return measured ? 'miss' : 'unknown';
+};
+
+/** The log names skills without a source and the snapshot holds only counts, so a count above zero cannot be called either way. */
 const countLabel = (count: number): LoadLabel => (count === 0 ? 'absent' : 'unknown');
+
+const total = (counts: HookEventCounts): number => Object.values(counts).reduce((sum, count) => sum + count, 0);
+
+/** A hook is `absent` at zero. Above zero the log gives no source and the snapshot holds only counts, so it is `unknown`, except where the rule skips its settings file by design. */
+const hookLabel = (counts: HookEventCounts, skippedByDesign: boolean): LoadLabel => {
+  if (total(counts) === 0) return 'absent';
+  return skippedByDesign ? 'excluded' : 'unknown';
+};
 
 const allPositions = (label: (position: InstructionPosition) => LoadLabel): LoadStatus['instructions'] => ({
   working: label('working'),
@@ -92,16 +144,32 @@ const allPositions = (label: (position: InstructionPosition) => LoadLabel): Load
 });
 
 export const loadStatusOf = ({ session, harness, snapshot, loaded }: { session: string; harness: string; snapshot: CandidateSnapshot | undefined; loaded: LoadedInstructions | undefined }): LoadStatus => {
-  const rules = RULES.get(harness);
+  const rule = RULES.get(harness);
   // No snapshot means nothing is known of what existed: never `absent`.
-  if (snapshot === undefined) return { v: LOAD_STATUS_VERSION, session, harness, instructions: allPositions(() => 'unknown'), skills: { project: 'unknown', user: 'unknown' }, hooks: 'unknown' };
+  if (snapshot === undefined) {
+    return {
+      v: LOAD_STATUS_VERSION,
+      session,
+      harness,
+      instructions: allPositions(() => 'unknown'),
+      files: { local: 'unknown', dotClaude: 'unknown', rules: 'unknown' },
+      skills: { project: 'unknown', user: 'unknown' },
+      hooks: { user: 'unknown', working: 'unknown', ancestors: 'unknown' },
+    };
+  }
+  const fileLabel = (kind: WorkingKind): LoadLabel => (rule === undefined ? 'unknown' : kindLabel(snapshot.workingKinds[kind], loaded?.[kind], rule.files));
   return {
     v: LOAD_STATUS_VERSION,
     session,
     harness,
-    instructions: allPositions((position) => (rules === undefined ? 'unknown' : instructionLabel(position, snapshot, loaded, rules))),
+    instructions: allPositions((position) => (rule === undefined ? 'unknown' : instructionLabel(position, snapshot, loaded, rule.positions))),
+    files: { local: fileLabel('local'), dotClaude: fileLabel('dotClaude'), rules: fileLabel('rules') },
     skills: { project: countLabel(snapshot.skills.project), user: countLabel(snapshot.skills.user) },
-    hooks: countLabel(Object.values(snapshot.hooks).reduce((sum, count) => sum + count, 0)),
+    hooks: {
+      user: hookLabel(snapshot.hooks.user, false),
+      working: hookLabel(snapshot.hooks.working, false),
+      ancestors: hookLabel(snapshot.hooks.ancestors, rule?.hooksAbove === 'skip'),
+    },
   };
 };
 
