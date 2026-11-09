@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { holdBranch, holdCommit, termsDigest, type HoldInput } from './machine-hold.js';
+import { holdBatch, holdBranch, holdCommit, runNetGit, termsDigest, type HoldDeps, type HoldInput } from './machine-hold.js';
 import { runGit, type Git } from './survival.js';
 
 // Each case runs a dozen git processes, which a Windows runner starts slowly.
@@ -124,5 +124,93 @@ describe('holdCommit', () => {
     expect(await holdCommit(watching, inputFor(repo, { allowRepos: [] }))).toBeUndefined();
     expect(await holdCommit(watching, inputFor(repo, { cwd: undefined }))).toBeUndefined();
     expect(calls.filter((call) => !call.startsWith('remote get-url'))).toEqual([]);
+  }, SLOW);
+});
+
+/** The `origin` URL read as a cloud session shows it, with every other git call real. */
+const asCloud = (git: Git): Git => (root, args, stdin) => (args[0] === 'remote' && args[1] === 'get-url' ? Promise.resolve('https://github.com/owner/name\n') : git(root, args, stdin));
+
+/** A bare repository standing in for the private repository, and a clone of it that is the VM's checkout. */
+const vmWithRemote = (): { bare: string; repo: string } => {
+  const bare = mkdtempSync(join(tmpdir(), 'oars-machine-hold-bare-'));
+  made.push(bare);
+  git(bare, 'init', '-q', '--bare');
+  const repo = repoWithWork();
+  git(repo, 'remote', 'set-url', 'origin', bare);
+  return { bare, repo };
+};
+
+const heldIn = (bare: string, branch: string): string => git(bare, 'rev-parse', '--verify', `refs/heads/${branch}`).trim();
+
+describe('holdBatch', () => {
+  const logged: unknown[] = [];
+  const depsFor = (net: Git = runNetGit): HoldDeps => ({ git: asCloud(runGit), net, log: (error) => (logged.push(error), Promise.resolve()) });
+  afterEach(() => {
+    logged.length = 0;
+  });
+
+  it('pushes the commit to oars-hold/<machine>/<id> and changes nothing of the checkout', async () => {
+    const { bare, repo } = vmWithRemote();
+    const head = git(repo, 'rev-parse', 'HEAD');
+    const index = readFileSync(join(repo, '.git', 'index'));
+    const input = inputFor(repo);
+    expect(await holdBatch(depsFor(), input)).toBe('pushed');
+    const tip = heldIn(bare, holdBranch('m1', input.id));
+    expect(git(bare, 'show', `${tip}:batch.json`)).toBe(input.batch);
+    expect(git(bare, 'log', '-1', '--format=%s', tip).trim()).toContain('[skip ci]');
+    expect(git(bare, 'for-each-ref', '--format=%(refname)').trim()).toBe(`refs/heads/${holdBranch('m1', input.id)}`);
+    expect(git(repo, 'rev-parse', 'HEAD')).toBe(head);
+    expect(readFileSync(join(repo, '.git', 'index')).equals(index)).toBe(true);
+  }, SLOW);
+
+  it('pushes each later turn on the branch as a fast-forward, with no refusal in between', async () => {
+    const { bare, repo } = vmWithRemote();
+    const pushes: string[] = [];
+    const counting: Git = (root, args, stdin) => (args[0] === 'push' ? (pushes.push(args.join(' ')), runNetGit(root, args, stdin)) : runNetGit(root, args, stdin));
+    const input = inputFor(repo);
+    expect(await holdBatch(depsFor(counting), input)).toBe('pushed');
+    expect(await holdBatch(depsFor(counting), { ...input, batch: '{"turn":2}\n' })).toBe('pushed');
+    expect(pushes).toHaveLength(2);
+    const tip = heldIn(bare, holdBranch('m1', input.id));
+    expect(git(bare, 'show', `${tip}:batch.json`)).toBe('{"turn":2}\n');
+    expect(git(bare, 'rev-list', '--count', tip).trim()).toBe('2');
+  }, SLOW);
+
+  it('is refused once for a branch another VM moved, fetches its tip, and is accepted on top of it', async () => {
+    const { bare, repo } = vmWithRemote();
+    const other = vmWithRemote().repo;
+    git(other, 'remote', 'set-url', 'origin', bare);
+    const input = inputFor(repo);
+    // The earlier VM of this session deposited first: its commit is the branch's tip, and this VM has never seen it.
+    expect(await holdBatch(depsFor(), { ...inputFor(other), batch: '{"vm":"earlier"}\n' })).toBe('pushed');
+    const earlier = heldIn(bare, holdBranch('m1', input.id));
+    const pushes: string[] = [];
+    const counting: Git = (root, args, stdin) => (args[0] === 'push' ? (pushes.push(args.join(' ')), runNetGit(root, args, stdin)) : runNetGit(root, args, stdin));
+    expect(await holdBatch(depsFor(counting), input)).toBe('pushed');
+    expect(pushes).toHaveLength(2);
+    const tip = heldIn(bare, holdBranch('m1', input.id));
+    expect(git(bare, 'rev-parse', `${tip}^`).trim()).toBe(earlier);
+    expect(git(bare, 'show', `${tip}:batch.json`)).toBe(input.batch);
+    expect(logged).toEqual([]);
+  }, SLOW);
+
+  it('is refused every time: three pushes, one log row, no throw, and the branch stays as it was', async () => {
+    const { bare, repo } = vmWithRemote();
+    writeFileSync(join(bare, 'hooks', 'pre-receive'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    const pushes: string[] = [];
+    const counting: Git = (root, args, stdin) => (args[0] === 'push' ? (pushes.push(args.join(' ')), runNetGit(root, args, stdin)) : runNetGit(root, args, stdin));
+    const input = inputFor(repo);
+    expect(await holdBatch(depsFor(counting), input)).toBe('refused');
+    expect(pushes).toHaveLength(3);
+    expect(logged).toHaveLength(1);
+    expect(String(logged[0])).not.toContain(input.batch);
+    expect(git(bare, 'for-each-ref').trim()).toBe('');
+  }, SLOW);
+
+  it('pushes nothing for a repository that left the list', async () => {
+    const { bare, repo } = vmWithRemote();
+    expect(await holdBatch(depsFor(), inputFor(repo, { allowRepos: ['owner/other'] }))).toBe('skipped');
+    expect(git(bare, 'for-each-ref').trim()).toBe('');
+    expect(logged).toEqual([]);
   }, SLOW);
 });

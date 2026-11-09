@@ -149,3 +149,55 @@ describe('runMachineChild: an expired client', () => {
     expect(written).toEqual({ entries: [{ code: 'vocabulary_expired', at: EXPIRED + 1 }] });
   });
 });
+
+/** A bare repository the session's repository pushes to instead of GitHub: `origin` still names GitHub (the allow list reads it), and only the push URL is rewritten, so nothing here reaches a network. */
+const withBare = (given: Scene): string => {
+  const bare = mkdtempSync(join(tmpdir(), 'oars-machine-child-bare-'));
+  made.push(bare);
+  execFileSync('git', ['init', '-q', '--bare', bare]);
+  execFileSync('git', ['-C', given.repo, 'config', `url.${bare}.pushInsteadOf`, 'https://github.com/owner/name']);
+  return bare;
+};
+
+const branchesIn = (bare: string): string[] => execFileSync('git', ['-C', bare, 'for-each-ref', '--format=%(refname)'], { encoding: 'utf8' }).split(/\r?\n/u).filter((ref) => ref !== '');
+
+const HOLD = { OARS_ALLOW_REPOS: 'owner/name', OARS_SESSION_SALT: 'a-derived-session-salt', ...TERMS };
+
+describe('runMachineChild: the holding route', () => {
+  it('pushes the batch it built to oars-hold/<machine>/<id>, with its stamp and a terms digest, and leaves the batch in the outbox', async () => {
+    const given = scene('https://github.com/owner/name');
+    const bare = withBare(given);
+    await run(given, HOLD);
+    const [file = ''] = batches(given.staged);
+    const [, stamp = '', name = ''] = file.split(/[/\\]/u);
+    expect(name).toMatch(/^[0-9a-f]{16}\.[0-9a-f]{64}\.jsonl$/u);
+    const id = name.slice(0, 16);
+    expect(branchesIn(bare)).toEqual([`refs/heads/oars-hold/m-1/${id}`]);
+    const show = (path: string): string => execFileSync('git', ['-C', bare, 'show', `refs/heads/oars-hold/m-1/${id}:${path}`], { encoding: 'utf8' });
+    expect(readFileSync(join(given.staged.storeDir, 'pool-outbox', file), 'utf8')).toBe(show('batch.json'));
+    expect(show('stamp')).toBe(`${stamp}\n`);
+    expect(show('terms')).toMatch(/^[0-9a-f]{64}\n$/u);
+    expect(existsSync(join(given.staged.storeDir, 'pool-send.log'))).toBe(false);
+  }, 60_000);
+
+  it('holds nothing without OARS_SESSION_SALT, or without OARS_MACHINE, and the batch is built all the same', async () => {
+    const noSalt = scene('https://github.com/owner/name');
+    const noSaltBare = withBare(noSalt);
+    await run(noSalt, { OARS_ALLOW_REPOS: 'owner/name', ...TERMS });
+    expect(batches(noSalt.staged)).toHaveLength(1);
+    expect(branchesIn(noSaltBare)).toEqual([]);
+    const noMachine = scene('https://github.com/owner/name');
+    const noMachineBare = withBare(noMachine);
+    await run(noMachine, { ...HOLD, OARS_MACHINE: '' });
+    expect(batches(noMachine.staged)).toHaveLength(1);
+    expect(branchesIn(noMachineBare)).toEqual([]);
+  }, 60_000);
+
+  it('holds nothing of a session a gate kept out', async () => {
+    const given = scene('https://github.com/owner/name', 'a request naming zorblax');
+    const bare = withBare(given);
+    await run(given, HOLD);
+    expect(batches(given.staged)).toEqual([]);
+    expect(branchesIn(bare)).toEqual([]);
+  }, 60_000);
+});

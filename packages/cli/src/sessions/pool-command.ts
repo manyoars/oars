@@ -23,7 +23,7 @@ import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from 
 import { contentHash, FIRST_ORDER_FAMILIES } from './read.js';
 import { isObject, keptReplica, loadSignIns, numberIn, replicaFile, signInOf, signInsFile, textIn, type SignIn } from './pool-replica.js';
 import { CAPTURE_VERSION, harnessOf as sessionHarness, type Harness } from './schema.js';
-import { machineOf } from './machine.js';
+import { machineOf, type MachineConfig } from './machine.js';
 import { loadStore, localSalt, readRedactDomains, readSkeletons, readState, updatePoolChoices, type SessionsRuntime } from './store.js';
 import { runGit, type Git } from './survival.js';
 import { vocabulary } from './vocab-load.js';
@@ -396,6 +396,11 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
   }
 };
 
+const machineAccount = (machine: MachineConfig): string => `machine:${machine.machine ?? machine.hostClass}`;
+
+/** The outbox key, and the skeleton `id`, of a machine's session: its own name stands in for the account, which a machine has none of. The holding route names its branch by the same key. */
+export const machineKeyOf = (machine: MachineConfig, session: string): string => contentHash([machineAccount(machine), session]);
+
 /**
  * `oars pool deposit`: every session in the store that passes both session gates is built into a canonical batch in the outbox, and the command stops: nothing is sent. The gates run before any projection does: the folder
  * allowlist, then the exclusion check. A session that fails either, or has no raw to scan, is counted and never built. A session is built only once it has ended: no transcript of it, main or subagent, has gained a line (the later of its capture
@@ -410,7 +415,7 @@ export const poolDeposit = async (
   // A machine (`OARS_HOST_CLASS`, see machine.ts) builds at every Stop and sends nothing from here, so it signs nobody in: the account part of its batch key is its own name, and the holding route's `id` replaces it.
   const machine = machineOf(deps.env);
   if (machine !== undefined && options.send !== undefined) throw usage('A machine builds batches into its outbox and sends none: --send is for a signed-in person.', DEPOSIT);
-  const { account, token } = machine === undefined ? await signedIn(deps, runtime.storeDir, server, DEPOSIT) : { account: `machine:${machine.machine ?? machine.hostClass}`, token: '' };
+  const { account, token } = machine === undefined ? await signedIn(deps, runtime.storeDir, server, DEPOSIT) : { account: machineAccount(machine), token: '' };
   // A client past `registry_max_age` builds no batch (spec Section 1.3): its sessions wait in `A` and nothing is lost. This comes before anything is written or sent.
   const expired = vocabularyExpired(deps);
   if (expired !== undefined) throw expired;
@@ -450,7 +455,7 @@ export const poolDeposit = async (
     const named = options.session === undefined || records.main.session === options.session;
     if (named) counts.sessions += 1;
     // Hashed with the account, so a redeposit replaces its own batch and two accounts' copies of one session cannot be joined.
-    const key = contentHash([account, records.main.session]);
+    const key = machine === undefined ? contentHash([account, records.main.session]) : machineKeyOf(machine, records.main.session);
     if (!allow.allows(records.main.project)) {
       if (named) {
         counts.excluded.folder += 1;
