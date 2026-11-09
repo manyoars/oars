@@ -11,7 +11,7 @@ import { derivedSalt } from './machine-ids.js';
 import { isMissing, writeOwnerOnly } from './owner-only.js';
 import { poolServer, runtimeOf } from './pool-command.js';
 import { BATCH_FIELDS, STAMP_FOLDER, currentStamp, fieldsOf, outboxFolder, removeBatchOf, writeBatch } from './pool-outbox.js';
-import { parseSkeleton, type SessionSkeleton } from './pool-wire.js';
+import { CLAIMED_HOST_CLASSES, CLAIMED_LAUNCHERS, parseSkeleton, type SessionSkeleton } from './pool-wire.js';
 import { localSalt } from './store.js';
 import type { Git } from './survival.js';
 
@@ -43,7 +43,8 @@ export type PullReason =
   | 'field_unknown'
   | 'claimed_present'
   | 'off_list'
-  | 'a38_term';
+  | 'a38_term'
+  | 'machine_record';
 
 /** A repository (no `branch`) or a branch that was refused, and why. */
 export interface PullRefusal {
@@ -194,6 +195,10 @@ const admit = async (run: Pulling, tip: Tip, id: string, machine: string): Promi
   const record = run.machines.find((known) => known.machine === machine);
   if (record === undefined) throw new Refused('unknown_machine', `no machine ${machine} in machines.jsonl`);
   if (!record.allowRepos.includes(tip.repo)) throw new Refused('machine_repo', `machine ${machine} was not enrolled for ${tip.repo}`);
+  // The claim comes from this machine's own record and nothing the branch holds, so a record the closed lists do not hold admits nothing.
+  const hostClass = CLAIMED_HOST_CLASSES.find((name) => name === record.hostClass);
+  const launcher = CLAIMED_LAUNCHERS.find((name) => name === record.launcher);
+  if (hostClass === undefined || launcher === undefined) throw new Refused('machine_record', `machines.jsonl holds a host class or launcher for machine ${machine} that the closed lists do not`);
   // The stamp becomes a path segment, so it is checked before anything else of the branch is used.
   const stamp = (await fileOf(run.ports, tip, 'stamp'))?.trim();
   if (stamp === undefined || !STAMP_FOLDER.test(stamp)) throw new Refused('stamp_invalid', 'the branch holds no stamp, or it is not a stamp folder name');
@@ -204,7 +209,7 @@ const admit = async (run: Pulling, tip: Tip, id: string, machine: string): Promi
   // The stamp's version names the vocabulary the batch was built under: a file that says otherwise is not what its stamp claims.
   if (stamp.slice(0, -9) !== `v${skeleton.vocabVersion}`) throw new Refused('stamp_invalid', `the stamp ${stamp} does not name the batch's vocabulary version ${skeleton.vocabVersion}`);
   // The order is the batch, then pulled.json, then the older copy: a crash between them leaves the next pull to replace the same id.
-  await writeBatch(run.outbox, id, skeleton, stamp);
+  await writeBatch(run.outbox, id, { ...skeleton, claimed: { hostClass, launcher } }, stamp);
   run.pulled[id] = stamp;
   await writePulled(run.outbox, run.pulled);
   for (const folder of await readdir(run.outbox)) {

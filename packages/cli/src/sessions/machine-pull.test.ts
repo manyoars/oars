@@ -31,6 +31,10 @@ const REPO = 'acme/widgets';
 const OTHER_REPO = 'acme/gadgets';
 const PRIVATE: Visibility = () => Promise.resolve('private');
 
+/** What a VM commits: the register's invented session without `claimed`, which only this machine writes. The type still names it, since the fixture's does. */
+const BRANCH_BATCH = structuredClone(REGISTER_FIXTURE);
+Reflect.deleteProperty(BRANCH_BATCH, 'claimed');
+
 const RECORD: MachineRecord = { machine: MACHINE, hostClass: 'cloud', launcher: 'orchestrated', allowRepos: [REPO] };
 
 interface Scene {
@@ -64,7 +68,7 @@ const gitIn = (cwd: string, args: readonly string[], input?: string, env: NodeJS
 
 /** The files a VM commits for a good batch: the batch, the client's stamp, and the digest of the exclusion terms it was gated under. */
 const goodFiles = (s: Scene, id = ID): { [file: string]: string } => ({
-  'batch.json': canonicalBytes({ ...REGISTER_FIXTURE, id }),
+  'batch.json': canonicalBytes({ ...BRANCH_BATCH, id }),
   stamp: `${currentStamp()}\n`,
   terms: `${termsDigest(s.salt, TERMS)}\n`,
 });
@@ -194,7 +198,7 @@ describe('oars pool hold pull: the stamp', () => {
 
   it('reports a refused batch of a differing stamp under its own reason with the cause, and a format the pool would refuse stays on its branch', async () => {
     const s = await scene();
-    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, { ...goodFiles(s), stamp: `${OLDER}\n`, 'batch.json': canonicalBytes({ ...REGISTER_FIXTURE, id: ID, format: 99 }) });
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, { ...goodFiles(s), stamp: `${OLDER}\n`, 'batch.json': canonicalBytes({ ...BRANCH_BATCH, id: ID, format: 99 }) });
     const out = await pull(s);
     expect(out.document).toMatchObject({ admitted: [], refused: [{ branch: `oars-hold/${MACHINE}/${ID}`, reason: 'differing_stamp' }] });
     expect(out.text).toContain('differing_stamp: batch_invalid: format');
@@ -252,7 +256,7 @@ describe('oars pool hold pull: the terms', () => {
   }, SLOW);
 });
 
-const BATCH = { ...REGISTER_FIXTURE, id: ID };
+const BATCH = { ...BRANCH_BATCH, id: ID };
 const OFF_LIST = 'a-value-no-vocabulary-holds';
 
 /** The fixture with its second tool's status set to `status`, a value the closed list of statuses either holds or does not (the first tool carries an error code and recovery calls, which the reader refuses beside a status it reads as `other`). */
@@ -283,6 +287,37 @@ describe('oars pool hold pull: the branch file is untrusted', () => {
     const out = await pull(s);
     expect(out.document).toMatchObject({ admitted: [], refused: [{ branch: `oars-hold/${MACHINE}/${ID}`, reason: 'a38_term' }] });
     expect(out.text).not.toContain(terms[0] ?? '');
+    expect(existsSync(s.outbox)).toBe(false);
+    expect(branchesOf(s, REPO)).toHaveLength(1);
+  }, SLOW);
+});
+
+/** The batch the outbox holds for `id` under the current stamp. */
+const batchOf = (s: Scene, id: string): unknown => {
+  const file = filed(s).find((name) => name.startsWith(`${id}.`));
+  const batch: unknown = JSON.parse(readFileSync(join(s.outbox, currentStamp(), file ?? 'absent'), 'utf8'));
+  return batch;
+};
+
+describe('oars pool hold pull: claimed', () => {
+  it('writes the host class and launcher of the branch\'s own machine record into each admitted batch', async () => {
+    const s = await scene([RECORD, { ...RECORD, machine: OTHER_MACHINE, hostClass: 'vps', launcher: 'scheduled' }]);
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, goodFiles(s));
+    hold(s, REPO, `oars-hold/${OTHER_MACHINE}/${OTHER_ID}`, goodFiles(s, OTHER_ID));
+    const out = await pull(s);
+    expect(out.document).toMatchObject({ refused: [] });
+    expect(batchOf(s, ID)).toMatchObject({ claimed: { hostClass: 'cloud', launcher: 'orchestrated' } });
+    expect(batchOf(s, OTHER_ID)).toMatchObject({ claimed: { hostClass: 'vps', launcher: 'scheduled' } });
+  }, SLOW);
+
+  it.each([
+    { what: 'a host class', record: { ...RECORD, hostClass: 'mainframe' } },
+    { what: 'a launcher', record: { ...RECORD, launcher: 'by-hand' } },
+  ])('refuses a branch of a machine whose record holds $what off the closed lists, and writes nothing', async ({ record }) => {
+    const s = await scene([record]);
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, goodFiles(s));
+    const out = await pull(s);
+    expect(out.document).toMatchObject({ admitted: [], refused: [{ branch: `oars-hold/${MACHINE}/${ID}`, reason: 'machine_record' }] });
     expect(existsSync(s.outbox)).toBe(false);
     expect(branchesOf(s, REPO)).toHaveLength(1);
   }, SLOW);
