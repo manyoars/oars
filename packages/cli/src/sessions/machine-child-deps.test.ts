@@ -1,14 +1,17 @@
 // The machine child end to end over a real store and a real git repository: the repository `origin` names must be on `OARS_ALLOW_REPOS` for a session to be captured and built, the terms in `OARS_EXCLUSION_TERMS_INLINE` gate it, and an
 // expired client builds nothing. The store is a temp folder and APPDATA is the same folder; each test confirms the store path is under the temp folder before it runs.
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { derivedSalt, machineIdOf } from './machine-ids.js';
 import { inlineTermsFile } from './machine.js';
 import { runMachineChild } from './machine-child-deps.js';
 import { messageOf, noticeFile } from './machine-notice.js';
 import { machineStop } from './machine-stop.js';
+import { localSalt, paths } from './store.js';
 import { addProject, cleanup, stage, type Staged } from './test-support.js';
 
 const made: string[] = [];
@@ -20,7 +23,7 @@ afterEach(() => {
 const SESSION = '99999999-9999-4999-8999-000000000001';
 const NO_WAIT = { quietMs: 0, maxMs: 0, pollMs: 1 };
 
-const lineOf = (content: string): string => JSON.stringify({ type: 'user', sessionId: SESSION, cwd: '/w', timestamp: '2026-05-01T01:00:00Z', permissionMode: 'default', message: { role: 'user', content } });
+const lineOf = (content: string, cwd = '/w'): string => JSON.stringify({ type: 'user', sessionId: SESSION, cwd, timestamp: '2026-05-01T01:00:00Z', permissionMode: 'default', message: { role: 'user', content } });
 
 interface Scene {
   staged: Staged;
@@ -60,7 +63,8 @@ describe('runMachineChild: the repository allow list', () => {
     expect(batches(given.staged)).toHaveLength(1);
     expect(existsSync(join(given.staged.storeDir, 'raw'))).toBe(true);
     expect(existsSync(join(given.staged.storeDir, 'pool-send.log'))).toBe(false);
-    expect(existsSync(noticeFile(given.staged.storeDir))).toBe(false);
+    // This enrollment gave no machine salt, so nothing is held and the person is told once; the batch is built all the same.
+    expect(JSON.parse(readFileSync(noticeFile(given.staged.storeDir), 'utf8'))).toMatchObject({ entries: [{ code: 'hold_unconfigured' }] });
   });
 
   it('builds nothing for a repository off the list, and does not capture the session either', async () => {
@@ -147,5 +151,96 @@ describe('runMachineChild: an expired client', () => {
     await run(given, { OARS_ALLOW_REPOS: 'owner/name', ...TERMS }, () => EXPIRED + 1);
     const written: unknown = JSON.parse(readFileSync(noticeFile(given.staged.storeDir), 'utf8'));
     expect(written).toEqual({ entries: [{ code: 'vocabulary_expired', at: EXPIRED + 1 }] });
+  });
+});
+
+/** A bare repository the session's repository pushes to instead of GitHub: `origin` still names GitHub (the allow list reads it), and only the push URL is rewritten, so nothing here reaches a network. */
+const withBare = (given: Scene): string => {
+  const bare = mkdtempSync(join(tmpdir(), 'oars-machine-child-bare-'));
+  made.push(bare);
+  execFileSync('git', ['init', '-q', '--bare', bare]);
+  execFileSync('git', ['-C', given.repo, 'config', `url.${bare}.pushInsteadOf`, 'https://github.com/owner/name']);
+  return bare;
+};
+
+const branchesIn = (bare: string): string[] => execFileSync('git', ['-C', bare, 'for-each-ref', '--format=%(refname)'], { encoding: 'utf8' }).split(/\r?\n/u).filter((ref) => ref !== '');
+
+const HOLD = { OARS_ALLOW_REPOS: 'owner/name', OARS_SESSION_SALT: 'a-derived-session-salt', ...TERMS };
+
+describe('runMachineChild: the holding route', () => {
+  it('pushes the batch it built to oars-hold/<machine>/<id>, with its stamp and a terms digest, and leaves the batch in the outbox', async () => {
+    const given = scene('https://github.com/owner/name');
+    const bare = withBare(given);
+    await run(given, HOLD);
+    const [file = ''] = batches(given.staged);
+    const [, stamp = '', name = ''] = file.split(/[/\\]/u);
+    expect(name).toMatch(/^[0-9a-f]{16}\.[0-9a-f]{64}\.jsonl$/u);
+    const id = name.slice(0, 16);
+    expect(id).toBe(machineIdOf('a-derived-session-salt', SESSION));
+    expect(branchesIn(bare)).toEqual([`refs/heads/oars-hold/m-1/${id}`]);
+    const show = (path: string): string => execFileSync('git', ['-C', bare, 'show', `refs/heads/oars-hold/m-1/${id}:${path}`], { encoding: 'utf8' });
+    expect(readFileSync(join(given.staged.storeDir, 'pool-outbox', file), 'utf8')).toBe(show('batch.json'));
+    expect(show('stamp')).toBe(`${stamp}\n`);
+    expect(show('terms')).toMatch(/^[0-9a-f]{64}\n$/u);
+    expect(existsSync(join(given.staged.storeDir, 'pool-send.log'))).toBe(false);
+  }, 60_000);
+
+  it('holds nothing without OARS_SESSION_SALT, or without OARS_MACHINE, and the batch is built all the same', async () => {
+    const noSalt = scene('https://github.com/owner/name');
+    const noSaltBare = withBare(noSalt);
+    await run(noSalt, { OARS_ALLOW_REPOS: 'owner/name', ...TERMS });
+    expect(batches(noSalt.staged)).toHaveLength(1);
+    expect(branchesIn(noSaltBare)).toEqual([]);
+    expect(JSON.parse(readFileSync(noticeFile(noSalt.staged.storeDir), 'utf8'))).toMatchObject({ entries: [{ code: 'hold_unconfigured' }] });
+    const noMachine = scene('https://github.com/owner/name');
+    const noMachineBare = withBare(noMachine);
+    await run(noMachine, { ...HOLD, OARS_MACHINE: '' });
+    expect(batches(noMachine.staged)).toHaveLength(1);
+    expect(branchesIn(noMachineBare)).toEqual([]);
+    expect(JSON.parse(readFileSync(noticeFile(noMachine.staged.storeDir), 'utf8'))).toMatchObject({ entries: [{ code: 'hold_unconfigured' }] });
+  }, 60_000);
+
+  it('tells the person once for a machine with OARS_HOST_CLASS alone, before any gate: no list, no id, no salt, and nothing built or logged', async () => {
+    const given = scene('https://github.com/owner/name');
+    await runMachineChild({ OARS_HOST_CLASS: 'cloud', APPDATA: given.staged.root }, given.staged.runtime, '0.0.0-test', Date.now, stopText(given), NO_WAIT);
+    expect(JSON.parse(readFileSync(noticeFile(given.staged.storeDir), 'utf8'))).toMatchObject({ entries: [{ code: 'hold_unconfigured' }] });
+    expect(batches(given.staged)).toEqual([]);
+    expect(existsSync(join(given.staged.storeDir, 'pool-send.log'))).toBe(false);
+  });
+
+  it('holds nothing of a session a gate kept out', async () => {
+    const given = scene('https://github.com/owner/name', 'a request naming zorblax');
+    const bare = withBare(given);
+    await run(given, HOLD);
+    expect(batches(given.staged)).toEqual([]);
+    expect(branchesIn(bare)).toEqual([]);
+  }, 60_000);
+});
+
+/** The `repo` of the session the child captured, read from the store's log. */
+const capturedRepo = (storeDir: string): unknown => {
+  const records = readFileSync(paths(storeDir).observations, 'utf8').split('\n').filter((entry) => entry !== '').map((entry): unknown => JSON.parse(entry));
+  const session = records.find((record) => typeof record === 'object' && record !== null && Reflect.get(record, 'kind') === 'session');
+  return typeof session === 'object' && session !== null ? Reflect.get(session, 'repo') : undefined;
+};
+
+const keyUnder = (salt: string): string => createHash('sha256').update(`${salt}\nrepo:origin:github.com/owner/name`).digest('hex').slice(0, 16);
+
+describe('runMachineChild: the repository key', () => {
+  it("hashes the session's repository under OARS_REPO_SALT, the enrollment's derived salt, and not under the store's own", async () => {
+    const given = scene('https://github.com/owner/name');
+    writeFileSync(given.transcript, `${lineOf('a plain request', given.repo)}\n`);
+    await run(given, { OARS_ALLOW_REPOS: 'owner/name', OARS_REPO_SALT: 'an-enrollment-repo-salt', ...TERMS });
+    expect(capturedRepo(given.staged.storeDir)).toBe(keyUnder('an-enrollment-repo-salt'));
+  });
+
+  it('with no OARS_REPO_SALT, or a blank one, hashes it under the salt derived from its own store salt', async () => {
+    const envs: { [name: string]: string }[] = [{}, { OARS_REPO_SALT: '  ' }];
+    for (const env of envs) {
+      const given = scene('https://github.com/owner/name');
+      writeFileSync(given.transcript, `${lineOf('a plain request', given.repo)}\n`);
+      await run(given, { OARS_ALLOW_REPOS: 'owner/name', ...env, ...TERMS });
+      expect(capturedRepo(given.staged.storeDir)).toBe(keyUnder(derivedSalt((await localSalt(given.staged.storeDir)).salt, 'repoKey/1')));
+    }
   });
 });

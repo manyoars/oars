@@ -15,6 +15,7 @@ import { DEADLINE_MS, gateHook } from './gate/hook.js';
 import { managerReader } from './gate/registry.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
 import { sessionsTry } from './sessions/try.js';
+import { githubVisibility, poolEnroll } from './sessions/machine-enroll.js';
 import { poolCoverage, poolDeposit, poolFetch, poolLogin, poolLogout, poolOutbox, poolRaw } from './sessions/pool-command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
@@ -538,9 +539,22 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     });
 
   pool
+    .command('enroll')
+    .description('print the whole configuration a cloud VM needs to hold its deposit in its own private repository (--hold-only): host class, launcher, a new machine id, the repositories, two salts derived from this machine\'s, and your exclusion terms, after checking that each repository is private (GH_TOKEN or GITHUB_TOKEN lets the check see a private one); no pool credential')
+    .option('--hold-only', 'hold in the session\'s own repository and send nothing to the pool (the only enrollment there is for now)')
+    .option('--host-class <class>', 'vps, cloud, ci, or hosted')
+    .option('--launcher <launcher>', 'interactive, orchestrated, or scheduled')
+    .option('--allow-repos <repos>', 'the repositories the machine may hold, as owner/name; repeat the flag or separate them with commas', collect)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      const token = deps.env.GH_TOKEN ?? deps.env.GITHUB_TOKEN;
+      emit(deps, flag(options, 'json'), await poolEnroll(deps, { holdOnly: flag(options, 'holdOnly'), hostClass: text(options, 'hostClass'), launcher: text(options, 'launcher'), allowRepos: list(options, 'allowRepos') }, githubVisibility(fetch, token)));
+    });
+
+  pool
     .command('deposit')
-    .description('write a batch to the outbox for each session that passes the folder allowlist and the exclusion check, and stop: nothing is sent, and only counts print. --send <hash> sends one batch that oars pool outbox printed and that is unchanged, once this account has accepted the pool covenant')
-    .option('--accept-covenant <version>', 'accept this version of the pool covenant before sending (with --send)')
+    .description('write a batch to the outbox for each session that passes the folder allowlist and the exclusion check, and stop: no session data is sent, and only counts print. --send <hash> sends one batch that oars pool outbox printed and that is unchanged, once this account has accepted the pool covenant')
+    .option('--accept-covenant <version>', 'name the covenant version you expect, with --send: on a terminal the screen is shown and you type its phrase yourself, and off a terminal this is refused')
     .option('--send <hash>', 'the SHA-256 of a batch that oars pool outbox printed')
     .option(serverOption, serverHelp)
     .action(async (_options: OptionValues, command: Command) => {

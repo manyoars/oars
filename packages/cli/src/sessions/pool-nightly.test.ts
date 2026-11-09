@@ -58,6 +58,7 @@ const scene = async (consent: 'granted' | 'declined' | null, env: NodeJS.Process
   await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
   await updatePoolChoices(staged.storeDir, (choices) => {
     choices.rawConsent = consent;
+    choices.rawConsentVersion = consent === 'granted' ? 'v1' : null;
   });
   if (signedIn) writeFileSync(join(staged.storeDir, 'pool-accounts.json'), JSON.stringify([{ server: POOL, account: 'acct_one', token: 'a-pool-token', expiresAt: LATER, signingKey: { kty: 'OKP', crv: 'Ed25519', x: 'k' } }]));
   return { staged, deps: h.deps };
@@ -142,6 +143,24 @@ describe('the nightly pool send', () => {
     const second = wire(OK_RAW);
     await nightlyPoolSend(here.deps, second.via);
     expect(second.requests.filter((request) => request.method !== 'GET')).toEqual([]);
+  });
+
+  it('holds back raw when the yes was given under another covenant than the one in force, and sends it when the versions match', async () => {
+    const old = await scene('granted');
+    await updatePoolChoices(old.staged.storeDir, (choices) => {
+      choices.rawConsentVersion = 'v0';
+    });
+    const held = wire(OK_RAW);
+    const night = await nightlyPoolSend(old.deps, held.via);
+    expect(night).toMatchObject({ outcome: 'sent', rawHeld: true });
+    expect(JSON.parse(readFileSync(join(old.staged.storeDir, 'pool-nightly.json'), 'utf8'))).toMatchObject({ rawHeld: true });
+    expect(paths(held, 'POST').filter((path) => path === '/v1/deposits').length).toBeGreaterThan(0);
+    expect(rawPuts(held)).toEqual([]);
+    expect(outboxFiles(old.staged, '.redacted')).toEqual([]);
+    const current = await scene('granted');
+    const sent = wire(OK_RAW);
+    expect(await nightlyPoolSend(current.deps, sent.via)).not.toHaveProperty('rawHeld');
+    expect(rawPuts(sent).length).toBeGreaterThan(0);
   });
 
   it('sends nothing when the covenant is not accepted, and builds nothing', async () => {

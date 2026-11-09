@@ -59,7 +59,7 @@ The event carries no path, user name, or environment value, and nothing joins it
 
 ### `covenant-shown`
 
-One each time a deposit to the pool stops because the covenant is not yet accepted: the CLI names the version to read and rerun with `--accept-covenant <version>`. It holds the version and nothing else, so a count of these is a count of times the covenant was put in front of an operator, which a server log of `GET /v1/covenant` cannot say (that route is read by a signed-out `curl` too). It is not written when the covenant is already accepted or when deposits are closed.
+One each time the covenant screen is shown at a terminal, whether or not the person then accepts. It holds the version and nothing else, so a count of these is a count of times the covenant was put in front of an operator, which a server log of `GET /v1/covenant` cannot say (that route is read by a signed-out `curl` too). It is not written when the covenant is already accepted, when deposits are closed, when the pool holds no text for the version, or when the command is not run at a terminal.
 
 | Field | What it holds |
 |---|---|

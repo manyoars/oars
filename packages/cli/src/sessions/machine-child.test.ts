@@ -108,6 +108,10 @@ describe('machineChild', () => {
       log.push(`build ${given.session}`);
       return Promise.resolve();
     },
+    hold: (given) => {
+      log.push(`hold ${given.session}`);
+      return Promise.resolve();
+    },
     ...extra,
   });
 
@@ -115,7 +119,7 @@ describe('machineChild', () => {
     const outbox = outboxFolder();
     const log: string[] = [];
     expect(await machineChild(deps(outbox, log, { settle: TIMES }), input('a'))).toBe('built');
-    expect(log).toEqual(['capture a', 'build a']);
+    expect(log).toEqual(['capture a', 'build a', 'hold a']);
     expect(existsSync(join(outbox, 'send.lock'))).toBe(false);
     expect(existsSync(join(outbox, 'send.dirty'))).toBe(false);
   });
@@ -183,7 +187,7 @@ describe('machineChild', () => {
     release();
     expect(await holder).toBe('built');
     // The marks of one session count once: a is built again from its latest transcript, b once.
-    expect(log).toEqual(['capture a', 'build a', 'capture a', 'build a', 'capture b', 'build b']);
+    expect(log).toEqual(['capture a', 'build a', 'hold a', 'capture a', 'build a', 'hold a', 'capture b', 'build b', 'hold b']);
     expect(existsSync(join(outbox, 'send.dirty'))).toBe(false);
     expect(existsSync(join(outbox, 'send.lock'))).toBe(false);
   });
@@ -193,7 +197,7 @@ describe('machineChild', () => {
     writeFileSync(join(outbox, 'send.dirty'), `${markOf('old')}not json\n\n`);
     const log: string[] = [];
     expect(await machineChild(deps(outbox, log), input('a'))).toBe('built');
-    expect(log).toEqual(['capture a', 'build a', 'capture old', 'build old']);
+    expect(log).toEqual(['capture a', 'build a', 'hold a', 'capture old', 'build old', 'hold old']);
   });
 
   it('a Stop that marks just after the holder let go finds the lock free on its second try and builds its own session', async () => {
@@ -209,7 +213,7 @@ describe('machineChild', () => {
       if (opens === 2) rmSync(lock, { force: true });
     };
     expect(await machineChild(deps(outbox, log), input('b'))).toBe('built');
-    expect(log).toEqual(['capture b', 'build b']);
+    expect(log).toEqual(['capture b', 'build b', 'hold b']);
     expect(existsSync(join(outbox, 'send.dirty'))).toBe(false);
   });
 
@@ -224,8 +228,20 @@ describe('machineChild', () => {
       writeFileSync(path, markOf('late'));
     };
     expect(await machineChild(deps(outbox, log), input('a'))).toBe('built');
-    expect(log).toEqual(['capture a', 'build a', 'capture late', 'build late']);
+    expect(log).toEqual(['capture a', 'build a', 'hold a', 'capture late', 'build late', 'hold late']);
     expect(existsSync(join(outbox, 'send.dirty'))).toBe(false);
+  });
+
+  it('holds a session once it is built, and holds nothing of a session that failed to build or is off the list', async () => {
+    const outbox = outboxFolder();
+    const log: string[] = [];
+    const failing = deps(outbox, log, { build: () => Promise.reject(new Error('build failed')) });
+    await expect(machineChild(failing, input('a'))).rejects.toThrow('build failed');
+    const off = deps(outbox, log, { allowed: () => Promise.resolve(false) });
+    await machineChild(off, input('b'));
+    expect(log).toEqual(['capture a']);
+    await machineChild(deps(outbox, log), input('c'));
+    expect(log).toEqual(['capture a', 'capture c', 'build c', 'hold c']);
   });
 
   it('every marked session gets its turn when one fails, and the first failure is reported', async () => {
@@ -239,7 +255,7 @@ describe('machineChild', () => {
       },
     });
     await expect(machineChild(failing, input('a'))).rejects.toThrow('build failed for a');
-    expect(log).toEqual(['capture a', 'build a', 'capture b', 'build b']);
+    expect(log).toEqual(['capture a', 'build a', 'capture b', 'build b', 'hold b']);
     expect(existsSync(join(outbox, 'send.lock'))).toBe(false);
   });
 
