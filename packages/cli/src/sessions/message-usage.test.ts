@@ -1,13 +1,13 @@
 // Token usage as an attribute of a message group (CAPTURE 28): one entry per distinct model message, never per content-block line or per tool call.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { rolloutLines } from './codex.js';
 import { captureSession } from './extract.js';
 import { makeRedactor } from './redact.js';
-import type { MessageUsage } from './schema.js';
-import { deposit, loadStore } from './store.js';
+import { CAPTURE_VERSION, type MessageUsage } from './schema.js';
+import { deposit, loadStore, paths } from './store.js';
 import { addProject, cleanup, NOW, stage } from './test-support.js';
 
 const redact = makeRedactor();
@@ -15,6 +15,11 @@ const line = (value: object): string => JSON.stringify(value);
 const capture = (lines: readonly string[]) => {
   const text = lines.join('\n');
   return captureSession({ text, session: 's', project: 'p', rev: 1, at: 'x', bytes: text.length, redact });
+};
+
+const parseObject = (text: string): { [key: string]: unknown } => {
+  const value: unknown = JSON.parse(text);
+  return typeof value === 'object' && value !== null ? { ...value } : {};
 };
 
 const USAGE = { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 30, cache_creation_input_tokens: 40, output_tokens_details: { thinking_tokens: 5 } };
@@ -192,5 +197,60 @@ describe('messageUsage on a Codex session', () => {
   it('records nothing for a session whose events hold no usage', () => {
     const { session } = codexCapture([...head, say(3, 'one'), entry(4, 'event_msg', { type: 'token_count', info: null, rate_limits: limits })]);
     expect(session).not.toHaveProperty('messageUsage');
+  });
+});
+
+describe('messageUsage on the version path', () => {
+  let appData: string;
+  beforeEach(() => {
+    appData = mkdtempSync(join(tmpdir(), 'oars-message-usage-appdata-'));
+    vi.stubEnv('APPDATA', appData);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(appData, { recursive: true, force: true });
+    cleanup();
+  });
+
+  it('is a capture-version bump: a version-27 store gains the field only when the next deposit captures its transcripts again', async () => {
+    expect(Number(CAPTURE_VERSION)).toBeGreaterThanOrEqual(28);
+    const staged = stage('proj');
+    expect(staged.storeDir.startsWith(staged.root)).toBe(true);
+    expect(staged.storeDir.startsWith(appData)).toBe(false);
+    addProject(staged, 'proj', 'usage-main', [user, block(1, 'msg_1', call('t1'))]);
+    const options = { allow: ['proj'], redactDomains: [], now: () => NOW };
+    await deposit(staged.runtime, options);
+    expect((await loadStore(staged.storeDir)).sessions.find((entry) => entry.session === 'usage-main')?.messageUsage).toHaveLength(1);
+
+    // Make the store what version 27 wrote: no field on the record, the old stamp on the record and in the state.
+    const file = paths(staged.storeDir).observations;
+    const old = readFileSync(file, 'utf8').split('\n').filter((entry) => entry !== '').map((entry) => {
+      const record = parseObject(entry);
+      Reflect.deleteProperty(record, 'messageUsage');
+      record.cv = '27';
+      return `${JSON.stringify(record)}\n`;
+    });
+    writeFileSync(file, old.join(''));
+    const state = parseObject(readFileSync(paths(staged.storeDir).state, 'utf8'));
+    const files: unknown = state.files;
+    if (typeof files !== 'object' || files === null) throw new Error('the state holds no files');
+    for (const held of Object.values(files)) Reflect.set(Object(held), 'v', '27');
+    writeFileSync(paths(staged.storeDir).state, JSON.stringify(state));
+    const before = (await loadStore(staged.storeDir)).sessions.find((entry) => entry.session === 'usage-main');
+    expect(before).toMatchObject({ cv: '27' });
+    expect(before).not.toHaveProperty('messageUsage');
+
+    const again = await deposit(staged.runtime, options);
+    expect(again.sessions).toBeGreaterThan(0);
+    const after = (await loadStore(staged.storeDir)).sessions.find((entry) => entry.session === 'usage-main');
+    expect(after).toMatchObject({ cv: CAPTURE_VERSION, messageUsage: [{ id: 'msg_1', calls: ['t1'], input: 10, output: 20 }] });
+  });
+
+  it('re-extraction of a session with no usage data still records nothing', async () => {
+    const staged = stage('proj');
+    const plain = line({ type: 'assistant', uuid: 'p', timestamp: '2026-06-01T00:00:01.000Z', message: { id: 'msg_p', role: 'assistant', content: [{ type: 'text', text: 'x' }] } });
+    addProject(staged, 'proj', 'usage-none', [user, plain]);
+    await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
+    expect((await loadStore(staged.storeDir)).sessions.find((entry) => entry.session === 'usage-none')).not.toHaveProperty('messageUsage');
   });
 });

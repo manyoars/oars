@@ -30,6 +30,11 @@
 // reads, not moved ones. A Copilot CLI session with rotated `events.N.jsonl` archives is now read as one session, so its `prompts`, `tools`, `lines`, and skeleton move; one
 // with no archives is unchanged. EXTRACTOR stays 11. A version-16 store's next deposit captures every transcript again from the harness or `raw/`.
 //
+// Version 28 (CAPTURE 28) adds the optional `messageUsage` to the session record: one entry per distinct model message (a Claude Code `message.id`, a Codex response), holding that message's token counts,
+// the ids of the tool calls it made, and, for Codex, the plan percent used and window length when the event held a rate-limit block (`MessageUsage`). Numbers and ids only; the counts are never split across the
+// message's calls. It changes no value captured before and EXTRACTOR stays as it is. A version-27 store's next deposit captures every transcript again, and a session recorded before then has no `messageUsage`
+// until it is: nothing reads the field back into the older record. A file that reports no usage gets none either way.
+//
 // Version 27 (CAPTURE 27) adds three optional fields to a tool call (`call-shape.ts`), each computed from the input at capture and stored as closed-list members, never a value: `argFeatures` (per key, the value's size and,
 // for a path, its depth, extension class, and folder kind, for a pattern what it uses), `argValues` (a boolean, or a string its tool's closed list holds), and `changeKind` (what changed from the previous call of the
 // same tool in the prompt). It changes no value captured before, so EXTRACTOR stays as it is; a version-26 store's next deposit captures every transcript again, and a call of an older record has none of them.
@@ -98,7 +103,7 @@ import type { RepoSize } from './public-vocabulary.js';
 import type { SessionFunnel, SessionSetup, SessionTrust } from './session-shape.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '27';
+export const CAPTURE_VERSION = '28';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
