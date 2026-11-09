@@ -2,7 +2,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { http, HttpResponse, type JsonBodyType } from 'msw';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { run } from '../cli.js';
 import { harness, server, useServer } from '../test-support.js';
 import { machinesFile, poolEnroll, type EnrollOptions, type Visibility } from './machine-enroll.js';
@@ -49,8 +49,6 @@ const poolAnswering = (status: number, body: JsonBodyType, sent: Sent[]): void =
 const CREATED = { machine: { id: 'pool-machine-id', label: 'night runner', expiresAt: LATER }, token: TOKEN };
 
 const blockLines = (text: string): string[] => text.split('\n').filter((line) => line.startsWith('OARS_') && !line.startsWith('OARS_MACHINE=') );
-
-const textOrNumber = (value: unknown): unknown => value;
 
 const usageRefusal = async (call: Promise<unknown>, message: RegExp): Promise<void> => {
   await expect(call).rejects.toThrow(message);
@@ -123,7 +121,26 @@ describe('oars pool enroll (full)', () => {
     const sent: Sent[] = [];
     poolAnswering(201, CREATED, sent);
     for (const days of ['1', '365']) await poolEnroll(h.deps, { ...OPTIONS, days }, PRIVATE);
-    expect(sent.map((one) => (isObject(one.body) ? textOrNumber(Reflect.get(one.body, 'days')) : undefined))).toEqual([1, 365]);
+    expect(sent.map((one) => (isObject(one.body) ? Reflect.get(one.body, 'days') : undefined))).toEqual([1, 365]);
+  });
+
+  it('names the host of the pool asked, not a fixed one, in the advice for the token', async () => {
+    const { h } = scene();
+    poolAnswering(201, CREATED, []);
+    const outcome = await poolEnroll(h.deps, OPTIONS, PRIVATE);
+    expect(outcome.text).toContain('host pool.test)');
+    expect(outcome.text).not.toContain('pool.manyoars.com');
+  });
+
+  it('refuses the hosted class locally, before GitHub or the pool is asked', async () => {
+    const { staged, h } = scene();
+    const sent: Sent[] = [];
+    poolAnswering(201, CREATED, sent);
+    const visibility = vi.fn(PRIVATE);
+    await usageRefusal(poolEnroll(h.deps, { ...OPTIONS, hostClass: 'hosted' }, visibility), /vps, cloud, or ci.*Nothing was checked\./u);
+    expect(visibility).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+    expect(existsSync(machinesFile(staged.storeDir))).toBe(false);
   });
 
   it('needs a label', async () => {

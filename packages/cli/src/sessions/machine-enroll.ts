@@ -1,4 +1,5 @@
-// `oars pool enroll --hold-only`: the whole configuration a cloud VM needs to hold its deposit in its own private repository, printed as one env block, with no pool credential (the pool may not exist yet).
+// `oars pool enroll`: the whole configuration a cloud VM needs to hold its deposit in its own private repository, printed as one env block. With `--hold-only` it uses no pool credential (the pool may not exist yet); without it,
+// the pool is also asked for a one-time enrollment token after every check below, and the machine is recorded only after the pool answers.
 // The trusted machine mints the machine id, derives the two salts from its own (so a local capture and a VM's key one repository the same way), reads its term file, and refuses any repository that is not
 // private: a hold branch is exactly as readable as the repository it sits in.
 import { randomBytes } from 'node:crypto';
@@ -125,11 +126,13 @@ const enrolledOf = (body: unknown): Enrolled => {
 };
 
 /**
- * Prints the env block for a machine that holds its deposit in its own private repository. Everything it refuses, it refuses before it asks GitHub anything: the flags, then the term list (a block with no terms
+ * Prints the env block for a machine that holds its deposit in its own private repository. Without `--hold-only` it also asks the pool for a one-time enrollment token after every check has passed, and records the
+ * machine only after the pool has answered. Everything it refuses, it refuses before it asks GitHub anything: the flags, then the term list (a block with no terms
  * would exclude every session, so nothing would be held). A repository that is public, or whose record cannot be read, refuses the whole block, and the message names each such repository.
  */
 export const poolEnroll = async (deps: RunDeps, options: EnrollOptions, visibility: Visibility): Promise<Outcome> => {
   const hostClass = classOf(options.hostClass);
+  if (!options.holdOnly && hostClass === 'hosted') throw usage('The pool enrolls a vps, cloud, or ci machine; a hosted run uses a per-run token, so it does not enroll. Nothing was checked.');
   const launcher = launcherOf(options.launcher);
   const repos = reposOf(options.allowRepos);
   if (options.holdOnly && (options.days !== undefined || options.name !== undefined)) throw usage('--name and --days belong to the enrollment that asks the pool for a token; --hold-only sends nothing to the pool. Nothing was checked.');
@@ -177,7 +180,7 @@ export const poolEnroll = async (deps: RunDeps, options: EnrollOptions, visibili
     `Enrolled ${options.name ?? ''} with the pool for ${count}.`,
     `One-time enrollment token (shown once; it must be activated within 24 hours, by ${new Date(enrolled.tokenExpiresAt).toISOString()}, or it is useless):`,
     `  ${enrolled.token}`,
-    'Hold it where the runtime keeps secrets: a network secret on the cloud environment (Bearer, host pool.manyoars.com), or an owner-only file on a server. Never in a repository.',
+    `Hold it where the runtime keeps secrets: a network secret on the cloud environment (Bearer, host ${new URL(server).host}), or an owner-only file on a server. Never in a repository.`,
     'Set these variables in the cloud environment. The block holds two salts and your exclusion terms, so treat it as a secret:',
     ...block,
   ].join('\n');
