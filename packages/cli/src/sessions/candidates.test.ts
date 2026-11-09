@@ -143,6 +143,57 @@ describe('a linked worktree', () => {
   });
 });
 
+describe('the working-folder instruction kinds', () => {
+  const kinds = async (cwd: string): Promise<Awaited<ReturnType<typeof snap>>['workingKinds']> => (await snap(cwd)).workingKinds;
+
+  it('counts a local file, a dot-claude file, and the unconditional rules files in the working folder', async () => {
+    const cwd = join(root, 'k');
+    repo(cwd);
+    write(join(cwd, 'CLAUDE.local.md'));
+    write(join(cwd, '.claude', 'CLAUDE.md'));
+    write(join(cwd, '.claude', 'rules', 'one.md'));
+    write(join(cwd, '.claude', 'rules', 'TWO.MD'), '---\ndescription: x\n---\nbody');
+    expect(await kinds(cwd)).toEqual({ local: 1, dotClaude: 1, rules: 2 });
+  });
+
+  it('does not count a rules file with a paths condition, a non-markdown file, a folder, or a nested file', async () => {
+    const cwd = join(root, 'k2');
+    repo(cwd);
+    write(join(cwd, '.claude', 'rules', 'scoped.md'), '---\r\npaths:\r\n  - "src/**"\r\n---\nbody');
+    write(join(cwd, '.claude', 'rules', 'notes.txt'));
+    write(join(cwd, '.claude', 'rules', 'deeper', 'nested.md'));
+    mkdirSync(join(cwd, '.claude', 'rules', 'folder.md'), { recursive: true });
+    // Text that only mentions the key, outside front matter, is not a condition.
+    write(join(cwd, '.claude', 'rules', 'mentions.md'), 'paths: not front matter\n');
+    expect(await kinds(cwd)).toEqual({ local: 0, dotClaude: 0, rules: 1 });
+  });
+
+  it('counts nothing above the working folder', async () => {
+    const top = join(root, 'k3');
+    repo(top);
+    write(join(top, 'CLAUDE.local.md'));
+    write(join(top, '.claude', 'CLAUDE.md'));
+    write(join(top, '.claude', 'rules', 'one.md'));
+    expect(await kinds(join(top, 'sub'))).toEqual({ local: 0, dotClaude: 0, rules: 0 });
+  });
+
+  it('counts a local file in a linked worktree own folder and nothing of its main checkout', async () => {
+    const main = join(root, 'k4', 'repo');
+    repo(main);
+    write(join(main, 'CLAUDE.local.md'));
+    const x = join(main, '.claude', 'worktrees', 'x');
+    worktree(x, main);
+    expect(await kinds(x)).toEqual({ local: 0, dotClaude: 0, rules: 0 });
+  });
+
+  it('leaves the config folder to the user level when the session runs in the folder that holds it', async () => {
+    const home = dirname(claudeDir);
+    write(join(claudeDir, 'CLAUDE.md'));
+    write(join(claudeDir, 'rules', 'one.md'));
+    expect(await kinds(home)).toEqual({ local: 0, dotClaude: 0, rules: 0 });
+  });
+});
+
 describe('the skill folders', () => {
   it('counts project skills up to the repo root, and user skills', async () => {
     repo(join(root, 's'));
@@ -153,6 +204,17 @@ describe('the skill folders', () => {
     // Above the repo root, so not this project's.
     skill(join(root, '.claude', 'skills'), 'outside');
     expect((await snap(join(root, 's', 'sub'))).skills).toEqual({ project: 2, user: 2 });
+  });
+
+  it('counts the main checkout root of a linked worktree, which the harness loads skills from, and not the folders between', async () => {
+    const main = join(root, 'w', 'repo');
+    repo(main);
+    skill(join(main, '.claude', 'skills'), 'root-skill');
+    skill(join(main, '.claude', 'worktrees', '.claude', 'skills'), 'between');
+    const x = join(main, '.claude', 'worktrees', 'x');
+    worktree(x, main);
+    skill(join(x, '.claude', 'skills'), 'own');
+    expect((await snap(x)).skills.project).toBe(2);
   });
 
   it('counts only folders that hold a skill file', async () => {
@@ -179,43 +241,69 @@ describe('the skill folders', () => {
 describe('the configured hook events', () => {
   const hooks = (...events: string[]): string => JSON.stringify({ hooks: Object.fromEntries(events.map((event) => [event, [{ hooks: [{ type: 'command', command: 'c' }, { type: 'command', command: 'd' }] }]])) });
 
-  it('counts commands per event across the three settings files', async () => {
+  it('counts commands per event and per source across the three settings files', async () => {
     repo(join(root, 'h'));
     write(join(claudeDir, 'settings.json'), hooks('SessionStart', 'PreToolUse'));
     write(join(root, 'h', '.claude', 'settings.json'), hooks('SessionStart'));
     write(join(root, 'h', '.claude', 'settings.local.json'), hooks('Stop'));
-    expect((await snap(join(root, 'h'))).hooks).toEqual({ SessionStart: 4, PreToolUse: 2, Stop: 2 });
+    expect((await snap(join(root, 'h'))).hooks).toEqual({ user: { SessionStart: 2, PreToolUse: 2 }, working: { SessionStart: 2, Stop: 2 }, ancestors: {} });
+  });
+
+  it('counts the settings of a folder above the working folder apart, because the harness skips them', async () => {
+    const top = join(root, 'ha');
+    repo(top);
+    write(join(top, '.claude', 'settings.json'), hooks('SessionStart'));
+    write(join(top, 'mid', '.claude', 'settings.local.json'), hooks('Stop'));
+    write(join(top, 'mid', 'deep', '.claude', 'settings.json'), hooks('PreToolUse'));
+    // Above the repo root, so not measured and not counted.
+    write(join(root, '.claude', 'settings.json'), hooks('Notification'));
+    expect((await snap(join(top, 'mid', 'deep'))).hooks).toEqual({ user: {}, working: { PreToolUse: 2 }, ancestors: { SessionStart: 2, Stop: 2 } });
+  });
+
+  it('counts the main checkout root of a linked worktree as above the working folder', async () => {
+    const main = join(root, 'hw', 'repo');
+    repo(main);
+    write(join(main, '.claude', 'settings.json'), hooks('SessionStart'));
+    const x = join(main, '.claude', 'worktrees', 'x');
+    worktree(x, main);
+    expect((await snap(x)).hooks).toEqual({ user: {}, working: {}, ancestors: { SessionStart: 2 } });
+  });
+
+  it('counts no folder above the working folder when no repository holds it', async () => {
+    write(join(root, 'hn', '.claude', 'settings.json'), hooks('Stop'));
+    write(join(root, 'hn', 'sub', '.claude', 'settings.json'), hooks('SessionStart'));
+    expect((await snap(join(root, 'hn', 'sub'))).hooks).toEqual({ user: {}, working: { SessionStart: 2 }, ancestors: {} });
   });
 
   it('counts an event the harness added later under its own name', async () => {
     repo(join(root, 'h1'));
     write(join(claudeDir, 'settings.json'), hooks('PostToolBatch', 'UserPromptExpansion', 'PreModelSwitch', 'PostModelSwitch', 'DirectoryAdded', 'MessageDisplay'));
-    expect((await snap(join(root, 'h1'))).hooks).toEqual({ PostToolBatch: 2, UserPromptExpansion: 2, PreModelSwitch: 2, PostModelSwitch: 2, DirectoryAdded: 2, MessageDisplay: 2 });
+    expect((await snap(join(root, 'h1'))).hooks.user).toEqual({ PostToolBatch: 2, UserPromptExpansion: 2, PreModelSwitch: 2, PostModelSwitch: 2, DirectoryAdded: 2, MessageDisplay: 2 });
   });
 
   it('folds an event name outside the closed list into other, so no free text is stored', async () => {
     repo(join(root, 'h2'));
     write(join(claudeDir, 'settings.json'), hooks('my-private-event'));
     const shot = await snap(join(root, 'h2'));
-    expect(shot.hooks).toEqual({ other: 2 });
+    expect(shot.hooks.user).toEqual({ other: 2 });
     expect(JSON.stringify(shot)).not.toContain('my-private-event');
   });
 
   it('ignores shapes that are not hook groups', async () => {
     repo(join(root, 'h3'));
     write(join(claudeDir, 'settings.json'), JSON.stringify({ hooks: { Stop: 'nope', SessionStart: ['nope', { hooks: 'nope' }] } }));
-    expect((await snap(join(root, 'h3'))).hooks).toEqual({});
+    expect((await snap(join(root, 'h3'))).hooks.user).toEqual({});
     write(join(claudeDir, 'settings.json'), JSON.stringify({ hooks: 'nope' }));
-    expect((await snap(join(root, 'h3'))).hooks).toEqual({});
+    expect((await snap(join(root, 'h3'))).hooks.user).toEqual({});
     write(join(claudeDir, 'settings.json'), '[]');
-    expect((await snap(join(root, 'h3'))).hooks).toEqual({});
+    expect((await snap(join(root, 'h3'))).hooks.user).toEqual({});
   });
 
   it('does not count the user settings twice when the repo root is the home folder', async () => {
     const home = dirname(claudeDir);
     repo(home);
     write(join(claudeDir, 'settings.json'), hooks('Stop'));
-    expect((await snap(home)).hooks).toEqual({ Stop: 2 });
+    expect((await snap(home)).hooks).toEqual({ user: { Stop: 2 }, working: {}, ancestors: {} });
   });
 });
 
@@ -232,13 +320,14 @@ describe('recordCandidates', () => {
     const text = readFileSync(join(store, CANDIDATES_FILE), 'utf8');
     expect(text.trim().split('\n')).toHaveLength(1);
     expect(JSON.parse(text)).toEqual({
-      v: 1,
+      v: 2,
       session: 'sess-1',
       at: new Date(NOW).toISOString(),
       harness: 'claude-code',
       instructions: { working: 1, parent: 0, above: 0, mainCheckout: 0, user: 0 },
+      workingKinds: { local: 0, dotClaude: 0, rules: 0 },
       skills: { project: 1, user: 0 },
-      hooks: {},
+      hooks: { user: {}, working: {}, ancestors: {} },
       repoLevels: 0,
       mainLevels: null,
     });
@@ -280,8 +369,9 @@ describe('readCandidates', () => {
   it('keeps the first snapshot of each session and skips a line it cannot read', async () => {
     const store = join(root, 'store');
     const shot = (session: string, working: number): string =>
-      JSON.stringify({ v: 1, session, at: 'a', harness: 'claude-code', instructions: { working, parent: 0, above: 0, mainCheckout: 0, user: 0 }, skills: { project: 0, user: 0 }, hooks: {}, repoLevels: 0, mainLevels: null });
-    write(join(store, CANDIDATES_FILE), `${shot('one', 1)}\n{ torn\n"text"\n${JSON.stringify({ v: 2, session: 'later-format' })}\n${shot('one', 9)}\n${shot('two', 2)}\n`);
+      JSON.stringify({ v: 2, session, at: 'a', harness: 'claude-code', instructions: { working, parent: 0, above: 0, mainCheckout: 0, user: 0 }, workingKinds: {}, skills: { project: 0, user: 0 }, hooks: {}, repoLevels: 0, mainLevels: null });
+    // A line of the first format counted hooks as one group and held no working-folder kinds, so it is skipped like a later one.
+    write(join(store, CANDIDATES_FILE), `${shot('one', 1)}\n{ torn\n"text"\n${JSON.stringify({ v: 3, session: 'later-format' })}\n${JSON.stringify({ v: 1, session: 'first-format' })}\n${shot('one', 9)}\n${shot('two', 2)}\n`);
     const read = await readCandidates(store);
     expect([...read.keys()]).toEqual(['one', 'two']);
     expect(read.get('one')?.instructions.working).toBe(1);
@@ -289,12 +379,12 @@ describe('readCandidates', () => {
 
   it('skips a line of the current version that lacks the count groups, so a later join never reads a missing one', async () => {
     const store = join(root, 'store');
-    const lacking = (missing: 'instructions' | 'skills' | 'hooks'): string => {
-      const groups = { instructions: {}, skills: {}, hooks: {} };
+    const lacking = (missing: 'instructions' | 'workingKinds' | 'skills' | 'hooks'): string => {
+      const groups = { instructions: {}, workingKinds: {}, skills: {}, hooks: {} };
       const kept = Object.fromEntries(Object.entries(groups).filter(([name]) => name !== missing));
-      return JSON.stringify({ v: 1, session: missing, at: 'a', harness: 'claude-code', ...kept, repoLevels: 0, mainLevels: null });
+      return JSON.stringify({ v: 2, session: missing, at: 'a', harness: 'claude-code', ...kept, repoLevels: 0, mainLevels: null });
     };
-    write(join(store, CANDIDATES_FILE), `${JSON.stringify({ v: 1, session: 'bare' })}\n${lacking('instructions')}\n${lacking('skills')}\n${lacking('hooks')}\n${JSON.stringify({ v: 1, session: 'null-group', instructions: null, skills: {}, hooks: {} })}\n`);
+    write(join(store, CANDIDATES_FILE), `${JSON.stringify({ v: 2, session: 'bare' })}\n${lacking('instructions')}\n${lacking('workingKinds')}\n${lacking('skills')}\n${lacking('hooks')}\n${JSON.stringify({ v: 2, session: 'null-group', instructions: null, workingKinds: {}, skills: {}, hooks: {} })}\n`);
     expect((await readCandidates(store)).size).toBe(0);
   });
 

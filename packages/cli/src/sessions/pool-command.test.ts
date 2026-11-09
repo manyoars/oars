@@ -475,9 +475,9 @@ describe('the session-start snapshot stays out of a deposit', () => {
     appendFileSync(join(scene.staged.projectsRoot, 'proj', 'errors-a.jsonl'), `${INSTRUCTIONS_RECORD}\n`);
     await capture(scene);
     const held = (await loadStore(scene.staged.storeDir)).sessions.find((one) => one.loadedInstructions !== undefined);
-    expect(held?.loadedInstructions, 'the transcript produced a loaded set').toEqual({ user: 1, levels: [0] });
+    expect(held?.loadedInstructions, 'the transcript produced a loaded set').toEqual({ user: 1, levels: [0], local: 0, dotClaude: 0, rules: 0 });
     if (snapshot) {
-      const shot = { v: 1, session: held?.session, at: '2026-11-09T07:00:00.000Z', harness: 'claude-code', instructions: { working: 3, parent: 2, above: 1, mainCheckout: 5, user: 1 }, skills: { project: 4, user: 7 }, hooks: { SessionStart: 1 }, repoLevels: 2, mainLevels: 3 };
+      const shot = { v: 2, session: held?.session, at: '2026-11-09T07:00:00.000Z', harness: 'claude-code', instructions: { working: 3, parent: 2, above: 1, mainCheckout: 5, user: 1 }, workingKinds: { local: 1, dotClaude: 1, rules: 2 }, skills: { project: 4, user: 7 }, hooks: { user: {}, working: { SessionStart: 1 }, ancestors: { Stop: 1 } }, repoLevels: 2, mainLevels: 3 };
       writeFileSync(join(scene.staged.storeDir, 'candidates.jsonl'), `${JSON.stringify(shot)}\n`);
     }
     await signIn(scene);

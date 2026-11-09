@@ -16,13 +16,14 @@ import type { SessionObservation } from './schema.js';
 const OWNED_KEYS = ['loadedInstructions', 'repoLevels', 'mainLevels', 'mainCheckout', 'instructions', 'hooks', 'levels', 'candidates', 'loadStatus'];
 
 const SNAPSHOT: CandidateSnapshot = {
-  v: 1,
+  v: 2,
   session: 's1',
   at: '2026-11-09T07:00:00.000Z',
   harness: 'claude-code',
   instructions: { working: 3, parent: 2, above: 1, mainCheckout: 5, user: 1 },
+  workingKinds: { local: 1, dotClaude: 1, rules: 2 },
   skills: { project: 4, user: 7 },
-  hooks: { SessionStart: 1, PreToolUse: 2 },
+  hooks: { user: { PreToolUse: 2 }, working: { SessionStart: 1 }, ancestors: { Stop: 1 } },
   repoLevels: 2,
   mainLevels: 3,
 };
