@@ -9,7 +9,7 @@ useServer();
 
 /** The file the retired launch switch read. Nothing reads it now; a request for it would be a regression. */
 const LAUNCH_FILE_URL = 'https://manyoars.com/.well-known/oars.json';
-const UNAVAILABLE = 'Cannot reach Many Oars sign-in at login.manyoars.com (Many Oars and its pool at pool.manyoars.com may not be deployed yet). Pass --issuer-url or set OARS_ISSUER_URL to use another issuer.';
+const UNAVAILABLE = 'Cannot reach Many Oars sign-in at login.manyoars.com (it may not be deployed yet). Pass --issuer-url or set OARS_ISSUER_URL to use another issuer.';
 const single = (text: string[]): unknown => JSON.parse(text.join(''));
 
 /** Answers the retired launch file as launched=false and counts the requests, so a test can prove a login never asked and is not held by it. */

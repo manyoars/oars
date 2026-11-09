@@ -10,7 +10,7 @@ This is the Many Oars open-source monorepo (Apache-2.0): the `oars` command line
 | `openapi/public.json` | The slice of the platform API that Many Oars exposes to the CLI and coding agents (including the API key operations), generated from the platform's OpenAPI by `scripts/openapi-public.mjs` and the operation list in `openapi/public-operations.json` | here |
 | `packages/cli` | `@manyoars/oars`, the `oars` command: `login`, `keys` (`create`, `list`, `revoke`), `sessions` (a local memory of your own coding-agent sessions: Claude Code, Cursor, Codex, Copilot CLI, Gemini CLI, Grok Build, OpenCode, Pi, and VS Code Copilot Chat), `gate` (a record of the install, MCP, and skill picks your agents make), and `pool` (deposit, outbox, and fetch commands for a pool server: the Many Oars pool, `pool.manyoars.com`, which is live, or one you name) | published on npm as [`@manyoars/oars`](https://www.npmjs.com/package/@manyoars/oars) |
 
-Accounts are not open yet: `oars login` uses the Many Oars issuer by default, and until Many Oars sign-in at `login.manyoars.com` (and its pool at `pool.manyoars.com`) is deployed it exits 2 with an error that names `login.manyoars.com`.
+Accounts are not open yet: `oars login` uses the Many Oars issuer by default, and until Many Oars sign-in at `login.manyoars.com` is deployed it exits 2 with an error that names `login.manyoars.com`.
 
 ## Session memory
 

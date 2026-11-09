@@ -94,7 +94,7 @@ One per `oars pool fetch` that reached the pool, whatever the pool answered: a r
 
 ### `store-health`
 
-One per sender run: a snapshot of the session store, counts and sizes only. If the store cannot be read, the event holds `readFailed: 1` and nothing else, and the run goes on.
+One per sender run: a snapshot of the session store: counts and sizes, plus the lists of harness versions and model names it holds (each only if public, else `other`). If the store cannot be read, the event holds `readFailed: 1` and nothing else, and the run goes on.
 
 | Field | What it holds |
 |---|---|
