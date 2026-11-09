@@ -59,6 +59,15 @@ describe('queries/first-run-installs.sql', () => {
     expect(header).not.toContain('--remote --file');
   });
 
+  it('names the install that sends no first-run event as the settings file kept without its install id, not the reverse', () => {
+    const words = SQL.split(/\r?\n/)
+      .filter((line) => line.startsWith('--'))
+      .map((line) => line.replace(/^--\s?/, ''))
+      .join(' ');
+    expect(words).toContain('the settings file kept without its install id');
+    expect(words).not.toContain('the install id kept without its settings file');
+  });
+
   it('counts distinct first-run installs on or after the day the covenant was first served, CI runs apart, with a row for each surface', async () => {
     expect(await run(db, forVersion('v2'))).toEqual([
       { version: 'v2', start_day: '2026-11-10', surface: '(all)', first_run_installs: 5, ci_installs: 2, non_ci_installs: 3 },
