@@ -220,7 +220,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .option('--family <name>', `one read family (${RECALL_FAMILIES.join(', ')}); only recovery and fit are narrowed by --class and --since`)
     .option('--text <text>', 'look for text in the local record')
     .option('--session <id>', 'the session asking, so what it did next can be read for this recall')
-    .option('--counts', 'print counts of recalls by mode, arm, and answer, with what followed, instead of answering (see --day)')
+    .option('--counts', 'print counts of recalls by mode, arm, and answer, with how many windows hold a call named like a shown action, instead of answering (see --day)')
     .option('--day <yyyy-mm-dd>', 'with --counts: only this UTC day')
     .option('--mcp', 'serve one recall tool over MCP on stdio instead of answering once')
     .option('--context', "print the repository's top recurring errors as a short block for injection into a session (see --cwd, --harness, --top, --max-chars)")
@@ -414,6 +414,9 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .option('--file <path>', 'the settings file for --scope file')
     .option('--harness <harness>', 'codex: install the opt-in Codex recording hook in hooks.json in the Codex home instead (Codex asks you to trust it before it runs; it records tool and token rows locally while codex is allowed)', harnessOption)
     .option('--keep-retention', 'leave cleanupPeriodDays as it is (the harness deletes raw transcripts older than it)')
+    .option('--machine', 'write the Stop and SessionEnd entries of a machine (a cloud VM, a VPS, or a runner): they run oars-hook, which builds the batch of its session at each Stop only where OARS_HOST_CLASS names a class other than local; --scope project (committed) or --scope user')
+    .option('--env <name=value>', 'with --machine --scope user: one variable of the enrollment block for the env block of that file (OARS_HOST_CLASS is required; repeat the flag; OARS_EXCLUSION_TERMS_INLINE: one term per line; a comma is part of the term); the file is then made owner-only', (value: string, before: string[] | undefined): string[] => [...(before ?? []), value])
+    .option('--terms-file <path>', 'with --machine --scope user: write the OARS_EXCLUSION_TERMS_INLINE terms to this owner-only file and name it in OARS_EXCLUSION_TERMS, so the settings file holds no term')
     .option('--schedule <mode>', 'off: no background sweep or pool send from the session-end hook or from commands (telemetry has its own switch: oars telemetry off), and remove the task an earlier version registered; on: clear that choice; nightly is refused, because sends now ride the hook and commands', (value: string) => {
       if (value !== 'nightly' && value !== 'off' && value !== 'on') throw new InvalidArgumentError('it must be off or on (nightly is no longer registered).');
       return value;
@@ -430,6 +433,9 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
           keepRetention: flag(options, 'keepRetention'),
           schedule: schedule === 'nightly' || schedule === 'off' || schedule === 'on' ? schedule : undefined,
           harness: harnessOf(options),
+          machine: flag(options, 'machine'),
+          env: list(options, 'env'),
+          termsFile: text(options, 'termsFile'),
         }),
       );
     });

@@ -225,6 +225,29 @@ describe('the nightly pool send', () => {
     expect(note).toContain('"outcome":"failed"');
     expect(note).not.toContain('ECONNREFUSED');
   });
+
+  it('sends nothing on a machine, whatever the sign-in and the covenant say, and leaves the outbox as it was', async () => {
+    // A person's night first leaves a held batch behind (the pool refuses it), so a machine night that sent would have something to send.
+    const person = await scene('granted');
+    const refusing = wire({ ...OK_RAW, 'POST /v1/deposits': answer(500, { error: 'boom', message: 'down' }) });
+    expect((await nightlyPoolSend(person.deps, refusing.via)).outcome).toBe('failed');
+    const held = outboxFiles(person.staged, '');
+    expect(held.some((name) => name.endsWith('.jsonl'))).toBe(true);
+    const bytes = (staged: Staged): string[] => outboxFiles(staged, '.jsonl').map((name) => readFileSync(join(staged.storeDir, 'pool-outbox', name), 'utf8'));
+    const before = bytes(person.staged);
+
+    // The same store as the person's, so the held batch is there, signed in, with the covenant accepted: only the machine setting differs.
+    const machine = harness({ OARS_EXCLUSION_TERMS: join(person.staged.root, 'terms.txt'), OARS_POOL_URL: POOL, OARS_HOST_CLASS: 'vps' });
+    machine.deps.sessions = person.staged.runtime;
+    machine.deps.now = settledClock;
+    const pool = wire(OK_RAW);
+    const result = await nightlyPoolSend(machine.deps, pool.via);
+    expect(result).toEqual({ outcome: 'machine', batches: 0, raw: 0 });
+    expect(pool.requests).toEqual([]);
+    expect(outboxFiles(person.staged, '')).toEqual(held);
+    expect(bytes(person.staged)).toEqual(before);
+    expect(readFileSync(join(person.staged.storeDir, 'pool-nightly.json'), 'utf8')).toContain('"outcome":"machine"');
+  });
 });
 
 describe('the nightly send dependencies', () => {

@@ -4,6 +4,7 @@
 import { motifsOf, stepsOfCall, type CountedStep } from './motif.js';
 import { bucketOf, floorOf } from './pool-wire.js';
 import type { Recall, RecallConsequence, RecallOutcome } from './recall-object.js';
+import { reversionsOf, type Reversion } from './reversion.js';
 import { harnessOf, type Harness, type PromptObservation, type ToolObservation } from './schema.js';
 import type { Store } from './store.js';
 
@@ -38,15 +39,17 @@ const positionOf = (line: readonly ToolObservation[], at: string): number => {
   return next < 0 ? line.length : next;
 };
 
-const outcomeOf = (prompt: PromptObservation | undefined): RecallOutcome => ({
+/** The values the prompt first showed, and beside them, never in place of them, the nearest later revert of a commit the prompt made (null when none is tied). */
+const outcomeOf = (prompt: PromptObservation | undefined, reverted: Reversion | null): RecallOutcome => ({
   errors: prompt?.errors ?? null,
   verify: prompt?.verify ?? null,
   stopped: prompt?.stopped ?? null,
   commits: prompt?.commits ?? null,
   redo: prompt?.redo ?? null,
+  reverted: prompt === undefined ? null : reverted,
 });
 
-const consequenceOf = (recall: Recall, session: string, line: readonly ToolObservation[], position: number, harness: Harness, prompts: ReadonlyMap<string, PromptObservation>): RecallConsequence => {
+const consequenceOf = (recall: Recall, session: string, line: readonly ToolObservation[], position: number, harness: Harness, prompts: ReadonlyMap<string, PromptObservation>, reverted: ReturnType<typeof reversionsOf>): RecallConsequence => {
   const prompt = (line[position - 1] ?? line[position])?.prompt ?? null;
   const calls: ToolObservation[] = [];
   let end: RecallConsequence['window']['end'] = 'session';
@@ -68,9 +71,10 @@ const consequenceOf = (recall: Recall, session: string, line: readonly ToolObser
     window: { from: position, to: position + calls.length, calls: calls.length, end },
     // Shape level only: it is the ID that joins across accounts, and named windows would multiply a row that exists per recall.
     motifs: [...new Set(motifsOf(steps).flatMap(({ motif }) => (motif.level === 'shape' ? [motif.motifId] : [])))],
-    followed: steps.some((step) => names.has(step.action)),
+    // The action name is the whole basis: a call of the shown action that failed, or did something else with it, still matches. The record holds no stronger evidence yet, so none is implied.
+    nameMatched: steps.some((step) => names.has(step.action)),
     cost: { tokens: measured.length === 0 ? null : measured.reduce((sum, tokens) => sum + tokens, 0), durationMs: steps.reduce((sum, step) => sum + step.durationMs, 0) },
-    outcome: outcomeOf(prompts.get(promptKey(session, prompt))),
+    outcome: outcomeOf(prompts.get(promptKey(session, prompt)), reverted(session, prompt)),
   };
 };
 
@@ -79,12 +83,13 @@ export const deriveConsequences = (store: Store, recalls: readonly Recall[]): Re
   const lines = mainLines(store);
   const prompts = new Map(store.prompts.map((prompt) => [promptKey(prompt.session, prompt.index), prompt]));
   const sessions = new Map(store.sessions.map((session) => [session.session, session]));
+  const reverted = reversionsOf(store);
   return recalls.map((recall) => {
     const session = recall.sid === null ? undefined : sessions.get(recall.sid);
     if (session === undefined) return recall;
     const line = lines.get(session.session) ?? [];
     const position = positionOf(line, recall.at);
-    return { ...recall, n: position, consequence: consequenceOf(recall, session.session, line, position, harnessOf(session), prompts) };
+    return { ...recall, n: position, consequence: consequenceOf(recall, session.session, line, position, harnessOf(session), prompts, reverted) };
   });
 };
 
@@ -162,9 +167,9 @@ export interface RecallCountRow {
   sessions: number;
   /** The size of what was injected, or for a held recall would have been. */
   tokens: number;
-  /** Recalls with a consequence window, and of those how many followed. */
+  /** Recalls with a consequence window, and of those how many have a call whose action name is one the recall carried. */
   windows: number;
-  followed: number;
+  nameMatched: number;
   windowCalls: number;
   /** Null when no window in the row measured any tokens. */
   windowTokens: number | null;
@@ -186,7 +191,7 @@ export const recallCounts = (recalls: readonly Recall[], day?: string): RecallCo
   for (const recall of recalls) {
     if (day !== undefined && !recall.at.startsWith(day)) continue;
     const key = [recall.mode, recall.arm, recall.answer.kind].join(' ');
-    const held = rows.get(key) ?? { row: { mode: recall.mode, arm: recall.arm, kind: recall.answer.kind, recalls: 0, sessions: 0, tokens: 0, windows: 0, followed: 0, windowCalls: 0, windowTokens: null, overlapped: 0 }, sessions: new Set<string>() };
+    const held = rows.get(key) ?? { row: { mode: recall.mode, arm: recall.arm, kind: recall.answer.kind, recalls: 0, sessions: 0, tokens: 0, windows: 0, nameMatched: 0, windowCalls: 0, windowTokens: null, overlapped: 0 }, sessions: new Set<string>() };
     rows.set(key, held);
     const { row, sessions } = held;
     row.recalls += 1;
@@ -196,7 +201,7 @@ export const recallCounts = (recalls: readonly Recall[], day?: string): RecallCo
     const { consequence } = recall;
     if (consequence === undefined) continue;
     row.windows += 1;
-    if (consequence.followed) row.followed += 1;
+    if (consequence.nameMatched) row.nameMatched += 1;
     row.windowCalls += consequence.window.calls;
     if (consequence.cost.tokens !== null) row.windowTokens = (row.windowTokens ?? 0) + consequence.cost.tokens;
     if (recall.arm === 'held' && (shown.get(recall.sid) ?? []).some((window) => sharesACall(consequence.window, window))) row.overlapped += 1;
@@ -208,5 +213,5 @@ export const formatRecallCounts = (rows: readonly RecallCountRow[]): string =>
   rows.length === 0
     ? 'No recalls in that span.'
     : rows
-        .map((row) => `${row.mode} ${row.arm} ${row.kind} | ${String(row.recalls)} recalls, ${String(row.sessions)} sessions, ${String(row.tokens)} tokens | ${String(row.windows)} windows, ${String(row.followed)} followed, ${String(row.windowCalls)} calls, ${row.windowTokens === null ? 'window tokens unmeasured' : `${String(row.windowTokens)} window tokens`}, ${String(row.overlapped)} overlapped`)
+        .map((row) => `${row.mode} ${row.arm} ${row.kind} | ${String(row.recalls)} recalls, ${String(row.sessions)} sessions, ${String(row.tokens)} tokens | ${String(row.windows)} windows, ${String(row.nameMatched)} name-matched, ${String(row.windowCalls)} calls, ${row.windowTokens === null ? 'window tokens unmeasured' : `${String(row.windowTokens)} window tokens`}, ${String(row.overlapped)} overlapped`)
         .join('\n');

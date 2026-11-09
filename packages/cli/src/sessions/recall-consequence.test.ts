@@ -52,24 +52,48 @@ describe('the consequence window', () => {
     expect(consequence([call(0, 'Read', 0), call(2, 'Read', 0, { steps: [step(null)] })], recallAt(1))?.cost.tokens).toBeNull();
   });
 
-  it('holds motifs, followed, cost, and outcome apart, with no composite', () => {
+  it('holds motifs, the name match, cost, and outcome apart, with no composite', () => {
     const found = consequence([call(0, 'Read', 0), call(2, 'Edit', 0, { durationMs: 40 }), call(3, 'Read', 0, { durationMs: 2 })], recallAt(1));
     expect(found?.motifs).toContain(shapeId([{ action: 'file.edit', identity: null }]));
-    expect(found?.followed).toBe(true);
+    expect(found?.nameMatched).toBe(true);
     expect(found?.cost).toEqual({ tokens: null, durationMs: 42 });
-    expect(found?.outcome).toEqual({ errors: 2, verify: 'passed', stopped: null, commits: 1, redo: null });
-    expect(Object.keys(found ?? {}).sort()).toEqual(['cost', 'followed', 'motifs', 'outcome', 'window']);
+    expect(found?.outcome).toEqual({ errors: 2, verify: 'passed', stopped: null, commits: 1, redo: null, reverted: null });
+    expect(Object.keys(found ?? {}).sort()).toEqual(['cost', 'motifs', 'nameMatched', 'outcome', 'window']);
   });
 
-  it('says not followed when no shown name appears, and states no outcome for a prompt it cannot find', () => {
+  it('keeps the outcome the prompt first showed and sets a later reversion beside it, read from the calls: a clean `git revert` of the commit, in a later prompt or in a later session', () => {
+    const committed = [call(0, 'Read', 0), call(2, 'Bash', 0, { segments: [{ run: 'git commit', read: true }], commits: ['abc1234'] })];
+    const revert = (session: string, n: number, promptIndex: number): ToolObservation => tool(session, n, 'Bash', { ts: stamp(n), prompt: promptIndex, segments: [{ run: 'git revert abc1234', read: true }] });
+    const outcome = (sessions: ReturnType<typeof session>[], tools: ToolObservation[]) =>
+      deriveConsequences(store({ sessions, prompts: [prompt('s', 0, { errors: 2, verify: 'passed', commits: 1 }), prompt('s', 1), prompt('t', 0)], tools }), [recallAt(1)])[0]?.consequence?.outcome;
+    const original = { errors: 2, verify: 'passed', stopped: null, commits: 1, redo: null };
+    expect(outcome([session('s')], committed)).toEqual({ ...original, reverted: null });
+    expect(outcome([session('s')], [...committed, revert('s', 5, 1)])).toEqual({ ...original, reverted: 'later-prompt' });
+    expect(outcome([session('s', { repo: 'r' }), session('t', { repo: 'r' })], [...committed, revert('t', 100, 0)])).toEqual({ ...original, reverted: 'later-session' });
+    expect(outcome([session('s')], committed)).not.toHaveProperty('intervention');
+  });
+
+  it('states no reversion for a prompt it holds no row for, even when a clean `git revert` ties to a commit that prompt made', () => {
+    const tools = [call(2, 'Bash', 7, { segments: [{ run: 'git commit', read: true }], commits: ['abc1234'] }), call(5, 'Bash', 8, { segments: [{ run: 'git revert abc1234', read: true }] })];
+    expect(consequence(tools, recallAt(1))?.outcome).toEqual({ errors: null, verify: null, stopped: null, commits: null, redo: null, reverted: null });
+  });
+
+  it('records a match on the action name and nothing stronger: a call of that name that failed still matches, and no field calls it followed', () => {
+    const found = consequence([call(0, 'Read', 0), call(2, 'Edit', 0, { status: 'error' })], recallAt(1));
+    expect(found?.nameMatched).toBe(true);
+    expect(found).not.toHaveProperty('followed');
+    expect(JSON.stringify(found)).not.toContain('followed');
+  });
+
+  it('says no name matched when no shown name appears, and states no outcome for a prompt it cannot find', () => {
     const found = consequence([call(2, 'Read', 7)], recallAt(1));
-    expect(found?.followed).toBe(false);
-    expect(found?.outcome).toEqual({ errors: null, verify: null, stopped: null, commits: null, redo: null });
+    expect(found?.nameMatched).toBe(false);
+    expect(found?.outcome).toEqual({ errors: null, verify: null, stopped: null, commits: null, redo: null, reverted: null });
   });
 
   it('reads a held recall the same way, and leaves a recall with no session or an unknown one as it was', () => {
     const tools = [call(2, 'Edit', 0)];
-    expect(consequence(tools, recallAt(1, 'held'))?.followed).toBe(true);
+    expect(consequence(tools, recallAt(1, 'held'))?.nameMatched).toBe(true);
     const [noSession] = deriveConsequences(line(tools), [recallAt(1, 'shown', null)]);
     expect(noSession).toMatchObject({ n: null });
     expect(noSession?.consequence).toBeUndefined();
@@ -156,7 +180,7 @@ describe('recalls in the graph', () => {
     expect(after.pool.version).not.toBe(before.pool.version);
     const rows = readFileSync(poolFiles(staged.storeDir).consequences, 'utf8').trim().split('\n');
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toContain('"followed":true');
+    expect(rows[0]).toContain('"nameMatched":true');
   });
 });
 
@@ -166,14 +190,14 @@ describe('recall counts', () => {
     const later: Recall = { ...recallAt(1), at: '2026-11-02T00:00:00.000Z', id: 'later' };
     const noSession = recallAt(1, 'shown', null);
     const rows = recallCounts(deriveConsequences(base, [recallAt(1), recallAt(1, 'held'), noSession, later]), '2026-11-01');
-    expect(rows.map(({ arm, recalls, sessions, windows, followed, windowCalls }) => ({ arm, recalls, sessions, windows, followed, windowCalls }))).toEqual([
-      { arm: 'held', recalls: 1, sessions: 1, windows: 1, followed: 1, windowCalls: 1 },
-      { arm: 'shown', recalls: 2, sessions: 1, windows: 1, followed: 1, windowCalls: 1 },
+    expect(rows.map(({ arm, recalls, sessions, windows, nameMatched, windowCalls }) => ({ arm, recalls, sessions, windows, nameMatched, windowCalls }))).toEqual([
+      { arm: 'held', recalls: 1, sessions: 1, windows: 1, nameMatched: 1, windowCalls: 1 },
+      { arm: 'shown', recalls: 2, sessions: 1, windows: 1, nameMatched: 1, windowCalls: 1 },
     ]);
-    expect(formatRecallCounts(rows)).toContain('push held hit | 1 recalls, 1 sessions, 10 tokens | 1 windows, 1 followed, 1 calls, window tokens unmeasured');
+    expect(formatRecallCounts(rows)).toContain('push held hit | 1 recalls, 1 sessions, 10 tokens | 1 windows, 1 name-matched, 1 calls, window tokens unmeasured');
     expect(formatRecallCounts(rows.map((row) => ({ ...row, windowTokens: 7 })))).toContain('1 calls, 7 window tokens');
     expect(recallCounts(deriveConsequences(base, [later]))).toHaveLength(1);
-    expect(recallCounts(deriveConsequences(line([call(2, 'Read', 0)]), [recallAt(1)]))[0]?.followed).toBe(0);
+    expect(recallCounts(deriveConsequences(line([call(2, 'Read', 0)]), [recallAt(1)]))[0]?.nameMatched).toBe(0);
     expect(formatRecallCounts([])).toBe('No recalls in that span.');
   });
 

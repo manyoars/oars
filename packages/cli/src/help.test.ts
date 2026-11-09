@@ -16,6 +16,11 @@ describe('help text states what the code does', () => {
     expect(text).toContain('on Windows, remove the nightly task an earlier version registered (oars installs no scheduler: a due sweep and send, at most about hourly, starts from the session-end hook and from any oars command; telemetry goes only while it is on, and pool batches only after you accept a pool covenant)');
   });
 
+  it('sessions hook install says a machine exclusion term list is one term per line, and a comma is part of the term', async () => {
+    // A comma list would be one term that matches nothing, and every session would read clean.
+    expect(await helpOf('sessions', 'hook', 'install')).toContain('OARS_EXCLUSION_TERMS_INLINE: one term per line; a comma is part of the term');
+  });
+
   it('pool raw --mode says off sends nothing from that folder to the pool', async () => {
     expect(await helpOf('pool', 'raw')).toContain('off sends nothing from that folder to the pool from now on');
   });

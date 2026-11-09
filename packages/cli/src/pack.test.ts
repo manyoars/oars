@@ -51,6 +51,15 @@ describe('the tarball npm pack would make', () => {
     expect(paths).toContain(target);
   });
 
+  it('lists the oars-hook bin a machine hook runs, and its source carries the shebang', () => {
+    const bin = manifest().bin;
+    const target = isRecord(bin) && typeof bin['oars-hook'] === 'string' ? bin['oars-hook'].replace(/^\.\//, '') : undefined;
+
+    expect(target).toBe('dist/oars-hook.js');
+    expect(paths).toContain(target);
+    expect(readFileSync(`${cliFolder}src/oars-hook.ts`, 'utf8').startsWith('#!/usr/bin/env node\n')).toBe(true);
+  });
+
   it('lists every vocabulary snapshot and the manifest that pins them', () => {
     expect(paths.filter((path) => path.startsWith('vocab/')).sort()).toEqual(
       readdirSync(`${cliFolder}vocab`).sort().map((name) => `vocab/${name}`),
