@@ -4,7 +4,7 @@
 
 import { ACTION_TABLES, CANONICAL_ACTIONS, mcpOf, type CanonicalAction } from './actions.js';
 import { CLOSED_ARG_VALUES, CUSTOM_AGENT, FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRIVATE, publicEffort, publicVersion, PUBLIC_PACKAGES, projectedAgentType, PUBLIC_FLAGS, REPO_SIZES, TOOL_INPUT_KEYS, VOCAB_VERSION, type RepoSize } from './public-vocabulary.js';
-import { ARG_CLASSES, CHANGE_KINDS, DIRECTORY_KINDS, EXTENSION_CLASSES, NAME_KINDS, PATH_DEPTHS, PATTERN_FEATURES, TARGET_CLASSES, VALUE_SIZES, type ArgClass, type ArgFeature, type ArgName, type ArgValue, type ChangeKind, type DirectoryKind, type ExtensionClass, type NameKind, type PathDepth, type PatternFeature, type TargetClass, type ValueSize } from './call-shape.js';
+import { ARG_CLASSES, CHANGE_KINDS, DIRECTORY_KINDS, EXTENSION_CLASSES, NAME_KINDS, PATH_DEPTHS, PATTERN_FEATURES, TARGET_CLASSES, TEMPLATE_SLOTS, VALUE_SIZES, type ArgClass, type ArgFeature, type ArgName, type ArgValue, type ChangeKind, type DirectoryKind, type ExtensionClass, type NameKind, type PathDepth, type PatternFeature, type TargetClass, type ValueSize } from './call-shape.js';
 import type { Cell } from './cells.js';
 import type { Redactor } from './redact.js';
 import type { Motif } from './motif.js';
@@ -24,7 +24,7 @@ export type SkeletonFormat = (typeof READ_FORMATS)[number];
 /** The tool fields format 4 added: a format 3 batch that holds one is holding a field it does not define. */
 export const FORMAT_4_TOOL_FIELDS = ['argFeatures', 'argValues', 'changeKind'] as const;
 /** The tool fields format 5 added: a batch of format 4 or 3 that holds one is holding a field it does not define. */
-export const FORMAT_5_TOOL_FIELDS = ['names', 'namesDropped'] as const;
+export const FORMAT_5_TOOL_FIELDS = ['names', 'namesDropped', 'templates', 'templatesDropped'] as const;
 /**
  * The version of the field list: every field name a batch can hold (`BATCH_FIELDS` in `pool-outbox.ts`). It moves with any field added, so a server told the version knows which names a batch may carry,
  * and a test pins the list to it (`pool-wire-additive.test.ts`). A field is deprecated and left on the list, never removed (conclusion section 17, rule 3).
@@ -122,6 +122,10 @@ export interface SkeletonTool {
   names?: SkeletonArgName[];
   /** A `count` bucket of the name tokens the call held that were not sent: one the redactor changes, an exclusion term matches, or that has no name shape. Absent when none was dropped; never the names. */
   namesDropped?: number;
+  /** One template per shell command of the call (layer 3), in the order the commands run: its program, subcommand, and flags, and every literal argument as a slot of `TEMPLATE_SLOTS`. Each kept word passed the one gate (`wireName`, `wireFlag`); never an argument. Absent when none is sent. */
+  templates?: string[];
+  /** A `count` bucket of the templates the call held that were not sent: one with a kept word the redactor changes, an exclusion term matches, or that has no name shape. Absent when none was dropped; never the templates. */
+  templatesDropped?: number;
   steps: SkeletonStep[];
 }
 
@@ -441,6 +445,38 @@ export const wireNames = (stored: readonly ArgName[] | undefined, gate: WireGate
   return { names, dropped: known.length - names.length };
 };
 
+const TEMPLATE_SLOT_LIST: readonly string[] = TEMPLATE_SLOTS;
+/**
+ * Whether every word of a template is one the wire may carry: a slot of `TEMPLATE_SLOTS`, the `--` marker, a flag with a slot joined to it, a flag, or a name (the program or subcommand), the last two as the caller judges them. A template is a single line of words
+ * set apart by one space, since no name or flag holds a space.
+ */
+const templateHolds = (template: string, name: (word: string) => boolean, flag: (word: string) => boolean): boolean =>
+  template.split(' ').every((word) => {
+    if (TEMPLATE_SLOT_LIST.includes(word) || word === '--') return true;
+    if (!word.startsWith('-')) return name(word);
+    const joined = word.indexOf('=');
+    return joined < 0 ? flag(word) : flag(word.slice(0, joined)) && TEMPLATE_SLOT_LIST.includes(word.slice(joined + 1));
+  });
+
+/** Whether a received template has the shape the wire sends: the pool's check, which holds no operator terms and no redactor. */
+export const isWireTemplate = (template: string): boolean => templateHolds(template, isWireName, isWireFlag);
+
+/**
+ * A call's command templates as the wire sends them (layer 3): every stored template whose kept words (program, subcommand, flags) all clear the one gate, as a name or a flag does. A template with a word the redactor changes, an exclusion term matches, or that
+ * has no name shape is dropped whole and counted in `dropped`. No floor, no threshold: a template is sent as it is, and a literal is only ever a slot.
+ */
+export const wireTemplates = (stored: readonly string[] | undefined, gate: WireGate): { templates: string[]; dropped: number } => {
+  const known = stored ?? [];
+  const templates = known.filter((template) =>
+    templateHolds(
+      template,
+      (word) => wireName(gate, word) !== PRIVATE,
+      (flag) => wireFlag(gate, flag) !== PRIVATE,
+    ),
+  );
+  return { templates, dropped: known.length - templates.length };
+};
+
 /** The basename of a program as capture read it: a path never goes on the wire. */
 const basenameOf = (program: string): string => program.replace(/^.*[\\/]/, '');
 
@@ -677,6 +713,7 @@ const transcriptOf = (
     const argValues = wireValues(tool.argValues, sent, steps[0]?.native);
     const changeKind = wireChange(tool.changeKind);
     const { names, dropped: namesDropped } = wireNames(tool.names, gate);
+    const { templates, dropped: templatesDropped } = wireTemplates(tool.templates, gate);
     steppedTools.push({
       side,
       prompt: promptPosition,
@@ -693,6 +730,8 @@ const transcriptOf = (
       ...(changeKind.length === 0 ? {} : { changeKind }),
       ...(names.length === 0 ? {} : { names }),
       ...(namesDropped === 0 ? {} : { namesDropped: bucketOf('count', namesDropped) }),
+      ...(templates.length === 0 ? {} : { templates }),
+      ...(templatesDropped === 0 ? {} : { templatesDropped: bucketOf('count', templatesDropped) }),
       steps,
     });
   }
@@ -848,7 +887,7 @@ export const OPTIONAL = {
   frame: ['harnessVersion', 'model', 'effort', 'day', 'shell', 'reach', 'repoKey', 'orgSize', 'team', 'repoVisibility', 'hour'],
   stack: ['size', 'languageShares'],
   prompt: ['wallSec', 'explore', 'usageResponses', 'intervention'],
-  tool: ['prompt', 'durationMs', 'errorCode', 'recoveryCalls', 'keys', 'keysDropped', 'targetClass', 'argClass', 'argFeatures', 'argValues', 'changeKind', 'names', 'namesDropped'],
+  tool: ['prompt', 'durationMs', 'errorCode', 'recoveryCalls', 'keys', 'keysDropped', 'targetClass', 'argClass', 'argFeatures', 'argValues', 'changeKind', 'names', 'namesDropped', 'templates', 'templatesDropped'],
   step: ['tokens', 'ms', 'allocated', 'parent', 'skill', 'edges', 'remainingTokens'],
   transcript: ['spawnedIn'],
 } as const satisfies { readonly [level: string]: readonly string[] };
@@ -1251,6 +1290,10 @@ const parseName = (held: Collected, value: unknown, at: string): SkeletonArgName
   return { kind: oneOf(held, NAME_KINDS, raw.kind, under(at, 'kind')), name: isWireName(name) ? name : unknownValue(held, under(at, 'name'), name) };
 };
 
+const parseTemplate = (held: Collected, value: unknown, at: string): string => {
+  const template = textOf(value, at);
+  return isWireTemplate(template) ? template : unknownValue(held, at, template);
+};
 const parseTool = (held: Collected, harness: WireHarness, value: unknown, at: string): SkeletonTool => {
   const layered = held.format >= 4;
   const named = held.format >= 5;
@@ -1269,6 +1312,8 @@ const parseTool = (held: Collected, harness: WireHarness, value: unknown, at: st
   const changeKind = !layered || raw.changeKind === undefined ? undefined : listOf(raw.changeKind, under(at, 'changeKind'), (entry, entryAt) => oneOf(held, CHANGE_KINDS, entry, entryAt));
   const names = !named || raw.names === undefined ? undefined : listOf(raw.names, under(at, 'names'), (entry, entryAt) => parseName(held, entry, entryAt));
   const namesDropped = !named || raw.namesDropped === undefined ? undefined : bucketIn('count', raw.namesDropped, under(at, 'namesDropped'));
+  const templates = !named || raw.templates === undefined ? undefined : listOf(raw.templates, under(at, 'templates'), (entry, entryAt) => parseTemplate(held, entry, entryAt));
+  const templatesDropped = !named || raw.templatesDropped === undefined ? undefined : bucketIn('count', raw.templatesDropped, under(at, 'templatesDropped'));
   return {
     side: booleanOf(raw.side, under(at, 'side')),
     prompt: orNull(raw.prompt, under(at, 'prompt'), countOf),
@@ -1285,6 +1330,8 @@ const parseTool = (held: Collected, harness: WireHarness, value: unknown, at: st
     ...(changeKind === undefined ? {} : { changeKind }),
     ...(names === undefined ? {} : { names }),
     ...(namesDropped === undefined ? {} : { namesDropped }),
+    ...(templates === undefined ? {} : { templates }),
+    ...(templatesDropped === undefined ? {} : { templatesDropped }),
     steps,
   };
 };

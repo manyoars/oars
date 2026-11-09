@@ -16,6 +16,8 @@ const built = (): SessionSkeleton => {
     argValues: [{ key: 'output_mode', enumValue: 'count' }],
     changeKind: ['value-changed'],
     names: [{ kind: 'dir', name: 'billing' }, { kind: 'file', name: 'plan.md' }, { kind: 'file', name: 'Q3 plan.md' }],
+    // The second template holds a program that is not a name, so it is dropped and counted.
+    templates: ['git commit -m <text>', 'a@b run <path>'],
     steps: [step(0, 0, 'file.search', { native: 'Grep' })],
   });
   const [only] = sessionsFrom(store({ sessions: [session('s1', { frame: framed })], prompts: [prompt('s1', 0, { frame: framed })], tools: [grep] }));

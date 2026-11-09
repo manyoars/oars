@@ -7,7 +7,7 @@ import { posix } from 'node:path';
 import { ACTION_TABLES, actionOf, shellOf, type ActionTable, type CanonicalAction } from './actions.js';
 import { exploreCount, strataOf } from './strata.js';
 import { closedFrame, frameIdOf, repoFilesFromIndex, repoSizeOf, stackOf, utcDay } from './frame.js';
-import { argClassOf, argFeaturesOf, argNamesOf, argValuesOf, changeKindOf, targetClassOf, variableOf, type CommandWords, type ComparedCall } from './call-shape.js';
+import { argClassOf, argFeaturesOf, argNamesOf, argValuesOf, changeKindOf, targetClassOf, templatesOf, variableOf, type CommandWords, type ComparedCall } from './call-shape.js';
 import { CLOSED_ARG_VALUES, LITERAL, type RepoSize } from './public-vocabulary.js';
 import { linkSteps } from './graph.js';
 import { callIdentity, shellIdentity, UNREAD_SHELL, type WordOfCommand } from './identity.js';
@@ -1912,6 +1912,8 @@ export const captureSession = (input: ExtractInput): Capture => {
         const argValues = argValuesOf(native, toolInput, CLOSED_ARG_VALUES);
         // A name is stored as the line's text is: masked at capture, so a credential-shaped folder or file name never reaches the store. The mask has no name shape, so the wire still drops it and counts it.
         const names = argNamesOf(native, toolInput, lineRoot ?? lineCwd, lineCwd, shell?.words ?? [], CLOSED_ARG_VALUES).map(({ kind, name }) => ({ kind, name: redact(name) }));
+        // A template keeps a program, a subcommand, and flags as written and every literal as a slot; its kept words are masked as a name is, and the wire gates each one again.
+        const templates = templatesOf(shell?.words ?? [], redact);
         const compared: ComparedCall = { input: toolInput, target: aimed.target, features: argFeatures, values: argValues };
         const lastKey = `${String(cur?.index ?? null)}\n${String(side)}\n${stored}`;
         const before = lastCall.get(lastKey);
@@ -1937,6 +1939,7 @@ export const captureSession = (input: ExtractInput): Capture => {
           argFeatures,
           ...(argValues.length === 0 ? {} : { argValues }),
           ...(names.length === 0 ? {} : { names }),
+          ...(templates.length === 0 ? {} : { templates }),
           ...(before === undefined ? {} : { changeKind: changeKindOf(before, compared) }),
           durationMs: null,
           toolUseId: id ?? null,

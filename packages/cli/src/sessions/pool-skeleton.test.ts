@@ -66,6 +66,8 @@ describe('the leak test: a private name in a path, a program, a package, an argu
     // `name` is exempt only on a pull (the one object with a `registry` and a `version`; a delta has no `version`), so a delta's `name` is still scanned.
     const scanned = (skip: ReadonlySet<string>): string =>
       JSON.stringify(skeleton, function (this: object, key: string, value: unknown) {
+        // A template names its program as a step's identity does, so its first word is exempt like `program`; every other word of it is scanned.
+        if (key === 'templates' && Array.isArray(value)) return value.map((template) => String(template).split(' ').slice(1).join(' '));
         return skip.has(key) || (key === 'name' && 'registry' in this && 'version' in this) ? undefined : value;
       }).toLowerCase();
     const text = scanned(named);
@@ -75,6 +77,10 @@ describe('the leak test: a private name in a path, a program, a package, an argu
     // A file's name crosses as a name token. The value after a credential-named flag (`--token abc123`) is no name and crosses nowhere.
     expect(text).toContain('secret.ts');
     expect(text).not.toContain('abc123');
+    // The templates hold the program and a public flag, and a slot where each argument stood.
+    const templates = skeleton.transcripts.flatMap((transcript) => transcript.tools.flatMap((tool) => tool.templates ?? []));
+    expect(templates).toContain(`${PLANTED.toLowerCase()} --token <text>`);
+    expect(templates).toContain('git commit -m <text> --amend');
     expect(JSON.stringify(shellIdentities(skeleton))).toContain('"program":"acme-deploy"');
     expect(JSON.stringify(shellIdentities(skeleton))).toContain(`"name":"${PLANTED.toLowerCase()}-pkg"`);
   });
