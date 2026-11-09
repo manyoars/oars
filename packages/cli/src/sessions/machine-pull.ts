@@ -10,7 +10,7 @@ import { readMachines, type MachineRecord, type Visibility } from './machine-enr
 import { derivedSalt } from './machine-ids.js';
 import { isMissing, writeOwnerOnly } from './owner-only.js';
 import { poolServer, runtimeOf } from './pool-command.js';
-import { STAMP_FOLDER, currentStamp, outboxFolder, removeBatchOf, writeBatch } from './pool-outbox.js';
+import { BATCH_FIELDS, STAMP_FOLDER, currentStamp, fieldsOf, outboxFolder, removeBatchOf, writeBatch } from './pool-outbox.js';
 import { parseSkeleton, type SessionSkeleton } from './pool-wire.js';
 import { localSalt } from './store.js';
 import type { Git } from './survival.js';
@@ -39,7 +39,11 @@ export type PullReason =
   | 'id_mismatch'
   | 'stamp_invalid'
   | 'terms_stale'
-  | 'differing_stamp';
+  | 'differing_stamp'
+  | 'field_unknown'
+  | 'claimed_present'
+  | 'off_list'
+  | 'a38_term';
 
 /** A repository (no `branch`) or a branch that was refused, and why. */
 export interface PullRefusal {
@@ -107,9 +111,22 @@ interface Pulling {
   machines: readonly MachineRecord[];
   /** `HMAC-SHA-256` of this machine's own term list under the session salt the enrollment derived: what a branch's `terms` file must equal. */
   terms: string;
+  /** This machine's own exclusion terms, lowercased, as `loadTerms` reads them. */
+  list: readonly string[];
   /** `pulled.json` as it stands: each admitted `id` and the stamp folder it is filed under. */
   pulled: { [id: string]: string };
 }
+
+/** Whether any string or key in `value` holds one of `terms`, compared lowercased the way the local gate compares a transcript. */
+const holdsTerm = (value: unknown, terms: readonly string[]): boolean => {
+  if (typeof value === 'string') {
+    const lower = value.toLowerCase();
+    return terms.some((term) => lower.includes(term));
+  }
+  if (Array.isArray(value)) return value.some((entry) => holdsTerm(entry, terms));
+  if (typeof value === 'object' && value !== null) return Object.entries(value).some(([key, entry]) => holdsTerm(key, terms) || holdsTerm(entry, terms));
+  return false;
+};
 
 /** The batch file of a tip as the skeleton the pool's own reader makes of it; throws `Refused` for anything that reader, or the branch's own name, would not take. */
 const skeletonOf = async (run: Pulling, tip: Tip, id: string): Promise<SessionSkeleton> => {
@@ -121,9 +138,15 @@ const skeletonOf = async (run: Pulling, tip: Tip, id: string): Promise<SessionSk
   } catch {
     throw new Refused('batch_invalid', 'batch.json is not JSON');
   }
+  // None of these details repeats a value of the file: a branch is written by whoever could push it, and its text must not reach a log.
+  const names = fieldsOf(batch);
+  if (names.includes('claimed')) throw new Refused('claimed_present', 'the batch holds a claimed field, which only this machine writes');
+  if (names.some((name) => !BATCH_FIELDS.includes(name))) throw new Refused('field_unknown', 'the batch holds a field outside the batch field list');
   const parsed = parseSkeleton(value);
   if (!parsed.ok) throw new Refused('batch_invalid', `${parsed.field}: ${parsed.reason}`);
+  if (parsed.extensions.length > 0) throw new Refused('off_list', `${String(parsed.extensions.length)} value or field off the current lists, at ${parsed.extensions.slice(0, 3).map(({ at }) => at).join(', ')}`);
   if (parsed.skeleton.id !== id) throw new Refused('id_mismatch', `the batch names ${parsed.skeleton.id}, the branch ${id}`);
+  if (holdsTerm(value, run.list)) throw new Refused('a38_term', 'a string or key of the batch holds a term of the exclusion list of this machine');
   return parsed.skeleton;
 };
 
@@ -230,7 +253,7 @@ export const holdPull = async (deps: RunDeps, options: { server?: string | undef
         refused.push({ repo, reason: 'repo_unreadable', detail: `its branches could not be fetched: ${error instanceof Error ? error.message.split('\n')[0] ?? '' : ''}` });
       }
     }
-    const run: Pulling = { ports, outbox, machines, terms: termsDigest(sessionSalt, terms), pulled };
+    const run: Pulling = { ports, outbox, machines, terms: termsDigest(sessionSalt, terms), list: terms, pulled };
     const taken = new Set<string>();
     for (const tip of [...tips].sort((a, b) => b.at - a.at || (a.branch < b.branch ? -1 : 1))) {
       try {

@@ -251,3 +251,39 @@ describe('oars pool hold pull: the terms', () => {
     expect(existsSync(s.outbox)).toBe(false);
   }, SLOW);
 });
+
+const BATCH = { ...REGISTER_FIXTURE, id: ID };
+const OFF_LIST = 'a-value-no-vocabulary-holds';
+
+/** The fixture with its second tool's status set to `status`, a value the closed list of statuses either holds or does not (the first tool carries an error code and recovery calls, which the reader refuses beside a status it reads as `other`). */
+const withStatus = (status: string): unknown => ({ ...BATCH, transcripts: BATCH.transcripts.map((transcript, at) => (at === 0 ? { ...transcript, tools: transcript.tools.map((tool, index) => (index === 1 ? { ...tool, status } : tool)) } : transcript)) });
+
+describe('oars pool hold pull: the branch file is untrusted', () => {
+  it.each([
+    { what: 'a field outside the batch field list', batch: { ...BATCH, note: OFF_LIST }, reason: 'field_unknown' },
+    { what: 'a claimed of its own', batch: { ...BATCH, claimed: { hostClass: 'cloud', launcher: 'ci' } }, reason: 'claimed_present' },
+    { what: 'a value off a closed list', batch: withStatus(OFF_LIST), reason: 'off_list' },
+    { what: 'an id unlike its branch', batch: { ...BATCH, id: OTHER_ID }, reason: 'id_mismatch' },
+  ])('refuses $what, writes nothing, never repeats the file\'s own text, and leaves the branch', async ({ batch, reason }) => {
+    const s = await scene();
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, { ...goodFiles(s), 'batch.json': canonicalBytes(batch) });
+    const out = await pull(s);
+    expect(out.document).toMatchObject({ admitted: [], refused: [{ repo: REPO, branch: `oars-hold/${MACHINE}/${ID}`, reason }] });
+    expect(out.text).not.toContain(OFF_LIST);
+    expect(existsSync(s.outbox)).toBe(false);
+    expect(branchesOf(s, REPO)).toEqual([`oars-hold/${MACHINE}/${ID}`]);
+  }, SLOW);
+
+  it.each([
+    { what: 'a string', terms: ['typescript'] },
+    { what: 'a key', terms: ['deltaKind'] },
+  ])('refuses a batch with an A38 term of this machine\'s own list in $what, and writes nothing', async ({ terms }) => {
+    const s = await scene([RECORD], `${terms.join('\n')}\n`);
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, { ...goodFiles(s), terms: `${termsDigest(s.salt, terms)}\n` });
+    const out = await pull(s);
+    expect(out.document).toMatchObject({ admitted: [], refused: [{ branch: `oars-hold/${MACHINE}/${ID}`, reason: 'a38_term' }] });
+    expect(out.text).not.toContain(terms[0] ?? '');
+    expect(existsSync(s.outbox)).toBe(false);
+    expect(branchesOf(s, REPO)).toHaveLength(1);
+  }, SLOW);
+});
