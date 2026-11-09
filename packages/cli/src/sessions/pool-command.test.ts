@@ -2614,6 +2614,19 @@ describe('oars pool deposit: the raw copy (t884)', () => {
     }
   });
 
+  it('queues no raw copy and prints one line when the yes was given under another covenant than the one in force', async () => {
+    const scene = await ready('granted');
+    await updatePoolChoices(scene.staged.storeDir, (choices) => {
+      choices.rawConsentVersion = 'v0';
+    });
+    const held = await poolDeposit(scene.h.deps, { server: POOL, covenant: 'v1' });
+    expect(rawFiles(scene)).toEqual([]);
+    expect(outboxFiles(scene).length).toBeGreaterThan(0);
+    expect(held.text.split('\n').filter((line) => line.includes('oars pool raw --consent yes') && line.includes('v0'))).toHaveLength(1);
+    await poolDeposit(scene.h.deps, { server: POOL, covenant: 'v0' });
+    expect(rawFiles(scene).length).toBeGreaterThan(0);
+  });
+
   it('writes no raw copy before an answer, after a no, or with the folder at skeleton only or off, and still writes the skeletons unless the folder is off', async () => {
     for (const [consent, folders, skeletons] of [
       [null, {}, true],

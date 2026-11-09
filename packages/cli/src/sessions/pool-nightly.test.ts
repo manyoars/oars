@@ -145,6 +145,22 @@ describe('the nightly pool send', () => {
     expect(second.requests.filter((request) => request.method !== 'GET')).toEqual([]);
   });
 
+  it('holds back raw when the yes was given under another covenant than the one in force, and sends it when the versions match', async () => {
+    const old = await scene('granted');
+    await updatePoolChoices(old.staged.storeDir, (choices) => {
+      choices.rawConsentVersion = 'v0';
+    });
+    const held = wire(OK_RAW);
+    expect((await nightlyPoolSend(old.deps, held.via)).outcome).toBe('sent');
+    expect(paths(held, 'POST').filter((path) => path === '/v1/deposits').length).toBeGreaterThan(0);
+    expect(rawPuts(held)).toEqual([]);
+    expect(outboxFiles(old.staged, '.redacted')).toEqual([]);
+    const current = await scene('granted');
+    const sent = wire(OK_RAW);
+    await nightlyPoolSend(current.deps, sent.via);
+    expect(rawPuts(sent).length).toBeGreaterThan(0);
+  });
+
   it('sends nothing when the covenant is not accepted, and builds nothing', async () => {
     for (const covenant of [answer(200, { version: 'v1', accepted: false }), answer(200, { accepted: true }), answer(403, { error: 'deposits_closed', message: 'closed' })]) {
       const here = await scene('granted');

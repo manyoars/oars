@@ -16,7 +16,7 @@ import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, lockedBatch, markShown
 import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, unpinnedKid, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
 import { carriedDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
-import { rawAllowed, sendsOf } from './pool-choices.js';
+import { rawAllowed, rawStale, sendsOf } from './pool-choices.js';
 import { heldRaw, rawParts, removeRawExcept, writeRaw } from './pool-raw.js';
 import { SendLockBusy, withSendLock } from './pool-send-lock.js';
 import { markSent, sentLog } from './pool-sent.js';
@@ -446,7 +446,7 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
  * allowlist, then the exclusion check. A session that fails either, or has no raw to scan, is counted and never built. A session is built only once it has ended: no transcript of it, main or subagent, has gained a line (the later of its capture
  * and its raw file's last write) for `session_idle_hours` (6 hours). One that has not is counted under `notEnded`, and any batch of it from an earlier pass is withdrawn. `--send <hash>` is the lock in `sendBatch`.
  */
-export const poolDeposit = async (deps: RunDeps, options: { server?: string | undefined; acceptCovenant?: string | undefined; send?: string | undefined; via?: Sender | undefined; git?: Git | undefined }): Promise<Outcome> => {
+export const poolDeposit = async (deps: RunDeps, options: { server?: string | undefined; acceptCovenant?: string | undefined; send?: string | undefined; via?: Sender | undefined; git?: Git | undefined; covenant?: string | undefined }): Promise<Outcome> => {
   const runtime = runtimeOf(deps);
   const server = poolServer(deps.env, DEPOSIT, options.server);
   const { account, token } = await signedIn(deps, runtime.storeDir, server, DEPOSIT);
@@ -535,7 +535,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
     }
     builtBytes += (await writeBatch(outbox, key, parsed.skeleton)).bytes;
     // The raw copy comes only after both gates and only with a yes to the raw prompt and a folder not at skeleton only: each transcript of the session, redacted here, before it is queued.
-    if (rawAllowed(saved.pool, records.main.project)) {
+    if (rawAllowed(saved.pool, records.main.project, options.covenant)) {
       let place = 0;
       for (const file of await transcriptFilesOf(runtime, records.main.project, records.main.session)) {
         const redacted = redactTranscript(await readFile(file.path, 'utf8'), saved.redactDomains, names, injectedKey);
@@ -566,6 +566,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
     ...(counts.withdrawn === 0 ? [] : [`Removed ${String(counts.withdrawn)} ${counts.withdrawn === 1 ? 'batch' : 'batches'} of sessions that no longer pass the gates, have not ended, or are no longer in the store.`]),
     ...(discarded === 0 ? [] : [`Discarded ${String(discarded)} ${discarded === 1 ? 'batch' : 'batches'} built under an older vocabulary, field list, or skeleton format.`]),
     `Raw copies queued: ${String(counts.raw.copies)} (${String(counts.raw.bytes)} bytes, ${String(counts.raw.masked)} values masked). ${rawNote(saved.pool.rawConsent)}`.trim(),
+    ...(rawStale(saved.pool, options.covenant) ? [`Your yes to the raw prompt was given under covenant ${saved.pool.rawConsentVersion ?? 'none'}, not ${options.covenant ?? ''}, so no raw copy is queued. Run oars pool raw --consent yes to answer for the covenant now in force.`] : []),
     ...(counts.off === 0 ? [] : [`${String(counts.off)} ${counts.off === 1 ? 'session' : 'sessions'} in a folder switched off: nothing of them is queued.`]),
     'Run oars pool outbox to print exactly what would be sent.',
   ];
