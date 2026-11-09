@@ -375,7 +375,7 @@ describe('what is dropped from the names', () => {
       call('g', 'Bash', { command: 'deploy --region eu_control FOO_ASSIGNED=$ASSIGNED_VALUE' }),
     );
     const tools = toolsOf(skeleton);
-    for (const tool of tools.slice(0, 5)) expect(tool?.names ?? []).toEqual([]);
+    for (const tool of tools.slice(0, 5)) expect(tool.names ?? []).toEqual([]);
     expect(tools[5]?.names).toEqual(names('flag', 'eu_control'));
     expect(tools[6]?.names).toEqual(names('flag', 'eu_control'));
     for (const value of ['hunter2', 'opaquetoken', 'hunter4', 'hunter5', 'customer_name', 'PREFIXED_NAME', 'PORT_DEFAULT', 'SENTENCE_NAME', 'ASSIGNED_VALUE']) expect(bytesOf(skeleton)).not.toContain(value);
@@ -386,7 +386,7 @@ describe('what is dropped from the names', () => {
     const skeleton = skeletonOfLines({ redact, terms: [] }, ...forms.map((form, at) => call(`r${String(at)}`, 'Bash', { command: `deploy --region ${form}` })));
     const tools = toolsOf(skeleton);
     expect(tools).toHaveLength(forms.length);
-    forms.forEach((form, at) => expect(tools[at]?.names, form).toEqual(names('env', 'BUILD_ID')));
+    for (const [at, form] of forms.entries()) expect(tools[at]?.names, form).toEqual(names('env', 'BUILD_ID'));
     // Not the scope word, and not a name taken from a longer word.
     for (const value of ['"name":"env"', '"name":"script"', '"name":"Global"']) expect(bytesOf(skeleton)).not.toContain(value);
   });
