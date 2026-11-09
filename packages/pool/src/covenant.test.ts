@@ -147,6 +147,7 @@ describe('the covenant record', () => {
     const db = await pool.db();
     await pool.post('/v1/covenant/accept', { version: 'v2' }, token);
     const first = await acceptances(db, account);
+    expect(first).toHaveLength(1);
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect((await pool.post('/v1/covenant/accept', { version: 'v2' }, token)).status).toBe(200);
     expect(await acceptances(db, account)).toEqual(first);
@@ -172,6 +173,13 @@ describe('the covenant record', () => {
     await pool.post('/v1/covenant/accept', { version: 'v2' }, token);
     await expect(db.prepare('UPDATE covenant_acceptances SET accepted_at = 1 WHERE account = ?').bind(account).run()).rejects.toThrow(/never changed/);
     await expect(db.prepare('DELETE FROM covenant_acceptances WHERE account = ?').bind(account).run()).rejects.toThrow(/never deleted/);
+  });
+
+  it('refuses to change or delete a first-served row', async () => {
+    const db = await pool.db();
+    await pool.get('/v1/covenant');
+    await expect(db.prepare("UPDATE covenant_served SET first_served_at = 1 WHERE version = 'v2'").run()).rejects.toThrow(/never changed/);
+    await expect(db.prepare("DELETE FROM covenant_served WHERE version = 'v2'").run()).rejects.toThrow(/never deleted/);
   });
 
   it('stores the first-served time once per version: one row on the first read, none moved by a later read, a second for a changed version', async () => {

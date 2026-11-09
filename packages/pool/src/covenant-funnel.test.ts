@@ -63,6 +63,14 @@ describe('queries/covenant-funnel.sql', () => {
     await pool.dispose();
   });
 
+  it('documents a run that prints rows: a remote read goes through --command with --json, because a remote --file is an import that returns only totals', () => {
+    const header = SQL.split(/\r?\n/)
+      .filter((line) => line.startsWith('--'))
+      .join(' ');
+    expect(header).toContain('--remote --json --command');
+    expect(header).not.toContain('--remote --file');
+  });
+
   it('prints the three counts for the named version, and the total before the cap', async () => {
     expect(await run(db, forVersion('v2'))).toEqual({ version: 'v2', start_day: '2026-11-10', installs: 300, installs_before_cap: 312, accepted: 4, depositing_4w: 1 });
   });

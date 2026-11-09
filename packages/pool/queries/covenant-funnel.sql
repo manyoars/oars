@@ -1,6 +1,6 @@
--- The V17(2) counts, read from what the pool stores. Run it against the remote database by hand:
---   npx wrangler d1 execute oars-pool --remote --file queries/covenant-funnel.sql
--- (add --json for a machine-readable answer; `--local` reads the local database.) It prints one row of counts and no verdict.
+-- The V17(2) counts, read from what the pool stores. Run it against the remote database by hand, from packages/pool in a POSIX shell:
+--   npx wrangler d1 execute oars-pool --remote --json --command "$(cat queries/covenant-funnel.sql)"
+-- A remote --file is a D1 import and prints only totals, not rows, so the query goes in through --command. `--local --file queries/covenant-funnel.sql` reads the local database. It prints one row of counts and no verdict.
 --
 -- THE ONE EDIT: name the covenant version between the quotes on the `params` line below. Left empty, it reads the version the pool served most recently.
 --
