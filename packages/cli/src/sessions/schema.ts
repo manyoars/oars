@@ -817,7 +817,7 @@ export interface RecallCall {
 /** One hook invocation, appended to `hook-calls.jsonl` by the hook itself; `measure` counts these per session. Class A: `session`, `at`, `error`; P: `event`, `hit`, `ms`, `startMs`. */
 export interface HookCall {
   at: string;
-  event: 'session-start' | 'prompt' | 'pre-tool' | 'post-tool' | 'stop' | 'nightly';
+  event: 'session-start' | 'prompt' | 'pre-tool' | 'post-tool' | 'stop' | 'nightly' | 'codex-record';
   /** The Claude Code session the hook ran in; null for the nightly run. */
   session: string | null;
   /** Whether the hook had something to say (an injected block, a recall hit, or a session deposited). */

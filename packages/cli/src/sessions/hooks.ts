@@ -25,7 +25,7 @@ import { deposit, depositSession, readSaved, type SessionsRuntime } from './stor
 import { recordSurvival } from './survival.js';
 import type { NightlyTelemetry } from '../telemetry/health.js';
 
-export type HookEvent = HookCall['event'];
+export type HookEvent = Exclude<HookCall['event'], 'codex-record'>;
 
 export const HOOK_EVENTS: readonly HookEvent[] = ['session-start', 'prompt', 'pre-tool', 'post-tool', 'stop', 'nightly'];
 

@@ -7,7 +7,7 @@ import type { HookCall } from './schema.js';
 const isRecord = (value: unknown): value is { [key: string]: unknown } => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const eventOf = (value: unknown): HookCall['event'] | undefined => {
-  if (value === 'session-start' || value === 'prompt' || value === 'pre-tool' || value === 'post-tool' || value === 'stop' || value === 'nightly') return value;
+  if (value === 'session-start' || value === 'prompt' || value === 'pre-tool' || value === 'post-tool' || value === 'stop' || value === 'nightly' || value === 'codex-record') return value;
   return undefined;
 };
 

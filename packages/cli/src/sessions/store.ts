@@ -122,6 +122,7 @@ export const paths = (storeDir: string) => ({
   skeletons: join(storeDir, 'skeletons'),
   calls: join(storeDir, 'mcp-calls.jsonl'),
   hookCalls: join(storeDir, 'hook-calls.jsonl'),
+  hookRows: join(storeDir, 'hook-rows.jsonl'),
   pipelineRuns: join(storeDir, 'pipeline-runs.jsonl'),
   salt: join(storeDir, 'salt'),
   raw: join(storeDir, 'raw'),
