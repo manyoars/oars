@@ -57,7 +57,7 @@ export const recordSchedule = async (storeDir: string, mode: 'on' | 'off'): Prom
 };
 
 /** One masked line in `pool-send.log`, the place a failure of the trigger or the sender goes. Never throws. */
-const logFailure = async (storeDir: string, at: number, error: unknown): Promise<void> => {
+export const logFailure = async (storeDir: string, at: number, error: unknown): Promise<void> => {
   const line = await errorLine(storeDir, error).catch(() => 'unknown error');
   await mkdir(storeDir, { recursive: true }).then(() => appendFile(join(storeDir, LOG), `${new Date(at).toISOString()} ${line}\n`, 'utf8')).catch(() => undefined);
 };

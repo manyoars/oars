@@ -109,6 +109,6 @@ describe('the top-level catch', () => {
     const made = harness({ APPDATA: appData });
     made.deps.telemetry = { dir: join(appData, 'oars', 'telemetry'), platform: 'linux' };
     await run(['--bogus'], made.deps);
-    expect(spoolEvents(join(appData, 'oars', 'telemetry')).map((event) => event.type)).toEqual(['command']);
+    expect(spoolEvents(join(appData, 'oars', 'telemetry')).map((event) => event.type)).toEqual(['first-run', 'command']);
   });
 });

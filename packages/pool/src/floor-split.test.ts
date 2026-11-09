@@ -7,7 +7,7 @@ import { verifyBundle, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js
 import { floorsOf } from './floors.js';
 import { sampleSkeleton } from './sample.js';
 import { environmentOf, type Held } from './stored.js';
-import { fieldOf, startPool, stubUser, type TestPool } from './test-pool.js';
+import { acceptanceOf, fieldOf, startPool, stubUser, type TestPool } from './test-pool.js';
 
 const VERSION = '2.1.314';
 
@@ -37,7 +37,7 @@ describe('one fresh account', () => {
   const deposit = async (pool: TestPool, user = stubUser('9801')): Promise<string> => {
     // An account that has not stood: its first counting batch is today (`access.ts`). Both names are on one week, so the week cells of their shape are one family (`complement.ts`; `complement-split.test.ts` holds the shape rule).
     const { token } = await pool.signIn('github', user, { fresh: true });
-    await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+    await pool.post('/v1/covenant/accept', acceptanceOf('v1'), token);
     expect((await pool.post('/v1/deposits', sampleSkeleton('0000000000009801', undefined, '2026-11-02', 'claude-code', { program: 'git', sub: 'push' }), token)).status).toBe(201);
     expect((await pool.post('/v1/deposits', sampleSkeleton('0000000000009802', undefined, '2026-11-02', 'claude-code', { program: 'acme-deploy', sub: 'ship' }), token)).status).toBe(201);
     return token;

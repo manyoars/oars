@@ -1,12 +1,13 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { books, measure, formatMeasure, recall } from './query.js';
 import { harnessOf, type SessionObservation } from './schema.js';
 import { deposit, loadStore, paths, readSkeletons } from './store.js';
 import { verifyAll, verifyCaptured } from './verify.js';
-import { cleanup, composers, folders, NOW, stage, stageCursor, stageRawCursor } from './test-support.js';
+import { cleanup, composers, folders, NOW, removeHeld, stage, stageCursor, stageRawCursor } from './test-support.js';
 
 afterEach(cleanup);
 
@@ -19,7 +20,31 @@ const trackedKeys = (storeDir: string): string[] => {
 
 const options = (allow: string[]) => ({ allow, redactDomains: [], now: () => NOW });
 
-const staged = async () => {
+/**
+ * The synthetic Cursor `User` folder (three SQLite files and the workspace folders they name) is built once: a deposit only reads it, and
+ * building it per test is avoidable file work, and one loaded Windows run of this file passed the 30 s limit (the cause was not
+ * reproduced). Each test still gets its own projects root and store, because a deposit writes there. A test that edits the Cursor store
+ * builds its own with `ownStaged`.
+ */
+let sharedRoot = '';
+let sharedUser = '';
+
+beforeAll(async () => {
+  sharedRoot = mkdtempSync(join(tmpdir(), 'oars-cursor-shared-'));
+  const { repo, plain } = folders(sharedRoot);
+  sharedUser = await stageCursor(sharedRoot, composers(repo, plain));
+});
+
+afterAll(() => {
+  removeHeld(sharedRoot);
+});
+
+const staged = () => {
+  const s = stage();
+  return { ...s, user: sharedUser, runtime: { ...s.runtime, cursorRoot: sharedUser } };
+};
+
+const ownStaged = async () => {
   const s = stage();
   const { repo, plain } = folders(s.root);
   const user = await stageCursor(s.root, composers(repo, plain));
@@ -28,7 +53,7 @@ const staged = async () => {
 
 describe('depositing the Cursor source', () => {
   it('captures each composer session as a cursor-harness session, and a second deposit adds nothing', async () => {
-    const s = await staged();
+    const s = staged();
     const first = await deposit(s.runtime, options(['cursor']));
     expect(first).toMatchObject({ cursor: 3, sessions: 3, unchanged: 0 });
     const store = await loadStore(s.storeDir);
@@ -48,7 +73,7 @@ describe('depositing the Cursor source', () => {
   });
 
   it('deposits a composer that recorded no token counts as unobserved usage, not a measured zero, and keeps the counted ones labeled', async () => {
-    const s = await staged();
+    const s = staged();
     await deposit(s.runtime, options(['cursor']));
     const store = await loadStore(s.storeDir);
     const loose = store.sessions.find((session) => session.session === 'cursor-loose');
@@ -63,7 +88,7 @@ describe('depositing the Cursor source', () => {
   });
 
   it('reads a Cursor call by its own table and frames its session as Cursor, from the deposit down', async () => {
-    const s = await staged();
+    const s = staged();
     await deposit(s.runtime, options(['cursor']));
     const store = await loadStore(s.storeDir);
     const steps = store.tools.filter((tool) => tool.session === 'cursor-agent').flatMap((tool) => tool.steps ?? []);
@@ -72,7 +97,7 @@ describe('depositing the Cursor source', () => {
   });
 
   it('puts a session in the project slug of its workspace folder and a loose one under cursor', async () => {
-    const s = await staged();
+    const s = staged();
     await deposit(s.runtime, options(['cursor']));
     const projects = Object.fromEntries((await loadStore(s.storeDir)).sessions.map((session) => [session.session, session.project]));
     expect(projects['cursor-agent']).toMatch(/work-app$/);
@@ -80,7 +105,7 @@ describe('depositing the Cursor source', () => {
   });
 
   it('does not read the store unless --allow names cursor', async () => {
-    const s = await staged();
+    const s = staged();
     expect(await deposit(s.runtime, options(['nothing-here']))).toMatchObject({ cursor: 0, sessions: 0 });
     expect(await deposit(s.runtime, options(['*']))).toMatchObject({ cursor: 3 });
   });
@@ -92,7 +117,7 @@ describe('depositing the Cursor source', () => {
   });
 
   it('captures a session again when Cursor writes it after the deposit', async () => {
-    const s = await staged();
+    const s = await ownStaged();
     await deposit(s.runtime, options(['cursor']));
     const { DatabaseSync } = await import('node:sqlite');
     const db = new DatabaseSync(`${s.user}/globalStorage/state.vscdb`);
@@ -111,7 +136,7 @@ describe('depositing the Cursor source', () => {
 
 describe('recall, books, and measure over Cursor skeletons', () => {
   it('books groups by harness, and a Claude Code session beside a Cursor one stays separate', async () => {
-    const s = await staged();
+    const s = staged();
     await deposit(s.runtime, options(['*']));
     const store = await loadStore(s.storeDir);
     const rows = books(store, 'harness', NOW);
@@ -123,7 +148,7 @@ describe('recall, books, and measure over Cursor skeletons', () => {
   });
 
   it('measure counts Cursor sessions in its window with no special case', async () => {
-    const s = await staged();
+    const s = staged();
     await deposit(s.runtime, options(['cursor']));
     const store = await loadStore(s.storeDir);
     const signal = measure(store, [], [], 5);
@@ -133,7 +158,7 @@ describe('recall, books, and measure over Cursor skeletons', () => {
   });
 
   it('recall finds the Cursor session by its error and by its file', async () => {
-    const s = await staged();
+    const s = staged();
     await deposit(s.runtime, options(['cursor']));
     const store = await loadStore(s.storeDir);
     const byError = recall(store, { error: '2 tests failed' }, NOW);
@@ -144,7 +169,7 @@ describe('recall, books, and measure over Cursor skeletons', () => {
   });
 
   it('verify holds for Cursor sessions: no invariant is violated by a deposit', async () => {
-    const s = await staged();
+    const s = staged();
     await deposit(s.runtime, options(['cursor']));
     const { skeletons } = await readSkeletons(s.storeDir);
     expect(skeletons).toHaveLength(3);
@@ -154,7 +179,7 @@ describe('recall, books, and measure over Cursor skeletons', () => {
   });
 
   it('allow.unmatched sees the Cursor source, so --allow cursor reports nothing missing', async () => {
-    const s = await staged();
+    const s = staged();
     expect((await deposit(s.runtime, options(['cursor']))).missing).toEqual([]);
     expect((await deposit(s.runtime, options(['cursr']))).missing).toEqual(['cursr']);
   });

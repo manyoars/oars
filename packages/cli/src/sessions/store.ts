@@ -18,6 +18,7 @@
 //   pipeline-runs.jsonl     the step log: one line per run of a pipeline step, appended when the step ends (steps.ts)
 //   pending/<hash>.<uuid>.json  one file per Stop deposit the store lock refused: the transcript path only, taken by the next deposit (pending.ts)
 import type { GoldEvaluator } from './gold-arms.js';
+import { derivedSalt } from './machine-ids.js';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { performance } from 'node:perf_hooks';
@@ -73,10 +74,14 @@ export interface SessionsRuntime {
   sources?: readonly Source[];
   /** Where the account's salt comes from; absent means this machine's own (`localSalt`). The seam an account identity replaces (M4). */
   accountSalt?: (storeDir: string) => Promise<AccountSalt>;
+  /** The salt repository keys are hashed under; a machine takes it from its enrollment (`OARS_REPO_SALT`). Absent means the one derived from the account salt, as the trusted machine computes it. */
+  repoSalt?: string;
   /** The fresh single-turn reader behind `gold arms`; absent in a run that has none. */
   evaluator?: GoldEvaluator | undefined;
   stdin: NodeJS.ReadableStream;
   stdout: { write: (text: string) => unknown };
+  /** Only its `isTTY` is read: the covenant screen is written to stderr, so a person is at a terminal only when stderr is one too. */
+  stderr?: { isTTY?: boolean | undefined } | undefined;
 }
 
 interface FileState {
@@ -106,9 +111,13 @@ export interface State {
   pool: PoolChoices;
 }
 
-/** The answer to the raw-copy prompt (`granted`, `declined`, or not asked yet) and the per-folder switches (an `--allow`-style entry mapped to what it may send). */
+/**
+ * The answer to the raw-copy prompt (`granted`, `declined`, or not asked yet) and the per-folder switches (an `--allow`-style entry mapped to what it may send).
+ * A yes carries the covenant version in force when it was given, because the prompt names the sale and training use that covenant states. A yes with no version predates that wording and reads as not asked.
+ */
 export interface PoolChoices {
   rawConsent: 'granted' | 'declined' | null;
+  rawConsentVersion: string | null;
   folders: { [entry: string]: FolderSend };
 }
 export type FolderSend = 'skeleton' | 'off';
@@ -184,12 +193,14 @@ export const readState = async (storeDir: string): Promise<State> => {
       const pool = isRecord(parsed.pool) ? parsed.pool : {};
       const folders: PoolChoices['folders'] = {};
       if (isRecord(pool.folders)) for (const [entry, mode] of Object.entries(pool.folders)) if (mode === 'skeleton' || mode === 'off') folders[entry] = mode;
-      return { files, redactDomains: domains, allow, pool: { rawConsent: pool.rawConsent === 'granted' || pool.rawConsent === 'declined' ? pool.rawConsent : null, folders } };
+      const yesVersion = typeof pool.rawConsentVersion === 'string' && pool.rawConsentVersion !== '' ? pool.rawConsentVersion : null;
+      const granted = pool.rawConsent === 'granted' && yesVersion !== null;
+      return { files, redactDomains: domains, allow, pool: { rawConsent: granted ? 'granted' : pool.rawConsent === 'declined' ? 'declined' : null, rawConsentVersion: granted ? yesVersion : null, folders } };
     }
   } catch (error) {
     if (!isMissing(error) && !(error instanceof SyntaxError)) throw error;
   }
-  return { files: {}, redactDomains: [], allow: [], pool: { rawConsent: null, folders: {} } };
+  return { files: {}, redactDomains: [], allow: [], pool: { rawConsent: null, rawConsentVersion: null, folders: {} } };
 };
 
 /** Changes the pool choices under the store lock, so a deposit running at the same time keeps them (it writes the state it read). */
@@ -319,6 +330,8 @@ interface DepositContext {
   domains: string[];
   redact: ReturnType<typeof makeRedactor>;
   salt: AccountSalt;
+  /** The salt a repository's key is hashed under. */
+  repoSalt: string;
   repoRoot: (cwd: string) => string | null;
   repoIdentity: (root: string) => string;
   /** This process's versions, read once per deposit (it parses package.json). */
@@ -349,6 +362,7 @@ const contextFor = async (runtime: SessionsRuntime, state: State, now: () => num
     domains: [...state.redactDomains].sort(),
     redact: makeRedactor(state.redactDomains),
     salt,
+    repoSalt: runtime.repoSalt ?? derivedSalt(salt.salt, 'repoKey/1'),
     repoRoot: makeRepoRoot(),
     repoIdentity: makeRepoIdentity(),
     captureRuntime: captureRuntime(),
@@ -558,6 +572,7 @@ const depositFile = async (context: DepositContext, project: string, transcript:
     bytes: info.size,
     redact: context.redact,
     salt: context.salt.salt,
+    repoSalt: context.repoSalt,
     sid: context.salt.sid,
     repoRoot: context.repoRoot,
     repoIdentity: context.repoIdentity,
@@ -1019,6 +1034,7 @@ const readSource = async (context: DepositContext, source: Source, root: string,
         bytes: Buffer.byteLength(text),
         redact: context.redact,
         salt: context.salt.salt,
+        repoSalt: context.repoSalt,
         sid: context.salt.sid,
         repoRoot: context.repoRoot,
         repoIdentity: context.repoIdentity,

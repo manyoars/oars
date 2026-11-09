@@ -95,7 +95,7 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   harnessVersion: 'The harness version: the name as it is after redaction; `private` when redaction changes it, an exclusion term matches it, it is not a name, or it is over 128 characters. A transcript or prompt frame carries the value capture closed it to (the public name, else `<literal>`), sent as it is; the version of a call, which capture keeps as its line names it, goes as the string after the gate.',
   host: 'The host of a web fetch or search, the name as it is after redaction; `private` when redaction changes it, an exclusion term matches it, it is not a name, or it is over 128 characters; null when the step names no host. Capture keeps the host as the address names it, without credentials, path, or query. The pool replaces a host with a keyed hash on arrival and serves it only once enough accounts report it.',
   hour: 'The UTC hour of day, 0 to 23, beside the day; never a minute, a second, or an offset.',
-  id: "A hash the client computes per account from the account and the session, so a redeposit replaces and two accounts' sessions cannot be joined. Never the session id.",
+  id: "A hash the client computes per account from the account and the session (for a machine, from the account's session salt and the session's name), so a redeposit replaces and two accounts' sessions cannot be joined. Never the session id.",
   identity: 'What a step called: a shell program with its subcommand and flags, an MCP server and tool, a skill, or a web host, each a name after redaction or `private`; null for an action with none.',
   input: 'A bucket of the input tokens in a prompt, a number, or null when the source never recorded it.',
   key: 'The key name an argument feature or closed value belongs to: one of the call\'s sent keys.',
@@ -209,12 +209,15 @@ const namesIn = async (folder: string): Promise<string[]> => {
 };
 
 /** Removes every batch under this stamp whose session is not in `kept`, and returns how many went. A session that fails a gate, leaves the allowlist, or is gone from the store never enters the outbox, so an earlier pass's batch of it cannot stay. */
-export const removeBatchesExcept = async (outbox: string, kept: ReadonlySet<string>, stamp: string = currentStamp(), only?: string): Promise<number> => {
+export const removeBatchesExcept = async (outbox: string, kept: ReadonlySet<string> | (() => Promise<ReadonlySet<string>>), stamp: string = currentStamp(), only?: string): Promise<number> => {
   const folder = join(outbox, stamp);
   let removed = 0;
-  for (const name of await namesIn(folder)) {
+  const names = await namesIn(folder);
+  // A reader is asked once the names are in hand: a key it reads then covers every batch listed above.
+  const keep = typeof kept === 'function' ? await kept() : kept;
+  for (const name of names) {
     const found = BATCH_FILE.exec(name);
-    if (found !== null && !kept.has(found[1] ?? '') && (only === undefined || found[1] === only)) {
+    if (found !== null && !keep.has(found[1] ?? '') && (only === undefined || found[1] === only)) {
       await rm(join(folder, name), { force: true });
       removed += 1;
     }
@@ -260,6 +263,39 @@ export const heldBatches = async (outbox: string, stamp: string = currentStamp()
     else batches.push({ key, hash, file, bytes });
   }
   return { batches, edited };
+};
+
+/** The held batch of one session under this stamp, read whole only when its file still hashes to its name; undefined when the session has none, or its file was edited. */
+export const heldBatchOf = async (outbox: string, key: string, stamp: string = currentStamp()): Promise<Held | undefined> => {
+  const folder = join(outbox, stamp);
+  for (const name of await namesIn(folder)) {
+    const found = BATCH_FILE.exec(name);
+    if (found?.[1] !== key) continue;
+    const hash = found[2] ?? '';
+    const file = join(folder, name);
+    const bytes = await unchangedBytes(file, hash);
+    if (bytes !== undefined) return { key, hash, file, bytes };
+  }
+  return undefined;
+};
+
+const machineKeysFile = (outbox: string): string => join(outbox, 'machine-keys.log');
+
+/** The batch keys a machine's Stop built, one per line. A person's `oars pool deposit` shares the outbox and cannot recompute them (the machine's name is in the key), so its sweep keeps these instead of treating them as batches of sessions the store lost. */
+export const machineKeys = async (outbox: string): Promise<Set<string>> => {
+  try {
+    return new Set((await readFile(machineKeysFile(outbox), 'utf8')).split('\n').filter((line) => line !== ''));
+  } catch (error) {
+    if (isAbsent(error)) return new Set();
+    throw error;
+  }
+};
+
+/** Notes that a machine built this key; a key already noted adds no line. */
+export const noteMachineKey = async (outbox: string, key: string): Promise<void> => {
+  if ((await machineKeys(outbox)).has(key)) return;
+  await mkdirOwnerOnly(outbox);
+  await appendOwnerOnly(machineKeysFile(outbox), `${key}\n`);
 };
 
 const shownFile = (outbox: string): string => join(outbox, 'shown.log');

@@ -1,0 +1,7 @@
+-- Machine keys. A machine is a runtime an account runs (a cloud environment, a VPS, a CI runner) with a key of its own, so the account credential never leaves the machines the person sits at.
+-- `key_hash` is the SHA-256 of the one key the machine holds now: the enrollment token until `rotate` replaces it. Neither is stored or logged in the clear; the token is shown once, at enrollment, and the rotated key once, at rotation.
+-- `retired_hash` is the hash of the key a rotation replaced, kept only so a spent token is refused by name. `id` is the opaque public id the account lists and revokes by.
+-- `state` is `pending` (a token not yet used), `active` (bound as the machine's key), or `revoked`. `expires_at` is when the credential held now ends: the token's 24 hours while `pending`, the key's 90 days from activation once `active`.
+-- `allow_repos` is a JSON array of `owner/name`, fixed at enrollment. `fingerprint_hash` is the hash of a machine fingerprint, null until a client states one.
+CREATE TABLE machines (id TEXT PRIMARY KEY, account TEXT NOT NULL REFERENCES accounts(id), key_hash TEXT NOT NULL UNIQUE, retired_hash TEXT UNIQUE, label TEXT NOT NULL, host_class TEXT NOT NULL, launcher TEXT NOT NULL, allow_repos TEXT NOT NULL, state TEXT NOT NULL, expires_at INTEGER NOT NULL, fingerprint_hash TEXT, created_at INTEGER NOT NULL, activated_at INTEGER, rotated_at INTEGER) STRICT, WITHOUT ROWID;
+CREATE INDEX machines_by_account ON machines (account, created_at);

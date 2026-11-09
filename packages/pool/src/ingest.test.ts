@@ -6,7 +6,7 @@ import type { SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import type { Bound, Env, PoolDb } from './http.js';
 import { chunksOf, incrementsOf } from './ingest.js';
 import { sampleSkeleton, withPairs } from './sample.js';
-import { fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
+import { acceptanceOf, fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
 import worker from './worker.js';
 
 interface Held {
@@ -61,7 +61,7 @@ const strataOracle = (byAccount: readonly (readonly SessionSkeleton[])[]): { key
 
 const accountOn = async (target: TestPool, id: string): Promise<string> => {
   const { token } = await target.signIn('github', stubUser(id));
-  await target.post('/v1/covenant/accept', { version: 'v1' }, token);
+  await target.post('/v1/covenant/accept', acceptanceOf('v1'), token);
   return token;
 };
 

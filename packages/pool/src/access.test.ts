@@ -4,7 +4,7 @@ import { VOCAB_VERSION, type SessionSkeleton } from '../../cli/src/sessions/pool
 import { batchCounts, batchTier, STANDING_AFTER_DAYS } from './access.js';
 import { incrementsOf } from './ingest.js';
 import { sampleSkeleton } from './sample.js';
-import { fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
+import { acceptanceOf, fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
 
 const PATH = `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -83,7 +83,7 @@ describe('the access flag over the routes', () => {
 
   const depositor = async (pool: TestPool, id: string, harness?: 'cursor'): Promise<{ token: string; account: string }> => {
     const signed = await pool.signIn('github', stubUser(id), { fresh: true });
-    await pool.post('/v1/covenant/accept', { version: 'v1' }, signed.token);
+    await pool.post('/v1/covenant/accept', acceptanceOf('v1'), signed.token);
     expect((await pool.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0'), undefined, undefined, harness), signed.token)).status).toBe(201);
     return signed;
   };
@@ -118,7 +118,7 @@ describe('the access flag over the routes', () => {
   it('does not lift the cap for a claude-code batch without a tool step', async () => {
     await inPool(async (pool) => {
       const signed = await pool.signIn('github', stubUser('3011'), { fresh: true });
-      await pool.post('/v1/covenant/accept', { version: 'v1' }, signed.token);
+      await pool.post('/v1/covenant/accept', acceptanceOf('v1'), signed.token);
       expect((await pool.post('/v1/deposits', without(sampleSkeleton('0000000000003011'), 'tools'), signed.token)).status).toBe(201);
       expect(await fetches(pool, signed.token, 2)).toEqual([200, 429]);
     });
@@ -127,7 +127,7 @@ describe('the access flag over the routes', () => {
   it('writes none for a batch whose root cannot be real, and the cap stays', async () => {
     await inPool(async (pool) => {
       const signed = await pool.signIn('github', stubUser('3012'), { fresh: true });
-      await pool.post('/v1/covenant/accept', { version: 'v1' }, signed.token);
+      await pool.post('/v1/covenant/accept', acceptanceOf('v1'), signed.token);
       const failed = withRoot(sampleSkeleton('0000000000003012'), { merkleRoot: createHash('sha256').update('x').digest('hex'), leaves: 0 });
       expect((await pool.post('/v1/deposits', failed, signed.token)).status).toBe(201);
       const { account } = signed;
@@ -154,7 +154,7 @@ describe('the access flag over the routes', () => {
   it('counts a batch first ingested at none once a resend fixes its root, though its cells are unchanged', async () => {
     await inPool(async (pool) => {
       const signed = await pool.signIn('github', stubUser('3014'), { fresh: true });
-      await pool.post('/v1/covenant/accept', { version: 'v1' }, signed.token);
+      await pool.post('/v1/covenant/accept', acceptanceOf('v1'), signed.token);
       const failed = withRoot(sampleSkeleton('0000000000003014'), { merkleRoot: createHash('sha256').update('x').digest('hex'), leaves: 0 });
       expect((await pool.post('/v1/deposits', failed, signed.token)).status).toBe(201);
       expect(await tierOf(pool, signed.account)).toBe('none');

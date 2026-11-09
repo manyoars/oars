@@ -3,6 +3,7 @@ import { statSync } from 'node:fs';
 import type { Outcome, RunDeps } from '../cli.js';
 import { CliError, ExitCode } from '../errors.js';
 import { consentOf, markNoticeShown, NOTICE, setEnabled, type Consent } from './consent.js';
+import { recordFirstRun } from './observe.js';
 import type { TelemetryRuntime } from './record.js';
 import { readFleet, reportOf, textOf } from './report.js';
 import { readSpool, spoolPaths } from './spool.js';
@@ -54,11 +55,14 @@ const save = (dir: string, enabled: boolean): void => {
 };
 
 export const telemetryOn = (deps: RunDeps): Outcome => {
-  const { dir } = runtimeOf(deps);
+  const runtime = runtimeOf(deps);
+  const { dir } = runtime;
+  const first = !consentOf(deps.env, dir).noticeShown;
   save(dir, true);
-  // Running `on` is the notice: it is printed here and recorded as shown.
-  markNoticeShown(dir, deps.now);
+  // Running `on` is the notice: it is printed here and recorded as shown, so the run's own check finds it shown and sends the `first-run` event from here.
+  const marked = markNoticeShown(dir, deps.now);
   const consent = consentOf(deps.env, dir);
+  if (first && marked && consent.enabled) recordFirstRun(deps, runtime);
   const override = consent.enabled ? '' : `\nIt stays off in this shell: ${consent.reason} is set.`;
   return { document: { ok: true, step: STEP, enabled: consent.enabled, reason: consent.reason, notice: NOTICE }, text: `Telemetry is on.\n${NOTICE}${override}` };
 };

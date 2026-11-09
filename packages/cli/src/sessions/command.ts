@@ -21,7 +21,8 @@ import { EMPTY_RECALL, emptyBooks, nothingFoundLines, savedListNote } from './em
 import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, inRepository, readIndex, type ContextOptions } from './hook-index.js';
 import { CODEX_TRUST_NOTICE, codexHookStatus, installCodexHook, uninstallCodexHook, type CodexInstall } from './codex-hook-install.js';
-import { hookStatus, installHooks, removeSchedule, SCHEDULE_REFUSED, scheduleStatus, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
+import { enrollmentOf } from './machine.js';
+import { hookStatus, installHooks, installMachineHooks, readSettings, removeSchedule, SCHEDULE_REFUSED, scheduleStatus, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
 import { recordSchedule } from './pool-due.js';
 import { serve } from './mcp.js';
 import { refreshPool, servedPool } from './pool.js';
@@ -486,7 +487,40 @@ const hookScope = (options: HookTarget): Scope => options.scope ?? (options.file
 const SENDS_OFF = 'The background sweep and the pool send are off, as you chose with --schedule off (telemetry has its own switch: oars telemetry off). Turn them back on with: oars sessions hook install --schedule on';
 const SENDS_ON = 'Background sweeps and sends are on: a due sweep and send starts from the session-end hook and from any oars command, at most about hourly.';
 
-export const sessionsHookInstall = async (deps: SessionsDeps, options: HookTarget & { keepRetention: boolean; schedule: 'nightly' | 'off' | 'on' | undefined; harness?: 'codex' | undefined }): Promise<Outcome> => {
+/** `--machine`: the Stop and SessionEnd entries for a cloud VM, a VPS, or a runner, and for a user-scope file the enrollment block too. Refused beside every flag it does not take, before anything is written. */
+const installMachine = async (deps: SessionsDeps, options: HookTarget & { keepRetention?: boolean; schedule: 'nightly' | 'off' | 'on' | undefined; harness?: 'codex' | undefined; env?: readonly string[] | undefined; termsFile?: string | undefined }): Promise<Outcome> => {
+  const refuse = (message: string): CliError => new CliError(message, ExitCode.USAGE, 'usage');
+  if (options.harness !== undefined || options.schedule !== undefined) throw refuse('--machine writes the Stop and SessionEnd entries of a machine; --harness and --schedule do not apply to it.');
+  if (options.keepRetention === true) throw refuse('--keep-retention does not apply to --machine: a machine install leaves cleanupPeriodDays alone.');
+  const scope = hookScope(options);
+  if (scope === 'file') throw refuse('--machine takes --scope project (the .claude/settings.json of a repository, committed) or --scope user (the ~/.claude/settings.json of a VPS or runner).');
+  if (options.file !== undefined) throw refuse('--file does not apply to --machine: it writes the user or project settings file named by --scope.');
+  const runtime = installOf(deps);
+  const file = settingsPath(runtime, scope, undefined);
+  const lines: string[] = [];
+  let result;
+  if (scope === 'project') {
+    if ((options.env ?? []).length > 0 || options.termsFile !== undefined) throw refuse('--env and --terms-file belong to --scope user: a project settings file is committed, and the enrollment block holds salts and terms.');
+    result = await installMachineHooks(file, undefined);
+    lines.push(`Installed ${result.installed.join(' and ')} machine hooks in ${file}. They run only where OARS_HOST_CLASS is set to a class other than local; set it, and the rest of the enrollment block, in the environment that runs the session.`);
+  } else {
+    // A file that cannot be read is refused before the terms file is written.
+    await readSettings(file);
+    const enrollment = await enrollmentOf(options.env ?? [], options.termsFile, runtime.cwd);
+    result = await installMachineHooks(file, enrollment.env);
+    lines.push(`Installed ${result.installed.join(' and ')} machine hooks and the enrollment block in ${file}, which is now readable by its owner only.`);
+    if (enrollment.termsPath !== undefined) lines.push(`The exclusion terms are in ${enrollment.termsPath} (owner-only), named by OARS_EXCLUSION_TERMS.`);
+    if (enrollment.env.OARS_EXCLUSION_TERMS === undefined && enrollment.env.OARS_EXCLUSION_TERMS_INLINE === undefined) lines.push('No exclusion terms were given: with no term file every session is excluded (fail-closed), so nothing will be built.');
+  }
+  return { document: { ok: true, machine: true, install: result }, text: lines.join('\n') };
+};
+
+export const sessionsHookInstall = async (
+  deps: SessionsDeps,
+  options: HookTarget & { keepRetention: boolean; schedule: 'nightly' | 'off' | 'on' | undefined; harness?: 'codex' | undefined; machine?: boolean | undefined; env?: readonly string[] | undefined; termsFile?: string | undefined },
+): Promise<Outcome> => {
+  if (options.machine === true) return installMachine(deps, options);
+  if ((options.env ?? []).length > 0 || options.termsFile !== undefined) throw new CliError('--env and --terms-file belong to --machine.', ExitCode.USAGE, 'usage');
   if (options.harness === 'codex') {
     refuseSettingsFlags(options);
     if (options.schedule !== undefined) throw new CliError('--schedule applies to the Claude Code hooks, not --harness codex.', ExitCode.USAGE, 'usage');

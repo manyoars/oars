@@ -382,6 +382,8 @@ export interface ExtractInput {
   redact: Redactor;
   /** The per-account salt for path targets; the store keeps it beside the log. */
   salt?: string;
+  /** The salt a repository's key is hashed under, derived from the account salt so a machine given it by enrollment keys a repository as the trusted machine does; absent means `salt`. */
+  repoSalt?: string;
   /** The salt's `sid` (first 8 hex of its SHA-256), stamped on every capture record; null when no salt is in play. */
   sid?: string | null;
   /** The repository root holding a working directory (worktree segments already stripped), or null; absent means no repository is known. */
@@ -1998,7 +2000,7 @@ export const captureSession = (input: ExtractInput): Capture => {
   const kept = [...files].sort().slice(0, FILES_PER_SESSION_MAX);
   session.files = kept;
   session.fileHashes = [...new Set(kept.flatMap((path) => [...(fileHashes.get(path) ?? [])]))].sort();
-  session.repo = sessionRoot === null ? null : sha256(`${salt}\nrepo:${identityOf(sessionRoot)}`).slice(0, 16);
+  session.repo = sessionRoot === null ? null : sha256(`${input.repoSalt ?? salt}\nrepo:${identityOf(sessionRoot)}`).slice(0, 16);
   session.urls = [...urls].sort();
   session.searches = [...searches].sort();
 

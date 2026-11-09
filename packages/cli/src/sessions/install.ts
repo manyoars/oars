@@ -6,12 +6,25 @@ import { dirname, join, resolve } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 import { ACTION_TABLES } from './actions.js';
 import type { CodexInstall } from './codex-hook-install.js';
+import { writeOwnerOnly } from './owner-only.js';
 
 export const RETENTION_FLOOR = 365;
 export const DEFAULT_RETENTION = 30;
 export const TASK_NAME = 'OarsSessionsNightly';
 // The tail of a command this module wrote; anything else in a settings file is the operator's, whatever it is called.
-const OWN_COMMAND = /hook-bin\.js" (?:session-start|prompt|pre-tool|post-tool|stop)$/;
+// The machine command is host-independent: it names no install path, only the `oars-hook` bin on PATH (see `MACHINE_COMMAND`).
+// A plain install and a machine install each replace only their own entries, so one never strips the other's; uninstall and status read both.
+const PLAIN_COMMAND = /hook-bin\.js" (?:session-start|prompt|pre-tool|post-tool|stop)$/;
+const MACHINE_OWN = /oars-hook stop --machine$/;
+const OWN_COMMAND = /(?:hook-bin\.js" (?:session-start|prompt|pre-tool|post-tool|stop)|oars-hook stop --machine)$/;
+/**
+ * What `--machine` writes for Stop and SessionEnd. A settings file committed from one machine is read on another (a cloud VM, a runner), where the installing machine's node and `hook-bin.js` paths do not exist, so this names no path:
+ * it resolves the `oars-hook` bin on PATH, and exits 0 when there is none (a hook that cannot start must not fail the session).
+ */
+export const MACHINE_COMMAND = 'command -v oars-hook >/dev/null || exit 0; oars-hook stop --machine';
+const MACHINE_EVENTS = ['Stop', 'SessionEnd'] as const;
+// The hook body is a node start and a detach (well under a second); this is the harness's ceiling, not its budget.
+const MACHINE_TIMEOUT = 10;
 
 /** What the install needs from the machine, so a test can stand in for each. */
 export interface InstallRuntime {
@@ -138,10 +151,10 @@ export interface InstallResult {
 const LEGACY_EVENTS = ['Stop'];
 
 /** Takes our entries out of `event`, dropping the key when that empties it. */
-const clearLegacy = (hooks: Json, event: string): boolean => {
+const clearLegacy = (hooks: Json, event: string, own: RegExp): boolean => {
   const groups = groupsOf(hooks, event);
-  if (!hasOwn(groups)) return false;
-  const kept = withoutOwn(groups);
+  if (!hasOwn(groups, own)) return false;
+  const kept = withoutOwn(groups, own);
   if (kept.length === 0) Reflect.deleteProperty(hooks, event);
   else hooks[event] = kept;
   return true;
@@ -150,9 +163,9 @@ const clearLegacy = (hooks: Json, event: string): boolean => {
 export const installHooks = async (runtime: InstallRuntime, path: string, keepRetention: boolean): Promise<InstallResult> => {
   const settings = await readSettings(path);
   const hooks = hooksOf(settings);
-  for (const event of LEGACY_EVENTS) clearLegacy(hooks, event);
+  for (const event of LEGACY_EVENTS) clearLegacy(hooks, event, PLAIN_COMMAND);
   for (const spec of SPECS) {
-    const others = withoutOwn(groupsOf(hooks, spec.event));
+    const others = withoutOwn(groupsOf(hooks, spec.event), PLAIN_COMMAND);
     const entry = { type: 'command', command: commandOf(runtime, spec.arg), timeout: spec.timeout };
     hooks[spec.event] = [...others, spec.matcher === undefined ? { hooks: [entry] } : { matcher: spec.matcher, hooks: [entry] }];
   }
@@ -182,11 +195,36 @@ export const installHooks = async (runtime: InstallRuntime, path: string, keepRe
   return { file: path, installed: SPECS.map((spec) => spec.event), retention };
 };
 
+/**
+ * `hook install --machine`: the Stop and SessionEnd entries that run `oars-hook stop --machine`, merged with what is there (only entries of ours are replaced). With `env`, the enrollment block goes to this file's `env`
+ * block, merged with the operator's own entries, and the file is made owner-only, because it then holds the salts and the terms. A project file gets no `env`: it is committed.
+ */
+export const installMachineHooks = async (path: string, env: { [name: string]: string } | undefined): Promise<InstallResult> => {
+  const settings = await readSettings(path);
+  const hooks = hooksOf(settings);
+  for (const event of MACHINE_EVENTS) {
+    hooks[event] = [...withoutOwn(groupsOf(hooks, event), MACHINE_OWN), { hooks: [{ type: 'command', command: MACHINE_COMMAND, timeout: MACHINE_TIMEOUT }] }];
+  }
+  settings.hooks = hooks;
+  if (env === undefined) {
+    await writeSettings(path, settings);
+  } else {
+    const merged = { ...(isObject(settings.env) ? settings.env : {}), ...env };
+    // The terms are given once: a re-install that names one variable replaces the other. A Stop lets the inline list win, so an earlier one would silently outlive the new list and keep terms in a file the operator moved them out of.
+    if (env.OARS_EXCLUSION_TERMS !== undefined) Reflect.deleteProperty(merged, 'OARS_EXCLUSION_TERMS_INLINE');
+    if (env.OARS_EXCLUSION_TERMS_INLINE !== undefined) Reflect.deleteProperty(merged, 'OARS_EXCLUSION_TERMS');
+    settings.env = merged;
+    await mkdir(dirname(path), { recursive: true });
+    await writeOwnerOnly(path, `${JSON.stringify(settings, null, 2)}\n`);
+  }
+  return { file: path, installed: [...MACHINE_EVENTS], retention: 'Left cleanupPeriodDays alone: a machine builds its batch at each Stop, not from a stored transcript.' };
+};
+
 export const uninstallHooks = async (path: string): Promise<{ file: string; removed: string[] }> => {
   const settings = await readSettings(path);
   const hooks = hooksOf(settings);
   const removed: string[] = [];
-  const cleared = LEGACY_EVENTS.map((event) => clearLegacy(hooks, event)).includes(true);
+  const cleared = LEGACY_EVENTS.map((event) => clearLegacy(hooks, event, OWN_COMMAND)).includes(true);
   for (const spec of SPECS) {
     const groups = groupsOf(hooks, spec.event);
     if (!hasOwn(groups)) continue;
@@ -194,7 +232,9 @@ export const uninstallHooks = async (path: string): Promise<{ file: string; remo
     removed.push(spec.event);
     hooks[spec.event] = kept;
   }
-  if (removed.length > 0 || cleared) {
+  // Stop is no spec's event: a machine install writes it, and an earlier build did.
+  if (cleared) removed.push('Stop');
+  if (removed.length > 0) {
     // An event this call emptied goes; an event that was already an empty list in the file is the operator's and stays.
     const remaining = Object.entries(hooks).filter(([event, groups]) => !(removed.includes(event) && Array.isArray(groups) && groups.length === 0));
     // `undefined` is left out of the JSON, so an emptied `hooks` key goes.
@@ -221,7 +261,7 @@ export const hookStatus = async (runtime: InstallRuntime, extra: string | undefi
   for (const target of targets) {
     const settings = await readSettings(target.file);
     const hooks = hooksOf(settings);
-    statuses.push({ ...target, installed: SPECS.filter((spec) => hasOwn(groupsOf(hooks, spec.event))).map((spec) => spec.event), retentionDays: effectiveRetention(settings) });
+    statuses.push({ ...target, installed: [...SPECS.filter((spec) => hasOwn(groupsOf(hooks, spec.event))).map((spec) => spec.event), ...LEGACY_EVENTS.filter((event) => hasOwn(groupsOf(hooks, event)))], retentionDays: effectiveRetention(settings) });
   }
   return statuses;
 };

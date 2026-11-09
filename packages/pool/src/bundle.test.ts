@@ -6,7 +6,7 @@ import { etagOf } from './bundle.js';
 import { DEFAULT_FLOORS, floorsOf } from './floors.js';
 import { SERVED } from './derive.js';
 import { sampleSkeleton, withPairs } from './sample.js';
-import { containing, fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
+import { acceptanceOf, containing, fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
 
 let pool: TestPool;
 
@@ -20,7 +20,7 @@ afterAll(async () => {
 
 const depositor = async (id: string, stack: { languages: string[] } = { languages: ['typescript'] }): Promise<string> => {
   const { token } = await pool.signIn('github', stubUser(id));
-  await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+  await pool.post('/v1/covenant/accept', acceptanceOf('v1'), token);
   expect((await pool.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0'), stack), token)).status).toBe(201);
   return token;
 };
@@ -94,7 +94,7 @@ describe('a bundle over five accounts', () => {
     try {
       const sign = async (id: string): Promise<string> => {
         const { token } = await fresh.signIn('github', stubUser(id));
-        await fresh.post('/v1/covenant/accept', { version: 'v1' }, token);
+        await fresh.post('/v1/covenant/accept', acceptanceOf('v1'), token);
         expect((await fresh.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0'), { languages: ['rust'] }), token)).status).toBe(201);
         return token;
       };
@@ -119,7 +119,7 @@ describe('a bundle over five accounts', () => {
       const stack: Parameters<typeof sampleSkeleton>[1] = { languages: ['rust'], frameworks: ['astro'], size: 'xl' };
       const sign = async (id: string, twice = false): Promise<string> => {
         const { token } = await fresh.signIn('github', stubUser(id));
-        await fresh.post('/v1/covenant/accept', { version: 'v1' }, token);
+        await fresh.post('/v1/covenant/accept', acceptanceOf('v1'), token);
         expect((await fresh.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0'), stack), token)).status).toBe(201);
         // A second session from the same account: a second session in the tally, still one cluster.
         if (twice) expect((await fresh.post('/v1/deposits', sampleSkeleton(`a${id}`.padStart(16, '0'), stack), token)).status).toBe(201);
@@ -151,7 +151,7 @@ describe('a bundle over five accounts', () => {
     try {
       const sign = async (id: string): Promise<string> => {
         const { token } = await fresh.signIn('github', stubUser(id));
-        await fresh.post('/v1/covenant/accept', { version: 'v1' }, token);
+        await fresh.post('/v1/covenant/accept', acceptanceOf('v1'), token);
         const skeleton = withPairs(sampleSkeleton(id.padStart(16, '0'), { languages: ['rust'], size: 'xl' }), [{ language: 'rust', languageShare: 'over-50' }], 7);
         expect((await fresh.post('/v1/deposits', skeleton, token)).status).toBe(201);
         return token;
@@ -245,7 +245,7 @@ describe('clusters over the cells of a read', () => {
 
   const depositOn = async (spread: TestPool, id: string, days: readonly string[]): Promise<string> => {
     const { token } = await spread.signIn('github', stubUser(id));
-    await spread.post('/v1/covenant/accept', { version: 'v1' }, token);
+    await spread.post('/v1/covenant/accept', acceptanceOf('v1'), token);
     for (const [index, day] of days.entries()) expect((await spread.post('/v1/deposits', sampleSkeleton(`${id}${String(index)}`.padStart(16, '0'), undefined, day), token)).status).toBe(201);
     return token;
   };
@@ -382,7 +382,7 @@ describe('a damaged ledger row', () => {
     try {
       const deposited = async (id: string): Promise<string> => {
         const { token } = await bad.signIn('github', stubUser(id));
-        await bad.post('/v1/covenant/accept', { version: 'v1' }, token);
+        await bad.post('/v1/covenant/accept', acceptanceOf('v1'), token);
         expect((await bad.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0')), token)).status).toBe(201);
         return token;
       };
@@ -466,7 +466,7 @@ describe('a bundle is one harness at one numbered bucket', () => {
         for (let at = 0; at < 5; at += 1) {
           const id = String(base + at);
           const { token } = await fresh.signIn('github', stubUser(id));
-          await fresh.post('/v1/covenant/accept', { version: 'v1' }, token);
+          await fresh.post('/v1/covenant/accept', acceptanceOf('v1'), token);
           expect((await fresh.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0'), { languages: ['typescript'] }, '2026-11-01', harness, command), token)).status).toBe(201);
           reader = token;
         }
@@ -516,7 +516,7 @@ describe('a bundle for a harness with no version on record', () => {
     for (let at = 0; at < count; at += 1) {
       const id = String(base + at);
       const { token } = await fresh.signIn('github', stubUser(id));
-      await fresh.post('/v1/covenant/accept', { version: 'v1' }, token);
+      await fresh.post('/v1/covenant/accept', acceptanceOf('v1'), token);
       expect((await fresh.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0'), { languages: ['typescript'] }, '2026-11-01', harness, { program: 'ls', sub: null }, version), token)).status).toBe(201);
       reader = token;
     }
@@ -623,7 +623,7 @@ describe('fit by platform and shell', () => {
 
   const depositFrom = async (spread: TestPool, id: string, harnessVersion: string, day = '2026-11-02', shell = 'bash'): Promise<string> => {
     const { token } = await spread.signIn('github', stubUser(id));
-    await spread.post('/v1/covenant/accept', { version: 'v1' }, token);
+    await spread.post('/v1/covenant/accept', acceptanceOf('v1'), token);
     expect((await spread.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0'), undefined, day, 'claude-code', undefined, harnessVersion, shell), token)).status).toBe(201);
     return token;
   };

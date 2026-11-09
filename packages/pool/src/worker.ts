@@ -9,6 +9,7 @@ import { heldBy, recount, repoKeysOf, signalStatements } from './cluster-store.j
 import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf } from './ingest.js';
 import { accountOf, loginGone, loginPoll, loginStart, logout } from './identity.js';
 import { hashHosts, hashKey } from './ingest-hash.js';
+import { activate, enroll, list, machineScope, revoke, rotate } from './machines.js';
 import { rawRoute } from './raw.js';
 import { depositDigest, erasedRefusal, holdsErasedValue, isErased } from './tombstones.js';
 import { telemetry, type TelemetryEnv } from './telemetry.js';
@@ -25,10 +26,6 @@ const UNLIMITED = Number.MAX_SAFE_INTEGER;
 
 /** What a batch's `deltas` hold until the wire carries them (spec Section 2, "Deltas"): the client builds them, so ingest has none to take. */
 const DELTAS = '[]';
-
-const BUNDLE = /^\/bundle\/([^/]*)\/([^/]*)\/([^/]*)$/;
-/** The route as it stood before the harness segment: refused by name rather than served. */
-const BUNDLE_WITHOUT_HARNESS = /^\/bundle\/([^/]*)\/([^/]*)$/;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -131,35 +128,69 @@ const decoded = (name: string): string => {
   }
 };
 
+type PoolEnv = Env & TelemetryEnv & RollupEnv & OperatorEnv;
+
+interface Route {
+  method: 'GET' | 'POST' | 'DELETE';
+  /** A `:name` segment matches anything but a slash, and its text reaches the handler. */
+  path: string;
+  /** Whether a machine key may call it. A machine key deposits, reads the covenant, activates and rotates itself, and posts telemetry (which reads no credential); every other route answers it 403 `deposit_only` (`machineScope`), so a route is closed to it until it says otherwise here. */
+  machine: boolean;
+  handle: (request: Request, env: PoolEnv, segments: readonly string[]) => Promise<Response> | Response;
+}
+
+/** Every route the pool serves but the raw tier's (`RAW_ROUTES`), which `rawRoute` matches itself and which a machine key may not call. The guard test walks this table. */
+export const ROUTES: readonly Route[] = [
+  { method: 'POST', path: '/v1/deposits', machine: true, handle: deposit },
+  // Not a deposit: it needs no covenant, and it is answered with deposits closed. It reads no credential, so a key gains nothing here; a cloud VM's agent proxy adds the network secret to every request for the pool's host, and its telemetry must not be refused.
+  { method: 'POST', path: '/v1/telemetry', machine: true, handle: (request, env) => telemetry(request, env, Date.now) },
+  { method: 'POST', path: '/v1/login/start', machine: false, handle: loginStart },
+  { method: 'POST', path: '/v1/login/poll', machine: false, handle: loginPoll },
+  { method: 'POST', path: '/v1/login', machine: false, handle: loginGone },
+  { method: 'DELETE', path: '/v1/login', machine: false, handle: logout },
+  { method: 'POST', path: '/v1/covenant/accept', machine: false, handle: (request, env) => covenantAccept(request, env) },
+  { method: 'POST', path: '/v1/machines/enroll', machine: false, handle: enroll },
+  // The account lists and revokes its machines; a machine key may do neither.
+  { method: 'GET', path: '/v1/machines', machine: false, handle: list },
+  { method: 'DELETE', path: '/v1/machines/:id', machine: false, handle: (request, env, [id]) => revoke(request, env, decoded(id ?? '')) },
+  // A machine key activates and rotates itself: it is the only credential these two routes read.
+  { method: 'POST', path: '/v1/machines/activate', machine: true, handle: activate },
+  { method: 'POST', path: '/v1/machines/rotate', machine: true, handle: rotate },
+  { method: 'GET', path: '/v1/covenant', machine: true, handle: (request, env) => covenantStatus(request, env) },
+  // Not a deposit and not signed in: percentiles over installs, served only where at least the public floor reports. No query is read.
+  { method: 'GET', path: '/v1/telemetry/fleet', machine: false, handle: (request, env) => fleet(env, Date.now(), !request.headers.has('authorization')) },
+  // The operator's anomaly read, behind a secret the deploy sets: never served to users.
+  { method: 'GET', path: '/v1/telemetry/operator', machine: false, handle: (request, env) => operator(request, env, Date.now()) },
+  { method: 'GET', path: '/bundle/:harness/:harnessVersion/:vocabVersion', machine: false, handle: (request, env, [harness, version, vocab]) => fetchBundle(request, env, decoded(harness ?? ''), decoded(version ?? ''), decoded(vocab ?? '')) },
+  // The route as it stood before the harness segment: refused by name rather than served.
+  { method: 'GET', path: '/bundle/:harness/:harnessVersion', machine: false, handle: () => harnessRequired() },
+];
+
+/** A path template as the pattern its request path is matched with. */
+const patternOf = (path: string): RegExp => new RegExp(`^${path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/:[A-Za-z]+/g, '([^/]*)')}$`);
+
+const COMPILED = ROUTES.map((route) => ({ route, pattern: patternOf(route.path) }));
+
+const routeOf = (method: string, pathname: string): { route: Route; segments: readonly string[] } | undefined => {
+  for (const { route, pattern } of COMPILED) {
+    const found = route.method === method ? pattern.exec(pathname) : null;
+    if (found !== null) return { route, segments: found.slice(1) };
+  }
+  return undefined;
+};
+
 export default {
   /** The nightly cron (wrangler.jsonc): the telemetry rollup the fleet read comes from, then the retention sweeps (`nightly.ts`). It reads the telemetry record, writes the rollup table, and drops what has expired. */
   scheduled: async (controller: { scheduledTime: number }, env: Env & RollupEnv & SweepEnv): Promise<void> => {
     await nightly(env, controller.scheduledTime);
   },
-  fetch: async (request: Request, env: Env & TelemetryEnv & RollupEnv & OperatorEnv): Promise<Response> => {
-    const { pathname } = new URL(request.url);
+  fetch: async (request: Request, env: PoolEnv): Promise<Response> => {
+    const found = routeOf(request.method, new URL(request.url).pathname);
+    // The scope comes before every route, the raw tier's and an unknown path included: a machine key is refused anywhere a route does not say it may go.
+    const outOfScope = await machineScope(request, env, found?.route.machine === true);
+    if (outOfScope !== undefined) return outOfScope;
     const raw = rawRoute(request, env);
     if (raw !== undefined) return raw;
-    if (request.method === 'POST') {
-      if (pathname === '/v1/deposits') return deposit(request, env);
-      // Not a deposit: it needs no covenant, and it is answered with deposits closed.
-      if (pathname === '/v1/telemetry') return telemetry(request, env, Date.now);
-      if (pathname === '/v1/login/start') return loginStart(request, env);
-      if (pathname === '/v1/login/poll') return loginPoll(request, env);
-      if (pathname === '/v1/login') return loginGone();
-      if (pathname === '/v1/covenant/accept') return covenantAccept(request, env);
-    }
-    if (request.method === 'DELETE' && pathname === '/v1/login') return logout(request, env);
-    if (request.method === 'GET') {
-      if (pathname === '/v1/covenant') return covenantStatus(request, env);
-      // Not a deposit and not signed in: percentiles over installs, served only where at least the public floor reports. No query is read.
-      if (pathname === '/v1/telemetry/fleet') return fleet(env, Date.now(), !request.headers.has('authorization'));
-      // The operator's anomaly read, behind a secret the deploy sets: never served to users.
-      if (pathname === '/v1/telemetry/operator') return operator(request, env, Date.now());
-      const route = BUNDLE.exec(pathname);
-      if (route !== null) return fetchBundle(request, env, decoded(route[1] ?? ''), decoded(route[2] ?? ''), decoded(route[3] ?? ''));
-      if (BUNDLE_WITHOUT_HARNESS.test(pathname)) return harnessRequired();
-    }
-    return refuse(404, 'not_found', 'No such route.');
+    return found === undefined ? refuse(404, 'not_found', 'No such route.') : found.route.handle(request, env, found.segments);
   },
 };

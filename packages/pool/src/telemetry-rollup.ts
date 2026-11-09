@@ -2,7 +2,7 @@
 // Why R2 and not Analytics Engine: a Worker has a binding to write Analytics Engine but none to read it, so reading it means the SQL API with an account token held as a secret, a new moving part; the R2
 // binding is already here, and R2 is the record, kept for the same 90 days as Analytics Engine. The rollup is a pure function of a day's objects, so running it again changes nothing, and it
 // reads only that: nothing here touches a deposit, a contributor, or a bundle.
-import { bucketOf, cellKey, measuresOf, type Kind, type Measure } from '../../cli/src/telemetry/measures.js';
+import { bucketOf, cellKey, covenantShownMeasures, firstRunMeasures, measuresOf, type Kind, type Measure } from '../../cli/src/telemetry/measures.js';
 import { fieldOf, type Env } from './http.js';
 import { INSTALL } from './telemetry.js';
 
@@ -59,7 +59,7 @@ const add = (into: Accumulated, event: object): void => {
   const identity = JSON.stringify(event);
   if (into.seen.has(identity)) return;
   into.seen.add(identity);
-  for (const measure of measuresOf(event)) {
+  for (const measure of [...measuresOf(event), ...firstRunMeasures(event), ...covenantShownMeasures(event)]) {
     const key = cellKey(measure);
     const cell = into.cells.get(key) ?? { head: measure, n: 0, hits: 0, buckets: new Map<number, number>() };
     cell.n += 1;

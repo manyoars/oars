@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { batchHash, BATCH_FIELDS, canonicalBytes, currentStamp, FIELD_ROWS, fieldsOf, writeBatch } from './pool-outbox.js';
+import { batchHash, BATCH_FIELDS, canonicalBytes, currentStamp, FIELD_ROWS, fieldsOf, heldBatchOf, removeBatchesExcept, writeBatch } from './pool-outbox.js';
 import { VOCAB_VERSION } from './public-vocabulary.js';
 import { FIELD_LIST_VERSION, parseSkeleton, SKELETON_FORMAT } from './pool-wire.js';
 
@@ -72,6 +72,18 @@ describe('the outbox', () => {
     writeFileSync(join(first.folder, 'readme.txt'), 'x');
     await writeBatch(dir, KEY, { ...BATCH, z: 'e' });
     expect(readdirSync(first.folder)).toContain('readme.txt');
+  });
+
+  it('reads the one batch of a session whole, and none of another session, an unwritten one, or an edited file', async () => {
+    const dir = temp();
+    expect(await heldBatchOf(dir, KEY)).toBeUndefined();
+    const written = await writeBatch(dir, KEY, BATCH);
+    await writeBatch(dir, OTHER, { ...BATCH, z: 'e' });
+    expect(await heldBatchOf(dir, KEY)).toEqual({ key: KEY, hash: HASH, file: join(written.folder, `${KEY}.${HASH}.jsonl`), bytes: BYTES });
+    expect((await heldBatchOf(dir, OTHER))?.bytes).toBe(canonicalBytes({ ...BATCH, z: 'e' }));
+    expect(await heldBatchOf(dir, 'cccccccccccccccc')).toBeUndefined();
+    writeFileSync(join(written.folder, `${KEY}.${HASH}.jsonl`), `${BYTES}edited`);
+    expect(await heldBatchOf(dir, KEY)).toBeUndefined();
   });
 });
 
@@ -150,5 +162,24 @@ describe('the stamp', () => {
     expect(currentStamp(BATCH_FIELDS, SKELETON_FORMAT + 1)).not.toBe(currentStamp());
     expect(currentStamp([...BATCH_FIELDS, 'extra'])).not.toBe(currentStamp());
     expect(currentStamp()).toBe(currentStamp(BATCH_FIELDS, SKELETON_FORMAT));
+  });
+});
+
+describe('removeBatchesExcept with a reader', () => {
+  it('asks for the kept keys only after the folder is listed, so a batch written in between is not swept', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'oars-sweep-'));
+    roots.push(root);
+    const folder = join(root, currentStamp());
+    mkdirSync(folder, { recursive: true });
+    const old = `${'a'.repeat(16)}.${'b'.repeat(64)}.jsonl`;
+    const late = `${'c'.repeat(16)}.${'d'.repeat(64)}.jsonl`;
+    writeFileSync(join(folder, old), '{}');
+    // The reader stands for the moment a machine notes its key and writes its batch: a read taken before the listing would miss both.
+    const removed = await removeBatchesExcept(root, () => {
+      writeFileSync(join(folder, late), '{}');
+      return Promise.resolve(new Set<string>());
+    });
+    expect(removed).toBe(1);
+    expect(readdirSync(folder)).toEqual([late]);
   });
 });

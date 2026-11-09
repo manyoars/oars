@@ -106,19 +106,23 @@ describe('recording the tally and the send', () => {
 
 describe('the size of the largest telemetry events', () => {
   // The pool sizes its telemetry body cap (`MAX_BATCH_BYTES`, packages/pool/src/telemetry.ts) from these. The two event types whose size depends on a list are measured at their schema's limit, each as the spool line the CLI writes: a
-  // `command` (path of 4 tokens and 40 flags, every token 32 characters, `schema.ts` `tokens`) and a `wire` (the register's whole field list, `FIELD_ROWS`, each with a seven-digit byte count). Every other type holds numbers and closed words.
+  // `command` (path of 4 tokens and 40 flags, every token 32 characters, `schema.ts` `tokens`, and the longest `ci` word) and a `wire` (the register's whole field list, `FIELD_ROWS`, each with a seven-digit byte count). Every other type holds numbers and closed words.
   const POOL_CAP_BYTES = 512 * 1024;
-  const lineOf = (type: string, fields: object): number => {
+  const lineOf = (type: string, fields: object): string => {
     const { dir, emitter: made } = emitter();
     emitEvent(made, type, fields);
     const line = readSpool(dir)[0];
     if (line === undefined) throw new Error(`no ${type} event was written`);
-    return Buffer.byteLength(line);
+    return line;
   };
 
   it('keeps a full 250-event batch (11 wire events, the rest commands) under the pool cap, and a wire event under 3 KB', () => {
     const token = 'a'.repeat(32);
-    const command = lineOf('command', { path: Array.from({ length: 4 }, () => token), flags: Array.from({ length: 40 }, () => token), durationMs: 86_400_000, exitCode: 255, errorClass: 'Error' });
+    const commandLine = lineOf('command', { path: Array.from({ length: 4 }, () => token), flags: Array.from({ length: 40 }, () => token), durationMs: 86_400_000, exitCode: 255, errorClass: 'rate-limited', ci: 'azure-pipelines' });
+    // The longest word of each closed list, so the line is the largest one the schema keeps: a word off the list is dropped and would leave its field out of the figure.
+    expect(commandLine).toContain('"errorClass":"rate-limited"');
+    expect(commandLine).toContain('"ci":"azure-pipelines"');
+    const command = Buffer.byteLength(commandLine);
     const tally = newTally();
     tallyBatch(tally, Object.fromEntries(Object.keys(FIELD_ROWS).map((name) => [name, 'x'.repeat(1_000_000)])));
     const { dir, emitter: made } = emitter();

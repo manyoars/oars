@@ -10,7 +10,8 @@ import { verifyBundle } from '../../cli/src/sessions/pool-wire.js';
 import { deposit } from '../../cli/src/sessions/store.js';
 import { cleanup, NOW, settledClock, stage, type Staged } from '../../cli/src/sessions/test-support.js';
 import { harness, type Harness } from '../../cli/src/test-support.js';
-import { fieldOf, startPool, stubUser, textOf, type TestPool } from './test-pool.js';
+import { TEST_PHRASE } from './test-covenant-texts.js';
+import { acceptanceOf, fieldOf, startPool, stubUser, textOf, type TestPool } from './test-pool.js';
 
 // An invented term: a session holding it would never leave, and a missing file would exclude everything.
 const TERM = 'zorblax';
@@ -86,6 +87,10 @@ describe('login, deposit, and fetch against a local server', () => {
       expect(one.last()).toMatchObject({ ok: true, sessions: 4, batched: 4, uncaptured: 0, refused: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 } });
       // At the server's word: nothing goes up before the covenant is accepted.
       await expect(one.send(0)).rejects.toMatchObject({ exitCode: ExitCode.AUTH, problem: { code: 'covenant_not_accepted' } });
+      // The flag only names the version this person expects; acceptance is the phrase the screen states, typed at a terminal.
+      Object.assign(one.staged.stdin, { isTTY: true });
+      Object.assign(one.staged.runtime, { stderr: { isTTY: true } });
+      one.staged.stdin.write(`${TEST_PHRASE}\n`);
       expect(await one.send(0, 'v1')).toMatchObject({ document: { ok: true, sent: true } });
       for (const index of [1, 2, 3]) expect(await one.send(index)).toMatchObject({ document: { ok: true, sent: true } });
 
@@ -105,6 +110,9 @@ describe('login, deposit, and fetch against a local server', () => {
     const db = await pool.db();
     expect(await db.prepare('SELECT COUNT(DISTINCT account) AS count FROM deposits').first('count')).toBe(5);
     expect(await db.prepare('SELECT COUNT(*) AS count FROM deposits').first('count')).toBe(20);
+    // Each acceptance carries the proof: the client hashed the text it printed, and that is the text the pool holds.
+    const proof = acceptanceOf('v1');
+    expect(await db.prepare("SELECT COUNT(*) AS count FROM covenant_acceptances WHERE text_sha256 = ? AND input = 'typed' AND client LIKE 'oars/%'").bind(proof.textSha256).first('count')).toBe(5);
   }, 60_000);
 
   it('refuses a fetch with no sign-in, and sends nothing for a deposit with none', async () => {
