@@ -282,7 +282,13 @@ const CREDENTIAL_FLAGS = words(
     '--api-key --apikey --api_key --private-key --auth --authorization --credential --credentials',
 );
 
-/** The values of a command's flags that are names: the next word of a flag (or the value joined to a long one) when it is a single identifier-like word, and the flag is not one that takes text or a credential. */
+// The one-letter flags whose next word is a name. Any other one-letter flag may be a switch followed by a positional (`-i needle`) or take a credential (`-p`), so its next word is not read.
+const SHORT_NAME_FLAGS = words('-k');
+
+/**
+ * The values of a command's flags that are names: the next word of a long flag (or of a short flag on the closed list), or the value joined to a long one, when it is a single identifier-like word, and the flag is not one that takes
+ * text or a credential. A long boolean flag followed by a positional is still read as if the positional were its value.
+ */
 const flagValueNames = (args: readonly CommandWord[]): string[] => {
   const found: string[] = [];
   for (let at = 0; at < args.length; at += 1) {
@@ -292,7 +298,7 @@ const flagValueNames = (args: readonly CommandWord[]): string[] => {
     const joined = JOINED_LONG_FLAG.exec(word.text);
     const flag = joined?.[1] ?? word.text;
     if (TEXT_FLAGS.has(flag) || CREDENTIAL_FLAGS.has(flag.toLowerCase()) || !FLAG_TOKEN.test(flag)) continue;
-    const next = args[at + 1];
+    const next = flag.startsWith('--') || SHORT_NAME_FLAGS.has(flag) ? args[at + 1] : undefined;
     const value = joined === null ? (next !== undefined && (next.quoted || !next.text.startsWith('-')) ? next.text : undefined) : joined[2];
     if (value !== undefined && FLAG_VALUE_NAME.test(value)) found.push(value);
   }

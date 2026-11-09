@@ -126,6 +126,24 @@ describe('what is dropped from the names', () => {
     for (const value of ['opaquetokenone', 'opaquetokentwo', 'hunterthree', 'keyfour', 'sfive', 'sixsix']) expect(bytesOf(skeleton)).not.toContain(value);
   });
 
+  it('reads the next word only of a long flag or of a short flag that takes a name, never of another short flag', () => {
+    const skeleton = skeletonOfLines(
+      { redact, terms: [] },
+      call('a', 'Bash', { command: 'sshpass -p hunter2 ssh box --project control_a' }),
+      call('b', 'Bash', { command: 'docker login -u meuser -p hunter2 --project control_b' }),
+      call('c', 'Bash', { command: 'echo -n hunter2 | base64 --wrap control_c' }),
+      call('d', 'Bash', { command: 'grep -i invoice_total src --project control_d' }),
+      call('e', 'Bash', { command: 'pytest -k test_control' }),
+    );
+    const [ssh, login, echo, grep, pytest] = toolsOf(skeleton);
+    expect(ssh?.names).toEqual(names('flag', 'control_a'));
+    expect(login?.names).toEqual(names('flag', 'control_b'));
+    expect(echo?.names).toEqual(names('flag', 'control_c'));
+    expect(grep?.names).toEqual(names('flag', 'control_d'));
+    expect(pytest?.names).toEqual(names('flag', 'test_control'));
+    for (const value of ['hunter2', 'invoice_total', 'meuser']) expect(bytesOf(skeleton)).not.toContain(value);
+  });
+
   it('reads no flag value after a credential-named flag in the name read itself', () => {
     const w = (text: string) => ({ text, quoted: false });
     const read = (...args: ReturnType<typeof w>[]) => argNamesOf('Bash', { command: 'x' }, '/w', '/w', [{ before: [], head: w('tool'), args }], CLOSED_ARG_VALUES);
