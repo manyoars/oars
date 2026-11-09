@@ -1,4 +1,4 @@
-// The erasure store over the operator's own `wrangler` login: D1 through `wrangler d1 execute` and R2 through `wrangler r2 object delete`, remote or local. No token is held anywhere: wrangler uses the login the operator already has.
+// The erasure store over the operator's own `wrangler` login: D1 through `wrangler d1 execute` and R2 through `wrangler r2 object delete` and `get`, remote or local. No token is held anywhere: wrangler uses the login the operator already has.
 import type { EraseStore } from './erase.js';
 
 /** Runs wrangler with these arguments and answers what it printed; a failure throws. */

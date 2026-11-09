@@ -81,7 +81,8 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
         io.print(JSON.stringify(hit));
       });
       io.print(JSON.stringify({ objectsRead: found.read, objectsMatched: found.matched, objectsMissing: found.missing }));
-      return 0;
+      // wrangler turns every remote 404 into a missing key, so a wrong bucket would read nothing: a missing object is a failed find, not a clean one.
+      return found.missing > 0 ? 1 : 0;
     }
     if (what === 'raw' && key !== undefined && extra.length === 0 && options.account === undefined && !options.contains) {
       if (!options.confirm) return plan(io, `delete raw object ${key} from ${where}`);

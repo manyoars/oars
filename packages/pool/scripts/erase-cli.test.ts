@@ -25,7 +25,7 @@ interface Fake {
 }
 
 /** An `Io` whose wrangler answers like `d1 execute --json` (one successful statement changing one row, `rows` as its results) and records every call. `objects` are the R2 objects `r2 object get --file` would write: by key, the bytes. */
-const fake = (options: { rows?: unknown[]; stdin?: string; success?: boolean; answer?: (sql: string) => unknown[]; objects?: { [key: string]: string }; getFails?: string } = {}): Fake => {
+const fake = (options: { rows?: unknown[]; stdin?: string; success?: boolean; answer?: (sql: string) => unknown[]; objects?: ReadonlyMap<string, string>; getFails?: string } = {}): Fake => {
   const calls: string[][] = [];
   const printed: string[] = [];
   const scratch = new Set<string>();
@@ -62,7 +62,7 @@ const fake = (options: { rows?: unknown[]; stdin?: string; success?: boolean; an
         if (args[0] === 'r2' && args[2] === 'get') {
           if (options.getFails !== undefined) return Promise.reject(new Error(options.getFails));
           const key = (args[3] ?? '').replace('oars-pool-raw/', '');
-          written.set(args[5] ?? '', options.objects?.[key] ?? '');
+          written.set(args[5] ?? '', options.objects?.get(key) ?? '');
           return Promise.resolve('Download complete.');
         }
         return Promise.resolve(args[0] === 'd1' ? JSON.stringify([{ results: options.answer?.(args[6] ?? '') ?? options.rows ?? [], success: options.success ?? true, meta: { changes: 1 } }]) : '');
@@ -106,7 +106,7 @@ describe('the wrangler store', () => {
   });
 
   it('downloads an object to a scratch file with r2 object get, streams it, and removes the file when the stream ends', async () => {
-    const { io, calls, scratch } = fake({ objects: { 'raw/x/y': 'hello world' } });
+    const { io, calls, scratch } = fake({ objects: new Map([['raw/x/y', 'hello world']]) });
     const pieces = await wranglerStore(io.wrangler, target, io.files).readObject('raw/x/y');
     expect(calls).toEqual([['r2', 'object', 'get', 'oars-pool-raw/raw/x/y', '--file', 'scratch-1', '--remote']]);
     expect(scratch.size).toBe(1);
@@ -119,7 +119,7 @@ describe('the wrangler store', () => {
   });
 
   it('removes the scratch file of a stream that is left early, and answers null for an object R2 does not hold', async () => {
-    const early = fake({ objects: { 'raw/x/y': 'hello world' } });
+    const early = fake({ objects: new Map([['raw/x/y', 'hello world']]) });
     const pieces = await wranglerStore(early.io.wrangler, target, early.io.files).readObject('raw/x/y');
     for await (const piece of pieces ?? []) {
       expect(piece.length).toBeGreaterThan(0);
@@ -292,7 +292,7 @@ describe('main: the find', () => {
   const verbs = (calls: string[][]): string[] => calls.map((call) => (call[0] === 'd1' ? (call[6] ?? '').split(' ')[0] ?? '' : call.slice(0, 3).join(' ')));
 
   it('reads the text from stdin, reports each object that holds it by key, account, and size, and counts what it read', async () => {
-    const { io, calls, printed } = fake({ stdin: `${NAME}\n`, answer: ledger, objects: { [KEY]: `before ${NAME} after` } });
+    const { io, calls, printed } = fake({ stdin: `${NAME}\n`, answer: ledger, objects: new Map([[KEY, `before ${NAME} after`]]) });
     expect(await main(['raw', '--contains', '--value-stdin', '--account', ACCOUNT], io)).toBe(0);
     expect(printed).toEqual([JSON.stringify({ key: KEY, account: ACCOUNT, bytes: 31 }), JSON.stringify({ objectsRead: 1, objectsMatched: 1, objectsMissing: 0 })]);
     // One SELECT of the ledger and one object read: nothing is written to D1 or R2, and the text is in no wrangler argument.
@@ -302,7 +302,7 @@ describe('main: the find', () => {
   });
 
   it('looks in every account with --all-accounts, and needs no --confirm because it changes nothing', async () => {
-    const { io, calls, printed } = fake({ stdin: NAME, answer: ledger, objects: { [KEY]: 'no one is named here' } });
+    const { io, calls, printed } = fake({ stdin: NAME, answer: ledger, objects: new Map([[KEY, 'no one is named here']]) });
     expect(await main(['raw', '--contains', '--value-stdin', '--all-accounts'], io)).toBe(0);
     expect(printed).toEqual([JSON.stringify({ objectsRead: 1, objectsMatched: 0, objectsMissing: 0 })]);
     expect(calls[0]?.[6]).not.toContain('account = ');
@@ -311,12 +311,12 @@ describe('main: the find', () => {
 
   it('counts an object R2 no longer holds', async () => {
     const { io, printed } = fake({ stdin: NAME, answer: ledger, getFails: 'The specified key does not exist.' });
-    expect(await main(['raw', '--contains', '--value-stdin', '--all-accounts', '--local'], io)).toBe(0);
+    expect(await main(['raw', '--contains', '--value-stdin', '--all-accounts', '--local'], io)).toBe(1);
     expect(printed).toEqual([JSON.stringify({ objectsRead: 0, objectsMatched: 0, objectsMissing: 1 })]);
   });
 
   it('prints neither the text nor the bytes around it', async () => {
-    const { io, printed } = fake({ stdin: NAME, answer: ledger, objects: { [KEY]: `AROUNDTEXT ${NAME} AROUNDTEXT` } });
+    const { io, printed } = fake({ stdin: NAME, answer: ledger, objects: new Map([[KEY, `AROUNDTEXT ${NAME} AROUNDTEXT`]]) });
     await main(['raw', '--contains', '--value-stdin', '--all-accounts'], io);
     expect(printed.join('\n')).not.toMatch(/Jane|Quentin|Tenant|AROUNDTEXT/);
   });

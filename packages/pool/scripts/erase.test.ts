@@ -1,6 +1,6 @@
 // The operator's erasure against a local pool under Miniflare: each kind leaves a tombstone, the same content is refused when it comes back, an audit row holds no content, and the aggregates keep their counts.
 import { createHash } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { sampleSkeleton } from '../src/sample.js';
 import { acceptanceOf, fieldOf, startPool, stubUser, type TestBucket, type TestDb, type TestPool } from '../src/test-pool.js';
 import { eraseAccount, eraseLeakedSecret, eraseRawObject, findRawContaining, holdsValue, type EraseStore, type RawHit } from './erase.js';
@@ -521,6 +521,18 @@ describe('finding the raw objects that hold a text', () => {
     tail.set(bytesOf(NAME), tail.length - NAME.length);
     const whole = { count: 0 };
     expect(await holdsValue(streamOf(tail, chunk, whole), [Buffer.from(NAME)])).toBe(true);
+    const sizes: number[] = [];
+    const original = Buffer.concat.bind(Buffer);
+    const concat = vi.spyOn(Buffer, 'concat').mockImplementation((list, length) => {
+      const joined = original(list, length);
+      sizes.push(joined.length);
+      return joined;
+    });
+    expect(await holdsValue(streamOf(tail, chunk, { count: 0 }), [Buffer.from(NAME)])).toBe(true);
+    // Memory is one piece and the kept tail, never the object read so far.
+    const largest = Math.max(...sizes);
+    concat.mockRestore();
+    expect(largest).toBeLessThanOrEqual(chunk + NAME.length - 1);
     expect(whole.count).toBe(41);
     expect(await holdsValue(streamOf(new Uint8Array(40 * chunk).fill(0x61), chunk, { count: 0 }), [Buffer.from(NAME)])).toBe(false);
   });
