@@ -67,7 +67,7 @@ describe('the measured Claude Code rule', () => {
   });
 });
 
-/** The kinds Item 1 added: one working-folder file of each kind loaded, as `instructions` logged them, and the hooks and skills the same sessions held. */
+/** The working-folder kinds: one working-folder file of each kind loaded, as `instructions` logged them, and the hooks and skills the same sessions held. */
 describe('the measured Claude Code rule for the other kinds', () => {
   const kinds = (over: Partial<WorkingKindCounts>): WorkingKindCounts => ({ local: 0, dotClaude: 0, rules: 0, ...over });
   const files = (shot: CandidateSnapshot, loaded: LoadedInstructions | undefined): LoadStatus['files'] => loadStatusOf({ session: 's', harness: 'claude-code', snapshot: shot, loaded }).files;
@@ -203,13 +203,14 @@ describe('loadedInstructionsOf', () => {
       { path: '/work/repo/.claude/CLAUDE.md', type: 'Project' },
       { path: '/work/repo/.claude/rules/a.md', type: 'Project' },
       { path: '/work/repo/.claude/rules/b.md', type: 'Project' },
+      { path: '/work/repo/.claude/rules/CLAUDE.md', type: 'Project' },
       { path: '/work/CLAUDE.local.md', type: 'Local' },
       { path: '/work/.claude/CLAUDE.md', type: 'Project' },
       { path: '/work/repo/.claude/rules/deeper/c.md', type: 'Project' },
       { path: '/work/repo/.claude/rules/notes.txt', type: 'Project' },
       { path: '/work/repo/other/CLAUDE.local.md', type: 'Local' },
     ];
-    expect(loadedInstructionsOf(files, '/work/repo')).toEqual({ user: 0, levels: [], local: 1, dotClaude: 1, rules: 2 });
+    expect(loadedInstructionsOf(files, '/work/repo')).toEqual({ user: 0, levels: [], local: 1, dotClaude: 1, rules: 3 });
   });
 
   it('keeps case on a path with no drive letter, where case can matter', () => {

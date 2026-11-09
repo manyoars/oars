@@ -249,6 +249,13 @@ describe('the configured hook events', () => {
     expect((await snap(join(root, 'h'))).hooks).toEqual({ user: { SessionStart: 2, PreToolUse: 2 }, working: { SessionStart: 2, Stop: 2 }, ancestors: {} });
   });
 
+  it('leaves the user settings out of the ancestors when the home folder is a repository root', async () => {
+    const home = dirname(claudeDir);
+    repo(home);
+    write(join(claudeDir, 'settings.json'), hooks('Stop'));
+    expect((await snap(join(home, 'proj'))).hooks).toEqual({ user: { Stop: 2 }, working: {}, ancestors: {} });
+  });
+
   it('counts the settings of a folder above the working folder apart, because the harness skips them', async () => {
     const top = join(root, 'ha');
     repo(top);
