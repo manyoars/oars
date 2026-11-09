@@ -290,14 +290,19 @@ const isCredentialFlag = (flag: string): boolean => {
   return CREDENTIAL_FLAGS.has(lower) || CREDENTIAL_SUFFIX.test(lower);
 };
 
-// The one-letter flags whose next word is a name. Any other one-letter flag may be a switch followed by a positional (`-i needle`) or take a credential (`-p`), so its next word is not read.
+// The one-letter flags whose next word is a name, and only on the program that gives them that meaning: `-k` selects tests on pytest, and is a passphrase on `openssl` and a switch on `curl` and `du`. Any other one-letter flag may be a
+// switch followed by a positional (`-i needle`) or take a credential (`-p`), so its next word is not read.
 const SHORT_NAME_FLAGS = words('-k');
+const PYTEST_PROGRAMS = words('pytest py.test');
+const runsPytest = (head: CommandWord, args: readonly CommandWord[]): boolean =>
+  PYTEST_PROGRAMS.has(head.text.replace(/^.*[\\/]/, '').replace(/\.exe$/i, '').toLowerCase()) || args.some((word, at) => !word.quoted && word.text === '-m' && args[at + 1]?.text === 'pytest');
 
 /**
- * The values of a command's flags that are names: the next word of a long flag (or of a short flag on the closed list), or the value joined to a long one, when it is a single identifier-like word, and the flag is not one that takes
+ * The values of a command's flags that are names: the next word of a long flag (or of `-k` on pytest), or the value joined to a long one, when it is a single identifier-like word, and the flag is not one that takes
  * text or a credential. A long boolean flag followed by a positional is still read as if the positional were its value.
  */
-const flagValueNames = (args: readonly CommandWord[]): string[] => {
+const flagValueNames = (head: CommandWord, args: readonly CommandWord[]): string[] => {
+  const pytest = runsPytest(head, args);
   const found: string[] = [];
   for (let at = 0; at < args.length; at += 1) {
     const word = args[at];
@@ -306,7 +311,7 @@ const flagValueNames = (args: readonly CommandWord[]): string[] => {
     const joined = JOINED_LONG_FLAG.exec(word.text);
     const flag = joined?.[1] ?? word.text;
     if (TEXT_FLAGS.has(flag) || isCredentialFlag(flag) || !FLAG_TOKEN.test(flag)) continue;
-    const next = flag.startsWith('--') || SHORT_NAME_FLAGS.has(flag) ? args[at + 1] : undefined;
+    const next = flag.startsWith('--') || (pytest && SHORT_NAME_FLAGS.has(flag)) ? args[at + 1] : undefined;
     const value = joined === null ? (next !== undefined && (next.quoted || !next.text.startsWith('-')) ? next.text : undefined) : joined[2];
     if (value !== undefined && FLAG_VALUE_NAME.test(value)) found.push(value);
   }
@@ -358,7 +363,7 @@ export const argNamesOf = (
       if (word.literal === true) continue;
       for (const match of word.text.matchAll(ENV_REFERENCE)) add('env', match[1] ?? match[2] ?? '');
     }
-    for (const name of flagValueNames(args)) add('flag', name);
+    for (const name of flagValueNames(head, args)) add('flag', name);
   }
   return [...held.values()].sort((a, b) => NAME_KINDS.indexOf(a.kind) - NAME_KINDS.indexOf(b.kind) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 };

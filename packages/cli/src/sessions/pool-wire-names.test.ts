@@ -48,7 +48,12 @@ describe('name tokens of a call', () => {
   it('reads a flag value that is a name, and not one that is text, a path, a number, or a variable', () => {
     const w = (text: string, quoted = false) => ({ text, quoted });
     const read = (...args: ReturnType<typeof w>[]) => argNamesOf('Bash', { command: 'x' }, '/w', '/w', [{ before: [], head: w('tool'), args }], CLOSED_ARG_VALUES);
-    expect(read(w('-k'), w('test_login'), w('--project'), w('billing-web'), w('--region=eu_west'), w('--shard'), w('3'))).toEqual(names('flag', 'billing-web', 'eu_west', 'test_login'));
+    expect(read(w('--project'), w('billing-web'), w('--region=eu_west'), w('--shard'), w('3'))).toEqual(names('flag', 'billing-web', 'eu_west'));
+    // `-k` names a test selection on pytest, and reads nothing on another program.
+    const readOn = (head: string, ...args: ReturnType<typeof w>[]) => argNamesOf('Bash', { command: 'x' }, '/w', '/w', [{ before: [], head: w(head), args }], CLOSED_ARG_VALUES);
+    expect(readOn('pytest', w('-k'), w('test_login'))).toEqual(names('flag', 'test_login'));
+    expect(readOn('PYTEST.EXE', w('-k'), w('test_login'))).toEqual(names('flag', 'test_login'));
+    expect(readOn('tool', w('-k'), w('test_login'))).toEqual([]);
     expect(read(w('-m'), w('shipping'), w('--out'), w('dist/app.js'), w('--home'), w('$HOME'), w('--name'), w('two words', true))).toEqual(names('env', 'HOME'));
     // A short cluster and a joined value carry no flag name of their own.
     expect(read(w('-am'), w('shipping'), w('-ftest_x'))).toEqual([]);
@@ -158,6 +163,26 @@ describe('what is dropped from the names', () => {
     expect(grep?.names).toEqual(names('flag', 'control_d'));
     expect(pytest?.names).toEqual(names('flag', 'test_control'));
     for (const value of ['hunter2', 'invoice_total', 'meuser']) expect(bytesOf(skeleton)).not.toContain(value);
+  });
+
+  it('reads the next word of -k only on pytest, where it selects tests, and not on a program where it is a passphrase or a switch', () => {
+    const skeleton = skeletonOfLines(
+      { redact, terms: [] },
+      call('a', 'Bash', { command: 'openssl enc -aes-256-cbc -k hunter5 -in notes.bin --project control_a' }),
+      call('b', 'Bash', { command: 'curl -k stagingbox --project control_b' }),
+      call('c', 'Bash', { command: 'du -k ledgerdir --project control_c' }),
+      call('d', 'Bash', { command: 'pytest -k test_control' }),
+      call('e', 'Bash', { command: 'python -m pytest -k test_module_control' }),
+      call('f', 'Bash', { command: '/usr/bin/py.test -k test_path_control' }),
+    );
+    const [openssl, curl, du, pytest, module, path] = toolsOf(skeleton);
+    expect(openssl?.names).toEqual(names('flag', 'control_a'));
+    expect(curl?.names).toEqual(names('flag', 'control_b'));
+    expect(du?.names).toEqual(names('flag', 'control_c'));
+    expect(pytest?.names).toEqual(names('flag', 'test_control'));
+    expect(module?.names).toEqual(names('flag', 'test_module_control'));
+    expect(path?.names).toEqual(names('flag', 'test_path_control'));
+    for (const value of ['hunter5', 'stagingbox', 'ledgerdir']) expect(bytesOf(skeleton)).not.toContain(value);
   });
 
   it('never reads the value of a prefixed credential flag, by its last word, in either separator', () => {
