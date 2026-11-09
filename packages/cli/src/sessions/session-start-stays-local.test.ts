@@ -13,7 +13,7 @@ import { skeletonOf, type SessionSkeleton } from './pool-wire.js';
 import type { SessionObservation } from './schema.js';
 
 /** Every key the snapshot, the loaded set, or a status row owns. A name the wire already uses for something else (`skills`) is covered by the byte comparison instead. */
-const OWNED_KEYS = ['loadedInstructions', 'repoLevels', 'mainLevels', 'mainCheckout', 'instructions', 'hooks', 'levels', 'candidates', 'loadStatus'];
+const OWNED_KEYS = ['loadedInstructions', 'repoLevels', 'mainLevels', 'mainCheckout', 'instructions', 'hooks', 'levels', 'candidates', 'loadStatus', 'workingKinds', 'dotClaude', 'ancestors', 'local', 'rules', 'files'];
 
 const SNAPSHOT: CandidateSnapshot = {
   v: 2,
@@ -29,7 +29,7 @@ const SNAPSHOT: CandidateSnapshot = {
 };
 
 const framed = frame({ shell: 'bash' });
-const withLoaded = (): SessionObservation => session('s1', { frame: framed, loadedInstructions: { user: 1, levels: [0] } });
+const withLoaded = (): SessionObservation => session('s1', { frame: framed, loadedInstructions: { user: 1, levels: [0], local: 1, dotClaude: 1, rules: 2 } });
 const bare = (): SessionObservation => session('s1', { frame: framed });
 const fromSession = (one: SessionObservation): ReturnType<typeof store> => store({ sessions: [one], prompts: [prompt('s1', 0, { frame: framed })] });
 
@@ -92,6 +92,6 @@ describe('the session-start snapshot stays local', () => {
     writeFileSync(join(dir, CANDIDATES_FILE), `${JSON.stringify(SNAPSHOT)}\n`);
     await refreshPool(dir, fromSession(withLoaded()));
     const [row] = readFileSync(join(dir, LOAD_STATUS_FILE), 'utf8').trim().split('\n');
-    expect(JSON.parse(row ?? '')).toMatchObject({ session: 's1', harness: 'claude-code', instructions: { working: 'loaded', parent: 'miss', user: 'loaded' } });
+    expect(JSON.parse(row ?? '')).toMatchObject({ session: 's1', harness: 'claude-code', instructions: { working: 'loaded', parent: 'miss', user: 'loaded' }, files: { local: 'loaded', dotClaude: 'loaded', rules: 'loaded' }, skills: { project: 'unknown', user: 'unknown' }, hooks: { user: 'unknown', working: 'unknown', ancestors: 'excluded' } });
   });
 });
