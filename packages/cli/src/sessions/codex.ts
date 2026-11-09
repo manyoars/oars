@@ -55,7 +55,7 @@ import { basename, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { PassThrough, pipeline } from 'node:stream';
 import { createZstdDecompress, zstdDecompressSync } from 'node:zlib';
-import { holdsOnlyKinds } from './head-only.js';
+import { holdsOnlyRecords } from './head-only.js';
 import { INTERRUPT_MARKER, SHAPE_TOOLS_LINE } from './session-shape.js';
 
 /** The Codex home for an environment; a test passes its own so it never reads the real one. */
@@ -322,7 +322,17 @@ export const rolloutBadLines = (text: string): string[] => text.split('\n').filt
 
 /** Rollout record types that carry no turn by design: the header and the per-turn context. A rollout of these alone is a session started and quit. */
 const ROLLOUT_HEAD_KINDS: ReadonlySet<string> = new Set(['session_meta', 'turn_context']);
-export const rolloutHeadOnly = (text: string): boolean => holdsOnlyKinds(text, ROLLOUT_HEAD_KINDS);
+/** Payload types the reader reads as carrying no turn: the usage event, an aborted turn (one the operator interrupted gives a prompt record, so it is no longer head-only), and the `response_item` messages of injected context (a prompt is the `event_msg` user_message). */
+const ROLLOUT_HEAD_EVENTS: ReadonlySet<string> = new Set(['token_count', 'turn_aborted']);
+const ROLLOUT_HEAD_ITEMS: ReadonlySet<string> = new Set(['message']);
+export const rolloutHeadOnly = (text: string): boolean =>
+  holdsOnlyRecords(text, (record) => {
+    if (ROLLOUT_HEAD_KINDS.has(record.type)) return true;
+    const payload = record.payload;
+    const kind = typeof payload === 'object' && payload !== null && 'type' in payload ? payload.type : undefined;
+    if (typeof kind !== 'string') return false;
+    return (record.type === 'event_msg' && ROLLOUT_HEAD_EVENTS.has(kind)) || (record.type === 'response_item' && ROLLOUT_HEAD_ITEMS.has(kind));
+  });
 
 /**
  * The names in a list of tool declarations: each entry's `name` (a `DynamicToolSpec` function, dynamic_tools.rs; an `additional_tools` or

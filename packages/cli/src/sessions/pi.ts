@@ -104,8 +104,9 @@ const missing = (error: unknown): boolean => error instanceof Error && 'code' in
 /** The non-blank lines that are not JSON (a torn write), kept so `captureSession` counts them and the deposit line reports them. */
 export const piBadLines = (text: string): string[] => text.split('\n').filter((raw) => raw.trim() !== '' && parse(raw) === undefined);
 
-/** The session header is the one record that carries no turn by design. A file of it alone is a session started and quit. */
-export const piHeadOnly = (text: string): boolean => holdsOnlyKinds(text, new Set(['session']));
+/** The session header and the ten entry kinds the format defines that carry no turn (the list at the top of this file). A file of them alone is a session started and quit. */
+const PI_HEAD_KINDS: ReadonlySet<string> = new Set(['session', 'model_change', 'thinking_level_change', 'usage', 'compaction', 'branch_summary', 'custom', 'custom_message', 'context_edit', 'label', 'session_info']);
+export const piHeadOnly = (text: string): boolean => holdsOnlyKinds(text, PI_HEAD_KINDS);
 
 /** A time in milliseconds, or undefined when it is not an absolute time after 2000. */
 const MIN_MS = Date.parse('2000-01-01T00:00:00Z');

@@ -38,8 +38,8 @@ export const outcomeOf = (file: { size: number; records: number | undefined; hea
   return file.headOnly === true ? 'empty' : 'unreadable';
 };
 
-/** The Claude Code record types that carry no turn by design: a compaction summary and a file-history snapshot. A transcript of these alone is a session started and quit. */
-const CLAUDE_HEAD_KINDS: ReadonlySet<string> = new Set(['summary', 'file-history-snapshot']);
+/** The Claude Code record types that carry no turn by design: a compaction summary, a file-history snapshot, the permission mode, an attachment, and a system notice. A transcript of these alone is a session started and quit. */
+const CLAUDE_HEAD_KINDS: ReadonlySet<string> = new Set(['summary', 'file-history-snapshot', 'permission-mode', 'attachment', 'system']);
 
 export const tally = (outcomes: readonly FileOutcome[]): FileCounts => {
   const yielded = outcomes.filter((outcome) => outcome === 'yielded').length;

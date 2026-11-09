@@ -128,7 +128,7 @@ const iso = (value: unknown): string | undefined => {
 export const eventBadLines = (text: string): string[] => text.split('\n').filter((raw) => raw.trim() !== '' && parse(raw) === undefined);
 
 /** Event types that carry no turn by design: the session's own start, resume, context, model, and shutdown records. A log of these alone is a session started and quit. */
-const EVENT_HEAD_KINDS: ReadonlySet<string> = new Set(['session.start', 'session.resume', 'session.context_changed', 'session.model_change', 'session.shutdown']);
+const EVENT_HEAD_KINDS: ReadonlySet<string> = new Set(['session.start', 'session.resume', 'session.context_changed', 'session.model_change', 'session.shutdown', 'session.journal_link', 'session.usage_checkpoint', 'session.error', 'abort']);
 export const eventHeadOnly = (text: string): boolean => holdsOnlyKinds(text, EVENT_HEAD_KINDS);
 
 /**
