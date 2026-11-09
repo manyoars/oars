@@ -51,8 +51,7 @@ afterEach(() => {
 });
 
 describe('the session-start snapshot stays local', () => {
-  it('leaves the pool wire payload of a session with a snapshot byte-identical to one without', () => {
-    writeFileSync(join(dir, CANDIDATES_FILE), `${JSON.stringify(SNAPSHOT)}\n`);
+  it('leaves the pool wire payload of a session with a loaded set byte-identical to one without', () => {
     const sent = skeletonOfStore(fromSession(withLoaded()));
     expect(canonicalBytes(sent)).toBe(canonicalBytes(skeletonOfStore(fromSession(bare()))));
     const keys = new Set(keysOf(JSON.parse(JSON.stringify(sent))));

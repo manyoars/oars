@@ -1,5 +1,5 @@
 import { createHash, createHmac, webcrypto } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { http, HttpResponse } from 'msw';
@@ -21,7 +21,7 @@ import { session as sessionRow } from './pool-fixture.js';
 import { slugOf } from './allow.js';
 import { parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey, type SkeletonFrame } from './pool-wire.js';
 import { contentHash } from './read.js';
-import { deposit, localSalt, updatePoolChoices } from './store.js';
+import { deposit, loadStore, localSalt, updatePoolChoices } from './store.js';
 import { spoolEvents } from '../telemetry/read-events.js';
 import { addProject, cleanup, NOW, settledClock, stage, TEST_FLOOR, type Staged } from './test-support.js';
 
@@ -450,6 +450,52 @@ describe('no harness token is ever read', () => {
     expect(scene.seen.length).toBeGreaterThanOrEqual(3);
     expect(scene.sent()).not.toContain(HARNESS_SECRET);
     expect(scene.sent()).toContain(POOL_TOKEN);
+  });
+});
+
+describe('the session-start snapshot stays out of a deposit', () => {
+  /** Every key the snapshot, the loaded set, or a status row owns (`skills` is a wire name too, so the byte comparison covers it). */
+  const OWNED_KEYS = ['loadedInstructions', 'repoLevels', 'mainLevels', 'mainCheckout', 'instructions', 'hooks', 'levels', 'candidates', 'loadStatus'];
+  const SALT = '0123456789abcdef0123456789abcdef';
+  /** The harness's record of the instruction files it loaded: the transcript's loaded set comes from it. */
+  const INSTRUCTIONS_RECORD = JSON.stringify({
+    type: 'attachment',
+    uuid: 'errors-a-instructions',
+    parentUuid: null,
+    timestamp: '2026-05-28T20:26:42.000Z',
+    version: '2.1.300',
+    attachment: { type: 'instructions', files: [{ path: '/work/app/CLAUDE.md', type: 'Project' }, { path: '/home/u/.claude/CLAUDE.md', type: 'User' }] },
+  });
+
+  /** A store signed in and deposited through the command. Both stores hold the loaded set, since the transcript carries it; only `snapshot` adds `candidates.jsonl`, which names the captured session. */
+  const deposited = async (snapshot: boolean): Promise<{ scene: Scene; batches: string[] }> => {
+    const scene = setting();
+    mkdirSync(scene.staged.storeDir, { recursive: true });
+    writeFileSync(join(scene.staged.storeDir, 'salt'), SALT);
+    appendFileSync(join(scene.staged.projectsRoot, 'proj', 'errors-a.jsonl'), `${INSTRUCTIONS_RECORD}\n`);
+    await capture(scene);
+    const held = (await loadStore(scene.staged.storeDir)).sessions.find((one) => one.loadedInstructions !== undefined);
+    expect(held?.loadedInstructions, 'the transcript produced a loaded set').toEqual({ user: 1, levels: [0] });
+    if (snapshot) {
+      const shot = { v: 1, session: held?.session, at: '2026-11-09T07:00:00.000Z', harness: 'claude-code', instructions: { working: 3, parent: 2, above: 1, mainCheckout: 5, user: 1 }, skills: { project: 4, user: 7 }, hooks: { SessionStart: 1 }, repoLevels: 2, mainLevels: 3 };
+      writeFileSync(join(scene.staged.storeDir, 'candidates.jsonl'), `${JSON.stringify(shot)}\n`);
+    }
+    await signIn(scene);
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    return { scene, batches: outboxFiles(scene) };
+  };
+
+  it('queues the same batch bytes as a store without a snapshot, and none of the keys the snapshot owns', async () => {
+    const control = await deposited(false);
+    const held = await deposited(true);
+    expect(control.batches.length).toBeGreaterThan(0);
+    expect(held.batches).toEqual(control.batches);
+    const read = (scene: Scene, name: string): string => readFileSync(join(scene.staged.storeDir, 'pool-outbox', name), 'utf8');
+    for (const name of held.batches) {
+      expect(read(held.scene, name)).toBe(read(control.scene, name));
+      for (const owned of OWNED_KEYS) expect(read(held.scene, name), owned).not.toContain(`"${owned}"`);
+    }
+    expect(existsSync(join(held.scene.staged.storeDir, 'candidates.jsonl'))).toBe(true);
   });
 });
 
