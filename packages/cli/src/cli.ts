@@ -639,6 +639,8 @@ const execute = async (argv: string[], deps: RunDeps, observed: Observed): Promi
 
 /** `sessions hook uninstall` is the first step of removing the store, so it must not start a sweep that would recreate what the person is about to delete. */
 const isHookUninstall = (observed: Observed): boolean => observed.path.join(' ') === 'sessions hook uninstall';
+/** `sessions try` promises no network call and no read of the real store, and the sender does both. */
+const isSessionsTry = (observed: Observed): boolean => observed.path.join(' ') === 'sessions try';
 
 /** Runs one invocation (`argv` without the node and script entries) and returns the exit code. Telemetry records it afterward and cannot change it. */
 export const run = async (argv: string[], deps: RunDeps): Promise<ExitCode> => {
@@ -647,6 +649,6 @@ export const run = async (argv: string[], deps: RunDeps): Promise<ExitCode> => {
   const exit = await execute(argv, deps, observed);
   finishTelemetry(deps, argv, observed, startedAt, exit);
   // Never from a gate hook (it runs before every tool call) or from `hook uninstall`; it cannot change the exit code or what the command printed.
-  if (deps.catchUp !== undefined && !isHook(argv, observed) && !isHookUninstall(observed)) await Promise.resolve().then(deps.catchUp).catch(() => undefined);
+  if (deps.catchUp !== undefined && !isHook(argv, observed) && !isHookUninstall(observed) && !isSessionsTry(observed)) await Promise.resolve().then(deps.catchUp).catch(() => undefined);
   return exit;
 };
