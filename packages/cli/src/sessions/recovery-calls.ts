@@ -25,8 +25,9 @@ const actionOf = ({ steps }: Followed): CanonicalAction => steps?.[0]?.action ??
 /**
  * What followed the call at `at` of a transcript's calls in the order they ran: null for a call that did not fail. The calls that followed are the later ones of the same prompt and the same run (a
  * subagent's call is not what the main run did next), up to 5. The scan ends at the first later call of that run that belongs to another prompt.
+ * `failedEditsCount` is the rule of the wire formats before 6, where any later edit counted whether or not its own result was an error; the ingest checks a batch of those formats with it, so a client already released is not refused for a failed edit.
  */
-export const recoveryCallsOf = (calls: readonly Followed[], at: number): RecoveryCalls | null => {
+export const recoveryCallsOf = (calls: readonly Followed[], at: number, failedEditsCount = false): RecoveryCalls | null => {
   const failed = calls[at];
   if (failed === undefined || failed.status !== 'error') return null;
   const next: CanonicalAction[] = [];
@@ -38,7 +39,7 @@ export const recoveryCallsOf = (calls: readonly Followed[], at: number): Recover
     const action = actionOf(call);
     next.push(action);
     // An edit whose own result is an error wrote nothing, so it is not an edit that followed. A call with no recorded result is not known to have failed, and still counts.
-    if (WRITES.has(action) && call.status !== 'error') editFollowed = true;
+    if (WRITES.has(action) && (failedEditsCount || call.status !== 'error')) editFollowed = true;
   }
   return { next, editFollowed };
 };

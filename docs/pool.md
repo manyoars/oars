@@ -116,6 +116,8 @@ The format a batch states decides what the deposit route reads from it. The clie
 | `format` 1 or 2 | 422 `closed_vocabulary` naming `format`: "the format n form is no longer read; send format 6" |
 | any other `format` | 422 `closed_vocabulary` naming `format`: not a format this version reads |
 
+The format also decides how a failed call's `recoveryCalls` is checked. A batch of format 6 is checked with the rule that an edit whose own result was an error does not set `editFollowed`; a batch of format 5 or older is checked with the rule it was built under, which counted any later edit, so a client already released is not refused for a failed edit.
+
 ## What a bundle serves
 
 A bundle's reads are derived from the stored cells with the code a local store runs (`packages/pool/src/derive.ts`), except the (name, `platform`, `shell`) read of `fit`, which runs only in the bundle: a local store writes those cells but no local read answers from them. A read is served when at least one of its cells clears the floor and is not withheld (below), and it cites and counts only those.

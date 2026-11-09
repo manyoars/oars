@@ -1357,9 +1357,9 @@ const parseTranscript = (held: Collected, value: unknown, at: string): SkeletonT
   const spawnedIn = orNull(raw.spawnedIn, under(at, 'spawnedIn'), countOf);
   const prompts = listOf(raw.prompts, under(at, 'prompts'), (entry, entryAt) => parsePrompt(held, entry, entryAt));
   const tools = listOf(raw.tools, under(at, 'tools'), (entry, entryAt) => parseTool(held, harness, entry, entryAt));
-  // What followed a call is read off the calls themselves, so a list that disagrees with them is a wrong deposit, not a new reading.
+  // What followed a call is read off the calls themselves, so a list that disagrees with them is a wrong deposit, not a new reading. A batch of a format before 6 was built when a failed edit still counted, so it is checked with that rule.
   tools.forEach((tool, index) => {
-    if (tool.recoveryCalls !== undefined && JSON.stringify(tool.recoveryCalls) !== JSON.stringify(recoveryCallsOf(tools, index))) throw new Refused(`${at}.tools[${String(index)}].recoveryCalls`, 'not what followed the call');
+    if (tool.recoveryCalls !== undefined && JSON.stringify(tool.recoveryCalls) !== JSON.stringify(recoveryCallsOf(tools, index, held.format < 6))) throw new Refused(`${at}.tools[${String(index)}].recoveryCalls`, 'not what followed the call');
   });
   return { merkleRoot, leaves, harness, frame, frames, spawnedIn, prompts, tools };
 };
