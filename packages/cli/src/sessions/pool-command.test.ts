@@ -20,12 +20,11 @@ import type * as PoolWire from './pool-wire.js';
 import { session as sessionRow } from './pool-fixture.js';
 import { slugOf } from './allow.js';
 import { hookRowOf } from './codex-hook.js';
-import { payloadOf } from './codex-hook-support.js';
 import { parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey, type SkeletonFrame } from './pool-wire.js';
 import { contentHash } from './read.js';
 import { deposit, loadStore, localSalt, updatePoolChoices } from './store.js';
 import { spoolEvents } from '../telemetry/read-events.js';
-import { addProject, cleanup, NOW, settledClock, stage, TEST_FLOOR, type Staged } from './test-support.js';
+import { addProject, cleanup, NOW, payloadOf, settledClock, stage, TEST_FLOOR, type Staged } from './test-support.js';
 
 // The session gates must stop a session before the projection runs; the real projection is wrapped so a test can see whether it was called.
 vi.mock('./pool-wire.js', async (importOriginal) => {
@@ -512,8 +511,7 @@ describe('the Codex recording hook rows stay local', () => {
     await capture(scene);
     if (hookRows) {
       const rows = (['SessionStart', 'PostToolUse', 'PostModelRequest'] as const).map((event) => hookRowOf(payloadOf(event, { session_id: 'codex-sess' }), '2026-11-09T12:00:00.000Z', '/home/me', () => null));
-      writeFileSync(join(scene.staged.storeDir, 'hook-rows.jsonl'), rows.map((row) => `${JSON.stringify(row)}
-`).join(''));
+      writeFileSync(join(scene.staged.storeDir, 'hook-rows.jsonl'), rows.map((row) => `${JSON.stringify(row)}\n`).join(''));
     }
     await signIn(scene);
     expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);

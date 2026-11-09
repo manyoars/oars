@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { mayRecord, runCodexHook, savedList } from './codex-hook.js';
-import { cleanHook, payloadOf, stageHook, type HookStore } from './codex-hook-support.js';
+import { cleanHook, payloadOf, stageHook, type HookStore } from './test-support.js';
 
 afterEach(cleanHook);
 

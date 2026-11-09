@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { errorFlagOf, hookRowOf, runCodexHook } from './codex-hook.js';
-import { AT, cleanHook, payloadOf, stageHook, type HookStore } from './codex-hook-support.js';
+import { AT, cleanHook, payloadOf, stageHook, type HookStore } from './test-support.js';
 
 afterEach(cleanHook);
 

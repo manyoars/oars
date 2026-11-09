@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { hookRowOf, type HookRow } from './codex-hook.js';
-import { payloadOf } from './codex-hook-support.js';
+import { payloadOf } from './test-support.js';
 import { separateHookRows } from './codex-hook-view.js';
 
 const rowOf = (session: string, over: { [key: string]: unknown } = {}): HookRow => {
