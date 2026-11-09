@@ -153,6 +153,25 @@ describe('oars pool export', () => {
     expect(gone.text).not.toContain('--raw');
   });
 
+  it('with --raw removes a raw file the ledger no longer lists as standing, and leaves other files alone', async () => {
+    const s = scene();
+    const kept = 'kept bytes';
+    const gone = 'since erased';
+    const both = pool({
+      '/v1/account/export': page('rawLedger', [ledgerRow(kept), ledgerRow(gone)], null),
+      [`/v1/account/export/raw/${sha256(kept)}`]: answer(200, Buffer.from(kept)),
+      [`/v1/account/export/raw/${sha256(gone)}`]: answer(200, Buffer.from(gone)),
+    });
+    await s.run(both, { raw: true });
+    writeFileSync(join(s.folder, 'raw', 'notes.txt'), 'mine');
+    expect(existsSync(join(s.folder, 'raw', sha256(gone)))).toBe(true);
+    // The pool has since erased the second object: a rerun must not leave its copy looking current.
+    await s.run(pool({ '/v1/account/export': page('rawLedger', [ledgerRow(kept), ledgerRow(gone, '2026-11-08')], null), [`/v1/account/export/raw/${sha256(kept)}`]: answer(200, Buffer.from(kept)) }), { raw: true });
+    expect(existsSync(join(s.folder, 'raw', sha256(gone)))).toBe(false);
+    expect(readFileSync(join(s.folder, 'raw', sha256(kept)), 'utf8')).toBe(kept);
+    expect(existsSync(join(s.folder, 'raw', 'notes.txt'))).toBe(true);
+  });
+
   it('with --raw fetches each ledger object that stands, checks its hash, and keeps its bytes as sent', async () => {
     const s = scene();
     const bytes = 'a redacted line\nand another\n';
