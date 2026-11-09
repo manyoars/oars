@@ -121,7 +121,8 @@ describe('oars pool enroll (full)', () => {
     const sent: Sent[] = [];
     poolAnswering(201, CREATED, sent);
     for (const days of ['1', '365']) await poolEnroll(h.deps, { ...OPTIONS, days }, PRIVATE);
-    expect(sent.map((one) => (isObject(one.body) ? Reflect.get(one.body, 'days') : undefined))).toEqual([1, 365]);
+    const sentDays = sent.map((one): unknown => (isObject(one.body) ? Reflect.get(one.body, 'days') : undefined));
+    expect(sentDays).toEqual([1, 365]);
   });
 
   it('names the host of the pool asked, not a fixed one, in the advice for the token', async () => {
