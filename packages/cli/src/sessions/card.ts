@@ -100,7 +100,8 @@ export const cardOf = (store: Store, survival: ReadonlyMap<string, SurvivalState
     days,
     windowEnd: end,
     sessions: sessions.length,
-    activeDays: new Set(prompts.map((prompt) => (prompt.ts ?? '').slice(0, 10))).size,
+    // The window is a span of hours, so it can touch one more UTC date than it has days; the card caps the count at the window's days.
+    activeDays: Math.min(days, new Set(prompts.map((prompt) => (prompt.ts ?? '').slice(0, 10))).size),
     harnesses: [...harnessCounts.entries()].map(([name, count]) => ({ name, sessions: count })).sort((a, b) => b.sessions - a.sessions || a.name.localeCompare(b.name)),
     models: modelMix(prompts),
     strokes: strokesOf(store.tools.filter(inWindow)),

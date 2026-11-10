@@ -4,6 +4,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 
 ## Unreleased
 
+- `oars card` no longer counts more active days than its window has days. A 30-day window runs 30 x 24 hours from now, so it could touch 31 UTC dates and say "31 active days"; the count is now capped at the window's days.
 - `oars card --no-cost` leaves the cost row out of the picture, the `--text` table, and the `--json` card, so you can share a card without your spend. The picture is one row shorter and nothing else changes. Without the flag the card is as before.
 - A test pins the raw prompt to the covenant text in `docs/covenant/` (Section 2.3 licenses Raw Copies; Section 6.6(b) reaches copies already sent), so a covenant edit that breaks the match fails `just check`.
 - The covenant screen asks "Are you in the EU, the EEA, or the UK? (yes/no)" after the phrase, and the pool stores the answer and the request's Cloudflare country with the acceptance, and the request's country with each deposit (both in `oars pool export`). `--in-eu-eea-uk <yes|no>` gives the answer without being asked; `--accept-covenant <version>` does not, so the question is still asked. While the pool's `PROTECTED_REGIONS_OPEN` is unset, an acceptance from a person who answers yes, or from a request in the EU, the EEA, or the UK, is refused with 403 `region_closed`: the command prints the pool's message and exits 3. Many Oars Co. has no representative in the EU or the UK (Article 27 of the GDPR and the UK GDPR).

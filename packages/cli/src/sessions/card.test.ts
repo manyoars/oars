@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { cardOf, cardText, cardWindow, tweetLink, type Card } from './card.js';
 import { CARD_NOW, cardStore, cardSurvival, PLANTED } from './card-fixture.js';
-import { store as emptyStore } from './pool-fixture.js';
+import { prompt, session, store as emptyStore } from './pool-fixture.js';
 
 const week = (): Card => cardOf(cardStore(), cardSurvival(), 'week', CARD_NOW);
 
@@ -71,6 +71,13 @@ describe('cardOf: the counts', () => {
     const card = cardOf(emptyStore({}), new Map(), 'week', CARD_NOW);
     expect(card).toMatchObject({ sessions: 0, activeDays: 0, harnesses: [], models: [], strokes: 0, crabs: 0, commits: 0, cost: { usd: null, recorded: 0, of: 0 } });
     expect(card.verifyAfterEdit).toEqual({ count: 0, of: 0, share: null });
+  });
+
+  it('never counts more active days than the window has days', () => {
+    // 30 x 24 h back from 2026-11-09T12:00Z starts at noon on 2026-10-10, so a prompt at noon on each date from then touches 31 UTC dates.
+    const dates = Array.from({ length: 31 }, (_, index) => new Date(Date.parse('2026-10-10T12:00:00Z') + index * 86_400_000).toISOString());
+    const crowded = emptyStore({ sessions: [session('s-long')], prompts: dates.map((ts, index) => prompt('s-long', index, { ts })) });
+    expect(cardOf(crowded, new Map(), 'month', CARD_NOW).activeDays).toBe(30);
   });
 
   it('puts the window at seven, thirty, and 365 days back from now', () => {
