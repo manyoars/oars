@@ -35,15 +35,24 @@ export interface HarnessTerms {
 }
 
 /**
- * The terms each harness puts on its user, as read on 2026-11-09 (umbrella `docs/business/2026-11-09-first-sale-buyers-pricing.md`, "Terms that bind a sale").
- * `training` is `priced-add-on` only where the terms allow training on outputs; the Usage Policy forbids it "without prior authorization from Anthropic".
+ * The terms each harness puts on its user, with each page's version as the page itself prints it, read on 2026-11-10 (t1103): Anthropic's Consumer Terms (effective 2025-10-08) and
+ * Usage Policy (effective 2026-11-12), OpenAI's Terms of Use (effective 2026-01-01) and Usage Policies (effective 2026-11-20). A lot sold before an effective date rests on the version before it.
+ * `training` is `priced-add-on` only where the terms allow training on outputs; Anthropic's Usage Policy forbids it "without prior authorization from Anthropic", and OpenAI's bars
+ * supplying training material for a model that substitutes for OpenAI's.
  * A harness with no row here is left out of a pack: a session whose terms are not known carries no rights to state.
  */
 export const HARNESS_TERMS: { readonly [harness in Harness]?: { terms: readonly HarnessTerms[]; training: 'priced-add-on' | 'not-offered' } } = {
   'claude-code': {
     terms: [
       { name: 'Anthropic Consumer Terms', version: 'effective 2025-10-08' },
-      { name: 'Anthropic Usage Policy', version: 'page version 2026-11-12' },
+      { name: 'Anthropic Usage Policy', version: 'effective 2026-11-12' },
+    ],
+    training: 'not-offered',
+  },
+  codex: {
+    terms: [
+      { name: 'OpenAI Terms of Use', version: 'effective 2026-01-01' },
+      { name: 'OpenAI Usage Policies', version: 'effective 2026-11-20' },
     ],
     training: 'not-offered',
   },

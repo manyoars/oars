@@ -185,7 +185,10 @@ describe('the manifest', () => {
       [S(2), 'Switchyard Software Company', null],
     ]);
     expect(rows[0]).toMatchObject({ harness: 'claude-code', harnessVersions: ['2.1.300'], permittedUses: ['evaluation', 'benchmarking', 'task-design'], training: 'not-offered', transcripts: 1 });
-    expect(rows[0]?.harnessTerms.map((terms) => terms.name)).toEqual(['Anthropic Consumer Terms', 'Anthropic Usage Policy']);
+    expect(rows[0]?.harnessTerms).toEqual([
+      { name: 'Anthropic Consumer Terms', version: 'effective 2025-10-08' },
+      { name: 'Anthropic Usage Policy', version: 'effective 2026-11-12' },
+    ]);
     expect(rows[0]?.matchId).toMatch(/^[0-9a-f]{64}$/);
     expect(readdirSync(join(f.out, 'sessions'))).toEqual(expect.arrayContaining(rows.map((row) => row.matchId)));
   });
@@ -468,7 +471,6 @@ const CODEX_ID = 'cccc3333-3333-4333-8333-333333333333';
 // Lowercase hex: a mixed-case call id is read as a secret and redacted before the masking sees it.
 const CODEX_CALL = 'call_9f2e7a41c6b8d305e1a7f482';
 const CODEX_AGENTS_LINE = 'Prefer the amber ledger for every receipt';
-const CODEX_ROW = { terms: [{ name: 'OpenAI Terms of Use', version: 'test version' }], training: 'not-offered' } as const;
 const codexTime = (second: number): string => `2026-06-01T10:00:${String(second).padStart(2, '0')}.000Z`;
 
 const joined = (...rows: string[]): string => rows.join(String.fromCharCode(10));
@@ -510,28 +512,35 @@ describe('the harness terms gate', () => {
   it('leaves out a session from a harness with no terms row, after the exclusion gate has cleared its rollout', async () => {
     const f = fixture();
     const runtime = await withCodex(f, codexRollout());
-    expect(await buildPack(runtime, options(f, { owners: ownersAll(f) }))).toMatchObject({ scanned: 1, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 1, emitted: 0 });
+    // Codex has a row now; the gate is proved by taking it away for the one run.
+    const row = HARNESS_TERMS.codex;
+    Reflect.deleteProperty(HARNESS_TERMS, 'codex');
+    try {
+      expect(await buildPack(runtime, options(f, { owners: ownersAll(f) }))).toMatchObject({ scanned: 1, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 1, emitted: 0 });
+    } finally {
+      Reflect.set(HARNESS_TERMS, 'codex', row);
+    }
     expect(existsSync(join(f.out, 'sessions'))).toBe(false);
     expect(manifest(f.out)).toEqual([]);
   });
 });
 
 describe('a Codex session (plan S2)', () => {
-  // The row is the one under test in Item 5; here it stands in so the gate and the copy can be proved apart from the terms.
-  const packed = async (f: Fixture, rollout: readonly object[] = codexRollout()): Promise<PackCounts> => {
-    const runtime = await withCodex(f, rollout);
-    Reflect.set(HARNESS_TERMS, 'codex', CODEX_ROW);
-    try {
-      return await buildPack(runtime, options(f, { owners: ownersAll(f) }));
-    } finally {
-      Reflect.deleteProperty(HARNESS_TERMS, 'codex');
-    }
-  };
+  const packed = async (f: Fixture, rollout: readonly object[] = codexRollout()): Promise<PackCounts> => buildPack(await withCodex(f, rollout), options(f, { owners: ownersAll(f) }));
 
   it('clears the exclusion gate on the rollout alone and is packed', async () => {
     const f = fixture();
     expect(await packed(f)).toMatchObject({ scanned: 1, excluded: { term: 0, noRaw: 0 }, noHarnessTerms: 0, emitted: 1 });
-    expect(manifest(f.out)).toMatchObject([{ harness: 'codex' }]);
+    expect(manifest(f.out)).toMatchObject([
+      {
+        harness: 'codex',
+        training: 'not-offered',
+        harnessTerms: [
+          { name: 'OpenAI Terms of Use', version: 'effective 2026-01-01' },
+          { name: 'OpenAI Usage Policies', version: 'effective 2026-11-20' },
+        ],
+      },
+    ]);
   });
 
   it('keeps no <user_instructions>, <environment_context>, or AGENTS.md text, only the keyed marker that stands for each', async () => {
