@@ -226,7 +226,7 @@ A club shares your counts with the people who hold its code, and nothing else. M
 ```
 oars club create "Friday crew" --nickname skipper   # prints the join code once
 oars club join K7M2QX --nickname bow                # a club you were invited to
-oars club join open --nickname bow                  # the open board, once your account has 90 days of standing
+oars club join open --nickname bow                  # the open board; your row shows once your account has standing
 oars club show <club>                               # the members in the pool's order
 oars club leave <club>                              # your row leaves view at once
 oars board                                          # the open board; no sign-in
