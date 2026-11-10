@@ -1,8 +1,11 @@
 // The weekly counts a board is made of (t1083): ingest writes `account_weeks` in the transaction that writes a deposit's cells, from the deposits that count, and from nothing else.
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
+import { afterAll,beforeAll, describe, expect, it } from 'vitest';
 import { isoWeekOf } from './week.js';
 import { sampleSkeleton } from './sample.js';
 import { acceptanceOf, startPool, stubUser, type TestDb, type TestPool } from './test-pool.js';
+
+const EMPTY_ROOT = createHash('sha256').update('').digest('hex');
 
 let pool: TestPool;
 let db: TestDb;
@@ -60,6 +63,23 @@ describe('account_weeks', () => {
     await db.prepare('UPDATE account_weeks SET week = ? WHERE account = ?').bind(isoWeekOf(lastWeek), account).run();
     expect((await pool.post('/v1/deposits', withFailedStep('0000000000830401'), token)).status).toBe(201);
     expect(await weeksOf(account)).toEqual([expect.objectContaining({ week: isoWeekOf(lastWeek), sessions: 1, failed_steps: 1 })]);
+  });
+
+  it('follows the tier of a resend: a broken root takes the session back, the good root returns it to its first week once', async () => {
+    const { token, account } = await accountOn('8305');
+    const good = sampleSkeleton('0000000000830501');
+    expect((await pool.post('/v1/deposits', good, token)).status).toBe(201);
+    // The session counted a week ago.
+    const lastWeek = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    await db.prepare('UPDATE deposits SET counted_at = ? WHERE account = ?').bind(lastWeek, account).run();
+    await db.prepare('UPDATE account_weeks SET week = ? WHERE account = ?').bind(isoWeekOf(lastWeek), account).run();
+    // The same cells under a root that no longer holds (the empty-hash root with leaves): tier `none`, so the session no longer counts.
+    const broken = { ...good, transcripts: good.transcripts.map((transcript) => ({ ...transcript, merkleRoot: EMPTY_ROOT, leaves: 12 })) };
+    expect((await pool.post('/v1/deposits', broken, token)).status).toBe(201);
+    expect(await weeksOf(account)).toEqual([expect.objectContaining({ week: isoWeekOf(lastWeek), sessions: 0 })]);
+    // The original sent again counts once, in its first week, and the current week gets no mark.
+    expect((await pool.post('/v1/deposits', good, token)).status).toBe(201);
+    expect(await weeksOf(account)).toEqual([expect.objectContaining({ week: isoWeekOf(lastWeek), sessions: 1 })]);
   });
 
   it('writes nothing for a deposit that does not count', async () => {
