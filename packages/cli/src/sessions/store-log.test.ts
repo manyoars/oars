@@ -9,8 +9,9 @@ interface Seams {
   logChars: number;
   rename: ((to: string) => Promise<void>) | undefined;
   open: ((file: string) => void) | undefined;
+  claim: (() => void) | undefined;
 }
-const seams = vi.hoisted((): Seams => ({ logChars: Number.POSITIVE_INFINITY, rename: undefined, open: undefined }));
+const seams = vi.hoisted((): Seams => ({ logChars: Number.POSITIVE_INFINITY, rename: undefined, open: undefined, claim: undefined }));
 
 vi.mock('node:fs/promises', () => ({
   ...promises,
@@ -18,6 +19,11 @@ vi.mock('node:fs/promises', () => ({
     const text = await promises.readFile(file, encoding);
     if (file.endsWith('observations.jsonl') && text.length > seams.logChars) throw new RangeError('Invalid string length');
     return text;
+  },
+  writeFile: (file: string, ...rest: [string, { flag?: string }?]) => {
+    // A claim of the lock file, counted: every try of a waiter is one, so a test can wait for the waiter's retry instead of for a clock.
+    if (file.endsWith('store.lock') && rest[1]?.flag === 'wx') seams.claim?.();
+    return promises.writeFile(file, ...rest);
   },
   rename: async (from: string, to: string) => {
     if (to.endsWith('observations.jsonl')) await seams.rename?.(to);
@@ -29,7 +35,7 @@ vi.mock('node:fs/promises', () => ({
   },
 }));
 
-const { compactLog, deposit, depositSession, loadStore, paths, withLock } = await import('./store.js');
+const { HOOK_LOCK, compactLog, deposit, depositSession, loadStore, paths, withLock } = await import('./store.js');
 const { extractSession } = await import('./derive.js');
 const { makeRedactor } = await import('./redact.js');
 
@@ -37,8 +43,13 @@ beforeEach(() => {
   seams.logChars = Number.POSITIVE_INFINITY;
   seams.rename = undefined;
   seams.open = undefined;
+  seams.claim = undefined;
 });
 afterEach(cleanup);
+const HOOK_WAIT_MS = HOOK_LOCK.waitMs;
+afterEach(() => {
+  HOOK_LOCK.waitMs = HOOK_WAIT_MS;
+});
 
 const options = { allow: ['proj'], redactDomains: [], now: () => NOW };
 
@@ -235,13 +246,22 @@ describe('compacting the log', () => {
     const staged = stage();
     await deposit(staged.runtime, options);
     touchTranscript(staged, 'tldr.jsonl', 5);
+    // The hook waits for the release however slow the runner is: no wall-clock window decides this test.
+    HOOK_LOCK.waitMs = Number.POSITIVE_INFINITY;
     let hook: Promise<unknown> | undefined;
     let appendedEarly: boolean | undefined;
     seams.rename = async () => {
       // The temp file is complete and the rename is next, the worst moment: a line appended now would be overwritten without the lock.
       const late = addProject(staged, 'proj', 'late-session', [JSON.stringify({ type: 'user', timestamp: '2026-06-01T00:00:00Z', message: { role: 'user', content: 'a late prompt' } })]);
+      // The hook's first try finds the lock held and its second follows the retry sleep: once it has tried twice, it is waiting and has not appended.
+      const retried = new Promise<void>((done) => {
+        let tries = 0;
+        seams.claim = () => {
+          if (++tries === 2) done();
+        };
+      });
       hook = depositSession(staged.runtime, late, () => NOW);
-      await new Promise((done) => setTimeout(done, 200));
+      await retried;
       appendedEarly = logOf(staged).includes('late-session');
     };
     await deposit(staged.runtime, options);

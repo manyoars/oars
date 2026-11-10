@@ -47,6 +47,8 @@ export interface MachineView {
   /** When the credential held now ends: the token's life while `pending`, the key's once `active`. */
   expiresAt: number;
   createdAt: number;
+  /** The `YYYY-MM-DD` day of the machine's last stored deposit, or null before a first one. */
+  lastDepositDay: string | null;
 }
 
 /** A key or token as the person holds it: 32 random bytes, hex. */
@@ -61,7 +63,7 @@ export const createMachine = async (env: Env, account: string, declared: NewMach
   await env.DB.prepare('INSERT INTO machines (id, account, key_hash, label, host_class, launcher, allow_repos, state, expires_at, created_at, key_days) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
     .bind(id, account, hashToken(token), machine.label, machine.hostClass, machine.launcher, JSON.stringify(machine.allowRepos), 'pending', expiresAt, now, days ?? null)
     .run();
-  return { machine: { id, ...machine, state: 'pending', expiresAt, createdAt: now }, token };
+  return { machine: { id, ...machine, state: 'pending', expiresAt, createdAt: now, lastDepositDay: null }, token };
 };
 
 /** The one place a machine key's scope is decided: a key deposits, reads the covenant, posts telemetry, and activates and rotates itself, and does nothing else. `allowed` is the matched route's own word on it (`ROUTES` in `worker.ts`), so a route added without one is closed to a machine key. A bearer that is no machine's key is none of this check's business. */
@@ -147,6 +149,7 @@ const viewOf = (row: unknown, now: number): MachineView => {
     state: expiresAt <= now ? 'expired' : closed(['pending', 'active'] as const, 'state', textField(row, 'state')),
     expiresAt,
     createdAt: Number(fieldOf(row, 'created_at')),
+    lastDepositDay: textField(row, 'last_deposit_day') ?? null,
   };
 };
 

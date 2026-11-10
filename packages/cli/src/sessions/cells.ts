@@ -2,11 +2,11 @@
 // stay the primary record, so a cell file can be dropped and rebuilt and any later derivation can run over old data. Nothing here reads raw.
 
 import { closedFrame, utcDay } from './frame.js';
-import { classMotif, motifName, motifsOf, stepsOfCall, type Motif } from './motif.js';
+import { classMotif, motifName, motifsOf, stepsOfCall, type CountedStep, type Motif } from './motif.js';
 import { bucketOf } from './pool-wire.js';
 import { CALL_SHAPE_METHOD, cellRef, contentHash, METHODS, RECOVERY_EDGE_METHOD } from './read.js';
 import { recoveryCallsOf } from './recovery-calls.js';
-import { NO_RECALLS, type RecallGraph } from './recall-consequence.js';
+import { NO_RECALLS, type PlacedStep, type RecallGraph } from './recall-consequence.js';
 import { ERROR_CODES, EXTRACTOR_VERSION, harnessOf, observesUsage, type ErrorObservation, type Frame, type Harness, type PromptObservation, type SessionObservation, type ToolObservation } from './schema.js';
 import type { Store } from './store.js';
 
@@ -41,7 +41,37 @@ export interface Cell {
   durationMs: number;
   /** Whether these counts sit inside a shown recall's consequence window, wholly or in part. It is part of the cell's key, so a motif's exposed and unexposed counts stay apart. */
   exposed: boolean;
+  /**
+   * What a deposit's evidence says of the counts: `shown` (inside a shown window), `held` (inside a held one), or `unknown` (no recommendation covers them, which a pool cannot tell from a client that never looked).
+   * Present only on a cell derived with an `ExposureGraph`; a local cell leaves it out and reads `exposed` alone. Its code is the last field of a stored key (`EXPOSURE_CODES`).
+   */
+  exposure?: Exposure;
 }
+
+/** The three readings of a recommendation's exposure. There is no `unexposed`: absent evidence is `unknown`. */
+export type Exposure = 'shown' | 'held' | 'unknown';
+
+/** The last field of a stored cell key. `unknown` is 0 so every key written before held existed keeps its meaning. */
+export const EXPOSURE_CODES: Readonly<Record<Exposure, number>> = { unknown: 0, shown: 1, held: 2 };
+
+/** A step placed by a graph that also knows the recommendations a session was held back from. */
+export interface HeldStep extends PlacedStep {
+  held: boolean;
+}
+
+/** A recall graph that states exposure in three readings. `deriveCells` reads `heldPrompt` and `held` beside the shown reading, and a cell it derives carries `exposure`. */
+export interface ExposureGraph extends RecallGraph {
+  place: (tool: ToolObservation, steps: readonly CountedStep[]) => HeldStep[];
+  heldPrompt: (session: string, index: number) => boolean;
+}
+
+const statesExposure = (graph: RecallGraph): graph is ExposureGraph => 'heldPrompt' in graph;
+
+/** A cell's reading: its own `exposure`, or for a local cell the two readings it can tell apart. */
+export const exposureOfCell = (cell: Pick<Cell, 'exposed' | 'exposure'>): Exposure => cell.exposure ?? (cell.exposed ? 'shown' : 'unknown');
+
+/** Shown wins over held, and held over unknown: a call in both windows counts as shown. */
+const exposureOf = (shown: boolean, held: boolean): Exposure => (shown ? 'shown' : held ? 'held' : 'unknown');
 
 export const UNKNOWN = 'unknown';
 
@@ -201,13 +231,13 @@ interface Tally {
   /** The prompts (or steps) behind `tokens`, counted where `recorded` gains a session. */
   recordedUnits: number;
   durationMs: number;
-  exposed: boolean;
+  exposure: Exposure;
 }
 
 /** The usage categories a prompt's tokens add up: thinking is part of the output already billed, so it is not summed. */
 const TOKEN_FIELDS = ['input', 'cacheWrite', 'cacheRead', 'output'] as const;
 
-const newTally = (motifId: string, frameBucket: string, grain: Grain, day: string, exposed: boolean): Tally => ({ motifId, frameBucket, grain, day, sessions: new Set(), ok: 0, failed: 0, tokens: 0, recorded: new Set(), recordedUnits: 0, durationMs: 0, exposed });
+const newTally = (motifId: string, frameBucket: string, grain: Grain, day: string, exposure: Exposure): Tally => ({ motifId, frameBucket, grain, day, sessions: new Set(), ok: 0, failed: 0, tokens: 0, recorded: new Set(), recordedUnits: 0, durationMs: 0, exposure });
 
 const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -244,22 +274,22 @@ const linesOf = (tools: readonly ToolObservation[]): ToolObservation[][] => {
 export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): CellSet => {
   const tallies = new Map<string, Tally>();
   const motifs = new Map<string, Motif>();
-  const tallyAt = (motif: Motif, frameBucket: string, grain: Grain, day: string, exposed: boolean): Tally => {
-    const key = `${motif.motifId}/${frameBucket}/${grain}/${day}/${String(exposed)}`;
+  const tallyAt = (motif: Motif, frameBucket: string, grain: Grain, day: string, exposure: Exposure): Tally => {
+    const key = `${motif.motifId}/${frameBucket}/${grain}/${day}/${exposure}`;
     const found = tallies.get(key);
     if (found !== undefined) return found;
-    const fresh = newTally(motif.motifId, frameBucket, grain, day, exposed);
+    const fresh = newTally(motif.motifId, frameBucket, grain, day, exposure);
     tallies.set(key, fresh);
     return fresh;
   };
   /** The tallies one occurrence counts into: its week cell, and for a one-step shape motif with a known day its live cell too (rule 6). A window of two or more steps, a named motif, and a class motif have no day cell. */
-  const talliesOf = (motif: Motif, frame: Frame, exposed: boolean, frameBucket = frameBucketOf(frame)): Tally[] => {
+  const talliesOf = (motif: Motif, frame: Frame, exposure: Exposure, frameBucket = frameBucketOf(frame)): Tally[] => {
     motifs.set(motif.motifId, motif);
     const day = frame.day ?? UNKNOWN;
-    const weekly = tallyAt(motif, frameBucket, 'week', weekStartOf(day), exposed);
-    const tallies = motif.level === 'shape' && motif.steps.length === 1 && day !== UNKNOWN ? [weekly, tallyAt(motif, frameBucket, 'day', day, exposed)] : [weekly];
+    const weekly = tallyAt(motif, frameBucket, 'week', weekStartOf(day), exposure);
+    const tallies = motif.level === 'shape' && motif.steps.length === 1 && day !== UNKNOWN ? [weekly, tallyAt(motif, frameBucket, 'day', day, exposure)] : [weekly];
     // Fit's (name, platform, shell) cell: a week cell beside the versioned one, counting the same call.
-    return isPlainCall(motif) ? [...tallies, tallyAt(motif, environmentBucketOf(frame), 'week', weekStartOf(day), exposed)] : tallies;
+    return isPlainCall(motif) ? [...tallies, tallyAt(motif, environmentBucketOf(frame), 'week', weekStartOf(day), exposure)] : tallies;
   };
 
   const sessions = new Map<string, SessionObservation>([...store.sessions, ...store.subagents].map((session) => [session.session, session]));
@@ -281,7 +311,8 @@ export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): Cell
     for (const { motif, start } of motifsOf(steps)) {
       const window = steps.slice(start, start + motif.steps.length);
       const status = window.at(-1)?.status;
-      for (const tally of talliesOf(motif, frame, placed.slice(start, start + motif.steps.length).some(({ exposed }) => exposed))) {
+      const covered = placed.slice(start, start + motif.steps.length);
+      for (const tally of talliesOf(motif, frame, exposureOf(covered.some(({ exposed }) => exposed), covered.some((step) => 'held' in step && step.held)))) {
         tally.sessions.add(first.parent);
         if (status === 'ok') tally.ok += 1;
         if (status === 'error') tally.failed += 1;
@@ -305,7 +336,7 @@ export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): Cell
       const code = ERROR_CODES.has(tool.errorCode) ? tool.errorCode : 'other';
       const motif = classMotif(recoveryClass(code, calls[at]?.steps[0]?.action ?? 'other', followed.next[0] ?? NO_NEXT));
       motifs.set(motif.motifId, motif);
-      const tally = tallyAt(motif, versionBucketOf(frame), 'week', weekStartOf(frame.day ?? UNKNOWN), false);
+      const tally = tallyAt(motif, versionBucketOf(frame), 'week', weekStartOf(frame.day ?? UNKNOWN), 'unknown');
       tally.sessions.add(first.parent);
       tally.failed += 1;
     }
@@ -315,7 +346,7 @@ export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): Cell
       for (const [facet, value] of shapeFacetsOf(tool)) {
         const motif = classMotif(shapeClass(action, facet, value));
         motifs.set(motif.motifId, motif);
-        const tally = tallyAt(motif, versionBucketOf(frame), 'week', weekStartOf(frame.day ?? UNKNOWN), false);
+        const tally = tallyAt(motif, versionBucketOf(frame), 'week', weekStartOf(frame.day ?? UNKNOWN), 'unknown');
         tally.sessions.add(first.parent);
         if (tool.status === 'ok') tally.ok += 1;
         if (tool.status === 'error') tally.failed += 1;
@@ -335,7 +366,7 @@ export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): Cell
           for (const [prefix, bucket] of [[ERROR_CLASS, `${frame.harness}/${NO_AXES}/${frame.model ?? UNKNOWN}`], [ERROR_VERSION_CLASS, versionBucketOf(frame)]] as const) {
             const motif = classMotif(`${prefix}${code}/${name}`);
             motifs.set(motif.motifId, motif);
-            const tally = tallyAt(motif, bucket, 'day', failedDay, false);
+            const tally = tallyAt(motif, bucket, 'day', failedDay, 'unknown');
             tally.sessions.add(first.parent);
             tally.failed += 1;
             if (counted.tokens !== null) {
@@ -353,9 +384,9 @@ export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): Cell
   for (const prompt of store.prompts) {
     const session = sessions.get(prompt.session);
     const frame = framedPrompt(prompt, harnessOf(session ?? {}), session?.env.harness ?? null, null, session?.env.os ?? UNKNOWN);
-    const exposed = graph.exposedPrompt(prompt.session, prompt.index);
-    const effort = frame.effort === null ? [] : talliesOf(classMotif(effortClass(frame.effort, prompt.usage.thinking)), frame, exposed, NO_AXES);
-    for (const tally of [...talliesOf(classMotif(prompt.cls), frame, exposed), ...effort]) {
+    const exposure = exposureOf(graph.exposedPrompt(prompt.session, prompt.index), statesExposure(graph) && graph.heldPrompt(prompt.session, prompt.index));
+    const effort = frame.effort === null ? [] : talliesOf(classMotif(effortClass(frame.effort, prompt.usage.thinking)), frame, exposure, NO_AXES);
+    for (const tally of [...talliesOf(classMotif(prompt.cls), frame, exposure), ...effort]) {
       tally.sessions.add(prompt.session);
       if (prompt.errors > 0) tally.failed += 1;
       else tally.ok += 1;
@@ -369,9 +400,10 @@ export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): Cell
     }
   }
 
+  const stated = statesExposure(graph);
   const cells = [...tallies.values()]
-    .sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.grain, b.grain) || compare(a.day, b.day) || Number(a.exposed) - Number(b.exposed))
-    .map((tally): Cell => ({ motifId: tally.motifId, frameBucket: tally.frameBucket, grain: tally.grain, day: tally.day, sessions: tally.sessions.size, clusters: ONE_OPERATOR, ok: tally.ok, failed: tally.failed, tokens: tally.recorded.size === 0 ? null : tally.tokens, tokenSessions: tally.recorded.size, tokenPrompts: tally.recordedUnits, durationMs: tally.durationMs, exposed: tally.exposed }));
+    .sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.grain, b.grain) || compare(a.day, b.day) || EXPOSURE_CODES[a.exposure] - EXPOSURE_CODES[b.exposure])
+    .map((tally): Cell => ({ motifId: tally.motifId, frameBucket: tally.frameBucket, grain: tally.grain, day: tally.day, sessions: tally.sessions.size, clusters: ONE_OPERATOR, ok: tally.ok, failed: tally.failed, tokens: tally.recorded.size === 0 ? null : tally.tokens, tokenSessions: tally.recorded.size, tokenPrompts: tally.recordedUnits, durationMs: tally.durationMs, exposed: tally.exposure === 'shown', ...(stated ? { exposure: tally.exposure } : {}) }));
   return { cells, motifs: [...motifs.values()].sort((a, b) => compare(a.motifId, b.motifId)) };
 };
 
