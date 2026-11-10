@@ -26,6 +26,8 @@ export interface PullPorts {
   remoteOf: (repo: string) => string;
   /** The send lock's waits, for a test that cannot sit out the two-minute default. */
   lock?: Partial<LockTimes>;
+  /** Called as a pull comes to the send lock to write an admitted batch: a test waits on it instead of a sleep. */
+  onLock?: () => void;
 }
 
 /** Why a repository or a branch was set aside; the report names it, and a test holds each. */
@@ -195,6 +197,7 @@ const admit = async (run: Pulling, tip: Tip, id: string, machine: string): Promi
   if (stamp.slice(0, -9) !== `v${skeleton.vocabVersion}`) throw new Refused('stamp_invalid', 'the stamp does not name the batch\'s vocabulary version');
   // The send lock is held across the writes, because the nightly and `--send` change `pulled.json` and prune the current-stamp folder under it: without it a pass could prune the batch before its entry is written, or write its own read of
   // `pulled.json` over the new entry. The file is read again inside the lock and only this id is merged. The order is the batch, then pulled.json, then the older copy: a crash between them leaves the next pull to replace the same id.
+  run.ports.onLock?.();
   await withSendLock(run.outbox, async () => {
     await writeBatch(run.outbox, id, { ...skeleton, claimed: { hostClass, launcher } }, stamp);
     const pulled = await readPulled(run.outbox, STEP);
@@ -263,7 +266,7 @@ export const holdPull = async (deps: RunDeps, options: { server?: string | undef
         admitted.push(await admit(run, tip, id, machine));
       } catch (error) {
         // A night holds the lock across its whole send, so a pull that overlaps a long one can be turned away: what was admitted before stays, and the tips left are read by the next pull.
-        if (error instanceof SendLockBusy) throw new CliError('Another oars run is sending from this outbox. The batches already admitted stay; the rest were not pulled. Run oars pool hold pull again in a minute.', ExitCode.CONFLICT, STEP, { title: 'Another oars run is sending from this outbox.', code: 'send_locked', status: 409 });
+        if (error instanceof SendLockBusy) throw new CliError('Another oars run is sending from this outbox. The batches already admitted stay; the rest were not pulled. Run oars pool hold pull again in a minute.', ExitCode.CONFLICT, STEP, { title: 'Another oars run is sending from this outbox.', code: 'send_locked', status: 409 }, { admitted });
         refused.push(refusalOf(tip, error));
       }
     }

@@ -66,8 +66,10 @@ describe('oars pool enroll (full)', () => {
     expect(full.text).toContain('24 hours');
     expect(full.document).toMatchObject({ ok: true, holdOnly: false, token: TOKEN, poolMachine: 'pool-machine-id' });
     const held = await poolEnroll(h.deps, { ...OPTIONS, holdOnly: true, name: undefined, days: undefined, server: undefined }, PRIVATE);
-    expect(blockLines(full.text)).toEqual(blockLines(held.text));
+    // The only difference is the marker a machine with no pool key needs.
+    expect(blockLines(held.text).filter((line) => line !== 'OARS_HOLD_ONLY=1')).toEqual(blockLines(full.text));
     expect(full.text).toContain('OARS_SESSION_SALT=');
+    expect(full.text).not.toContain('OARS_HOLD_ONLY');
     const rows = readFileSync(machinesFile(staged.storeDir), 'utf8').trimEnd().split('\n');
     expect(rows).toHaveLength(2);
     expect(JSON.parse(rows[0] ?? '')).toMatchObject({ hostClass: 'cloud', launcher: 'scheduled', allowRepos: ['acme/widgets'] });
@@ -106,6 +108,13 @@ describe('oars pool enroll (full)', () => {
     await expect(poolEnroll(h.deps, OPTIONS, PRIVATE)).rejects.toThrow(/oars pool login/u);
     expect(sent).toEqual([]);
     expect(existsSync(machinesFile(staged.storeDir))).toBe(false);
+  });
+
+  it('asks GitHub nothing when the login is missing: the local sign-in check comes before the visibility calls', async () => {
+    const { h } = scene(false);
+    const visibility = vi.fn(PRIVATE);
+    await expect(poolEnroll(h.deps, OPTIONS, visibility)).rejects.toThrow(/oars pool login/u);
+    expect(visibility).not.toHaveBeenCalled();
   });
 
   it.each(['0', '366', '1.5', '-1', 'abc', '', '1e2'])('refuses --days %j locally, with the pool\'s wording, before anything is checked', async (days) => {
