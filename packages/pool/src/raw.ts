@@ -1,4 +1,4 @@
-// The raw tier: a locally redacted transcript goes to R2 in parts, and D1 keeps one ledger row per object. This file is the only one that touches the raw bucket or `raw_objects`, and it serves nothing: no route returns a raw byte, a hash, or a count (`raw-serves-nothing.test.ts` pins that).
+// The raw tier: a locally redacted transcript goes to R2 in parts, and D1 keeps one ledger row per object. This file stages and assembles, and the only other file that touches the raw bucket or `raw_objects` is `export.ts`, which reads an account its own object back. No route here returns a raw byte, a hash, or a count (`raw-serves-nothing.test.ts` pins both).
 // The server cannot verify redaction. It takes the client's word that the bytes were redacted (and hosts masked) before they were sent, and it runs no scanner.
 import { createHash } from 'node:crypto';
 import { covenantNotAccepted, depositsClosed, hasAccepted } from './covenant.js';
@@ -35,7 +35,7 @@ export const RAW_ROUTES = [
 
 const stagingPrefix = (account: string, hash: string): string => `staging/${account}/${hash}/`;
 const stagingKey = (account: string, hash: string, part: number): string => `${stagingPrefix(account, hash)}${String(part).padStart(6, '0')}`;
-const objectKey = (account: string, hash: string): string => `raw/${account}/${hash}`;
+export const objectKey = (account: string, hash: string): string => `raw/${account}/${hash}`;
 
 interface Admitted {
   account: string;

@@ -16,7 +16,10 @@ import { managerReader } from './gate/registry.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
 import { sessionsTry } from './sessions/try.js';
 import { githubVisibility, poolEnroll } from './sessions/machine-enroll.js';
-import { poolCoverage, poolDeposit, poolFetch, poolLogin, poolLogout, poolOutbox, poolRaw } from './sessions/pool-command.js';
+import { runNetGit } from './sessions/machine-hold.js';
+import { holdPull } from './sessions/machine-pull.js';
+import { runGit } from './sessions/survival.js';
+import { poolCoverage, poolDeposit, poolExport, poolFetch, poolLogin, poolLogout, poolOutbox, poolRaw } from './sessions/pool-command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 import { telemetryOff, telemetryOn, telemetryReport, telemetryShow, telemetryStatus } from './telemetry/command.js';
@@ -552,6 +555,19 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     });
 
   pool
+    .command('hold')
+    .description('the trusted machine\'s side of the holding route')
+    .command('pull')
+    .description('on the trusted machine, read the oars-hold/* branch tips of every enrolled machine\'s private repositories (each repository\'s visibility is checked again on every run) and admit each batch that passes every gate to the outbox; a branch that does not is reported and left where it is. Uses this machine\'s own git credential and GH_TOKEN or GITHUB_TOKEN for the visibility check')
+    .option(serverOption, serverHelp)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      const token = deps.env.GH_TOKEN ?? deps.env.GITHUB_TOKEN;
+      const ports = { visibility: githubVisibility(fetch, token), git: runGit, net: runNetGit, remoteOf: (repo: string) => `https://github.com/${repo}.git` };
+      emit(deps, flag(options, 'json'), await holdPull(deps, { server: text(options, 'server') }, ports));
+    });
+
+  pool
     .command('deposit')
     .description('write a batch to the outbox for each session that passes the folder allowlist and the exclusion check, and stop: no session data is sent, and only counts print. --send <hash> sends one batch that oars pool outbox printed and that is unchanged, once this account has accepted the pool covenant')
     .option('--accept-covenant <version>', 'name the covenant version you expect, with --send: on a terminal the screen is shown and you type its phrase yourself, and off a terminal this is refused')
@@ -591,6 +607,17 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       emit(deps, flag(options, 'json'), await poolOutbox(deps, { server: text(options, 'server'), explain: flag(options, 'explain') }));
+    });
+
+  pool
+    .command('export')
+    .description('save a copy of what the pool holds about your account to a folder, as JSON, one file a page, and write nothing to the pool; with --raw also save your own raw transcripts that still stand (GDPR Articles 15 and 20)')
+    .requiredOption('--out <folder>', 'the folder to save the export in; its files are owner-only, and a rerun overwrites the same ones')
+    .option('--raw', 'also fetch each raw transcript you deposited that has not been erased, into <folder>/raw')
+    .option(serverOption, serverHelp)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await poolExport(deps, { server: text(options, 'server'), out: text(options, 'out') ?? '', raw: flag(options, 'raw') }));
     });
 
   pool
