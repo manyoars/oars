@@ -1,6 +1,6 @@
 // The first sale's sample pack (P98 (10) to (12)): a local folder of an operator's own sessions, for the operator to read before any buyer sees one.
 // Nothing here sends anything: it reads a sessions store and the harness's transcripts, and writes one folder that must sit outside every repository.
-// Order, per session: the exclusion gate (A38) first, then a known owner and known harness terms, the turn floor, a repository, and no duplicate, then the copy, with every injected block stripped.
+// Order, per session: the exclusion gate (A38) first, then a known owner and known harness terms, the turn floor, a repository, and no duplicate, then redaction, masking, and the secret scan, then the copy, with every injected block stripped.
 import { createHash, createHmac } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
 import { appendFile, mkdir, readdir, readFile, rename, rmdir, writeFile } from 'node:fs/promises';
@@ -95,7 +95,7 @@ export interface PackOptions {
 export interface PackCounts {
   /** Main sessions with a user turn in the store: what the draw runs over. */
   frame: number;
-  /** Sessions the exclusion gate read, in draw order, until `size` were emitted or the frame ran out. */
+  /** Sessions the draw reached, in draw order, until `size` were emitted or the frame ran out. */
   scanned: number;
   excluded: { term: number; noRaw: number; noTerms: number; unreadable: number };
   noOwner: number;
@@ -258,18 +258,24 @@ interface TurnCount {
   turns: number;
 }
 
-/** The sessions that lose to a longer one replaying their first prompt (a tie goes to the lower session id), so the rule gives the same lot whichever of the two the draw reaches first. */
-const duplicatesOf = async (runtime: SessionsRuntime, candidates: readonly TurnCount[]): Promise<Set<string>> => {
-  const groups = new Map<string, TurnCount[]>();
-  for (const candidate of candidates) {
+/**
+ * The sessions that lose to a longer one replaying their first prompt (a tie goes to the lower session id), so the rule gives the same lot whichever of the two the draw reaches first.
+ * Every session of the frame is keyed first (one cheap line read each, no gate), and only a group of two or more is asked `accepted`: the loser is chosen among the members that pass every earlier rule.
+ */
+const duplicatesOf = async <T extends TurnCount>(runtime: SessionsRuntime, frame: readonly T[], accepted: (member: T) => Promise<boolean>): Promise<Set<string>> => {
+  const groups = new Map<string, T[]>();
+  for (const candidate of frame) {
     const main = (await transcriptFilesOf(runtime, candidate.project, candidate.session)).find((file) => file.main);
     const key = main === undefined ? undefined : await firstPromptKey(main.path);
     if (key !== undefined) groups.set(key, [...(groups.get(key) ?? []), candidate]);
   }
   const losers = new Set<string>();
   for (const group of groups.values()) {
-    const [winner] = [...group].sort((a, b) => b.turns - a.turns || (a.session < b.session ? -1 : 1));
-    for (const member of group) if (member !== winner) losers.add(member.session);
+    if (group.length < 2) continue;
+    const live: T[] = [];
+    for (const member of group) if (await accepted(member)) live.push(member);
+    const [winner] = live.sort((a, b) => b.turns - a.turns || (a.session < b.session ? -1 : 1));
+    for (const member of live) if (member !== winner) losers.add(member.session);
   }
   return losers;
 };
@@ -360,7 +366,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   const drawn = frame.map((session) => ({ session, rank: order(session.session) })).sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0));
   const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, tooShort: 0, noRepo: 0, duplicate: 0, secret: 0, emitted: 0 };
   const turnsOf = (session: { userTurns: number; assistantTurns: number }): number => session.userTurns + session.assistantTurns;
-  // The rules up to the repository one, once per session: the duplicate rule asks them of every session in the frame, the draw asks them again of the ones it reaches.
+  // The rules up to the repository one, once per session: the duplicate rule asks them only of the members of a group that shares a first prompt, the draw of the sessions it reaches; a singleton the draw never reaches is never gated.
   const earlyBy = new Map<string, Promise<Early>>();
   const early = async (record: StoredSession): Promise<Early> => {
     const verdict = await checkSession(runtime, options.terms, record.project, record.session);
@@ -397,9 +403,8 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     const { owner, harness, terms } = decided.accepted;
     // Read once, on the first session that gets this far. A loser is chosen only among sessions that pass every rule above, so a longer twin that one of them drops never costs the shorter its place; a duplicate's other half may not be drawn at all.
     if (losers === undefined) {
-      const candidates: TurnCount[] = [];
-      for (const session of frame) if ('accepted' in (await earlyOf(session))) candidates.push({ session: session.session, project: session.project, turns: turnsOf(session) });
-      losers = await duplicatesOf(runtime, candidates);
+      const everyone = frame.map((record) => ({ session: record.session, project: record.project, turns: turnsOf(record), record }));
+      losers = await duplicatesOf(runtime, everyone, async (member) => 'accepted' in (await earlyOf(member.record)));
     }
     if (losers.has(record.session)) {
       counts.duplicate += 1;
