@@ -97,12 +97,12 @@ const hold = (s: Scene, repo: string, name: string, files: { [file: string]: str
 
 const branchesOf = (s: Scene, repo: string): string[] => gitIn(bareOf(s, repo), ['for-each-ref', '--format=%(refname:short)', 'refs/heads/oars-hold/']).split('\n').filter((line) => line !== '');
 
-const pull = (s: Scene, visibility: Visibility = PRIVATE): Promise<Outcome> => {
+const pull = (s: Scene, visibility: Visibility = PRIVATE, onLock?: () => void): Promise<Outcome> => {
   const net: Git = (root, args, stdin) => {
     s.network.push(args.join(' '));
     return runNetGit(root, args, stdin);
   };
-  return holdPull(s.h.deps, {}, { visibility, git: runGit, net, remoteOf: (repo) => bareOf(s, repo) });
+  return holdPull(s.h.deps, {}, { visibility, git: runGit, net, remoteOf: (repo) => bareOf(s, repo), ...(onLock === undefined ? {} : { onLock }) });
 };
 
 /** The files the outbox holds under one stamp folder; none when the folder was never made. */
@@ -572,7 +572,7 @@ describe('oars pool hold pull: deleting what was admitted', () => {
       return out;
     };
     const busy = holdPull(s.h.deps, {}, { visibility: PRIVATE, git: runGit, net: night, remoteOf: (repo) => bareOf(s, repo), lock: { waitMs: 200, pollMs: 20 } });
-    await expect(busy).rejects.toMatchObject({ name: 'CliError', exitCode: ExitCode.CONFLICT, problem: { code: 'send_locked' } });
+    await expect(busy).rejects.toMatchObject({ name: 'CliError', exitCode: ExitCode.CONFLICT, problem: { code: 'send_locked' }, details: { admitted: [{ id: ID, branchDeleted: true }] } });
     await expect(busy).rejects.toThrow(/another oars run is sending from this outbox/iu);
     expect(pulledOf(s)).toEqual({ [ID]: currentStamp() });
     expect(filed(s)).toHaveLength(1);
@@ -584,10 +584,14 @@ describe('oars pool hold pull: deleting what was admitted', () => {
     hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, goodFiles(s));
     const prune = (): Promise<number> => removeBatchesExcept(s.outbox, async () => new Set(await pulledAt(s.outbox)));
     let pulling: Promise<Outcome> | undefined;
+    let reached: () => void = () => undefined;
+    const atLock = new Promise<void>((done) => {
+      reached = done;
+    });
     await withSendLock(s.outbox, async () => {
-      pulling = pull(s);
-      await vi.waitFor(() => { expect(s.network.some((line) => line.startsWith('fetch'))).toBe(true); }, { timeout: 30_000 });
-      await new Promise((done) => setTimeout(done, 500));
+      pulling = pull(s, PRIVATE, reached);
+      // The pull has fetched, read the branch, and come to the send lock this test holds: that is the moment the prune below is meant to race it.
+      await atLock;
       // The night's prune, with the pull parked on the lock: nothing of the pull is on disk yet.
       expect(await prune()).toBe(0);
       expect(filed(s)).toHaveLength(0);
