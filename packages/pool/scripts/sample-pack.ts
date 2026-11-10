@@ -148,6 +148,8 @@ export interface PackCounts {
   noSkeleton: number;
   /** An emitted session of an owner who opted in whose repository could not be found, so its `pointer` is null. */
   noPointer: number;
+  /** Dropped because `objections.jsonl` names the session or its text holds a named person (Art. 21(1)); nothing of it was written. */
+  objected: number;
   /** Dropped because the redacted, masked text still held something shaped like a key (`secretIn`); nothing of the session was written. */
   secret: number;
   emitted: number;
@@ -162,6 +164,19 @@ export interface IndexRow {
 }
 
 export class PackError extends Error {}
+
+/** What an objection covers. A pack is a sale, so `sale` and `all` keep a session out; `training` does too, because lot 1 cannot hand a session over for evaluation and withhold it from training. */
+export const OBJECTION_SCOPES = ['sale', 'training', 'all'] as const;
+
+/** A line of the operator's `objections.jsonl`, beside the owners file: a session id or a person's name, when the objection arrived (a full ISO time, so a pack built after it is told from one built before), and the scope. */
+export interface Objection {
+  session?: string;
+  name?: string;
+  received: string;
+  scope: (typeof OBJECTION_SCOPES)[number];
+}
+
+export const OBJECTIONS_FILE = 'objections.jsonl';
 
 const isText = (value: unknown): value is string => typeof value === 'string';
 
@@ -185,6 +200,44 @@ export const parseOwners = (text: string): OwnerRule[] => {
     return { folder, owner, license, pointer };
   });
 };
+
+const isScope = (value: unknown): value is Objection['scope'] => OBJECTION_SCOPES.some((scope) => scope === value);
+
+/** The objections beside the owners file (`dir`); none when the file is absent. A line that cannot be read stops the run, so no session leaves on a guess about whose objection it was. */
+export const readObjections = async (dir: string): Promise<Objection[]> => {
+  let text: string;
+  try {
+    text = await readFile(join(dir, OBJECTIONS_FILE), 'utf8');
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return [];
+    throw error;
+  }
+  return text.split(String.fromCharCode(10)).filter((row) => row.trim() !== '').map((row, at): Objection => {
+    const where = `${OBJECTIONS_FILE} line ${String(at + 1)}`;
+    const fields: object = (() => {
+      try {
+        const parsed: unknown = JSON.parse(row);
+        return typeof parsed === 'object' && parsed !== null ? parsed : {};
+      } catch {
+        throw new PackError(`${where} is not JSON.`);
+      }
+    })();
+    const field = (name: string): unknown => {
+      const value: unknown = Reflect.get(fields, name);
+      return value;
+    };
+    const [session, name, received, scope] = [field('session'), field('name'), field('received'), field('scope')];
+    if (session !== undefined && (!isText(session) || session === '')) throw new PackError(`${where} needs session to be a session id.`);
+    if (name !== undefined && (!isText(name) || name.trim() === '')) throw new PackError(`${where} needs name to be a person's name.`);
+    if (session === undefined && name === undefined) throw new PackError(`${where} names no session and no person.`);
+    if (!isText(received) || !received.includes('T') || Number.isNaN(Date.parse(received))) throw new PackError(`${where} needs received to be an ISO date and time, such as 2026-06-05T09:30:00Z.`);
+    if (!isScope(scope)) throw new PackError(`${where} needs scope to be one of ${OBJECTION_SCOPES.join(', ')}.`);
+    return { ...(session === undefined ? {} : { session }), ...(name === undefined ? {} : { name }), received, scope };
+  });
+};
+
+/** Lower case with runs of white space made one, so a name matches across a line break or a doubled space. */
+const squashed = (text: string): string => text.toLowerCase().replace(/\s+/g, ' ');
 
 const globOf = (folder: string): RegExp => new RegExp(`^${folder.split('*').map((part) => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`, 'i');
 
@@ -645,6 +698,12 @@ const landedOf = async (git: Git, root: string | null, shas: readonly string[]):
   return said;
 };
 
+/** The session's id as its transcript file names it: a Codex or other source's store id is `<harness>-<id>`. */
+const bareIdOf = (record: { session: string; harness?: Harness }): string => {
+  const prefix = `${harnessOf(record)}-`;
+  return harnessOf(record) !== 'claude-code' && record.session.startsWith(prefix) ? record.session.slice(prefix.length) : record.session;
+};
+
 type StoredSession = Awaited<ReturnType<typeof loadStore>>['sessions'][number];
 type HarnessRow = NonNullable<(typeof HARNESS_TERMS)[Harness]>;
 
@@ -665,6 +724,9 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   if (!(await isEmptyOrAbsent(partial))) throw new PackError(`An unfinished pack from an earlier run is at ${partial}. Delete it, then run again.`);
   const owners = parseOwners(await readFile(options.owners, 'utf8'));
   const indexKey = await readIndexKey(options.indexKey);
+  const objections = await readObjections(dirname(resolve(options.owners)));
+  const objectedSessions = new Set(objections.flatMap(({ session }) => (session === undefined ? [] : [session])));
+  const objectedNames = objections.flatMap(({ name }) => (name === undefined ? [] : [squashed(name.trim())]));
   const domains = await readRedactDomains(runtime.storeDir);
   const names = localNames();
   // One injected-block key per buyer: within a pack the same CLAUDE.md gives the same marker, and two buyers' markers cannot be compared.
@@ -701,7 +763,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   }
   const order = (session: string): string => createHash('sha256').update(`${options.seed}\n${session}`).digest('hex');
   const drawn = frame.map((session) => ({ session, rank: order(session.session) })).sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0));
-  const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, tooShort: 0, noRepo: 0, duplicate: 0, noSkeleton: 0, noPointer: 0, secret: 0, emitted: 0 };
+  const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, tooShort: 0, noRepo: 0, duplicate: 0, noSkeleton: 0, noPointer: 0, objected: 0, secret: 0, emitted: 0 };
   const turnsOf = (session: { userTurns: number; assistantTurns: number }): number => session.userTurns + session.assistantTurns;
   // The rules up to the repository one, once per session: the duplicate rule asks them only of the members of a group that shares a first prompt, the draw of the sessions it reaches; a singleton the draw never reaches is never gated.
   const earlyBy = new Map<string, Promise<Early>>();
@@ -733,6 +795,11 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   for (const { session: record } of drawn) {
     if (counts.emitted >= options.size) break;
     counts.scanned += 1;
+    // Before the gate and before any read of the session: an objection is honored even for a session the other rules would have left out anyway, and it is the first reason counted.
+    if (objectedSessions.has(record.session) || objectedSessions.has(bareIdOf(record))) {
+      counts.objected += 1;
+      continue;
+    }
     const decided = await earlyOf(record);
     if ('left' in decided) {
       decided.left(counts);
@@ -759,7 +826,17 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     const skeletonText = `${JSON.stringify(skeleton, null, 2)}\n`;
     const files = await transcriptFilesOf(runtime, record.project, record.session);
     const texts: string[] = [];
-    for (const file of files) texts.push(redactTranscript(await readFile(file.path, 'utf8'), domains, names, injectedKey).text);
+    const heard: string[] = [];
+    for (const file of files) {
+      const raw = await readFile(file.path, 'utf8');
+      texts.push(redactTranscript(raw, domains, names, injectedKey).text);
+      heard.push(raw);
+    }
+    // The person's name is looked for in the redacted text as well as the raw one: redaction decodes each line's strings, so a name a JSON escape hid from the raw bytes shows in what a buyer would read.
+    if (objectedNames.some((name) => [...texts, ...heard].some((text) => squashed(text).includes(name)))) {
+      counts.objected += 1;
+      continue;
+    }
     const masked = maskIds(texts, sessionIds, indexKey, options.buyerKey);
     // After redaction and masking, before the first byte is written: a session with a hit leaves no file, manifest row, or index row.
     if ([...masked, skeletonText].some((text) => secretIn(scannable(text)) !== undefined)) {
@@ -858,7 +935,7 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
       [
         `Wrote ${String(counts.emitted)} sessions to ${options.out} (manifest.jsonl, sessions/<match id>/).`,
         `Scanned ${String(counts.scanned)} of ${String(counts.frame)} in draw order. Excluded: ${String(term)} for a term, ${String(noRaw)} with no raw, ${String(noTerms)} with no term file, ${String(unreadable)} unreadable.`,
-        `Left out after the gate: ${String(counts.noOwner)} in a folder no owner entry names, ${String(counts.noHarnessTerms)} from a harness with no terms row, ${String(counts.tooShort)} under ${String(options.minTurns)} turns, ${String(counts.noRepo)} with no repository, ${String(counts.duplicate)} replaying a longer session, ${String(counts.secret)} holding a secret after redaction.`,
+        `Left out after the gate: ${String(counts.noOwner)} in a folder no owner entry names, ${String(counts.noHarnessTerms)} from a harness with no terms row, ${String(counts.tooShort)} under ${String(options.minTurns)} turns, ${String(counts.noRepo)} with no repository, ${String(counts.duplicate)} replaying a longer session, ${String(counts.objected)} under an objection, ${String(counts.secret)} holding a secret after redaction.`,
       ].join('\n'),
     );
     return 0;
