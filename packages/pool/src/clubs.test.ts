@@ -325,7 +325,7 @@ describe('GET /v1/clubs/consent', () => {
 /** A pool database for a route called directly, in which the reads that look for an existing row see nothing until the write has run: the other request's insert had not happened when they ran, and has when the write does. */
 const blind = (hidden: RegExp): PoolDb => {
   const base = poolDbOf(db);
-  const real = new WeakMap<Bound, ReturnType<TestDb['prepare']>>();
+  const real = new WeakMap<Bound, ReturnType<ReturnType<TestDb['prepare']>['bind']>>();
   let written = false;
   return {
     prepare: (sql) => ({
