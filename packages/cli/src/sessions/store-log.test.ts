@@ -35,7 +35,7 @@ vi.mock('node:fs/promises', () => ({
   },
 }));
 
-const { compactLog, deposit, depositSession, loadStore, paths, withLock } = await import('./store.js');
+const { HOOK_LOCK, compactLog, deposit, depositSession, loadStore, paths, withLock } = await import('./store.js');
 const { extractSession } = await import('./derive.js');
 const { makeRedactor } = await import('./redact.js');
 
@@ -46,6 +46,10 @@ beforeEach(() => {
   seams.claim = undefined;
 });
 afterEach(cleanup);
+const HOOK_WAIT_MS = HOOK_LOCK.waitMs;
+afterEach(() => {
+  HOOK_LOCK.waitMs = HOOK_WAIT_MS;
+});
 
 const options = { allow: ['proj'], redactDomains: [], now: () => NOW };
 
@@ -242,6 +246,8 @@ describe('compacting the log', () => {
     const staged = stage();
     await deposit(staged.runtime, options);
     touchTranscript(staged, 'tldr.jsonl', 5);
+    // The hook waits for the release however slow the runner is: no wall-clock window decides this test.
+    HOOK_LOCK.waitMs = Number.POSITIVE_INFINITY;
     let hook: Promise<unknown> | undefined;
     let appendedEarly: boolean | undefined;
     seams.rename = async () => {
