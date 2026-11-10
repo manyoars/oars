@@ -1,0 +1,95 @@
+name: release-mcp
+
+# Lists @manyoars/oars on the MCP registry as io.github.manyoars/oars (server.json at the root) after each CLI release. It runs when release-cli
+# finishes a tag push successfully, so the npm package (whose package.json carries mcpName, which the registry checks) is already published. A manual
+# run lists an existing tag and never pushes or moves one:
+#   gh workflow run release-mcp.yml -R manyoars/oars -f tag=cli-v0.5.1
+# Start a manual run from main: the tag's commit must be an ancestor of main, and the run's workflow file is main's.
+#
+# Why CI: the registry refuses the interactive `mcp-publisher login github` for an organization namespace (403: it cannot read organization roles),
+# and documents GitHub Actions OIDC as the way to publish one. Auth is the registry's GitHub OIDC login: no stored token or secret, so none may be
+# added. One job holds id-token: write; it installs nothing from npm, so no dependency code runs while it can mint the token. The only program it
+# runs besides the repository's own checks is the pinned mcp-publisher binary, verified against its release's checksums file.
+on:
+  workflow_run:
+    workflows: [release-cli]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag (cli-v<semver>) to list on the MCP registry
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  # The tag being listed: the manual run's input, or the tag a release-cli push run built (a tag push run's head_branch is the tag name).
+  TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+  # Pinned; bump on purpose. Releases: github.com/modelcontextprotocol/registry/releases
+  MCP_PUBLISHER_VERSION: 1.8.9
+
+concurrency:
+  group: release-mcp-${{ inputs.tag || github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # A release-cli run that failed, or a backfill dispatch of it (its head_branch is a branch, not a tag), lists nothing.
+    if: >-
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+      || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    # GitHub-hosted runners only: this repository is public.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write # the registry's GitHub OIDC login; nothing else
+    steps:
+      # Full history for the ancestry check below; no credentials kept in .git/config. The tag's code, not the branch the run started on.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: refs/tags/${{ env.TAG }}
+      - name: Check the tag is cli-v<semver> (no prerelease), on main, and matches server.json
+        run: |
+          semver="${TAG#cli-v}"
+          if ! printf '%s' "$semver" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "::error::$TAG is not cli-v<major.minor.patch> (prerelease tags are not listed)"
+            exit 1
+          fi
+          git fetch --no-tags origin main
+          tagged="$(git rev-parse HEAD)"
+          if ! git merge-base --is-ancestor "$tagged" FETCH_HEAD; then
+            echo "::error::$TAG points at $tagged, which is not on main, so it is not listed"
+            exit 1
+          fi
+          listed="$(node -p "require('./server.json').version")"
+          if [ "$semver" != "$listed" ]; then
+            echo "::error::$TAG does not match server.json version $listed"
+            exit 1
+          fi
+      - name: Install mcp-publisher (pinned, checked against the release checksums)
+        run: |
+          base="https://github.com/modelcontextprotocol/registry/releases/download/v${MCP_PUBLISHER_VERSION}"
+          archive=mcp-publisher_linux_amd64.tar.gz
+          mkdir -p "$RUNNER_TEMP/mcp-publisher"
+          cd "$RUNNER_TEMP/mcp-publisher"
+          curl --fail --silent --show-error --location --remote-name "$base/$archive"
+          curl --fail --silent --show-error --location --remote-name "$base/registry_${MCP_PUBLISHER_VERSION}_checksums.txt"
+          grep " $archive\$" "registry_${MCP_PUBLISHER_VERSION}_checksums.txt" > expected.sha256
+          if [ "$(wc -l < expected.sha256)" -ne 1 ]; then
+            echo "::error::registry_${MCP_PUBLISHER_VERSION}_checksums.txt does not list $archive exactly once"
+            exit 1
+          fi
+          sha256sum --check expected.sha256
+          tar -xzf "$archive" mcp-publisher
+          echo "$RUNNER_TEMP/mcp-publisher" >> "$GITHUB_PATH"
+      - name: Validate server.json
+        run: mcp-publisher validate
+      - name: Log in with GitHub OIDC
+        run: mcp-publisher login github-oidc
+      - name: Publish to the MCP registry
+        run: mcp-publisher publish

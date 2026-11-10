@@ -95,7 +95,7 @@ describe('cardOf: the counts', () => {
     expect(card).toMatchObject({ sessions: 1, activeDays: 1 });
   });
 
-  it('puts the window at seven, thirty, and 365 days back from now', () => {
+  it("names seven, thirty, and 365 days ending on today's UTC date", () => {
     expect(cardWindow('week', CARD_NOW)).toEqual({ days: 7, end: '2026-11-09' });
     expect(cardWindow('year', CARD_NOW).days).toBe(365);
   });

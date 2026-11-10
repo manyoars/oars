@@ -32,6 +32,7 @@ const SAMPLES: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['api_key=abcd1234', ['abcd1234']],
   ['secret_name=abcd1234', ['abcd1234']],
   ['token=ab__cdefgh', ['ab__cdefgh']],
+  ['tokens=ab__cdefgh', ['ab__cdefgh']],
 ];
 
 /** Whether one rule alone reads the token as a secret. The rules are global regexes, so a fresh copy keeps `lastIndex` out of it. */

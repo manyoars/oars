@@ -74,7 +74,7 @@ describe('the export folder', () => {
     }
   });
 
-  it('reads a missing folder as empty but rethrows any other readdir failure', async () => {
+  it('rethrows ENOTDIR when the export folder is a regular file', async () => {
     const parent = mkdtempSync(join(tmpdir(), 'oars-export-test-'));
     try {
       const file = join(parent, 'a-file');

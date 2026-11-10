@@ -373,8 +373,8 @@ describe('MCP tool names: a token behind an underscore or in a later part is red
       expect(stored).not.toContain('Context7');
     }
   });
-  it('keeps what a Slack match leaves of a token right behind a Slack-shaped run, an accepted limit', () => {
-    expect(storedToolName('mcp_xoxb-1234567890-ghp_abcdefghijklmnopqrstuvwxyz0123456789_find', redact)).toBe('mcp_<secret>_abcdefghijklmnopqrstuvwxyz0123456789_find');
+  it('masks a GitHub token right behind a Slack-shaped run, and keeps what a Slack match leaves of a JWT behind one, an accepted limit', () => {
+    expect(storedToolName('mcp_xoxb-1234567890-ghp_abcdefghijklmnopqrstuvwxyz0123456789_find', redact)).toBe('mcp_<secret><secret>_find');
     expect(storedToolName('mcp__xoxb-a-eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0.c2lnbmF0dXJlMTIz__find', redact)).toBe(
       'mcp__<secret>.eyJzdWIiOiIxMjM0.c2lnbmF0dXJlMTIz__find',
     );

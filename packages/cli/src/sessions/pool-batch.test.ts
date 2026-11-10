@@ -46,6 +46,42 @@ describe('a session has ended', () => {
     expect(both !== undefined && hasEnded(both, NOW, NOW - 8 * HOUR)).toBe(true);
   });
 
+  it('counts the session own last line, not capture time: a store captured just now holds days-old sessions that have ended', () => {
+    const lastLine = (hoursAgo: number): string => new Date(NOW - hoursAgo * HOUR).toISOString();
+    const fresh = (main: number, sub: number): Store =>
+      store({ sessions: [session('m', { frame: framed, rev: NOW, tsLast: lastLine(main) })], subagents: [session('m~a', { parent: 'm', spawnedIn: 'm', agentType: 'Explore', frame: framed, rev: NOW, tsLast: lastLine(sub) })] });
+    const [old] = sessionsFrom(fresh(48, 49));
+    // A file copied in after its last line, and captured now: its write time is not later than the capture, so it is not activity.
+    expect(old !== undefined && hasEnded(old, NOW, NOW)).toBe(true);
+    expect(old !== undefined && hasEnded(old, NOW, 0)).toBe(true);
+    const [quiet] = sessionsFrom(fresh(48, 5));
+    expect(quiet !== undefined && hasEnded(quiet, NOW, 0)).toBe(false);
+    const [recent] = sessionsFrom(fresh(5, 48));
+    expect(recent !== undefined && hasEnded(recent, NOW, 0)).toBe(false);
+    // Just under the idle bound waits, at it goes.
+    const [edge] = sessionsFrom(fresh(6, 6));
+    expect(edge !== undefined && hasEnded(edge, NOW, 0)).toBe(true);
+    const [near] = sessionsFrom(fresh(5.9, 6));
+    expect(near !== undefined && hasEnded(near, NOW, 0)).toBe(false);
+    // The file grew after the capture: that write is activity whatever the last captured line says.
+    expect(old !== undefined && hasEnded(old, NOW, NOW + 1)).toBe(false);
+    // A last line that is not a time falls back to the capture.
+    const [odd] = sessionsFrom(store({ sessions: [session('m', { frame: framed, rev: NOW - 7 * HOUR, tsLast: 'not a time' })], subagents: [] }));
+    expect(odd !== undefined && hasEnded(odd, NOW, 0)).toBe(true);
+  });
+
+  it('lets the sender build a session only a hold window after its capture, while a person builds it at once', () => {
+    const [old] = sessionsFrom(store({ sessions: [session('m', { frame: framed, rev: NOW - 59 * 60_000, tsLast: new Date(NOW - 48 * HOUR).toISOString() })], subagents: [] }));
+    expect(old !== undefined && hasEnded(old, NOW, 0)).toBe(true);
+    expect(old !== undefined && hasEnded(old, NOW, 0, undefined, true)).toBe(false);
+    expect(old !== undefined && hasEnded(old, NOW + 2 * 60_000, 0, undefined, true)).toBe(true);
+  });
+
+  it('caps a last line in the future at the capture: a skewed clock does not hold a session', () => {
+    const [skewed] = sessionsFrom(store({ sessions: [session('m', { frame: framed, rev: NOW - 7 * HOUR, tsLast: new Date(NOW + 30 * HOUR).toISOString() })], subagents: [] }));
+    expect(skewed !== undefined && hasEnded(skewed, NOW, 0)).toBe(true);
+  });
+
   it('holds a dead subagent back no longer than the bound', () => {
     const [dead] = sessionsFrom(from(30, 6));
     expect(dead !== undefined && hasEnded(dead, NOW, 0)).toBe(true);

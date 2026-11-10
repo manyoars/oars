@@ -254,6 +254,32 @@ describe('oars pool login', () => {
     expect(scene.h.out.join('')).toBe(`Signed in to ${POOL} as acct_one.\n`);
   });
 
+  it('names the exclusion-terms file and the variable that sets it when there is none, and says nothing when there is one', async () => {
+    const bare = setting();
+    const missing = join(bare.staged.root, 'no-such-terms.txt');
+    bare.h.deps.env.OARS_EXCLUSION_TERMS = missing;
+    poolAt(bare);
+    expect(await bare.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
+    const lines = bare.h.out.join('').split('\n');
+    expect(lines[0]).toBe(`Signed in to ${POOL} as acct_one.`);
+    expect(bare.h.out.join('')).toContain(missing);
+    expect(bare.h.out.join('')).toContain('OARS_EXCLUSION_TERMS');
+
+    // The default place, when the variable is not set, is named too.
+    const unset = setting();
+    delete unset.h.deps.env.OARS_EXCLUSION_TERMS;
+    poolAt(unset);
+    expect(await unset.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
+    expect(unset.h.out.join('')).toContain(join('session-commons', 'exclusion-terms.txt'));
+
+    // --json stays one document, and an empty file counts as none.
+    const json = setting();
+    writeFileSync(join(json.staged.root, 'terms.txt'), '\n');
+    poolAt(json);
+    expect(await json.cli('pool', 'login', '--provider', 'github', '--server', POOL, '--json')).toBe(ExitCode.OK);
+    expect(json.document()).toMatchObject({ ok: true, termsFile: join(json.staged.root, 'terms.txt') });
+  });
+
   it('goes on with a printed link when no browser opens', async () => {
     const scene = setting();
     scene.h.deps.openBrowser = () => Promise.reject(new Error('no browser'));
@@ -376,6 +402,58 @@ describe('oars pool login', () => {
     expect(await counted.cli('pool', 'login', '--provider', 'github', '--server', POOL, '--json')).toBe(ExitCode.AUTH);
     expect(counted.document()).toMatchObject({ problem: { code: 'EXPIRED_TOKEN' } });
     expect(counted.h.sleeps).toEqual([4000, 4000]);
+  });
+
+  it.each([
+    ['a network error', () => HttpResponse.error()],
+    ['an HTTP 502', () => HttpResponse.json({ error: 'provider_unavailable', message: 'The provider did not answer the poll.' }, { status: 502 })],
+    ['an HTTP 503 with no body', () => new HttpResponse(null, { status: 503 })],
+  ])('survives one bad poll (%s): it waits longer, polls again, and signs in', async (_name, bad) => {
+    const scene = setting();
+    poolAt(scene, { polls: [bad(), authorized()] });
+    expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL, '--json')).toBe(ExitCode.OK);
+    expect(scene.document()).toEqual({ ok: true, server: POOL, account: 'acct_one', expiresAt: LATER });
+    // The interval, then the backed-off wait after one failure.
+    expect(scene.h.sleeps).toEqual([2000, 4000]);
+  });
+
+  it('backs off on each failed poll, caps the wait, and goes back to the interval after an answer', async () => {
+    const scene = setting();
+    const bad = (): Response => new HttpResponse(null, { status: 503 });
+    poolAt(scene, { start: { interval: 20, expiresIn: 1000 }, polls: [bad(), bad(), bad(), state('pending'), bad(), authorized()] });
+    expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
+    expect(scene.h.sleeps).toEqual([20_000, 40_000, 60_000, 60_000, 20_000, 40_000]);
+  });
+
+  it('ends a login whose every poll failed only when the code expires, with the last failure', async () => {
+    const down = setting();
+    poolAt(down, { start: { interval: 4, expiresIn: 12 }, polls: [HttpResponse.json({ error: 'provider_unavailable', message: 'The provider did not answer the poll.' }, { status: 502 })] });
+    expect(await down.cli('pool', 'login', '--provider', 'github', '--server', POOL, '--json')).toBe(ExitCode.UNREACHABLE);
+    expect(down.document()).toMatchObject({ problem: { status: 502, title: 'The provider did not answer the poll.' } });
+    expect(down.h.sleeps).toEqual([4000, 8000]);
+
+    const dark = setting();
+    poolAt(dark, { start: { interval: 4, expiresIn: 12 }, polls: [HttpResponse.error()] });
+    expect(await dark.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.UNREACHABLE);
+  });
+
+  it('does not mistake a bug for a bad minute: a poll that throws something other than a CliError ends the login with it', async () => {
+    const scene = setting();
+    poolAt(scene, { polls: [authorized()] });
+    const stderr = scene.h.deps.io.stderr;
+    scene.h.deps.io.stderr = (text) => {
+      if (text.includes('/v1/login/poll')) throw new TypeError('a bug in the printer');
+      stderr(text);
+    };
+    expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL, '--verbose')).toBe(ExitCode.UNEXPECTED);
+    expect(scene.h.err.join('')).not.toContain('expired');
+  });
+
+  it('adds five seconds on slow_down even after a failed poll', async () => {
+    const scene = setting();
+    poolAt(scene, { polls: [new HttpResponse(null, { status: 500 }), state('slow_down'), authorized()] });
+    expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
+    expect(scene.h.sleeps).toEqual([2000, 4000, 7000]);
   });
 
   it('names the pool\'s refusal of a poll, such as a handle it did not issue', async () => {
@@ -904,6 +982,27 @@ describe('oars pool deposit', () => {
       await expectNothingBuilt(scene, { folder: 0, term: 0, noRaw: 0, noTerms: 1, unreadable: 0 });
     });
 
+    it('with no term file, the deposit says where the file goes and what sets it, and stays fail-closed', async () => {
+      const scene = await alone([line('a plain request')]);
+      const missing = join(scene.staged.root, 'no-such-terms.txt');
+      scene.h.deps.env.OARS_EXCLUSION_TERMS = missing;
+      expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+      expect(outboxFiles(scene)).toEqual([]);
+      const printed = scene.h.out.join('');
+      expect(printed).toContain('Wrote 0 of 1 sessions');
+      expect(printed).toContain(`No exclusion terms file at ${missing}`);
+      expect(printed).toContain('OARS_EXCLUSION_TERMS');
+
+      const json = await poolDeposit(scene.h.deps, { server: POOL });
+      expect(json.document).toMatchObject({ ok: true, termsFile: missing });
+
+      // With the file there, the line is gone.
+      writeFileSync(missing, 'zorblax\n');
+      scene.h.out.length = 0;
+      expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+      expect(scene.h.out.join('')).not.toContain('No exclusion terms file');
+    });
+
     describe('a session that passed once and fails a gate later leaves the outbox', () => {
       /** A built and printed batch, and its hash. */
       const built = async (): Promise<{ scene: Scene; hash: string }> => {
@@ -1047,7 +1146,7 @@ plain
     const HOUR = 60 * 60 * 1000;
     // The harness clock of the command tests: the command reads it as now.
     const END = Date.parse('2026-10-23T00:00:00Z');
-    const user = (text: string): string => JSON.stringify({ type: 'user', sessionId: MAIN, cwd: '/w', timestamp: '2026-06-01T00:00:00Z', message: { role: 'user', content: text } });
+    const user = (text: string, at = '2026-06-01T00:00:00Z'): string => JSON.stringify({ type: 'user', sessionId: MAIN, cwd: '/w', timestamp: at, message: { role: 'user', content: text } });
 
     /** Sets every file under a folder to one time, as the harness's files are when nothing has written them since. */
     const settle = (folder: string, at: number): void => {
@@ -1066,15 +1165,17 @@ plain
     const quiet = async (mainHours: number, agentHours: number): Promise<Quiet> => {
       const scene = setting();
       rmSync(join(scene.staged.projectsRoot, 'proj'), { recursive: true, force: true });
-      addProject(scene.staged, FOLDER, MAIN, [user('a plain request')]);
+      // A session's quiet time is its own last line's, so each line is stamped with the clock its capture ran under.
+      const stamp = (hours: number): string => new Date(END - hours * HOUR).toISOString();
+      addProject(scene.staged, FOLDER, MAIN, [user('a plain request', stamp(mainHours))]);
       const agents = join(scene.staged.projectsRoot, FOLDER, MAIN, 'subagents');
       mkdirSync(agents, { recursive: true });
       const agentFile = join(agents, 'agent-a.jsonl');
-      writeFileSync(agentFile, `${user('the subagent starts')}
+      writeFileSync(agentFile, `${user('the subagent starts', stamp(mainHours))}
 `);
       await deposit(scene.staged.runtime, { allow: [FOLDER], redactDomains: [], now: () => END - mainHours * HOUR });
-      writeFileSync(agentFile, `${user('the subagent starts')}
-${user('and goes on')}
+      writeFileSync(agentFile, `${user('the subagent starts', stamp(mainHours))}
+${user('and goes on', stamp(agentHours))}
 `);
       await deposit(scene.staged.runtime, { allow: [FOLDER], redactDomains: [], now: () => END - agentHours * HOUR });
       settle(scene.staged.projectsRoot, END - 10 * HOUR);
@@ -1106,6 +1207,37 @@ ${user('and goes on')}
       await deposited(scene);
       expect(scene.document()).toMatchObject({ sessions: 1, batched: 0, notEnded: 1, withdrawn: 1 });
       expect(outboxFiles(scene)).toEqual([]);
+    });
+
+    it('builds at once from a store captured a minute ago when every transcript last line is two days old', async () => {
+      const scene = setting();
+      rmSync(join(scene.staged.projectsRoot, 'proj'), { recursive: true, force: true });
+      addProject(scene.staged, FOLDER, MAIN, [user('an old request', new Date(END - 48 * HOUR).toISOString())]);
+      await deposit(scene.staged.runtime, { allow: [FOLDER], redactDomains: [], now: () => END - 60_000 });
+      settle(scene.staged.projectsRoot, END - 49 * HOUR);
+      settle(join(scene.staged.storeDir, 'raw'), END - 49 * HOUR);
+      await signIn(scene);
+      scene.h.deps.now = () => END;
+      await deposited(scene);
+      expect(scene.document()).toMatchObject({ sessions: 1, batched: 1, notEnded: 0 });
+      expect(outboxFiles(scene)).toHaveLength(1);
+    });
+
+    it('builds a days-old session captured a minute ago for a person at once, but the sender waits the hold window from capture', async () => {
+      const scene = setting();
+      rmSync(join(scene.staged.projectsRoot, 'proj'), { recursive: true, force: true });
+      addProject(scene.staged, FOLDER, MAIN, [user('an old request', new Date(END - 48 * HOUR).toISOString())]);
+      await deposit(scene.staged.runtime, { allow: [FOLDER], redactDomains: [], now: () => END - 60_000 });
+      settle(scene.staged.projectsRoot, END - 49 * HOUR);
+      settle(join(scene.staged.storeDir, 'raw'), END - 49 * HOUR);
+      await signIn(scene);
+      scene.h.deps.now = () => END;
+      const early = await poolDeposit(scene.h.deps, { server: POOL, covenant: 'v1' });
+      expect(early.document).toMatchObject({ sessions: 1, batched: 0, notEnded: 1 });
+      expect(outboxFiles(scene)).toEqual([]);
+      scene.h.deps.now = () => END - 60_000 + HOUR;
+      const later = await poolDeposit(scene.h.deps, { server: POOL, covenant: 'v1' });
+      expect(later.document).toMatchObject({ sessions: 1, batched: 1, notEnded: 0 });
     });
 
     it('counts a captured subagent that has no root as not built', async () => {

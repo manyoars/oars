@@ -4,13 +4,20 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 
 ## Unreleased
 
+- Client deposits now redact at version 4 (`REDACTION_VERSION`; a queued version 3 raw copy is stale and is not sent): system-role request blobs and memory-file text get the injected-block marks, synthetic provider token prefixes are masked, and token counts, scoped npm names (`@scope/name`), and `1password:` are no longer masked. `docs/sessions-store.md` lists the history.
+- `oars --help` names `oars sessions try` on the `sessions` line, the empty-store message says `oars sessions deposit` reads your own session history, and `@manyoars/oars-client` now declares the CLI's Node floor (22.23.4), so installing the CLI on Node 22 no longer prints engine warnings (with @manyoars/oars-client 0.1.2).
+- Each release now lists `io.github.manyoars/oars` on the MCP registry from GitHub Actions over OIDC (`release-mcp.yml`), with no stored token; a dispatch can list an existing tag.
+- `oars pool login` survives a failed poll: a network error or a 5xx waits twice as long (up to 60 seconds) and polls again until the device code expires, `slow_down` still adds 5 seconds, and `access_denied` and `expired_token` still end it at once; exit 8 comes only once the code has expired with the last poll still failing.
+- `oars pool deposit` judges a session ended by its transcript's own last line, not by when it was captured, so a store captured a minute ago from days-old transcripts builds its outbox at once; a session whose last line is under 6 hours old still waits, and the nightly sender sends a session only an hour after it first captured it.
+- `oars pool login` and `oars pool deposit` name the exclusion-terms file's path and `OARS_EXCLUSION_TERMS` when there is no terms file; the deposit stays fail-closed without one.
+
 ## 0.5.1 (2026-11-10)
 
 - 0.5.0 was tagged but never reached npm because the release job's pack step failed, so 0.5.1 is the first npm release of the 0.5 line.
 - `oars pool deposit` now builds a Codex session and queues its redacted rollout as the raw copy (with a yes to the raw prompt): the exclusion check reaches the rollout where Codex keeps it, through the Codex source, so a Codex session is scanned and cleared or excluded for a term instead of being left out as having no raw. Its `<user_instructions>`, `<environment_context>`, and AGENTS.md text are replaced as for any harness. `oars sessions exclusions` and `oars sessions gold sample` count a Codex session by what its rollout holds, not as having no raw.
 - `oars club create|join|leave|show` and `oars board` (each with `--json`): make a club, join one by its code or the open board, leave, see the members, and read the open board without signing in. Create and join show the pool's consent text and need you to type `yes` at a terminal. Errors lead with the cause (`not_signed_in`, also when the pool no longer accepts your sign-in; `club_full`, `nickname_taken`, `nickname_invalid`, `rate_limited` with when to retry). See the README, "club".
-
 - `oars card` now counts the last N whole UTC dates ending today, so a 30-day card can no longer read more than 30 active days. Before, the window was N times 24 hours and could touch one more date.
+
 ## 0.5.0 (2026-11-10)
 
 - `oars --version` prints one line, and `--version` and `--help` no longer show the first-run telemetry notice. The notice shows once, on the first other command.

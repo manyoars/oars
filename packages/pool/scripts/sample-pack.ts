@@ -9,6 +9,7 @@ import { createInterface } from 'node:readline';
 import { dirname, join, resolve } from 'node:path';
 import { defaultConfigDir } from '../../cli/src/credentials.js';
 import { checkSession, loadTerms, transcriptFilesOf, type Reason } from '../../cli/src/sessions/exclusion.js';
+import { configOf, makeRepoRoot, originUrl } from '../../cli/src/sessions/repo-root.js';
 import { LEADING_TAG, LOCAL_COMMAND_TAGS } from '../../cli/src/sessions/extract.js';
 import { bucketOf, floorOf, sessionsOf, skeletonOf, type SessionSkeleton, type SkeletonTool, type TranscriptRoot, type WireGate } from '../../cli/src/sessions/pool-wire.js';
 import { shellReader } from '../../cli/src/sessions/projection.js';
@@ -69,6 +70,10 @@ export interface OwnerRule {
   folder: string;
   owner: string;
   license: string | null;
+  /** Accounts (GitHub users or organizations) this entry's repositories live under, masked as `<owner>` besides the one each session's own remote names. */
+  handles?: readonly string[];
+  /** First prompts (`/handoff resume`) that mark a session of this entry's repositories as an orchestration lead session, beside `LEAD_PROMPTS`: ordinary work in one repository, a lead's resume in another, so the operator says which. */
+  leadPrompts?: readonly string[];
   /** The owner opts in to the repository pointer and the outcome block (plan S4): a private remote names the repository and a sha names private work, so nothing is read or shipped without it. */
   pointer: boolean;
 }
@@ -108,7 +113,7 @@ export interface ManifestRow {
   turns: number;
   /** The file beside the transcripts that holds the session's skeleton. */
   skeleton: string;
-  /** Only for an owner who opted in: null when the repository cannot be found (counted in `noPointer`). */
+  /** Only for an owner who opted in: null when the repository cannot be found, has no `origin`, or whose remote is not kept (counted in `noPointer`). */
   pointer?: RepositoryPointer | null;
   /** Only for an owner who opted in. */
   outcome?: Outcome;
@@ -127,6 +132,8 @@ export interface PackOptions {
   seed: string;
   /** User plus assistant turns a session needs to be taken; plan S1 sets 20. */
   minTurns: number;
+  /** Extra first-prompt patterns of an orchestration lead session, beside `LEAD_PROMPTS`. */
+  leadPrompts?: readonly RegExp[];
   /** Runs one read-only git command, as `oars pool deposit` takes `options.git ?? runGit`; a test injects its own. */
   git?: Git | undefined;
 }
@@ -139,6 +146,8 @@ export interface PackCounts {
   excluded: { term: number; noRaw: number; noTerms: number; unreadable: number };
   noOwner: number;
   noHarnessTerms: number;
+  /** An orchestration lead session (its first prompt matches `LEAD_PROMPTS`): private company business, never drawn. */
+  lead: number;
   /** Under `minTurns` user plus assistant turns. */
   tooShort: number;
   /** No repository recorded for the session. */
@@ -147,7 +156,7 @@ export interface PackCounts {
   duplicate: number;
   /** The store holds no skeleton for the session (captured before steps and frames, or with no root), so it has none to pack. */
   noSkeleton: number;
-  /** An emitted session of an owner who opted in whose repository could not be found, so its `pointer` is null. */
+  /** An emitted session of an owner who opted in whose repository could not be found, has no `origin`, or whose remote is not kept, so its `pointer` is null. */
   noPointer: number;
   /** Dropped because `objections.jsonl` names the session or its text holds a named person (Art. 21(1)); nothing of it was written. */
   objected: number;
@@ -198,10 +207,17 @@ export const parseOwners = (text: string): OwnerRule[] => {
     if (!isText(folder) || folder === '') throw new PackError(`Owners entry ${String(at + 1)} has no folder.`);
     if (!isText(owner) || owner.trim() === '') throw new PackError(`Owners entry ${String(at + 1)} has no owner.`);
     if (license !== null && !isText(license)) throw new PackError(`Owners entry ${String(at + 1)} needs a license string or null.`);
+    const names = (name: string, label: string): string[] | undefined => {
+      const value = field(name);
+      if (value === undefined) return undefined;
+      if (!Array.isArray(value) || value.some((item: unknown) => !isText(item) || item.trim() === '')) throw new PackError(`Owners entry ${String(at + 1)} needs ${name} as a list of ${label}.`);
+      return value.map(String);
+    };
+    const [handles, leadPrompts] = [names('handles', 'account names'), names('leadPrompts', 'first prompts')];
     const raw = field('pointer');
     const pointer = raw === undefined ? false : raw;
     if (typeof pointer !== 'boolean') throw new PackError(`Owners entry ${String(at + 1)} needs pointer to be true or false.`);
-    return { folder, owner, license, pointer };
+    return { folder, owner, license, pointer, ...(handles === undefined ? {} : { handles }), ...(leadPrompts === undefined ? {} : { leadPrompts }) };
   });
 };
 
@@ -320,7 +336,22 @@ const isEmptyOrAbsent = async (folder: string): Promise<boolean> => {
 // rewritten only when it is a known id, so other words that match are left alone.
 const UUID_OR_PREFIXED = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|(?:req|call)_[0-9A-Za-z]+/gi;
 
+// `accountUuid": "<uuid>` as it reads inside a JSON string, the quotes plain or escaped.
+const QUOTED_UUID = /uuid\\*"\s*:\s*\\*"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi;
+
 const isRecord = (value: unknown): value is object => typeof value === 'object' && value !== null;
+
+/** The working folders a raw transcript names (the `cwd` of a line), read before redaction. */
+const cwdsOf = (text: string): Set<string> => {
+  const found = new Set<string>();
+  for (const row of text.split('\n')) {
+    if (!row.includes('"cwd"')) continue;
+    const entry = parsed(row);
+    const cwd: unknown = isRecord(entry) ? Reflect.get(entry, 'cwd') : undefined;
+    if (typeof cwd === 'string' && cwd !== '') found.add(cwd);
+  }
+  return found;
+};
 
 /** The keys whose value is an id: Claude Code's `uuid`, `parentUuid`, `leafUuid`, ... and `requestId`, and Codex's `call_id`, `session_id`, and `forked_from_id`. */
 const isIdKey = (key: string): boolean => /uuid$/i.test(key) || ['requestId', 'call_id', 'session_id', 'forked_from_id'].includes(key);
@@ -337,6 +368,22 @@ const lineIdsOf = (value: unknown, found: Set<string>): void => {
       else lineIdsOf(item, found);
     }
   }
+};
+
+// The account in a remote URL: `https://host/acme/app.git`, `git@host:acme/app.git`, `ssh://git@host/acme/app`.
+const REMOTE_ACCOUNT = /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/\s]+@)?[^/:\s]+(?::\d+(?=\/))?[:/]([^/\s]+)\/[^\s]+$/i;
+
+/** The accounts the `origin` remotes of the repositories a session ran in name (an upstream or submodule url is someone else's account); a folder that is gone, or has no origin, adds none. */
+const accountsOf = (cwds: Iterable<string>): string[] => {
+  const repoRoot = makeRepoRoot();
+  const found = new Set<string>();
+  for (const cwd of cwds) {
+    const root = repoRoot(cwd);
+    const url = root === null ? null : originUrl(configOf(root) ?? '');
+    const account = url === null ? undefined : REMOTE_ACCOUNT.exec(url)?.[1];
+    if (account !== undefined && !/^\d+$/.test(account)) found.add(account);
+  }
+  return [...found];
 };
 
 const parsed = (line: string): unknown => {
@@ -360,7 +407,11 @@ const maskOf = (indexKey: string, buyerKey: string, id: string): string => {
 /** Every store session id (to its match id) and every line id the texts carry, rewritten wherever it occurs: the `sessionId` field, a path, a typed mention. Other text is left alone. */
 const maskIds = (texts: readonly string[], sessions: ReadonlyMap<string, string>, indexKey: string, buyerKey: string): string[] => {
   const lineIds = new Set<string>();
-  for (const text of texts) for (const line of text.split('\n')) lineIdsOf(parsed(line), lineIds);
+  for (const text of texts) {
+    for (const line of text.split('\n')) lineIdsOf(parsed(line), lineIds);
+    // A key ending in `uuid` inside a quoted settings file or tool output: no line carries it as a key, but its value is the same kind of id.
+    for (const [, id] of text.matchAll(QUOTED_UUID)) if (id !== undefined) lineIds.add(id);
+  }
   return texts.map((text) => text.replace(UUID_OR_PREFIXED, (id) => sessions.get(id) ?? (lineIds.has(id) ? maskOf(indexKey, buyerKey, id) : id)));
 };
 
@@ -411,6 +462,40 @@ const typedPromptsOf = async (path: string, limit: number): Promise<string[]> =>
     lines.close();
     stream.destroy();
   }
+};
+
+/** The first prompts of an orchestration lead session in any repository: `/loop /orchestrate` and `/orchestrate`. A command is read as its name and arguments, as typed. `/handoff resume` is ordinary work in a child repository, so it is a lead only where an owners entry lists it. */
+export const LEAD_PROMPTS: readonly RegExp[] = [/^\/loop\s+(?:\S+\s+)?\/orchestrate\b/, /^\/orchestrate\b/];
+
+const COMMAND_NAME = /<command-name>\s*([^<]*?)\s*<\/command-name>/;
+const COMMAND_ARGS = /<command-args>([^<]*)<\/command-args>/;
+
+/** The first prompt of a Claude Code transcript as the person typed it: a slash command is its name and arguments (`/handoff resume x`), so a pattern reads what was typed. */
+const firstPromptOf = async (path: string): Promise<string | undefined> => {
+  const stream = createReadStream(path, { encoding: 'utf8' });
+  const lines = createInterface({ input: stream, crlfDelay: Infinity });
+  try {
+    for await (const row of lines) {
+      const entry = parsed(row);
+      if (!isRecord(entry) || Reflect.get(entry, 'type') !== 'user' || Reflect.get(entry, 'isMeta') === true) continue;
+      const message: unknown = Reflect.get(entry, 'message');
+      const text = isRecord(message) ? textOf(Reflect.get(message, 'content')) : undefined;
+      if (text === undefined || text.trim() === '') continue;
+      const name = COMMAND_NAME.exec(text)?.[1];
+      return name === undefined ? text.trim() : `${name} ${COMMAND_ARGS.exec(text)?.[1]?.trim() ?? ''}`.trim();
+    }
+    return undefined;
+  } finally {
+    lines.close();
+    stream.destroy();
+  }
+};
+
+const isLead = async (runtime: SessionsRuntime, record: { project: string; session: string }, extra: readonly RegExp[], listed: readonly string[]): Promise<boolean> => {
+  const main = (await transcriptFilesOf(runtime, record.project, record.session)).find((file) => file.main);
+  const prompt = main === undefined ? undefined : await firstPromptOf(main.path);
+  if (prompt === undefined) return false;
+  return [...LEAD_PROMPTS, ...extra].some((pattern) => pattern.test(prompt)) || listed.some((lead) => prompt === lead || prompt.startsWith(`${lead} `));
 };
 
 /** How many typed turns say that two sessions are one conversation: a resume replays the start of the one it continues, so the first few turns agree. */
@@ -663,16 +748,16 @@ const repositoryRoot = async (git: Git, cwd: string): Promise<string | null> => 
 };
 
 const REMOTE_PROTOCOLS: readonly string[] = ['http:', 'https:', 'ssh:', 'git:'];
-/** A path under a home folder names an account on the remote host (`/home/alice/...`, `/Users/alice/...`, `C:/Users/alice/...`). */
-const ACCOUNT_PATH = /^\/?(?:[A-Za-z]:\/)?(?:home|Users)\//i;
+/** A path under a home folder or `~name/` names an account on the remote host (`/home/alice/...`, `/Users/alice/...`, `C:/Users/alice/...`). */
+const ACCOUNT_PATH = /^\/?(?:[A-Za-z]:\/)?(?:(?:home|Users)\/|~[^/]*\/)/i;
 const SCP_REMOTE = /^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:(?!\/\/)[^\s]+$/;
 
 /**
- * The remote as a buyer may read it, or null. A URL can carry a user name or token (`https://user:token@host/...`); neither is a pointer. Only a network URL or `user@host:path` is
+ * The remote as a buyer may read it, or null. A URL can carry a user name or token (`https://user:token@host/...`); neither is a pointer. Only a network URL or `git@host:path` (any other scp user names an account) is
  * kept: a folder (`C:/Users/<name>/...`, `/home/<name>/...`) or a `file:` URL would put the operator's account name and home path into a manifest that the transcripts' masking never reaches.
  */
 const publicRemote = (remote: string): string | null => {
-  if (SCP_REMOTE.test(remote)) return ACCOUNT_PATH.test(remote.slice(remote.indexOf(':') + 1)) ? null : remote;
+  if (SCP_REMOTE.test(remote)) return remote.startsWith('git@') && !ACCOUNT_PATH.test(remote.slice(remote.indexOf(':') + 1)) ? remote : null;
   try {
     const url = new URL(remote);
     if (!REMOTE_PROTOCOLS.includes(url.protocol) || ACCOUNT_PATH.test(decodeURIComponent(url.pathname))) return null;
@@ -813,7 +898,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   }
   const order = (session: string): string => createHash('sha256').update(`${options.seed}\n${session}`).digest('hex');
   const drawn = frame.map((session) => ({ session, rank: order(session.session) })).sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0));
-  const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, tooShort: 0, noRepo: 0, duplicate: 0, noSkeleton: 0, noPointer: 0, objected: 0, secret: 0, emitted: 0 };
+  const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, lead: 0, tooShort: 0, noRepo: 0, duplicate: 0, noSkeleton: 0, noPointer: 0, objected: 0, secret: 0, emitted: 0 };
   const turnsOf = (session: { userTurns: number; assistantTurns: number }): number => session.userTurns + session.assistantTurns;
   // The rules up to the repository one, once per session: the duplicate rule asks them only of the members of a group that shares a first prompt, the draw of the sessions it reaches; a singleton the draw never reaches is never gated.
   const earlyBy = new Map<string, Promise<Early>>();
@@ -828,6 +913,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     const harness = harnessOf(record);
     const terms = HARNESS_TERMS[harness];
     if (terms === undefined) return { left: (c) => { c.noHarnessTerms += 1; } };
+    if (await isLead(runtime, record, options.leadPrompts ?? [], owner.leadPrompts ?? [])) return { left: (c) => { c.lead += 1; } };
     if (turnsOf(record) < options.minTurns) return { left: (c) => { c.tooShort += 1; } };
     if (record.repo === null) return { left: (c) => { c.noRepo += 1; } };
     return { accepted: { owner, harness, terms } };
@@ -876,15 +962,12 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     const skeleton = skeletonUnder(built, matchId, options.buyerKey);
     const skeletonText = `${JSON.stringify(skeleton, null, 2)}\n`;
     const files = await transcriptFilesOf(runtime, record.project, record.session);
-    const texts: string[] = [];
-    const heard: string[] = [];
-    for (const file of files) {
-      const raw = await readFile(file.path, 'utf8');
-      texts.push(redactTranscript(raw, domains, names, injectedKey).text);
-      heard.push(raw);
-    }
+    const raws = await Promise.all(files.map((file) => readFile(file.path, 'utf8')));
+    // The accounts this session's repositories live under: the owners entry's, and what the remote of each working folder names.
+    const handles = [...(owner.handles ?? []), ...accountsOf(new Set(raws.flatMap((raw) => [...cwdsOf(raw)])))];
+    const texts = raws.map((raw) => redactTranscript(raw, domains, names, injectedKey, { handles, toolId: (id) => maskOf(indexKey, options.buyerKey, id), fetchedHosts: true }).text);
     // The person's name is looked for in the raw text, the redacted text, and the decoded strings: a JSON escape hides it from the raw bytes, and redaction decodes a line only when it masks something in it, so the decoding is done here.
-    const searched = [...texts, ...heard, ...heard.flatMap(decodedStrings)].map(squashed);
+    const searched = [...texts, ...raws, ...raws.flatMap(decodedStrings)].map(squashed);
     if (objectedNames.some((name) => searched.some((text) => text.includes(name)))) {
       counts.objected += 1;
       continue;

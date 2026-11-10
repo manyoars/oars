@@ -49,6 +49,8 @@ const DEFAULT_INTERVAL_SEC = 5;
 const DEFAULT_EXPIRY_SEC = 900;
 /** RFC 8628: a `slow_down` adds five seconds to every poll after it. */
 const SLOW_DOWN_MS = 5000;
+/** The longest wait between polls after failed ones. */
+const MAX_BACKOFF_MS = 60_000;
 
 export { isObject, loadSignIns, textIn };
 
@@ -197,9 +199,28 @@ ${proofLines(account, provedAt)}`;
 /** Polls the pool until the person approves, and returns the pool's answer with the credential. Time is counted in the waits asked for, so a machine that slept through the code still gets one poll that says it expired. */
 const awaitCredential = async (deps: RunDeps, server: string, started: Started, show: Masker | undefined): Promise<Reply> => {
   let { intervalMs } = started;
-  for (let waited = 0; waited < started.expiresMs; waited += intervalMs) {
-    await deps.sleep(intervalMs);
-    const reply = await ask(deps, LOGIN, server, '/v1/login/poll', { body: { handle: started.handle }, show });
+  let failures = 0;
+  let lastFailure: CliError | undefined;
+  for (let waited = 0; waited < started.expiresMs;) {
+    // A failed poll (a network error or a 5xx) is the provider or the network having a bad minute, not the person's answer: wait longer each time, up to the cap, and ask again until the code's own expiry.
+    const wait = Math.min(intervalMs * 2 ** failures, Math.max(intervalMs, MAX_BACKOFF_MS));
+    await deps.sleep(wait);
+    waited += wait;
+    // `ask` rejects only with the unreachable failure of `send`.
+    const [settled] = await Promise.allSettled([ask(deps, LOGIN, server, '/v1/login/poll', { body: { handle: started.handle }, show })]);
+    // A rejection that is not the unreachable failure is a bug, not a bad minute: it ends the login as itself.
+    if (settled.status === 'rejected') {
+      if (!(settled.reason instanceof CliError) || settled.reason.exitCode !== ExitCode.UNREACHABLE) throw settled.reason;
+      lastFailure = settled.reason;
+    }
+    const reply = settled.status === 'fulfilled' ? settled.value : undefined;
+    if (reply !== undefined && reply.status >= 500) lastFailure = refusal(LOGIN, reply);
+    if (reply === undefined || reply.status >= 500) {
+      failures += 1;
+      continue;
+    }
+    failures = 0;
+    lastFailure = undefined;
     if (reply.status !== 200 || !isObject(reply.body)) throw closedProof(reply) ?? refusal(LOGIN, reply);
     const status = textIn(reply.body, 'status');
     if (status === 'authorized') return reply;
@@ -210,6 +231,8 @@ const awaitCredential = async (deps: RunDeps, server: string, started: Started, 
       throw new CliError(title, ExitCode.AUTH, LOGIN, { code: 'login_refused', title });
     } else if (status !== 'pending') throw new CliError('The pool answered a sign-in poll with a state this client does not know.', ExitCode.UNEXPECTED, LOGIN);
   }
+  // Out of time with the last poll still failing: the failure is the truth (exit 8), not an expiry nobody saw.
+  if (lastFailure !== undefined) throw lastFailure;
   const title = 'The sign-in code expired. Run oars pool login again.';
   throw new CliError(title, ExitCode.AUTH, LOGIN, { code: 'EXPIRED_TOKEN', title });
 };
@@ -256,7 +279,11 @@ export const poolLogin = async (deps: RunDeps, options: { server?: string | unde
   const pinned: SignIn = { ...signIn, signingKeys: known === undefined ? signIn.signingKeys : held };
   await mkdirOwnerOnly(storeDir);
   await writeOwnerOnly(signInsFile(storeDir), `${JSON.stringify([...saved.filter((entry) => entry !== known), pinned])}\n`);
-  return { document: { ok: true, server, account: signIn.account, expiresAt: signIn.expiresAt }, text: `Signed in to ${server} as ${signIn.account}.` };
+  // The first deposit stops without a term file, so the login that precedes it says so.
+  const { terms: termsFile } = exclusionPaths(runtimeOf(deps).projectsRoot, deps.env);
+  const bare = (await loadTerms(termsFile)).length === 0;
+  return { document: { ok: true, server, account: signIn.account, expiresAt: signIn.expiresAt, ...(bare ? { termsFile } : {}) }, text: `Signed in to ${server} as ${signIn.account}.${bare ? `
+${termsHint(termsFile)}` : ''}` };
 };
 
 /** The pool is not answering: it could not be reached, or a gateway in front of it says so. */
@@ -476,6 +503,9 @@ const rawNote = (consent: string | null): string =>
 /** The exclusion terms in force now, re-read from the term file each time it is asked: empty when the file is missing or unreadable. */
 export const currentTerms = (deps: RunDeps): Promise<string[]> => loadTerms(exclusionPaths(runtimeOf(deps).projectsRoot, deps.env).terms);
 
+/** The one line a person with no exclusion terms needs: where the file goes and what names another. The deposit stays fail-closed without it (the A38 exclusion rule), so the first run says so before the deposit has to. */
+const termsHint = (file: string): string => `No exclusion terms file at ${file}: until it holds a term, one per line, every session stays out of the outbox. Create it there, or set OARS_EXCLUSION_TERMS to the file of your own.`;
+
 /** `deposit --send <hash>`: the send lock the detached sender (hook-bin.js nightly) takes too, then a skip for a hash already in `sent.log`, then the batch lock, then the covenant (accepted here or before, or nothing is sent), then the request. The body is read and hashed again just before the request. */
 const sendBatch = async (deps: RunDeps, options: { outbox: string; server: string; token: string; hash: string; acceptCovenant: string | undefined; region: Region | undefined; via: Sender | undefined }): Promise<Outcome> => {
   const { outbox, server, token, hash } = options;
@@ -623,7 +653,7 @@ export const poolDeposit = async (
       continue;
     }
     // The batch of a session is built once the session and its subagents have ended; a session still in progress waits, and an earlier batch of it is withdrawn. A machine's Stop is the end of a turn, not of a session: its VM may be reclaimed before the session ends, so it builds the open session as it stands.
-    if (machine === undefined && !hasEnded(records, deps.now(), await lastWritten(runtime, records.main.project, records.main.session))) {
+    if (machine === undefined && !hasEnded(records, deps.now(), await lastWritten(runtime, records.main.project, records.main.session), undefined, options.covenant !== undefined)) {
       counts.notEnded += 1;
       await withdraw(key);
       continue;
@@ -698,9 +728,10 @@ export const poolDeposit = async (
     `Raw copies queued: ${String(counts.raw.copies)} (${String(counts.raw.bytes)} bytes, ${String(counts.raw.masked)} values masked). ${rawNote(saved.pool.rawConsent)}`.trim(),
     ...(rawStale(saved.pool, covenant) ? [`Your yes to the raw prompt was given under covenant ${saved.pool.rawConsentVersion ?? 'none'}, not ${covenant ?? ''}, so no raw copy is queued. Run oars pool raw --consent yes to answer for the covenant now in force.`] : []),
     ...(counts.off === 0 ? [] : [`${String(counts.off)} ${counts.off === 1 ? 'session' : 'sessions'} in a folder switched off: nothing of them is queued.`]),
+    ...(termList.length === 0 ? [termsHint(terms)] : []),
     'Run oars pool outbox to print exactly what would be sent.',
   ];
-  return { document: { ok: true, server, ...counts }, text: lines.join('\n') };
+  return { document: { ok: true, server, ...counts, ...(termList.length === 0 ? { termsFile: terms } : {}) }, text: lines.join('\n') };
 };
 
 /** Each field of a batch, at any depth, with its row. A field with no row fails the command rather than printing blank. */
