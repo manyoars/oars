@@ -339,11 +339,16 @@ describe('the acceptance rule (plan S1)', () => {
     expect(sessionsOf(f)).toEqual([S(1)]);
   });
 
+  const replayable = (text: string): object => {
+    const value: unknown = JSON.parse(text);
+    return typeof value === 'object' && value !== null ? value : {};
+  };
+
   it('drops a resumed session that replays an earlier one in favor of the longer, whichever is drawn first', async () => {
     const f = fixture();
     const earlier = turns(S(1), 2);
     // A resumed session starts with the earlier one's lines (same uuids, its own session id), then goes on.
-    const replay = earlier.map((text) => line({ ...JSON.parse(text), sessionId: S(2) }));
+    const replay = earlier.map((text) => line({ ...replayable(text), sessionId: S(2) }));
     f.write('-work-oars', S(1), earlier);
     f.write('-work-oars', S(2), [...replay, ...turns(S(2), 2)]);
     f.write('-work-oars', S(3), turns(S(3), 2));
