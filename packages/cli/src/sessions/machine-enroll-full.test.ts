@@ -108,6 +108,13 @@ describe('oars pool enroll (full)', () => {
     expect(existsSync(machinesFile(staged.storeDir))).toBe(false);
   });
 
+  it('asks GitHub nothing when the login is missing: the local sign-in check comes before the visibility calls', async () => {
+    const { h } = scene(false);
+    const visibility = vi.fn(PRIVATE);
+    await expect(poolEnroll(h.deps, OPTIONS, visibility)).rejects.toThrow(/oars pool login/u);
+    expect(visibility).not.toHaveBeenCalled();
+  });
+
   it.each(['0', '366', '1.5', '-1', 'abc', '', '1e2'])('refuses --days %j locally, with the pool\'s wording, before anything is checked', async (days) => {
     const { h } = scene();
     const sent: Sent[] = [];

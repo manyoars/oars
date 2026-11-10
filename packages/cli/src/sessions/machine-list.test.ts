@@ -52,6 +52,14 @@ describe('oars pool machines', () => {
     ]);
   });
 
+  it('says the pool did not answer with a list when a 200 has no machines array, not that it answered HTTP 200', async () => {
+    const h = scene();
+    server.use(http.get(`${POOL}/v1/machines`, () => HttpResponse.json({ ok: true })));
+    await expect(run(['pool', 'machines'], h.deps)).resolves.toBe(1);
+    expect(h.err.join('')).toContain('The pool did not answer with a list of machines.');
+    expect(h.err.join('')).not.toContain('HTTP 200');
+  });
+
   it('prints the machines as JSON', async () => {
     const h = scene();
     server.use(http.get(`${POOL}/v1/machines`, () => HttpResponse.json({ machines: [machine({})] })));

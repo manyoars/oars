@@ -168,6 +168,9 @@ export const poolEnroll = async (deps: RunDeps, options: EnrollOptions, visibili
   const termsFile = exclusionPaths(runtime.projectsRoot, deps.env).terms;
   const terms = [...new Set(await loadTerms(termsFile))];
   if (terms.length === 0) throw usage(`No exclusion terms in ${termsFile}: a block without them would exclude every session, and nothing would be held. Nothing was checked.`);
+  // The sign-in is read from this machine's store (no network), so a signed-out run is refused before GitHub is asked about any repository. The pool itself is asked only after every repository is confirmed private, and the machine is recorded only after the pool has answered: a refusal at either leaves nothing behind.
+  const server = options.holdOnly ? '' : poolServer(deps.env, STEP, options.server);
+  const credential = options.holdOnly ? undefined : await signedIn(deps, runtime.storeDir, server, STEP);
   const refused: string[] = [];
   for (const repo of repos) {
     const seen = await visibility(repo);
@@ -175,9 +178,6 @@ export const poolEnroll = async (deps: RunDeps, options: EnrollOptions, visibili
     else if (seen === 'unknown') refused.push(`  ${repo}: could not confirm it is private (the check needs a GH_TOKEN or GITHUB_TOKEN that can read it, and the repository's current name).`);
   }
   if (refused.length > 0) throw usage(`Refusing to enroll: every repository must be private.\n${refused.join('\n')}`);
-  // The pool is asked only after every repository is confirmed private, and the machine is recorded only after the pool has answered: a refusal at either leaves nothing behind.
-  const server = options.holdOnly ? '' : poolServer(deps.env, STEP, options.server);
-  const credential = options.holdOnly ? undefined : await signedIn(deps, runtime.storeDir, server, STEP);
   await mkdirOwnerOnly(runtime.storeDir);
   const localKey = (await (runtime.accountSalt ?? localSalt)(runtime.storeDir)).salt;
   const env = {
@@ -257,6 +257,7 @@ export const poolMachines = async (deps: RunDeps, options: { server?: string | u
   const { token } = await signedIn(deps, storeDir, server, MACHINES);
   const reply = await ask(deps, MACHINES, server, '/v1/machines', { token });
   const rows: unknown = isObject(reply.body) ? Reflect.get(reply.body, 'machines') : undefined;
+  if (reply.status === 200 && !Array.isArray(rows)) throw new CliError('The pool did not answer with a list of machines.', ExitCode.UNEXPECTED, MACHINES);
   if (reply.status !== 200 || !Array.isArray(rows)) throw refusal(MACHINES, reply);
   const machines = rows.map(listedOf);
   const lines = machines.map(
