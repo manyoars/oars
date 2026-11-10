@@ -206,11 +206,10 @@ const awaitCredential = async (deps: RunDeps, server: string, started: Started, 
     const wait = Math.min(intervalMs * 2 ** failures, Math.max(intervalMs, MAX_BACKOFF_MS));
     await deps.sleep(wait);
     waited += wait;
-    const reply = await ask(deps, LOGIN, server, '/v1/login/poll', { body: { handle: started.handle }, show }).catch((error: unknown) => {
-      // `ask` throws only the unreachable failure of `send`.
-      lastFailure = error as CliError;
-      return undefined;
-    });
+    // `ask` rejects only with the unreachable failure of `send`.
+    const [settled] = await Promise.allSettled([ask(deps, LOGIN, server, '/v1/login/poll', { body: { handle: started.handle }, show })]);
+    if (settled.status === 'rejected' && settled.reason instanceof CliError) lastFailure = settled.reason;
+    const reply = settled.status === 'fulfilled' ? settled.value : undefined;
     if (reply !== undefined && reply.status >= 500) lastFailure = refusal(LOGIN, reply);
     if (reply === undefined || reply.status >= 500) {
       failures += 1;
