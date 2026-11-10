@@ -10,7 +10,7 @@ import { dirname, join, resolve } from 'node:path';
 import { defaultConfigDir } from '../../cli/src/credentials.js';
 import { checkSession, loadTerms, transcriptFilesOf, type Reason } from '../../cli/src/sessions/exclusion.js';
 import { LEADING_TAG, LOCAL_COMMAND_TAGS } from '../../cli/src/sessions/extract.js';
-import { bucketOf, floorOf, sessionsOf, skeletonOf, type SessionSkeleton, type TranscriptRoot, type WireGate } from '../../cli/src/sessions/pool-wire.js';
+import { bucketOf, floorOf, sessionsOf, skeletonOf, type SessionSkeleton, type SkeletonTool, type TranscriptRoot, type WireGate } from '../../cli/src/sessions/pool-wire.js';
 import { shellReader } from '../../cli/src/sessions/projection.js';
 import { contentHash } from '../../cli/src/sessions/read.js';
 import { localNames, makeRedactor, redactTranscript, REDACTION_VERSION } from '../../cli/src/sessions/redact.js';
@@ -353,10 +353,10 @@ export const secretIn = (text: string): string | undefined => SECRET_SHAPES.find
 
 const EXCLUDED: { readonly [reason in Exclude<Reason, 'clean'>]: keyof PackCounts['excluded'] } = { term: 'term', 'no-raw': 'noRaw', 'no-terms': 'noTerms', unreadable: 'unreadable' };
 
-/** Where a transcript goes under the session's folder: `main.jsonl`, or its path under the session (`subagents/agent-x.jsonl`). */
 /** The name of a session's skeleton beside its transcripts, and what its manifest row calls it. */
 const SKELETON_FILE = 'skeleton.json';
 
+/** Where a transcript goes under the session's folder: `main.jsonl`, or its path under the session (`subagents/agent-x.jsonl`). */
 const placeOf = (key: string, session: string, main: boolean): string => (main ? 'main.jsonl' : key.slice(session.length + 1));
 
 /**
@@ -382,20 +382,36 @@ const scannable = (text: string): string =>
     })
     .join('\n');
 
-/** The store's repo key is a salted hash that is the same in every pack built from one store, so two buyers could join on it: under the buyer's key it differs per buyer, and one buyer still sees one repository as one key. */
-const repoKeyUnder = (buyerKey: string, repoKey: string): string => createHmac('sha256', buyerKey).update(`repoKey:${repoKey}`).digest('hex').slice(0, 16);
+/** A value the store derives with no key of the buyer's, re-derived under the buyer's key: the same input gives a buyer one value, and two buyers two, so no pair of packs joins on it. `length` keeps the wire's shape for it. */
+const keyedUnder = (buyerKey: string, kind: string, value: string, length: number): string => createHmac('sha256', buyerKey).update(`${kind}:${value}`).digest('hex').slice(0, length);
 
-/** The skeleton as a buyer holds it: `id` is the match id, never the key the pool deposit would use, and every `repoKey` is the buyer's. Every other value is the wire's own, after its gate. */
+/** The store's repo key is a salted hash that is the same in every pack built from one store, so two buyers could join on it: under the buyer's key it differs per buyer, and one buyer still sees one repository as one key. */
+const repoKeyUnder = (buyerKey: string, repoKey: string): string => keyedUnder(buyerKey, 'repoKey', repoKey, 16);
+
+const withoutDigests = (tool: SkeletonTool): SkeletonTool => {
+  const kept = { ...tool };
+  delete kept.digests;
+  return kept;
+};
+
+/**
+ * The skeleton as a buyer holds it: `id` is the match id, never the key the pool deposit would use, and every `repoKey` is the buyer's. No unkeyed hash of content or timing ships (plan S3, lead 14): a tool's
+ * `digests` are SHA-256 of the unredacted Edit, MultiEdit, and Write text, so a guess at a masked value could be confirmed against one, and are dropped; a transcript's `merkleRoot` and the batch's `timingPrint` are
+ * kept in the wire's shape but re-derived under the buyer's key. Every other value is the wire's own, after its gate.
+ */
 export const skeletonUnder = (skeleton: SessionSkeleton, matchId: string, buyerKey: string): SessionSkeleton => {
   const framed = <F extends { repoKey?: string }>(frame: F): F => (frame.repoKey === undefined ? frame : { ...frame, repoKey: repoKeyUnder(buyerKey, frame.repoKey) });
   return {
     ...skeleton,
     id: matchId,
+    timingPrint: skeleton.timingPrint === null ? null : keyedUnder(buyerKey, 'timingPrint', skeleton.timingPrint, 16),
     transcripts: skeleton.transcripts.map((transcript) => ({
       ...transcript,
+      merkleRoot: keyedUnder(buyerKey, 'merkleRoot', transcript.merkleRoot, 64),
       frame: framed(transcript.frame),
       frames: transcript.frames.map(framed),
       prompts: transcript.prompts.map((prompt) => ({ ...prompt, frame: framed(prompt.frame) })),
+      tools: transcript.tools.map(withoutDigests),
     })),
   };
 };
