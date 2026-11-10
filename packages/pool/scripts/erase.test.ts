@@ -9,7 +9,7 @@ import { sampleSkeleton } from '../src/sample.js';
 import { PANEL_COUNT } from '../src/stored.js';
 import { acceptanceOf, fieldOf, startPool, stubUser, textOf, type StubUser, type TestPool } from '../src/test-pool.js';
 import { asyncPieces, storeOf } from './erase-test-store.js';
-import { anonymizeSkeleton, closeAccount, eraseAccount, eraseLeakedSecret, eraseRawObject, findRawContaining, holdsValue, restrictAccount, weekOf, type EraseStore, type RawHit } from './erase.js';
+import { anonymizeSkeleton, closeAccount, eraseAccount, eraseLeakedSecret, eraseRawObject, findDepositsContaining, findRawContaining, holdsValue, restrictAccount, weekOf, type EraseStore, type RawHit } from './erase.js';
 
 let pool: TestPool;
 let next = 7000;
@@ -1087,6 +1087,117 @@ describe('finding the raw objects that hold a text', () => {
     const printed = lines.join('\n');
     for (const forbidden of [NAME, 'AROUNDTEXT', 'Quentin']) expect(printed).not.toContain(forbidden);
   }, 60_000);
+});
+
+describe('finding the deposit rows that hold a text (gap 10, Articles 15(1) and 11(2))', () => {
+  const PERSON = 'Quentin Tenant';
+  const SOON = Date.parse('2026-11-03T10:00:00Z');
+  const LATER = Date.parse('2026-11-05T10:00:00Z');
+  const cellOf = (key: string, motif: string): Promise<unknown> =>
+    pool.db().then((db) => db.prepare("INSERT INTO cells (key, harness_bucket, motif_id, frame_bucket, day, exposed, sessions, clusters, ok, failed, tokens, duration_ms) VALUES (?, 'claude-code/2.1.x', ?, 'claude-code/2.1.x/m/e', '2026-11-01', 0, 1, 1, 0, 0, 0, 0)").bind(key, motif).run());
+
+  /** Two accounts that hold the person's text: A in a skeleton, an extension list, a motif, a cell key, and a contributor record; B in a skeleton, another motif, another cell, and another record. And a row that holds nothing. */
+  const seeded = async (): Promise<{ a: string; b: string; session: { skeleton: string; extension: string; other: string; clean: string } }> => {
+    const a = (await member()).account;
+    const b = (await member()).account;
+    const db = await pool.db();
+    const tag = String(next);
+    const session = { skeleton: `${tag}a1`, extension: `${tag}a2`, other: `${tag}b1`, clean: `${tag}a3` };
+    const deposit = (account: string, id: string, skeleton: string, extensions: string, countedAt: number): Promise<unknown> =>
+      db.prepare("INSERT INTO deposits (account, id, skeleton, tier, counted_at, extensions, deltas) VALUES (?, ?, ?, 'skeleton', ?, ?, '[]')").bind(account, id, skeleton, countedAt, extensions).run();
+    await deposit(a, session.skeleton, JSON.stringify({ note: `sent by ${PERSON}` }), '[]', SOON);
+    await deposit(a, session.extension, '{}', JSON.stringify([{ name: PERSON }]), LATER);
+    await deposit(a, session.clean, '{"note":"nobody"}', '[]', LATER);
+    await deposit(b, session.other, JSON.stringify({ note: PERSON }), '[]', SOON);
+    for (const [motif, text] of [[`${tag}m1`, `{"program":"${PERSON}"}`], [`${tag}m2`, `{"program":"${PERSON} again"}`]]) await db.prepare('INSERT INTO motifs (motif_id, motif) VALUES (?, ?)').bind(motif, text).run();
+    await cellOf(`cell/${PERSON}/${tag}1`, `${tag}m1`);
+    await cellOf(`cell/${PERSON}/${tag}2`, `${tag}m2`);
+    for (const [account, key] of [[a, `cell/${PERSON}/${tag}1`], [b, `cell/${PERSON}/${tag}2`]] as const) await db.prepare("INSERT INTO contributors (kind, key, account, day) VALUES ('cell', ?, ?, '2026-11-03')").bind(key, account).run();
+    return { a, b, session };
+  };
+
+  it('lists every deposit row that holds the text, with the counts of motifs, cells, and contributor records, across all accounts', async () => {
+    const { a, b, session } = await seeded();
+    const found = await findDepositsContaining(await store(), { allAccounts: true }, PERSON);
+    expect(found.deposits).toHaveLength(3);
+    expect(found.deposits).toEqual(expect.arrayContaining([
+      { account: a, session: session.skeleton, day: '2026-11-03' },
+      { account: a, session: session.extension, day: '2026-11-05' },
+      { account: b, session: session.other, day: '2026-11-03' },
+    ]));
+    expect(found.deposits.map((one) => one.session)).not.toContain(session.clean);
+    expect(found).toMatchObject({ motifs: 2, cells: 2, contributors: 2 });
+  }, 90_000);
+
+  it('lists only the account named: its rows, its records, and the cells and motifs it contributed to', async () => {
+    const { a, session } = await seeded();
+    const found = await findDepositsContaining(await store(), { account: a }, PERSON);
+    expect(found.deposits).toHaveLength(2);
+    expect(found.deposits).toEqual(expect.arrayContaining([
+      { account: a, session: session.skeleton, day: '2026-11-03' },
+      { account: a, session: session.extension, day: '2026-11-05' },
+    ]));
+    expect(found).toMatchObject({ motifs: 1, cells: 1, contributors: 1 });
+  }, 90_000);
+
+  it('changes nothing: only SELECTs run, none of them holds the text, and a dump of every table is the same before and after', async () => {
+    await seeded();
+    const before = await dump();
+    const inner = await store();
+    const seen: string[] = [];
+    const watched: EraseStore = {
+      rows: (sql, binds) => {
+        seen.push(sql, ...binds.map(String));
+        return inner.rows(sql, binds);
+      },
+      run: () => Promise.reject(new Error('the find wrote to D1')),
+      deleteObject: () => Promise.reject(new Error('the find deleted from R2')),
+      telemetry: inner.telemetry,
+      readObject: () => Promise.reject(new Error('the find read R2')),
+    };
+    const found = await findDepositsContaining(watched, { allAccounts: true }, PERSON);
+    expect(found.deposits.length).toBeGreaterThan(0);
+    expect(await dump()).toBe(before);
+    expect(seen.length).toBeGreaterThan(0);
+    // The text is matched here, never asked of D1, so no wrangler argument or log carries it.
+    expect(seen.join('\n')).not.toContain(PERSON);
+  }, 90_000);
+
+  it('answers keys, days, and counts, and neither the text nor what stands around it', async () => {
+    await seeded();
+    const printed = JSON.stringify(await findDepositsContaining(await store(), { allAccounts: true }, PERSON));
+    for (const forbidden of [PERSON, 'Quentin', 'sent by']) expect(printed).not.toContain(forbidden);
+  }, 90_000);
+
+  it('finds what the scrub finds: after the scrub of the same text, the find lists nothing', async () => {
+    const { a, session } = await seeded();
+    const run = await store();
+    expect((await findDepositsContaining(run, { allAccounts: true }, PERSON)).deposits.length).toBeGreaterThan(0);
+    await eraseLeakedSecret(run, { account: a, id: session.skeleton, value: PERSON }, NOW);
+    expect(await findDepositsContaining(run, { allAccounts: true }, PERSON)).toEqual({ deposits: [], motifs: 0, cells: 0, contributors: 0 });
+  }, 90_000);
+
+  it('does not list an erased deposit row', async () => {
+    const { a, session } = await seeded();
+    const db = await pool.db();
+    await db.prepare("UPDATE deposits SET skeleton = ?, erased_on = '2026-11-08' WHERE account = ? AND id = ?").bind(JSON.stringify({ note: PERSON }), a, session.skeleton).run();
+    expect((await findDepositsContaining(await store(), { account: a }, PERSON)).deposits.map((one) => one.session)).toEqual([session.extension]);
+  }, 90_000);
+
+  it('refuses a text of seven characters, neither or both selectors, and an account that is not a name', async () => {
+    const run = await store();
+    await expect(findDepositsContaining(run, { allAccounts: true }, 'Jane Do')).rejects.toThrow(/at least 8 characters/);
+    await expect(findDepositsContaining(run, {}, PERSON)).rejects.toThrow('name exactly one of an account and every account');
+    await expect(findDepositsContaining(run, { account: 'acct_x', allAccounts: true }, PERSON)).rejects.toThrow('name exactly one of an account and every account');
+    await expect(findDepositsContaining(run, { account: 'a b; DROP TABLE deposits' }, PERSON)).rejects.toThrow(/account/);
+  });
+
+  it('answers a text no row holds with an empty find, and no day for a row that was never counted', async () => {
+    expect(await findDepositsContaining(await store(), { allAccounts: true }, 'Nobody Holds This Name')).toEqual({ deposits: [], motifs: 0, cells: 0, contributors: 0 });
+    const { account } = await member();
+    await (await pool.db()).prepare("INSERT INTO deposits (account, id, skeleton, tier, extensions, deltas) VALUES (?, 'neverCounted01', ?, 'skeleton', '[]', '[]')").bind(account, JSON.stringify({ note: 'Uncounted Quentin Row' })).run();
+    expect((await findDepositsContaining(await store(), { account }, 'Uncounted Quentin Row')).deposits).toEqual([{ account, session: 'neverCounted01', day: null }]);
+  });
 });
 
 /** The strings a deposit is planted with: each is a value of a class an erased deposit must not keep, and none of them may be in the row after the erasure. */

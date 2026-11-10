@@ -305,6 +305,83 @@ const aroundOf = (key: string, value: string): { sql: string; binds: (string | n
   return { sql: sql.join(' AND '), binds };
 };
 
+/** The text a row holds for `value`: as JSON wrote it (a skeleton and an extension list are JSON, and a name with no quote or backslash in it reads the same). */
+const jsonForm = (value: string): string => JSON.stringify(value).slice(1, -1);
+
+/** A contributor record: the cell it names, who held it, and the day. */
+interface ContributorRecord {
+  kind: string;
+  key: string;
+  account: string;
+  day: string;
+}
+
+/** What holds a value: the live deposit rows (with the UTC day each was counted, null when it never was), the motifs, the cells, and the contributor records. Nothing in it is written back by the search. */
+export interface ValueFind {
+  deposits: { account: string; id: string; day: string | null }[];
+  motifs: { id: string; text: string }[];
+  cells: { rowid: number; key: string; harnessBucket: string; frameBucket: string }[];
+  contributors: ContributorRecord[];
+}
+
+/**
+ * The search half of the value scrub, which the find also calls: it reads every live deposit row, motif, cell, and contributor record and answers the ones that hold `stored` (the value in the form a row holds it). It only reads, and the value is never in a statement: each table is paged in key order
+ * or read whole, and the match is made here. A row of an erased account (`erased:` prefix, already scrubbed) or an erased deposit is not read. With `account`, the deposits and contributor records are that account's alone, and the cells and motifs are the ones it contributed to (a contributor record names its cell by key; a motif is named by the cell).
+ */
+const findValue = async (store: EraseStore, stored: string, account?: string): Promise<ValueFind> => {
+  const found: ValueFind = { deposits: [], motifs: [], cells: [], contributors: [] };
+  await scan(store, 'deposits', ['account', 'id', 'skeleton', 'extensions', 'counted_at'], ['account', 'id'], (row) => {
+    if (textOf(row, 'skeleton').includes(stored) || textOf(row, 'extensions').includes(stored)) {
+      const counted = fieldOf(row, 'counted_at');
+      found.deposits.push({ account: textOf(row, 'account'), id: textOf(row, 'id'), day: typeof counted === 'number' ? new Date(counted).toISOString().slice(0, 10) : null });
+    }
+    return Promise.resolve();
+  }, account === undefined ? "erased_on IS NULL AND account NOT LIKE 'erased:%' AND " : "erased_on IS NULL AND account NOT LIKE 'erased:%' AND account = ? AND ", account === undefined ? [] : [account]);
+  const touched = new Set<string>();
+  if (account !== undefined) {
+    await scan(store, 'contributors', ['key'], ['key'], (row) => {
+      touched.add(textOf(row, 'key'));
+      return Promise.resolve();
+    }, "kind = 'cell' AND account = ? AND ", [account]);
+  }
+  const motifs: { id: string; text: string }[] = [];
+  await scan(store, 'motifs', ['motif_id', 'motif'], ['motif_id'], (row) => {
+    if (textOf(row, 'motif').includes(stored)) motifs.push({ id: textOf(row, 'motif_id'), text: textOf(row, 'motif') });
+    return Promise.resolve();
+  });
+  const holds = (one: unknown): boolean => CELL_TEXT.some((column) => textOf(one, column).includes(stored));
+  const reached = new Set<string>();
+  for (const row of await readAll(store, 'cells', account === undefined ? ['rowid', 'key', 'harness_bucket', 'frame_bucket'] : ['rowid', 'key', 'harness_bucket', 'frame_bucket', 'motif_id'], 'rowid', (one) => (account === undefined ? holds(one) : touched.has(textOf(one, 'key'))))) {
+    if (account !== undefined) reached.add(textOf(row, 'motif_id'));
+    if (holds(row)) found.cells.push({ rowid: numberOf(row, 'rowid'), key: textOf(row, 'key'), harnessBucket: textOf(row, 'harness_bucket'), frameBucket: textOf(row, 'frame_bucket') });
+  }
+  found.motifs = account === undefined ? motifs : motifs.filter((one) => reached.has(one.id));
+  for (const row of await readAll(store, 'contributors', ['kind', 'key', 'account', 'day'], 'kind, key, account, day', (one) => textOf(one, 'key').includes(stored) && (account === undefined || textOf(one, 'account') === account))) {
+    found.contributors.push({ kind: textOf(row, 'kind'), key: textOf(row, 'key'), account: textOf(row, 'account'), day: textOf(row, 'day') });
+  }
+  return found;
+};
+
+/** What the find answers: each live deposit row that holds the text, and how many motifs, cells, and contributor records hold it. Never the text. */
+export interface DepositFind {
+  deposits: { account: string; session: string; day: string | null }[];
+  motifs: number;
+  cells: number;
+  contributors: number;
+}
+
+/**
+ * Finds what holds `value` in the deposit rows and the aggregates built from them, for a request from a person a deposit names (GDPR Articles 15(1) and 11(2): the text they send is what lets the pool look). It runs SELECTs and no other call, and it answers accounts, session ids, days, and counts, never the value
+ * or a byte around it. Exactly one of an account and every account. It uses the scrub's own search (`findValue`), so what it lists is what `eraseLeakedSecret` would erase. Staged parts are sealed with a key the command does not hold and are not searched here.
+ */
+export const findDepositsContaining = async (store: EraseStore, selector: { account?: string; allAccounts?: boolean }, value: string): Promise<DepositFind> => {
+  if ((selector.account === undefined) === (selector.allAccounts !== true)) throw new Error('name exactly one of an account and every account');
+  const account = selector.account === undefined ? undefined : nameOf(selector.account, 'the account');
+  if (value.length < MIN_VALUE_LENGTH) throw new Error(`a text to find is at least ${String(MIN_VALUE_LENGTH)} characters, or it would match rows that do not name anyone`);
+  const found = await findValue(store, jsonForm(value), account);
+  return { deposits: found.deposits.map((one) => ({ account: one.account, session: one.id, day: one.day })), motifs: found.motifs.length, cells: found.cells.length, contributors: found.contributors.length };
+};
+
 /**
  * Erases a deposit row that holds a leaked secret: its content is replaced by a marker in place (no row is dropped), and its key is tombstoned. With the value, every other deposit row that holds it goes the same way, the
  * motifs, cells (key, harness bucket, and frame bucket, where a frame's `model` and `harnessVersion` are kept; the value becomes `[erased:<12 hex of its SHA-256>]`, so two values stay two keys), and contributor records that name it are scrubbed of it (their counts stand), the unfinished staged parts of every account that held it are dropped, and a tombstone of its
@@ -323,26 +400,20 @@ export const eraseLeakedSecret = async (store: EraseStore, secret: LeakedSecret,
   if (value !== undefined) {
     await tombstone(store, 'value', await digestOf(value), 'leaked-secret', now);
     // A row holds the value as JSON wrote it, so that is the text to look for.
-    const stored = JSON.stringify(value).slice(1, -1);
-    await scan(store, 'deposits', ['account', 'id', 'skeleton', 'extensions'], ['account', 'id'], (row) => {
-      if (textOf(row, 'skeleton').includes(stored) || textOf(row, 'extensions').includes(stored)) held.push({ account: textOf(row, 'account'), id: textOf(row, 'id') });
-      return Promise.resolve();
-    }, "erased_on IS NULL AND account NOT LIKE 'erased:%' AND ");
+    const stored = jsonForm(value);
+    const found = await findValue(store, stored);
+    for (const one of found.deposits) held.push({ account: one.account, id: one.id });
     let aggregates = 0;
-    await scan(store, 'motifs', ['motif_id', 'motif'], ['motif_id'], async (row) => {
-      const motif = textOf(row, 'motif');
-      if (motif.includes(stored)) aggregates += await store.run('UPDATE motifs SET motif = ? WHERE motif_id = ?', [motif.replaceAll(stored, SCRUBBED), textOf(row, 'motif_id')]);
-    });
-    // A frame's `model` and `harnessVersion` are names the pool stores in clear: in the cell's key, harness bucket, and frame bucket, and in the contributor record that names the cell. Each table is read whole before any of it is written, and a row is
+    for (const motif of found.motifs) aggregates += await store.run('UPDATE motifs SET motif = ? WHERE motif_id = ?', [motif.text.replaceAll(stored, SCRUBBED), motif.id]);
+    // A frame's `model` and `harnessVersion` are names the pool stores in clear: in the cell's key, harness bucket, and frame bucket, and in the contributor record that names the cell. `findValue` read each table whole before any of it is written, and a row is
     // changed by its rowid or by the text around the value, so the value is on no wrangler command line. The marker carries the first 12 hex of the value's SHA-256, so two leaked values stay two keys.
     const marker = `[erased:${(await digestOf(value)).slice(0, 12)}]`;
     const scrubbed = (text: string): string => text.replaceAll(stored, marker);
-    for (const row of await readAll(store, 'cells', ['rowid', 'key', 'harness_bucket', 'frame_bucket'], 'rowid', (one) => CELL_TEXT.some((column) => textOf(one, column).includes(stored)))) {
-      aggregates += await store.run('UPDATE cells SET key = ?, harness_bucket = ?, frame_bucket = ? WHERE rowid = ?', [scrubbed(textOf(row, 'key')), scrubbed(textOf(row, 'harness_bucket')), scrubbed(textOf(row, 'frame_bucket')), numberOf(row, 'rowid')]);
+    for (const row of found.cells) {
+      aggregates += await store.run('UPDATE cells SET key = ?, harness_bucket = ?, frame_bucket = ? WHERE rowid = ?', [scrubbed(row.key), scrubbed(row.harnessBucket), scrubbed(row.frameBucket), row.rowid]);
     }
-    for (const row of await readAll(store, 'contributors', ['kind', 'key', 'account', 'day'], 'kind, key, account, day', (one) => textOf(one, 'key').includes(stored))) {
-      const key = textOf(row, 'key');
-      const [kind, account, day] = [textOf(row, 'kind'), textOf(row, 'account'), textOf(row, 'day')];
+    for (const row of found.contributors) {
+      const { kind, key, account, day } = row;
       const around = aroundOf(key, stored);
       const shape = `kind = ? AND account = ? AND day = ? AND ${around.sql}`;
       const binds = [kind, account, day, ...around.binds];
