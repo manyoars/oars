@@ -57,7 +57,7 @@ describe('the first-run notice', () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(spoolPaths(dir).settings, JSON.stringify({ noticeShownAt: '2026-11-01T00:00:00.000Z' }));
     expect(consentOf(deps.env, dir).noticeShown).toBe(false);
-    expect(await run(['--version'], deps)).toBe(0);
+    expect(await run(['logout'], deps)).toBe(0);
     expect(err.join('')).toBe(`${NOTICE}
 `);
     expect(consentOf(deps.env, dir).noticeShown).toBe(true);
@@ -68,7 +68,7 @@ describe('the first-run notice', () => {
     const { deps, err, dir } = setup();
     mkdirSync(dir, { recursive: true });
     writeFileSync(spoolPaths(dir).settings, JSON.stringify({ noticeShownAt: '2026-11-01T00:00:00.000Z' }));
-    expect(await run(['--version'], deps)).toBe(0);
+    expect(await run(['logout'], deps)).toBe(0);
     expect(err.join('')).toBe(`${NOTICE}
 `);
     expect(events(dir).map((event) => String(Reflect.get(Object(event), 'type')))).toEqual(['command']);
