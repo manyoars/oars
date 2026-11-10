@@ -216,23 +216,24 @@ export const eraseLeakedSecret = async (store: EraseStore, secret: LeakedSecret,
 /** A random 128-bit id as 32 hex digits. It is drawn, never derived from an account, a machine, or a session, so no key and no input recomputes it. */
 const randomId = (): string => Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, '0')).join('');
 
-/** A random rowid between 2^32 and 2^52: the bare `accounts` row of an erasure must not sit where `erasure_audit.id` order would put it. */
+/** A random negative rowid, -(1 + a random below 2^52): a kept row moved here sits off the positive range, so the next live row still takes `max(rowid) + 1` and an erased row's place never dates it or orders it by `erasure_audit.id`. */
 const randomRowid = (): number => {
   const [high = 0, low = 0] = crypto.getRandomValues(new Uint32Array(2));
-  return 2 ** 32 + (high % 2 ** 20) * 2 ** 32 + low;
+  return -(1 + (high % 2 ** 20) * 2 ** 32 + low);
 };
 
 const DAY_MS = 86_400_000;
 
 /**
  * Unlinks the rows an erasure keeps that covenant 6.6(d) does not list (`machines` and `deposits`): they leave the account's pseudonym for one random id per erasure (`erased:` and 32 hex, with a minimal `accounts` row, since the foreign keys need one),
- * so they still join to each other (the counts) and to no one. A machine and a deposit also take a random id each, the machine's fingerprint is blanked and its key revoked (the key would otherwise act for the random id), a counting time is cut to its UTC day, and
- * `erased_on` is cleared on the deposits, because a date there would pick out the audit row of that day: a reader that needs "erased" reads the `erased:` prefix. The `accounts` row takes a random rowid for the same reason. `accounts.provider_created`, GitHub's public creation time, is cleared.
- * Raw objects stay on the pseudonym: they are 6.6(d)'s hash, size, and date, and their tombstone (the unkeyed hash of the key `raw/<account>/<sha256>`) would give the account back from any row that kept the hash.
+ * so they still join to each other (the counts) and to no one. A machine and a deposit also take a random id each, the machine's fingerprint is blanked and its key revoked and replaced by a random hash (an export and the person's own client hold the old exact values), a deposit's `ingest` mark is replaced, every time is cut to its UTC day (a machine's expiry too, since it is a fixed span from a time that was), and
+ * `erased_on` is cleared on the deposits, because a date there would pick out the audit row of that day: a reader that needs "erased" reads the `erased:` prefix. The `accounts` row and each deposit take a random negative rowid for the same reason (a deposit would otherwise keep its place among live ones, which pins its time). `accounts.provider_created`, GitHub's public creation time, is cleared.
+ * Raw objects stay on the pseudonym, their date cut to the day: they are 6.6(d)'s hash, size, and date, and their tombstone (the unkeyed hash of the key `raw/<account>/<sha256>`) would give the account back from any row that kept the hash.
  * Rows are found by the account, so a rerun finds none and changes nothing; a run that stops between two statements leaves the rest for a rerun under a second id, which splits the join and links nothing. The random id is written nowhere else, least of all beside the pseudonym.
  */
 const unlink = async (store: EraseStore, account: string): Promise<void> => {
   await store.run('UPDATE accounts SET provider_created = NULL WHERE id = ? AND provider_created IS NOT NULL', [account]);
+  await store.run('UPDATE raw_objects SET stored_at = stored_at - stored_at % ? WHERE account = ? AND stored_at % ? <> 0', [DAY_MS, account, DAY_MS]);
   const machines = new Set([...(await store.rows('SELECT id AS machine FROM machines WHERE account = ?', [account])), ...(await store.rows('SELECT DISTINCT machine FROM deposits WHERE account = ? AND machine IS NOT NULL', [account]))].map((row) => textOf(row, 'machine')));
   const deposits = (await store.rows('SELECT id FROM deposits WHERE account = ?', [account])).map((row) => textOf(row, 'id'));
   if (machines.size === 0 && deposits.length === 0) return;
@@ -241,9 +242,9 @@ const unlink = async (store: EraseStore, account: string): Promise<void> => {
   for (const machine of machines) {
     const renamed = randomId();
     await store.run('UPDATE deposits SET machine = ? WHERE account = ? AND machine = ?', [renamed, account, machine]);
-    await store.run("UPDATE machines SET id = ?, account = ?, fingerprint_hash = NULL, state = 'revoked', created_at = created_at - created_at % ?, activated_at = activated_at - activated_at % ?, rotated_at = rotated_at - rotated_at % ? WHERE id = ? AND account = ?", [renamed, erased, DAY_MS, DAY_MS, DAY_MS, machine, account]);
+    await store.run("UPDATE machines SET id = ?, account = ?, fingerprint_hash = NULL, state = 'revoked', key_hash = ?, retired_hash = NULL, created_at = created_at - created_at % ?, activated_at = activated_at - activated_at % ?, rotated_at = rotated_at - rotated_at % ?, expires_at = expires_at - expires_at % ? WHERE id = ? AND account = ?", [renamed, erased, randomId() + randomId(), DAY_MS, DAY_MS, DAY_MS, DAY_MS, machine, account]);
   }
-  for (const deposit of deposits) await store.run('UPDATE deposits SET id = ?, account = ?, erased_on = NULL, counted_at = counted_at - counted_at % ? WHERE account = ? AND id = ?', [randomId(), erased, DAY_MS, account, deposit]);
+  for (const deposit of deposits) await store.run('UPDATE deposits SET rowid = ?, id = ?, account = ?, ingest = ?, erased_on = NULL, counted_at = counted_at - counted_at % ? WHERE account = ? AND id = ?', [randomRowid(), randomId(), erased, randomId(), DAY_MS, account, deposit]);
 };
 
 /**
