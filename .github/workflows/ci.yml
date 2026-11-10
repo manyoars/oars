@@ -44,14 +44,14 @@ jobs:
       - run: just check
 
   # The CLI's declared Node floor (packages/cli/package.json engines.node) is tested, not assumed: install and build on 24 (the
-  # repo's dev tooling needs it), then run only the CLI package suite on each Node below. The floor is the lowest version that passes.
+  # repo's dev tooling needs it), then run only the CLI package suite on each Node below. The floor is pinned at 22.23.4 (the latest 22 that passed, run 42781000296); 24.0.0 guards the oldest 24.
   cli-node-floor:
     name: cli on Node ${{ matrix.node }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        node: ['22', '24.0.0']
+        node: ['22.23.4', '24.0.0']
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

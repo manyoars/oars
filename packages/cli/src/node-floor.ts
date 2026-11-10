@@ -1,9 +1,21 @@
-/** The oldest Node major the CLI supports (`engines.node` in package.json). Proven cause: `node:sqlite` URI filenames (`sessions/opencode.ts:91`) fail on Node 22. */
-export const MIN_NODE_MAJOR = 24;
+/**
+ * The oldest Node the CLI supports (`engines.node` in package.json): the latest 22.x when the floor leg of `.github/workflows/ci.yml` (`cli-node-floor`) passed the whole CLI suite on it
+ * (run 42781000296, v22.23.4). The one proven cause below it is `node:sqlite` URI filenames (`sessions/opencode.ts:91`), which Node 22.13 rejected (t1087 run 42776737858).
+ */
+export const MIN_NODE = '22.23.4';
+
+const parts = (version: string): number[] => version.split('.').map((part) => Number.parseInt(part, 10));
+
+const atLeast = (version: string, floor: string): boolean => {
+  const have = parts(version);
+  const need = parts(floor);
+  const at = need.findIndex((value, index) => (have[index] ?? 0) !== value);
+  return at === -1 || (have[at] ?? 0) > (need[at] ?? 0);
+};
 
 /** One line for a Node older than the floor, or undefined when `version` (as in `process.versions.node`) is new enough. */
 export const nodeFloorMessage = (version: string): string | undefined =>
-  Number.parseInt(version, 10) >= MIN_NODE_MAJOR ? undefined : `oars needs Node ${String(MIN_NODE_MAJOR)} or newer; this is Node ${version}.`;
+  atLeast(version, MIN_NODE) ? undefined : `oars needs Node ${MIN_NODE} or newer; this is Node ${version}.`;
 
 /** Writes the one line plus a newline and exits 1 on a Node under the floor; does neither otherwise. `write` and `exit` are injected so a test can see both. */
 export const exitIfTooOld = (version: string, write: (text: string) => unknown, exit: (code: number) => unknown): void => {
