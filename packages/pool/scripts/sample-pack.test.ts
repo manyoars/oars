@@ -1239,3 +1239,41 @@ describe('an objection keeps a session out (plan S5, Art. 21(1))', () => {
     expect(counts).toMatchObject({ emitted: 1, objected: 1 });
   });
 });
+
+describe('an objection by name (plan S5, Art. 21(1))', () => {
+  it('leaves out a session whose text names the person, and keeps the others', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done')]);
+    f.write('-work-oars', S(2), [user(S(2), 1, 'ask Priya Raman about the schema'), assistant(S(2), 1, 'will do')]);
+    await stored(f);
+    objectTo(f, { name: 'priya raman', received: '2026-06-05T09:00:00.000Z', scope: 'all' });
+
+    const counts = await buildPack(f.runtime, options(f));
+
+    expect(sessionsOf(f)).toEqual([S(1)]);
+    expect(counts).toMatchObject({ emitted: 1, objected: 1 });
+    expect(packText(f.out).toLowerCase()).not.toContain('priya');
+  });
+
+  it('refuses a session whose name matches only once redaction has decoded the line', async () => {
+    const f = fixture();
+    // The raw line spells the name with a JSON escape, so the raw bytes never hold it; redaction decodes each string and writes it out whole.
+    const escaped = user(S(1), 1, 'thanks to Zoë Quill for the fix').replace('Zoë', `Zo${String.fromCharCode(92)}u00eb`);
+    const raw = f.write('-work-oars', S(1), [escaped, assistant(S(1), 1, 'noted')]);
+    expect(readFileSync(raw, 'utf8')).not.toContain('Zoë');
+    await stored(f);
+    objectTo(f, { name: 'Zoë Quill', received: '2026-06-05T09:00:00.000Z', scope: 'sale' });
+
+    const counts = await buildPack(f.runtime, options(f));
+
+    expect(counts).toMatchObject({ emitted: 0, objected: 1 });
+  });
+
+  it('stops on an objections line it cannot read, so no session leaves on a guess', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    writeFileSync(join(f.root, 'objections.jsonl'), '{"session": "x"}\n');
+    await expect(buildPack(f.runtime, options(f))).rejects.toThrow(/objections/i);
+  });
+});
