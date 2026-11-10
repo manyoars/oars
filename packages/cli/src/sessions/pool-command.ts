@@ -798,7 +798,7 @@ export const RAW_PROMPT = [
   'It also does not catch a host with no dot, a public host name outside a link, quoted file contents and command output, a secret split across lines, images and attachments, a JSON env value, your username written another way, another person\'s hyphenated name in a project folder path, or an IPv6 address with a zone or inside a longer word, and a common-word account name is masked everywhere it appears.',
   'The blocks the harness adds on its own (instruction files, memory, skill lists, the system prompt) are replaced by a short marker, but a block in a shape the redactor does not list yet, a summary the harness writes for a session you left, a file it quotes after compaction, the echo of a command you ran, a reminder the harness puts in the middle of a message, and what an agent reports back are not, and stay as written; the project folder name and working directory on each line also stay readable, apart from the masking above.',
   'Yes is also your explicit consent to processing any health, belief, or other special category data about you that a copy holds, for these purposes. You can withdraw it at any time with oars pool raw --consent no, and that reaches copies already sent. Your access does not depend on it.',
-  'Say no, or say nothing, and only skeletons go to the pool. Change your mind any time: oars pool raw --consent yes|no. A no stops later sends, and the pool erases the raw copies it already holds for you within a day.',
+  'Say no, or say nothing, and only skeletons go to the pool. Change your mind any time: oars pool raw --consent yes|no. A no stops later sends, and the pool starts erasing the raw copies it already holds for you that night; a large account can take more than one night.',
 ].join('\n');
 
 /** What a person types to say yes to the raw prompt: consent is a statement made at a terminal (GDPR Articles 7 and 9(2)(a)), not a flag a script can pass. */
@@ -927,7 +927,7 @@ export const poolRaw = async (deps: RunDeps, options: { consent?: string | undef
       ? []
       : options.consent === 'yes'
         ? [told === 'told' ? 'The pool heard it: raw copies are accepted again from this account for the covenant in force.' : 'This machine holds no sign-in to the pool, so it told the pool nothing. Sign in with oars pool login; if you withdrew before, run this again then.']
-        : [told === 'told' ? 'The pool was told: it no longer accepts raw copies from this account, keeps a record of the withdrawal, and erases the raw copies it already holds within a day.' : 'This machine holds no sign-in to the pool, so it told the pool nothing. If you said yes from another machine, sign in with oars pool login and run this again.'];
+        : [told === 'told' ? 'The pool was told: it no longer accepts raw copies from this account, keeps a record of the withdrawal, and starts erasing the raw copies it already holds that night; a large account can take more than one night.' : 'This machine holds no sign-in to the pool, so it told the pool nothing. If you said yes from another machine, sign in with oars pool login and run this again.'];
   const lines = [...(choices.rawConsent === null ? [RAW_PROMPT, ''] : []), `Raw copies: ${answer}.`, ...toldLine, ...(switched.length === 0 ? [] : ['Folders switched down:', ...switched])];
   return { document: { ok: true, rawConsent: choices.rawConsent, rawConsentVersion: choices.rawConsentVersion, folders: choices.folders, ...(told === undefined ? {} : { pool: told }) }, text: lines.join('\n') };
 };
