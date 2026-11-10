@@ -8,7 +8,7 @@ import { answer, bound, brake, notConfigured, refuse, type Env } from './http.js
 import { receivePart } from './parts.js';
 import { heldBy, recount, repoKeysOf, signalStatements } from './cluster-store.js';
 import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf } from './ingest.js';
-import { loginGone, loginPoll, loginStart, logout } from './identity.js';
+import { loginGone, loginPoll, loginStart, logout, proveControl } from './identity.js';
 import { hashHosts, hashKey } from './ingest-hash.js';
 import { activate, callerOf, enroll, list, machineScope, revoke, rotate, type Caller } from './machines.js';
 import { stampOf, takeClaim } from './provenance.js';
@@ -175,6 +175,8 @@ export const ROUTES: readonly Route[] = [
   // The account's own copy of what the pool holds (Articles 15(3) and 20), and one raw object of its own. Neither is open to a machine key: a runtime that deposits has no business reading the account back.
   { method: 'GET', path: '/v1/account/export', machine: false, handle: exportPage },
   { method: 'GET', path: '/v1/account/export/raw/:hash', machine: false, handle: (request, env, [hash]) => exportRaw(request, env, decoded(hash ?? '')) },
+  // The account proves it controls itself (the operator confirms a requester against the stored time). Token-only: a machine key never proves a person.
+  { method: 'POST', path: '/v1/account/proof', machine: false, handle: proveControl },
   { method: 'GET', path: '/v1/covenant', machine: true, handle: (request, env) => covenantStatus(request, env) },
   // The account takes its raw yes back (GDPR Article 7(3)). Account-only: a machine key never speaks for a person's consent.
   { method: 'DELETE', path: '/v1/consent/raw', machine: false, handle: withdrawRawConsent },

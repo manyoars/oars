@@ -119,6 +119,15 @@ export const closedRefusal = async (env: Env, account: string): Promise<Response
   return row === null || fieldOf(row, 'closed_at') === null ? undefined : closedAccount();
 };
 
+/** `POST /v1/account/proof`: the account proves control of itself with its sign-in token and the pool stores the time (`proved_at`) for the operator to confirm a requester against (GDPR Art. 12(6)). The route is token-only: it reads the caller with `accountOf`, which a machine key is not (and `machine: false` in `ROUTES` answers a key 403 `deposit_only` before this runs), because a key may sit on a host and not with the person (Art. 32). A revoked, expired, or unknown token gets the usual 401. */
+export const proveControl = async (request: Request, env: Env): Promise<Response> => {
+  const account = await accountOf(request, env);
+  if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
+  const provedAt = Date.now();
+  await env.DB.prepare('UPDATE accounts SET proved_at = ? WHERE id = ?').bind(provedAt, account).run();
+  return answer(200, { account, provedAt }, { 'cache-control': 'private, no-store' });
+};
+
 /** `DELETE /v1/login`: revokes the credential the request presents, so a copy of it signs nobody in. 204 when it was live; a revoked, expired, or unknown credential gets the usual 401. */
 export const logout = async (request: Request, env: Env): Promise<Response> => {
   const token = bearerOf(request);
