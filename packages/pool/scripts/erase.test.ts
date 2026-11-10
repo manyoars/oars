@@ -343,16 +343,19 @@ describe('erasing one account under a lawful request', () => {
     const links = await count('SELECT (SELECT COUNT(*) FROM account_repo_keys WHERE account = ?) + (SELECT COUNT(*) FROM deposit_hours WHERE account = ?) + (SELECT COUNT(*) FROM contributors WHERE account = ?) AS held', account, account, account);
     expect(links).toBe(10);
 
+    // The rewrite moves a deposit's account and id, so the rows are found by their ingest id, which stays.
+    const ingests = JSON.stringify((await all('SELECT ingest FROM deposits WHERE account = ? ORDER BY ingest', account)).map((row) => fieldOf(row, 'ingest')));
     const erased = await eraseAccount(await store(), account, NOW);
     expect(erased.objects).toBe(1);
     // 2 deposit rows, 1 token, and the 10 links.
     expect(erased.rows).toBe(13);
 
     // Per-account content: both rows are markers and tombstoned, the raw object is gone and tombstoned.
-    expect(await all('SELECT id, skeleton, erased_on FROM deposits WHERE account = ? ORDER BY id', account)).toEqual([
-      { id: '00000000000075aa', skeleton: '{"erased":"lawful-request"}', erased_on: '2026-11-08' },
-      { id: '00000000000075ab', skeleton: '{"erased":"lawful-request"}', erased_on: '2026-11-08' },
+    expect(await all('SELECT skeleton, erased_on FROM deposits WHERE ingest IN (SELECT value FROM json_each(?)) ORDER BY ingest', ingests)).toEqual([
+      { skeleton: '{"erased":"lawful-request"}', erased_on: '2026-11-08' },
+      { skeleton: '{"erased":"lawful-request"}', erased_on: '2026-11-08' },
     ]);
+    expect(await count('SELECT COUNT(*) AS held FROM deposits WHERE account = ?', account)).toBe(0);
     expect(await rawKeys(account)).toEqual([]);
     expect(await rawKeys(other.account)).toEqual([`raw/${other.account}/${theirs.hash}`]);
     expect(await count("SELECT COUNT(*) AS held FROM erasure_tombstones WHERE reason = 'lawful-request' AND kind <> 'account'")).toBe(3);
@@ -382,8 +385,10 @@ describe('erasing one account under a lawful request', () => {
     const hashes = await all('SELECT id, key_hash FROM machines WHERE account = ?', account);
     // The machine row and the account's one token.
     expect((await eraseAccount(await store(), account, NOW)).rows).toBe(2);
-    expect(await all('SELECT label, allow_repos FROM machines WHERE account = ?', account)).toEqual([{ label: '[erased]', allow_repos: '[]' }]);
-    expect(await all('SELECT id, key_hash FROM machines WHERE account = ?', account)).toEqual(hashes);
+    // The machine's account and id are rewritten, so it is found by its key hash, which stays and still refuses the key.
+    const keyHash = fieldOf(hashes[0], 'key_hash');
+    expect(await all('SELECT label, allow_repos FROM machines WHERE key_hash = ?', String(keyHash))).toEqual([{ label: '[erased]', allow_repos: '[]' }]);
+    expect(await count('SELECT COUNT(*) AS held FROM machines WHERE account = ?', account)).toBe(0);
     expect(await all('SELECT label FROM machines WHERE account = ?', other.account)).toEqual([{ label: 'their box' }]);
     expect((await eraseAccount(await store(), account, NOW)).rows).toBe(0);
     expect(await all("SELECT rows_erased FROM erasure_audit WHERE kind = 'account' AND account = ? ORDER BY id DESC LIMIT 1", account)).toEqual([{ rows_erased: 0 }]);
@@ -465,11 +470,12 @@ describe('erasing one account removes its own rows and its link to the shared to
     const { token, account } = await member();
     expect((await pool.post('/v1/deposits', skeletonWith('0000000000007b01'), token)).status).toBe(201);
     const mine = await putRaw(token, new TextEncoder().encode('kept record transcript'));
+    const ingest = String(fieldOf((await all('SELECT ingest FROM deposits WHERE account = ?', account))[0], 'ingest'));
     await eraseAccount(await store(), account, NOW);
     expect(await count('SELECT COUNT(*) AS held FROM covenant_acceptances WHERE account = ?', account)).toBe(1);
     expect(await count("SELECT COUNT(*) AS held FROM erasure_tombstones WHERE reason = 'lawful-request' AND kind = 'deposit'")).toBeGreaterThan(0);
-    expect(await all('SELECT sha256, bytes, erased_on FROM raw_objects WHERE account = ?', account)).toEqual([{ sha256: mine.hash, bytes: 'kept record transcript'.length, erased_on: '2026-11-08' }]);
-    expect(await count('SELECT COUNT(*) AS held FROM deposits WHERE account = ? AND erased_on IS NOT NULL', account)).toBe(1);
+    expect(await all("SELECT sha256, bytes, erased_on FROM raw_objects WHERE sha256 = ? AND account LIKE 'erased:%'", mine.hash)).toEqual([{ sha256: mine.hash, bytes: 'kept record transcript'.length, erased_on: '2026-11-08' }]);
+    expect(await count('SELECT COUNT(*) AS held FROM deposits WHERE ingest = ? AND erased_on IS NOT NULL', ingest)).toBe(1);
   }, 60_000);
 
   it('removes the account from the contributor records, leaves every total as it was, and moves the generation so the next bundle is built without it', async () => {
@@ -569,7 +575,10 @@ describe('unlinking the rows an erasure keeps (t1065, covenant 6.6(d))', () => {
     expect(await count('SELECT COUNT(*) AS held FROM raw_objects WHERE account = ?', erasedId)).toBe(1);
     expect(await count('SELECT COUNT(*) AS held FROM deposits WHERE account = ? AND machine IN (SELECT id FROM machines WHERE account = ?)', erasedId, erasedId)).toBe(1);
     // The random id is on no row the covenant keeps.
-    for (const table of proof) expect(await tableText(table), `${table} holds the random id`).not.toContain(erasedId);
+    for (const table of proof.filter((one) => one !== 'accounts')) expect(await tableText(table), `${table} holds the random id`).not.toContain(erasedId);
+    // `accounts` holds it once, as the bare row the foreign keys need: nothing in it comes from the account but the input source, and the pseudonym's own row does not name it.
+    expect(await all('SELECT first_seen, provider_created, covenant, access, raw_consent FROM accounts WHERE id = ?', erasedId)).toEqual([{ first_seen: null, provider_created: null, covenant: null, access: null, raw_consent: null }]);
+    expect(JSON.stringify(await all('SELECT * FROM accounts WHERE id = ?', account))).not.toContain(erasedId);
     // The kept proof still names the account, as 6.6(d) allows.
     expect(await count('SELECT COUNT(*) AS held FROM covenant_acceptances WHERE account = ?', account)).toBe(1);
     expect(await count("SELECT COUNT(*) AS held FROM erasure_tombstones WHERE kind = 'account' AND digest = ?", account)).toBe(1);
@@ -583,6 +592,22 @@ describe('unlinking the rows an erasure keeps (t1065, covenant 6.6(d))', () => {
     expect((await eraseAccount(await store(), account, NOW)).rows).toBe(0);
     expect(await count("SELECT COUNT(*) AS held FROM accounts WHERE id LIKE 'erased:%'")).toBe(accountsBefore);
     expect(JSON.stringify([await all('SELECT * FROM machines WHERE account LIKE ?', 'erased:%'), await all('SELECT * FROM deposits WHERE account LIKE ?', 'erased:%'), await all('SELECT * FROM raw_objects WHERE account LIKE ?', 'erased:%')])).toBe(snapshot);
+  }, 90_000);
+
+  it('replaces the machine id on a deposit whose machine row is gone, and rewrites what a later sign-in adds', async () => {
+    const user = stubUser(String(next + 1));
+    const { token, account } = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000090ad'), token)).status).toBe(201);
+    await (await pool.db()).prepare('UPDATE deposits SET machine = ? WHERE account = ?').bind('machine-swept-long-ago', account).run();
+    await eraseAccount(await store(), account, NOW);
+    expect(await tableText('deposits')).not.toContain('machine-swept-long-ago');
+    const again = await pool.signIn('github', user);
+    expect(again.account).toBe(account);
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000090ae'), again.token)).status).toBe(201);
+    await (await pool.db()).prepare("INSERT INTO raw_objects (account, sha256, bytes, capture_version, redaction_version, stored_at) VALUES (?, ?, 1, 'cap-1', '1', 1)").bind(account, 'b'.repeat(64)).run();
+    await eraseAccount(await store(), account, NOW);
+    expect(await count('SELECT COUNT(*) AS held FROM raw_objects WHERE account = ?', account)).toBe(0);
+    expect(await count('SELECT COUNT(*) AS held FROM deposits WHERE account = ?', account)).toBe(0);
   }, 90_000);
 
   it('uses a different random id for each erasure, so two erased accounts are not joined to each other', async () => {
