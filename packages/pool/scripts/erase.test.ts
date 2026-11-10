@@ -2,6 +2,7 @@
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { sampleSkeleton } from '../src/sample.js';
+import { PANEL_COUNT } from '../src/stored.js';
 import { acceptanceOf, fieldOf, startPool, stubUser, type TestBucket, type TestDb, type TestPool } from '../src/test-pool.js';
 import { telemetryOf } from './erase-test-telemetry.js';
 import { eraseAccount, eraseLeakedSecret, eraseRawObject, findRawContaining, holdsValue, type EraseStore, type RawHit } from './erase.js';
@@ -608,6 +609,18 @@ describe('unlinking the rows an erasure keeps (t1065, covenant 6.6(d))', () => {
     await eraseAccount(await store(), account, NOW);
     expect(await count('SELECT COUNT(*) AS held FROM raw_objects WHERE account = ?', account)).toBe(0);
     expect(await count('SELECT COUNT(*) AS held FROM deposits WHERE account = ?', account)).toBe(0);
+  }, 90_000);
+
+  it('keeps the panel count and the panel readable, with nothing new for a recount', async () => {
+    const { account } = await fixture();
+    const panel = (): Promise<number> => all(PANEL_COUNT, 0).then((rows) => Number(fieldOf(rows[0], 'accounts')));
+    const before = await panel();
+    expect(before).toBeGreaterThan(0);
+    await eraseAccount(await store(), account, NOW);
+    expect(await panel()).toBe(before);
+    expect(await count('SELECT COUNT(*) AS held FROM contributors WHERE account LIKE ?', 'erased:%')).toBe(0);
+    expect(await count('SELECT COUNT(*) AS held FROM account_repo_keys WHERE account LIKE ?', 'erased:%')).toBe(0);
+    expect(await count('SELECT COUNT(*) AS held FROM deposit_hours WHERE account LIKE ?', 'erased:%')).toBe(0);
   }, 90_000);
 
   it('uses a different random id for each erasure, so two erased accounts are not joined to each other', async () => {
