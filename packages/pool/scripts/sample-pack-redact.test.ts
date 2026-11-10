@@ -180,8 +180,8 @@ describe('Item 4: orchestration lead sessions are not drawn', () => {
     f.write(S(5), [command(f, S(5), '/handoff', 'write a note'), assistant(S(5), 1, [{ type: 'text', text: 'working' }])]);
     const counts = await run(f);
     expect(counts).toMatchObject({ lead: 3, emitted: 2 });
-    const pack: { counts: { lead: number } } = JSON.parse(readFileSync(join(f.out, 'pack.json'), 'utf8'));
-    expect(pack.counts.lead).toBe(3);
+    const pack: unknown = JSON.parse(readFileSync(join(f.out, 'pack.json'), 'utf8'));
+    expect(pack).toMatchObject({ counts: { lead: 3 }, redactionVersion: '4' });
     expect(packText(f.out)).not.toContain('leading');
   });
 

@@ -27,7 +27,7 @@ describe('tool use ids', () => {
   });
 
   it('keys server tool and cloud-prefixed ids too, inside prose', () => {
-    const { text } = redactTranscript(`ids srvtoolu_01AbCdEfGhIjKlMnOpQr and toolu_bdrk_01AbCdEfGhIjKlMnOpQr here`, [], [], 'k', { toolId: (id) => `mapped(${id.length})` });
+    const { text } = redactTranscript(`ids srvtoolu_01AbCdEfGhIjKlMnOpQr and toolu_bdrk_01AbCdEfGhIjKlMnOpQr here`, [], [], 'k', { toolId: (id) => `mapped(${String(id.length)})` });
     expect(text).toBe('ids mapped(29) and mapped(31) here');
   });
 });

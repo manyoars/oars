@@ -10,7 +10,7 @@ import { injectedRule, learnInjected, type InjectedRule, type Json, type JsonObj
 export const PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, '<secret>'],
   [/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, '<secret>'],
-  // A synthetic fixture quoted in a session is masked like a real token (buyers' scanners flag the prefix, not the value), so the minimums are short and the
+  // A synthetic fixture quoted in a session is masked like a real token (a secret scanner flags the prefix, not the value), so the minimums are short and the
   // left guard is a non-alphanumeric: `FAKE_ghp_...` still starts a token where `\b` would miss it.
   [/(?<![A-Za-z0-9])gh[pousr]_[A-Za-z0-9]{8,}(?![A-Za-z0-9])/g, '<secret>'],
   [/(?<![A-Za-z0-9])github_pat_[A-Za-z0-9_]{8,}(?![A-Za-z0-9])/g, '<secret>'],
