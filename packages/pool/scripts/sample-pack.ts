@@ -97,6 +97,8 @@ export interface PackCounts {
   noRepo: number;
   /** A resumed session that replays another's first prompt line and is the shorter of the two. */
   duplicate: number;
+  /** Dropped because the redacted, masked text still held something shaped like a key (`secretIn`); nothing of the session was written. */
+  secret: number;
   emitted: number;
 }
 
@@ -239,6 +241,28 @@ const duplicatesOf = async (runtime: SessionsRuntime, candidates: readonly TurnC
   return losers;
 };
 
+/**
+ * The key shapes `redact.ts` masks (its `PATTERNS`), read again over the redacted output, and unanchored: the redactor's rules start at a word boundary, so a key stuck to the
+ * word before it (`myAKIA...`) is one it can miss, and a pack that goes to a buyer is held to the stricter test. A hit drops the whole session; nothing is repaired here.
+ * A placeholder (`token=<secret>`, `https://<secret>@host`) is not a hit. `sk-` outside `sk-ant-` keeps a left guard and a digit, so `task-management-notes` is not read as a key.
+ */
+const SECRET_SHAPES: ReadonlyArray<readonly [string, RegExp]> = [
+  ['private key', /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
+  ['AWS access key id', /(?:AKIA|ASIA)[A-Z0-9]{16}/],
+  ['GitHub token', /gh[pousr]_[A-Za-z0-9]{20,}/],
+  ['GitHub fine-grained token', /github_pat_[A-Za-z0-9_]{20,}/],
+  ['API key', /sk-ant-[A-Za-z0-9_-]{16,}|(?<![A-Za-z0-9])sk-(?=[A-Za-z_-]*[0-9])[A-Za-z0-9_-]{20,}/],
+  ['Stripe key', /(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{10,}/],
+  ['Stripe webhook secret', /whsec_[A-Za-z0-9]{10,}/],
+  ['Slack token', /xox[abprs]-[A-Za-z0-9-]{10,}/],
+  ['Google API key', /AIza[0-9A-Za-z_-]{30,}/],
+  ['JSON web token', /eyJ[A-Za-z0-9_-]{8,}[.][A-Za-z0-9_-]{8,}[.][A-Za-z0-9_-]{8,}/],
+  ['password in a URL', /[a-z][a-z0-9+.-]*:[/][/][^\s/:@<]+:[^\s/@<]+@/i],
+];
+
+/** The name of the first secret shape the text holds, or undefined when it holds none. */
+export const secretIn = (text: string): string | undefined => SECRET_SHAPES.find(([, shape]) => shape.test(text))?.[0];
+
 const EXCLUDED: { readonly [reason in Exclude<Reason, 'clean'>]: keyof PackCounts['excluded'] } = { term: 'term', 'no-raw': 'noRaw', 'no-terms': 'noTerms', unreadable: 'unreadable' };
 
 /** Where a transcript goes under the session's folder: `main.jsonl`, or its path under the session (`subagents/agent-x.jsonl`). */
@@ -265,7 +289,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   const sessionIds = new Map(store.sessions.map((session) => [session.session, matchIdOf(options.buyerKey, serverKeyOf(indexKey, session.session))]));
   const order = (session: string): string => createHash('sha256').update(`${options.seed}\n${session}`).digest('hex');
   const drawn = frame.map((session) => ({ session, rank: order(session.session) })).sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0));
-  const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, tooShort: 0, noRepo: 0, duplicate: 0, emitted: 0 };
+  const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, tooShort: 0, noRepo: 0, duplicate: 0, secret: 0, emitted: 0 };
   const turnsOf = (session: { userTurns: number; assistantTurns: number }): number => session.userTurns + session.assistantTurns;
   let losers: Set<string> | undefined;
   const rows: ManifestRow[] = [];
@@ -312,6 +336,11 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     const texts: string[] = [];
     for (const file of files) texts.push(redactTranscript(await readFile(file.path, 'utf8'), domains, names, injectedKey).text);
     const masked = maskIds(texts, sessionIds, indexKey, options.buyerKey);
+    // After redaction and masking, before the first byte is written: a session with a hit leaves no file, manifest row, or index row.
+    if (masked.some((text) => secretIn(text) !== undefined)) {
+      counts.secret += 1;
+      continue;
+    }
     for (const [at, file] of files.entries()) {
       const target = join(partial, 'sessions', matchId, placeOf(file.key, record.session, file.main));
       await mkdir(dirname(target), { recursive: true });
@@ -381,7 +410,7 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
       [
         `Wrote ${String(counts.emitted)} sessions to ${options.out} (manifest.jsonl, sessions/<match id>/).`,
         `Scanned ${String(counts.scanned)} of ${String(counts.frame)} in draw order. Excluded: ${String(term)} for a term, ${String(noRaw)} with no raw, ${String(noTerms)} with no term file, ${String(unreadable)} unreadable.`,
-        `Left out after the gate: ${String(counts.noOwner)} in a folder no owner entry names, ${String(counts.noHarnessTerms)} from a harness with no terms row, ${String(counts.tooShort)} under ${String(options.minTurns)} turns, ${String(counts.noRepo)} with no repository, ${String(counts.duplicate)} replaying a longer session.`,
+        `Left out after the gate: ${String(counts.noOwner)} in a folder no owner entry names, ${String(counts.noHarnessTerms)} from a harness with no terms row, ${String(counts.tooShort)} under ${String(options.minTurns)} turns, ${String(counts.noRepo)} with no repository, ${String(counts.duplicate)} replaying a longer session, ${String(counts.secret)} holding a secret after redaction.`,
       ].join('\n'),
     );
     return 0;

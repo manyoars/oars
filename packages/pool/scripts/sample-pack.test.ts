@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { deposit, loadStore, paths, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { rolloutLine, stageCodex } from '../../cli/src/sessions/test-support.js';
-import { buildPack, main, matchIdOf, ownerOf, parseOwners, serverKeyOf, USAGE, type ManifestRow, type PackOptions } from './sample-pack.js';
+import { buildPack, main, matchIdOf, ownerOf, parseOwners, secretIn, serverKeyOf, USAGE, type ManifestRow, type PackOptions } from './sample-pack.js';
 
 const TERM = 'zorblax';
 const CLAUDE_MD_LINE = 'Always fold the green napkins before lunch';
@@ -353,6 +353,48 @@ describe('the acceptance rule (plan S1)', () => {
       expect(await buildPack(f.runtime, options(f, { seed, out }))).toMatchObject({ duplicate: 1, emitted: 2 });
       expect(sessionsOf(f, out).sort()).toEqual([S(2), S(3)]);
     }
+  });
+});
+
+describe('the secret scan', () => {
+  // Built from parts so this file holds no whole key shape for a scanner to find.
+  const SHAPES: [string, string][] = [
+    ['private key', '-----BEGIN RSA PRIVATE ' + 'KEY-----'],
+    ['AWS access key id', 'AK' + 'IA' + 'IOSFODNN7EXAMPLE'],
+    ['GitHub token', 'gh' + 'p_' + 'a1B2c3D4e5F6g7H8i9J0k1L2'],
+    ['GitHub fine-grained token', 'github_' + 'pat_' + '11AAAAAAA0abcdefghij1234'],
+    ['API key', 'sk' + '-ant-' + 'api03abcdefghij1234567890'],
+    ['Stripe key', 'sk' + '_live_' + 'abcdefghij1234'],
+    ['Stripe webhook secret', 'wh' + 'sec_' + 'abcdefghij1234'],
+    ['Slack token', 'xo' + 'xb-' + '1234567890-abcdefghij'],
+    ['Google API key', 'AI' + 'za' + 'SyA1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6'],
+    ['JSON web token', 'ey' + 'J' + 'hbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2QT4'],
+    ['password in a URL', 'https://admin:hunter22' + '@example.com/repo'],
+  ];
+
+  it.each(SHAPES)('finds a %s in a text, even stuck to the word before it', (name, sample) => {
+    expect(secretIn(`the value is ${sample} here`)).toBe(name);
+    expect(secretIn(`prefix${sample}`)).toBe(name);
+  });
+
+  it('passes ordinary text, a masked value, kebab-case words, and a masked URL', () => {
+    for (const text of ['please rename the helper in parse.ts', 'token=<secret>', 'https://<secret>@example.com', 'the task-management-and-planning-notes and a disk-usage-report-for-the-quarter', 'Bearer <secret>']) expect(secretIn(text)).toBeUndefined();
+  });
+
+  it('drops a session whose redacted text still holds a key, writes nothing of it, and counts it', async () => {
+    const f = fixture();
+    // Stuck to a word, the key is outside the redactor's word-boundary rule: it comes through redaction, and the scan is what stops it.
+    const planted = 'my' + 'AK' + 'IA' + 'IOSFODNN7EXAMPLE';
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, `set it to ${planted} and rerun`)]);
+    f.write('-work-oars', S(2), [user(S(2), 1, 'run the build'), assistant(S(2), 1, 'green')]);
+    await stored(f);
+    const counts = await buildPack(f.runtime, options(f));
+    expect(counts).toMatchObject({ scanned: 2, secret: 1, emitted: 1 });
+    expect(sessionsOf(f)).toEqual([S(2)]);
+    expect(packText(f.out)).not.toContain(planted);
+    expect(readFileSync(join(f.out, 'manifest.jsonl'), 'utf8')).not.toContain(planted);
+    expect(indexOf(f).map((row) => row.session)).toEqual([S(2)]);
+    expect(readdirSync(join(f.out, 'sessions'))).toHaveLength(1);
   });
 });
 
