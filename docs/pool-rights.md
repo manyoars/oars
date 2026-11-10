@@ -67,6 +67,8 @@ Limit: **no provider sign-in.** If the requester has no provider sign-in at all,
 
 Limit: **recipients.** None to name today. Nothing is sold, and no path hands deposits to anyone ([`flags.md`](flags.md)). Cloudflare runs the pool as processor; name it as that category. A bundle is built from `cells` and `strata` and carries no account's personal data, so the accounts that fetch it receive none of the requester's data and are not their recipients (Art. 15(1)(c)).
 
+Limit: **lot 1 recipients (Art. 15(1)(c)).** A lot-1 sample pack hands over the operator's own sessions, not pool deposits, so the pool holds no record of it and a requester who is a pool account does not find it there. Its register is `deliveries.jsonl` beside the owners file: `npm run deliver -w packages/pool -- recipients <session id or the person's name> --owners <file>` prints each recipient by name with the match id it holds. Redaction reduces the personal data in a pack but does not remove it, so a person a session names is a data subject of that lot; name every recipient printed, not a category. The search reads only the packs `index.jsonl` lists that are still on the machine, so say so when a pack has been deleted since.
+
 ## Art. 16, rectification
 
 **Arrives:** an email saying a record about them is wrong.
@@ -110,6 +112,8 @@ Limit: **the person's own machine.** The local store is theirs and is never sent
 
 Limit: **Art. 19, telling recipients.** No one to tell: a bundle carries no account's personal data, so its fetchers are not the requester's recipients (Art. 19). When a path hands deposits to anyone, its register names them (C6).
 
+Limit: **lot 1, telling recipients (Art. 19).** Run `deliver recipients` for the session or the person's name: each recipient printed holds the data under the printed match id, never the session id, so quote that match id when you ask them to erase or correct it. `deliver` sends nothing, so telling a recipient is a message you send yourself. A session with no row was never handed over, so there is no one to tell.
+
 ## Art. 18, restriction
 
 **Arrives:** an email asking you to stop using their data while a dispute about it is settled.
@@ -146,6 +150,12 @@ Covenant 6.6(a): you must stop the processing unless you show compelling grounds
 **Record kept:** the decision and the grounds, with dates.
 
 Nothing is sold and no path hands deposits to anyone, so an objection to sale or training has nothing to exclude from yet. Record it in the register, scope included; the first sale path loads those records.
+
+Lot 1 (the first sale) has a register today. Add the objection to `objections.jsonl` beside the owners file, one JSON line (`{"name": "<the person>"}` or `{"session": "<id>"}`, `"received"` as an ISO date and time, `"scope"` as `sale`, `training`, or `all`). The next `sample-pack` build leaves out each session it names and each whose text holds the name, and `deliver` refuses a pack built before the newest objection (Art. 21(1)); both are in [`pool.md`](pool.md), "The sample pack".
+
+Limit: **a lot already delivered.** An objection stops later processing, not a lot already sent. Run `deliver recipients` and tell each recipient (Art. 19 above) to stop using the session; that rests on the term sheet, not on anything the pool can enforce.
+
+Limit: **scope on lot 1.** Every scope keeps the session out of a pack, because a pack is a sale and lot 1 cannot hand a session over for evaluation and withhold it from training (Art. 21(1)).
 
 ## Art. 7(3), withdrawing raw consent
 
