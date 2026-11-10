@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as Exclusion from '../../cli/src/sessions/exclusion.js';
 import { SKELETON_FORMAT, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { deposit, loadStore, paths, type SessionsRuntime } from '../../cli/src/sessions/store.js';
+import { runGit } from '../../cli/src/sessions/survival.js';
 import { rolloutLine, stageCodex } from '../../cli/src/sessions/test-support.js';
 import { buildPack, HARNESS_TERMS, main, matchIdOf, ownerOf, parseOwners, secretIn, serverKeyOf, skeletonUnder, USAGE, type Census, type ManifestRow, type PackCounts, type PackOptions, type Tally } from './sample-pack.js';
 
@@ -366,7 +367,8 @@ describe('the skeleton and the manifest fields it adds (plan S3)', () => {
   });
 });
 
-describe('the repository pointer and the outcome (plan S4)', () => {
+// Each of these runs several real git processes, and a Windows runner spends seconds on them.
+describe('the repository pointer and the outcome (plan S4)', { timeout: 30_000 }, () => {
   const REMOTE = 'https://example.com/acme/app.git';
   const OPTED_IN = [{ folder: '*-oars*', owner: 'Many Oars Co.', license: 'Apache-2.0', pointer: true }];
 
@@ -413,6 +415,85 @@ describe('the repository pointer and the outcome (plan S4)', () => {
     await stored(f);
     await buildPack(f.runtime, options(f));
     expect(pointerOf(manifest(f.out)[0])).toMatchObject({ remote: REMOTE, commit: shas.onFeature });
+  });
+
+  it('falls back to origin/<branch> when the local branch is gone, then to origin/HEAD with the same cutoff, and never reads a commit made after the session started', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    const shas = makeRepo(repo);
+    git(repo, ['update-ref', 'refs/remotes/origin/topic', shas.onFeature]);
+    git(repo, ['branch', '-q', '-D', 'feature']);
+    // A commit on main dated after the session began: the cutoff must keep it out.
+    commitIn(repo, 'later.txt', '2026-06-02T12:00:00Z');
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'topic'), assistant(S(1), 1, 'done')]);
+    f.write('-work-oars', S(2), [user(S(2), 1, 'rename a helper', repo, 'never-pushed'), assistant(S(2), 1, 'done')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    const byTurn = new Map(manifest(f.out).map((row) => [row.matchId, pointerOf(row)]));
+    expect([...byTurn.values()]).toEqual(expect.arrayContaining([expect.objectContaining({ commit: shas.onFeature }), expect.objectContaining({ commit: shas.onMain })]));
+    expect(byTurn.size).toBe(2);
+  });
+
+  it('maps a working directory that no longer exists to the repository it was a worktree of', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    const shas = makeRepo(repo);
+    const gone = join(repo, '.claude', 'worktrees', 't1');
+    mkdirSync(gone, { recursive: true });
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', gone, 'task/t1'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    rmSync(join(repo, '.claude'), { recursive: true });
+    const counts = await buildPack(f.runtime, options(f));
+    expect(pointerOf(manifest(f.out)[0])).toEqual({ remote: REMOTE, commit: shas.onMain });
+    expect(counts.noPointer).toBe(0);
+  });
+
+  it('reads pointer: null for a session whose directory and repository are both gone, and counts it once', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    makeRepo(repo);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'feature'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    rmSync(repo, { recursive: true, force: true });
+    const counts = await buildPack(f.runtime, options(f));
+    const [row] = manifest(f.out);
+    expect(row).toBeDefined();
+    expect(Reflect.get(row ?? {}, 'pointer')).toBeNull();
+    expect(counts).toMatchObject({ emitted: 1, noPointer: 1 });
+  });
+
+  it('makes no git call, writes no pointer or outcome, and counts no noPointer when no owners entry opts in', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    makeRepo(repo);
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'feature'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    const spy = vi.fn(runGit);
+    const counts = await buildPack(f.runtime, options(f, { git: spy }));
+    expect(spy).not.toHaveBeenCalled();
+    const [row] = manifest(f.out);
+    expect(row).toBeDefined();
+    expect(row ? Object.keys(row) : []).not.toEqual(expect.arrayContaining(['pointer']));
+    expect(row ? Object.keys(row) : []).not.toEqual(expect.arrayContaining(['outcome']));
+    expect(counts).toMatchObject({ emitted: 1, noPointer: 0 });
+  });
+
+  it('asks the injected runner for the remote of the working directory, and drops credentials embedded in the remote URL', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    const shas = makeRepo(repo);
+    git(repo, ['remote', 'set-url', 'origin', 'https://builder:s3cret@example.com/acme/app.git']);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'feature'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    const spy = vi.fn(runGit);
+    await buildPack(f.runtime, options(f, { git: spy }));
+    expect(spy).toHaveBeenCalledWith(repo, ['remote', 'get-url', 'origin']);
+    expect(pointerOf(manifest(f.out)[0])).toEqual({ remote: REMOTE, commit: shas.onFeature });
+    expect(readFileSync(join(f.out, 'manifest.jsonl'), 'utf8')).not.toContain('s3cret');
   });
 });
 
