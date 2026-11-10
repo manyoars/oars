@@ -165,18 +165,26 @@ const isEmptyOrAbsent = async (folder: string): Promise<boolean> => {
   }
 };
 
-const UUID_OR_REQUEST = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|req_[0-9A-Za-z]+/gi;
+// A candidate id: a uuid, or a prefixed id (`req_...`, `call_...`). A candidate is rewritten only when it is a known id, so other words that match are left alone.
+const UUID_OR_PREFIXED = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[A-Za-z]+_[0-9A-Za-z]+/gi;
 
 const isRecord = (value: unknown): value is object => typeof value === 'object' && value !== null;
 
-/** The line ids a transcript carries: the value of every key ending in `uuid` (`uuid`, `parentUuid`, `leafUuid`, ...) and every `requestId`, at any depth. */
+/** The keys whose value is an id: Claude Code's `uuid`, `parentUuid`, `leafUuid`, ... and `requestId`, and Codex's `call_id`, `session_id`, and `forked_from_id`. */
+const isIdKey = (key: string): boolean => /uuid$/i.test(key) || ['requestId', 'call_id', 'session_id', 'forked_from_id'].includes(key);
+
+/** The line ids a transcript carries: the value of every id key at any depth, and a Codex `session_meta` line's own `id` (a bare `id` is no id key elsewhere). */
 const lineIdsOf = (value: unknown, found: Set<string>): void => {
   if (Array.isArray(value)) for (const item of value) lineIdsOf(item, found);
-  else if (isRecord(value))
+  else if (isRecord(value)) {
+    const payload: unknown = Reflect.get(value, 'payload');
+    const own: unknown = Reflect.get(value, 'type') === 'session_meta' && isRecord(payload) ? Reflect.get(payload, 'id') : undefined;
+    if (typeof own === 'string') found.add(own);
     for (const [key, item] of Object.entries(value)) {
-      if (typeof item === 'string' && (/uuid$/i.test(key) || key === 'requestId')) found.add(item);
+      if (typeof item === 'string' && isIdKey(key)) found.add(item);
       else lineIdsOf(item, found);
     }
+  }
 };
 
 const parsed = (line: string): unknown => {
@@ -188,19 +196,20 @@ const parsed = (line: string): unknown => {
 };
 
 /**
- * One id under the keyed index, shaped as the id it stands for: a line uuid stays a uuid and a request id a `req_` id.
+ * One id under the keyed index, shaped as the id it stands for: a line uuid stays a uuid and a prefixed id (`req_`, `call_`) keeps its prefix.
  * The same function as the match id, so a buyer's masks are stable across packs and no one without the index key can test an id against them.
  */
 const maskOf = (indexKey: string, buyerKey: string, id: string): string => {
   const hex = matchIdOf(buyerKey, serverKeyOf(indexKey, id));
-  return id.startsWith('req_') ? `req_${hex.slice(0, 24)}` : `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+  const prefix = /^([A-Za-z]+)_/.exec(id)?.[1];
+  return prefix !== undefined ? `${prefix}_${hex.slice(0, 24)}` : `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 };
 
 /** Every store session id (to its match id) and every line id the texts carry, rewritten wherever it occurs: the `sessionId` field, a path, a typed mention. Other text is left alone. */
 const maskIds = (texts: readonly string[], sessions: ReadonlyMap<string, string>, indexKey: string, buyerKey: string): string[] => {
   const lineIds = new Set<string>();
   for (const text of texts) for (const line of text.split('\n')) lineIdsOf(parsed(line), lineIds);
-  return texts.map((text) => text.replace(UUID_OR_REQUEST, (id) => sessions.get(id) ?? (lineIds.has(id) ? maskOf(indexKey, buyerKey, id) : id)));
+  return texts.map((text) => text.replace(UUID_OR_PREFIXED, (id) => sessions.get(id) ?? (lineIds.has(id) ? maskOf(indexKey, buyerKey, id) : id)));
 };
 
 /** What a resumed session shares with the one it continues: its first user line, as the harness replays it, without the session id it rewrites. Undefined when the transcript has no user line. */
@@ -314,6 +323,12 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   const frame = store.sessions.filter((session) => session.userTurns > 0);
   // Every session the store knows, so a transcript that names another session names it by that session's match id.
   const sessionIds = new Map(store.sessions.map((session) => [session.session, matchIdOf(options.buyerKey, serverKeyOf(indexKey, session.session))]));
+  // A source's store id is `<harness>-<id>` while its file names the bare id (a Codex rollout's `session_meta.id`): both are the session.
+  for (const session of store.sessions) {
+    const prefix = `${harnessOf(session)}-`;
+    const match = sessionIds.get(session.session);
+    if (harnessOf(session) !== 'claude-code' && session.session.startsWith(prefix) && match !== undefined) sessionIds.set(session.session.slice(prefix.length), match);
+  }
   const order = (session: string): string => createHash('sha256').update(`${options.seed}\n${session}`).digest('hex');
   const drawn = frame.map((session) => ({ session, rank: order(session.session) })).sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0));
   const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, tooShort: 0, noRepo: 0, duplicate: 0, secret: 0, emitted: 0 };

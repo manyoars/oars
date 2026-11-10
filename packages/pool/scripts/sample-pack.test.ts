@@ -465,7 +465,8 @@ describe('the secret scan', () => {
 
 // A Codex session as the harness writes it: the rollout is the only copy (oars archives nothing for a source), so it reaches the pack only through the store's own record of where it lives.
 const CODEX_ID = 'cccc3333-3333-4333-8333-333333333333';
-const CODEX_CALL = 'call_Qx7LmN2vTz9RkPb4WcYd8HsJ';
+// Lowercase hex: a mixed-case call id is read as a secret and redacted before the masking sees it.
+const CODEX_CALL = 'call_9f2e7a41c6b8d305e1a7f482';
 const CODEX_AGENTS_LINE = 'Prefer the amber ledger for every receipt';
 const CODEX_ROW = { terms: [{ name: 'OpenAI Terms of Use', version: 'test version' }], training: 'not-offered' } as const;
 const codexTime = (second: number): string => `2026-06-01T10:00:${String(second).padStart(2, '0')}.000Z`;
@@ -544,6 +545,36 @@ describe('a Codex session (plan S2)', () => {
     // What the person typed and what the model answered stay.
     expect(text).toContain('fix the build');
     expect(text).toContain('fixed');
+  });
+
+  it('masks the session id and every call id, the same way wherever each occurs, and writes neither raw', async () => {
+    const f = fixture();
+    expect(await packed(f)).toMatchObject({ emitted: 1 });
+    const [row] = manifest(f.out);
+    const text = packText(f.out);
+    expect(text).not.toContain(CODEX_ID);
+    expect(text).not.toContain(CODEX_CALL);
+    expect(text).not.toContain(CODEX_CALL.slice(5));
+    const records = text.split(String.fromCharCode(10)).filter((entry) => entry !== '').map((entry): unknown => JSON.parse(entry));
+    const callIds = records.flatMap((record) => {
+      const payload: unknown = typeof record === 'object' && record !== null ? Reflect.get(record, 'payload') : undefined;
+      const id: unknown = typeof payload === 'object' && payload !== null ? Reflect.get(payload, 'call_id') : undefined;
+      return typeof id === 'string' ? [id] : [];
+    });
+    // The call and its output still name one call, and the call id keeps the shape of the id it stands for.
+    expect(callIds).toHaveLength(2);
+    expect(callIds[0]).toBe(callIds[1]);
+    expect(callIds[0]).toMatch(/^call_[0-9a-f]{24}$/);
+    // The rollout's own id is the session's match id, as a Claude Code line's sessionId is.
+    expect(text).toContain(row?.matchId);
+  });
+
+  it('writes no raw call id when the redactor took it first as a secret', async () => {
+    const f = fixture();
+    const random = 'call_Qx7LmN2vTz9RkPb4WcYd8HsJ';
+    const rollout = codexRollout().map((entry) => JSON.parse(JSON.stringify(entry).replaceAll(CODEX_CALL, random)) as object);
+    expect(await packed(f, rollout)).toMatchObject({ emitted: 1 });
+    expect(packText(f.out)).not.toContain(random);
   });
 });
 
