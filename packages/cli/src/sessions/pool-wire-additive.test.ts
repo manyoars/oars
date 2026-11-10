@@ -81,7 +81,7 @@ describe('versions on every batch', () => {
 });
 
 // The pin: the field names a batch holds, hashed, filed under the field-list version. Adding a field changes the hash, so the test fails until the version moves and the new pin is added beside the old.
-const FIELDS_PINNED: { readonly [version: number]: string } = { 1: '3bf238006c97c800', 2: '9ddaff511a5a8342', 3: '4f59ec59f40accb5', 4: 'dcd086e0971b7948', 5: 'dc85267df48b42cb', 6: '6b58bf15c7c5f639', 7: 'a3348890aa46b605', 8: 'adbb805b0b3eda6d', 9: '9f365e370101f49a', 10: 'a7a05ccb5d5ac89f' };
+const FIELDS_PINNED: { readonly [version: number]: string } = { 1: '3bf238006c97c800', 2: '9ddaff511a5a8342', 3: '4f59ec59f40accb5', 4: 'dcd086e0971b7948', 5: 'dc85267df48b42cb', 6: '6b58bf15c7c5f639', 7: 'a3348890aa46b605', 8: 'adbb805b0b3eda6d', 9: '9f365e370101f49a', 10: '8a39f6a8e30bbf0a', 11: '0a3ca64cb42e22a5', 12: '356ffb0f2fbfe249' };
 const fieldsHash = (): string => createHash('sha256').update(BATCH_FIELDS.join(',')).digest('hex').slice(0, 16);
 
 describe('the field-list version', () => {

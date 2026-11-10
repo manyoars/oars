@@ -179,6 +179,7 @@ export const REGISTER_FIXTURE = {
   vocabVersion: VOCAB_VERSION,
   fieldsVersion: FIELD_LIST_VERSION,
   id: '0123456789abcdef',
+  claimed: { hostClass: 'cloud', launcher: 'ci' },
   deltas: [{ deltaKind: 'removed', field: 'package', name: 'typescript', registry: 'npm', metric: 'callsPerSession', change: -2 }],
   timingPrint: null,
   transcripts: [

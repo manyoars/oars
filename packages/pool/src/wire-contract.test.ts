@@ -247,7 +247,7 @@ describe('a value this server does not know', () => {
 describe('a format 5 batch with every optional field absent', () => {
   /** What an absent optional field reads as, which is what a sent null is. */
   const EMPTY: { [name: string]: unknown } = { deltas: [], timingPrint: null, languageShares: [] };
-  const ABSENT_ONLY: ReadonlySet<string> = new Set(['reach', 'skill', 'edges', 'recoveryCalls', 'usageResponses', 'allocated', 'repoKey', 'orgSize', 'team', 'repoVisibility', 'hour', 'keys', 'keysDropped', 'targetClass', 'argClass', 'argFeatures', 'argValues', 'changeKind', 'names', 'namesDropped', 'templates', 'templatesDropped', 'diffShape']);
+  const ABSENT_ONLY: ReadonlySet<string> = new Set(['claimed', 'reach', 'skill', 'edges', 'recoveryCalls', 'usageResponses', 'allocated', 'repoKey', 'orgSize', 'team', 'repoVisibility', 'hour', 'keys', 'keysDropped', 'targetClass', 'argClass', 'argFeatures', 'argValues', 'changeKind', 'names', 'namesDropped', 'templates', 'templatesDropped', 'diffShape']);
 
   // Each level of the wire with its optional names and where it sits; a level added to OPTIONAL fails the length check below until it is listed here.
   const LEVELS_OPTIONAL: readonly (readonly [readonly string[], (string | number)[]])[] = [
@@ -295,12 +295,12 @@ describe('a format 5 batch with every optional field absent', () => {
 });
 
 describe('the bag', () => {
-  it('is read by nothing that serves: no source file outside the deposit route names the column', () => {
+  it('is read by nothing that serves a read: no source file outside the deposit route and the account\'s own export (Article 15 copy) names the column', () => {
     const dir = fileURLToPath(new URL('.', import.meta.url));
     const readers = readdirSync(dir)
       .filter((file) => file.endsWith('.ts') && !file.endsWith('.test.ts'))
       .filter((file) => /\bextensions\b|\bother_values\b/.test(readFileSync(`${dir}${file}`, 'utf8')));
-    expect(readers).toEqual(['worker.ts']);
+    expect(readers).toEqual(['export.ts', 'worker.ts']);
   });
 
   it('is left out of a bundle: a stored bag changes no cell a bundle is derived from', async () => {

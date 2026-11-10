@@ -19,6 +19,7 @@ interface Statement {
 /** The D1 calls these tests make. Miniflare's own return type names a package whose ambient types clash with Node's, so it is named here. */
 export interface TestDb {
   prepare: (sql: string) => Statement & { bind: (...values: (string | number | null)[]) => Statement };
+  batch: (statements: readonly Statement[]) => Promise<unknown>;
 }
 
 /** The R2 calls these tests make, named for the same reason as `TestDb`. */
@@ -352,9 +353,12 @@ export const startPool = async (bindings: { [name: string]: string } = {}, optio
   const db = async (): Promise<TestDb> => (await miniflare.getBindings<{ DB: TestDb }>()).DB;
   const bucket = async (): Promise<TestBucket> => (await miniflare.getBindings<{ TELEMETRY: TestBucket }>()).TELEMETRY;
   const database = await db();
+  // One batch, not one round trip per statement: the migrations are about 90 statements, so the hook no longer pays one round trip per statement when the machine is busy.
+  const statements: Statement[] = [];
   for (const file of readdirSync(fileIn('../migrations')).sort()) {
-    for (const line of readFileSync(fileIn(`../migrations/${file}`), 'utf8').split('\n')) if (line.trim() !== '' && !line.startsWith('--')) await database.prepare(line).run();
+    for (const line of readFileSync(fileIn(`../migrations/${file}`), 'utf8').split('\n')) if (line.trim() !== '' && !line.startsWith('--')) statements.push(database.prepare(line));
   }
+  await database.batch(statements);
 
   const rawBucket = async (): Promise<TestBucket> => (await miniflare.getBindings<{ RAW: TestBucket }>()).RAW;
 

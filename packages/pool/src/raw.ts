@@ -1,8 +1,8 @@
-// The raw tier: a locally redacted transcript goes to R2 in parts, and D1 keeps one ledger row per object. This file is the only one that touches the raw bucket or `raw_objects`, and it serves nothing: no route returns a raw byte, a hash, or a count (`raw-serves-nothing.test.ts` pins that).
+// The raw tier: a locally redacted transcript goes to R2 in parts, and D1 keeps one ledger row per object. This file stages and assembles, and the only other file that touches the raw bucket or `raw_objects` is `export.ts`, which reads an account its own object back. No route here returns a raw byte, a hash, or a count (`raw-serves-nothing.test.ts` pins both).
 // The server cannot verify redaction. It takes the client's word that the bytes were redacted (and hosts masked) before they were sent, and it runs no scanner.
 import { createHash } from 'node:crypto';
 import { covenantNotAccepted, depositsClosed, hasAccepted } from './covenant.js';
-import { answer, bodyOf, bound, fieldOf, notConfigured, refuse, type Env, type RawBucket, type RawUploadedPart } from './http.js';
+import { answer, bodyOf, bound, fieldOf, notConfigured, refuse, textField, type Env, type RawBucket, type RawUploadedPart } from './http.js';
 import { accountOf } from './identity.js';
 import { erasedRefusal, isErased, rawDigest } from './tombstones.js';
 
@@ -22,6 +22,7 @@ const VERSION = /^[A-Za-z0-9._-]{1,64}$/;
 const REDACTION_HEADER = 'oars-redaction-version';
 const CAPTURE_HEADER = 'oars-capture-version';
 const CONSENT_HEADER = 'oars-raw-consent';
+const CONSENT_VERSION_HEADER = 'oars-raw-consent-version';
 
 const PART_ROUTE = /^\/v1\/raw\/([0-9a-f]{64})\/parts\/([1-9][0-9]{0,5})$/;
 const COMPLETE_ROUTE = /^\/v1\/raw\/([0-9a-f]{64})\/complete$/;
@@ -34,7 +35,7 @@ export const RAW_ROUTES = [
 
 const stagingPrefix = (account: string, hash: string): string => `staging/${account}/${hash}/`;
 const stagingKey = (account: string, hash: string, part: number): string => `${stagingPrefix(account, hash)}${String(part).padStart(6, '0')}`;
-const objectKey = (account: string, hash: string): string => `raw/${account}/${hash}`;
+export const objectKey = (account: string, hash: string): string => `raw/${account}/${hash}`;
 
 interface Admitted {
   account: string;
@@ -48,18 +49,37 @@ const versionOf = (request: Request, header: string): string | undefined => {
   return value !== null && VERSION.test(value) ? value : undefined;
 };
 
-/** Raw consent is its own answer, apart from the covenant. Stating it records it once; after that a request need not repeat it, and one that states anything but `granted` is a refusal. */
-const consented = async (request: Request, env: Env, account: string): Promise<boolean> => {
+const notAsked = (): Response => refuse(403, 'raw_consent_required', `Raw transcripts need their own consent: send ${CONSENT_HEADER}: granted and ${CONSENT_VERSION_HEADER}: <the covenant version in force> once the person has said yes.`, CONSENT_HEADER);
+
+const staleYes = (covenant: string): Response => refuse(403, 'raw_consent_stale', `The yes to raw copies was given under another covenant version. Answer again for ${covenant}: oars pool raw --consent yes.`, CONSENT_VERSION_HEADER);
+
+const withdrawnYes = (): Response => refuse(403, 'raw_consent_withdrawn', 'This account withdrew its consent to raw copies. They are accepted again only after a new yes: oars pool raw --consent yes.', CONSENT_HEADER);
+
+/**
+ * Raw consent is its own answer, apart from the covenant, and it answers one covenant version (GDPR Article 7(1)): a yes counts only for the version in force. Stating it with the version it answered records it, and after that a request need not repeat it;
+ * one that states anything but `granted` is a refusal. A yes with no version, in the request or in the row, reads as not asked, and one for another version is stale. After a withdrawal (`withdrawRawConsent`) the raw routes refuse by name, whatever the header says, until a new yes through `grantRawConsent`.
+ */
+const consented = async (request: Request, env: Env, account: string, covenant: string): Promise<Response | undefined> => {
   const stated = request.headers.get(CONSENT_HEADER);
+  const row = await env.DB.prepare('SELECT raw_consent, raw_consent_version, raw_consent_withdrawn_at FROM accounts WHERE id = ?').bind(account).first();
+  const standing = typeof fieldOf(row, 'raw_consent') === 'number';
+  const held = fieldOf(row, 'raw_consent_version');
+  // A withdrawal holds whatever a request says (GDPR Article 7(3)): the client states `granted` on every raw request from any machine with a local yes, so the header cannot be what undoes it. Only PUT /v1/consent/raw records a yes after a withdrawal.
+  if (!standing && typeof fieldOf(row, 'raw_consent_withdrawn_at') === 'number') return withdrawnYes();
   if (stated === 'granted') {
-    await env.DB.prepare('UPDATE accounts SET raw_consent = COALESCE(raw_consent, ?) WHERE id = ?').bind(Date.now(), account).run();
-    return true;
+    const answered = versionOf(request, CONSENT_VERSION_HEADER);
+    if (answered === undefined) return notAsked();
+    if (answered !== covenant) return staleYes(covenant);
+    if (!standing || held !== answered) await env.DB.prepare('UPDATE accounts SET raw_consent = COALESCE(raw_consent, ?), raw_consent_version = ? WHERE id = ?').bind(Date.now(), answered, account).run();
+    return undefined;
   }
-  if (stated !== null) return false;
-  return typeof fieldOf(await env.DB.prepare('SELECT raw_consent FROM accounts WHERE id = ?').bind(account).first(), 'raw_consent') === 'number';
+  if (stated !== null) return notAsked();
+  if (!standing) return notAsked();
+  if (typeof held !== 'string') return notAsked();
+  return held === covenant ? undefined : staleYes(covenant);
 };
 
-/** Every raw request passes the same gate, in this order: the pool is open, the account is signed in and has accepted the covenant in force, the request states its redaction and capture versions, and the account has given raw consent. */
+/** Every raw request passes the same gate, in this order: the pool is open, the account is signed in and has accepted the covenant in force, the request states its redaction and capture versions, and the account has given raw consent for the covenant in force. */
 const admit = async (request: Request, env: Env): Promise<Admitted | Response> => {
   const version = bound(env.COVENANT_VERSION);
   if (version === undefined) return depositsClosed();
@@ -70,7 +90,8 @@ const admit = async (request: Request, env: Env): Promise<Admitted | Response> =
   if (redaction === undefined) return refuse(422, 'redaction_required', `State the redaction version the transcript went through in ${REDACTION_HEADER} (letters, digits, dot, dash, underscore; 64 at most).`, REDACTION_HEADER);
   const capture = versionOf(request, CAPTURE_HEADER);
   if (capture === undefined) return refuse(422, 'capture_required', `State the capture version in ${CAPTURE_HEADER} (letters, digits, dot, dash, underscore; 64 at most).`, CAPTURE_HEADER);
-  if (!(await consented(request, env, account))) return refuse(403, 'raw_consent_required', `Raw transcripts need their own consent: send ${CONSENT_HEADER}: granted once the person has said yes.`, CONSENT_HEADER);
+  const unconsented = await consented(request, env, account, version);
+  if (unconsented !== undefined) return unconsented;
   if (env.RAW === undefined) return notConfigured('RAW');
   return { account, redaction, capture, bucket: env.RAW };
 };
@@ -177,6 +198,85 @@ const complete = async (request: Request, env: Env, hash: string): Promise<Respo
     .run();
   await bucket.delete(Array.from({ length: parts }, (_, at) => stagingKey(account, hash, at + 1)));
   return answer(201, { ok: true, stored: true });
+};
+
+/** Drops every staged part the account holds, a page at a time, and answers how many it dropped. A part staged while this runs is refused as withdrawn (`consented`), so the list ends. */
+const dropStaged = async (bucket: RawBucket, account: string): Promise<number> => {
+  let dropped = 0;
+  for (;;) {
+    const page = (await bucket.list({ prefix: `staging/${account}/`, limit: MAX_STAGED_RAW_PARTS })).objects.map((one) => one.key);
+    if (page.length === 0) return dropped;
+    await bucket.delete(page);
+    dropped += page.length;
+  }
+};
+
+/**
+ * `DELETE /v1/consent/raw`: the account takes its raw yes back (GDPR Article 7(3)). It clears the yes and records the time and the covenant version the yes answered, and answers 200 whether or not a yes stood, so a retry is safe and a second withdrawal keeps the first record.
+ * It needs a sign-in and nothing else: not an open pool, not an accepted covenant, because a person can always withdraw. The account's staged raw parts go at once; the objects it already holds are erased by the nightly sweep (`sweepWithdrawnRaw`), which reads the record this writes.
+ */
+export const withdrawRawConsent = async (request: Request, env: Env): Promise<Response> => {
+  const account = await accountOf(request, env);
+  if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
+  // One statement, and a SET expression reads the row as it was, so the version withdrawn is the one the yes answered. With no yes standing it matches no row.
+  await env.DB.prepare('UPDATE accounts SET raw_consent_withdrawn_at = ?, raw_consent_withdrawn_version = raw_consent_version, raw_consent = NULL, raw_consent_version = NULL WHERE id = ? AND raw_consent IS NOT NULL').bind(Date.now(), account).run();
+  if (env.RAW !== undefined) await dropStaged(env.RAW, account);
+  return answer(200, { ok: true });
+};
+
+/** How many held raw objects one sweep page erases. R2 deletes up to 1,000 keys in one call; D1 takes the batch as one call too. */
+const SWEEP_PAGE = 100;
+
+/** The subrequests one sweep page spends: the read, the tombstones, the R2 delete, and the ledger marks. */
+export const SWEEP_PAGE_CALLS = 4;
+
+/**
+ * The raw copies a withdrawal reaches (GDPR Articles 7(3) and 17(1)(b)): every held object of an account that withdrew its yes, and every one stored before the yes it gave again after. An account whose yes stands has the objects that were stored
+ * before that yes (`raw_consent` is the time of the first yes after the last withdrawal: a withdrawal clears it, and a yes said again or restated for a new covenant version keeps it, so a re-grant never reaches the copies it covers); one with no yes standing has them all, even one that finished while the withdrawal was being written. Raw bytes are opaque, so the whole copy goes. For each object the tombstone goes first (so the same bytes
+ * cannot be taken again as already stored), then the object, then the mark on its ledger row, which keeps the hash, the byte count, and the date, as the operator's `erase raw` does. A run that stops halfway runs again to the end, and one with nothing left does nothing. A night that erased anything writes one `erasure_audit` row (kind `raw-object`, reason `consent-withdrawn`, the object count, no account).
+ * `calls` is the subrequests it may spend; it answers how many objects it erased. The nightly cron runs it (`nightly.ts`), so no operator has to type it.
+ */
+export const sweepWithdrawnRaw = async (env: Env, now: number, calls: number): Promise<number> => {
+  const bucket = env.RAW;
+  if (bucket === undefined) return 0;
+  const day = new Date(now).toISOString().slice(0, 10);
+  let erased = 0;
+  for (let spent = SWEEP_PAGE_CALLS; spent <= calls; spent += SWEEP_PAGE_CALLS) {
+    const held = (
+      await env.DB.prepare(
+        'SELECT o.account AS account, o.sha256 AS sha256 FROM accounts a JOIN raw_objects o ON o.account = a.id WHERE a.raw_consent_withdrawn_at IS NOT NULL AND o.erased_on IS NULL AND (a.raw_consent IS NULL OR o.stored_at < a.raw_consent) LIMIT ?',
+      )
+        .bind(SWEEP_PAGE)
+        .all()
+    ).results.map((row) => ({ account: String(fieldOf(row, 'account')), sha256: String(fieldOf(row, 'sha256')) }));
+    if (held.length === 0) break;
+    const keys = held.map((one) => objectKey(one.account, one.sha256));
+    const digests = await Promise.all(keys.map((key) => rawDigest(key)));
+    await env.DB.batch(digests.map((digest) => env.DB.prepare("INSERT OR IGNORE INTO erasure_tombstones (kind, digest, reason, erased_on) VALUES ('raw-object', ?, 'consent-withdrawn', ?)").bind(digest, day)));
+    await bucket.delete(keys);
+    await env.DB.batch(held.map((one) => env.DB.prepare('UPDATE raw_objects SET erased_on = ? WHERE account = ? AND sha256 = ? AND erased_on IS NULL').bind(day, one.account, one.sha256)));
+    erased += held.length;
+    if (held.length < SWEEP_PAGE) break;
+  }
+  // One audit row for the night, as every operator erasure writes one (docs/pool.md, "The audit"). It is the one call past the pages, inside the margin `RESERVED_CALLS` holds back; a night that erased nothing writes none.
+  if (erased > 0) await env.DB.prepare("INSERT INTO erasure_audit (kind, reason, erased_on, rows_erased, objects_erased, account) VALUES ('raw-object', 'consent-withdrawn', ?, 0, ?, NULL)").bind(day, erased).run();
+  return erased;
+};
+
+/**
+ * `PUT /v1/consent/raw`: the account says yes to raw copies for the covenant version in force, the one way to record a yes after a withdrawal. A person types the phrase at a terminal first (the client's side); the pool records which version the yes answers.
+ * Account only. The withdrawal columns stay, because they are the record an erasure reads.
+ */
+export const grantRawConsent = async (request: Request, env: Env): Promise<Response> => {
+  const version = bound(env.COVENANT_VERSION);
+  if (version === undefined) return depositsClosed();
+  const account = await accountOf(request, env);
+  if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
+  const named = textField(await bodyOf(request), 'version');
+  if (named === undefined) return refuse(400, 'missing_field', 'A raw yes names the covenant version it answers.', 'version');
+  if (named !== version) return refuse(409, 'covenant_version', `The covenant in force is ${version}, not ${named}.`, 'version');
+  await env.DB.prepare('UPDATE accounts SET raw_consent = COALESCE(raw_consent, ?), raw_consent_version = ? WHERE id = ?').bind(Date.now(), version, account).run();
+  return answer(200, { ok: true, version });
 };
 
 /** The raw routes, or undefined for a request that is not one. */

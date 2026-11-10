@@ -1,9 +1,9 @@
 // The operator's erasure against a local pool under Miniflare: each kind leaves a tombstone, the same content is refused when it comes back, an audit row holds no content, and the aggregates keep their counts.
 import { createHash } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { sampleSkeleton } from '../src/sample.js';
 import { acceptanceOf, fieldOf, startPool, stubUser, type TestBucket, type TestDb, type TestPool } from '../src/test-pool.js';
-import { eraseAccount, eraseLeakedSecret, eraseRawObject, type EraseStore } from './erase.js';
+import { eraseAccount, eraseLeakedSecret, eraseRawObject, findRawContaining, holdsValue, type EraseStore, type RawHit } from './erase.js';
 
 let pool: TestPool;
 let next = 7000;
@@ -16,7 +16,7 @@ afterAll(async () => {
   await pool.dispose();
 });
 
-const grant = { 'oars-redaction-version': '1', 'oars-capture-version': 'cap-1', 'oars-raw-consent': 'granted' };
+const grant = { 'oars-redaction-version': '1', 'oars-capture-version': 'cap-1', 'oars-raw-consent': 'granted', 'oars-raw-consent-version': 'v1' };
 const NOW = new Date('2026-11-08T12:00:00Z');
 
 /** An invented key shaped like a cloud access key: the value a redactor missed. */
@@ -31,14 +31,33 @@ const TWIN_A = 'AKIAFAKEKEY0TWINAAAA';
 const TWIN_B = 'AKIAFAKEKEY0TWINBBBB';
 const VERSION_KEY = 'AKIAFAKEKEY0VERSION';
 
+/** The pieces handed out one at a time, as a stream: each is made only when asked for. */
+const asyncPieces = (pieces: Iterable<Uint8Array>): AsyncIterable<Uint8Array> => ({
+  [Symbol.asyncIterator]: () => {
+    const next = pieces[Symbol.iterator]();
+    return { next: () => Promise.resolve(next.next()) };
+  },
+});
+
 /** The erasure store over the pool's local D1 and raw bucket, as `wrangler --local` would reach them. */
-const storeOf = (db: TestDb, bucket: TestBucket): EraseStore => ({
+const storeOf = (db: TestDb, bucket: TestBucket, chunk = 64 * 1024): EraseStore => ({
   rows: async (sql, binds) => (await db.prepare(sql).bind(...binds).all()).results,
   run: async (sql, binds) => Number(fieldOf(fieldOf(await db.prepare(sql).bind(...binds).run(), 'meta'), 'changes')),
   deleteObject: (key) => bucket.delete([key]),
+  // The object's bytes in pieces of `chunk`, as a file read gives them: the find never holds the whole object.
+  readObject: async (key) => {
+    const found = await bucket.get(key);
+    if (found === null) return null;
+    const bytes = new Uint8Array(await found.arrayBuffer());
+    return asyncPieces(
+      (function* pieces() {
+        for (let at = 0; at < bytes.length; at += chunk) yield bytes.subarray(at, at + chunk);
+      })(),
+    );
+  },
 });
 
-const store = async (): Promise<EraseStore> => storeOf(await pool.db(), await pool.rawBucket());
+const store = async (chunk?: number): Promise<EraseStore> => storeOf(await pool.db(), await pool.rawBucket(), chunk);
 
 const member = async (): Promise<{ token: string; account: string }> => {
   next += 1;
@@ -84,6 +103,9 @@ const dump = async (): Promise<string> => {
 };
 
 const aggregates = async (): Promise<string> => JSON.stringify([await all('SELECT key, sessions, clusters, ok, failed FROM cells ORDER BY key'), await all('SELECT key, sessions, clusters FROM strata ORDER BY key'), await all('SELECT kind, key, account, day FROM contributors ORDER BY kind, key, account, day')]);
+
+/** The served totals alone: what an account's erasure must leave as it was. The contributor records are the link to them, and an erasure removes the account's. */
+const totals = async (): Promise<string> => JSON.stringify([await all('SELECT key, sessions, clusters, ok, failed FROM cells ORDER BY key'), await all('SELECT key, sessions, clusters FROM strata ORDER BY key')]);
 
 describe('erasing a raw object', () => {
   it('deletes the object, writes a tombstone and an audit row, and refuses the same object when it is deposited again', async () => {
@@ -303,6 +325,7 @@ describe('erasing a row that holds a leaked secret', () => {
 
 describe('erasing one account under a lawful request', () => {
   it('erases its per-account content and raw objects and keeps its contribution to the aggregate counts', async () => {
+    const user = stubUser(String(next + 1));
     const { token, account } = await member();
     const other = await member();
     expect((await pool.post('/v1/deposits', skeletonWith('00000000000075aa'), token)).status).toBe(201);
@@ -310,11 +333,18 @@ describe('erasing one account under a lawful request', () => {
     expect((await pool.post('/v1/deposits', skeletonWith('00000000000075ac'), other.token)).status).toBe(201);
     const mine = await putRaw(token, new TextEncoder().encode('my transcript'));
     const theirs = await putRaw(other.token, new TextEncoder().encode('their transcript'));
-    const before = await aggregates();
-    const bundleBefore = await pool.get('/bundle/claude-code/2.1.314/1', token);
+    const before = await totals();
+    const theirContributors = await all('SELECT kind, key, account, day FROM contributors WHERE account = ? ORDER BY kind, key, day', other.account);
+    const bundleBefore = await pool.get('/bundle/claude-code/2.1.314/1', other.token);
+
+    // The links to the totals this fixture's two deposits made: the count below is exact, so a step that stops counting a table fails here.
+    const links = await count('SELECT (SELECT COUNT(*) FROM account_repo_keys WHERE account = ?) + (SELECT COUNT(*) FROM deposit_hours WHERE account = ?) + (SELECT COUNT(*) FROM contributors WHERE account = ?) AS held', account, account, account);
+    expect(links).toBe(10);
 
     const erased = await eraseAccount(await store(), account, NOW);
-    expect(erased).toEqual({ rows: 2, objects: 1 });
+    expect(erased.objects).toBe(1);
+    // 2 deposit rows, 1 token, and the 10 links.
+    expect(erased.rows).toBe(13);
 
     // Per-account content: both rows are markers and tombstoned, the raw object is gone and tombstoned.
     expect(await all('SELECT id, skeleton, erased_on FROM deposits WHERE account = ? ORDER BY id', account)).toEqual([
@@ -323,17 +353,22 @@ describe('erasing one account under a lawful request', () => {
     ]);
     expect(await rawKeys(account)).toEqual([]);
     expect(await rawKeys(other.account)).toEqual([`raw/${other.account}/${theirs.hash}`]);
-    expect(await count("SELECT COUNT(*) AS held FROM erasure_tombstones WHERE reason = 'lawful-request'")).toBe(3);
+    expect(await count("SELECT COUNT(*) AS held FROM erasure_tombstones WHERE reason = 'lawful-request' AND kind <> 'account'")).toBe(3);
     // The other account's content stands.
     expect(await count("SELECT COUNT(*) AS held FROM deposits WHERE account = ? AND erased_on IS NULL", other.account)).toBe(1);
-    // Aggregates: opting out removes nothing, so every count, cluster, and contributor record is as it was, and the bundle reads the same.
-    expect(await aggregates()).toBe(before);
-    expect((await pool.get('/bundle/claude-code/2.1.314/1', token)).json).toEqual(bundleBefore.json);
-    // The erased sessions and the erased object cannot come back.
-    expect(await pool.post('/v1/deposits', skeletonWith('00000000000075aa'), token)).toMatchObject({ status: 403, json: { error: 'erased' } });
-    expect((await pool.send(`/v1/raw/${mine.hash}/parts/1`, { method: 'PUT', body: 'my transcript' }, token, grant)).status).toBe(403);
+    // Totals: every served count and cluster is as it was. The account's own contributor records are gone and the other account's stand.
+    expect(await totals()).toBe(before);
+    expect(await count('SELECT COUNT(*) AS held FROM contributors WHERE account = ?', account)).toBe(0);
+    expect(await all('SELECT kind, key, account, day FROM contributors WHERE account = ? ORDER BY kind, key, day', other.account)).toEqual(theirContributors);
+    expect((await pool.get('/bundle/claude-code/2.1.314/1', other.token)).json).toEqual(bundleBefore.json);
+    // The token it held is dead; the person signs in again to the same account, and the erased sessions and the erased object cannot come back.
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000075aa'), token)).status).toBe(401);
+    const again = await pool.signIn('github', user);
+    expect(again.account).toBe(account);
+    expect(await pool.post('/v1/deposits', skeletonWith('00000000000075aa'), again.token)).toMatchObject({ status: 403, json: { error: 'erased' } });
+    expect((await pool.send(`/v1/raw/${mine.hash}/parts/1`, { method: 'PUT', body: 'my transcript' }, again.token, grant)).status).toBe(403);
     // The audit row counts and names no content.
-    expect(await all("SELECT kind, reason, erased_on, rows_erased, objects_erased, account FROM erasure_audit WHERE kind = 'account'")).toEqual([{ kind: 'account', reason: 'lawful-request', erased_on: '2026-11-08', rows_erased: 2, objects_erased: 1, account }]);
+    expect(await all("SELECT kind, reason, erased_on, rows_erased, objects_erased, account FROM erasure_audit WHERE kind = 'account' AND account = ?", account)).toEqual([{ kind: 'account', reason: 'lawful-request', erased_on: '2026-11-08', rows_erased: erased.rows, objects_erased: 1, account }]);
   }, 90_000);
 
   it('scrubs the label and allow list of the account\'s machines and leaves the other account\'s and the hashes', async () => {
@@ -343,7 +378,8 @@ describe('erasing one account under a lawful request', () => {
     expect((await enroll(token, 'a home server')).status).toBe(201);
     expect((await enroll(other.token, 'their box')).status).toBe(201);
     const hashes = await all('SELECT id, key_hash FROM machines WHERE account = ?', account);
-    expect((await eraseAccount(await store(), account, NOW)).rows).toBe(1);
+    // The machine row and the account's one token.
+    expect((await eraseAccount(await store(), account, NOW)).rows).toBe(2);
     expect(await all('SELECT label, allow_repos FROM machines WHERE account = ?', account)).toEqual([{ label: '[erased]', allow_repos: '[]' }]);
     expect(await all('SELECT id, key_hash FROM machines WHERE account = ?', account)).toEqual(hashes);
     expect(await all('SELECT label FROM machines WHERE account = ?', other.account)).toEqual([{ label: 'their box' }]);
@@ -359,8 +395,130 @@ describe('erasing one account under a lawful request', () => {
     const sent = await pool.send('/v1/deposits', { method: 'POST', body: body.slice(0, half) }, token, { 'oars-part': '1/2', 'oars-batch': batch });
     expect(sent.status).toBe(202);
     expect(await count('SELECT COUNT(*) AS held FROM deposit_parts WHERE account = ?', account)).toBe(1);
-    expect((await eraseAccount(await store(), account, NOW)).rows).toBe(1);
+    // The staged part and the account's one token.
+    expect((await eraseAccount(await store(), account, NOW)).rows).toBe(2);
     expect(await count('SELECT COUNT(*) AS held FROM deposit_parts WHERE account = ?', account)).toBe(0);
+  }, 60_000);
+});
+
+describe('erasing one account removes its own rows and its link to the shared totals (GDPR Article 17)', () => {
+  const telemetry = (day: string, install: string, account: string): Promise<unknown> =>
+    pool.db().then((db) => db.prepare("INSERT INTO telemetry_install_days (day, install, account, batches, events, measures) VALUES (?, ?, ?, 2, 5, '[]')").bind(day, install, account).run());
+
+  it('deletes its repo keys and deposit hours, clears its telemetry account, and leaves the other account\'s rows', async () => {
+    const { token, account } = await member();
+    const other = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('0000000000007a01'), token)).status).toBe(201);
+    expect((await pool.post('/v1/deposits', skeletonWith('0000000000007a02'), other.token)).status).toBe(201);
+    const db = await pool.db();
+    for (const holder of [account, other.account]) await db.prepare('INSERT OR IGNORE INTO account_repo_keys (account, repo_key) VALUES (?, ?)').bind(holder, `key-${holder}`).run();
+    await telemetry('2026-11-07', 'install-mine', account);
+    await telemetry('2026-11-07', 'install-theirs', other.account);
+    expect(await count('SELECT COUNT(*) AS held FROM deposit_hours WHERE account = ?', account)).toBeGreaterThan(0);
+
+    await eraseAccount(await store(), account, NOW);
+
+    expect(await count('SELECT COUNT(*) AS held FROM account_repo_keys WHERE account = ?', account)).toBe(0);
+    expect(await count('SELECT COUNT(*) AS held FROM deposit_hours WHERE account = ?', account)).toBe(0);
+    expect(await count('SELECT COUNT(*) AS held FROM account_repo_keys WHERE account = ?', other.account)).toBe(1);
+    expect(await count('SELECT COUNT(*) AS held FROM deposit_hours WHERE account = ?', other.account)).toBeGreaterThan(0);
+    // The row of the telemetry day stays with its counts; only the account id is gone, and the other account's id stands.
+    expect(await count('SELECT COUNT(*) AS held FROM telemetry_install_days WHERE account = ?', account)).toBe(0);
+    expect(await all("SELECT install, batches, events FROM telemetry_install_days WHERE install = 'install-mine'")).toEqual([{ install: 'install-mine', batches: 2, events: 5 }]);
+    expect(await all("SELECT account FROM telemetry_install_days WHERE install = 'install-theirs'")).toEqual([{ account: other.account }]);
+  }, 90_000);
+
+  it('clears the telemetry account of two installs of one day without colliding with each other or with an anonymous row', async () => {
+    const { account } = await member();
+    const other = await member();
+    await telemetry('2026-11-06', 'shared-install', account);
+    await telemetry('2026-11-06', 'shared-install', other.account);
+    await telemetry('2026-11-06', 'shared-install', '');
+    await eraseAccount(await store(), account, NOW);
+    await eraseAccount(await store(), other.account, NOW);
+    expect(await count("SELECT COUNT(*) AS held FROM telemetry_install_days WHERE install = 'shared-install'")).toBe(3);
+    expect(await count("SELECT COUNT(*) AS held FROM telemetry_install_days WHERE install = 'shared-install' AND account IN (?, ?)", account, other.account)).toBe(0);
+  }, 60_000);
+
+  it('makes its tokens unusable and holds no credential, and keeps that a sign-in happened', async () => {
+    const { token, account } = await member();
+    const other = await member();
+    const before = await all('SELECT hash, expires_at FROM tokens WHERE account = ? ORDER BY rowid', account);
+    expect(before).toHaveLength(1);
+    expect((await pool.get('/bundle/claude-code/2.1.314/1', token)).status).not.toBe(401);
+
+    await eraseAccount(await store(), account, NOW);
+
+    const after = await all('SELECT hash, expires_at FROM tokens WHERE account = ? ORDER BY rowid', account);
+    expect(after).toHaveLength(1);
+    expect(fieldOf(after[0], 'expires_at')).toBe(fieldOf(before[0], 'expires_at'));
+    expect(fieldOf(after[0], 'hash')).not.toBe(fieldOf(before[0], 'hash'));
+    expect(String(fieldOf(after[0], 'hash'))).toMatch(/^erased:/);
+    expect((await pool.get('/bundle/claude-code/2.1.314/1', token)).status).toBe(401);
+    expect((await pool.get('/bundle/claude-code/2.1.314/1', other.token)).status).not.toBe(401);
+    expect(await count('SELECT COUNT(*) AS held FROM tokens WHERE account = ?', other.account)).toBe(1);
+  }, 60_000);
+
+  it('keeps the acceptance, the tombstones, and the hash, size, and date of what it erased', async () => {
+    const { token, account } = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('0000000000007b01'), token)).status).toBe(201);
+    const mine = await putRaw(token, new TextEncoder().encode('kept record transcript'));
+    await eraseAccount(await store(), account, NOW);
+    expect(await count('SELECT COUNT(*) AS held FROM covenant_acceptances WHERE account = ?', account)).toBe(1);
+    expect(await count("SELECT COUNT(*) AS held FROM erasure_tombstones WHERE reason = 'lawful-request' AND kind = 'deposit'")).toBeGreaterThan(0);
+    expect(await all('SELECT sha256, bytes, erased_on FROM raw_objects WHERE account = ?', account)).toEqual([{ sha256: mine.hash, bytes: 'kept record transcript'.length, erased_on: '2026-11-08' }]);
+    expect(await count('SELECT COUNT(*) AS held FROM deposits WHERE account = ? AND erased_on IS NOT NULL', account)).toBe(1);
+  }, 60_000);
+
+  it('removes the account from the contributor records, leaves every total as it was, and moves the generation so the next bundle is built without it', async () => {
+    const { token, account } = await member();
+    const other = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('0000000000007c01', 'twinprog'), token)).status).toBe(201);
+    expect((await pool.post('/v1/deposits', skeletonWith('0000000000007c02', 'twinprog'), other.token)).status).toBe(201);
+    expect(await count('SELECT COUNT(*) AS held FROM contributors WHERE account = ?', account)).toBeGreaterThan(0);
+    const before = await totals();
+    const generation = await count('SELECT generation AS held FROM pool_generation');
+    const theirs = await count('SELECT COUNT(*) AS held FROM contributors WHERE account = ?', other.account);
+
+    await eraseAccount(await store(), account, NOW);
+
+    expect(await count('SELECT COUNT(*) AS held FROM contributors WHERE account = ?', account)).toBe(0);
+    expect(await count('SELECT COUNT(*) AS held FROM contributors WHERE account = ?', other.account)).toBe(theirs);
+    expect(await totals()).toBe(before);
+    expect(await count('SELECT generation AS held FROM pool_generation')).toBe(generation + 1);
+    // A rerun finds nothing to remove and moves nothing.
+    expect((await eraseAccount(await store(), account, NOW)).rows).toBe(0);
+    expect(await count('SELECT generation AS held FROM pool_generation')).toBe(generation + 1);
+    expect(await count('SELECT COUNT(*) AS held FROM cells WHERE key LIKE ?', '%')).toBeGreaterThan(0);
+  }, 90_000);
+
+  it('still moves the generation when a run stopped before it did, because the links are not yet gone to hide it', async () => {
+    const { token, account } = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('0000000000007d01', 'stopprog'), token)).status).toBe(201);
+    const generation = await count('SELECT generation AS held FROM pool_generation');
+    const whole = await store();
+    // The run stops at the statement that moves the generation (the process dies, the network drops).
+    const stopping: EraseStore = {
+      ...whole,
+      run: (sql, binds) => (sql.startsWith('UPDATE pool_generation') ? Promise.reject(new Error('stopped')) : whole.run(sql, binds)),
+    };
+    await expect(eraseAccount(stopping, account, NOW)).rejects.toThrow('stopped');
+
+    await eraseAccount(await store(), account, NOW);
+
+    expect(await count('SELECT COUNT(*) AS held FROM contributors WHERE account = ?', account)).toBe(0);
+    expect(await count('SELECT generation AS held FROM pool_generation')).toBe(generation + 1);
+    // A run that finds nothing left moves nothing more.
+    const settled = await count('SELECT generation AS held FROM pool_generation');
+    await eraseAccount(await store(), account, NOW);
+    expect(await count('SELECT generation AS held FROM pool_generation')).toBe(settled);
+  }, 90_000);
+
+  it('does not move the generation for an account that held no link to a total', async () => {
+    const { account } = await member();
+    const generation = await count('SELECT generation AS held FROM pool_generation');
+    await eraseAccount(await store(), account, NOW);
+    expect(await count('SELECT generation AS held FROM pool_generation')).toBe(generation);
   }, 60_000);
 });
 
@@ -403,5 +561,195 @@ describe('the tombstones and the audit', () => {
     await expect(db.prepare("UPDATE erasure_tombstones SET reason = 'raw'").run()).rejects.toThrow(/never changed/);
     await expect(db.prepare('DELETE FROM erasure_audit').run()).rejects.toThrow(/never deleted/);
     await expect(db.prepare("UPDATE erasure_audit SET reason = 'raw'").run()).rejects.toThrow(/never changed/);
+  }, 60_000);
+});
+
+describe('finding the raw objects that hold a text', () => {
+  /** A name a third party would ask about: said in prose, so no redactor masked it. */
+  const NAME = 'Jane Quentin Tenant';
+
+  const bytesOf = (text: string): Uint8Array => new TextEncoder().encode(text);
+
+  const find = async (selector: { account?: string; allAccounts?: boolean }, value: string, chunk?: number): Promise<{ hits: RawHit[]; read: number; matched: number; missing: number }> => {
+    const hits: RawHit[] = [];
+    const total = await findRawContaining(await store(chunk), selector, value, (hit) => hits.push(hit));
+    return { hits, ...total };
+  };
+
+  /** Pieces of a stream the way a file read gives them, counting how many were asked for. */
+  const streamOf = (bytes: Uint8Array, chunk: number, asked: { count: number }): AsyncIterable<Uint8Array> =>
+    asyncPieces(
+      (function* pieces() {
+        for (let at = 0; at < bytes.length; at += chunk) {
+          asked.count += 1;
+          yield bytes.subarray(at, at + chunk);
+        }
+      })(),
+    );
+
+  it('reports the key, account, and size of an object that holds the text, and counts what it read', async () => {
+    const holder = await member();
+    const bystander = await member();
+    const text = `{"role":"user","text":"my landlord ${NAME} said the deposit was fine"}`;
+    const held = await putRaw(holder.token, bytesOf(text));
+    await putRaw(bystander.token, bytesOf('{"role":"user","text":"nothing about anyone"}'));
+    const found = await find({ account: holder.account }, NAME);
+    expect(found).toEqual({ hits: [{ key: `raw/${holder.account}/${held.hash}`, account: holder.account, bytes: bytesOf(text).length }], read: 1, matched: 1, missing: 0 });
+  }, 60_000);
+
+  it('misses an object that does not hold it, and a near miss', async () => {
+    const { token, account } = await member();
+    await putRaw(token, bytesOf('Jane Quentin Tenan and jane quentin tenant'));
+    expect(await find({ account }, NAME)).toMatchObject({ hits: [], read: 1, matched: 0 });
+  }, 60_000);
+
+  it('looks in every account with --all-accounts, and in one account only with an account', async () => {
+    const first = await member();
+    const second = await member();
+    const third = await member();
+    const a = await putRaw(first.token, bytesOf(`first: ${NAME}`));
+    const b = await putRaw(second.token, bytesOf(`second: ${NAME}!`));
+    await putRaw(third.token, bytesOf('third: no one'));
+    const everywhere = await find({ allAccounts: true }, NAME);
+    expect(everywhere.hits.map((hit) => hit.key)).toEqual(expect.arrayContaining([`raw/${first.account}/${a.hash}`, `raw/${second.account}/${b.hash}`]));
+    expect(everywhere.hits.every((hit) => hit.key.startsWith('raw/'))).toBe(true);
+    expect(everywhere.read).toBeGreaterThanOrEqual(3);
+    expect((await find({ account: second.account }, NAME)).hits.map((hit) => hit.account)).toEqual([second.account]);
+  }, 60_000);
+
+  it('does not read an object that was erased, and counts a ledger row whose object is gone', async () => {
+    const { token, account } = await member();
+    const erased = await putRaw(token, bytesOf(`erased: ${NAME}`));
+    const lost = await putRaw(token, bytesOf(`lost: ${NAME}`));
+    await eraseRawObject(await store(), `raw/${account}/${erased.hash}`, NOW);
+    // The object vanished from R2 while its ledger row stands: the find says so and goes on.
+    await (await pool.rawBucket()).delete([`raw/${account}/${lost.hash}`]);
+    expect(await find({ account }, NAME)).toEqual({ hits: [], read: 0, matched: 0, missing: 1 });
+  }, 60_000);
+
+  it('finds a match that straddles a read boundary, at every offset', async () => {
+    const needle = [Buffer.from(NAME)];
+    for (const chunk of [1, 2, 5, 19, 64]) {
+      for (let before = 0; before <= chunk + 2; before += 1) {
+        const bytes = bytesOf(`${'x'.repeat(before)}${NAME}${'y'.repeat(chunk)}`);
+        expect(await holdsValue(streamOf(bytes, chunk, { count: 0 }), needle)).toBe(true);
+      }
+    }
+    // One byte short of the value in the last chunk, and one byte wrong, are not matches.
+    expect(await holdsValue(streamOf(bytesOf(`aaaa${NAME.slice(0, -1)}`), 5, { count: 0 }), needle)).toBe(false);
+    expect(await holdsValue(streamOf(bytesOf(`aaaa${NAME.slice(0, -1)}X`), 5, { count: 0 }), needle)).toBe(false);
+  });
+
+  it('finds a straddling match in an object read through the store', async () => {
+    const { token, account } = await member();
+    const text = `0123456789${NAME}0123456789`;
+    await putRaw(token, bytesOf(text));
+    // 7-byte reads put the name across three of them.
+    expect((await find({ account }, NAME, 7)).matched).toBe(1);
+  }, 60_000);
+
+  it('reads an object larger than its buffer a piece at a time, and stops at the first match', async () => {
+    const chunk = 64 * 1024;
+    const big = new Uint8Array(40 * chunk + 100).fill(0x61);
+    big.set(bytesOf(NAME), 3 * chunk - 5);
+    const early = { count: 0 };
+    expect(await holdsValue(streamOf(big, chunk, early), [Buffer.from(NAME)])).toBe(true);
+    // The match starts in the third piece and ends in the fourth: the other 36 pieces were never asked for.
+    expect(early.count).toBe(4);
+    const tail = new Uint8Array(40 * chunk + 100).fill(0x61);
+    tail.set(bytesOf(NAME), tail.length - NAME.length);
+    const whole = { count: 0 };
+    expect(await holdsValue(streamOf(tail, chunk, whole), [Buffer.from(NAME)])).toBe(true);
+    const sizes: number[] = [];
+    const original = Buffer.concat.bind(Buffer);
+    const concat = vi.spyOn(Buffer, 'concat').mockImplementation((list, length) => {
+      const joined = original(list, length);
+      sizes.push(joined.length);
+      return joined;
+    });
+    expect(await holdsValue(streamOf(tail, chunk, { count: 0 }), [Buffer.from(NAME)])).toBe(true);
+    // Memory is one piece and the kept tail, never the object read so far.
+    const largest = Math.max(...sizes);
+    concat.mockRestore();
+    expect(largest).toBeLessThanOrEqual(chunk + NAME.length - 1);
+    expect(whole.count).toBe(41);
+    expect(await holdsValue(streamOf(new Uint8Array(40 * chunk).fill(0x61), chunk, { count: 0 }), [Buffer.from(NAME)])).toBe(false);
+  });
+
+  it('finds a text in an object that went up in several parts', async () => {
+    const { token, account } = await member();
+    const pieces = [new Uint8Array(1024 * 1024).fill(0x61), new Uint8Array(1024 * 1024).fill(0x62), bytesOf(`tail ${NAME}`)];
+    const bytes = new Uint8Array(pieces.reduce((sum, piece) => sum + piece.length, 0));
+    let at = 0;
+    for (const piece of pieces) {
+      bytes.set(piece, at);
+      at += piece.length;
+    }
+    const hash = sha(bytes);
+    for (const [index, piece] of pieces.entries()) expect((await pool.send(`/v1/raw/${hash}/parts/${String(index + 1)}`, { method: 'PUT', body: piece }, token, grant)).status).toBe(200);
+    expect((await pool.send(`/v1/raw/${hash}/complete`, { method: 'POST', body: JSON.stringify({ parts: 3, bytes: bytes.length }) }, token, grant)).status).toBe(201);
+    expect((await find({ account }, NAME, 64 * 1024)).hits).toEqual([{ key: `raw/${account}/${hash}`, account, bytes: bytes.length }]);
+  }, 120_000);
+
+  it('matches the text as a transcript writes it: JSON escapes a quote and a backslash', async () => {
+    const { token, account } = await member();
+    const value = 'Mary "Mo" O\\Brien-Smith';
+    await putRaw(token, bytesOf(`{"text":${JSON.stringify(`hello ${value} there`)}}`));
+    expect((await find({ account }, value)).matched).toBe(1);
+    // The literal form matches too, for a transcript that is not JSON.
+    await putRaw(token, bytesOf(`plain: ${value}`));
+    expect((await find({ account }, value)).matched).toBe(2);
+  }, 60_000);
+
+  it('refuses a value under 8 characters without echoing it, and a selector with neither or both account flags', async () => {
+    const { account } = await member();
+    const refusal = await find({ account }, 'Jane Do').then(
+      () => 'no refusal',
+      (error: unknown) => (error instanceof Error ? error.message : 'not an error'),
+    );
+    expect(refusal).toMatch(/at least 8 characters/);
+    expect(refusal).not.toContain('Jane Do');
+    await expect(find({ account }, 'Jane Doe')).resolves.toMatchObject({ matched: 0 });
+    await expect(find({}, NAME)).rejects.toThrow(/exactly one of/);
+    await expect(find({ account, allAccounts: true }, NAME)).rejects.toThrow(/exactly one of/);
+    await expect(find({ account: 'not an id!' }, NAME)).rejects.toThrow(/not a pool id/);
+  });
+
+  it('only reads: the store sees SELECTs and object reads, and the database and bucket are as they were', async () => {
+    const { token, account } = await member();
+    await putRaw(token, bytesOf(`kept: ${NAME}`));
+    const before = [await dump(), await rawKeys(account)];
+    const inner = await store();
+    const seen: string[] = [];
+    const watched: EraseStore = {
+      rows: (sql, binds) => {
+        seen.push(sql);
+        return inner.rows(sql, binds);
+      },
+      run: () => Promise.reject(new Error('the find wrote to D1')),
+      deleteObject: () => Promise.reject(new Error('the find deleted from R2')),
+      readObject: (key) => {
+        seen.push(`READ ${key}`);
+        return inner.readObject(key);
+      },
+    };
+    const total = await findRawContaining(watched, { account }, NAME, () => undefined);
+    expect(total.matched).toBe(1);
+    expect(seen.filter((entry) => !entry.startsWith('READ ')).every((sql) => sql.startsWith('SELECT'))).toBe(true);
+    expect(seen.some((entry) => entry.startsWith('READ raw/'))).toBe(true);
+    expect([await dump(), await rawKeys(account)]).toEqual(before);
+    // Nothing the find asks D1 holds the text, so no wrangler argument or log carries it.
+    expect(seen.join('\n')).not.toContain(NAME);
+  }, 60_000);
+
+  it('hands the caller keys and counts, and nothing the objects said', async () => {
+    const { token, account } = await member();
+    const around = 'AROUNDTEXT-before ';
+    await putRaw(token, bytesOf(`${around}${NAME} after-AROUNDTEXT`));
+    const lines: string[] = [];
+    const total = await findRawContaining(await store(), { account }, NAME, (hit) => lines.push(JSON.stringify(hit)));
+    lines.push(JSON.stringify(total));
+    const printed = lines.join('\n');
+    for (const forbidden of [NAME, 'AROUNDTEXT', 'Quentin']) expect(printed).not.toContain(forbidden);
   }, 60_000);
 });

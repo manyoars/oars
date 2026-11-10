@@ -2,6 +2,7 @@
 import { parseSkeleton, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { batchCounts, batchTier } from './access.js';
 import { fetchBundle, harnessRequired } from './bundle.js';
+import { exportPage, exportRaw } from './export.js';
 import { covenantAccept, covenantNotAccepted, covenantStatus, depositsClosed, hasAccepted } from './covenant.js';
 import { answer, bound, brake, notConfigured, refuse, type Env } from './http.js';
 import { receivePart } from './parts.js';
@@ -11,7 +12,7 @@ import { loginGone, loginPoll, loginStart, logout } from './identity.js';
 import { hashHosts, hashKey } from './ingest-hash.js';
 import { activate, callerOf, enroll, list, machineScope, revoke, rotate, type Caller } from './machines.js';
 import { stampOf, takeClaim } from './provenance.js';
-import { rawRoute } from './raw.js';
+import { grantRawConsent, rawRoute, withdrawRawConsent } from './raw.js';
 import { depositDigest, erasedRefusal, holdsErasedValue, isErased } from './tombstones.js';
 import { telemetry, type TelemetryEnv } from './telemetry.js';
 import { fleet, operator, type OperatorEnv } from './telemetry-fleet.js';
@@ -146,7 +147,7 @@ const decoded = (name: string): string => {
 type PoolEnv = Env & TelemetryEnv & RollupEnv & OperatorEnv;
 
 interface Route {
-  method: 'GET' | 'POST' | 'DELETE';
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   /** A `:name` segment matches anything but a slash, and its text reaches the handler. */
   path: string;
   /** Whether a machine key may call it. A machine key deposits, reads the covenant, activates and rotates itself, and posts telemetry (which reads no credential); every other route answers it 403 `deposit_only` (`machineScope`), so a route is closed to it until it says otherwise here. */
@@ -171,7 +172,14 @@ export const ROUTES: readonly Route[] = [
   // A machine key activates and rotates itself: it is the only credential these two routes read.
   { method: 'POST', path: '/v1/machines/activate', machine: true, handle: activate },
   { method: 'POST', path: '/v1/machines/rotate', machine: true, handle: rotate },
+  // The account's own copy of what the pool holds (Articles 15(3) and 20), and one raw object of its own. Neither is open to a machine key: a runtime that deposits has no business reading the account back.
+  { method: 'GET', path: '/v1/account/export', machine: false, handle: exportPage },
+  { method: 'GET', path: '/v1/account/export/raw/:hash', machine: false, handle: (request, env, [hash]) => exportRaw(request, env, decoded(hash ?? '')) },
   { method: 'GET', path: '/v1/covenant', machine: true, handle: (request, env) => covenantStatus(request, env) },
+  // The account takes its raw yes back (GDPR Article 7(3)). Account-only: a machine key never speaks for a person's consent.
+  { method: 'DELETE', path: '/v1/consent/raw', machine: false, handle: withdrawRawConsent },
+  // The one way to record a yes after a withdrawal: a header on a raw request cannot.
+  { method: 'PUT', path: '/v1/consent/raw', machine: false, handle: grantRawConsent },
   // Not a deposit and not signed in: percentiles over installs, served only where at least the public floor reports. No query is read.
   { method: 'GET', path: '/v1/telemetry/fleet', machine: false, handle: (request, env) => fleet(env, Date.now(), !request.headers.has('authorization')) },
   // The operator's anomaly read, behind a secret the deploy sets: never served to users.
