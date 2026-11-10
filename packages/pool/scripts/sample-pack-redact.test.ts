@@ -94,6 +94,23 @@ describe('Item 2: the account the repositories live under', () => {
     expect(text).toContain('https://<host>/<owner>/app/pull/3');
   });
 
+  it('takes the handle from origin only: an upstream remote and a submodule url keep their accounts in the clear', async () => {
+    const f = fixture();
+    writeFileSync(
+      join(f.cwd, '.git', 'config'),
+      '[remote "origin"]\n\turl = https://github.com/acme-dev/app.git\n[remote "upstream"]\n\turl = https://github.com/upstream-co/app.git\n[submodule "vendor"]\n\turl = https://github.com/vendor-co/lib.git\n',
+    );
+    f.write(S(1), [
+      user(f, S(1), 1, 'see https://github.com/upstream-co/app/issues/9 and /srv/vendor-co/lib and /srv/acme-dev/app'),
+      assistant(S(1), 1, [{ type: 'text', text: 'ok' }]),
+    ]);
+    expect((await run(f)).emitted).toBe(1);
+    const text = packText(f.out);
+    expect(text).not.toContain('acme-dev');
+    expect(text).toContain('upstream-co/app/issues/9');
+    expect(text).toContain('/srv/vendor-co/lib');
+  });
+
   it('masks an account the owners entry names, whatever remote the session repository has', async () => {
     const f = fixture('https://example.com/other/app.git');
     f.setOwners([{ folder: '*-oars*', owner: 'Many Oars Co.', license: null, handles: ['lamp-co'] }]);
