@@ -23,8 +23,8 @@ export const appendOwnerOnly = async (file: string, text: string): Promise<void>
   await appendFile(file, text, { encoding: 'utf8', mode: 0o600 });
 };
 
-/** Writes `text` to `file`, readable and writable by the owner only, whether or not the file existed. */
-export const writeOwnerOnly = async (file: string, text: string): Promise<void> => {
+/** Writes `text` (or bytes, kept exactly as they are) to `file`, readable and writable by the owner only, whether or not the file existed. */
+export const writeOwnerOnly = async (file: string, text: string | Uint8Array): Promise<void> => {
   await narrow(file);
   await writeFile(file, text, { encoding: 'utf8', mode: 0o600 });
 };

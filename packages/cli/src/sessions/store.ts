@@ -118,6 +118,8 @@ export interface State {
 export interface PoolChoices {
   rawConsent: 'granted' | 'declined' | null;
   rawConsentVersion: string | null;
+  /** True from a typed no that the pool was not told, while this machine held a yes, until the pool hears the withdrawal or a new yes is typed: the pool may still hold the yes, so a rerun of the no must not read the local `declined` as nothing to tell. */
+  withdrawalPending: boolean;
   folders: { [entry: string]: FolderSend };
 }
 export type FolderSend = 'skeleton' | 'off';
@@ -195,12 +197,12 @@ export const readState = async (storeDir: string): Promise<State> => {
       if (isRecord(pool.folders)) for (const [entry, mode] of Object.entries(pool.folders)) if (mode === 'skeleton' || mode === 'off') folders[entry] = mode;
       const yesVersion = typeof pool.rawConsentVersion === 'string' && pool.rawConsentVersion !== '' ? pool.rawConsentVersion : null;
       const granted = pool.rawConsent === 'granted' && yesVersion !== null;
-      return { files, redactDomains: domains, allow, pool: { rawConsent: granted ? 'granted' : pool.rawConsent === 'declined' ? 'declined' : null, rawConsentVersion: granted ? yesVersion : null, folders } };
+      return { files, redactDomains: domains, allow, pool: { rawConsent: granted ? 'granted' : pool.rawConsent === 'declined' ? 'declined' : null, rawConsentVersion: granted ? yesVersion : null, withdrawalPending: pool.withdrawalPending === true && !granted, folders } };
     }
   } catch (error) {
     if (!isMissing(error) && !(error instanceof SyntaxError)) throw error;
   }
-  return { files: {}, redactDomains: [], allow: [], pool: { rawConsent: null, rawConsentVersion: null, folders: {} } };
+  return { files: {}, redactDomains: [], allow: [], pool: { rawConsent: null, rawConsentVersion: null, withdrawalPending: false, folders: {} } };
 };
 
 /** Changes the pool choices under the store lock, so a deposit running at the same time keeps them (it writes the state it read). */

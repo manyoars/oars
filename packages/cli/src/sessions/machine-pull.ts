@@ -1,6 +1,7 @@
 // `oars pool hold pull`: admission of the batches a cloud VM held on `oars-hold/<machine>/<id>` branches of its own private repository (the VM side is `machine-hold.ts`). The trusted machine does it, and treats every branch as input
-// from outside: anything able to push a branch can write one, the session's own agent included. A branch that fails any gate is reported with its reason, writes nothing to the outbox, and stays where it is; branches are never deleted here.
-import { mkdtemp, readFile, readdir, rename, rm } from 'node:fs/promises';
+// from outside: anything able to push a branch can write one, the session's own agent included. A branch that fails any gate is reported with its reason, writes nothing to the outbox, and stays where it is; the branch of an admitted batch is deleted
+// from here (the VM's proxy refuses deletions), and only after the batch and its `pulled.json` entry are durable.
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Outcome, RunDeps } from '../cli.js';
 import { CliError, ExitCode } from '../errors.js';
@@ -8,9 +9,9 @@ import { exclusionPaths, loadTerms } from './exclusion.js';
 import { termsDigest } from './machine-hold.js';
 import { readMachines, type MachineRecord, type Visibility } from './machine-enroll.js';
 import { derivedSalt } from './machine-ids.js';
-import { isMissing, writeOwnerOnly } from './owner-only.js';
 import { poolServer, runtimeOf } from './pool-command.js';
-import { BATCH_FIELDS, STAMP_FOLDER, currentStamp, fieldsOf, outboxFolder, removeBatchOf, writeBatch } from './pool-outbox.js';
+import { SendLockBusy, withSendLock, type LockTimes } from './pool-send-lock.js';
+import { BATCH_FIELDS, STAMP_FOLDER, currentStamp, fieldsOf, holdsTerm, outboxFolder, readPulled, removeBatchOf, writeBatch, writePulled } from './pool-outbox.js';
 import { CLAIMED_HOST_CLASSES, CLAIMED_LAUNCHERS, parseSkeleton, type SessionSkeleton } from './pool-wire.js';
 import { localSalt } from './store.js';
 import type { Git } from './survival.js';
@@ -23,6 +24,8 @@ export interface PullPorts {
   git: Git;
   net: Git;
   remoteOf: (repo: string) => string;
+  /** The send lock's waits, for a test that cannot sit out the two-minute default. */
+  lock?: Partial<LockTimes>;
 }
 
 /** Why a repository or a branch was set aside; the report names it, and a test holds each. */
@@ -60,6 +63,8 @@ export interface PullAdmission {
   branch: string;
   id: string;
   stamp: string;
+  /** Whether the branch is gone from the repository. False when it moved after it was fetched (a newer push is kept and the next pull admits it) or the remote refused the delete; the batch is admitted either way. */
+  branchDeleted: boolean;
 }
 
 class Refused extends Error {
@@ -88,6 +93,8 @@ const BRANCH = /^oars-hold\/([^/]+)\/([0-9a-f]{16})$/u;
 const tipsOf = async (ports: PullPorts, parent: string, repo: string): Promise<Tip[]> => {
   const scratch = await mkdtemp(join(parent, 'repo-'));
   await ports.git(scratch, ['init', '--bare', '--quiet']);
+  // A depth-1 fetch of a pattern that matches nothing fails, and with branches deleted as they are admitted that is the usual state of a repository: ask first, and fetch only when a held branch is there.
+  if ((await ports.net(scratch, ['ls-remote', '--heads', ports.remoteOf(repo), 'refs/heads/oars-hold/*'])).trim() === '') return [];
   await ports.net(scratch, ['fetch', '--quiet', '--no-tags', '--depth=1', ports.remoteOf(repo), '+refs/heads/oars-hold/*:refs/held/*']);
   const listing = await ports.git(scratch, ['for-each-ref', '--format=%(refname:strip=2)%09%(objectname)%09%(committerdate:unix)', 'refs/held/']);
   return listing
@@ -115,20 +122,7 @@ interface Pulling {
   terms: string;
   /** This machine's own exclusion terms, lowercased, as `loadTerms` reads them. */
   list: readonly string[];
-  /** `pulled.json` as it stands: each admitted `id` and the stamp folder it is filed under. */
-  pulled: { [id: string]: string };
 }
-
-/** Whether any string or key in `value` holds one of `terms`, compared lowercased the way the local gate compares a transcript. */
-const holdsTerm = (value: unknown, terms: readonly string[]): boolean => {
-  if (typeof value === 'string') {
-    const lower = value.toLowerCase();
-    return terms.some((term) => lower.includes(term));
-  }
-  if (Array.isArray(value)) return value.some((entry) => holdsTerm(entry, terms));
-  if (typeof value === 'object' && value !== null) return Object.entries(value).some(([key, entry]) => holdsTerm(key, terms) || holdsTerm(entry, terms));
-  return false;
-};
 
 /** The batch file of a tip as the skeleton the pool's own reader makes of it; throws `Refused` for anything that reader, or the branch's own name, would not take. */
 const skeletonOf = async (run: Pulling, tip: Tip, id: string): Promise<SessionSkeleton> => {
@@ -168,33 +162,17 @@ const underStamp = async <T>(stamp: string, work: () => Promise<T>): Promise<T> 
   }
 };
 
-const PULLED = 'pulled.json';
-
-const readPulled = async (outbox: string): Promise<{ [id: string]: string }> => {
-  let text: string;
+/**
+ * Deletes the branch the batch came from, but only while it still points at the tip that was read: a push that landed since is a newer state of the session and is left for the next pull. The remote's own text is never kept, since it can carry
+ * the remote's URL. Answers whether the branch is gone.
+ */
+const deleteBranch = async (ports: PullPorts, tip: Tip): Promise<boolean> => {
   try {
-    text = await readFile(join(outbox, PULLED), 'utf8');
-  } catch (error) {
-    if (isMissing(error)) return {};
-    throw error;
-  }
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
+    await ports.net(tip.scratch, ['push', '--quiet', `--force-with-lease=refs/heads/${tip.branch}:${tip.sha}`, ports.remoteOf(tip.repo), `:refs/heads/${tip.branch}`]);
+    return true;
   } catch {
-    value = undefined;
+    return false;
   }
-  if (typeof value !== 'object' || value === null || Array.isArray(value) || !Object.values(value).every((stamp) => typeof stamp === 'string')) {
-    throw new CliError(`${join(outbox, PULLED)} is not a list of ids and stamps. Move it aside and pull again; nothing was fetched.`, ExitCode.INVALID, STEP);
-  }
-  return Object.fromEntries(Object.entries(value).map(([id, stamp]) => [id, String(stamp)]));
-};
-
-/** Staged and renamed, so a crash leaves the whole old file or the whole new one. */
-const writePulled = async (outbox: string, pulled: { [id: string]: string }): Promise<void> => {
-  const staged = join(outbox, `${PULLED}.tmp`);
-  await writeOwnerOnly(staged, `${JSON.stringify(Object.fromEntries(Object.entries(pulled).sort(([a], [b]) => (a < b ? -1 : 1))), null, 2)}\n`);
-  await rename(staged, join(outbox, PULLED));
 };
 
 /** One tip through its gates; answers the admission, or throws `Refused` with the first gate that failed. Nothing is written before the batch is through every gate. */
@@ -215,20 +193,25 @@ const admit = async (run: Pulling, tip: Tip, id: string, machine: string): Promi
   const skeleton = await underStamp(stamp, () => skeletonOf(run, tip, id));
   // The stamp's version names the vocabulary the batch was built under: a file that says otherwise is not what its stamp claims.
   if (stamp.slice(0, -9) !== `v${skeleton.vocabVersion}`) throw new Refused('stamp_invalid', 'the stamp does not name the batch\'s vocabulary version');
-  // The order is the batch, then pulled.json, then the older copy: a crash between them leaves the next pull to replace the same id.
-  await writeBatch(run.outbox, id, { ...skeleton, claimed: { hostClass, launcher } }, stamp);
-  run.pulled[id] = stamp;
-  await writePulled(run.outbox, run.pulled);
-  for (const folder of await readdir(run.outbox)) {
-    if (folder !== stamp && STAMP_FOLDER.test(folder)) await removeBatchOf(run.outbox, id, folder);
-  }
-  return { repo: tip.repo, branch: tip.branch, id, stamp };
+  // The send lock is held across the writes, because the nightly and `--send` change `pulled.json` and prune the current-stamp folder under it: without it a pass could prune the batch before its entry is written, or write its own read of
+  // `pulled.json` over the new entry. The file is read again inside the lock and only this id is merged. The order is the batch, then pulled.json, then the older copy: a crash between them leaves the next pull to replace the same id.
+  await withSendLock(run.outbox, async () => {
+    await writeBatch(run.outbox, id, { ...skeleton, claimed: { hostClass, launcher } }, stamp);
+    const pulled = await readPulled(run.outbox, STEP);
+    pulled[id] = stamp;
+    await writePulled(run.outbox, pulled);
+    for (const folder of await readdir(run.outbox)) {
+      if (folder !== stamp && STAMP_FOLDER.test(folder)) await removeBatchOf(run.outbox, id, folder);
+    }
+  }, run.ports.lock);
+  // The lock is let go first, so a waiting send pass is not held up by the network. The batch and `pulled.json` are durable, so the branch is no longer the only copy; a crash before this line leaves it for the next pull to replace the same id.
+  return { repo: tip.repo, branch: tip.branch, id, stamp, branchDeleted: await deleteBranch(run.ports, tip) };
 };
 
 const summary = (admitted: readonly PullAdmission[], refused: readonly PullRefusal[]): string =>
   [
-    `Admitted ${String(admitted.length)} ${admitted.length === 1 ? 'batch' : 'batches'}; refused ${String(refused.length)}. A refused branch stays where it is.`,
-    ...admitted.map((entry) => `  admitted ${entry.branch} (${entry.repo}) as ${entry.id} under ${entry.stamp}`),
+    `Admitted ${String(admitted.length)} ${admitted.length === 1 ? 'batch' : 'batches'}; refused ${String(refused.length)}. A refused branch stays where it is; an admitted one is deleted.`,
+    ...admitted.map((entry) => `  admitted ${entry.branch} (${entry.repo}) as ${entry.id} under ${entry.stamp}${entry.branchDeleted ? '' : ' (branch kept: it moved since it was read, or the repository refused the delete)'}`),
     ...refused.map((entry) => `  refused ${entry.branch ?? 'the repository'} (${entry.repo}): ${entry.reason}: ${entry.detail}`),
   ].join('\n');
 
@@ -249,7 +232,8 @@ export const holdPull = async (deps: RunDeps, options: { server?: string | undef
   const terms = await loadTerms(termsFile);
   if (terms.length === 0) throw new CliError(`No exclusion terms in ${termsFile}: every branch would be unverifiable. Nothing was fetched.`, ExitCode.USAGE, STEP);
   const sessionSalt = derivedSalt((await (runtime.accountSalt ?? localSalt)(runtime.storeDir)).salt, 'sessionId/1');
-  const pulled = await readPulled(outbox);
+  // Read once to stop before any fetch when the file is bad; `admit` reads it again under the send lock, where it is changed.
+  await readPulled(outbox, STEP);
   const scratch = await mkdtemp(join(runtime.storeDir, 'hold-pull-'));
   try {
     const tips: Tip[] = [];
@@ -266,7 +250,7 @@ export const holdPull = async (deps: RunDeps, options: { server?: string | undef
         refused.push({ repo, reason: 'repo_unreadable', detail: 'its branches could not be fetched (check this machine\'s git credential for the repository)' });
       }
     }
-    const run: Pulling = { ports, outbox, machines, terms: termsDigest(sessionSalt, terms), list: terms, pulled };
+    const run: Pulling = { ports, outbox, machines, terms: termsDigest(sessionSalt, terms), list: terms };
     const taken = new Set<string>();
     for (const tip of [...tips].sort((a, b) => b.at - a.at || (a.branch < b.branch ? -1 : 1))) {
       try {
@@ -278,6 +262,8 @@ export const holdPull = async (deps: RunDeps, options: { server?: string | undef
         taken.add(id);
         admitted.push(await admit(run, tip, id, machine));
       } catch (error) {
+        // A night holds the lock across its whole send, so a pull that overlaps a long one can be turned away: what was admitted before stays, and the tips left are read by the next pull.
+        if (error instanceof SendLockBusy) throw new CliError('Another oars run is sending from this outbox. The batches already admitted stay; the rest were not pulled. Run oars pool hold pull again in a minute.', ExitCode.CONFLICT, STEP, { title: 'Another oars run is sending from this outbox.', code: 'send_locked', status: 409 });
         refused.push(refusalOf(tip, error));
       }
     }

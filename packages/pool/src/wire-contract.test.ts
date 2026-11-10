@@ -269,12 +269,12 @@ describe('a format 5 batch with every optional field absent', () => {
 });
 
 describe('the bag', () => {
-  it('is read by nothing that serves: no source file outside the deposit route names the column', () => {
+  it('is read by nothing that serves a read: no source file outside the deposit route and the account\'s own export (Article 15 copy) names the column', () => {
     const dir = fileURLToPath(new URL('.', import.meta.url));
     const readers = readdirSync(dir)
       .filter((file) => file.endsWith('.ts') && !file.endsWith('.test.ts'))
       .filter((file) => /\bextensions\b|\bother_values\b/.test(readFileSync(`${dir}${file}`, 'utf8')));
-    expect(readers).toEqual(['worker.ts']);
+    expect(readers).toEqual(['export.ts', 'worker.ts']);
   });
 
   it('is left out of a bundle: a stored bag changes no cell a bundle is derived from', async () => {
