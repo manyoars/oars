@@ -3,7 +3,7 @@
 import { createHash } from 'node:crypto';
 import { answer, bodyOf, fieldOf, refuse, textField, type Bound, type Env } from './http.js';
 import { STANDING_AFTER_DAYS } from './access.js';
-import { accountOf } from './identity.js';
+import { accountOf, restrictedRefusal } from './identity.js';
 import { isoWeekOf } from './week.js';
 
 /** A club holds at most this many members. */
@@ -63,10 +63,10 @@ const streakOf = (weeks: ReadonlySet<string>, now: number): number => {
 /** The open board's standing rule: a hand grant, the latched `standing` flag, or a first counting deposit at least `STANDING_AFTER_DAYS` old (read directly, so a flag not yet latched does not hide an old account). The second bind is the cutoff. */
 const STANDING_ONLY = ` AND (EXISTS (SELECT 1 FROM board_standing g WHERE g.account = m.account) OR (SELECT access FROM accounts a WHERE a.id = m.account) = 'standing' OR (SELECT MIN(counted_at) FROM deposits d WHERE d.account = m.account AND d.counted_at IS NOT NULL AND d.tier <> 'none') <= ?)`;
 
-/** A club's members as the board shows them: counted members by weeks rowing, active days, then nickname; those with no counting deposit last, "ashore", with no numbers. */
+/** A club's members as the board shows them: counted members by weeks rowing, active days, then nickname; those with no counting deposit last, "ashore", with no numbers. A closed or restricted account is not listed (its rows stay stored; GDPR Art. 18(1)). */
 const boardOf = async (env: Env, club: string, now: number, standingOnly = false): Promise<object[]> => {
   const { results } = await env.DB.prepare(
-    `SELECT m.nickname AS nickname, w.week AS week, w.sessions AS sessions, w.tool_steps AS steps, w.day_mask AS mask FROM club_members m LEFT JOIN account_weeks w ON w.account = m.account AND w.sessions > 0 WHERE m.club = ? AND NOT EXISTS (SELECT 1 FROM accounts c WHERE c.id = m.account AND c.closed_at IS NOT NULL)${standingOnly ? STANDING_ONLY : ''}`,
+    `SELECT m.nickname AS nickname, w.week AS week, w.sessions AS sessions, w.tool_steps AS steps, w.day_mask AS mask FROM club_members m LEFT JOIN account_weeks w ON w.account = m.account AND w.sessions > 0 WHERE m.club = ? AND NOT EXISTS (SELECT 1 FROM accounts c WHERE c.id = m.account AND (c.closed_at IS NOT NULL OR c.restricted_at IS NOT NULL))${standingOnly ? STANDING_ONLY : ''}`,
   ).bind(...(standingOnly ? [club, now - STANDING_AFTER_DAYS * DAY_MS] : [club])).all();
   const entries = new Map<string, Entry>();
   const thisWeek = isoWeekOf(now);
@@ -108,9 +108,15 @@ const refusalOf = async (env: Env, club: string, account: string, nickname: stri
   return null;
 };
 
+/** The account that may take a seat: signed in and not restricted, because joining a board publishes its counts and that is processing beyond storage (GDPR Art. 18(1)). Leaving and reading stay open. */
+const seatable = async (request: Request, env: Env): Promise<string | Response> => {
+  const account = await signedIn(request, env);
+  return account instanceof Response ? account : ((await restrictedRefusal(env, account)) ?? account);
+};
+
 /** `POST /v1/clubs`: a club named by its creator, who is its first member. The code comes back once; only its hash is kept. */
 export const createClub = async (request: Request, env: Env): Promise<Response> => {
-  const account = await signedIn(request, env);
+  const account = await seatable(request, env);
   if (account instanceof Response) return account;
   const body = await bodyOf(request);
   const name = textField(body, 'name')?.trim();
@@ -127,7 +133,7 @@ export const createClub = async (request: Request, env: Env): Promise<Response> 
 
 /** `POST /v1/clubs/join`: the code, a nickname, and the hash of the consent text. The code word `OPEN` joins the open board, whose consent text is its own. */
 export const joinClub = async (request: Request, env: Env): Promise<Response> => {
-  const account = await signedIn(request, env);
+  const account = await seatable(request, env);
   if (account instanceof Response) return account;
   const body = await bodyOf(request);
   const code = textField(body, 'code')?.trim().toUpperCase() ?? '';

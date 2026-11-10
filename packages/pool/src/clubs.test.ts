@@ -302,6 +302,49 @@ describe('the open board', () => {
     expect(await db.prepare('SELECT COUNT(*) AS held FROM club_members WHERE account = ?').bind(closing.account).first('held')).toBe(2);
   });
 
+  it('drops a restricted account from the open board and from its clubs, keeps its rows, and shows it again once lifted (GDPR Art. 18)', async () => {
+    const owner = await member();
+    const restricted = await member(true);
+    const club = await createClub(owner.token, 'club-owner');
+    await join(restricted.token, club.code, 'restricted-oar');
+    expect((await joinOpen(restricted.token, 'restricted-open')).status).toBe(200);
+    await weeks(restricted.account, [0]);
+    await countedAgo(restricted.account, 100);
+    const restrict = async (at: number | null): Promise<void> => {
+      await db.prepare('UPDATE accounts SET restricted_at = ? WHERE id = ?').bind(at, restricted.account).run();
+    };
+
+    await restrict(Date.now());
+    expect(namesOf((await pool.get('/v1/board')).json)).not.toContain('restricted-open');
+    expect(namesOf((await pool.get(`/v1/clubs/${club.id}`, owner.token)).json)).toEqual(['club-owner']);
+    expect(await db.prepare('SELECT COUNT(*) AS held FROM club_members WHERE account = ?').bind(restricted.account).first('held')).toBe(2);
+    expect(await db.prepare('SELECT COUNT(*) AS held FROM account_weeks WHERE account = ?').bind(restricted.account).first('held')).toBe(1);
+
+    await restrict(null);
+    expect(namesOf((await pool.get('/v1/board')).json)).toContain('restricted-open');
+    expect(namesOf((await pool.get(`/v1/clubs/${club.id}`, owner.token)).json)).toContain('restricted-oar');
+
+    // Leaving is not gated: it is the person's own act and ends the processing.
+    await restrict(Date.now());
+    expect((await leave(restricted.token, club.id)).status).toBe(204);
+  });
+
+  it('refuses a restricted account a new club and a join with 403 account_restricted, and takes both again once lifted', async () => {
+    const owner = await member();
+    const restricted = await member(true);
+    const club = await createClub(owner.token, 'club-owner');
+    await db.prepare('UPDATE accounts SET restricted_at = ? WHERE id = ?').bind(Date.now(), restricted.account).run();
+    const refused = { status: 403, json: { error: 'account_restricted', message: 'This account is restricted at your request: the pool keeps its data stored and takes nothing more until the restriction is lifted. Write to privacy@manyoars.com.' } };
+
+    expect(await pool.post('/v1/clubs', { name: 'Late crew', nickname: 'late', consent: (await consents()).club }, restricted.token)).toMatchObject(refused);
+    expect(await join(restricted.token, club.code, 'late-oar')).toMatchObject(refused);
+    expect(await joinOpen(restricted.token, 'late-open')).toMatchObject(refused);
+    expect(await db.prepare('SELECT COUNT(*) AS held FROM club_members WHERE account = ?').bind(restricted.account).first('held')).toBe(0);
+
+    await db.prepare('UPDATE accounts SET restricted_at = NULL WHERE id = ?').bind(restricted.account).run();
+    expect((await join(restricted.token, club.code, 'late-oar')).status).toBe(200);
+  });
+
   it('has no code of its own to guess', async () => {
     expect(await db.prepare("SELECT code_hash FROM clubs WHERE id = 'open'").first('code_hash')).toBeNull();
   });
