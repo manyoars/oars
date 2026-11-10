@@ -1,5 +1,5 @@
 // The first sale's sample pack (P98 (10) to (12)): fixture stores, built in a temp folder, with an invented term and invented instruction text.
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -353,6 +353,22 @@ describe('the acceptance rule (plan S1)', () => {
       expect(await buildPack(f.runtime, options(f, { seed, out }))).toMatchObject({ duplicate: 1, emitted: 2 });
       expect(sessionsOf(f, out).sort()).toEqual([S(2), S(3)]);
     }
+  });
+});
+
+describe('the run record', () => {
+  it('writes how long the run took and how many bytes the pack holds (sessions and manifest) into pack.json', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    const pack: unknown = JSON.parse(readFileSync(join(f.out, 'pack.json'), 'utf8'));
+    const field = (name: string): unknown => (typeof pack === 'object' && pack !== null ? Reflect.get(pack, name) : undefined);
+    const held = [...packFiles(f.out), join(f.out, 'manifest.jsonl')].reduce((sum, file) => sum + statSync(file).size, 0);
+    expect(field('bytes')).toBe(held);
+    expect(held).toBeGreaterThan(0);
+    const elapsed = field('elapsedMs');
+    expect(typeof elapsed === 'number' && Number.isInteger(elapsed) && elapsed >= 0).toBe(true);
   });
 });
 

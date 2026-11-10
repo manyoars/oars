@@ -269,6 +269,9 @@ const EXCLUDED: { readonly [reason in Exclude<Reason, 'clean'>]: keyof PackCount
 const placeOf = (key: string, session: string, main: boolean): string => (main ? 'main.jsonl' : key.slice(session.length + 1));
 
 export const buildPack = async (runtime: SessionsRuntime, options: PackOptions): Promise<PackCounts> => {
+  const started = Date.now();
+  // Bytes of the pack's `sessions/` files and `manifest.jsonl`; `pack.json` holds the number, so it is not in it.
+  let bytes = 0;
   const out = resolve(options.out);
   // Built here and renamed to `out` at the end, so a run that stops partway leaves no half pack where a finished one belongs.
   const partial = `${out}.partial`;
@@ -344,7 +347,9 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     for (const [at, file] of files.entries()) {
       const target = join(partial, 'sessions', matchId, placeOf(file.key, record.session, file.main));
       await mkdir(dirname(target), { recursive: true });
-      await writeFile(target, masked[at] ?? '');
+      const body = masked[at] ?? '';
+      bytes += Buffer.byteLength(body);
+      await writeFile(target, body);
     }
     index.push({ pack: out, session: record.session, project: record.project, matchId });
     rows.push({
@@ -363,8 +368,10 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     });
     counts.emitted += 1;
   }
-  await writeFile(join(partial, 'manifest.jsonl'), rows.map((row) => `${JSON.stringify(row)}\n`).join(''));
-  await writeFile(join(partial, 'pack.json'), `${JSON.stringify({ built: new Date().toISOString(), size: options.size, seed: options.seed, minTurns: options.minTurns, redactionVersion: REDACTION_VERSION, counts }, null, 2)}\n`);
+  const manifest = rows.map((row) => `${JSON.stringify(row)}\n`).join('');
+  bytes += Buffer.byteLength(manifest);
+  await writeFile(join(partial, 'manifest.jsonl'), manifest);
+  await writeFile(join(partial, 'pack.json'), `${JSON.stringify({ built: new Date().toISOString(), size: options.size, seed: options.seed, minTurns: options.minTurns, redactionVersion: REDACTION_VERSION, counts, bytes, elapsedMs: Date.now() - started }, null, 2)}\n`);
   // Outside the pack, beside the owners file, and appended, so it maps every pack built from that folder. Written before the rename, so a pack under `out` always has its rows.
   await appendFile(join(dirname(resolve(options.owners)), 'index.jsonl'), index.map((row) => `${JSON.stringify(row)}\n`).join(''));
   // An empty `out` was allowed above, and a folder is renamed only onto a free name.
