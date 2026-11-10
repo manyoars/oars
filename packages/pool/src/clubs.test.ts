@@ -491,6 +491,21 @@ describe('the brakes on guessing a code and on making clubs', () => {
     expect(await openJoin(other.token, 'oar')).toBe(429);
   });
 
+  it('refuses an invalid nickname or consent 422 first and does not count it toward either brake', async () => {
+    const person = await member();
+    const club = await createClub(person.token, 'first', 'Crew one');
+    for (let n = 0; n < 12; n += 1) {
+      expect((await join(person.token, `WRONG${String(n)}`, '<bad>')).status).toBe(422);
+      expect((await pool.post('/v1/clubs/join', { code: `WRONG${String(n)}`, nickname: 'bow', consent: sha256('something else') }, person.token)).status).toBe(422);
+      expect((await pool.post('/v1/clubs', { name: `Crew ${String(n)}`, nickname: '<bad>', consent: (await consents()).club }, person.token)).status).toBe(422);
+    }
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM club_attempts WHERE account = ?').bind(person.account).first('n')).toBe(1);
+    const other = await member();
+    expect(await join(person.token, 'WRONGZ', 'bow')).toMatchObject({ status: 404, json: { error: 'not_found' } });
+    expect((await join(other.token, club.code, 'bow')).status).toBe(200);
+    await createClub(person.token, 'second', 'Crew two');
+  });
+
   it('answers the 6th club created in a day 429 rate_limited and takes the 5th, and a day later takes another', async () => {
     const maker = await member();
     for (let n = 0; n < 5; n += 1) await createClub(maker.token, `maker${String(n)}`, `Crew ${String(n)}`);
