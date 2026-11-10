@@ -59,6 +59,17 @@ describe('a restricted account', () => {
     expect(await deposits(account)).toBe(0);
   }, 60_000);
 
+  it('cannot enroll a machine (new processing), but can still list and revoke the ones it has', async () => {
+    const { token, account } = await member();
+    const enrolled = await pool.post('/v1/machines/enroll', { hostClass: 'vps', launcher: 'scheduled', label: 'before', allowRepos: [] }, token);
+    expect(enrolled.status).toBe(201);
+    await restrict(account);
+    expect(await pool.post('/v1/machines/enroll', { hostClass: 'vps', launcher: 'scheduled', label: 'after', allowRepos: [] }, token)).toMatchObject(RESTRICTED);
+    expect((await pool.get('/v1/machines', token)).status).toBe(200);
+    await restrict(account, null);
+    expect((await pool.post('/v1/machines/enroll', { hostClass: 'vps', launcher: 'scheduled', label: 'after', allowRepos: [] }, token)).status).toBe(201);
+  }, 60_000);
+
   it('is refused a raw part and the completion of a raw object', async () => {
     const { token, account } = await member();
     await restrict(account);

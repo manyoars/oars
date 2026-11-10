@@ -3,7 +3,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { HostClass } from '../../cli/src/sessions/machine.js';
 import { answer, bodyOf, fieldOf, refuse, textField, type Env } from './http.js';
-import { accountOf, bearerOf, closedRefusal, hashToken } from './identity.js';
+import { accountOf, bearerOf, closedRefusal, hashToken, restrictedRefusal } from './identity.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -121,6 +121,9 @@ export const enroll = async (request: Request, env: Env): Promise<Response> => {
   if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
   const closed = await closedRefusal(env, account);
   if (closed !== undefined) return closed;
+  // A new machine is new processing, not storage (GDPR Art. 18(1)), so a restricted account enrolls none; it can still list and revoke.
+  const restricted = await restrictedRefusal(env, account);
+  if (restricted !== undefined) return restricted;
   const declared = declaredMachine(await bodyOf(request));
   if (declared instanceof Response) return declared;
   return answer(201, await createMachine(env, account, declared, Date.now()));
