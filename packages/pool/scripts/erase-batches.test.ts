@@ -312,3 +312,21 @@ describe('an install shared by two accounts (fix round 2)', () => {
     expect(reads.filter((key) => key === rewriteKeyOf(fixture.keys.a1))).toHaveLength(1);
   });
 });
+
+describe('cutting the times of a rewrite (t1075 Item 2)', () => {
+  it('cuts received and every event\'s at to the Monday 00:00 UTC of its week, and keeps counts, commands, and durations', async () => {
+    const [bucket, db] = [await pool.bucket(), await pool.db()];
+    await clean(bucket, db);
+    const account = accountName();
+    const key = 'telemetry/2026-11-08/cut.json';
+    const event = (at: string, durationMs: number): object => ({ v: 1, type: 'command', at, cli: 'cut', os: 'linux', data: { path: ['sessions', 'list'], durationMs, exitCode: 0 } });
+    await bucket.put(key, JSON.stringify({ received: '2026-11-08T23:59:59.000Z', account, batch: { install: INSTALL_A, events: [event('2026-11-04T13:45:10Z', 12), event('2026-11-08T23:59:59Z', 34), event('2026-11-02T00:00:00Z', 56), event('not a time', 78)] } }));
+    await eraseBatches(storeOf(db, telemetryOf(bucket)), account, NOW);
+    const held: unknown = JSON.parse((await (await bucket.get(rewriteKeyOf(key)))?.text()) ?? '{}');
+    expect(fieldOf(held, 'received')).toBe('2026-11-02T00:00:00.000Z');
+    const events = fieldOf(fieldOf(held, 'batch'), 'events') as object[];
+    expect(events.map((one) => fieldOf(one, 'at'))).toEqual(['2026-11-02T00:00:00.000Z', '2026-11-02T00:00:00.000Z', '2026-11-02T00:00:00.000Z', 'not a time']);
+    expect(events.map((one) => fieldOf(fieldOf(one, 'data'), 'durationMs'))).toEqual([12, 34, 56, 78]);
+    expect(events.map((one) => fieldOf(fieldOf(one, 'data'), 'path'))).toEqual(Array(4).fill(['sessions', 'list']));
+  });
+});
