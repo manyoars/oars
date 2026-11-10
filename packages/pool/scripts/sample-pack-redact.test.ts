@@ -185,7 +185,7 @@ describe('Item 4: orchestration lead sessions are not drawn', () => {
     expect(packText(f.out)).not.toContain('leading');
   });
 
-  it('draws a lead session by a prompt the pack is told to treat as one', async () => {
+  it('leaves out a session whose first prompt matches one the pack is told to treat as one', async () => {
     const f = fixture();
     f.write(S(1), [user(f, S(1), 1, 'PLAN-LEAD start the plan'), assistant(S(1), 1, [{ type: 'text', text: 'leading' }])]);
     f.write(S(2), [user(f, S(2), 1, 'plain work'), assistant(S(2), 1, [{ type: 'text', text: 'working' }])]);

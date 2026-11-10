@@ -93,6 +93,8 @@ export interface PackOptions {
   seed: string;
   /** User plus assistant turns a session needs to be taken; plan S1 sets 20. */
   minTurns: number;
+  /** Extra first-prompt patterns of an orchestration lead session, beside `LEAD_PROMPTS`. */
+  leadPrompts?: readonly RegExp[];
 }
 
 export interface PackCounts {
@@ -103,6 +105,8 @@ export interface PackCounts {
   excluded: { term: number; noRaw: number; noTerms: number; unreadable: number };
   noOwner: number;
   noHarnessTerms: number;
+  /** An orchestration lead session (its first prompt matches `LEAD_PROMPTS`): private company business, never drawn. */
+  lead: number;
   /** Under `minTurns` user plus assistant turns. */
   tooShort: number;
   /** No repository recorded for the session. */
@@ -328,6 +332,39 @@ const typedPromptsOf = async (path: string, limit: number): Promise<string[]> =>
   }
 };
 
+/** The first prompts of an orchestration lead session: `/loop /orchestrate`, `/orchestrate`, and `/handoff resume`. A command is read as its name and arguments, as typed. */
+export const LEAD_PROMPTS: readonly RegExp[] = [/^\/loop\s+\/orchestrate\b/, /^\/orchestrate\b/, /^\/handoff\s+resume\b/];
+
+const COMMAND_NAME = /<command-name>\s*([^<]*?)\s*<\/command-name>/;
+const COMMAND_ARGS = /<command-args>([^<]*)<\/command-args>/;
+
+/** The first prompt of a Claude Code transcript as the person typed it: a slash command is its name and arguments (`/handoff resume x`), so a pattern reads what was typed. */
+const firstPromptOf = async (path: string): Promise<string | undefined> => {
+  const stream = createReadStream(path, { encoding: 'utf8' });
+  const lines = createInterface({ input: stream, crlfDelay: Infinity });
+  try {
+    for await (const row of lines) {
+      const entry = parsed(row);
+      if (!isRecord(entry) || Reflect.get(entry, 'type') !== 'user' || Reflect.get(entry, 'isMeta') === true) continue;
+      const message: unknown = Reflect.get(entry, 'message');
+      const text = isRecord(message) ? textOf(Reflect.get(message, 'content')) : undefined;
+      if (text === undefined || text.trim() === '') continue;
+      const name = COMMAND_NAME.exec(text)?.[1];
+      return name === undefined ? text.trim() : `${name} ${COMMAND_ARGS.exec(text)?.[1]?.trim() ?? ''}`.trim();
+    }
+    return undefined;
+  } finally {
+    lines.close();
+    stream.destroy();
+  }
+};
+
+const isLead = async (runtime: SessionsRuntime, record: { project: string; session: string }, extra: readonly RegExp[] = []): Promise<boolean> => {
+  const main = (await transcriptFilesOf(runtime, record.project, record.session)).find((file) => file.main);
+  const prompt = main === undefined ? undefined : await firstPromptOf(main.path);
+  return prompt !== undefined && [...LEAD_PROMPTS, ...extra].some((pattern) => pattern.test(prompt));
+};
+
 /** How many typed turns say that two sessions are one conversation: a resume replays the start of the one it continues, so the first few turns agree. */
 const PROMPTS_COMPARED = 3;
 
@@ -458,7 +495,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   }
   const order = (session: string): string => createHash('sha256').update(`${options.seed}\n${session}`).digest('hex');
   const drawn = frame.map((session) => ({ session, rank: order(session.session) })).sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0));
-  const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, tooShort: 0, noRepo: 0, duplicate: 0, secret: 0, emitted: 0 };
+  const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, lead: 0, tooShort: 0, noRepo: 0, duplicate: 0, secret: 0, emitted: 0 };
   const turnsOf = (session: { userTurns: number; assistantTurns: number }): number => session.userTurns + session.assistantTurns;
   // The rules up to the repository one, once per session: the duplicate rule asks them only of the members of a group that shares a first prompt, the draw of the sessions it reaches; a singleton the draw never reaches is never gated.
   const earlyBy = new Map<string, Promise<Early>>();
@@ -473,6 +510,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     const harness = harnessOf(record);
     const terms = HARNESS_TERMS[harness];
     if (terms === undefined) return { left: (c) => { c.noHarnessTerms += 1; } };
+    if (await isLead(runtime, record, options.leadPrompts)) return { left: (c) => { c.lead += 1; } };
     if (turnsOf(record) < options.minTurns) return { left: (c) => { c.tooShort += 1; } };
     if (record.repo === null) return { left: (c) => { c.noRepo += 1; } };
     return { accepted: { owner, harness, terms } };
