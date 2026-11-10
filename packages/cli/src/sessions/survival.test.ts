@@ -103,17 +103,11 @@ const holdsAll = (...shas: string[]): Git => {
   const full = (sha: string): string => sha.padEnd(40, '0');
   return async (_root, args) => {
     switch (args[0]) {
-      case 'rev-parse': return 'false
-';
-      case 'symbolic-ref': return 'refs/remotes/origin/main
-';
-      case 'rev-list': return `${shas.map(full).join('
-')}
-`;
+      case 'rev-parse': return 'false';
+      case 'symbolic-ref': return 'refs/remotes/origin/main';
+      case 'rev-list': return shas.map(full).join(String.fromCharCode(10));
       case 'log': return '';
-      default: return `${shas.map((sha) => `${full(sha)} commit`).join('
-')}
-`;
+      default: return shas.map((sha) => `${full(sha)} commit`).join(String.fromCharCode(10));
     }
   };
 };
