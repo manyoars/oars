@@ -67,8 +67,8 @@ const seed = async (account: string, tag: string): Promise<void> => {
       .bind(account, `${tag}-s${String(n)}`, skeleton(`${tag}-s${String(n)}`), 1_700_000_000_000 + n, `ingest-${tag}-${String(n)}`)
       .run();
   }
-  // One deposit carries the provenance migration 0025 stamps: the machine that sent it, its class and launcher, and what the batch claimed.
-  await db.prepare("UPDATE deposits SET machine = ?, host_class = 'vps', launcher = 'scheduled', claimed_host_class = 'cloud', claimed_launcher = 'cron' WHERE account = ? AND id = ?").bind(`machine-${tag}`, account, `${tag}-s1`).run();
+  // One deposit carries the provenance migration 0025 stamps: the machine that sent it, its class and launcher, and what the batch claimed; and the country its request came from (migration 0035).
+  await db.prepare("UPDATE deposits SET machine = ?, host_class = 'vps', launcher = 'scheduled', claimed_host_class = 'cloud', claimed_launcher = 'cron', request_country = 'DE' WHERE account = ? AND id = ?").bind(`machine-${tag}`, account, `${tag}-s1`).run();
   await db.prepare("INSERT INTO deposits (account, id, skeleton, tier, extensions, deltas, erased_on) VALUES (?, ?, ?, 'skeleton', '[]', '[]', '2026-11-01')").bind(account, `${tag}-gone`, '{"erased":"lawful-request"}').run();
   await db.prepare('INSERT INTO raw_objects (account, sha256, bytes, capture_version, redaction_version, stored_at) VALUES (?, ?, 11, ?, ?, ?)').bind(account, sha256(`${tag}-held`), 'cap-1', 'red-1', 1_700_000_100_000).run();
   await db.prepare('INSERT INTO raw_objects (account, sha256, bytes, capture_version, redaction_version, stored_at, erased_on) VALUES (?, ?, 7, ?, ?, ?, ?)').bind(account, sha256(`${tag}-erased`), 'cap-1', 'red-1', 1_700_000_200_000, '2026-11-02').run();
@@ -114,7 +114,7 @@ describe('GET /v1/account/export', () => {
     expect(text).not.toContain(sha256(textOf(enrolled.json, 'token')));
 
     expect(rowsOf(pages, 'account')).toEqual([expect.objectContaining({ id: mine.account, rawConsent: 1_700_000_300_000, rawConsentVersion: 'v2', rawConsentWithdrawnAt: 1_700_000_350_000, rawConsentWithdrawnVersion: 'v1', access: 'standing' })]);
-    expect(rowsOf(pages, 'covenant')).toEqual([expect.objectContaining({ version: 'v1', textSha256: acceptanceOf('v1').textSha256, input: acceptanceOf('v1').input, client: acceptanceOf('v1').client })]);
+    expect(rowsOf(pages, 'covenant')).toEqual([expect.objectContaining({ version: 'v1', textSha256: acceptanceOf('v1').textSha256, input: acceptanceOf('v1').input, client: acceptanceOf('v1').client, euEeaUk: 'no', requestCountry: 'US' })]);
     expect(rowsOf(pages, 'machines')).toEqual([expect.objectContaining({ id: textOf(fieldOf(enrolled.json, 'machine'), 'id'), label: 'my box', hostClass: 'vps', launcher: 'scheduled', allowRepos: ['acme/api'], state: 'pending', lastDepositDay: '2026-11-05', keyDays: 30 })]);
     expect(rowsOf(pages, 'repoKeys')).toEqual([{ repoKey: 'repo-mine' }]);
     expect(rowsOf(pages, 'depositHours')).toEqual([
@@ -139,7 +139,7 @@ describe('GET /v1/account/export', () => {
     // Deposits come as stored, the erased one as it now reads, marked.
     const deposits = rowsOf(pages, 'deposits');
     expect(deposits).toHaveLength(4);
-    expect(deposits).toContainEqual({ id: 'mine-s1', tier: 'skeleton', countedAt: 1_700_000_000_001, format: 2, vocabVersion: 'vocab-1', fieldsVersion: 3, extensions: [], otherValues: 0, deltas: [], ingest: 'ingest-mine-1', skeleton: { id: 'mine-s1', harness: 'claude-code' }, tombstone: null, machine: 'machine-mine', hostClass: 'vps', launcher: 'scheduled', claimedHostClass: 'cloud', claimedLauncher: 'cron' });
+    expect(deposits).toContainEqual({ id: 'mine-s1', tier: 'skeleton', countedAt: 1_700_000_000_001, format: 2, vocabVersion: 'vocab-1', fieldsVersion: 3, extensions: [], otherValues: 0, deltas: [], ingest: 'ingest-mine-1', skeleton: { id: 'mine-s1', harness: 'claude-code' }, tombstone: null, machine: 'machine-mine', hostClass: 'vps', launcher: 'scheduled', claimedHostClass: 'cloud', claimedLauncher: 'cron', requestCountry: 'DE' });
     expect(deposits).toContainEqual(expect.objectContaining({ id: 'mine-gone', skeleton: { erased: 'lawful-request' }, tombstone: '2026-11-01' }));
   }, 60_000);
 

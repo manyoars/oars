@@ -55,6 +55,15 @@ export const covenantStatus = async (request: Request, env: Env, texts: Readonly
   return answer(200, { version, accepted: caller !== undefined && (await hasAccepted(env, caller.account, version)), screen: screenOf(version, texts), ...expires });
 };
 
+/**
+ * The two-letter country Cloudflare reports for a request (`request.cf.country`), or `null` when it gives none or something that is not two capital letters. Two letters name a country, not a person, and the covenant lists the country among the identifiers it keeps (Annex C.1).
+ * Cloudflare also reports `XX` (no data) and `T1` (Tor); they are kept as they come, since neither is a protected region.
+ */
+export const countryOf = (request: Request): string | null => {
+  const country = (request as { cf?: { country?: unknown } }).cf?.country;
+  return typeof country === 'string' && /^[A-Z]{2}$/.test(country) ? country : null;
+};
+
 /** The longest `input` or `client` an acceptance may state: a name and a version, so a row stays small whatever a caller sends. */
 const PROOF_FIELD_MAX = 64;
 
@@ -80,10 +89,12 @@ export const covenantAccept = async (request: Request, env: Env, texts: Readonly
   if (input === undefined || input.length > PROOF_FIELD_MAX) return refuse(400, 'missing_field', `An acceptance states how the person answered, in at most ${String(PROOF_FIELD_MAX)} characters.`, 'input');
   const client = textField(body, 'client');
   if (client === undefined || client.length > PROOF_FIELD_MAX) return refuse(400, 'missing_field', `An acceptance names its client, in at most ${String(PROOF_FIELD_MAX)} characters.`, 'client');
+  const answered = textField(body, 'euEeaUk');
+  if (answered !== 'yes' && answered !== 'no') return refuse(400, 'missing_field', 'An acceptance states whether the person is in the EU, the EEA, or the UK: yes or no.', 'euEeaUk');
   // One transaction: the history row and the column the gate reads change together, and a repeat of a version on record keeps its first time and its first proof (`OR IGNORE`). A client that accepts without reading first still leaves the version's start on record.
   await env.DB.batch([
     servedOf(env, version),
-    env.DB.prepare('INSERT OR IGNORE INTO covenant_acceptances (account, version, accepted_at, text_sha256, input, client) VALUES (?, ?, ?, ?, ?, ?)').bind(account, version, Date.now(), shown, input, client),
+    env.DB.prepare('INSERT OR IGNORE INTO covenant_acceptances (account, version, accepted_at, text_sha256, input, client, eu_eea_uk, request_country) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(account, version, Date.now(), shown, input, client, answered, countryOf(request)),
     env.DB.prepare('UPDATE accounts SET covenant = ? WHERE id = ?').bind(version, account),
   ]);
   return answer(200, { ok: true, version });
