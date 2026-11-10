@@ -463,6 +463,28 @@ describe('the secret scan', () => {
     expect(packText(f.out)).toContain(shot);
   });
 
+  it('leaves the image copy of a Read out of the scan too: toolUseResult.file.base64, whose object type is the media type', async () => {
+    const f = fixture();
+    const shot = 'AI' + 'za' + 'A'.repeat(30);
+    const data = `iVBORw0KGgo${shot}AAAA`;
+    // The harness records a Read of an image twice: in the tool_result block, and under `toolUseResult.file`, where the sibling `type` is the media type.
+    const read = line({
+      type: 'user',
+      uuid: uuidOf(S(1), 'b', 5),
+      parentUuid: null,
+      isSidechain: false,
+      timestamp: at(5),
+      version: '2.1.300',
+      sessionId: S(1),
+      cwd: repoCwd,
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_01abc', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data } }] }] },
+      toolUseResult: { type: 'image', file: { base64: data, type: 'image/png', originalSize: 1024, dimensions: { originalWidth: 800, originalHeight: 600, displayWidth: 800, displayHeight: 600 } } },
+    });
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done'), read]);
+    await stored(f);
+    expect(await buildPack(f.runtime, options(f))).toMatchObject({ secret: 0, emitted: 1 });
+  });
+
   it('drops a session whose redacted text still holds a key, writes nothing of it, and counts it', async () => {
     const f = fixture();
     // Stuck to a word, the key is outside the redactor's word-boundary rule: it comes through redaction, and the scan is what stops it.
