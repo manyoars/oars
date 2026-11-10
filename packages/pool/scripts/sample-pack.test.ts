@@ -577,6 +577,38 @@ describe('the repository pointer and the outcome (plan S4)', { timeout: 30_000 }
     expect(pointerOf(manifest(f.out)[0])).toEqual({ remote: 'git@example.com:acme/app.git', commit: shas.onFeature });
   });
 
+  // Claude Code records gitBranch "HEAD" for a detached checkout; HEAD is whatever is checked out now, so it is not the session's branch.
+  it('does not read HEAD for a session that started detached (gitBranch HEAD): it goes through origin/HEAD', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    const shas = makeRepo(repo);
+    git(repo, ['checkout', '-q', 'feature']);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'HEAD'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    expect(pointerOf(manifest(f.out)[0])).toEqual({ remote: REMOTE, commit: shas.onMain });
+  });
+
+  it.each([
+    ['ssh://git@example.com/home/alice/app.git'],
+    ['git@example.com:/home/alice/app'],
+    ['ssh://git@example.com/Users/alice/app.git'],
+    ['https://example.com/C:/Users/alice/app.git'],
+  ])('writes pointer: null for a remote whose path names an account on its host (%s)', async (remote) => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    makeRepo(repo);
+    git(repo, ['remote', 'set-url', 'origin', remote]);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'feature'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    const counts = await buildPack(f.runtime, options(f));
+    expect(pointerOf(manifest(f.out)[0])).toBeNull();
+    expect(counts).toMatchObject({ emitted: 1, noPointer: 1 });
+    expect(readFileSync(join(f.out, 'manifest.jsonl'), 'utf8')).not.toContain('alice');
+  });
+
   // A commit the session made: the Bash call, and the result that names the sha the way `git commit` prints it.
   const committed = (session: string, n: number, branch: string, sha: string): string[] => [
     line({ type: 'assistant', uuid: uuidOf(session, 'a', n), parentUuid: null, isSidechain: false, timestamp: at(n), version: '2.1.300', sessionId: session, requestId: requestOf(session, n), message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: `toolu_${String(n)}`, name: 'Bash', input: { command: 'git commit -m work' } }], usage: { input_tokens: 10, output_tokens: 20 } } }),
