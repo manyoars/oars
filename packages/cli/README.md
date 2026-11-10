@@ -86,7 +86,7 @@ oars card --year --out me.png    # the last 365 days, saved as me.png and me.svg
 
 Once a week, the first command you run in a terminal on or after Friday prints one line to stderr, `Your week: N sessions, M strokes. \`oars card --text\` for the table.`, never with `--json`, from a hook, from the MCP server, from a recall, from `oars sessions try`, or from `oars card` itself, and only when the week has a session. About one install in ten never sees it; `card-line.json` in the session store folder records the week and whether it was `shown`, `held`, or `not_due`, and `card-line-id` holds the id the holdback hashes, copied once from the telemetry install id when there is one, else random, so the arm never changes.
 
-Nothing is uploaded and nothing is sent anywhere: the command makes no network call and prints one prefilled `x.com` link whose text is the card's own numbers, for you to post if you choose. The card carries no folder name, path, prompt or response text, repository name, or long-tail tool or model name, and posting it unlocks nothing. The picture is a byte-stable SVG and a PNG drawn from it with a built-in font; `--text` prints the table and writes nothing.
+Nothing is uploaded and nothing is sent anywhere: the command makes no network call and prints one prefilled `x.com` link whose text is the card's own numbers, for you to post if you choose. The card carries no folder name, path, prompt or response text, repository name, or long-tail tool or model name, and posting it unlocks nothing. The picture is a byte-stable SVG and a PNG drawn from it with a built-in font; `--text` prints the table and writes nothing. `--no-cost` leaves the cost row out of the picture, the table, and `--json`.
 
 ### sessions
 

@@ -8,7 +8,7 @@ import { GLYPH_HEIGHT, GLYPH_WIDTH, lit } from './card-font.js';
 const WIDTH = 1200;
 const MARGIN = 48;
 const TOP = 140;
-const PITCH = 36;
+export const PITCH = 36;
 const FONT = 20;
 const TITLE_FONT = 30;
 const VALUE_X = 308;

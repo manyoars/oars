@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "erase": "node scripts/erase.mjs",
+    "sample-pack": "node scripts/sample-pack.mjs",
     "grant-standing": "node scripts/grant-standing.mjs",
     "hide-nickname": "node scripts/hide-nickname.mjs"
   },
