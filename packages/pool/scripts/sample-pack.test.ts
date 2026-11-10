@@ -1479,10 +1479,10 @@ describe('a raw id inside text (t1135 item 2)', () => {
   };
 
   it.each([
-    ['msg_', 'msg_01XFDUDYJgAACzvnptvVoYEL'],
-    ['req_', 'req_011CSHoEeqs5C35K2UUqR7Fy'],
-    ['toolu_', 'toolu_01A09q90qw90lq917835lq9k'],
-    ['srvtoolu_', 'srvtoolu_01B19r81rx81mr028946mr0l'],
+    ['msg_', 'msg_01aaaaaaaaaaaaaaaaaa0001'],
+    ['req_', 'req_011Caaaaaaaaaaaaaaaa0001'],
+    ['toolu_', 'toolu_01aaaaaaaaaaaaaaaaaa0001'],
+    ['srvtoolu_', 'srvtoolu_01aaaaaaaaaaaaaaaaaa0002'],
   ])('masks a %s id in tool output whether or not any line carries it as an id', async (_prefix, raw) => {
     const text = await built((s) => [result(s, 20, `log: handled ${raw} in 40ms`)]);
     expect(text).not.toContain(raw);
@@ -1491,7 +1491,7 @@ describe('a raw id inside text (t1135 item 2)', () => {
   });
 
   it('masks the same msg_ id to the same value under msg_id and in text', async () => {
-    const raw = 'msg_01SameIdInTwoPlaces0001';
+    const raw = 'msg_01aaaaaaaaaaaaaaaaaa0003';
     const text = await built((s) => [harnessLine(s, 20, 'system', { msg_id: raw }), result(s, 21, `see ${raw}`)]);
     expect(text).not.toContain(raw);
     const masks = [...text.matchAll(/msg_[0-9a-f]{24}/g)].map((found) => found[0]);
