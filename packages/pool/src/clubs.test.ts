@@ -106,8 +106,8 @@ describe('creating and joining a club', () => {
     expect((await pool.post('/v1/clubs/join', { code: club.code, nickname: 'bow' }, guest.token)).status).toBe(422);
     expect((await pool.post('/v1/clubs/join', { code: club.code, nickname: 'bow', consent: sha256('something else') }, guest.token)).json).toMatchObject({ error: 'consent_required' });
     expect(await join(guest.token, 'ZZZZZZ', 'bow')).toMatchObject({ status: 404, json: { error: 'not_found' } });
-    expect((await join(guest.token, club.code, '  ')).status).toBe(422);
-    expect((await join(guest.token, club.code, '<script>')).status).toBe(422);
+    expect(await join(guest.token, club.code, '  ')).toMatchObject({ status: 422, json: { error: 'nickname_invalid' } });
+    expect(await join(guest.token, club.code, '<script>')).toMatchObject({ status: 422, json: { error: 'nickname_invalid' } });
     expect(await join(guest.token, club.code, 'SKIPPER')).toMatchObject({ status: 409, json: { error: 'nickname_taken' } });
     expect((await join(guest.token, club.code, 'bow')).status).toBe(200);
     expect(await join(guest.token, club.code, 'stroke')).toMatchObject({ status: 409, json: { error: 'already_member' } });
@@ -459,5 +459,42 @@ describe('the brakes on guessing a code and on making clubs', () => {
     await db.prepare('UPDATE club_attempts SET at = at - ? WHERE account = ?').bind(2 * DAY, guesser.account).run();
     await join(guesser.token, 'NEWONE', 'bow');
     expect(await db.prepare('SELECT COUNT(*) AS n FROM club_attempts WHERE account = ?').bind(guesser.account).first('n')).toBe(1);
+  });
+});
+
+describe('the nickname rule', () => {
+  const rule = /2 to 24/;
+
+  it('refuses a nickname outside the rule as nickname_invalid, with the rule in one line', async () => {
+    const guest = await member();
+    const club = await createClub((await member()).token);
+    for (const nickname of ['a', 'x'.repeat(25), ' lead', 'trail ', 'two@words', 'me@example', 'http://x.io', 'www.example.com', 'visit oars.dev', 'under!score', 'emoji 🚣']) {
+      const refused = await join(guest.token, club.code, nickname);
+      expect(refused, nickname).toMatchObject({ status: 422, json: { error: 'nickname_invalid', field: 'nickname' } });
+      expect(JSON.stringify(refused.json), nickname).toMatch(rule);
+    }
+  });
+
+  it('accepts letters, digits, space, hyphen, underscore, and dot, 2 to 24 long', async () => {
+    for (const nickname of ['ab', 'x'.repeat(24), 'Ana-Maria_2.0', 'two words', 'j.doe', 'v1.2']) {
+      const guest = await member();
+      const club = await createClub((await member()).token);
+      expect(await join(guest.token, club.code, nickname), nickname).toMatchObject({ status: 200, json: { nickname } });
+    }
+  });
+
+  it('stores the NFKC form, so a full-width name and its plain form are one nickname', async () => {
+    const owner = await member();
+    const guest = await member();
+    const club = await createClub(owner.token, 'ｓｋｉｐｐｅｒ２');
+    expect(club.id).toBeTruthy();
+    expect(await join(guest.token, club.code, 'skipper2')).toMatchObject({ status: 409, json: { error: 'nickname_taken' } });
+    expect(namesOf((await pool.get(`/v1/clubs/${club.id}`, owner.token)).json)).toEqual(['skipper2']);
+  });
+
+  it('applies to creating a club as well, and club names keep their own rule', async () => {
+    const maker = await member();
+    expect(await pool.post('/v1/clubs', { name: 'Fine crew', nickname: 'x', consent: (await consents()).club }, maker.token)).toMatchObject({ status: 422, json: { error: 'nickname_invalid' } });
+    expect(await pool.post('/v1/clubs', { name: '!!', nickname: 'maker', consent: (await consents()).club }, maker.token)).toMatchObject({ status: 422, json: { error: 'bad_name' } });
   });
 });
