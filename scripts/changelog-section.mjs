@@ -39,4 +39,4 @@ const run = () => {
 };
 
 // Only when run as a script, so importing sectionOf never sets the exit code.
-if (import.meta.url === pathToFileURL(process.argv[1]).href) process.exitCode = run();
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) process.exitCode = run();
