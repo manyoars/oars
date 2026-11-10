@@ -32,6 +32,13 @@ describe('release-cli workflow', () => {
     expect(job('publish')).toContain('path: release-pack');
   });
 
+  it('fails a publish dispatch from a ref other than main instead of skipping every job', () => {
+    const refuse = job('refuse-non-main');
+    expect(refuse).toContain("if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref != 'refs/heads/main'");
+    expect(refuse).toContain('::error::');
+    expect(refuse).toContain('exit 1');
+  });
+
   it('lets a manual run build and publish the tag, only when asked', () => {
     expect(workflow).toContain('TAG: ${{ inputs.tag || github.ref_name }}');
     expect(workflow).toMatch(/\n {6}publish:\n {8}description: [^\n]+\n {8}required: false\n {8}type: boolean\n {8}default: false/);

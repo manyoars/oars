@@ -112,7 +112,7 @@ export interface ManifestRow {
   turns: number;
   /** The file beside the transcripts that holds the session's skeleton. */
   skeleton: string;
-  /** Only for an owner who opted in: null when the repository cannot be found (counted in `noPointer`). */
+  /** Only for an owner who opted in: null when the repository cannot be found, has no `origin`, or whose remote is not kept (counted in `noPointer`). */
   pointer?: RepositoryPointer | null;
   /** Only for an owner who opted in. */
   outcome?: Outcome;
@@ -155,7 +155,7 @@ export interface PackCounts {
   duplicate: number;
   /** The store holds no skeleton for the session (captured before steps and frames, or with no root), so it has none to pack. */
   noSkeleton: number;
-  /** An emitted session of an owner who opted in whose repository could not be found, so its `pointer` is null. */
+  /** An emitted session of an owner who opted in whose repository could not be found, has no `origin`, or whose remote is not kept, so its `pointer` is null. */
   noPointer: number;
   /** Dropped because the redacted, masked text still held something shaped like a key (`secretIn`); nothing of the session was written. */
   secret: number;
@@ -651,16 +651,16 @@ const repositoryRoot = async (git: Git, cwd: string): Promise<string | null> => 
 };
 
 const REMOTE_PROTOCOLS: readonly string[] = ['http:', 'https:', 'ssh:', 'git:'];
-/** A path under a home folder names an account on the remote host (`/home/alice/...`, `/Users/alice/...`, `C:/Users/alice/...`). */
-const ACCOUNT_PATH = /^\/?(?:[A-Za-z]:\/)?(?:home|Users)\//i;
+/** A path under a home folder or `~name/` names an account on the remote host (`/home/alice/...`, `/Users/alice/...`, `C:/Users/alice/...`). */
+const ACCOUNT_PATH = /^\/?(?:[A-Za-z]:\/)?(?:(?:home|Users)\/|~[^/]*\/)/i;
 const SCP_REMOTE = /^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:(?!\/\/)[^\s]+$/;
 
 /**
- * The remote as a buyer may read it, or null. A URL can carry a user name or token (`https://user:token@host/...`); neither is a pointer. Only a network URL or `user@host:path` is
+ * The remote as a buyer may read it, or null. A URL can carry a user name or token (`https://user:token@host/...`); neither is a pointer. Only a network URL or `git@host:path` (any other scp user names an account) is
  * kept: a folder (`C:/Users/<name>/...`, `/home/<name>/...`) or a `file:` URL would put the operator's account name and home path into a manifest that the transcripts' masking never reaches.
  */
 const publicRemote = (remote: string): string | null => {
-  if (SCP_REMOTE.test(remote)) return ACCOUNT_PATH.test(remote.slice(remote.indexOf(':') + 1)) ? null : remote;
+  if (SCP_REMOTE.test(remote)) return remote.startsWith('git@') && !ACCOUNT_PATH.test(remote.slice(remote.indexOf(':') + 1)) ? remote : null;
   try {
     const url = new URL(remote);
     if (!REMOTE_PROTOCOLS.includes(url.protocol) || ACCOUNT_PATH.test(decodeURIComponent(url.pathname))) return null;

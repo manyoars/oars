@@ -50,6 +50,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  refuse-non-main:
+    # A publish=true dispatch from another ref would end with every job skipped and no error; fail it loudly instead.
+    if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: echo "::error::publish=true must be dispatched from main (this run is on ${{ github.ref }}); the tag's commit must be an ancestor of main and the workflow file is main's." && exit 1
+
   build:
     if: (github.event_name == 'push' || inputs.publish) && (github.event_name == 'push' || github.ref == 'refs/heads/main')
     # GitHub-hosted runners only: this repository is public.

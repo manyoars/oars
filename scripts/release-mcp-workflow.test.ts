@@ -21,7 +21,7 @@ interface ParsedWorkflow {
 
 // A guard, not an assertion: the permission checks below compare exact values, so the shape only has to be an object holding those two keys.
 const isParsedWorkflow = (value: unknown): value is ParsedWorkflow =>
-  typeof value === 'object' && value !== null && 'permissions' in value && 'jobs' in value;
+  typeof value === 'object' && value !== null && 'permissions' in value && 'jobs' in value && typeof value.jobs === 'object' && value.jobs !== null && 'publish' in value.jobs;
 
 describe('release-mcp workflow', () => {
   it('exists', () => {
