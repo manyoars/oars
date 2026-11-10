@@ -13,7 +13,7 @@ const wranglerBin = join(dirname(createRequire(import.meta.url).resolve('wrangle
 
 const bundled = await build({ entryPoints: [join(here, 'erase-cli.ts')], bundle: true, platform: 'node', format: 'esm', write: false });
 const code = bundled.outputFiles?.[0]?.text ?? '';
-const { main, nodeFiles } = await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`);
+const { main, nodeFiles, r2Lister } = await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`);
 
 /** Wrangler's own entry point under node, so the same call works on Windows, where `npx` is a .cmd file. It runs in the pool's folder, where `wrangler.jsonc` is. */
 const wrangler = (/** @type {readonly string[]} */ args) =>
@@ -28,8 +28,11 @@ const stdin = async () => {
 };
 
 const files = nodeFiles();
+// An account erasure also rewrites the telemetry batches that name it, and wrangler cannot list a bucket: R2's S3 API does, with an R2 API token the operator exports (read on the bucket `oars-telemetry`). The token goes to Cloudflare only.
+const { R2_ACCOUNT_ID: accountId, R2_ACCESS_KEY_ID: accessKeyId, R2_SECRET_ACCESS_KEY: secretAccessKey } = process.env;
+const list = accountId && accessKeyId && secretAccessKey ? r2Lister({ accountId, accessKeyId, secretAccessKey }, 'oars-telemetry', (url, init) => fetch(url, init), () => new Date()) : undefined;
 try {
-  process.exitCode = await main(process.argv.slice(2), { stdin, print: (/** @type {string} */ text) => console.log(text), wrangler, files, now: () => new Date() });
+  process.exitCode = await main(process.argv.slice(2), { stdin, print: (/** @type {string} */ text) => console.log(text), wrangler, files, ...(list === undefined ? {} : { list }), now: () => new Date() });
 } finally {
   // The find writes each object it reads to a scratch file; a run that failed halfway must not leave one behind.
   await files.dispose();

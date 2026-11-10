@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { sampleSkeleton } from '../src/sample.js';
 import { acceptanceOf, fieldOf, startPool, stubUser, type TestBucket, type TestDb, type TestPool } from '../src/test-pool.js';
+import { telemetryOf } from './erase-test-telemetry.js';
 import { eraseAccount, eraseLeakedSecret, eraseRawObject, findRawContaining, holdsValue, type EraseStore, type RawHit } from './erase.js';
 
 let pool: TestPool;
@@ -40,7 +41,8 @@ const asyncPieces = (pieces: Iterable<Uint8Array>): AsyncIterable<Uint8Array> =>
 });
 
 /** The erasure store over the pool's local D1 and raw bucket, as `wrangler --local` would reach them. */
-const storeOf = (db: TestDb, bucket: TestBucket, chunk = 64 * 1024): EraseStore => ({
+const storeOf = (db: TestDb, bucket: TestBucket, telemetry: TestBucket, chunk = 64 * 1024): EraseStore => ({
+  telemetry: telemetryOf(telemetry),
   rows: async (sql, binds) => (await db.prepare(sql).bind(...binds).all()).results,
   run: async (sql, binds) => Number(fieldOf(fieldOf(await db.prepare(sql).bind(...binds).run(), 'meta'), 'changes')),
   deleteObject: (key) => bucket.delete([key]),
@@ -57,7 +59,7 @@ const storeOf = (db: TestDb, bucket: TestBucket, chunk = 64 * 1024): EraseStore 
   },
 });
 
-const store = async (chunk?: number): Promise<EraseStore> => storeOf(await pool.db(), await pool.rawBucket(), chunk);
+const store = async (chunk?: number): Promise<EraseStore> => storeOf(await pool.db(), await pool.rawBucket(), await pool.bucket(), chunk);
 
 const member = async (): Promise<{ token: string; account: string }> => {
   next += 1;
@@ -728,6 +730,7 @@ describe('finding the raw objects that hold a text', () => {
       },
       run: () => Promise.reject(new Error('the find wrote to D1')),
       deleteObject: () => Promise.reject(new Error('the find deleted from R2')),
+      telemetry: inner.telemetry,
       readObject: (key) => {
         seen.push(`READ ${key}`);
         return inner.readObject(key);

@@ -601,6 +601,8 @@ describe('a piece that can move the quote state, before a single-quoted referenc
     { kind: 'a double-quoted flag after a case arm inside a substitution', command: `echo "$(case x in x) echo " --customer acme_value ";; esac)"` },
     { kind: 'a double-quoted flag after a parenthesis in a comment inside a substitution', command: ['echo "$(echo a # )', 'echo " --customer acme_value ")"'].join('\n') },
     { kind: 'a double-quoted flag after a backtick substitution', command: 'echo "`echo a`" " --customer acme_value "' },
+    // An unquoted backtick substitution is read to its closing backtick by a scan the reader does not run: an escaped quote inside it reads as a bare quote, so the words after it must not be read.
+    { kind: 'an escaped quote inside an unquoted backtick substitution', command: 'echo `echo \\" --customer acme_value \\"`' },
   ];
   for (const { kind, command } of WHOLE) {
     it(`sends no name from the literal text after ${kind}`, () => {
@@ -680,6 +682,8 @@ describe('a PowerShell command', () => {
     { kind: 'double typographic quotes around a reference', command: 'Write-Output “a $hunter2 b”', calls: [{ harness: 'codex', tool: 'Bash' }] },
     { kind: 'a block comment', command: ['<#', 'mysql --customer acme_value $hunter2', '#>', 'Get-Item x'].join('\n'), calls: [{ harness: 'codex', tool: 'Bash' }] },
     { kind: 'a stop-parsing token after a launcher path', command: String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -Command "Write-Output --% --customer acme_value"`, calls: [{ harness: 'codex', tool: 'Bash' }] },
+    // Codex stores a PowerShell call as `Bash`, so a double-quoted path ending in a backslash is read with POSIX escapes: the backslash escapes the closing quote and inverts the quote state for the words after it.
+    { kind: 'a double-quoted path ending in a backslash', command: String.raw`Select-String -Path "C:\repo\" -Pattern "fix the --customer acme_value bug"`, calls: [{ harness: 'codex', tool: 'Bash' }] },
     {
       kind: 'a stop-parsing token inside a nested pwsh -c',
       command: 'pwsh -c "Write-Output --% --customer acme_value"',
@@ -728,5 +732,33 @@ describe('a PowerShell command', () => {
     const [pair, escaped] = toolsOf(skeleton);
     expect(pair?.names).toEqual(names('flag', 'eu_control'));
     expect(escaped?.names ?? []).toEqual([]);
+  });
+});
+
+describe('a double-quoted value joined to an assignment or a long flag', () => {
+  // A quote inside the word used to make the whole word quoted, so the name before the `=` went unsaid. The prefix is as written, so the name and the joined value are read as for an unquoted word; a credential flag's value never is.
+  it('reads the variable an assignment names and the value a long flag carries, with the quotes around the value', () => {
+    const skeleton = skeletonOfLines(
+      { redact, terms: [] },
+      call('a', 'Bash', { command: 'API_REGION="eu" ./deploy.sh' }),
+      call('b', 'Bash', { command: 'tool --region="eu_control"' }),
+      call('c', 'Bash', { command: 'tool --token="zq_secret_value" --password="zq_pass_value" --region="eu_control"' }),
+    );
+    const [assigned, joined, credential] = toolsOf(skeleton);
+    expect(assigned?.names).toEqual(names('env', 'API_REGION'));
+    expect(joined?.names).toEqual(names('flag', 'eu_control'));
+    expect(credential?.names).toEqual(names('flag', 'eu_control'));
+    for (const value of ['zq_secret_value', 'zq_pass_value']) expect(JSON.stringify(skeleton)).not.toContain(value);
+  });
+
+  it('reads no value from a single quote or a substitution after the `=`, where literal text begins', () => {
+    const skeleton = skeletonOfLines(
+      { redact, terms: [] },
+      call('a', 'Bash', { command: "tool --region='eu_single'" }),
+      call('b', 'Bash', { command: 'tool --region="$(echo eu_sub)"' }),
+      call('c', 'Bash', { command: "API_REGION='eu' ./deploy.sh" }),
+    );
+    expect(toolsOf(skeleton).map((tool) => tool.names ?? [])).toEqual([[], [], []]);
+    for (const value of ['eu_single', 'eu_sub']) expect(JSON.stringify(skeleton)).not.toContain(value);
   });
 });

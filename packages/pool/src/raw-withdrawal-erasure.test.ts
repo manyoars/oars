@@ -183,6 +183,21 @@ describe('the nightly cron erases the raw copies of an account that withdrew', (
     expect(await sweepWithdrawnRaw(env, TONIGHT, 2 * SWEEP_PAGE_CALLS)).toBe(0);
   }, 90_000);
 
+  it('takes the account that withdrew first, whatever the order the accounts were made in, when the night cannot take them all', async () => {
+    const newer = await member();
+    const older = await member();
+    const db = await pool.db();
+    // The newer withdrawal is the account made first (and holds the most objects), so a page with no order would fill with it and leave the older one waiting.
+    await db.prepare('UPDATE accounts SET raw_consent_withdrawn_at = 5000, raw_consent = NULL, raw_consent_version = NULL WHERE id = ?').bind(newer.account).run();
+    await db.prepare('UPDATE accounts SET raw_consent_withdrawn_at = 1000, raw_consent = NULL, raw_consent_version = NULL WHERE id = ?').bind(older.account).run();
+    for (let at = 0; at < 100; at += 1) await db.prepare('INSERT INTO raw_objects (account, sha256, bytes, capture_version, redaction_version, stored_at) VALUES (?, ?, 1, ?, ?, 1)').bind(newer.account, `d${String(at).padStart(2, '0')}`.padEnd(64, '0'), 'cap-1', '1').run();
+    for (let at = 0; at < 3; at += 1) await db.prepare('INSERT INTO raw_objects (account, sha256, bytes, capture_version, redaction_version, stored_at) VALUES (?, ?, 1, ?, ?, 1)').bind(older.account, `e${String(at).padStart(2, '0')}`.padEnd(64, '0'), 'cap-1', '1').run();
+    const env = await pool.miniflare.getBindings<Env>();
+    expect(await sweepWithdrawnRaw(env, TONIGHT, SWEEP_PAGE_CALLS)).toBe(100);
+    expect(await count('SELECT COUNT(*) AS held FROM raw_objects WHERE account = ? AND erased_on IS NULL', older.account)).toBe(0);
+    expect(await count('SELECT COUNT(*) AS held FROM raw_objects WHERE account = ? AND erased_on IS NULL', newer.account)).toBe(3);
+  }, 90_000);
+
   it('does nothing on a pool with no raw bucket', async () => {
     expect(await sweepWithdrawnRaw(await unbound.miniflare.getBindings<Env>(), TONIGHT, 20)).toBe(0);
   }, 60_000);

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { cellsOf, storeOf } from './cell-increments.js';
 import { SHAPE_CLASS } from './cells.js';
 import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from './pool-fixture.js';
-import { FORMAT_4_TOOL_FIELDS, FORMAT_5_TOOL_FIELDS, parseSkeleton, READ_FORMATS, skeletonOf, SKELETON_FORMAT, type SessionSkeleton } from './pool-wire.js';
+import { bucketOf, FORMAT_4_TOOL_FIELDS, FORMAT_5_TOOL_FIELDS, parseSkeleton, READ_FORMATS, skeletonOf, SKELETON_FORMAT, type SessionSkeleton } from './pool-wire.js';
 
 const framed = frame({ shell: 'bash' });
 const NAMES = [{ kind: 'dir', name: 'billing' }, { kind: 'file', name: 'plan.md' }];
@@ -16,6 +16,9 @@ const built = (): SessionSkeleton => {
     argValues: [{ key: 'output_mode', enumValue: 'count' }],
     changeKind: ['value-changed'],
     names: [{ kind: 'dir', name: 'billing' }, { kind: 'file', name: 'plan.md' }, { kind: 'file', name: 'Q3 plan.md' }],
+    // The second template holds a program that is not a name, so it is dropped and counted.
+    templates: ['git commit -m <text>', 'a@b run <path>'],
+    diffShape: ['import-added', 'lines-changed'],
     steps: [step(0, 0, 'file.search', { native: 'Grep' })],
   });
   const [only] = sessionsFrom(store({ sessions: [session('s1', { frame: framed })], prompts: [prompt('s1', 0, { frame: framed })], tools: [grep] }));
@@ -44,8 +47,19 @@ describe('the wire formats', () => {
     if (!parsed.ok) throw new Error(parsed.reason);
     expect(parsed).toMatchObject({ others: 0, extensions: [] });
     expect(parsed.skeleton.format).toBe(7);
-    expect(parsed.skeleton.transcripts[0]?.tools[0]).toMatchObject({ argFeatures: [{ key: 'pattern', valueSize: '1-8', patternFeatures: ['anchor'] }], argValues: [{ key: 'output_mode', enumValue: 'count' }], changeKind: ['value-changed'], names: NAMES });
+    expect(parsed.skeleton.transcripts[0]?.tools[0]).toMatchObject({ argFeatures: [{ key: 'pattern', valueSize: '1-8', patternFeatures: ['anchor'] }], argValues: [{ key: 'output_mode', enumValue: 'count' }], changeKind: ['value-changed'], names: NAMES, templates: ['git commit -m <text>'], templatesDropped: bucketOf('count', 1), diffShape: ['import-added', 'lines-changed'] });
     expect(layerOne(parsed.skeleton)).toEqual(['shape:file.search/change/value-changed', 'shape:file.search/enum/output_mode=count', 'shape:file.search/pattern/pattern=anchor', 'shape:file.search/size/pattern=1-8']);
+  });
+
+  it('reads a diff shape this reader does not know as other, and counts and bags it', () => {
+    const odd = built();
+    const call = odd.transcripts[0]?.tools[0];
+    if (call === undefined) throw new Error('no call');
+    Reflect.set(call, 'diffShape', ['lines-added', 'text-rewritten']);
+    const parsed = parseSkeleton(odd);
+    if (!parsed.ok) throw new Error(parsed.reason);
+    expect(parsed.skeleton.transcripts[0]?.tools[0]?.diffShape).toEqual(['lines-added', 'other']);
+    expect(parsed.others).toBeGreaterThan(0);
   });
 
   it('reads a name of a kind this reader does not know, or one with no name shape, as other, and counts and bags it', () => {

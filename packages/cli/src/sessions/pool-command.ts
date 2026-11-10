@@ -153,7 +153,7 @@ const send = async (deps: RunDeps, step: string, request: Outgoing, show: Masker
 export const networkSender = (deps: RunDeps, step: string): Sender => (request) => send(deps, step, request, undefined);
 
 /** The server's named refusal, as a failure: its `error` is the problem's code in `--json`. */
-const refusal = (step: string, { status, body }: Reply): CliError => {
+export const refusal = (step: string, { status, body }: Reply): CliError => {
   const code = isObject(body) ? textIn(body, 'error') : undefined;
   const message = (isObject(body) ? textIn(body, 'message') : undefined) ?? `The pool answered HTTP ${String(status)}.`;
   return new CliError(message, exitCodeForProblem(status, code === undefined ? undefined : { code }), step, { title: message, status, ...(code === undefined ? {} : { code }) });
@@ -811,13 +811,13 @@ const RAW = 'pool-raw';
 
 /** The raw prompt, in plain words: shown by `oars pool raw` until it is answered, and what the detached sender relies on. Redaction is best effort and the text says so. */
 export const RAW_PROMPT = [
-  'Raw transcripts are separate from the covenant. If you say yes, then once the pool says your account accepted its covenant, the sender that a session-end hook or any oars command starts (at most about once an hour) uploads a redacted copy of each full transcript of every folder you allowed, beside its skeleton, except a folder you set to skeleton only or off.',
+  'Raw copies are covered by the covenant you accepted, including its license to sell them and to train on them. If you say yes, then once the pool says your account accepted its covenant, the sender that a session-end hook or any oars command starts (at most about once an hour) uploads a redacted copy of each full transcript of every folder you allowed, beside its skeleton, except a folder you set to skeleton only or off.',
   'Many Oars Co. may sell these copies and use them to train AI models, and it may let anyone it sells them to do the same.',
   'Redaction runs on this machine, before anything is queued, and it is best effort: it masks secret shapes it knows, emails, your username, home paths, environment values, and hosts, and it can miss a secret that has no recognizable shape or a name written in prose.',
   'It also does not catch a host with no dot, a public host name outside a link, quoted file contents and command output, a secret split across lines, images and attachments, a JSON env value, your username written another way, another person\'s hyphenated name in a project folder path, or an IPv6 address with a zone or inside a longer word, and a common-word account name is masked everywhere it appears.',
   'The blocks the harness adds on its own (instruction files, memory, skill lists, the system prompt) are replaced by a short marker, but a block in a shape the redactor does not list yet, a summary the harness writes for a session you left, a file it quotes after compaction, the echo of a command you ran, a reminder the harness puts in the middle of a message, and what an agent reports back are not, and stay as written; the project folder name and working directory on each line also stay readable, apart from the masking above.',
   'Yes is also your explicit consent to processing any health, belief, or other special category data about you that a copy holds, for these purposes. You can withdraw it at any time with oars pool raw --consent no, and that reaches copies already sent. Your access does not depend on it.',
-  'Say no, or say nothing, and only skeletons go to the pool. Change your mind any time: oars pool raw --consent yes|no. A no stops later sends, and the pool starts erasing the raw copies it already holds for you that night; a large account can take more than one night.',
+  'Say no, or say nothing, and only skeletons go to the pool. Change your mind any time: oars pool raw --consent yes|no. A no stops later sends. If the GDPR or the UK GDPR protects you, it also reaches copies already sent. The pool starts erasing the raw copies it already holds for you at the pool\'s next nightly run; a large account, or a busy night, can take more than one night.',
 ].join('\n');
 
 /** What a person types to say yes to the raw prompt: consent is a statement made at a terminal (GDPR Articles 7 and 9(2)(a)), not a flag a script can pass. */
@@ -946,7 +946,7 @@ export const poolRaw = async (deps: RunDeps, options: { consent?: string | undef
       ? []
       : options.consent === 'yes'
         ? [told === 'told' ? 'The pool heard it: raw copies are accepted again from this account for the covenant in force.' : 'This machine holds no sign-in to the pool, so it told the pool nothing. Sign in with oars pool login; if you withdrew before, run this again then.']
-        : [told === 'told' ? 'The pool was told: it no longer accepts raw copies from this account, keeps a record of the withdrawal, and starts erasing the raw copies it already holds that night; a large account can take more than one night.' : 'This machine holds no sign-in to the pool, so it told the pool nothing. If you said yes from another machine, sign in with oars pool login and run this again.'];
+        : [told === 'told' ? 'The pool was told: it no longer accepts raw copies from this account, keeps a record of the withdrawal, and starts erasing at the pool\'s next nightly run; a large account, or a busy night, can take more than one night.' : 'This machine holds no sign-in to the pool, so it told the pool nothing. If you said yes from another machine, sign in with oars pool login and run this again.'];
   const lines = [...(choices.rawConsent === null ? [RAW_PROMPT, ''] : []), `Raw copies: ${answer}.`, ...toldLine, ...(switched.length === 0 ? [] : ['Folders switched down:', ...switched])];
   return { document: { ok: true, rawConsent: choices.rawConsent, rawConsentVersion: choices.rawConsentVersion, folders: choices.folders, ...(told === undefined ? {} : { pool: told }) }, text: lines.join('\n') };
 };

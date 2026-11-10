@@ -221,6 +221,9 @@ export const REGISTER_FIXTURE = {
           changeKind: ['key-added'],
           names: [{ kind: 'env', name: 'NODE_ENV' }, { kind: 'file', name: 'plan.md' }],
           namesDropped: 1,
+          templates: ['npm run <ident>', 'git commit -m <text>'],
+          templatesDropped: 1,
+          diffShape: ['import-added', 'lines-changed'],
           // The parser does not ask which tool holds a digest either, so the fixture carries one pair on the call that sends names.
           digests: [{ old: '5d41402abc4b2a76b9719d911017c592', new: '7d793037a0760186574b0282f2f435e7' }],
           steps: [
