@@ -188,6 +188,8 @@ export const poolEnroll = async (deps: RunDeps, options: EnrollOptions, visibili
     OARS_REPO_SALT: derivedSalt(localKey, 'repoKey/1'),
     OARS_SESSION_SALT: derivedSalt(localKey, 'sessionId/1'),
     OARS_EXCLUSION_TERMS_INLINE: terms.join('\n'),
+    // A hold-only machine has no pool key; the marker keeps its child from reporting an unknown credential.
+    ...(options.holdOnly ? { OARS_HOLD_ONLY: '1' } : {}),
   };
   const enrolled =
     credential === undefined

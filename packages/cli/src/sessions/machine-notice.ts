@@ -35,7 +35,7 @@ const TEXT: { [code in NoticeCode]: (entry: NoticeEntry) => string } = {
   machine_key_expired: () => `The pool key of this machine has expired, so its deposits are refused and its batches wait in its outbox. ${LIST} Enroll the machine again with oars pool enroll.`,
   machine_key_revoked: () => 'The account revoked the pool key of this machine, so its deposits are refused and its batches wait in its outbox. See oars pool machines; enroll this machine again with oars pool enroll if the revocation was a mistake.',
   machine_key_retired: () => `The pool key of this machine was replaced by a rotation that did not finish on this machine, so the pool refuses what is left of it and its batches wait in its outbox. ${LIST} Enroll the machine again with oars pool enroll.`,
-  machine_key_unknown: () => `The pool does not know the credential this machine presents, so its deposits are refused and its batches wait in its outbox. Check the network secret (cloud) or the key file (other machines), or enroll the machine again; ${LIST}`,
+  machine_key_unknown: () => `The pool does not know the credential this machine presents, so its deposits are refused and its batches wait in its outbox. Check the network secret (cloud) or the key file (other machines), or enroll the machine again; ${LIST} If this machine is hold-only, set OARS_HOLD_ONLY=1.`,
 };
 
 const isCode = (value: unknown): value is NoticeCode => NOTICE_CODES.some((code) => code === value);

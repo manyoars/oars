@@ -94,7 +94,7 @@ describe('a cloud machine: the proxy holds the token', () => {
     const pool = poolOf({ answers: { 'POST /v1/machines/activate': error(401, 'unauthorized') } });
     expect(await machineSend(deps, senderOf(pool, false))).toEqual({ outcome: 'refused', batches: 0 });
     expect(readFileOrEmpty(join(staged.storeDir, 'pool-send.log'))).toContain('unauthorized');
-    expect(takeNotice(staged.storeDir)).toContain('does not know the credential');
+    expect(takeNotice(staged.storeDir)).toContain('If this machine is hold-only, set OARS_HOLD_ONLY=1.');
   });
 });
 

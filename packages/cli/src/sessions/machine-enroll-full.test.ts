@@ -66,8 +66,10 @@ describe('oars pool enroll (full)', () => {
     expect(full.text).toContain('24 hours');
     expect(full.document).toMatchObject({ ok: true, holdOnly: false, token: TOKEN, poolMachine: 'pool-machine-id' });
     const held = await poolEnroll(h.deps, { ...OPTIONS, holdOnly: true, name: undefined, days: undefined, server: undefined }, PRIVATE);
-    expect(blockLines(full.text)).toEqual(blockLines(held.text));
+    // The only difference is the marker a machine with no pool key needs.
+    expect(blockLines(held.text).filter((line) => line !== 'OARS_HOLD_ONLY=1')).toEqual(blockLines(full.text));
     expect(full.text).toContain('OARS_SESSION_SALT=');
+    expect(full.text).not.toContain('OARS_HOLD_ONLY');
     const rows = readFileSync(machinesFile(staged.storeDir), 'utf8').trimEnd().split('\n');
     expect(rows).toHaveLength(2);
     expect(JSON.parse(rows[0] ?? '')).toMatchObject({ hostClass: 'cloud', launcher: 'scheduled', allowRepos: ['acme/widgets'] });
