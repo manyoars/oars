@@ -1,8 +1,12 @@
 // Boards, the pool side (t1083; P100 (19) to (21)): private clubs joined by a code, one open board, ranked by weeks rowing then active days. A club shows its members at once; the open board lists an account only after 90 days of standing or a hand grant.
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { closeAccount, type EraseStore } from '../scripts/erase.js';
+import { telemetryOf } from '../scripts/erase-test-telemetry.js';
+import { createClub as createClubRoute, joinClub } from './clubs.js';
+import type { Bound, Env, PoolDb } from './http.js';
 import { isoWeekOf } from './week.js';
-import { acceptanceOf, fieldOf, startPool, stubUser, textOf, type TestDb, type TestPool } from './test-pool.js';
+import { acceptanceOf, fieldOf, poolDbOf, startPool, stubUser, textOf, type TestDb, type TestPool } from './test-pool.js';
 
 let pool: TestPool;
 let db: TestDb;
@@ -230,7 +234,7 @@ describe('ranking', () => {
   });
 });
 
-// Item 4, not built yet (resume there): unskip when `GET /v1/board`, the reserved `OPEN` join, and the standing rule land.
+// The open board: the reserved `OPEN` join, `GET /v1/board`, and the standing rule (90 days past the first counting deposit, a latched flag, or a hand grant).
 describe('the open board', () => {
   const joinOpen = async (token: string, nickname: string): Promise<{ status: number; json: unknown }> => pool.post('/v1/clubs/join', { code: 'OPEN', nickname, consent: (await consents()).open }, token);
 
@@ -272,6 +276,32 @@ describe('the open board', () => {
     expect(namesOf((await pool.get('/v1/board')).json)).toContain('latched-oar');
   });
 
+  it('drops a closed account from the open board and from its clubs, and keeps its rows', async () => {
+    const owner = await member();
+    const closing = await member(true);
+    const club = await createClub(owner.token, 'club-owner');
+    await join(closing.token, club.code, 'closing-oar');
+    expect((await joinOpen(closing.token, 'closing-open')).status).toBe(200);
+    await weeks(closing.account, [0]);
+    await countedAgo(closing.account, 100);
+    expect(namesOf((await pool.get('/v1/board')).json)).toContain('closing-open');
+    expect(namesOf((await pool.get(`/v1/clubs/${club.id}`, owner.token)).json)).toContain('closing-oar');
+
+    const bucket = await pool.rawBucket();
+    const store: EraseStore = {
+      telemetry: telemetryOf(await pool.bucket()),
+      rows: async (sql, binds) => (await db.prepare(sql).bind(...binds).all()).results,
+      run: async (sql, binds) => Number(fieldOf(fieldOf(await db.prepare(sql).bind(...binds).run(), 'meta'), 'changes')),
+      deleteObject: (key) => bucket.delete([key]),
+      readObject: () => Promise.resolve(null),
+    };
+    await closeAccount(store, closing.account, new Date());
+
+    expect(namesOf((await pool.get('/v1/board')).json)).not.toContain('closing-open');
+    expect(namesOf((await pool.get(`/v1/clubs/${club.id}`, owner.token)).json)).toEqual(['club-owner']);
+    expect(await db.prepare('SELECT COUNT(*) AS held FROM club_members WHERE account = ?').bind(closing.account).first('held')).toBe(2);
+  });
+
   it('has no code of its own to guess', async () => {
     expect(await db.prepare("SELECT code_hash FROM clubs WHERE id = 'open'").first('code_hash')).toBeNull();
   });
@@ -286,6 +316,81 @@ describe('GET /v1/clubs/consent', () => {
       expect(sha256(textOf(entry, 'text'))).toBe(textOf(entry, 'sha256'));
     }
     expect(textOf(fieldOf(answered.json, 'open'), 'text')).toMatch(/public/i);
+    // The rule is 90 days past the first counting deposit, not the account's age, and the text a person agrees to says so.
+    expect(textOf(fieldOf(answered.json, 'open'), 'text')).toContain('90 days of standing (90 days after its first counting deposit)');
     expect(textOf(fieldOf(answered.json, 'club'), 'text')).toMatch(/nickname/i);
+  });
+});
+
+/** A pool database for a route called directly, in which the reads that look for an existing row see nothing: the other request's insert has not happened yet when they run, and has when the write does. */
+const blind = (hidden: RegExp): PoolDb => {
+  const base = poolDbOf(db);
+  const real = new WeakMap<Bound, ReturnType<TestDb['prepare']>>();
+  return {
+    prepare: (sql) => ({
+      bind: (...values): Bound => {
+        const bound = base.prepare(sql).bind(...values);
+        const seen: Bound = hidden.test(sql) ? { ...bound, first: () => Promise.resolve(null) } : bound;
+        real.set(seen, db.prepare(sql).bind(...values));
+        return seen;
+      },
+    }),
+    batch: async (statements) => {
+      const done = await db.batch(statements.map((statement) => real.get(statement)!));
+      return (done as unknown[]).map((one) => ({ meta: { changes: Number(fieldOf(fieldOf(one, 'meta'), 'changes')) } }));
+    },
+  };
+};
+
+const envOf = (hidden: RegExp): Env => ({ DB: blind(hidden) });
+
+const requestOf = async (path: string, token: string, body: object): Promise<Request> =>
+  new Request(`https://pool.test${path}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ ...body, consent: (await consents()).club }) });
+
+const answered = async (response: Response): Promise<{ status: number; json: unknown }> => ({ status: response.status, json: await response.json() });
+
+describe('joins that race past the checks', () => {
+  const checks = /^SELECT 1 AS held FROM club_members/;
+
+  it('answers already_member when the same account was seated between the check and the write', async () => {
+    const owner = await member();
+    const guest = await member();
+    const club = await createClub(owner.token);
+    expect((await join(guest.token, club.code, 'first')).status).toBe(200);
+    const raced = await joinClub(await requestOf('/v1/clubs/join', guest.token, { code: club.code, nickname: 'second' }), envOf(checks));
+    expect(await answered(raced)).toMatchObject({ status: 409, json: { error: 'already_member' } });
+  });
+
+  it('answers nickname_taken when another account took the nickname between the check and the write', async () => {
+    const owner = await member();
+    const guest = await member();
+    const club = await createClub(owner.token, 'taken');
+    const raced = await joinClub(await requestOf('/v1/clubs/join', guest.token, { code: club.code, nickname: 'TAKEN' }), envOf(checks));
+    expect(await answered(raced)).toMatchObject({ status: 409, json: { error: 'nickname_taken' } });
+  });
+
+  it('answers club_full only when the club holds the cap, and seats the account while it has room', async () => {
+    const owner = await member();
+    const club = await createClub(owner.token, 'm00');
+    const guest = await member();
+    expect((await answered(await joinClub(await requestOf('/v1/clubs/join', guest.token, { code: club.code, nickname: 'room' }), envOf(checks)))).status).toBe(200);
+    for (let n = 1; n < 49; n += 1) await db.prepare('INSERT INTO club_members (club, account, nickname, joined_at) VALUES (?, ?, ?, ?)').bind(club.id, (await member()).account, `f${String(n)}`, Date.now()).run();
+    const late = await member();
+    const raced = await joinClub(await requestOf('/v1/clubs/join', late.token, { code: club.code, nickname: 'late' }), envOf(checks));
+    expect(await answered(raced)).toMatchObject({ status: 409, json: { error: 'club_full' } });
+  });
+});
+
+describe('creating a club is one write', () => {
+  it('leaves no club behind when seating its creator fails', async () => {
+    const owner = await member();
+    const before = await db.prepare('SELECT COUNT(*) AS held FROM clubs').first('held');
+    await db.prepare("CREATE TRIGGER doomed_seat BEFORE INSERT ON club_members WHEN NEW.nickname = 'doomed-bow' BEGIN SELECT RAISE(ABORT, 'doomed'); END").run();
+    try {
+      await expect(createClubRoute(await requestOf('/v1/clubs', owner.token, { name: 'Doomed', nickname: 'doomed-bow' }), envOf(/^$/))).rejects.toThrow();
+    } finally {
+      await db.prepare('DROP TRIGGER doomed_seat').run();
+    }
+    expect(await db.prepare('SELECT COUNT(*) AS held FROM clubs').first('held')).toBe(before);
   });
 });
