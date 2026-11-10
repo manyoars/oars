@@ -2,6 +2,10 @@
 // This is a script the operator runs with their own `wrangler` login (`erase-cli.ts`), never a route: the Worker has no way to erase anything and holds no token for it.
 // The ledger never deletes (migrations 0009 and 0011), so a row's content is replaced in place and the row, its counts, and its tier stay. Every step is written so a run that stops halfway runs again to the end: the
 // tombstone goes first (so nothing can come back), then the content, then the audit row.
+import { admittedNative, bucketOf, PACKAGE_REGISTRIES, parseSkeleton, type DeltaEntry, type SkeletonFrame, type SkeletonPrompt, type SkeletonStep, type SkeletonTool, type WireHarness } from '../../cli/src/sessions/pool-wire.js';
+import { projectedAgentType, VOCAB_VERSION } from '../../cli/src/sessions/public-vocabulary.js';
+import { ERROR_CODES } from '../../cli/src/sessions/schema.js';
+import { isListed } from '../src/field-classes.js';
 import { depositDigest, digestOf, rawDigest } from '../src/tombstones.js';
 import { eraseBatches, type TelemetryStore } from './erase-batches.js';
 
@@ -56,6 +60,135 @@ const dayOf = (now: Date): string => now.toISOString().slice(0, 10);
 /** The marker a deposit row holds in place of its skeleton. It parses as no skeleton, and the deposit tombstone refuses a resend of the session before `previousOf` reads it. */
 const markerOf = (reason: ErasureReason): string => JSON.stringify({ erased: reason });
 
+const OTHER = 'other';
+const DAY_MS = 86_400_000;
+
+/** SQL for a millisecond time cut to the Monday (UTC) of its ISO week: the epoch day 0 is a Thursday, so the days since Monday are (day + 3) % 7. A null stays null. */
+const weekMs = (column: string): string => `(${column} / ${String(DAY_MS)} - (${column} / ${String(DAY_MS)} + 3) % 7) * ${String(DAY_MS)}`;
+
+/** SQL for a `YYYY-MM-DD` text cut to the Monday of its week (`strftime('%w')` counts Sunday as 0). A null stays null. */
+const weekDay = (column: string): string => `date(${column}, '-' || ((CAST(strftime('%w', ${column}) AS INTEGER) + 6) % 7) || ' days')`;
+
+/** A name that is on the public list stays; any other becomes `other`, so the list (the same for everyone) is all that is kept of it. A null stays null. */
+const listedOr = (field: string, value: string | null, context?: string): string | null => (value === null ? null : isListed(field, value, context) ? value : OTHER);
+const listedText = (field: string, value: string, context?: string): string => listedOr(field, value, context) ?? OTHER;
+
+/** The Monday (UTC) of the ISO week a UTC day falls in: a day on a kept row would pair with a sign-in or an upload of that day on a small pool, a week does not. */
+export const weekOf = (day: string | null): string | null => {
+  if (day === null) return null;
+  const at = Date.parse(`${day}T00:00:00Z`);
+  return new Date(at - ((new Date(at).getUTCDay() + 6) % 7) * DAY_MS).toISOString().slice(0, 10);
+};
+
+/** An optional field: present in the result only when the source held it. */
+const held = (key: string, value: unknown): object => (value === undefined ? {} : { [key]: value });
+
+const frameOf = (frame: SkeletonFrame): object => ({
+  harness: frame.harness,
+  harnessVersion: listedOr('harnessVersion', frame.harnessVersion),
+  model: listedOr('model', frame.model),
+  effort: frame.effort,
+  day: weekOf(frame.day),
+  platform: frame.platform,
+  shell: frame.shell,
+  stack: { languages: frame.stack.languages, frameworks: frame.stack.frameworks, size: frame.stack.size, languageShares: frame.stack.languageShares.map(({ language, languageShare }) => ({ language, languageShare })) },
+  // The parser holds a plugin as `other` alone (no list names one), so only the mcp servers and skills are looked up.
+  ...held('reach', frame.reach === undefined ? undefined : { filled: frame.reach.filled, mcp: frame.reach.mcp.map((name) => listedText('mcp', name)), skills: frame.reach.skills.map((name) => listedText('skills', name)), plugins: frame.reach.plugins.map(() => OTHER) }),
+  ...held('orgSize', frame.orgSize),
+  ...held('team', frame.team),
+  ...held('repoVisibility', frame.repoVisibility),
+});
+
+const identityOf = (identity: SkeletonStep['identity']): object | null => {
+  if (identity === null) return null;
+  if ('program' in identity) return { program: listedText('program', identity.program), sub: listedOr('sub', identity.sub, identity.program), flags: identity.flags.map((flag) => listedText('flags', flag)) };
+  if ('server' in identity) return { server: listedText('server', identity.server), tool: listedText('tool', identity.tool, identity.server) };
+  if ('skill' in identity) return { skill: listedText('skill', identity.skill) };
+  return { host: null };
+};
+
+const stepOf = (harness: WireHarness) => (step: SkeletonStep): object => ({
+  action: step.action,
+  // A native name outside the harness's action table is a long-tail name (a private MCP or custom tool): only the table's rows, `private`, and `other` stay.
+  native: step.native === OTHER || admittedNative(harness, step.native) ? step.native : OTHER,
+  identity: identityOf(step.identity),
+  status: step.status,
+  tokens: step.tokens,
+  ms: step.ms,
+  remainingTokens: step.remainingTokens,
+  // `isListed` has no agentType case, so the projection the reader applies is what closes it.
+  agentType: step.agentType === null ? null : projectedAgentType(step.agentType) === step.agentType ? step.agentType : OTHER,
+  parent: step.parent,
+  frame: step.frame,
+  ...held('edges', step.edges?.map(({ kind, target }) => ({ kind, target }))),
+  ...held('allocated', step.allocated),
+  ...held('skill', step.skill === undefined ? undefined : listedText('skill', step.skill)),
+});
+
+const toolOf = (harness: WireHarness) => (tool: SkeletonTool): object => ({
+  side: tool.side,
+  prompt: tool.prompt,
+  status: tool.status,
+  // The exact duration is what `timingPrint` hashes, so someone holding the session's timings could re-derive it: only its bucket stays.
+  durationMs: tool.durationMs === null ? null : bucketOf('ms', tool.durationMs),
+  errorCode: tool.errorCode === null ? null : ERROR_CODES.has(tool.errorCode) ? tool.errorCode : OTHER,
+  ...held('recoveryCalls', tool.recoveryCalls === undefined ? undefined : { next: tool.recoveryCalls.next, editFollowed: tool.recoveryCalls.editFollowed }),
+  ...held('keys', tool.keys?.map((key) => listedText('key', key))),
+  ...held('keysDropped', tool.keysDropped),
+  ...held('targetClass', tool.targetClass),
+  ...held('argClass', tool.argClass),
+  ...held('argFeatures', tool.argFeatures?.map(({ key, ...rest }) => ({ ...rest, key: listedText('key', key) }))),
+  ...held('argValues', tool.argValues?.map(({ key, enumValue }) => ({ key: listedText('key', key), enumValue }))),
+  ...held('changeKind', tool.changeKind),
+  ...held('namesDropped', tool.namesDropped),
+  ...held('templatesDropped', tool.templatesDropped),
+  ...held('diffShape', tool.diffShape),
+  steps: tool.steps.map(stepOf(harness)),
+});
+
+const promptOf = (prompt: SkeletonPrompt): object => ({
+  cls: prompt.cls,
+  errors: prompt.errors,
+  wallSec: prompt.wallSec,
+  usage: { input: prompt.usage.input, cacheWrite: prompt.usage.cacheWrite, cacheRead: prompt.usage.cacheRead, output: prompt.usage.output, thinking: prompt.usage.thinking },
+  explore: prompt.explore,
+  ...held('usageResponses', prompt.usageResponses),
+  ...held('intervention', prompt.intervention),
+  frame: frameOf(prompt.frame),
+});
+
+const deltaOf = (entry: DeltaEntry): object => ({
+  deltaKind: entry.deltaKind,
+  field: entry.field,
+  name: listedOr('name', entry.name),
+  registry: entry.registry === null ? null : PACKAGE_REGISTRIES.some((known) => known === entry.registry) ? entry.registry : OTHER,
+  metric: entry.metric,
+  change: entry.change,
+});
+
+/**
+ * The anonymous shape of a stored Skeleton, or null when the text is no Skeleton the reader parses (the caller then keeps the marker alone). It is rebuilt field by field from what the parser read, never copied, so a field this
+ * function does not name is gone: what stays is closed lists, buckets, and names on the public list (any other name becomes `other`), in the order sent (transcripts, prompts, calls, steps). Dropped: the session id, `repoKey`, every
+ * hash of the person's own lines (`merkleRoot`, `timingPrint`, the edit `digests`, a recommendation's `id`), the free-text `names` and `templates`, the hour, a recommendation's `poolVersion` (the instant the pool answered), and the bag of fields the reader did not know.
+ * A UTC day becomes the Monday of its week, and a tool's exact duration becomes its bucket.
+ */
+export const anonymizeSkeleton = (stored: unknown, reason: ErasureReason): { readonly [field: string]: unknown } | null => {
+  const parsed = parseSkeleton(stored);
+  if (!parsed.ok) return null;
+  const { skeleton } = parsed;
+  return {
+    erased: reason,
+    format: skeleton.format,
+    vocabVersion: skeleton.vocabVersion === VOCAB_VERSION ? skeleton.vocabVersion : OTHER,
+    fieldsVersion: skeleton.fieldsVersion,
+    transcripts: skeleton.transcripts.map((transcript) => ({ harness: transcript.harness, frame: frameOf(transcript.frame), frames: transcript.frames.map(frameOf), spawnedIn: transcript.spawnedIn, prompts: transcript.prompts.map(promptOf), tools: transcript.tools.map(toolOf(transcript.harness)) })),
+    deltas: skeleton.deltas.map(deltaOf),
+    // A skeleton stored before migration 0025 may still hold `claimed`, and erasure must reach it.
+    ...held('claimed', skeleton.claimed === undefined ? undefined : { hostClass: skeleton.claimed.hostClass, launcher: skeleton.claimed.launcher }),
+    ...held('recommendations', skeleton.recommendations?.map(({ arm, from, to }) => ({ arm, from, to }))),
+  };
+};
+
 const nameOf = (value: string, what: string): string => {
   if (!NAME.test(value)) throw new Error(`${what} is not a pool id: letters, digits, dot, dash, and underscore, 1 to 128`);
   return value;
@@ -77,10 +210,24 @@ const dropObject = async (store: EraseStore, account: string, sha256: string, re
   return store.run('UPDATE raw_objects SET erased_on = ? WHERE account = ? AND sha256 = ? AND erased_on IS NULL', [dayOf(now), account, sha256]);
 };
 
-/** The deposit row `account`/`id`: tombstoned, its content replaced by the marker, its tier and counts left. Answers whether a row was changed. */
+/**
+ * The Skeleton an erased deposit holds: the marker alone for a leaked secret (that Deposit is not a 6.6(c) unlink, and a secret may sit anywhere in it), else the marker with the anonymous shape beside it (`anonymizeSkeleton`).
+ * A row whose text is no Skeleton the reader parses keeps the marker alone. The `erased` field stays either way, so a resend is refused.
+ */
+const keptSkeleton = async (store: EraseStore, account: string, id: string, reason: ErasureReason): Promise<string> => {
+  if (reason !== 'lawful-request') return markerOf(reason);
+  const text = (await store.rows('SELECT skeleton FROM deposits WHERE account = ? AND id = ? AND erased_on IS NULL', [account, id])).map((row) => textOf(row, 'skeleton'))[0] ?? '';
+  try {
+    return JSON.stringify(anonymizeSkeleton(JSON.parse(text), reason) ?? { erased: reason });
+  } catch {
+    return markerOf(reason);
+  }
+};
+
+/** The deposit row `account`/`id`: tombstoned, its content replaced by the marker (and, under a lawful request, the anonymous shape), its tier and counts left. Answers whether a row was changed. */
 const dropDeposit = async (store: EraseStore, account: string, id: string, reason: ErasureReason, now: Date): Promise<number> => {
   await tombstone(store, 'deposit', await depositDigest(account, id), reason, now);
-  return store.run("UPDATE deposits SET skeleton = ?, extensions = '[]', deltas = '[]', request_country = NULL, erased_on = ? WHERE account = ? AND id = ? AND erased_on IS NULL", [markerOf(reason), dayOf(now), account, id]);
+  return store.run("UPDATE deposits SET skeleton = ?, extensions = '[]', deltas = '[]', request_country = NULL, erased_on = ? WHERE account = ? AND id = ? AND erased_on IS NULL", [await keptSkeleton(store, account, id, reason), dayOf(now), account, id]);
 };
 
 /**
@@ -222,11 +369,9 @@ const randomRowid = (): number => {
   return -(1 + (high % 2 ** 20) * 2 ** 32 + low);
 };
 
-const DAY_MS = 86_400_000;
-
 /**
  * Unlinks the rows an erasure keeps that covenant 6.6(d) does not list (`machines` and `deposits`): they leave the account's pseudonym for one random id per erasure (`erased:` and 32 hex, with a minimal `accounts` row, since the foreign keys need one),
- * so they still join to each other (the counts) and to no one. A machine and a deposit also take a random id each, the machine's fingerprint is blanked and its key revoked and replaced by a random hash (an export and the person's own client hold the old exact values), a deposit's `ingest` mark is replaced, every time is cut to its UTC day (a machine's expiry too, since it is a fixed span from a time that was), and
+ * so they still join to each other (the counts) and to no one. A machine and a deposit also take a random id each, the machine's fingerprint is blanked and its key revoked and replaced by a random hash (an export and the person's own client hold the old exact values), a deposit's `ingest` mark is replaced, every time is cut to the Monday (UTC) of its ISO week (a machine's expiry too, since it is a fixed span from a time that was), and
  * `erased_on` is cleared on the deposits, because a date there would pick out the audit row of that day: a reader that needs "erased" reads the `erased:` prefix. The `accounts` row and each deposit take a random negative rowid for the same reason (a deposit would otherwise keep its place among live ones, which pins its time). `accounts.provider_created`, GitHub's public creation time, is cleared.
  * Raw objects stay on the pseudonym, their date cut to the day: they are 6.6(d)'s hash, size, and date, and their tombstone (the unkeyed hash of the key `raw/<account>/<sha256>`) would give the account back from any row that kept the hash.
  * Rows are found by the account, so a rerun finds none and changes nothing; a run that stops between two statements leaves the rest for a rerun under a second id, which splits the join and links nothing. The random id is written nowhere else, least of all beside the pseudonym.
@@ -242,9 +387,9 @@ const unlink = async (store: EraseStore, account: string): Promise<void> => {
   for (const machine of machines) {
     const renamed = randomId();
     await store.run('UPDATE deposits SET machine = ? WHERE account = ? AND machine = ?', [renamed, account, machine]);
-    await store.run("UPDATE machines SET id = ?, account = ?, fingerprint_hash = NULL, state = 'revoked', key_hash = ?, retired_hash = NULL, created_at = created_at - created_at % ?, activated_at = activated_at - activated_at % ?, rotated_at = rotated_at - rotated_at % ?, expires_at = expires_at - expires_at % ? WHERE id = ? AND account = ?", [renamed, erased, randomId() + randomId(), DAY_MS, DAY_MS, DAY_MS, DAY_MS, machine, account]);
+    await store.run(`UPDATE machines SET id = ?, account = ?, fingerprint_hash = NULL, state = 'revoked', key_hash = ?, retired_hash = NULL, created_at = ${weekMs('created_at')}, activated_at = ${weekMs('activated_at')}, rotated_at = ${weekMs('rotated_at')}, expires_at = ${weekMs('expires_at')}, last_deposit_day = ${weekDay('last_deposit_day')} WHERE id = ? AND account = ?`, [renamed, erased, randomId() + randomId(), machine, account]);
   }
-  for (const deposit of deposits) await store.run('UPDATE deposits SET rowid = ?, id = ?, account = ?, ingest = ?, erased_on = NULL, counted_at = counted_at - counted_at % ? WHERE account = ? AND id = ?', [randomRowid(), randomId(), erased, randomId(), DAY_MS, account, deposit]);
+  for (const deposit of deposits) await store.run(`UPDATE deposits SET rowid = ?, id = ?, account = ?, ingest = ?, erased_on = NULL, counted_at = ${weekMs('counted_at')} WHERE account = ? AND id = ?`, [randomRowid(), randomId(), erased, randomId(), account, deposit]);
 };
 
 /**
@@ -270,6 +415,8 @@ export const eraseAccount = async (store: EraseStore, accountId: string, now: Da
   const held = numberOf((await store.rows('SELECT (SELECT COUNT(*) FROM account_repo_keys WHERE account = ?) + (SELECT COUNT(*) FROM deposit_hours WHERE account = ?) + (SELECT COUNT(*) FROM contributors WHERE account = ?) AS held', [account, account, account]))[0], 'held');
   if (held > 0) await store.run('UPDATE pool_generation SET generation = generation + 1', []);
   rows += (await store.run('DELETE FROM account_repo_keys WHERE account = ?', [account])) + (await store.run('DELETE FROM deposit_hours WHERE account = ?', [account])) + (await store.run('DELETE FROM contributors WHERE account = ?', [account]));
+  // The board counts (migration 0036) are the account's own: its weekly counts, the nickname it typed in each club, and the standing granted to it by hand go. Its consent rows stay beside `covenant_acceptances`: append-only, a text hash and a time, with no nickname.
+  rows += (await store.run('DELETE FROM account_weeks WHERE account = ?', [account])) + (await store.run('DELETE FROM club_members WHERE account = ?', [account])) + (await store.run('DELETE FROM board_standing WHERE account = ?', [account]));
   for (const row of await store.rows('SELECT id FROM deposits WHERE account = ? AND erased_on IS NULL', [account])) rows += await dropDeposit(store, account, textOf(row, 'id'), 'lawful-request', now);
   let objects = 0;
   for (const row of await store.rows('SELECT sha256 FROM raw_objects WHERE account = ? AND erased_on IS NULL', [account])) objects += await dropObject(store, account, textOf(row, 'sha256'), 'lawful-request', now);

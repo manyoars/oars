@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "erase": "node scripts/erase.mjs",
-    "sample-pack": "node scripts/sample-pack.mjs"
+    "sample-pack": "node scripts/sample-pack.mjs",
+    "grant-standing": "node scripts/grant-standing.mjs"
   },
   "devDependencies": {
     "aws4fetch": "1.0.20",
