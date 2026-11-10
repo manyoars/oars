@@ -1,4 +1,5 @@
 // The first sale's sample pack (P98 (10) to (12)): fixture stores, built in a temp folder, with an invented term and invented instruction text.
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -271,6 +272,39 @@ describe('the skeleton and the manifest fields it adds (plan S3)', () => {
     expect(keysA[0]).not.toBe(storeKey);
     expect(keysB[0]).not.toBe(keysA[0]);
     expect(a.matchId).not.toBe(b.matchId);
+  });
+
+  it('ships no unkeyed hash of content or timing: no digests, and the root and print differ per buyer', async () => {
+    const f = fixture();
+    const oldText = 'const owner = "jane.doe@example.com";';
+    const newText = 'const owner = "someone";';
+    const edit = (n: number): string =>
+      line({ type: 'assistant', uuid: uuidOf(S(1), 'a', n), parentUuid: uuidOf(S(1), 'b', n), isSidechain: false, timestamp: at(n + 1), version: '2.1.300', sessionId: S(1), requestId: requestOf(S(1), n), message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: `toolu_01edit${String(n)}`, name: 'Edit', input: { file_path: 'src/owner.ts', old_string: oldText, new_string: newText } }], usage: { input_tokens: 10, output_tokens: 20 } } });
+    const result = (n: number): string =>
+      line({ type: 'user', uuid: uuidOf(S(1), 'b', n + 1), parentUuid: uuidOf(S(1), 'a', n), isSidechain: false, timestamp: at(n + 2), version: '2.1.300', sessionId: S(1), cwd: repoCwd, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `toolu_01edit${String(n)}`, content: 'edited' }] } });
+    f.write('-work-oars', S(1), [user(S(1), 1, 'rename the owner'), edit(2), result(2), edit(5), result(5), edit(8), result(8), assistant(S(1), 10, 'done')]);
+    await stored(f);
+    const under = async (buyerKey: string, out: string): Promise<{ text: string; all: string }> => {
+      await buildPack(f.runtime, options(f, { buyerKey, out: join(f.root, out) }));
+      const matchId = manifest(join(f.root, out))[0]?.matchId ?? '';
+      return { text: skeletonText(join(f.root, out), matchId), all: packText(join(f.root, out)) };
+    };
+    const a = await under('buyer-a', 'a');
+    const b = await under('buyer-b', 'b');
+    // Non-vacuous: the fixture's tools are in the skeleton, and the wire does hold a root for each buyer.
+    expect(a.text).toContain('"Edit"');
+    const shaped = (text: string): string[] => [...text.matchAll(/[0-9a-f]{64}/g)].map((found) => found[0]);
+    expect(shaped(a.text).length).toBeGreaterThan(0);
+    expect(shaped(a.text).filter((value) => shaped(b.text).includes(value))).toEqual([]);
+    // Neither the digests field nor the digest of any edit text, whole or at the wire's 32 digits, is anywhere in the pack.
+    expect(a.text).not.toContain('digests');
+    for (const text of [oldText, newText]) {
+      const full = createHash('sha256').update(text).digest('hex');
+      expect(a.all).not.toContain(full.slice(0, 32));
+      expect(b.all).not.toContain(full.slice(0, 32));
+    }
+    const prints = (text: string): string[] => [...text.matchAll(/"timingPrint": "([0-9a-f]{16})"/g)].map((found) => found[1] ?? '');
+    expect(prints(a.text).filter((value) => prints(b.text).includes(value))).toEqual([]);
   });
 
   it('counts a session whose store holds no skeleton, and writes nothing of it', async () => {
@@ -780,10 +814,12 @@ describe('a Codex session (plan S2)', () => {
     const f = fixture();
     expect(await packed(f)).toMatchObject({ emitted: 1 });
     const [row] = manifest(f.out);
+    // The whole pack, skeleton.json included, holds none of the raw ids; only the transcript lines are parsed.
+    const everything = packText(f.out);
+    expect(everything).not.toContain(CODEX_ID);
+    expect(everything).not.toContain(CODEX_CALL);
+    expect(everything).not.toContain(CODEX_CALL.slice(5));
     const text = transcriptText(f.out);
-    expect(text).not.toContain(CODEX_ID);
-    expect(text).not.toContain(CODEX_CALL);
-    expect(text).not.toContain(CODEX_CALL.slice(5));
     const records = text.split(String.fromCharCode(10)).filter((entry) => entry !== '').map((entry): unknown => JSON.parse(entry));
     const callIds = records.flatMap((record) => {
       const payload: unknown = typeof record === 'object' && record !== null ? Reflect.get(record, 'payload') : undefined;
