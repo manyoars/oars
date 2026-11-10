@@ -7,7 +7,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 - `oars --version` prints one line, and `--version` and `--help` no longer show the first-run telemetry notice. The notice shows once, on the first other command.
 - `oars pool login` prints the one-line cause of a failure first. The raw request echo now prints only with the new `--verbose` flag.
 - `oars pool --help` says the covenant screen appears the first time you send a batch with `oars pool deposit --send`.
-- oars now runs on Node 22.13 or newer (it was Node 24). Installing on Node 22 no longer prints an engines warning.
+- On a Node older than 24, `oars` prints "oars needs Node 24 or newer; this is Node <version>." and exits 1, instead of failing with a stack trace.
 - The empty-store message names `oars sessions try` first, then says `oars sessions deposit` reads this machine's coding-agent session logs into a local store.
 - `docs/pool.md` has a "Run a pool locally" section, and the pool package has an `npm run dev` script.
 - The covenant screen asks "Are you in the EU, the EEA, or the UK? (yes/no)" after the phrase, and the pool stores the answer and the request's Cloudflare country with the acceptance, and the request's country with each deposit (both in `oars pool export`). `--in-eu-eea-uk <yes|no>` gives the answer without being asked; `--accept-covenant <version>` does not, so the question is still asked. While the pool's `PROTECTED_REGIONS_OPEN` is unset, an acceptance from a person who answers yes, or from a request in the EU, the EEA, or the UK, is refused with 403 `region_closed`: the command prints the pool's message and exits 3. Many Oars Co. has no representative in the EU or the UK (Article 27 of the GDPR and the UK GDPR).

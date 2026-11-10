@@ -8,7 +8,7 @@ oars keeps a local, searchable record of your coding agent sessions, across Clau
 npm install --global @manyoars/oars
 ```
 
-Node 22.13 or later. ESM only. Local recall needs no account.
+Node 24 or later. ESM only. Local recall needs no account.
 
 Or run it once without installing:
 

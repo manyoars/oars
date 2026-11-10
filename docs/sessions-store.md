@@ -103,7 +103,7 @@ A cloud VM, a VPS, or a self-hosted runner builds its session's deposit batch in
 | Terms | `OARS_EXCLUSION_TERMS_INLINE` is one term per line; a comma is part of the term, so a comma list is one term that matches nothing. It is written at each Stop to `exclusion-terms-inline.txt` in the store, owner-only, and `OARS_EXCLUSION_TERMS` is pointed at it; it wins over a file that variable named. With no term file at all every session is excluded. |
 | Notice file | `machine-notice.json` in the store holds what the child could not say: `{"entries":[{"code":"vocabulary_expired","at":<ms>}]}`, one entry per code. A client past its vocabulary's age builds nothing and writes `vocabulary_expired`, at most once a day (`machine-notified.json`); the next Stop reads and clears the file before it starts its child and prints one `systemMessage`. `hold_unconfigured` is written, also at most once a day, at a Stop of a machine whose enrollment lacks `OARS_MACHINE` or `OARS_SESSION_SALT`, before any gate runs: such a machine holds nothing, and the next Stop after the notice is written says so. |
 
-Node: `engines` asks for Node 22.13 or later, so a cloud image that ships Node 22 installs the package without a warning; this page's measurements were taken on Node 24.
+Node: `engines` asks for Node 24 or later, and a cloud image that ships Node 22 installs the package with an engines warning rather than an error (npm only warns unless `engine-strict` is set); run `oars-hook` on Node 24 or later, since this page's measurements were taken on it and Node 22 is untested.
 
 The setup-script route (a global install in the environment's setup, found by the hook's shell) resolved `oars-hook` in one single-repository cloud session. It is not measured for a session of several repositories or one restored from a snapshot, and this page claims neither.
 
@@ -743,7 +743,7 @@ carry `harness: "cursor"`; a record with no `harness` is Claude Code's (`harness
 
 - **Where it is read from.** Cursor's `User` folder: `%APPDATA%\Cursor\User` on Windows, `~/Library/Application Support/Cursor/User` on
   macOS, `$XDG_CONFIG_HOME/Cursor/User` (else `~/.config/Cursor/User`) on Linux. `deposit` finds it on its own and skips it silently when
-  it is absent. It opens the two SQLite files read-only through the built-in `node:sqlite` (Node 22.13 or later, no dependency), loaded only
+  it is absent. It opens the two SQLite files read-only through the built-in `node:sqlite` (Node 24 or later, no dependency), loaded only
   when a Cursor store exists.
 - **Read by default.** Like any other source, it is read by default; `--allow` narrows and `--deny cursor` keeps it out. The sweep
   reuses the saved list.
