@@ -137,6 +137,46 @@ describe('the pool harness reuses its connections', () => {
     }
   });
 
+  // t1090: workerd closes a keep-alive socket 15.0 s after its last answer (measured: the server's FIN at 15,020 ms). A test thread blocked longer than that, as on a starved CI box (Miniflare's first call of a
+  // proxied function is synchronous), reaches the next `send` on the same tick it wakes: undici has not yet seen the FIN or fired its own 10 s timer, takes the dead socket from its pool, and the request
+  // fails with `read ECONNRESET` 5 ms in. So the sender goes by the clock and not by the event loop: past its own keep-alive window an idle lane opens a new connection. The clock is injected, so no case waits.
+  it('opens a new connection, on both lanes, for a call that follows a pause longer than its keep-alive window', async () => {
+    let accepted = 0;
+    const server = createServer((request, response) => {
+      request.resume();
+      response.end('ok');
+    });
+    server.on('connection', () => {
+      accepted += 1;
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    let now = 1_000_000;
+    const sender = keepAliveSender(() => Promise.resolve(new URL(`http://127.0.0.1:${String(typeof address === 'object' && address !== null ? address.port : 0)}`)), () => now);
+    const both = async (): Promise<void> => {
+      await (await sender.send('http://pool.test/call')).text();
+      await (await sender.send('http://pool.test/', { method: 'DELETE', headers: { [CoreHeaders.OP]: ProxyOps.FREE } })).text();
+    };
+    try {
+      await both();
+      expect(accepted).toBe(2);
+      now += 9_999;
+      await both();
+      expect(accepted, 'inside the window both lanes ride the sockets they have').toBe(2);
+      now += 10_001;
+      await both();
+      expect(accepted, 'past the window each lane opens a new connection').toBe(4);
+      expect(sender.connects()).toBe(2);
+      now += 1;
+      await both();
+      expect(accepted, 'the new sockets are reused again').toBe(4);
+    } finally {
+      await sender.close();
+      server.close();
+    }
+  });
+
   // A failed fetch reads only `fetch failed` over a bare socket error, which names no call; on a loaded box that is all a flake leaves behind (t1068).
   it('names the method, the path, whether the socket was reused, and the elapsed time when a call fails', async () => {
     const server = createServer((request, response) => {
