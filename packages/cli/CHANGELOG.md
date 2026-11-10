@@ -4,6 +4,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 
 ## Unreleased
 
+- `oars pool deposit` now builds a Codex session and queues its redacted rollout as the raw copy (with a yes to the raw prompt): the exclusion check reaches the rollout where Codex keeps it, through the Codex source, so a Codex session is scanned and cleared or excluded for a term instead of being left out as having no raw. Its `<user_instructions>`, `<environment_context>`, and AGENTS.md text are replaced as for any harness. `oars sessions exclusions` and `gold sample` count a Codex session by what its rollout holds, not as having no raw.
 - `oars club create|join|leave|show` and `oars board` (each with `--json`): make a club, join one by its code or the open board, leave, see the members, and read the open board without signing in. Create and join show the pool's consent text and need you to type `yes` at a terminal. Errors lead with the cause (`not_signed_in`, also when the pool no longer accepts your sign-in; `club_full`, `nickname_taken`, `nickname_invalid`, `rate_limited` with when to retry). See the README, "club".
 ## 0.5.0 (2026-11-10)
 
