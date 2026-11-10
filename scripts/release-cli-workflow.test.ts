@@ -47,9 +47,7 @@ describe('release-cli workflow', () => {
   });
 
   it('names every job in the header comment', () => {
-    const header = workflow.split('
-').slice(0, 20).join('
-');
+    const header = workflow.split(/^on:/m)[0];
     for (const name of ['refuse-non-main', 'build', 'publish', 'release']) expect(header).toContain(name);
   });
 
