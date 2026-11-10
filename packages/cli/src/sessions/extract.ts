@@ -1393,7 +1393,9 @@ const restoredBy = (git: GitCall): string[] => {
   const words = git.args;
   if (git.sub === 'checkout') {
     const dashes = words.findIndex((word) => !word.quoted && word.text === '--');
-    return dashes < 0 ? [] : words.slice(dashes + 1).map((word) => word.text);
+    // `git checkout --patch` takes part of a file, as `git restore --patch` does, so it names no whole file.
+    if (dashes < 0 || words.slice(0, dashes).some((word) => !word.quoted && PATCH_FLAG.test(word.text))) return [];
+    return words.slice(dashes + 1).map((word) => word.text);
   }
   if (git.sub !== 'restore') return [];
   const paths: string[] = [];

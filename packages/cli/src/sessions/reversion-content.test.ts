@@ -99,4 +99,13 @@ describe('a later reversion tied to an edit by a git restore of its path', () =>
     // A commit before the edit does not keep it.
     expect(read([commit('s', 1, 0), edit('s', 2, 0, [['a', 'b']]), restore('s', 3, 1)]).s0).toBe('later-prompt');
   });
+
+  it('reads the stamps of a commit and an edit across sessions: a commit stamped before the edit keeps nothing, one with no stamp falls back to its position', () => {
+    // The restore's session committed (at 1) before the edit (at 5) was made: that commit does not hold the edit.
+    expect(read([commit('t', 1, 0), edit('s', 5, 0, [['a', 'b']]), restore('t', 10, 1)]).s0).toBe('later-session');
+    // One stamped after the edit does.
+    expect(read([edit('s', 5, 0, [['a', 'b']]), commit('t', 8, 0), restore('t', 10, 1)]).s0).toBeNull();
+    // With no stamp on the commit the order is unknown, so the position decides, as before.
+    expect(read([shell('t', 1, 0, ['git commit'], { commits: ['abc1234'], ts: null }), edit('s', 5, 0, [['a', 'b']]), restore('t', 10, 1)]).s0).toBeNull();
+  });
 });

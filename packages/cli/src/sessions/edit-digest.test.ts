@@ -83,6 +83,12 @@ describe('the path a git restore names', () => {
     expect(restoresOf('git checkout -b feature/x')).toBeUndefined();
   });
 
+  it('is no restore of the whole file for `git checkout --patch`, which takes part of one', () => {
+    expect(restoresOf('git checkout -p -- src/a.ts')).toBeUndefined();
+    expect(restoresOf('git checkout --patch main -- src/a.ts')).toBeUndefined();
+    expect(restoresOf('git checkout main -- src/a.ts')).toEqual([target]);
+  });
+
   it('is not a restore of the working file for `--staged` alone, and is for `--worktree` with it', () => {
     expect(restoresOf('git restore --staged src/a.ts')).toBeUndefined();
     expect(restoresOf('git restore -S src/a.ts')).toBeUndefined();

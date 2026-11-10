@@ -37,7 +37,20 @@ interface Written extends Place {
   now: string;
 }
 
+/** A commit call of a session: its position there and its time. */
+interface Commit {
+  n: number;
+  ts: string | null;
+}
+
 const tied = (commit: string, word: string): boolean => commit.startsWith(word) || word.startsWith(commit);
+
+/** Adds to the list a key holds, making it once, so a hot path costs one push per call and not a copy of the list. */
+const append = <T>(lists: Map<string, T[]>, key: string, items: readonly T[]): void => {
+  const held = lists.get(key);
+  if (held === undefined) lists.set(key, [...items]);
+  else held.push(...items);
+};
 
 /** Where `later` ran against `earlier`, or null when it is not later. Across sessions the calls are ordered by their time, so a call with none cannot be placed, and both sessions must sit in one known repository. */
 const whereOf = (earlier: Place, later: Place, repos: ReadonlyMap<string, string | null>): Reversion | null => {
@@ -52,12 +65,13 @@ const whereOf = (earlier: Place, later: Place, repos: ReadonlyMap<string, string
 
 /**
  * Whether a commit kept the edit before the restore ran: a `git restore` returns the file to the last commit, so an edit committed since is what it returns to, not what it undoes. A commit in the restore's own call counts, since
- * the order inside a call is not kept. Across sessions the order of the commits is not known, so a commit of the edit's session after it, or of the restore's session before it, counts.
+ * the order inside a call is not kept. Across sessions a commit of the edit's session after it counts, and so does a commit of the restore's session before the restore unless both stamps are known and the commit is stamped before the
+ * edit; with a stamp missing the position alone decides.
  */
-const keptBy = (committed: ReadonlyMap<string, readonly number[]>, edit: Place, restore: Place): boolean => {
+const keptBy = (committed: ReadonlyMap<string, readonly Commit[]>, edit: Place, restore: Place): boolean => {
   const before = committed.get(edit.session) ?? [];
-  if (edit.session === restore.session) return before.some((n) => n > edit.n && n <= restore.n);
-  return before.some((n) => n > edit.n) || (committed.get(restore.session) ?? []).some((n) => n <= restore.n);
+  if (edit.session === restore.session) return before.some((commit) => commit.n > edit.n && commit.n <= restore.n);
+  return before.some((commit) => commit.n > edit.n) || (committed.get(restore.session) ?? []).some((commit) => commit.n <= restore.n && !(commit.ts !== null && edit.ts !== null && commit.ts < edit.ts));
 };
 
 /**
@@ -68,7 +82,7 @@ export const reversionsOf = (store: Store): ((session: string, index: number | n
   const repos = new Map(store.sessions.map((session) => [session.session, session.repo]));
   const commits: Placed[] = [];
   const reverts: Placed[] = [];
-  const committed = new Map<string, number[]>();
+  const committed = new Map<string, Commit[]>();
   const edited = new Map<string, Place[]>();
   const written = new Map<string, Written[]>();
   const restored: Array<Place & { target: string }> = [];
@@ -76,13 +90,12 @@ export const reversionsOf = (store: Store): ((session: string, index: number | n
     if (tool.side || tool.prompt === null) continue;
     const at = { session: tool.session, n: tool.n, k: 0, ts: tool.ts, prompt: tool.prompt };
     if (EDITS.has(tool.tool) && tool.status !== 'error' && tool.target !== null) {
-      edited.set(tool.target, [...(edited.get(tool.target) ?? []), at]);
-      const pairs = (tool.digests ?? []).map((held, k): Written => ({ ...at, k, old: held.old ?? null, now: held.new }));
-      written.set(tool.target, [...(written.get(tool.target) ?? []), ...pairs]);
+      append(edited, tool.target, [at]);
+      append(written, tool.target, (tool.digests ?? []).map((held, k): Written => ({ ...at, k, old: held.old ?? null, now: held.new })));
     }
     if (tool.status !== 'ok' || !SHELL.has(tool.tool)) continue;
     for (const sha of tool.commits ?? []) if (sha !== null && SHA.test(sha)) commits.push({ ...at, sha });
-    if ((tool.commits ?? []).length > 0) committed.set(tool.session, [...(committed.get(tool.session) ?? []), tool.n]);
+    if ((tool.commits ?? []).length > 0) append(committed, tool.session, [{ n: tool.n, ts: tool.ts }]);
     for (const target of tool.restores ?? []) restored.push({ ...at, target });
     for (const segment of tool.segments ?? []) if (segment.read) for (const word of revertWords(segment.run)) reverts.push({ ...at, sha: word });
   }
