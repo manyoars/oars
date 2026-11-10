@@ -137,6 +137,50 @@ describe('the pool harness reuses its connections', () => {
     }
   });
 
+  // A lane can hold two sockets. One clock per lane read the lane as fresh while a socket it holds had sat past the window, so a later call could take that socket (t1099, from the t1090 review).
+  it('opens a new connection when any socket of a lane has sat idle past the window, though another was used since', async () => {
+    let accepted = 0;
+    const held: ServerResponse[] = [];
+    const server = createServer((request, response) => {
+      request.resume();
+      request.resume();
+      if (accepted <= 2 && held.length < 2) {
+        held.push(response);
+        if (held.length === 2) for (const one of held) one.end('ok');
+        return;
+      }
+      response.end('ok');
+    });
+    server.on('connection', () => {
+      accepted += 1;
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    let now = 1_000_000;
+    const sender = keepAliveSender(() => Promise.resolve(new URL(`http://127.0.0.1:${String(typeof address === 'object' && address !== null ? address.port : 0)}`)), () => now);
+    const call = async (): Promise<void> => {
+      await (await sender.send('http://pool.test/call')).text();
+    };
+    try {
+      await Promise.all([call(), call()]);
+      expect(accepted, 'two calls at once need two sockets').toBe(2);
+      // undici frees a connection a tick after the body ends; a call in that gap opens another.
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+      now += 9_000;
+      await call();
+      expect(accepted, 'inside the window a socket is reused').toBe(2);
+      now += 3_000;
+      await call();
+      expect(accepted, 'one socket has now idled 12 s, though the other was used 3 s ago').toBe(3);
+    } finally {
+      await sender.close();
+      server.close();
+    }
+  });
+
   // t1090: workerd closes a keep-alive socket 15.0 s after its last answer (measured: the server's FIN at 15,020 ms). A test thread blocked longer than that, as on a starved CI box (Miniflare's first call of a
   // proxied function is synchronous), reaches the next `send` on the same tick it wakes: undici has not yet seen the FIN or fired its own 10 s timer, takes the dead socket from its pool, and the request
   // fails with `read ECONNRESET` 5 ms in. So the sender goes by the clock and not by the event loop: past its own keep-alive window an idle lane opens a new connection. The clock is injected, so no case waits.
