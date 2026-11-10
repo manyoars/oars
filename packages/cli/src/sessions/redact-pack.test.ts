@@ -44,6 +44,9 @@ describe('numbers and names that are not secrets', () => {
   it('still masks a token name with a real value, and a number under a name that is always a secret', () => {
     expect(redact('tokens: abcd1234efgh')).toBe('tokens: <secret>');
     expect(redact('token=12345abc')).toBe('token=<secret>');
+    expect(redact('token=123456')).toBe('token=<secret>');
+    expect(redact('{"verify_token": "839201"}')).toBe('{"verify_token": "<secret>"}');
+    expect(redact('AUTH_TOKEN=1234567890')).toBe('AUTH_TOKEN=<secret>');
     expect(redact('api_key: 12345678')).toBe('api_key: <secret>');
     expect(redact('password=123456')).toBe('password=<secret>');
   });
