@@ -1,8 +1,9 @@
 // Ingest (spec Section 2, "the deposit form"): a batch's skeleton becomes cell increments on the stored `index` cells, and a `contributor` record per (cell, account, UTC day) is the
 // cell's holders, which `recount` (`cluster-store.ts`) clusters into the cell's held count. Everything one deposit writes goes in one transaction, guarded by the deposit row that this write set, so a refused deposit writes none.
 import { incrementsOf, type CellRow, type Increments, type StratumRow } from '../../cli/src/sessions/cell-increments.js';
-import { parseSkeleton } from '../../cli/src/sessions/pool-wire.js';
+import { parseSkeleton, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { fieldOf, type Bound, type Env } from './http.js';
+import { isoWeekOf, weekdayOf } from './week.js';
 
 export { incrementsOf, type CellRow, type Increments, type StratumRow };
 
@@ -20,10 +21,24 @@ const netOf = <Row extends { key: string }>(next: ReadonlyMap<string, Row>, prev
 const CELL_FIELDS: readonly (keyof CellRow)[] = ['sessions', 'ok', 'failed', 'tokens', 'tokenSessions', 'tokenPrompts', 'durationMs'];
 const STRATUM_FIELDS: readonly (keyof StratumRow)[] = ['sessions'];
 
-/** The row an account holds under this id: the mark of the write that set it, whether its tier is `none`, and the increments that write made, or none when the stored skeleton no longer parses (see `previousOf`). */
+/** What a batch adds to its week on a board (`account_weeks`): its tool steps, the failed ones among them, and the harnesses its transcripts ran in. Counts only: no token, cost, or text. */
+export interface Shape {
+  steps: number;
+  failed: number;
+  harnesses: readonly string[];
+}
+
+export const shapeOf = ({ transcripts }: SessionSkeleton): Shape => {
+  const steps = transcripts.flatMap(({ tools }) => tools.flatMap((tool) => tool.steps));
+  return { steps: steps.length, failed: steps.filter(({ status }) => status === 'error').length, harnesses: [...new Set(transcripts.map(({ harness }) => harness))].sort() };
+};
+
+/** The row an account holds under this id: the mark of the write that set it, whether its tier is `none`, the `counted_at` it holds (raw: a `none` row keeps the date it had, which the upsert reuses when the row counts again), the shape it was counted with, and the increments that write made, or none when the stored skeleton no longer parses (see `previousOf`). */
 export interface Previous {
   ingest: string;
   none: boolean;
+  heldAt: number | null;
+  shape: Shape | undefined;
   increments: Increments | undefined;
 }
 
@@ -32,16 +47,18 @@ export interface Previous {
  * not derived again on a read), so a resend over it adds the whole batch a second time: a limit the stored form has until the ledger is rebuilt by a later change.
  */
 export const previousOf = async (env: Env, account: string, id: string): Promise<Previous | undefined> => {
-  const held = await env.DB.prepare('SELECT skeleton, ingest, tier FROM deposits WHERE account = ? AND id = ?').bind(account, id).first();
+  const held = await env.DB.prepare('SELECT skeleton, ingest, tier, counted_at FROM deposits WHERE account = ? AND id = ?').bind(account, id).first();
   const text = fieldOf(held, 'skeleton');
   const ingest = fieldOf(held, 'ingest');
   if (typeof text !== 'string' || typeof ingest !== 'string') return undefined;
   const none = fieldOf(held, 'tier') === 'none';
+  const at = fieldOf(held, 'counted_at');
+  const heldAt = typeof at === 'number' ? at : null;
   try {
     const parsed = parseSkeleton(JSON.parse(text));
-    return { ingest, none, increments: parsed.ok ? incrementsOf(parsed.skeleton) : undefined };
+    return { ingest, none, heldAt, shape: parsed.ok ? shapeOf(parsed.skeleton) : undefined, increments: parsed.ok ? incrementsOf(parsed.skeleton) : undefined };
   } catch {
-    return { ingest, none, increments: undefined };
+    return { ingest, none, heldAt, shape: undefined, increments: undefined };
   }
 };
 
@@ -116,6 +133,35 @@ export const incrementStatements = (env: Env, account: string, id: string, inges
   for (const keys of chunksOf([...next.strata.keys()])) {
     statements.push(
       env.DB.prepare(`INSERT OR IGNORE INTO contributors (kind, key, account, day) SELECT 'stratum', value, ?, ? FROM json_each(?) WHERE ${GUARD}`).bind(account, today, keys, ...guard),
+    );
+  }
+  return statements;
+};
+
+/** One deposit's place on a board: the ISO week it first counted in, the weekday bit of that moment, and the shape it was counted with. */
+export interface Counted {
+  at: number;
+  shape: Shape;
+}
+
+/**
+ * The statements that move one deposit's counts in `account_weeks`, after the deposit's own row in the same transaction and under the same guard as the increments. `before` is what the row held (null when it did not count), `after` what it holds now (null when it does not):
+ * the earlier contribution is taken back from its week and the new one added to its own, so two deposits of one week sum, a session sent again is one session, and a resend keeps its first week because `counted_at` keeps its first moment. The day and harness marks only add: a union cannot be unmixed.
+ * A limit: when a counted row's stored skeleton no longer parses, its shape is unknown, so `before` is null and a resend adds its session to its week again (the same limit `previousOf` notes for the increments).
+ */
+export const weekStatements = (env: Env, account: string, id: string, ingest: string, before: Counted | null, after: Counted | null): Bound[] => {
+  const guard = [account, id, ingest] as const;
+  const statements: Bound[] = [];
+  if (before !== null) {
+    statements.push(
+      env.DB.prepare(`UPDATE account_weeks SET sessions = sessions - 1, tool_steps = tool_steps - ?, failed_steps = failed_steps - ? WHERE account = ? AND week = ? AND ${GUARD}`).bind(before.shape.steps, before.shape.failed, account, isoWeekOf(before.at), ...guard),
+    );
+  }
+  if (after !== null) {
+    statements.push(
+      env.DB.prepare(
+        `INSERT INTO account_weeks (account, week, sessions, tool_steps, failed_steps, day_mask, harnesses) SELECT ?, ?, 1, ?, ?, ?, ? WHERE ${GUARD} ON CONFLICT (account, week) DO UPDATE SET sessions = account_weeks.sessions + 1, tool_steps = account_weeks.tool_steps + excluded.tool_steps, failed_steps = account_weeks.failed_steps + excluded.failed_steps, day_mask = account_weeks.day_mask | excluded.day_mask, harnesses = (SELECT json_group_array(value) FROM (SELECT value FROM json_each(account_weeks.harnesses) UNION SELECT value FROM json_each(excluded.harnesses) ORDER BY value))`,
+      ).bind(account, isoWeekOf(after.at), after.shape.steps, after.shape.failed, 1 << weekdayOf(new Date(after.at)), JSON.stringify(after.shape.harnesses), ...guard),
     );
   }
   return statements;

@@ -362,8 +362,8 @@ describe('erasing one account under a lawful request', () => {
     const markersBefore = await markers();
     const erased = await eraseAccount(await store(), account, NOW);
     expect(erased.objects).toBe(1);
-    // 2 deposit rows, 1 token, and the 10 links.
-    expect(erased.rows).toBe(13);
+    // 2 deposit rows, 1 token, the 10 links, and 1 weekly count.
+    expect(erased.rows).toBe(14);
 
     // Per-account content: both rows are markers and tombstoned, the raw object is gone and tombstoned.
     expect(await markers()).toBe(markersBefore + 2);
@@ -423,6 +423,30 @@ describe('erasing one account under a lawful request', () => {
 describe('erasing one account removes its own rows and its link to the shared totals (GDPR Article 17)', () => {
   const telemetry = (day: string, install: string, account: string): Promise<unknown> =>
     pool.db().then((db) => db.prepare("INSERT INTO telemetry_install_days (day, install, account, batches, events, measures) VALUES (?, ?, ?, 2, 5, '[]')").bind(day, install, account).run());
+
+  it('deletes its weekly counts, its club memberships, and its hand-granted standing, keeps its consent rows, and leaves the rows of another account', async () => {
+    const { token, account } = await member();
+    const other = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('0000000000007b01'), token)).status).toBe(201);
+    expect((await pool.post('/v1/deposits', skeletonWith('0000000000007b02'), other.token)).status).toBe(201);
+    const db = await pool.db();
+    for (const holder of [account, other.account]) {
+      await db.prepare("INSERT INTO club_members (club, account, nickname, joined_at) VALUES ('open', ?, ?, 1)").bind(holder, `nick-${holder}`).run();
+      await db.prepare("INSERT INTO club_consents (account, club, text_sha256, accepted_at) VALUES (?, 'open', 'abc', 1)").bind(holder).run();
+      await db.prepare('INSERT INTO board_standing (account, granted_at, granted_by, reason) VALUES (?, 1, ?, ?)').bind(holder, 'operator', 'fleet').run();
+    }
+    const held = (table: string, holder: string): Promise<number> => count(`SELECT COUNT(*) AS held FROM ${table} WHERE account = ?`, holder);
+    expect(await held('account_weeks', account)).toBe(1);
+
+    await eraseAccount(await store(), account, NOW);
+
+    for (const table of ['account_weeks', 'club_members', 'board_standing']) {
+      expect(await held(table, account), table).toBe(0);
+      expect(await held(table, other.account), table).toBe(1);
+    }
+    expect(await held('club_consents', account)).toBe(1);
+    expect(await count('SELECT COUNT(*) AS held FROM club_members WHERE nickname = ?', `nick-${account}`)).toBe(0);
+  });
 
   it('deletes its repo keys and deposit hours, clears its telemetry account, and leaves the other account\'s rows', async () => {
     const { token, account } = await member();

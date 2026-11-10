@@ -80,19 +80,21 @@ const goodFiles = (s: Scene, id = ID): { [file: string]: string } => ({
   terms: `${termsDigest(s.salt, TERMS)}\n`,
 });
 
-/** Commits `files` on top of `parent` in the bare repository standing for `repo`, as the branch `name`, and answers the commit. `at` is the commit's time in epoch seconds. */
+/**
+ * Commits `files` on top of `parent` in the bare repository standing for `repo`, as the branch `name`, and answers the commit. `at` is the commit's time in epoch seconds. One `git fast-import` writes the blobs, the tree, the
+ * commit, and the ref, where the plumbing commands cost seven git processes a call, and a Windows runner starts those slowly (t1090: the setup was 429 of the file's 740 git processes, ~23 s of ~66 s on a quiet box).
+ */
 const hold = (s: Scene, repo: string, name: string, files: { [file: string]: string }, at = 1_700_000_000, parent?: string): string => {
   const bare = bareOf(s, repo);
   if (!existsSync(bare)) {
     mkdirSync(bare, { recursive: true });
     gitIn(bare, ['init', '--bare', '-q']);
   }
-  const entries = Object.entries(files).map(([file, content]) => `100644 blob ${gitIn(bare, ['hash-object', '-w', '--no-filters', '--stdin'], content).trim()}\t${file}\n`);
-  const tree = gitIn(bare, ['mktree'], entries.join('')).trim();
-  const date = `${String(at)} +0000`;
-  const commit = gitIn(bare, ['-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit-tree', tree, ...(parent === undefined ? [] : ['-p', parent]), '-m', 'oars hold [skip ci]'], undefined, { GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date }).trim();
-  gitIn(bare, ['update-ref', `refs/heads/${name}`, commit]);
-  return commit;
+  const data = (text: string): string => `data ${String(Buffer.byteLength(text))}\n${text}\n`;
+  const lines = [`commit refs/heads/${name}\n`, 'mark :1\n', `committer t <t@example.com> ${String(at)} +0000\n`, data('oars hold [skip ci]\n'), ...(parent === undefined ? [] : [`from ${parent}\n`]), 'deleteall\n'];
+  for (const [file, content] of Object.entries(files)) lines.push(`M 100644 inline ${file}\n`, data(content));
+  // `--force`: a commit with no parent replaces a branch that already exists, as `update-ref` did. `get-mark` prints the commit's id on stdout, so no second git process reads it back.
+  return gitIn(bare, ['fast-import', '--quiet', '--force'], `${lines.join('')}get-mark :1\n`).trim();
 };
 
 const branchesOf = (s: Scene, repo: string): string[] => gitIn(bareOf(s, repo), ['for-each-ref', '--format=%(refname:short)', 'refs/heads/oars-hold/']).split('\n').filter((line) => line !== '');
