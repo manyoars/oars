@@ -7,6 +7,9 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 - Client deposits now redact at version 4 (`REDACTION_VERSION`; a queued version 3 raw copy is stale and is not sent): system-role request blobs and memory-file text get the injected-block marks, synthetic provider token prefixes are masked, and token counts, scoped npm names (`@scope/name`), and `1password:` are no longer masked. `docs/sessions-store.md` lists the history.
 - `oars --help` names `oars sessions try` on the `sessions` line, the empty-store message says `oars sessions deposit` reads your own session history, and `@manyoars/oars-client` now declares the CLI's Node floor (22.23.4), so installing the CLI on Node 22 no longer prints engine warnings (with @manyoars/oars-client 0.1.2).
 - Each release now lists `io.github.manyoars/oars` on the MCP registry from GitHub Actions over OIDC (`release-mcp.yml`), with no stored token; a dispatch can list an existing tag.
+- `oars pool login` survives a failed poll: a network error or a 5xx waits twice as long (up to 60 seconds) and polls again until the device code expires, `slow_down` still adds 5 seconds, and `access_denied` and `expired_token` still end it at once; exit 8 comes only once the code has expired with the last poll still failing.
+- `oars pool deposit` judges a session ended by its transcript's own last line, not by when it was captured, so a store captured a minute ago from days-old transcripts builds its outbox at once; a session whose last line is under 6 hours old still waits.
+- `oars pool login` and `oars pool deposit` name the exclusion-terms file's path and `OARS_EXCLUSION_TERMS` when there is no terms file; the deposit stays fail-closed without one.
 
 ## 0.5.1 (2026-11-10)
 
