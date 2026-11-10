@@ -10,9 +10,10 @@ name: release-cli
 #           section of packages/cli/CHANGELOG.md, marked Latest), so the repository page shows the tool and not a template release.
 # A manual run with the `tag` input works on an existing tag and never pushes or moves one. By default it runs only the release job (no build, no
 # npm publish); it updates the release when one exists. Backfill: gh workflow run release-cli.yml -f tag=cli-v0.4.1 -f latest=true
-# With `publish=true` it runs the whole pipeline (build, publish, release) on that tag's code with this workflow file, which is how a tag whose
-# own workflow run failed gets published without re-tagging: gh workflow run release-cli.yml -f tag=cli-v0.5.0 -f latest=true -f publish=true
-# Start it from main: the tag's commit must still be an ancestor of main, and the run's workflow file is main's. A `publish=true` dispatch signs provenance for the dispatch ref and sha, not the tag's commit, so a new patch tag is the default.
+# The default for a tag whose push run failed is a new patch tag, tagged on a commit that is on main. `publish=true` is a recovery tool: it runs
+# the whole pipeline (build, publish, release) on that tag's code with this workflow file, but its provenance names the dispatch ref and sha, not
+# the tag's commit: gh workflow run release-cli.yml -f tag=cli-v<semver> -f latest=true -f publish=true
+# Start it from main: the tag's commit must still be an ancestor of main, and the run's workflow file is main's.
 #
 # Auth: npm trusted publishing (OIDC), no stored secret. The package's trusted publisher on npmjs.com names the GitHub
 # Actions repository manyoars/oars and the workflow file release-cli.yml (both case-sensitive, no environment), so do
@@ -32,7 +33,7 @@ on:
         type: boolean
         default: false
       publish:
-        description: Also build and publish the tag's code to npm before the release (for a tag whose push run failed); leave off for a backfill
+        description: Also build and publish the tag's code to npm before the release (recovery only: provenance names the dispatch sha, not the tag's commit); leave off for a backfill
         required: false
         type: boolean
         default: false
@@ -93,7 +94,7 @@ jobs:
       - run: npm ci
       - run: just check
       - name: Pack the tarball that will be published
-        # `npm pack` does not create the destination (npm 11 and later fail with ENOENT), and a relative one resolves against the repo root.
+        # `npm pack` does not create the destination (run 42827858620 failed with ENOENT), and a relative one resolves against the repo root.
         run: |
           mkdir -p release-pack
           npm pack -w packages/cli --pack-destination release-pack
