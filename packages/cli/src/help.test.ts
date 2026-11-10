@@ -38,4 +38,8 @@ describe('help text states what the code does', () => {
   it('pool names the redacted raw copies that a yes to the raw prompt adds', async () => {
     expect(await helpOf('pool')).toContain('and, after a yes to the raw prompt, redacted raw copies');
   });
+
+  it('pool says where the covenant screen appears', async () => {
+    expect(await helpOf('pool')).toContain('appears the first time you send a batch with oars pool deposit --send');
+  });
 });

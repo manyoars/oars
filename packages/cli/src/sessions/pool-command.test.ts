@@ -424,10 +424,27 @@ describe('oars pool login prints what it sends', () => {
   /** The request lines in a stderr snapshot, in the order they were printed. */
   const requestLines = (text: string): string[] => text.split('\n').filter((line) => /^(GET|POST) \S+ HTTP\/1\.1$/.test(line));
 
-  it.each(['github', 'google'] as const)('prints every %s request, headers and body, before sending it, with the handle masked', async (flavor) => {
+  it('says the cause first and prints no request unless --verbose is given', async () => {
+    const refused = (): void => {
+      server.use(http.post(`${POOL}/v1/login/start`, () => HttpResponse.json({ error: 'no_pseudonym_key', message: 'This pool has no PSEUDONYM_KEY binding.' }, { status: 503 })));
+    };
+    const quiet = setting();
+    refused();
+    await quiet.cli('pool', 'login', '--provider', 'github', '--server', POOL);
+    expect(quiet.h.err.join('').split('\n')[0]).toBe('This pool has no PSEUDONYM_KEY binding.');
+    expect(requestLines(quiet.h.err.join(''))).toEqual([]);
+
+    const loud = setting();
+    refused();
+    await loud.cli('pool', 'login', '--provider', 'github', '--server', POOL, '--verbose');
+    expect(requestLines(loud.h.err.join(''))).toEqual(['POST /v1/login/start HTTP/1.1']);
+    expect(loud.h.err.join('').trimEnd().split('\n').at(-1)).toBe('This pool has no PSEUDONYM_KEY binding.');
+  });
+
+  it.each(['github', 'google'] as const)('prints every %s request with --verbose, headers and body, before sending it, with the handle masked', async (flavor) => {
     const scene = setting();
     poolAt(scene, { polls: [state('pending'), authorized()] });
-    expect(await scene.cli('pool', 'login', '--provider', flavor, '--server', POOL)).toBe(ExitCode.OK);
+    expect(await scene.cli('pool', 'login', '--provider', flavor, '--server', POOL, '--verbose')).toBe(ExitCode.OK);
 
     // Each request found its own request line already printed, and no later one.
     expect(scene.seen).toHaveLength(3);

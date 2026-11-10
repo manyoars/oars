@@ -534,7 +534,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
       emit(deps, flag(command.optsWithGlobals(), 'json'), await gateReport(sessionDeps(deps)));
     });
 
-  const pool = program.command('pool').description('sign in to a pool server, deposit session skeletons (a closed list of fields, each value redacted first) and, after a yes to the raw prompt, redacted raw copies, and fetch signed reads; local capture, recall, and reads need none of it');
+  const pool = program.command('pool').description('sign in to a pool server, deposit session skeletons (a closed list of fields, each value redacted first) and, after a yes to the raw prompt, redacted raw copies, and fetch signed reads; local capture, recall, and reads need none of it. The covenant screen, where you type its phrase to accept, appears the first time you send a batch with oars pool deposit --send <hash>, not at sign-in');
   const serverOption = '--server <url>';
   const serverHelp = 'the pool server, https or plain http to localhost (default: OARS_POOL_URL, else https://pool.manyoars.com)';
 
@@ -549,12 +549,13 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
 
   pool
     .command('login')
-    .description('sign in by GitHub or Google device flow, run here against the provider; prints each request before sending it, and the pool keeps a pseudonym; no harness token is read')
+    .description('sign in by GitHub or Google device flow, run here against the provider; --verbose prints each request before sending it, and the pool keeps a pseudonym; no harness token is read')
     .requiredOption('--provider <name>', 'github or google')
+    .option('--verbose', 'print each request, headers and body, to stderr before it is sent (a credential shows as its size)')
     .option(serverOption, serverHelp)
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
-      emit(deps, flag(options, 'json'), await poolLogin(deps, { server: text(options, 'server'), provider: text(options, 'provider') }));
+      emit(deps, flag(options, 'json'), await poolLogin(deps, { server: text(options, 'server'), provider: text(options, 'provider'), verbose: flag(options, 'verbose') }));
     });
 
   pool

@@ -53,13 +53,13 @@ const block = (dir: string): void => {
 describe('the first-run notice', () => {
   it('prints once on stderr, leaves stdout alone, and is recorded as shown', async () => {
     const first = setup();
-    expect(await run(['--version'], first.deps)).toBe(0);
-    expect(first.out.join('')).toBe('9.9.9\n');
+    expect(await run(['logout'], first.deps)).toBe(0);
+    expect(first.out.join('')).toBe('Logged out\n');
     expect(first.err.join('')).toBe(`${NOTICE}\n`);
     expect(consentOf({}, first.dir).noticeShown).toBe(true);
     first.err.length = 0;
     first.out.length = 0;
-    await run(['--version'], first.deps);
+    await run(['logout'], first.deps);
     expect(first.err.join('')).toBe('');
   });
 
@@ -103,8 +103,8 @@ describe('the first-run notice', () => {
   it('is not claimed when the folder cannot be written, and the run is unaffected', async () => {
     const { deps, out, err, dir } = setup();
     block(dir);
-    expect(await run(['--version'], deps)).toBe(0);
-    expect(out.join('')).toBe('9.9.9\n');
+    expect(await run(['logout'], deps)).toBe(0);
+    expect(out.join('')).toBe('Logged out\n');
     expect(err.join('')).toBe('');
   });
 });
@@ -115,7 +115,7 @@ describe('the off switches', () => {
     ['DO_NOT_TRACK=1', { DO_NOT_TRACK: '1' }],
   ])('%s: no notice, no event, nothing written', async (_name, env) => {
     const { deps, err, dir } = setup(env);
-    await run(['--version'], deps);
+    await run(['logout'], deps);
     expect(err.join('')).toBe('');
     expect(existsSync(dir)).toBe(false);
   });
@@ -125,16 +125,16 @@ describe('the off switches', () => {
     await run(['telemetry', 'off'], deps);
     expect(out.join('')).toContain('Telemetry is off');
     expect(err.join('')).toBe('');
-    await run(['--version'], deps);
+    await run(['logout'], deps);
     expect(readSpool(dir)).toEqual([]);
     expect(err.join('')).toBe('');
     out.length = 0;
     await run(['telemetry', 'on'], deps);
     expect(out.join('')).toContain(NOTICE);
     expect(consentOf({}, dir).noticeShown).toBe(true);
-    await run(['--version'], deps);
+    await run(['logout'], deps);
     // `on` also sends the one `first-run` event, since it showed the notice (first-run.test.ts).
-    expect(commandEvents(dir).map((event) => field(event, 'data', 'path'))).toEqual([['telemetry', 'on'], []]);
+    expect(commandEvents(dir).map((event) => field(event, 'data', 'path'))).toEqual([['telemetry', 'on'], ['logout']]);
     expect(events(dir).map((event) => String(Reflect.get(Object(event), 'type')))).toEqual(['first-run', 'command', 'command']);
   });
 
@@ -162,7 +162,7 @@ describe('the off switches', () => {
 describe('oars telemetry status and show', () => {
   it('status reports the switch, the notice, and the spool', async () => {
     const { deps, out } = setup();
-    await run(['--version'], deps);
+    await run(['logout'], deps);
     out.length = 0;
     await run(['telemetry', 'status'], deps);
     const text = out.join('');
@@ -180,8 +180,8 @@ describe('oars telemetry status and show', () => {
 
   it('show prints the spool exactly as stored, and the same events under --json', async () => {
     const { deps, out, dir } = setup();
-    await run(['--version'], deps);
-    await run(['--version'], deps);
+    await run(['logout'], deps);
+    await run(['logout'], deps);
     const stored = readFileSync(spoolPaths(dir).current, 'utf8');
     out.length = 0;
     await run(['telemetry', 'show'], deps);
@@ -243,7 +243,7 @@ describe('command events', () => {
     const broken = setup();
     block(broken.dir);
     const off = setup({ OARS_TELEMETRY: '0' });
-    for (const argv of [['--version'], ['sessions', 'recall', '--error', 'x', '--json'], ['sessions', 'recall'], ['bogus']]) {
+    for (const argv of [['logout'], ['sessions', 'recall', '--error', 'x', '--json'], ['sessions', 'recall'], ['bogus']]) {
       expect(await run(argv, broken.deps)).toBe(await run(argv, off.deps));
     }
     expect(broken.out).toEqual(off.out);
@@ -254,7 +254,7 @@ describe('command events', () => {
     const broken = setup();
     mkdirSync(spoolPaths(broken.dir).current, { recursive: true });
     const off = setup({ OARS_TELEMETRY: '0' });
-    expect(await run(['--version'], broken.deps)).toBe(await run(['--version'], off.deps));
+    expect(await run(['logout'], broken.deps)).toBe(await run(['logout'], off.deps));
     expect(broken.out).toEqual(off.out);
   });
 });

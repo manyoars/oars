@@ -51,6 +51,9 @@ export const recordFirstRun = (deps: RunDeps, runtime: TelemetryRuntime, install
   }
 };
 
+/** `--version` and `--help` end the parse before any action runs (so the path is empty); they stay a plain answer and leave the notice for the next command. */
+const isInfoOnly = (argv: string[], observed: Observed): boolean => observed.path.length === 0 && argv.some((word) => ['--version', '-V', '--help', '-h'].includes(word));
+
 /**
  * Prints the notice on the first run that is not a hook, then records the event. Never throws and never changes what the command did. `installPath` is where this copy runs from; only a test names it,
  * and it is read inside the guard because it is needed on a first run only.
@@ -61,7 +64,7 @@ export const finishTelemetry = (deps: RunDeps, argv: string[], observed: Observe
     if (runtime === undefined) return;
     const consent = consentOf(deps.env, runtime.dir);
     if (!consent.enabled) return;
-    if (!consent.noticeShown && !isHook(argv, observed) && markNoticeShown(runtime.dir, deps.now)) {
+    if (!consent.noticeShown && !isHook(argv, observed) && !isInfoOnly(argv, observed) && markNoticeShown(runtime.dir, deps.now)) {
       deps.io.stderr(`${NOTICE}\n`);
       // Once per install: the notice is shown once, and nothing is recorded or sent from a folder that could not claim it.
       recordFirstRun(deps, runtime, installPath);

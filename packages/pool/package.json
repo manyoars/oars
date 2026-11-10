@@ -11,7 +11,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "erase": "node scripts/erase.mjs"
+    "erase": "node scripts/erase.mjs",
+    "dev": "wrangler dev --port 8788"
   },
   "devDependencies": {
     "aws4fetch": "1.0.20",

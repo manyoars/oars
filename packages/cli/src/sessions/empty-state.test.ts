@@ -25,6 +25,7 @@ const bare = () => {
 };
 
 describe('empty states', () => {
+it('the empty-store line points to sessions try first, then says what deposit reads and where it puts it', () => {    for (const line of [EMPTY_RECALL, emptyBooks('prompts')]) {      expect(line.indexOf('oars sessions try')).toBeGreaterThan(-1);      expect(line.indexOf('oars sessions try')).toBeLessThan(line.indexOf('oars sessions deposit'));      expect(line).toContain("reads this machine's coding-agent session logs into a local store");    }  });
   it('deposit that finds nothing prints the folders it looked in and the count found in each', async () => {
     const { deps, out, staged, cursor } = bare();
     expect(await run(['sessions', 'deposit'], deps)).toBe(ExitCode.OK);
