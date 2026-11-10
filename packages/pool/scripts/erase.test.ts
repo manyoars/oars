@@ -636,6 +636,13 @@ describe('unlinking the rows an erasure keeps (t1065, covenant 6.6(d))', () => {
     expect(await all('SELECT created_at, activated_at, rotated_at, expires_at FROM machines WHERE account = ?', erasedId)).toEqual([{ created_at: week(MACHINE_TIMES.created_at), activated_at: week(MACHINE_TIMES.activated_at), rotated_at: week(MACHINE_TIMES.rotated_at), expires_at: week(MACHINE_TIMES.expires_at) }]);
   }, 90_000);
 
+  it('cuts the machine last_deposit_day to the Monday of its ISO week (UTC)', async () => {
+    const { account, machine } = await fixture();
+    await (await pool.db()).prepare("UPDATE machines SET last_deposit_day = '2026-11-05' WHERE id = ?").bind(machine).run();
+    const erasedId = await erase(account);
+    expect(await all('SELECT last_deposit_day FROM machines WHERE account = ?', erasedId)).toEqual([{ last_deposit_day: '2026-11-02' }]);
+  }, 90_000);
+
   it('leaves no exact identifier an export or the machine key held: not the deposit ingest mark, not the key hashes', async () => {
     const { account, ingest, keyHash, retiredHash } = await fixture();
     expect(ingest).not.toBe('');
