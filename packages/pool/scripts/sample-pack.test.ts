@@ -1466,3 +1466,60 @@ describe('harness ids a buyer could join on beyond uuid and requestId (t1135)', 
     expect(a).not.toBe(raw);
   });
 });
+
+describe('a raw id inside text (t1135 item 2)', () => {
+  const harnessLine = (session: string, n: number, type: string, fields: object): string => line({ type, uuid: uuidOf(session, 'a', n), parentUuid: null, isSidechain: false, timestamp: at(n), version: '2.1.300', sessionId: session, ...fields });
+  const result = (session: string, n: number, text: string): string => harnessLine(session, n, 'user', { message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_01TextCarrier000000001', content: text }] } });
+  const built = async (lines: (session: string) => string[]): Promise<string> => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), ...lines(S(1)), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    expect((await buildPack(f.runtime, options(f))).emitted).toBe(1);
+    return packText(f.out);
+  };
+
+  it.each([
+    ['msg_', 'msg_01XFDUDYJgAACzvnptvVoYEL'],
+    ['req_', 'req_011CSHoEeqs5C35K2UUqR7Fy'],
+    ['toolu_', 'toolu_01A09q90qw90lq917835lq9k'],
+    ['srvtoolu_', 'srvtoolu_01B19r81rx81mr028946mr0l'],
+  ])('masks a %s id in tool output whether or not any line carries it as an id', async (_prefix, raw) => {
+    const text = await built((s) => [result(s, 20, `log: handled ${raw} in 40ms`)]);
+    expect(text).not.toContain(raw);
+    expect(text).not.toContain(raw.slice(raw.indexOf('_') + 1));
+    expect(text).toMatch(new RegExp(`handled ${raw.slice(0, raw.indexOf('_') + 1)}[0-9a-f]{24} in 40ms`));
+  });
+
+  it('masks the same msg_ id to the same value under msg_id and in text', async () => {
+    const raw = 'msg_01SameIdInTwoPlaces0001';
+    const text = await built((s) => [harnessLine(s, 20, 'system', { msg_id: raw }), result(s, 21, `see ${raw}`)]);
+    expect(text).not.toContain(raw);
+    const masks = [...text.matchAll(/msg_[0-9a-f]{24}/g)].map((found) => found[0]);
+    expect(masks.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(masks).size).toBe(1);
+  });
+
+  it('masks a leafUuid, promptId, and a known line uuid written in tool output, plain, quoted, or after a colon', async () => {
+    const leaf = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+    const prompt = 'f0e1d2c3-b4a5-4968-8776-65544332211f';
+    const lineUuid = uuidOf(S(1), 'b', 77);
+    const text = await built((s) => [
+      harnessLine(s, 77, 'system', { content: 'x' }),
+      result(s, 20, `summary leafUuid: ${leaf}\nraw {"promptId":"${prompt}"} and ${lineUuid}`),
+    ]);
+    for (const id of [leaf, prompt]) expect(text).not.toContain(id);
+    expect(text).not.toContain(uuidOf(S(1), 'a', 77));
+  });
+
+  it('leaves a lone uuid that no line carries as an id: it may be the person\'s own data', async () => {
+    const own = '7d6c5b4a-3928-4170-8f6e-5d4c3b2a1908';
+    const text = await built((s) => [result(s, 20, `the order number is ${own}`)]);
+    expect(text).toContain(own);
+  });
+
+  it('leaves a code identifier that only starts like a prefixed id', async () => {
+    const text = await built((s) => [result(s, 20, 'calls msg_handler_func and req_queue_length')]);
+    expect(text).toContain('msg_handler_func');
+    expect(text).toContain('req_queue_length');
+  });
+});
