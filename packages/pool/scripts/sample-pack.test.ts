@@ -427,6 +427,12 @@ describe('owners file', () => {
   it('refuses an entry with no owner', () => {
     expect(() => parseOwners(JSON.stringify([{ folder: '*', owner: '', license: null }]))).toThrow(/owner/);
   });
+
+  it('reads the pointer opt-in, false unless an entry says true, and names the entry whose value is not a boolean', () => {
+    const rules = parseOwners(JSON.stringify([{ folder: 'a', owner: 'A', license: null }, { folder: 'b', owner: 'B', license: null, pointer: true }, { folder: 'c', owner: 'C', license: null, pointer: false }]));
+    expect(rules.map((rule) => rule.pointer)).toEqual([false, true, false]);
+    for (const bad of ['true', 1, null]) expect(() => parseOwners(JSON.stringify([{ folder: 'a', owner: 'A', license: null }, { folder: 'b', owner: 'B', license: null, pointer: bad }]))).toThrow(/Owners entry 2.*pointer/);
+  });
 });
 
 describe('the command line', () => {
