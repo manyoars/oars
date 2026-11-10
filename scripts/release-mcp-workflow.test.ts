@@ -31,11 +31,12 @@ describe('release-mcp workflow', () => {
   });
 
   it('holds id-token: write and contents: read only, and no stored secret', () => {
-    const parsed = load(text()) as { permissions: Record<string, string>; jobs: Record<string, { permissions: Record<string, string> }> };
-    expect(parsed.permissions).toEqual({ contents: 'read' });
-    for (const job of Object.values(parsed.jobs)) {
-      expect(job.permissions).toEqual({ contents: 'read', 'id-token': 'write' });
-    }
+    expect(load(text())).toMatchObject({
+      permissions: { contents: 'read' },
+      jobs: { publish: { permissions: { contents: 'read', 'id-token': 'write' } } },
+    });
+    // Only the one job may mint the token.
+    expect(text().match(/^ +id-token: write/gm)).toHaveLength(1);
     expect(text()).not.toContain('secrets.');
   });
 

@@ -6,6 +6,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 
 - Client deposits now redact at version 4 (`REDACTION_VERSION`; a queued version 3 raw copy is stale and is not sent): system-role request blobs and memory-file text get the injected-block marks, synthetic provider token prefixes are masked, and token counts, scoped npm names (`@scope/name`), and `1password:` are no longer masked. `docs/sessions-store.md` lists the history.
 - `oars --help` names `oars sessions try` on the `sessions` line, the empty-store message says `oars sessions deposit` reads your own session history, and `@manyoars/oars-client` now declares the CLI's Node floor (22.23.4), so installing the CLI on Node 22 no longer prints engine warnings (with @manyoars/oars-client 0.1.2).
+- Each release now lists `io.github.manyoars/oars` on the MCP registry from GitHub Actions over OIDC (`release-mcp.yml`), with no stored token; a dispatch can list an existing tag.
 
 ## 0.5.1 (2026-11-10)
 
