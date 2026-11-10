@@ -185,26 +185,40 @@ const positionOf = (cursor: string): Position | undefined => {
   return after.length === 0 || after.length === section.order.length ? { at, after } : undefined;
 };
 
+/** Runs one SELECT with its values and answers its rows: the Worker's D1 for the route, the operator's `wrangler d1 execute` for the script (`scripts/export-account.ts`). The page builder reads only through this, so the two cannot drift. */
+export type ExportRows = (sql: string, binds: readonly (string | number)[]) => Promise<readonly unknown[]>;
+
 /** The rows of one section after a position, one more than a page holds, so the caller can tell whether another page follows. */
-const readSection = async (env: Env, section: Section, account: string, after: Key, limit: number): Promise<unknown[]> => {
+const readSection = async (rows: ExportRows, section: Section, account: string, after: Key, limit: number): Promise<unknown[]> => {
   const order = section.order.join(', ');
   const past = after.length === 0 ? '' : ` AND (${order}) > (${after.map(() => '?').join(', ')})`;
-  const { results } = await env.DB.prepare(`SELECT ${section.select} FROM ${section.table} WHERE ${section.owner} = ?${past} ORDER BY ${order} LIMIT ?`).bind(account, ...after, limit + 1).all();
-  return [...results];
+  return [...(await rows(`SELECT ${section.select} FROM ${section.table} WHERE ${section.owner} = ?${past} ORDER BY ${order} LIMIT ?`, [account, ...after, limit + 1]))];
 };
 
 const LIMIT = /^[1-9][0-9]{0,5}$/;
 
-/** `GET /v1/account/export`: one page of the account's records. `limit` (optional) asks for fewer rows than a page holds; `cursor` is the previous page's `next`. A page holds rows of one section, and the last page's `next` is null. */
-export const exportPage = async (request: Request, env: Env): Promise<Response> => {
-  const account = await accountOf(request, env);
-  if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
-  const query = new URL(request.url).searchParams;
-  const asked = query.get('limit');
-  if (asked !== null && !LIMIT.test(asked)) return refuse(400, 'bad_limit', 'limit is a whole number of at least 1.', 'limit');
-  const given = query.get('cursor');
+/** One page of an account's export, as the route sends it and the operator's script writes it. */
+export interface ExportPageBody {
+  format: string;
+  version: number;
+  account: string;
+  section: string;
+  rows: object[];
+  next: string | null;
+}
+
+/** A request the builder cannot read: the route answers it 400 with this code, message, and field. */
+export interface ExportRefusal {
+  code: string;
+  message: string;
+  field: string;
+}
+
+/** One page of the account's records. `asked` (optional) is `limit`, fewer rows than a page holds; `cursor` is the previous page's `next`. A page holds rows of one section, and the last page's `next` is null. The account is the caller's own, never read from the cursor. */
+export const buildExportPage = async (account: string, asked: string | null, given: string | null, rows: ExportRows): Promise<ExportPageBody | ExportRefusal> => {
+  if (asked !== null && !LIMIT.test(asked)) return { code: 'bad_limit', message: 'limit is a whole number of at least 1.', field: 'limit' };
   const start = given === null ? { at: 0, after: [] } : positionOf(given);
-  if (start === undefined) return refuse(400, 'bad_cursor', 'cursor is the next value of the previous page.', 'cursor');
+  if (start === undefined) return { code: 'bad_cursor', message: 'cursor is the next value of the previous page.', field: 'cursor' };
   let { at, after } = start;
   // A section with nothing left is passed over, so no page is empty but the last.
   for (;;) {
@@ -212,18 +226,28 @@ export const exportPage = async (request: Request, env: Env): Promise<Response> 
     // `at` starts at a section and only moves to the next while one follows, so this is the compiler's question, not a state a request reaches.
     if (section === undefined) throw new Error('the export walked past its last section');
     const size = Math.min(section.page, asked === null ? section.page : Number(asked));
-    const read = await readSection(env, section, account, after, size);
-    const rows = read.slice(0, size);
+    const read = await readSection(rows, section, account, after, size);
+    const held = read.slice(0, size);
     const following = SECTIONS[at + 1];
-    if (rows.length === 0 && following !== undefined) {
+    if (held.length === 0 && following !== undefined) {
       at += 1;
       after = [];
       continue;
     }
-    const last = rows.at(-1);
+    const last = held.at(-1);
     const next = read.length > size ? cursorOf(section, section.keyed.map((name) => text(last, name) ?? count(last, name) ?? '')) : following === undefined ? null : cursorOf(following, undefined);
-    return answer(200, { format: FORMAT, version: VERSION, account, section: section.name, rows: rows.map((row) => section.view(row, account)), next }, { 'cache-control': 'private, no-store' });
+    return { format: FORMAT, version: VERSION, account, section: section.name, rows: held.map((row) => section.view(row, account)), next };
   }
+};
+
+/** `GET /v1/account/export`: one page of the account's records (`buildExportPage`). */
+export const exportPage = async (request: Request, env: Env): Promise<Response> => {
+  const account = await accountOf(request, env);
+  if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
+  const query = new URL(request.url).searchParams;
+  const built = await buildExportPage(account, query.get('limit'), query.get('cursor'), async (sql, binds) => (await env.DB.prepare(sql).bind(...binds).all()).results);
+  if ('code' in built) return refuse(400, built.code, built.message, built.field);
+  return answer(200, built, { 'cache-control': 'private, no-store' });
 };
 
 const SHA256 = /^[0-9a-f]{64}$/;

@@ -56,7 +56,7 @@ const dayOf = (now: Date): string => now.toISOString().slice(0, 10);
 /** The marker a deposit row holds in place of its skeleton. It parses as no skeleton, and the deposit tombstone refuses a resend of the session before `previousOf` reads it. */
 const markerOf = (reason: ErasureReason): string => JSON.stringify({ erased: reason });
 
-const nameOf = (value: string, what: string): string => {
+export const nameOf = (value: string, what: string): string => {
   if (!NAME.test(value)) throw new Error(`${what} is not a pool id: letters, digits, dot, dash, and underscore, 1 to 128`);
   return value;
 };
