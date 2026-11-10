@@ -500,7 +500,7 @@ describe('the nickname rule', () => {
   });
 
   it('accepts letters, digits, space, hyphen, underscore, and dot, 2 to 24 long', async () => {
-    for (const nickname of ['ab', 'x'.repeat(24), 'Ana-Maria_2.0', 'two words', 'j.doe', 'v1.2']) {
+    for (const nickname of ['ab', 'x'.repeat(24), 'Ana-Maria_2.0', 'two words', 'j.doe', 'v1.2', 'राम', 'हिन्दी', 'ไทย']) {
       const guest = await member();
       const club = await createClub((await member()).token);
       expect(await join(guest.token, club.code, nickname), nickname).toMatchObject({ status: 200, json: { nickname } });

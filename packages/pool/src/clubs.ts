@@ -34,8 +34,8 @@ const NAME = /^[\p{L}\p{N}][\p{L}\p{N} ._-]{0,23}$/u;
 
 /** The rule, in the one line a refusal carries. */
 const NICKNAME_RULE = 'A nickname is 2 to 24 letters, digits, spaces, dots, underscores, or hyphens, with no space at either end, no @, and no web address.';
-/** Letters, digits, space, dot, underscore, hyphen; no space at either end. Length is checked apart, in characters. */
-const NICKNAME = /^[\p{L}\p{N}_.-](?:[\p{L}\p{N} _.-]*[\p{L}\p{N}_.-])?$/u;
+/** Letters, digits, space, dot, underscore, hyphen; no space at either end. Combining marks (vowel signs in Devanagari, Thai, Tamil, and others) may follow the first character. Length is checked apart, in characters. */
+const NICKNAME = /^[\p{L}\p{N}_.-](?:[\p{L}\p{N}\p{M} _.-]*[\p{L}\p{N}\p{M}_.-])?$/u;
 /** A web address in a name: "www." or a dot before a common top-level domain. The character set already keeps out "@", ":", and "/". */
 const WEB_ADDRESS = /www\.|\.(?:com|net|org|io|dev|app|co|me|ly|xyz|info|biz|gg|tv)(?![\p{L}\p{N}])/iu;
 
