@@ -208,7 +208,7 @@ describe('main', () => {
   });
 
   it('restricts an account: checks it exists, sets restricted_at once, audits, and deletes and revokes nothing', async () => {
-    const { io, calls, printed } = fake({ rows: [{ found: 1 }] });
+    const { io, calls, printed } = fake({ answer: (sql) => (sql.includes('FROM contributors') ? [] : [{ found: 1 }]) });
     expect(await main(['restrict', '--account', ACCOUNT, '--confirm'], io)).toBe(0);
     const statements = calls.map((call) => call[6] ?? '');
     expect(statements[0]).toBe(`SELECT 1 AS found FROM accounts WHERE id = '${ACCOUNT}'`);
@@ -218,10 +218,19 @@ describe('main', () => {
   });
 
   it('lifts a restriction with --lift, clearing restricted_at', async () => {
-    const { io, calls, printed } = fake({ rows: [{ found: 1 }] });
+    const { io, calls, printed } = fake({ answer: (sql) => (sql.includes('FROM contributors') ? [] : [{ found: 1 }]) });
     expect(await main(['restrict', '--account', ACCOUNT, '--lift', '--confirm'], io)).toBe(0);
     expect(calls.map((call) => call[6] ?? '')[1]).toMatch(/^UPDATE accounts SET restricted_at = NULL WHERE id = 'acct_[0-9a-f]+' AND restricted_at IS NOT NULL$/);
     expect(printed).toEqual([JSON.stringify({ rowsChanged: 1 })]);
+  });
+
+  it('recounts the cells and strata the account holds in the same run, in small chunks, before it audits', async () => {
+    const { io, calls } = fake({ answer: (sql) => (sql.includes('SELECT DISTINCT key FROM contributors') ? [{ key: 'cell-1' }] : [{ found: 1 }]) });
+    expect(await main(['restrict', '--account', ACCOUNT, '--confirm'], io)).toBe(0);
+    const statements = calls.map((call) => call[6] ?? '');
+    const writes = statements.filter((sql) => /^UPDATE (cells|strata) SET clusters/.test(sql));
+    expect(writes).toHaveLength(2);
+    expect(statements.findIndex((sql) => sql.startsWith('INSERT INTO erasure_audit'))).toBeGreaterThan(statements.indexOf(writes[1] ?? ''));
   });
 
   it('answers exit code 1 and the reason when the account is not in the pool', async () => {
