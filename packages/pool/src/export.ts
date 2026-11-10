@@ -57,13 +57,13 @@ const json = (row: unknown, name: string): unknown => {
 const SECTIONS: readonly Section[] = [
   {
     name: 'account',
-    select: 'id, covenant, raw_consent, access, source, first_seen, provider_created, fetch_week, fetches, raw_consent_version, raw_consent_withdrawn_at, raw_consent_withdrawn_version',
+    select: 'id, covenant, raw_consent, access, source, first_seen, provider_created, fetch_week, fetches, raw_consent_version, raw_consent_withdrawn_at, raw_consent_withdrawn_version, closed_at',
     table: 'accounts',
     owner: 'id',
     order: ['id'],
     keyed: ['id'],
     page: SMALL_PAGE,
-    view: (row) => ({ id: text(row, 'id'), covenant: text(row, 'covenant'), rawConsent: count(row, 'raw_consent'), access: text(row, 'access'), source: text(row, 'source'), firstSeen: count(row, 'first_seen'), providerCreated: count(row, 'provider_created'), fetchWeek: text(row, 'fetch_week'), fetches: count(row, 'fetches'), rawConsentVersion: text(row, 'raw_consent_version'), rawConsentWithdrawnAt: count(row, 'raw_consent_withdrawn_at'), rawConsentWithdrawnVersion: text(row, 'raw_consent_withdrawn_version') }),
+    view: (row) => ({ id: text(row, 'id'), covenant: text(row, 'covenant'), rawConsent: count(row, 'raw_consent'), access: text(row, 'access'), source: text(row, 'source'), firstSeen: count(row, 'first_seen'), providerCreated: count(row, 'provider_created'), fetchWeek: text(row, 'fetch_week'), fetches: count(row, 'fetches'), rawConsentVersion: text(row, 'raw_consent_version'), rawConsentWithdrawnAt: count(row, 'raw_consent_withdrawn_at'), rawConsentWithdrawnVersion: text(row, 'raw_consent_withdrawn_version'), closedAt: count(row, 'closed_at') }),
   },
   // When a sign-in ends and nothing else: the hash that is the credential's only stored form is not selected.
   { name: 'tokens', select: 'rowid AS n, expires_at', table: 'tokens', owner: 'account', order: ['rowid'], keyed: ['n'], page: SMALL_PAGE, view: (row) => ({ expiresAt: count(row, 'expires_at') }) },

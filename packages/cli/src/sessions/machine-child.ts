@@ -37,6 +37,8 @@ export interface MachineChildDeps {
   build: (input: ChildInput) => Promise<void>;
   /** Commits the batch just built to the session's holding branch and pushes it (`machine-hold.ts`); a refused push is the step's own log row, not a throw. */
   hold: (input: ChildInput) => Promise<void>;
+  /** Activates the machine's key and sends what its outbox holds once the covenant is accepted (`machine-send.ts`); it never throws, and a refusal is its own log row. Under the same lock as the build. */
+  send?: () => Promise<void>;
   settle?: SettleTimes;
   lock?: Partial<LockTimes>;
 }
@@ -112,6 +114,7 @@ const extract = async (deps: MachineChildDeps, input: ChildInput): Promise<void>
   await deps.capture(input);
   await deps.build(input);
   await deps.hold(input);
+  await deps.send?.();
 };
 
 /** Takes the lock without waiting and runs `work`, then every session marked dirty meanwhile; `false` when another child holds it. The first failure is rethrown once every session has had its turn. */

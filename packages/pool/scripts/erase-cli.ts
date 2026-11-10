@@ -1,5 +1,5 @@
 // `npm run erase -w packages/pool -- <what> ...`: the operator's erasure command (docs/pool.md, "Erasure"). It changes nothing until `--confirm` is given; without it, it says what it would do.
-import { depositExists, eraseAccount, eraseLeakedSecret, eraseRawObject, findRawContaining, type Erased, type EraseStore } from './erase.js';
+import { closeAccount, depositExists, eraseAccount, eraseLeakedSecret, eraseRawObject, findRawContaining, type Erased, type EraseStore } from './erase.js';
 import { wranglerStore, type Lister, type ObjectFiles, type Target, type Wrangler } from './erase-wrangler.js';
 
 export { nodeFiles } from './erase-files.js';
@@ -14,6 +14,7 @@ export const USAGE = [
   '        [--value-stdin]               also read the leaked value from stdin: scrub it from aggregates, erase every row that holds it,',
   '                                      and make ingest refuse it again (only its SHA-256 is kept)',
   '  account --account <id>              erase one account\'s deposit rows and raw objects, scrub its machines\' labels and allow lists, delete its repo keys, deposit hours, and contributor records, and disable its tokens, then rewrite each telemetry batch within retention that names it (needs R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY, to list the bucket); the shared totals stay',
+  '  close --account <id>               close one account (covenant 6.1): revoke its tokens and machine keys and record when it closed, so sign-in, enrollment, and activation refuse it; its Deposits, raw objects, and the shared totals stay',
   'Options: --confirm (without it nothing is changed), --local (the local wrangler state instead of the account\'s)',
   `Runs with the wrangler login already on this machine against D1 database "oars-pool" and R2 buckets "oars-pool-raw" and "oars-telemetry".`,
 ].join('\n');
@@ -104,6 +105,11 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
       }
       const value = options.valueStdin ? (await io.stdin()).replace(/\r?\n$/, '') : undefined;
       io.print(summary(await eraseLeakedSecret(store, { account: options.account, id: options.id, ...(value === undefined ? {} : { value }) }, io.now())));
+      return 0;
+    }
+    if (what === 'close' && options.positional.length === 1 && options.account !== undefined && options.id === undefined) {
+      if (!options.confirm) return plan(io, `close account ${options.account} in ${where}: record when it closed, revoke its tokens and machine keys, and delete nothing a Deposit holds`);
+      io.print(JSON.stringify({ rowsChanged: (await closeAccount(store, options.account, io.now())).rows }));
       return 0;
     }
     if (what === 'account' && options.positional.length === 1 && options.account !== undefined && options.id === undefined) {

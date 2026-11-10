@@ -48,7 +48,8 @@ const stop = (program: string, folder: string, extra: { [name: string]: string }
 /** `<program> machine-child <input>` run to completion, as the Stop's detached child runs it: the folder is HOME, as `machineStop` sets the child's cwd to it. The settle wait is real, so this takes the transcript's quiet time (2 s). */
 const machineChild = (program: string, folder: string, extra: { [name: string]: string }, input: string): Promise<{ code: number | null; stdout: string }> =>
   new Promise((resolve, reject) => {
-    const env = { PATH: process.env.PATH, APPDATA: folder, HOME: folder, USERPROFILE: folder, XDG_CONFIG_HOME: folder, OARS_TELEMETRY: '0', ...extra };
+    // The child talks to the pool after it builds; a closed local port keeps the test off the network.
+    const env = { PATH: process.env.PATH, APPDATA: folder, HOME: folder, USERPROFILE: folder, XDG_CONFIG_HOME: folder, OARS_TELEMETRY: '0', OARS_POOL_URL: 'http://127.0.0.1:9', ...extra };
     const child = spawn(process.execPath, [program, 'machine-child', input], { cwd: folder, env, stdio: ['ignore', 'pipe', 'ignore'], timeout: 60_000 });
     let stdout = '';
     child.stdout.on('data', (chunk: Buffer) => {

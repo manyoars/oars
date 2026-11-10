@@ -31,6 +31,7 @@ import {
   type PullEcosystem,
   type SessionObservation,
   type ShellIdentity,
+  type EditDigest,
   type ShellSegment,
   type Skeleton,
   type SkeletonLine,
@@ -138,6 +139,25 @@ export const isErrorResult = (block: Obj, text: string): boolean => {
   if (truthy(block.is_error)) return true;
   const exit = EXIT_RE.exec(text.trim());
   return exit !== null && exit[1] !== '0';
+};
+
+/** The first 32 hex digits of the SHA-256 of a text's exact UTF-8 bytes: plain, not keyed, so the same text matches across sessions and accounts, and a line ending or a trailing space is a difference. */
+const textDigest = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 32);
+
+/**
+ * The digests of an edit call's text, from the input: an Edit has one old and new pair, a MultiEdit one per edit in order, a Write a new digest only (its old text is not in the call, so no old digest is held, not the digest of an
+ * empty string). Any other tool, and an edit whose input holds no text for the side it needs, has none: a malformed entry of a MultiEdit is skipped.
+ */
+const editDigestsOf = (tool: string, input: Obj): EditDigest[] => {
+  if (tool === 'Write') {
+    const content = str(input.content);
+    return content === undefined ? [] : [{ new: textDigest(content) }];
+  }
+  const edits = tool === 'MultiEdit' && Array.isArray(input.edits) ? input.edits.filter(isObj) : tool === 'Edit' ? [input] : [];
+  return edits.flatMap((edit) => {
+    const [old, replacement] = [str(edit.old_string), str(edit.new_string)];
+    return old === undefined || replacement === undefined ? [] : [{ old: textDigest(old), new: textDigest(replacement) }];
+  });
 };
 
 /** What an Edit, MultiEdit, or Write shows of a manifest: the names it adds and removes (an edit), or lists (a write). Undefined when it shows none. */
@@ -670,6 +690,8 @@ export interface ShellRead {
   steps: ShellStepRead[];
   pulls: ToolPull[];
   commitPlan: PlannedCommit[];
+  /** The paths a `git restore` or `git checkout --` names, as written, in the commands whose status the call reports. Not in `segments`: a slashed path stays out of `run`. */
+  restores: string[];
 }
 
 const HEREDOC = /(?<!<)<<-?\s*(?:'([^']+)'|"([^"]+)"|\\?([A-Za-z_][\w.-]*))/g;
@@ -1361,6 +1383,49 @@ const isReadBack = (commands: readonly ShellCommand[], from: number, scope: stri
   return false;
 };
 
+const RESTORE_VALUE_FLAGS = new Set(['-s', '--source', '--pathspec-from-file']);
+const STAGED_FLAG = /^(?:--staged|-[a-zA-Z]*S[a-zA-Z]*)$/;
+const WORKTREE_FLAG = /^(?:--worktree|-[a-zA-Z]*W[a-zA-Z]*)$/;
+const PATCH_FLAG = /^(?:--patch|-[a-zA-Z]*p[a-zA-Z]*)$/;
+
+/** The words a `git restore` or `git checkout --` takes as paths to the working file. `git restore --staged` alone restores the index, and `--patch` restores part of a file, so neither names a whole file; `git checkout` with no `--` may name a branch. */
+const restoredBy = (git: GitCall): string[] => {
+  const words = git.args;
+  if (git.sub === 'checkout') {
+    const dashes = words.findIndex((word) => !word.quoted && word.text === '--');
+    // `git checkout --patch` takes part of a file, as `git restore --patch` does, so it names no whole file.
+    if (dashes < 0 || words.slice(0, dashes).some((word) => !word.quoted && PATCH_FLAG.test(word.text))) return [];
+    return words.slice(dashes + 1).map((word) => word.text);
+  }
+  if (git.sub !== 'restore') return [];
+  const paths: string[] = [];
+  let staged = false;
+  let worktree = false;
+  for (let at = 0; at < words.length; at += 1) {
+    const text = words[at]?.text ?? '';
+    if (text === '--') return staged && !worktree ? [] : [...paths, ...words.slice(at + 1).map((word) => word.text)];
+    if (PATCH_FLAG.test(text)) return [];
+    if (RESTORE_VALUE_FLAGS.has(text)) at += 1;
+    else if (text.startsWith('-')) {
+      staged ||= STAGED_FLAG.test(text);
+      worktree ||= WORKTREE_FLAG.test(text);
+    } else paths.push(text);
+  }
+  return staged && !worktree ? [] : paths;
+};
+
+/**
+ * The paths the call's `git restore` and `git checkout --` commands name, for a command whose status the call reports and that runs in the call's folder: after a `cd`, or under a repository flag (`-C`), a relative path means another folder.
+ * A word that holds a variable is no path.
+ */
+const restoredPaths = (commands: readonly ShellCommand[]): string[] => {
+  const folderAt = commands.findIndex((command) => CHANGES_FOLDER.has(command.program));
+  return (folderAt < 0 ? commands : commands.slice(0, folderAt)).flatMap((command) => {
+    const git = command.read ? gitCall(command) : null;
+    return git === null || git.scope !== '' ? [] : restoredBy(git).filter((path) => path !== '' && !path.includes('$'));
+  });
+};
+
 const commitPlanOf = (commands: readonly ShellCommand[]): PlannedCommit[] =>
   commands.flatMap((command, at) => {
     const git = gitCall(command);
@@ -1394,6 +1459,7 @@ export const readShell = (command: string, redact: Redactor, dialect: ShellDiale
     steps: kept.map((held) => ({ identity: shellIdentity(held.program, held.args, pullsOfCommand(held.program, held.args).filter(present), redact), read: held.read, run: runOf(held) })),
     pulls: [...pulls.values()],
     commitPlan: commitPlanOf(commands),
+    restores: restoredPaths(commands),
   };
 };
 
@@ -1924,7 +1990,10 @@ export const captureSession = (input: ExtractInput): Capture => {
         const argFeatures = argFeaturesOf(native, toolInput, lineRoot ?? lineCwd, lineCwd);
         const argValues = argValuesOf(native, toolInput, CLOSED_ARG_VALUES);
         // A name is stored as the line's text is: masked at capture, so a credential-shaped folder or file name never reaches the store. The mask has no name shape, so the wire still drops it and counts it.
-        const names = argNamesOf(native, toolInput, lineRoot ?? lineCwd, lineCwd, shell?.words ?? [], CLOSED_ARG_VALUES).map(({ kind, name }) => ({ kind, name: redact(name) }));
+        const names = argNamesOf(native, toolInput, lineRoot ?? lineCwd, lineCwd, shell?.words ?? [], CLOSED_ARG_VALUES, shell?.restores ?? []).map(({ kind, name }) => ({ kind, name: redact(name) }));
+        const digests = editDigestsOf(name, toolInput);
+        // A restored path is hashed as an edit's target is, so the two compare; the same call's folder and repository anchor a relative one.
+        const restores = [...new Set((shell?.restores ?? []).map((path) => hashPath(path, lineCwd, lineRoot, salt).hash))];
         // A template keeps a program, a subcommand, and flags as written and every literal as a slot; its kept words are masked as a name is, and the wire gates each one again.
         const templates = templatesOf(shell?.words ?? [], redact);
         // An edit is stored as the shapes of its change from a closed list, read from the old and new text and never kept.
@@ -1954,6 +2023,8 @@ export const captureSession = (input: ExtractInput): Capture => {
           argFeatures,
           ...(argValues.length === 0 ? {} : { argValues }),
           ...(names.length === 0 ? {} : { names }),
+          ...(digests.length === 0 ? {} : { digests }),
+          ...(restores.length === 0 ? {} : { restores }),
           ...(templates.length === 0 ? {} : { templates }),
           ...(diffShape.length === 0 ? {} : { diffShape }),
           ...(before === undefined ? {} : { changeKind: changeKindOf(before, compared) }),

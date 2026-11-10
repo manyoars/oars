@@ -59,8 +59,9 @@ describe('oars pool enroll --hold-only', () => {
     });
     const block = blockOf(text);
     const local = (await localSalt(staged.storeDir)).salt;
-    expect(Object.keys(block).sort()).toEqual(['OARS_ALLOW_REPOS', 'OARS_EXCLUSION_TERMS_INLINE', 'OARS_HOST_CLASS', 'OARS_LAUNCHER', 'OARS_MACHINE', 'OARS_REPO_SALT', 'OARS_SESSION_SALT']);
+    expect(Object.keys(block).sort()).toEqual(['OARS_ALLOW_REPOS', 'OARS_EXCLUSION_TERMS_INLINE', 'OARS_HOLD_ONLY', 'OARS_HOST_CLASS', 'OARS_LAUNCHER', 'OARS_MACHINE', 'OARS_REPO_SALT', 'OARS_SESSION_SALT']);
     expect(block).toMatchObject({
+      OARS_HOLD_ONLY: '1',
       OARS_HOST_CLASS: 'cloud',
       OARS_LAUNCHER: 'orchestrated',
       OARS_ALLOW_REPOS: 'acme/widgets,acme/gadgets',

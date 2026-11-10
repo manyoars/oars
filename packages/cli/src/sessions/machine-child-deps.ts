@@ -6,8 +6,9 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { exclusionPaths, loadTerms } from './exclusion.js';
 import { machineChild, parseChildInput, type ChildInput, type SettleTimes } from './machine-child.js';
 import { holdBatch, runNetGit } from './machine-hold.js';
-import { DEPOSIT, machineKeyOf, poolDeposit, poolServer, vocabularyExpired } from './pool-command.js';
+import { DEPOSIT, machineKeyOf, poolDeposit, poolServer, vocabularyExpired, type Sender } from './pool-command.js';
 import { machineOf, withInlineTerms, type MachineConfig } from './machine.js';
+import { machineSend } from './machine-send.js';
 import { recordNotice } from './machine-notice.js';
 import { repoAllowed } from './machine-repo.js';
 import { logFailure } from './pool-due.js';
@@ -34,8 +35,8 @@ const holdSession = async (env: NodeJS.ProcessEnv, gated: NodeJS.ProcessEnv, ses
   );
 };
 
-/** Runs the child for one Stop's forwarded input (`text`, the one argument `machine-stop.ts` passes). `settle` replaces the settle wait's times, which a test shortens. */
-export const runMachineChild = async (env: NodeJS.ProcessEnv, sessions: SessionsRuntime, version: string, now: () => number, text: string, settle?: SettleTimes): Promise<void> => {
+/** Runs the child for one Stop's forwarded input (`text`, the one argument `machine-stop.ts` passes). `settle` replaces the settle wait's times, which a test shortens, and `via` the network a send goes over. */
+export const runMachineChild = async (env: NodeJS.ProcessEnv, sessions: SessionsRuntime, version: string, now: () => number, text: string, settle?: SettleTimes, via?: Sender): Promise<void> => {
   const input = parseChildInput(text);
   if (input === undefined) return;
   try {
@@ -72,6 +73,9 @@ export const runMachineChild = async (env: NodeJS.ProcessEnv, sessions: Sessions
           await poolDeposit(deps, { session: basename(forwarded.transcript, '.jsonl') });
         },
         hold: (forwarded) => holdSession(env, gated, sessions, now, machine, forwarded),
+        send: async () => {
+          await machineSend(deps, via);
+        },
       },
       input,
     );

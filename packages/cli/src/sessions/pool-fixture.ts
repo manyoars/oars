@@ -224,6 +224,8 @@ export const REGISTER_FIXTURE = {
           templates: ['npm run <ident>', 'git commit -m <text>'],
           templatesDropped: 1,
           diffShape: ['import-added', 'lines-changed'],
+          // The parser does not ask which tool holds a digest either, so the fixture carries one pair on the call that sends names.
+          digests: [{ old: '5d41402abc4b2a76b9719d911017c592', new: '7d793037a0760186574b0282f2f435e7' }],
           steps: [
             { ...REGISTER_STEP, allocated: true, skill: 'commit', action: 'shell.exec', native: 'Bash', identity: { program: 'npm', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] } },
             { ...REGISTER_STEP, edges: [{ kind: 'next', target: 0 }], action: 'mcp.call', native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' } },

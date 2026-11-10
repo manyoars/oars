@@ -136,6 +136,56 @@ describe('the pool harness reuses its connections', () => {
       server.close();
     }
   });
+
+  // A failed fetch reads only `fetch failed` over a bare socket error, which names no call; on a loaded box that is all a flake leaves behind (t1068).
+  it('names the method, the path, whether the socket was reused, and the elapsed time when a call fails', async () => {
+    const server = createServer((request, response) => {
+      // Bytes that are no HTTP answer fail the call on the socket it reused. A destroyed socket would not do: undici retries that one on a connection of its own.
+      if (request.url?.startsWith('/drop') === true) request.socket.end('not an HTTP answer\r\n\r\n');
+      else {
+        request.resume();
+        response.end('ok');
+      }
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    const port = typeof address === 'object' && address !== null ? address.port : 0;
+    const sender = keepAliveSender(() => Promise.resolve(new URL(`http://127.0.0.1:${String(port)}`)));
+    const failure = async (call: Promise<Response>): Promise<Error> => {
+      try {
+        await call;
+      } catch (error) {
+        if (error instanceof Error) return error;
+      }
+      return new Error('the call did not reject');
+    };
+    try {
+      // The first calls may open a socket each; a call that opens none has found an idle one, and the failing call below must find the same.
+      for (let warm = 0, seen = -1; seen !== sender.connects() && warm < 5; warm += 1) {
+        seen = sender.connects();
+        await (await sender.send(`http://pool.test/warm${String(warm)}`)).text();
+      }
+      const reused = await failure(sender.send('http://pool.test/drop?x=1', { method: 'POST', body: '{}' }));
+      expect(reused.message).toMatch(/^POST \/drop failed after \d+ ms on a reused connection: /);
+      expect(reused.cause).toBeInstanceOf(TypeError);
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => {
+          resolve();
+        });
+      });
+      const fresh = keepAliveSender(() => Promise.resolve(new URL(`http://127.0.0.1:${String(port)}`)));
+      try {
+        const refused = await failure(fresh.send('http://pool.test/gone'));
+        expect(refused.message).toMatch(/^GET \/gone failed after \d+ ms on a new connection: /);
+      } finally {
+        await fresh.close();
+      }
+    } finally {
+      await sender.close();
+    }
+  });
 });
 
 describe('a Worker exception reads as the Worker\'s own error', () => {

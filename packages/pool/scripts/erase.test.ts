@@ -2,9 +2,10 @@
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { sampleSkeleton } from '../src/sample.js';
-import { acceptanceOf, fieldOf, startPool, stubUser, type TestBucket, type TestDb, type TestPool } from '../src/test-pool.js';
+import { PANEL_COUNT } from '../src/stored.js';
+import { acceptanceOf, fieldOf, startPool, stubUser, textOf, type StubUser, type TestBucket, type TestDb, type TestPool } from '../src/test-pool.js';
 import { telemetryOf } from './erase-test-telemetry.js';
-import { eraseAccount, eraseLeakedSecret, eraseRawObject, findRawContaining, holdsValue, type EraseStore, type RawHit } from './erase.js';
+import { closeAccount, eraseAccount, eraseLeakedSecret, eraseRawObject, findRawContaining, holdsValue, type EraseStore, type RawHit } from './erase.js';
 
 let pool: TestPool;
 let next = 7000;
@@ -61,11 +62,12 @@ const storeOf = (db: TestDb, bucket: TestBucket, telemetry: TestBucket, chunk = 
 
 const store = async (chunk?: number): Promise<EraseStore> => storeOf(await pool.db(), await pool.rawBucket(), await pool.bucket(), chunk);
 
-const member = async (): Promise<{ token: string; account: string }> => {
+const member = async (): Promise<{ token: string; account: string; user: StubUser }> => {
   next += 1;
-  const { token, account } = await pool.signIn('github', stubUser(String(next)));
+  const user = stubUser(String(next));
+  const { token, account } = await pool.signIn('github', user);
   expect((await pool.post('/v1/covenant/accept', acceptanceOf('v1'), token)).status).toBe(200);
-  return { token, account };
+  return { token, account, user };
 };
 
 const sha = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
@@ -351,16 +353,17 @@ describe('erasing one account under a lawful request', () => {
     const links = await count('SELECT (SELECT COUNT(*) FROM account_repo_keys WHERE account = ?) + (SELECT COUNT(*) FROM deposit_hours WHERE account = ?) + (SELECT COUNT(*) FROM contributors WHERE account = ?) AS held', account, account, account);
     expect(links).toBe(10);
 
+    // The rewrite moves a deposit's account, id, and ingest mark, so the rows are counted by the marker they now hold under a random id.
+    const markers = (): Promise<number> => count("SELECT COUNT(*) AS held FROM deposits WHERE account LIKE 'erased:%' AND skeleton = '{\"erased\":\"lawful-request\"}' AND erased_on IS NULL");
+    const markersBefore = await markers();
     const erased = await eraseAccount(await store(), account, NOW);
     expect(erased.objects).toBe(1);
     // 2 deposit rows, 1 token, and the 10 links.
     expect(erased.rows).toBe(13);
 
     // Per-account content: both rows are markers and tombstoned, the raw object is gone and tombstoned.
-    expect(await all('SELECT id, skeleton, erased_on FROM deposits WHERE account = ? ORDER BY id', account)).toEqual([
-      { id: '00000000000075aa', skeleton: '{"erased":"lawful-request"}', erased_on: '2026-11-08' },
-      { id: '00000000000075ab', skeleton: '{"erased":"lawful-request"}', erased_on: '2026-11-08' },
-    ]);
+    expect(await markers()).toBe(markersBefore + 2);
+    expect(await count('SELECT COUNT(*) AS held FROM deposits WHERE account = ?', account)).toBe(0);
     expect(await rawKeys(account)).toEqual([]);
     expect(await rawKeys(other.account)).toEqual([`raw/${other.account}/${theirs.hash}`]);
     expect(await count("SELECT COUNT(*) AS held FROM erasure_tombstones WHERE reason = 'lawful-request' AND kind <> 'account'")).toBe(3);
@@ -387,11 +390,13 @@ describe('erasing one account under a lawful request', () => {
     const enroll = (bearer: string, label: string): Promise<{ status: number }> => pool.post('/v1/machines/enroll', { hostClass: 'vps', launcher: 'scheduled', label, allowRepos: ['acme/secret-repo'] }, bearer);
     expect((await enroll(token, 'a home server')).status).toBe(201);
     expect((await enroll(other.token, 'their box')).status).toBe(201);
-    const hashes = await all('SELECT id, key_hash FROM machines WHERE account = ?', account);
+    const scrubbed = (): Promise<number> => count("SELECT COUNT(*) AS held FROM machines WHERE label = '[erased]' AND allow_repos = '[]'");
+    const scrubbedBefore = await scrubbed();
     // The machine row and the account's one token.
     expect((await eraseAccount(await store(), account, NOW)).rows).toBe(2);
-    expect(await all('SELECT label, allow_repos FROM machines WHERE account = ?', account)).toEqual([{ label: '[erased]', allow_repos: '[]' }]);
-    expect(await all('SELECT id, key_hash FROM machines WHERE account = ?', account)).toEqual(hashes);
+    // The machine's account, id, and key hash are rewritten, so it is counted by the label and allow list it now holds.
+    expect(await scrubbed()).toBe(scrubbedBefore + 1);
+    expect(await count('SELECT COUNT(*) AS held FROM machines WHERE account = ?', account)).toBe(0);
     expect(await all('SELECT label FROM machines WHERE account = ?', other.account)).toEqual([{ label: 'their box' }]);
     expect((await eraseAccount(await store(), account, NOW)).rows).toBe(0);
     expect(await all("SELECT rows_erased FROM erasure_audit WHERE kind = 'account' AND account = ? ORDER BY id DESC LIMIT 1", account)).toEqual([{ rows_erased: 0 }]);
@@ -438,6 +443,30 @@ describe('erasing one account removes its own rows and its link to the shared to
     expect(await all("SELECT account FROM telemetry_install_days WHERE install = 'install-theirs'")).toEqual([{ account: other.account }]);
   }, 90_000);
 
+  it('removes each item the covenant lists in 6.6(d): contributors, repository keys, deposit hours, and telemetry install days, and no other account\'s', async () => {
+    const { token, account } = await member();
+    const other = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('0000000000007c01'), token)).status).toBe(201);
+    expect((await pool.post('/v1/deposits', skeletonWith('0000000000007c02'), other.token)).status).toBe(201);
+    const db = await pool.db();
+    for (const holder of [account, other.account]) await db.prepare('INSERT OR IGNORE INTO account_repo_keys (account, repo_key) VALUES (?, ?)').bind(holder, `key-${holder}`).run();
+    await telemetry('2026-11-07', 'six-six-d-mine', account);
+    await telemetry('2026-11-07', 'six-six-d-theirs', other.account);
+    const held = (table: string, holder: string): Promise<number> => count(`SELECT COUNT(*) AS held FROM ${table} WHERE account = ?`, holder);
+    for (const table of ['contributors', 'account_repo_keys', 'deposit_hours', 'telemetry_install_days']) {
+      expect(await held(table, account)).toBeGreaterThan(0);
+      expect(await held(table, other.account)).toBeGreaterThan(0);
+    }
+    const theirs = await Promise.all(['contributors', 'account_repo_keys', 'deposit_hours', 'telemetry_install_days'].map((table) => held(table, other.account)));
+
+    await eraseAccount(await store(), account, NOW);
+
+    for (const table of ['contributors', 'account_repo_keys', 'deposit_hours', 'telemetry_install_days']) expect(await held(table, account)).toBe(0);
+    expect(await Promise.all(['contributors', 'account_repo_keys', 'deposit_hours', 'telemetry_install_days'].map((table) => held(table, other.account)))).toEqual(theirs);
+    // The install day keeps its counts under a placeholder that names no account.
+    expect(await all("SELECT batches, events FROM telemetry_install_days WHERE install = 'six-six-d-mine'")).toEqual([{ batches: 2, events: 5 }]);
+  }, 90_000);
+
   it('clears the telemetry account of two installs of one day without colliding with each other or with an anonymous row', async () => {
     const { account } = await member();
     const other = await member();
@@ -473,11 +502,13 @@ describe('erasing one account removes its own rows and its link to the shared to
     const { token, account } = await member();
     expect((await pool.post('/v1/deposits', skeletonWith('0000000000007b01'), token)).status).toBe(201);
     const mine = await putRaw(token, new TextEncoder().encode('kept record transcript'));
+    const marked = (): Promise<number> => count("SELECT COUNT(*) AS held FROM deposits WHERE account LIKE 'erased:%' AND skeleton = '{\"erased\":\"lawful-request\"}'");
+    const markedBefore = await marked();
     await eraseAccount(await store(), account, NOW);
     expect(await count('SELECT COUNT(*) AS held FROM covenant_acceptances WHERE account = ?', account)).toBe(1);
     expect(await count("SELECT COUNT(*) AS held FROM erasure_tombstones WHERE reason = 'lawful-request' AND kind = 'deposit'")).toBeGreaterThan(0);
-    expect(await all('SELECT sha256, bytes, erased_on FROM raw_objects WHERE account = ?', account)).toEqual([{ sha256: mine.hash, bytes: 'kept record transcript'.length, erased_on: '2026-11-08' }]);
-    expect(await count('SELECT COUNT(*) AS held FROM deposits WHERE account = ? AND erased_on IS NOT NULL', account)).toBe(1);
+    expect(await all("SELECT sha256, bytes, erased_on FROM raw_objects WHERE sha256 = ? AND account = ?", mine.hash, account)).toEqual([{ sha256: mine.hash, bytes: 'kept record transcript'.length, erased_on: '2026-11-08' }]);
+    expect(await marked()).toBe(markedBefore + 1);
   }, 60_000);
 
   it('removes the account from the contributor records, leaves every total as it was, and moves the generation so the next bundle is built without it', async () => {
@@ -532,6 +563,224 @@ describe('erasing one account removes its own rows and its link to the shared to
   }, 60_000);
 });
 
+describe('unlinking the rows an erasure keeps (t1065, covenant 6.6(d))', () => {
+  const SESSION = '00000000000090aa';
+  const FINGERPRINT = 'fingerprint-of-the-erased-laptop';
+  const COUNTED_AT = Date.UTC(2026, 10, 3, 14, 25, 36, 789);
+  const MACHINE_TIMES = { created_at: Date.UTC(2026, 10, 1, 9, 15, 30, 111), activated_at: Date.UTC(2026, 10, 2, 8, 5, 4, 222), rotated_at: Date.UTC(2026, 10, 2, 20, 45, 59, 333), expires_at: Date.UTC(2027, 1, 1, 8, 5, 4, 222) };
+  const retiredOf = (machine: string): string => `hash-of-the-key-a-rotation-replaced-${machine}`;
+  const DAY = 86_400_000;
+  const kept = ['machines', 'deposits', 'telemetry_install_days'];
+  const proof = ['covenant_acceptances', 'accounts', 'tokens', 'erasure_tombstones', 'erasure_audit'];
+  const RANDOM_ID = /^erased:[0-9a-f]{32}$/;
+
+  const tableText = async (table: string): Promise<string> => JSON.stringify(await all(`SELECT * FROM ${table}`));
+
+  /** Every random `erased:` id held now (the telemetry placeholder is the bare `erased:`, which this does not match). */
+  const randomIds = async (): Promise<string[]> => (await all("SELECT id FROM accounts WHERE id LIKE 'erased:%'")).map((row) => String(fieldOf(row, 'id'))).filter((id) => RANDOM_ID.test(id));
+
+  /** Erases one account and returns the one new `erased:` id that appears, so the id is never read from a value the rewrite keeps. */
+  const erase = async (account: string, when: Date = NOW): Promise<string> => {
+    const before = new Set(await randomIds());
+    await eraseAccount(await store(), account, when);
+    const added = (await randomIds()).filter((id) => !before.has(id));
+    expect(added).toHaveLength(1);
+    return added[0] ?? '';
+  };
+
+  /** An account with a machine, a token, a deposit stamped with the machine, a raw object, a telemetry day, and an acceptance. */
+  const fixture = async (): Promise<{ account: string; machine: string; key: string; keyHash: string; retiredHash: string; ingest: string; values: string[] }> => {
+    const { token, account } = await member();
+    const enrolled = await pool.post('/v1/machines/enroll', { hostClass: 'vps', launcher: 'scheduled', label: 'unlink box', allowRepos: [] }, token);
+    expect(enrolled.status).toBe(201);
+    const key = String(fieldOf(enrolled.json, 'token'));
+    const machine = String(fieldOf((await all('SELECT id FROM machines WHERE account = ?', account))[0], 'id'));
+    expect((await pool.post('/v1/deposits', skeletonWith(SESSION), token)).status).toBe(201);
+    await putRaw(token, new TextEncoder().encode('unlink transcript'));
+    const db = await pool.db();
+    await db.prepare('UPDATE machines SET fingerprint_hash = ?, created_at = ?, activated_at = ?, rotated_at = ?, expires_at = ?, retired_hash = ? WHERE id = ?').bind(FINGERPRINT, MACHINE_TIMES.created_at, MACHINE_TIMES.activated_at, MACHINE_TIMES.rotated_at, MACHINE_TIMES.expires_at, retiredOf(machine), machine).run();
+    await db.prepare('UPDATE deposits SET machine = ?, counted_at = ? WHERE account = ?').bind(machine, COUNTED_AT, account).run();
+    await db.prepare('UPDATE accounts SET provider_created = 1500000000123 WHERE id = ?').bind(account).run();
+    await db.prepare("INSERT INTO telemetry_install_days (day, install, account, batches, events, measures) VALUES ('2026-11-03', 'unlink-install', ?, 1, 2, '[]')").bind(account).run();
+    const keyHash = String(fieldOf((await all('SELECT key_hash FROM machines WHERE id = ?', machine))[0], 'key_hash'));
+    const ingest = String(fieldOf((await all('SELECT ingest FROM deposits WHERE account = ?', account))[0], 'ingest'));
+    return { account, machine, key, keyHash, retiredHash: retiredOf(machine), ingest, values: [account, machine, FINGERPRINT, SESSION] };
+  };
+
+  it('leaves no kept row outside 6.6(d) holding the old account, machine, fingerprint, session id, or a time finer than the day, and gives the rewritten rows one random id', async () => {
+    const { account, values } = await fixture();
+    const erasedId = await erase(account);
+
+    for (const table of kept) {
+      const text = await tableText(table);
+      for (const value of values) expect(text, `${table} holds ${value}`).not.toContain(value);
+    }
+    expect(await count('SELECT COUNT(*) AS held FROM deposits WHERE counted_at = ?', Date.UTC(2026, 10, 3))).toBe(1);
+    expect(await tableText('deposits')).not.toContain(String(COUNTED_AT));
+    expect(await all('SELECT provider_created FROM accounts WHERE id = ?', account)).toEqual([{ provider_created: null }]);
+
+    expect(await count('SELECT COUNT(*) AS held FROM machines WHERE account = ?', erasedId)).toBe(1);
+    expect(await count('SELECT COUNT(*) AS held FROM deposits WHERE account = ?', erasedId)).toBe(1);
+    expect(await count('SELECT COUNT(*) AS held FROM deposits WHERE account = ? AND machine IN (SELECT id FROM machines WHERE account = ?)', erasedId, erasedId)).toBe(1);
+    // A raw object is 6.6(d)'s hash, size, and date, and its tombstone is the unkeyed hash of the pseudonym and the object's hash, so it stays on the pseudonym; the random id never reaches it.
+    expect(await count('SELECT COUNT(*) AS held FROM raw_objects WHERE account = ?', account)).toBe(1);
+    expect(await count('SELECT COUNT(*) AS held FROM raw_objects WHERE account = ?', erasedId)).toBe(0);
+    // The random id is on no row the covenant keeps.
+    for (const table of proof.filter((one) => one !== 'accounts')) expect(await tableText(table), `${table} holds the random id`).not.toContain(erasedId);
+    // `accounts` holds it once, as the bare row the foreign keys need: nothing in it comes from the account but the input source, and the pseudonym's own row does not name it.
+    expect(await all('SELECT first_seen, provider_created, covenant, access, raw_consent FROM accounts WHERE id = ?', erasedId)).toEqual([{ first_seen: null, provider_created: null, covenant: null, access: null, raw_consent: null }]);
+    expect(JSON.stringify(await all('SELECT * FROM accounts WHERE id = ?', account))).not.toContain(erasedId);
+    // The kept proof still names the account, as 6.6(d) allows.
+    expect(await count('SELECT COUNT(*) AS held FROM covenant_acceptances WHERE account = ?', account)).toBe(1);
+    expect(await count("SELECT COUNT(*) AS held FROM erasure_tombstones WHERE kind = 'account' AND digest = ?", account)).toBe(1);
+  }, 90_000);
+
+  it('cuts a machine created, activated, rotated, and expiry time to the UTC day, as the counting time is', async () => {
+    const { account } = await fixture();
+    const erasedId = await erase(account);
+    const day = (ms: number): number => ms - (ms % DAY);
+    expect(await all('SELECT created_at, activated_at, rotated_at, expires_at FROM machines WHERE account = ?', erasedId)).toEqual([{ created_at: day(MACHINE_TIMES.created_at), activated_at: day(MACHINE_TIMES.activated_at), rotated_at: day(MACHINE_TIMES.rotated_at), expires_at: day(MACHINE_TIMES.expires_at) }]);
+  }, 90_000);
+
+  it('leaves no exact identifier an export or the machine key held: not the deposit ingest mark, not the key hashes', async () => {
+    const { account, ingest, keyHash, retiredHash } = await fixture();
+    expect(ingest).not.toBe('');
+    await eraseAccount(await store(), account, NOW);
+    expect(await count('SELECT COUNT(*) AS held FROM deposits WHERE ingest = ?', ingest)).toBe(0);
+    expect(await count('SELECT COUNT(*) AS held FROM machines WHERE key_hash IN (?, ?) OR retired_hash IN (?, ?)', keyHash, retiredHash, keyHash, retiredHash)).toBe(0);
+    expect(await count("SELECT COUNT(*) AS held FROM machines WHERE account LIKE 'erased:%' AND retired_hash IS NOT NULL")).toBe(0);
+  }, 90_000);
+
+  it('moves an erased deposit off its place among live ones, and cuts the raw object date to the day', async () => {
+    const first = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000090b1'), first.token)).status).toBe(201);
+    const second = await fixture();
+    const third = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000090b3'), third.token)).status).toBe(201);
+    const rowidOf = async (account: string): Promise<number> => Number(fieldOf((await all('SELECT rowid AS n FROM deposits WHERE account = ?', account))[0], 'n'));
+    // The fixture's deposit went in after the first member's and before the third's, so it sits between two live rows by rowid.
+    const placed = [await rowidOf(first.account), await rowidOf(second.account), await rowidOf(third.account)];
+    expect(placed[0]).toBeLessThan(placed[1] ?? 0);
+    expect(placed[1]).toBeLessThan(placed[2] ?? 0);
+    expect(await count('SELECT COUNT(*) AS held FROM raw_objects WHERE account = ? AND stored_at % ? <> 0', second.account, DAY)).toBe(1);
+    const erasedId = await erase(second.account);
+    expect(await rowidOf(erasedId)).toBeLessThan(0);
+    expect(await rowidOf(first.account)).toBe(placed[0]);
+    expect(await rowidOf(third.account)).toBe(placed[2]);
+    expect(await count('SELECT COUNT(*) AS held FROM raw_objects WHERE account = ? AND stored_at % ? <> 0', second.account, DAY)).toBe(0);
+    expect(await count('SELECT COUNT(*) AS held FROM raw_objects WHERE account = ?', second.account)).toBe(1);
+  }, 90_000);
+
+  it('lets no tombstone be recomputed from an audited account and a row under an erased id', async () => {
+    const { account } = await fixture();
+    await eraseAccount(await store(), account, NOW);
+    const audited = (await all("SELECT account FROM erasure_audit WHERE kind = 'account'")).map((row) => String(fieldOf(row, 'account')));
+    expect(audited).toContain(account);
+    const tombstoned = new Set((await all("SELECT digest FROM erasure_tombstones WHERE kind IN ('raw-object', 'deposit')")).map((row) => String(fieldOf(row, 'digest'))));
+    const hash = (text: string): string => createHash('sha256').update(text).digest('hex');
+    const deposits = (await all("SELECT id FROM deposits WHERE account LIKE 'erased:%'")).map((row) => String(fieldOf(row, 'id')));
+    const objects = (await all("SELECT sha256 FROM raw_objects WHERE account LIKE 'erased:%'")).map((row) => String(fieldOf(row, 'sha256')));
+    expect(deposits.length).toBeGreaterThan(0);
+    for (const one of audited) {
+      for (const id of deposits) expect(tombstoned.has(hash(`${one}/${id}`)), `${one} and deposit ${id}`).toBe(false);
+      for (const sha256 of objects) expect(tombstoned.has(hash(`raw/${one}/${sha256}`)), `${one} and raw object ${sha256}`).toBe(false);
+    }
+    expect(objects).toEqual([]);
+  }, 90_000);
+
+  it('refuses the erased machine key with a 401 on deposit, activate, and rotate, and keeps the row revoked', async () => {
+    const { account, key } = await fixture();
+    await eraseAccount(await store(), account, NOW);
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000090af'), key)).status).toBe(401);
+    expect((await pool.post('/v1/machines/activate', {}, key)).status).toBe(401);
+    expect((await pool.post('/v1/machines/rotate', {}, key)).status).toBe(401);
+    expect(await count("SELECT COUNT(*) AS held FROM machines WHERE account LIKE 'erased:%' AND state <> 'revoked'")).toBe(0);
+  }, 90_000);
+
+  it('rerun changes nothing: no new id, no new row', async () => {
+    const { account } = await fixture();
+    await eraseAccount(await store(), account, NOW);
+    const accountsBefore = await count("SELECT COUNT(*) AS held FROM accounts WHERE id LIKE 'erased:%'");
+    const snapshot = JSON.stringify([await all('SELECT * FROM machines WHERE account LIKE ?', 'erased:%'), await all('SELECT * FROM deposits WHERE account LIKE ?', 'erased:%'), await all('SELECT * FROM raw_objects WHERE account = ?', account)]);
+    expect((await eraseAccount(await store(), account, NOW)).rows).toBe(0);
+    expect(await count("SELECT COUNT(*) AS held FROM accounts WHERE id LIKE 'erased:%'")).toBe(accountsBefore);
+    expect(JSON.stringify([await all('SELECT * FROM machines WHERE account LIKE ?', 'erased:%'), await all('SELECT * FROM deposits WHERE account LIKE ?', 'erased:%'), await all('SELECT * FROM raw_objects WHERE account = ?', account)])).toBe(snapshot);
+  }, 90_000);
+
+  it('replaces the machine id on a deposit whose machine row is gone, and rewrites what a later sign-in adds', async () => {
+    const { token, account, user } = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000090ad'), token)).status).toBe(201);
+    await (await pool.db()).prepare('UPDATE deposits SET machine = ? WHERE account = ?').bind('machine-swept-long-ago', account).run();
+    await eraseAccount(await store(), account, NOW);
+    expect(await tableText('deposits')).not.toContain('machine-swept-long-ago');
+    const again = await pool.signIn('github', user);
+    expect(again.account).toBe(account);
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000090ae'), again.token)).status).toBe(201);
+    await eraseAccount(await store(), account, NOW);
+    expect(await count('SELECT COUNT(*) AS held FROM deposits WHERE account = ?', account)).toBe(0);
+  }, 90_000);
+
+  it('keeps the panel count and the panel readable, with nothing new for a recount', async () => {
+    const { account } = await fixture();
+    const panel = (): Promise<number> => all(PANEL_COUNT, 0).then((rows) => Number(fieldOf(rows[0], 'accounts')));
+    const before = await panel();
+    expect(before).toBeGreaterThan(0);
+    await eraseAccount(await store(), account, NOW);
+    expect(await panel()).toBe(before);
+    expect(await count('SELECT COUNT(*) AS held FROM contributors WHERE account LIKE ?', 'erased:%')).toBe(0);
+    expect(await count('SELECT COUNT(*) AS held FROM account_repo_keys WHERE account LIKE ?', 'erased:%')).toBe(0);
+    expect(await count('SELECT COUNT(*) AS held FROM deposit_hours WHERE account LIKE ?', 'erased:%')).toBe(0);
+  }, 90_000);
+
+  it('uses a different random id for each erasure, so two erased accounts are not joined to each other', async () => {
+    const first = await fixture();
+    const second = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000090ab'), second.token)).status).toBe(201);
+    // One account at a time: the id of each erasure is the one new `erased:` id that appears, so no value the rewrite keeps is read.
+    const ids = [await erase(first.account), await erase(second.account)];
+    expect(ids[0]).toMatch(RANDOM_ID);
+    expect(ids[1]).toMatch(RANDOM_ID);
+    expect(ids[0]).not.toBe(ids[1]);
+  }, 90_000);
+
+  it('carries no erasure date and no insert order that maps an erased id to its audit row', async () => {
+    const accounts = [await fixture(), await fixture(), await fixture()];
+    const nextRowid = async (): Promise<number> => Number(fieldOf((await all('SELECT MAX(rowid) + 1 AS n FROM accounts'))[0], 'n'));
+    const expected = await nextRowid();
+    const erasedIds = [await erase(accounts[0]?.account ?? ''), await erase(accounts[1]?.account ?? ''), await erase(accounts[2]?.account ?? '', new Date('2026-11-09T12:00:00Z'))];
+    // No row under a random id holds an erasure date, so the day cannot pick out the audit row of that day.
+    for (const erased of erasedIds) expect(await count('SELECT COUNT(*) AS held FROM deposits WHERE account = ? AND erased_on IS NOT NULL', erased)).toBe(0);
+    // The bare `accounts` row takes a random negative rowid, never the next free one, so the order of those rows is not the order of `erasure_audit.id` and a live account signed in later gets the rowid it would have had anyway.
+    const rowids = await Promise.all(erasedIds.map(async (erased) => Number(fieldOf((await all('SELECT rowid AS n FROM accounts WHERE id = ?', erased))[0], 'n'))));
+    for (const rowid of rowids) expect(rowid).toBeLessThan(0);
+    expect(new Set(rowids).size).toBe(rowids.length);
+    expect(await nextRowid()).toBe(expected);
+    const later = await member();
+    expect(Number(fieldOf((await all('SELECT rowid AS n FROM accounts WHERE id = ?', later.account))[0], 'n'))).toBe(expected);
+  }, 120_000);
+
+  it('does not scan a deposit under an erased id for a leaked value, so the sweep never dates it', async () => {
+    const { account } = await fixture();
+    const erased = await erase(account);
+    const before = JSON.stringify(await all('SELECT * FROM deposits WHERE account = ?', erased));
+    // The marker an erased deposit holds contains this text, so a scan that read the row would find it and date it.
+    await eraseLeakedSecret(await store(), { account: 'nobody', id: 'nothing', value: 'lawful-request' }, NOW);
+    expect(JSON.stringify(await all('SELECT * FROM deposits WHERE account = ?', erased))).toBe(before);
+  }, 90_000);
+
+  it('leaves another account\'s deposit, machine, and raw object as they were', async () => {
+    const live = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000090ac'), live.token)).status).toBe(201);
+    expect((await pool.post('/v1/machines/enroll', { hostClass: 'vps', launcher: 'scheduled', label: 'live box', allowRepos: [] }, live.token)).status).toBe(201);
+    await putRaw(live.token, new TextEncoder().encode('live transcript'));
+    const rows = async (): Promise<string> => JSON.stringify([await all('SELECT * FROM deposits WHERE account = ?', live.account), await all('SELECT * FROM machines WHERE account = ?', live.account), await all('SELECT * FROM raw_objects WHERE account = ?', live.account)]);
+    const before = await rows();
+    const { account } = await fixture();
+    await eraseAccount(await store(), account, NOW);
+    expect(await rows()).toBe(before);
+  }, 90_000);
+});
+
 /** Stages one part of a two-part deposit through `oars-part`, as the client does. The pool seals the body before it is stored, so a row of `deposit_parts` is ciphertext. */
 const stage = async (token: string, id: string, program: string, part: 1 | 2): Promise<number> => {
   const body = JSON.stringify(skeletonWith(id, program));
@@ -539,6 +788,71 @@ const stage = async (token: string, id: string, program: string, part: 1 | 2): P
   const batch = createHash('sha256').update(body).digest('hex');
   return (await pool.send('/v1/deposits', { method: 'POST', body: part === 1 ? body.slice(0, half) : body.slice(half) }, token, { 'oars-part': `${String(part)}/2`, 'oars-batch': batch })).status;
 };
+
+describe('closing one account (covenant 6.1 and 7.2(a))', () => {
+  const BOX = { hostClass: 'vps', launcher: 'scheduled', label: 'box' };
+
+  it('revokes every token and machine key, records when it closed, writes one audit row, and keeps the Deposits byte for byte', async () => {
+    const { token, account } = await member();
+    const other = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('0000000000008a01'), token)).status).toBe(201);
+    const raw = await putRaw(token, new TextEncoder().encode('transcript held through a close'));
+    expect(raw.complete).toBe(201);
+    const keys = await rawKeys(account);
+    expect(keys.length).toBeGreaterThan(0);
+    const enrolled = await pool.post('/v1/machines/enroll', BOX, token);
+    const otherBox = await pool.post('/v1/machines/enroll', BOX, other.token);
+    const deposits = JSON.stringify(await all('SELECT * FROM deposits WHERE account = ? ORDER BY id', account));
+    const objects = JSON.stringify(await all('SELECT * FROM raw_objects WHERE account = ? ORDER BY sha256', account));
+    const totalsBefore = await totals();
+    const audits = await count('SELECT COUNT(*) AS held FROM erasure_audit');
+    expect(await count('SELECT COUNT(*) AS held FROM tokens WHERE account = ?', account)).toBeGreaterThan(0);
+
+    const closed = await closeAccount(await store(), account, NOW);
+
+    expect(closed).toEqual({ rows: 3, objects: 0 });
+    expect(await all('SELECT closed_at FROM accounts WHERE id = ?', account)).toEqual([{ closed_at: NOW.getTime() }]);
+    expect(await count('SELECT COUNT(*) AS held FROM tokens WHERE account = ?', account)).toBe(0);
+    expect(await all('SELECT state FROM machines WHERE account = ?', account)).toEqual([{ state: 'revoked' }]);
+    expect(await pool.get('/bundle/claude-code/2.1.314/1', token)).toMatchObject({ status: 401 });
+    expect(await pool.post('/v1/machines/activate', {}, textOf(enrolled.json, 'token'))).toMatchObject({ status: 401, json: { error: 'machine_revoked' } });
+    expect(await count('SELECT COUNT(*) AS held FROM erasure_audit')).toBe(audits + 1);
+    expect(await all("SELECT kind, reason, erased_on, rows_erased, objects_erased, account FROM erasure_audit WHERE kind = 'close' AND account = ?", account)).toEqual([{ kind: 'close', reason: 'account-close', erased_on: '2026-11-08', rows_erased: 3, objects_erased: 0, account }]);
+    expect(JSON.stringify(await all('SELECT * FROM deposits WHERE account = ? ORDER BY id', account))).toBe(deposits);
+    expect(JSON.stringify(await all('SELECT * FROM raw_objects WHERE account = ? ORDER BY sha256', account))).toBe(objects);
+    expect(await rawKeys(account)).toEqual(keys);
+    expect(await all('SELECT erased_on FROM raw_objects WHERE account = ? AND sha256 = ?', account, raw.hash)).toEqual([{ erased_on: null }]);
+    expect(await totals()).toBe(totalsBefore);
+    // Another account's credentials, machines, and closed-at record are not touched.
+    expect(await all('SELECT closed_at FROM accounts WHERE id = ?', other.account)).toEqual([{ closed_at: null }]);
+    expect(await count('SELECT COUNT(*) AS held FROM tokens WHERE account = ?', other.account)).toBe(1);
+    expect(await all('SELECT state FROM machines WHERE account = ?', other.account)).toEqual([{ state: 'pending' }]);
+    expect(otherBox.status).toBe(201);
+  }, 90_000);
+
+  it('changes nothing on a rerun, keeps the first closed-at time, and writes no second audit row', async () => {
+    const { account } = await member();
+    await closeAccount(await store(), account, NOW);
+    const audits = await count('SELECT COUNT(*) AS held FROM erasure_audit');
+    expect(await closeAccount(await store(), account, new Date('2026-12-01T00:00:00Z'))).toEqual({ rows: 0, objects: 0 });
+    expect(await all('SELECT closed_at FROM accounts WHERE id = ?', account)).toEqual([{ closed_at: NOW.getTime() }]);
+    expect(await count('SELECT COUNT(*) AS held FROM erasure_audit')).toBe(audits);
+  }, 60_000);
+
+  it('finishes a close that stopped after the closed-at record, then audits once', async () => {
+    const { token, account } = await member();
+    await (await pool.db()).prepare('UPDATE accounts SET closed_at = ? WHERE id = ?').bind(NOW.getTime(), account).run();
+    expect((await pool.post('/v1/machines/enroll', BOX, token)).status).toBe(403);
+    expect(await closeAccount(await store(), account, new Date('2026-12-01T00:00:00Z'))).toEqual({ rows: 1, objects: 0 });
+    expect(await count('SELECT COUNT(*) AS held FROM tokens WHERE account = ?', account)).toBe(0);
+  }, 60_000);
+
+  it('refuses an account the pool has never seen, and leaves no audit row', async () => {
+    const audits = await count('SELECT COUNT(*) AS held FROM erasure_audit');
+    await expect(closeAccount(await store(), 'acct_nobody', NOW)).rejects.toThrow('No account acct_nobody in the pool.');
+    expect(await count('SELECT COUNT(*) AS held FROM erasure_audit')).toBe(audits);
+  });
+});
 
 describe('staged parts and a leaked secret', () => {
   it('drops the staged parts of the account that held the value, though the pool seals every part and the command cannot match its text', async () => {
