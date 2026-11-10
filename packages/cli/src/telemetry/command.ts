@@ -20,7 +20,7 @@ const REASONS = {
   setting: 'by `oars telemetry on` or `off`',
   OARS_TELEMETRY: 'by OARS_TELEMETRY',
   DO_NOT_TRACK: 'by DO_NOT_TRACK',
-  region: 'off in the EU, the EEA, and the UK',
+  region: "because this machine's time zone is in the EU, the EEA, or the UK",
 };
 
 const sizeOf = (path: string): number => {
@@ -42,7 +42,7 @@ export const telemetryStatus = (deps: RunDeps): Outcome => {
     describe(consent),
     `The notice has ${consent.noticeShown ? '' : 'not '}been shown.`,
     `${String(events)} events (${String(bytes)} bytes) in ${dir}.`,
-    'Events are sent to the pool server in OARS_POOL_URL, else to the Many Oars pool (pool.manyoars.com, which is live), and only while telemetry is on and the notice has been shown.',
+    'Events are sent to the pool server in OARS_POOL_URL, else to the Many Oars pool (pool.manyoars.com, which is live), and only while telemetry is on and the notice has been shown, and never from a machine whose time zone is in the EU, the EEA, or the UK.',
   ];
   return { document: { ok: true, step: STEP, enabled: consent.enabled, reason: consent.reason, noticeShown: consent.noticeShown, events, bytes, dir }, text: lines.join('\n') };
 };
@@ -64,7 +64,7 @@ export const telemetryOn = (deps: RunDeps): Outcome => {
   const marked = markNoticeShown(dir, deps.now);
   const consent = consentOf(deps.env, dir);
   if (first && marked && consent.enabled) recordFirstRun(deps, runtime);
-  const override = consent.enabled ? '' : consent.reason === 'region' ? `\nIt stays off: ${REASONS.region}.` : `\nIt stays off in this shell: ${consent.reason} is set.`;
+  const override = consent.enabled ? '' : consent.reason === 'region' ? `\nIt stays off: this machine's time zone is in the EU, the EEA, or the UK.` : `\nIt stays off in this shell: ${consent.reason} is set.`;
   return { document: { ok: true, step: STEP, enabled: consent.enabled, reason: consent.reason, notice: NOTICE }, text: `Telemetry is on.\n${NOTICE}${override}` };
 };
 

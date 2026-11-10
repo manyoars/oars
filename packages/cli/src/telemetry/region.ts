@@ -9,7 +9,7 @@ export const CLOSED_ZONES: ReadonlySet<string> = new Set([
   'Europe/Rome', 'Europe/Riga', 'Europe/Vilnius', 'Europe/Luxembourg', 'Europe/Malta', 'Europe/Amsterdam', 'Europe/Warsaw', 'Europe/Lisbon', 'Europe/Bucharest',
   'Europe/Bratislava', 'Europe/Ljubljana', 'Europe/Madrid', 'Europe/Stockholm',
   // EEA outside the EU, and the UK (with its legacy aliases)
-  'Atlantic/Reykjavik', 'Iceland', 'Europe/Vaduz', 'Europe/Oslo', 'Arctic/Longyearbyen', 'Europe/London', 'Europe/Belfast', 'Europe/Jersey', 'Europe/Guernsey', 'Europe/Isle_of_Man',
+  'Atlantic/Reykjavik', 'Iceland', 'Europe/Vaduz', 'Europe/Oslo', 'Arctic/Longyearbyen', 'Atlantic/Jan_Mayen', 'WET', 'CET', 'MET', 'EET', 'Europe/London', 'Europe/Belfast', 'Europe/Jersey', 'Europe/Guernsey', 'Europe/Isle_of_Man',
   'GB', 'GB-Eire', 'Eire', 'Portugal', 'Poland',
   // Outermost regions and island zones of member states
   'Atlantic/Canary', 'Atlantic/Madeira', 'Atlantic/Azores', 'Africa/Ceuta', 'America/Martinique', 'America/Guadeloupe', 'America/Cayenne', 'Indian/Reunion', 'Indian/Mayotte',
@@ -17,7 +17,7 @@ export const CLOSED_ZONES: ReadonlySet<string> = new Set([
 ]);
 
 /** True when the zone is on the closed list or cannot be read (absent or blank). */
-export const isClosedZone = (zone: string | undefined): boolean => zone === undefined || zone.trim() === '' || CLOSED_ZONES.has(zone.trim());
+export const isClosedZone = (zone: string | undefined): boolean => zone === undefined || zone.trim() === '' || zone.trim() === 'Etc/Unknown' || CLOSED_ZONES.has(zone.trim());
 
 /** The machine's resolved IANA zone, or `undefined` when the runtime cannot say. */
 export const machineZone = (): string | undefined => {

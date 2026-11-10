@@ -130,14 +130,14 @@ describe('closed regions', () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
-  it.each(['Europe/Berlin', 'Europe/Paris', 'Europe/London', 'Europe/Oslo', 'Atlantic/Reykjavik', 'Europe/Vaduz', 'Europe/Mariehamn', 'Atlantic/Canary', 'Atlantic/Madeira', 'Atlantic/Azores', 'Indian/Reunion', 'America/Martinique', 'America/Cayenne', 'Europe/Dublin'])('is off in %s, even with a saved on and the notice shown', (zone) => {
+  it.each(['Europe/Berlin', 'Europe/Paris', 'Europe/London', 'Europe/Oslo', 'Atlantic/Reykjavik', 'Europe/Vaduz', 'Europe/Mariehamn', 'Atlantic/Canary', 'Atlantic/Madeira', 'Atlantic/Azores', 'Indian/Reunion', 'America/Martinique', 'America/Cayenne', 'Europe/Dublin', 'Atlantic/Jan_Mayen', 'WET', 'CET', 'MET', 'EET'])('is off in %s, even with a saved on and the notice shown', (zone) => {
     const dir = folder();
     setEnabled(dir, true);
     markNoticeShown(dir, Date.now);
     expect(consentOf({}, dir, zone)).toEqual({ enabled: false, reason: 'region', noticeShown: true });
     expect(telemetrySendAllowed({}, dir, zone)).toBe(false);
   });
-  it.each([''])('counts a blank zone (%j) as closed', (zone) => {
+  it.each(['', 'Etc/Unknown'])('counts a blank zone (%j) as closed', (zone) => {
     expect(consentOf({}, folder(), zone)).toMatchObject({ enabled: false, reason: 'region' });
   });
   it.each(['America/New_York', 'Asia/Tokyo', 'Australia/Sydney', 'UTC'])('is on by default in %s', (zone) => {

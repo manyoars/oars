@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { run, type RunDeps } from '../cli.js';
 import { defaultConfigDir } from '../credentials.js';
 import { folderKey } from '../gate/record.js';
@@ -14,6 +14,7 @@ import { readSpool, spoolPaths } from './spool.js';
 
 const roots: string[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -169,7 +170,7 @@ describe('oars telemetry status and show', () => {
     expect(text).toContain('Telemetry is on (on by default).');
     expect(text).toContain('The notice has been shown.');
     expect(text).toMatch(/\d+ events \(\d+ bytes\)/);
-    expect(text).toContain('Events are sent to the pool server in OARS_POOL_URL, else to the Many Oars pool (pool.manyoars.com, which is live), and only while telemetry is on and the notice has been shown.');
+    expect(text).toContain('Events are sent to the pool server in OARS_POOL_URL, else to the Many Oars pool (pool.manyoars.com, which is live), and only while telemetry is on and the notice has been shown, and never from a machine whose time zone is in the EU, the EEA, or the UK.');
   });
 
   it('status names the switch that turned it off', async () => {
@@ -256,5 +257,43 @@ describe('command events', () => {
     const off = setup({ OARS_TELEMETRY: '0' });
     expect(await run(['--version'], broken.deps)).toBe(await run(['--version'], off.deps));
     expect(broken.out).toEqual(off.out);
+  });
+});
+
+/** Pins the machine zone for one test (restored in afterEach). */
+const inZone = (timeZone: string): void => {
+  const real = new Intl.DateTimeFormat().resolvedOptions();
+  vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockImplementation(() => ({ ...real, timeZone }));
+};
+
+describe('a closed region', () => {
+  it('prints no notice and records nothing', async () => {
+    inZone('Europe/Berlin');
+    const { deps, err, dir } = setup();
+    expect(await run(['--version'], deps)).toBe(0);
+    expect(err.join('')).not.toContain('NOTICE');
+    expect(err.join('')).not.toContain(NOTICE);
+    expect(readSpool(dir)).toEqual([]);
+  });
+
+  it('status names the zone rule', async () => {
+    inZone('Europe/Berlin');
+    const { deps, out } = setup();
+    await run(['telemetry', 'status'], deps);
+    expect(out.join('')).toContain("Telemetry is off (because this machine's time zone is in the EU, the EEA, or the UK).");
+    out.length = 0;
+    await run(['telemetry', 'status', '--json'], deps);
+    expect(field(JSON.parse(out.join('')), 'reason')).toBe('region');
+  });
+
+  it('telemetry on stays off, and says why', async () => {
+    inZone('Europe/Berlin');
+    const { deps, out } = setup();
+    await run(['telemetry', 'on'], deps);
+    expect(out.join('')).toContain("\nIt stays off: this machine's time zone is in the EU, the EEA, or the UK.");
+    out.length = 0;
+    await run(['telemetry', 'on', '--json'], deps);
+    expect(field(JSON.parse(out.join('')), 'reason')).toBe('region');
+    expect(field(JSON.parse(out.join('')), 'enabled')).toBe(false);
   });
 });
