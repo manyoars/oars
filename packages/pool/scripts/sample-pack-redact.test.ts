@@ -131,3 +131,38 @@ describe('Item 2: the account the repositories live under', () => {
     expect(masks[0]?.account).not.toBe(masks[0]?.organization);
   });
 });
+
+const callOf = (session: string, n: number, id: string, name: string, input: object): string => assistant(session, n, [{ type: 'tool_use', id, name, input }]);
+const resultOf = (f: Fixture, session: string, n: number, id: string, text: string): string => user(f, session, n, [{ type: 'tool_result', tool_use_id: id, content: [{ type: 'text', text }] }]);
+
+describe('Item 3: over-masking', () => {
+  it('keys a tool id under the buyer key: the call and its result carry one value, in the shape of the id', async () => {
+    const f = fixture();
+    const id = 'toolu_01AbCdEfGhIjKlMnOpQrStUv';
+    f.write(S(1), [user(f, S(1), 1, 'list files'), callOf(S(1), 1, id, 'Bash', { command: 'ls' }), resultOf(f, S(1), 2, id, 'a.txt')]);
+    f.write(S(2), [user(f, S(2), 1, 'again'), callOf(S(2), 1, id, 'Bash', { command: 'ls' }), resultOf(f, S(2), 2, id, 'b.txt')]);
+    expect((await run(f)).emitted).toBe(2);
+    const text = packText(f.out);
+    expect(text).not.toContain(id);
+    const ids = [...text.matchAll(/toolu_[0-9a-f]{24}/g)].map((match) => match[0]);
+    expect(ids).toHaveLength(4);
+    expect(new Set(ids).size).toBe(1);
+  });
+
+  it('keeps a host the session fetched in that result, masks the rest, and keeps token counts', async () => {
+    const f = fixture();
+    const id = 'toolu_01FetchFetchFetchFetch';
+    f.write(S(1), [
+      user(f, S(1), 1, 'read the docs'),
+      callOf(S(1), 1, id, 'WebFetch', { url: 'https://docs.example.org/page', prompt: 'p' }),
+      resultOf(f, S(1), 2, id, 'cited https://docs.example.org/guide and https://tracker.example.net/x\ntokens: 4096\n1password: a password manager\nadd @scope/name@1.2.3'),
+    ]);
+    expect((await run(f)).emitted).toBe(1);
+    const text = packText(f.out);
+    expect(text).toContain('https://docs.example.org/guide');
+    expect(text).toContain('https://<host>/x');
+    expect(text).toContain('tokens: 4096');
+    expect(text).toContain('1password: a password manager');
+    expect(text).toContain('@scope/name@1.2.3');
+  });
+});
