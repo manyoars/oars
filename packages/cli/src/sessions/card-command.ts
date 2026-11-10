@@ -49,6 +49,8 @@ export interface CardOptions {
   text: boolean;
   /** A `.png` or `.svg` path: both pictures are written, with this name's extension swapped for each. */
   out?: string | undefined;
+  /** Leave the cost row out of the picture, the table, and the JSON. */
+  noCost?: boolean | undefined;
 }
 
 /** The two paths a card is saved to: `--out` names the base, the default is one per period in the working directory. */
@@ -62,7 +64,7 @@ export const sessionsCard = async (deps: SessionsDeps, options: CardOptions, env
   if (deps.sessions === undefined) throw new CliError('The session store is not configured in this run.', ExitCode.UNEXPECTED, 'unexpected');
   const paths = cardPaths(options.period, options.out);
   const store = await loadStore(deps.sessions.storeDir);
-  const card = cardOf(store, await readSurvival(deps.sessions.storeDir), options.period, deps.now());
+  const card = cardOf(store, await readSurvival(deps.sessions.storeDir), options.period, deps.now(), options.noCost !== true);
   const link = tweetLink(card);
   if (card.sessions === 0) {
     const empty = store.sessions.length === 0 && store.prompts.length === 0 ? emptyBooks('prompts') : `No sessions in the last ${String(card.days)} days in the local store.`;

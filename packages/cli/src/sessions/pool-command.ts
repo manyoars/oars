@@ -42,6 +42,7 @@ const OUTBOX = 'pool-outbox';
 const POOL_DEPOSITS = '/v1/deposits';
 const FETCH = 'pool-fetch';
 const EXPORT = 'pool-export';
+const PROVE = 'pool-prove';
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 export const POOL_PROVIDERS = ['github', 'google'] as const;
 const DEFAULT_INTERVAL_SEC = 5;
@@ -177,13 +178,29 @@ const startedOf = ({ body }: Reply): Started => {
   return { handle, userCode, verificationUrl, intervalMs: (interval === undefined || interval <= 0 ? DEFAULT_INTERVAL_SEC : interval) * 1000, expiresMs: (numberIn(body, 'expiresIn') ?? DEFAULT_EXPIRY_SEC) * 1000 };
 };
 
+/** The two lines the operator compares with `accounts.proved_at` (GDPR Art. 12(6)): the account, and the proof time in milliseconds exactly as the pool stored it. */
+const proofLines = (account: string, provedAt: number): string => `account: ${account}
+provedAt: ${String(provedAt)}`;
+
+/** The pool refused a sign-in because the account is closed, and kept the sign-in as proof of control: the refusal carries the account and the time, and the failure prints both, text and `--json`, so the person can send them to the operator who asks for proof. Undefined for any other refusal. */
+const closedProof = (reply: Reply): CliError | undefined => {
+  const body = reply.body;
+  const account = isObject(body) ? textIn(body, 'account') : undefined;
+  const provedAt = isObject(body) ? numberIn(body, 'provedAt') : undefined;
+  if (reply.status !== 403 || !isObject(body) || textIn(body, 'error') !== 'account_closed' || account === undefined || provedAt === undefined) return undefined;
+  const refused = refusal(LOGIN, reply);
+  const detail = `The operator will ask for these two lines when you write to privacy@manyoars.com:
+${proofLines(account, provedAt)}`;
+  return new CliError(refused.message, refused.exitCode, LOGIN, { ...refused.problem, detail }, { account, provedAt });
+};
+
 /** Polls the pool until the person approves, and returns the pool's answer with the credential. Time is counted in the waits asked for, so a machine that slept through the code still gets one poll that says it expired. */
 const awaitCredential = async (deps: RunDeps, server: string, started: Started, show: Masker | undefined): Promise<Reply> => {
   let { intervalMs } = started;
   for (let waited = 0; waited < started.expiresMs; waited += intervalMs) {
     await deps.sleep(intervalMs);
     const reply = await ask(deps, LOGIN, server, '/v1/login/poll', { body: { handle: started.handle }, show });
-    if (reply.status !== 200 || !isObject(reply.body)) throw refusal(LOGIN, reply);
+    if (reply.status !== 200 || !isObject(reply.body)) throw closedProof(reply) ?? refusal(LOGIN, reply);
     const status = textIn(reply.body, 'status');
     if (status === 'authorized') return reply;
     if (status === 'slow_down') intervalMs += SLOW_DOWN_MS;
@@ -1008,6 +1025,27 @@ export const poolCoverage = async (deps: RunDeps, options: { orgSize?: string | 
   if (changed) await writeCoverageSetting(storeDir, setting);
   const lines = [`Organization size: ${setting.orgSize}`, `Repository visibility: ${setting.repoVisibility}`, 'Both stay on this machine until a deposit states them as bands; nothing is looked up. The team band is counted from each repository\'s local git log at deposit.'];
   return { document: { ok: true, saved: changed, ...setting }, text: lines.join('\n') };
+};
+
+/**
+ * `oars pool prove`: the account proves control of itself with its sign-in token alone (`POST /v1/account/proof`, never a machine key), and the pool stores the time. It prints the account and the time to send, in reply to the operator's request for proof, so the operator can compare them with the stored row (GDPR Art. 12(6)). A lapsed sign-in says to run `oars pool login` first; a closed account proves by that login instead.
+ */
+export const poolProve = async (deps: RunDeps, options: { server?: string | undefined }): Promise<Outcome> => {
+  const { storeDir } = runtimeOf(deps);
+  const server = poolServer(deps.env, PROVE, options.server);
+  const { token } = await signedIn(deps, storeDir, server, PROVE);
+  const credential = new Masker();
+  credential.add(token);
+  const reply = await ask(deps, PROVE, server, '/v1/account/proof', { body: {}, token, show: credential });
+  if (reply.status !== 200) throw refusal(PROVE, reply);
+  const account = isObject(reply.body) ? textIn(reply.body, 'account') : undefined;
+  const provedAt = isObject(reply.body) ? numberIn(reply.body, 'provedAt') : undefined;
+  if (account === undefined || provedAt === undefined) throw new CliError('The pool answered a proof with no account or proof time.', ExitCode.UNEXPECTED, PROVE);
+  return {
+    document: { ok: true, server, account, provedAt },
+    text: `Proof recorded for ${account} at ${new Date(provedAt).toISOString()}. Send these two lines in reply to the privacy@manyoars.com message that asked you for proof:
+${proofLines(account, provedAt)}`,
+  };
 };
 
 /** What the pool's export pages say they are (`export.ts` in the pool). A page of another format or version is refused, not guessed at. */
