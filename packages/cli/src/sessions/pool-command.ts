@@ -198,8 +198,8 @@ const awaitCredential = async (deps: RunDeps, server: string, started: Started, 
 };
 
 /**
- * `oars pool login` (spec Section 1.4): the pool runs the provider's device flow and this client only shows the code and polls the pool, so no provider token, device code, client ID, or secret is ever here. Every request, which goes to the pool alone,
- * prints before it is sent, with the login handle and the credential masked as `<credential: n bytes>`.
+ * `oars pool login` (spec Section 1.4): the pool runs the provider's device flow and this client only shows the code and polls the pool, so no provider token, device code, client ID, or secret is ever here. With `--verbose`, every request, which goes to the pool alone,
+ * prints before it is sent, with the login handle and the credential masked as `<credential: n bytes>`; without it, a failure's cause is the first line printed.
  */
 export const poolLogin = async (deps: RunDeps, options: { server?: string | undefined; provider?: string | undefined; verbose?: boolean }): Promise<Outcome> => {
   const { storeDir } = runtimeOf(deps);

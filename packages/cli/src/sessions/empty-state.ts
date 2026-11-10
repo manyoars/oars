@@ -3,8 +3,8 @@ import { compileAllow, isDenial } from './allow.js';
 import type { Source } from './sources.js';
 import type { DepositResult, SessionsRuntime } from './store.js';
 
-/** The two commands that get someone out of an empty store: fill it from their own sessions, or watch it work on made-up ones first. */
-const WAYS_OUT = "See it work on made-up sessions with `oars sessions try`, or fill it with `oars sessions deposit`, which reads this machine's coding-agent session logs into a local store here.";
+/** The two commands that get someone out of an empty store: watch it work on made-up sessions first with `sessions try`, or fill it from their own sessions with `sessions deposit`. */
+const WAYS_OUT = "See it work on made-up sessions with `oars sessions try`, or fill it with `oars sessions deposit`, which reads this machine's coding-agent session logs into a local store and archives a copy of each transcript.";
 
 /** `recall` over a store with no sessions in it. */
 export const EMPTY_RECALL = `Your store is empty, so there is nothing to recall. ${WAYS_OUT}`;

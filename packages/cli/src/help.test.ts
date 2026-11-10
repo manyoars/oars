@@ -40,6 +40,6 @@ describe('help text states what the code does', () => {
   });
 
   it('pool says where the covenant screen appears', async () => {
-    expect(await helpOf('pool')).toContain('appears the first time you send a batch with oars pool deposit --send');
+    expect(await helpOf('pool')).toContain('appears when you send a batch with oars pool deposit --send');
   });
 });

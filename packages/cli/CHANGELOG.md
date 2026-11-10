@@ -6,7 +6,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 
 - `oars --version` prints one line, and `--version` and `--help` no longer show the first-run telemetry notice. The notice shows once, on the first other command.
 - `oars pool login` prints the one-line cause of a failure first. The raw request echo now prints only with the new `--verbose` flag.
-- `oars pool --help` says the covenant screen appears the first time you send a batch with `oars pool deposit --send`.
+- `oars pool --help` says the covenant screen appears when you send a batch with `oars pool deposit --send` and have not accepted the covenant in force.
 - On a Node older than 24, `oars` prints "oars needs Node 24 or newer; this is Node <version>." and exits 1, instead of failing with a stack trace.
 - The empty-store message names `oars sessions try` first, then says `oars sessions deposit` reads this machine's coding-agent session logs into a local store.
 - `docs/pool.md` has a "Run a pool locally" section, and the pool package has an `npm run dev` script.
