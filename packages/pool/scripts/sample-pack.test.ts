@@ -363,6 +363,20 @@ describe('the acceptance rule (plan S1)', () => {
     }
   });
 
+  it('keys a duplicate on the text of the first prompt alone: a resumed copy that differs only in timestamp, uuid, parentUuid, and sessionId still loses to the longer session', async () => {
+    const f = fixture();
+    const earlier = turns(S(1), 2);
+    const replay = earlier.map((text, n) => line({ ...replayable(text), sessionId: S(2), uuid: uuidOf(S(2), 'b', n), parentUuid: n === 0 ? null : uuidOf(S(2), 'a', n), timestamp: at(30 + n) }));
+    f.write('-work-oars', S(1), earlier);
+    f.write('-work-oars', S(2), [...replay, ...turns(S(2), 2)]);
+    await stored(f);
+    for (const seed of ['1', '2', '3', '4']) {
+      const out = join(f.root, `pack-${seed}`);
+      expect(await buildPack(f.runtime, options(f, { seed, out }))).toMatchObject({ duplicate: 1, emitted: 1 });
+      expect(sessionsOf(f, out)).toEqual([S(2)]);
+    }
+  });
+
   it('chooses a duplicate loser only among sessions that pass every earlier rule: a longer twin another rule drops does not cost the shorter its place', async () => {
     const f = fixture();
     const earlier = turns(S(1), 2);
@@ -492,8 +506,8 @@ const codexRollout = (call = CODEX_CALL): object[] => {
 };
 
 /** Deposits the rollout into the fixture's store and returns the runtime that also reads Codex's store: the rollout stays where Codex wrote it. */
-const withCodex = async (f: Fixture, rollout: readonly object[]): Promise<SessionsRuntime> => {
-  const home = stageCodex(f.root, [{ id: CODEX_ID, lines: rollout }]);
+const withCodex = async (f: Fixture, rollout: readonly object[], more: readonly { id: string; lines: readonly object[] }[] = []): Promise<SessionsRuntime> => {
+  const home = stageCodex(f.root, [{ id: CODEX_ID, lines: rollout }, ...more]);
   // The fixture runtime names no sources, which reads none; this one reads Codex's.
   const { storeDir, projectsRoot, stdin, stdout } = f.runtime;
   const runtime: SessionsRuntime = { storeDir, projectsRoot, stdin, stdout, sourceRoots: { codex: home } };
@@ -575,6 +589,23 @@ describe('a Codex session (plan S2)', () => {
     expect(callIds[0]).toMatch(/^call_[0-9a-f]{24}$/);
     // The rollout's own id is the session's match id, as a Claude Code line's sessionId is.
     expect(text).toContain(row?.matchId);
+  });
+
+  it('deduplicates a resumed Codex rollout (same first message, its own id and timestamps) in favor of the longer', async () => {
+    const f = fixture();
+    const other = 'dddd4444-4444-4444-8444-444444444444';
+    const later = (text: string): string => text.replace(/2026-06-01T10:00:(\d\d)/g, '2026-06-02T11:30:$1');
+    const resumed: object[] = [
+      ...codexRollout().map((entry): object => {
+        const copy: unknown = JSON.parse(later(JSON.stringify(entry)).split(CODEX_ID).join(other));
+        return typeof copy === 'object' && copy !== null ? copy : {};
+      }),
+      rolloutLine(codexTime(20), 'event_msg', { type: 'user_message', message: 'and the lint' }),
+      rolloutLine(codexTime(21), 'event_msg', { type: 'agent_message', message: 'linted' }),
+    ];
+    const runtime = await withCodex(f, codexRollout(), [{ id: other, lines: resumed }]);
+    expect(await buildPack(runtime, options(f, { owners: ownersAll(f) }))).toMatchObject({ duplicate: 1, emitted: 1 });
+    expect(packText(f.out)).toContain('and the lint');
   });
 
   it('writes no raw call id when the redactor took it first as a secret', async () => {
