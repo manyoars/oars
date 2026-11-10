@@ -9,6 +9,7 @@ import { createInterface } from 'node:readline';
 import { dirname, join, resolve } from 'node:path';
 import { defaultConfigDir } from '../../cli/src/credentials.js';
 import { checkSession, transcriptFilesOf, type Reason } from '../../cli/src/sessions/exclusion.js';
+import { LEADING_TAG, LOCAL_COMMAND_TAGS } from '../../cli/src/sessions/extract.js';
 import { localNames, redactTranscript, REDACTION_VERSION } from '../../cli/src/sessions/redact.js';
 import { harnessOf, type Harness } from '../../cli/src/sessions/schema.js';
 import { loadStore, readRedactDomains, type SessionsRuntime } from '../../cli/src/sessions/store.js';
@@ -222,61 +223,96 @@ const maskIds = (texts: readonly string[], sessions: ReadonlyMap<string, string>
   return texts.map((text) => text.replace(UUID_OR_PREFIXED, (id) => sessions.get(id) ?? (lineIds.has(id) ? maskOf(indexKey, buyerKey, id) : id)));
 };
 
-/** The text of a line's first user message, as the harness wrote it: a Claude Code `user` line's `message.content`, or a Codex rollout's first `user_message` event. Undefined for any other line. */
-const promptOf = (entry: unknown): unknown => {
+/** The text of a user message's content, or undefined when it has none to type: a tool result (the harness answering the model) and an image with no words carry nothing the person wrote. */
+const textOf = (content: unknown): string | undefined => {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return undefined;
+  const blocks: unknown[] = content;
+  if (blocks.some((block) => isRecord(block) && Reflect.get(block, 'type') === 'tool_result')) return undefined;
+  const texts = blocks.flatMap((block): string[] => {
+    const text: unknown = isRecord(block) && Reflect.get(block, 'type') === 'text' ? Reflect.get(block, 'text') : undefined;
+    return typeof text === 'string' ? [text] : [];
+  });
+  return texts.length === 0 ? undefined : texts.join('\n');
+};
+
+/**
+ * The text a line carries as something the person typed: a Claude Code `user` line's `message.content`, or a Codex rollout's `user_message` event. Undefined for every other line, and for
+ * the harness's own user lines: an `isMeta` line, one that opens with a local command's tag (`<local-command-caveat>`, `<command-name>`, ...), and a tool result. The same text opens
+ * unrelated sessions, so none of it can say that one session resumes another.
+ */
+const typedOf = (entry: unknown): string | undefined => {
   if (!isRecord(entry)) return undefined;
   const type: unknown = Reflect.get(entry, 'type');
   if (type === 'user') {
     const message: unknown = Reflect.get(entry, 'message');
-    return isRecord(message) ? Reflect.get(message, 'content') : undefined;
+    const text = Reflect.get(entry, 'isMeta') === true || !isRecord(message) ? undefined : textOf(Reflect.get(message, 'content'));
+    const leading = text === undefined ? undefined : LEADING_TAG.exec(text.trimStart())?.[1];
+    return text === undefined || text.trim() === '' || (leading !== undefined && LOCAL_COMMAND_TAGS.has(leading)) ? undefined : text;
   }
   const payload: unknown = Reflect.get(entry, 'payload');
-  return type === 'event_msg' && isRecord(payload) && Reflect.get(payload, 'type') === 'user_message' ? Reflect.get(payload, 'message') : undefined;
+  const message: unknown = type === 'event_msg' && isRecord(payload) && Reflect.get(payload, 'type') === 'user_message' ? Reflect.get(payload, 'message') : undefined;
+  return typeof message === 'string' ? message : undefined;
 };
 
-/**
- * What a resumed session shares with the one it continues: the text of its first user message, and nothing else of the line. A resume rewrites `sessionId` and can
- * rewrite `uuid`, `parentUuid`, and `timestamp`, so none of them is in the key. Undefined when the transcript has no user message.
- */
-const firstPromptKey = async (path: string): Promise<string | undefined> => {
+/** The first `limit` things the person typed in a transcript, in order, as the harness wrote them (fewer when the session holds fewer). Nothing else of a line is read: a resume rewrites `sessionId`, `uuid`, `parentUuid`, and `timestamp`. */
+const typedPromptsOf = async (path: string, limit: number): Promise<string[]> => {
   const stream = createReadStream(path, { encoding: 'utf8' });
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
+  const found: string[] = [];
   try {
     for await (const text of lines) {
-      const prompt = promptOf(parsed(text));
-      if (prompt !== undefined) return JSON.stringify(prompt);
+      const typed = typedOf(parsed(text));
+      if (typed !== undefined) found.push(typed);
+      if (found.length >= limit) break;
     }
-    return undefined;
+    return found;
   } finally {
     lines.close();
     stream.destroy();
   }
 };
 
+/** How many typed turns say that two sessions are one conversation: a resume replays the start of the one it continues, so the first few turns agree. */
+const PROMPTS_COMPARED = 3;
+
 interface TurnCount {
   session: string;
   project: string;
   turns: number;
+  repo: string | null;
 }
 
+/** One list is the start of the other: a resumed copy replays the earlier session's turns (all of them, or the first few) and goes on. */
+const startsTheOther = (a: readonly string[], b: readonly string[]): boolean => a.every((text, n) => text === b[n]) || b.every((text, n) => text === a[n]);
+
 /**
- * The sessions that lose to a longer one replaying their first prompt (a tie goes to the lower session id), so the rule gives the same lot whichever of the two the draw reaches first.
- * Every session of the frame is keyed first (one cheap line read each, no gate), and only a group of two or more is asked `accepted`: the loser is chosen among the members that pass every earlier rule.
+ * The sessions that lose to a longer one replaying their first prompts (a tie goes to the lower session id), so the rule gives the same lot whichever of the two the draw reaches first.
+ * Every session of the frame is keyed first on its first typed turn and its repository (one cheap line read each, no gate). Only a group of two or more is asked `accepted` and read for its
+ * first three typed turns: the loser is chosen among the members that pass every earlier rule, and a member loses only to one whose turns it starts or that starts its turns. Two sessions that
+ * open with the same word and go on differently are both kept.
  */
 const duplicatesOf = async <T extends TurnCount>(runtime: SessionsRuntime, frame: readonly T[], accepted: (member: T) => Promise<boolean>): Promise<Set<string>> => {
-  const groups = new Map<string, T[]>();
+  const groups = new Map<string, { member: T; path: string }[]>();
   for (const candidate of frame) {
     const main = (await transcriptFilesOf(runtime, candidate.project, candidate.session)).find((file) => file.main);
-    const key = main === undefined ? undefined : await firstPromptKey(main.path);
-    if (key !== undefined) groups.set(key, [...(groups.get(key) ?? []), candidate]);
+    const [first] = main === undefined ? [] : await typedPromptsOf(main.path, 1);
+    if (main !== undefined && first !== undefined) {
+      const key = JSON.stringify([candidate.repo, first]);
+      groups.set(key, [...(groups.get(key) ?? []), { member: candidate, path: main.path }]);
+    }
   }
   const losers = new Set<string>();
   for (const group of groups.values()) {
     if (group.length < 2) continue;
-    const live: T[] = [];
-    for (const member of group) if (await accepted(member)) live.push(member);
-    const [winner] = live.sort((a, b) => b.turns - a.turns || (a.session < b.session ? -1 : 1));
-    for (const member of live) if (member !== winner) losers.add(member.session);
+    const live: { member: T; prompts: string[] }[] = [];
+    for (const { member, path } of group) if (await accepted(member)) live.push({ member, prompts: await typedPromptsOf(path, PROMPTS_COMPARED) });
+    live.sort((a, b) => b.member.turns - a.member.turns || (a.member.session < b.member.session ? -1 : 1));
+    const kept: { member: T; prompts: string[] }[] = [];
+    for (const candidate of live) {
+      if (kept.some((winner) => startsTheOther(winner.prompts, candidate.prompts))) losers.add(candidate.member.session);
+      else kept.push(candidate);
+    }
   }
   return losers;
 };
@@ -404,7 +440,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     const { owner, harness, terms } = decided.accepted;
     // Read once, on the first session that gets this far. A loser is chosen only among sessions that pass every rule above, so a longer twin that one of them drops never costs the shorter its place; a duplicate's other half may not be drawn at all.
     if (losers === undefined) {
-      const everyone = frame.map((record) => ({ session: record.session, project: record.project, turns: turnsOf(record), record }));
+      const everyone = frame.map((record) => ({ session: record.session, project: record.project, turns: turnsOf(record), repo: record.repo, record }));
       losers = await duplicatesOf(runtime, everyone, async (member) => 'accepted' in (await earlyOf(member.record)));
     }
     if (losers.has(record.session)) {
