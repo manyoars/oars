@@ -566,6 +566,8 @@ const repositoryRoot = async (git: Git, cwd: string): Promise<string | null> => 
 };
 
 const REMOTE_PROTOCOLS: readonly string[] = ['http:', 'https:', 'ssh:', 'git:'];
+/** A path under a home folder names an account on the remote host (`/home/alice/...`, `/Users/alice/...`, `C:/Users/alice/...`). */
+const ACCOUNT_PATH = /^\/?(?:[A-Za-z]:\/)?(?:home|Users)\//i;
 const SCP_REMOTE = /^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:(?!\/\/)[^\s]+$/;
 
 /**
@@ -573,10 +575,10 @@ const SCP_REMOTE = /^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:(?!\/\/)[^\s]+$/;
  * kept: a folder (`C:/Users/<name>/...`, `/home/<name>/...`) or a `file:` URL would put the operator's account name and home path into a manifest that the transcripts' masking never reaches.
  */
 const publicRemote = (remote: string): string | null => {
-  if (SCP_REMOTE.test(remote)) return remote;
+  if (SCP_REMOTE.test(remote)) return ACCOUNT_PATH.test(remote.slice(remote.indexOf(':') + 1)) ? null : remote;
   try {
     const url = new URL(remote);
-    if (!REMOTE_PROTOCOLS.includes(url.protocol)) return null;
+    if (!REMOTE_PROTOCOLS.includes(url.protocol) || ACCOUNT_PATH.test(decodeURIComponent(url.pathname))) return null;
     url.username = '';
     url.password = '';
     return url.href;
@@ -592,7 +594,7 @@ const epochOf = (ts: string): string => String(Math.floor(Date.parse(ts) / 1000)
 const startingCommit = async (git: Git, root: string, branches: readonly string[], tsFirst: string | null): Promise<string | null> => {
   if (tsFirst === null || Number.isNaN(Date.parse(tsFirst))) return null;
   const before = `--before=${epochOf(tsFirst)}`;
-  const refs = [...branches.filter((branch) => branch !== '' && !branch.startsWith('-')).flatMap((branch) => [branch, `origin/${branch}`]), 'origin/HEAD'];
+  const refs = [...branches.filter((branch) => branch !== '' && !branch.startsWith('-') && branch !== 'HEAD' && !branch.endsWith('/HEAD')).flatMap((branch) => [branch, `origin/${branch}`]), 'origin/HEAD'];
   for (const ref of refs) {
     try {
       const found = (await git(root, ['rev-list', '-1', before, ref, '--'])).trim();
