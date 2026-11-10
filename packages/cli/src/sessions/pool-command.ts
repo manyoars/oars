@@ -49,6 +49,8 @@ const DEFAULT_INTERVAL_SEC = 5;
 const DEFAULT_EXPIRY_SEC = 900;
 /** RFC 8628: a `slow_down` adds five seconds to every poll after it. */
 const SLOW_DOWN_MS = 5000;
+/** The longest wait between polls after failed ones. */
+const MAX_BACKOFF_MS = 60_000;
 
 export { isObject, loadSignIns, textIn };
 
@@ -197,9 +199,25 @@ ${proofLines(account, provedAt)}`;
 /** Polls the pool until the person approves, and returns the pool's answer with the credential. Time is counted in the waits asked for, so a machine that slept through the code still gets one poll that says it expired. */
 const awaitCredential = async (deps: RunDeps, server: string, started: Started, show: Masker | undefined): Promise<Reply> => {
   let { intervalMs } = started;
-  for (let waited = 0; waited < started.expiresMs; waited += intervalMs) {
-    await deps.sleep(intervalMs);
-    const reply = await ask(deps, LOGIN, server, '/v1/login/poll', { body: { handle: started.handle }, show });
+  let failures = 0;
+  let lastFailure: CliError | undefined;
+  for (let waited = 0; waited < started.expiresMs;) {
+    // A failed poll (a network error or a 5xx) is the provider or the network having a bad minute, not the person's answer: wait longer each time, up to the cap, and ask again until the code's own expiry.
+    const wait = Math.min(intervalMs * 2 ** failures, Math.max(intervalMs, MAX_BACKOFF_MS));
+    await deps.sleep(wait);
+    waited += wait;
+    const reply = await ask(deps, LOGIN, server, '/v1/login/poll', { body: { handle: started.handle }, show }).catch((error: unknown) => {
+      // `ask` throws only the unreachable failure of `send`.
+      lastFailure = error as CliError;
+      return undefined;
+    });
+    if (reply !== undefined && reply.status >= 500) lastFailure = refusal(LOGIN, reply);
+    if (reply === undefined || reply.status >= 500) {
+      failures += 1;
+      continue;
+    }
+    failures = 0;
+    lastFailure = undefined;
     if (reply.status !== 200 || !isObject(reply.body)) throw closedProof(reply) ?? refusal(LOGIN, reply);
     const status = textIn(reply.body, 'status');
     if (status === 'authorized') return reply;
@@ -210,6 +228,8 @@ const awaitCredential = async (deps: RunDeps, server: string, started: Started, 
       throw new CliError(title, ExitCode.AUTH, LOGIN, { code: 'login_refused', title });
     } else if (status !== 'pending') throw new CliError('The pool answered a sign-in poll with a state this client does not know.', ExitCode.UNEXPECTED, LOGIN);
   }
+  // Out of time with the last poll still failing: the failure is the truth (exit 8), not an expiry nobody saw.
+  if (lastFailure !== undefined) throw lastFailure;
   const title = 'The sign-in code expired. Run oars pool login again.';
   throw new CliError(title, ExitCode.AUTH, LOGIN, { code: 'EXPIRED_TOKEN', title });
 };

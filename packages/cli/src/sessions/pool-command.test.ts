@@ -378,6 +378,46 @@ describe('oars pool login', () => {
     expect(counted.h.sleeps).toEqual([4000, 4000]);
   });
 
+  it.each([
+    ['a network error', () => HttpResponse.error()],
+    ['an HTTP 502', () => HttpResponse.json({ error: 'provider_unavailable', message: 'The provider did not answer the poll.' }, { status: 502 })],
+    ['an HTTP 503 with no body', () => new HttpResponse(null, { status: 503 })],
+  ])('survives one bad poll (%s): it waits longer, polls again, and signs in', async (_name, bad) => {
+    const scene = setting();
+    poolAt(scene, { polls: [bad(), authorized()] });
+    expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL, '--json')).toBe(ExitCode.OK);
+    expect(scene.document()).toEqual({ ok: true, server: POOL, account: 'acct_one', expiresAt: LATER });
+    // The interval, then the backed-off wait after one failure.
+    expect(scene.h.sleeps).toEqual([2000, 4000]);
+  });
+
+  it('backs off on each failed poll, caps the wait, and goes back to the interval after an answer', async () => {
+    const scene = setting();
+    const bad = (): Response => new HttpResponse(null, { status: 503 });
+    poolAt(scene, { start: { interval: 20, expiresIn: 1000 }, polls: [bad(), bad(), bad(), state('pending'), bad(), authorized()] });
+    expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
+    expect(scene.h.sleeps).toEqual([20_000, 40_000, 60_000, 60_000, 20_000, 40_000]);
+  });
+
+  it('ends a login whose every poll failed only when the code expires, with the last failure', async () => {
+    const down = setting();
+    poolAt(down, { start: { interval: 4, expiresIn: 12 }, polls: [HttpResponse.json({ error: 'provider_unavailable', message: 'The provider did not answer the poll.' }, { status: 502 })] });
+    expect(await down.cli('pool', 'login', '--provider', 'github', '--server', POOL, '--json')).toBe(ExitCode.UNREACHABLE);
+    expect(down.document()).toMatchObject({ problem: { status: 502, title: 'The provider did not answer the poll.' } });
+    expect(down.h.sleeps).toEqual([4000, 8000]);
+
+    const dark = setting();
+    poolAt(dark, { start: { interval: 4, expiresIn: 12 }, polls: [HttpResponse.error()] });
+    expect(await dark.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.UNREACHABLE);
+  });
+
+  it('adds five seconds on slow_down even after a failed poll', async () => {
+    const scene = setting();
+    poolAt(scene, { polls: [new HttpResponse(null, { status: 500 }), state('slow_down'), authorized()] });
+    expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
+    expect(scene.h.sleeps).toEqual([2000, 4000, 7000]);
+  });
+
   it('names the pool\'s refusal of a poll, such as a handle it did not issue', async () => {
     const scene = setting();
     poolAt(scene, { polls: [HttpResponse.json({ error: 'invalid_handle', message: 'This pool did not issue that login handle.' }, { status: 401 })] });
