@@ -90,4 +90,9 @@ describe('memory-file text', () => {
     const plain: JsonObject = { type: 'system', subtype: 'informational', content: 'The lamp changed on disk.' };
     expect(run(plain)).toBe(plain);
   });
+
+  it('leaves the echo of a command the operator ran, even when it names a harness form', () => {
+    const echo: JsonObject = { type: 'system', subtype: 'local_command', content: '<local-command-stdout>Available agent types: lamp-keeper; CLAUDE.md changed on disk</local-command-stdout>' };
+    expect(run(echo)).toBe(echo);
+  });
 });
