@@ -110,6 +110,14 @@ describe('receiptOf', () => {
     expect(block).toContain('other');
   });
 
+  it('scrubs a recorded branch only where it stands as a whole token', () => {
+    const leaky = store({ sessions: [session('s1', { branches: ['main'] })], errors: [error('s1', 'Bash | domain remains in main', { tool: 'Bash', ts: '2026-11-03T09:00:00.000Z' })] });
+    const block = receiptOf(leaky, { error: 'domain remains' }, ago) ?? '';
+    expect(block).toContain('domain remains');
+    expect(block).toContain('domain remains in <branch>');
+    expect(block).not.toMatch(/\bmain\b/);
+  });
+
   it('is null when no earlier session hit the error', () => {
     expect(receiptOf(planted(), { error: 'never seen before' }, ago)).toBeNull();
   });
@@ -145,7 +153,7 @@ describe('oars sessions recall --receipt', () => {
   };
 
   it('exits USAGE when another form is given beside --receipt --error', async () => {
-    for (const extra of [['--text', 'y'], ['--entity', 'y'], ['--family', 'recovery'], ['--pattern', 'y'], ['--counts'], ['--mcp']]) {
+    for (const extra of [['--text', 'y'], ['--entity', 'y'], ['--family', 'recovery'], ['--pattern', 'y'], ['--counts'], ['--mcp'], ['--context']]) {
       const { deps } = setup();
       expect(await run(['sessions', 'recall', '--receipt', '--error', 'x', ...extra], deps)).toBe(ExitCode.USAGE);
     }

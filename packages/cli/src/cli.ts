@@ -254,7 +254,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       if (flag(options, 'receipt')) {
-        if (flag(options, 'counts') || flag(options, 'mcp') || list(options, 'pattern').length > 0 || text(options, 'entity') !== undefined || text(options, 'family') !== undefined || text(options, 'text') !== undefined) throw new CliError('--receipt answers one error: pass --error "<text>" and no other form.', ExitCode.USAGE, 'usage');
+        if (flag(options, 'counts') || flag(options, 'mcp') || flag(options, 'context') || list(options, 'pattern').length > 0 || text(options, 'entity') !== undefined || text(options, 'family') !== undefined || text(options, 'text') !== undefined) throw new CliError('--receipt answers one error: pass --error "<text>" and no other form.', ExitCode.USAGE, 'usage');
         emit(deps, flag(options, 'json'), await sessionsReceipt(sessionDeps(deps), { ...(text(options, 'error') === undefined ? {} : { error: text(options, 'error') }), ...(text(options, 'path') === undefined ? {} : { path: text(options, 'path') }), ...(text(options, 'class') === undefined ? {} : { cls: text(options, 'class') }), ...(count(options, 'since') === undefined ? {} : { sinceDays: count(options, 'since') }) }, text(options, 'session') ?? null));
         return;
       }

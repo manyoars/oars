@@ -55,10 +55,14 @@ export const receiptOf = (store: Store, query: RecallQuery, now: number, redactD
   // (branches, project slugs; the transcript rules have no rule for either), then runs through the transcript rules (home paths, encoded folder slugs,
   // local names, secrets), and only the redacted result is cut. Every unlisted `mcp__` word becomes `other`, with backticks out so the fence holds.
   const recorded = store.sessions.filter((entry) => sessionIds.has(entry.session));
-  const literals = [...new Set([...recorded.flatMap((entry) => entry.branches.map((branch) => [branch, '<branch>'] as const)), ...recorded.map((entry) => [entry.project, '<project>'] as const)])]
-    .filter(([literal]) => literal.length > 0)
-    .sort((a, b) => b[0].length - a[0].length);
-  const scrubbed = literals.reduce((text, [literal, label]) => text.replaceAll(literal, label), top.sig.slice(top.sig.indexOf(' | ') + 3));
+  const labels = new Map<string, string>();
+  for (const entry of recorded) {
+    for (const branch of entry.branches) labels.set(branch, '<branch>');
+    labels.set(entry.project, '<project>');
+  }
+  // A literal goes only where it stands as a whole token, so a branch named `main` leaves `domain` and `./main.js` alone.
+  const literals = [...labels.entries()].filter(([literal]) => literal.length > 0).sort((a, b) => b[0].length - a[0].length || a[0].localeCompare(b[0]));
+  const scrubbed = literals.reduce((text, [literal, label]) => text.replace(new RegExp(`(?<![A-Za-z0-9_-])${literal.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_-])`, 'g'), label), top.sig.slice(top.sig.indexOf(' | ') + 3));
   const text = redactTranscript(scrubbed, redactDomains, names).text.slice(0, SIGNATURE_LIMIT).replace(MCP_WORD, (word) => listedTool(word)).replaceAll('`', "'");
   return [
     '```markdown',
