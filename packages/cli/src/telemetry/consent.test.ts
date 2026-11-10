@@ -123,6 +123,9 @@ describe('telemetrySendAllowed: the check the sender calls', () => {
   });
 });
 
+const REAL_OPTIONS = Intl.DateTimeFormat().resolvedOptions();
+const zoned = (timeZone: string): Intl.ResolvedDateTimeFormatOptions => ({ ...REAL_OPTIONS, timeZone });
+
 describe('closed regions', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -142,13 +145,13 @@ describe('closed regions', () => {
   });
   it('reads the machine zone by default, and a runtime that cannot say is closed', () => {
     const spy = vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions');
-    spy.mockImplementation(() => ({ timeZone: 'Europe/Madrid' }) as Intl.ResolvedDateTimeFormatOptions);
+    spy.mockImplementation(() => zoned('Europe/Madrid'));
     expect(consentOf({}, folder()).reason).toBe('region');
     spy.mockImplementation(() => {
       throw new Error('no zone');
     });
     expect(consentOf({}, folder()).reason).toBe('region');
-    spy.mockImplementation(() => ({ timeZone: 'America/New_York' }) as Intl.ResolvedDateTimeFormatOptions);
+    spy.mockImplementation(() => zoned('America/New_York'));
     expect(consentOf({}, folder()).reason).toBe('default');
   });
 });
@@ -157,6 +160,6 @@ describe('the first-run notice', () => {
   it('states the covenant sentences word for word, and has a version', () => {
     expect(NOTICE).toContain('Many Oars Co. may license and sell Usage Data. oars sends no telemetry from a machine whose time zone is in the EU, the EEA, or the UK.');
     expect(NOTICE).not.toContain('and nowhere else');
-    expect(Number.isInteger(NOTICE_VERSION) && NOTICE_VERSION >= 2).toBe(true);
+    expect(NOTICE_VERSION).toBe(2);
   });
 });

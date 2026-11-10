@@ -434,6 +434,9 @@ describe('sendNightly', () => {
   });
 });
 
+const REAL_OPTIONS = Intl.DateTimeFormat().resolvedOptions();
+const zoned = (timeZone: string): Intl.ResolvedDateTimeFormatOptions => ({ ...REAL_OPTIONS, timeZone });
+
 describe('sendSpool in a closed region', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -441,7 +444,7 @@ describe('sendSpool in a closed region', () => {
   const zoneIs = (zone: string | undefined): void => {
     vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockImplementation(() => {
       if (zone === undefined) throw new Error('no zone');
-      return { timeZone: zone } as Intl.ResolvedDateTimeFormatOptions;
+      return zoned(zone);
     });
   };
 
@@ -458,6 +461,6 @@ describe('sendSpool in a closed region', () => {
     const fake = await serve();
     zoneIs('America/New_York');
     expect(await sendWith(spooled(1), { OARS_POOL_URL: fake.origin })).toMatchObject({ outcome: 'sent' });
-    expect(Reflect.get(fake.received[0]?.body as object, 'notice')).toBe(NOTICE_VERSION);
+    expect(fake.received[0]?.body).toMatchObject({ notice: NOTICE_VERSION });
   });
 });
