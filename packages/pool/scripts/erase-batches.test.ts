@@ -328,7 +328,8 @@ describe('cutting the times of a rewrite (t1075 Item 2)', () => {
     await eraseBatches(storeOf(db, telemetryOf(bucket)), account, NOW);
     const held: unknown = JSON.parse((await (await bucket.get(rewriteKeyOf(key)))?.text()) ?? '{}');
     expect(fieldOf(held, 'received')).toBe('2026-11-02T00:00:00.000Z');
-    const events = fieldOf(fieldOf(held, 'batch'), 'events') as object[];
+    const list = fieldOf(fieldOf(held, 'batch'), 'events');
+    const events: unknown[] = Array.isArray(list) ? list : [];
     expect(events.map((one) => fieldOf(one, 'at'))).toEqual(['2026-11-02T00:00:00.000Z', '2026-11-02T00:00:00.000Z', '2026-11-02T00:00:00.000Z', 'not a time']);
     expect(events.map((one) => fieldOf(fieldOf(one, 'data'), 'durationMs'))).toEqual([12, 34, 56, 78]);
     expect(events.map((one) => fieldOf(fieldOf(one, 'data'), 'path'))).toEqual(Array(4).fill(['sessions', 'list']));
