@@ -10,7 +10,7 @@ import { termsDigest } from './machine-hold.js';
 import { readMachines, type MachineRecord, type Visibility } from './machine-enroll.js';
 import { derivedSalt } from './machine-ids.js';
 import { poolServer, runtimeOf } from './pool-command.js';
-import { withSendLock } from './pool-send-lock.js';
+import { SendLockBusy, withSendLock, type LockTimes } from './pool-send-lock.js';
 import { BATCH_FIELDS, STAMP_FOLDER, currentStamp, fieldsOf, holdsTerm, outboxFolder, readPulled, removeBatchOf, writeBatch, writePulled } from './pool-outbox.js';
 import { CLAIMED_HOST_CLASSES, CLAIMED_LAUNCHERS, parseSkeleton, type SessionSkeleton } from './pool-wire.js';
 import { localSalt } from './store.js';
@@ -24,6 +24,8 @@ export interface PullPorts {
   git: Git;
   net: Git;
   remoteOf: (repo: string) => string;
+  /** The send lock's waits, for a test that cannot sit out the two-minute default. */
+  lock?: Partial<LockTimes>;
 }
 
 /** Why a repository or a branch was set aside; the report names it, and a test holds each. */
@@ -201,7 +203,7 @@ const admit = async (run: Pulling, tip: Tip, id: string, machine: string): Promi
     for (const folder of await readdir(run.outbox)) {
       if (folder !== stamp && STAMP_FOLDER.test(folder)) await removeBatchOf(run.outbox, id, folder);
     }
-  });
+  }, run.ports.lock);
   // The lock is let go first, so a waiting send pass is not held up by the network. The batch and `pulled.json` are durable, so the branch is no longer the only copy; a crash before this line leaves it for the next pull to replace the same id.
   return { repo: tip.repo, branch: tip.branch, id, stamp, branchDeleted: await deleteBranch(run.ports, tip) };
 };
@@ -260,6 +262,8 @@ export const holdPull = async (deps: RunDeps, options: { server?: string | undef
         taken.add(id);
         admitted.push(await admit(run, tip, id, machine));
       } catch (error) {
+        // A night holds the lock across its whole send, so a pull that overlaps a long one can be turned away: what was admitted before stays, and the tips left are read by the next pull.
+        if (error instanceof SendLockBusy) throw new CliError('Another oars run is sending from this outbox. The batches already admitted stay; the rest were not pulled. Run oars pool hold pull again in a minute.', ExitCode.CONFLICT, STEP, { title: 'Another oars run is sending from this outbox.', code: 'send_locked', status: 409 });
         refused.push(refusalOf(tip, error));
       }
     }

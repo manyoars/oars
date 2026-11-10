@@ -11,8 +11,10 @@ import { derivedSalt } from './machine-ids.js';
 import type { MachineRecord, Visibility } from './machine-enroll.js';
 import { termsDigest, runNetGit } from './machine-hold.js';
 import { holdPull } from './machine-pull.js';
-import { canonicalBytes, currentStamp, outboxFolder } from './pool-outbox.js';
+import { canonicalBytes, currentStamp, outboxFolder, pulledAt, removeBatchesExcept } from './pool-outbox.js';
+import { withSendLock } from './pool-send-lock.js';
 import { REGISTER_FIXTURE } from './pool-fixture.js';
+import { ExitCode } from '../errors.js';
 import { DEFAULT_POOL_URL } from './pool-command.js';
 import { localSalt } from './store.js';
 import { runGit, type Git } from './survival.js';
@@ -557,5 +559,43 @@ describe('oars pool hold pull: deleting what was admitted', () => {
     expect((await pulling).document).toMatchObject({ admitted: [{ id: ID, branchDeleted: true }] });
     expect(filed(s)).toHaveLength(1);
     expect(branchesOf(s, REPO)).toEqual([]);
+  }, SLOW);
+
+  it('stops with send_locked when the send lock stays busy, keeps what it admitted before, and reads no further tip', async () => {
+    const s = await scene();
+    // The newer branch is admitted first; a send pass takes the lock right after its branch is deleted, and holds it past the pull's short wait.
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, goodFiles(s), 1_700_000_100);
+    hold(s, REPO, `oars-hold/${MACHINE}/${OTHER_ID}`, goodFiles(s, OTHER_ID), 1_700_000_000);
+    const night: Git = async (root, args, stdin) => {
+      const out = await runNetGit(root, args, stdin);
+      if (args[0] === 'push') writeFileSync(join(s.outbox, 'send.lock'), 'another-run');
+      return out;
+    };
+    const busy = holdPull(s.h.deps, {}, { visibility: PRIVATE, git: runGit, net: night, remoteOf: (repo) => bareOf(s, repo), lock: { waitMs: 200, pollMs: 20 } });
+    await expect(busy).rejects.toMatchObject({ name: 'CliError', exitCode: ExitCode.CONFLICT, problem: { code: 'send_locked' } });
+    await expect(busy).rejects.toThrow(/another oars run is sending from this outbox/iu);
+    expect(pulledOf(s)).toEqual({ [ID]: currentStamp() });
+    expect(filed(s)).toHaveLength(1);
+    expect(branchesOf(s, REPO)).toEqual([`oars-hold/${MACHINE}/${OTHER_ID}`]);
+  }, SLOW);
+
+  it('keeps a pulled batch and its entry through the prune a night runs under the send lock the pull waits on', async () => {
+    const s = await scene();
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, goodFiles(s));
+    const prune = (): Promise<number> => removeBatchesExcept(s.outbox, async () => new Set(await pulledAt(s.outbox)));
+    let pulling: Promise<Outcome> | undefined;
+    await withSendLock(s.outbox, async () => {
+      pulling = pull(s);
+      await vi.waitFor(() => { expect(s.network.some((line) => line.startsWith('fetch'))).toBe(true); }, { timeout: 30_000 });
+      await new Promise((done) => setTimeout(done, 500));
+      // The night's prune, with the pull parked on the lock: nothing of the pull is on disk yet.
+      expect(await prune()).toBe(0);
+      expect(filed(s)).toHaveLength(0);
+    });
+    expect((await pulling)?.document).toMatchObject({ admitted: [{ id: ID, branchDeleted: true }] });
+    // The next night's prune sees the entry the pull wrote, so the batch stays.
+    expect(await prune()).toBe(0);
+    expect(filed(s)).toHaveLength(1);
+    expect(pulledOf(s)).toEqual({ [ID]: currentStamp() });
   }, SLOW);
 });
