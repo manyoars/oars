@@ -8,7 +8,7 @@ What each right reaches, and the reasons, are in [`pool.md`](pool.md) ("Rights a
 
 - **Run the migrations first.** The erase and close commands need every migration through the newest one applied on the live pool. Check before the first request, not during one.
 - **Where requests arrive.** `privacy@manyoars.com` only (covenant 6.1, 6.3, 6.6). A request anywhere else is forwarded there and answered from there.
-- **Run the erase commands from the repository root** with your own `wrangler` login: `npm run erase -w packages/pool -- <what> ...`. Every erase command is a dry run until you add `--confirm`, and says what it would do. `--local` points it at local state, for rehearsal. Never rehearse against the remote pool.
+- **Run the erase commands from the repository root** with your own `wrangler` login: `npm run erase -w packages/pool -- <what> ...`. Every erase command is a dry run until you add `--confirm` (except `export`, which only reads), and says what it would do. `--local` points it at local state, for rehearsal. Never rehearse against the remote pool.
 - **Keep a request register,** outside the repository, because it holds personal data. One entry per request: the date received, the right, the account, the proof used, any extension and its reason with the date you told them, the answer and its date, and for an Art. 16 request any supplementary statement. Art. 5(2) needs you able to show you met each clock, and the pool keeps no request log.
 - **Erase needs R2 keys.** `erase ... account` lists the telemetry bucket, so export `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, and `R2_SECRET_ACCESS_KEY` first.
 
@@ -53,7 +53,7 @@ Rules for how hard to ask:
 3. Tell them what is not in it, and why: `contributors`, pooled cells, strata, and bundle reads tie the account to totals over other people (Art. 15(4)), and credential hashes are withheld (Art. 32).
 4. When they report the files are saved, the answer is complete. If the command fails, send the error line back and retry once the cause is fixed.
 
-**Command (the operator runs it, when the requester cannot run the client):** confirm the account by a token proof first (see "Who is asking": `oars pool prove`, or a refused sign-in; never a machine key). Then, from `packages/pool`:
+**Command (the operator runs it, when the requester cannot run the client):** confirm the account by a token proof first (see "Who is asking": `oars pool prove`, or a refused sign-in; never a machine key). Then, from the repository root:
 `npm run erase -w packages/pool -- export --account <account id> --out <folder> [--raw] [--local]`.
 It only reads, so it takes no `--confirm`. It writes the same `account-export-NNNN.json` pages `oars pool export` writes (one page builder serves both), and with `--raw` each raw object not erased, checked against its name; it lists any that is missing or altered and exits non-zero while still writing the rest. It reads D1 and R2 through your own `wrangler` login, so it needs no token; `--local` reads the local store.
 
@@ -149,7 +149,7 @@ Gap: **no exclusion marker for a sale or a manual export.** Nothing is sold toda
 
 **Command (the requester runs it):** `oars pool raw --consent no`. It stops later raw copies on their machine and tells the pool (`DELETE /v1/consent/raw`), which drops their staged raw parts at once. The pool erases the raw objects it already holds, whole, on its nightly run; a large account can take more than one night. Each erased object keeps a tombstone, and the hash, size, and date stay.
 
-**Command (the operator runs it, when the requester cannot run the client or writes instead, covenant 6.6(b)):** confirm the account by a token proof first (see "Who is asking"; never a machine key). Then, from `packages/pool`:
+**Command (the operator runs it, when the requester cannot run the client or writes instead, covenant 6.6(b)):** confirm the account by a token proof first (see "Who is asking"; never a machine key). Then, from the repository root:
 `npm run erase -w packages/pool -- withdraw --account <account id> [--confirm] [--local]`.
 It runs the same update the route runs (one shared statement), then deletes the account's staged raw parts, and prints `{"withdrawn":true|false,"stagedDropped":n}`. Without `--confirm` it changes nothing and prints what it would do. With no yes standing on the account it changes nothing and says so. The account row does not change on a rerun or with no yes standing; for an account that already withdrew, `--confirm` drops only staged parts an earlier run left. The remote run lists the staged parts through R2's S3 API, so it needs `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, and `R2_SECRET_ACCESS_KEY` with read on `oars-pool-raw` (and on `oars-telemetry` for the other commands); with no token it stops before changing anything. `--local` records the withdrawal but cannot list R2, so it drops no staged parts.
 

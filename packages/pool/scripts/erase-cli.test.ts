@@ -339,6 +339,15 @@ describe('main', () => {
     }
   });
 
+  it('refuses --raw and --out on every verb but export, so a typo cannot be silently ignored', async () => {
+    for (const argv of [['account', '--account', ACCOUNT, '--out', 'f', '--confirm'], ['close', '--account', ACCOUNT, '--raw', '--confirm'], ['withdraw', '--account', ACCOUNT, '--raw', '--confirm'], ['row', '--account', ACCOUNT, '--id', 's1', '--out', 'f', '--confirm'], ['raw', 'k', '--raw', '--confirm']]) {
+      const { io, calls, printed } = fake();
+      expect(await main(argv, io)).toBe(2);
+      expect(calls).toEqual([]);
+      expect(printed).toEqual([USAGE]);
+    }
+  });
+
   it('answers a bad option or a missing option value with exit code 2', async () => {
     for (const argv of [['--nope'], ['row', '--account'], ['row', '--account', '--id', 'x']]) {
       const { io, printed } = fake();

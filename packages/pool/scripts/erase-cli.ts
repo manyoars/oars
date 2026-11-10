@@ -87,6 +87,11 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
     return 2;
   }
   const [what, key, ...extra] = options.positional;
+  // --raw and --out belong to export alone: on any other verb they would be ignored without a word, like a typo that still erases.
+  if (what !== 'export' && (options.raw || options.out !== undefined)) {
+    io.print(USAGE);
+    return 2;
+  }
   const target: Target = { ...TARGET, local: options.local };
   const store: EraseStore = wranglerStore(io.wrangler, target, io.files, io.list, io.listRaw);
   const where = options.local ? 'local state' : 'the remote pool';
