@@ -166,3 +166,29 @@ describe('Item 3: over-masking', () => {
     expect(text).toContain('@scope/name@1.2.3');
   });
 });
+
+const command = (f: Fixture, session: string, name: string, args: string): string =>
+  user(f, session, 1, `<command-message>${name.slice(1)}</command-message>\n<command-name>${name}</command-name>\n<command-args>${args}</command-args>`);
+
+describe('Item 4: orchestration lead sessions are not drawn', () => {
+  it('leaves out a session whose first prompt is /loop /orchestrate, /orchestrate, or /handoff resume, counts it lead, and writes the count to pack.json', async () => {
+    const f = fixture();
+    f.write(S(1), [command(f, S(1), '/loop', '/orchestrate'), assistant(S(1), 1, [{ type: 'text', text: 'leading' }])]);
+    f.write(S(2), [command(f, S(2), '/orchestrate', ''), assistant(S(2), 1, [{ type: 'text', text: 'leading' }])]);
+    f.write(S(3), [command(f, S(3), '/handoff', 'resume t1086'), assistant(S(3), 1, [{ type: 'text', text: 'leading' }])]);
+    f.write(S(4), [user(f, S(4), 1, 'orchestrate the loop of the parser'), assistant(S(4), 1, [{ type: 'text', text: 'working' }])]);
+    f.write(S(5), [command(f, S(5), '/handoff', 'write a note'), assistant(S(5), 1, [{ type: 'text', text: 'working' }])]);
+    const counts = await run(f);
+    expect(counts).toMatchObject({ lead: 3, emitted: 2 });
+    const pack: { counts: { lead: number } } = JSON.parse(readFileSync(join(f.out, 'pack.json'), 'utf8'));
+    expect(pack.counts.lead).toBe(3);
+    expect(packText(f.out)).not.toContain('leading');
+  });
+
+  it('draws a lead session by a prompt the pack is told to treat as one', async () => {
+    const f = fixture();
+    f.write(S(1), [user(f, S(1), 1, 'PLAN-LEAD start the plan'), assistant(S(1), 1, [{ type: 'text', text: 'leading' }])]);
+    f.write(S(2), [user(f, S(2), 1, 'plain work'), assistant(S(2), 1, [{ type: 'text', text: 'working' }])]);
+    expect(await run(f, { leadPrompts: [/^PLAN-LEAD\b/] })).toMatchObject({ lead: 1, emitted: 1 });
+  });
+});
