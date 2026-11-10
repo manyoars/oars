@@ -235,12 +235,11 @@ const maskIds = (texts: readonly string[], sessions: ReadonlyMap<string, string>
   return texts.map((text) => text.replace(UUID_OR_PREFIXED, (id) => sessions.get(id) ?? (lineIds.has(id) ? maskOf(indexKey, buyerKey, id) : id)));
 };
 
-/** The text of a user message's content, or undefined when it has none to type: a tool result (the harness answering the model) and an image with no words carry nothing the person wrote. */
+/** The text of a user message's content, or undefined when it has none to type: a message of only tool results (the harness answering the model) and an image with no words carry nothing the person wrote. Text sent beside a tool result is the person's, so it counts. */
 const textOf = (content: unknown): string | undefined => {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return undefined;
   const blocks: unknown[] = content;
-  if (blocks.some((block) => isRecord(block) && Reflect.get(block, 'type') === 'tool_result')) return undefined;
   const texts = blocks.flatMap((block): string[] => {
     const text: unknown = isRecord(block) && Reflect.get(block, 'type') === 'text' ? Reflect.get(block, 'text') : undefined;
     return typeof text === 'string' ? [text] : [];

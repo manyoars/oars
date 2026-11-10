@@ -82,7 +82,9 @@ const seed = async (account: string, tag: string): Promise<void> => {
   await db.prepare("INSERT INTO club_consents (account, club, text_sha256, accepted_at) VALUES (?, 'open', ?, 1700000500000)").bind(account, sha256(`consent-${tag}`)).run();
   await db.prepare('INSERT INTO board_standing (account, granted_at, granted_by, reason) VALUES (?, 1700000600000, ?, ?)').bind(account, `operator-${tag}`, `fleet-${tag}`).run();
   await db.prepare("INSERT INTO club_attempts (account, kind, at) VALUES (?, 'guess', 1700000700000)").bind(account).run();
-  await db.prepare("INSERT INTO club_hides (club, account, nickname, hidden_at, hidden_by, reason) VALUES ('open', ?, ?, 1700000800000, ?, ?)").bind(account, `nick-${tag}`, `operator-${tag}`, `why-${tag}`).run();
+  await db.prepare("INSERT INTO club_hides (club, account, nickname, hidden_at, hidden_by, reason, seated_at) VALUES ('open', ?, ?, 1700000800000, ?, ?, 1700000500000)").bind(account, `nick-${tag}`, `operator-${tag}`, `why-${tag}`).run();
+  // A hide recorded before migration 0040 has no seated_at.
+  await db.prepare("INSERT INTO club_hides (club, account, nickname, hidden_at, hidden_by, reason) VALUES ('open', ?, ?, 1700000900000, ?, ?)").bind(account, `old-${tag}`, `operator-${tag}`, `old-why-${tag}`).run();
   await db.prepare("INSERT INTO erasure_audit (kind, reason, erased_on, rows_erased, objects_erased, account) VALUES ('account', ?, '2026-11-03', 4, 2, ?)").bind(`reason-${tag}`, account).run();
 };
 
@@ -134,7 +136,10 @@ describe('GET /v1/account/export', () => {
     expect(rowsOf(pages, 'clubConsents')).toEqual([{ club: 'open', textSha256: sha256('consent-mine'), acceptedAt: 1_700_000_500_000 }]);
     expect(rowsOf(pages, 'standing')).toEqual([{ grantedAt: 1_700_000_600_000, grantedBy: 'operator-mine', reason: 'fleet-mine' }]);
     expect(rowsOf(pages, 'clubAttempts')).toEqual([{ kind: 'guess', at: 1_700_000_700_000 }]);
-    expect(rowsOf(pages, 'clubHides')).toEqual([{ club: 'open', nickname: 'nick-mine', hiddenAt: 1_700_000_800_000, hiddenBy: 'operator-mine', reason: 'why-mine' }]);
+    expect(rowsOf(pages, 'clubHides')).toEqual([
+      { club: 'open', nickname: 'nick-mine', hiddenAt: 1_700_000_800_000, hiddenBy: 'operator-mine', reason: 'why-mine', seatedAt: 1_700_000_500_000 },
+      { club: 'open', nickname: 'old-mine', hiddenAt: 1_700_000_900_000, hiddenBy: 'operator-mine', reason: 'old-why-mine', seatedAt: null },
+    ]);
     expect(rowsOf(pages, 'erasures')).toEqual([{ kind: 'account', reason: 'reason-mine', erasedOn: '2026-11-03', rowsErased: 4, objectsErased: 2 }]);
     // The ledger lists the held object and the tombstoned one, each by the key it is stored under.
     expect(rowsOf(pages, 'rawLedger')).toEqual(

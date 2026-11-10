@@ -144,7 +144,7 @@ const SECTIONS: readonly Section[] = [
   { name: 'clubConsents', select: 'id, club, text_sha256, accepted_at', table: 'club_consents', owner: 'account', order: ['id'], keyed: ['id'], page: SMALL_PAGE, view: (row) => ({ club: text(row, 'club'), textSha256: text(row, 'text_sha256'), acceptedAt: count(row, 'accepted_at') }) },
   { name: 'standing', select: 'granted_at, granted_by, reason', table: 'board_standing', owner: 'account', order: ['granted_at'], keyed: ['granted_at'], page: SMALL_PAGE, view: (row) => ({ grantedAt: count(row, 'granted_at'), grantedBy: text(row, 'granted_by'), reason: text(row, 'reason') }) },
   { name: 'clubAttempts', select: 'id, kind, at', table: 'club_attempts', owner: 'account', order: ['id'], keyed: ['id'], page: SMALL_PAGE, view: (row) => ({ kind: text(row, 'kind'), at: count(row, 'at') }) },
-  { name: 'clubHides', select: 'id, club, nickname, hidden_at, hidden_by, reason', table: 'club_hides', owner: 'account', order: ['id'], keyed: ['id'], page: SMALL_PAGE, view: (row) => ({ club: text(row, 'club'), nickname: text(row, 'nickname'), hiddenAt: count(row, 'hidden_at'), hiddenBy: text(row, 'hidden_by'), reason: text(row, 'reason') }) },
+  { name: 'clubHides', select: 'id, club, nickname, hidden_at, hidden_by, reason, seated_at', table: 'club_hides', owner: 'account', order: ['id'], keyed: ['id'], page: SMALL_PAGE, view: (row) => ({ club: text(row, 'club'), nickname: text(row, 'nickname'), hiddenAt: count(row, 'hidden_at'), hiddenBy: text(row, 'hidden_by'), reason: text(row, 'reason'), seatedAt: count(row, 'seated_at') }) },
   // A deposit as it now reads: an erased one holds the marker the erasure left, and `tombstone` is the day it was erased.
   {
     name: 'deposits',

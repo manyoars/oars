@@ -562,6 +562,16 @@ describe('the acceptance rule (plan S1)', () => {
     }
   });
 
+  it('keys on the text a person sends beside a tool result: two sessions that differ only there are both emitted', async () => {
+    const f = fixture();
+    const beside = (session: string, typed: string): string =>
+      line({ ...replayable(user(session, 20, 'unused')), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_01', content: 'the same output' }, { type: 'text', text: typed }] } });
+    f.write('-work-oars', S(1), [beside(S(1), 'use the first approach'), ...turns(S(1), 2, 'fix the parser')]);
+    f.write('-work-oars', S(2), [beside(S(2), 'use the second approach'), ...turns(S(2), 2, 'fix the parser')]);
+    await stored(f);
+    expect(await buildPack(f.runtime, options(f, { seed: '1', out: join(f.root, 'pack-beside') }))).toMatchObject({ duplicate: 0, emitted: 2 });
+  });
+
   it('keeps two sessions that open with the same short text but go on differently, and two that open the same in different repositories', async () => {
     const f = fixture();
     const other = join(f.root, 'work', 'other');
