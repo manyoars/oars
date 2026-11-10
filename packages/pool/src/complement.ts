@@ -167,7 +167,7 @@ const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, motif: Mot
       return [{ family: JSON.stringify(['target-keys', parsed.action, parsed.facet, cell.frameBucket, cell.grain, cell.day, exposureOfCell(cell)]), role: 'part', total: pathCalls(parsed.action, cell) }];
     },
   },
-  // An action's one-step shape cells, per model (`harness/version/model`) and exposure, sum to the calls its facet cells split on the version bucket (`harness/version/-`, unexposed): the total the `fit` read gives.
+  // An action's one-step shape cells, per model (`harness/version/model`) and exposure, sum to the calls its facet cells split on the version bucket (`harness/version/-`, unknown exposure): the total the `fit` read gives.
   // A one-step shape cell counts every step and a facet cell one per call by its first step, so the two are equal only where each call has one step; elsewhere the tie can only withhold more.
   {
     name: 'action-calls',
