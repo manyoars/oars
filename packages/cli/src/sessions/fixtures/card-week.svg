@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="724" viewBox="0 0 1200 724">
+<rect x="0" y="0" width="1200" height="724" fill="#0b1b2b"/>
+<text x="48" y="72" font-family="monospace" font-size="30" fill="#e8eef4">oars crew card: the last 7 days to 2026-11-09</text>
+<rect x="48" y="96" width="1104" height="2" fill="#f2b134"/>
+<text x="48" y="140" font-family="monospace" font-size="20" fill="#8fa6ba">sessions</text>
+<text x="308" y="140" font-family="monospace" font-size="20" fill="#e8eef4">3 on 3 active days</text>
+<text x="48" y="176" font-family="monospace" font-size="20" fill="#8fa6ba">harnesses</text>
+<text x="308" y="176" font-family="monospace" font-size="20" fill="#e8eef4">claude-code 1, codex 1, cursor 1</text>
+<text x="48" y="212" font-family="monospace" font-size="20" fill="#8fa6ba">models</text>
+<text x="308" y="212" font-family="monospace" font-size="20" fill="#e8eef4">claude-opus-5-5 40, gpt-5-codex 3, other 1</text>
+<text x="48" y="248" font-family="monospace" font-size="20" fill="#8fa6ba">tokens</text>
+<text x="308" y="248" font-family="monospace" font-size="20" fill="#e8eef4">claude-opus-5-5 4000</text>
+<text x="308" y="284" font-family="monospace" font-size="20" fill="#e8eef4">gpt-5-codex 300</text>
+<text x="308" y="320" font-family="monospace" font-size="20" fill="#e8eef4">other 50</text>
+<text x="48" y="356" font-family="monospace" font-size="20" fill="#8fa6ba">strokes</text>
+<text x="308" y="356" font-family="monospace" font-size="20" fill="#e8eef4">13</text>
+<text x="48" y="392" font-family="monospace" font-size="20" fill="#8fa6ba">crabs</text>
+<text x="308" y="392" font-family="monospace" font-size="20" fill="#e8eef4">4</text>
+<text x="48" y="428" font-family="monospace" font-size="20" fill="#8fa6ba">moved on</text>
+<text x="308" y="428" font-family="monospace" font-size="20" fill="#e8eef4">too few (2 of 4 crabs)</text>
+<text x="48" y="464" font-family="monospace" font-size="20" fill="#8fa6ba">verified after edit</text>
+<text x="308" y="464" font-family="monospace" font-size="20" fill="#e8eef4">75% (30 of 40 edits)</text>
+<text x="48" y="500" font-family="monospace" font-size="20" fill="#8fa6ba">commits</text>
+<text x="308" y="500" font-family="monospace" font-size="20" fill="#e8eef4">3</text>
+<text x="48" y="536" font-family="monospace" font-size="20" fill="#8fa6ba">survived</text>
+<text x="308" y="536" font-family="monospace" font-size="20" fill="#e8eef4">too few (1 of 1 settled)</text>
+<text x="48" y="572" font-family="monospace" font-size="20" fill="#8fa6ba">cost</text>
+<text x="308" y="572" font-family="monospace" font-size="20" fill="#e8eef4">$1.75 (2 of 3 sessions recorded one)</text>
+<text x="48" y="608" font-family="monospace" font-size="20" fill="#8fa6ba">depositor</text>
+<text x="308" y="608" font-family="monospace" font-size="20" fill="#e8eef4">ashore: run oars pool login</text>
+<rect x="48" y="654" width="1104" height="1" fill="#8fa6ba"/>
+<text x="48" y="694" font-family="monospace" font-size="20" fill="#f2b134">manyoars.com</text>
+<text x="876" y="694" font-family="monospace" font-size="20" fill="#f2b134">npx @manyoars/oars card</text>
+</svg>

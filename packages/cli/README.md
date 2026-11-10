@@ -65,6 +65,18 @@ oars records how it is used, on this machine, and says so: on the first run that
 
 Every event type, with an example, is in [docs/telemetry.md](https://github.com/manyoars/oars/blob/main/docs/telemetry.md).
 
+### card
+
+```
+oars card --text                 # your week as a table, sized for a screenshot
+oars card --month                # the last 30 days as a picture: oars-card-month.png and .svg in this folder
+oars card --year --out me.png    # the last 365 days, saved as me.png and me.svg
+```
+
+`oars card` makes a share-ready card of your own week (the default, the last 7 days), month, or year across every harness, read from the local session store only. It shows your sessions and active days, the harnesses and models you used, tokens by model, tool calls, failed calls and how many were followed by a different next step, how often an edit was verified, commits and how many survived, and cost only where the harness recorded one. A count under the same floor `oars sessions books` uses prints `too few`. The depositor row reads `ashore: run oars pool login` until you sign in; signed in, it reads the number of weeks in which this machine sent a deposit, from the local sent record, and says it is this machine's.
+
+Nothing is uploaded and nothing is sent anywhere: the command makes no network call and prints one prefilled `x.com` link whose text is the card's own numbers, for you to post if you choose. The card carries no folder name, path, prompt or response text, repository name, or long-tail tool or model name, and posting it unlocks nothing. The picture is a byte-stable SVG and a PNG drawn from it with a built-in font; `--text` prints the table and writes nothing.
+
 ### sessions
 
 `oars sessions` keeps a local, deterministic memory of your own coding-agent sessions. The session commands make no model call and no network call, except `gold arms`, which sends redacted text through your own Claude subscription. oars also records telemetry events (a command's path, its flag names, how long it took, its exit code, and its error class, with a random install id, the oars version, the OS, and the time; never session content, prompts, paths, URLs, or argument values), which oars sends in batches to the pool server in `OARS_POOL_URL`, else to the Many Oars pool (live) ([what telemetry records and how to turn it off](https://github.com/manyoars/oars/blob/main/docs/telemetry.md)).
