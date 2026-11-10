@@ -263,9 +263,10 @@ export const injectedRule = (key: string, known: ReadonlySet<string> = new Set()
         });
       case 'system':
         // The hook output a stop-hook summary carries: what a hook printed, its error text, and the command line it ran.
-        return line['subtype'] === 'stop_hook_summary'
-          ? HOOK_SUMMARY_FIELDS.reduce((acc, name) => withField(acc, name, (value) => mapStrings(value, name, blocksIn(key, 'hook-summary'))), line)
-          : withField(line, 'content', (value) => (typeof value === 'string' ? systemText(key)(value) : value));
+        if (line['subtype'] === 'stop_hook_summary') return HOOK_SUMMARY_FIELDS.reduce((acc, name) => withField(acc, name, (value) => mapStrings(value, name, blocksIn(key, 'hook-summary'))), line);
+        // Any other system text is the harness speaking (a changed memory file, a notice), except the echo of a command the operator ran: that is operator output, not an instruction.
+        if (line['subtype'] === 'local_command') return line;
+        return withField(line, 'content', (value) => (typeof value === 'string' ? systemText(key)(value) : value));
       case 'session_meta':
       case 'turn_context':
         return withField(line, 'payload', (payload) => (isObject(payload) ? codexFields(key, payload) : payload));
