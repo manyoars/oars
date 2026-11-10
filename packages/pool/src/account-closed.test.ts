@@ -1,6 +1,7 @@
 // A closed account (covenant 6.1, 7.2(a)): sign-in, machine enrollment, and activation refuse it, and the message names where to write.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { fieldOf, startPool, stubUser, textOf, type TestPool } from './test-pool.js';
+import { storeToken } from './identity.js';
+import { fieldOf, poolDbOf, startPool, stubUser, textOf, type TestPool } from './test-pool.js';
 
 let pool: TestPool;
 let next = 9100;
@@ -57,5 +58,17 @@ describe('a closed account', () => {
     await close(account);
     expect(await pool.post('/v1/machines/activate', {}, textOf(pending.json, 'token'))).toEqual(CLOSED);
     expect(await pool.post('/v1/machines/activate', {}, textOf(revoked.json, 'token'))).toMatchObject({ status: 401, json: { error: 'machine_revoked' } });
+  }, 60_000);
+
+  it('stores no token when the close lands between the check and the insert', async () => {
+    const { account } = await member();
+    const db = await pool.db();
+    const env = { DB: poolDbOf(db, async (sql) => { if (sql.startsWith('INSERT INTO tokens')) await close(account); }) };
+    const before = await tokensOf(account);
+    expect(await storeToken(env, account, 'a'.repeat(64), Date.now() + 60_000)).toBe(false);
+    expect(await tokensOf(account)).toBe(before);
+    // An open account still stores one.
+    const open = await member();
+    expect(await storeToken({ DB: poolDbOf(db) }, open.account, 'b'.repeat(64), Date.now() + 60_000)).toBe(true);
   }, 60_000);
 });

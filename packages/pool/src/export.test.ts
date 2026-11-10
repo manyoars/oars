@@ -99,7 +99,7 @@ describe('GET /v1/account/export', () => {
     expect((await pool.post('/v1/covenant/accept', acceptanceOf('v1'), theirs.token)).status).toBe(200);
     const enrolled = await pool.post('/v1/machines/enroll', { hostClass: 'vps', launcher: 'scheduled', label: 'my box', allowRepos: ['acme/api'] }, mine.token);
     await pool.post('/v1/machines/enroll', { hostClass: 'vps', launcher: 'scheduled', label: 'their box' }, theirs.token);
-    await db.prepare('UPDATE accounts SET raw_consent = ?, raw_consent_version = ?, raw_consent_withdrawn_at = ?, raw_consent_withdrawn_version = ? WHERE id = ?').bind(1_700_000_300_000, 'v2', 1_700_000_350_000, 'v1', mine.account).run();
+    await db.prepare('UPDATE accounts SET raw_consent = ?, raw_consent_version = ?, raw_consent_withdrawn_at = ?, raw_consent_withdrawn_version = ?, closed_at = ? WHERE id = ?').bind(1_700_000_300_000, 'v2', 1_700_000_350_000, 'v1', 1_700_000_400_000, mine.account).run();
     await db.prepare('UPDATE machines SET last_deposit_day = ?, key_days = ? WHERE account = ?').bind('2026-11-05', 30, mine.account).run();
     await seed(mine.account, 'mine');
     await seed(theirs.account, 'theirs');
@@ -113,7 +113,7 @@ describe('GET /v1/account/export', () => {
     expect(text).not.toContain(textOf(enrolled.json, 'token'));
     expect(text).not.toContain(sha256(textOf(enrolled.json, 'token')));
 
-    expect(rowsOf(pages, 'account')).toEqual([expect.objectContaining({ id: mine.account, rawConsent: 1_700_000_300_000, rawConsentVersion: 'v2', rawConsentWithdrawnAt: 1_700_000_350_000, rawConsentWithdrawnVersion: 'v1', access: 'standing' })]);
+    expect(rowsOf(pages, 'account')).toEqual([expect.objectContaining({ id: mine.account, rawConsent: 1_700_000_300_000, rawConsentVersion: 'v2', rawConsentWithdrawnAt: 1_700_000_350_000, rawConsentWithdrawnVersion: 'v1', closedAt: 1_700_000_400_000, access: 'standing' })]);
     expect(rowsOf(pages, 'covenant')).toEqual([expect.objectContaining({ version: 'v1', textSha256: acceptanceOf('v1').textSha256, input: acceptanceOf('v1').input, client: acceptanceOf('v1').client })]);
     expect(rowsOf(pages, 'machines')).toEqual([expect.objectContaining({ id: textOf(fieldOf(enrolled.json, 'machine'), 'id'), label: 'my box', hostClass: 'vps', launcher: 'scheduled', allowRepos: ['acme/api'], state: 'pending', lastDepositDay: '2026-11-05', keyDays: 30 })]);
     expect(rowsOf(pages, 'repoKeys')).toEqual([{ repoKey: 'repo-mine' }]);

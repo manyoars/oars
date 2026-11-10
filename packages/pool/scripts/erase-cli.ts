@@ -109,7 +109,7 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
     }
     if (what === 'close' && options.positional.length === 1 && options.account !== undefined && options.id === undefined) {
       if (!options.confirm) return plan(io, `close account ${options.account} in ${where}: record when it closed, revoke its tokens and machine keys, and delete nothing a Deposit holds`);
-      io.print(summary(await closeAccount(store, options.account, io.now())));
+      io.print(JSON.stringify({ rowsChanged: (await closeAccount(store, options.account, io.now())).rows }));
       return 0;
     }
     if (what === 'account' && options.positional.length === 1 && options.account !== undefined && options.id === undefined) {

@@ -204,7 +204,7 @@ describe('main', () => {
     expect(statements[2]).toContain('DELETE FROM tokens');
     expect(statements[3]).toContain("UPDATE machines SET state = 'revoked'");
     expect(statements.join(' ')).not.toMatch(/deposits|raw_objects|DELETE FROM (cells|strata|contributors)/);
-    expect(printed).toEqual([JSON.stringify({ rowsErased: 3, objectsErased: 0 })]);
+    expect(printed).toEqual([JSON.stringify({ rowsChanged: 3 })]);
   });
 
   it('answers exit code 1 and the reason when the account is not in the pool', async () => {

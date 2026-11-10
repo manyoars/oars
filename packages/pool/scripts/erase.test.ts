@@ -549,6 +549,13 @@ describe('erasing one account removes its own rows and its link to the shared to
 });
 
 /** Stages one part of a two-part deposit through `oars-part`, as the client does. The pool seals the body before it is stored, so a row of `deposit_parts` is ciphertext. */
+const stage = async (token: string, id: string, program: string, part: 1 | 2): Promise<number> => {
+  const body = JSON.stringify(skeletonWith(id, program));
+  const half = Math.floor(body.length / 2);
+  const batch = createHash('sha256').update(body).digest('hex');
+  return (await pool.send('/v1/deposits', { method: 'POST', body: part === 1 ? body.slice(0, half) : body.slice(half) }, token, { 'oars-part': `${String(part)}/2`, 'oars-batch': batch })).status;
+};
+
 describe('closing one account (covenant 6.1 and 7.2(a))', () => {
   const BOX = { hostClass: 'vps', launcher: 'scheduled', label: 'box' };
 
@@ -556,6 +563,10 @@ describe('closing one account (covenant 6.1 and 7.2(a))', () => {
     const { token, account } = await member();
     const other = await member();
     expect((await pool.post('/v1/deposits', skeletonWith('0000000000008a01'), token)).status).toBe(201);
+    const raw = await putRaw(token, new TextEncoder().encode('transcript held through a close'));
+    expect(raw.complete).toBe(200);
+    const keys = await rawKeys(account);
+    expect(keys.length).toBeGreaterThan(0);
     const enrolled = await pool.post('/v1/machines/enroll', BOX, token);
     const otherBox = await pool.post('/v1/machines/enroll', BOX, other.token);
     const deposits = JSON.stringify(await all('SELECT * FROM deposits WHERE account = ? ORDER BY id', account));
@@ -576,6 +587,8 @@ describe('closing one account (covenant 6.1 and 7.2(a))', () => {
     expect(await all("SELECT kind, reason, erased_on, rows_erased, objects_erased, account FROM erasure_audit WHERE kind = 'close' AND account = ?", account)).toEqual([{ kind: 'close', reason: 'account-close', erased_on: '2026-11-08', rows_erased: 3, objects_erased: 0, account }]);
     expect(JSON.stringify(await all('SELECT * FROM deposits WHERE account = ? ORDER BY id', account))).toBe(deposits);
     expect(JSON.stringify(await all('SELECT * FROM raw_objects WHERE account = ? ORDER BY sha256', account))).toBe(objects);
+    expect(await rawKeys(account)).toEqual(keys);
+    expect(await all('SELECT erased_on FROM raw_objects WHERE account = ? AND sha256 = ?', account, raw.hash)).toEqual([{ erased_on: null }]);
     expect(await totals()).toBe(totalsBefore);
     // Another account's credentials, machines, and closed-at record are not touched.
     expect(await all('SELECT closed_at FROM accounts WHERE id = ?', other.account)).toEqual([{ closed_at: null }]);
@@ -607,13 +620,6 @@ describe('closing one account (covenant 6.1 and 7.2(a))', () => {
     expect(await count('SELECT COUNT(*) AS held FROM erasure_audit')).toBe(audits);
   });
 });
-
-const stage = async (token: string, id: string, program: string, part: 1 | 2): Promise<number> => {
-  const body = JSON.stringify(skeletonWith(id, program));
-  const half = Math.floor(body.length / 2);
-  const batch = createHash('sha256').update(body).digest('hex');
-  return (await pool.send('/v1/deposits', { method: 'POST', body: part === 1 ? body.slice(0, half) : body.slice(half) }, token, { 'oars-part': `${String(part)}/2`, 'oars-batch': batch })).status;
-};
 
 describe('staged parts and a leaked secret', () => {
   it('drops the staged parts of the account that held the value, though the pool seals every part and the command cannot match its text', async () => {
