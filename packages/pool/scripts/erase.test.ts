@@ -524,6 +524,89 @@ describe('erasing one account removes its own rows and its link to the shared to
   }, 60_000);
 });
 
+describe('unlinking the rows an erasure keeps (t1065, covenant 6.6(d))', () => {
+  const SESSION = '00000000000090aa';
+  const FINGERPRINT = 'fingerprint-of-the-erased-laptop';
+  const COUNTED_AT = Date.UTC(2026, 10, 3, 14, 25, 36, 789);
+  const kept = ['machines', 'deposits', 'raw_objects', 'telemetry_install_days'];
+  const proof = ['covenant_acceptances', 'accounts', 'tokens', 'erasure_tombstones', 'erasure_audit'];
+
+  const tableText = async (table: string): Promise<string> => JSON.stringify(await all(`SELECT * FROM ${table}`));
+
+  /** An account with a machine, a token, a deposit stamped with the machine, a raw object, a telemetry day, and an acceptance. */
+  const fixture = async (): Promise<{ account: string; machine: string; values: string[] }> => {
+    const { token, account } = await member();
+    expect((await pool.post('/v1/machines/enroll', { hostClass: 'vps', launcher: 'scheduled', label: 'unlink box', allowRepos: [] }, token)).status).toBe(201);
+    const machine = String(fieldOf((await all('SELECT id FROM machines WHERE account = ?', account))[0], 'id'));
+    expect((await pool.post('/v1/deposits', skeletonWith(SESSION), token)).status).toBe(201);
+    await putRaw(token, new TextEncoder().encode('unlink transcript'));
+    const db = await pool.db();
+    await db.prepare('UPDATE machines SET fingerprint_hash = ? WHERE id = ?').bind(FINGERPRINT, machine).run();
+    await db.prepare('UPDATE deposits SET machine = ?, counted_at = ? WHERE account = ?').bind(machine, COUNTED_AT, account).run();
+    await db.prepare('UPDATE accounts SET provider_created = 1500000000123 WHERE id = ?').bind(account).run();
+    await db.prepare("INSERT INTO telemetry_install_days (day, install, account, batches, events, measures) VALUES ('2026-11-03', 'unlink-install', ?, 1, 2, '[]')").bind(account).run();
+    return { account, machine, values: [account, machine, FINGERPRINT, SESSION] };
+  };
+
+  it('leaves no kept row outside 6.6(d) holding the old account, machine, fingerprint, session id, or a time finer than the day, and gives the rewritten rows one random id', async () => {
+    const { account, values } = await fixture();
+    await eraseAccount(await store(), account, NOW);
+
+    for (const table of kept) {
+      const text = await tableText(table);
+      for (const value of values) expect(text, `${table} holds ${value}`).not.toContain(value);
+    }
+    expect(await count('SELECT COUNT(*) AS held FROM deposits WHERE counted_at = ?', Date.UTC(2026, 10, 3))).toBe(1);
+    expect(await tableText('deposits')).not.toContain(String(COUNTED_AT));
+    expect(await all('SELECT provider_created FROM accounts WHERE id = ?', account)).toEqual([{ provider_created: null }]);
+
+    const erasedId = String(fieldOf((await all("SELECT account FROM raw_objects WHERE account LIKE 'erased:%' ORDER BY rowid DESC LIMIT 1"))[0], 'account'));
+    expect(erasedId).toMatch(/^erased:[0-9a-f]{32}$/);
+    expect(await all('SELECT DISTINCT account FROM machines WHERE account LIKE ?', 'erased:%')).toContainEqual({ account: erasedId });
+    expect(await all('SELECT DISTINCT account FROM deposits WHERE erased_on = ? AND account LIKE ?', '2026-11-08', 'erased:%')).toContainEqual({ account: erasedId });
+    expect(await count('SELECT COUNT(*) AS held FROM machines WHERE account = ?', erasedId)).toBe(1);
+    expect(await count('SELECT COUNT(*) AS held FROM deposits WHERE account = ?', erasedId)).toBe(1);
+    expect(await count('SELECT COUNT(*) AS held FROM raw_objects WHERE account = ?', erasedId)).toBe(1);
+    expect(await count('SELECT COUNT(*) AS held FROM deposits WHERE account = ? AND machine IN (SELECT id FROM machines WHERE account = ?)', erasedId, erasedId)).toBe(1);
+    // The random id is on no row the covenant keeps.
+    for (const table of proof) expect(await tableText(table), `${table} holds the random id`).not.toContain(erasedId);
+    // The kept proof still names the account, as 6.6(d) allows.
+    expect(await count('SELECT COUNT(*) AS held FROM covenant_acceptances WHERE account = ?', account)).toBe(1);
+    expect(await count("SELECT COUNT(*) AS held FROM erasure_tombstones WHERE kind = 'account' AND digest = ?", account)).toBe(1);
+  }, 90_000);
+
+  it('rerun changes nothing: no new id, no new row', async () => {
+    const { account } = await fixture();
+    await eraseAccount(await store(), account, NOW);
+    const accountsBefore = await count("SELECT COUNT(*) AS held FROM accounts WHERE id LIKE 'erased:%'");
+    const snapshot = JSON.stringify([await all('SELECT * FROM machines WHERE account LIKE ?', 'erased:%'), await all('SELECT * FROM deposits WHERE account LIKE ?', 'erased:%'), await all('SELECT * FROM raw_objects WHERE account LIKE ?', 'erased:%')]);
+    expect((await eraseAccount(await store(), account, NOW)).rows).toBe(0);
+    expect(await count("SELECT COUNT(*) AS held FROM accounts WHERE id LIKE 'erased:%'")).toBe(accountsBefore);
+    expect(JSON.stringify([await all('SELECT * FROM machines WHERE account LIKE ?', 'erased:%'), await all('SELECT * FROM deposits WHERE account LIKE ?', 'erased:%'), await all('SELECT * FROM raw_objects WHERE account LIKE ?', 'erased:%')])).toBe(snapshot);
+  }, 90_000);
+
+  it('uses a different random id for each erasure, so two erased accounts are not joined to each other', async () => {
+    const first = await fixture();
+    const second = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000090ab'), second.token)).status).toBe(201);
+    await eraseAccount(await store(), first.account, NOW);
+    await eraseAccount(await store(), second.account, NOW);
+    expect(await count("SELECT COUNT(DISTINCT account) AS held FROM deposits WHERE account LIKE 'erased:%'")).toBeGreaterThanOrEqual(2);
+  }, 90_000);
+
+  it('leaves another account\'s deposit, machine, and raw object as they were', async () => {
+    const live = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000090ac'), live.token)).status).toBe(201);
+    expect((await pool.post('/v1/machines/enroll', { hostClass: 'vps', launcher: 'scheduled', label: 'live box', allowRepos: [] }, live.token)).status).toBe(201);
+    await putRaw(live.token, new TextEncoder().encode('live transcript'));
+    const rows = async (): Promise<string> => JSON.stringify([await all('SELECT * FROM deposits WHERE account = ?', live.account), await all('SELECT * FROM machines WHERE account = ?', live.account), await all('SELECT * FROM raw_objects WHERE account = ?', live.account)]);
+    const before = await rows();
+    const { account } = await fixture();
+    await eraseAccount(await store(), account, NOW);
+    expect(await rows()).toBe(before);
+  }, 90_000);
+});
+
 /** Stages one part of a two-part deposit through `oars-part`, as the client does. The pool seals the body before it is stored, so a row of `deposit_parts` is ciphertext. */
 const stage = async (token: string, id: string, program: string, part: 1 | 2): Promise<number> => {
   const body = JSON.stringify(skeletonWith(id, program));
