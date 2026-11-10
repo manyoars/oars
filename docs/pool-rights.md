@@ -38,7 +38,7 @@ Rules for how hard to ask:
 
 - For **erasure and closing**, do steps 1 to 3 whenever the requester asks the operator to act. They cannot be undone. The export (access and portability) runs only on the account's own sign-in, so it needs no check.
 - For a **protected person** (the GDPR or UK GDPR protects them), covenant 6.6(f) says to ask for proof of identity only when you have reasonable doubts. The pool holds no name or email, so an email alone always leaves reasonable doubt (Art. 12(6)), and covenant 6.3 allows requiring a fresh sign-in. A matching `provedAt` from one is that proof.
-- If the requester says they cannot sign in, ask them to run `oars pool prove` first: it needs only the provider sign-in, not the account's machines or a saved credential. If they have no provider sign-in at all, you cannot confirm them. A machine key is no proof: it may sit on a host, not with the person. The pool holds no name or email, and the account id is derived from the sign-in provider's account, so nothing else proves the account is theirs (Art. 11(2) and 12(2)). Tell them so, in writing, within the month. Do not erase, close, or send data on an email alone.
+- If the requester says they cannot sign in, ask them to run `oars pool login --provider github` (or `google`) and then `oars pool prove --json` first: it needs only their provider sign-in, not the account's machines. If they have no provider sign-in at all, you cannot confirm them. A machine key is no proof: it may sit on a host, not with the person. The pool holds no name or email, and the account id is derived from the sign-in provider's account, so nothing else proves the account is theirs (Art. 11(2) and 12(2)). Tell them so, in writing, within the month. Do not erase, close, or send data on an email alone.
 - A request from someone other than the account holder (a third party named in a deposit) is a different case. See "A third party named in a deposit" at the end.
 
 ## Art. 15, access, and Art. 20, portability
@@ -175,7 +175,7 @@ Gap: **withdrawing the covenant.** Acceptance rows are append-only. Declining a 
 
 A close erases nothing. If they also want their data deleted, that is a separate Art. 17 request.
 
-**Answer to send:** the date it closed, that no machine of theirs can deposit now, that their data stays, that a later request about it can still be confirmed: they sign in once with `oars pool login --json`, which the pool refuses and records as proof of control (see "Who is asking"), and that reopening is done by hand on a written request.
+**Answer to send:** the date it closed, that no machine of theirs can deposit now, that their data stays, that a later request about it can still be confirmed: they sign in once with `oars pool login --provider github --json` (or `google`), which the pool refuses and records as proof of control (see "Who is asking"), and that reopening is done by hand on a written request.
 
 **Record kept:** the pool sets `accounts.closed_at`, which starts the retention clock in covenant 7.2(a), and writes one audit row. You keep the dates.
 
@@ -183,9 +183,7 @@ A close erases nothing. If they also want their data deleted, that is a separate
 `npx wrangler d1 execute oars-pool --remote --command "UPDATE accounts SET closed_at = NULL WHERE id = '<account id>' AND closed_at IS NOT NULL"`
 Tokens and machine keys stay revoked, so the person signs in and enrolls their machines again. Note it in the request register.
 
-**Requests after closing.** The proof from `oars pool login --json` confirms the requester. Then run `erase account` (Art. 17). The operator cannot yet export a closed account's data or record its raw withdrawal; those commands are not written.
-
-Gap: **requests after closing.** A closed account cannot sign in, so it cannot be confirmed for erasure, export, or withdrawal. Not yet possible.
+**Requests after closing.** The proof from `oars pool login --provider github --json` (or `google`) confirms the requester. Then run `erase account` (Art. 17). The operator cannot yet export a closed account's data or record its raw withdrawal; those commands are not written.
 
 ## A third party named in a deposit
 

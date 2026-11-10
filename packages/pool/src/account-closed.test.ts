@@ -23,7 +23,7 @@ const member = async (): Promise<{ token: string; account: string; id: string }>
   return { ...(await pool.signIn('github', stubUser(id))), id };
 };
 
-/** The state a close leaves on the account row, set directly so each route is tested alone (the operator step that does it has its own tests). */
+/** The proof time the pool stored on the account row, or null when none. */
 const provedAtOf = async (account: string): Promise<number | null> => {
   const held = fieldOf(await (await pool.db()).prepare('SELECT proved_at FROM accounts WHERE id = ?').bind(account).first(), 'proved_at');
   return held === null ? null : Number(held);
@@ -40,6 +40,7 @@ const signInClosed = async (id: string): Promise<{ status: number; json: unknown
 
 const tokensOf = async (account: string): Promise<number> => Number(fieldOf(await (await pool.db()).prepare('SELECT COUNT(*) AS held FROM tokens WHERE account = ?').bind(account).first(), 'held'));
 
+/** The state a close leaves on the account row, set directly so each route is tested alone (the operator step that does it has its own tests). */
 const close = async (account: string): Promise<void> => {
   await (await pool.db()).prepare('UPDATE accounts SET closed_at = ? WHERE id = ?').bind(Date.now(), account).run();
 };
