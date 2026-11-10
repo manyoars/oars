@@ -495,6 +495,36 @@ describe('the repository pointer and the outcome (plan S4)', { timeout: 30_000 }
     expect(pointerOf(manifest(f.out)[0])).toEqual({ remote: REMOTE, commit: shas.onFeature });
     expect(readFileSync(join(f.out, 'manifest.jsonl'), 'utf8')).not.toContain('s3cret');
   });
+
+  // A commit the session made: the Bash call, and the result that names the sha the way `git commit` prints it.
+  const committed = (session: string, n: number, branch: string, sha: string): string[] => [
+    line({ type: 'assistant', uuid: uuidOf(session, 'a', n), parentUuid: null, isSidechain: false, timestamp: at(n), version: '2.1.300', sessionId: session, requestId: requestOf(session, n), message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: `toolu_${String(n)}`, name: 'Bash', input: { command: 'git commit -m work' } }], usage: { input_tokens: 10, output_tokens: 20 } } }),
+    line({ type: 'user', uuid: uuidOf(session, 'b', n), parentUuid: uuidOf(session, 'a', n), isSidechain: false, timestamp: at(n + 1), version: '2.1.300', sessionId: session, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `toolu_${String(n)}`, content: `[${branch} ${sha.slice(0, 7)}] work\n 1 file changed, 1 insertion(+)` }] } }),
+  ];
+
+  const outcomeOf = (row: ManifestRow | undefined): unknown => (row === undefined ? undefined : Reflect.get(row, 'outcome'));
+
+  it('says for each commit the session made whether the remote default branch holds it now: one landed, one not', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    const shas = makeRepo(repo);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'feature'), ...committed(S(1), 3, 'main', shas.onMain), ...committed(S(1), 5, 'feature', shas.onFeature), assistant(S(1), 7, 'done')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    expect(outcomeOf(manifest(f.out)[0])).toEqual({ verify: 'none', commits: [{ sha: shas.onMain.slice(0, 7), landed: true }, { sha: shas.onFeature.slice(0, 7), landed: false }] });
+  });
+
+  it('reads landed: null for a sha the repository does not hold, and still lists it', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    makeRepo(repo);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'feature'), ...committed(S(1), 3, 'feature', 'abcdef1234567890abcdef1234567890abcdef12'), assistant(S(1), 5, 'done')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    expect(outcomeOf(manifest(f.out)[0])).toMatchObject({ commits: [{ sha: 'abcdef1', landed: null }] });
+  });
 });
 
 describe('owners file', () => {
