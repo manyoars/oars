@@ -1,5 +1,6 @@
 // The first sale's hand-over register (plan S5, 2.2; P98 (10) to (12)): which recipient received which session of a sample pack, under which match id.
 // It writes local records only, beside the owners file, and sends nothing: Art. 15(1)(c) and 19 need the recipients named, Art. 21(1) needs an objection checked before anything is handed over.
+import type { Dirent } from 'node:fs';
 import { appendFile, readdir, readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { bareOf, insideRepository, isAbsent, isText, keyIdOf, PackError, readObjections, squashed } from './sample-pack.js';
@@ -12,7 +13,7 @@ export const USAGE = [
   '  --license <id>       the term sheet\'s version, so the rights the recipient holds are the ones it signed',
   '  --buyer-key <key>    the key the pack was built under (checked against pack.json; it is never written down)',
   '  --owners <file>      the owners file; deliveries.jsonl, index.jsonl, and objections.jsonl sit beside it',
-  'deliver appends one row per session to deliveries.jsonl, when you send the pack: it sends nothing itself, and it refuses a pack built before the newest objection.',
+  'deliver appends one row per session to deliveries.jsonl, when you send the pack: it sends nothing itself, and it refuses a pack built under other objections than objections.jsonl holds now (rebuild, then deliver).',
   'recipients prints each recipient of a session, or of every session whose text names the person, with the match id that recipient holds it under (Art. 15(1)(c), 19).',
 ].join('\n');
 
@@ -75,14 +76,16 @@ const indexOf = async (dir: string): Promise<IndexEntry[]> =>
     return isText(pack) && isText(session) && isText(matchId) ? [{ pack, session, matchId }] : [];
   });
 
-const jsonOf = async (file: string, what: string): Promise<unknown> => {
+const textOf = async (file: string, what: string): Promise<string> => {
   try {
-    return JSON.parse(await readFile(file, 'utf8'));
+    return await readFile(file, 'utf8');
   } catch (error) {
     if (isAbsent(error)) throw new PackError(`${what} is missing: this folder is not a pack built by sample-pack.`);
     throw error;
   }
 };
+
+const jsonOf = async (file: string, what: string): Promise<unknown> => JSON.parse(await textOf(file, what));
 
 /** What `deliver` wrote, and how many (recipient, lot, match id) rows the register already held, which it leaves alone. */
 export interface Delivered {
@@ -108,7 +111,7 @@ export const deliver = async (options: DeliverOptions): Promise<Delivered> => {
   const recorded = fieldOf(record, 'objections');
   if (recorded !== (await readObjections(dir)).hash) throw new PackError(`${recorded === undefined ? 'This pack predates the objections hash in pack.json' : 'The objections changed since the build'}: rebuild the pack, then deliver.`);
   const sessions = new Map((await indexOf(dir)).map(({ matchId, session }) => [matchId, session]));
-  const matchIds = (await readFile(join(pack, 'manifest.jsonl'), 'utf8')).split(String.fromCharCode(10)).filter((row) => row.trim() !== '').map((row): string => {
+  const matchIds = (await textOf(join(pack, 'manifest.jsonl'), 'manifest.jsonl')).split(String.fromCharCode(10)).filter((row) => row.trim() !== '').map((row): string => {
     const matchId = fieldOf(JSON.parse(row), 'matchId');
     if (!isText(matchId)) throw new PackError('manifest.jsonl holds a row with no match id.');
     return matchId;
@@ -136,21 +139,16 @@ export const recipientsOf = async (owners: string, query: string): Promise<Deliv
   else {
     const wanted = squashed(query.trim());
     for (const entry of index) {
-      let files: string[];
+      let found: Dirent[];
       try {
-        files = await readdir(join(entry.pack, 'sessions', entry.matchId), { recursive: true });
+        found = await readdir(join(entry.pack, 'sessions', entry.matchId), { recursive: true, withFileTypes: true });
       } catch (error) {
+        // A pack folder removed since the delivery has nothing to read; any other failure (EACCES) must not read as "no recipient".
         if (isAbsent(error)) continue;
         throw error;
       }
-      for (const file of files) {
-        let text: string;
-        try {
-          text = await readFile(join(entry.pack, 'sessions', entry.matchId, file), 'utf8');
-        } catch {
-          continue;
-        }
-        if (squashed(text).includes(wanted)) named.add(entry.session);
+      for (const file of found.filter((item) => item.isFile())) {
+        if (squashed(await readFile(join(file.parentPath, file.name), 'utf8')).includes(wanted)) named.add(entry.session);
       }
     }
   }

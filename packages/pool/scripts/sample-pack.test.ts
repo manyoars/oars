@@ -1241,7 +1241,10 @@ describe('an objection keeps a session out (plan S5, Art. 21(1))', () => {
 });
 
 describe('the objections a pack was built under (plan S5, Art. 21(1))', () => {
-  const recorded = (f: Fixture): unknown => (JSON.parse(readFileSync(join(f.out, 'pack.json'), 'utf8')) as { objections?: unknown }).objections;
+  const recorded = (f: Fixture): unknown => {
+    const pack: unknown = JSON.parse(readFileSync(join(f.out, 'pack.json'), 'utf8'));
+    return typeof pack === 'object' && pack !== null && 'objections' in pack ? pack.objections : undefined;
+  };
 
   it('writes the SHA-256 of objections.jsonl as read into pack.json, or none without the file', async () => {
     const without = fixture();
@@ -1310,7 +1313,7 @@ ${line}
     await expect(buildPack(f.runtime, options(f))).rejects.toThrow(message);
   };
 
-  it('refuses a bare date for received: a pack built later that day must be told from one built before', async () => {
+  it('refuses a bare date for received: the register keeps the time the objection arrived', async () => {
     await refused(JSON.stringify({ session: S(2), received: '2026-06-05', scope: 'sale' }), /objections\.jsonl line 2 needs received to be an ISO date and time/);
   });
 

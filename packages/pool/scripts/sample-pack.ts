@@ -169,7 +169,7 @@ export class PackError extends Error {}
 /** What an objection covers. A pack is a sale, so `sale` and `all` keep a session out; `training` does too, because lot 1 cannot hand a session over for evaluation and withhold it from training. */
 export const OBJECTION_SCOPES = ['sale', 'training', 'all'] as const;
 
-/** A line of the operator's `objections.jsonl`, beside the owners file: a session id or a person's name, when the objection arrived (a full ISO time, so a pack built after it is told from one built before), and the scope. */
+/** A line of the operator's `objections.jsonl`, beside the owners file: a session id or a person's name, when the objection arrived (a full ISO time, kept for the Art. 21 register), and the scope. */
 export interface Objection {
   session?: string;
   name?: string;
@@ -710,12 +710,9 @@ const landedOf = async (git: Git, root: string | null, shas: readonly string[]):
 };
 
 /** The session's id as its transcript file names it: a Codex or other source's store id is `<harness>-<id>`. */
-const bareIdOf = (record: { session: string; harness?: Harness }): string => {
-  const prefix = `${harnessOf(record)}-`;
-  return harnessOf(record) !== 'claude-code' && record.session.startsWith(prefix) ? record.session.slice(prefix.length) : record.session;
-};
-
-const PREFIXED = ['cursor', 'codex', 'copilot', 'gemini', 'grok', 'opencode', 'pi', 'vscode-copilot', 'otel'] as const satisfies readonly Harness[];
+// Exhaustive over the harnesses that prefix their store ids: a new `Harness` member fails to compile here until it is listed.
+const PREFIXED_HARNESSES: { [K in Exclude<Harness, 'claude-code'>]: true } = { cursor: true, codex: true, copilot: true, gemini: true, grok: true, opencode: true, pi: true, 'vscode-copilot': true, otel: true };
+const PREFIXED = Object.keys(PREFIXED_HARNESSES);
 
 /** A store id as its transcript file names it, from the id alone: `codex-<id>` is `<id>`. `recipients` matches a query against both forms, as an objection may name either. */
 export const bareOf = (session: string): string => {
@@ -745,7 +742,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   const indexKey = await readIndexKey(options.indexKey);
   const { objections, hash: objectionsHash } = await readObjections(dirname(resolve(options.owners)));
   const objectedSessions = new Set(objections.flatMap(({ session }) => (session === undefined ? [] : [session])));
-  const isObjected = (record: { session: string; harness?: Harness }): boolean => objectedSessions.has(record.session) || objectedSessions.has(bareIdOf(record));
+  const isObjected = (record: { session: string; harness?: Harness }): boolean => objectedSessions.has(record.session) || objectedSessions.has(bareOf(record.session));
   const objectedNames = objections.flatMap(({ name }) => (name === undefined ? [] : [squashed(name.trim())]));
   const domains = await readRedactDomains(runtime.storeDir);
   const names = localNames();
