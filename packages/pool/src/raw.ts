@@ -3,7 +3,7 @@
 import { createHash } from 'node:crypto';
 import { covenantNotAccepted, depositsClosed, hasAccepted } from './covenant.js';
 import { answer, bodyOf, bound, fieldOf, notConfigured, refuse, textField, type Env, type RawBucket, type RawUploadedPart } from './http.js';
-import { accountOf } from './identity.js';
+import { accountOf, restrictedRefusal } from './identity.js';
 import { erasedRefusal, isErased, rawDigest } from './tombstones.js';
 
 /** One request carries at most this much, the same cap a deposit has. A transcript past it goes in parts. */
@@ -79,12 +79,14 @@ const consented = async (request: Request, env: Env, account: string, covenant: 
   return held === covenant ? undefined : staleYes(covenant);
 };
 
-/** Every raw request passes the same gate, in this order: the pool is open, the account is signed in and has accepted the covenant in force, the request states its redaction and capture versions, and the account has given raw consent for the covenant in force. */
+/** Every raw request passes the same gate, in this order: the pool is open, the account is signed in and not restricted (Art. 18) and has accepted the covenant in force, the request states its redaction and capture versions, and the account has given raw consent for the covenant in force. */
 const admit = async (request: Request, env: Env): Promise<Admitted | Response> => {
   const version = bound(env.COVENANT_VERSION);
   if (version === undefined) return depositsClosed();
   const account = await accountOf(request, env);
   if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
+  const restricted = await restrictedRefusal(env, account);
+  if (restricted !== undefined) return restricted;
   if (!(await hasAccepted(env, account, version))) return covenantNotAccepted(version);
   const redaction = versionOf(request, REDACTION_HEADER);
   if (redaction === undefined) return refuse(422, 'redaction_required', `State the redaction version the transcript went through in ${REDACTION_HEADER} (letters, digits, dot, dash, underscore; 64 at most).`, REDACTION_HEADER);

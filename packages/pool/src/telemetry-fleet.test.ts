@@ -196,6 +196,20 @@ describe('the fleet read, from the nightly rollup, on the Worker', () => {
     expect((await (await pool.db()).prepare('SELECT account FROM telemetry_install_days').all()).results.map((one) => fieldOf(one, 'account')).sort()).toEqual(['', 'acct-kept', 'erased:']);
   }, 60_000);
 
+  it('leaves a restricted account’s batches out of the rollup and counts them again once the restriction is lifted (GDPR Article 18)', async () => {
+    const db = await pool.db();
+    await db.prepare('INSERT INTO accounts (id, restricted_at) VALUES (?, ?)').bind('acct-restricted', Date.now()).run();
+    await keep(pool, daysAgo(1), uuid(5), [hook(100)], 'acct-restricted');
+    await keep(pool, daysAgo(1), uuid(5), [hook(200)], 'acct-other');
+    await nightly(pool);
+    const rolled = async (): Promise<unknown[]> => (await db.prepare('SELECT install, account, batches FROM telemetry_install_days WHERE install = ? ORDER BY account').bind(uuid(5)).all()).results;
+    expect(await rolled()).toEqual([{ install: uuid(5), account: 'acct-other', batches: 1 }]);
+    // The batch stays stored: lifting the restriction brings it back at the next rebuild of the day.
+    await db.prepare('UPDATE accounts SET restricted_at = NULL WHERE id = ?').bind('acct-restricted').run();
+    await nightly(pool);
+    expect(await rolled()).toEqual([{ install: uuid(5), account: 'acct-other', batches: 1 }, { install: uuid(5), account: 'acct-restricted', batches: 1 }]);
+  }, 60_000);
+
   it('rolls a first-run event into one cell on its install-day: the surface in the metric, a hit only for a run in CI, once however many batches carried it', async () => {
     const firstRun = { v: 1, id: 'x', at: '2026-11-09T12:00:00.000Z', type: 'first-run', cli: '0.4.0', os: 'linux', data: { ci: 'github-actions', surface: 'npx' } };
     await keep(pool, daysAgo(1), uuid(7), [firstRun, hook(100)]);

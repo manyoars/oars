@@ -64,7 +64,7 @@ describe('a restricted account', () => {
     await restrict(account);
     const part = await pool.send(`/v1/raw/${HASH}/parts/1`, { method: 'PUT', body: new Uint8Array([1, 2, 3]) }, token, grant);
     expect(part).toMatchObject(RESTRICTED);
-    const done = await pool.send(`/v1/raw/${HASH}`, { method: 'POST', body: JSON.stringify({ parts: 1, bytes: 3 }) }, token, grant);
+    const done = await pool.send(`/v1/raw/${HASH}/complete`, { method: 'POST', body: JSON.stringify({ parts: 1, bytes: 3 }) }, token, grant);
     expect(done).toMatchObject(RESTRICTED);
     expect(await (await pool.db()).prepare('SELECT COUNT(*) AS held FROM raw_objects WHERE account = ?').bind(account).first('held')).toBe(0);
   }, 60_000);
@@ -75,7 +75,7 @@ describe('a restricted account', () => {
     await restrict(account);
     const exported = await pool.get('/v1/account/export', token);
     expect(exported.status).toBe(200);
-    expect(textOf(fieldOf(exported.json, 'account'), 'id')).toBe(account);
+    expect(textOf(exported.json, 'account')).toBe(account);
   }, 60_000);
 
   it('stops counting toward a shared cell: another account’s later deposit recounts it without the restricted one', async () => {

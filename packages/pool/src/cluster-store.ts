@@ -48,8 +48,11 @@ const into = <Value>(map: Map<string, Value[]>, key: string, value: Value): void
   map.set(key, [...(map.get(key) ?? []), value]);
 };
 
+/** The condition that leaves out an account the operator restricted (GDPR Art. 18): its records stay stored but count toward no cell or stratum, so the pool does not go on processing them at every other account's deposit. The count catches up at the next deposit that touches the key. */
+const NOT_RESTRICTED = 'account NOT IN (SELECT id FROM accounts WHERE restricted_at IS NOT NULL)';
+
 /** The accounts that hold any of `keys`, as the subquery every signal read starts from. */
-const HOLDING = (kind: Kind): string => `SELECT account FROM contributors WHERE kind = '${kind}' AND key IN (SELECT value FROM json_each(?))`;
+const HOLDING = (kind: Kind): string => `SELECT account FROM contributors WHERE kind = '${kind}' AND key IN (SELECT value FROM json_each(?)) AND ${NOT_RESTRICTED}`;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -61,7 +64,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  */
 const countsOf = async (env: Env, kind: Kind, keys: string, now: number): Promise<{ key: string; count: number; any: number }[]> => {
   const [held, accounts, repoKeys, hours, counted] = await Promise.all([
-    rows(env, `SELECT key, account, MIN(day) AS first_day FROM contributors WHERE kind = ? AND key IN (SELECT value FROM json_each(?)) GROUP BY key, account`, kind, keys),
+    rows(env, `SELECT key, account, MIN(day) AS first_day FROM contributors WHERE kind = ? AND key IN (SELECT value FROM json_each(?)) AND ${NOT_RESTRICTED} GROUP BY key, account`, kind, keys),
     rows(env, `SELECT id, first_seen, provider_created, access FROM accounts WHERE id IN (${HOLDING(kind)})`, keys),
     rows(env, `SELECT account, repo_key FROM account_repo_keys WHERE account IN (${HOLDING(kind)})`, keys),
     rows(env, `SELECT account, day, hour FROM deposit_hours WHERE account IN (${HOLDING(kind)})`, keys),
@@ -102,7 +105,7 @@ const countsOf = async (env: Env, kind: Kind, keys: string, now: number): Promis
 };
 
 /** Every cell or stratum key `account` holds: the signals it adds (repo keys, deposit hours) are the account's, so a deposit can change the cluster of any key it holds, not only this batch's. */
-export const heldBy = async (env: Env, account: string, kind: Kind): Promise<string[]> => (await rows(env, 'SELECT DISTINCT key FROM contributors WHERE kind = ? AND account = ?', kind, account)).map((row) => text(row, 'key'));
+export const heldBy = async (env: Env, account: string, kind: Kind): Promise<string[]> => (await rows(env, `SELECT DISTINCT key FROM contributors WHERE kind = ? AND account = ? AND ${NOT_RESTRICTED}`, kind, account)).map((row) => text(row, 'key'));
 
 /**
  * Writes the weighted count of each key in `keys` to its row's `clusters`, and for a cell `clusters_any`. It reads what is committed, then writes after awaiting, so a recount that started earlier can write after a later one:
