@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as Exclusion from '../../cli/src/sessions/exclusion.js';
-import { deposit, paths, type SessionsRuntime } from '../../cli/src/sessions/store.js';
+import { deposit, loadStore, paths, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { rolloutLine, stageCodex } from '../../cli/src/sessions/test-support.js';
-import { buildPack, HARNESS_TERMS, main, matchIdOf, ownerOf, parseOwners, secretIn, serverKeyOf, USAGE, type ManifestRow, type PackCounts, type PackOptions } from './sample-pack.js';
+import { buildPack, HARNESS_TERMS, main, matchIdOf, ownerOf, parseOwners, secretIn, serverKeyOf, USAGE, type Census, type ManifestRow, type PackCounts, type PackOptions, type Tally } from './sample-pack.js';
 
 // Every session the exclusion check was asked about, in call order: the frame-first rule is proved by who was never asked.
 const gated = vi.hoisted((): string[] => []);
@@ -110,6 +110,9 @@ const packFiles = (out: string): string[] =>
     .map((entry) => join(entry.parentPath, entry.name));
 
 const packText = (out: string): string => packFiles(out).map((file) => readFileSync(file, 'utf8')).join('\n');
+
+// The harness's own lines alone, one JSON value per line: a session's skeleton is a JSON document beside them.
+const transcriptText = (out: string): string => packFiles(out).filter((file) => !file.endsWith('skeleton.json')).map((file) => readFileSync(file, 'utf8')).join('\n');
 
 interface IndexRow {
   pack: string;
@@ -229,6 +232,81 @@ describe('the skeleton and the manifest fields it adds (plan S3)', () => {
     const [row] = manifest(f.out);
     expect(row).toMatchObject({ models: { 'claude-opus-5-5': 2 }, turns: 4, skeleton: 'skeleton.json' });
     expect(existsSync(join(f.out, 'sessions', row?.matchId ?? '', 'skeleton.json'))).toBe(true);
+  });
+
+  const skeletonText = (out: string, matchId: string): string => readFileSync(join(out, 'sessions', matchId, 'skeleton.json'), 'utf8');
+  const repoKeysIn = (text: string): string[] => [...text.matchAll(/"repoKey": "([0-9a-f]{16})"/g)].map((found) => found[1] ?? '');
+
+  it('names the skeleton by the match id and holds no store repoKey or session id; two buyer keys give two repoKeys', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    const [held] = (await loadStore(f.runtime.storeDir)).sessions;
+    const storeKey = held?.repo ?? '';
+    expect(storeKey).toMatch(/^[0-9a-f]{16}$/);
+    const under = async (buyerKey: string, out: string): Promise<{ text: string; matchId: string; all: string }> => {
+      await buildPack(f.runtime, options(f, { buyerKey, out: join(f.root, out) }));
+      const matchId = manifest(join(f.root, out))[0]?.matchId ?? '';
+      return { text: skeletonText(join(f.root, out), matchId), matchId, all: packText(join(f.root, out)) };
+    };
+    const a = await under('buyer-a', 'a');
+    const b = await under('buyer-b', 'b');
+    for (const pack of [a, b]) {
+      expect(pack.all).not.toContain(storeKey);
+      expect(pack.all).not.toContain(S(1));
+      expect(JSON.parse(pack.text)).toMatchObject({ id: pack.matchId });
+    }
+    // Non-vacuous: the fixture's skeleton does carry a repoKey, and each buyer's differs from the store's and from the other's. One buyer sees one repository as one key.
+    const keysA = repoKeysIn(a.text);
+    const keysB = repoKeysIn(b.text);
+    expect(keysA.length).toBeGreaterThan(0);
+    expect(new Set(keysA).size).toBe(1);
+    expect(keysA[0]).not.toBe(storeKey);
+    expect(keysB[0]).not.toBe(keysA[0]);
+    expect(a.matchId).not.toBe(b.matchId);
+  });
+
+  it('counts a session whose store holds no skeleton, and writes nothing of it', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    // The skeleton files hold each transcript's root; without one the wire builds no batch.
+    rmSync(paths(f.runtime.storeDir).skeletons, { recursive: true, force: true });
+    expect(await buildPack(f.runtime, options(f))).toMatchObject({ emitted: 0, noSkeleton: 1 });
+    expect(manifest(f.out)).toEqual([]);
+    expect(existsSync(join(f.out, 'sessions'))).toBe(false);
+  });
+
+  it('writes census.json from the same skeletons: counts only, totals equal to the manifest, and no match id or session id', async () => {
+    const f = fixture();
+    const failing = [
+      user(S(1), 1, 'run the build'),
+      line({ type: 'assistant', uuid: uuidOf(S(1), 'a', 1), parentUuid: uuidOf(S(1), 'b', 1), isSidechain: false, timestamp: at(2), version: '2.1.300', sessionId: S(1), requestId: requestOf(S(1), 1), message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: 'toolu_01build', name: 'Bash', input: { command: 'npm test' } }], usage: { input_tokens: 10, output_tokens: 20 } } }),
+      line({ type: 'user', uuid: uuidOf(S(1), 'b', 3), parentUuid: uuidOf(S(1), 'a', 1), isSidechain: false, timestamp: at(3), version: '2.1.300', sessionId: S(1), cwd: repoCwd, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_01build', is_error: true, content: 'Error: Exit code 1' }] } }),
+      assistant(S(1), 4, 'it failed'),
+    ];
+    f.write('-work-oars', S(1), failing);
+    f.write('-work-shop-web', S(2), [user(S(2), 1, 'fix the page'), assistant(S(2), 1, 'fixed')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    const rows = manifest(f.out);
+    const census = JSON.parse(readFileSync(join(f.out, 'census.json'), 'utf8')) as Census;
+    const total = (tally: Tally): number => Object.values(tally).reduce((sum, count) => sum + count, 0);
+    expect(census.sessions).toBe(rows.length);
+    expect(total(census.harness)).toBe(rows.length);
+    expect(census.harness).toEqual({ 'claude-code': 2 });
+    expect(census.harnessVersion).toEqual({ '2.1.300': 2 });
+    expect(total(census.turnBucket)).toBe(rows.length);
+    expect(total(census.model)).toBe(rows.reduce((sum, row) => sum + total(row.models), 0));
+    // Every failed call a skeleton holds is counted once, and the fixture holds one.
+    const failed = rows.flatMap((row) => skeletonText(f.out, row.matchId).match(/"errorCode": "[^"]+"/g) ?? []);
+    expect(failed.length).toBeGreaterThan(0);
+    expect(total(census.errorCode)).toBe(failed.length);
+    expect(total(census.recovery)).toBe(failed.length);
+    expect(total(census.promptClass)).toBeGreaterThanOrEqual(rows.length);
+    const text = readFileSync(join(f.out, 'census.json'), 'utf8');
+    for (const row of rows) expect(text).not.toContain(row.matchId);
+    for (const session of [S(1), S(2)]) expect(text).not.toContain(session);
   });
 });
 
@@ -492,14 +570,14 @@ describe('the acceptance rule (plan S1)', () => {
 });
 
 describe('the run record', () => {
-  it('writes how long the run took and how many bytes the pack holds (sessions and manifest) into pack.json', async () => {
+  it('writes how long the run took and how many bytes the pack holds (sessions, manifest, and census) into pack.json', async () => {
     const f = fixture();
     f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done')]);
     await stored(f);
     await buildPack(f.runtime, options(f));
     const pack: unknown = JSON.parse(readFileSync(join(f.out, 'pack.json'), 'utf8'));
     const field = (name: string): unknown => (typeof pack === 'object' && pack !== null ? Reflect.get(pack, name) : undefined);
-    const held = [...packFiles(f.out), join(f.out, 'manifest.jsonl')].reduce((sum, file) => sum + statSync(file).size, 0);
+    const held = [...packFiles(f.out), join(f.out, 'manifest.jsonl'), join(f.out, 'census.json')].reduce((sum, file) => sum + statSync(file).size, 0);
     expect(field('bytes')).toBe(held);
     expect(held).toBeGreaterThan(0);
     const elapsed = field('elapsedMs');
@@ -695,7 +773,7 @@ describe('a Codex session (plan S2)', () => {
     const f = fixture();
     expect(await packed(f)).toMatchObject({ emitted: 1 });
     const [row] = manifest(f.out);
-    const text = packText(f.out);
+    const text = transcriptText(f.out);
     expect(text).not.toContain(CODEX_ID);
     expect(text).not.toContain(CODEX_CALL);
     expect(text).not.toContain(CODEX_CALL.slice(5));
