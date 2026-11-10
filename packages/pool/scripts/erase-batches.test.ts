@@ -54,7 +54,7 @@ const accountName = (): string => {
 interface Fixture {
   account: string;
   other: string;
-  keys: { a1: string; a2: string; b1: string; boundary: string; other: string; anonymous: string; past: string };
+  keys: { a1: string; a2: string; b1: string; boundary: string; other: string; anonymous: string; past: string; anonA: string; index: string };
 }
 
 /** Batches that name the account (two installs, three days, one at the edge of retention), one that names another account, one that names none, and one past retention that names the account too. */
@@ -69,6 +69,8 @@ const seed = async (bucket: TestBucket, db: TestDb): Promise<Fixture> => {
     other: 'telemetry/2026-11-08/other.json',
     anonymous: 'telemetry/2026-11-08/anonymous.json',
     past: 'telemetry/2026-08-10/past.json',
+    anonA: 'telemetry/2026-11-08/a-anon.json',
+    index: 'telemetry/2026-11-08/index.json',
   };
   await bucket.put(keys.a1, batchText('2026-11-08', INSTALL_A, account, 'a1'));
   await bucket.put(keys.a2, batchText('2026-11-07', INSTALL_A, account, 'a2', 1));
@@ -77,8 +79,11 @@ const seed = async (bucket: TestBucket, db: TestDb): Promise<Fixture> => {
   await bucket.put(keys.other, batchText('2026-11-08', INSTALL_C, other, 'other'));
   await bucket.put(keys.anonymous, batchText('2026-11-08', INSTALL_D, undefined, 'anonymous'));
   await bucket.put(keys.past, batchText('2026-08-10', INSTALL_A, account, 'past'));
+  // A batch of install A that names no account (sent before sign-in), and an index-looking object that lists the account but is not a batch.
+  await bucket.put(keys.anonA, batchText('2026-11-08', INSTALL_A, undefined, 'anonA'));
+  await bucket.put(keys.index, JSON.stringify({ account, batches: [keys.a1, keys.a2, keys.b1] }));
   // The rollup's rows as eraseAccount leaves them: the erased account's rows hold a placeholder, the others their account.
-  for (const [day, install, who] of [['2026-11-08', INSTALL_A, 'erased:1'], ['2026-11-07', INSTALL_A, 'erased:2'], ['2026-11-07', INSTALL_B, 'erased:3'], ['2026-08-11', INSTALL_A, 'erased:4'], ['2026-11-08', INSTALL_C, other], ['2026-11-08', INSTALL_D, '']] as const) {
+  for (const [day, install, who] of [['2026-11-08', INSTALL_A, 'erased:1'], ['2026-11-07', INSTALL_A, 'erased:2'], ['2026-11-07', INSTALL_B, 'erased:3'], ['2026-08-11', INSTALL_A, 'erased:4'], ['2026-11-08', INSTALL_C, other], ['2026-11-08', INSTALL_D, ''], ['2026-11-08', INSTALL_A, '']] as const) {
     await db.prepare("INSERT INTO telemetry_install_days (day, install, account, batches, events, measures) VALUES (?, ?, ?, 1, 2, '[]')").bind(day, install, who).run();
   }
   return { account, other, keys };
@@ -96,13 +101,14 @@ describe('finding the batches of an account (Item 1)', () => {
     const [bucket, db] = [await pool.bucket(), await pool.db()];
     await clean(bucket, db);
     const fixture = await seed(bucket, db);
-    // A batch under a day that names the account in an index-looking sibling key is still read for itself.
+    // The index-looking object that lists the account is not a batch and is not returned.
     const found = await findBatches(telemetryOf(bucket), fixture.account, NOW);
     expect(found.map((batch) => batch.key).sort()).toEqual([fixture.keys.a2, fixture.keys.a1, fixture.keys.b1, fixture.keys.boundary].sort());
     expect(found.find((batch) => batch.key === fixture.keys.a1)?.install).toBe(INSTALL_A);
     // The batch past retention is left to its lifecycle rule, and another account's is not found.
     expect(found.map((batch) => batch.key)).not.toContain(fixture.keys.past);
     expect(found.map((batch) => batch.key)).not.toContain(fixture.keys.other);
+    expect(found.map((batch) => batch.key)).not.toContain(fixture.keys.index);
   });
 
   it('skips an object that is not a batch, and a batch without a usable install id', async () => {
@@ -128,7 +134,7 @@ describe('rewriting them (Items 2 and 3)', () => {
       made += 1;
       return `aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa${String(made)}`;
     });
-    expect(rewritten).toBe(4);
+    expect(rewritten).toBe(5);
     // One id per old install: A has three batches and gets one id, B gets another.
     expect(made).toBe(2);
     const after = await all(bucket);
@@ -137,7 +143,7 @@ describe('rewriting them (Items 2 and 3)', () => {
       expect(keys).not.toContain(key);
       expect(keys).toContain(rewriteKeyOf(key));
     }
-    for (const key of [fixture.keys.other, fixture.keys.anonymous, fixture.keys.past]) expect(after.find((one) => one.key === key)).toEqual(before.find((one) => one.key === key));
+    for (const key of [fixture.keys.other, fixture.keys.anonymous, fixture.keys.past, fixture.keys.index]) expect(after.find((one) => one.key === key)).toEqual(before.find((one) => one.key === key));
     const record = (text: string): { received: unknown; account: unknown; install: string; events: unknown } => {
       const parsed: unknown = JSON.parse(text);
       const batch = fieldOf(parsed, 'batch');
@@ -156,6 +162,14 @@ describe('rewriting them (Items 2 and 3)', () => {
     expect(ids.size).toBe(2);
     // The old ids stand in no batch that names the account or the placeholder, and in no row of the rollup that names an erased account.
     for (const one of after.filter((seen) => seen.key.endsWith('-erased.json'))) expect(one.text).not.toMatch(new RegExp(`${INSTALL_A}|${INSTALL_B}|${fixture.account}`));
+    // The anonymous batch of install A is rewritten too, with the same fresh id as A's other batches and no account added.
+    const anonAfter = JSON.parse(after.find((one) => one.key === rewriteKeyOf(fixture.keys.anonA))?.text ?? '{}') as object;
+    expect('account' in anonAfter).toBe(false);
+    expect(installOf(JSON.stringify(anonAfter))).toBe(installOf(after.find((one) => one.key === rewriteKeyOf(fixture.keys.a1))?.text ?? ''));
+    // The old ids stand in no object within retention (the past one is left to its lifecycle rule) and in no row of the rollup.
+    for (const one of after.filter((seen) => seen.key !== fixture.keys.past)) expect(one.text).not.toMatch(new RegExp(`${INSTALL_A}|${INSTALL_B}`));
+    const oldRows = (await db.prepare('SELECT install FROM telemetry_install_days WHERE install IN (?, ?)').bind(INSTALL_A, INSTALL_B).all()).results;
+    expect(oldRows).toHaveLength(0);
     expect(await installsPerDay(db)).toEqual(countsBefore);
     const rows = (await db.prepare("SELECT install FROM telemetry_install_days WHERE account LIKE 'erased:%'").all()).results.map((row) => fieldOf(row, 'install'));
     expect(rows).toHaveLength(4);
@@ -163,9 +177,11 @@ describe('rewriting them (Items 2 and 3)', () => {
     expect(rows).not.toContain(INSTALL_B);
     // The other account's and the anonymous install's rows stand as they were.
     expect((await db.prepare('SELECT install FROM telemetry_install_days WHERE account = ?').bind(fixture.other).all()).results.map((row) => fieldOf(row, 'install'))).toEqual([INSTALL_C]);
-    expect((await db.prepare("SELECT install FROM telemetry_install_days WHERE account = ''").all()).results.map((row) => fieldOf(row, 'install'))).toEqual([INSTALL_D]);
+    const anonymousRows = (await db.prepare("SELECT install FROM telemetry_install_days WHERE account = '' ORDER BY install").all()).results.map((row) => fieldOf(row, 'install'));
+    expect(anonymousRows).toHaveLength(2);
+    expect(anonymousRows).toContain(INSTALL_D);
     // Each old batch is tombstoned by the hash of its key and the date of the erasure.
-    expect((await db.prepare("SELECT erased_on FROM erasure_tombstones WHERE kind = 'telemetry-batch'").all()).results.map((row) => fieldOf(row, 'erased_on'))).toEqual(['2026-11-09', '2026-11-09', '2026-11-09', '2026-11-09']);
+    expect((await db.prepare("SELECT erased_on FROM erasure_tombstones WHERE kind = 'telemetry-batch'").all()).results.map((row) => fieldOf(row, 'erased_on'))).toEqual(['2026-11-09', '2026-11-09', '2026-11-09', '2026-11-09', '2026-11-09']);
   });
 
   it('draws a different install id on each erasure', async () => {
@@ -198,10 +214,10 @@ describe('rerunning (Item 4)', () => {
   });
 
   it.each([
-    ['before the second rewrite is written', 'write', 2],
-    ['after every rewrite and the rows, before the first delete', 'remove', 1],
-    ['in the middle of the deletes', 'remove', 3],
-  ] as const)('a stop %s runs again to the same end as a run that did not stop, with no batch twice', async (_name, where, onCall) => {
+    ['before the second rewrite is written', 'write', 2, 5],
+    ['after every rewrite and the rows, before the first delete', 'remove', 1, 5],
+    ['in the middle of the deletes', 'remove', 3, 3],
+  ] as const)('a stop %s runs again to the same end as a run that did not stop, with no batch twice', async (_name, where, onCall, expected) => {
     const [bucket, db] = [await pool.bucket(), await pool.db()];
     await clean(bucket, db);
     const fixture = await seed(bucket, db);
@@ -213,10 +229,10 @@ describe('rerunning (Item 4)', () => {
     };
     const stopping = telemetryOf(bucket, where === 'write' ? { beforeWrite: stop } : { beforeRemove: stop });
     await expect(eraseBatches(storeOf(db, stopping), fixture.account, NOW)).rejects.toThrow('stopped');
-    expect(await eraseBatches(storeOf(db, telemetryOf(bucket)), fixture.account, NOW)).toBeGreaterThanOrEqual(0);
+    expect(await eraseBatches(storeOf(db, telemetryOf(bucket)), fixture.account, NOW)).toBe(expected);
     const after = await all(bucket);
-    // Exactly the four rewrites and the three batches that were never the account's.
-    expect(after.map((one) => one.key).sort()).toEqual([...[fixture.keys.a1, fixture.keys.a2, fixture.keys.b1, fixture.keys.boundary].map(rewriteKeyOf), fixture.keys.other, fixture.keys.anonymous, fixture.keys.past].sort());
+    // Exactly the five rewrites and the four objects that were never the account's batches.
+    expect(after.map((one) => one.key).sort()).toEqual([...[fixture.keys.a1, fixture.keys.a2, fixture.keys.b1, fixture.keys.boundary, fixture.keys.anonA].map(rewriteKeyOf), fixture.keys.other, fixture.keys.anonymous, fixture.keys.past, fixture.keys.index].sort());
     // The rollup's rows and the batches carry the same ids, and the daily counts held.
     const batchInstalls = new Set(after.filter((one) => one.key.endsWith('-erased.json')).map((one) => installOf(one.text)));
     expect(batchInstalls.size).toBe(2);
@@ -240,9 +256,9 @@ describe('eraseAccount runs it (Item 4)', () => {
       telemetry,
     };
     const erased = await eraseAccount(store, fixture.account, NOW);
-    expect(erased.objects).toBe(4);
-    expect((await all(bucket)).filter((one) => one.text.includes(fixture.account))).toHaveLength(1);
-    expect((await all(bucket)).filter((one) => one.key.endsWith('-erased.json'))).toHaveLength(4);
+    expect(erased.objects).toBe(5);
+    expect((await all(bucket)).filter((one) => one.text.includes(fixture.account))).toHaveLength(2);
+    expect((await all(bucket)).filter((one) => one.key.endsWith('-erased.json'))).toHaveLength(5);
     // A rerun of the whole erasure moves no batch a second time.
     const settled = await all(bucket);
     expect((await eraseAccount(store, fixture.account, NOW)).objects).toBe(0);
