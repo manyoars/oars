@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { cellsOf, storeOf } from './cell-increments.js';
 import { SHAPE_CLASS } from './cells.js';
 import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from './pool-fixture.js';
-import { FORMAT_4_TOOL_FIELDS, FORMAT_5_TOOL_FIELDS, parseSkeleton, READ_FORMATS, skeletonOf, SKELETON_FORMAT, type SessionSkeleton } from './pool-wire.js';
+import { bucketOf, FORMAT_4_TOOL_FIELDS, FORMAT_5_TOOL_FIELDS, parseSkeleton, READ_FORMATS, skeletonOf, SKELETON_FORMAT, type SessionSkeleton } from './pool-wire.js';
 
 const framed = frame({ shell: 'bash' });
 const NAMES = [{ kind: 'dir', name: 'billing' }, { kind: 'file', name: 'plan.md' }];
@@ -47,7 +47,7 @@ describe('the wire formats', () => {
     if (!parsed.ok) throw new Error(parsed.reason);
     expect(parsed).toMatchObject({ others: 0, extensions: [] });
     expect(parsed.skeleton.format).toBe(5);
-    expect(parsed.skeleton.transcripts[0]?.tools[0]).toMatchObject({ argFeatures: [{ key: 'pattern', valueSize: '1-8', patternFeatures: ['anchor'] }], argValues: [{ key: 'output_mode', enumValue: 'count' }], changeKind: ['value-changed'], names: NAMES, diffShape: ['import-added', 'lines-changed'] });
+    expect(parsed.skeleton.transcripts[0]?.tools[0]).toMatchObject({ argFeatures: [{ key: 'pattern', valueSize: '1-8', patternFeatures: ['anchor'] }], argValues: [{ key: 'output_mode', enumValue: 'count' }], changeKind: ['value-changed'], names: NAMES, templates: ['git commit -m <text>'], templatesDropped: bucketOf('count', 1), diffShape: ['import-added', 'lines-changed'] });
     expect(layerOne(parsed.skeleton)).toEqual(['shape:file.search/change/value-changed', 'shape:file.search/enum/output_mode=count', 'shape:file.search/pattern/pattern=anchor', 'shape:file.search/size/pattern=1-8']);
   });
 
