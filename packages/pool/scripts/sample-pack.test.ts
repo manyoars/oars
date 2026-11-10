@@ -1292,6 +1292,20 @@ describe('an objection by name (plan S5, Art. 21(1))', () => {
     expect(counts).toMatchObject({ emitted: 0, objected: 1 });
   });
 
+  it('refuses a session whose name sits in a JSON escape on a line redaction changes nothing in', async () => {
+    const f = fixture();
+    // An assistant line has no cwd to mask, so redaction leaves it as written: the name must be found by decoding the line, not by what redaction rewrote (on Linux the user line's temp-dir cwd is untouched too).
+    const escaped = assistant(S(1), 1, 'thanks to Zoë Quill for the fix').replace('Zoë', `Zo${String.fromCharCode(92)}u00eb`);
+    const raw = f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), escaped]);
+    expect(readFileSync(raw, 'utf8')).not.toContain('Zoë');
+    await stored(f);
+    objectTo(f, { name: 'Zoë Quill', received: '2026-06-05T09:00:00.000Z', scope: 'sale' });
+
+    const counts = await buildPack(f.runtime, options(f));
+
+    expect(counts).toMatchObject({ emitted: 0, objected: 1 });
+  });
+
   it('stops on an objections line it cannot read, so no session leaves on a guess', async () => {
     const f = fixture();
     f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done')]);
