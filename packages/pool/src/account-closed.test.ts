@@ -1,6 +1,6 @@
 // A closed account (covenant 6.1, 7.2(a)): sign-in, machine enrollment, and activation refuse it, and the message names where to write.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { startPool, stubUser, textOf, type TestPool } from './test-pool.js';
+import { fieldOf, startPool, stubUser, textOf, type TestPool } from './test-pool.js';
 
 let pool: TestPool;
 let next = 9100;
@@ -23,6 +23,8 @@ const member = async (): Promise<{ token: string; account: string; id: string }>
 };
 
 /** The state a close leaves on the account row, set directly so each route is tested alone (the operator step that does it has its own tests). */
+const tokensOf = async (account: string): Promise<number> => Number(fieldOf(await (await pool.db()).prepare('SELECT COUNT(*) AS held FROM tokens WHERE account = ?').bind(account).first(), 'held'));
+
 const close = async (account: string): Promise<void> => {
   await (await pool.db()).prepare('UPDATE accounts SET closed_at = ? WHERE id = ?').bind(Date.now(), account).run();
 };
@@ -36,9 +38,9 @@ describe('a closed account', () => {
     pool.stub.approve(`device-${/USER-(\d+)/.exec(userCode)?.[1] ?? ''}`, stubUser(id));
     const handle = textOf(started.json, 'handle');
     await pool.due(handle);
-    const before = (await (await pool.db()).prepare('SELECT COUNT(*) AS held FROM tokens WHERE account = ?').bind(account).first<{ held: number }>())?.held;
+    const before = await tokensOf(account);
     expect(await pool.post('/v1/login/poll', { handle })).toEqual(CLOSED);
-    expect((await (await pool.db()).prepare('SELECT COUNT(*) AS held FROM tokens WHERE account = ?').bind(account).first<{ held: number }>())?.held).toBe(before);
+    expect(await tokensOf(account)).toBe(before);
   }, 60_000);
 
   it('is refused at machine enrollment with 403 account_closed', async () => {
@@ -51,7 +53,7 @@ describe('a closed account', () => {
     const { token, account } = await member();
     const pending = await pool.post('/v1/machines/enroll', BOX, token);
     const revoked = await pool.post('/v1/machines/enroll', BOX, token);
-    await (await pool.db()).prepare("UPDATE machines SET state = 'revoked' WHERE id = ?").bind(textOf((revoked.json as { machine: unknown }).machine, 'id')).run();
+    await (await pool.db()).prepare("UPDATE machines SET state = 'revoked' WHERE id = ?").bind(textOf(fieldOf(revoked.json, 'machine'), 'id')).run();
     await close(account);
     expect(await pool.post('/v1/machines/activate', {}, textOf(pending.json, 'token'))).toEqual(CLOSED);
     expect(await pool.post('/v1/machines/activate', {}, textOf(revoked.json, 'token'))).toMatchObject({ status: 401, json: { error: 'machine_revoked' } });
