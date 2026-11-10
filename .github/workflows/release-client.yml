@@ -63,7 +63,10 @@ jobs:
       - run: npm ci
       - run: just check
       - name: Pack the tarball that will be published
-        run: npm pack -w packages/client --pack-destination release-pack
+        # `npm pack` does not create the destination (run 42905213803 failed with ENOENT), and a relative one resolves against the repo root.
+        run: |
+          mkdir -p release-pack
+          npm pack -w packages/client --pack-destination release-pack
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-tarball
