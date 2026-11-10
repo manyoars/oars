@@ -338,8 +338,8 @@ const blind = (hidden: RegExp): PoolDb => {
     }),
     batch: async (statements) => {
       written = true;
-      const done = await db.batch(statements.map((statement) => real.get(statement)!));
-      return (done as unknown[]).map((one) => ({ meta: { changes: Number(fieldOf(fieldOf(one, 'meta'), 'changes')) } }));
+      const done: unknown = await db.batch(statements.flatMap((statement) => real.get(statement) ?? []));
+      return (Array.isArray(done) ? done : []).map((one) => ({ meta: { changes: Number(fieldOf(fieldOf(one, 'meta'), 'changes')) } }));
     },
   };
 };
