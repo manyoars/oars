@@ -8,9 +8,9 @@ export const MAX_BATCH_EVENTS = 250;
 
 /**
  * What one request can put in the record, sized from what the CLI sends (`packages/cli/src/telemetry/send.ts`: at most `MAX_BATCH_EVENTS` events a request). The two event types whose size depends on a list are bounded by the schema
- * (`packages/cli/src/telemetry/schema.ts`): a `command` holds at most 4 path and 40 flag tokens of 32 characters, 1,783 bytes as the spool line, with its `ci` word, and a `wire` event holds the register's field list and nothing else (`wire.ts:1-3`, `FIELD_ROWS` in
+ * (`packages/cli/src/telemetry/schema.ts`): a `command` holds at most 4 path and 40 flag tokens of 32 characters, 1,804 bytes as the spool line, with its `ci` word and `cardLine` arm, and a `wire` event holds the register's field list and nothing else (`wire.ts:1-3`, `FIELD_ROWS` in
  * `sessions/pool-outbox.ts`), 2,254 bytes with a seven-digit byte count on every field. Both are measured from the CLI's own writers in `packages/cli/src/telemetry/wire.test.ts` ("the size of the largest telemetry events"). Every other type is
- * numbers and closed words, and a typical command event is about 0.3 KB, so a usual batch is about 75 KB. The worst a CLI can send is 11 `wire` events (one per harness) and 239 maximal commands, 440 KB, so the cap is 512 KiB: it admits that,
+ * numbers and closed words, and a typical command event is about 0.3 KB, so a usual batch is about 75 KB. The worst a CLI can send is 11 `wire` events (one per harness) and 239 maximal commands, 445 KiB, so the cap is 512 KiB: it admits that,
  * and is half the 1 MiB it replaces. The route takes no credential, so this is what bounds the bytes one request can write.
  */
 export const MAX_BATCH_BYTES = 512 * 1024;

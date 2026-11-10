@@ -103,6 +103,9 @@ export const HOOK_OUTCOMES = ['hit', 'miss', 'held', 'error'] as const;
 export const RECALL_FORMS = ['pattern', 'entity', 'question', 'text', 'legacy'] as const;
 export const RECALL_MODES = ['pull', 'push'] as const;
 export const RECALL_ARMS = ['shown', 'held'] as const;
+/** What the weekly card line did on a command: printed, held back by the holdback, or not due. */
+export const CARD_LINE_ARMS = ['shown', 'held', 'not_due'] as const;
+export type CardLineArm = (typeof CARD_LINE_ARMS)[number];
 /** The read families a recall can serve, as the program names them. */
 export const RECALL_FAMILY_NAMES = ['recovery', 'fit', 'cost', 'change', 'live', 'adoption', 'method', 'next-step', 'tool-day', 'version-boundary', 'substitution', 'interaction', 'day-move', 'entity'] as const;
 export const FETCH_HARNESSES = ['claude-code', 'cursor', 'codex', 'copilot', 'gemini', 'grok', 'opencode', 'pi', 'vscode-copilot', 'otel', 'other'] as const;
@@ -122,7 +125,7 @@ const WIRE_LENGTH = WIRE_NAMES.size;
 
 /** One line per event type. */
 const EVENTS: ReadonlyMap<string, FieldRules> = new Map([
-  ['command', rules({ path: tokens(4), flags: tokens(40), durationMs: whole(DAY_MS), exitCode: whole(255), errorClass: oneOf(ERROR_CLASSES), ci: oneOf(CI_WORDS) })],
+  ['command', rules({ path: tokens(4), flags: tokens(40), durationMs: whole(DAY_MS), exitCode: whole(255), errorClass: oneOf(ERROR_CLASSES), ci: oneOf(CI_WORDS), cardLine: oneOf(CARD_LINE_ARMS) })],
   ['hook', rules({ name: oneOf(HOOK_NAMES), latencyMs: whole(DAY_MS), outcome: oneOf(HOOK_OUTCOMES), bytes: whole(BYTES), harness: oneOf(WIRE_HARNESSES), harnessVersion: MODEL_OR_VERSION(versionWord), model: MODEL_OR_VERSION(modelWord) })],
   [
     'recall',

@@ -227,7 +227,7 @@ const keptSkeleton = async (store: EraseStore, account: string, id: string, reas
 /** The deposit row `account`/`id`: tombstoned, its content replaced by the marker (and, under a lawful request, the anonymous shape), its tier and counts left. Answers whether a row was changed. */
 const dropDeposit = async (store: EraseStore, account: string, id: string, reason: ErasureReason, now: Date): Promise<number> => {
   await tombstone(store, 'deposit', await depositDigest(account, id), reason, now);
-  return store.run("UPDATE deposits SET skeleton = ?, extensions = '[]', deltas = '[]', erased_on = ? WHERE account = ? AND id = ? AND erased_on IS NULL", [await keptSkeleton(store, account, id, reason), dayOf(now), account, id]);
+  return store.run("UPDATE deposits SET skeleton = ?, extensions = '[]', deltas = '[]', request_country = NULL, erased_on = ? WHERE account = ? AND id = ? AND erased_on IS NULL", [await keptSkeleton(store, account, id, reason), dayOf(now), account, id]);
 };
 
 /**

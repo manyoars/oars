@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "oars",
+  "version": "0.4.0",
+  "description": "Recall from your own past coding agent sessions, kept on your machine, over MCP.",
+  "author": { "name": "Many Oars" },
+  "homepage": "https://manyoars.com/",
+  "repository": "https://github.com/manyoars/oars",
+  "license": "Apache-2.0",
+  "keywords": ["session-history", "agent-memory", "mcp"]
+}

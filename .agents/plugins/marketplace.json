@@ -1,0 +1,12 @@
+{
+  "name": "manyoars",
+  "interface": { "displayName": "Many Oars" },
+  "plugins": [
+    {
+      "name": "oars",
+      "source": { "source": "local", "path": "./" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Developer Tools"
+    }
+  ]
+}

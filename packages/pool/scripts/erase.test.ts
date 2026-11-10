@@ -311,6 +311,14 @@ describe('erasing a row that holds a leaked secret', () => {
     await expect(eraseLeakedSecret(await store(), { account: "a'; DROP TABLE x; --", id: '00000000000073aa' }, NOW)).rejects.toThrow(/not a pool id/);
   }, 60_000);
 
+  it('takes the request country out of an erased deposit, because the country is an identifier', async () => {
+    const { token, account } = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000079aa'), token, { 'MF-CF-Blob': JSON.stringify({ country: 'DE' }) })).status).toBe(201);
+    expect(await all("SELECT request_country FROM deposits WHERE id = '00000000000079aa'")).toEqual([{ request_country: 'DE' }]);
+    await eraseLeakedSecret(await store(), { account, id: '00000000000079aa' }, NOW);
+    expect(await all("SELECT request_country, erased_on FROM deposits WHERE id = '00000000000079aa'")).toEqual([{ request_country: null, erased_on: '2026-11-08' }]);
+  }, 60_000);
+
   it('refuses a selector that names no deposit row, and writes no tombstone or audit row for it', async () => {
     const { account } = await member();
     const before = await count('SELECT COUNT(*) AS held FROM erasure_tombstones');
@@ -1166,7 +1174,7 @@ const mondayMidnight = (value: unknown): boolean => typeof value === 'number' &&
 const COLUMNS: { readonly [column: string]: (value: unknown) => boolean } = {
   account: (value) => typeof value === 'string' && /^erased:[0-9a-f]{32}$/.test(value),
   id: randomHex, machine: (value) => value === null || randomHex(value), ingest: randomHex,
-  skeleton: () => true, extensions: (value) => value === '[]', deltas: (value) => value === '[]', erased_on: (value) => value === null,
+  skeleton: () => true, extensions: (value) => value === '[]', deltas: (value) => value === '[]', erased_on: (value) => value === null, request_country: (value) => value === null,
   tier: tag, vocab_version: tag, host_class: tag, launcher: tag, claimed_host_class: tag, claimed_launcher: tag,
   counted_at: mondayMidnight, format: (value) => typeof value === 'number', fields_version: (value) => typeof value === 'number', other_values: (value) => typeof value === 'number',
 };
@@ -1258,7 +1266,7 @@ describe('anonymizing a skeleton', () => {
   });
 
   it('keeps the claimed host class and launcher, the recommendation arm, and the structure of a rich skeleton, in the order sent', () => {
-    const rich: unknown = Object.assign({}, richSkeleton('00000000000095aa'), { claimed: { hostClass: 'ci', launcher: 'scheduled' } });
+    const rich: unknown = richSkeleton('00000000000095aa');
     const kept = anonymizeSkeleton(rich, 'lawful-request');
     expect(kept).toMatchObject({ claimed: { hostClass: 'ci', launcher: 'scheduled' }, recommendations: [{ arm: 'shown', from: 0, to: 1 }] });
     keptShape(rich, kept);

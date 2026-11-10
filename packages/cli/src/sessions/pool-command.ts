@@ -273,8 +273,19 @@ export const poolLogout = async (deps: RunDeps, options: { server?: string | und
   return { document: { ok: true, server, revoked, removed: true }, text };
 };
 
+/** The answer to the region question, which the pool stores with the acceptance and, while it has no representative in the EU or the UK, refuses a yes to (403 `region_closed`). */
+type Region = 'yes' | 'no';
+
+const REGION_FLAG = '--in-eu-eea-uk';
+const REGION_QUESTION = 'Are you in the EU, the EEA, or the UK? (yes/no)';
+
+const regionOf = (text: string | undefined): Region | undefined => {
+  const answer = text?.trim().toLowerCase();
+  return answer === 'yes' || answer === 'no' ? answer : undefined;
+};
+
 /** A send stops here when the server is closed or wants a covenant accepted, before the batch is read for the last time. */
-const openCovenant = async (deps: RunDeps, server: string, token: string, accept: string | undefined, via: Sender): Promise<void> => {
+const openCovenant = async (deps: RunDeps, server: string, token: string, accept: string | undefined, region: Region | undefined, via: Sender): Promise<void> => {
   const reply = await ask(deps, DEPOSIT, server, '/v1/covenant', { token }, via);
   if (reply.status !== 200 || !isObject(reply.body)) throw refusal(DEPOSIT, reply);
   const version = textIn(reply.body, 'version');
@@ -295,9 +306,26 @@ const openCovenant = async (deps: RunDeps, server: string, token: string, accept
   }
   deps.io.stderr(`\n${screen.text}\n\n> `);
   emitOf(deps)('covenant-shown', { version });
-  const typed = await lineFrom(runtimeOf(deps).stdin);
-  if (typed?.trim() !== screen.phrase) throw notAccepted(`${typed === undefined ? 'No phrase was typed' : 'That was not the phrase'}. To accept covenant ${version}, type exactly: ${screen.phrase}. Nothing was accepted.`);
-  const body = { version, textSha256: createHash('sha256').update(screen.text).digest('hex'), input: 'typed', client: `oars/${deps.version}` };
+  // One reader for both lines: a second one opened after the first closed would lose a line the first had already taken from a pipe.
+  const lines = createInterface({ input: runtimeOf(deps).stdin, terminal: false });
+  const iterator = lines[Symbol.asyncIterator]();
+  const nextLine = async (): Promise<string | undefined> => {
+    const next = await iterator.next();
+    return next.done === true ? undefined : next.value;
+  };
+  let answered: Region | undefined = region;
+  try {
+    const typed = await nextLine();
+    if (typed?.trim() !== screen.phrase) throw notAccepted(`${typed === undefined ? 'No phrase was typed' : 'That was not the phrase'}. To accept covenant ${version}, type exactly: ${screen.phrase}. Nothing was accepted.`);
+    if (region === undefined) {
+      deps.io.stderr(`${REGION_QUESTION} > `);
+      answered = regionOf(await nextLine());
+    }
+  } finally {
+    lines.close();
+  }
+  if (answered === undefined) throw notAccepted('Answer yes or no: are you in the EU, the EEA, or the UK? Nothing was accepted.');
+  const body = { version, textSha256: createHash('sha256').update(screen.text).digest('hex'), input: 'typed', client: `oars/${deps.version}`, euEeaUk: answered };
   const accepted = await ask(deps, DEPOSIT, server, '/v1/covenant/accept', { token, body }, via);
   if (accepted.status !== 200) throw refusal(DEPOSIT, accepted);
   // A yes to the raw prompt belongs to the covenant it was given under, and a covenant can change what that prompt covers: accepting another version asks the raw question again.
@@ -430,7 +458,7 @@ const rawNote = (consent: string | null): string =>
 export const currentTerms = (deps: RunDeps): Promise<string[]> => loadTerms(exclusionPaths(runtimeOf(deps).projectsRoot, deps.env).terms);
 
 /** `deposit --send <hash>`: the send lock the detached sender (hook-bin.js nightly) takes too, then a skip for a hash already in `sent.log`, then the batch lock, then the covenant (accepted here or before, or nothing is sent), then the request. The body is read and hashed again just before the request. */
-const sendBatch = async (deps: RunDeps, options: { outbox: string; server: string; token: string; hash: string; acceptCovenant: string | undefined; via: Sender | undefined }): Promise<Outcome> => {
+const sendBatch = async (deps: RunDeps, options: { outbox: string; server: string; token: string; hash: string; acceptCovenant: string | undefined; region: Region | undefined; via: Sender | undefined }): Promise<Outcome> => {
   const { outbox, server, token, hash } = options;
   const via = options.via ?? networkSender(deps, DEPOSIT);
   if (!/^[0-9a-f]{64}$/.test(hash)) throw usage('--send takes the SHA-256 that oars pool outbox printed: 64 hexadecimal characters.', DEPOSIT);
@@ -449,7 +477,7 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
       const locked = await lockedAcross(outbox, hash);
       if (!locked.ok) throw refuse(locked.code, lockMessages[locked.code]);
       if (!scan.open && (await heldAcross(outbox)).batches.some((batch) => batch.hash === hash && batch.pulled)) throw refuse('terms_missing', 'This batch was held by a cloud session, and your exclusion term file is missing or empty, so it cannot be checked and was not sent.');
-      await openCovenant(deps, server, token, options.acceptCovenant, via);
+      await openCovenant(deps, server, token, options.acceptCovenant, options.region, via);
       const bytes = await unchangedBytes(locked.file, hash);
       if (bytes === undefined) throw refuse('batch_changed', lockMessages.batch_changed);
       await postBatch(deps, { server, token, bytes, hash, via });
@@ -486,7 +514,7 @@ export const machineKeyOf = (machine: MachineConfig, session: string): string =>
  */
 export const poolDeposit = async (
   deps: RunDeps,
-  options: { server?: string | undefined; acceptCovenant?: string | undefined; send?: string | undefined; via?: Sender | undefined; git?: Git | undefined; session?: string | undefined; covenant?: string | undefined },
+  options: { server?: string | undefined; acceptCovenant?: string | undefined; inEuEeaUk?: string | undefined; send?: string | undefined; via?: Sender | undefined; git?: Git | undefined; session?: string | undefined; covenant?: string | undefined },
 ): Promise<Outcome> => {
   const runtime = runtimeOf(deps);
   const server = poolServer(deps.env, DEPOSIT, options.server);
@@ -499,9 +527,12 @@ export const poolDeposit = async (
   if (expired !== undefined) throw expired;
   // Accepting the covenant is a step of sending a batch: alone it would exit 0 as though something had been sent under it.
   if (options.send === undefined && options.acceptCovenant !== undefined) throw usage('--accept-covenant belongs to --send: it names the covenant version expected when a person accepts before a send. Nothing was accepted.', DEPOSIT);
+  if (options.send === undefined && options.inEuEeaUk !== undefined) throw usage(`${REGION_FLAG} belongs to --send: it answers the question asked when a person accepts before a send. Nothing was accepted.`, DEPOSIT);
+  const region = options.inEuEeaUk === undefined ? undefined : regionOf(options.inEuEeaUk);
+  if (options.inEuEeaUk !== undefined && region === undefined) throw usage(`${REGION_FLAG} takes yes or no, not "${options.inEuEeaUk}". Nothing was accepted.`, DEPOSIT);
   const outbox = outboxFolder(runtime.storeDir, server);
   await mkdirOwnerOnly(outbox);
-  if (options.send !== undefined) return sendBatch(deps, { outbox, server, token, hash: options.send, acceptCovenant: options.acceptCovenant, via: options.via });
+  if (options.send !== undefined) return sendBatch(deps, { outbox, server, token, hash: options.send, acceptCovenant: options.acceptCovenant, region, via: options.via });
   const { terms } = exclusionPaths(runtime.projectsRoot, deps.env);
   const saved = await readState(runtime.storeDir);
   // A yes to the raw prompt counts only for the covenant it was given under, so an interactive build asks the pool which is in force; the nightly already knows and passes it. A pool that cannot be asked, or names none, leaves it unknown and the build goes on as before.

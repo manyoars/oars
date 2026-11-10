@@ -226,10 +226,15 @@ const familiesOf = (held: readonly Cell[], motifs: readonly Motif[]): Family[] =
  * A sub-floor part held to a higher floor than the lowest of its family (a long-tail name under a clear shape, which carries no identity; a long-tail model beside a listed one in an action's one-step shape cells) is not
  * hidden by withholding a part that is served only on that lower floor: a part that hides it, withheld already or withheld now, must itself be at or above that bar on the accounts that have stood (`Floorplan.standingOf`),
  * or the count less the served parts could be that part alone. With none, a family with a whole withholds the whole; a family with a total no cell holds (the calls its parts sum to) withholds the smallest served part of
- * each family that counts the same total, since a reader reads that total from those cells (`byTotal`).
+ * each family that counts the same total, since a reader reads that total from those cells (`byTotal`). The cells it withholds are returned, so the caller runs it again over only the families they belong to.
  */
-const withholdLocally = (families: readonly Family[], byTotal: ReadonlyMap<string, readonly Family[]>, withheld: Set<Cell>, { floorOf, standingOf }: Floorplan): void => {
+const withholdLocally = (families: readonly Family[], byTotal: ReadonlyMap<string, readonly Family[]>, withheld: Set<Cell>, { floorOf, standingOf }: Floorplan): Cell[] => {
   const served = (cell: Cell): boolean => clears(cell, floorOf(cell));
+  const added: Cell[] = [];
+  const add = (cell: Cell): void => {
+    withheld.add(cell);
+    added.push(cell);
+  };
   for (let changed = true; changed; ) {
     changed = false;
     for (const family of families) {
@@ -245,7 +250,7 @@ const withholdLocally = (families: readonly Family[], byTotal: ReadonlyMap<strin
       if (!thin && unserved.length !== 1) continue;
       const [next] = parts.filter((part) => served(part) && !withheld.has(part) && hides(part)).sort(smallest);
       if (next !== undefined) {
-        withheld.add(next);
+        add(next);
         changed = true;
         continue;
       }
@@ -253,7 +258,7 @@ const withholdLocally = (families: readonly Family[], byTotal: ReadonlyMap<strin
         // The total is read from the other families that count it, each of which gives up its smallest served part unless one of its parts is withheld already.
         const gone = whole !== null ? [whole] : (byTotal.get(total ?? '') ?? []).flatMap((other) => (other === family || other.parts.some((part) => withheld.has(part)) ? [] : other.parts.filter((part) => served(part)).sort(smallest).slice(0, 1)));
         for (const cell of gone) {
-          withheld.add(cell);
+          add(cell);
           changed = true;
         }
         continue;
@@ -262,11 +267,12 @@ const withholdLocally = (families: readonly Family[], byTotal: ReadonlyMap<strin
       // With no served part left to join it, a lone unserved part equals its whole, so the whole goes too; and it equals the total that the families echoing it count, so each of those gives up its smallest served part.
       for (const gone of [whole, ...echoes.map((echo) => echo.parts.filter((part) => served(part) && !withheld.has(part)).sort(smallest)[0])]) {
         if (gone === null || gone === undefined || withheld.has(gone)) continue;
-        withheld.add(gone);
+        add(gone);
         changed = true;
       }
     }
   }
+  return added;
 };
 
 /** A term of an equation: a held cell, or a total no cell holds (`Family.total`). */
@@ -290,22 +296,47 @@ const eliminate = (row: Row, pivot: Row, column: Term): Row => {
   return new Map([...result].map(([term, coefficient]) => [term, coefficient / divisor]));
 };
 
+/** The terms every `eliminate` call may touch, in all the systems of one `bundleOf` and at every floor it serves: a limit on counted work, with no clock (`withheldOf`). */
+export const MAX_BUNDLE_UNITS = 10_000_000;
+
+/** What is left of the work one `bundleOf` may spend. One object per bundle, so the floors it serves share it. */
+export interface Meter {
+  left: number;
+}
+
+export const meterOf = (units = MAX_BUNDLE_UNITS): Meter => ({ left: units });
+
+/** Takes what one elimination reads, the terms of its row and of its pivot, from the meter before the elimination runs; `false` when the meter cannot pay, and nothing is taken. */
+const charge = (meter: Meter, row: Row, pivot: Row): boolean => {
+  const units = row.size + pivot.size;
+  if (units > meter.left) return false;
+  meter.left -= units;
+  return true;
+};
+
 /**
  * The unserved cells that the served cells determine, each with the reduced equation that gives it. Gauss-Jordan elimination over the unknowns only (the unserved cells and the totals), so a served cell is never
- * a pivot: an unserved cell is determined when its column is a pivot whose row holds no other unknown, and that row is the cell as a combination of served cells.
+ * a pivot: an unserved cell is determined when its column is a pivot whose row holds no other unknown, and that row is the cell as a combination of served cells. Each elimination is charged to `meter` first; where it cannot
+ * pay, the pivots built so far are dropped and the answer is `null`, because a system not eliminated to the end shows nothing about which cells it determines.
  */
-const determinedOf = (equations: readonly Row[], known: (term: Term) => boolean): Map<Cell, Row> => {
+const determinedOf = (equations: readonly Row[], known: (term: Term) => boolean, meter: Meter): Map<Cell, Row> | null => {
   const pivots = new Map<Term, Row>();
   for (const equation of equations) {
     let row = equation;
     // A pivot row holds no other pivot's column, so reducing by one never brings back a column already reduced.
     for (const column of [...row.keys()]) {
       const pivot = pivots.get(column);
-      if (pivot !== undefined) row = eliminate(row, pivot, column);
+      if (pivot === undefined) continue;
+      if (!charge(meter, row, pivot)) return null;
+      row = eliminate(row, pivot, column);
     }
     const column = [...row.keys()].find((term) => !known(term));
     if (column === undefined) continue;
-    for (const [other, pivot] of pivots) if (pivot.has(column)) pivots.set(other, eliminate(pivot, row, column));
+    for (const [other, pivot] of pivots) {
+      if (!pivot.has(column)) continue;
+      if (!charge(meter, pivot, row)) return null;
+      pivots.set(other, eliminate(pivot, row, column));
+    }
     pivots.set(column, row);
   }
   return new Map([...pivots].flatMap(([column, row]): [Cell, Row][] => (typeof column !== 'string' && [...row.keys()].every((term) => term === column || known(term)) ? [[column, row]] : [])));
@@ -354,8 +385,13 @@ export const MAX_SYSTEM_TERMS = 5000;
  * determine any unserved cell (`determinedOf`), the smallest served cell of its equation that shares a family with it is withheld (any served cell of its equation where none does), and both stages repeat.
  * A system of more than `maxTerms` terms is not eliminated, because the work grows faster than its size: measured, a long-tail action of 4,000 `keys` cells took 1.8 s and one of 13,000 took 10 s, against a Worker's CPU
  * limit. Nothing can be shown determined or not in such a system, so every served cell of it is withheld, which is safe and costs that action's facet, one-step shape, and named cells, day and week, for that week and version bucket.
+ *
+ * Under that per-system limit the work is metered (`Meter`), because terms squared is not the work: each elimination is charged the terms of its row and its pivot before it runs, so a dense system under `maxTerms` is caught, and
+ * a system eliminated again after a cell is withheld from it is charged again. The meter is the caller's, one per bundle, so it is shared by every week and floor the bundle serves. Each system runs to its fixed point in
+ * size order, smallest first and ties by the least key of its terms, so the small systems finish before a large one can spend the meter. A system that cannot pay for its next elimination stops, and is left out of the rank check
+ * like one over `maxTerms`: every served cell of it is withheld. Later systems still run if they fit. The meter counts and reads no clock, so the same cells give the same bundle.
  */
-export const withheldOf = (held: readonly Cell[], motifs: readonly Motif[], plan: Floorplan, maxTerms = MAX_SYSTEM_TERMS): Set<Cell> => {
+export const withheldOf = (held: readonly Cell[], motifs: readonly Motif[], plan: Floorplan, maxTerms = MAX_SYSTEM_TERMS, meter: Meter = meterOf()): Set<Cell> => {
   const { floorOf } = plan;
   // The one-step shape cells tie an action's calls only where its shape cells split them, so an action with no shape cells keeps its shape cells out of this rule.
   const every = familiesOf(held, motifs);
@@ -368,7 +404,15 @@ export const withheldOf = (held: readonly Cell[], motifs: readonly Motif[], plan
   for (const family of families) if (family.total !== null) byTotal.set(family.total, [...(byTotal.get(family.total) ?? []), family]);
   const allSystems = systemsOf(families);
   const termsOf = (system: readonly Row[]): Set<Term> => new Set(system.flatMap((row) => [...row.keys()]));
-  const systems = allSystems.filter((system) => termsOf(system).size <= maxTerms);
+  // A term's key is the same for the same cells, so ties in size break the same way whatever order the cells came in.
+  const termKey = (term: Term): string => (typeof term === 'string' ? term : JSON.stringify([term.motifId, term.frameBucket, term.grain, term.day, term.exposed]));
+  const ranked = allSystems
+    .flatMap((system) => {
+      const terms = termsOf(system);
+      return terms.size <= maxTerms ? [{ system, size: terms.size, key: [...terms].map(termKey).reduce((least, key) => (compare(key, least) < 0 ? key : least)) }] : [];
+    })
+    .sort((a, b) => a.size - b.size || compare(a.key, b.key));
+  const systems = ranked.map(({ system }) => system);
   // The member set of each family, and the families each cell is in, so "shares a family" is a lookup and no cell holds a set of its neighbors (a family of thousands of `keys` cells would square).
   const membersOf = new Map<Family, Set<Cell>>();
   const familiesOfCell = new Map<Cell, Family[]>();
@@ -381,35 +425,43 @@ export const withheldOf = (held: readonly Cell[], motifs: readonly Motif[], plan
   const withheld = new Set<Cell>();
   // A cell is served when it clears its own floor, so a `clear` cell below the public floor is known to the rank check as served.
   const known = (term: Term): boolean => (typeof term === 'string' ? isActionCalls(term) && !tied.has(term) : clears(term, floorOf(term)) && !withheld.has(term));
-  const systemOf = new Map<Term, Row[]>(systems.flatMap((system) => system.flatMap((row) => [...row.keys()].map((term): [Term, Row[]] => [term, system]))));
-  // The cell each system withholds next, kept until a cell of that system is withheld; the systems share no cell, so each round withholds one per system.
-  const choices = new Map<Row[], Cell | undefined>();
-  const choiceOf = (system: Row[]): Cell | undefined =>
-    [...determinedOf(system, known)]
+  // The cell a system withholds next, `undefined` where the served cells determine none, and `null` where the meter cannot pay for finding out.
+  const choiceOf = (system: Row[]): Cell | undefined | null => {
+    const determined = determinedOf(system, known, meter);
+    if (determined === null) return null;
+    return [...determined]
       .map(([cell, row]) => {
         const support = [...row.keys()].filter((term): term is Cell => typeof term !== 'string' && term !== cell && known(term));
         const near = support.filter((term) => sharesFamily(cell, term));
         return (near.length > 0 ? near : support).sort(smallest)[0];
       })
       .find((cell) => cell !== undefined);
-  for (let seen = 0; ; ) {
-    withholdLocally(families, byTotal, withheld, plan);
-    for (const cell of [...withheld].slice(seen)) {
-      const system = systemOf.get(cell);
-      if (system !== undefined) choices.delete(system);
+  };
+  const familyOrder = new Map(families.map((family, index) => [family, index]));
+  // The local rules over `dirty` families, and again over the families of each cell they withhold. A family's rule reads only its own cells, so those are the only families a newly withheld cell can change. Every cell of a
+  // family lies in one system (an equation joins its terms), so a local rule only withholds from the system that is running, and a finished system is never reopened.
+  const settleLocally = (initial: readonly Family[]): void => {
+    for (let dirty = initial; dirty.length > 0; ) {
+      const added = withholdLocally(dirty, byTotal, withheld, plan);
+      dirty = [...new Set(added.flatMap((cell) => familiesOfCell.get(cell) ?? []))].sort((a, b) => (familyOrder.get(a) ?? 0) - (familyOrder.get(b) ?? 0));
     }
-    seen = withheld.size;
-    const next = systems.flatMap((system) => {
-      const choice = choices.has(system) ? choices.get(system) : choiceOf(system);
-      choices.set(system, choice);
-      return choice === undefined ? [] : [choice];
-    });
-    if (next.length === 0) break;
-    for (const cell of next) withheld.add(cell);
+  };
+  settleLocally(families);
+  const unpaid = new Set<Row[]>();
+  for (const system of systems) {
+    for (let choice = choiceOf(system); choice !== undefined; choice = choiceOf(system)) {
+      if (choice === null) {
+        unpaid.add(system);
+        break;
+      }
+      withheld.add(choice);
+      settleLocally(familiesOfCell.get(choice) ?? []);
+    }
   }
-  // The systems left out of the rank check keep none of their served cells.
+  // The systems left out of the rank check, over `maxTerms` or unpaid, keep none of their served cells.
+  const kept = new Set(systems.filter((system) => !unpaid.has(system)));
   for (const system of allSystems) {
-    if (systems.includes(system)) continue;
+    if (kept.has(system)) continue;
     for (const term of termsOf(system)) if (typeof term !== 'string' && clears(term, floorOf(term))) withheld.add(term);
   }
   return withheld;

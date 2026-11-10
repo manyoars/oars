@@ -18,7 +18,7 @@ import type { Harness } from '../../cli/src/sessions/schema.js';
 import type { Store } from '../../cli/src/sessions/store.js';
 import { cellClassOf } from './cell-class.js';
 import { booksOf } from './books.js';
-import { withheldOf } from './complement.js';
+import { MAX_BUNDLE_UNITS, MAX_SYSTEM_TERMS, meterOf, withheldOf } from './complement.js';
 import { cellFloor, clears, clustersOf, countsEvery, floorFor, wireFloors, type Floors } from './floors.js';
 import type { StoredPool } from './stored.js';
 
@@ -80,8 +80,10 @@ export const bucketPrefix = (harness: string, harnessVersion: string): string =>
  * The floors are the deploy's (`floors.ts`), applied here and nowhere else: the stored cells keep their held counts, so a floor that moves needs no redeposit. Each read family is derived from the cells served at its own floor (the public floor unless
  * `floors.families` names it), with complementary withholding computed at that floor, so a family on its own floor holds the same differencing guarantee as one on the public floor. A `clear` cell (`cell-class.ts`) is served at the floor of its class (`cellFloor`), and a part is sub-floor against its own class's floor when a whole is withheld beside it. The bundle's `cells` are those served at the public floor,
  * and beside them any cell that a read of a family on its own floor cites, since a read must be able to be walked back to the cells it names; a family on a lower floor therefore shows its own cells and no other family's.
+ * The withholding work is one meter for the whole bundle (`withheldOf`), `units` touched terms, whatever the number of weeks and floors: the public floor's pool is made first and spends what it needs, and a family on a lower floor only what is left.
  */
-export const bundleOf = (harness: Harness, harnessVersion: string, stored: StoredPool, floors: Floors): Bundle => {
+export const bundleOf = (harness: Harness, harnessVersion: string, stored: StoredPool, floors: Floors, units = MAX_BUNDLE_UNITS): Bundle => {
+  const meter = meterOf(units);
   const prefix = bucketPrefix(harness, harnessVersion);
   const cells = stored.cells.filter((cell) => cell.frameBucket.startsWith(prefix) || cell.frameBucket.startsWith(`${harness}/${NO_AXES}/`)).sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.grain, b.grain) || compare(a.day, b.day));
   const motifs = [...stored.motifs].sort((a, b) => compare(a.motifId, b.motifId));
@@ -112,7 +114,7 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
     if (known !== undefined) return known;
     const floorOf = (cell: Cell): number => cellFloor(floors, floor, cellClassOf(cell, motifOf.get(cell.motifId)));
     const countedHeld = held.map((cell) => countedAt(floor, cell));
-    const withheld = withheldOf(countedHeld, motifs, { floorOf, standingOf: (cell) => clustersOf(standing.get(cell) ?? cell) });
+    const withheld = withheldOf(countedHeld, motifs, { floorOf, standingOf: (cell) => clustersOf(standing.get(cell) ?? cell) }, MAX_SYSTEM_TERMS, meter);
     // A version-free counterpart would otherwise reveal the name withheld in this bucket.
     const counterpart = (cell: Cell): string => JSON.stringify([cell.motifId, cell.grain, cell.day, exposureOfCell(cell)]);
     const withheldBuckets = new Set(cells.filter((cell) => withheld.has(countedAt(floor, cell))).map(counterpart));
@@ -128,6 +130,7 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
     poolsAt.set(floor, made);
     return made;
   };
+  // The public floor's pool comes first, ahead of the loop below that makes the others', so a lower family floor can only spend what the public floor left of the meter.
   const { served, held: heldAtPublic, pool } = poolAt(floors.public);
   // The serve decision is per pool, but the bundle ships one row of a cell, and a read's input id hashes the row's `clusters`. The row is chosen once, before any read: the public pool's copy when it serves the cell, else the copy of the lowest
   // family floor that serves it. Every family's reads are derived over that row, so each input is a cell in `cells`. The copies differ only when pools count a clear cell differently (every account at a clear floor of 1, the accounts that have
