@@ -1523,3 +1523,23 @@ describe('a raw id inside text (t1135 item 2)', () => {
     expect(text).toContain('req_queue_length');
   });
 });
+
+describe('the skeleton names a transcript file (t1135 item 3)', () => {
+  it('writes the match id, not the store session id, where a tool call named the transcript file', async () => {
+    const f = fixture();
+    const read = (session: string, n: number, path: string): string =>
+      line({ type: 'assistant', uuid: uuidOf(session, 'a', n), parentUuid: uuidOf(session, 'b', n), isSidechain: false, timestamp: at(n + 1), version: '2.1.300', sessionId: session, requestId: requestOf(session, n), message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: `toolu_01read${String(n)}aaaaaaaaaa`, name: 'Read', input: { file_path: path } }], usage: { input_tokens: 10, output_tokens: 20 } } });
+    f.write('-work-oars', S(1), [user(S(1), 1, 'look at the other run'), read(S(1), 1, `/home/work/.claude/projects/-work-oars/${S(2)}.jsonl`), assistant(S(1), 3, 'read it')]);
+    f.write('-work-oars', S(2), [user(S(2), 1, 'run the build'), assistant(S(2), 1, 'green')]);
+    await stored(f);
+    expect((await buildPack(f.runtime, options(f))).emitted).toBe(2);
+    const rows = indexOf(f);
+    const first = rows.find((row) => row.session === S(1));
+    const second = rows.find((row) => row.session === S(2));
+    const skeleton = readFileSync(join(f.out, 'sessions', first?.matchId ?? '', 'skeleton.json'), 'utf8');
+    // Non-vacuous: the wire did carry the file name, so the match id of the session it names stands in it.
+    expect(skeleton).toContain(second?.matchId ?? 'none');
+    expect(skeleton).not.toContain(S(2));
+    expect(skeleton).not.toContain(S(2).slice(0, 8));
+  });
+});
