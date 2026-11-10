@@ -33,7 +33,7 @@ on:
         type: boolean
         default: false
       publish:
-        description: Also build and publish the tag's code to npm before the release (recovery only: provenance names the dispatch sha, not the tag's commit); leave off for a backfill
+        description: "Also build and publish the tag's code to npm before the release (recovery only: provenance names the dispatch sha, not the tag's commit); leave off for a backfill"
         required: false
         type: boolean
         default: false
