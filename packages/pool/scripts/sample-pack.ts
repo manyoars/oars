@@ -301,12 +301,15 @@ const EXCLUDED: { readonly [reason in Exclude<Reason, 'clean'>]: keyof PackCount
 /** Where a transcript goes under the session's folder: `main.jsonl`, or its path under the session (`subagents/agent-x.jsonl`). */
 const placeOf = (key: string, session: string, main: boolean): string => (main ? 'main.jsonl' : key.slice(session.length + 1));
 
-/** A base64 image block's `data` can hold any shape by chance (the redactor keeps it), so the scan reads the line without it. Lines with no such block are scanned as written. */
+/**
+ * An image's base64 can hold any shape by chance (the redactor keeps it), so the scan reads the line without it: the `data` of a `type: 'base64'` source, and the `base64` of a Read's
+ * `toolUseResult.file`, whose object `type` is the media type. Lines with neither are scanned as written.
+ */
 const withoutImageData = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(withoutImageData);
   if (!isRecord(value)) return value;
   const base64 = Reflect.get(value, 'type') === 'base64';
-  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, base64 && key === 'data' && typeof item === 'string' ? '' : withoutImageData(item)]));
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, typeof item === 'string' && ((base64 && key === 'data') || key === 'base64') ? '' : withoutImageData(item)]));
 };
 
 /** The text the secret scan reads: the transcript with every base64 image's data left out. */
