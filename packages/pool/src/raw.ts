@@ -214,7 +214,7 @@ const dropStaged = async (bucket: RawBucket, account: string): Promise<number> =
 
 /**
  * The update that records a withdrawal, with the time and the account to bind, in that order. One statement, and a SET expression reads the row as it was, so the version withdrawn is the one the yes answered. With no yes standing it matches no row.
- * The route and the operator's `erase withdraw` (`scripts/erase.ts`) both run this text, so the row one leaves is the row the other leaves.
+ * The route and the operator's `erase withdraw` (`scripts/withdraw-account.ts`) both run this text, so the row one leaves is the row the other leaves.
  */
 export const WITHDRAW_RAW_CONSENT = 'UPDATE accounts SET raw_consent_withdrawn_at = ?, raw_consent_withdrawn_version = raw_consent_version, raw_consent = NULL, raw_consent_version = NULL WHERE id = ? AND raw_consent IS NOT NULL';
 

@@ -109,7 +109,7 @@ Limit: **bundles and client copies.** Not recalled, and need not be: a bundle is
 
 Limit: **the person's own machine.** The local store is theirs and is never sent, so Many Oars Co. does not hold it (Art. 4(7)). Tell them to delete `<store>/raw/`, `<store>/state.json`, and the outbox, naming the store path `oars` prints.
 
-Limit: **Art. 19, telling recipients.** No one to tell: a bundle carries no account's personal data, so its fetchers are not the requester's recipients (Art. 19). When a path hands deposits to anyone, its register names them.
+Limit: **Art. 19, telling recipients.** No one to tell: a bundle carries no account's personal data, so its fetchers are not the requester's recipients (Art. 19). When a path hands deposits to anyone, its register names them (C6).
 
 ## Art. 18, restriction
 
@@ -151,7 +151,7 @@ Gap: **no exclusion marker for a sale or a manual export.** Nothing is sold toda
 
 **Command (the operator runs it, when the requester cannot run the client or writes instead, covenant 6.6(b)):** confirm the account by a token proof first (see "Who is asking"; never a machine key). Then, from `packages/pool`:
 `npm run erase -w packages/pool -- withdraw --account <account id> [--confirm] [--local]`.
-It runs the same update the route runs (one shared statement), then deletes the account's staged raw parts, and prints `{"withdrawn":true|false,"stagedDropped":n}`. Without `--confirm` it changes nothing and prints what it would do. With no yes standing on the account it changes nothing and says so. A rerun changes nothing more. The remote run lists the staged parts through R2's S3 API, so it needs `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, and `R2_SECRET_ACCESS_KEY` with read on `oars-pool-raw` (and on `oars-telemetry` for the other commands); with no token it stops before changing anything. `--local` records the withdrawal but cannot list R2, so it drops no staged parts.
+It runs the same update the route runs (one shared statement), then deletes the account's staged raw parts, and prints `{"withdrawn":true|false,"stagedDropped":n}`. Without `--confirm` it changes nothing and prints what it would do. With no yes standing on the account it changes nothing and says so. The account row does not change on a rerun or with no yes standing; for an account that already withdrew, `--confirm` drops only staged parts an earlier run left. The remote run lists the staged parts through R2's S3 API, so it needs `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, and `R2_SECRET_ACCESS_KEY` with read on `oars-pool-raw` (and on `oars-telemetry` for the other commands); with no token it stops before changing anything. `--local` records the withdrawal but cannot list R2, so it drops no staged parts.
 
 **Operator steps:** 1. Confirm the account. 2. Dry run, and read the line it prints. 3. Add `--confirm`. 4. The held objects go on the next nightly runs; check as in steps 3 and 4 below.
 
