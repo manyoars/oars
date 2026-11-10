@@ -81,7 +81,8 @@ const strokesOf = (tools: readonly ToolObservation[]): number => {
 
 export const cardOf = (store: Store, survival: ReadonlyMap<string, SurvivalState>, period: CardPeriod, now: number, includeCost = true): Card => {
   const { days, end } = cardWindow(period, now);
-  const cutoff = new Date(now - days * DAY_MS).toISOString();
+  // Whole UTC dates: the window opens at 00:00 UTC of the date days - 1 before today, so it holds exactly `days` dates.
+  const cutoff = new Date(Date.parse(`${end}T00:00:00Z`) - (days - 1) * DAY_MS).toISOString();
   const prompts = store.prompts.filter((prompt) => prompt.ts !== null && prompt.ts >= cutoff);
   const promptKeys = new Set(prompts.map((prompt) => `${prompt.session}#${String(prompt.index)}`));
   const inWindow = (record: { session: string; prompt: number | null }): boolean => record.prompt !== null && promptKeys.has(`${record.session}#${String(record.prompt)}`);
@@ -100,8 +101,7 @@ export const cardOf = (store: Store, survival: ReadonlyMap<string, SurvivalState
     days,
     windowEnd: end,
     sessions: sessions.length,
-    // The window is a span of hours, so it can touch one more UTC date than it has days; the card caps the count at the window's days.
-    activeDays: Math.min(days, new Set(prompts.map((prompt) => (prompt.ts ?? '').slice(0, 10))).size),
+    activeDays: new Set(prompts.map((prompt) => (prompt.ts ?? '').slice(0, 10))).size,
     harnesses: [...harnessCounts.entries()].map(([name, count]) => ({ name, sessions: count })).sort((a, b) => b.sessions - a.sessions || a.name.localeCompare(b.name)),
     models: modelMix(prompts),
     strokes: strokesOf(store.tools.filter(inWindow)),

@@ -73,11 +73,26 @@ describe('cardOf: the counts', () => {
     expect(card.verifyAfterEdit).toEqual({ count: 0, of: 0, share: null });
   });
 
-  it('never counts more active days than the window has days', () => {
-    // 30 x 24 h back from 2026-11-09T12:00Z starts at noon on 2026-10-10, so a prompt at noon on each date from then touches 31 UTC dates.
-    const dates = Array.from({ length: 31 }, (_, index) => new Date(Date.parse('2026-10-10T12:00:00Z') + index * 86_400_000).toISOString());
-    const crowded = emptyStore({ sessions: [session('s-long')], prompts: dates.map((ts, index) => prompt('s-long', index, { ts })) });
-    expect(cardOf(crowded, new Map(), 'month', CARD_NOW).activeDays).toBe(30);
+  it.each([['week', 7], ['month', 30], ['year', 365]] as const)('reads the %s as the last %i whole UTC dates ending today, one session per date', (period, days) => {
+    // One session per UTC date, from days + 1 dates back through today, at noon: the oldest falls one date outside the window.
+    const noon = Date.parse('2026-11-09T12:00:00Z');
+    const dates = Array.from({ length: days + 1 }, (_, index) => new Date(noon - index * 86_400_000).toISOString());
+    const crowded = emptyStore({
+      sessions: dates.map((_, index) => session(`s-${String(index)}`)),
+      prompts: dates.map((ts, index) => prompt(`s-${String(index)}`, 0, { ts })),
+    });
+    const card = cardOf(crowded, new Map(), period, CARD_NOW);
+    expect(card.activeDays).toBe(days);
+    expect(card.sessions).toBe(days);
+  });
+
+  it('starts the window at 00:00 UTC of the oldest date, keeping a prompt just after it and dropping one just before', () => {
+    const crowded = emptyStore({
+      sessions: [session('in'), session('out')],
+      prompts: [prompt('in', 0, { ts: '2026-10-11T00:00:00.000Z' }), prompt('out', 0, { ts: '2026-10-10T23:59:59.999Z' })],
+    });
+    const card = cardOf(crowded, new Map(), 'month', CARD_NOW);
+    expect(card).toMatchObject({ sessions: 1, activeDays: 1 });
   });
 
   it('puts the window at seven, thirty, and 365 days back from now', () => {
