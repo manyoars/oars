@@ -26,13 +26,13 @@ The pool holds no email address and no name. An account id is a hash of the sign
 What the pool does have: the account id, the machines enrolled under it (label and id), and the provider sign-in. Use them together:
 
 1. Ask the requester to run `oars pool login --provider github` (or `google`) on their machine. It prints `Signed in to <server> as <account id>`. Ask them to rerun it with `--json` and send you the account id and the `expiresAt` it prints.
-2. Ask them to run `oars pool machines` and send one machine's label and id, or the last deposit day it shows. Only someone signed in to the account sees these.
+2. If `oars pool machines` lists any machine, ask for one machine's label and id, or the last deposit day it shows. Only someone signed in to the account sees these. Many accounts list none.
 3. Check both against the pool, read-only, from `packages/pool` (this reads production, so only for a live request):
    `npx wrangler d1 execute oars-pool --remote --command "SELECT id, closed_at, raw_consent_withdrawn_at FROM accounts WHERE id = '<account id>'"`
    and the same against `machines` (`id`, `label`, `account`, `last_deposit_day`). Then check the sign-in is fresh:
    `npx wrangler d1 execute oars-pool --remote --command "SELECT expires_at FROM tokens WHERE account = '<account id>'"`
-   One row must hold exactly the `expiresAt` the requester sent, issued after the date of the email.
-4. If both match, go on. If not, write back, say what could not be matched, and do not act. The month keeps running.
+   One row must hold exactly the `expiresAt` the requester sent, and that value minus 90 days (the token lifetime, `packages/pool/src/identity.ts:10`) must fall after the date of the email.
+4. If the `expiresAt` matches, and the machine too when the account has one, go on. If not, write back, say what could not be matched, and do not act. The month keeps running.
 
 Rules for how hard to ask:
 
@@ -50,7 +50,7 @@ Gap: no command issues a challenge or checks an id. The check above is by hand.
 **Command (the requester runs it):** `oars pool export --out <folder>`, and `--raw` to include their raw copies. It signs in with their own credential (`GET /v1/account/export`), writes JSON one file a page, and writes nothing to the pool. Tell them the folder holds the account row, token expiry times, covenant acceptances, machines, repository keys, deposit hours, telemetry day counts, the raw ledger, staged deposit parts, erasure audit rows, and deposit rows as they now read.
 
 **Steps:**
-1. Confirm the account (above).
+1. Nothing to confirm: the export runs only on their own sign-in.
 2. Reply with the one command, and the folder it will fill. Tell them an erased raw object is not in the copy.
 3. Tell them what is not in it, and why: `contributors`, pooled cells, strata, and bundle reads tie the account to totals over other people (Art. 15(4)), and credential hashes are withheld (Art. 32).
 4. When they report the files are saved, the answer is complete. If the command fails, send the error line back and retry once the cause is fixed.
@@ -149,13 +149,13 @@ Gap: **no exclusion marker for a sale or a manual export.** Nothing is sold toda
 3. Check the withdrawal landed, read-only, from `packages/pool`:
    `npx wrangler d1 execute oars-pool --remote --command "SELECT raw_consent_withdrawn_at FROM accounts WHERE id = '<account id>'"`
    A number means the pool has it.
-4. A few days later, check the raw objects are gone the same way (`raw_objects` rows with `erased_on` set). If objects remain after several nights, erase them by key. Dry run: `npm run erase -w packages/pool -- raw <r2-key>`. Read the line it prints, then add `--confirm`.
+4. A few days later, check the raw objects are gone the same way (`raw_objects` rows with `erased_on` set). If objects remain after several nights, erase them by key (`raw/<account>/<sha256>`, from the row's `account` and `sha256`; `packages/pool/scripts/erase-cli.ts:10`). Dry run: `npm run erase -w packages/pool -- raw <r2-key>`. Read the line it prints, then add `--confirm`.
 
 **Answer to send:** the date the withdrawal landed, that earlier processing is not affected (Art. 7(3)), and that a copy already sold or served is not recalled.
 
 **Record kept:** the pool keeps `raw_consent_withdrawn_at` and the covenant version it answered. You keep the dates.
 
-Gap: **the operator cannot withdraw for them.** Only the account's own credential sends the withdrawal. If the requester cannot sign in, erase the raw objects by key with the command in step 4, after listing them from `raw_objects`. That by-hand erasure does not set the withdrawal.
+Gap: **the operator cannot withdraw for them.** Only the account's own credential sends the withdrawal. If the requester cannot sign in, erase the raw objects by key with the command in step 4, after listing them from `raw_objects`. The key is `raw/<account>/<sha256>`, from the row's `account` and `sha256` (`packages/pool/scripts/erase-cli.ts:10`). That by-hand erasure does not set the withdrawal.
 
 Gap: **withdrawing the covenant.** Acceptance rows are append-only. Declining a later version stops later deposits. Not yet possible beyond that.
 
@@ -190,7 +190,7 @@ You cannot confirm them against an account, so confirm the claim instead: find t
    `npm run erase -w packages/pool -- raw --contains --value-stdin --all-accounts` (eight characters at least)
 2. It prints each matching key, account, and size, and changes nothing.
 3. Erase each key you accept. Dry run: `npm run erase -w packages/pool -- raw <r2-key>`. Read the line it prints, then add `--confirm`.
-4. Deposit skeletons, motifs, cells, and contributors that hold the text. Dry run, text on stdin: `npm run erase -w packages/pool -- row --account <id> --id <session> --value-stdin`. Read the line it prints, then add `--confirm`. That scrubs the text from every place it appears, for every account, and cannot be undone.
+4. Deposit skeletons, motifs, cells, and contributors that hold the text. Dry run, text on stdin: `npm run erase -w packages/pool -- row --account <id> --id <session> --value-stdin`. Read the line it prints, then add `--confirm`. That scrubs the text from every place it appears, for every account, and cannot be undone. Later deposits holding the exact text are refused.
    The account is the one in the raw key. With no known session, the dry run shows "no such row: only the value would be erased".
 
 Gap: **parts of a raw object still uploading are not searched**, and redaction can miss a name written in prose.
