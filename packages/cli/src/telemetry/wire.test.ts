@@ -118,10 +118,11 @@ describe('the size of the largest telemetry events', () => {
 
   it('keeps a full 250-event batch (11 wire events, the rest commands) under the pool cap, and a wire event under 3 KB', () => {
     const token = 'a'.repeat(32);
-    const commandLine = lineOf('command', { path: Array.from({ length: 4 }, () => token), flags: Array.from({ length: 40 }, () => token), durationMs: 86_400_000, exitCode: 255, errorClass: 'rate-limited', ci: 'azure-pipelines' });
+    const commandLine = lineOf('command', { path: Array.from({ length: 4 }, () => token), flags: Array.from({ length: 40 }, () => token), durationMs: 86_400_000, exitCode: 255, errorClass: 'rate-limited', ci: 'azure-pipelines', cardLine: 'not_due' });
     // The longest word of each closed list, so the line is the largest one the schema keeps: a word off the list is dropped and would leave its field out of the figure.
     expect(commandLine).toContain('"errorClass":"rate-limited"');
     expect(commandLine).toContain('"ci":"azure-pipelines"');
+    expect(commandLine).toContain('"cardLine":"not_due"');
     const command = Buffer.byteLength(commandLine);
     const tally = newTally();
     tallyBatch(tally, Object.fromEntries(Object.keys(FIELD_ROWS).map((name) => [name, 'x'.repeat(1_000_000)])));

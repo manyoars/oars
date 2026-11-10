@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { run } from '../cli.js';
 import { harness } from '../test-support.js';
 import { cardOf } from './card.js';
-import { cardSvg } from './card-render.js';
+import { PITCH, cardSvg } from './card-render.js';
 import { CARD_NOW, cardStore, cardSurvival } from './card-fixture.js';
 import type { SessionsDeps } from './command.js';
 import type * as StoreModule from './store.js';
@@ -139,7 +139,7 @@ describe('oars card through run', () => {
     const withCost = join(dir, 'with.png');
     await run(['card', '--month', '--out', withCost], wired().deps);
     const height = (path: string): number => Number(/height="(\d+)"/.exec(readFileSync(path, 'utf8'))?.[1]);
-    expect(height(svg)).toBeLessThan(height(join(dir, 'with.svg')));
+    expect(height(join(dir, 'with.svg')) - height(svg)).toBe(PITCH);
 
     const table = wired();
     expect(await run(['card', '--month', '--text', '--no-cost'], table.deps)).toBe(0);
