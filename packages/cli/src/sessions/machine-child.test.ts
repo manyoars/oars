@@ -124,6 +124,17 @@ describe('machineChild', () => {
     expect(existsSync(join(outbox, 'send.dirty'))).toBe(false);
   });
 
+  it('sends after it holds, with the send lock still taken', async () => {
+    const outbox = outboxFolder();
+    const log: string[] = [];
+    const send = (): Promise<void> => {
+      log.push(`send ${String(existsSync(join(outbox, 'send.lock')))}`);
+      return Promise.resolve();
+    };
+    await machineChild(deps(outbox, log, { settle: TIMES, send }), input('a'));
+    expect(log).toEqual(['capture a', 'build a', 'hold a', 'send true']);
+  });
+
   it('builds nothing for a session whose repository is off the allow list: no wait, no capture, no build', async () => {
     const outbox = outboxFolder();
     const log: string[] = [];

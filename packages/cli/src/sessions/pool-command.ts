@@ -382,13 +382,13 @@ const lockMessages: { [code in LockRefusal]: string } = {
 };
 
 /** The calls one batch takes, in order: one, or one per part when it is past a request's bytes. `outbox` prints these and `deposit --send` sends these, so what is printed is what is sent. */
-const callsOf = (token: string, bytes: string, hash: string): Call[] => {
+const callsOf = (token: string | undefined, bytes: string, hash: string): Call[] => {
   const parts = partsOf(bytes);
-  return parts.map((piece, at) => ({ token, bytes: piece, ...(parts.length === 1 ? {} : { part: { index: at + 1, count: parts.length, batch: hash } }) }));
+  return parts.map((piece, at) => ({ ...(token === undefined ? {} : { token }), bytes: piece, ...(parts.length === 1 ? {} : { part: { index: at + 1, count: parts.length, batch: hash } }) }));
 };
 
 /** One batch to the pool: a batch past one request's bytes goes in parts, in order, each answered 202 until the last completes the deposit with 201. A part sent again is harmless, so the retry covers every part alike. */
-export const postBatch = async (deps: RunDeps, options: { server: string; token: string; bytes: string; hash: string; via: Sender }): Promise<void> => {
+export const postBatch = async (deps: RunDeps, options: { server: string; token: string | undefined; bytes: string; hash: string; via: Sender }): Promise<void> => {
   const { server, token, bytes, hash, via } = options;
   const calls = callsOf(token, bytes, hash);
   for (const [at, call] of calls.entries()) {

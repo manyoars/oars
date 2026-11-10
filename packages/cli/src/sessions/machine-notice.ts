@@ -7,13 +7,15 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
 
-export const NOTICE_CODES = ['vocabulary_expired', 'hold_unconfigured'] as const;
+export const NOTICE_CODES = ['vocabulary_expired', 'hold_unconfigured', 'machine_key_expiring', 'machine_key_expired', 'machine_key_revoked'] as const;
 export type NoticeCode = (typeof NOTICE_CODES)[number];
 
 export interface NoticeEntry {
   code: NoticeCode;
   /** Epoch milliseconds when the child wrote it. */
   at: number;
+  /** Epoch milliseconds the machine key expires, kept for `machine_key_expiring` so the message can name the day. */
+  expiresAt?: number;
 }
 
 const NOTICE = 'machine-notice.json';
@@ -25,9 +27,13 @@ export const NOTICE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 export const noticeFile = (storeDir: string): string => join(storeDir, NOTICE);
 
 /** What the person is told for each code: what stopped, what is kept, and the one step. */
-const TEXT: { [code in NoticeCode]: string } = {
-  hold_unconfigured: 'oars on this machine holds nothing: OARS_MACHINE or OARS_SESSION_SALT is missing from its enrollment, so no session reaches its hold branch and the data of its sessions is lost. Run oars pool enroll --hold-only on your own machine and set the printed block in this environment.',
-  vocabulary_expired: 'oars on this machine is out of date, so it builds no deposit batches: its closed vocabulary is past its age limit. The sessions stay on this machine. Upgrade with npm install -g @manyoars/oars.',
+const LIST = 'oars pool machines lists the machines of your account, their expiry included.';
+const TEXT: { [code in NoticeCode]: (entry: NoticeEntry) => string } = {
+  hold_unconfigured: () => 'oars on this machine holds nothing: OARS_MACHINE or OARS_SESSION_SALT is missing from its enrollment, so no session reaches its hold branch and the data of its sessions is lost. Run oars pool enroll --hold-only on your own machine and set the printed block in this environment.',
+  vocabulary_expired: () => 'oars on this machine is out of date, so it builds no deposit batches: its closed vocabulary is past its age limit. The sessions stay on this machine. Upgrade with npm install -g @manyoars/oars.',
+  machine_key_expiring: (entry) => `The pool key of this machine expires ${entry.expiresAt === undefined ? 'soon' : `on ${new Date(entry.expiresAt).toISOString().slice(0, 10)}`}; after that its deposits are refused. ${LIST} Enroll the machine again with oars pool enroll before then.`,
+  machine_key_expired: () => `The pool key of this machine has expired, so its deposits are refused and its batches wait in its outbox. ${LIST} Enroll the machine again with oars pool enroll.`,
+  machine_key_revoked: () => 'The account revoked the pool key of this machine, so its deposits are refused and its batches wait in its outbox. See oars pool machines; enroll this machine again with oars pool enroll if the revocation was a mistake.',
 };
 
 const isCode = (value: unknown): value is NoticeCode => NOTICE_CODES.some((code) => code === value);
@@ -45,13 +51,14 @@ const entriesOf = (text: string): NoticeEntry[] => {
   return listed.flatMap((entry: unknown) => {
     const code: unknown = typeof entry === 'object' && entry !== null ? Reflect.get(entry, 'code') : undefined;
     const at: unknown = typeof entry === 'object' && entry !== null ? Reflect.get(entry, 'at') : undefined;
-    return isCode(code) && typeof at === 'number' ? [{ code, at }] : [];
+    const expiresAt: unknown = typeof entry === 'object' && entry !== null ? Reflect.get(entry, 'expiresAt') : undefined;
+    return isCode(code) && typeof at === 'number' ? [{ code, at, ...(typeof expiresAt === 'number' ? { expiresAt } : {}) }] : [];
   });
 };
 
 
 /** The child records a condition: its entry replaces an earlier one of the same code and keeps its place, so the file lists the codes in the order they were first raised. A notice file it cannot read is rewritten. */
-export const recordNotice = async (storeDir: string, code: NoticeCode, at: number): Promise<void> => {
+export const recordNotice = async (storeDir: string, code: NoticeCode, at: number, expiresAt?: number): Promise<void> => {
   const written = entriesOf(await readFile(join(storeDir, WRITTEN), 'utf8').catch(() => ''));
   const last = written.find((entry) => entry.code === code);
   // A clock that moved backward (`at < last.at`) writes again, rather than staying quiet until it catches up.
@@ -59,7 +66,7 @@ export const recordNotice = async (storeDir: string, code: NoticeCode, at: numbe
   const kept = entriesOf(await readFile(noticeFile(storeDir), 'utf8').catch(() => ''));
   // A Map keeps a key's first place when it is set again.
   const byCode = new Map(kept.map((entry) => [entry.code, entry]));
-  byCode.set(code, { code, at });
+  byCode.set(code, { code, at, ...(expiresAt === undefined ? {} : { expiresAt }) });
   const entries = [...byCode.values()];
   await mkdirOwnerOnly(storeDir);
   await writeOwnerOnly(noticeFile(storeDir), `${JSON.stringify({ entries })}\n`);
@@ -67,7 +74,7 @@ export const recordNotice = async (storeDir: string, code: NoticeCode, at: numbe
 };
 
 /** The one message for a set of entries, or `undefined` for none. */
-export const messageOf = (entries: readonly NoticeEntry[]): string | undefined => (entries.length === 0 ? undefined : entries.map((entry) => TEXT[entry.code]).join(' '));
+export const messageOf = (entries: readonly NoticeEntry[]): string | undefined => (entries.length === 0 ? undefined : entries.map((entry) => TEXT[entry.code](entry)).join(' '));
 
 /**
  * The Stop reads the notice and clears it: the file is renamed first, so two Stops never both print it, then read and removed. The text, or `undefined` when there is no notice. Never throws: a hook that cannot read its notice goes on to
