@@ -3,7 +3,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { HostClass } from '../../cli/src/sessions/machine.js';
 import { answer, bodyOf, fieldOf, refuse, textField, type Env } from './http.js';
-import { accountOf, bearerOf, hashToken } from './identity.js';
+import { accountOf, bearerOf, closedRefusal, hashToken } from './identity.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -119,6 +119,8 @@ const declaredMachine = (body: unknown): NewMachine | Response => {
 export const enroll = async (request: Request, env: Env): Promise<Response> => {
   const account = await accountOf(request, env);
   if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
+  const closed = await closedRefusal(env, account);
+  if (closed !== undefined) return closed;
   const declared = declaredMachine(await bodyOf(request));
   if (declared instanceof Response) return declared;
   return answer(201, await createMachine(env, account, declared, Date.now()));
@@ -228,6 +230,8 @@ export const activate = async (request: Request, env: Env): Promise<Response> =>
   const now = Date.now();
   const first = await heldBy(request, env, now);
   if (first instanceof Response) return first;
+  const closed = await closedRefusal(env, first.account);
+  if (closed !== undefined) return closed;
   if (first.view.state === 'active') return activated(first);
   // `AND state = 'pending'` lets the first of two uses at once bind the key; the other changes nothing and reads the same row.
   await env.DB.prepare("UPDATE machines SET state = 'active', activated_at = ?, expires_at = ? WHERE id = ? AND state = 'pending'").bind(now, now + first.lifeMs, first.view.id).run();
