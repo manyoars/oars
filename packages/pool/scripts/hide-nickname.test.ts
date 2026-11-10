@@ -28,8 +28,8 @@ const clubConsent = async (): Promise<string> => String(fieldOf(fieldOf((await p
 
 /** A club with its creator (nickname `owner`) and one guest under `nickname`. */
 const seated = async (n: number, nickname: string): Promise<{ club: string; code: string; guest: { account: string; token: string } }> => {
-  const owner = await pool.signIn('github', stubUser(`hide-owner-${String(n)}`));
-  const guest = await pool.signIn('github', stubUser(`hide-guest-${String(n)}`));
+  const owner = await pool.signIn('github', stubUser(String(9200 + n)));
+  const guest = await pool.signIn('github', stubUser(String(9300 + n)));
   const consent = await clubConsent();
   const made = await pool.post('/v1/clubs', { name: `Hide ${String(n)}`, nickname: 'owner', consent }, owner.token);
   const club = String(fieldOf(made.json, 'id'));

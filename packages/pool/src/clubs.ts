@@ -32,6 +32,21 @@ const hashOfCode = (code: string): string => sha256(`club-code:${code}`);
 /** A nickname or club name: letters and digits first, then those or space, dot, underscore, and hyphen; 24 at most. */
 const NAME = /^[\p{L}\p{N}][\p{L}\p{N} ._-]{0,23}$/u;
 
+/** The rule, in the one line a refusal carries. */
+const NICKNAME_RULE = 'A nickname is 2 to 24 letters, digits, spaces, dots, underscores, or hyphens, with no space at either end, no @, and no web address.';
+/** Letters, digits, space, dot, underscore, hyphen; no space at either end. Length is checked apart, in characters. */
+const NICKNAME = /^[\p{L}\p{N}_.-](?:[\p{L}\p{N} _.-]*[\p{L}\p{N}_.-])?$/u;
+/** A web address in a name: "www." or a dot before a common top-level domain. The character set already keeps out "@", ":", and "/". */
+const WEB_ADDRESS = /www\.|\.(?:com|net|org|io|dev|app|co|me|ly|xyz|info|biz|gg|tv)(?![\p{L}\p{N}])/iu;
+
+/** The NFKC form of a nickname that follows the rule, else undefined. NFKC first, so a full-width or look-alike form is judged and stored as the plain one. */
+const nicknameOf = (given: string | undefined): string | undefined => {
+  if (given === undefined) return undefined;
+  const nickname = given.normalize('NFKC');
+  const length = [...nickname].length;
+  return length >= 2 && length <= 24 && NICKNAME.test(nickname) && !WEB_ADDRESS.test(nickname) ? nickname : undefined;
+};
+
 const signedIn = async (request: Request, env: Env): Promise<string | Response> => (await accountOf(request, env)) ?? refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
 
 /** 429 `rate_limited` when the account already has `limit` attempts of this kind inside the window: `retry_after` (seconds, also the `retry-after` header) is when the limit-th newest one leaves it, which is when the next try is allowed. */
@@ -108,8 +123,8 @@ const boardOf = async (env: Env, club: string, now: number, standingOnly = false
 
 /** The nickname and consent a create or a join carries, or the refusal naming the field. */
 const asked = (body: unknown, expected: string): { nickname: string } | Response => {
-  const nickname = textField(body, 'nickname')?.trim();
-  if (nickname === undefined || !NAME.test(nickname)) return refuse(422, 'bad_nickname', 'A nickname is 1 to 24 letters, digits, spaces, dots, underscores, or hyphens, starting with a letter or digit.', 'nickname');
+  const nickname = nicknameOf(textField(body, 'nickname'));
+  if (nickname === undefined) return refuse(422, 'nickname_invalid', NICKNAME_RULE, 'nickname');
   if (textField(body, 'consent') !== expected) return refuse(422, 'consent_required', 'Send the SHA-256 of the consent text shown for this board (GET /v1/clubs/consent) to agree to it.', 'consent');
   return { nickname };
 };
