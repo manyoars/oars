@@ -211,7 +211,7 @@ describe('the covenant record', () => {
     const { token, account } = await pool.signIn('github', stubUser(user));
     const db = await pool.db();
     const rest = Object.fromEntries(Object.entries(acceptanceOf('v2')).filter(([name]) => name !== field));
-    expect(Object.keys(rest)).toHaveLength(3);
+    expect(Object.keys(rest)).toHaveLength(4);
     expect(await pool.post('/v1/covenant/accept', rest, token)).toMatchObject({ status: 400, json: { error: 'missing_field', field } });
     expect(await proofOf(db, account)).toEqual([]);
   });
