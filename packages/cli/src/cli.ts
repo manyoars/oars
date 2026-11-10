@@ -9,7 +9,7 @@ import { CliError, ExitCode } from './errors.js';
 import type { BooksBy, RecallQuery } from './sessions/query.js';
 import { closedQueryOf, formsRefusal, RECALL_FAMILIES } from './sessions/recall-reads.js';
 import { FAMILIES } from './sessions/read.js';
-import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsGoldArms, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsLineage, sessionsMeasure, sessionsRead, sessionsRecall, sessionsRecallCounts, sessionsVerify, type SessionsDeps } from './sessions/command.js';
+import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsGoldArms, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsLineage, sessionsMeasure, sessionsRead, sessionsRecall, sessionsReceipt, sessionsRecallCounts, sessionsVerify, type SessionsDeps } from './sessions/command.js';
 import { sessionsCard } from './sessions/card-command.js';
 import type { CardPeriod } from './sessions/card.js';
 import { gateInstall, gatePolicy, gateReplay, gateReport, gateUninstall } from './gate/command.js';
@@ -242,6 +242,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .option('--family <name>', `one read family (${RECALL_FAMILIES.join(', ')}); only recovery and fit are narrowed by --class and --since`)
     .option('--text <text>', 'look for text in the local record')
     .option('--session <id>', 'the session asking, so what it did next can be read for this recall')
+    .option('--receipt', 'with --error: print a redacted Markdown block to paste into an issue on the failing tool (tool, harness, normalized signature, earlier sessions and weeks, what they did next)')
     .option('--counts', 'print counts of recalls by mode, arm, and answer, with how many windows hold a call named like a shown action, instead of answering (see --day)')
     .option('--day <yyyy-mm-dd>', 'with --counts: only this UTC day')
     .option('--mcp', 'serve one recall tool over MCP on stdio instead of answering once')
@@ -274,6 +275,10 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
         return;
       }
       const session = text(options, 'session') ?? null;
+      if (flag(options, 'receipt')) {
+        emit(deps, flag(options, 'json'), await sessionsReceipt(sessionDeps(deps), { ...(text(options, 'error') === undefined ? {} : { error: text(options, 'error') }), ...(text(options, 'path') === undefined ? {} : { path: text(options, 'path') }), ...(text(options, 'class') === undefined ? {} : { cls: text(options, 'class') }), ...(count(options, 'since') === undefined ? {} : { sinceDays: count(options, 'since') }) }, session));
+        return;
+      }
       const conflict = formsRefusal([
         ...(list(options, 'pattern').length > 0 ? ['prefix' as const] : []),
         ...(text(options, 'entity') === undefined ? [] : ['entity' as const]),

@@ -17,6 +17,7 @@ import { appendRecall, readRecalls } from './recall-object.js';
 import { deriveConsequences, formatRecallCounts, recallCounts } from './recall-consequence.js';
 import { pull, pullRefusal, type PullInput } from './recall-reads.js';
 import { MISS_TEXT } from './recall-render.js';
+import { receiptOf, RECEIPT_MISS } from './receipt.js';
 import { EMPTY_RECALL, emptyBooks, nothingFoundLines, savedListNote } from './empty-state.js';
 import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, inRepository, readIndex, type ContextOptions } from './hook-index.js';
@@ -134,6 +135,20 @@ export const sessionsRecall = async (deps: SessionsDeps, query: PullInput, sid: 
   if (result.legacy !== undefined) return { document: { ok: true, ...result.legacy, recall: result.recall }, text: empty && result.legacy.matches.length === 0 ? EMPTY_RECALL : formatRecall(result.legacy) };
   // The document states the recall and not the raw reads: a read's tool, keys, and versions are store strings that can carry text, and `recall.evidence` already states them closed.
   return { document: { ok: true, recall: result.recall }, text: result.recall.answer.rendered === '' ? (empty ? EMPTY_RECALL : MISS_TEXT) : result.recall.answer.rendered };
+};
+
+/**
+ * `recall --error <text> --receipt`: the same pull, recorded as any recall is, printed as a paste-ready block for an issue. Only `--error` asks about one error;
+ * every other form refuses, because a receipt states one signature.
+ */
+export const sessionsReceipt = async (deps: SessionsDeps, query: PullInput, sid: string | null = null): Promise<Outcome> => {
+  if ('form' in query || query.error === undefined || query.path !== undefined || query.cls !== undefined || query.sinceDays !== undefined) {
+    throw new CliError('--receipt answers one error: pass --error "<text>" and no other form.', ExitCode.USAGE, 'usage');
+  }
+  await sessionsRecall(deps, query, sid);
+  const { storeDir } = runtimeOf(deps);
+  const block = receiptOf(await loadStore(storeDir), query, deps.now(), await readRedactDomains(storeDir));
+  return { document: { ok: true, receipt: block }, text: block ?? RECEIPT_MISS };
 };
 
 /** `recall --counts`: push and pull, shown and held, as counts only. */

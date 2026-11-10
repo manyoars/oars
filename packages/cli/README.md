@@ -113,6 +113,7 @@ oars sessions recall --entity Monitor                # what is known about a pub
 oars sessions recall --text "wrong input"            # look for text in the local record (counts all time)
 oars sessions recall --pattern <readId> --pattern <readId>  # what happened from here, from the read IDs of your steps so far (repeatable; counts all time)
 oars sessions recall --error "..." --session <id>    # name the asking session, so what it did next can be read for this recall
+oars sessions recall --error "..." --receipt         # a paste-ready Markdown block for an issue on the failing tool: listed tool and harness names, the normalized signature, earlier sessions and weeks, what they did next, redacted
 
 # Serve the same query to a running agent as one MCP tool, oars_recall (stdio):
 oars sessions recall --mcp
