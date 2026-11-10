@@ -84,6 +84,8 @@ oars card --year --out me.png    # the last 365 days, saved as me.png and me.svg
 
 `oars card` makes a share-ready card of your own week (the default, the last 7 days), month, or year across every harness, read from the local session store only. It shows your sessions and active days, the harnesses and models you used, tokens by model, tool calls, failed calls and how many were followed by a different next step, how often an edit was verified, commits and how many survived, and cost only where the harness recorded one. A count under the same floor `oars sessions books` uses prints `too few`. The depositor row reads `ashore: run oars pool login` until you sign in; signed in, it reads the number of weeks in which this machine sent a deposit, from the local sent record, and says it is this machine's.
 
+Once a week, the first command you run in a terminal on or after Friday prints one line to stderr, `Your week: N sessions, M strokes. \`oars card --text\` for the table.`, never with `--json`, from a hook, from the MCP server, from a recall, from `oars sessions try`, or from `oars card` itself, and only when the week has a session. About one install in ten never sees it; `card-line.json` in the session store folder records the week and whether it was `shown`, `held`, or `not_due`, and `card-line-id` holds the id the holdback hashes, copied once from the telemetry install id when there is one, else random, so the arm never changes.
+
 Nothing is uploaded and nothing is sent anywhere: the command makes no network call and prints one prefilled `x.com` link whose text is the card's own numbers, for you to post if you choose. The card carries no folder name, path, prompt or response text, repository name, or long-tail tool or model name, and posting it unlocks nothing. The picture is a byte-stable SVG and a PNG drawn from it with a built-in font; `--text` prints the table and writes nothing.
 
 ### sessions
@@ -111,6 +113,7 @@ oars sessions recall --entity Monitor                # what is known about a pub
 oars sessions recall --text "wrong input"            # look for text in the local record (counts all time)
 oars sessions recall --pattern <readId> --pattern <readId>  # what happened from here, from the read IDs of your steps so far (repeatable; counts all time)
 oars sessions recall --error "..." --session <id>    # name the asking session, so what it did next can be read for this recall
+oars sessions recall --error "..." --receipt         # a paste-ready Markdown block for an issue on the failing tool: listed tool and harness names, the normalized signature, earlier sessions and weeks, what they did next (the next tools), redacted
 
 # Serve the same query to a running agent as one MCP tool, oars_recall (stdio):
 oars sessions recall --mcp

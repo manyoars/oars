@@ -3,6 +3,7 @@
 import type { Command } from 'commander';
 import type { RunDeps } from '../cli.js';
 import type { ExitCode } from '../errors.js';
+import type { CardLineArm } from './schema.js';
 import { consentOf, everShownNotice, markNoticeShown, NOTICE } from './consent.js';
 import { recordEvent, type TelemetryRuntime } from './record.js';
 import { startDailySend } from './send.js';
@@ -14,6 +15,8 @@ export interface Observed {
   path: string[];
   /** The long names (as commander keys them) of the options given on the command line. */
   flags: string[];
+  /** What the weekly card line did on this command (`sessions/card-line.ts`); absent when it was never asked. */
+  cardLine?: CardLineArm;
 }
 
 const pathOf = (command: Command): string[] => {
@@ -76,6 +79,7 @@ export const finishTelemetry = (deps: RunDeps, argv: string[], observed: Observe
       durationMs: Math.max(0, deps.now() - startedAt),
       exitCode: exit,
       ci: ciWord(deps.env),
+      ...(observed.cardLine === undefined ? {} : { cardLine: observed.cardLine }),
       ...(errorClass === undefined ? {} : { errorClass }),
     });
     // Never from a hook: a hook has a time budget, and the send is for the detached sender and the commands a person runs.
