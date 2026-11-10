@@ -34,8 +34,9 @@ describe('release-cli workflow', () => {
   it('lets a manual run build and publish the tag, only when asked', () => {
     expect(workflow).toContain('TAG: ${{ inputs.tag || github.ref_name }}');
     expect(workflow).toMatch(/\n {6}publish:\n {8}description: [^\n]+\n {8}required: false\n {8}type: boolean\n {8}default: false/);
-    expect(job('build')).toContain("if: github.event_name == 'push' || inputs.publish");
-    expect(job('publish')).toContain("if: github.event_name == 'push' || inputs.publish");
+    const guard = "if: (github.event_name == 'push' || inputs.publish) && (github.event_name == 'push' || github.ref == 'refs/heads/main')";
+    expect(job('build')).toContain(guard);
+    expect(job('publish')).toContain(guard);
     expect(job('release')).toContain("(github.event_name == 'workflow_dispatch' && !inputs.publish)");
   });
 

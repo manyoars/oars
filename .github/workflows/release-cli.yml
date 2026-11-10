@@ -12,7 +12,7 @@ name: release-cli
 # npm publish); it updates the release when one exists. Backfill: gh workflow run release-cli.yml -f tag=cli-v0.4.1 -f latest=true
 # With `publish=true` it runs the whole pipeline (build, publish, release) on that tag's code with this workflow file, which is how a tag whose
 # own workflow run failed gets published without re-tagging: gh workflow run release-cli.yml -f tag=cli-v0.5.0 -f latest=true -f publish=true
-# Start it from main: the tag's commit must still be an ancestor of main, and the run's workflow file is main's.
+# Start it from main: the tag's commit must still be an ancestor of main, and the run's workflow file is main's. A `publish=true` dispatch signs provenance for the dispatch ref and sha, not the tag's commit, so a new patch tag is the default.
 #
 # Auth: npm trusted publishing (OIDC), no stored secret. The package's trusted publisher on npmjs.com names the GitHub
 # Actions repository manyoars/oars and the workflow file release-cli.yml (both case-sensitive, no environment), so do
@@ -23,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing tag (cli-v<semver>) to create or update the GitHub Release for; nothing is built or published
+        description: Existing tag (cli-v<semver>) to work on; with publish off, only the GitHub Release is created or updated
         required: true
         type: string
       latest:
@@ -50,7 +50,7 @@ concurrency:
 
 jobs:
   build:
-    if: github.event_name == 'push' || inputs.publish
+    if: (github.event_name == 'push' || inputs.publish) && (github.event_name == 'push' || github.ref == 'refs/heads/main')
     # GitHub-hosted runners only: this repository is public.
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -106,7 +106,7 @@ jobs:
 
   publish:
     needs: build
-    if: github.event_name == 'push' || inputs.publish
+    if: (github.event_name == 'push' || inputs.publish) && (github.event_name == 'push' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

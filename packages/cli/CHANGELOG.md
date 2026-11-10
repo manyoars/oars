@@ -4,7 +4,11 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 
 ## Unreleased
 
+## 0.5.1 (2026-11-10)
+
+- 0.5.0 was tagged but never reached npm because the release job's pack step failed, so 0.5.1 is the first npm release of the 0.5 line.
 - `oars club create|join|leave|show` and `oars board` (each with `--json`): make a club, join one by its code or the open board, leave, see the members, and read the open board without signing in. Create and join show the pool's consent text and need you to type `yes` at a terminal. Errors lead with the cause (`not_signed_in`, also when the pool no longer accepts your sign-in; `club_full`, `nickname_taken`, `nickname_invalid`, `rate_limited` with when to retry). See the README, "club".
+
 ## 0.5.0 (2026-11-10)
 
 - `oars --version` prints one line, and `--version` and `--help` no longer show the first-run telemetry notice. The notice shows once, on the first other command.
