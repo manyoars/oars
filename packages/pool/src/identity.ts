@@ -119,7 +119,7 @@ export const closedRefusal = async (env: Env, account: string): Promise<Response
   return row === null || fieldOf(row, 'closed_at') === null ? undefined : closedAccount();
 };
 
-/** The refusal for a restricted account (GDPR Art. 18: the operator restricted it on request), or undefined when it is not or the pool has never seen it. A deposit and a raw request answer it; no credential is revoked, so lifting the restriction restores the account whole. The export, an erasure, and the withdrawal do not ask. */
+/** The refusal for a restricted account (GDPR Art. 18: the operator restricted it on request), or undefined when it is not or the pool has never seen it. A deposit, a raw request, a machine enrollment, and a club create or join answer it; no credential is revoked, so lifting the restriction restores the account whole. The export, an erasure, and the withdrawal do not ask. */
 export const restrictedRefusal = async (env: Env, account: string): Promise<Response | undefined> => {
   const row = await env.DB.prepare('SELECT restricted_at FROM accounts WHERE id = ?').bind(account).first();
   return typeof fieldOf(row, 'restricted_at') !== 'number' ? undefined : refuse(403, 'account_restricted', 'This account is restricted at your request: the pool keeps its data stored and takes nothing more until the restriction is lifted. Write to privacy@manyoars.com.');

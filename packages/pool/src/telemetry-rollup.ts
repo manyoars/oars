@@ -142,7 +142,7 @@ export const rollupDay = async (env: Env & RollupEnv, day: string, options: Roll
   let lists = 0;
   // Read once (two statements), and only for a day that holds a batch with an account: a day of anonymous batches spends no call on it.
   let standing: Standing | undefined;
-  let tombstoneReads = 0;
+  let standingReads = 0;
   let truncated = false;
   let cursor: string | undefined;
   do {
@@ -160,7 +160,7 @@ export const rollupDay = async (env: Env & RollupEnv, day: string, options: Roll
       batches += 1;
       if (batch.account !== '' && standing === undefined) {
         standing = await standingOf(env);
-        tombstoneReads += 2;
+        standingReads += 2;
       }
       // A restricted account's batch stays in R2 (storage is what Art. 18(2) allows) and counts toward no row, so no night's rollup processes it.
       if (standing?.restricted.has(batch.account) === true) continue;
@@ -174,13 +174,13 @@ export const rollupDay = async (env: Env & RollupEnv, day: string, options: Roll
     cursor = truncated || !page.truncated ? undefined : page.cursor;
   } while (cursor !== undefined);
   const installs = new Set([...byInstall.values()].map((one) => one.install)).size;
-  if (truncated && options.keepWhenCut === true) return { day, batches, installs, truncated, gets, subrequests: lists + gets + tombstoneReads, kept: true };
+  if (truncated && options.keepWhenCut === true) return { day, batches, installs, truncated, gets, subrequests: lists + gets + standingReads, kept: true };
   const insert = [...byInstall.values()].map((one) =>
     env.DB.prepare('INSERT INTO telemetry_install_days (day, install, account, batches, events, measures) VALUES (?, ?, ?, ?, ?, ?)').bind(day, one.install, one.account, one.batches, one.seen.size, JSON.stringify(entriesOf(one))),
   );
   // One transaction, so a reader sees the day before or after the run, never half of it.
   await env.DB.batch([env.DB.prepare('DELETE FROM telemetry_install_days WHERE day = ?').bind(day), ...insert]);
-  return { day, batches, installs, truncated, gets, subrequests: lists + gets + tombstoneReads + 1, kept: false };
+  return { day, batches, installs, truncated, gets, subrequests: lists + gets + standingReads + 1, kept: false };
 };
 
 /**

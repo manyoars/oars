@@ -15,7 +15,7 @@ export const USAGE = [
   '                                      and make ingest refuse it again (only its SHA-256 is kept)',
   '  account --account <id>              erase one account\'s deposit rows and raw objects, scrub its machines\' labels and allow lists, delete its repo keys, deposit hours, and contributor records, and disable its tokens, then rewrite each telemetry batch within retention that names it (needs R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY, to list the bucket); the shared totals stay',
   '  close --account <id>               close one account (covenant 6.1): revoke its tokens and machine keys and record when it closed, so sign-in, enrollment, and activation refuse it; its Deposits, raw objects, and the shared totals stay',
-  '  restrict --account <id> [--lift]   restrict one account on the person’s request (GDPR Art. 18), or lift it: it keeps its data stored and takes nothing more (deposits, raw parts, and machine enrollment are refused, its telemetry batches roll into no row, and its records count toward no shared cell); its export, an erasure, and the sweeps still run, and nothing is revoked',
+  '  restrict --account <id> [--lift]   restrict one account on the person’s request (GDPR Art. 18), or lift it: it keeps its data stored and takes nothing more (deposits, raw parts, machine enrollment, and club joins are refused, its rows leave every club board, its telemetry batches roll into no row, and it counts toward the holder count of no cell); its export, an erasure, and the sweeps still run, and nothing is revoked',
   'Options: --confirm (without it nothing is changed), --local (the local wrangler state instead of the account\'s)',
   `Runs with the wrangler login already on this machine against D1 database "oars-pool" and R2 buckets "oars-pool-raw" and "oars-telemetry".`,
 ].join('\n');
@@ -116,7 +116,7 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
       return 0;
     }
     if (what === 'restrict' && options.positional.length === 1 && options.account !== undefined && options.id === undefined) {
-      if (!options.confirm) return plan(io, options.lift ? `lift the restriction on account ${options.account} in ${where}: its deposits, raw parts, and machine enrollment are taken again, its telemetry batches roll into a row again, and its records count toward shared cells again; tell the person first (Art. 18(3))` : `restrict account ${options.account} in ${where}: record when it was restricted; its deposits, raw parts, and machine enrollment are refused, and its telemetry batches roll into no row; stop counting its records toward shared cells; delete and revoke nothing`);
+      if (!options.confirm) return plan(io, options.lift ? `lift the restriction on account ${options.account} in ${where}: its deposits, raw parts, machine enrollment, and club joins are taken again, its rows return to the club boards, its telemetry batches roll into a row again, and it counts toward cell holder counts again; tell the person first (Art. 18(3))` : `restrict account ${options.account} in ${where}: record when it was restricted; its deposits, raw parts, machine enrollment, and club joins are refused, its rows leave every club board, and its telemetry batches roll into no row; stop counting it toward cell holder counts; delete and revoke nothing`);
       io.print(JSON.stringify({ rowsChanged: (await restrictAccount(store, options.account, options.lift, io.now())).rows }));
       return 0;
     }
