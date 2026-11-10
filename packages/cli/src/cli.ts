@@ -21,7 +21,7 @@ import { githubVisibility, poolEnroll, poolMachineRevoke, poolMachines } from '.
 import { runNetGit } from './sessions/machine-hold.js';
 import { holdPull } from './sessions/machine-pull.js';
 import { runGit } from './sessions/survival.js';
-import { poolCoverage, poolDeposit, poolExport, poolFetch, poolLogin, poolLogout, poolOutbox, poolRaw } from './sessions/pool-command.js';
+import { poolCoverage, poolDeposit, poolExport, poolFetch, poolLogin, poolLogout, poolOutbox, poolProve, poolRaw } from './sessions/pool-command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 import { telemetryOff, telemetryOn, telemetryReport, telemetryShow, telemetryStatus } from './telemetry/command.js';
@@ -196,10 +196,11 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .option('--year', 'the last 365 days')
     .option('--text', 'print the card as a table instead of saving a picture')
     .option('--out <file>', 'save the card here, as .png or .svg: both are written, one with each extension (default oars-card-<period> in the working directory)')
+    .option('--no-cost', 'leave the cost row out of the picture, the table, and --json')
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       const period: CardPeriod = flag(options, 'year') ? 'year' : flag(options, 'month') ? 'month' : 'week';
-      emit(deps, flag(options, 'json'), await sessionsCard(sessionDeps(deps), { period, text: flag(options, 'text'), out: text(options, 'out') }, deps.env));
+      emit(deps, flag(options, 'json'), await sessionsCard(sessionDeps(deps), { period, text: flag(options, 'text'), out: text(options, 'out'), noCost: options.cost === false }, deps.env));
     });
 
   const sessions = program.command('sessions').description("deposit and recall your own coding-agent session logs, locally (these commands make no model call and no network call, except `gold arms`, which asks your own Claude subscription; telemetry is separate: oars telemetry)");
@@ -653,6 +654,15 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       emit(deps, flag(options, 'json'), await poolOutbox(deps, { server: text(options, 'server'), explain: flag(options, 'explain') }));
+    });
+
+  pool
+    .command('prove')
+    .description('prove you control your pool account with your sign-in, and print the account and the time the pool stored, to send to the operator who asked for proof before acting on your request (GDPR Article 12(6)); for a closed account, run login instead')
+    .option(serverOption, serverHelp)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await poolProve(deps, { server: text(options, 'server') }));
     });
 
   pool

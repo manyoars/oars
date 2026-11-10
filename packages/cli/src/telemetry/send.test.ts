@@ -4,11 +4,11 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { run, type RunDeps } from '../cli.js';
 import { defaultConfigDir } from '../credentials.js';
 import { harness } from '../test-support.js';
-import { markNoticeShown, setEnabled } from './consent.js';
+import { markNoticeShown, NOTICE_VERSION, setEnabled } from './consent.js';
 import { BATCH_EVENTS, dueForSend, sendNightly, sendSpool, startDailySend } from './send.js';
 import { appendLine, installId, readSpool, spoolPaths } from './spool.js';
 
@@ -95,7 +95,7 @@ describe('sendSpool', () => {
     expect(only?.url).toBe('/v1/telemetry');
     expect(only?.headers['content-type']).toBe('application/json');
     // Exactly the spooled lines, and the install id the folder keeps.
-    expect(only?.body).toEqual({ install: installId(dir), events: [0, 1, 2].map((n): unknown => JSON.parse(eventLine(n))) });
+    expect(only?.body).toEqual({ install: installId(dir), notice: NOTICE_VERSION, events: [0, 1, 2].map((n): unknown => JSON.parse(eventLine(n))) });
     expect(readSpool(dir)).toEqual([]);
   });
 
@@ -431,5 +431,47 @@ describe('sendNightly', () => {
     const result = await sendNightly({ APPDATA: appData, OARS_POOL_URL: fake.origin, OARS_TELEMETRY: '0' }, 'win32', 'C:\\unused-home', () => 0);
     expect(result.outcome).toBe('not-allowed');
     expect(fake.received).toHaveLength(0);
+  });
+});
+
+const REAL_OPTIONS = Intl.DateTimeFormat().resolvedOptions();
+const zoned = (timeZone: string): Intl.ResolvedDateTimeFormatOptions => ({ ...REAL_OPTIONS, timeZone });
+
+describe('sendSpool in a closed region', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+  const zoneIs = (zone: string | undefined): void => {
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockImplementation(() => {
+      if (zone === undefined) throw new Error('no zone');
+      return zoned(zone);
+    });
+  };
+
+  it.each(['Europe/Berlin', 'Europe/London', 'Atlantic/Canary', undefined])('sends nothing from %s and keeps the spool', async (zone) => {
+    const fake = await serve();
+    zoneIs(zone);
+    const dir = spooled(2);
+    expect(await sendWith(dir, { OARS_POOL_URL: fake.origin })).toMatchObject({ outcome: 'not-allowed', requests: 0 });
+    expect(fake.received).toHaveLength(0);
+    expect(readSpool(dir)).toHaveLength(2);
+  });
+
+  it('sends nothing for an install that saw an older notice, then stamps the batch with the notice it saw', async () => {
+    const fake = await serve();
+    zoneIs('America/New_York');
+    const dir = spooled(1, false);
+    writeFileSync(spoolPaths(dir).settings, JSON.stringify({ noticeShownAt: '2026-11-01T00:00:00.000Z' }));
+    expect(await sendWith(dir, { OARS_POOL_URL: fake.origin })).toMatchObject({ outcome: 'not-allowed', requests: 0 });
+    expect(markNoticeShown(dir, () => 0)).toBe(true);
+    expect(await sendWith(dir, { OARS_POOL_URL: fake.origin })).toMatchObject({ outcome: 'sent' });
+    expect(fake.received[0]?.body).toMatchObject({ notice: 2 });
+  });
+
+  it('sends from America/New_York, and the batch carries the notice version', async () => {
+    const fake = await serve();
+    zoneIs('America/New_York');
+    expect(await sendWith(spooled(1), { OARS_POOL_URL: fake.origin })).toMatchObject({ outcome: 'sent' });
+    expect(fake.received[0]?.body).toMatchObject({ notice: NOTICE_VERSION });
   });
 });

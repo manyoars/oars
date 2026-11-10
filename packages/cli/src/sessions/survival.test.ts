@@ -39,15 +39,22 @@ afterEach(() => {
 const IDENTITY = ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false'];
 const gitIn = (dir: string, ...args: string[]): string => execFileSync('git', ['-C', dir, ...IDENTITY, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 
-const commitIn = (dir: string, name: string): string => {
-  writeFileSync(join(dir, name), name);
-  gitIn(dir, 'add', name);
-  // `core.abbrev=8` makes the commit's own summary line (`[main 1a2b3c4d] add x`) carry the eight-character sha, so no `rev-parse` process is spawned to read it back.
-  const made = gitIn(dir, '-c', 'core.abbrev=8', 'commit', '-m', `add ${name}`);
+// `core.abbrev=8` makes the commit's own summary line (`[main 1a2b3c4d] add x`) carry the eight-character sha, so no `rev-parse` process is spawned to read it back.
+const commitSha = (dir: string, ...args: string[]): string => {
+  const made = gitIn(dir, '-c', 'core.abbrev=8', 'commit', ...args);
   const sha = /^\[[^\]]+ ([0-9a-f]{8})\]/.exec(made)?.[1];
   if (sha === undefined) throw new Error(`no sha in the commit summary: ${made}`);
   return sha;
 };
+
+const commitIn = (dir: string, name: string): string => {
+  writeFileSync(join(dir, name), name);
+  gitIn(dir, 'add', name);
+  return commitSha(dir, '-m', `add ${name}`);
+};
+
+/** A commit with no file change, in one git process where `commitIn` spends two: for a test that only needs a distinct, reachable sha. */
+const emptyCommitIn = (dir: string, name: string): string => commitSha(dir, '--allow-empty', '-m', `add ${name}`);
 
 // Every test starts from the same one-commit repository, and building it costs three git processes (init, add, commit). Spawn count is the suspected cost under
 // load, so it is paid once and each test copies the folder, which spawns nothing.
@@ -86,6 +93,24 @@ const publish = (dir: string): void => {
 
 const pointOriginHead = (dir: string, branch = 'main'): void => {
   gitIn(dir, 'symbolic-ref', 'refs/remotes/origin/HEAD', `refs/remotes/origin/${branch}`);
+};
+
+/**
+ * Git answering as a repository whose default branch holds every sha, for a test of which commits are due: that choice is made before git is asked, so a real
+ * repository adds only spawns, and under load those are what a test runs out of time on.
+ */
+const holdsAll = (...shas: string[]): Git => {
+  const full = (sha: string): string => sha.padEnd(40, '0');
+  const answer = (args: readonly string[]): string => {
+    switch (args[0]) {
+      case 'rev-parse': return 'false';
+      case 'symbolic-ref': return 'refs/remotes/origin/main';
+      case 'rev-list': return shas.map(full).join(String.fromCharCode(10));
+      case 'log': return '';
+      default: return shas.map((sha) => `${full(sha)} commit`).join(String.fromCharCode(10));
+    }
+  };
+  return (_root, args) => Promise.resolve(answer(args));
 };
 
 /** `ts: null` leaves the timestamp off the assistant and result lines, as a transcript line the harness did not date. */
@@ -129,7 +154,7 @@ describe('cleanup', () => {
 describe('recordSurvival', () => {
   it('reads an ancestor of the default branch as survived, on a day-resolution date, in a file beside the store', async () => {
     const repo = makeRepo();
-    const sha = commitIn(repo, 'kept');
+    const sha = emptyCommitIn(repo, 'kept');
     publish(repo);
     pointOriginHead(repo);
     const { s, project } = await staged(repo, [{ sha }]);
@@ -144,18 +169,15 @@ describe('recordSurvival', () => {
     const young = new Date(NOW - (SURVIVAL_DAYS - 1) * 86_400_000).toISOString();
     const { s, project } = await staged(repo, [{ sha, ts: young }]);
     expect(SURVIVAL_DAYS).toBe(7);
-    expect(await recordSurvival(s.runtime, [project], () => NOW)).toEqual({ survived: 0, reverted: 0, unreachable: 0, unknown: 0 });
+    expect(await recordSurvival(s.runtime, [project], () => NOW, holdsAll(sha))).toEqual({ survived: 0, reverted: 0, unreachable: 0, unknown: 0 });
     expect(lines(s)).toEqual([]);
   });
 
   // The boundary is `>=` on a day-resolution promise ("more than" SURVIVAL_DAYS old): a call exactly at the cutoff is not due, and one a millisecond older is.
   const countsFor = async (ts: string | null) => {
-    const repo = makeRepo();
-    const sha = commitIn(repo, 'kept');
-    publish(repo);
-    pointOriginHead(repo);
-    const { s, project } = await staged(repo, [{ sha, ts }]);
-    return recordSurvival(s.runtime, [project], () => NOW);
+    const sha = 'a1b2c3d4';
+    const { s, project } = await staged(sharedDir, [{ sha, ts }]);
+    return recordSurvival(s.runtime, [project], () => NOW, holdsAll(sha));
   };
   const CUTOFF = NOW - SURVIVAL_DAYS * 86_400_000;
 
@@ -207,16 +229,15 @@ describe('recordSurvival', () => {
   it('reads a commit left on a branch the default branch never took as unreachable', async () => {
     const repo = makeRepo();
     gitIn(repo, 'checkout', '-q', '-b', 'side');
-    const sha = commitIn(repo, 'side');
+    const sha = emptyCommitIn(repo, 'side');
     gitIn(repo, 'checkout', '-q', 'main');
-    publish(repo);
     const { s, project } = await staged(repo, [{ sha }]);
     expect(await recordSurvival(s.runtime, [project], () => NOW)).toEqual({ survived: 0, reverted: 0, unreachable: 1, unknown: 0 });
   });
 
   it('falls back to a local main when no remote names a default branch', async () => {
     const repo = makeRepo();
-    const sha = commitIn(repo, 'local');
+    const sha = emptyCommitIn(repo, 'local');
     const { s, project } = await staged(repo, [{ sha }]);
     expect(await recordSurvival(s.runtime, [project], () => NOW)).toEqual({ survived: 1, reverted: 0, unreachable: 0, unknown: 0 });
   });
@@ -225,15 +246,13 @@ describe('recordSurvival', () => {
     const repo = mkdtempSync(join(tmpdir(), 'oars-survival-'));
     dirs.push(repo);
     gitIn(repo, 'init', '-q', '-b', 'trunk');
-    const sha = commitIn(repo, 'trunk');
+    const sha = emptyCommitIn(repo, 'trunk');
     const { s, project } = await staged(repo, [{ sha }]);
     expect(await recordSurvival(s.runtime, [project], () => NOW)).toEqual({ survived: 0, reverted: 0, unreachable: 0, unknown: 1 });
   });
 
   it('reads a sha this repository does not hold as unknown, since the session may have committed in another repository', async () => {
-    const repo = makeRepo();
-    publish(repo);
-    const { s, project } = await staged(repo, [{ sha: 'abcdef12' }]);
+    const { s, project } = await staged(shared().repo, [{ sha: 'abcdef12' }]);
     expect(await recordSurvival(s.runtime, [project], () => NOW)).toEqual({ survived: 0, reverted: 0, unreachable: 0, unknown: 1 });
   });
 
