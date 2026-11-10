@@ -25,7 +25,7 @@ The pool holds no email address and no name. An account id is a hash of the sign
 
 What the pool does have: the account id, the machines enrolled under it (label and id), and the provider sign-in. Use them together:
 
-1. Ask the requester to run `oars pool login --provider github` (or `google`) on their machine. It prints `Signed in to <server> as <account id>`. Ask them to rerun it with `--json` and send you the account id and the `expiresAt` it prints.
+1. Ask the requester to run `oars pool login --provider github --json` (or `google`) on their machine, and to send you the `account` and `expiresAt` it prints.
 2. If `oars pool machines` lists any machine, ask for one machine's label and id, or the last deposit day it shows. Only someone signed in to the account sees these. Many accounts list none.
 3. Check both against the pool, read-only, from `packages/pool` (this reads production, so only for a live request):
    `npx wrangler d1 execute oars-pool --remote --command "SELECT id, closed_at, raw_consent_withdrawn_at FROM accounts WHERE id = '<account id>'"`
@@ -165,13 +165,13 @@ Gap: **withdrawing the covenant.** Acceptance rows are append-only. Declining a 
 
 **Steps:**
 1. Confirm the account.
-1a. Before you close, ask whether they also want an export or an erasure: once closed, the account cannot sign in, so it cannot be confirmed and the export cannot run. Do those first.
-2. Dry run:
+2. Before you close, ask whether they also want an export or an erasure: once closed, the account cannot sign in, so it cannot be confirmed and the export cannot run. Do those first.
+3. Dry run:
    `npm run erase -w packages/pool -- close --account <id>`
-3. Run it:
+4. Run it:
    `npm run erase -w packages/pool -- close --account <id> --confirm`
    It prints `{"rowsChanged":n}`.
-4. It revokes every token and every machine key, and from then on sign-in, machine enrollment, and activation answer 403 `account_closed`. A rerun changes nothing.
+5. It revokes every token and every machine key, and from then on sign-in, machine enrollment, and activation answer 403 `account_closed`. A rerun changes nothing.
 
 A close erases nothing. If they also want their data deleted, that is a separate Art. 17 request.
 
