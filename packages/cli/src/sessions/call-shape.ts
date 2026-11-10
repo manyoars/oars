@@ -488,7 +488,7 @@ const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
 
 const textLines = (text: string): string[] => text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== '');
 
-/** The lines of `from` that `against` does not hold, by count and in order, so a line moved or repeated is no change. */
+/** The lines of `from` that `against` does not hold, by count and in order, so a line moved is no change. */
 const unmatched = (from: readonly string[], against: readonly string[]): string[] => {
   const spare = new Map<string, number>();
   for (const line of against) spare.set(line, (spare.get(line) ?? 0) + 1);
