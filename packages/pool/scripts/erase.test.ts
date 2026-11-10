@@ -1,7 +1,7 @@
 // The operator's erasure against a local pool under Miniflare: each kind leaves a tombstone, the same content is refused when it comes back, an audit row holds no content, and the aggregates keep their counts.
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { admittedNative, PACKAGE_REGISTRIES, PLATFORMS, SHELLS } from '../../cli/src/sessions/pool-wire.js';
+import { admittedNative, bucketOf, isHarness, PACKAGE_REGISTRIES, PLATFORMS, SHELLS } from '../../cli/src/sessions/pool-wire.js';
 import { FRAMEWORKS, LANGUAGES, projectedAgentType, VOCAB_VERSION } from '../../cli/src/sessions/public-vocabulary.js';
 import { ERROR_CODES } from '../../cli/src/sessions/schema.js';
 import { isListed } from '../src/field-classes.js';
@@ -1104,18 +1104,23 @@ const richSkeleton = (id: string): unknown => {
   Object.assign(call, { argFeatures: [{ key: 'acme_arg_key', valueSize: '9-32', patternFeatures: ['literal'] }], argValues: [{ key: 'acme_arg_key', enumValue: 'true' }] });
   const [step] = call.steps;
   if (step !== undefined) Object.assign(step, { identity: { program: 'acmetool', sub: 'deploy', flags: ['--acme-flag'] }, status: 'error', native: 'acme-native-tool', skill: 'acme-skill-step' });
+  if (step !== undefined) call.steps.push({ ...structuredClone(step), action: 'web.fetch', native: 'WebFetch', identity: { host: 'hostdigest0123456789abcdef' } });
   skeleton.deltas.push({ deltaKind: 'removed', field: 'package', name: 'acme-pkg-9', registry: 'acme-registry', metric: 'callsPerSession', change: 1 });
   Object.assign(skeleton, { timingPrint: '5555555555555a5a', acmeExtra: 'acme-extra-field', recommendations: [{ id: 'feedfacecafebeef', arm: 'shown', poolVersion: '2026-11-04T10:11:12.123Z', from: 0, to: 1 }] });
   return skeleton;
 };
 
-type Leaf = { path: string; key: string; value: unknown; parent: { readonly [field: string]: unknown } };
+type Leaf = { path: string; key: string; value: unknown; parent: { readonly [field: string]: unknown }; harness: string };
 
 /** Every leaf of a JSON value with its path and the key it sits under (an array item sits under its array's key). */
-const leavesOf = (value: unknown, path = '$', key = '', parent: Leaf['parent'] = {}): Leaf[] => {
-  if (Array.isArray(value)) return value.flatMap((item, at) => leavesOf(item, `${path}[${String(at)}]`, key, parent));
-  if (typeof value === 'object' && value !== null) return Object.entries(value).flatMap(([name, item]) => leavesOf(item, `${path}.${name}`, name, { ...value }));
-  return [{ path, key, value, parent }];
+const leavesOf = (value: unknown, path = '$', key = '', parent: Leaf['parent'] = {}, harness = ''): Leaf[] => {
+  if (Array.isArray(value)) return value.flatMap((item, at) => leavesOf(item, `${path}[${String(at)}]`, key, parent, harness));
+  if (typeof value === 'object' && value !== null) {
+    // A transcript names its harness; every leaf under it is judged against that harness's tables.
+    const here = 'harness' in value && typeof value.harness === 'string' ? value.harness : harness;
+    return Object.entries(value).flatMap(([name, item]) => leavesOf(item, `${path}.${name}`, name, { ...value }, here));
+  }
+  return [{ path, key, value, parent, harness }];
 };
 
 const isMonday = (value: unknown): boolean => typeof value === 'string' && /^\d{4}-\d\d-\d\d$/.test(value) && new Date(`${value}T00:00:00Z`).getUTCDay() === 1;
@@ -1128,22 +1133,26 @@ const scoped = (field: string, scope: string) => (value: unknown, parent: Leaf['
 const tag = (value: unknown): boolean => typeof value === 'string' && /^[A-Za-z0-9<>.+_-]{1,32}$/.test(value);
 
 /** The one allow list: a kept leaf is a number or boolean (a bucket, an ordinal, a flag), null, or a string under a key named here whose value passes its check. Any other key is a leaf the erasure should have dropped. */
-const ALLOWED: { readonly [key: string]: (value: unknown, parent: Leaf['parent']) => boolean } = {
+const ALLOWED: { readonly [key: string]: (value: unknown, parent: Leaf['parent'], harness: string) => boolean } = {
   erased: (value) => value === 'lawful-request',
   vocabVersion: (value) => value === VOCAB_VERSION || value === 'other', harness: tag, harnessVersion: gated('harnessVersion'), model: gated('model'), effort: tag, day: isMonday, platform: inList(PLATFORMS), shell: inList(SHELLS), languages: inList(LANGUAGES), frameworks: inList(FRAMEWORKS), size: tag, language: inList(LANGUAGES), languageShare: tag,
   mcp: gated('mcp'), skills: gated('skills'), plugins: (value) => value === 'other', orgSize: tag, team: tag, repoVisibility: tag, cls: tag, intervention: tag, status: tag,
-  errorCode: (value) => typeof value === 'string' && ERROR_CODES.has(value), next: tag, action: tag, native: (value) => typeof value === 'string' && (value === 'other' || admittedNative('claude-code', value)), targetClass: tag, argClass: tag, key: gated('key'), enumValue: tag, valueSize: tag, pathDepth: tag, extension: tag, dirKind: tag, patternFeatures: tag, changeKind: tag, diffShape: tag,
+  errorCode: (value) => typeof value === 'string' && ERROR_CODES.has(value), next: tag, action: tag, native: (value, _parent, harness) => typeof value === 'string' && (value === 'other' || value === 'private' || (harness === 'other' || isHarness(harness)) && admittedNative(harness, value)), targetClass: tag, argClass: tag, key: gated('key'), enumValue: tag, valueSize: tag, pathDepth: tag, extension: tag, dirKind: tag, patternFeatures: tag, changeKind: tag, diffShape: tag,
   program: gated('program'), sub: scoped('sub', 'program'), flags: gated('flags'), target: tag, server: gated('server'), tool: scoped('tool', 'server'), skill: gated('skill'), agentType: (value) => typeof value === 'string' && (value === 'other' || projectedAgentType(value) === value), kind: tag, deltaKind: tag, field: tag, name: gated('name'), registry: inList(PACKAGE_REGISTRIES), metric: tag, arm: tag, hostClass: tag, launcher: tag,
   keys: gated('key'),
 };
 
+/** The keys a number may sit under: a bucket, an ordinal, a count, a version, or an index. `hour`, `leaves`, and an exact time are absent, so a kept one fails. */
+const NUMBER_KEYS: ReadonlySet<string> = new Set(['format', 'fieldsVersion', 'errors', 'wallSec', 'input', 'cacheWrite', 'cacheRead', 'output', 'thinking', 'explore', 'usageResponses', 'tokens', 'ms', 'remainingTokens', 'parent', 'frame', 'target', 'prompt', 'spawnedIn', 'keysDropped', 'namesDropped', 'templatesDropped', 'change', 'from', 'to', 'durationMs']);
+
 /** The paths of every kept leaf that is not on the allow list, each with why. */
 const offList = (value: unknown): string[] =>
-  leavesOf(value).flatMap(({ path, key, value: leaf, parent }) => {
-    if (leaf === null || typeof leaf === 'number' || typeof leaf === 'boolean') return [];
+  leavesOf(value).flatMap(({ path, key, value: leaf, parent, harness }) => {
+    if (leaf === null || typeof leaf === 'boolean') return [];
+    if (typeof leaf === 'number') return NUMBER_KEYS.has(key) ? [] : [`${path}: no allow-list entry for ${key}`];
     const check = ALLOWED[key];
     if (check === undefined) return [`${path}: no allow-list entry for ${key}`];
-    return check(leaf, parent) ? [] : [`${path}: ${JSON.stringify(leaf)} fails the ${key} check`];
+    return check(leaf, parent, harness) ? [] : [`${path}: ${JSON.stringify(leaf)} fails the ${key} check`];
   });
 
 const randomHex = (value: unknown): boolean => typeof value === 'string' && /^[0-9a-f]{32}$/.test(value);
@@ -1177,6 +1186,9 @@ describe('an erased deposit keeps its anonymous shape', () => {
     expect(textOf(stored, 'extensions')).not.toBe('[]');
     const before = `${String(fieldOf(stored, 'skeleton'))}${textOf(stored, 'extensions')}`;
     for (const planted of PLANTED) expect(before, `the fixture holds ${planted}`).toContain(planted);
+    // The host is hashed at ingest with the pool's key, so the stored digest is not a fixed string: it is found by its shape.
+    const HOST_DIGEST = /"host":"h:[0-9a-f]{64}"/;
+    expect(before).toMatch(HOST_DIGEST);
     // A time that is not a Monday at midnight: the erasure must cut it to the Monday of its week (Wednesday 14 October 2026 to Monday 12 October).
     await (await pool.db()).prepare('UPDATE deposits SET counted_at = ? WHERE account = ? AND id = ?').bind(Date.UTC(2026, 9, 14, 9, 8, 7, 123), account, SESSION).run();
     await eraseAccount(await store(), account, NOW);
@@ -1187,6 +1199,10 @@ describe('an erased deposit keeps its anonymous shape', () => {
       expect(columnsOffList(row)).toEqual([]);
       const skeleton: unknown = JSON.parse(textOf(row, 'skeleton'));
       expect(offList(skeleton)).toEqual([]);
+      // The exact duration planted (1234 ms) is gone: what stays is a bucket index, at most the last `ms` bucket.
+      for (const { key, value } of leavesOf(skeleton)) if (key === 'durationMs' && value !== null) expect(value).toBeLessThanOrEqual(bucketOf('ms', Number.MAX_SAFE_INTEGER));
+      expect(JSON.stringify(skeleton)).toContain('"host":null');
+      expect(JSON.stringify(row)).not.toMatch(HOST_DIGEST);
       expect(JSON.stringify(row)).not.toContain(SESSION);
       for (const planted of PLANTED) expect(JSON.stringify(row), `the kept row holds ${planted}`).not.toContain(planted);
       const text = JSON.stringify(skeleton);
@@ -1198,6 +1214,13 @@ describe('an erased deposit keeps its anonymous shape', () => {
 });
 
 describe('anonymizing a skeleton', () => {
+  it('fails the walk on a skeleton that was not anonymized, naming the exact hour, the leaf count, and the repo key', () => {
+    const lines = offList(richSkeleton('00000000000094aa'));
+    expect(lines).toContain('$.transcripts[0].frame.hour: no allow-list entry for hour');
+    expect(lines).toContain('$.transcripts[0].leaves: no allow-list entry for leaves');
+    expect(lines).toContain('$.transcripts[0].frame.repoKey: no allow-list entry for repoKey');
+  });
+
   it('cuts a day to the Monday of its ISO week (UTC)', () => {
     expect([null, '2026-11-02', '2026-11-04', '2026-11-08', '2026-11-09', '2026-01-01'].map(weekOf)).toEqual([null, '2026-11-02', '2026-11-02', '2026-11-02', '2026-11-09', '2025-12-29']);
   });
@@ -1230,8 +1253,9 @@ describe('anonymizing a skeleton', () => {
     const db = await pool.db();
     await db.prepare("UPDATE deposits SET skeleton = '{\"format\":7}' WHERE account = ? AND id = '00000000000092aa'").bind(account).run();
     await db.prepare("UPDATE deposits SET skeleton = 'not json' WHERE account = ? AND id = '00000000000092ab'").bind(account).run();
+    const markerRows = async (): Promise<number> => (await all("SELECT skeleton FROM deposits WHERE account LIKE 'erased:%' AND skeleton = ?", '{"erased":"lawful-request"}')).length;
+    const before = await markerRows();
     await eraseAccount(await store(), account, NOW);
-    expect(await all("SELECT skeleton FROM deposits WHERE account LIKE 'erased:%' AND skeleton = ?", '{"erased":"lawful-request"}')).toEqual(expect.arrayContaining([{ skeleton: '{"erased":"lawful-request"}' }]));
-    expect((await all("SELECT skeleton FROM deposits WHERE account LIKE 'erased:%' AND skeleton = ?", '{"erased":"lawful-request"}')).length).toBeGreaterThanOrEqual(2);
+    expect((await markerRows()) - before).toBe(2);
   });
 });

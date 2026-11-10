@@ -3,7 +3,7 @@
 // The ledger never deletes (migrations 0009 and 0011), so a row's content is replaced in place and the row, its counts, and its tier stay. Every step is written so a run that stops halfway runs again to the end: the
 // tombstone goes first (so nothing can come back), then the content, then the audit row.
 import { admittedNative, bucketOf, PACKAGE_REGISTRIES, parseSkeleton, type DeltaEntry, type SkeletonFrame, type SkeletonPrompt, type SkeletonStep, type SkeletonTool, type WireHarness } from '../../cli/src/sessions/pool-wire.js';
-import { VOCAB_VERSION } from '../../cli/src/sessions/public-vocabulary.js';
+import { projectedAgentType, VOCAB_VERSION } from '../../cli/src/sessions/public-vocabulary.js';
 import { ERROR_CODES } from '../../cli/src/sessions/schema.js';
 import { isListed } from '../src/field-classes.js';
 import { depositDigest, digestOf, rawDigest } from '../src/tombstones.js';
@@ -116,7 +116,8 @@ const stepOf = (harness: WireHarness) => (step: SkeletonStep): object => ({
   tokens: step.tokens,
   ms: step.ms,
   remainingTokens: step.remainingTokens,
-  agentType: listedOr('agentType', step.agentType),
+  // `isListed` has no agentType case, so the projection the reader applies is what closes it.
+  agentType: step.agentType === null ? null : projectedAgentType(step.agentType) === step.agentType ? step.agentType : OTHER,
   parent: step.parent,
   frame: step.frame,
   ...held('edges', step.edges?.map(({ kind, target }) => ({ kind, target }))),
