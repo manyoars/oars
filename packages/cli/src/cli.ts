@@ -25,6 +25,8 @@ import { poolCoverage, poolDeposit, poolExport, poolFetch, poolLogin, poolLogout
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 import { telemetryOff, telemetryOn, telemetryReport, telemetryShow, telemetryStatus } from './telemetry/command.js';
+import { cardLine } from './sessions/card-line.js';
+import type { CardLineArm } from './telemetry/schema.js';
 import { recordCrash } from './telemetry/crash.js';
 import { emitOf } from './telemetry/emit.js';
 import { finishTelemetry, isHook, observeCommand, type Observed } from './telemetry/observe.js';
@@ -737,11 +739,18 @@ const isHookUninstall = (observed: Observed): boolean => observed.path.join(' ')
 /** `sessions try` promises no network call and no read of the real store, and the sender does both. */
 const isSessionsTry = (observed: Observed): boolean => observed.path.join(' ') === 'sessions try';
 
+/** The weekly card line (`sessions/card-line.ts`): stderr only, never an error, never a change to the exit code. */
+const weeklyLine = (argv: string[], deps: RunDeps, observed: Observed): Promise<CardLineArm> =>
+  deps.sessions === undefined
+    ? Promise.resolve('not_due')
+    : cardLine({ storeDir: deps.sessions.storeDir, telemetryDir: deps.telemetry?.dir, now: deps.now(), tty: deps.sessions.stderr?.isTTY === true, argv, path: observed.path, flags: observed.flags, stderr: deps.io.stderr });
+
 /** Runs one invocation (`argv` without the node and script entries) and returns the exit code. Telemetry records it afterward and cannot change it. */
 export const run = async (argv: string[], deps: RunDeps): Promise<ExitCode> => {
   const observed: Observed = { path: [], flags: [] };
   const startedAt = deps.now();
   const exit = await execute(argv, deps, observed);
+  observed.cardLine = await weeklyLine(argv, deps, observed);
   finishTelemetry(deps, argv, observed, startedAt, exit);
   // Never from a gate hook (it runs before every tool call) or from `hook uninstall`; it cannot change the exit code or what the command printed.
   if (deps.catchUp !== undefined && !isHook(argv, observed) && !isHookUninstall(observed) && !isSessionsTry(observed)) await Promise.resolve().then(deps.catchUp).catch(() => undefined);
