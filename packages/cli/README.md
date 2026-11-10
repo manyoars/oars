@@ -96,6 +96,8 @@ A machine that deposits for you (a cloud environment, a VPS, a CI runner) has it
 
 Apart from that and telemetry (on by default, off with `oars telemetry off`, `OARS_TELEMETRY=0`, or `DO_NOT_TRACK=1`; it sends to the pool server in `OARS_POOL_URL`, else to the Many Oars pool at `pool.manyoars.com`, which is live), oars itself sends nothing, except what you opted into with a pool server: after you accept its covenant, the detached sender that a session-end hook or any `oars` command starts, at most about once an hour, sends closed-vocabulary session skeletons, and, only after a separate yes to the raw prompt, a locally redacted (best-effort) copy of each full transcript; `oars pool outbox` prints what is queued when you run it, but the sender builds new batches and sends them in the same run without printing them first, and a session leaves your machine no sooner than an hour after it ends, and a folder can be switched to skeleton only or off; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.
 
+After you accept the covenant, a deposit may be licensed and sold under it. The pool is not offered in the EU, the EEA, or the UK.
+
 ```bash
 # Read every folder; or only the ones you name (a path, or its name under ~/.claude/projects); --deny keeps one out.
 oars sessions deposit --redact-domain corp.example
