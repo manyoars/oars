@@ -6,7 +6,10 @@ name: release-cli
 #           `just check` as ci, and packs the tarball (the package's prepack rebuilds dist/, so it is never a stale build).
 #   publish id-token: write only. No checkout and no install: it downloads that tarball and runs `npm publish <tarball> --provenance
 #           --ignore-scripts`. Provenance names this repository and this workflow file.
-# No such tag exists until the first release.
+#   release contents: write only. After publish succeeds it creates the GitHub Release for the tag (title `oars <version>`, notes the matching
+#           section of packages/cli/CHANGELOG.md, marked Latest), so the repository page shows the tool and not a template release.
+# A manual run with the `tag` input runs only the release job for an existing tag (no build, no npm publish, no tag push); it updates the
+# release when one exists. Backfill: gh workflow run release-cli.yml -f tag=cli-v0.4.1 -f latest=true
 #
 # Auth: npm trusted publishing (OIDC), no stored secret. The package's trusted publisher on npmjs.com names the GitHub
 # Actions repository manyoars/oars and the workflow file release-cli.yml (both case-sensitive, no environment), so do
@@ -14,16 +17,28 @@ name: release-cli
 on:
   push:
     tags: ['cli-v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag (cli-v<semver>) to create or update the GitHub Release for; nothing is built or published
+        required: true
+        type: string
+      latest:
+        description: Mark the release Latest (only the newest version should be; a prerelease never is)
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-cli-${{ github.ref }}
+  group: release-cli-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
   build:
+    if: github.event_name == 'push'
     # GitHub-hosted runners only: this repository is public.
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -73,6 +88,7 @@ jobs:
 
   publish:
     needs: build
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -109,3 +125,46 @@ jobs:
       # `./`: npm reads a bare `release-pack/x.tgz` as GitHub shorthand (`github:release-pack/x.tgz`) and would fetch that repository.
       - name: Publish
         run: npm publish ./release-pack/*.tgz --provenance --access public --ignore-scripts
+
+  release:
+    needs: publish
+    # A push gets here only after publish succeeded; a manual run skips build and publish, so this job must not wait on them being green.
+    if: ${{ !cancelled() && (needs.publish.result == 'success' || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # create or edit the release; nothing else, and no npm credential
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      # A tag push is always the newest release; a manual backfill says so with the input.
+      LATEST: ${{ github.event_name == 'workflow_dispatch' && inputs.latest || github.event_name == 'push' }}
+    steps:
+      # The default ref: the tagged commit on a push, and the branch the run was started on (main) for a backfill. The script and the
+      # changelog come from there, so an old tag that predates the script still gets its notes.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Create or update the GitHub Release
+        run: |
+          case "$TAG" in cli-v*) ;; *) echo "::error::$TAG is not a cli-v<semver> tag"; exit 1 ;; esac
+          version="${TAG#cli-v}"
+          if ! printf '%s' "$version" | grep -Eq '^(0|[1-9][0-9]*).(0|[1-9][0-9]*).(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::$TAG is not cli-v<semver>"
+            exit 1
+          fi
+          prerelease=false
+          case "$version" in *-*) prerelease=true ;; esac
+          # A prerelease is never Latest.
+          latest="$LATEST"
+          if [ "$prerelease" = true ]; then latest=false; fi
+          node scripts/changelog-section.mjs "$version" > release-notes.md
+          # --verify-tag: a typo in the input must not create a tag on the default branch.
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release edit "$TAG" --title "oars $version" --notes-file release-notes.md --prerelease="$prerelease" --latest="$latest"
+          else
+            gh release create "$TAG" --verify-tag --title "oars $version" --notes-file release-notes.md --prerelease="$prerelease" --latest="$latest"
+          fi
