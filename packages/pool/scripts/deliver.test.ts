@@ -272,6 +272,17 @@ describe('deliver recipients (Art. 15(1)(c) and 19)', () => {
     expect(found.map((row) => row.session)).toEqual([S1]);
   });
 
+  it('finds a person whose name sits in a JSON escape in a delivered pack file', async () => {
+    const f = fixture();
+    // The pack file spells the name with a \u escape and a \n between the names, so the raw bytes never hold "Zoë Quill".
+    writeFileSync(join(f.pack, 'sessions', M1, 'main.jsonl'), `{"text":"thanks Zo${String.fromCharCode(92)}u00eb${String.fromCharCode(92)}nQuill"}${String.fromCharCode(10)}`);
+    await deliver(args(f));
+
+    const found = await recipientsOf(f.owners, 'Zoë Quill');
+
+    expect(found.map((row) => row.session)).toEqual([S1]);
+  });
+
   it('answers a query by the bare transcript id of a delivered Codex session', async () => {
     const f = fixture({ sessions: [CODEX, S2] });
     await deliver(args(f));
