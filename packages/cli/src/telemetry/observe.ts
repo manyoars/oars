@@ -70,8 +70,7 @@ export const finishTelemetry = (deps: RunDeps, argv: string[], observed: Observe
     if (!consent.noticeShown && !isHook(argv, observed) && !isInfoOnly(argv, observed)) {
       const seenBefore = everShownNotice(runtime.dir);
       if (markNoticeShown(runtime.dir, deps.now)) {
-        deps.io.stderr(`${NOTICE}
-`);
+        deps.io.stderr(`${NOTICE}\n`);
         // Once per install: an install that saw an older notice sees this one but records no second first-run; nothing is recorded or sent from a folder that could not claim it.
         if (!seenBefore) recordFirstRun(deps, runtime, installPath);
       }
