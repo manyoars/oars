@@ -224,7 +224,7 @@ const maskIds = (texts: readonly string[], sessions: ReadonlyMap<string, string>
 /** The text of a line's first user message, as the harness wrote it: a Claude Code `user` line's `message.content`, or a Codex rollout's first `user_message` event. Undefined for any other line. */
 const promptOf = (entry: unknown): unknown => {
   if (!isRecord(entry)) return undefined;
-  const type = Reflect.get(entry, 'type');
+  const type: unknown = Reflect.get(entry, 'type');
   if (type === 'user') {
     const message: unknown = Reflect.get(entry, 'message');
     return isRecord(message) ? Reflect.get(message, 'content') : undefined;

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type * as Exclusion from '../../cli/src/sessions/exclusion.js';
 import { deposit, paths, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { rolloutLine, stageCodex } from '../../cli/src/sessions/test-support.js';
 import { buildPack, HARNESS_TERMS, main, matchIdOf, ownerOf, parseOwners, secretIn, serverKeyOf, USAGE, type ManifestRow, type PackCounts, type PackOptions } from './sample-pack.js';
@@ -10,7 +11,7 @@ import { buildPack, HARNESS_TERMS, main, matchIdOf, ownerOf, parseOwners, secret
 // Every session the exclusion check was asked about, in call order: the frame-first rule is proved by who was never asked.
 const gated = vi.hoisted((): string[] => []);
 vi.mock('../../cli/src/sessions/exclusion.js', async (original) => {
-  const real = await original<typeof import('../../cli/src/sessions/exclusion.js')>();
+  const real = await original<typeof Exclusion>();
   return { ...real, checkSession: async (...args: Parameters<typeof real.checkSession>): Promise<Awaited<ReturnType<typeof real.checkSession>>> => {
     gated.push(args[3]);
     return real.checkSession(...args);
