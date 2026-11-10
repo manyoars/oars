@@ -99,6 +99,7 @@ const REAL = {
   vocabVersion: VOCAB_VERSION,
   fieldsVersion: FIELD_LIST_VERSION,
   id: '0123456789abcdef',
+  claimed: { hostClass: 'cloud', launcher: 'ci' },
   deltas: [{ deltaKind: 'removed', field: 'package', name: 'typescript', registry: 'npm', metric: 'callsPerSession', change: -2 }],
   recommendations: [{ id: 'fedcba9876543210', arm: 'held', poolVersion: '2026-11-03T03:00:00.000Z', from: 0, to: 1 }],
   timingPrint: null,

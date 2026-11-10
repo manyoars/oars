@@ -4,7 +4,7 @@ import { isPublicMcpTool, PUBLIC_INPUT_KEYS, PUBLIC_FLAGS, PUBLIC_MCP_SERVERS, P
 
 /**
  * `clear`: a closed list or an opaque client hash, served at the clear floor (`Floors.clear`, `floors.ts`). `thresholded`: held always and served only once `PUBLIC_FLOOR` distinct accounts report the same value (5 by default).
- * `hashed at ingest`: replaced by an HMAC-SHA-256 under `INGEST_HASH_KEY` before anything is written. `raw tier`: stored, never served.
+ * `hashed at ingest`: replaced by an HMAC-SHA-256 under `INGEST_HASH_KEY` before anything is written. `raw tier`: stored, served only to the account that deposited it.
  */
 export type FieldClass = 'clear' | 'thresholded' | 'hashed at ingest' | 'raw tier';
 
@@ -26,6 +26,7 @@ export const FIELD_CLASSES: { readonly [field: string]: FieldRow } = {
   cacheWrite: { class: 'clear' },
   change: { class: 'clear' },
   changeKind: { class: 'clear' },
+  claimed: { class: 'clear' },
   cls: { class: 'clear' },
   day: { class: 'clear' },
   deltaKind: { class: 'clear' },
@@ -53,6 +54,7 @@ export const FIELD_CLASSES: { readonly [field: string]: FieldRow } = {
   harnessVersion: { class: 'clear', longTail: 'thresholded' },
   hour: { class: 'clear' },
   host: { class: 'hashed at ingest' },
+  hostClass: { class: 'clear' },
   id: { class: 'clear' },
   identity: { class: 'clear' },
   input: { class: 'clear' },
@@ -65,6 +67,7 @@ export const FIELD_CLASSES: { readonly [field: string]: FieldRow } = {
   languageShare: { class: 'clear' },
   languageShares: { class: 'clear' },
   languages: { class: 'clear' },
+  launcher: { class: 'clear' },
   leaves: { class: 'clear' },
   mcp: { class: 'clear', longTail: 'thresholded' },
   merkleRoot: { class: 'clear' },
