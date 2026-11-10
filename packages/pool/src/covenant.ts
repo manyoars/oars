@@ -31,7 +31,7 @@ export interface Screen {
 
 /** The two lines a screen must carry, so the client prints and asks for what the text itself states. */
 const LINK_LINE = /^Full text: (\S+)$/m;
-const PHRASE_LINE = /^To accept, type: (.+)$/m;
+const PHRASE_LINE = /^(?:You must be 18 or older\. )?To accept, (?:intending to be legally bound, )?type: (.+)$/m;
 
 export const sha256Of = (text: string): string => createHash('sha256').update(text).digest('hex');
 
