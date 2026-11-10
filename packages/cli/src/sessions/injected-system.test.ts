@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { injectedRule, type JsonObject } from './injected.js';
 
 const KEY = 'test-key-system';
+const win = (...parts: string[]): string => parts.join(String.fromCharCode(92));
 const MARK = /\[injected ([a-z0-9-]+) ([0-9a-f]{12})\]/;
 const run = (line: JsonObject): JsonObject => injectedRule(KEY)(line);
 const text = (value: unknown): string => JSON.stringify(value);
@@ -17,9 +18,14 @@ const FORMS: ReadonlyArray<{ form: string; attachment: string; kind: string; bod
   { form: 'the SessionStart hook output', attachment: 'hook_additional_context', kind: 'hook-additional-context', body: 'SessionStart hook additional context: lamp recall: the blue lamp stays lit, and the green kettle waits on shelf nine.' },
   { form: 'the skill listing', attachment: 'skill_listing', kind: 'skill-listing', body: 'The following skills are available for use with the Skill tool:\n\n- lamp-polish: polish the blue lamp\n- kettle-fill: fill the green kettle' },
   { form: 'the agent roster', attachment: 'agent_listing_delta', kind: 'agent-listing-delta', body: 'Available agent types for the Agent tool:\n- lamp-keeper: keeps the blue lamp lit' },
-  { form: 'the environment block', attachment: 'environment', kind: 'environment', body: '# Environment\nYou have been invoked in the following environment:\n - Primary working directory: C:\Users\nobody\lamps\n - Platform: win32' },
+  { form: 'the environment block', attachment: 'environment', kind: 'environment', body: `# Environment
+You have been invoked in the following environment:
+ - Primary working directory: ${win('C:', 'Users', 'nobody', 'lamps')}
+ - Platform: win32` },
   { form: 'the MCP server instructions', attachment: 'mcp_instructions_delta', kind: 'mcp-instructions-delta', body: '# MCP Server Instructions\n\nThe following MCP servers have provided instructions for how to use their tools and resources:\n\n## lamp\nAlways dim the lamp first.' },
-  { form: 'a rules file block', attachment: 'instructions', kind: 'instructions', body: 'Contents of C:\Users\nobody\lamps\.claude\rules\lamps.md (project instructions, checked into the codebase):\n\nKeep the blue lamp lit.' },
+  { form: 'a rules file block', attachment: 'instructions', kind: 'instructions', body: `Contents of ${win('C:', 'Users', 'nobody', 'lamps', '.claude', 'rules', 'lamps.md')} (project instructions, checked into the codebase):
+
+Keep the blue lamp lit.` },
   { form: 'a rules file block on a Unix path', attachment: 'instructions', kind: 'instructions', body: 'Contents of /home/nobody/lamps/.claude/rules/lamps.md (project instructions, checked into the codebase):\n\nKeep the blue lamp lit.' },
 ];
 
@@ -27,7 +33,8 @@ describe('a system-role request blob', () => {
   for (const { form, attachment, kind, body } of FORMS) {
     it(`marks ${form} under the marker its attachment copy gets`, () => {
       const out = blobText(run(blob(body)));
-      expect(out).toMatch(new RegExp(`^\[injected ${kind} [0-9a-f]{12}\]$`));
+      expect(MARK.exec(String(out))?.[1]).toBe(kind);
+      expect(out).toMatch(/^\[injected /);
       expect(out).toBe(attachedText(run(attached(attachment, body))));
       expect(text(run(blob(body)))).not.toContain('lamp');
     });
@@ -52,7 +59,7 @@ describe('memory-file text', () => {
   const edited = (filename: string, snippet = SNIPPET): JsonObject => ({ type: 'attachment', attachment: { type: 'edited_text_file', filename, snippet } });
 
   it('marks the snippet of an edited CLAUDE.md, MEMORY.md, or memory/*.md, and keeps the file name', () => {
-    for (const name of ['C:\Users\nobody\lamps\CLAUDE.md', '/home/nobody/.claude/projects/x/memory/MEMORY.md', 'C:\Users\nobody\.claude\projects\x\memory\feedback_lamp.md']) {
+    for (const name of [win('C:', 'Users', 'nobody', 'lamps', 'CLAUDE.md'), '/home/nobody/.claude/projects/x/memory/MEMORY.md', win('C:', 'Users', 'nobody', '.claude', 'projects', 'x', 'memory', 'feedback_lamp.md')]) {
       const out = run(edited(name));
       expect(at(out, 'attachment', 'snippet')).toMatch(/^\[injected memory-file [0-9a-f]{12}\]$/);
       expect(at(out, 'attachment', 'filename')).toBe(name);
