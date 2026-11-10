@@ -104,7 +104,7 @@ export interface PackCounts {
   tooShort: number;
   /** No repository recorded for the session. */
   noRepo: number;
-  /** A resumed session that replays another's first prompt line and is the shorter of the two. */
+  /** A resumed session that replays another's first prompt and is the shorter of the two. */
   duplicate: number;
   /** Dropped because the redacted, masked text still held something shaped like a key (`secretIn`); nothing of the session was written. */
   secret: number;
@@ -221,14 +221,29 @@ const maskIds = (texts: readonly string[], sessions: ReadonlyMap<string, string>
   return texts.map((text) => text.replace(UUID_OR_PREFIXED, (id) => sessions.get(id) ?? (lineIds.has(id) ? maskOf(indexKey, buyerKey, id) : id)));
 };
 
-/** What a resumed session shares with the one it continues: its first user line, as the harness replays it, without the session id it rewrites. Undefined when the transcript has no user line. */
+/** The text of a line's first user message, as the harness wrote it: a Claude Code `user` line's `message.content`, or a Codex rollout's first `user_message` event. Undefined for any other line. */
+const promptOf = (entry: unknown): unknown => {
+  if (!isRecord(entry)) return undefined;
+  const type = Reflect.get(entry, 'type');
+  if (type === 'user') {
+    const message: unknown = Reflect.get(entry, 'message');
+    return isRecord(message) ? Reflect.get(message, 'content') : undefined;
+  }
+  const payload: unknown = Reflect.get(entry, 'payload');
+  return type === 'event_msg' && isRecord(payload) && Reflect.get(payload, 'type') === 'user_message' ? Reflect.get(payload, 'message') : undefined;
+};
+
+/**
+ * What a resumed session shares with the one it continues: the text of its first user message, and nothing else of the line. A resume rewrites `sessionId` and can
+ * rewrite `uuid`, `parentUuid`, and `timestamp`, so none of them is in the key. Undefined when the transcript has no user message.
+ */
 const firstPromptKey = async (path: string): Promise<string | undefined> => {
   const stream = createReadStream(path, { encoding: 'utf8' });
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
   try {
     for await (const text of lines) {
-      const entry = parsed(text);
-      if (isRecord(entry) && Reflect.get(entry, 'type') === 'user') return JSON.stringify(Object.entries(entry).filter(([key]) => key !== 'sessionId'));
+      const prompt = promptOf(parsed(text));
+      if (prompt !== undefined) return JSON.stringify(prompt);
     }
     return undefined;
   } finally {
@@ -243,7 +258,7 @@ interface TurnCount {
   turns: number;
 }
 
-/** The sessions that lose to a longer one replaying their first prompt line (a tie goes to the lower session id), so the rule gives the same lot whichever of the two the draw reaches first. */
+/** The sessions that lose to a longer one replaying their first prompt (a tie goes to the lower session id), so the rule gives the same lot whichever of the two the draw reaches first. */
 const duplicatesOf = async (runtime: SessionsRuntime, candidates: readonly TurnCount[]): Promise<Set<string>> => {
   const groups = new Map<string, TurnCount[]>();
   for (const candidate of candidates) {

@@ -300,7 +300,7 @@ describe('what a buyer can join on', () => {
 });
 
 describe('the acceptance rule (plan S1)', () => {
-  const turns = (session: string, count: number): string[] => Array.from({ length: count }, (_, n) => [user(session, 2 * n + 1, `ask ${String(n)}`), assistant(session, 2 * n + 1, `answer ${String(n)}`)]).flat();
+  const turns = (session: string, count: number, label = 'ask'): string[] => Array.from({ length: count }, (_, n) => [user(session, 2 * n + 1, `${label} ${String(n)}`), assistant(session, 2 * n + 1, `answer ${String(n)}`)]).flat();
 
   it('keeps a subagent transcript out of the frame: only the main session is drawn', async () => {
     const f = fixture();
@@ -354,7 +354,7 @@ describe('the acceptance rule (plan S1)', () => {
     const replay = earlier.map((text) => line({ ...replayable(text), sessionId: S(2) }));
     f.write('-work-oars', S(1), earlier);
     f.write('-work-oars', S(2), [...replay, ...turns(S(2), 2)]);
-    f.write('-work-oars', S(3), turns(S(3), 2));
+    f.write('-work-oars', S(3), turns(S(3), 2, 'a different ask'));
     await stored(f);
     for (const seed of ['1', '2', '3', '4']) {
       const out = join(f.root, `pack-${seed}`);
