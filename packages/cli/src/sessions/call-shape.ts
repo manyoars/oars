@@ -422,13 +422,14 @@ const slotOf = (text: string): TemplateSlot => {
 
 /**
  * A flag word as a template holds it, and whether the word after it is text. A number (`head -20`) is `<num>`. A flag keeps its name when it is on the public flag list or is one letter, the two cases the step identity names too; any other flag is `<flag>`
- * (a private script's flag, a cluster, a value attached to a short flag), so a flag a program or a person made up is not spelled. The value joined to a kept flag is its slot. Whether the next word is text is decided by the flag's name alone.
+ * (a private script's flag, a cluster, a value attached to a short flag), so a flag a program or a person made up is not spelled. The value joined to a kept flag is its slot. The next word is text after a text or credential flag, and after any
+ * one-letter flag but `-k` on pytest (`pytest`): the names reader refuses to read that word (`-p` is a password on `sshpass` and a count on `head`), so its type is not sent either.
  */
-const flagToken = (text: string, redact: (text: string) => string, opaque: boolean): { token: string; text: boolean } => {
+const flagToken = (text: string, redact: (text: string) => string, opaque: boolean, pytest: boolean): { token: string; text: boolean } => {
   if (NUMBER_WORD.test(text)) return { token: '<num>', text: false };
   const joined = JOINED_LONG_FLAG.exec(text);
   const flag = joined?.[1] ?? text;
-  const takesText = TEXT_FLAGS.has(flag) || isCredentialFlag(flag);
+  const takesText = TEXT_FLAGS.has(flag) || isCredentialFlag(flag) || (SHORT_FLAG_NAME.test(flag) && !(pytest && SHORT_NAME_FLAGS.has(flag)));
   if (!PUBLIC_FLAGS.has(flag) && !SHORT_FLAG_NAME.test(flag)) return { token: '<flag>', text: joined === null && takesText };
   if (joined !== null) return { token: `${redact(flag)}=${opaque || takesText ? '<text>' : slotOf(joined[2] ?? '')}`, text: false };
   return { token: redact(flag), text: takesText };
@@ -436,8 +437,8 @@ const flagToken = (text: string, redact: (text: string) => string, opaque: boole
 
 /**
  * One command as a template: its program, its subcommand, and its flags, as written, and every other word as a slot (`git commit -m <text>`, `pytest <path> -k <ident>`). A program given as a path is `<path>`. The subcommand is the first word the
- * program's own public table lists (`PUBLIC_SUBCOMMANDS`, the table the step identity reads), so no free word of an argument list is ever kept as one. The word after a credential flag or a text flag, joined or apart, is `<text>` whatever its shape, so
- * not even the type of a secret is sent. A word after `--`, a quoted word, and a word at or after the command's opaque point (`tokenize`) are never kept words: a flag-shaped one at that point keeps its name and no value. A variable reference is
+ * program's own public table lists (`PUBLIC_SUBCOMMANDS`, the table the step identity reads), so no free word of an argument list is ever kept as one. The word after a credential flag, a text flag, or a one-letter flag (but `-k` on pytest), joined or apart, is
+ * `<text>` whatever its shape, so not even the type of a secret is sent. A word after `--`, a quoted word, and a word at or after the command's opaque point (`tokenize`) are never kept words: a flag-shaped one at that point keeps its name and no value. A variable reference is
  * `<var>` and its name is the names layer's. Every kept word is masked by `redact`, so a credential-shaped word is not stored as it is; the wire gates each one again (`wireTemplate`).
  */
 const templateOf = ({ head, args }: CommandWords, redact: (text: string) => string): string => {
@@ -447,6 +448,7 @@ const templateOf = ({ head, args }: CommandWords, redact: (text: string) => stri
   if (head.variable !== undefined) tokens.push('<var>');
   else if (head.opaque === true || (head.quoted && /\s/.test(head.text))) tokens.push('<text>');
   else tokens.push(/[\\/]|^~|^\.{1,2}$/.test(head.text) ? '<path>' : redact(program));
+  const pytest = runsPytest(head, args);
   let subcommand = false;
   let textNext = false;
   let ended = false;
@@ -461,7 +463,7 @@ const templateOf = ({ head, args }: CommandWords, redact: (text: string) => stri
       ended = true;
       tokens.push('--');
     } else if (flagLike) {
-      const flag = flagToken(word.text, redact, word.opaque === true);
+      const flag = flagToken(word.text, redact, word.opaque === true, pytest);
       textNext = flag.text;
       tokens.push(flag.token);
     } else if (!subcommand && table?.has(word.text) === true) {

@@ -53,10 +53,10 @@ describe('a shell command as a template', () => {
   const FIXTURE: readonly { command: string; template: string; literals: string[] }[] = [
     { command: 'git commit -m "charge zq_customer_one twice"', template: 'git commit -m <text>', literals: ['zq_customer_one', 'charge'] },
     { command: 'pytest tests/test_zq_billing.py', template: 'pytest <path>', literals: ['zq_billing'] },
-    { command: 'curl -s https://zq-host.example/v1/zq_orders', template: 'curl -s <url>', literals: ['zq-host', 'zq_orders'] },
+    { command: 'curl -s https://zq-host.example/v1/zq_orders', template: 'curl -s <text>', literals: ['zq-host', 'zq_orders'] },
     { command: 'grep -rn zq_symbol_name src', template: 'grep <flag> <ident> <ident>', literals: ['zq_symbol_name'] },
     { command: 'echo zq_plain_word 42', template: 'echo <ident> <num>', literals: ['zq_plain_word'] },
-    { command: 'git log -n 5 zq_branch_name', template: 'git log -n <num> <ident>', literals: ['zq_branch_name'] },
+    { command: 'git log -n 5 zq_branch_name', template: 'git log -n <text> <ident>', literals: ['zq_branch_name'] },
     { command: 'cat zq_notes.md ./zq/dir/file.txt', template: 'cat <path> <path>', literals: ['zq_notes', 'file.txt'] },
     { command: 'npm run zq-build-target', template: 'npm run <ident>', literals: ['zq-build-target'] },
   ];
@@ -70,8 +70,24 @@ describe('a shell command as a template', () => {
 
   it('keeps a public flag name and turns its value into a slot, joined or apart', () => {
     expect(sent('deploy-tool --limit 5 --name zq_name_value --output=zq_out_value --force')).toEqual(['deploy-tool --limit <num> --name <ident> --output=<ident> --force']);
-    // A one-letter flag is kept as the step identity keeps it, and the word after it is a slot by its own shape.
-    expect(sent('deploy-tool -n zq_one_letter')).toEqual(['deploy-tool -n <ident>']);
+    // A one-letter flag is kept as the step identity keeps it.
+    expect(sent('deploy-tool -n 5')).toEqual(['deploy-tool -n <text>']);
+  });
+
+  it('types no word after a one-letter flag, since the names reader refuses to read it: it is text, except pytest -k', () => {
+    // `-p` is a password on sshpass and `-n` a count on head; the template cannot tell, so no type of the word after either is sent.
+    const skeleton = skeletonOfLines(OPEN, bash('sshpass -p zq_hunter_two ssh zq_host'));
+    expect(toolsOf(skeleton)[0]?.templates).toEqual(['sshpass -p <text> <ident> <ident>']);
+    expect(JSON.stringify(skeleton)).not.toContain('zq_hunter_two');
+    expect(sent('sshpass -p 12345 ssh zq_host')).toEqual(['sshpass -p <text> <ident> <ident>']);
+    expect(sent('deploy-tool -n zq_one_letter')).toEqual(['deploy-tool -n <text>']);
+    expect(sent('curl -k https://zq.example/x')).toEqual(['curl -k <text>']);
+    expect(sent('tail -n 3 zq_log')).toEqual(['tail -n <text> <ident>']);
+    // The one closed list the names reader keeps: `-k` on pytest, however pytest is run. A number flag (`head -20`) and a cluster stay as they were.
+    expect(sent('pytest -k zq_login tests')).toEqual(['pytest -k <ident> <ident>']);
+    expect(sent('python -m pytest -k zq_login')).toEqual(['python -m <text> -k <ident>']);
+    expect(sent('head -20 zq_log')).toEqual(['head <num> <ident>']);
+    expect(sent('openssl enc -k zq_pass_two')).toEqual(['openssl <ident> -k <text>']);
   });
 
   it('spells no flag a program or a person made up: it is a flag slot, and its value is a slot', () => {
@@ -101,7 +117,7 @@ describe('a shell command as a template', () => {
   });
 
   it('is one template per command of a call, in order, and none for a command with no program', () => {
-    expect(sent('cd zq_dir && git status | tail -n 3; echo "$ZQ_ID"')).toEqual(['cd <ident>', 'git status', 'tail -n <num>', 'echo <var>']);
+    expect(sent('cd zq_dir && git status | tail -n 3; echo "$ZQ_ID"')).toEqual(['cd <ident>', 'git status', 'tail -n <text>', 'echo <var>']);
     expect(sent('')).toEqual([]);
   });
 
