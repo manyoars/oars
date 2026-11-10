@@ -532,6 +532,19 @@ describe('a Codex session (plan S2)', () => {
     expect(await packed(f)).toMatchObject({ scanned: 1, excluded: { term: 0, noRaw: 0 }, noHarnessTerms: 0, emitted: 1 });
     expect(manifest(f.out)).toMatchObject([{ harness: 'codex' }]);
   });
+
+  it('keeps no <user_instructions>, <environment_context>, or AGENTS.md text, only the keyed marker that stands for each', async () => {
+    const f = fixture();
+    expect(await packed(f)).toMatchObject({ emitted: 1 });
+    const text = packText(f.out);
+    for (const gone of [CODEX_AGENTS_LINE, '<shell>bash</shell>', '# AGENTS.md instructions']) expect(text).not.toContain(gone);
+    expect(text).toMatch(/\[injected user-instructions [0-9a-f]+\]/);
+    expect(text).toMatch(/\[injected environment-context [0-9a-f]+\]/);
+    expect(text).toMatch(/\[injected agents-md [0-9a-f]+\]/);
+    // What the person typed and what the model answered stay.
+    expect(text).toContain('fix the build');
+    expect(text).toContain('fixed');
+  });
 });
 
 describe('refusals and an unfinished run', () => {
