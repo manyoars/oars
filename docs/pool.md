@@ -177,7 +177,7 @@ An unknown field name a client sends lands in the `extensions` bag of the deposi
 | `action` | every order 1 read (`fit`, `change`, `live`, `adoption`, `method`, `next-step`, `tool-day`): the step's kind | clear | yes | 100 |
 | `agentType` | future `change` agentType shares (named under What a bundle serves, served by nothing yet) | clear | yes | 80 |
 | `allocated` | none served yet: whether a step's `tokens` figure was divided among the calls of one model response rather than measured for the call alone, so a later `cost` read can tell the two apart (a flag, true only; absent when measured) | clear | yes | 16 |
-| `argClass` | `fit` by call shape (one `arg` shape cell per member): which kinds of value a call's arguments held (`path`, `url`, `pattern`, `command`, `number`, `flag`, `text`, `none`), a sorted set, so a path-taking call reads apart from a pattern-taking one without a value | clear | yes | 55 |
+| `argClass` | none today: held in the `arg` shape cells, which are never served; which kinds of value a call's arguments held (`path`, `url`, `pattern`, `command`, `number`, `flag`, `text`, `none`), a sorted set | clear | yes | 55 |
 | `argFeatures` | `fit` by call shape: the container of a call's value features, one per sent key, never the value (the `size`, `depth`, `extension`, `dir`, and `pattern` shape cells read its members); format 4 | clear | yes | 42 |
 | `argValues` | `fit` by call shape: the container of a call's closed values, one per sent key (the `enum` shape cell reads its members); format 4 | clear | yes | 17 |
 | `cacheRead` | `cost`: tokens per prompt class, model, and week | clear (bucket) | yes | 13 |

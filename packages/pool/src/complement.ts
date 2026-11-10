@@ -226,10 +226,15 @@ const familiesOf = (held: readonly Cell[], motifs: readonly Motif[]): Family[] =
  * A sub-floor part held to a higher floor than the lowest of its family (a long-tail name under a clear shape, which carries no identity; a long-tail model beside a listed one in an action's one-step shape cells) is not
  * hidden by withholding a part that is served only on that lower floor: a part that hides it, withheld already or withheld now, must itself be at or above that bar on the accounts that have stood (`Floorplan.standingOf`),
  * or the count less the served parts could be that part alone. With none, a family with a whole withholds the whole; a family with a total no cell holds (the calls its parts sum to) withholds the smallest served part of
- * each family that counts the same total, since a reader reads that total from those cells (`byTotal`).
+ * each family that counts the same total, since a reader reads that total from those cells (`byTotal`). The cells it withholds are returned, so the caller runs it again over only the families they belong to.
  */
-const withholdLocally = (families: readonly Family[], byTotal: ReadonlyMap<string, readonly Family[]>, withheld: Set<Cell>, { floorOf, standingOf }: Floorplan): void => {
+const withholdLocally = (families: readonly Family[], byTotal: ReadonlyMap<string, readonly Family[]>, withheld: Set<Cell>, { floorOf, standingOf }: Floorplan): Cell[] => {
   const served = (cell: Cell): boolean => clears(cell, floorOf(cell));
+  const added: Cell[] = [];
+  const add = (cell: Cell): void => {
+    withheld.add(cell);
+    added.push(cell);
+  };
   for (let changed = true; changed; ) {
     changed = false;
     for (const family of families) {
@@ -245,7 +250,7 @@ const withholdLocally = (families: readonly Family[], byTotal: ReadonlyMap<strin
       if (!thin && unserved.length !== 1) continue;
       const [next] = parts.filter((part) => served(part) && !withheld.has(part) && hides(part)).sort(smallest);
       if (next !== undefined) {
-        withheld.add(next);
+        add(next);
         changed = true;
         continue;
       }
@@ -253,7 +258,7 @@ const withholdLocally = (families: readonly Family[], byTotal: ReadonlyMap<strin
         // The total is read from the other families that count it, each of which gives up its smallest served part unless one of its parts is withheld already.
         const gone = whole !== null ? [whole] : (byTotal.get(total ?? '') ?? []).flatMap((other) => (other === family || other.parts.some((part) => withheld.has(part)) ? [] : other.parts.filter((part) => served(part)).sort(smallest).slice(0, 1)));
         for (const cell of gone) {
-          withheld.add(cell);
+          add(cell);
           changed = true;
         }
         continue;
@@ -262,11 +267,12 @@ const withholdLocally = (families: readonly Family[], byTotal: ReadonlyMap<strin
       // With no served part left to join it, a lone unserved part equals its whole, so the whole goes too; and it equals the total that the families echoing it count, so each of those gives up its smallest served part.
       for (const gone of [whole, ...echoes.map((echo) => echo.parts.filter((part) => served(part) && !withheld.has(part)).sort(smallest)[0])]) {
         if (gone === null || gone === undefined || withheld.has(gone)) continue;
-        withheld.add(gone);
+        add(gone);
         changed = true;
       }
     }
   }
+  return added;
 };
 
 /** A term of an equation: a held cell, or a total no cell holds (`Family.total`). */
@@ -407,6 +413,7 @@ export const withheldOf = (held: readonly Cell[], motifs: readonly Motif[], plan
     })
     .sort((a, b) => a.size - b.size || compare(a.key, b.key));
   const systems = ranked.map(({ system }) => system);
+  // The member set of each family, and the families each cell is in, so "shares a family" is a lookup and no cell holds a set of its neighbors (a family of thousands of `keys` cells would square).
   const membersOf = new Map<Family, Set<Cell>>();
   const familiesOfCell = new Map<Cell, Family[]>();
   for (const family of families) {
@@ -431,14 +438,11 @@ export const withheldOf = (held: readonly Cell[], motifs: readonly Motif[], plan
       .find((cell) => cell !== undefined);
   };
   const familyOrder = new Map(families.map((family, index) => [family, index]));
-  let seen = 0;
   // The local rules over `dirty` families, and again over the families of each cell they withhold. A family's rule reads only its own cells, so those are the only families a newly withheld cell can change. Every cell of a
   // family lies in one system (an equation joins its terms), so a local rule only withholds from the system that is running, and a finished system is never reopened.
   const settleLocally = (initial: readonly Family[]): void => {
     for (let dirty = initial; dirty.length > 0; ) {
-      withholdLocally(dirty, byTotal, withheld, plan);
-      const added = [...withheld].slice(seen);
-      seen = withheld.size;
+      const added = withholdLocally(dirty, byTotal, withheld, plan);
       dirty = [...new Set(added.flatMap((cell) => familiesOfCell.get(cell) ?? []))].sort((a, b) => (familyOrder.get(a) ?? 0) - (familyOrder.get(b) ?? 0));
     }
   };
