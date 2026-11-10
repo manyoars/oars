@@ -168,8 +168,13 @@ export const keepAliveSender = (entry: () => Promise<URL>): KeepAliveSender => {
     const small = typeof held === 'string' ? Buffer.byteLength(held) <= WHOLE_BODY_BYTES : held instanceof Uint8Array && held.byteLength <= WHOLE_BODY_BYTES;
     const body = forward.body === null ? undefined : small ? new Uint8Array(await forward.arrayBuffer()) : forward.body;
     let response: Response;
+    const started = Date.now();
+    const connectsBefore = connects;
     try {
       response = await fetch(new URL(`${sent.pathname}${sent.search}`, base), { method: forward.method, headers, ...(body === undefined ? {} : body instanceof Uint8Array ? { body } : { body, duplex: 'half' }), redirect: forward.redirect, dispatcher });
+    } catch (error) {
+      // undici reports a reset as `fetch failed` over a bare socket error, which names no call; a flake on a loaded box leaves nothing else behind, so say which call it was (t1068). A connect since the call began means it did not ride an idle socket.
+      throw new Error(`${forward.method} ${sent.pathname} failed after ${String(Date.now() - started)} ms on a ${connects === connectsBefore ? 'reused' : 'new'} connection: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     } finally {
       if (counted) inFlight -= 1;
     }
