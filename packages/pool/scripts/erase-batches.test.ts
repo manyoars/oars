@@ -1,7 +1,7 @@
 // The telemetry batches of an erased account: found by their own records, rewritten with the placeholder and a fresh install id, and left alone when they name someone else, no one, or sit past retention.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { fieldOf, startPool, type TestBucket, type TestDb, type TestPool } from '../src/test-pool.js';
-import { eraseBatches, findBatches, rewriteKeyOf, type BatchStore } from './erase-batches.js';
+import { fieldOf, textOf, startPool, type TestBucket, type TestDb, type TestPool } from '../src/test-pool.js';
+import { eraseBatches, findBatches, rewriteKeyOf, type BatchStore, type TelemetryStore } from './erase-batches.js';
 import { telemetryOf } from './erase-test-telemetry.js';
 import { eraseAccount, type EraseStore } from './erase.js';
 
@@ -25,6 +25,8 @@ const storeOf = (db: TestDb, telemetry: TelemetryStore): BatchStore => ({
   run: async (sql, binds) => Number(fieldOf(fieldOf(await db.prepare(sql).bind(...binds).run(), 'meta'), 'changes')),
   telemetry,
 });
+
+const installOf = (text: string): string => textOf(fieldOf(JSON.parse(text), 'batch'), 'install');
 
 interface Seen {
   key: string;
@@ -82,7 +84,7 @@ const seed = async (bucket: TestBucket, db: TestDb): Promise<Fixture> => {
   return { account, other, keys };
 };
 
-const installsPerDay = async (db: TestDb): Promise<unknown[]> => (await db.prepare('SELECT day, COUNT(DISTINCT install) AS installs FROM telemetry_install_days GROUP BY day ORDER BY day').all()).results;
+const installsPerDay = async (db: TestDb): Promise<readonly unknown[]> => (await db.prepare('SELECT day, COUNT(DISTINCT install) AS installs FROM telemetry_install_days GROUP BY day ORDER BY day').all()).results;
 
 const clean = async (bucket: TestBucket, db: TestDb): Promise<void> => {
   await bucket.delete((await bucket.list({ prefix: 'telemetry/' })).objects.map((object) => object.key));
@@ -136,16 +138,20 @@ describe('rewriting them (Items 2 and 3)', () => {
       expect(keys).toContain(rewriteKeyOf(key));
     }
     for (const key of [fixture.keys.other, fixture.keys.anonymous, fixture.keys.past]) expect(after.find((one) => one.key === key)).toEqual(before.find((one) => one.key === key));
-    const record = (text: string): { received: unknown; account: unknown; batch: { install: string; events: unknown } } => JSON.parse(text) as { received: unknown; account: unknown; batch: { install: string; events: unknown } };
+    const record = (text: string): { received: unknown; account: unknown; install: string; events: unknown } => {
+      const parsed: unknown = JSON.parse(text);
+      const batch = fieldOf(parsed, 'batch');
+      return { received: fieldOf(parsed, 'received'), account: fieldOf(parsed, 'account'), install: textOf(batch, 'install'), events: fieldOf(batch, 'events') };
+    };
     const ids = new Set<string>();
     for (const key of [fixture.keys.a1, fixture.keys.a2, fixture.keys.b1, fixture.keys.boundary]) {
       const was = record(before.find((one) => one.key === key)?.text ?? '');
       const now = record(after.find((one) => one.key === rewriteKeyOf(key))?.text ?? '');
       expect(now.account).toBe('erased:');
       expect(now.received).toBe(was.received);
-      expect(JSON.stringify(now.batch.events)).toBe(JSON.stringify(was.batch.events));
-      expect(now.batch.install).not.toBe(was.batch.install);
-      ids.add(`${was.batch.install}>${now.batch.install}`);
+      expect(JSON.stringify(now.events)).toBe(JSON.stringify(was.events));
+      expect(now.install).not.toBe(was.install);
+      ids.add(`${was.install}>${now.install}`);
     }
     expect(ids.size).toBe(2);
     // The old ids stand in no batch that names the account or the placeholder, and in no row of the rollup that names an erased account.
@@ -171,7 +177,7 @@ describe('rewriting them (Items 2 and 3)', () => {
     await bucket.put('telemetry/2026-11-08/two.json', batchText('2026-11-08', INSTALL_B, second, 'two'));
     await eraseBatches(storeOf(db, telemetryOf(bucket)), first, NOW);
     await eraseBatches(storeOf(db, telemetryOf(bucket)), second, NOW);
-    const ids = (await all(bucket)).map((one) => (JSON.parse(one.text) as { batch: { install: string } }).batch.install);
+    const ids = (await all(bucket)).map((one) => installOf(one.text));
     expect(new Set(ids).size).toBe(2);
     for (const id of ids) expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   });
@@ -212,7 +218,7 @@ describe('rerunning (Item 4)', () => {
     // Exactly the four rewrites and the three batches that were never the account's.
     expect(after.map((one) => one.key).sort()).toEqual([...[fixture.keys.a1, fixture.keys.a2, fixture.keys.b1, fixture.keys.boundary].map(rewriteKeyOf), fixture.keys.other, fixture.keys.anonymous, fixture.keys.past].sort());
     // The rollup's rows and the batches carry the same ids, and the daily counts held.
-    const batchInstalls = new Set(after.filter((one) => one.key.endsWith('-erased.json')).map((one) => (JSON.parse(one.text) as { batch: { install: string } }).batch.install));
+    const batchInstalls = new Set(after.filter((one) => one.key.endsWith('-erased.json')).map((one) => installOf(one.text)));
     expect(batchInstalls.size).toBe(2);
     const rowInstalls = new Set((await db.prepare("SELECT install FROM telemetry_install_days WHERE account LIKE 'erased:%'").all()).results.map((row) => fieldOf(row, 'install')));
     expect(rowInstalls).toEqual(batchInstalls);
