@@ -430,6 +430,30 @@ describe('erasing one account removes its own rows and its link to the shared to
     expect(await all("SELECT account FROM telemetry_install_days WHERE install = 'install-theirs'")).toEqual([{ account: other.account }]);
   }, 90_000);
 
+  it('removes each item the covenant lists in 6.6(d): contributors, repository keys, deposit hours, and telemetry install days, and no other account\'s', async () => {
+    const { token, account } = await member();
+    const other = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('0000000000007c01'), token)).status).toBe(201);
+    expect((await pool.post('/v1/deposits', skeletonWith('0000000000007c02'), other.token)).status).toBe(201);
+    const db = await pool.db();
+    for (const holder of [account, other.account]) await db.prepare('INSERT OR IGNORE INTO account_repo_keys (account, repo_key) VALUES (?, ?)').bind(holder, `key-${holder}`).run();
+    await telemetry('2026-11-07', 'six-six-d-mine', account);
+    await telemetry('2026-11-07', 'six-six-d-theirs', other.account);
+    const held = (table: string, holder: string): Promise<number> => count(`SELECT COUNT(*) AS held FROM ${table} WHERE account = ?`, holder);
+    for (const table of ['contributors', 'account_repo_keys', 'deposit_hours', 'telemetry_install_days']) {
+      expect(await held(table, account)).toBeGreaterThan(0);
+      expect(await held(table, other.account)).toBeGreaterThan(0);
+    }
+    const theirs = await Promise.all(['contributors', 'account_repo_keys', 'deposit_hours', 'telemetry_install_days'].map((table) => held(table, other.account)));
+
+    await eraseAccount(await store(), account, NOW);
+
+    for (const table of ['contributors', 'account_repo_keys', 'deposit_hours', 'telemetry_install_days']) expect(await held(table, account)).toBe(0);
+    expect(await Promise.all(['contributors', 'account_repo_keys', 'deposit_hours', 'telemetry_install_days'].map((table) => held(table, other.account)))).toEqual(theirs);
+    // The install day keeps its counts under a placeholder that names no account.
+    expect(await all("SELECT batches, events FROM telemetry_install_days WHERE install = 'six-six-d-mine'")).toEqual([{ batches: 2, events: 5 }]);
+  }, 90_000);
+
   it('clears the telemetry account of two installs of one day without colliding with each other or with an anonymous row', async () => {
     const { account } = await member();
     const other = await member();
