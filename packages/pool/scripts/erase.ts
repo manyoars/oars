@@ -177,7 +177,7 @@ export const eraseLeakedSecret = async (store: EraseStore, secret: LeakedSecret,
     await scan(store, 'deposits', ['account', 'id', 'skeleton', 'extensions'], ['account', 'id'], (row) => {
       if (textOf(row, 'skeleton').includes(stored) || textOf(row, 'extensions').includes(stored)) held.push({ account: textOf(row, 'account'), id: textOf(row, 'id') });
       return Promise.resolve();
-    }, 'erased_on IS NULL AND ');
+    }, "erased_on IS NULL AND account NOT LIKE 'erased:%' AND ");
     let aggregates = 0;
     await scan(store, 'motifs', ['motif_id', 'motif'], ['motif_id'], async (row) => {
       const motif = textOf(row, 'motif');
@@ -216,35 +216,41 @@ export const eraseLeakedSecret = async (store: EraseStore, secret: LeakedSecret,
 /** A random 128-bit id as 32 hex digits. It is drawn, never derived from an account, a machine, or a session, so no key and no input recomputes it. */
 const randomId = (): string => Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, '0')).join('');
 
+/** A random rowid between 2^32 and 2^52: the bare `accounts` row of an erasure must not sit where `erasure_audit.id` order would put it. */
+const randomRowid = (): number => {
+  const [high = 0, low = 0] = crypto.getRandomValues(new Uint32Array(2));
+  return 2 ** 32 + (high % 2 ** 20) * 2 ** 32 + low;
+};
+
 const DAY_MS = 86_400_000;
 
 /**
- * Unlinks the rows an erasure keeps that covenant 6.6(d) does not list (`machines`, `deposits`, `raw_objects`): they leave the account's pseudonym for one random id per erasure (`erased:` and 32 hex, with a minimal `accounts` row, since the foreign keys need one),
- * so they still join to each other (the counts) and to no one. A machine and a deposit also take a random id each, the machine's fingerprint is blanked, and a counting time is cut to its UTC day. `accounts.provider_created`, GitHub's public creation time, is cleared.
+ * Unlinks the rows an erasure keeps that covenant 6.6(d) does not list (`machines` and `deposits`): they leave the account's pseudonym for one random id per erasure (`erased:` and 32 hex, with a minimal `accounts` row, since the foreign keys need one),
+ * so they still join to each other (the counts) and to no one. A machine and a deposit also take a random id each, the machine's fingerprint is blanked and its key revoked (the key would otherwise act for the random id), a counting time is cut to its UTC day, and
+ * `erased_on` is cleared on the deposits, because a date there would pick out the audit row of that day: a reader that needs "erased" reads the `erased:` prefix. The `accounts` row takes a random rowid for the same reason. `accounts.provider_created`, GitHub's public creation time, is cleared.
+ * Raw objects stay on the pseudonym: they are 6.6(d)'s hash, size, and date, and their tombstone (the unkeyed hash of the key `raw/<account>/<sha256>`) would give the account back from any row that kept the hash.
  * Rows are found by the account, so a rerun finds none and changes nothing; a run that stops between two statements leaves the rest for a rerun under a second id, which splits the join and links nothing. The random id is written nowhere else, least of all beside the pseudonym.
  */
 const unlink = async (store: EraseStore, account: string): Promise<void> => {
   await store.run('UPDATE accounts SET provider_created = NULL WHERE id = ? AND provider_created IS NOT NULL', [account]);
   const machines = new Set([...(await store.rows('SELECT id AS machine FROM machines WHERE account = ?', [account])), ...(await store.rows('SELECT DISTINCT machine FROM deposits WHERE account = ? AND machine IS NOT NULL', [account]))].map((row) => textOf(row, 'machine')));
   const deposits = (await store.rows('SELECT id FROM deposits WHERE account = ?', [account])).map((row) => textOf(row, 'id'));
-  const objects = numberOf((await store.rows('SELECT COUNT(*) AS held FROM raw_objects WHERE account = ?', [account]))[0], 'held');
-  if (machines.size === 0 && deposits.length === 0 && objects === 0) return;
+  if (machines.size === 0 && deposits.length === 0) return;
   const erased = `erased:${randomId()}`;
-  await store.run('INSERT INTO accounts (id, source) SELECT ?, source FROM accounts WHERE id = ?', [erased, account]);
+  await store.run('INSERT INTO accounts (rowid, id, source) SELECT ?, ?, source FROM accounts WHERE id = ?', [randomRowid(), erased, account]);
   for (const machine of machines) {
     const renamed = randomId();
     await store.run('UPDATE deposits SET machine = ? WHERE account = ? AND machine = ?', [renamed, account, machine]);
-    await store.run('UPDATE machines SET id = ?, account = ?, fingerprint_hash = NULL WHERE id = ? AND account = ?', [renamed, erased, machine, account]);
+    await store.run("UPDATE machines SET id = ?, account = ?, fingerprint_hash = NULL, state = 'revoked', created_at = created_at - created_at % ?, activated_at = activated_at - activated_at % ?, rotated_at = rotated_at - rotated_at % ? WHERE id = ? AND account = ?", [renamed, erased, DAY_MS, DAY_MS, DAY_MS, machine, account]);
   }
-  for (const deposit of deposits) await store.run('UPDATE deposits SET id = ?, account = ?, counted_at = counted_at - counted_at % ? WHERE account = ? AND id = ?', [randomId(), erased, DAY_MS, account, deposit]);
-  await store.run('UPDATE raw_objects SET account = ? WHERE account = ?', [erased, account]);
+  for (const deposit of deposits) await store.run('UPDATE deposits SET id = ?, account = ?, erased_on = NULL, counted_at = counted_at - counted_at % ? WHERE account = ? AND id = ?', [randomId(), erased, DAY_MS, account, deposit]);
 };
 
 /**
  * Erases one account's content under a lawful request (GDPR Articles 17(1) and 17(3)(e)): every deposit row it holds is replaced by the marker and tombstoned, every raw object it holds is deleted and tombstoned, its staged parts are dropped, the label and allow list of its
  * machines are scrubbed, its repo keys and deposit hours are deleted, its tokens stop working and hold no credential, and the account id leaves its telemetry days and its contributor records. Every telemetry batch within retention that names it is rewritten with the rollup's placeholder and a fresh install id (`erase-batches.ts`). A telemetry day keeps its counts (the account column holds a placeholder that names no account, one per row, so
  * two erased accounts of one install never collide), and a token row keeps that a sign-in happened (its expiry). The generation moves, before the links go, when the account held any repo key, deposit hour, or contributor record, so a client fetches the bundle again.
- * Then the rows that stay but are not 6.6(d)'s (`machines`, `deposits`, `raw_objects`) leave the pseudonym for a random id (`unlink`); `rows` counts erased content and not those rewrites.
+ * Then the rows that stay but are not 6.6(d)'s (`machines`, `deposits`) leave the pseudonym for a random id (`unlink`); `rows` counts erased content and not those rewrites.
  * What stays: the totals (`cells`, `strata`, and the clusters held in them: a recount drops the account the next time a deposit touches the cell), `covenant_acceptances` (append-only, and the pool's proof that the covenant was accepted, Article 17(3)(e)), the tombstones, the audit, and the hash, size, and date of every raw object.
  * The `account` tombstone goes first: it is what lets the database delete the contributor records (migration 0027), and a run that stops halfway runs again to the end.
  */
