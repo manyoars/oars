@@ -81,7 +81,7 @@ export const weekOf = (day: string | null): string | null => {
 };
 
 /** An optional field: present in the result only when the source held it. */
-const held = <Key extends string>(key: Key, value: unknown): { [name in Key]?: unknown } => (value === undefined ? {} : { [key]: value });
+const held = (key: string, value: unknown): object => (value === undefined ? {} : { [key]: value });
 
 const frameOf = (frame: SkeletonFrame): object => ({
   harness: frame.harness,

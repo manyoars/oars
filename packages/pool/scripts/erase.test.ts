@@ -1087,19 +1087,21 @@ const WEEK_OF_PLANTED_DAY = '2026-11-02';
 
 /** The deposit of a person whose session holds a value of every class t1069 found: ids, hashes, free-text names, exact times, an off-list model, and a digest. */
 const richSkeleton = (id: string): unknown => {
-  const skeleton = JSON.parse(JSON.stringify(sampleSkeleton(id)));
+  const skeleton = structuredClone(sampleSkeleton(id));
   const [transcript] = skeleton.transcripts;
-  const frame = { ...transcript.frame, day: '2026-11-04', repoKey: 'feedfacecafebeef', hour: 13, reach: { filled: true, mcp: ['github', 'acme-private-mcp'], skills: ['acme-skill'], plugins: ['acme-plugin'] } };
-  transcript.frame = frame;
-  transcript.frames = [{ ...frame, model: 'acme-finetune-7' }];
-  transcript.prompts[0].frame = { ...transcript.prompts[0].frame, day: '2026-11-04' };
-  transcript.tools.push(...Array.from({ length: 50 }, () => structuredClone(transcript.tools[1])));
+  if (transcript === undefined) throw new Error('the sample skeleton holds no transcript');
+  Object.assign(transcript.frame, { day: '2026-11-04', repoKey: 'feedfacecafebeef', hour: 13, reach: { filled: true, mcp: ['github', 'acme-private-mcp'], skills: ['acme-skill'], plugins: ['acme-plugin'] } });
+  Object.assign(transcript, { frames: [{ ...transcript.frame, model: 'acme-finetune-7' }] });
+  const [prompt] = transcript.prompts;
+  if (prompt !== undefined) Object.assign(prompt.frame, { day: '2026-11-04' });
+  const spare = transcript.tools[1];
+  if (spare !== undefined) transcript.tools.push(...Array.from({ length: 50 }, () => structuredClone(spare)));
   const [call] = transcript.tools;
+  if (call === undefined) throw new Error('the sample skeleton holds no tool');
   Object.assign(call, { status: 'error', errorCode: FIRST_ERROR, durationMs: 1234, keys: ['file_path', 'acme_secret_key'], names: [{ kind: 'file', name: 'janedoe-notes' }], templates: ['acmetool deploy'], digests: [{ old: 'deadbeefdeadbeefdeadbeefdeadbeef', new: 'cafebabecafebabecafebabecafebabe' }] });
-  call.steps[0].identity = { program: 'acmetool', sub: 'deploy', flags: ['--acme-flag'] };
-  call.steps[0].status = 'error';
-  skeleton.timingPrint = '5555555555555a5a';
-  skeleton.recommendations = [{ id: 'feedfacecafebeef', arm: 'shown', poolVersion: '2026-11-04T10:11:12.123Z', from: 0, to: 1 }];
+  const [step] = call.steps;
+  if (step !== undefined) Object.assign(step, { identity: { program: 'acmetool', sub: 'deploy', flags: ['--acme-flag'] }, status: 'error' });
+  Object.assign(skeleton, { timingPrint: '5555555555555a5a', recommendations: [{ id: 'feedfacecafebeef', arm: 'shown', poolVersion: '2026-11-04T10:11:12.123Z', from: 0, to: 1 }] });
   return skeleton;
 };
 
@@ -1132,7 +1134,7 @@ const offList = (value: unknown): string[] =>
     if (leaf === null || typeof leaf === 'number' || typeof leaf === 'boolean') return [];
     const check = ALLOWED[key];
     if (check === undefined) return [`${path}: no allow-list entry for ${key}`];
-    return check(leaf) ? [] : [`${path}: ${String(leaf)} fails the ${key} check`];
+    return check(leaf) ? [] : [`${path}: ${JSON.stringify(leaf)} fails the ${key} check`];
   });
 
 const randomHex = (value: unknown): boolean => typeof value === 'string' && /^[0-9a-f]{32}$/.test(value);
