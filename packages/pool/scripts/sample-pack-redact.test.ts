@@ -111,6 +111,16 @@ describe('Item 2: the account the repositories live under', () => {
     expect(text).toContain('/srv/vendor-co/lib');
   });
 
+  it.each([
+    ['ssh://git@git.example.com:22/acme-dev/app.git', 'an ssh url with a port'],
+    ['https://gitlab.com/acme-dev/sub/app.git', 'a subgroup path'],
+  ])('finds the account in %s (%s)', async (remote) => {
+    const f = fixture(remote);
+    f.write(S(1), [user(f, S(1), 1, 'open /srv/acme-dev/app'), assistant(S(1), 1, [{ type: 'text', text: 'ok' }])]);
+    expect((await run(f)).emitted).toBe(1);
+    expect(packText(f.out)).not.toContain('acme-dev');
+  });
+
   it('masks an account the owners entry names, whatever remote the session repository has', async () => {
     const f = fixture('https://example.com/other/app.git');
     f.setOwners([{ folder: '*-oars*', owner: 'Many Oars Co.', license: null, handles: ['lamp-co'] }]);
@@ -200,6 +210,13 @@ describe('Item 4: orchestration lead sessions are not drawn', () => {
     const pack: unknown = JSON.parse(readFileSync(join(f.out, 'pack.json'), 'utf8'));
     expect(pack).toMatchObject({ counts: { lead: 2 }, redactionVersion: '4' });
     expect(packText(f.out)).not.toContain('leading');
+  });
+
+  it('counts a lead started with an interval (/loop 5m /orchestrate) as lead', async () => {
+    const f = fixture();
+    f.write(S(1), [command(f, S(1), '/loop', '5m /orchestrate'), assistant(S(1), 1, [{ type: 'text', text: 'leading' }])]);
+    f.write(S(2), [command(f, S(2), '/loop', '5m check the build'), assistant(S(2), 1, [{ type: 'text', text: 'working' }])]);
+    expect(await run(f)).toMatchObject({ lead: 1, emitted: 1 });
   });
 
   it('draws /handoff resume in a repository whose owners entry lists no lead prompt, and leaves it out where the entry lists it', async () => {

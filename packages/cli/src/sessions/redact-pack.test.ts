@@ -106,6 +106,16 @@ describe('hosts the session itself fetched', () => {
     expect(text).toContain('<org-domain>');
   });
 
+  it('keeps a fetched host in that call result only: a plain-text line or a top-level array after it gets none', () => {
+    const lines = [call('WebFetch', { url: 'https://docs.example.org/page' }, 'toolu_01KeptKeptKeptKept05'), result('see https://docs.example.org/guide', 'toolu_01KeptKeptKeptKept05'), 'plain line at https://docs.example.org/guide', '["https://docs.example.org/guide"]'];
+    const rows = redactTranscript(lines.join('
+'), [], [], 'k', { fetchedHosts: true }).text.split('
+');
+    expect(rows[1]).toContain('https://docs.example.org/guide');
+    expect(rows[2]).toBe('plain line at https://<host>/guide');
+    expect(rows[3]).toBe('["https://<host>/guide"]');
+  });
+
   it('keeps a searched domain, but never a loopback, private-range, or .local host, and never in another call result', () => {
     const lines = [
       call('WebSearch', { query: 'redaction', allowed_domains: ['news.example.org', 'localhost', 'wiki.corp.local'] }, 'toolu_01SearchSearchSearch01'),
