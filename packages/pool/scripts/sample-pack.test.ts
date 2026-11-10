@@ -1403,3 +1403,66 @@ describe('the run record names the buyer key (plan S5)', () => {
     expect(record).not.toContain('"sample"');
   });
 });
+
+// t1135: the harness's own line, request, prompt, delivery, and message ids are joinable with the vendor's records, so each is masked as the line uuid is.
+describe('harness ids a buyer could join on beyond uuid and requestId (t1135)', () => {
+  const KEYED: readonly { name: string; type: string; key: string; raw: string; shape: RegExp }[] = [
+    { name: 'the id of an api-request line', type: 'api-request', key: 'id', raw: '3f9a1c7e5b2d4a6f8091b3c5d7e9f102', shape: /^[0-9a-f]{32}$/ },
+    { name: 'requestRef', type: 'api-request', key: 'requestRef', raw: 'ref-7f3a9c21d4e85b60', shape: /^[0-9a-f]{20}$/ },
+    { name: 'serverClassifierRequest', type: 'api-request', key: 'serverClassifierRequest', raw: 'cls-5d1e0a93b7c24f68', shape: /^[0-9a-f]{20}$/ },
+    { name: 'promptId', type: 'user', key: 'promptId', raw: 'a7c3e1f9-2b4d-4c6e-8a0b-1d3f5e7a9c2b', shape: /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/ },
+    { name: 'toolUseID', type: 'progress', key: 'toolUseID', raw: 'hookprog-9e8d7c6b5a4f3e21', shape: /^[0-9a-f]{25}$/ },
+    { name: 'tool_use_id', type: 'progress', key: 'tool_use_id', raw: 'hookprog-0a1b2c3d4e5f6071', shape: /^[0-9a-f]{25}$/ },
+    { name: 'deliveryId', type: 'system', key: 'deliveryId', raw: 'dlv-11aa22bb33cc44dd', shape: /^[0-9a-f]{20}$/ },
+    { name: 'delivery_id', type: 'system', key: 'delivery_id', raw: 'dlv-55ee66ff77aa88bb', shape: /^[0-9a-f]{20}$/ },
+    { name: 'messageId of a file-history-snapshot line', type: 'file-history-snapshot', key: 'messageId', raw: '9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d', shape: /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/ },
+    { name: 'msg_id', type: 'system', key: 'msg_id', raw: 'msgid-c0ffee00c0ffee11', shape: /^[0-9a-f]{22}$/ },
+  ];
+  const harnessLine = (session: string, n: number, type: string, fields: object): string => line({ type, uuid: uuidOf(session, 'a', n), parentUuid: null, isSidechain: false, timestamp: at(n), version: '2.1.300', sessionId: session, ...fields });
+  const mainOf = (f: Fixture): unknown[] => {
+    const matchId = manifest(f.out)[0]?.matchId ?? '';
+    return readFileSync(join(f.out, 'sessions', matchId, 'main.jsonl'), 'utf8')
+      .split('\n')
+      .filter((text) => text !== '')
+      .map((text): unknown => JSON.parse(text));
+  };
+  const fieldOf = (entry: unknown, name: string): unknown => (typeof entry === 'object' && entry !== null ? Reflect.get(entry, name) : undefined);
+
+  it.each(KEYED)('masks $name through the keyed hash, cut to the id shape, and keeps the line', async ({ type, key, raw, shape }) => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), harnessLine(S(1), 20, type, { [key]: raw }), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    expect((await buildPack(f.runtime, options(f))).emitted).toBe(1);
+    expect(packText(f.out)).not.toContain(raw);
+    const carried = mainOf(f).filter((entry) => fieldOf(entry, 'type') === type && fieldOf(entry, key) !== undefined);
+    expect(carried).toHaveLength(1);
+    expect(String(fieldOf(carried[0], key))).toMatch(shape);
+  });
+
+  it('leaves a bare id alone on a line that is not an api-request', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), harnessLine(S(1), 20, 'system', { id: 'plain-label-001' }), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    expect(packText(f.out)).toContain('plain-label-001');
+  });
+
+  it.each([
+    ['toolUseID and the tool_use_id of a content block', 'toolUseID', 'tool_use_id', 'hookprog-5a4b3c2d1e0f9a8b'],
+    ['a toolu_ toolUseID and its tool_use_id', 'toolUseID', 'tool_use_id', 'toolu_01RawLinkedToolUse0001'],
+    ['requestRef and requestId', 'requestRef', 'requestId', 'req_011CRawLinkedRequest0001'],
+  ])('maps %s to one masked value', async (_label, first, second, raw) => {
+    const f = fixture();
+    const carrier = (key: string, n: number): string => harnessLine(S(1), n, 'system', { [key]: raw });
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), carrier(first, 20), carrier(second, 21), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    expect(packText(f.out)).not.toContain(raw);
+    const entries = mainOf(f);
+    const a = entries.map((entry) => fieldOf(entry, first)).find((value) => value !== undefined);
+    const b = entries.map((entry) => fieldOf(entry, second)).find((value) => value !== undefined);
+    expect(typeof a).toBe('string');
+    expect(a).toBe(b);
+    expect(a).not.toBe(raw);
+  });
+});
