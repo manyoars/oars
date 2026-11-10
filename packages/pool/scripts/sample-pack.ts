@@ -179,7 +179,10 @@ export interface Objection {
 
 export const OBJECTIONS_FILE = 'objections.jsonl';
 
-const isText = (value: unknown): value is string => typeof value === 'string';
+export const isText = (value: unknown): value is string => typeof value === 'string';
+
+/** A read that found no file. */
+export const isAbsent = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ENOENT';
 
 /** The owners file: a JSON list, each entry a folder glob, an owner, a license or null, and optionally `"pointer": true`. A malformed entry stops the run rather than leaving a session unowned or owned by the wrong entry. */
 export const parseOwners = (text: string): OwnerRule[] => {
@@ -204,16 +207,19 @@ export const parseOwners = (text: string): OwnerRule[] => {
 
 const isScope = (value: unknown): value is Objection['scope'] => OBJECTION_SCOPES.some((scope) => scope === value);
 
-/** The objections beside the owners file (`dir`); none when the file is absent. A line that cannot be read stops the run, so no session leaves on a guess about whose objection it was. */
-export const readObjections = async (dir: string): Promise<Objection[]> => {
+/** The SHA-256 of `objections.jsonl` as read, or this when the file is absent: pack.json records it, and `deliver` refuses a pack whose recorded value is not the file's now. */
+export const NO_OBJECTIONS = 'none';
+
+/** The objections beside the owners file (`dir`) with the hash of the bytes they were read from; none when the file is absent. A line that cannot be read stops the run, so no session leaves on a guess about whose objection it was. */
+export const readObjections = async (dir: string): Promise<{ objections: Objection[]; hash: string }> => {
   let text: string;
   try {
     text = await readFile(join(dir, OBJECTIONS_FILE), 'utf8');
   } catch (error) {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return [];
+    if (isAbsent(error)) return { objections: [], hash: NO_OBJECTIONS };
     throw error;
   }
-  return text.split(String.fromCharCode(10)).filter((row) => row.trim() !== '').map((row, at): Objection => {
+  const objections = text.split(String.fromCharCode(10)).filter((row) => row.trim() !== '').map((row, at): Objection => {
     const where = `${OBJECTIONS_FILE} line ${String(at + 1)}`;
     const fields: object = (() => {
       try {
@@ -235,10 +241,11 @@ export const readObjections = async (dir: string): Promise<Objection[]> => {
     if (!isScope(scope)) throw new PackError(`${where} needs scope to be one of ${OBJECTION_SCOPES.join(', ')}.`);
     return { ...(session === undefined ? {} : { session }), ...(name === undefined ? {} : { name }), received, scope };
   });
+  return { objections, hash: createHash('sha256').update(text).digest('hex') };
 };
 
 /** Lower case with runs of white space made one, so a name matches across a line break or a doubled space. */
-const squashed = (text: string): string => text.toLowerCase().replace(/\s+/g, ' ');
+export const squashed = (text: string): string => text.toLowerCase().replace(/\s+/g, ' ');
 
 const globOf = (folder: string): RegExp => new RegExp(`^${folder.split('*').map((part) => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`, 'i');
 
@@ -271,7 +278,7 @@ const isEmptyOrAbsent = async (folder: string): Promise<boolean> => {
   try {
     return (await readdir(folder)).length === 0;
   } catch (error) {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return true;
+    if (isAbsent(error)) return true;
     throw error;
   }
 };
@@ -708,6 +715,14 @@ const bareIdOf = (record: { session: string; harness?: Harness }): string => {
   return harnessOf(record) !== 'claude-code' && record.session.startsWith(prefix) ? record.session.slice(prefix.length) : record.session;
 };
 
+const PREFIXED = ['cursor', 'codex', 'copilot', 'gemini', 'grok', 'opencode', 'pi', 'vscode-copilot', 'otel'] as const satisfies readonly Harness[];
+
+/** A store id as its transcript file names it, from the id alone: `codex-<id>` is `<id>`. `recipients` matches a query against both forms, as an objection may name either. */
+export const bareOf = (session: string): string => {
+  const prefix = PREFIXED.find((harness) => session.startsWith(`${harness}-`));
+  return prefix === undefined ? session : session.slice(prefix.length + 1);
+};
+
 type StoredSession = Awaited<ReturnType<typeof loadStore>>['sessions'][number];
 type HarnessRow = NonNullable<(typeof HARNESS_TERMS)[Harness]>;
 
@@ -728,8 +743,9 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   if (!(await isEmptyOrAbsent(partial))) throw new PackError(`An unfinished pack from an earlier run is at ${partial}. Delete it, then run again.`);
   const owners = parseOwners(await readFile(options.owners, 'utf8'));
   const indexKey = await readIndexKey(options.indexKey);
-  const objections = await readObjections(dirname(resolve(options.owners)));
+  const { objections, hash: objectionsHash } = await readObjections(dirname(resolve(options.owners)));
   const objectedSessions = new Set(objections.flatMap(({ session }) => (session === undefined ? [] : [session])));
+  const isObjected = (record: { session: string; harness?: Harness }): boolean => objectedSessions.has(record.session) || objectedSessions.has(bareIdOf(record));
   const objectedNames = objections.flatMap(({ name }) => (name === undefined ? [] : [squashed(name.trim())]));
   const domains = await readRedactDomains(runtime.storeDir);
   const names = localNames();
@@ -799,8 +815,8 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   for (const { session: record } of drawn) {
     if (counts.emitted >= options.size) break;
     counts.scanned += 1;
-    // Before the gate and before any read of the session: an objection is honored even for a session the other rules would have left out anyway, and it is the first reason counted.
-    if (objectedSessions.has(record.session) || objectedSessions.has(bareIdOf(record))) {
+    // Before this session's own gate: an objection is honored even for a session the other rules would have left out anyway, and it is the first reason counted.
+    if (isObjected(record)) {
       counts.objected += 1;
       continue;
     }
@@ -812,7 +828,8 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     const { owner, harness, terms } = decided.accepted;
     // Read once, on the first session that gets this far. A loser is chosen only among sessions that pass every rule above, so a longer twin that one of them drops never costs the shorter its place; a duplicate's other half may not be drawn at all.
     if (losers === undefined) {
-      const everyone = frame.map((record) => ({ session: record.session, project: record.project, turns: turnsOf(record), repo: record.repo, record }));
+      // An objected session is no member of a group: a longer one that never ships must not cost its shorter replay the place.
+      const everyone = frame.filter((record) => !isObjected(record)).map((record) => ({ session: record.session, project: record.project, turns: turnsOf(record), repo: record.repo, record }));
       losers = await duplicatesOf(runtime, everyone, async (member) => 'accepted' in (await earlyOf(member.record)));
     }
     if (losers.has(record.session)) {
@@ -893,7 +910,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   const census = `${JSON.stringify(censusOf(rows, skeletons), null, 2)}\n`;
   bytes += Buffer.byteLength(census);
   await writeFile(join(partial, 'census.json'), census);
-  await writeFile(join(partial, 'pack.json'), `${JSON.stringify({ built: new Date().toISOString(), size: options.size, seed: options.seed, minTurns: options.minTurns, redactionVersion: REDACTION_VERSION, keyId: keyIdOf(options.buyerKey), counts, bytes, elapsedMs: Date.now() - started }, null, 2)}\n`);
+  await writeFile(join(partial, 'pack.json'), `${JSON.stringify({ built: new Date().toISOString(), size: options.size, seed: options.seed, minTurns: options.minTurns, redactionVersion: REDACTION_VERSION, keyId: keyIdOf(options.buyerKey), objections: objectionsHash, counts, bytes, elapsedMs: Date.now() - started }, null, 2)}\n`);
   // Outside the pack, beside the owners file, and appended, so it maps every pack built from that folder. Written before the rename, so a pack under `out` always has its rows.
   await appendFile(join(dirname(resolve(options.owners)), 'index.jsonl'), index.map((row) => `${JSON.stringify(row)}\n`).join(''));
   // An empty `out` was allowed above, and a folder is renamed only onto a free name.

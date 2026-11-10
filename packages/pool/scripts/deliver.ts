@@ -2,7 +2,7 @@
 // It writes local records only, beside the owners file, and sends nothing: Art. 15(1)(c) and 19 need the recipients named, Art. 21(1) needs an objection checked before anything is handed over.
 import { appendFile, readdir, readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { insideRepository, keyIdOf, PackError, readObjections } from './sample-pack.js';
+import { bareOf, insideRepository, isAbsent, isText, keyIdOf, PackError, readObjections, squashed } from './sample-pack.js';
 
 export const USAGE = [
   'Usage: deliver --pack <dir> --recipient <name> --license <id> --buyer-key <key> --owners <file>',
@@ -39,22 +39,18 @@ export interface DeliverOptions {
   now?: (() => Date) | undefined;
 }
 
-const isText = (value: unknown): value is string => typeof value === 'string';
-
 const fieldOf = (value: unknown, name: string): unknown => {
   if (typeof value !== 'object' || value === null) return undefined;
   const found: unknown = Reflect.get(value, name);
   return found;
 };
 
-const absent = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ENOENT';
-
 const linesOf = async (file: string): Promise<unknown[]> => {
   let text: string;
   try {
     text = await readFile(file, 'utf8');
   } catch (error) {
-    if (absent(error)) return [];
+    if (isAbsent(error)) return [];
     throw error;
   }
   return text.split(String.fromCharCode(10)).filter((row) => row.trim() !== '').map((row): unknown => JSON.parse(row));
@@ -83,13 +79,19 @@ const jsonOf = async (file: string, what: string): Promise<unknown> => {
   try {
     return JSON.parse(await readFile(file, 'utf8'));
   } catch (error) {
-    if (absent(error)) throw new PackError(`${what} is missing: this folder is not a pack built by sample-pack.`);
+    if (isAbsent(error)) throw new PackError(`${what} is missing: this folder is not a pack built by sample-pack.`);
     throw error;
   }
 };
 
+/** What `deliver` wrote, and how many (recipient, lot, match id) rows the register already held, which it leaves alone. */
+export interface Delivered {
+  rows: Delivery[];
+  skipped: number;
+}
+
 /** Appends one row per session of the pack for `recipient`, all or none: every refusal comes before the first byte is written. */
-export const deliver = async (options: DeliverOptions): Promise<Delivery[]> => {
+export const deliver = async (options: DeliverOptions): Promise<Delivered> => {
   const recipient = options.recipient.trim();
   const license = options.license.trim();
   if (recipient === '') throw new PackError('The recipient must be the buyer\'s legal name.');
@@ -102,9 +104,9 @@ export const deliver = async (options: DeliverOptions): Promise<Delivery[]> => {
   const [built, keyId] = [fieldOf(record, 'built'), fieldOf(record, 'keyId')];
   if (!isText(built) || Number.isNaN(Date.parse(built))) throw new PackError('pack.json has no build time.');
   if (keyId !== keyIdOf(options.buyerKey)) throw new PackError('The buyer key is not the one this pack was built under (or the pack predates the key id in pack.json). Rebuild the pack under this key.');
-  // Art. 21(1): an objection that arrived after the build was never applied to this pack, so it goes out only after a rebuild.
-  const newest = (await readObjections(dir)).reduce<string | undefined>((latest, { received }) => (latest === undefined || Date.parse(received) > Date.parse(latest) ? received : latest), undefined);
-  if (newest !== undefined && Date.parse(newest) > Date.parse(built)) throw new PackError(`This pack was built before the newest objection (received ${newest}). Rebuild it, then deliver.`);
+  // Art. 21(1): the pack records the hash of the objections it was built under, and an objection recorded since (whatever its `received` says) was never applied to it, so it goes out only after a rebuild.
+  const recorded = fieldOf(record, 'objections');
+  if (recorded !== (await readObjections(dir)).hash) throw new PackError(`${recorded === undefined ? 'This pack predates the objections hash in pack.json' : 'The objections changed since the build'}: rebuild the pack, then deliver.`);
   const sessions = new Map((await indexOf(dir)).map(({ matchId, session }) => [matchId, session]));
   const matchIds = (await readFile(join(pack, 'manifest.jsonl'), 'utf8')).split(String.fromCharCode(10)).filter((row) => row.trim() !== '').map((row): string => {
     const matchId = fieldOf(JSON.parse(row), 'matchId');
@@ -113,23 +115,24 @@ export const deliver = async (options: DeliverOptions): Promise<Delivery[]> => {
   });
   const deliveredAt = (options.now ?? ((): Date => new Date()))().toISOString();
   const lot = pack.split(/[\\/]/).pop() ?? pack;
-  const rows = matchIds.map((matchId): Delivery => {
+  const held = new Set((await deliveriesOf(dir)).filter((row) => row.recipient === recipient && row.lot === lot).map((row) => row.matchId));
+  const rows = matchIds.filter((matchId) => !held.has(matchId)).map((matchId): Delivery => {
     const session = sessions.get(matchId);
     if (session === undefined) throw new PackError(`The operator index (index.jsonl beside the owners file) has no session for match id ${matchId}, so the delivery could not be recorded.`);
     return { recipient, lot, keyId, matchId, session, deliveredAt, license };
   });
-  await appendFile(join(dir, DELIVERIES_FILE), rows.map((row) => `${JSON.stringify(row)}\n`).join(''));
-  return rows;
+  if (rows.length > 0) await appendFile(join(dir, DELIVERIES_FILE), rows.map((row) => `${JSON.stringify(row)}\n`).join(''));
+  return { rows, skipped: matchIds.length - rows.length };
 };
-
-const squashed = (text: string): string => text.toLowerCase().replace(/\s+/g, ' ');
 
 /** The deliveries that hold a session, or every session whose delivered text names the person (read from the packs the index lists, which are local folders). Empty when nothing was delivered. */
 export const recipientsOf = async (owners: string, query: string): Promise<Delivery[]> => {
   const dir = dirname(resolve(owners));
   const [deliveries, index] = [await deliveriesOf(dir), await indexOf(dir)];
   const named = new Set<string>();
-  if ([...deliveries, ...index].some(({ session }) => session === query)) named.add(query);
+  // An objection may name a Codex session by its transcript id, so a query may too: the store id and its bare form are one session.
+  const known = [...deliveries, ...index].map(({ session }) => session).filter((session) => session === query || bareOf(session) === query);
+  if (known.length > 0) for (const session of known) named.add(session);
   else {
     const wanted = squashed(query.trim());
     for (const entry of index) {
@@ -137,7 +140,7 @@ export const recipientsOf = async (owners: string, query: string): Promise<Deliv
       try {
         files = await readdir(join(entry.pack, 'sessions', entry.matchId), { recursive: true });
       } catch (error) {
-        if (absent(error)) continue;
+        if (isAbsent(error)) continue;
         throw error;
       }
       for (const file of files) {
@@ -192,8 +195,8 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
       return 0;
     }
     if (pack === undefined || recipient === undefined || license === undefined || buyerKey === undefined) return usage('Missing a required option.');
-    const written = await deliver({ pack, recipient, license, buyerKey, owners, now: io.now });
-    io.print(`Recorded ${String(written.length)} sessions of ${written[0]?.lot ?? pack} as delivered to ${recipient.trim()} in ${DELIVERIES_FILE}. Nothing was sent: send the pack yourself.`);
+    const { rows, skipped } = await deliver({ pack, recipient, license, buyerKey, owners, now: io.now });
+    io.print(`Recorded ${String(rows.length)} sessions of ${rows[0]?.lot ?? pack} as delivered to ${recipient.trim()} in ${DELIVERIES_FILE} (${String(skipped)} already recorded, skipped). Nothing was sent: send the pack yourself.`);
     return 0;
   } catch (error) {
     if (!(error instanceof PackError) && !(error instanceof SyntaxError)) throw error;

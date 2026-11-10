@@ -151,7 +151,7 @@ Covenant 6.6(a): you must stop the processing unless you show compelling grounds
 
 Nothing is sold and no path hands deposits to anyone, so an objection to sale or training has nothing to exclude from yet. Record it in the register, scope included; the first sale path loads those records.
 
-Lot 1 (the first sale) has a register today. Add the objection to `objections.jsonl` beside the owners file, one JSON line (`{"name": "<the person>"}` or `{"session": "<id>"}`, `"received"` as an ISO date and time, `"scope"` as `sale`, `training`, or `all`). The next `sample-pack` build leaves out each session it names and each whose text holds the name, and `deliver` refuses a pack built before the newest objection (Art. 21(1)); both are in [`pool.md`](pool.md), "The sample pack".
+Lot 1 (the first sale) has a register today. Add the objection to `objections.jsonl` beside the owners file, one JSON line (`{"name": "<the person>"}` or `{"session": "<id>"}`, `"received"` as an ISO date and time, `"scope"` as `sale`, `training`, or `all`). The next `sample-pack` build leaves out each session it names and each whose text holds the name, and `deliver` refuses a pack built under a different `objections.jsonl` than the one beside the owners file now (Art. 21(1)); both are in [`pool.md`](pool.md), "The sample pack".
 
 Limit: **a lot already delivered.** An objection stops later processing, not a lot already sent. Run `deliver recipients` and tell each recipient (Art. 19 above) to stop using the session; that rests on the term sheet, not on anything the pool can enforce.
 
