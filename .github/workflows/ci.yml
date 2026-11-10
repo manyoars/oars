@@ -43,6 +43,32 @@ jobs:
       - run: npm ci
       - run: just check
 
+  # The CLI's declared Node floor (packages/cli/package.json engines.node) is tested, not assumed: install and build on 24 (the
+  # repo's dev tooling needs it), then run only the CLI package suite on each Node below. The floor is the lowest version that passes.
+  cli-node-floor:
+    name: cli on Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24.0.0']
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+      - run: node --version
+      - run: npm run test -w packages/cli
+
   # Known advisories in what ships (high or critical). A separate job, not part of `just check`: it asks the registry, so a newly
   # published advisory turns this job red on its own and never an unrelated pull request's `check`.
   audit:
