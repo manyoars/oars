@@ -22,7 +22,7 @@ const block = (text: string, from: string): string => {
 /** The steps, each as the text from its `- ` to the next, in file order. */
 const steps = (): string[] => {
   const text = block(workflow, 'jobs:');
-  const parts = text.split(/\n(?=      - )/).slice(1);
+  const parts = text.split(/\n(?= {6}- )/).slice(1);
   expect(parts.length).toBeGreaterThan(0);
   return parts;
 };
@@ -37,7 +37,7 @@ describe('deploy-pool workflow', () => {
   it('runs after a green ci on main, or by hand', () => {
     const on = block(workflow, 'on:');
     expect(on).toMatch(/workflow_run:\n\s+workflows: \[ci\]\n\s+types: \[completed\]\n\s+branches: \[main\]/);
-    expect(on).toMatch(/\n  workflow_dispatch:/);
+    expect(on).toMatch(/\n {2}workflow_dispatch:/);
     // ci completes on failure and cancel too: only success deploys. A dispatch has no ci run to read.
     expect(workflow).toMatch(/if: github\.event_name == 'workflow_dispatch' \|\| github\.event\.workflow_run\.conclusion == 'success'/);
   });
@@ -55,7 +55,7 @@ describe('deploy-pool workflow', () => {
   });
 
   it('reads its secrets from the pool-production environment, at the steps that need them', () => {
-    expect(workflow).toMatch(/\n    environment: pool-production\n/);
+    expect(workflow).toMatch(/\n {4}environment: pool-production\n/);
     const withSecrets = steps().filter((step) => step.includes('secrets.CLOUDFLARE_API_TOKEN'));
     // The gate (to name a missing token), the migrations, and the deploy: never the install, whose scripts would read it.
     expect(withSecrets.map((step) => /name: (.*)/.exec(step)?.[1])).toEqual([
@@ -145,7 +145,7 @@ describe('deploy-pool workflow', () => {
   it('pins every action to a commit, the same commit ci.yml pins', () => {
     const pins = (text: string): Map<string, string> => {
       const found = new Map<string, string>();
-      for (const match of text.matchAll(/uses: ([\w./-]+)@(\S+) # (v[\d.]+)/g)) found.set(match[1] ?? '', `${match[2]} # ${match[3]}`);
+      for (const match of text.matchAll(/uses: ([\w./-]+)@(\S+) # (v[\d.]+)/g)) found.set(match[1] ?? '', [match[2], match[3]].join(' # '));
       return found;
     };
     const mine = pins(workflow);
