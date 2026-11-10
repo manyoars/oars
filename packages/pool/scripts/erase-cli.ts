@@ -1,8 +1,9 @@
 // `npm run erase -w packages/pool -- <what> ...`: the operator's erasure command (docs/pool.md, "Erasure"). It changes nothing until `--confirm` is given; without it, it says what it would do.
 import { closeAccount, depositExists, eraseAccount, eraseLeakedSecret, eraseRawObject, findRawContaining, type Erased, type EraseStore } from './erase.js';
+import { exportAccount, type ExportFolder } from './export-account.js';
 import { wranglerStore, type Lister, type ObjectFiles, type Target, type Wrangler } from './erase-wrangler.js';
 
-export { nodeFiles } from './erase-files.js';
+export { nodeFiles, nodeFolder } from './erase-files.js';
 export { r2Lister } from './erase-r2-list.js';
 
 export const USAGE = [
@@ -15,6 +16,7 @@ export const USAGE = [
   '                                      and make ingest refuse it again (only its SHA-256 is kept)',
   '  account --account <id>              erase one account\'s deposit rows and raw objects, scrub its machines\' labels and allow lists, delete its repo keys, deposit hours, and contributor records, and disable its tokens, then rewrite each telemetry batch within retention that names it (needs R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY, to list the bucket); the shared totals stay',
   '  close --account <id>               close one account (covenant 6.1): revoke its tokens and machine keys and record when it closed, so sign-in, enrollment, and activation refuse it; its Deposits, raw objects, and the shared totals stay',
+  '  export --account <id> --out <folder> [--raw]   write the export of the account (the pages `oars pool export` saves, as account-export-NNNN.json) to the folder, and with --raw each raw object not erased under raw/<sha256>: it reads and changes nothing, so it takes no --confirm; run it only for a requester confirmed by a token proof',
   'Options: --confirm (without it nothing is changed), --local (the local wrangler state instead of the account\'s)',
   `Runs with the wrangler login already on this machine against D1 database "oars-pool" and R2 buckets "oars-pool-raw" and "oars-telemetry".`,
 ].join('\n');
@@ -28,6 +30,8 @@ export interface Io {
   files: ObjectFiles;
   /** Lists the telemetry bucket (`erase-r2-list.ts`); absent when the operator exported no R2 token. */
   list?: Lister;
+  /** The folder an export is written to, by path (`erase-files.ts`). */
+  folder: (path: string) => ExportFolder;
   now: () => Date;
 }
 
@@ -40,12 +44,14 @@ interface Options {
   valueStdin: boolean;
   contains: boolean;
   allAccounts: boolean;
+  raw: boolean;
+  out?: string;
   confirm: boolean;
   local: boolean;
 }
 
 const optionsOf = (argv: readonly string[]): Options | string => {
-  const options: Options = { positional: [], valueStdin: false, contains: false, allAccounts: false, confirm: false, local: false };
+  const options: Options = { positional: [], valueStdin: false, contains: false, allAccounts: false, raw: false, confirm: false, local: false };
   for (let at = 0; at < argv.length; at += 1) {
     const arg = argv[at] ?? '';
     if (arg === '--confirm') options.confirm = true;
@@ -53,10 +59,11 @@ const optionsOf = (argv: readonly string[]): Options | string => {
     else if (arg === '--value-stdin') options.valueStdin = true;
     else if (arg === '--contains') options.contains = true;
     else if (arg === '--all-accounts') options.allAccounts = true;
-    else if (arg === '--account' || arg === '--id') {
+    else if (arg === '--raw') options.raw = true;
+    else if (arg === '--account' || arg === '--id' || arg === '--out') {
       const value = argv[at + 1];
       if (value === undefined || value.startsWith('--')) return `${arg} needs a value`;
-      options[arg === '--account' ? 'account' : 'id'] = value;
+      options[arg === '--account' ? 'account' : arg === '--out' ? 'out' : 'id'] = value;
       at += 1;
     } else if (arg.startsWith('--')) return `unknown option ${arg}`;
     else options.positional.push(arg);
@@ -111,6 +118,14 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
       if (!options.confirm) return plan(io, `close account ${options.account} in ${where}: record when it closed, revoke its tokens and machine keys, and delete nothing a Deposit holds`);
       io.print(JSON.stringify({ rowsChanged: (await closeAccount(store, options.account, io.now())).rows }));
       return 0;
+    }
+    // The export reads and changes nothing, so it needs no --confirm. It is for a requester the operator has confirmed by a token proof, never a machine key (docs/pool-rights.md, "Who is asking").
+    if (what === 'export' && options.positional.length === 1 && options.account !== undefined && options.out !== undefined && options.id === undefined) {
+      const done = await exportAccount(store, io.folder(options.out), options.account, options.raw);
+      for (const failure of done.failed) io.print(`Not saved: raw object ${failure}.`);
+      io.print(JSON.stringify({ pages: done.pages, ...(options.raw ? { rawObjects: done.rawObjects, rawFailed: done.failed.length } : {}) }));
+      // A raw object the ledger lists and the bucket does not hold, or one that does not hash to its name, makes the copy incomplete: the requester is not sent it as whole.
+      return done.failed.length > 0 ? 1 : 0;
     }
     if (what === 'account' && options.positional.length === 1 && options.account !== undefined && options.id === undefined) {
       if (!options.confirm) return plan(io, `erase every deposit row and raw object of account ${options.account} in ${where}, scrub the label and allow list of its machines, delete its repo keys, deposit hours, and contributor records, and disable its tokens`);

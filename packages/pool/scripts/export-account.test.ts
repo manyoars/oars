@@ -20,6 +20,8 @@ afterAll(async () => {
 const grant = { 'oars-redaction-version': '1', 'oars-capture-version': 'cap-1', 'oars-raw-consent': 'granted', 'oars-raw-consent-version': 'v1' };
 const NOW = new Date('2026-11-10T12:00:00Z');
 
+const parsed = (bytes: Buffer | undefined): unknown => JSON.parse(bytes?.toString('utf8') ?? 'null');
+
 const sha = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 
 const store = async () => storeOf(await pool.db(), await pool.rawBucket(), await pool.bucket());
@@ -110,7 +112,7 @@ describe('erase export', () => {
 
     expect(done).toEqual({ pages: expected.length, rawObjects: 0, rawErased: 0, failed: [] });
     expect(pageFiles(out.files)).toEqual(expected.map((_, at) => `account-export-${String(at + 1).padStart(4, '0')}.json`));
-    expect(pageFiles(out.files).map((name) => JSON.parse(out.files.get(name)?.toString('utf8') ?? 'null'))).toEqual(expected);
+    expect(pageFiles(out.files).map((name) => parsed(out.files.get(name)))).toEqual(expected);
     // The same text the client writes: two-space JSON and a final newline.
     expect(out.files.get('account-export-0001.json')?.toString('utf8')).toBe(`${JSON.stringify(expected[0], null, 2)}\n`);
     // Without --raw nothing but pages is written, and nothing of the other account is in any of them.
@@ -137,7 +139,7 @@ describe('erase export', () => {
     expect(out.files.has(`raw/${gone}`)).toBe(false);
     expect(out.files.has(`raw/${other}`)).toBe(false);
     // The ledger page still names the erased object, marked.
-    const ledger = [...out.files.entries()].flatMap(([name, bytes]) => (name.startsWith('account-export-') ? [JSON.parse(bytes.toString('utf8'))] : [])).find((page) => textOf(page, 'section') === 'rawLedger');
+    const ledger = [...out.files.entries()].flatMap(([name, bytes]) => (name.startsWith('account-export-') ? [parsed(bytes)] : [])).find((page) => textOf(page, 'section') === 'rawLedger');
     const rows = fieldOf(ledger, 'rows');
     expect(rows).toHaveLength(2);
     expect(rows).toEqual(expect.arrayContaining([expect.objectContaining({ sha256: kept, tombstone: null }), expect.objectContaining({ sha256: gone, tombstone: '2026-11-10' })]));
