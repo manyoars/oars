@@ -564,7 +564,7 @@ describe('closing one account (covenant 6.1 and 7.2(a))', () => {
     const other = await member();
     expect((await pool.post('/v1/deposits', skeletonWith('0000000000008a01'), token)).status).toBe(201);
     const raw = await putRaw(token, new TextEncoder().encode('transcript held through a close'));
-    expect(raw.complete).toBe(200);
+    expect(raw.complete).toBe(201);
     const keys = await rawKeys(account);
     expect(keys.length).toBeGreaterThan(0);
     const enrolled = await pool.post('/v1/machines/enroll', BOX, token);
