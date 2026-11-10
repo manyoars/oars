@@ -3,7 +3,7 @@
 // Order, per session: the exclusion gate (A38) first, then a known owner and known harness terms, the turn floor, a repository, and no duplicate, then redaction, masking, and the secret scan, then the copy, with every injected block stripped.
 import { createHash, createHmac } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
-import { appendFile, mkdir, readdir, readFile, rename, rmdir, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readdir, readFile, rename, rmdir, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { dirname, join, resolve } from 'node:path';
@@ -63,6 +63,8 @@ export interface OwnerRule {
   folder: string;
   owner: string;
   license: string | null;
+  /** Accounts (GitHub users or organizations) this entry's repositories live under, masked as `<owner>` besides the one each session's own remote names. */
+  handles?: readonly string[];
 }
 
 /** No session id: a buyer holds only the match id, and the operator's `index.jsonl` maps one to the other. */
@@ -138,7 +140,10 @@ export const parseOwners = (text: string): OwnerRule[] => {
     if (!isText(folder) || folder === '') throw new PackError(`Owners entry ${String(at + 1)} has no folder.`);
     if (!isText(owner) || owner.trim() === '') throw new PackError(`Owners entry ${String(at + 1)} has no owner.`);
     if (license !== null && !isText(license)) throw new PackError(`Owners entry ${String(at + 1)} needs a license string or null.`);
-    return { folder, owner, license };
+    const handles = field('handles');
+    if (handles === undefined) return { folder, owner, license };
+    if (!Array.isArray(handles) || handles.some((handle: unknown) => !isText(handle) || handle.trim() === '')) throw new PackError(`Owners entry ${String(at + 1)} needs handles as a list of account names.`);
+    return { folder, owner, license, handles: handles.map(String) };
   });
 };
 
@@ -179,7 +184,22 @@ const isEmptyOrAbsent = async (folder: string): Promise<boolean> => {
 // rewritten only when it is a known id, so other words that match are left alone.
 const UUID_OR_PREFIXED = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|(?:req|call)_[0-9A-Za-z]+/gi;
 
+// `accountUuid": "<uuid>` as it reads inside a JSON string, the quotes plain or escaped.
+const QUOTED_UUID = /uuid\\*"\s*:\s*\\*"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi;
+
 const isRecord = (value: unknown): value is object => typeof value === 'object' && value !== null;
+
+/** The working folders a raw transcript names (the `cwd` of a line), read before redaction. */
+const cwdsOf = (text: string): Set<string> => {
+  const found = new Set<string>();
+  for (const row of text.split('\n')) {
+    if (!row.includes('"cwd"')) continue;
+    const entry = parsed(row);
+    const cwd: unknown = isRecord(entry) ? Reflect.get(entry, 'cwd') : undefined;
+    if (typeof cwd === 'string' && cwd !== '') found.add(cwd);
+  }
+  return found;
+};
 
 /** The keys whose value is an id: Claude Code's `uuid`, `parentUuid`, `leafUuid`, ... and `requestId`, and Codex's `call_id`, `session_id`, and `forked_from_id`. */
 const isIdKey = (key: string): boolean => /uuid$/i.test(key) || ['requestId', 'call_id', 'session_id', 'forked_from_id'].includes(key);
@@ -196,6 +216,38 @@ const lineIdsOf = (value: unknown, found: Set<string>): void => {
       else lineIdsOf(item, found);
     }
   }
+};
+
+// `url = <remote>` lines of a git config, and the account in one: `https://host/acme/app.git`, `git@host:acme/app.git`, `ssh://git@host/acme/app`.
+const CONFIG_URL = /^[ \t]*url[ \t]*=[ \t]*(\S+)[ \t]*$/gm;
+const REMOTE_ACCOUNT = /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/\s]+@)?[^/:\s]+[:/]([^/\s]+)\/[^/\s]+$/i;
+
+/** The git config a working folder belongs to: its own `.git/config`, or a linked worktree's common one (`.git` is then a file naming `<repo>/.git/worktrees/<name>`). */
+const configOf = async (cwd: string): Promise<string | undefined> => {
+  for (let folder = cwd; ; folder = dirname(folder)) {
+    const dot = join(folder, '.git');
+    try {
+      if ((await stat(dot)).isDirectory()) return join(dot, 'config');
+      const pointer = /^gitdir:\s*(.+)$/m.exec(await readFile(dot, 'utf8'))?.[1];
+      return pointer === undefined ? undefined : join(resolve(folder, pointer.trim()), '..', '..', 'config');
+    } catch {
+      if (dirname(folder) === folder) return undefined;
+    }
+  }
+};
+
+/** The accounts the remotes of the repositories a session ran in name; a folder that is gone, or has no remote, adds none. */
+const accountsOf = async (cwds: Iterable<string>): Promise<string[]> => {
+  const found = new Set<string>();
+  for (const cwd of cwds) {
+    const config = await configOf(cwd);
+    const text = config === undefined ? '' : await readFile(config, 'utf8').catch(() => '');
+    for (const [, url] of text.matchAll(CONFIG_URL)) {
+      const account = REMOTE_ACCOUNT.exec(url ?? '')?.[1];
+      if (account !== undefined && !/^\d+$/.test(account)) found.add(account);
+    }
+  }
+  return [...found];
 };
 
 const parsed = (line: string): unknown => {
@@ -219,7 +271,11 @@ const maskOf = (indexKey: string, buyerKey: string, id: string): string => {
 /** Every store session id (to its match id) and every line id the texts carry, rewritten wherever it occurs: the `sessionId` field, a path, a typed mention. Other text is left alone. */
 const maskIds = (texts: readonly string[], sessions: ReadonlyMap<string, string>, indexKey: string, buyerKey: string): string[] => {
   const lineIds = new Set<string>();
-  for (const text of texts) for (const line of text.split('\n')) lineIdsOf(parsed(line), lineIds);
+  for (const text of texts) {
+    for (const line of text.split('\n')) lineIdsOf(parsed(line), lineIds);
+    // A key ending in `uuid` inside a quoted settings file or tool output: no line carries it as a key, but its value is the same kind of id.
+    for (const [, id] of text.matchAll(QUOTED_UUID)) if (id !== undefined) lineIds.add(id);
+  }
   return texts.map((text) => text.replace(UUID_OR_PREFIXED, (id) => sessions.get(id) ?? (lineIds.has(id) ? maskOf(indexKey, buyerKey, id) : id)));
 };
 
@@ -450,8 +506,10 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     }
     const matchId = matchIdOf(options.buyerKey, serverKeyOf(indexKey, record.session));
     const files = await transcriptFilesOf(runtime, record.project, record.session);
-    const texts: string[] = [];
-    for (const file of files) texts.push(redactTranscript(await readFile(file.path, 'utf8'), domains, names, injectedKey).text);
+    const raws = await Promise.all(files.map((file) => readFile(file.path, 'utf8')));
+    // The accounts this session's repositories live under: the owners entry's, and what the remote of each working folder names.
+    const handles = [...(owner.handles ?? []), ...(await accountsOf(new Set(raws.flatMap((raw) => [...cwdsOf(raw)]))))];
+    const texts = raws.map((raw) => redactTranscript(raw, domains, names, injectedKey, { handles }).text);
     const masked = maskIds(texts, sessionIds, indexKey, options.buyerKey);
     // After redaction and masking, before the first byte is written: a session with a hit leaves no file, manifest row, or index row.
     if (masked.some((text) => secretIn(scannable(text)) !== undefined)) {

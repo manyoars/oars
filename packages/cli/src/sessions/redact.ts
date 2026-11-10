@@ -81,7 +81,7 @@ const PROMPT = /(?:<user>|\b[A-Za-z0-9._-]+)@[A-Za-z0-9-]+(?=:[~/.])/g;
 const IPV6 =
   /(?<![0-9A-Za-z:])(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,7}:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})?|::[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})(?![0-9A-Za-z:])/gi;
 const MIN_NAME = 3;
-const PLACEHOLDER = /<(?:secret|email|org-domain|host|user|env)>/g;
+const PLACEHOLDER = /<(?:secret|email|org-domain|host|user|env|owner)>/g;
 // A `.env` line whose name is lower case (`mapbox=q8z7...`): only a whole line of that shape, so `--flag=value` and `?page=2` are left alone.
 const LOWER_ENVIRONMENT = /^([ \t]*(?:export[ \t]+)?[a-z][a-z0-9_]{2,}=)(?!<)(?:(["'])[^"'\n]*\2|[^\s"']+)[ \t]*$/gm;
 
@@ -197,14 +197,28 @@ const nameRule = (names: readonly string[]): RegExp | undefined => {
   return forms.length === 0 ? undefined : new RegExp(`(?<![A-Za-z0-9<])(?:${forms.map(escapeRegExp).join('|')})(?![A-Za-z0-9>])`, 'gi');
 };
 
+/** What only a sample pack asks of the raw-copy rules (t1111). */
+export interface PackRules {
+  /** The accounts the operator's repositories live under (a GitHub user or organization): masked as `<owner>` where one stands as a path segment or after a `:` of a remote. */
+  handles?: readonly string[];
+}
+
+// A handle is a whole path segment (`/acme/app`, `\acme\app`, `git@host:acme/app.git`) or a hyphen-bounded word of an encoded project folder (`-repos-acme-app`).
+const handleRule = (handles: readonly string[]): RegExp | undefined => {
+  const usable = [...new Set(handles.filter((handle) => handle.length >= MIN_NAME))].sort((a, b) => b.length - a.length);
+  return usable.length === 0 ? undefined : new RegExp(String.raw`(?<=[\\/:-])(?:${usable.map(escapeRegExp).join('|')})(?=[\\/.-]|["'\s]|$)`, 'gi');
+};
+
 /** A whole transcript body redacted for upload, and how many values were masked (placeholders added, a count and nothing else). `names` are the local usernames to mask wherever they stand as a whole word. */
-export const redactTranscript = (body: string, domains: readonly string[] = [], names: readonly string[] = [], injectedKey: string = randomBytes(16).toString('hex')): { text: string; masked: number } => {
+export const redactTranscript = (body: string, domains: readonly string[] = [], names: readonly string[] = [], injectedKey: string = randomBytes(16).toString('hex'), pack: PackRules = {}): { text: string; masked: number } => {
   const named = nameRule(names);
+  const owner = handleRule(pack.handles ?? []);
   const known = makeRedactor(domains);
   const redactText: Redactor = (text) => {
     // The names go first: a hyphenated or spaced name must be masked whole before the path rules take its first word.
     const masked = known(rawRules(text));
-    return (named === undefined ? masked : masked.replace(named, '<user>'))
+    const mine = named === undefined ? masked : masked.replace(named, '<user>');
+    return (owner === undefined ? mine : mine.replace(owner, '<owner>'))
       .replace(URL_HOST, '$1<host>')
       .replace(INTERNAL_NAME, '<host>')
       .replace(IPV4, '<host>')

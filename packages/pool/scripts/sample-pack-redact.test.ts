@@ -57,7 +57,9 @@ const fixture = (remote = 'https://github.com/acme-dev/app.git'): Fixture => {
     stored: async () => {
       await deposit(runtime, { allow: [], redactDomains: [], now: () => Date.parse('2026-06-10T00:00:00Z') });
     },
-    setOwners: (owners) => writeFileSync(join(root, 'owners.json'), JSON.stringify(owners)),
+    setOwners: (owners) => {
+      writeFileSync(join(root, 'owners.json'), JSON.stringify(owners));
+    },
   };
 };
 
