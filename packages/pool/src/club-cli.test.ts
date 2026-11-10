@@ -105,7 +105,8 @@ describe('oars club create', () => {
     const owner = await person();
     owner.types('yes');
     expect(await owner.cli('club', 'create', 'Friday crew', '--nickname', 'skipper')).toBe(ExitCode.OK);
-    expect(owner.last()).toMatchObject({ ok: true, name: 'Friday crew', nickname: 'skipper', code: expect.stringMatching(/^[A-HJ-NP-Z2-9]{6}$/) as unknown });
+    expect(owner.last()).toMatchObject({ ok: true, name: 'Friday crew', nickname: 'skipper' });
+    expect(String(fieldOf(owner.last(), 'code'))).toMatch(/^[A-HJ-NP-Z2-9]{6}$/);
   });
 
   it('creates nothing when the person does not type yes, or is not at a terminal', async () => {
@@ -207,7 +208,9 @@ describe('the open board', () => {
     await db.prepare("UPDATE accounts SET access = 'standing' WHERE id = ?").bind(account).run();
     await db.prepare("INSERT INTO account_weeks (account, week, sessions, tool_steps, failed_steps, day_mask, harnesses) VALUES (?, ?, 1, 5, 0, 1, '[\"claude-code\"]')").bind(account, isoWeekOf(Date.now())).run();
     expect(await reader.cli('board')).toBe(ExitCode.OK);
-    expect(reader.last()).toMatchObject({ ok: true, board: 'open', members: expect.arrayContaining([expect.objectContaining({ nickname: 'Oarsman', weeksRowing: 1 }) as unknown]) as unknown });
+    expect(reader.last()).toMatchObject({ ok: true, board: 'open' });
+    const members = fieldOf(reader.last(), 'members');
+    expect(Array.isArray(members) ? members : []).toContainEqual(expect.objectContaining({ nickname: 'Oarsman', weeksRowing: 1 }));
     const text = await reader.words('board');
     expect(text.text).toContain('Oarsman');
   });

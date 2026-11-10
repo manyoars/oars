@@ -405,7 +405,8 @@ describe('the brakes on guessing a code and on making clubs', () => {
     for (let n = 0; n < 10; n += 1) expect(await join(guesser.token, `WRONG${String(n)}`, 'bow')).toMatchObject({ status: 404, json: { error: 'not_found' } });
     const braked = await pool.send('/v1/clubs/join', { method: 'POST', body: JSON.stringify({ code: 'WRONGX', nickname: 'bow', consent: (await consents()).club }) }, guesser.token, { 'content-type': 'application/json' });
     expect(braked.status).toBe(429);
-    expect(braked.json).toMatchObject({ error: 'rate_limited', retry_after: expect.any(Number) as unknown });
+    expect(braked.json).toMatchObject({ error: 'rate_limited' });
+    expect(typeof fieldOf(braked.json, 'retry_after')).toBe('number');
     const wait = Number(fieldOf(braked.json, 'retry_after'));
     expect(wait).toBeGreaterThan(HOUR / 1000 - 60);
     expect(wait).toBeLessThanOrEqual(HOUR / 1000);
@@ -440,7 +441,8 @@ describe('the brakes on guessing a code and on making clubs', () => {
     for (let n = 0; n < 5; n += 1) await createClub(maker.token, `maker${String(n)}`, `Crew ${String(n)}`);
     const sixth = await pool.post('/v1/clubs', { name: 'Crew 6', nickname: 'maker6', consent: (await consents()).club }, maker.token);
     expect(sixth.status).toBe(429);
-    expect(sixth.json).toMatchObject({ error: 'rate_limited', retry_after: expect.any(Number) as unknown });
+    expect(sixth.json).toMatchObject({ error: 'rate_limited' });
+    expect(typeof fieldOf(sixth.json, 'retry_after')).toBe('number');
     expect(Number(fieldOf(sixth.json, 'retry_after'))).toBeLessThanOrEqual(DAY / 1000);
     expect(await db.prepare('SELECT COUNT(*) AS n FROM clubs WHERE name = ?').bind('Crew 6').first('n')).toBe(0);
     await db.prepare('UPDATE club_attempts SET at = at - ? WHERE account = ?').bind(DAY + 1000, maker.account).run();

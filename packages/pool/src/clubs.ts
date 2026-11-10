@@ -43,7 +43,7 @@ const WEB_ADDRESS = /www\.|\.(?:com|net|org|io|dev|app|co|me|ly|xyz|info|biz|gg|
 const nicknameOf = (given: string | undefined): string | undefined => {
   if (given === undefined) return undefined;
   const nickname = given.normalize('NFKC');
-  const length = [...nickname].length;
+  const length = Array.from(nickname).length;
   return length >= 2 && length <= 24 && NICKNAME.test(nickname) && !WEB_ADDRESS.test(nickname) ? nickname : undefined;
 };
 

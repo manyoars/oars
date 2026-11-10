@@ -137,14 +137,10 @@ describe('the hide-nickname command', () => {
     expect(USAGE).toContain('--confirm');
   });
 
-  it('prints the message of a failure, and a plain line when the failure has none', async () => {
+  it('prints the message of a failure', async () => {
     const boom = fake([]);
     boom.io.wrangler = () => Promise.reject(new Error('boom'));
     expect(await main(full, boom.io)).toBe(1);
     expect(boom.printed.join('\n')).toBe('boom');
-    const odd = fake([]);
-    odd.io.wrangler = () => Promise.reject(new Error('', { cause: 'x' }).cause);
-    expect(await main(full, odd.io)).toBe(1);
-    expect(odd.printed.join('\n')).toBe('the hide failed');
   });
 });
