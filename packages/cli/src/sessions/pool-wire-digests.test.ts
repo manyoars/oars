@@ -88,7 +88,7 @@ describe('format 7 and the formats before it', () => {
   });
 
   it('reads a format 6 batch as before: a digests list in it is a field format 6 does not define, so it goes to the bag', () => {
-    const sent = JSON.parse(JSON.stringify(skeletonOfLines(call('e1', 'Edit', { file_path: '/w/a.ts', old_string: 'x', new_string: 'y' })))) as SessionSkeleton;
+    const sent = structuredClone(skeletonOfLines(call('e1', 'Edit', { file_path: '/w/a.ts', old_string: 'x', new_string: 'y' })));
     const parsed = parseSkeleton({ ...sent, format: 6, fieldsVersion: 12 });
     if (!parsed.ok) throw new Error(parsed.reason);
     expect(parsed.skeleton.format).toBe(6);
@@ -97,7 +97,7 @@ describe('format 7 and the formats before it', () => {
   });
 
   it.each([5, 4, 3])('puts a digests list in a batch of format %i into the bag too', (format) => {
-    const sent = JSON.parse(JSON.stringify(skeletonOfLines(call('e1', 'Edit', { file_path: '/w/a.ts', old_string: 'x', new_string: 'y' })))) as SessionSkeleton;
+    const sent = structuredClone(skeletonOfLines(call('e1', 'Edit', { file_path: '/w/a.ts', old_string: 'x', new_string: 'y' })));
     const parsed = parseSkeleton({ ...sent, format });
     if (!parsed.ok) throw new Error(parsed.reason);
     expect(toolsOf(parsed.skeleton)[0]).not.toHaveProperty('digests');
@@ -105,12 +105,12 @@ describe('format 7 and the formats before it', () => {
   });
 
   it('reads a format 6 batch that holds no digests with no bag at all', () => {
-    const sent = JSON.parse(JSON.stringify(skeletonOfLines(call('r1', 'Read', { file_path: '/w/a.ts' })))) as SessionSkeleton;
+    const sent = structuredClone(skeletonOfLines(call('r1', 'Read', { file_path: '/w/a.ts' })));
     expect(parseSkeleton({ ...sent, format: 6 })).toMatchObject({ ok: true, others: 0, extensions: [], skeleton: { format: 6 } });
   });
 
   it('reads the recommendations of a format 6 batch and a format 7 batch, and not those of format 5', () => {
-    const base = JSON.parse(JSON.stringify(skeletonOfLines(call('r1', 'Read', { file_path: '/w/a.ts' })))) as SessionSkeleton;
+    const base = structuredClone(skeletonOfLines(call('r1', 'Read', { file_path: '/w/a.ts' })));
     const withRow = { ...base, recommendations: [{ id: 'a'.repeat(16), arm: 'shown', poolVersion: 'v1', from: 0, to: 1 }] };
     for (const format of [6, 7]) expect(parseSkeleton({ ...withRow, format })).toMatchObject({ ok: true, skeleton: { recommendations: [{ arm: 'shown' }] } });
     const older = parseSkeleton({ ...withRow, format: 5 });
@@ -128,7 +128,7 @@ describe('format 7 and the formats before it', () => {
 });
 
 describe('a digest the pool refuses', () => {
-  const edited = (): SessionSkeleton => JSON.parse(JSON.stringify(skeletonOfLines(call('e1', 'Edit', { file_path: '/w/a.ts', old_string: 'x', new_string: 'y' })))) as SessionSkeleton;
+  const edited = (): SessionSkeleton => structuredClone(skeletonOfLines(call('e1', 'Edit', { file_path: '/w/a.ts', old_string: 'x', new_string: 'y' })));
   const withDigest = (digest: unknown): unknown => {
     const skeleton = edited();
     Object.assign(skeleton.transcripts[0]?.tools[0] ?? {}, { digests: [digest] });
