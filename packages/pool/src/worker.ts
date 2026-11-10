@@ -2,7 +2,7 @@
 import { parseSkeleton, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { batchCounts, batchTier } from './access.js';
 import { fetchBundle, harnessRequired } from './bundle.js';
-import { consentTexts, createClub, joinClub, leaveClub, viewClub } from './clubs.js';
+import { consentTexts, createClub, joinClub, leaveClub, viewBoard, viewClub } from './clubs.js';
 import { exportPage, exportRaw } from './export.js';
 import { countryOf, covenantAccept, covenantNotAccepted, covenantStatus, depositsClosed, hasAccepted } from './covenant.js';
 import { answer, bound, brake, notConfigured, refuse, type Env } from './http.js';
@@ -181,6 +181,7 @@ export const ROUTES: readonly Route[] = [
   { method: 'GET', path: '/v1/account/export', machine: false, handle: exportPage },
   { method: 'GET', path: '/v1/account/export/raw/:hash', machine: false, handle: (request, env, [hash]) => exportRaw(request, env, decoded(hash ?? '')) },
   // Boards (clubs.ts): account-only, so a machine key is refused. The consent route comes before `:id` so that it is not read as a club.
+  { method: 'GET', path: '/v1/board', machine: false, handle: (_request, env) => viewBoard(env) },
   { method: 'GET', path: '/v1/clubs/consent', machine: false, handle: () => consentTexts() },
   { method: 'POST', path: '/v1/clubs', machine: false, handle: createClub },
   { method: 'POST', path: '/v1/clubs/join', machine: false, handle: joinClub },

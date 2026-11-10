@@ -27,9 +27,10 @@ const consents = async (): Promise<{ club: string; open: string }> => {
   return { club: textOf(fieldOf(answered.json, 'club'), 'sha256'), open: textOf(fieldOf(answered.json, 'open'), 'sha256') };
 };
 
-const member = async (): Promise<{ token: string; account: string }> => {
+/** A signed-in account. `fresh` leaves its access unlatched (the pool's test sign-in grants `standing` otherwise), which the open board's standing rule needs. */
+const member = async (fresh = false): Promise<{ token: string; account: string }> => {
   seen += 1;
-  return pool.signIn('github', stubUser(String(seen)));
+  return pool.signIn('github', stubUser(String(seen)), { fresh });
 };
 
 const createClub = async (token: string, nickname = 'skipper', name = 'Friday crew'): Promise<{ id: string; code: string }> => {
@@ -230,14 +231,14 @@ describe('ranking', () => {
 });
 
 // Item 4, not built yet (resume there): unskip when `GET /v1/board`, the reserved `OPEN` join, and the standing rule land.
-describe.skip('the open board', () => {
+describe('the open board', () => {
   const joinOpen = async (token: string, nickname: string): Promise<{ status: number; json: unknown }> => pool.post('/v1/clubs/join', { code: 'OPEN', nickname, consent: (await consents()).open }, token);
 
   it('lists an 89-day account never, a 90-day account and a granted account always, and drops either when it leaves', async () => {
-    const young = await member();
-    const old = await member();
-    const granted = await member();
-    const nobody = await member();
+    const young = await member(true);
+    const old = await member(true);
+    const granted = await member(true);
+    const nobody = await member(true);
     await countedAgo(young.account, 89);
     await countedAgo(old.account, 90);
     await weeks(young.account, [0]);
@@ -257,11 +258,18 @@ describe.skip('the open board', () => {
   });
 
   it('is public, is not a club anyone can read through the members route, and takes its own consent text', async () => {
-    const who = await member();
+    const who = await member(true);
     expect((await pool.post('/v1/clubs/join', { code: 'OPEN', nickname: 'wrong-text', consent: (await consents()).club }, who.token)).json).toMatchObject({ error: 'consent_required' });
     expect((await joinOpen(who.token, 'right-text')).status).toBe(200);
     expect((await pool.get('/v1/clubs/open', who.token)).status).toBe(404);
     expect((await pool.get('/v1/board')).json).toMatchObject({ board: 'open' });
+  });
+
+  it('keeps listing an account whose standing flag was latched, even when its deposits later stopped counting', async () => {
+    const latched = await member();
+    await weeks(latched.account, [0]);
+    expect((await joinOpen(latched.token, 'latched-oar')).status).toBe(200);
+    expect(namesOf((await pool.get('/v1/board')).json)).toContain('latched-oar');
   });
 
   it('has no code of its own to guess', async () => {

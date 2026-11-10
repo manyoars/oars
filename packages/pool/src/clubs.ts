@@ -2,12 +2,16 @@
 // Ranked by weeks rowing (consecutive ISO weeks with a counting deposit, ending this week or last), then active days, then nickname. Sessions and strokes are shown, never ranked, and no token or cost is held in `account_weeks` to show.
 import { createHash } from 'node:crypto';
 import { answer, bodyOf, fieldOf, refuse, textField, type Env } from './http.js';
+import { STANDING_AFTER_DAYS } from './access.js';
 import { accountOf } from './identity.js';
 import { isoWeekOf } from './week.js';
 
 /** A club holds at most this many members. */
 const MEMBER_CAP = 50;
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const WEEK_MS = 7 * DAY_MS;
+/** The reserved club the public board lists: it has no code, and its members join it by the code word `OPEN`. */
+const OPEN_CLUB = 'open';
 
 /** What a person is shown before they join, and the hash the join records. A change to either text is a new hash, so the record says which text was agreed to. */
 const CLUB_TEXT = 'Members of this club will see my nickname, my weeks rowing, my active days, my sessions, and my strokes this week. They will never see my sessions, projects, prompts, or tokens. I can leave at any time and my row leaves view at once.';
@@ -52,11 +56,14 @@ const streakOf = (weeks: ReadonlySet<string>, now: number): number => {
   return run;
 };
 
+/** The open board's standing rule: a hand grant, the latched `standing` flag, or a first counting deposit at least `STANDING_AFTER_DAYS` old (read directly, so a flag not yet latched does not hide an old account). The second bind is the cutoff. */
+const STANDING_ONLY = ` AND (EXISTS (SELECT 1 FROM board_standing g WHERE g.account = m.account) OR (SELECT access FROM accounts a WHERE a.id = m.account) = 'standing' OR (SELECT MIN(counted_at) FROM deposits d WHERE d.account = m.account AND d.counted_at IS NOT NULL AND d.tier <> 'none') <= ?)`;
+
 /** A club's members as the board shows them: counted members by weeks rowing, active days, then nickname; those with no counting deposit last, "ashore", with no numbers. */
-const boardOf = async (env: Env, club: string, now: number): Promise<object[]> => {
+const boardOf = async (env: Env, club: string, now: number, standingOnly = false): Promise<object[]> => {
   const { results } = await env.DB.prepare(
-    'SELECT m.nickname AS nickname, w.week AS week, w.sessions AS sessions, w.tool_steps AS steps, w.day_mask AS mask FROM club_members m LEFT JOIN account_weeks w ON w.account = m.account AND w.sessions > 0 WHERE m.club = ?',
-  ).bind(club).all();
+    `SELECT m.nickname AS nickname, w.week AS week, w.sessions AS sessions, w.tool_steps AS steps, w.day_mask AS mask FROM club_members m LEFT JOIN account_weeks w ON w.account = m.account AND w.sessions > 0 WHERE m.club = ?${standingOnly ? STANDING_ONLY : ''}`,
+  ).bind(...(standingOnly ? [club, now - STANDING_AFTER_DAYS * DAY_MS] : [club])).all();
   const entries = new Map<string, Entry>();
   const thisWeek = isoWeekOf(now);
   for (const row of results) {
@@ -77,18 +84,18 @@ const boardOf = async (env: Env, club: string, now: number): Promise<object[]> =
 };
 
 /** The nickname and consent a create or a join carries, or the refusal naming the field. */
-const asked = (body: unknown): { nickname: string } | Response => {
+const asked = (body: unknown, expected: string): { nickname: string } | Response => {
   const nickname = textField(body, 'nickname')?.trim();
   if (nickname === undefined || !NAME.test(nickname)) return refuse(422, 'bad_nickname', 'A nickname is 1 to 24 letters, digits, spaces, dots, underscores, or hyphens, starting with a letter or digit.', 'nickname');
-  if (textField(body, 'consent') !== CLUB_SHA) return refuse(422, 'consent_required', 'Send the SHA-256 of the club consent text (GET /v1/clubs/consent) to agree to it.', 'consent');
+  if (textField(body, 'consent') !== expected) return refuse(422, 'consent_required', 'Send the SHA-256 of the consent text shown for this board (GET /v1/clubs/consent) to agree to it.', 'consent');
   return { nickname };
 };
 
-/** Seats the account: the member row and the consent record in one transaction, the row only while the club has room. Answers whether it was seated. */
-const seat = async (env: Env, club: string, account: string, nickname: string, now: number): Promise<boolean> => {
+/** Seats the account: the member row and the consent record in one transaction, the row only while the club has room (the open board has none to keep: its cap is unlimited). Answers whether it was seated. */
+const seat = async (env: Env, club: string, account: string, nickname: string, now: number, text: string, cap: number): Promise<boolean> => {
   const [seated] = await env.DB.batch([
-    env.DB.prepare('INSERT OR IGNORE INTO club_members (club, account, nickname, joined_at) SELECT ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM club_members WHERE club = ?) < ?').bind(club, account, nickname, now, club, MEMBER_CAP),
-    env.DB.prepare('INSERT INTO club_consents (account, club, text_sha256, accepted_at) SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM club_members WHERE club = ? AND account = ? AND joined_at = ? AND nickname = ?)').bind(account, club, CLUB_SHA, now, club, account, now, nickname),
+    env.DB.prepare('INSERT OR IGNORE INTO club_members (club, account, nickname, joined_at) SELECT ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM club_members WHERE club = ?) < ?').bind(club, account, nickname, now, club, cap),
+    env.DB.prepare('INSERT INTO club_consents (account, club, text_sha256, accepted_at) SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM club_members WHERE club = ? AND account = ? AND joined_at = ? AND nickname = ?)').bind(account, club, text, now, club, account, now, nickname),
   ]);
   return (seated?.meta.changes ?? 0) > 0;
 };
@@ -100,32 +107,36 @@ export const createClub = async (request: Request, env: Env): Promise<Response> 
   const body = await bodyOf(request);
   const name = textField(body, 'name')?.trim();
   if (name === undefined || !NAME.test(name)) return refuse(422, 'bad_name', 'A club name is 1 to 24 letters, digits, spaces, dots, underscores, or hyphens, starting with a letter or digit.', 'name');
-  const given = asked(body);
+  const given = asked(body, CLUB_SHA);
   if (given instanceof Response) return given;
   const id = crypto.randomUUID();
   const code = codeOf();
   const now = Date.now();
   await env.DB.prepare('INSERT INTO clubs (id, name, code_hash, created_at) VALUES (?, ?, ?, ?)').bind(id, name, hashOfCode(code), now).run();
-  await seat(env, id, account, given.nickname, now);
+  await seat(env, id, account, given.nickname, now, CLUB_SHA, MEMBER_CAP);
   return answer(201, { id, name, code });
 };
 
-/** `POST /v1/clubs/join`: the code, a nickname, and the hash of the consent text. */
+/** `POST /v1/clubs/join`: the code, a nickname, and the hash of the consent text. The code word `OPEN` joins the open board, whose consent text is its own. */
 export const joinClub = async (request: Request, env: Env): Promise<Response> => {
   const account = await signedIn(request, env);
   if (account instanceof Response) return account;
   const body = await bodyOf(request);
-  const given = asked(body);
-  if (given instanceof Response) return given;
   const code = textField(body, 'code')?.trim().toUpperCase() ?? '';
-  const found = await env.DB.prepare('SELECT id, name FROM clubs WHERE code_hash = ?').bind(hashOfCode(code)).first();
+  const open = code === 'OPEN';
+  const given = asked(body, open ? OPEN_SHA : CLUB_SHA);
+  if (given instanceof Response) return given;
+  const found = await env.DB.prepare(open ? 'SELECT id, name FROM clubs WHERE id = ?' : 'SELECT id, name FROM clubs WHERE code_hash = ?').bind(open ? OPEN_CLUB : hashOfCode(code)).first();
   if (found === null) return missing();
   const club = String(fieldOf(found, 'id'));
   if ((await env.DB.prepare('SELECT 1 AS held FROM club_members WHERE club = ? AND account = ?').bind(club, account).first()) !== null) return refuse(409, 'already_member', 'You are already in this club. Leave it first to change your nickname.');
   if ((await env.DB.prepare('SELECT 1 AS held FROM club_members WHERE club = ? AND nickname = ? COLLATE NOCASE').bind(club, given.nickname).first()) !== null) return refuse(409, 'nickname_taken', 'Another member of this club has that nickname.', 'nickname');
-  if (!(await seat(env, club, account, given.nickname, Date.now()))) return refuse(409, 'club_full', `A club holds at most ${String(MEMBER_CAP)} members.`);
+  if (!(await seat(env, club, account, given.nickname, Date.now(), open ? OPEN_SHA : CLUB_SHA, open ? Number.MAX_SAFE_INTEGER : MEMBER_CAP))) return refuse(409, 'club_full', `A club holds at most ${String(MEMBER_CAP)} members.`);
   return answer(200, { id: club, name: String(fieldOf(found, 'name')), nickname: given.nickname });
 };
+
+/** `GET /v1/board`: the open board, public. It lists a member only once the account stands (90 days past its first counting deposit) or holds a hand grant; everyone else who joined is not shown at all. */
+export const viewBoard = async (env: Env): Promise<Response> => answer(200, { board: 'open', members: await boardOf(env, OPEN_CLUB, Date.now(), true) }, { 'cache-control': 'no-store' });
 
 /** `GET /v1/clubs/:id`: the board, to its members only. A club the caller is not in answers as one that does not exist. */
 export const viewClub = async (request: Request, env: Env, id: string): Promise<Response> => {
