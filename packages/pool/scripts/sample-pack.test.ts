@@ -1277,3 +1277,15 @@ describe('an objection by name (plan S5, Art. 21(1))', () => {
     await expect(buildPack(f.runtime, options(f))).rejects.toThrow(/objections/i);
   });
 });
+
+describe('the run record names the buyer key (plan S5)', () => {
+  it('writes the first 16 hex of the key SHA-256 into pack.json, never the key', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    const record = readFileSync(join(f.out, 'pack.json'), 'utf8');
+    expect(record).toContain(`"keyId": "${createHash('sha256').update('sample').digest('hex').slice(0, 16)}"`);
+    expect(record).not.toContain('"sample"');
+  });
+});
