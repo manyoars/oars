@@ -355,10 +355,10 @@ const screenIn = (body: object): Screen | undefined => {
 };
 
 /** A person is here when input and the screen's stream are both terminals: a typed phrase counts only for a text that reached a screen. */
-const isTerminal = (deps: RunDeps): boolean => Reflect.get(runtimeOf(deps).stdin, 'isTTY') === true && runtimeOf(deps).stderr?.isTTY === true;
+export const isTerminal = (deps: RunDeps): boolean => Reflect.get(runtimeOf(deps).stdin, 'isTTY') === true && runtimeOf(deps).stderr?.isTTY === true;
 
 /** The next line a person types, or `undefined` when the input ends first. The interface is closed after it, so the terminal is released. */
-const lineFrom = async (input: NodeJS.ReadableStream): Promise<string | undefined> => {
+export const lineFrom = async (input: NodeJS.ReadableStream): Promise<string | undefined> => {
   const lines = createInterface({ input, terminal: false });
   try {
     for await (const line of lines) return line;

@@ -139,7 +139,7 @@ describe('oars club join, show, and leave', () => {
     guest.types('yes');
     expect(await guest.cli('club', 'join', club.code, '--nickname', 'bow')).toBe(ExitCode.OK);
     expect(guest.last()).toMatchObject({ ok: true, id: club.id, name: 'Friday crew', nickname: 'bow' });
-    const account = String(fieldOf(await db.prepare("SELECT account FROM club_members WHERE club = ? AND nickname = 'skipper'").first(), 'account'));
+    const account = String(fieldOf(await db.prepare("SELECT account FROM club_members WHERE club = ? AND nickname = 'skipper'").bind(club.id).first(), 'account'));
     for (const ago of [0, 1]) await db.prepare("INSERT INTO account_weeks (account, week, sessions, tool_steps, failed_steps, day_mask, harnesses) VALUES (?, ?, 2, 10, 0, 3, '[\"claude-code\"]')").bind(account, isoWeekOf(Date.now() - ago * WEEK)).run();
     expect(await guest.cli('club', 'show', club.id)).toBe(ExitCode.OK);
     expect(guest.last()).toMatchObject({ ok: true, name: 'Friday crew', members: [{ place: 1, nickname: 'skipper', weeksRowing: 2, activeDays: 4, sessions: 4, strokesThisWeek: 10 }, { place: 2, nickname: 'bow', ashore: true }] });
@@ -164,7 +164,10 @@ describe('oars club join, show, and leave', () => {
     guest.types('yes');
     expect(await guest.cli('club', 'join', 'ZZZZZZ', '--nickname', 'bow')).toBe(ExitCode.INVALID);
     expect(problemOf(guest.last()).code).toBe('not_found');
-    for (let n = 0; n < 49; n += 1) await db.prepare('INSERT INTO club_members (club, account, nickname, joined_at) VALUES (?, ?, ?, ?)').bind(club.id, `filler-${String(n)}-${String(seen)}`, `f${String(n)}`, Date.now()).run();
+    for (let n = 0; n < 49; n += 1) {
+      await db.prepare('INSERT INTO accounts (id) VALUES (?)').bind(`filler-${String(n)}-${String(seen)}`).run();
+      await db.prepare('INSERT INTO club_members (club, account, nickname, joined_at) VALUES (?, ?, ?, ?)').bind(club.id, `filler-${String(n)}-${String(seen)}`, `f${String(n)}`, Date.now()).run();
+    }
     guest.types('yes');
     expect(await guest.cli('club', 'join', club.code, '--nickname', 'bow')).toBe(ExitCode.CONFLICT);
     expect(problemOf(guest.last())).toMatchObject({ code: 'club_full' });
