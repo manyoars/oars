@@ -466,7 +466,7 @@ const hasImage = (content: unknown): boolean => Array.isArray(content) && conten
 
 // The tags a local command (a slash command the harness ran itself) leaves as user lines. A model's answer to a command makes it a prompt, and that case never reaches
 // the run: a tag listed here that is still on a line there was not answered.
-const LOCAL_COMMAND_TAGS: ReadonlySet<string> = new Set(['command-name', 'command-message', 'local-command-stdout', 'local-command-stderr', 'local-command-caveat']);
+export const LOCAL_COMMAND_TAGS: ReadonlySet<string> = new Set(['command-name', 'command-message', 'local-command-stdout', 'local-command-stderr', 'local-command-caveat']);
 
 const firstTextBlock = (content: unknown): string => {
   if (typeof content === 'string') return content;

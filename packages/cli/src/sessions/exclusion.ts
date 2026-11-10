@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import type { Outcome } from '../cli.js';
 import { CliError, ExitCode } from '../errors.js';
-import { loadStore, paths, type SessionsRuntime } from './store.js';
+import { loadStore, paths, sourceRoots, sourcesOf, type SessionsRuntime } from './store.js';
 
 export interface ExclusionPaths {
   /** One term per line, matched without regard to case. */
@@ -167,7 +167,48 @@ interface SessionFiles {
   unreadable: boolean;
 }
 
-/** Both the harness's folder and oars' raw archive, because either can be the only copy left. */
+/**
+ * Where each session of a non-Claude source keeps its file, by the store's session id (`<source>-<id>`), read once per runtime and source: opening a source's store walks all of it.
+ * Only a transcript file counts: a source that keeps its sessions in a database names the database for every session, and that is no text the gate can read.
+ */
+const sourceFileCache = new WeakMap<SessionsRuntime, Map<string, Promise<ReadonlyMap<string, string>>>>();
+
+const sourceFileMap = (runtime: SessionsRuntime, name: string, open: () => Promise<ReadonlyMap<string, string>>): Promise<ReadonlyMap<string, string>> => {
+  const known = sourceFileCache.get(runtime) ?? new Map<string, Promise<ReadonlyMap<string, string>>>();
+  sourceFileCache.set(runtime, known);
+  const found = known.get(name) ?? open();
+  known.set(name, found);
+  return found;
+};
+
+/** The harness's own file for a session of a source the runtime reads (a Codex rollout): the only copy there is, since oars archives nothing for a source. */
+const sourceFilesOf = async (runtime: SessionsRuntime, session: string, found: TranscriptFile[]): Promise<boolean> => {
+  const roots = sourceRoots(runtime);
+  const source = sourcesOf(runtime).find((one) => roots.has(one.name) && session.startsWith(`${one.name}-`));
+  const root = source === undefined ? undefined : roots.get(source.name);
+  if (source === undefined || root === undefined) return false;
+  try {
+    const files = await sourceFileMap(runtime, source.name, async () => {
+      const store = await source.open(root);
+      const byId = new Map<string, string>();
+      if (store === undefined) return byId;
+      try {
+        for (const one of store.sessions) byId.set(`${source.name}-${one.id}`, store.where(one));
+      } finally {
+        store.close();
+      }
+      return byId;
+    });
+    const path = files.get(session);
+    // A hit in it is counted with the harness's folders: it is the harness's own file, as a Claude Code transcript is.
+    if (path !== undefined && path.endsWith('.jsonl') && (await isFile(path))) found.push({ path, key: `${session}.jsonl`, main: true, source: 'projects' });
+    return false;
+  } catch {
+    return true;
+  }
+};
+
+/** Both the harness's folder and oars' raw archive, because either can be the only copy left; a source's session also has its own file. */
 const filesOf = async (runtime: SessionsRuntime, project: string, session: string): Promise<SessionFiles> => {
   const files: TranscriptFile[] = [];
   const raw = paths(runtime.storeDir).raw;
@@ -176,7 +217,8 @@ const filesOf = async (runtime: SessionsRuntime, project: string, session: strin
   for (const root of [runtime.projectsRoot, runtime.storeDir, raw]) if (await badLink(root, 'directory')) unreadable = true;
   const first = await filesIn(runtime.projectsRoot, 'projects', project, session, files);
   const second = await filesIn(raw, 'raw', project, session, files);
-  return { files, unreadable: unreadable || first || second };
+  const third = await sourceFilesOf(runtime, session, files);
+  return { files, unreadable: unreadable || first || second || third };
 };
 
 /** The transcript files of one session, the main one first, one per path under the project folder (the harness's copy before oars' raw archive's): what a raw copy is built from, after the gate has cleared them. */

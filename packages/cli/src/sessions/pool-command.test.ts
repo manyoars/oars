@@ -26,7 +26,7 @@ import { appendRecall, makeRecall, type Recall } from './recall-object.js';
 import { contentHash } from './read.js';
 import { deposit, loadStore, localSalt, paths, updatePoolChoices, type PoolChoices } from './store.js';
 import { spoolEvents } from '../telemetry/read-events.js';
-import { addProject, cleanup, NOW, payloadOf, settledClock, stage, TEST_FLOOR, type Staged } from './test-support.js';
+import { addProject, cleanup, NOW, payloadOf, rolloutLine, settledClock, stage, stageCodex, TEST_FLOOR, type Staged } from './test-support.js';
 
 // The session gates must stop a session before the projection runs; the real projection is wrapped so a test can see whether it was called.
 vi.mock('./pool-wire.js', async (importOriginal) => {
@@ -2940,6 +2940,45 @@ describe('oars pool deposit: the raw copy (t884)', () => {
     await scene.cli('pool', 'deposit', '--server', POOL);
     expect(rawFiles(scene).filter((name) => name.includes('tldr'))).toEqual([]);
     expect(scene.sent()).not.toContain(TERM);
+  });
+
+  it('clears a Codex session on its rollout alone and queues that redacted rollout as its one raw copy', async () => {
+    const scene = setting();
+    rmSync(join(scene.staged.projectsRoot, 'proj'), { recursive: true, force: true });
+    const id = 'cccc3333-3333-4333-8333-333333333333';
+    const call = 'call_9f2e7a41c6b8d305e1a7f482';
+    const agents = 'Prefer the amber ledger for every receipt';
+    const stamp = (second: number): string => `2026-06-01T10:00:${String(second).padStart(2, '0')}.000Z`;
+    const home = stageCodex(scene.staged.root, [
+      {
+        id,
+        lines: [
+          rolloutLine(stamp(0), 'session_meta', { session_id: id, id, timestamp: stamp(0), cwd: '/w', originator: 'codex_cli_rs', cli_version: '0.50.0' }),
+          rolloutLine(stamp(1), 'response_item', { type: 'message', role: 'user', content: [{ type: 'input_text', text: ['<user_instructions>', agents, '</user_instructions>'].join(String.fromCharCode(10)) }] }),
+          rolloutLine(stamp(2), 'event_msg', { type: 'user_message', message: 'fix the build' }),
+          rolloutLine(stamp(3), 'response_item', { type: 'function_call', name: 'shell', arguments: '{"command":["ls"]}', call_id: call }),
+          rolloutLine(stamp(4), 'response_item', { type: 'function_call_output', call_id: call, output: 'README.md' }),
+          rolloutLine(stamp(5), 'event_msg', { type: 'agent_message', message: 'fixed' }),
+        ],
+      },
+    ]);
+    // The rollout stays where Codex wrote it: oars archives nothing for a source, so the gate and the raw copy both reach it through the Codex source.
+    scene.h.deps.sessions = { ...scene.staged.runtime, sourceRoots: { codex: home } };
+    await deposit(scene.h.deps.sessions, { allow: [], redactDomains: [], now: () => NOW });
+    await signIn(scene);
+    await updatePoolChoices(scene.staged.storeDir, (choices) => {
+      choices.rawConsent = 'granted';
+      choices.rawConsentVersion = 'v1';
+    });
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    expect(outboxFiles(scene)).toHaveLength(1);
+    const copies = rawFiles(scene);
+    expect(copies).toHaveLength(1);
+    const body = readFileSync(join(scene.staged.storeDir, 'pool-outbox', copies[0] ?? ''), 'utf8');
+    expect(body).toContain('fix the build');
+    expect(body).not.toContain(agents);
+    expect(body).toMatch(/\[injected user-instructions [0-9a-f]+\]/);
+    expect(scene.sent()).not.toContain(agents);
   });
 
   it('names the real command for the raw prompt in the deposit summary until it is answered yes', async () => {

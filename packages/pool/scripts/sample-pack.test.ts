@@ -2,10 +2,21 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { deposit, loadStore, paths, type SessionsRuntime } from '../../cli/src/sessions/store.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type * as Exclusion from '../../cli/src/sessions/exclusion.js';
+import { deposit, paths, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { rolloutLine, stageCodex } from '../../cli/src/sessions/test-support.js';
-import { buildPack, main, matchIdOf, ownerOf, parseOwners, secretIn, serverKeyOf, USAGE, type ManifestRow, type PackOptions } from './sample-pack.js';
+import { buildPack, HARNESS_TERMS, main, matchIdOf, ownerOf, parseOwners, secretIn, serverKeyOf, USAGE, type ManifestRow, type PackCounts, type PackOptions } from './sample-pack.js';
+
+// Every session the exclusion check was asked about, in call order: the frame-first rule is proved by who was never asked.
+const gated = vi.hoisted((): string[] => []);
+vi.mock('../../cli/src/sessions/exclusion.js', async (original) => {
+  const real = await original<typeof Exclusion>();
+  return { ...real, checkSession: async (...args: Parameters<typeof real.checkSession>): Promise<Awaited<ReturnType<typeof real.checkSession>>> => {
+    gated.push(args[3]);
+    return real.checkSession(...args);
+  } };
+});
 
 const TERM = 'zorblax';
 const CLAUDE_MD_LINE = 'Always fold the green napkins before lunch';
@@ -185,7 +196,10 @@ describe('the manifest', () => {
       [S(2), 'Switchyard Software Company', null],
     ]);
     expect(rows[0]).toMatchObject({ harness: 'claude-code', harnessVersions: ['2.1.300'], permittedUses: ['evaluation', 'benchmarking', 'task-design'], training: 'not-offered', transcripts: 1 });
-    expect(rows[0]?.harnessTerms.map((terms) => terms.name)).toEqual(['Anthropic Consumer Terms', 'Anthropic Usage Policy']);
+    expect(rows[0]?.harnessTerms).toEqual([
+      { name: 'Anthropic Consumer Terms', version: 'effective 2025-10-08' },
+      { name: 'Anthropic Usage Policy', version: 'effective 2026-11-12' },
+    ]);
     expect(rows[0]?.matchId).toMatch(/^[0-9a-f]{64}$/);
     expect(readdirSync(join(f.out, 'sessions'))).toEqual(expect.arrayContaining(rows.map((row) => row.matchId)));
   });
@@ -294,10 +308,21 @@ describe('what a buyer can join on', () => {
     // Another session the text names is masked to that session's own match id, so the buyer sees the link but not the id.
     expect(JSON.stringify(lines[2])).toContain(index.find((row) => row.session === S(2))?.matchId ?? 'none');
   });
+
+  it('masks a session id or a line uuid written after a word and an underscore (session_<uuid>, x_<uuid>), whole', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, `see /tmp/session_${S(1)}.log and x_${uuidOf(S(1), 'b', 2)}`), assistant(S(1), 1, 'done'), user(S(1), 2, 'again')]);
+    await stored(f);
+    expect((await buildPack(f.runtime, options(f))).emitted).toBe(1);
+    const text = packText(f.out);
+    for (const id of [S(1), uuidOf(S(1), 'b', 2)]) expect(text).not.toContain(id);
+    // Not even the first group of either: a prefix of the id is as good a join key.
+    for (const id of [S(1), uuidOf(S(1), 'b', 2)]) expect(text).not.toContain(id.slice(0, 8));
+  });
 });
 
 describe('the acceptance rule (plan S1)', () => {
-  const turns = (session: string, count: number): string[] => Array.from({ length: count }, (_, n) => [user(session, 2 * n + 1, `ask ${String(n)}`), assistant(session, 2 * n + 1, `answer ${String(n)}`)]).flat();
+  const turns = (session: string, count: number, label = 'ask'): string[] => Array.from({ length: count }, (_, n) => [user(session, 2 * n + 1, `${label} ${String(n)}`), assistant(session, 2 * n + 1, `answer ${String(n)}`)]).flat();
 
   it('keeps a subagent transcript out of the frame: only the main session is drawn', async () => {
     const f = fixture();
@@ -351,12 +376,89 @@ describe('the acceptance rule (plan S1)', () => {
     const replay = earlier.map((text) => line({ ...replayable(text), sessionId: S(2) }));
     f.write('-work-oars', S(1), earlier);
     f.write('-work-oars', S(2), [...replay, ...turns(S(2), 2)]);
-    f.write('-work-oars', S(3), turns(S(3), 2));
+    f.write('-work-oars', S(3), turns(S(3), 2, 'a different ask'));
     await stored(f);
     for (const seed of ['1', '2', '3', '4']) {
       const out = join(f.root, `pack-${seed}`);
       expect(await buildPack(f.runtime, options(f, { seed, out }))).toMatchObject({ duplicate: 1, emitted: 2 });
       expect(sessionsOf(f, out).sort()).toEqual([S(2), S(3)]);
+    }
+  });
+
+  it('keys a duplicate on the text of the first prompt alone: a resumed copy that differs only in timestamp, uuid, parentUuid, and sessionId still loses to the longer session', async () => {
+    const f = fixture();
+    const earlier = turns(S(1), 2);
+    const replay = earlier.map((text, n) => line({ ...replayable(text), sessionId: S(2), uuid: uuidOf(S(2), 'b', n), parentUuid: n === 0 ? null : uuidOf(S(2), 'a', n), timestamp: at(30 + n) }));
+    f.write('-work-oars', S(1), earlier);
+    f.write('-work-oars', S(2), [...replay, ...turns(S(2), 2)]);
+    await stored(f);
+    for (const seed of ['1', '2', '3', '4']) {
+      const out = join(f.root, `pack-${seed}`);
+      expect(await buildPack(f.runtime, options(f, { seed, out }))).toMatchObject({ duplicate: 1, emitted: 1 });
+      expect(sessionsOf(f, out)).toEqual([S(2)]);
+    }
+  });
+
+  it('does not key on what the harness wrote: two unrelated sessions that open with the same caveat, /clear, and tool-result lines are both emitted', async () => {
+    const f = fixture();
+    // A slash command's opener: an `isMeta` caveat, the command and its output, and a tool result. All of it is the same text in every session that starts this way.
+    const opener = (session: string): string[] => [
+      line({ ...replayable(user(session, 20, '<local-command-caveat>Caveat: the messages below were generated by the user while running local commands.</local-command-caveat>')), isMeta: true }),
+      user(session, 21, '<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>'),
+      user(session, 22, '<local-command-stdout></local-command-stdout>'),
+      line({ ...replayable(user(session, 23, 'unused')), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_01', content: 'the same output' }] } }),
+    ];
+    f.write('-work-oars', S(1), [...opener(S(1)), ...turns(S(1), 2, 'fix the parser')]);
+    f.write('-work-oars', S(2), [...opener(S(2)), ...turns(S(2), 2, 'write the docs')]);
+    await stored(f);
+    for (const seed of ['1', '2']) {
+      const out = join(f.root, `pack-${seed}`);
+      expect(await buildPack(f.runtime, options(f, { seed, out }))).toMatchObject({ duplicate: 0, emitted: 2 });
+    }
+  });
+
+  it('keys on the text a person sends beside a tool result: two sessions that differ only there are both emitted', async () => {
+    const f = fixture();
+    const beside = (session: string, typed: string): string =>
+      line({ ...replayable(user(session, 20, 'unused')), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_01', content: 'the same output' }, { type: 'text', text: typed }] } });
+    f.write('-work-oars', S(1), [beside(S(1), 'use the first approach'), ...turns(S(1), 2, 'fix the parser')]);
+    f.write('-work-oars', S(2), [beside(S(2), 'use the second approach'), ...turns(S(2), 2, 'fix the parser')]);
+    await stored(f);
+    expect(await buildPack(f.runtime, options(f, { seed: '1', out: join(f.root, 'pack-beside') }))).toMatchObject({ duplicate: 0, emitted: 2 });
+  });
+
+  it('keeps two sessions that open with the same short text but go on differently, and two that open the same in different repositories', async () => {
+    const f = fixture();
+    const other = join(f.root, 'work', 'other');
+    mkdirSync(join(other, '.git'), { recursive: true });
+    writeFileSync(join(other, '.git', 'config'), `[remote "origin"]\n\turl = https://example.com/acme/other.git\n`);
+    const opening = (session: string, second: string, cwd = repoCwd): string[] => [user(session, 1, 'continue', cwd), assistant(session, 1, 'ok'), user(session, 3, second, cwd), assistant(session, 3, 'ok')];
+    f.write('-work-oars', S(1), opening(S(1), 'now the parser'));
+    f.write('-work-oars', S(2), opening(S(2), 'now the docs'));
+    f.write('-work-oars', S(3), [user(S(3), 1, 'go'), assistant(S(3), 1, 'ok')]);
+    f.write('-work-oars', S(4), [user(S(4), 1, 'go', other), assistant(S(4), 1, 'ok')]);
+    await stored(f);
+    expect(await buildPack(f.runtime, options(f))).toMatchObject({ duplicate: 0, emitted: 4 });
+  });
+
+  it('gates only the sessions the draw reaches and the members of a group that shares a first prompt: an undrawn singleton is never asked', async () => {
+    const f = fixture();
+    const earlier = turns(S(1), 2);
+    f.write('-work-oars', S(1), earlier);
+    f.write('-work-oars', S(2), [...earlier.map((text) => line({ ...replayable(text), sessionId: S(2) })), ...turns(S(2), 2)]);
+    f.write('-work-oars', S(3), turns(S(3), 2, 'third'));
+    f.write('-work-oars', S(4), turns(S(4), 2, 'fourth'));
+    await stored(f);
+    for (const seed of ['1', '2', '3', '4', '5', '6']) {
+      gated.length = 0;
+      const out = join(f.root, `pack-${seed}`);
+      const counts = await buildPack(f.runtime, options(f, { seed, out, size: 1 }));
+      const singles = new Set(gated.filter((session) => session === S(3) || session === S(4)));
+      // The pair is always asked about (the loser is chosen among it); a single only when the draw reached it. With size 1 and no other rule firing, a singleton the draw reached is emitted, so the singletons gated are exactly the singletons emitted.
+      expect(gated).toEqual(expect.arrayContaining([S(1), S(2)]));
+      expect([...singles].sort()).toEqual(sessionsOf(f, out).filter((session) => session === S(3) || session === S(4)));
+      expect(counts.emitted).toBe(1);
+      expect(gated).toHaveLength(new Set(gated).size);
     }
   });
 
@@ -446,6 +548,41 @@ describe('the secret scan', () => {
     expect(packText(f.out)).toContain(shot);
   });
 
+  it('leaves the image copy of a Read out of the scan too: toolUseResult.file.base64, whose object type is the media type', async () => {
+    const f = fixture();
+    const shot = 'AI' + 'za' + 'A'.repeat(30);
+    const data = `iVBORw0KGgo${shot}AAAA`;
+    // The harness records a Read of an image twice: in the tool_result block, and under `toolUseResult.file`, where the sibling `type` is the media type.
+    const read = line({
+      type: 'user',
+      uuid: uuidOf(S(1), 'b', 5),
+      parentUuid: null,
+      isSidechain: false,
+      timestamp: at(5),
+      version: '2.1.300',
+      sessionId: S(1),
+      cwd: repoCwd,
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_01abc', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data } }] }] },
+      toolUseResult: { type: 'image', file: { base64: data, type: 'image/png', originalSize: 1024, dimensions: { originalWidth: 800, originalHeight: 600, displayWidth: 800, displayHeight: 600 } } },
+    });
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done'), read]);
+    await stored(f);
+    expect(await buildPack(f.runtime, options(f))).toMatchObject({ secret: 0, emitted: 1 });
+  });
+
+  it('blanks a base64 field only on an image: the same field on a non-image object is scanned as written', async () => {
+    const f = fixture();
+    const planted = 'my' + 'AK' + 'IA' + 'IOSFODNN7EXAMPLE';
+    // A tool's own `base64` input (a bare field, then one beside a non-image media type) is text a person could have typed, so a key shape in it still drops the session.
+    const encode = (session: string, n: number, extra: object): string => line({ type: 'user', uuid: uuidOf(session, 'b', n), parentUuid: null, isSidechain: false, timestamp: at(n), version: '2.1.300', sessionId: session, cwd: repoCwd, message: { role: 'user', content: 'encode this' }, ...extra });
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done'), encode(S(1), 5, { toolUseResult: { base64: planted } })]);
+    f.write('-work-oars', S(2), [user(S(2), 1, 'add a spec'), assistant(S(2), 1, 'done'), encode(S(2), 5, { toolUseResult: { file: { base64: planted, type: 'text/plain' } } })]);
+    f.write('-work-oars', S(3), [user(S(3), 1, 'add a doc'), assistant(S(3), 1, 'done'), encode(S(3), 5, { toolUseResult: { file: { base64: planted, type: 'image/png' } } })]);
+    await stored(f);
+    expect(await buildPack(f.runtime, options(f))).toMatchObject({ secret: 2, emitted: 1 });
+    expect(sessionsOf(f)).toEqual([S(3)]);
+  });
+
   it('drops a session whose redacted text still holds a key, writes nothing of it, and counts it', async () => {
     const f = fixture();
     // Stuck to a word, the key is outside the redactor's word-boundary rule: it comes through redaction, and the scan is what stops it.
@@ -463,30 +600,139 @@ describe('the secret scan', () => {
   });
 });
 
+// A Codex session as the harness writes it: the rollout is the only copy (oars archives nothing for a source), so it reaches the pack only through the store's own record of where it lives.
+const CODEX_ID = 'cccc3333-3333-4333-8333-333333333333';
+// Lowercase hex: a mixed-case call id is read as a secret and redacted before the masking sees it.
+const CODEX_CALL = 'call_9f2e7a41c6b8d305e1a7f482';
+const CODEX_AGENTS_LINE = 'Prefer the amber ledger for every receipt';
+const codexTime = (second: number): string => `2026-06-01T10:00:${String(second).padStart(2, '0')}.000Z`;
+
+const joined = (...rows: string[]): string => rows.join(String.fromCharCode(10));
+
+const codexRollout = (call = CODEX_CALL): object[] => {
+  const cwd = repoCwd;
+  const message = (role: string, kind: string, text: string, second: number): object => rolloutLine(codexTime(second), 'response_item', { type: 'message', role, content: [{ type: kind, text }] });
+  return [
+    rolloutLine(codexTime(0), 'session_meta', { session_id: CODEX_ID, id: CODEX_ID, timestamp: codexTime(0), cwd, originator: 'codex_cli_rs', cli_version: '0.50.0', instructions: `${CODEX_AGENTS_LINE} (base)` }),
+    rolloutLine(codexTime(1), 'turn_context', { model: 'gpt-5-codex', cwd }),
+    message('user', 'input_text', joined('<user_instructions>', CODEX_AGENTS_LINE, '</user_instructions>'), 2),
+    message('user', 'input_text', joined('<environment_context>', `  <cwd>${cwd}</cwd>`, '  <shell>bash</shell>', '</environment_context>'), 3),
+    message('user', 'input_text', joined(`# AGENTS.md instructions for ${cwd}`, '', CODEX_AGENTS_LINE), 4),
+    rolloutLine(codexTime(5), 'event_msg', { type: 'user_message', message: 'fix the build' }),
+    rolloutLine(codexTime(6), 'response_item', { type: 'function_call', name: 'shell', arguments: '{"command":["ls"]}', call_id: call }),
+    rolloutLine(codexTime(7), 'response_item', { type: 'function_call_output', call_id: call, output: joined('Exit code: 0', 'Output:', 'README.md') }),
+    rolloutLine(codexTime(8), 'event_msg', { type: 'agent_message', message: 'fixed' }),
+  ];
+};
+
+/** Deposits the rollout into the fixture's store and returns the runtime that also reads Codex's store: the rollout stays where Codex wrote it. */
+const withCodex = async (f: Fixture, rollout: readonly object[], more: readonly { id: string; lines: readonly object[] }[] = []): Promise<SessionsRuntime> => {
+  const home = stageCodex(f.root, [{ id: CODEX_ID, lines: rollout }, ...more]);
+  // The fixture runtime names no sources, which reads none; this one reads Codex's.
+  const { storeDir, projectsRoot, stdin, stdout } = f.runtime;
+  const runtime: SessionsRuntime = { storeDir, projectsRoot, stdin, stdout, sourceRoots: { codex: home } };
+  await deposit(runtime, { allow: ['codex'], redactDomains: [], now: () => Date.parse('2026-06-10T00:00:00Z') });
+  return runtime;
+};
+
+const ownersAll = (f: Fixture): string => {
+  const owners = join(f.root, 'owners-all.json');
+  writeFileSync(owners, JSON.stringify([{ folder: '*', owner: 'Many Oars Co.', license: null }]));
+  return owners;
+};
+
 describe('the harness terms gate', () => {
-  it('leaves out a session from a harness with no terms row, after the exclusion gate has cleared it', async () => {
+  it('leaves out a session from a harness with no terms row, after the exclusion gate has cleared its rollout', async () => {
     const f = fixture();
-    const id = 'cccc3333-3333-4333-8333-333333333333';
-    const T = (second: number): string => `2026-06-01T10:00:${String(second).padStart(2, '0')}.000Z`;
-    const rollout = [
-      rolloutLine(T(0), 'session_meta', { session_id: id, id, timestamp: T(0), cwd: join(f.root, 'not-a-repo'), originator: 'codex_cli_rs', cli_version: '0.50.0' }),
-      rolloutLine(T(1), 'turn_context', { model: 'gpt-5-codex', cwd: join(f.root, 'not-a-repo') }),
-      rolloutLine(T(2), 'event_msg', { type: 'user_message', message: 'fix the build' }),
-      rolloutLine(T(3), 'event_msg', { type: 'agent_message', message: 'fixed' }),
-    ];
-    const home = stageCodex(f.root, [{ id, lines: rollout }]);
-    // The fixture runtime names no sources, which reads none; this one reads Codex's.
-    const { storeDir, projectsRoot, stdin, stdout } = f.runtime;
-    await deposit({ storeDir, projectsRoot, stdin, stdout, sourceRoots: { codex: home } }, { allow: ['codex'], redactDomains: [], now: () => Date.parse('2026-06-10T00:00:00Z') });
-    const record = (await loadStore(f.runtime.storeDir)).sessions.find((session) => session.harness === 'codex');
-    if (record === undefined) throw new Error('the rollout did not reach the store');
-    // A raw copy where the gate looks, so the exclusion gate clears the session and the harness gate is what decides.
-    f.write(record.project, record.session, rollout.map((entry) => JSON.stringify(entry)));
-    const owners = join(f.root, 'owners-all.json');
-    writeFileSync(owners, JSON.stringify([{ folder: '*', owner: 'Many Oars Co.', license: null }]));
-    expect(await buildPack(f.runtime, options(f, { owners }))).toMatchObject({ scanned: 1, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 1, emitted: 0 });
+    const runtime = await withCodex(f, codexRollout());
+    // Codex has a row now; the gate is proved by taking it away for the one run.
+    const row = HARNESS_TERMS.codex;
+    Reflect.deleteProperty(HARNESS_TERMS, 'codex');
+    try {
+      expect(await buildPack(runtime, options(f, { owners: ownersAll(f) }))).toMatchObject({ scanned: 1, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 1, emitted: 0 });
+    } finally {
+      Reflect.set(HARNESS_TERMS, 'codex', row);
+    }
     expect(existsSync(join(f.out, 'sessions'))).toBe(false);
     expect(manifest(f.out)).toEqual([]);
+  });
+});
+
+describe('a Codex session (plan S2)', () => {
+  const packed = async (f: Fixture, rollout: readonly object[] = codexRollout()): Promise<PackCounts> => buildPack(await withCodex(f, rollout), options(f, { owners: ownersAll(f) }));
+
+  it('clears the exclusion gate on the rollout alone and is packed', async () => {
+    const f = fixture();
+    expect(await packed(f)).toMatchObject({ scanned: 1, excluded: { term: 0, noRaw: 0 }, noHarnessTerms: 0, emitted: 1 });
+    expect(manifest(f.out)).toMatchObject([
+      {
+        harness: 'codex',
+        training: 'not-offered',
+        harnessTerms: [
+          { name: 'OpenAI Terms of Use', version: 'effective 2026-01-01' },
+          { name: 'OpenAI Usage Policies', version: 'effective 2026-11-20' },
+        ],
+      },
+    ]);
+  });
+
+  it('keeps no <user_instructions>, <environment_context>, or AGENTS.md text, only the keyed marker that stands for each', async () => {
+    const f = fixture();
+    expect(await packed(f)).toMatchObject({ emitted: 1 });
+    const text = packText(f.out);
+    for (const gone of [CODEX_AGENTS_LINE, '<shell>bash</shell>', '# AGENTS.md instructions']) expect(text).not.toContain(gone);
+    expect(text).toMatch(/\[injected user-instructions [0-9a-f]+\]/);
+    expect(text).toMatch(/\[injected environment-context [0-9a-f]+\]/);
+    expect(text).toMatch(/\[injected agents-md [0-9a-f]+\]/);
+    // What the person typed and what the model answered stay.
+    expect(text).toContain('fix the build');
+    expect(text).toContain('fixed');
+  });
+
+  it('masks the session id and every call id, the same way wherever each occurs, and writes neither raw', async () => {
+    const f = fixture();
+    expect(await packed(f)).toMatchObject({ emitted: 1 });
+    const [row] = manifest(f.out);
+    const text = packText(f.out);
+    expect(text).not.toContain(CODEX_ID);
+    expect(text).not.toContain(CODEX_CALL);
+    expect(text).not.toContain(CODEX_CALL.slice(5));
+    const records = text.split(String.fromCharCode(10)).filter((entry) => entry !== '').map((entry): unknown => JSON.parse(entry));
+    const callIds = records.flatMap((record) => {
+      const payload: unknown = typeof record === 'object' && record !== null ? Reflect.get(record, 'payload') : undefined;
+      const id: unknown = typeof payload === 'object' && payload !== null ? Reflect.get(payload, 'call_id') : undefined;
+      return typeof id === 'string' ? [id] : [];
+    });
+    // The call and its output still name one call, and the call id keeps the shape of the id it stands for.
+    expect(callIds).toHaveLength(2);
+    expect(callIds[0]).toBe(callIds[1]);
+    expect(callIds[0]).toMatch(/^call_[0-9a-f]{24}$/);
+    // The rollout's own id is the session's match id, as a Claude Code line's sessionId is.
+    expect(text).toContain(row?.matchId);
+  });
+
+  it('deduplicates a resumed Codex rollout (same first message, its own id and timestamps) in favor of the longer', async () => {
+    const f = fixture();
+    const other = 'dddd4444-4444-4444-8444-444444444444';
+    const later = (text: string): string => text.replace(/2026-06-01T10:00:(\d\d)/g, '2026-06-02T11:30:$1');
+    const resumed: object[] = [
+      ...codexRollout().map((entry): object => {
+        const copy: unknown = JSON.parse(later(JSON.stringify(entry)).split(CODEX_ID).join(other));
+        return typeof copy === 'object' && copy !== null ? copy : {};
+      }),
+      rolloutLine(codexTime(20), 'event_msg', { type: 'user_message', message: 'and the lint' }),
+      rolloutLine(codexTime(21), 'event_msg', { type: 'agent_message', message: 'linted' }),
+    ];
+    const runtime = await withCodex(f, codexRollout(), [{ id: other, lines: resumed }]);
+    expect(await buildPack(runtime, options(f, { owners: ownersAll(f) }))).toMatchObject({ duplicate: 1, emitted: 1 });
+    expect(packText(f.out)).toContain('and the lint');
+  });
+
+  it('writes no raw call id when the redactor took it first as a secret', async () => {
+    const f = fixture();
+    const random = 'call_Qx7LmN2vTz9RkPb4WcYd8HsJ';
+    expect(await packed(f, codexRollout(random))).toMatchObject({ emitted: 1 });
+    expect(packText(f.out)).not.toContain(random);
   });
 });
 

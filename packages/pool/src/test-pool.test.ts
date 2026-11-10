@@ -143,7 +143,6 @@ describe('the pool harness reuses its connections', () => {
     const held: ServerResponse[] = [];
     const server = createServer((request, response) => {
       request.resume();
-      request.resume();
       if (accepted <= 2 && held.length < 2) {
         held.push(response);
         if (held.length === 2) for (const one of held) one.end('ok');

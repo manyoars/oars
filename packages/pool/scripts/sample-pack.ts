@@ -1,6 +1,6 @@
 // The first sale's sample pack (P98 (10) to (12)): a local folder of an operator's own sessions, for the operator to read before any buyer sees one.
 // Nothing here sends anything: it reads a sessions store and the harness's transcripts, and writes one folder that must sit outside every repository.
-// Order, per session: the exclusion gate (A38) first, then a known owner and known harness terms, the turn floor, a repository, and no duplicate, then the copy, with every injected block stripped.
+// Order, per session: the exclusion gate (A38) first, then a known owner and known harness terms, the turn floor, a repository, and no duplicate, then redaction, masking, and the secret scan, then the copy, with every injected block stripped.
 import { createHash, createHmac } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
 import { appendFile, mkdir, readdir, readFile, rename, rmdir, writeFile } from 'node:fs/promises';
@@ -9,6 +9,7 @@ import { createInterface } from 'node:readline';
 import { dirname, join, resolve } from 'node:path';
 import { defaultConfigDir } from '../../cli/src/credentials.js';
 import { checkSession, transcriptFilesOf, type Reason } from '../../cli/src/sessions/exclusion.js';
+import { LEADING_TAG, LOCAL_COMMAND_TAGS } from '../../cli/src/sessions/extract.js';
 import { localNames, redactTranscript, REDACTION_VERSION } from '../../cli/src/sessions/redact.js';
 import { harnessOf, type Harness } from '../../cli/src/sessions/schema.js';
 import { loadStore, readRedactDomains, type SessionsRuntime } from '../../cli/src/sessions/store.js';
@@ -35,15 +36,24 @@ export interface HarnessTerms {
 }
 
 /**
- * The terms each harness puts on its user, as read on 2026-11-09 (umbrella `docs/business/2026-11-09-first-sale-buyers-pricing.md`, "Terms that bind a sale").
- * `training` is `priced-add-on` only where the terms allow training on outputs; the Usage Policy forbids it "without prior authorization from Anthropic".
+ * The terms each harness puts on its user, with each page's version as the page itself prints it, read on 2026-11-10 (t1103): Anthropic's Consumer Terms (effective 2025-10-08) and
+ * Usage Policy (effective 2026-11-12), OpenAI's Terms of Use (effective 2026-01-01) and Usage Policies (effective 2026-11-20). A lot sold before an effective date rests on the version before it.
+ * `training` is `priced-add-on` only where the terms allow training on outputs; Anthropic's Usage Policy forbids it "without prior authorization from Anthropic", and OpenAI's bars
+ * supplying training material for a model that substitutes for OpenAI's.
  * A harness with no row here is left out of a pack: a session whose terms are not known carries no rights to state.
  */
 export const HARNESS_TERMS: { readonly [harness in Harness]?: { terms: readonly HarnessTerms[]; training: 'priced-add-on' | 'not-offered' } } = {
   'claude-code': {
     terms: [
       { name: 'Anthropic Consumer Terms', version: 'effective 2025-10-08' },
-      { name: 'Anthropic Usage Policy', version: 'page version 2026-11-12' },
+      { name: 'Anthropic Usage Policy', version: 'effective 2026-11-12' },
+    ],
+    training: 'not-offered',
+  },
+  codex: {
+    terms: [
+      { name: 'OpenAI Terms of Use', version: 'effective 2026-01-01' },
+      { name: 'OpenAI Usage Policies', version: 'effective 2026-11-20' },
     ],
     training: 'not-offered',
   },
@@ -86,7 +96,7 @@ export interface PackOptions {
 export interface PackCounts {
   /** Main sessions with a user turn in the store: what the draw runs over. */
   frame: number;
-  /** Sessions the exclusion gate read, in draw order, until `size` were emitted or the frame ran out. */
+  /** Sessions the draw reached, in draw order, until `size` were emitted or the frame ran out. */
   scanned: number;
   excluded: { term: number; noRaw: number; noTerms: number; unreadable: number };
   noOwner: number;
@@ -95,7 +105,7 @@ export interface PackCounts {
   tooShort: number;
   /** No repository recorded for the session. */
   noRepo: number;
-  /** A resumed session that replays another's first prompt line and is the shorter of the two. */
+  /** A resumed session that replays another's first prompt and is the shorter of the two. */
   duplicate: number;
   /** Dropped because the redacted, masked text still held something shaped like a key (`secretIn`); nothing of the session was written. */
   secret: number;
@@ -165,18 +175,27 @@ const isEmptyOrAbsent = async (folder: string): Promise<boolean> => {
   }
 };
 
-const UUID_OR_REQUEST = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|req_[0-9A-Za-z]+/gi;
+// A candidate id: a uuid, or a `req_`/`call_` id. Any other `word_` prefix is not one, or it would eat the first group of a uuid that follows it (`session_<uuid>`). A candidate is
+// rewritten only when it is a known id, so other words that match are left alone.
+const UUID_OR_PREFIXED = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|(?:req|call)_[0-9A-Za-z]+/gi;
 
 const isRecord = (value: unknown): value is object => typeof value === 'object' && value !== null;
 
-/** The line ids a transcript carries: the value of every key ending in `uuid` (`uuid`, `parentUuid`, `leafUuid`, ...) and every `requestId`, at any depth. */
+/** The keys whose value is an id: Claude Code's `uuid`, `parentUuid`, `leafUuid`, ... and `requestId`, and Codex's `call_id`, `session_id`, and `forked_from_id`. */
+const isIdKey = (key: string): boolean => /uuid$/i.test(key) || ['requestId', 'call_id', 'session_id', 'forked_from_id'].includes(key);
+
+/** The line ids a transcript carries: the value of every id key at any depth, and a Codex `session_meta` line's own `id` (a bare `id` is no id key elsewhere). */
 const lineIdsOf = (value: unknown, found: Set<string>): void => {
   if (Array.isArray(value)) for (const item of value) lineIdsOf(item, found);
-  else if (isRecord(value))
+  else if (isRecord(value)) {
+    const payload: unknown = Reflect.get(value, 'payload');
+    const own: unknown = Reflect.get(value, 'type') === 'session_meta' && isRecord(payload) ? Reflect.get(payload, 'id') : undefined;
+    if (typeof own === 'string') found.add(own);
     for (const [key, item] of Object.entries(value)) {
-      if (typeof item === 'string' && (/uuid$/i.test(key) || key === 'requestId')) found.add(item);
+      if (typeof item === 'string' && isIdKey(key)) found.add(item);
       else lineIdsOf(item, found);
     }
+  }
 };
 
 const parsed = (line: string): unknown => {
@@ -188,55 +207,111 @@ const parsed = (line: string): unknown => {
 };
 
 /**
- * One id under the keyed index, shaped as the id it stands for: a line uuid stays a uuid and a request id a `req_` id.
+ * One id under the keyed index, shaped as the id it stands for: a line uuid stays a uuid and a prefixed id (`req_`, `call_`) keeps its prefix.
  * The same function as the match id, so a buyer's masks are stable across packs and no one without the index key can test an id against them.
  */
 const maskOf = (indexKey: string, buyerKey: string, id: string): string => {
   const hex = matchIdOf(buyerKey, serverKeyOf(indexKey, id));
-  return id.startsWith('req_') ? `req_${hex.slice(0, 24)}` : `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+  const prefix = /^([A-Za-z]+)_/.exec(id)?.[1];
+  return prefix !== undefined ? `${prefix}_${hex.slice(0, 24)}` : `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 };
 
 /** Every store session id (to its match id) and every line id the texts carry, rewritten wherever it occurs: the `sessionId` field, a path, a typed mention. Other text is left alone. */
 const maskIds = (texts: readonly string[], sessions: ReadonlyMap<string, string>, indexKey: string, buyerKey: string): string[] => {
   const lineIds = new Set<string>();
   for (const text of texts) for (const line of text.split('\n')) lineIdsOf(parsed(line), lineIds);
-  return texts.map((text) => text.replace(UUID_OR_REQUEST, (id) => sessions.get(id) ?? (lineIds.has(id) ? maskOf(indexKey, buyerKey, id) : id)));
+  return texts.map((text) => text.replace(UUID_OR_PREFIXED, (id) => sessions.get(id) ?? (lineIds.has(id) ? maskOf(indexKey, buyerKey, id) : id)));
 };
 
-/** What a resumed session shares with the one it continues: its first user line, as the harness replays it, without the session id it rewrites. Undefined when the transcript has no user line. */
-const firstPromptKey = async (path: string): Promise<string | undefined> => {
+/** The text of a user message's content, or undefined when it has none to type: a message of only tool results (the harness answering the model) and an image with no words carry nothing the person wrote. Text sent beside a tool result is the person's, so it counts. */
+const textOf = (content: unknown): string | undefined => {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return undefined;
+  const blocks: unknown[] = content;
+  const texts = blocks.flatMap((block): string[] => {
+    const text: unknown = isRecord(block) && Reflect.get(block, 'type') === 'text' ? Reflect.get(block, 'text') : undefined;
+    return typeof text === 'string' ? [text] : [];
+  });
+  return texts.length === 0 ? undefined : texts.join('\n');
+};
+
+/**
+ * The text a line carries as something the person typed: a Claude Code `user` line's `message.content`, or a Codex rollout's `user_message` event. Undefined for every other line, and for
+ * the harness's own user lines: an `isMeta` line, one that opens with a local command's tag (`<local-command-caveat>`, `<command-name>`, ...), and a tool result. The same text opens
+ * unrelated sessions, so none of it can say that one session resumes another.
+ */
+const typedOf = (entry: unknown): string | undefined => {
+  if (!isRecord(entry)) return undefined;
+  const type: unknown = Reflect.get(entry, 'type');
+  if (type === 'user') {
+    const message: unknown = Reflect.get(entry, 'message');
+    const text = Reflect.get(entry, 'isMeta') === true || !isRecord(message) ? undefined : textOf(Reflect.get(message, 'content'));
+    const leading = text === undefined ? undefined : LEADING_TAG.exec(text.trimStart())?.[1];
+    return text === undefined || text.trim() === '' || (leading !== undefined && LOCAL_COMMAND_TAGS.has(leading)) ? undefined : text;
+  }
+  const payload: unknown = Reflect.get(entry, 'payload');
+  const message: unknown = type === 'event_msg' && isRecord(payload) && Reflect.get(payload, 'type') === 'user_message' ? Reflect.get(payload, 'message') : undefined;
+  return typeof message === 'string' ? message : undefined;
+};
+
+/** The first `limit` things the person typed in a transcript, in order, as the harness wrote them (fewer when the session holds fewer). Nothing else of a line is read: a resume rewrites `sessionId`, `uuid`, `parentUuid`, and `timestamp`. */
+const typedPromptsOf = async (path: string, limit: number): Promise<string[]> => {
   const stream = createReadStream(path, { encoding: 'utf8' });
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
+  const found: string[] = [];
   try {
     for await (const text of lines) {
-      const entry = parsed(text);
-      if (isRecord(entry) && Reflect.get(entry, 'type') === 'user') return JSON.stringify(Object.entries(entry).filter(([key]) => key !== 'sessionId'));
+      const typed = typedOf(parsed(text));
+      if (typed !== undefined) found.push(typed);
+      if (found.length >= limit) break;
     }
-    return undefined;
+    return found;
   } finally {
     lines.close();
     stream.destroy();
   }
 };
 
+/** How many typed turns say that two sessions are one conversation: a resume replays the start of the one it continues, so the first few turns agree. */
+const PROMPTS_COMPARED = 3;
+
 interface TurnCount {
   session: string;
   project: string;
   turns: number;
+  repo: string | null;
 }
 
-/** The sessions that lose to a longer one replaying their first prompt line (a tie goes to the lower session id), so the rule gives the same lot whichever of the two the draw reaches first. */
-const duplicatesOf = async (runtime: SessionsRuntime, candidates: readonly TurnCount[]): Promise<Set<string>> => {
-  const groups = new Map<string, TurnCount[]>();
-  for (const candidate of candidates) {
+/** One list is the start of the other: a resumed copy replays the earlier session's turns (all of them, or the first few) and goes on. */
+const startsTheOther = (a: readonly string[], b: readonly string[]): boolean => a.every((text, n) => text === b[n]) || b.every((text, n) => text === a[n]);
+
+/**
+ * The sessions that lose to a longer one replaying their first prompts (a tie goes to the lower session id), so the rule gives the same lot whichever of the two the draw reaches first.
+ * Every session of the frame is keyed first on its first typed turn and its repository (one cheap line read each, no gate). Only a group of two or more is asked `accepted` and read for its
+ * first three typed turns: the loser is chosen among the members that pass every earlier rule, and a member loses only to one whose turns it starts or that starts its turns. Two sessions that
+ * open with the same word and go on differently are both kept.
+ */
+const duplicatesOf = async <T extends TurnCount>(runtime: SessionsRuntime, frame: readonly T[], accepted: (member: T) => Promise<boolean>): Promise<Set<string>> => {
+  const groups = new Map<string, { member: T; path: string }[]>();
+  for (const candidate of frame) {
     const main = (await transcriptFilesOf(runtime, candidate.project, candidate.session)).find((file) => file.main);
-    const key = main === undefined ? undefined : await firstPromptKey(main.path);
-    if (key !== undefined) groups.set(key, [...(groups.get(key) ?? []), candidate]);
+    const [first] = main === undefined ? [] : await typedPromptsOf(main.path, 1);
+    if (main !== undefined && first !== undefined) {
+      const key = JSON.stringify([candidate.repo, first]);
+      groups.set(key, [...(groups.get(key) ?? []), { member: candidate, path: main.path }]);
+    }
   }
   const losers = new Set<string>();
   for (const group of groups.values()) {
-    const [winner] = [...group].sort((a, b) => b.turns - a.turns || (a.session < b.session ? -1 : 1));
-    for (const member of group) if (member !== winner) losers.add(member.session);
+    if (group.length < 2) continue;
+    const live: { member: T; prompts: string[] }[] = [];
+    for (const { member, path } of group) if (await accepted(member)) live.push({ member, prompts: await typedPromptsOf(path, PROMPTS_COMPARED) });
+    live.sort((a, b) => b.member.turns - a.member.turns || (a.member.session < b.member.session ? -1 : 1));
+    const kept: { member: T; prompts: string[] }[] = [];
+    for (const candidate of live) {
+      if (kept.some((winner) => startsTheOther(winner.prompts, candidate.prompts))) losers.add(candidate.member.session);
+      else kept.push(candidate);
+    }
   }
   return losers;
 };
@@ -268,12 +343,17 @@ const EXCLUDED: { readonly [reason in Exclude<Reason, 'clean'>]: keyof PackCount
 /** Where a transcript goes under the session's folder: `main.jsonl`, or its path under the session (`subagents/agent-x.jsonl`). */
 const placeOf = (key: string, session: string, main: boolean): string => (main ? 'main.jsonl' : key.slice(session.length + 1));
 
-/** A base64 image block's `data` can hold any shape by chance (the redactor keeps it), so the scan reads the line without it. Lines with no such block are scanned as written. */
+/**
+ * An image's base64 can hold any shape by chance (the redactor keeps it), so the scan reads the line without it: the `data` of a `type: 'base64'` source, and the `base64` of a Read's
+ * `toolUseResult.file`, whose object `type` is the media type (`image/...`). A `base64` field on any other object, and a line with neither, is scanned as written.
+ */
 const withoutImageData = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(withoutImageData);
   if (!isRecord(value)) return value;
-  const base64 = Reflect.get(value, 'type') === 'base64';
-  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, base64 && key === 'data' && typeof item === 'string' ? '' : withoutImageData(item)]));
+  const type: unknown = Reflect.get(value, 'type');
+  const source = type === 'base64';
+  const media = typeof type === 'string' && type.startsWith('image/');
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, typeof item === 'string' && ((source && key === 'data') || (media && key === 'base64')) ? '' : withoutImageData(item)]));
 };
 
 /** The text the secret scan reads: the transcript with every base64 image's data left out. */
@@ -314,11 +394,17 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   const frame = store.sessions.filter((session) => session.userTurns > 0);
   // Every session the store knows, so a transcript that names another session names it by that session's match id.
   const sessionIds = new Map(store.sessions.map((session) => [session.session, matchIdOf(options.buyerKey, serverKeyOf(indexKey, session.session))]));
+  // A source's store id is `<harness>-<id>` while its file names the bare id (a Codex rollout's `session_meta.id`): both are the session.
+  for (const session of store.sessions) {
+    const prefix = `${harnessOf(session)}-`;
+    const match = sessionIds.get(session.session);
+    if (harnessOf(session) !== 'claude-code' && session.session.startsWith(prefix) && match !== undefined) sessionIds.set(session.session.slice(prefix.length), match);
+  }
   const order = (session: string): string => createHash('sha256').update(`${options.seed}\n${session}`).digest('hex');
   const drawn = frame.map((session) => ({ session, rank: order(session.session) })).sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0));
   const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, tooShort: 0, noRepo: 0, duplicate: 0, secret: 0, emitted: 0 };
   const turnsOf = (session: { userTurns: number; assistantTurns: number }): number => session.userTurns + session.assistantTurns;
-  // The rules up to the repository one, once per session: the duplicate rule asks them of every session in the frame, the draw asks them again of the ones it reaches.
+  // The rules up to the repository one, once per session: the duplicate rule asks them only of the members of a group that shares a first prompt, the draw of the sessions it reaches; a singleton the draw never reaches is never gated.
   const earlyBy = new Map<string, Promise<Early>>();
   const early = async (record: StoredSession): Promise<Early> => {
     const verdict = await checkSession(runtime, options.terms, record.project, record.session);
@@ -355,9 +441,8 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     const { owner, harness, terms } = decided.accepted;
     // Read once, on the first session that gets this far. A loser is chosen only among sessions that pass every rule above, so a longer twin that one of them drops never costs the shorter its place; a duplicate's other half may not be drawn at all.
     if (losers === undefined) {
-      const candidates: TurnCount[] = [];
-      for (const session of frame) if ('accepted' in (await earlyOf(session))) candidates.push({ session: session.session, project: session.project, turns: turnsOf(session) });
-      losers = await duplicatesOf(runtime, candidates);
+      const everyone = frame.map((record) => ({ session: record.session, project: record.project, turns: turnsOf(record), repo: record.repo, record }));
+      losers = await duplicatesOf(runtime, everyone, async (member) => 'accepted' in (await earlyOf(member.record)));
     }
     if (losers.has(record.session)) {
       counts.duplicate += 1;
