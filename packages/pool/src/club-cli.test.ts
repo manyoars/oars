@@ -175,6 +175,35 @@ describe('oars club join, show, and leave', () => {
     expect(problemOf(guest.last()).title).toMatch(/^club_full: /);
   });
 
+  it('says rate_limited first, with when to try again, once the account has used its wrong codes', async () => {
+    const guesser = await person();
+    const club = await created(guesser);
+    const account = String(fieldOf(await db.prepare("SELECT account FROM club_members WHERE club = ? AND nickname = 'skipper'").bind(club.id).first(), 'account'));
+    for (let n = 0; n < 10; n += 1) await db.prepare("INSERT INTO club_attempts (account, kind, at) VALUES (?, 'guess', ?)").bind(account, Date.now() - n).run();
+    guesser.types('yes');
+    expect(await guesser.cli('club', 'join', 'ZZZZZZ', '--nickname', 'bow')).toBe(ExitCode.RATE_LIMITED);
+    expect(problemOf(guesser.last()).code).toBe('rate_limited');
+    expect(problemOf(guesser.last()).title).toMatch(/^rate_limited: .* Try again in \d+ minutes\.$/);
+  });
+
+  it('says nickname_invalid first, with the rule', async () => {
+    const guest = await person();
+    guest.types('yes');
+    expect(await guest.cli('club', 'join', 'ZZZZZZ', '--nickname', 'bow@example')).toBe(ExitCode.INVALID);
+    expect(problemOf(guest.last()).code).toBe('nickname_invalid');
+    expect(problemOf(guest.last()).title).toMatch(/^nickname_invalid: /);
+  });
+
+  it('says not_signed_in, and to sign in again, when the pool no longer knows the token', async () => {
+    const owner = await person();
+    const club = await created(owner);
+    const account = String(fieldOf(await db.prepare("SELECT account FROM club_members WHERE club = ? AND nickname = 'skipper'").bind(club.id).first(), 'account'));
+    await db.prepare('DELETE FROM tokens WHERE account = ?').bind(account).run();
+    expect(await owner.cli('club', 'show', club.id)).toBe(ExitCode.AUTH);
+    expect(problemOf(owner.last()).code).toBe('not_signed_in');
+    expect(problemOf(owner.last()).title).toMatch(/^not_signed_in: .*Run oars pool login first\.$/);
+  });
+
   it('refuses a join without typed consent and seats nobody', async () => {
     const owner = await person();
     const guest = await person();

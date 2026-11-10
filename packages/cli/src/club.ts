@@ -25,8 +25,12 @@ const spanOf = (seconds: number): string => {
   return `${String(Math.ceil(seconds / 3600))} hours`;
 };
 
+const failure = (step: string, code: string, exit: ExitCode, message: string): CliError => new CliError(`${code}: ${message}`, exit, step, { title: `${code}: ${message}`, code });
+
 /** The pool's named refusal with its code first (`club_full: ...`), and for a brake, when to try again. */
 const refused = (step: string, { status, body }: Reply): CliError => {
+  // A token the pool no longer knows (revoked, or expired there) while the local sign-in still looks valid: the same cause as no sign-in at all.
+  if (status === 401) return failure(step, 'not_signed_in', ExitCode.AUTH, 'the pool did not accept your sign-in. Run oars pool login first.');
   const code = isObject(body) ? textIn(body, 'error') : undefined;
   const said = (isObject(body) ? textIn(body, 'message') : undefined) ?? `The pool answered HTTP ${String(status)}.`;
   const wait = isObject(body) ? numberIn(body, 'retry_after') : undefined;
@@ -34,8 +38,6 @@ const refused = (step: string, { status, body }: Reply): CliError => {
   const exit = status === 409 ? ExitCode.CONFLICT : status === 404 ? ExitCode.INVALID : exitCodeForProblem(status, code === undefined ? undefined : { code });
   return new CliError(title, exit, step, { title, status, ...(code === undefined ? {} : { code }) });
 };
-
-const failure = (step: string, code: string, exit: ExitCode, message: string): CliError => new CliError(`${code}: ${message}`, exit, step, { title: `${code}: ${message}`, code });
 
 /** The pool and the credential held for it, or `not_signed_in` before anything is shown or asked. */
 const credential = async (deps: RunDeps, step: string, options: Options): Promise<{ server: string; token: string }> => {
