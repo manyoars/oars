@@ -173,7 +173,7 @@ describe('the wrangler store', () => {
 
 describe('main', () => {
   it('changes nothing without --confirm and says what it would do', async () => {
-    for (const argv of [['raw', `raw/${ACCOUNT}/${SHA}`], ['row', '--account', ACCOUNT, '--id', 's1'], ['row', '--account', ACCOUNT, '--id', 's1', '--value-stdin'], ['account', '--account', ACCOUNT]]) {
+    for (const argv of [['raw', `raw/${ACCOUNT}/${SHA}`], ['row', '--account', ACCOUNT, '--id', 's1'], ['row', '--account', ACCOUNT, '--id', 's1', '--value-stdin'], ['account', '--account', ACCOUNT], ['close', '--account', ACCOUNT]]) {
       const { io, calls, printed } = fake({ rows: [{ found: 1 }] });
       expect(await main(argv, io)).toBe(0);
       // The only call a dry run makes is the SELECT that checks the row named.
@@ -193,6 +193,25 @@ describe('main', () => {
     expect(confirmed.printed.join('')).toContain('no deposit row');
     // One SELECT, and no INSERT, UPDATE, or DELETE: no tombstone and no audit row.
     expect(confirmed.calls.map((call) => (call[6] ?? '').split(' ')[0])).toEqual(['SELECT']);
+  });
+
+  it('closes an account: checks it exists, records the close, revokes its tokens and machines, and audits, deleting nothing a Deposit holds', async () => {
+    const { io, calls, printed } = fake({ rows: [{ found: 1 }] });
+    expect(await main(['close', '--account', ACCOUNT, '--confirm'], io)).toBe(0);
+    const statements = calls.map((call) => call[6] ?? '');
+    expect(statements[0]).toBe(`SELECT 1 AS found FROM accounts WHERE id = '${ACCOUNT}'`);
+    expect(statements[1]).toMatch(/^UPDATE accounts SET closed_at = \d+ WHERE id = 'acct_[0-9a-f]+' AND closed_at IS NULL$/);
+    expect(statements[2]).toContain('DELETE FROM tokens');
+    expect(statements[3]).toContain("UPDATE machines SET state = 'revoked'");
+    expect(statements.join(' ')).not.toMatch(/deposits|raw_objects|DELETE FROM (cells|strata|contributors)/);
+    expect(printed).toEqual([JSON.stringify({ rowsErased: 3, objectsErased: 0 })]);
+  });
+
+  it('answers exit code 1 and the reason when the account is not in the pool', async () => {
+    const { io, calls, printed } = fake({ rows: [] });
+    expect(await main(['close', '--account', ACCOUNT, '--confirm'], io)).toBe(1);
+    expect(printed).toEqual([`No account ${ACCOUNT} in the pool.`]);
+    expect(calls).toHaveLength(1);
   });
 
   it('names the local state in its plan when --local is given', async () => {
@@ -294,7 +313,7 @@ describe('main', () => {
   });
 
   it('answers a usage error with exit code 2 and the usage', async () => {
-    for (const argv of [[], ['nothing'], ['raw'], ['raw', 'k', 'extra'], ['row', '--account', ACCOUNT], ['account'], ['account', '--account', ACCOUNT, '--id', 's'], ['raw', 'k', '--account', ACCOUNT]]) {
+    for (const argv of [[], ['nothing'], ['raw'], ['raw', 'k', 'extra'], ['row', '--account', ACCOUNT], ['account'], ['account', '--account', ACCOUNT, '--id', 's'], ['close'], ['close', '--account', ACCOUNT, '--id', 's'], ['raw', 'k', '--account', ACCOUNT]]) {
       const { io, calls, printed } = fake();
       expect(await main(argv, io)).toBe(2);
       expect(calls).toEqual([]);

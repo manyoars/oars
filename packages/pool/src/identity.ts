@@ -113,6 +113,12 @@ export const accountOf = async (request: Request, env: Env): Promise<string | un
   return hasAccount(row) ? row.account : undefined;
 };
 
+/** The refusal for a closed account (covenant 6.1: the operator closed it on request), or undefined when it is open or the pool has never seen it. Sign-in, machine enrollment, and activation answer it, so a closed account cannot get a new credential by any route. */
+export const closedRefusal = async (env: Env, account: string): Promise<Response | undefined> => {
+  const row = await env.DB.prepare('SELECT closed_at FROM accounts WHERE id = ?').bind(account).first();
+  return row === null || fieldOf(row, 'closed_at') === null ? undefined : refuse(403, 'account_closed', 'This account is closed. To reopen it, write to privacy@manyoars.com.');
+};
+
 /** `DELETE /v1/login`: revokes the credential the request presents, so a copy of it signs nobody in. 204 when it was live; a revoked, expired, or unknown credential gets the usual 401. */
 export const logout = async (request: Request, env: Env): Promise<Response> => {
   const token = bearerOf(request);
@@ -273,6 +279,8 @@ const WAITING = new Map([
 
 /** The pool's own credential for an account: only its hash is stored. Also when the table sheds the rows past their expiry, since they sign nobody in. */
 const credentialFor = async (env: Env, signingKey: string, kid: string, account: string, providerCreated: number | undefined): Promise<Response> => {
+  const closed = await closedRefusal(env, account);
+  if (closed !== undefined) return closed;
   const token = randomBytes(32).toString('hex');
   const now = Date.now();
   const expiresAt = now + TOKEN_LIFETIME_MS;

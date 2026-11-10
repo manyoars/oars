@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { sampleSkeleton } from '../src/sample.js';
 import { acceptanceOf, fieldOf, startPool, stubUser, type TestBucket, type TestDb, type TestPool } from '../src/test-pool.js';
 import { telemetryOf } from './erase-test-telemetry.js';
-import { eraseAccount, eraseLeakedSecret, eraseRawObject, findRawContaining, holdsValue, type EraseStore, type RawHit } from './erase.js';
+import { closeAccount, eraseAccount, eraseLeakedSecret, eraseRawObject, findRawContaining, holdsValue, type EraseStore, type RawHit } from './erase.js';
 
 let pool: TestPool;
 let next = 7000;
@@ -549,6 +549,65 @@ describe('erasing one account removes its own rows and its link to the shared to
 });
 
 /** Stages one part of a two-part deposit through `oars-part`, as the client does. The pool seals the body before it is stored, so a row of `deposit_parts` is ciphertext. */
+describe('closing one account (covenant 6.1 and 7.2(a))', () => {
+  const BOX = { hostClass: 'vps', launcher: 'scheduled', label: 'box' };
+
+  it('revokes every token and machine key, records when it closed, writes one audit row, and keeps the Deposits byte for byte', async () => {
+    const { token, account } = await member();
+    const other = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('0000000000008a01'), token)).status).toBe(201);
+    const enrolled = await pool.post('/v1/machines/enroll', BOX, token);
+    const otherBox = await pool.post('/v1/machines/enroll', BOX, other.token);
+    const deposits = JSON.stringify(await all('SELECT * FROM deposits WHERE account = ? ORDER BY id', account));
+    const objects = JSON.stringify(await all('SELECT * FROM raw_objects WHERE account = ? ORDER BY sha256', account));
+    const totalsBefore = await totals();
+    const audits = await count('SELECT COUNT(*) AS held FROM erasure_audit');
+    expect(await count('SELECT COUNT(*) AS held FROM tokens WHERE account = ?', account)).toBeGreaterThan(0);
+
+    const closed = await closeAccount(await store(), account, NOW);
+
+    expect(closed).toEqual({ rows: 3, objects: 0 });
+    expect(await all('SELECT closed_at FROM accounts WHERE id = ?', account)).toEqual([{ closed_at: NOW.getTime() }]);
+    expect(await count('SELECT COUNT(*) AS held FROM tokens WHERE account = ?', account)).toBe(0);
+    expect(await all('SELECT state FROM machines WHERE account = ?', account)).toEqual([{ state: 'revoked' }]);
+    expect(await pool.get('/bundle/claude-code/2.1.314/1', token)).toMatchObject({ status: 401 });
+    expect(await pool.post('/v1/machines/activate', {}, String((enrolled.json as { token: unknown }).token))).toMatchObject({ status: 401, json: { error: 'machine_revoked' } });
+    expect(await count('SELECT COUNT(*) AS held FROM erasure_audit')).toBe(audits + 1);
+    expect(await all("SELECT kind, reason, erased_on, rows_erased, objects_erased, account FROM erasure_audit WHERE kind = 'close' AND account = ?", account)).toEqual([{ kind: 'close', reason: 'account-close', erased_on: '2026-11-08', rows_erased: 3, objects_erased: 0, account }]);
+    expect(JSON.stringify(await all('SELECT * FROM deposits WHERE account = ? ORDER BY id', account))).toBe(deposits);
+    expect(JSON.stringify(await all('SELECT * FROM raw_objects WHERE account = ? ORDER BY sha256', account))).toBe(objects);
+    expect(await totals()).toBe(totalsBefore);
+    // Another account's credentials, machines, and closed-at record are not touched.
+    expect(await all('SELECT closed_at FROM accounts WHERE id = ?', other.account)).toEqual([{ closed_at: null }]);
+    expect(await count('SELECT COUNT(*) AS held FROM tokens WHERE account = ?', other.account)).toBe(1);
+    expect(await all('SELECT state FROM machines WHERE account = ?', other.account)).toEqual([{ state: 'pending' }]);
+    expect(otherBox.status).toBe(201);
+  }, 90_000);
+
+  it('changes nothing on a rerun, keeps the first closed-at time, and writes no second audit row', async () => {
+    const { account } = await member();
+    await closeAccount(await store(), account, NOW);
+    const audits = await count('SELECT COUNT(*) AS held FROM erasure_audit');
+    expect(await closeAccount(await store(), account, new Date('2026-12-01T00:00:00Z'))).toEqual({ rows: 0, objects: 0 });
+    expect(await all('SELECT closed_at FROM accounts WHERE id = ?', account)).toEqual([{ closed_at: NOW.getTime() }]);
+    expect(await count('SELECT COUNT(*) AS held FROM erasure_audit')).toBe(audits);
+  }, 60_000);
+
+  it('finishes a close that stopped after the closed-at record, then audits once', async () => {
+    const { token, account } = await member();
+    await (await pool.db()).prepare('UPDATE accounts SET closed_at = ? WHERE id = ?').bind(NOW.getTime(), account).run();
+    expect((await pool.post('/v1/machines/enroll', BOX, token)).status).toBe(403);
+    expect(await closeAccount(await store(), account, new Date('2026-12-01T00:00:00Z'))).toEqual({ rows: 1, objects: 0 });
+    expect(await count('SELECT COUNT(*) AS held FROM tokens WHERE account = ?', account)).toBe(0);
+  }, 60_000);
+
+  it('refuses an account the pool has never seen, and leaves no audit row', async () => {
+    const audits = await count('SELECT COUNT(*) AS held FROM erasure_audit');
+    await expect(closeAccount(await store(), 'acct_nobody', NOW)).rejects.toThrow('No account acct_nobody in the pool.');
+    expect(await count('SELECT COUNT(*) AS held FROM erasure_audit')).toBe(audits);
+  });
+});
+
 const stage = async (token: string, id: string, program: string, part: 1 | 2): Promise<number> => {
   const body = JSON.stringify(skeletonWith(id, program));
   const half = Math.floor(body.length / 2);
