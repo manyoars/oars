@@ -1,8 +1,9 @@
 // `npm run erase -w packages/pool -- <what> ...`: the operator's erasure command (docs/pool.md, "Erasure"). It changes nothing until `--confirm` is given; without it, it says what it would do.
 import { depositExists, eraseAccount, eraseLeakedSecret, eraseRawObject, findRawContaining, type Erased, type EraseStore } from './erase.js';
-import { wranglerStore, type ObjectFiles, type Target, type Wrangler } from './erase-wrangler.js';
+import { wranglerStore, type Lister, type ObjectFiles, type Target, type Wrangler } from './erase-wrangler.js';
 
 export { nodeFiles } from './erase-files.js';
+export { r2Lister } from './erase-r2-list.js';
 
 export const USAGE = [
   'Usage: erase <what> [options]',
@@ -12,9 +13,9 @@ export const USAGE = [
   '  row --account <id> --id <session>   replace a deposit row that holds a leaked secret with a marker and tombstone it',
   '        [--value-stdin]               also read the leaked value from stdin: scrub it from aggregates, erase every row that holds it,',
   '                                      and make ingest refuse it again (only its SHA-256 is kept)',
-  '  account --account <id>              erase one account\'s deposit rows and raw objects, scrub its machines\' labels and allow lists, delete its repo keys, deposit hours, and contributor records, and disable its tokens (a lawful request); the shared totals stay',
+  '  account --account <id>              erase one account\'s deposit rows and raw objects, scrub its machines\' labels and allow lists, delete its repo keys, deposit hours, and contributor records, and disable its tokens, then rewrite each telemetry batch within retention that names it (needs R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY, to list the bucket); the shared totals stay',
   'Options: --confirm (without it nothing is changed), --local (the local wrangler state instead of the account\'s)',
-  `Runs with the wrangler login already on this machine against D1 database "oars-pool" and R2 bucket "oars-pool-raw".`,
+  `Runs with the wrangler login already on this machine against D1 database "oars-pool" and R2 buckets "oars-pool-raw" and "oars-telemetry".`,
 ].join('\n');
 
 export interface Io {
@@ -24,10 +25,12 @@ export interface Io {
   wrangler: Wrangler;
   /** Where the find writes an object to read it (`erase-files.ts`). */
   files: ObjectFiles;
+  /** Lists the telemetry bucket (`erase-r2-list.ts`); absent when the operator exported no R2 token. */
+  list?: Lister;
   now: () => Date;
 }
 
-const TARGET = { database: 'oars-pool', bucket: 'oars-pool-raw' } as const;
+const TARGET = { database: 'oars-pool', bucket: 'oars-pool-raw', telemetryBucket: 'oars-telemetry' } as const;
 
 interface Options {
   positional: string[];
@@ -71,7 +74,7 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
   }
   const [what, key, ...extra] = options.positional;
   const target: Target = { ...TARGET, local: options.local };
-  const store: EraseStore = wranglerStore(io.wrangler, target, io.files);
+  const store: EraseStore = wranglerStore(io.wrangler, target, io.files, io.list);
   const where = options.local ? 'local state' : 'the remote pool';
   try {
     // The find reads and changes nothing, so it needs no --confirm. The text comes from stdin only: an argument would be in the process table and the shell's history.

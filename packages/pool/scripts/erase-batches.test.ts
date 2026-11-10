@@ -58,7 +58,7 @@ interface Fixture {
 /** Batches that name the account (two installs, three days, one at the edge of retention), one that names another account, one that names none, and one past retention that names the account too. */
 const seed = async (bucket: TestBucket, db: TestDb): Promise<Fixture> => {
   const account = accountName();
-  const other = `${account}-other`;
+  const other = `bystander-${account.slice(-2)}`;
   const keys = {
     a1: 'telemetry/2026-11-08/a1.json',
     a2: 'telemetry/2026-11-07/a2.json',
