@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { deposit, loadStore, paths, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { rolloutLine, stageCodex } from '../../cli/src/sessions/test-support.js';
-import { buildPack, main, matchIdOf, ownerOf, parseOwners, secretIn, serverKeyOf, USAGE, type ManifestRow, type PackOptions } from './sample-pack.js';
+import { buildPack, HARNESS_TERMS, main, matchIdOf, ownerOf, parseOwners, secretIn, serverKeyOf, USAGE, type ManifestRow, type PackCounts, type PackOptions } from './sample-pack.js';
 
 const TERM = 'zorblax';
 const CLAUDE_MD_LINE = 'Always fold the green napkins before lunch';
@@ -463,30 +463,74 @@ describe('the secret scan', () => {
   });
 });
 
+// A Codex session as the harness writes it: the rollout is the only copy (oars archives nothing for a source), so it reaches the pack only through the store's own record of where it lives.
+const CODEX_ID = 'cccc3333-3333-4333-8333-333333333333';
+const CODEX_CALL = 'call_Qx7LmN2vTz9RkPb4WcYd8HsJ';
+const CODEX_AGENTS_LINE = 'Prefer the amber ledger for every receipt';
+const CODEX_ROW = { terms: [{ name: 'OpenAI Terms of Use', version: 'test version' }], training: 'not-offered' } as const;
+const codexTime = (second: number): string => `2026-06-01T10:00:${String(second).padStart(2, '0')}.000Z`;
+
+const joined = (...rows: string[]): string => rows.join(String.fromCharCode(10));
+
+const codexRollout = (extra: readonly object[] = []): object[] => {
+  const cwd = repoCwd;
+  const message = (role: string, kind: string, text: string, second: number): object => rolloutLine(codexTime(second), 'response_item', { type: 'message', role, content: [{ type: kind, text }] });
+  return [
+    rolloutLine(codexTime(0), 'session_meta', { session_id: CODEX_ID, id: CODEX_ID, timestamp: codexTime(0), cwd, originator: 'codex_cli_rs', cli_version: '0.50.0', instructions: `${CODEX_AGENTS_LINE} (base)` }),
+    rolloutLine(codexTime(1), 'turn_context', { model: 'gpt-5-codex', cwd }),
+    message('user', 'input_text', joined('<user_instructions>', CODEX_AGENTS_LINE, '</user_instructions>'), 2),
+    message('user', 'input_text', joined('<environment_context>', `  <cwd>${cwd}</cwd>`, '  <shell>bash</shell>', '</environment_context>'), 3),
+    message('user', 'input_text', joined(`# AGENTS.md instructions for ${cwd}`, '', CODEX_AGENTS_LINE), 4),
+    rolloutLine(codexTime(5), 'event_msg', { type: 'user_message', message: 'fix the build' }),
+    rolloutLine(codexTime(6), 'response_item', { type: 'function_call', name: 'shell', arguments: '{"command":["ls"]}', call_id: CODEX_CALL }),
+    rolloutLine(codexTime(7), 'response_item', { type: 'function_call_output', call_id: CODEX_CALL, output: joined('Exit code: 0', 'Output:', 'README.md') }),
+    rolloutLine(codexTime(8), 'event_msg', { type: 'agent_message', message: 'fixed' }),
+    ...extra,
+  ];
+};
+
+/** Deposits the rollout into the fixture's store and returns the runtime that also reads Codex's store: the rollout stays where Codex wrote it. */
+const withCodex = async (f: Fixture, rollout: readonly object[]): Promise<SessionsRuntime> => {
+  const home = stageCodex(f.root, [{ id: CODEX_ID, lines: rollout }]);
+  // The fixture runtime names no sources, which reads none; this one reads Codex's.
+  const { storeDir, projectsRoot, stdin, stdout } = f.runtime;
+  const runtime: SessionsRuntime = { storeDir, projectsRoot, stdin, stdout, sourceRoots: { codex: home } };
+  await deposit(runtime, { allow: ['codex'], redactDomains: [], now: () => Date.parse('2026-06-10T00:00:00Z') });
+  return runtime;
+};
+
+const ownersAll = (f: Fixture): string => {
+  const owners = join(f.root, 'owners-all.json');
+  writeFileSync(owners, JSON.stringify([{ folder: '*', owner: 'Many Oars Co.', license: null }]));
+  return owners;
+};
+
 describe('the harness terms gate', () => {
-  it('leaves out a session from a harness with no terms row, after the exclusion gate has cleared it', async () => {
+  it('leaves out a session from a harness with no terms row, after the exclusion gate has cleared its rollout', async () => {
     const f = fixture();
-    const id = 'cccc3333-3333-4333-8333-333333333333';
-    const T = (second: number): string => `2026-06-01T10:00:${String(second).padStart(2, '0')}.000Z`;
-    const rollout = [
-      rolloutLine(T(0), 'session_meta', { session_id: id, id, timestamp: T(0), cwd: join(f.root, 'not-a-repo'), originator: 'codex_cli_rs', cli_version: '0.50.0' }),
-      rolloutLine(T(1), 'turn_context', { model: 'gpt-5-codex', cwd: join(f.root, 'not-a-repo') }),
-      rolloutLine(T(2), 'event_msg', { type: 'user_message', message: 'fix the build' }),
-      rolloutLine(T(3), 'event_msg', { type: 'agent_message', message: 'fixed' }),
-    ];
-    const home = stageCodex(f.root, [{ id, lines: rollout }]);
-    // The fixture runtime names no sources, which reads none; this one reads Codex's.
-    const { storeDir, projectsRoot, stdin, stdout } = f.runtime;
-    await deposit({ storeDir, projectsRoot, stdin, stdout, sourceRoots: { codex: home } }, { allow: ['codex'], redactDomains: [], now: () => Date.parse('2026-06-10T00:00:00Z') });
-    const record = (await loadStore(f.runtime.storeDir)).sessions.find((session) => session.harness === 'codex');
-    if (record === undefined) throw new Error('the rollout did not reach the store');
-    // A raw copy where the gate looks, so the exclusion gate clears the session and the harness gate is what decides.
-    f.write(record.project, record.session, rollout.map((entry) => JSON.stringify(entry)));
-    const owners = join(f.root, 'owners-all.json');
-    writeFileSync(owners, JSON.stringify([{ folder: '*', owner: 'Many Oars Co.', license: null }]));
-    expect(await buildPack(f.runtime, options(f, { owners }))).toMatchObject({ scanned: 1, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 1, emitted: 0 });
+    const runtime = await withCodex(f, codexRollout());
+    expect(await buildPack(runtime, options(f, { owners: ownersAll(f) }))).toMatchObject({ scanned: 1, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 1, emitted: 0 });
     expect(existsSync(join(f.out, 'sessions'))).toBe(false);
     expect(manifest(f.out)).toEqual([]);
+  });
+});
+
+describe('a Codex session (plan S2)', () => {
+  // The row is the one under test in Item 5; here it stands in so the gate and the copy can be proved apart from the terms.
+  const packed = async (f: Fixture, rollout: readonly object[] = codexRollout()): Promise<PackCounts> => {
+    const runtime = await withCodex(f, rollout);
+    Reflect.set(HARNESS_TERMS, 'codex', CODEX_ROW);
+    try {
+      return await buildPack(runtime, options(f, { owners: ownersAll(f) }));
+    } finally {
+      Reflect.deleteProperty(HARNESS_TERMS, 'codex');
+    }
+  };
+
+  it('clears the exclusion gate on the rollout alone and is packed', async () => {
+    const f = fixture();
+    expect(await packed(f)).toMatchObject({ scanned: 1, excluded: { term: 0, noRaw: 0 }, noHarnessTerms: 0, emitted: 1 });
+    expect(manifest(f.out)).toMatchObject([{ harness: 'codex' }]);
   });
 });
 
