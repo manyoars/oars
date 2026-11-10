@@ -396,3 +396,67 @@ describe('creating a club is one write', () => {
     expect(await db.prepare('SELECT COUNT(*) AS held FROM clubs').first('held')).toBe(before);
   });
 });
+
+const HOUR = 60 * 60 * 1000;
+
+describe('the brakes on guessing a code and on making clubs', () => {
+  it('answers the 11th wrong code in an hour 429 rate_limited with when to retry, and takes the 10th as an ordinary miss', async () => {
+    const guesser = await member();
+    for (let n = 0; n < 10; n += 1) expect(await join(guesser.token, `WRONG${String(n)}`, 'bow')).toMatchObject({ status: 404, json: { error: 'not_found' } });
+    const braked = await pool.send('/v1/clubs/join', { method: 'POST', body: JSON.stringify({ code: 'WRONGX', nickname: 'bow', consent: (await consents()).club }) }, guesser.token, { 'content-type': 'application/json' });
+    expect(braked.status).toBe(429);
+    expect(braked.json).toMatchObject({ error: 'rate_limited', retry_after: expect.any(Number) as unknown });
+    const wait = Number(fieldOf(braked.json, 'retry_after'));
+    expect(wait).toBeGreaterThan(HOUR / 1000 - 60);
+    expect(wait).toBeLessThanOrEqual(HOUR / 1000);
+    expect(braked.headers.get('retry-after')).toBe(String(wait));
+  });
+
+  it('refuses a right code too until the window clears, then lets it in', async () => {
+    const owner = await member();
+    const guesser = await member();
+    const club = await createClub(owner.token);
+    for (let n = 0; n < 10; n += 1) await join(guesser.token, `WRONG${String(n)}`, 'bow');
+    expect(await join(guesser.token, club.code, 'bow')).toMatchObject({ status: 429, json: { error: 'rate_limited' } });
+    await db.prepare("UPDATE club_attempts SET at = at - ? WHERE account = ?").bind(HOUR + 1000, guesser.account).run();
+    expect((await join(guesser.token, club.code, 'bow')).status).toBe(200);
+  });
+
+  it('lets a right code in while the account is inside the limit, and counts only wrong codes, per account', async () => {
+    const owner = await member();
+    const guesser = await member();
+    const other = await member();
+    const club = await createClub(owner.token);
+    for (let n = 0; n < 9; n += 1) await join(guesser.token, `WRONG${String(n)}`, 'bow');
+    expect((await join(guesser.token, club.code, 'bow')).status).toBe(200);
+    for (let n = 0; n < 10; n += 1) await join(other.token, `NOPE${String(n)}`, 'oar');
+    expect((await join(guesser.token, 'OPEN', 'again')).status).toBe(200);
+    expect((await join(other.token, 'OPEN', 'oar')).status).toBe(429);
+  });
+
+  it('answers the 6th club created in a day 429 rate_limited and takes the 5th, and a day later takes another', async () => {
+    const maker = await member();
+    for (let n = 0; n < 5; n += 1) await createClub(maker.token, `maker${String(n)}`, `Crew ${String(n)}`);
+    const sixth = await pool.post('/v1/clubs', { name: 'Crew 6', nickname: 'maker6', consent: (await consents()).club }, maker.token);
+    expect(sixth.status).toBe(429);
+    expect(sixth.json).toMatchObject({ error: 'rate_limited', retry_after: expect.any(Number) as unknown });
+    expect(Number(fieldOf(sixth.json, 'retry_after'))).toBeLessThanOrEqual(DAY / 1000);
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM clubs WHERE name = ?').bind('Crew 6').first('n')).toBe(0);
+    await db.prepare('UPDATE club_attempts SET at = at - ? WHERE account = ?').bind(DAY + 1000, maker.account).run();
+    await createClub(maker.token, 'maker7', 'Crew 7');
+  });
+
+  it('does not count a refused create (bad name, no consent) against the day', async () => {
+    const maker = await member();
+    for (let n = 0; n < 6; n += 1) expect((await pool.post('/v1/clubs', { name: '!!', nickname: 'maker', consent: (await consents()).club }, maker.token)).status).toBe(422);
+    await createClub(maker.token, 'maker', 'Real crew');
+  });
+
+  it('keeps no more than a day of an account\'s attempts', async () => {
+    const guesser = await member();
+    await join(guesser.token, 'OLDONE', 'bow');
+    await db.prepare('UPDATE club_attempts SET at = at - ? WHERE account = ?').bind(2 * DAY, guesser.account).run();
+    await join(guesser.token, 'NEWONE', 'bow');
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM club_attempts WHERE account = ?').bind(guesser.account).first('n')).toBe(1);
+  });
+});
