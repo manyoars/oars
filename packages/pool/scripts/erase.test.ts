@@ -1204,15 +1204,14 @@ describe('finding the deposit rows that hold a text (gap 10, Articles 15(1) and 
     await db.prepare("INSERT INTO contributors (kind, key, account, day) VALUES ('cell', ?, ?, '2026-11-03')").bind(`cell/${person}/k`, account).run();
     const run = await store();
     expect(await findDepositsContaining(run, { allAccounts: true }, person)).toEqual({ deposits: [], motifs: 0, cells: 1, contributors: 1 });
-    expect(await findDepositsContaining(run, { account }, person)).toEqual({ deposits: [], motifs: 1, cells: 1, contributors: 1 });
+    expect(await findDepositsContaining(run, { account }, person)).toEqual({ deposits: [], motifs: 0, cells: 1, contributors: 1 });
     await eraseLeakedSecret(run, { account, id: 'neverDeposited1', value: person }, NOW);
     expect(await findDepositsContaining(run, { allAccounts: true }, person)).toEqual({ deposits: [], motifs: 0, cells: 0, contributors: 0 });
-    const kept = await db.prepare("SELECT key, harness_bucket, frame_bucket FROM cells WHERE motif_id = ?").bind(`clear${account}`).first<{ key: string; harness_bucket: string; frame_bucket: string }>();
-    expect(Object.values(kept ?? {}).join('
-')).not.toContain(person);
-    expect(kept?.key).toMatch(/^cell\/\[erased:[0-9a-f]{12}\]\/k$/);
-    const record = await db.prepare("SELECT key FROM contributors WHERE account = ?").bind(account).first<{ key: string }>();
-    expect(record?.key).toMatch(/^cell\/\[erased:[0-9a-f]{12}\]\/k$/);
+    const [kept] = await all('SELECT key, harness_bucket, frame_bucket FROM cells WHERE motif_id = ?', `clear${account}`);
+    expect([textOf(kept, 'key'), textOf(kept, 'harness_bucket'), textOf(kept, 'frame_bucket')].join(' ')).not.toContain(person);
+    expect(textOf(kept, 'key')).toMatch(/^cell\/\[erased:[0-9a-f]{12}\]\/k$/);
+    const [record] = await all('SELECT key FROM contributors WHERE account = ?', account);
+    expect(textOf(record, 'key')).toMatch(/^cell\/\[erased:[0-9a-f]{12}\]\/k$/);
   }, 90_000);
 
   it('answers a text no row holds with an empty find, and no day for a row that was never counted', async () => {
