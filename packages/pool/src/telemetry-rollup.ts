@@ -115,10 +115,18 @@ export interface RollupOptions {
 /** What an erased account's batches roll under: it names no account, and the day's rows still count what the installs did (GDPR Article 17(3)(e) leaves the totals). */
 export const ERASED_ACCOUNT = 'erased:';
 
-/** The accounts with an `account` tombstone: an erasure clears the id from the rows, and the R2 batches still name it, so every rebuild of a day has to map it again. */
-const erasedAccounts = async (env: Env): Promise<Set<string>> => {
-  const held = await env.DB.prepare("SELECT digest FROM erasure_tombstones WHERE kind = 'account'").bind().all();
-  return new Set(held.results.map((one) => fieldOf(one, 'digest')).filter((digest): digest is string => typeof digest === 'string'));
+/** What the rollup asks D1 about the accounts its batches name, in one read: the accounts with an `account` tombstone (an erasure clears the id from the rows, and the R2 batches still name it, so every rebuild of a day has to map it again), and the accounts the operator restricted (GDPR Art. 18: their batches stay stored but roll into no row). */
+interface Standing {
+  erased: Set<string>;
+  restricted: Set<string>;
+}
+
+const idsOf = (held: { results: readonly unknown[] }, column: string): Set<string> => new Set(held.results.map((one) => fieldOf(one, column)).filter((value): value is string => typeof value === 'string'));
+
+const standingOf = async (env: Env): Promise<Standing> => {
+  const erased = await env.DB.prepare("SELECT digest FROM erasure_tombstones WHERE kind = 'account'").bind().all();
+  const restricted = await env.DB.prepare('SELECT id FROM accounts WHERE restricted_at IS NOT NULL').bind().all();
+  return { erased: idsOf(erased, 'digest'), restricted: idsOf(restricted, 'id') };
 };
 
 /** Rolls the day's batches (by the day they arrived) into its rows, replacing whatever rows the day had. */
@@ -132,9 +140,9 @@ export const rollupDay = async (env: Env & RollupEnv, day: string, options: Roll
   let batches = 0;
   let gets = 0;
   let lists = 0;
-  // Read once, and only for a day that holds a batch with an account: a day of anonymous batches spends no call on it.
-  let erased: Set<string> | undefined;
-  let tombstoneReads = 0;
+  // Read once (two statements), and only for a day that holds a batch with an account: a day of anonymous batches spends no call on it.
+  let standing: Standing | undefined;
+  let standingReads = 0;
   let truncated = false;
   let cursor: string | undefined;
   do {
@@ -150,11 +158,13 @@ export const rollupDay = async (env: Env & RollupEnv, day: string, options: Roll
       const batch = text === undefined ? undefined : batchOf(text);
       if (batch === undefined) continue;
       batches += 1;
-      if (batch.account !== '' && erased === undefined) {
-        erased = await erasedAccounts(env);
-        tombstoneReads += 1;
+      if (batch.account !== '' && standing === undefined) {
+        standing = await standingOf(env);
+        standingReads += 2;
       }
-      const account = erased?.has(batch.account) === true ? ERASED_ACCOUNT : batch.account;
+      // A restricted account's batch stays in R2 (storage is what Art. 18(2) allows) and counts toward no row, so no night's rollup processes it.
+      if (standing?.restricted.has(batch.account) === true) continue;
+      const account = standing?.erased.has(batch.account) === true ? ERASED_ACCOUNT : batch.account;
       const id = `${batch.install}\u0000${account}`;
       const into = byInstall.get(id) ?? { install: batch.install, account, batches: 0, seen: new Set<string>(), cells: new Map() };
       into.batches += 1;
@@ -164,13 +174,13 @@ export const rollupDay = async (env: Env & RollupEnv, day: string, options: Roll
     cursor = truncated || !page.truncated ? undefined : page.cursor;
   } while (cursor !== undefined);
   const installs = new Set([...byInstall.values()].map((one) => one.install)).size;
-  if (truncated && options.keepWhenCut === true) return { day, batches, installs, truncated, gets, subrequests: lists + gets + tombstoneReads, kept: true };
+  if (truncated && options.keepWhenCut === true) return { day, batches, installs, truncated, gets, subrequests: lists + gets + standingReads, kept: true };
   const insert = [...byInstall.values()].map((one) =>
     env.DB.prepare('INSERT INTO telemetry_install_days (day, install, account, batches, events, measures) VALUES (?, ?, ?, ?, ?, ?)').bind(day, one.install, one.account, one.batches, one.seen.size, JSON.stringify(entriesOf(one))),
   );
   // One transaction, so a reader sees the day before or after the run, never half of it.
   await env.DB.batch([env.DB.prepare('DELETE FROM telemetry_install_days WHERE day = ?').bind(day), ...insert]);
-  return { day, batches, installs, truncated, gets, subrequests: lists + gets + tombstoneReads + 1, kept: false };
+  return { day, batches, installs, truncated, gets, subrequests: lists + gets + standingReads + 1, kept: false };
 };
 
 /**

@@ -78,6 +78,20 @@ describe('hideNickname', () => {
     expect(await db.prepare('SELECT COUNT(*) AS n FROM club_hides WHERE club = ?').bind(club).first('n')).toBe(2);
   });
 
+  it('hides once per seating whatever the operator clock says, and a rejoin allows one more', async () => {
+    const { club, code, guest } = await seated(5, 'Skewed Name');
+    const hours = 3_600_000;
+    const failing: Pick<EraseStore, 'rows' | 'run'> = { rows: storeOf().rows, run: async (sql, binds) => (sql.startsWith('DELETE') ? Promise.reject(new Error('wrangler failed')) : storeOf().run(sql, binds)) };
+    // The first run's clock is hours behind the Worker's, so its hidden_at is before the member's joined_at.
+    await expect(hideNickname(failing, { club, nickname: 'Skewed Name', by: 'matt', reason: 'abuse' }, new Date(Date.now() - 5 * hours))).rejects.toThrow('wrangler failed');
+    expect(await hideNickname(storeOf(), { club, nickname: 'Skewed Name', by: 'matt', reason: 'abuse' }, new Date(Date.now() + 5 * hours))).toBe('hidden');
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM club_hides WHERE club = ?').bind(club).first('n')).toBe(1);
+    // The rejoin is a new seating; the earlier hide's hidden_at is hours ahead of it, which must not count as "after".
+    expect((await pool.post('/v1/clubs/join', { code, nickname: 'Skewed Name', consent: await clubConsent() }, guest.token)).status).toBe(200);
+    expect(await hideNickname(storeOf(), { club, nickname: 'Skewed Name', by: 'matt', reason: 'again' }, new Date(Date.now() + 5 * hours))).toBe('hidden');
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM club_hides WHERE club = ?').bind(club).first('n')).toBe(2);
+  });
+
   it('refuses a malformed club id, a missing nickname, and a missing who or why, changing nothing', async () => {
     const { club } = await seated(4, 'Keep Me');
     await expect(hideNickname(storeOf(), { club: "x'; DROP", nickname: 'Keep Me', by: 'm', reason: 'r' }, NOW)).rejects.toThrow(/not a club id/);

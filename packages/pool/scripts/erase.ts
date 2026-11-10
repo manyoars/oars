@@ -5,6 +5,7 @@
 import { admittedNative, bucketOf, PACKAGE_REGISTRIES, parseSkeleton, type DeltaEntry, type SkeletonFrame, type SkeletonPrompt, type SkeletonStep, type SkeletonTool, type WireHarness } from '../../cli/src/sessions/pool-wire.js';
 import { projectedAgentType, VOCAB_VERSION } from '../../cli/src/sessions/public-vocabulary.js';
 import { ERROR_CODES } from '../../cli/src/sessions/schema.js';
+import { recount, type Counting, type Kind } from '../src/cluster-store.js';
 import { isListed } from '../src/field-classes.js';
 import { depositDigest, digestOf, rawDigest } from '../src/tombstones.js';
 import { eraseBatches, type TelemetryStore } from './erase-batches.js';
@@ -200,7 +201,7 @@ const tombstone = async (store: EraseStore, kind: 'raw-object' | 'deposit' | 'va
   await store.run('INSERT OR IGNORE INTO erasure_tombstones (kind, digest, reason, erased_on) VALUES (?, ?, ?, ?)', [kind, digest, reason, dayOf(now)]);
 };
 
-const audit = async (store: EraseStore, kind: 'raw-object' | 'row' | 'account' | 'close', reason: ErasureReason | 'account-close', account: string, erased: Erased, now: Date): Promise<void> => {
+const audit = async (store: EraseStore, kind: 'raw-object' | 'row' | 'account' | 'close' | 'restrict' | 'lift', reason: ErasureReason | 'account-close' | 'account-restrict' | 'account-lift', account: string, erased: Erased, now: Date): Promise<void> => {
   await store.run('INSERT INTO erasure_audit (kind, reason, erased_on, rows_erased, objects_erased, account) VALUES (?, ?, ?, ?, ?, ?)', [kind, reason, dayOf(now), erased.rows, erased.objects, account]);
 };
 
@@ -445,6 +446,41 @@ export const closeAccount = async (store: EraseStore, accountId: string, now: Da
   const closed = { rows, objects: 0 };
   if (rows > 0) await audit(store, 'close', 'account-close', account, closed, now);
   return closed;
+};
+
+const KINDS: readonly Kind[] = ['cell', 'stratum'];
+/** A recount's chunk, small because `wrangler d1 execute` takes the values inside a command line, not as bindings. */
+const RECOUNT_CHUNK_BYTES = 8 * 1024;
+
+/** The store as the recount reads it: the same statements the Worker runs, through the operator's own connection. */
+const countingOf = (store: EraseStore): Counting => ({
+  DB: {
+    prepare: (sql) => ({
+      bind: (...values) => ({
+        all: async () => ({ results: await store.rows(sql, values) }),
+        run: async () => ({ meta: { changes: await store.run(sql, values) } }),
+      }),
+    }),
+  },
+});
+
+/**
+ * Restricts one account at the person's request (GDPR Art. 18), or lifts the restriction: it sets `accounts.restricted_at` or clears it. While it is set a deposit, a raw request, a machine enrollment, and a club create or join refuse the account 403 `account_restricted`, its rows leave every club board and the open board, a telemetry batch that names it rolls into no row, and its
+ * contributor records count toward no cell's holder count: the same run recounts every cell and stratum the account contributes to, so a cell only it holds (or that falls under its floor without it) stops serving at once, and a lift recounts the same ones with it counted again. A shared cell still above its floor keeps its totals, which relate to no identifiable person (Art. 4(1)), so no recompute is built. Nothing is erased and no credential is revoked, so its export, an erasure, the withdrawal sweep, and the retention sweeps still run, and a lift restores the account whole.
+ * The first restricted-at time stands, so a rerun changes no account row and writes no audit row (it recounts again, which writes the same numbers and finishes a run that stopped between the two steps); a lift of an account that is not restricted is the same. An account the pool has never seen is an error, since a mistyped id would otherwise look like success.
+ */
+export const restrictAccount = async (store: EraseStore, accountId: string, lift: boolean, now: Date): Promise<Erased> => {
+  const account = nameOf(accountId, 'the account');
+  if ((await store.rows('SELECT 1 AS found FROM accounts WHERE id = ?', [account])).length === 0) throw new Error(`No account ${account} in the pool.`);
+  const rows = lift ? await store.run('UPDATE accounts SET restricted_at = NULL WHERE id = ? AND restricted_at IS NOT NULL', [account]) : await store.run('UPDATE accounts SET restricted_at = ? WHERE id = ? AND restricted_at IS NULL', [now.getTime(), account]);
+  const changed = { rows, objects: 0 };
+  // The cells are read from the account's own contributor rows, not through the restricted-aware read, which would answer none once the account is restricted.
+  for (const kind of KINDS) {
+    const held = await store.rows('SELECT DISTINCT key FROM contributors WHERE kind = ? AND account = ?', [kind, account]);
+    await recount(countingOf(store), kind, held.map((row) => textOf(row, 'key')), now.getTime(), RECOUNT_CHUNK_BYTES);
+  }
+  if (rows > 0) await audit(store, lift ? 'lift' : 'restrict', lift ? 'account-lift' : 'account-restrict', account, changed, now);
+  return changed;
 };
 
 /** A raw object that holds the text the find looked for: its R2 key, its account, and its size as the ledger recorded it. Nothing of what the object says. */

@@ -54,7 +54,7 @@ Rules for how hard to ask:
 4. When they report the files are saved, the answer is complete. If the command fails, send the error line back and retry once the cause is fixed.
 
 **Command (the operator runs it, when the requester cannot run the client):** confirm the account by a token proof first (see "Who is asking": `oars pool prove`, or a refused sign-in; never a machine key). Then, from the repository root:
-`npm run erase -w packages/pool -- export --account <account id> --out <folder> [--raw] [--local]`.
+`npm run erase -w packages/pool -- export --account <account id> --out <folder> [--raw] [--local]`. Use a new, empty folder for each run: the command refuses a folder that already holds files, so a copy from an earlier run is never sent by mistake.
 It only reads, so it takes no `--confirm`. It writes the same `account-export-NNNN.json` pages `oars pool export` writes (one page builder serves both), and with `--raw` each raw object not erased, checked against its name; it lists any that is missing or altered and exits non-zero while still writing the rest. It reads D1 and R2 through your own `wrangler` login, so it needs no token; `--local` reads the local store.
 
 **Operator steps:** 1. Confirm the account (above). 2. Run the command; read the counts it prints. 3. Send the folder as one archive encrypted with a passphrase, and the passphrase by another channel the requester names (Art. 32). 4. Delete your copy of the folder and the archive once they confirm they have it.
@@ -71,13 +71,12 @@ Limit: **recipients.** None to name today. Nothing is sold, and no path hands de
 
 **Arrives:** an email saying a record about them is wrong.
 
-Gap: **no command.** A deposit is a derived skeleton and the ledger never changes its content. Not yet possible.
-
-What you can do by hand, and only if the requester asks for it:
+A deposit row is the record of what the client sent, so it is accurate as that record; the ledger never changes content, and there is no edit command. Art. 16 corrects data that are inaccurate for their purpose, so you answer it in one of these ways, and only if the requester asks:
+- They show a row is not theirs or not what was sent: restrict the account while you check (`erase restrict`, Art. 18(1)(a); see "Art. 18, restriction" below), then erase the row (`erase row`, Art. 17 below).
 - A wrong machine label: they revoke the machine and enroll it again with the right label (`oars pool machines revoke <id>`, then `oars pool enroll ...`).
-- A deposit they do not want kept: erase it. That is the Art. 17 request below.
+- A statement they want kept beside a record (Art. 16, second sentence): keep it in the request register, with the date.
 
-**Answer to send:** say the pool cannot correct a deposit in place, name the two options above, and say what each does. If you decline, say why, within the month.
+**Answer to send:** say a deposit records what the client sent and so is not changed in place, name the options above that apply, and say what each does. If you decline, say why within the month (Art. 12(4)).
 
 **Record kept:** dates, the request, and the answer.
 
@@ -115,15 +114,20 @@ Limit: **Art. 19, telling recipients.** No one to tell: a bundle carries no acco
 
 **Arrives:** an email asking you to stop using their data while a dispute about it is settled.
 
-Gap: **no per-account freeze on the pool.** Nothing marks an account's held data as restricted. Not yet possible.
+**Steps:**
+1. Confirm the account (see "Who is asking").
+2. Dry run: `npm run erase -w packages/pool -- restrict --account <id>`. Read the line it prints, then add `--confirm`. The command sets `accounts.restricted_at`, writes one `erasure_audit` row (kind `restrict`), and revokes and deletes nothing. A rerun changes nothing. Restrict on request on any Art. 18(1) ground, and while you weigh an objection (18(1)(d)).
+3. Tell them what stops and what stays (below).
+4. Before you lift it (`restrict --account <id> --lift --confirm`), tell the requester (Art. 18(3)). Lifting restores the account whole: no credential was revoked.
 
-The nearest steps, with their agreement:
-- Stop later deposits: close the account (below). This ends all credentials. The held data stays and is still processed.
+What stops while it is set: later deposits and raw parts are refused (403 `account_restricted`, a machine key's too), enrolling a new machine is refused the same way (new processing, Art. 18(1)), and its batches roll into no telemetry row. Its rows also leave every club board and the open board (`GET /v1/board`) while it is set, as a closed account's do, and creating or joining a club is refused the same way (publishing counts under a nickname is processing, not storage, Art. 18(1)); leaving a club still works, and a lift shows the rows again. The operator's restrict run recounts every cell and stratum the account contributes to at once, and a lift recounts them with it counted again. The account stops counting toward a cell's holder count at once, so a cell only it holds (or that falls under its floor without it) stops serving; a shared cell still above its floor keeps its totals (sessions, outcomes, tokens, and duration), which include the account's earlier increments, because a cell above the floor relates to no identifiable person (Art. 4(1), Recital 26), so Art. 18(1) does not reach it, and no recompute is built. Telemetry batches carry no account, so the telemetry route cannot refuse them. What stays: the data stored, the account's own export (Art. 15), an erasure if they ask (Art. 17), the withdrawal sweep, and the retention sweeps, because each is the person's own request or a deletion, which Art. 18(2) does not stop.
+
+The nearest steps, for a person who wants only to stop sending, with their agreement:
 - On their machine: `oars pool raw --folder <entry> --mode off`, or `oars sessions deposit --deny <folder>`, or `oars sessions hook install --schedule off`. These stop later sends only.
 
-**Answer to send:** say what stops and what does not, in those words. Do not say the data is restricted.
+**Answer to send:** what stops and what stays, in those words, and that you will tell them before you lift it.
 
-**Record kept:** dates, the request, and the steps taken.
+**Record kept:** dates, the request and its ground, the steps taken, and the date you lifted it.
 
 ## Art. 21, objection
 
@@ -133,7 +137,7 @@ Covenant 6.6(a): you must stop the processing unless you show compelling grounds
 
 **Steps:**
 1. Confirm the account.
-2. If you accept: close the account so no more arrives (below), and erase if they ask for it (Art. 17 above). Closing deletes their credentials; erasing removes their contributor records.
+2. While you weigh the grounds, restrict the account (`erase restrict`, Art. 18(1)(d); see above). If you accept: erase the account (`erase account`, Art. 17 above), whose unlink of the kept rows covenant 6.6(c) allows in place of deletion; close the account too if they want no more arriving (below). Closing deletes their credentials; erasing removes their contributor records.
 3. For telemetry only: they run `oars telemetry off`, or set `OARS_TELEMETRY=0`.
 4. If you do not accept, tell them the grounds within the month, with the complaint right.
 
@@ -141,7 +145,7 @@ Covenant 6.6(a): you must stop the processing unless you show compelling grounds
 
 **Record kept:** the decision and the grounds, with dates.
 
-Gap: **no exclusion marker for a sale or a manual export.** Nothing is sold today. When a sale path exists, nothing excludes an objecting account from it, because no field records the objection. Not yet possible. Keep your record of the objection; it is the only trace.
+Nothing is sold and no path hands deposits to anyone, so an objection to sale or training has nothing to exclude from yet. Record it in the register, scope included; the first sale path loads those records.
 
 ## Art. 7(3), withdrawing raw consent
 
@@ -207,8 +211,9 @@ You cannot confirm them against an account, so confirm the claim instead: find t
    `npm run erase -w packages/pool -- raw --contains --value-stdin --all-accounts` (eight characters at least)
 2. It prints each matching key, account, and size, and changes nothing.
 3. Erase each key you accept. Dry run: `npm run erase -w packages/pool -- raw <r2-key>`. Read the line it prints, then add `--confirm`.
-4. Deposit skeletons, motifs, cells, and contributors that hold the text. Dry run, text on stdin: `npm run erase -w packages/pool -- row --account <id> --id <session> --value-stdin`. Read the line it prints, then add `--confirm`. That scrubs the text from every place it appears, for every account, and cannot be undone. Later deposits holding the exact text are refused.
-   The account is the one in the raw key. With no known session, the dry run shows "no such row: only the value would be erased".
+4. Deposit rows (until the deposit find ships): put the text, and its JSON-escaped form, in a temporary SQL file of `SELECT account, id FROM deposits WHERE instr(skeleton, '<text>') > 0 OR instr(extensions, '<text>') > 0`-style reads over `deposits`, `motifs`, `cells`, and `contributors`. Run it with `npx wrangler d1 execute oars-pool --remote --file <file>` from `packages/pool` (this reads production, so only for a live request), then delete the file. `eraseLeakedSecret`'s search in `scripts/erase.ts` has the exact statements.
+5. Deposit skeletons, motifs, cells, and contributors that hold the text. Dry run, text on stdin: `npm run erase -w packages/pool -- row --account <id> --id <session> --value-stdin`. Read the line it prints, then add `--confirm`. That scrubs the text from every place it appears, for every account, and cannot be undone. Later deposits holding the exact text are refused.
+   The account is the one in the raw key or the deposit read. With no known session, the dry run shows "no such row: only the value would be erased".
 
 Gap: **parts of a raw object still uploading are not searched**, and redaction can miss a name written in prose.
 

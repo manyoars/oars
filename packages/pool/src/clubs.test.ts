@@ -113,6 +113,18 @@ describe('creating and joining a club', () => {
     expect(await join(guest.token, club.code, 'stroke')).toMatchObject({ status: 409, json: { error: 'already_member' } });
   });
 
+  it('refuses stacked and enclosing marks in a nickname on join and on create, and keeps a vowel-signed name', async () => {
+    const owner = await member();
+    const club = await createClub(owner.token);
+    const guest = await member();
+    // "a" and three combining acutes; "a" and an enclosing circle (Me).
+    for (const bad of ['á́́b', 'a⃝b']) {
+      expect(await join(guest.token, club.code, bad), bad).toMatchObject({ status: 422, json: { error: 'nickname_invalid' } });
+      expect((await pool.post('/v1/clubs', { name: 'Crew', nickname: bad, consent: (await consents()).club }, guest.token)).status, bad).toBe(422);
+    }
+    expect((await join(guest.token, club.code, 'नमस्ते')).status).toBe(200);
+  });
+
   it('refuses the 51st member and still takes the 50th', async () => {
     const owner = await member();
     const club = await createClub(owner.token, 'm00');
@@ -302,6 +314,49 @@ describe('the open board', () => {
     expect(await db.prepare('SELECT COUNT(*) AS held FROM club_members WHERE account = ?').bind(closing.account).first('held')).toBe(2);
   });
 
+  it('drops a restricted account from the open board and from its clubs, keeps its rows, and shows it again once lifted (GDPR Art. 18)', async () => {
+    const owner = await member();
+    const restricted = await member(true);
+    const club = await createClub(owner.token, 'club-owner');
+    await join(restricted.token, club.code, 'restricted-oar');
+    expect((await joinOpen(restricted.token, 'restricted-open')).status).toBe(200);
+    await weeks(restricted.account, [0]);
+    await countedAgo(restricted.account, 100);
+    const restrict = async (at: number | null): Promise<void> => {
+      await db.prepare('UPDATE accounts SET restricted_at = ? WHERE id = ?').bind(at, restricted.account).run();
+    };
+
+    await restrict(Date.now());
+    expect(namesOf((await pool.get('/v1/board')).json)).not.toContain('restricted-open');
+    expect(namesOf((await pool.get(`/v1/clubs/${club.id}`, owner.token)).json)).toEqual(['club-owner']);
+    expect(await db.prepare('SELECT COUNT(*) AS held FROM club_members WHERE account = ?').bind(restricted.account).first('held')).toBe(2);
+    expect(await db.prepare('SELECT COUNT(*) AS held FROM account_weeks WHERE account = ?').bind(restricted.account).first('held')).toBe(1);
+
+    await restrict(null);
+    expect(namesOf((await pool.get('/v1/board')).json)).toContain('restricted-open');
+    expect(namesOf((await pool.get(`/v1/clubs/${club.id}`, owner.token)).json)).toContain('restricted-oar');
+
+    // Leaving is not gated: it is the person's own act and ends the processing.
+    await restrict(Date.now());
+    expect((await leave(restricted.token, club.id)).status).toBe(204);
+  });
+
+  it('refuses a restricted account a new club and a join with 403 account_restricted, and takes both again once lifted', async () => {
+    const owner = await member();
+    const restricted = await member(true);
+    const club = await createClub(owner.token, 'club-owner');
+    await db.prepare('UPDATE accounts SET restricted_at = ? WHERE id = ?').bind(Date.now(), restricted.account).run();
+    const refused = { status: 403, json: { error: 'account_restricted', message: 'This account is restricted at your request: the pool keeps its data stored and takes nothing more until the restriction is lifted. Write to privacy@manyoars.com.' } };
+
+    expect(await pool.post('/v1/clubs', { name: 'Late crew', nickname: 'late', consent: (await consents()).club }, restricted.token)).toMatchObject(refused);
+    expect(await join(restricted.token, club.code, 'late-oar')).toMatchObject(refused);
+    expect(await joinOpen(restricted.token, 'late-open')).toMatchObject(refused);
+    expect(await db.prepare('SELECT COUNT(*) AS held FROM club_members WHERE account = ?').bind(restricted.account).first('held')).toBe(0);
+
+    await db.prepare('UPDATE accounts SET restricted_at = NULL WHERE id = ?').bind(restricted.account).run();
+    expect((await join(restricted.token, club.code, 'late-oar')).status).toBe(200);
+  });
+
   it('has no code of its own to guess', async () => {
     expect(await db.prepare("SELECT code_hash FROM clubs WHERE id = 'open'").first('code_hash')).toBeNull();
   });
@@ -434,6 +489,21 @@ describe('the brakes on guessing a code and on making clubs', () => {
     const openJoin = async (token: string, nickname: string): Promise<number> => (await pool.post('/v1/clubs/join', { code: 'OPEN', nickname, consent: (await consents()).open }, token)).status;
     expect(await openJoin(guesser.token, 'again')).toBe(200);
     expect(await openJoin(other.token, 'oar')).toBe(429);
+  });
+
+  it('refuses an invalid nickname or consent 422 first and does not count it toward either brake', async () => {
+    const person = await member();
+    const club = await createClub(person.token, 'first', 'Crew one');
+    for (let n = 0; n < 12; n += 1) {
+      expect((await join(person.token, `WRONG${String(n)}`, '<bad>')).status).toBe(422);
+      expect((await pool.post('/v1/clubs/join', { code: `WRONG${String(n)}`, nickname: 'bow', consent: sha256('something else') }, person.token)).status).toBe(422);
+      expect((await pool.post('/v1/clubs', { name: `Crew ${String(n)}`, nickname: '<bad>', consent: (await consents()).club }, person.token)).status).toBe(422);
+    }
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM club_attempts WHERE account = ?').bind(person.account).first('n')).toBe(1);
+    const other = await member();
+    expect(await join(person.token, 'WRONGZ', 'bow')).toMatchObject({ status: 404, json: { error: 'not_found' } });
+    expect((await join(other.token, club.code, 'bow')).status).toBe(200);
+    await createClub(person.token, 'second', 'Crew two');
   });
 
   it('answers the 6th club created in a day 429 rate_limited and takes the 5th, and a day later takes another', async () => {

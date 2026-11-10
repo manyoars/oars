@@ -9,7 +9,7 @@ import { answer, bound, brake, notConfigured, refuse, type Env } from './http.js
 import { receivePart } from './parts.js';
 import { heldBy, recount, repoKeysOf, signalStatements } from './cluster-store.js';
 import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf, shapeOf, weekStatements } from './ingest.js';
-import { loginGone, loginPoll, loginStart, logout, proveControl } from './identity.js';
+import { loginGone, loginPoll, loginStart, logout, proveControl, restrictedRefusal } from './identity.js';
 import { hashHosts, hashKey } from './ingest-hash.js';
 import { activate, callerOf, enroll, list, machineScope, revoke, rotate, type Caller } from './machines.js';
 import { stampOf, takeClaim } from './provenance.js';
@@ -129,6 +129,8 @@ const deposit = async (request: Request, env: Env): Promise<Response> => {
   const caller = await callerOf(request, env, Date.now());
   if (caller instanceof Response) return caller;
   if (caller === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
+  const restricted = await restrictedRefusal(env, caller.account);
+  if (restricted !== undefined) return restricted;
   if (!(await hasAccepted(env, caller.account, version))) return covenantNotAccepted(version);
   // A host is hashed before any write, so a pool with no key refuses here, before the body is read, rather than store one in clear.
   const secret = bound(env.INGEST_HASH_KEY);

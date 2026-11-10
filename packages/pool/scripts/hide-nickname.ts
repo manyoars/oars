@@ -23,8 +23,8 @@ export const hideNickname = async (store: Store, hide: { club: string; nickname:
   if (nickname === '') throw new Error('--nickname is required: the member to hide');
   if (hide.by.trim() === '' || hide.reason.trim() === '') throw new Error('--by and --reason are required: the hide is a record of who decided and why');
   if ((await store.rows(FIND, [hide.club, nickname])).length === 0) return 'absent';
-  // The store runs one statement at a time, so the two writes cannot share a transaction. The record goes first and only once per seating (none at or after the member's `joined_at` yet): a run that failed before the delete leaves the member seated and one record, and the rerun adds none and finishes the delete.
-  await store.run('INSERT INTO club_hides (club, account, nickname, hidden_at, hidden_by, reason) SELECT m.club, m.account, m.nickname, ?, ?, ? FROM club_members m WHERE m.club = ? AND m.nickname = ? COLLATE NOCASE AND NOT EXISTS (SELECT 1 FROM club_hides h WHERE h.club = m.club AND h.account = m.account AND h.hidden_at >= m.joined_at)', [now.getTime(), hide.by.trim(), hide.reason.trim(), hide.club, nickname]);
+  // The store runs one statement at a time, so the two writes cannot share a transaction. The record goes first and only once per seating (none yet with this `joined_at` as its `seated_at`, so the guard compares two Worker-side times and a skewed operator clock cannot change it): a run that failed before the delete leaves the member seated and one record, and the rerun adds none and finishes the delete.
+  await store.run('INSERT INTO club_hides (club, account, nickname, hidden_at, hidden_by, reason, seated_at) SELECT m.club, m.account, m.nickname, ?, ?, ?, m.joined_at FROM club_members m WHERE m.club = ? AND m.nickname = ? COLLATE NOCASE AND NOT EXISTS (SELECT 1 FROM club_hides h WHERE h.club = m.club AND h.account = m.account AND h.seated_at = m.joined_at)', [now.getTime(), hide.by.trim(), hide.reason.trim(), hide.club, nickname]);
   await store.run('DELETE FROM club_members WHERE club = ? AND nickname = ? COLLATE NOCASE', [hide.club, nickname]);
   return 'hidden';
 };

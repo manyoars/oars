@@ -1,6 +1,7 @@
 // One pool under the Workers runtime for a test file: the bundled handler and its D1 store in Miniflare's workerd, with a stub device-flow provider behind the Worker's outbound fetch. No account, no Docker, no network.
 import { createHash, webcrypto } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
+import type { Socket } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { build, type PluginBuild } from 'esbuild';
 import { convertV4MiniflareOptions, CoreHeaders, Miniflare, ProxyOps, Request as StubRequest, Response as StubResponse } from 'miniflare';
@@ -142,39 +143,54 @@ export const keepAliveSender = (entry: () => Promise<URL>, now: () => number = D
   let peak = 0;
   const retired: Promise<void>[] = [];
   // An Agent's own timer cannot keep a socket from a dead server when the thread stalls: the next `send` runs on the tick the thread wakes, before undici has seen the server's FIN or fired its timer
-  // (t1090). So a lane goes by the clock: one that has sat idle past the keep-alive window is retired, and its next request opens a connection. `close` lets requests in flight finish.
-  const lane = (options: Agent.Options) => {
-    let agent = new Agent(options);
+  // (t1090). So a lane goes by the clock: one that holds a socket idle past the keep-alive window is retired, and its next request opens a connection. `close` lets requests in flight finish.
+  // A lane can hold several sockets, so each keeps its own last activity (its connect, then each chunk it receives; dropped on close): one clock per lane would read the lane as fresh because a
+  // different socket was used since (t1099).
+  const lane = (onConnect: () => void) => {
+    const activity = new Map<Socket, number>();
+    const open = (): Agent =>
+      new Agent({
+        ...keepAliveTimeout,
+        connect: (connectOptions, callback) => {
+          onConnect();
+          connector(connectOptions, (error, socket) => {
+            if (error !== null) {
+              callback(error, null);
+              return;
+            }
+            activity.set(socket, now());
+            socket.on('data', () => activity.set(socket, now()));
+            socket.once('close', () => activity.delete(socket));
+            callback(null, socket);
+          });
+        },
+      });
+    let agent = open();
     let busy = 0;
-    let idleSince = now();
     return {
       take: (): Agent => {
-        if (busy === 0 && now() - idleSince > KEEP_ALIVE_MS) {
+        if (busy === 0 && [...activity.values()].some((at) => now() - at > KEEP_ALIVE_MS)) {
           retired.push(agent.close());
-          agent = new Agent(options);
+          activity.clear();
+          agent = open();
         }
         busy += 1;
         return agent;
       },
       release: (): void => {
         busy -= 1;
-        idleSince = now();
       },
       close: async (): Promise<void> => {
         await agent.close();
       },
     };
   };
-  const calls = lane({
-    ...keepAliveTimeout,
-    connect: (options, callback) => {
-      connects += 1;
-      connector(options, callback);
-    },
+  const calls = lane(() => {
+    connects += 1;
   });
   // Miniflare frees the handles `getBindings` returned in a DELETE it sends on its own schedule (100 ms after a garbage collection), so it can be in flight while a test makes its next call. An Agent opens
   // a connection for a request that finds none idle; on the calls' Agent that DELETE would take the connection the call is about to reuse and cost it a connect. Its own Agent keeps the calls' count about the calls.
-  const releases = lane(keepAliveTimeout);
+  const releases = lane(() => undefined);
   let inFlight = 0;
   const send: Miniflare['dispatchFetch'] = async (input, init) => {
     const forward = new StubRequest(input, init);

@@ -1,4 +1,4 @@
-// Commit survival against real git repositories in a temp folder: the states are git's answers, so a fake git would prove nothing about them.
+// Commit survival against real git repositories in a temp folder: the states are git's answers, so a fake git would prove nothing about them. Only the due-date tests use a scripted `Git` (`holdsAll`): which commits are due is decided before git is asked.
 import { execFileSync, spawn } from 'node:child_process';
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -176,7 +176,7 @@ describe('recordSurvival', () => {
   // The boundary is `>=` on a day-resolution promise ("more than" SURVIVAL_DAYS old): a call exactly at the cutoff is not due, and one a millisecond older is.
   const countsFor = async (ts: string | null) => {
     const sha = 'a1b2c3d4';
-    const { s, project } = await staged(sharedDir, [{ sha, ts }]);
+    const { s, project } = await staged(shared().repo, [{ sha, ts }]);
     return recordSurvival(s.runtime, [project], () => NOW, holdsAll(sha));
   };
   const CUTOFF = NOW - SURVIVAL_DAYS * 86_400_000;
@@ -228,6 +228,7 @@ describe('recordSurvival', () => {
 
   it('reads a commit left on a branch the default branch never took as unreachable', async () => {
     const repo = makeRepo();
+    // No `publish`, on purpose: the default branch is the local `main` (the `refs/heads/main` fallback, as in the next test), and the commit on `side` is never merged into it.
     gitIn(repo, 'checkout', '-q', '-b', 'side');
     const sha = emptyCommitIn(repo, 'side');
     gitIn(repo, 'checkout', '-q', 'main');

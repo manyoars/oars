@@ -3,7 +3,7 @@
 import { createHash } from 'node:crypto';
 import { answer, bodyOf, fieldOf, refuse, textField, type Bound, type Env } from './http.js';
 import { STANDING_AFTER_DAYS } from './access.js';
-import { accountOf } from './identity.js';
+import { accountOf, restrictedRefusal } from './identity.js';
 import { isoWeekOf } from './week.js';
 
 /** A club holds at most this many members. */
@@ -34,17 +34,19 @@ const NAME = /^[\p{L}\p{N}][\p{L}\p{N} ._-]{0,23}$/u;
 
 /** The rule, in the one line a refusal carries. */
 const NICKNAME_RULE = 'A nickname is 2 to 24 letters, digits, spaces, dots, underscores, or hyphens, with no space at either end, no @, and no web address.';
-/** Letters, digits, space, dot, underscore, hyphen; no space at either end. Combining marks (vowel signs in Devanagari, Thai, Tamil, and others) may follow the first character. Length is checked apart, in characters. */
-const NICKNAME = /^[\p{L}\p{N}_.-](?:[\p{L}\p{N}\p{M} _.-]*[\p{L}\p{N}\p{M}_.-])?$/u;
+/** Letters, digits, space, dot, underscore, hyphen; no space at either end. Non-spacing and spacing combining marks (vowel signs in Devanagari, Thai, Tamil, and others) may follow the first character; enclosing marks may not. Length is checked apart, in characters. */
+const NICKNAME = /^[\p{L}\p{N}_.-](?:[\p{L}\p{N}\p{Mn}\p{Mc} _.-]*[\p{L}\p{N}\p{Mn}\p{Mc}_.-])?$/u;
+/** A run of three marks is a stack that spills over its neighbors. */
+const MARK_STACK = /\p{M}{3}/u;
 /** A web address in a name: "www." or a dot before a common top-level domain. The character set already keeps out "@", ":", and "/". */
 const WEB_ADDRESS = /www\.|\.(?:com|net|org|io|dev|app|co|me|ly|xyz|info|biz|gg|tv)(?![\p{L}\p{N}])/iu;
 
-/** The NFKC form of a nickname that follows the rule, else undefined. NFKC first, so a full-width or look-alike form is judged and stored as the plain one. */
+/** The NFKC form of a nickname that follows the rule, else undefined. NFKC first, so a full-width or look-alike form is judged and stored as the plain one. The mark stack is also judged before NFKC, which would fold a letter and its first accent into one character and hide a stack. */
 const nicknameOf = (given: string | undefined): string | undefined => {
   if (given === undefined) return undefined;
   const nickname = given.normalize('NFKC');
   const length = Array.from(nickname).length;
-  return length >= 2 && length <= 24 && NICKNAME.test(nickname) && !WEB_ADDRESS.test(nickname) ? nickname : undefined;
+  return length >= 2 && length <= 24 && NICKNAME.test(nickname) && !MARK_STACK.test(given) && !MARK_STACK.test(nickname) && !WEB_ADDRESS.test(nickname) ? nickname : undefined;
 };
 
 const signedIn = async (request: Request, env: Env): Promise<string | Response> => (await accountOf(request, env)) ?? refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
@@ -99,10 +101,10 @@ const streakOf = (weeks: ReadonlySet<string>, now: number): number => {
 /** The open board's standing rule: a hand grant, the latched `standing` flag, or a first counting deposit at least `STANDING_AFTER_DAYS` old (read directly, so a flag not yet latched does not hide an old account). The second bind is the cutoff. */
 const STANDING_ONLY = ` AND (EXISTS (SELECT 1 FROM board_standing g WHERE g.account = m.account) OR (SELECT access FROM accounts a WHERE a.id = m.account) = 'standing' OR (SELECT MIN(counted_at) FROM deposits d WHERE d.account = m.account AND d.counted_at IS NOT NULL AND d.tier <> 'none') <= ?)`;
 
-/** A club's members as the board shows them: counted members by weeks rowing, active days, then nickname; those with no counting deposit last, "ashore", with no numbers. */
+/** A club's members as the board shows them: counted members by weeks rowing, active days, then nickname; those with no counting deposit last, "ashore", with no numbers. A closed or restricted account is not listed (its rows stay stored; GDPR Art. 18(1)). */
 const boardOf = async (env: Env, club: string, now: number, standingOnly = false): Promise<object[]> => {
   const { results } = await env.DB.prepare(
-    `SELECT m.nickname AS nickname, w.week AS week, w.sessions AS sessions, w.tool_steps AS steps, w.day_mask AS mask FROM club_members m LEFT JOIN account_weeks w ON w.account = m.account AND w.sessions > 0 WHERE m.club = ? AND NOT EXISTS (SELECT 1 FROM accounts c WHERE c.id = m.account AND c.closed_at IS NOT NULL)${standingOnly ? STANDING_ONLY : ''}`,
+    `SELECT m.nickname AS nickname, w.week AS week, w.sessions AS sessions, w.tool_steps AS steps, w.day_mask AS mask FROM club_members m LEFT JOIN account_weeks w ON w.account = m.account AND w.sessions > 0 WHERE m.club = ? AND NOT EXISTS (SELECT 1 FROM accounts c WHERE c.id = m.account AND (c.closed_at IS NOT NULL OR c.restricted_at IS NOT NULL))${standingOnly ? STANDING_ONLY : ''}`,
   ).bind(...(standingOnly ? [club, now - STANDING_AFTER_DAYS * DAY_MS] : [club])).all();
   const entries = new Map<string, Entry>();
   const thisWeek = isoWeekOf(now);
@@ -144,9 +146,15 @@ const refusalOf = async (env: Env, club: string, account: string, nickname: stri
   return null;
 };
 
+/** The account that may take a seat: signed in and not restricted, because joining a board publishes its counts and that is processing beyond storage (GDPR Art. 18(1)). Leaving and reading stay open. */
+const seatable = async (request: Request, env: Env): Promise<string | Response> => {
+  const account = await signedIn(request, env);
+  return account instanceof Response ? account : ((await restrictedRefusal(env, account)) ?? account);
+};
+
 /** `POST /v1/clubs`: a club named by its creator, who is its first member. The code comes back once; only its hash is kept. */
 export const createClub = async (request: Request, env: Env): Promise<Response> => {
-  const account = await signedIn(request, env);
+  const account = await seatable(request, env);
   if (account instanceof Response) return account;
   const body = await bodyOf(request);
   const name = textField(body, 'name')?.trim();
@@ -164,7 +172,7 @@ export const createClub = async (request: Request, env: Env): Promise<Response> 
 
 /** `POST /v1/clubs/join`: the code, a nickname, and the hash of the consent text. The code word `OPEN` joins the open board, whose consent text is its own. */
 export const joinClub = async (request: Request, env: Env): Promise<Response> => {
-  const account = await signedIn(request, env);
+  const account = await seatable(request, env);
   if (account instanceof Response) return account;
   const body = await bodyOf(request);
   const code = textField(body, 'code')?.trim().toUpperCase() ?? '';

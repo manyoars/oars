@@ -191,7 +191,7 @@ describe('the wrangler store', () => {
 
 describe('main', () => {
   it('changes nothing without --confirm and says what it would do', async () => {
-    for (const argv of [['raw', `raw/${ACCOUNT}/${SHA}`], ['row', '--account', ACCOUNT, '--id', 's1'], ['row', '--account', ACCOUNT, '--id', 's1', '--value-stdin'], ['account', '--account', ACCOUNT], ['close', '--account', ACCOUNT]]) {
+    for (const argv of [['raw', `raw/${ACCOUNT}/${SHA}`], ['row', '--account', ACCOUNT, '--id', 's1'], ['row', '--account', ACCOUNT, '--id', 's1', '--value-stdin'], ['account', '--account', ACCOUNT], ['close', '--account', ACCOUNT], ['restrict', '--account', ACCOUNT], ['restrict', '--account', ACCOUNT, '--lift']]) {
       const { io, calls, printed } = fake({ rows: [{ found: 1 }] });
       expect(await main(argv, io)).toBe(0);
       // The only call a dry run makes is the SELECT that checks the row named.
@@ -223,6 +223,47 @@ describe('main', () => {
     expect(statements[3]).toContain("UPDATE machines SET state = 'revoked'");
     expect(statements.join(' ')).not.toMatch(/deposits|raw_objects|DELETE FROM (cells|strata|contributors)/);
     expect(printed).toEqual([JSON.stringify({ rowsChanged: 3 })]);
+  });
+
+  it('restricts an account: checks it exists, sets restricted_at once, audits, and deletes and revokes nothing', async () => {
+    const { io, calls, printed } = fake({ answer: (sql) => (sql.includes('FROM contributors') ? [] : [{ found: 1 }]) });
+    expect(await main(['restrict', '--account', ACCOUNT, '--confirm'], io)).toBe(0);
+    const statements = calls.map((call) => call[6] ?? '');
+    expect(statements[0]).toBe(`SELECT 1 AS found FROM accounts WHERE id = '${ACCOUNT}'`);
+    expect(statements[1]).toMatch(/^UPDATE accounts SET restricted_at = \d+ WHERE id = 'acct_[0-9a-f]+' AND restricted_at IS NULL$/);
+    expect(statements.join(' ')).not.toMatch(/DELETE|tokens|machines|deposits|raw_objects/);
+    expect(printed).toEqual([JSON.stringify({ rowsChanged: 1 })]);
+  });
+
+  it('lifts a restriction with --lift, clearing restricted_at', async () => {
+    const { io, calls, printed } = fake({ answer: (sql) => (sql.includes('FROM contributors') ? [] : [{ found: 1 }]) });
+    expect(await main(['restrict', '--account', ACCOUNT, '--lift', '--confirm'], io)).toBe(0);
+    expect(calls.map((call) => call[6] ?? '')[1]).toMatch(/^UPDATE accounts SET restricted_at = NULL WHERE id = 'acct_[0-9a-f]+' AND restricted_at IS NOT NULL$/);
+    expect(printed).toEqual([JSON.stringify({ rowsChanged: 1 })]);
+  });
+
+  it('tells the operator in the dry run what a restriction refuses and what it does not (deposits, raw parts, enrollment, club joins; telemetry rolls into no row)', async () => {
+    const restrict = fake({ rows: [{ found: 1 }] });
+    expect(await main(['restrict', '--account', ACCOUNT], restrict.io)).toBe(0);
+    const lift = fake({ rows: [{ found: 1 }] });
+    expect(await main(['restrict', '--account', ACCOUNT, '--lift'], lift.io)).toBe(0);
+    for (const plan of [restrict.printed.join('\n'), lift.printed.join('\n')]) {
+      expect(plan).toContain('deposits, raw parts, machine enrollment, and club joins');
+      expect(plan).toContain('telemetry batches');
+      expect(plan).not.toContain('telemetry are refused');
+    }
+    expect(restrict.printed.join('\n')).toContain('deposits, raw parts, machine enrollment, and club joins are refused, its rows leave every club board, and its telemetry batches roll into no row');
+    expect(lift.printed.join('\n')).toContain('deposits, raw parts, machine enrollment, and club joins are taken again, its rows return to the club boards, its telemetry batches roll into a row again');
+    expect([...restrict.calls, ...lift.calls]).toEqual([]);
+  });
+
+  it('recounts the cells and strata the account holds in the same run, in small chunks, before it audits', async () => {
+    const { io, calls } = fake({ answer: (sql) => (sql.includes('SELECT DISTINCT key FROM contributors') ? [{ key: 'cell-1' }] : [{ found: 1 }]) });
+    expect(await main(['restrict', '--account', ACCOUNT, '--confirm'], io)).toBe(0);
+    const statements = calls.map((call) => call[6] ?? '');
+    const writes = statements.filter((sql) => /^UPDATE (cells|strata) SET clusters/.test(sql));
+    expect(writes).toHaveLength(2);
+    expect(statements.findIndex((sql) => sql.startsWith('INSERT INTO erasure_audit'))).toBeGreaterThan(statements.indexOf(writes[1] ?? ''));
   });
 
   it('answers exit code 1 and the reason when the account is not in the pool', async () => {
@@ -331,7 +372,7 @@ describe('main', () => {
   });
 
   it('answers a usage error with exit code 2 and the usage', async () => {
-    for (const argv of [[], ['nothing'], ['raw'], ['raw', 'k', 'extra'], ['row', '--account', ACCOUNT], ['account'], ['account', '--account', ACCOUNT, '--id', 's'], ['close'], ['close', '--account', ACCOUNT, '--id', 's'], ['raw', 'k', '--account', ACCOUNT]]) {
+    for (const argv of [[], ['nothing'], ['raw'], ['raw', 'k', 'extra'], ['row', '--account', ACCOUNT], ['account'], ['account', '--account', ACCOUNT, '--id', 's'], ['close'], ['close', '--account', ACCOUNT, '--id', 's'], ['restrict'], ['restrict', '--account', ACCOUNT, '--id', 's'], ['raw', 'k', '--account', ACCOUNT]]) {
       const { io, calls, printed } = fake();
       expect(await main(argv, io)).toBe(2);
       expect(calls).toEqual([]);
