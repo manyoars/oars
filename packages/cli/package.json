@@ -12,6 +12,11 @@
     "agent-memory",
     "session-history",
     "mcp",
+    "mcp-server",
+    "claude-code-plugin",
+    "codex-plugin",
+    "gemini-cli-extension",
+    "coding-agent",
     "cli"
   ],
   "license": "Apache-2.0",

@@ -2,24 +2,35 @@
 
 oars keeps a local, searchable record of your coding agent sessions, across Claude Code, Cursor, Codex, and other harnesses. Ask it about an error and it shows how many past sessions hit it, when, and which tools came next. More at [manyoars.com](https://manyoars.com/).
 
-Node 24 or later. ESM only.
-
 ## Install
 
 ```sh
 npm install --global @manyoars/oars
-oars --help
 ```
+
+Node 24 or later. ESM only. Local recall needs no account.
 
 Or run it once without installing:
 
 ```sh
-npx @manyoars/oars <command>
+npx @manyoars/oars sessions try
+```
+
+Sample output (made-up sessions, from `oars sessions try`):
+
+```
+$ oars sessions recall --error "unexpected EOF while looking for matching quote"
+Bash | bash: -c: line <n>: unexpected EOF while looking for matching quote
+  3 sessions, 3 errors, first 2026-10-06T10:00:15.000Z, last 2026-10-20T10:00:27.000Z
+  harness 2.1.300; followed by Bash x2, Read x1, Write x1; an edit followed 1 times
+
+$ oars sessions recall --context --cwd C:\work\demo
+oars recall: errors that recur in this repository's earlier sessions. Check these before retrying:
+- Bash | bash: -c: line <n>: unexpected EOF while looking for matching quote (3 sessions in the last 300; next: Bash, Read, Write)
+- Write | File has not been read yet. Read it first before writing to it. (2 sessions in the last 300; next: Read, Bash, Write)
 ```
 
 No coding-agent history yet? `oars sessions try` runs recall, books, and the hook line over made-up sessions in a throwaway store under your temp folder, labeled synthetic and deleted on exit, and never touches your own store.
-
-Accounts are not open yet: `oars login` uses the Many Oars issuer by default, and until Many Oars sign-in at `login.manyoars.com` is deployed it exits 2 with an error that names `login.manyoars.com`.
 
 ## Commands
 
@@ -34,6 +45,8 @@ These flags work on every command:
 ### login
 
 Signs in with your browser (RFC 8628 device flow) and stores the login.
+
+Accounts are not open yet: `oars login` uses the Many Oars issuer by default, and until Many Oars sign-in at `login.manyoars.com` is deployed it exits 2 with an error that names `login.manyoars.com`.
 
 - `--no-browser` prints the link and code without opening a browser.
 - `--issuer-url <url>` is the Keycloak realm URL. The default is `OARS_ISSUER_URL`. With neither, `login` uses the built-in Many Oars issuer, `https://login.manyoars.com/realms/aor`; nothing has to be switched on first. When the built-in issuer does not answer discovery (it may not be deployed yet), with no `--issuer-url` or `OARS_ISSUER_URL`, the command prints "Cannot reach Many Oars sign-in at login.manyoars.com (it may not be deployed yet). Pass --issuer-url or set OARS_ISSUER_URL to use another issuer." and exits 2.
@@ -55,15 +68,11 @@ Revokes the stored login and deletes it.
 
 ### telemetry
 
-oars records how it is used, on this machine, and says so: on the first run that is not a hook it prints a notice on stderr, once. Each command leaves an event in a local spool under `<config>/oars/telemetry/`: the command path, the names of the flags given (never their values), the duration, the exit code, a closed error class, whether it ran in CI (a closed word), the oars version, the OS, and the time. So does each fire of a hook (the bare `oars gate hook` included, written after its answer is printed: which hook, how long, hit, miss, held, or error, the bytes it printed, and the harness name and version and the model name when the hook saw them), each recall (how it was asked and which read families it served, as counts), each deposit pass or sent batch (sessions counted, batches, bytes, and how many sessions each gate kept out, never which), and each fetch (an ETag hit, a cap hit). Five more kinds of event are recorded, each only counts, sizes, and closed words: each time the background sender runs (at most about once an hour), a `store-health` snapshot of the session store (counts and sizes, and the lists of harness versions and model names it holds) and a `run-cost` event (time and peak memory); a `crash` event when oars fails in a way it did not plan for (the error's class and a hash of its stack, never its message); and, for each `oars pool deposit` pass, one `wire` event per harness (which fields its batches held and how many bytes each took) and, with `--send`, a `wire-send` event (the HTTP status, the pool's refusal code, and the size). Each install also records one `first-run` event, on its first run (whether it ran in CI and how this copy was installed, as closed words), and one `covenant-shown` event, holding only the covenant version, each time the covenant screen is shown at a terminal, whether or not the person then accepts. Nothing else is recorded: no session content, prompt text, file path, URL, or argument. Every field of every event, with an example, is in [docs/telemetry.md](https://github.com/manyoars/oars/blob/main/docs/telemetry.md). oars sends the events in batches, at most once a day, to the pool server in `OARS_POOL_URL` if you set one, else to the Many Oars pool (`https://pool.manyoars.com`), which is live. A per-install random id (not derived from your machine or account) is in each event.
-
-- `oars telemetry status` says whether it is on, which switch decided that, whether the notice was shown, and how large the spool is.
-- `oars telemetry off` stops recording and sending; `oars telemetry on` resumes it and prints the notice again.
-- `oars telemetry show` prints the spool exactly as stored, oldest first.
-- `oars telemetry report` prints your own numbers from the spool (hook latency percentiles, hit rates, and store health over the last 7 and 30 days) with no server and no account, and the fleet's percentile beside each when `OARS_POOL_URL` names a server that serves it.
-- `OARS_TELEMETRY=0` or `DO_NOT_TRACK=1` turns it off for the process, and wins over `oars telemetry on`.
-
-Every event type, with an example, is in [docs/telemetry.md](https://github.com/manyoars/oars/blob/main/docs/telemetry.md).
+- On by default: each command leaves an event in a local spool under `<config>/oars/telemetry/`, with counts, sizes, and closed words. It never holds session content, prompt text, a file path, a URL, or an argument.
+- oars sends the events in batches, at most once a day, to the pool server in `OARS_POOL_URL` if you set one, else to the Many Oars pool (`https://pool.manyoars.com`), which is live. A per-install random id is in each event.
+- `oars telemetry status` says whether it is on and why; `oars telemetry show` prints the spool as stored; `oars telemetry report` prints your own numbers from it.
+- `oars telemetry off` stops recording and sending; `oars telemetry on` resumes it. `OARS_TELEMETRY=0` or `DO_NOT_TRACK=1` turns it off for the process and wins over `on`.
+- Every event type and field, with an example, is in [docs/telemetry.md](https://github.com/manyoars/oars/blob/main/docs/telemetry.md).
 
 ### card
 
