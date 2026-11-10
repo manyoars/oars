@@ -1,10 +1,10 @@
 // Whether telemetry records and may send, and the one-time notice. The off switches are `oars telemetry off` (a saved setting), `OARS_TELEMETRY=0`, and
-// `DO_NOT_TRACK=1`; the environment wins over a saved `on`. `telemetrySendAllowed` is the check the sender must call before any byte leaves.
+// `DO_NOT_TRACK=1`, and a machine whose time zone is in the EU, the EEA, or the UK (`region.ts`), which no switch overrides; the environment wins over a saved `on`. `telemetrySendAllowed` is the check the sender must call before any byte leaves.
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { isClosedZone, machineZone } from './region.js';
 import { spoolPaths } from './spool.js';
 
-/** The version of the notice above. Every batch is stamped with it, and only batches under the notice that states the license count as licensed; raise it whenever the notice changes in meaning. */
+/** The version of the notice below. `markNoticeShown` stores it and each batch is stamped with the stored version; raise it whenever the notice changes in meaning. */
 export const NOTICE_VERSION = 2;
 
 /** Printed once on stderr, on the first run that is not a hook; also what `oars telemetry on` prints. */
