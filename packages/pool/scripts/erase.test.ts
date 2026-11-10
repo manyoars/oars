@@ -1167,7 +1167,7 @@ const COLUMNS: { readonly [column: string]: (value: unknown) => boolean } = {
   account: (value) => typeof value === 'string' && /^erased:[0-9a-f]{32}$/.test(value),
   id: randomHex, machine: (value) => value === null || randomHex(value), ingest: randomHex,
   skeleton: () => true, extensions: (value) => value === '[]', deltas: (value) => value === '[]', erased_on: (value) => value === null,
-  tier: tag, vocab_version: tag, host_class: tag, launcher: tag, claimed_host_class: (value) => value === null || tag(value), claimed_launcher: (value) => value === null || tag(value),
+  tier: tag, vocab_version: tag, host_class: tag, launcher: tag, claimed_host_class: tag, claimed_launcher: tag,
   counted_at: mondayMidnight, format: (value) => typeof value === 'number', fields_version: (value) => typeof value === 'number', other_values: (value) => typeof value === 'number',
 };
 
@@ -1229,6 +1229,8 @@ describe('an erased deposit keeps its anonymous shape', () => {
     expect(kept.length).toBe(1);
     for (const row of kept) {
       expect(columnsOffList(row)).toEqual([]);
+      // The Worker sets `claimed` apart from the stored skeleton, so the kept row holds it in these columns.
+      expect(row).toMatchObject({ claimed_host_class: 'ci', claimed_launcher: 'scheduled' });
       const skeleton: unknown = JSON.parse(textOf(row, 'skeleton'));
       expect(offList(skeleton)).toEqual([]);
       // The exact duration planted (1234 ms) is gone: what stays is a bucket index, at most the last `ms` bucket.

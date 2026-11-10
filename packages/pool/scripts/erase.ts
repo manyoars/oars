@@ -183,6 +183,7 @@ export const anonymizeSkeleton = (stored: unknown, reason: ErasureReason): { rea
     fieldsVersion: skeleton.fieldsVersion,
     transcripts: skeleton.transcripts.map((transcript) => ({ harness: transcript.harness, frame: frameOf(transcript.frame), frames: transcript.frames.map(frameOf), spawnedIn: transcript.spawnedIn, prompts: transcript.prompts.map(promptOf), tools: transcript.tools.map(toolOf(transcript.harness)) })),
     deltas: skeleton.deltas.map(deltaOf),
+    // A skeleton stored before migration 0025 may still hold `claimed`, and erasure must reach it.
     ...held('claimed', skeleton.claimed === undefined ? undefined : { hostClass: skeleton.claimed.hostClass, launcher: skeleton.claimed.launcher }),
     ...held('recommendations', skeleton.recommendations?.map(({ arm, from, to }) => ({ arm, from, to }))),
   };
