@@ -53,7 +53,7 @@ const into = <Value>(map: Map<string, Value[]>, key: string, value: Value): void
   map.set(key, [...(map.get(key) ?? []), value]);
 };
 
-/** The condition that leaves out an account the operator restricted (GDPR Art. 18): its records stay stored but count toward no cell or stratum, so the pool does not go on processing them at every other account's deposit. The count catches up at the next deposit that touches the key. */
+/** The condition that leaves out an account the operator restricted (GDPR Art. 18): its records stay stored but count toward no cell or stratum, so the pool does not go on processing them at every other account's deposit. `erase restrict` recounts the account's keys in the same run; a key it does not reach catches up at the next deposit that touches it. */
 const NOT_RESTRICTED = 'account NOT IN (SELECT id FROM accounts WHERE restricted_at IS NOT NULL)';
 
 /** The accounts that hold any of `keys`, as the subquery every signal read starts from. */

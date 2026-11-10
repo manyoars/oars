@@ -224,6 +224,21 @@ describe('main', () => {
     expect(printed).toEqual([JSON.stringify({ rowsChanged: 1 })]);
   });
 
+  it('tells the operator in the dry run what a restriction refuses and what it does not (deposits, raw parts, enrollment; telemetry rolls into no row)', async () => {
+    const restrict = fake({ rows: [{ found: 1 }] });
+    expect(await main(['restrict', '--account', ACCOUNT], restrict.io)).toBe(0);
+    const lift = fake({ rows: [{ found: 1 }] });
+    expect(await main(['restrict', '--account', ACCOUNT, '--lift'], lift.io)).toBe(0);
+    for (const plan of [restrict.printed.join('\n'), lift.printed.join('\n')]) {
+      expect(plan).toContain('deposits, raw parts, and machine enrollment');
+      expect(plan).toContain('telemetry batches');
+      expect(plan).not.toContain('telemetry are refused');
+    }
+    expect(restrict.printed.join('\n')).toContain('deposits, raw parts, and machine enrollment are refused, and its telemetry batches roll into no row');
+    expect(lift.printed.join('\n')).toContain('deposits, raw parts, and machine enrollment are taken again, its telemetry batches roll into a row again');
+    expect([...restrict.calls, ...lift.calls]).toEqual([]);
+  });
+
   it('recounts the cells and strata the account holds in the same run, in small chunks, before it audits', async () => {
     const { io, calls } = fake({ answer: (sql) => (sql.includes('SELECT DISTINCT key FROM contributors') ? [{ key: 'cell-1' }] : [{ found: 1 }]) });
     expect(await main(['restrict', '--account', ACCOUNT, '--confirm'], io)).toBe(0);
