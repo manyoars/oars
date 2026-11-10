@@ -7,7 +7,7 @@ import { sampleSkeleton } from '../src/sample.js';
 import { PANEL_COUNT } from '../src/stored.js';
 import { acceptanceOf, fieldOf, startPool, stubUser, textOf, type StubUser, type TestBucket, type TestDb, type TestPool } from '../src/test-pool.js';
 import { telemetryOf } from './erase-test-telemetry.js';
-import { closeAccount, eraseAccount, eraseLeakedSecret, eraseRawObject, findRawContaining, holdsValue, type EraseStore, type RawHit } from './erase.js';
+import { anonymizeSkeleton, closeAccount, eraseAccount, eraseLeakedSecret, eraseRawObject, findRawContaining, holdsValue, weekOf, type EraseStore, type RawHit } from './erase.js';
 
 let pool: TestPool;
 let next = 7000;
@@ -609,7 +609,7 @@ describe('unlinking the rows an erasure keeps (t1065, covenant 6.6(d))', () => {
       const text = await tableText(table);
       for (const value of values) expect(text, `${table} holds ${value}`).not.toContain(value);
     }
-    expect(await count('SELECT COUNT(*) AS held FROM deposits WHERE counted_at = ?', Date.UTC(2026, 10, 3))).toBe(1);
+    expect(await count('SELECT COUNT(*) AS held FROM deposits WHERE counted_at = ?', Date.UTC(2026, 10, 2))).toBe(1);
     expect(await tableText('deposits')).not.toContain(String(COUNTED_AT));
     expect(await all('SELECT provider_created FROM accounts WHERE id = ?', account)).toEqual([{ provider_created: null }]);
 
@@ -629,11 +629,11 @@ describe('unlinking the rows an erasure keeps (t1065, covenant 6.6(d))', () => {
     expect(await count("SELECT COUNT(*) AS held FROM erasure_tombstones WHERE kind = 'account' AND digest = ?", account)).toBe(1);
   }, 90_000);
 
-  it('cuts a machine created, activated, rotated, and expiry time to the UTC day, as the counting time is', async () => {
+  it('cuts a machine created, activated, rotated, and expiry time to the Monday of its ISO week (UTC), as the counting time is', async () => {
     const { account } = await fixture();
     const erasedId = await erase(account);
-    const day = (ms: number): number => ms - (ms % DAY);
-    expect(await all('SELECT created_at, activated_at, rotated_at, expires_at FROM machines WHERE account = ?', erasedId)).toEqual([{ created_at: day(MACHINE_TIMES.created_at), activated_at: day(MACHINE_TIMES.activated_at), rotated_at: day(MACHINE_TIMES.rotated_at), expires_at: day(MACHINE_TIMES.expires_at) }]);
+    const week = (ms: number): number => (Math.floor(ms / DAY) - ((Math.floor(ms / DAY) + 3) % 7)) * DAY;
+    expect(await all('SELECT created_at, activated_at, rotated_at, expires_at FROM machines WHERE account = ?', erasedId)).toEqual([{ created_at: week(MACHINE_TIMES.created_at), activated_at: week(MACHINE_TIMES.activated_at), rotated_at: week(MACHINE_TIMES.rotated_at), expires_at: week(MACHINE_TIMES.expires_at) }]);
   }, 90_000);
 
   it('leaves no exact identifier an export or the machine key held: not the deposit ingest mark, not the key hashes', async () => {
@@ -1107,7 +1107,7 @@ const leavesOf = (value: unknown, path = '$', key = ''): Leaf[] => {
 
 const isMonday = (value: unknown): boolean => typeof value === 'string' && /^\d{4}-\d\d-\d\d$/.test(value) && new Date(`${value}T00:00:00Z`).getUTCDay() === 1;
 const gated = (field: string) => (value: unknown): boolean => typeof value === 'string' && (value === 'other' || isListed(field, value));
-const tag = (value: unknown): boolean => typeof value === 'string' && /^[a-z0-9<>.+-]{1,32}$/.test(value);
+const tag = (value: unknown): boolean => typeof value === 'string' && /^[A-Za-z0-9<>.+_-]{1,32}$/.test(value);
 
 /** The one allow list: a kept leaf is a number or boolean (a bucket, an ordinal, a flag), null, or a string under a key named here whose value passes its check. Any other key is a leaf the erasure should have dropped. */
 const ALLOWED: { readonly [key: string]: (value: unknown) => boolean } = {
@@ -1128,6 +1128,25 @@ const offList = (value: unknown): string[] =>
     return check(leaf) ? [] : [`${path}: ${String(leaf)} fails the ${key} check`];
   });
 
+const randomHex = (value: unknown): boolean => typeof value === 'string' && /^[0-9a-f]{32}$/.test(value);
+const mondayMidnight = (value: unknown): boolean => typeof value === 'number' && value % 86_400_000 === 0 && isMonday(new Date(value).toISOString().slice(0, 10));
+/** The allow list of the deposit row's own columns (`skeleton` is walked on its own): every column a kept row may hold, with what its value may be. A new column fails until it is named here. */
+const COLUMNS: { readonly [column: string]: (value: unknown) => boolean } = {
+  account: (value) => typeof value === 'string' && /^erased:[0-9a-f]{32}$/.test(value),
+  id: randomHex, machine: (value) => value === null || randomHex(value), ingest: randomHex,
+  skeleton: () => true, extensions: (value) => value === '[]', deltas: (value) => value === '[]', erased_on: (value) => value === null,
+  tier: tag, vocab_version: tag, host_class: tag, launcher: tag, claimed_host_class: (value) => value === null || tag(value), claimed_launcher: (value) => value === null || tag(value),
+  counted_at: mondayMidnight, format: (value) => typeof value === 'number', fields_version: (value) => typeof value === 'number', other_values: (value) => typeof value === 'number',
+};
+
+/** Every column of a kept deposit row that is not on the allow list, named. */
+const columnsOffList = (row: unknown): string[] =>
+  Object.entries(typeof row === 'object' && row !== null ? row : {}).flatMap(([column, value]) => {
+    const check = COLUMNS[column];
+    if (check === undefined) return [`${column}: no allow-list entry`];
+    return check(value) ? [] : [`${column}: ${String(value)} fails its check`];
+  });
+
 describe('an erased deposit keeps its anonymous shape', () => {
   const SESSION = '00000000000090aa';
 
@@ -1137,11 +1156,14 @@ describe('an erased deposit keeps its anonymous shape', () => {
     expect(posted.status).toBe(201);
     const before = String(fieldOf((await all('SELECT skeleton FROM deposits WHERE account = ? AND id = ?', account, SESSION))[0], 'skeleton'));
     for (const planted of PLANTED) expect(before, `the fixture holds ${planted}`).toContain(planted);
+    // A time that is not a Monday at midnight: the erasure must cut it to the Monday of its week (Wednesday 14 October 2026 to Monday 12 October).
+    await (await pool.db()).prepare('UPDATE deposits SET counted_at = ? WHERE account = ? AND id = ?').bind(Date.UTC(2026, 9, 14, 9, 8, 7, 123), account, SESSION).run();
     await eraseAccount(await store(), account, NOW);
 
-    const kept = await all("SELECT * FROM deposits WHERE account LIKE 'erased:%' AND json_extract(skeleton, '$.erased') = 'lawful-request' AND json_array_length(json_extract(skeleton, '$.transcripts')) > 0");
-    expect(kept.length).toBeGreaterThan(0);
+    const kept = await all('SELECT * FROM deposits WHERE counted_at = ?', Date.UTC(2026, 9, 12));
+    expect(kept.length).toBe(1);
     for (const row of kept) {
+      expect(columnsOffList(row)).toEqual([]);
       const skeleton: unknown = JSON.parse(textOf(row, 'skeleton'));
       expect(offList(skeleton)).toEqual([]);
       expect(JSON.stringify(row)).not.toContain(SESSION);
@@ -1150,7 +1172,37 @@ describe('an erased deposit keeps its anonymous shape', () => {
       expect(text).toContain(WEEK_OF_PLANTED_DAY);
       expect(text).not.toContain('2026-11-04');
       expect(text).toContain('git');
-      expect(textOf(row, 'extensions')).toBe('[]');
     }
   }, 60_000);
+});
+
+describe('anonymizing a skeleton', () => {
+  it('cuts a day to the Monday of its ISO week (UTC)', () => {
+    expect([null, '2026-11-02', '2026-11-04', '2026-11-08', '2026-11-09', '2026-01-01'].map(weekOf)).toEqual([null, '2026-11-02', '2026-11-02', '2026-11-02', '2026-11-09', '2025-12-29']);
+  });
+
+  it('turns an off-list model, harness version, program, flag, mcp server, and skill into other, and keeps the listed ones', () => {
+    const kept = JSON.stringify(anonymizeSkeleton(richSkeleton('00000000000091aa'), 'lawful-request'));
+    for (const planted of PLANTED) expect(kept).not.toContain(planted);
+    expect(kept).toContain('"model":"claude-opus-5-5"');
+    expect(kept).toContain('"model":"other"');
+    expect(kept).toContain('"program":"other"');
+    expect(kept).toContain('"mcp":["github","other"]');
+    expect(kept).toContain('"skills":["other"]');
+    expect(kept).toContain('"flags":["other"]');
+    expect(kept).toContain('"erased":"lawful-request"');
+  });
+
+  it('is null for text that is no skeleton, and a lawful erasure then keeps the marker alone, as it does for text that is no JSON', async () => {
+    expect(anonymizeSkeleton({ format: 7 }, 'lawful-request')).toBeNull();
+    const { token, account } = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000092aa'), token)).status).toBe(201);
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000092ab'), token)).status).toBe(201);
+    const db = await pool.db();
+    await db.prepare("UPDATE deposits SET skeleton = '{\"format\":7}' WHERE account = ? AND id = '00000000000092aa'").bind(account).run();
+    await db.prepare("UPDATE deposits SET skeleton = 'not json' WHERE account = ? AND id = '00000000000092ab'").bind(account).run();
+    await eraseAccount(await store(), account, NOW);
+    expect(await all("SELECT skeleton FROM deposits WHERE account LIKE 'erased:%' AND skeleton = ?", '{"erased":"lawful-request"}')).toEqual(expect.arrayContaining([{ skeleton: '{"erased":"lawful-request"}' }]));
+    expect((await all("SELECT skeleton FROM deposits WHERE account LIKE 'erased:%' AND skeleton = ?", '{"erased":"lawful-request"}')).length).toBeGreaterThanOrEqual(2);
+  });
 });
