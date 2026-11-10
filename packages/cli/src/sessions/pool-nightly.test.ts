@@ -413,16 +413,16 @@ describe('withSendLock', () => {
     utimesSync(lock, old, old);
     let inside = 0;
     let overlapped = false;
-    // The second waiter's first look at the lock reports it stale only after the first waiter has taken the lock and is running, and the first holder stays inside until that stale look has been answered: a
+    // The second waiter's first look at the lock reports it stale only after the first waiter has taken the lock and is running, and the first holder stays inside until the late waiter's takeover is decided (its create after the stale look is refused): a
     // takeover that removes the file by path would delete the first waiter's fresh lock and let the second in beside it. Each waiter has its own LockFs, so which waiter looks first (a loaded runner may
     // schedule either) cannot move the stale look onto the wrong waiter, and signals replace sleeps.
     let firstRunning = (): void => undefined;
     const running = new Promise<void>((resolve) => {
       firstRunning = resolve;
     });
-    let looked = (): void => undefined;
-    const staleLookAnswered = new Promise<void>((resolve) => {
-      looked = resolve;
+    let decided = (): void => undefined;
+    const takeoverDecided = new Promise<void>((resolve) => {
+      decided = resolve;
     });
     const onceStale = (before: () => Promise<void>, afterCreate: () => void): LockFs => {
       let first = true;
@@ -450,13 +450,13 @@ describe('withSendLock', () => {
       };
     };
     const quick = onceStale(() => Promise.resolve(), () => undefined);
-    const late = onceStale(() => running, looked);
+    const late = onceStale(() => running, decided);
     const body = async (): Promise<void> => {
       inside += 1;
       overlapped ||= inside > 1;
-      if (inside > 1) looked();
+      if (inside > 1) decided();
       firstRunning();
-      await staleLookAnswered;
+      await takeoverDecided;
       inside -= 1;
     };
     const times = { staleMs: 1000, waitMs: 2000, pollMs: 5 };

@@ -1,6 +1,6 @@
 name: release-cli
 
-# Publishes @manyoars/oars (the `oars` command) to npm on a tag cli-v<semver>. Two jobs, so no code from a dependency ever runs while a job can mint the publishing
+# Publishes @manyoars/oars (the `oars` command) to npm on a tag cli-v<semver>. Three jobs (build, publish, release; a fourth, refuse-non-main, only fails a bad publish=true dispatch), so no code from a dependency ever runs while a job can mint the publishing
 # token (OIDC):
 #   build   contents: read only. Checks the tag (semver, matches packages/cli/package.json, commit is on main), installs, runs the same
 #           `just check` as ci, and packs the tarball (the package's prepack rebuilds dist/, so it is never a stale build).
@@ -56,7 +56,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - run: echo "::error::publish=true must be dispatched from main (this run is on ${{ github.ref }}); the tag's commit must be an ancestor of main and the workflow file is main's." && exit 1
+      - env:
+          REF: ${{ github.ref }}
+        run: echo "::error::publish=true must be dispatched from main (this run is on $REF); the tag's commit must be an ancestor of main and the workflow file is main's." && exit 1
 
   build:
     if: (github.event_name == 'push' || inputs.publish) && (github.event_name == 'push' || github.ref == 'refs/heads/main')
