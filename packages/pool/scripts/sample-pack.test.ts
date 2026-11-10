@@ -1278,9 +1278,9 @@ describe('an objection by name (plan S5, Art. 21(1))', () => {
     expect(packText(f.out).toLowerCase()).not.toContain('priya');
   });
 
-  it('refuses a session whose name matches only once redaction has decoded the line', async () => {
+  it('refuses a session whose name sits in a JSON escape on a line redaction rewrites', async () => {
     const f = fixture();
-    // The raw line spells the name with a JSON escape, so the raw bytes never hold it; redaction decodes each string and writes it out whole.
+    // The raw line spells the name with a JSON escape, so the raw bytes never hold it; the decode finds the escape whether or not redaction rewrites the line.
     const escaped = user(S(1), 1, 'thanks to Zoë Quill for the fix').replace('Zoë', `Zo${String.fromCharCode(92)}u00eb`);
     const raw = f.write('-work-oars', S(1), [escaped, assistant(S(1), 1, 'noted')]);
     expect(readFileSync(raw, 'utf8')).not.toContain('Zoë');

@@ -884,7 +884,8 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
       heard.push(raw);
     }
     // The person's name is looked for in the raw text, the redacted text, and the decoded strings: a JSON escape hides it from the raw bytes, and redaction decodes a line only when it masks something in it, so the decoding is done here.
-    if (objectedNames.some((name) => [...texts, ...heard, ...heard.flatMap(decodedStrings)].some((text) => squashed(text).includes(name)))) {
+    const searched = [...texts, ...heard, ...heard.flatMap(decodedStrings)].map(squashed);
+    if (objectedNames.some((name) => searched.some((text) => text.includes(name)))) {
       counts.objected += 1;
       continue;
     }

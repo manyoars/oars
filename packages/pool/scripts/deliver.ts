@@ -3,7 +3,7 @@
 import type { Dirent } from 'node:fs';
 import { appendFile, readdir, readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { bareOf, insideRepository, isAbsent, isText, keyIdOf, PackError, readObjections, squashed } from './sample-pack.js';
+import { bareOf, decodedStrings, insideRepository, isAbsent, isText, keyIdOf, PackError, readObjections, squashed } from './sample-pack.js';
 
 export const USAGE = [
   'Usage: deliver --pack <dir> --recipient <name> --license <id> --buyer-key <key> --owners <file>',
@@ -148,7 +148,9 @@ export const recipientsOf = async (owners: string, query: string): Promise<Deliv
         throw error;
       }
       for (const file of found.filter((item) => item.isFile())) {
-        if (squashed(await readFile(join(file.parentPath, file.name), 'utf8')).includes(wanted)) named.add(entry.session);
+        // Raw text and decoded JSON strings: an escape in the file can hide the name from the raw bytes.
+        const text = await readFile(join(file.parentPath, file.name), 'utf8');
+        if ([text, ...decodedStrings(text)].some((candidate) => squashed(candidate).includes(wanted))) named.add(entry.session);
       }
     }
   }
