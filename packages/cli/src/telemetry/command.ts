@@ -2,7 +2,7 @@
 import { statSync } from 'node:fs';
 import type { Outcome, RunDeps } from '../cli.js';
 import { CliError, ExitCode } from '../errors.js';
-import { consentOf, markNoticeShown, NOTICE, setEnabled, type Consent } from './consent.js';
+import { consentOf, everShownNotice, markNoticeShown, NOTICE, setEnabled, type Consent } from './consent.js';
 import { recordFirstRun } from './observe.js';
 import type { TelemetryRuntime } from './record.js';
 import { readFleet, reportOf, textOf } from './report.js';
@@ -58,7 +58,7 @@ const save = (dir: string, enabled: boolean): void => {
 export const telemetryOn = (deps: RunDeps): Outcome => {
   const runtime = runtimeOf(deps);
   const { dir } = runtime;
-  const first = !consentOf(deps.env, dir).noticeShown;
+  const first = !everShownNotice(dir);
   save(dir, true);
   // Running `on` is the notice: it is printed here and recorded as shown, so the run's own check finds it shown and sends the `first-run` event from here.
   const marked = markNoticeShown(dir, deps.now);

@@ -64,6 +64,16 @@ describe('the first-run notice', () => {
     expect(shownNoticeVersion(dir)).toBe(NOTICE_VERSION);
   });
 
+  it('records no second first-run event for an install that saw an older notice', async () => {
+    const { deps, err, dir } = setup();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(spoolPaths(dir).settings, JSON.stringify({ noticeShownAt: '2026-11-01T00:00:00.000Z' }));
+    expect(await run(['--version'], deps)).toBe(0);
+    expect(err.join('')).toBe(`${NOTICE}
+`);
+    expect(events(dir).map((event) => String(Reflect.get(Object(event), 'type')))).toEqual(['command']);
+  });
+
   it('prints once on stderr, leaves stdout alone, and is recorded as shown', async () => {
     const first = setup();
     expect(await run(['--version'], first.deps)).toBe(0);

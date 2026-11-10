@@ -86,6 +86,9 @@ export const markNoticeShown = (dir: string, now: () => number): boolean => {
   }
 };
 
+/** Whether this install has ever been shown any notice (an older version included). */
+export const everShownNotice = (dir: string): boolean => readSettings(dir).noticeShownAt !== undefined;
+
 /** The notice version this install was shown, or `undefined` when none (or an unreadable file). */
 export const shownNoticeVersion = (dir: string): number | undefined => readSettings(dir).noticeVersion;
 
