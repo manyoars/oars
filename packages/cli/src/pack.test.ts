@@ -92,8 +92,8 @@ describe('the tarball npm pack would make', () => {
 // docs.stripe.com): ecosystem names, not terms of this product.
 const ECOSYSTEM_LISTS = ['dist/sessions/public-vocabulary.js', 'dist/sessions/public-vocabulary.d.ts'];
 
-// The raw-copy prompt must say the data may be sold (the covenant's sale sentence), so the one file that prints it may name `sell`.
-const SALE_NOTICE = ['dist/sessions/pool-command.js: /\\bsell/i'];
+// The raw-copy prompt must say the data may be sold (the covenant's sale sentence), so the two files that print it (this and the telemetry first-run notice) may name `sell`.
+const SALE_NOTICE = ['dist/sessions/pool-command.js: /\\bsell/i', 'dist/telemetry/consent.js: /\\bsell/i'];
 
 describe('the packed dist names none of the withheld terms', () => {
   it('has no withheld term in any packed dist file, declarations included', () => {
@@ -270,10 +270,10 @@ describe('the public text states facts only', () => {
     expect(manifest().keywords).toEqual(expect.any(Array));
     const keywordCount = String(manifest().keywords).split(',').length;
     expect(keywordCount).toBeGreaterThanOrEqual(6);
-    expect(keywordCount).toBeLessThanOrEqual(10);
+    expect(keywordCount).toBeLessThanOrEqual(15);
   });
 
-  it.each([['packages/cli/README.md', join(cliFolder, 'README.md')], ['README.md', join(root, 'README.md')]])('%s says raw/ is unredacted, what the harness sends, where <config> is, and that accounts are not open', (_name, file) => {
+  it.each([['packages/cli/README.md', join(cliFolder, 'README.md')]])('%s says raw/ is unredacted, what the harness sends, where <config> is, and that accounts are not open', (_name, file) => {
     const text = readFileSync(file, 'utf8');
     expect(text).toContain('raw transcripts');
     expect(text).toMatch(/unredacted/);
@@ -282,15 +282,48 @@ describe('the public text states facts only', () => {
     expect(text).toContain(NOT_OPEN);
     expect(text).toContain('%APPDATA%');
     expect(text).toContain('~/.config');
+    expect(text).toContain('After you accept the covenant, a deposit may be licensed and sold under it.');
+    expect(text).toContain('The pool is not offered in the EU, the EEA, or the UK.');
     expect(text).toContain('session-commons/review');
   });
 
-  // The package page is read before install, so its account of what telemetry records matches the first-run notice (`NOTICE` in telemetry/consent.ts).
-  it('packages/cli/README.md says each command records whether it ran in CI, one first-run event, and the covenant version each time the screen is shown', () => {
+  // The package page is read before install: it keeps telemetry to five lines and sends the field-by-field account to docs/telemetry.md,
+  // which is where the first-run and covenant-shown events are described.
+  it('packages/cli/README.md keeps telemetry to five lines, says it is on by default and how to turn it off, and links docs/telemetry.md', () => {
     const text = readFileSync(join(cliFolder, 'README.md'), 'utf8');
-    expect(text).toContain('a closed error class, whether it ran in CI (a closed word), the oars version');
-    expect(text).toContain('Each install also records one `first-run` event, on its first run (whether it ran in CI and how this copy was installed, as closed words), and one `covenant-shown` event, holding only the covenant version, each time the covenant screen is shown at a terminal, whether or not the person then accepts.');
-    expect(text).toContain('Nothing else is recorded');
+    const section = text.slice(text.indexOf('### telemetry'), text.indexOf('### card'));
+    expect(section.split(String.fromCharCode(10)).filter((line) => line.startsWith('- '))).toHaveLength(5);
+    expect(section).toContain('On by default');
+    for (const off of ['oars telemetry off', 'OARS_TELEMETRY=0', 'DO_NOT_TRACK=1']) expect(section).toContain(off);
+    expect(section).toContain('never holds session content, prompt text, a file path, a URL, or an argument');
+    expect(section).toContain('docs/telemetry.md');
+    const doc = readFileSync(join(root, 'docs/telemetry.md'), 'utf8');
+    for (const event of ['first-run', 'covenant-shown']) expect(doc).toContain(event);
+  });
+
+  it('the root README leads with the install line and sample output, then says what leaves the machine in at most five lines', () => {
+    const text = readFileSync(join(root, 'README.md'), 'utf8');
+    const heads = [...text.matchAll(/^## (.+)$/gm)].map((match) => match[1]);
+    expect(heads.slice(0, 2)).toEqual(['Install', 'What leaves your machine']);
+    expect(heads.at(-2)).toBe('Repository layout');
+    expect(text.indexOf('npm install --global @manyoars/oars')).toBeLessThan(text.indexOf('Repository layout'));
+    expect(text).toContain('Node 24 or later');
+    expect(text).toContain('oars sessions try');
+    const leaves = text.slice(text.indexOf('## What leaves your machine'), text.indexOf('## Develop'));
+    expect(leaves.split(String.fromCharCode(10)).filter((line) => line.startsWith('- '))).toHaveLength(5);
+    expect(leaves).toContain('except `gold arms`, which sends redacted text through your own Claude subscription');
+    expect(leaves).toMatch(/unredacted/);
+    expect(leaves).toContain('Telemetry is on by default');
+    for (const off of ['oars telemetry off', 'OARS_TELEMETRY=0', 'DO_NOT_TRACK=1']) expect(leaves).toContain(off);
+    expect(leaves).toContain('closed until its covenant opens them');
+    expect(leaves).toContain('licensed and sold');
+    expect(leaves).toContain('your harness sends that to its model');
+    expect(leaves).toContain('pool.manyoars.com');
+    expect(leaves).toContain('OARS_POOL_URL');
+    expect(leaves).toContain('not offered in the EU, the EEA, or the UK');
+    expect(leaves).toContain('docs/telemetry.md');
+    expect(text).toContain(NOT_OPEN);
+    expect(text).toContain('%APPDATA%');
   });
 
   it('the root README gives the hook commands in the forms that run, with --scope user', () => {

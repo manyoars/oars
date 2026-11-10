@@ -113,6 +113,9 @@ export const workerError = async (response: Response): Promise<Error> => {
   return error;
 };
 
+/** How long a lane may sit idle before its next request opens a connection. Below the 15 s after which workerd closes an idle socket (measured: the server's FIN at 15,020 ms). */
+const KEEP_ALIVE_MS = 10_000;
+
 /** The most of a request body the sender holds whole: a chosen bound, small enough that headers and body leave in one write in practice. Past it a body can reach workerd in several segments anyway. */
 const WHOLE_BODY_BYTES = 64 * 1024;
 
@@ -129,15 +132,40 @@ export interface KeepAliveSender {
  * Miniflare sends every `dispatchFetch` with `reset: true`, so undici closes the socket after each response: one loopback socket in TIME_WAIT for every request a test makes, and for every D1 or R2 call it makes through `getBindings` too, because the proxy client holds this same function. A full run opened about 9,000 and left about 5,400 in TIME_WAIT (Linux), enough to exhaust the dynamic port range when gates run together.
  * This sends the same request on a keep-alive undici Agent the pool owns instead, with the two headers Miniflare's own dispatcher adds. `entry` names the server the request goes to.
  */
-export const keepAliveSender = (entry: () => Promise<URL>): KeepAliveSender => {
+export const keepAliveSender = (entry: () => Promise<URL>, now: () => number = Date.now): KeepAliveSender => {
   // undici closes a socket idle for 4 s by default, and a test process starved by a loaded box can idle that long between two calls; each such close costs a reconnect and a TIME_WAIT
   // socket. Ten seconds covers the longest planned pause between calls (4.5 s) and stays below the 15 s after which workerd closes an idle socket itself, so the client never reuses a socket
   // the server may be closing. `close` closes both agents, so no socket outlives a pool.
-  const keepAliveTimeout = { keepAliveTimeout: 10_000, keepAliveMaxTimeout: 10_000 };
+  const keepAliveTimeout = { keepAliveTimeout: KEEP_ALIVE_MS, keepAliveMaxTimeout: KEEP_ALIVE_MS };
   const connector = buildConnector({});
   let connects = 0;
   let peak = 0;
-  const calls = new Agent({
+  const retired: Promise<void>[] = [];
+  // An Agent's own timer cannot keep a socket from a dead server when the thread stalls: the next `send` runs on the tick the thread wakes, before undici has seen the server's FIN or fired its timer
+  // (t1090). So a lane goes by the clock: one that has sat idle past the keep-alive window is retired, and its next request opens a connection. `close` lets requests in flight finish.
+  const lane = (options: Agent.Options) => {
+    let agent = new Agent(options);
+    let busy = 0;
+    let idleSince = now();
+    return {
+      take: (): Agent => {
+        if (busy === 0 && now() - idleSince > KEEP_ALIVE_MS) {
+          retired.push(agent.close());
+          agent = new Agent(options);
+        }
+        busy += 1;
+        return agent;
+      },
+      release: (): void => {
+        busy -= 1;
+        idleSince = now();
+      },
+      close: async (): Promise<void> => {
+        await agent.close();
+      },
+    };
+  };
+  const calls = lane({
     ...keepAliveTimeout,
     connect: (options, callback) => {
       connects += 1;
@@ -146,7 +174,7 @@ export const keepAliveSender = (entry: () => Promise<URL>): KeepAliveSender => {
   });
   // Miniflare frees the handles `getBindings` returned in a DELETE it sends on its own schedule (100 ms after a garbage collection), so it can be in flight while a test makes its next call. An Agent opens
   // a connection for a request that finds none idle; on the calls' Agent that DELETE would take the connection the call is about to reuse and cost it a connect. Its own Agent keeps the calls' count about the calls.
-  const releases = new Agent(keepAliveTimeout);
+  const releases = lane(keepAliveTimeout);
   let inFlight = 0;
   const send: Miniflare['dispatchFetch'] = async (input, init) => {
     const forward = new StubRequest(input, init);
@@ -155,8 +183,8 @@ export const keepAliveSender = (entry: () => Promise<URL>): KeepAliveSender => {
     const headers = new Headers([...forward.headers.entries()]);
     headers.set('MF-Original-URL', forward.url);
     headers.set('MF-Disable-Pretty-Error', 'true');
-    const dispatcher = forward.headers.get(CoreHeaders.OP) === ProxyOps.FREE ? releases : calls;
-    const counted = dispatcher === calls;
+    const used = forward.headers.get(CoreHeaders.OP) === ProxyOps.FREE ? releases : calls;
+    const counted = used === calls;
     if (counted) {
       inFlight += 1;
       peak = Math.max(peak, inFlight);
@@ -167,6 +195,7 @@ export const keepAliveSender = (entry: () => Promise<URL>): KeepAliveSender => {
     const held = init?.body;
     const small = typeof held === 'string' ? Buffer.byteLength(held) <= WHOLE_BODY_BYTES : held instanceof Uint8Array && held.byteLength <= WHOLE_BODY_BYTES;
     const body = forward.body === null ? undefined : small ? new Uint8Array(await forward.arrayBuffer()) : forward.body;
+    const dispatcher = used.take();
     let response: Response;
     const started = Date.now();
     const connectsBefore = connects;
@@ -176,6 +205,7 @@ export const keepAliveSender = (entry: () => Promise<URL>): KeepAliveSender => {
       // undici reports a reset as `fetch failed` over a bare socket error, which names no call; a flake on a loaded box leaves nothing else behind, so say which call it was (t1068). A connect since the call began means it did not ride an idle socket.
       throw new Error(`${forward.method} ${sent.pathname} failed after ${String(Date.now() - started)} ms on a ${connects === connectsBefore ? 'reused' : 'new'} connection: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     } finally {
+      used.release();
       if (counted) inFlight -= 1;
     }
     if (response.status === 500 && response.headers.has('MF-Experimental-Error-Stack')) throw await workerError(response);
@@ -186,7 +216,7 @@ export const keepAliveSender = (entry: () => Promise<URL>): KeepAliveSender => {
     connects: () => connects,
     peak: () => peak,
     close: async () => {
-      await Promise.all([calls.close(), releases.close()]);
+      await Promise.all([calls.close(), releases.close(), ...retired]);
     },
   };
 };

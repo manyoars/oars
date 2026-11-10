@@ -1,0 +1,26 @@
+{
+  "name": "oars",
+  "displayName": "oars",
+  "version": "0.4.0",
+  "description": "Recall from your own past coding agent sessions, kept on your machine: the oars hooks and its recall MCP server.",
+  "author": { "name": "Many Oars" },
+  "homepage": "https://manyoars.com/",
+  "repository": "https://github.com/manyoars/oars",
+  "license": "Apache-2.0",
+  "keywords": ["session-history", "agent-memory", "mcp"],
+  "hooks": {
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "command -v oars-hook >/dev/null || exit 0; oars-hook session-start", "timeout": 5 }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "command -v oars-hook >/dev/null || exit 0; oars-hook prompt", "timeout": 5 }] }],
+    "PreToolUse": [{ "hooks": [{ "type": "command", "command": "command -v oars-hook >/dev/null || exit 0; oars-hook pre-tool", "timeout": 5 }] }],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Read|Edit|MultiEdit|NotebookEdit|Write|Grep|Glob|LSP|Bash|PowerShell|WebSearch|WebFetch|Skill|Agent|Task|TodoWrite|TaskCreate|TaskUpdate|TaskList|TaskGet|EnterPlanMode|ExitPlanMode|AskUserQuestion|StructuredOutput|ToolSearch|SendMessage|ListAgents|Monitor|TaskStop|TaskOutput|BashOutput|KillShell|ScheduleWakeup|Workflow|EnterWorktree|ExitWorktree|mcp__.*",
+        "hooks": [{ "type": "command", "command": "command -v oars-hook >/dev/null || exit 0; IFS= read -r event; case \"$event\" in '') exit 0;; *'\"tool_name\":\"Bash\"'*|*'\"tool_name\":\"PowerShell\"'*) case \"$event\" in *'Exit code'*) ;; *) exit 0;; esac;; esac; { printf '%s\\n' \"$event\"; cat; } | oars-hook post-tool", "timeout": 5 }]
+      }
+    ],
+    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "command -v oars-hook >/dev/null || exit 0; oars-hook stop", "timeout": 30 }] }]
+  },
+  "mcpServers": {
+    "oars": { "command": "oars", "args": ["sessions", "recall", "--mcp"] }
+  }
+}

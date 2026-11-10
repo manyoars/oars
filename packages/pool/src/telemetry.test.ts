@@ -49,6 +49,15 @@ describe('POST /v1/telemetry on the Worker', () => {
     expect(fieldOf(batch, 'events')).toEqual([command(), command({ type: 'future-kind', novel: { deep: [1, 2] } })]);
   });
 
+  it('keeps the notice version a batch was sent under, and a batch without one keeps none (not licensed)', async () => {
+    await pool.post('/v1/telemetry', { install: INSTALL, notice: 2, events: [command()] });
+    await pool.post('/v1/telemetry', { install: INSTALL, events: [command()] });
+    const notices = (await kept(pool)).map((object) => fieldOf(fieldOf(JSON.parse(object.text), 'batch'), 'notice'));
+    expect(notices).toHaveLength(2);
+    expect(notices).toContain(2);
+    expect(notices).toContain(undefined);
+  });
+
   // S23: a bearer on the request would join an install id to an account, though the CLI never sends one. The route reads no credential, keeps none, and indexes no account.
   it('ignores a sent bearer: no account in the record, none in the index, and the credential is never read', async () => {
     const { token } = await pool.signIn('github', stubUser('7001'));
