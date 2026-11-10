@@ -105,6 +105,8 @@ export const stageCursor = async (root: string, composers: readonly FixtureCompo
   mkdirSync(join(user, 'globalStorage'), { recursive: true });
   const global = new DatabaseSync(join(user, 'globalStorage', 'state.vscdb'));
   global.exec('create table ItemTable (key text unique on conflict replace, value blob); create table cursorDiskKV (key text unique on conflict replace, value blob)');
+  // One commit for the whole store: every insert on its own is a synced write, which is where a loaded disk spends this staging's time.
+  global.exec('begin');
   const put = global.prepare('insert into cursorDiskKV (key, value) values (?, ?)');
   const byFolder = new Map<string, FixtureComposer[]>();
   for (const composer of composers) {
@@ -139,6 +141,7 @@ export const stageCursor = async (root: string, composers: readonly FixtureCompo
   // A composer that was opened and left holds no message.
   put.run('composerData:empty', JSON.stringify({ composerId: 'empty', createdAt: 1, fullConversationHeadersOnly: [] }));
   put.run('composerData:torn', '{not json');
+  global.exec('commit');
   global.close();
   let index = 0;
   for (const [folder, listed] of byFolder) {
@@ -561,6 +564,8 @@ export const stageOpencode = async (root: string, sessions: readonly OpencodeFix
     create table session_message (id text primary key, session_id text not null, type text not null, seq integer not null, time_created integer not null, time_updated integer not null, data text not null);
     create table session_part (message_id text not null, session_id text not null, ordinal integer not null, type text not null, call_id text, time_created integer not null, time_updated integer not null, data text not null, primary key (message_id, ordinal));
   `);
+  // One commit for the whole store (see stageCursor): the journal mode above is set first, and the rows follow in a single transaction.
+  db.exec('begin');
   for (const session of sessions) {
     db.prepare('insert into session_v2 (id, parent_id, fork_session_id, directory, version, agent, time_created, time_updated) values (?, ?, ?, ?, ?, ?, ?, ?)').run(
       session.id,
@@ -579,6 +584,7 @@ export const stageOpencode = async (root: string, sessions: readonly OpencodeFix
       db.prepare('insert into session_part (message_id, session_id, ordinal, type, call_id, time_created, time_updated, data) values (?, ?, ?, ?, ?, ?, ?, ?)').run(part.messageId, session.id, part.ordinal, part.type, null, session.created, session.created, JSON.stringify(part.data));
     }
   }
+  db.exec('commit');
   db.close();
   return dir;
 };
