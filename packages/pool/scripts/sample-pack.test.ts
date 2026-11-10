@@ -410,6 +410,10 @@ describe('the repository pointer and the outcome (plan S4)', { timeout: 30_000 }
     const f = fixture();
     const repo = join(f.root, 'work', 'ptr');
     const shas = makeRepo(repo);
+    // A commit on the session's own branch dated after it started: the cutoff must keep it out.
+    git(repo, ['checkout', '-q', 'feature']);
+    commitIn(repo, 'after-start.txt', '2026-06-03T12:00:00Z');
+    git(repo, ['checkout', '-q', 'main']);
     writeFileSync(f.owners, JSON.stringify(OPTED_IN));
     f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'feature'), assistant(S(1), 1, 'done')]);
     await stored(f);
@@ -424,7 +428,8 @@ describe('the repository pointer and the outcome (plan S4)', { timeout: 30_000 }
     git(repo, ['update-ref', 'refs/remotes/origin/topic', shas.onFeature]);
     git(repo, ['branch', '-q', '-D', 'feature']);
     // A commit on main dated after the session began: the cutoff must keep it out.
-    commitIn(repo, 'later.txt', '2026-06-02T12:00:00Z');
+    // The remote's default branch holds it too, so the origin/HEAD lookup reaches it unless the cutoff stops it.
+    git(repo, ['update-ref', 'refs/remotes/origin/main', commitIn(repo, 'later.txt', '2026-06-02T12:00:00Z')]);
     writeFileSync(f.owners, JSON.stringify(OPTED_IN));
     f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'topic'), assistant(S(1), 1, 'done')]);
     f.write('-work-oars', S(2), [user(S(2), 1, 'rename a helper', repo, 'never-pushed'), assistant(S(2), 1, 'done')]);
