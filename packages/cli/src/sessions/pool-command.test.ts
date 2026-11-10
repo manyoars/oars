@@ -445,7 +445,8 @@ describe('oars pool login', () => {
       if (text.includes('/v1/login/poll')) throw new TypeError('a bug in the printer');
       stderr(text);
     };
-    await expect(scene.cli('pool', 'login', '--provider', 'github', '--server', POOL, '--verbose')).rejects.toThrow('a bug in the printer');
+    expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL, '--verbose')).toBe(ExitCode.UNEXPECTED);
+    expect(scene.h.err.join('')).not.toContain('expired');
   });
 
   it('adds five seconds on slow_down even after a failed poll', async () => {
