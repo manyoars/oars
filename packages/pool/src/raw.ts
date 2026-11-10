@@ -1,4 +1,4 @@
-// The raw tier: a locally redacted transcript goes to R2 in parts, and D1 keeps one ledger row per object. This file stages and assembles, and the only other file that touches the raw bucket or `raw_objects` is `export.ts`, which reads an account its own object back. No route here returns a raw byte, a hash, or a count (`raw-serves-nothing.test.ts` pins both).
+// The raw tier: a locally redacted transcript goes to R2 in parts, and D1 keeps one ledger row per object. This file stages, assembles, and sweeps withdrawn copies, and the only other file that touches the raw bucket or `raw_objects` is `export.ts`, which reads an account its own object back. No route here returns a raw byte, a hash, or a count (`raw-serves-nothing.test.ts` pins both).
 // The server cannot verify redaction. It takes the client's word that the bytes were redacted (and hosts masked) before they were sent, and it runs no scanner.
 import { createHash } from 'node:crypto';
 import { covenantNotAccepted, depositsClosed, hasAccepted } from './covenant.js';
@@ -244,7 +244,7 @@ export const sweepWithdrawnRaw = async (env: Env, now: number, calls: number): P
   for (let spent = SWEEP_PAGE_CALLS; spent <= calls; spent += SWEEP_PAGE_CALLS) {
     const held = (
       await env.DB.prepare(
-        'SELECT o.account AS account, o.sha256 AS sha256 FROM accounts a JOIN raw_objects o ON o.account = a.id WHERE a.raw_consent_withdrawn_at IS NOT NULL AND o.erased_on IS NULL AND (a.raw_consent IS NULL OR o.stored_at < a.raw_consent) LIMIT ?',
+        'SELECT o.account AS account, o.sha256 AS sha256 FROM accounts a JOIN raw_objects o ON o.account = a.id WHERE a.raw_consent_withdrawn_at IS NOT NULL AND o.erased_on IS NULL AND (a.raw_consent IS NULL OR o.stored_at < a.raw_consent) ORDER BY a.raw_consent_withdrawn_at, o.stored_at LIMIT ?',
       )
         .bind(SWEEP_PAGE)
         .all()

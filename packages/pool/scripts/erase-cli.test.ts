@@ -43,6 +43,10 @@ const fake = (options: { rows?: unknown[]; stdin?: string; success?: boolean; an
       for (let at = 0; at < text.length; at += 4) pieces.push(Buffer.from(text.slice(at, at + 4)));
       return asyncPieces(pieces);
     },
+    write: (path, text) => {
+      written.set(path, text);
+      return Promise.resolve();
+    },
     remove: (path) => {
       scratch.delete(path);
       return Promise.resolve();
@@ -61,7 +65,7 @@ const fake = (options: { rows?: unknown[]; stdin?: string; success?: boolean; an
         calls.push([...args]);
         if (args[0] === 'r2' && args[2] === 'get') {
           if (options.getFails !== undefined) return Promise.reject(new Error(options.getFails));
-          const key = (args[3] ?? '').replace('oars-pool-raw/', '');
+          const key = (args[3] ?? '').replace(/^oars-[a-z-]+\//, '');
           written.set(args[5] ?? '', options.objects?.get(key) ?? '');
           return Promise.resolve('Download complete.');
         }
@@ -84,7 +88,7 @@ describe('inline', () => {
 });
 
 describe('the wrangler store', () => {
-  const target = { database: 'oars-pool', bucket: 'oars-pool-raw', local: false };
+  const target = { database: 'oars-pool', bucket: 'oars-pool-raw', telemetryBucket: 'oars-telemetry', local: false };
 
   it('reads rows and counts changes through d1 execute against the remote database', async () => {
     const { io, calls } = fake({ rows: [{ id: 'a' }] });
@@ -93,6 +97,27 @@ describe('the wrangler store', () => {
     expect(await store.run('UPDATE deposits SET erased_on = ? WHERE id = ?', ['2026-11-08', 'a'])).toBe(1);
     expect(calls[0]).toEqual(['d1', 'execute', 'oars-pool', '--remote', '--json', '--command', "SELECT id FROM deposits WHERE account = 'x'"]);
     expect(calls[1]?.slice(0, 5)).toEqual(['d1', 'execute', 'oars-pool', '--remote', '--json']);
+  });
+
+  it('reads, writes, and deletes a telemetry batch in the telemetry bucket, and lists through the lister it is given', async () => {
+    const { io, calls, scratch } = fake({ objects: new Map([['telemetry/2026-11-08/a.json', '{"x":1}']]) });
+    const store = wranglerStore(io.wrangler, target, io.files, (prefix) => Promise.resolve([`${prefix}a.json`]));
+    expect(await store.telemetry.list('telemetry/2026-11-08/')).toEqual(['telemetry/2026-11-08/a.json']);
+    expect(await store.telemetry.read('telemetry/2026-11-08/a.json')).toBe('{"x":1}');
+    await store.telemetry.write('telemetry/2026-11-08/b.json', '{"y":2}');
+    await store.telemetry.remove('telemetry/2026-11-08/a.json');
+    expect(calls).toEqual([
+      ['r2', 'object', 'get', 'oars-telemetry/telemetry/2026-11-08/a.json', '--file', 'scratch-1', '--remote'],
+      ['r2', 'object', 'put', 'oars-telemetry/telemetry/2026-11-08/b.json', '--file', 'scratch-2', '--content-type', 'application/json', '--remote'],
+      ['r2', 'object', 'delete', 'oars-telemetry/telemetry/2026-11-08/a.json', '--remote'],
+    ]);
+    expect(scratch.size).toBe(0);
+  });
+
+  it('reads a missing telemetry batch as null, passes any other fault on, and says what to export when no lister was given', async () => {
+    expect(await wranglerStore(fake({ getFails: 'The specified key does not exist.' }).io.wrangler, target, fake().io.files).telemetry.read('telemetry/x')).toBeNull();
+    await expect(wranglerStore(fake({ getFails: 'not logged in' }).io.wrangler, target, fake().io.files).telemetry.read('telemetry/x')).rejects.toThrow(/not logged in/);
+    await expect(wranglerStore(fake().io.wrangler, target, fake().io.files).telemetry.list('telemetry/')).rejects.toThrow(/R2_ACCESS_KEY_ID/);
   });
 
   it('deletes an object through r2 object delete, and uses local state when asked', async () => {
@@ -252,10 +277,20 @@ describe('main', () => {
   it('erases an account, and moves the generation when it held links to the totals', async () => {
     // The count of links is a SELECT that always answers one row; the rest of the account's rows are empty.
     const { io, calls, printed } = fake({ answer: (sql) => (sql.includes('AS held') ? [{ held: 2 }] : []) });
-    expect(await main(['account', '--account', ACCOUNT, '--confirm'], io)).toBe(0);
+    const listed: string[] = [];
+    expect(await main(['account', '--account', ACCOUNT, '--confirm'], { ...io, list: (prefix) => { listed.push(prefix); return Promise.resolve([]); } })).toBe(0);
     expect(printed).toHaveLength(1);
     expect(printed[0]).toMatch(/^\{"rowsErased":\d+,"objectsErased":\d+\}$/);
     expect(calls.flat().some((arg) => arg.startsWith('UPDATE pool_generation'))).toBe(true);
+    // The batch step lists the 91 days within retention.
+    expect(listed).toHaveLength(91);
+  });
+
+  it('says what to export when the account erasure has no R2 token to list the telemetry bucket with, after every other step', async () => {
+    const { io, calls, printed } = fake({ answer: (sql) => (sql.includes('AS held') ? [{ held: 0 }] : []) });
+    expect(await main(['account', '--account', ACCOUNT, '--confirm'], io)).toBe(1);
+    expect(printed.join(' ')).toMatch(/R2_ACCESS_KEY_ID/);
+    expect(calls.flat().some((arg) => arg.startsWith('INSERT INTO erasure_audit'))).toBe(false);
   });
 
   it('answers a usage error with exit code 2 and the usage', async () => {

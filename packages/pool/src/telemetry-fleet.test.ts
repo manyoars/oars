@@ -447,6 +447,20 @@ describe('the counting rules', () => {
     expect(measurablesOf(rows.slice(0, 4), daysAgo(0), DEFAULT_PUBLIC_FLOOR).firstFleetRead).toBeNull();
   });
 
+  it('neither counts nor lists an erased placeholder as an account: each `erased:` id is a stand-in, and the rollup merges every erased account of an install-day into one', () => {
+    const counts = [18, 19, 20, 20, 21, 22, 19, 20];
+    const rows = counts.map((events, at) => row(daysAgo(1), uuid(at + 1), { events, batches: 1, account: `acct-${String(at % 5)}` }));
+    const base = anomaliesOf(rows, DEFAULT_PUBLIC_FLOOR);
+    // One huge merged placeholder and one numbered one: neither is an account, so the account count and the outliers stay as they were.
+    const withErased = [...rows, row(daysAgo(1), uuid(20), { events: 5000, batches: 1, account: 'erased:' }), row(daysAgo(1), uuid(21), { events: 7000, batches: 1, account: 'erased:12' })];
+    const found = anomaliesOf(withErased, DEFAULT_PUBLIC_FLOOR);
+    expect(found.accounts).toBe(base.accounts);
+    expect(found.outliers.filter((one) => one.entity === 'account')).toEqual(base.outliers.filter((one) => one.entity === 'account'));
+    expect(found.outliers.some((one) => one.entity === 'account' && one.id.startsWith('erased:'))).toBe(false);
+    // The install behind a placeholder still counts as an install.
+    expect(found.installs).toBe(base.installs + 2);
+  });
+
   it('lists a far count among installs and among accounts, and lists none without a baseline of DEFAULT_PUBLIC_FLOOR', () => {
     const counts = [18, 19, 20, 20, 21, 22, 19, 20, 5000];
     const rows = counts.map((events, at) => row(daysAgo(1), uuid(at + 1), { events, batches: 1, account: `acct-${String(at % 5)}` }));

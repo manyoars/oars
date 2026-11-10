@@ -1,4 +1,4 @@
-// What an erasure leaves behind (migration 0018) and the check ingest makes against it. The Worker writes only `raw-object` tombstones (the nightly withdrawal sweep, `raw.ts`), never `account`, and the tombstones are append-only (0018); every other kind comes from the operator's own command (`scripts/erase.ts`), so no route can erase anything else.
+// What an erasure leaves behind (migration 0018) and the check ingest makes against it. The Worker writes only `raw-object` tombstones (the nightly withdrawal sweep, `raw.ts`), never `account`, and the tombstones are append-only (0018); every other kind comes from the operator's own command (`scripts/erase.ts`), so no route can erase anything else. The operator's `telemetry-batch` kind (`scripts/erase-batches.ts`) holds the SHA-256 of an old telemetry batch's R2 key and the erasure date, and no size.
 // The digests live here so the Worker and the command cannot drift apart.
 import { fieldOf, refuse, type Env } from './http.js';
 
