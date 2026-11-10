@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { deposit, loadStore, paths, type SessionsRuntime } from '../../cli/src/sessions/store.js';
+import { deposit, paths, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { rolloutLine, stageCodex } from '../../cli/src/sessions/test-support.js';
 import { buildPack, HARNESS_TERMS, main, matchIdOf, ownerOf, parseOwners, secretIn, serverKeyOf, USAGE, type ManifestRow, type PackCounts, type PackOptions } from './sample-pack.js';
 
@@ -475,7 +475,7 @@ const codexTime = (second: number): string => `2026-06-01T10:00:${String(second)
 
 const joined = (...rows: string[]): string => rows.join(String.fromCharCode(10));
 
-const codexRollout = (extra: readonly object[] = []): object[] => {
+const codexRollout = (call = CODEX_CALL): object[] => {
   const cwd = repoCwd;
   const message = (role: string, kind: string, text: string, second: number): object => rolloutLine(codexTime(second), 'response_item', { type: 'message', role, content: [{ type: kind, text }] });
   return [
@@ -485,10 +485,9 @@ const codexRollout = (extra: readonly object[] = []): object[] => {
     message('user', 'input_text', joined('<environment_context>', `  <cwd>${cwd}</cwd>`, '  <shell>bash</shell>', '</environment_context>'), 3),
     message('user', 'input_text', joined(`# AGENTS.md instructions for ${cwd}`, '', CODEX_AGENTS_LINE), 4),
     rolloutLine(codexTime(5), 'event_msg', { type: 'user_message', message: 'fix the build' }),
-    rolloutLine(codexTime(6), 'response_item', { type: 'function_call', name: 'shell', arguments: '{"command":["ls"]}', call_id: CODEX_CALL }),
-    rolloutLine(codexTime(7), 'response_item', { type: 'function_call_output', call_id: CODEX_CALL, output: joined('Exit code: 0', 'Output:', 'README.md') }),
+    rolloutLine(codexTime(6), 'response_item', { type: 'function_call', name: 'shell', arguments: '{"command":["ls"]}', call_id: call }),
+    rolloutLine(codexTime(7), 'response_item', { type: 'function_call_output', call_id: call, output: joined('Exit code: 0', 'Output:', 'README.md') }),
     rolloutLine(codexTime(8), 'event_msg', { type: 'agent_message', message: 'fixed' }),
-    ...extra,
   ];
 };
 
@@ -581,8 +580,7 @@ describe('a Codex session (plan S2)', () => {
   it('writes no raw call id when the redactor took it first as a secret', async () => {
     const f = fixture();
     const random = 'call_Qx7LmN2vTz9RkPb4WcYd8HsJ';
-    const rollout = codexRollout().map((entry) => JSON.parse(JSON.stringify(entry).replaceAll(CODEX_CALL, random)) as object);
-    expect(await packed(f, rollout)).toMatchObject({ emitted: 1 });
+    expect(await packed(f, codexRollout(random))).toMatchObject({ emitted: 1 });
     expect(packText(f.out)).not.toContain(random);
   });
 });

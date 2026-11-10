@@ -491,7 +491,7 @@ describe('a session of a source with its own file', () => {
       label: 'Codex',
       root: () => '',
       storeFile: () => '',
-      open: async () => ({ sessions: [{ id: ID, folder: null, size: 1, mtimeMs: 1 }], transcript: () => '', rejected: 0, unreadable: [], where: () => join(runtime.storeDir, 'codex.db'), close: () => undefined }),
+      open: () => Promise.resolve({ sessions: [{ id: ID, folder: null, size: 1, mtimeMs: 1 }], transcript: () => '', rejected: 0, unreadable: [], where: () => join(runtime.storeDir, 'codex.db'), close: () => undefined }),
     };
     expect(await checkSession({ ...runtime, sources: [database] }, termsFile, project, session)).toMatchObject({ excluded: true, reason: 'no-raw' });
   });
@@ -499,11 +499,9 @@ describe('a session of a source with its own file', () => {
   it('excludes a session as unreadable when its source cannot be opened, and as no raw when the source holds no store', async () => {
     const { runtime, termsFile, project, session } = await codexSetup('fix the build');
     const source = (open: Source['open']): Source => ({ name: 'codex', harness: 'codex', label: 'Codex', root: () => '', storeFile: () => '', open });
-    const failing = source(async () => {
-      throw new Error('locked');
-    });
+    const failing = source(() => Promise.reject(new Error('locked')));
     expect(await checkSession({ ...runtime, sources: [failing] }, termsFile, project, session)).toMatchObject({ excluded: true, reason: 'unreadable' });
-    expect(await checkSession({ ...runtime, sources: [source(async () => undefined)] }, termsFile, project, session)).toMatchObject({ excluded: true, reason: 'no-raw' });
+    expect(await checkSession({ ...runtime, sources: [source(() => Promise.resolve(undefined))] }, termsFile, project, session)).toMatchObject({ excluded: true, reason: 'no-raw' });
   });
 });
 
