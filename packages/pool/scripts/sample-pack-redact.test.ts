@@ -188,7 +188,7 @@ const command = (f: Fixture, session: string, name: string, args: string): strin
   user(f, session, 1, `<command-message>${name.slice(1)}</command-message>\n<command-name>${name}</command-name>\n<command-args>${args}</command-args>`);
 
 describe('Item 4: orchestration lead sessions are not drawn', () => {
-  it('leaves out a session whose first prompt is /loop /orchestrate, /orchestrate, or /handoff resume, counts it lead, and writes the count to pack.json', async () => {
+  it('leaves out a session whose first prompt is /loop /orchestrate or /orchestrate, counts it lead, and writes the count to pack.json', async () => {
     const f = fixture();
     f.write(S(1), [command(f, S(1), '/loop', '/orchestrate'), assistant(S(1), 1, [{ type: 'text', text: 'leading' }])]);
     f.write(S(2), [command(f, S(2), '/orchestrate', ''), assistant(S(2), 1, [{ type: 'text', text: 'leading' }])]);
@@ -196,10 +196,29 @@ describe('Item 4: orchestration lead sessions are not drawn', () => {
     f.write(S(4), [user(f, S(4), 1, 'orchestrate the loop of the parser'), assistant(S(4), 1, [{ type: 'text', text: 'working' }])]);
     f.write(S(5), [command(f, S(5), '/handoff', 'write a note'), assistant(S(5), 1, [{ type: 'text', text: 'working' }])]);
     const counts = await run(f);
-    expect(counts).toMatchObject({ lead: 3, emitted: 2 });
+    expect(counts).toMatchObject({ lead: 2, emitted: 3 });
     const pack: unknown = JSON.parse(readFileSync(join(f.out, 'pack.json'), 'utf8'));
-    expect(pack).toMatchObject({ counts: { lead: 3 }, redactionVersion: '4' });
+    expect(pack).toMatchObject({ counts: { lead: 2 }, redactionVersion: '4' });
     expect(packText(f.out)).not.toContain('leading');
+  });
+
+  it('draws /handoff resume in a repository whose owners entry lists no lead prompt, and leaves it out where the entry lists it', async () => {
+    const f = fixture();
+    f.write(S(1), [command(f, S(1), '/handoff', 'resume t1086'), assistant(S(1), 1, [{ type: 'text', text: 'ordinary work' }])]);
+    expect(await run(f)).toMatchObject({ lead: 0, emitted: 1 });
+    const g = fixture();
+    g.setOwners([{ folder: '*-oars*', owner: 'Many Oars Co.', license: 'Apache-2.0', leadPrompts: ['/handoff resume'] }]);
+    g.write(S(1), [command(g, S(1), '/handoff', 'resume t1086'), assistant(S(1), 1, [{ type: 'text', text: 'leading' }])]);
+    g.write(S(2), [command(g, S(2), '/handoff', 'write a note'), assistant(S(2), 1, [{ type: 'text', text: 'working' }])]);
+    expect(await run(g)).toMatchObject({ lead: 1, emitted: 1 });
+    expect(packText(g.out)).not.toContain('leading');
+  });
+
+  it('refuses an owners entry whose leadPrompts are not a list of prompts', () => {
+    expect(() => parseOwners(JSON.stringify([{ folder: '*', owner: 'x', license: null, leadPrompts: '/handoff resume' }]))).toThrow(/leadPrompts/);
+    expect(() => parseOwners(JSON.stringify([{ folder: '*', owner: 'x', license: null, leadPrompts: [''] }]))).toThrow(/leadPrompts/);
+    const [rule]: OwnerRule[] = parseOwners(JSON.stringify([{ folder: '*', owner: 'x', license: null, handles: ['a'], leadPrompts: ['/handoff resume'] }]));
+    expect(rule).toMatchObject({ handles: ['a'], leadPrompts: ['/handoff resume'] });
   });
 
   it('leaves out a session whose first prompt matches one the pack is told to treat as one', async () => {
