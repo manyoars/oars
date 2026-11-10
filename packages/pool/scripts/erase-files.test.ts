@@ -74,6 +74,18 @@ describe('the export folder', () => {
     }
   });
 
+  it('reads a missing folder as empty but rethrows any other readdir failure', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'oars-export-test-'));
+    try {
+      const file = join(parent, 'a-file');
+      writeFileSync(file, 'x');
+      // A regular file as the folder fails readdir with ENOTDIR, not ENOENT: the folder cannot be shown empty, so the error reaches the operator as it is.
+      await expect(nodeFolder(file).write('account-export-0001.json', 'new')).rejects.toThrow(/ENOTDIR/);
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
   it.skipIf(process.platform === 'win32')('creates the folder readable by the operator alone, 0700 for folders and 0600 for files', async () => {
     const parent = mkdtempSync(join(tmpdir(), 'oars-export-test-'));
     try {

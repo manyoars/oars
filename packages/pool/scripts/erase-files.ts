@@ -39,7 +39,11 @@ export const nodeFolder = (path: string): ExportFolder => {
   const root = resolve(path);
   let checked: Promise<void> | undefined;
   const empty = async (): Promise<void> => {
-    const held = await readdir(root).catch(() => []);
+    const held = await readdir(root).catch((error: unknown) => {
+      // A folder not made yet reads as empty; any other failure (permissions, a file in its place) must not read as empty.
+      if (error instanceof Error && Reflect.get(error, 'code') === 'ENOENT') return [];
+      throw error;
+    });
     if (held.length > 0) throw new Error(`${path} already holds files: use a new, empty folder for each run, so no copy from an earlier run is sent.`);
   };
   return {
