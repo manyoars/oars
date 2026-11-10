@@ -244,6 +244,39 @@ export const readObjections = async (dir: string): Promise<{ objections: Objecti
   return { objections, hash: createHash('sha256').update(text).digest('hex') };
 };
 
+/** Every string a transcript holds once its JSON is decoded, keys and values, including JSON carried inside a string: a name a `\u` escape hides from the raw bytes is found here whether or not redaction rewrote the line. */
+export const decodedStrings = (body: string): string[] => {
+  const out: string[] = [];
+  const walk = (value: unknown): void => {
+    if (typeof value === 'string') {
+      out.push(value);
+      const inner = value.trimStart();
+      if (inner.startsWith('{') || inner.startsWith('[')) {
+        try {
+          walk(JSON.parse(value));
+        } catch {
+          // Prose that opens with a brace: the string itself is already collected.
+        }
+      }
+    } else if (Array.isArray(value)) {
+      for (const item of value) walk(item);
+    } else if (typeof value === 'object' && value !== null) {
+      for (const [key, item] of Object.entries(value)) {
+        out.push(key);
+        walk(item);
+      }
+    }
+  };
+  for (const row of body.split(String.fromCharCode(10))) {
+    try {
+      walk(JSON.parse(row));
+    } catch {
+      // Not a JSON line: the raw text is searched as it stands.
+    }
+  }
+  return out;
+};
+
 /** Lower case with runs of white space made one, so a name matches across a line break or a doubled space. */
 export const squashed = (text: string): string => text.toLowerCase().replace(/\s+/g, ' ');
 
@@ -850,8 +883,8 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
       texts.push(redactTranscript(raw, domains, names, injectedKey).text);
       heard.push(raw);
     }
-    // The person's name is looked for in the redacted text as well as the raw one: redaction decodes each line's strings, so a name a JSON escape hid from the raw bytes shows in what a buyer would read.
-    if (objectedNames.some((name) => [...texts, ...heard].some((text) => squashed(text).includes(name)))) {
+    // The person's name is looked for in the raw text, the redacted text, and the decoded strings: a JSON escape hides it from the raw bytes, and redaction decodes a line only when it masks something in it, so the decoding is done here.
+    if (objectedNames.some((name) => [...texts, ...heard, ...heard.flatMap(decodedStrings)].some((text) => squashed(text).includes(name)))) {
       counts.objected += 1;
       continue;
     }

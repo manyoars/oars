@@ -11,7 +11,7 @@ import { SKELETON_FORMAT, type SessionSkeleton } from '../../cli/src/sessions/po
 import { deposit, loadStore, paths, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { runGit } from '../../cli/src/sessions/survival.js';
 import { rolloutLine, stageCodex } from '../../cli/src/sessions/test-support.js';
-import { buildPack, HARNESS_TERMS, main, matchIdOf, ownerOf, parseOwners, secretIn, serverKeyOf, skeletonUnder, USAGE, type Census, type ManifestRow, type PackCounts, type PackOptions, type Tally } from './sample-pack.js';
+import { buildPack, decodedStrings, HARNESS_TERMS, main, matchIdOf, ownerOf, parseOwners, secretIn, serverKeyOf, skeletonUnder, USAGE, type Census, type ManifestRow, type PackCounts, type PackOptions, type Tally } from './sample-pack.js';
 
 // Every session the exclusion check was asked about, in call order: the frame-first rule is proved by who was never asked.
 const gated = vi.hoisted((): string[] => []);
@@ -1312,6 +1312,14 @@ describe('an objection by name (plan S5, Art. 21(1))', () => {
     await stored(f);
     writeFileSync(join(f.root, 'objections.jsonl'), '{"session": "x"}\n');
     await expect(buildPack(f.runtime, options(f))).rejects.toThrow(/objections/i);
+  });
+});
+
+describe('decodedStrings reads the strings a transcript holds, whatever redaction does (plan S5)', () => {
+  it('collects keys and values, the items of arrays, and JSON carried inside a string; skips lines that are not JSON', () => {
+    const inner = JSON.stringify({ quoted: 'Zoë' });
+    const body = ['not json at all', JSON.stringify({ role: 'user', parts: ['one', { two: 'two' }], blob: inner, prose: '{ not json', count: 3 })].join(String.fromCharCode(10));
+    expect(decodedStrings(body).sort()).toEqual(['Zoë', 'blob', 'count', 'one', 'parts', 'prose', 'quoted', 'role', 'two', 'two', inner, '{ not json', 'user'].sort());
   });
 });
 
