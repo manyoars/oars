@@ -20,9 +20,9 @@ const countOf = async (pool: TestPool, account: string): Promise<unknown> =>
   (await pool.db()).prepare('SELECT (SELECT COUNT(*) FROM covenant_acceptances WHERE account = ?) AS n').bind(account).first('n');
 
 describe('the regions the pool does not take acceptances from', () => {
-  it('lists the EU 27, Iceland, Liechtenstein, Norway, and the UK', () => {
-    expect(PROTECTED_REGIONS.size).toBe(31);
-    for (const code of ['AT', 'DE', 'FR', 'IE', 'SE', 'IS', 'LI', 'NO', 'GB']) expect(PROTECTED_REGIONS.has(code)).toBe(true);
+  it('lists the EU 27 and the EU territory with its own code, Iceland, Liechtenstein, Norway, and the UK', () => {
+    expect(PROTECTED_REGIONS.size).toBe(38);
+    for (const code of ['AT', 'DE', 'FR', 'IE', 'SE', 'IS', 'LI', 'NO', 'GB', 'RE', 'AX', 'GF', 'GP', 'MQ', 'YT', 'MF']) expect(PROTECTED_REGIONS.has(code)).toBe(true);
     for (const code of ['US', 'CH', 'CA', 'UK', 'T1']) expect(PROTECTED_REGIONS.has(code)).toBe(false);
   });
 });

@@ -1494,16 +1494,16 @@ describe('oars pool deposit --send', () => {
         expect(scene.h.err.join('')).not.toContain(QUESTION);
       });
 
-      it('refuses --accept-covenant with no answer, names the flag, and shows nothing', async () => {
+      it('asks the question when --accept-covenant names the version and no region flag answers it', async () => {
         const scene = await batched();
         const hash = await printedAndHash(scene);
         const pool = wire(acceptRoutes());
         atTerminal(scene, SCREEN.phrase, 'no');
-        const refused = poolDeposit(scene.h.deps, { ...sendOptions(hash, pool.via), acceptCovenant: 'v1' });
-        await expect(refused).rejects.toMatchObject({ exitCode: ExitCode.USAGE });
-        await expect(refused).rejects.toThrow('--in-eu-eea-uk');
-        expect(scene.h.err.join('')).not.toContain(SCREEN.text);
-        expect(paths(pool)).toEqual(['/v1/covenant']);
+        await poolDeposit(scene.h.deps, { ...sendOptions(hash, pool.via), acceptCovenant: 'v1' });
+        const shown = scene.h.err.join('');
+        expect(shown.indexOf(QUESTION)).toBeGreaterThan(shown.indexOf(SCREEN.text));
+        expect(bodyOf(pool)).toMatchObject({ euEeaUk: 'no' });
+        expect(paths(pool)).toEqual(['/v1/covenant', '/v1/covenant/accept', '/v1/deposits']);
       });
 
       it('refuses a flag value that is not yes or no', async () => {
@@ -1622,11 +1622,11 @@ describe('oars pool deposit --send', () => {
       const hash = await printedAndHash(scene);
       const refused = wire(acceptRoutes());
       atTerminal(scene, 'v1');
-      await expect(poolDeposit(scene.h.deps, { ...sendOptions(hash, refused.via), acceptCovenant: 'v1', inEuEeaUk: 'no' })).rejects.toMatchObject({ problem: { code: 'covenant_not_accepted' } });
+      await expect(poolDeposit(scene.h.deps, { ...sendOptions(hash, refused.via), acceptCovenant: 'v1' })).rejects.toMatchObject({ problem: { code: 'covenant_not_accepted' } });
       expect(paths(refused)).toEqual(['/v1/covenant']);
       const taken = wire(acceptRoutes());
-      atTerminal(scene, SCREEN.phrase);
-      await poolDeposit(scene.h.deps, { ...sendOptions(hash, taken.via), acceptCovenant: 'v1', inEuEeaUk: 'no' });
+      atTerminal(scene, SCREEN.phrase, 'no');
+      await poolDeposit(scene.h.deps, { ...sendOptions(hash, taken.via), acceptCovenant: 'v1' });
       expect(paths(taken)).toEqual(['/v1/covenant', '/v1/covenant/accept', '/v1/deposits']);
     });
 
@@ -1657,7 +1657,7 @@ describe('oars pool deposit --send', () => {
       const hash = await printedAndHash(scene);
       const pool = wire(acceptRoutes(answer(200, { version: 'v1', accepted: true, screen: SCREEN })));
       atTerminal(scene);
-      await poolDeposit(scene.h.deps, { ...sendOptions(hash, pool.via), acceptCovenant: 'v1', inEuEeaUk: 'no' });
+      await poolDeposit(scene.h.deps, { ...sendOptions(hash, pool.via), acceptCovenant: 'v1' });
       expect(paths(pool)).toEqual(['/v1/covenant', '/v1/deposits']);
       expect(scene.h.err.join('')).not.toContain(SCREEN.text);
     });

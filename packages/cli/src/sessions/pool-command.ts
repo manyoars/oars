@@ -304,8 +304,6 @@ const openCovenant = async (deps: RunDeps, server: string, token: string, accept
   if (!isTerminal(deps)) {
     throw notAccepted(`Covenant ${version} is not accepted for this account. Accepting it takes a person at a terminal who reads it and types its phrase: run this command from one. Nothing was accepted.`);
   }
-  // Naming the version is how a script asks, so it gives the answer the same way: the question is asked only of a person who named nothing.
-  if (accept !== undefined && region === undefined) throw usage(`--accept-covenant needs ${REGION_FLAG} yes|no: "${REGION_QUESTION}" is not asked when you name the version. Nothing was accepted.`, DEPOSIT);
   deps.io.stderr(`\n${screen.text}\n\n> `);
   emitOf(deps)('covenant-shown', { version });
   // One reader for both lines: a second one opened after the first closed would lose a line the first had already taken from a pipe.

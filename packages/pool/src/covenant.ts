@@ -66,10 +66,12 @@ export const countryOf = (request: Request): string | null => {
 };
 
 /**
- * The countries the pool does not take acceptances from while `PROTECTED_REGIONS_OPEN` is not `1`: the 27 EU member states, Iceland, Liechtenstein, and Norway (the EEA), and the United Kingdom (`GB`). Many Oars Co. has no representative in the EU or the UK (Article 27 of the GDPR and the UK GDPR), so it takes no acceptance from a person there until it appoints one.
+ * The countries the pool does not take acceptances from while `PROTECTED_REGIONS_OPEN` is not `1`: the 27 EU member states and the EU territory with its own code (Åland and the French outermost regions), Iceland, Liechtenstein, and Norway (the EEA), and the United Kingdom (`GB`). Many Oars Co. has no representative in the EU or the UK (Article 27 of the GDPR and the UK GDPR), so it takes no acceptance from a person there until it appoints one.
  */
 export const PROTECTED_REGIONS: ReadonlySet<string> = new Set([
   ...['AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE'],
+  // EU territory that Cloudflare reports under its own ISO code: Åland, and the French outermost regions.
+  ...['AX', 'GF', 'GP', 'MQ', 'RE', 'YT', 'MF'],
   ...['IS', 'LI', 'NO', 'GB'],
 ]);
 
