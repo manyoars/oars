@@ -1,11 +1,11 @@
 // The first sale's sample pack (P98 (10) to (12)): fixture stores, built in a temp folder, with an invented term and invented instruction text.
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { deposit, loadStore, paths, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { rolloutLine, stageCodex } from '../../cli/src/sessions/test-support.js';
-import { buildPack, main, matchIdOf, ownerOf, parseOwners, serverKeyOf, USAGE, type ManifestRow, type PackOptions } from './sample-pack.js';
+import { buildPack, main, matchIdOf, ownerOf, parseOwners, secretIn, serverKeyOf, USAGE, type ManifestRow, type PackOptions } from './sample-pack.js';
 
 const TERM = 'zorblax';
 const CLAUDE_MD_LINE = 'Always fold the green napkins before lunch';
@@ -28,8 +28,10 @@ const at = (n: number): string => `2026-06-01T10:00:${String(n).padStart(2, '0')
 // Ids shaped as the harness writes them: a uuid per line, `parentUuid` naming the line before, and a `req_` id per request.
 const uuidOf = (session: string, kind: 'a' | 'b', n: number): string => `${session.slice(0, 8)}-${kind}${String(n).padStart(3, '0')}-4222-8222-222222222222`;
 const requestOf = (session: string, n: number): string => `req_011C${session.slice(0, 8)}x${String(n)}`;
-const user = (session: string, n: number, content: string): string =>
-  line({ type: 'user', uuid: uuidOf(session, 'b', n), parentUuid: null, isSidechain: false, timestamp: at(n), version: '2.1.300', sessionId: session, cwd: '/work/app', message: { role: 'user', content } });
+// The working directory of a fixture's sessions: a folder with an origin remote, so the store records a repository for them. `fixture()` sets it.
+let repoCwd = '';
+const user = (session: string, n: number, content: string, cwd = repoCwd): string =>
+  line({ type: 'user', uuid: uuidOf(session, 'b', n), parentUuid: null, isSidechain: false, timestamp: at(n), version: '2.1.300', sessionId: session, cwd, message: { role: 'user', content } });
 const assistant = (session: string, n: number, text: string): string =>
   line({ type: 'assistant', uuid: uuidOf(session, 'a', n), parentUuid: uuidOf(session, 'b', n), isSidechain: false, timestamp: at(n + 1), version: '2.1.300', sessionId: session, requestId: requestOf(session, n), message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text }], usage: { input_tokens: 10, output_tokens: 20 } } });
 // Where the harness puts CLAUDE.md and the memory index: an `instructions` attachment, and a leading `<system-reminder>` of a user message.
@@ -52,6 +54,10 @@ const fixture = (): Fixture => {
   dirs.push(root);
   const projectsRoot = join(root, 'projects');
   mkdirSync(projectsRoot);
+  repoCwd = join(root, 'work', 'app');
+  mkdirSync(join(repoCwd, '.git'), { recursive: true });
+  writeFileSync(join(repoCwd, '.git', 'config'), `[remote "origin"]\n\turl = https://example.com/acme/app.git\n`);
+  mkdirSync(join(root, 'notes'));
   const terms = join(root, 'terms.txt');
   writeFileSync(terms, `${TERM}\n`);
   const owners = join(root, 'owners.json');
@@ -68,7 +74,7 @@ const fixture = (): Fixture => {
   return { root, runtime, terms, owners, indexKey, out: join(root, 'pack'), write };
 };
 
-const options = (f: Fixture, extra: Partial<PackOptions> = {}): PackOptions => ({ terms: f.terms, owners: f.owners, indexKey: f.indexKey, buyerKey: 'sample', out: f.out, size: 25, seed: '1', ...extra });
+const options = (f: Fixture, extra: Partial<PackOptions> = {}): PackOptions => ({ terms: f.terms, owners: f.owners, indexKey: f.indexKey, buyerKey: 'sample', out: f.out, size: 25, seed: '1', minTurns: 1, ...extra });
 
 const stored = async (f: Fixture): Promise<void> => {
   await deposit(f.runtime, { allow: [], redactDomains: [], now: () => Date.parse('2026-06-10T00:00:00Z') });
@@ -234,6 +240,22 @@ describe('the command line', () => {
     expect(printed.join('\n')).toMatch(/inside a git repository/);
   });
 
+  it('refuses an owners folder inside a git repository, since the operator index lands beside it, and writes nothing', async () => {
+    const f = fixture();
+    mkdirSync(join(f.root, 'repo', '.git'), { recursive: true });
+    const owners = join(f.root, 'repo', 'owners.json');
+    writeFileSync(owners, JSON.stringify(OWNERS));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    const printed: string[] = [];
+    const code = await main(['--terms', f.terms, '--owners', owners, '--index-key', f.indexKey, '--buyer-key', 'sample', '--out', f.out], { runtime: f.runtime, print: (text) => printed.push(text) });
+    expect(code).toBe(2);
+    expect(printed.join('\n')).toMatch(/owners file.*inside a git repository/);
+    expect(existsSync(join(f.root, 'repo', 'index.jsonl'))).toBe(false);
+    expect(existsSync(f.out)).toBe(false);
+    expect(existsSync(`${f.out}.partial`)).toBe(false);
+  });
+
   it('prints the usage when a required option is missing', async () => {
     const f = fixture();
     const printed: string[] = [];
@@ -250,7 +272,7 @@ describe('what a buyer can join on', () => {
     f.write('-work-oars', S(2), [user(S(2), 1, 'run the build'), assistant(S(2), 1, 'green')]);
     await stored(f);
     expect((await buildPack(f.runtime, options(f))).emitted).toBe(2);
-    const raw = [S(1), S(2), uuidOf(S(1), 'b', 1), uuidOf(S(1), 'a', 1), uuidOf(S(1), 'b', 3), requestOf(S(1), 1), requestOf(S(1), 3)];
+    const raw = [S(1), S(2), uuidOf(S(1), 'b', 1), uuidOf(S(1), 'a', 1), uuidOf(S(1), 'a', 3), uuidOf(S(1), 'b', 3), uuidOf(S(2), 'b', 1), uuidOf(S(2), 'a', 1), requestOf(S(1), 1), requestOf(S(1), 3), requestOf(S(2), 1)];
     for (const file of [join(f.out, 'manifest.jsonl'), join(f.out, 'pack.json'), ...packFiles(f.out)]) {
       const text = readFileSync(file, 'utf8');
       for (const id of raw) expect(text, `${id} in ${file}`).not.toContain(id);
@@ -271,6 +293,173 @@ describe('what a buyer can join on', () => {
     expect(field(lines[1], 'requestId')).toMatch(/^req_[0-9a-f]{24}$/);
     // Another session the text names is masked to that session's own match id, so the buyer sees the link but not the id.
     expect(JSON.stringify(lines[2])).toContain(index.find((row) => row.session === S(2))?.matchId ?? 'none');
+  });
+});
+
+describe('the acceptance rule (plan S1)', () => {
+  const turns = (session: string, count: number): string[] => Array.from({ length: count }, (_, n) => [user(session, 2 * n + 1, `ask ${String(n)}`), assistant(session, 2 * n + 1, `answer ${String(n)}`)]).flat();
+
+  it('keeps a subagent transcript out of the frame: only the main session is drawn', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), turns(S(1), 1));
+    f.write('-work-oars', S(1), [user(S(1), 9, 'look around'), assistant(S(1), 9, 'looked')], 'agent-a1');
+    await stored(f);
+    expect(await buildPack(f.runtime, options(f))).toMatchObject({ frame: 1, scanned: 1, emitted: 1 });
+  });
+
+  it('drops a session under --min-turns (user plus assistant turns) and counts it, and the default is 20', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), turns(S(1), 2));
+    f.write('-work-oars', S(2), turns(S(2), 1));
+    await stored(f);
+    expect(await buildPack(f.runtime, options(f, { minTurns: 4 }))).toMatchObject({ tooShort: 1, noRepo: 0, duplicate: 0, emitted: 1 });
+    expect(sessionsOf(f)).toEqual([S(1)]);
+    const printed: string[] = [];
+    const out = join(f.root, 'default');
+    const code = await main(['--terms', f.terms, '--owners', f.owners, '--index-key', f.indexKey, '--buyer-key', 'sample', '--out', out], { runtime: f.runtime, print: (text) => printed.push(text) });
+    expect(code).toBe(0);
+    expect(JSON.parse(readFileSync(join(out, 'pack.json'), 'utf8'))).toMatchObject({ minTurns: 20, counts: { tooShort: 2, emitted: 0 } });
+    expect(printed.join('\n')).toContain('2 under 20 turns');
+  });
+
+  it('refuses a --min-turns that is not a whole number of 1 or more', async () => {
+    const f = fixture();
+    const printed: string[] = [];
+    const code = await main(['--terms', f.terms, '--owners', f.owners, '--index-key', f.indexKey, '--buyer-key', 'sample', '--out', f.out, '--min-turns', '0'], { runtime: f.runtime, print: (text) => printed.push(text) });
+    expect(code).toBe(2);
+    expect(printed.join('\n')).toContain('--min-turns takes a whole number');
+  });
+
+  it('drops a session with no repository and counts it', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), turns(S(1), 1));
+    f.write('-work-oars', S(2), [user(S(2), 1, 'tidy these notes', join(f.root, 'notes')), assistant(S(2), 1, 'tidied')]);
+    await stored(f);
+    expect(await buildPack(f.runtime, options(f))).toMatchObject({ noRepo: 1, tooShort: 0, emitted: 1 });
+    expect(sessionsOf(f)).toEqual([S(1)]);
+  });
+
+  const replayable = (text: string): object => {
+    const value: unknown = JSON.parse(text);
+    return typeof value === 'object' && value !== null ? value : {};
+  };
+
+  it('drops a resumed session that replays an earlier one in favor of the longer, whichever is drawn first', async () => {
+    const f = fixture();
+    const earlier = turns(S(1), 2);
+    // A resumed session starts with the earlier one's lines (same uuids, its own session id), then goes on.
+    const replay = earlier.map((text) => line({ ...replayable(text), sessionId: S(2) }));
+    f.write('-work-oars', S(1), earlier);
+    f.write('-work-oars', S(2), [...replay, ...turns(S(2), 2)]);
+    f.write('-work-oars', S(3), turns(S(3), 2));
+    await stored(f);
+    for (const seed of ['1', '2', '3', '4']) {
+      const out = join(f.root, `pack-${seed}`);
+      expect(await buildPack(f.runtime, options(f, { seed, out }))).toMatchObject({ duplicate: 1, emitted: 2 });
+      expect(sessionsOf(f, out).sort()).toEqual([S(2), S(3)]);
+    }
+  });
+
+  it('chooses a duplicate loser only among sessions that pass every earlier rule: a longer twin another rule drops does not cost the shorter its place', async () => {
+    const f = fixture();
+    const earlier = turns(S(1), 2);
+    const replay = earlier.map((text) => line({ ...replayable(text), sessionId: S(2) }));
+    // The longer twin sits in a folder no owners entry names, so the shorter replay is the one to emit.
+    f.write('-work-oars', S(1), earlier);
+    f.write('-elsewhere-app', S(2), [...replay, ...turns(S(2), 2)]);
+    await stored(f);
+    for (const seed of ['1', '2', '3', '4']) {
+      const out = join(f.root, `pack-${seed}`);
+      expect(await buildPack(f.runtime, options(f, { seed, out }))).toMatchObject({ noOwner: 1, duplicate: 0, emitted: 1 });
+      expect(sessionsOf(f, out)).toEqual([S(1)]);
+    }
+  });
+
+  it('counts a duplicate that also holds a key as a duplicate: the cheaper check runs before the secret scan', async () => {
+    const f = fixture();
+    const earlier = turns(S(1), 2);
+    const planted = 'my' + 'AK' + 'IA' + 'IOSFODNN7EXAMPLE';
+    f.write('-work-oars', S(1), earlier);
+    f.write('-work-oars', S(2), [...earlier.map((text) => line({ ...replayable(text), sessionId: S(2) })), ...turns(S(2), 2)]);
+    f.write('-work-oars', S(3), [...earlier.map((text) => line({ ...replayable(text), sessionId: S(3) })), assistant(S(3), 9, `use ${planted}`)]);
+    await stored(f);
+    expect(await buildPack(f.runtime, options(f))).toMatchObject({ duplicate: 2, secret: 0, emitted: 1 });
+  });
+});
+
+describe('the run record', () => {
+  it('writes how long the run took and how many bytes the pack holds (sessions and manifest) into pack.json', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    const pack: unknown = JSON.parse(readFileSync(join(f.out, 'pack.json'), 'utf8'));
+    const field = (name: string): unknown => (typeof pack === 'object' && pack !== null ? Reflect.get(pack, name) : undefined);
+    const held = [...packFiles(f.out), join(f.out, 'manifest.jsonl')].reduce((sum, file) => sum + statSync(file).size, 0);
+    expect(field('bytes')).toBe(held);
+    expect(held).toBeGreaterThan(0);
+    const elapsed = field('elapsedMs');
+    expect(typeof elapsed === 'number' && Number.isInteger(elapsed) && elapsed >= 0).toBe(true);
+  });
+});
+
+describe('the secret scan', () => {
+  // Built from parts so this file holds no whole key shape for a scanner to find.
+  const SHAPES: [string, string][] = [
+    ['private key', '-----BEGIN RSA PRIVATE ' + 'KEY-----'],
+    ['AWS access key id', 'AK' + 'IA' + 'IOSFODNN7EXAMPLE'],
+    ['GitHub token', 'gh' + 'p_' + 'a1B2c3D4e5F6g7H8i9J0k1L2'],
+    ['GitHub fine-grained token', 'github_' + 'pat_' + '11AAAAAAA0abcdefghij1234'],
+    ['API key', 'sk' + '-ant-' + 'api03abcdefghij1234567890'],
+    ['Stripe key', 'sk' + '_live_' + 'abcdefghij1234'],
+    ['Stripe webhook secret', 'wh' + 'sec_' + 'abcdefghij1234'],
+    ['Slack token', 'xo' + 'xb-' + '1234567890-abcdefghij'],
+    ['Google API key', 'AI' + 'za' + 'SyA1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6'],
+    ['JSON web token', 'ey' + 'J' + 'hbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2QT4'],
+    ['password in a URL', 'https://admin:hunter22' + '@example.com/repo'],
+  ];
+
+  it.each(SHAPES)('finds a %s in a text, even stuck to the word before it', (name, sample) => {
+    expect(secretIn(`the value is ${sample} here`)).toBe(name);
+    expect(secretIn(`prefix${sample}`)).toBe(name);
+  });
+
+  it('finds a bare sk- key (OpenAI style) at a word edge, and does not find one stuck to a word', () => {
+    const key = 'sk' + '-proj-' + 'Ab12Cd34Ef56Gh78Ij90Kl';
+    expect(secretIn(`key ${key}`)).toBe('API key');
+    expect(secretIn(`key ${key} here`)).toBe('API key');
+    // The guarded branch keeps its left guard: stuck to a word it is read as a hyphenated word, not a key.
+    expect(secretIn(`task${key}`)).toBeUndefined();
+  });
+
+  it('passes ordinary text, a masked value, kebab-case words, and a masked URL', () => {
+    for (const text of ['please rename the helper in parse.ts', 'token=<secret>', 'https://<secret>@example.com', 'the task-management-and-planning-notes and a disk-usage-report-for-the-quarter', 'Bearer <secret>']) expect(secretIn(text)).toBeUndefined();
+  });
+
+  it('leaves a base64 image out of the scan: a screenshot whose data holds a key shape is still emitted', async () => {
+    const f = fixture();
+    const shot = 'AI' + 'za' + 'A'.repeat(30);
+    const image = line({ type: 'user', uuid: uuidOf(S(1), 'b', 5), parentUuid: null, isSidechain: false, timestamp: at(5), version: '2.1.300', sessionId: S(1), cwd: repoCwd, message: { role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: `iVBORw0KGgo${shot}AAAA` } }, { type: 'text', text: 'what is on screen' }] } });
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done'), image]);
+    await stored(f);
+    expect(await buildPack(f.runtime, options(f))).toMatchObject({ secret: 0, emitted: 1 });
+    expect(packText(f.out)).toContain(shot);
+  });
+
+  it('drops a session whose redacted text still holds a key, writes nothing of it, and counts it', async () => {
+    const f = fixture();
+    // Stuck to a word, the key is outside the redactor's word-boundary rule: it comes through redaction, and the scan is what stops it.
+    const planted = 'my' + 'AK' + 'IA' + 'IOSFODNN7EXAMPLE';
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, `set it to ${planted} and rerun`)]);
+    f.write('-work-oars', S(2), [user(S(2), 1, 'run the build'), assistant(S(2), 1, 'green')]);
+    await stored(f);
+    const counts = await buildPack(f.runtime, options(f));
+    expect(counts).toMatchObject({ scanned: 2, secret: 1, emitted: 1 });
+    expect(sessionsOf(f)).toEqual([S(2)]);
+    expect(packText(f.out)).not.toContain(planted);
+    expect(readFileSync(join(f.out, 'manifest.jsonl'), 'utf8')).not.toContain(planted);
+    expect(indexOf(f).map((row) => row.session)).toEqual([S(2)]);
+    expect(readdirSync(join(f.out, 'sessions'))).toHaveLength(1);
   });
 });
 
@@ -304,7 +493,7 @@ describe('the harness terms gate', () => {
 describe('refusals and an unfinished run', () => {
   const run = async (f: Fixture, extra: readonly string[] = []): Promise<{ code: number; printed: string }> => {
     const printed: string[] = [];
-    const args = ['--terms', f.terms, '--owners', f.owners, '--index-key', f.indexKey, '--buyer-key', 'sample', '--out', f.out, ...extra];
+    const args = ['--terms', f.terms, '--owners', f.owners, '--index-key', f.indexKey, '--buyer-key', 'sample', '--out', f.out, '--min-turns', '1', ...extra];
     const code = await main(args, { runtime: f.runtime, print: (text) => printed.push(text) });
     return { code, printed: printed.join('\n') };
   };

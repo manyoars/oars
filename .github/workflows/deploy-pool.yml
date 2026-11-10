@@ -1,0 +1,127 @@
+name: deploy-pool
+
+# Deploys the pool (packages/pool, the Cloudflare Worker behind https://pool.manyoars.com) from green main, so no deploy is a hand step.
+# The deployed commit is readable afterwards: `wrangler deployments list` (in packages/pool) shows the sha in the message of the version.
+#
+# Trigger: a ci run on main that completed with success (the run is of exactly that commit, never a later main), or a manual run.
+#   1. gate        no token yet -> a warning naming the secret, and the job does nothing else. A commit that is no longer the tip of main
+#                  also stops here: a slower ci run for an older commit must not replace a newer deploy, and the tip's own ci run deploys it.
+#   2. migrations  every D1 migration not yet applied to oars-pool, in order, before the new code that may read it.
+#   3. deploy      the Worker, tagged with the commit, with the custom domain attached by every deploy (idempotent) so it is never dropped.
+#   4. smoke       a read of the live pool, as docs/pool.md says a closed pool answers.
+#   5. summary     the commit, the Worker version, the highest migration applied, and the smoke answer.
+# Deposits are not touched: a deploy keeps the Worker's secrets, and no step here sets one.
+#
+# Secrets (CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID) live in the `pool-production` environment, limited to main (docs/pool.md, "Deploy
+# steps"). They reach only the steps that call Cloudflare, never the install, whose scripts would otherwise be able to read them.
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time, and a running deploy is never cancelled: half a migration run or a half-uploaded Worker is worse than waiting.
+# (A queued run replaces an older queued run, which is right: only the newest green commit needs to deploy.)
+concurrency:
+  group: deploy-pool
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # ci also completes on failure and cancel: only success deploys. ci runs on pull requests too, and `branches: [main]` matches a fork's
+    # branch named main: only a push to this repository starts the job, so the environment's secrets are never in reach of a fork.
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository)
+    # GitHub-hosted runners only: this repository is public.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: pool-production
+    env:
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - name: Check there is a token and this commit is still main
+        id: gate
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::warning::The CLOUDFLARE_API_TOKEN secret is not set in the pool-production environment, so the pool was not deployed. Set it, and CLOUDFLARE_ACCOUNT_ID, as docs/pool.md (Deploy steps) says."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          tip=$(git ls-remote "https://github.com/$GITHUB_REPOSITORY.git" refs/heads/main)
+          tip="${tip%%[[:space:]]*}"
+          if [ "$tip" != "$SHA" ]; then
+            echo "::notice::$SHA is not the tip of main ($tip), so it was not deployed: the newer commit's own ci run deploys it."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "go=true" >> "$GITHUB_OUTPUT"
+      # The exact commit the green ci run tested, never a later main. No credentials stay in .git/config.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.gate.outputs.go == 'true'
+        with:
+          ref: ${{ env.SHA }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.gate.outputs.go == 'true'
+        with:
+          node-version: 24
+          cache: npm
+      - if: steps.gate.outputs.go == 'true'
+        run: npm ci
+      # `npm exec --` before wrangler's own flags: without it npm takes a flag such as --dry-run for its own (docs/pool.md, step 7).
+      - name: Apply the unapplied D1 migrations
+        id: migrations
+        if: steps.gate.outputs.go == 'true'
+        working-directory: packages/pool
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npm exec -- wrangler d1 migrations apply oars-pool --remote
+          # The summary's line; a failure to read it must not stop the deploy the applied migrations belong to.
+          highest=unknown
+          if npm exec -- wrangler d1 execute oars-pool --remote --json --command "SELECT name FROM d1_migrations ORDER BY id DESC LIMIT 1" > "$RUNNER_TEMP/highest.json"; then
+            highest=$(node -e 'const t = process.getBuiltinModule("node:fs").readFileSync(process.argv[1], "utf8"); console.log(JSON.parse(t.slice(t.indexOf("[")))[0].results[0].name)' "$RUNNER_TEMP/highest.json") || highest=unknown
+          fi
+          echo "highest=$highest" >> "$GITHUB_OUTPUT"
+      # --domain on every deploy keeps pool.manyoars.com attached (the live pool got it this way); --tag is the short sha, --message the whole one.
+      - name: Deploy the Worker
+        id: deploy
+        if: steps.gate.outputs.go == 'true'
+        working-directory: packages/pool
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/wrangler-output.ndjson
+        run: |
+          npm exec -- wrangler deploy --domain pool.manyoars.com --tag "${SHA:0:12}" --message "deploy $SHA"
+          version=$(node -e 'const t = process.getBuiltinModule("node:fs").readFileSync(process.argv[1], "utf8"); const d = t.trim().split("\n").map((line) => JSON.parse(line)).filter((entry) => entry.type === "deploy"); console.log(d.at(-1).version_id)' "$WRANGLER_OUTPUT_FILE_PATH") || { echo "::warning::The Worker version id could not be read from wrangler's output."; version=unknown; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      # GET /v1/covenant answers with no sign-in: 200 {version: null, accepted: false} while deposits are closed. Once the covenant is published
+      # it answers its version, so this checks that the pool answers in shape, not that deposits stay closed.
+      - name: Read the pool
+        id: smoke
+        if: steps.gate.outputs.go == 'true'
+        run: |
+          body=$(curl --fail --silent --show-error --retry 5 --retry-delay 5 --retry-all-errors --max-time 20 https://pool.manyoars.com/v1/covenant)
+          answer=$(printf '%s' "$body" | node -e 'const a = JSON.parse(process.getBuiltinModule("node:fs").readFileSync(0, "utf8")); if (!("version" in a) || a.accepted !== false) { console.error("unexpected answer: keys " + Object.keys(a).join(",")); process.exit(1); } console.log("200 version=" + a.version + " accepted=false")')
+          echo "answer=$answer" >> "$GITHUB_OUTPUT"
+      - name: Write the job summary
+        if: always() && steps.gate.outputs.go == 'true'
+        env:
+          VERSION: ${{ steps.deploy.outputs.version }}
+          HIGHEST: ${{ steps.migrations.outputs.highest }}
+          ANSWER: ${{ steps.smoke.outputs.answer }}
+        run: |
+          {
+            echo "### Pool deploy"
+            echo "- commit: \`$SHA\`"
+            echo "- Worker version: \`${VERSION:-not reached}\`"
+            echo "- highest migration applied: \`${HIGHEST:-not reached}\`"
+            echo "- smoke read of https://pool.manyoars.com: ${ANSWER:-not reached}"
+          } >> "$GITHUB_STEP_SUMMARY"

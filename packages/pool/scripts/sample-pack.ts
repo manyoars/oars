@@ -1,10 +1,11 @@
 // The first sale's sample pack (P98 (10) to (12)): a local folder of an operator's own sessions, for the operator to read before any buyer sees one.
 // Nothing here sends anything: it reads a sessions store and the harness's transcripts, and writes one folder that must sit outside every repository.
-// Order, per session: the exclusion gate (A38) first, then a known owner and known harness terms, then the copy, with every injected block stripped.
+// Order, per session: the exclusion gate (A38) first, then a known owner and known harness terms, the turn floor, a repository, and no duplicate, then the copy, with every injected block stripped.
 import { createHash, createHmac } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
 import { appendFile, mkdir, readdir, readFile, rename, rmdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
+import { createInterface } from 'node:readline';
 import { dirname, join, resolve } from 'node:path';
 import { defaultConfigDir } from '../../cli/src/credentials.js';
 import { checkSession, transcriptFilesOf, type Reason } from '../../cli/src/sessions/exclusion.js';
@@ -13,13 +14,14 @@ import { harnessOf, type Harness } from '../../cli/src/sessions/schema.js';
 import { loadStore, readRedactDomains, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 
 export const USAGE = [
-  'Usage: sample-pack --terms <file> --owners <file> --index-key <file> --buyer-key <key> --out <dir> [--size <n>] [--seed <text>]',
+  'Usage: sample-pack --terms <file> --owners <file> --index-key <file> --buyer-key <key> --out <dir> [--size <n>] [--seed <text>] [--min-turns <n>]',
   '  --terms <file>       the exclusion term list (one term per line; a local file, never in a repository)',
   '  --owners <file>      JSON list of {"folder": "<glob over the project folder name>", "owner": "<company>", "license": "<SPDX id>" | null}; first match wins, and a session in a folder no entry names is left out',
   '  --index-key <file>   the matching-index key (64 hex characters or more): a session\'s server key is HMAC-SHA-256 of its id under it. Keep it; a new key gives every session new ids',
   '  --buyer-key <key>    the buyer\'s key: a match id is HMAC-SHA-256 of the server key under it',
   '  --out <dir>          an empty or new folder outside every git repository',
   '  --size <n>           sessions to emit (default 25); --seed <text> orders the draw (default 1)',
+  '  --min-turns <n>      a session needs at least this many turns, user plus assistant (default 20); a shorter one is left out and counted',
   'Reads the store under APPDATA (or XDG_CONFIG_HOME) and the transcripts under CLAUDE_CONFIG_DIR or ~/.claude. Builds in <out>.partial and renames it to --out when done,',
   'and appends each session id and its match id to index.jsonl beside the owners file: the operator\'s only map from one to the other.',
 ].join('\n');
@@ -77,6 +79,8 @@ export interface PackOptions {
   out: string;
   size: number;
   seed: string;
+  /** User plus assistant turns a session needs to be taken; plan S1 sets 20. */
+  minTurns: number;
 }
 
 export interface PackCounts {
@@ -87,6 +91,14 @@ export interface PackCounts {
   excluded: { term: number; noRaw: number; noTerms: number; unreadable: number };
   noOwner: number;
   noHarnessTerms: number;
+  /** Under `minTurns` user plus assistant turns. */
+  tooShort: number;
+  /** No repository recorded for the session. */
+  noRepo: number;
+  /** A resumed session that replays another's first prompt line and is the shorter of the two. */
+  duplicate: number;
+  /** Dropped because the redacted, masked text still held something shaped like a key (`secretIn`); nothing of the session was written. */
+  secret: number;
   emitted: number;
 }
 
@@ -191,16 +203,105 @@ const maskIds = (texts: readonly string[], sessions: ReadonlyMap<string, string>
   return texts.map((text) => text.replace(UUID_OR_REQUEST, (id) => sessions.get(id) ?? (lineIds.has(id) ? maskOf(indexKey, buyerKey, id) : id)));
 };
 
+/** What a resumed session shares with the one it continues: its first user line, as the harness replays it, without the session id it rewrites. Undefined when the transcript has no user line. */
+const firstPromptKey = async (path: string): Promise<string | undefined> => {
+  const stream = createReadStream(path, { encoding: 'utf8' });
+  const lines = createInterface({ input: stream, crlfDelay: Infinity });
+  try {
+    for await (const text of lines) {
+      const entry = parsed(text);
+      if (isRecord(entry) && Reflect.get(entry, 'type') === 'user') return JSON.stringify(Object.entries(entry).filter(([key]) => key !== 'sessionId'));
+    }
+    return undefined;
+  } finally {
+    lines.close();
+    stream.destroy();
+  }
+};
+
+interface TurnCount {
+  session: string;
+  project: string;
+  turns: number;
+}
+
+/** The sessions that lose to a longer one replaying their first prompt line (a tie goes to the lower session id), so the rule gives the same lot whichever of the two the draw reaches first. */
+const duplicatesOf = async (runtime: SessionsRuntime, candidates: readonly TurnCount[]): Promise<Set<string>> => {
+  const groups = new Map<string, TurnCount[]>();
+  for (const candidate of candidates) {
+    const main = (await transcriptFilesOf(runtime, candidate.project, candidate.session)).find((file) => file.main);
+    const key = main === undefined ? undefined : await firstPromptKey(main.path);
+    if (key !== undefined) groups.set(key, [...(groups.get(key) ?? []), candidate]);
+  }
+  const losers = new Set<string>();
+  for (const group of groups.values()) {
+    const [winner] = [...group].sort((a, b) => b.turns - a.turns || (a.session < b.session ? -1 : 1));
+    for (const member of group) if (member !== winner) losers.add(member.session);
+  }
+  return losers;
+};
+
+/**
+ * The key shapes `redact.ts` masks (its `PATTERNS`), read again over the redacted output, and unanchored: the redactor's rules start at a word boundary, so a key stuck to the
+ * word before it (`myAKIA...`) is one it can miss, and a pack that goes to a buyer is held to the stricter test. A hit drops the whole session; nothing is repaired here.
+ * A placeholder (`token=<secret>`, `https://<secret>@host`) is not a hit. `sk-` outside `sk-ant-` keeps a left guard and a digit, so `task-management-notes` is not read as a key.
+ */
+const SECRET_SHAPES: ReadonlyArray<readonly [string, RegExp]> = [
+  ['private key', /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
+  ['AWS access key id', /(?:AKIA|ASIA)[A-Z0-9]{16}/],
+  ['GitHub token', /gh[pousr]_[A-Za-z0-9]{20,}/],
+  ['GitHub fine-grained token', /github_pat_[A-Za-z0-9_]{20,}/],
+  ['API key', /sk-ant-[A-Za-z0-9_-]{16,}|(?<![A-Za-z0-9])sk-(?=[A-Za-z_-]*[0-9])[A-Za-z0-9_-]{20,}/],
+  ['Stripe key', /(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{10,}/],
+  ['Stripe webhook secret', /whsec_[A-Za-z0-9]{10,}/],
+  ['Slack token', /xox[abprs]-[A-Za-z0-9-]{10,}/],
+  ['Google API key', /AIza[0-9A-Za-z_-]{30,}/],
+  ['JSON web token', /eyJ[A-Za-z0-9_-]{8,}[.][A-Za-z0-9_-]{8,}[.][A-Za-z0-9_-]{8,}/],
+  ['password in a URL', /[a-z][a-z0-9+.-]*:[/][/][^\s/:@<]+:[^\s/@<]+@/i],
+];
+
+/** The name of the first secret shape the text holds, or undefined when it holds none. */
+export const secretIn = (text: string): string | undefined => SECRET_SHAPES.find(([, shape]) => shape.test(text))?.[0];
+
 const EXCLUDED: { readonly [reason in Exclude<Reason, 'clean'>]: keyof PackCounts['excluded'] } = { term: 'term', 'no-raw': 'noRaw', 'no-terms': 'noTerms', unreadable: 'unreadable' };
 
 /** Where a transcript goes under the session's folder: `main.jsonl`, or its path under the session (`subagents/agent-x.jsonl`). */
 const placeOf = (key: string, session: string, main: boolean): string => (main ? 'main.jsonl' : key.slice(session.length + 1));
 
+/** A base64 image block's `data` can hold any shape by chance (the redactor keeps it), so the scan reads the line without it. Lines with no such block are scanned as written. */
+const withoutImageData = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(withoutImageData);
+  if (!isRecord(value)) return value;
+  const base64 = Reflect.get(value, 'type') === 'base64';
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, base64 && key === 'data' && typeof item === 'string' ? '' : withoutImageData(item)]));
+};
+
+/** The text the secret scan reads: the transcript with every base64 image's data left out. */
+const scannable = (text: string): string =>
+  text
+    .split('\n')
+    .map((row) => {
+      const entry = row.includes('"base64"') ? parsed(row) : undefined;
+      return entry === undefined ? row : JSON.stringify(withoutImageData(entry));
+    })
+    .join('\n');
+
+type StoredSession = Awaited<ReturnType<typeof loadStore>>['sessions'][number];
+type HarnessRow = NonNullable<(typeof HARNESS_TERMS)[Harness]>;
+
+/** What the rules before the duplicate check decide: the count a session adds to, or what it carries on. */
+type Early = { left: (counts: PackCounts) => void } | { accepted: { owner: OwnerRule; harness: Harness; terms: HarnessRow } };
+
 export const buildPack = async (runtime: SessionsRuntime, options: PackOptions): Promise<PackCounts> => {
+  const started = Date.now();
+  // Bytes of the pack's `sessions/` files and `manifest.jsonl`; `pack.json` holds the number, so it is not in it.
+  let bytes = 0;
   const out = resolve(options.out);
   // Built here and renamed to `out` at the end, so a run that stops partway leaves no half pack where a finished one belongs.
   const partial = `${out}.partial`;
   if (insideRepository(out)) throw new PackError('The output folder is inside a git repository. Choose one outside every repository: a pack is never committed.');
+  // `index.jsonl` (session id to match id) is appended beside the owners file, so that folder is held to the same rule as the pack: the map must never be committed.
+  if (insideRepository(dirname(resolve(options.owners)))) throw new PackError('The owners file is inside a git repository, and the operator index is written beside it. Move the owners file outside every repository.');
   if (!(await isEmptyOrAbsent(out))) throw new PackError('The output folder is not empty. Choose a new folder, so one pack never mixes with another.');
   if (!(await isEmptyOrAbsent(partial))) throw new PackError(`An unfinished pack from an earlier run is at ${partial}. Delete it, then run again.`);
   const owners = parseOwners(await readFile(options.owners, 'utf8'));
@@ -215,27 +316,51 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   const sessionIds = new Map(store.sessions.map((session) => [session.session, matchIdOf(options.buyerKey, serverKeyOf(indexKey, session.session))]));
   const order = (session: string): string => createHash('sha256').update(`${options.seed}\n${session}`).digest('hex');
   const drawn = frame.map((session) => ({ session, rank: order(session.session) })).sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0));
-  const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, emitted: 0 };
+  const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, tooShort: 0, noRepo: 0, duplicate: 0, secret: 0, emitted: 0 };
+  const turnsOf = (session: { userTurns: number; assistantTurns: number }): number => session.userTurns + session.assistantTurns;
+  // The rules up to the repository one, once per session: the duplicate rule asks them of every session in the frame, the draw asks them again of the ones it reaches.
+  const earlyBy = new Map<string, Promise<Early>>();
+  const early = async (record: StoredSession): Promise<Early> => {
+    const verdict = await checkSession(runtime, options.terms, record.project, record.session);
+    if (verdict.reason !== 'clean') {
+      const reason = EXCLUDED[verdict.reason];
+      return { left: (c) => { c.excluded[reason] += 1; } };
+    }
+    const owner = ownerOf(owners, record.project);
+    if (owner === undefined) return { left: (c) => { c.noOwner += 1; } };
+    const harness = harnessOf(record);
+    const terms = HARNESS_TERMS[harness];
+    if (terms === undefined) return { left: (c) => { c.noHarnessTerms += 1; } };
+    if (turnsOf(record) < options.minTurns) return { left: (c) => { c.tooShort += 1; } };
+    if (record.repo === null) return { left: (c) => { c.noRepo += 1; } };
+    return { accepted: { owner, harness, terms } };
+  };
+  const earlyOf = (record: StoredSession): Promise<Early> => {
+    const known = earlyBy.get(record.session) ?? early(record);
+    earlyBy.set(record.session, known);
+    return known;
+  };
+  let losers: Set<string> | undefined;
   const rows: ManifestRow[] = [];
   const index: IndexRow[] = [];
   await mkdir(partial, { recursive: true });
   for (const { session: record } of drawn) {
     if (counts.emitted >= options.size) break;
     counts.scanned += 1;
-    const verdict = await checkSession(runtime, options.terms, record.project, record.session);
-    if (verdict.reason !== 'clean') {
-      counts.excluded[EXCLUDED[verdict.reason]] += 1;
+    const decided = await earlyOf(record);
+    if ('left' in decided) {
+      decided.left(counts);
       continue;
     }
-    const owner = ownerOf(owners, record.project);
-    if (owner === undefined) {
-      counts.noOwner += 1;
-      continue;
+    const { owner, harness, terms } = decided.accepted;
+    // Read once, on the first session that gets this far. A loser is chosen only among sessions that pass every rule above, so a longer twin that one of them drops never costs the shorter its place; a duplicate's other half may not be drawn at all.
+    if (losers === undefined) {
+      const candidates: TurnCount[] = [];
+      for (const session of frame) if ('accepted' in (await earlyOf(session))) candidates.push({ session: session.session, project: session.project, turns: turnsOf(session) });
+      losers = await duplicatesOf(runtime, candidates);
     }
-    const harness = harnessOf(record);
-    const terms = HARNESS_TERMS[harness];
-    if (terms === undefined) {
-      counts.noHarnessTerms += 1;
+    if (losers.has(record.session)) {
+      counts.duplicate += 1;
       continue;
     }
     const matchId = matchIdOf(options.buyerKey, serverKeyOf(indexKey, record.session));
@@ -243,10 +368,17 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     const texts: string[] = [];
     for (const file of files) texts.push(redactTranscript(await readFile(file.path, 'utf8'), domains, names, injectedKey).text);
     const masked = maskIds(texts, sessionIds, indexKey, options.buyerKey);
+    // After redaction and masking, before the first byte is written: a session with a hit leaves no file, manifest row, or index row.
+    if (masked.some((text) => secretIn(scannable(text)) !== undefined)) {
+      counts.secret += 1;
+      continue;
+    }
     for (const [at, file] of files.entries()) {
       const target = join(partial, 'sessions', matchId, placeOf(file.key, record.session, file.main));
       await mkdir(dirname(target), { recursive: true });
-      await writeFile(target, masked[at] ?? '');
+      const body = masked[at] ?? '';
+      bytes += Buffer.byteLength(body);
+      await writeFile(target, body);
     }
     index.push({ pack: out, session: record.session, project: record.project, matchId });
     rows.push({
@@ -265,8 +397,10 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     });
     counts.emitted += 1;
   }
-  await writeFile(join(partial, 'manifest.jsonl'), rows.map((row) => `${JSON.stringify(row)}\n`).join(''));
-  await writeFile(join(partial, 'pack.json'), `${JSON.stringify({ built: new Date().toISOString(), size: options.size, seed: options.seed, redactionVersion: REDACTION_VERSION, counts }, null, 2)}\n`);
+  const manifest = rows.map((row) => `${JSON.stringify(row)}\n`).join('');
+  bytes += Buffer.byteLength(manifest);
+  await writeFile(join(partial, 'manifest.jsonl'), manifest);
+  await writeFile(join(partial, 'pack.json'), `${JSON.stringify({ built: new Date().toISOString(), size: options.size, seed: options.seed, minTurns: options.minTurns, redactionVersion: REDACTION_VERSION, counts, bytes, elapsedMs: Date.now() - started }, null, 2)}\n`);
   // Outside the pack, beside the owners file, and appended, so it maps every pack built from that folder. Written before the rename, so a pack under `out` always has its rows.
   await appendFile(join(dirname(resolve(options.owners)), 'index.jsonl'), index.map((row) => `${JSON.stringify(row)}\n`).join(''));
   // An empty `out` was allowed above, and a folder is renamed only onto a free name.
@@ -280,7 +414,7 @@ export interface Io {
   print: (text: string) => void;
 }
 
-const VALUED = new Set(['--terms', '--owners', '--index-key', '--buyer-key', '--out', '--size', '--seed']);
+const VALUED = new Set(['--terms', '--owners', '--index-key', '--buyer-key', '--out', '--size', '--seed', '--min-turns']);
 
 const parseArgs = (argv: readonly string[]): PackOptions | string => {
   const values = new Map<string, string>();
@@ -293,7 +427,9 @@ const parseArgs = (argv: readonly string[]): PackOptions | string => {
   if (terms === undefined || owners === undefined || indexKey === undefined || buyerKey === undefined || out === undefined) return 'Missing a required option.';
   const size = Number(values.get('--size') ?? '25');
   if (!Number.isInteger(size) || size < 1) return '--size takes a whole number of 1 or more.';
-  return { terms, owners, indexKey, buyerKey, out, size, seed: values.get('--seed') ?? '1' };
+  const minTurns = Number(values.get('--min-turns') ?? '20');
+  if (!Number.isInteger(minTurns) || minTurns < 1) return '--min-turns takes a whole number of 1 or more.';
+  return { terms, owners, indexKey, buyerKey, out, size, seed: values.get('--seed') ?? '1', minTurns };
 };
 
 /** The command: 0 when the pack was written, 2 on a usage or input error (nothing written), with counts only on success: no term, path, or transcript text. */
@@ -310,7 +446,7 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
       [
         `Wrote ${String(counts.emitted)} sessions to ${options.out} (manifest.jsonl, sessions/<match id>/).`,
         `Scanned ${String(counts.scanned)} of ${String(counts.frame)} in draw order. Excluded: ${String(term)} for a term, ${String(noRaw)} with no raw, ${String(noTerms)} with no term file, ${String(unreadable)} unreadable.`,
-        `Left out after the gate: ${String(counts.noOwner)} in a folder no owner entry names, ${String(counts.noHarnessTerms)} from a harness with no terms row.`,
+        `Left out after the gate: ${String(counts.noOwner)} in a folder no owner entry names, ${String(counts.noHarnessTerms)} from a harness with no terms row, ${String(counts.tooShort)} under ${String(options.minTurns)} turns, ${String(counts.noRepo)} with no repository, ${String(counts.duplicate)} replaying a longer session, ${String(counts.secret)} holding a secret after redaction.`,
       ].join('\n'),
     );
     return 0;
