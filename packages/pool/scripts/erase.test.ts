@@ -1,6 +1,8 @@
 // The operator's erasure against a local pool under Miniflare: each kind leaves a tombstone, the same content is refused when it comes back, an audit row holds no content, and the aggregates keep their counts.
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { ERROR_CODES } from '../../cli/src/sessions/schema.js';
+import { isListed } from '../src/field-classes.js';
 import { sampleSkeleton } from '../src/sample.js';
 import { PANEL_COUNT } from '../src/stored.js';
 import { acceptanceOf, fieldOf, startPool, stubUser, textOf, type StubUser, type TestBucket, type TestDb, type TestPool } from '../src/test-pool.js';
@@ -346,7 +348,7 @@ describe('erasing one account under a lawful request', () => {
     expect(links).toBe(10);
 
     // The rewrite moves a deposit's account, id, and ingest mark, so the rows are counted by the marker they now hold under a random id.
-    const markers = (): Promise<number> => count("SELECT COUNT(*) AS held FROM deposits WHERE account LIKE 'erased:%' AND skeleton = '{\"erased\":\"lawful-request\"}' AND erased_on IS NULL");
+    const markers = (): Promise<number> => count("SELECT COUNT(*) AS held FROM deposits WHERE account LIKE 'erased:%' AND json_extract(skeleton, '$.erased') = 'lawful-request' AND erased_on IS NULL");
     const markersBefore = await markers();
     const erased = await eraseAccount(await store(), account, NOW);
     expect(erased.objects).toBe(1);
@@ -494,7 +496,7 @@ describe('erasing one account removes its own rows and its link to the shared to
     const { token, account } = await member();
     expect((await pool.post('/v1/deposits', skeletonWith('0000000000007b01'), token)).status).toBe(201);
     const mine = await putRaw(token, new TextEncoder().encode('kept record transcript'));
-    const marked = (): Promise<number> => count("SELECT COUNT(*) AS held FROM deposits WHERE account LIKE 'erased:%' AND skeleton = '{\"erased\":\"lawful-request\"}'");
+    const marked = (): Promise<number> => count("SELECT COUNT(*) AS held FROM deposits WHERE account LIKE 'erased:%' AND json_extract(skeleton, '$.erased') = 'lawful-request'");
     const markedBefore = await marked();
     await eraseAccount(await store(), account, NOW);
     expect(await count('SELECT COUNT(*) AS held FROM covenant_acceptances WHERE account = ?', account)).toBe(1);
@@ -1068,5 +1070,87 @@ describe('finding the raw objects that hold a text', () => {
     lines.push(JSON.stringify(total));
     const printed = lines.join('\n');
     for (const forbidden of [NAME, 'AROUNDTEXT', 'Quentin']) expect(printed).not.toContain(forbidden);
+  }, 60_000);
+});
+
+/** The strings a deposit is planted with: each is a value of a class an erased deposit must not keep, and none of them may be in the row after the erasure. */
+const PLANTED = ['feedfacecafebeef', 'acme-finetune-7', 'acmetool', 'acme-flag', 'janedoe-notes', 'acme-private-mcp', 'acme-skill', '2026-11-04T10:11:12.123Z', 'deadbeefdeadbeefdeadbeefdeadbeef', 'cafebabecafebabecafebabecafebabe', '5555555555555a5a'];
+const FIRST_ERROR = [...ERROR_CODES][0] ?? 'other';
+const WEEK_OF_PLANTED_DAY = '2026-11-02';
+
+/** The deposit of a person whose session holds a value of every class t1069 found: ids, hashes, free-text names, exact times, an off-list model, and a digest. */
+const richSkeleton = (id: string): unknown => {
+  const skeleton = JSON.parse(JSON.stringify(sampleSkeleton(id)));
+  const [transcript] = skeleton.transcripts;
+  const frame = { ...transcript.frame, day: '2026-11-04', repoKey: 'feedfacecafebeef', hour: 13, reach: { filled: true, mcp: ['github', 'acme-private-mcp'], skills: ['acme-skill'], plugins: ['acme-plugin'] } };
+  transcript.frame = frame;
+  transcript.frames = [{ ...frame, model: 'acme-finetune-7' }];
+  transcript.prompts[0].frame = { ...transcript.prompts[0].frame, day: '2026-11-04' };
+  transcript.tools.push(...Array.from({ length: 50 }, () => structuredClone(transcript.tools[1])));
+  const [call] = transcript.tools;
+  Object.assign(call, { status: 'error', errorCode: FIRST_ERROR, durationMs: 1234, keys: ['file_path', 'acme_secret_key'], names: [{ kind: 'file', name: 'janedoe-notes' }], templates: ['acmetool deploy'], digests: [{ old: 'deadbeefdeadbeefdeadbeefdeadbeef', new: 'cafebabecafebabecafebabecafebabe' }] });
+  call.steps[0].identity = { program: 'acmetool', sub: 'deploy', flags: ['--acme-flag'] };
+  call.steps[0].status = 'error';
+  skeleton.timingPrint = '5555555555555a5a';
+  skeleton.recommendations = [{ id: 'feedfacecafebeef', arm: 'shown', poolVersion: '2026-11-04T10:11:12.123Z', from: 0, to: 1 }];
+  return skeleton;
+};
+
+type Leaf = { path: string; key: string; value: unknown };
+
+/** Every leaf of a JSON value with its path and the key it sits under (an array item sits under its array's key). */
+const leavesOf = (value: unknown, path = '$', key = ''): Leaf[] => {
+  if (Array.isArray(value)) return value.flatMap((item, at) => leavesOf(item, `${path}[${String(at)}]`, key));
+  if (typeof value === 'object' && value !== null) return Object.entries(value).flatMap(([name, item]) => leavesOf(item, `${path}.${name}`, name));
+  return [{ path, key, value }];
+};
+
+const isMonday = (value: unknown): boolean => typeof value === 'string' && /^\d{4}-\d\d-\d\d$/.test(value) && new Date(`${value}T00:00:00Z`).getUTCDay() === 1;
+const gated = (field: string) => (value: unknown): boolean => typeof value === 'string' && (value === 'other' || isListed(field, value));
+const tag = (value: unknown): boolean => typeof value === 'string' && /^[a-z0-9<>.+-]{1,32}$/.test(value);
+
+/** The one allow list: a kept leaf is a number or boolean (a bucket, an ordinal, a flag), null, or a string under a key named here whose value passes its check. Any other key is a leaf the erasure should have dropped. */
+const ALLOWED: { readonly [key: string]: (value: unknown) => boolean } = {
+  erased: (value) => value === 'lawful-request',
+  vocabVersion: tag, harness: tag, harnessVersion: gated('harnessVersion'), model: gated('model'), effort: tag, day: isMonday, platform: tag, shell: tag, languages: tag, frameworks: tag, size: tag, language: tag, languageShare: tag,
+  mcp: gated('mcp'), skills: gated('skills'), plugins: (value) => value === 'other', orgSize: tag, team: tag, repoVisibility: tag, cls: tag, intervention: tag, status: tag,
+  errorCode: (value) => typeof value === 'string' && ERROR_CODES.has(value), next: tag, action: tag, native: tag, targetClass: tag, argClass: tag, key: gated('key'), enumValue: tag, valueSize: tag, pathDepth: tag, extension: tag, dirKind: tag, patternFeatures: tag, changeKind: tag, diffShape: tag,
+  program: gated('program'), sub: tag, flags: gated('flags'), target: tag, server: gated('server'), tool: tag, skill: gated('skill'), agentType: tag, kind: tag, deltaKind: tag, field: tag, name: gated('name'), registry: tag, metric: tag, arm: tag, hostClass: tag, launcher: tag,
+  keys: gated('key'),
+};
+
+/** The paths of every kept leaf that is not on the allow list, each with why. */
+const offList = (value: unknown): string[] =>
+  leavesOf(value).flatMap(({ path, key, value: leaf }) => {
+    if (leaf === null || typeof leaf === 'number' || typeof leaf === 'boolean') return [];
+    const check = ALLOWED[key];
+    if (check === undefined) return [`${path}: no allow-list entry for ${key}`];
+    return check(leaf) ? [] : [`${path}: ${String(leaf)} fails the ${key} check`];
+  });
+
+describe('an erased deposit keeps its anonymous shape', () => {
+  const SESSION = '00000000000090aa';
+
+  it('holds only closed-list, bucketed, and listed leaves, in the order it was sent, and no id, hash, name, or exact time', async () => {
+    const { token, account } = await member();
+    const posted = await pool.post('/v1/deposits', richSkeleton(SESSION), token);
+    expect(posted.status).toBe(201);
+    const before = String(fieldOf((await all('SELECT skeleton FROM deposits WHERE account = ? AND id = ?', account, SESSION))[0], 'skeleton'));
+    for (const planted of PLANTED) expect(before, `the fixture holds ${planted}`).toContain(planted);
+    await eraseAccount(await store(), account, NOW);
+
+    const kept = await all("SELECT * FROM deposits WHERE account LIKE 'erased:%' AND json_extract(skeleton, '$.erased') = 'lawful-request' AND json_array_length(json_extract(skeleton, '$.transcripts')) > 0");
+    expect(kept.length).toBeGreaterThan(0);
+    for (const row of kept) {
+      const skeleton: unknown = JSON.parse(textOf(row, 'skeleton'));
+      expect(offList(skeleton)).toEqual([]);
+      expect(JSON.stringify(row)).not.toContain(SESSION);
+      for (const planted of PLANTED) expect(JSON.stringify(row), `the kept row holds ${planted}`).not.toContain(planted);
+      const text = JSON.stringify(skeleton);
+      expect(text).toContain(WEEK_OF_PLANTED_DAY);
+      expect(text).not.toContain('2026-11-04');
+      expect(text).toContain('git');
+      expect(textOf(row, 'extensions')).toBe('[]');
+    }
   }, 60_000);
 });
