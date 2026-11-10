@@ -247,6 +247,9 @@ export const ownerOf = (rules: readonly OwnerRule[], project: string): OwnerRule
 /** The session's key in the matching index: one per session, held by whoever holds the index key, so nobody without it can test a session id against a match id. */
 export const serverKeyOf = (indexKey: string, session: string): string => createHmac('sha256', indexKey).update(session).digest('hex');
 
+/** Which buyer key a recipient's match ids belong to: the first 16 hex of the key's SHA-256, never the key (plan 2.2). */
+export const keyIdOf = (buyerKey: string): string => createHash('sha256').update(buyerKey).digest('hex').slice(0, 16);
+
 /** A buyer's opaque id for a session: two buyers' ids for one session cannot be joined without the buyer keys, and one buyer's id is the same in every pack. */
 export const matchIdOf = (buyerKey: string, serverKey: string): string => createHmac('sha256', buyerKey).update(serverKey).digest('hex');
 
@@ -256,7 +259,7 @@ const readIndexKey = async (file: string): Promise<string> => {
   return key;
 };
 
-const insideRepository = (folder: string): boolean => {
+export const insideRepository = (folder: string): boolean => {
   for (let at = resolve(folder); ; at = dirname(at)) {
     if (existsSync(join(at, '.git'))) return true;
     if (dirname(at) === at) return false;
@@ -889,7 +892,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   const census = `${JSON.stringify(censusOf(rows, skeletons), null, 2)}\n`;
   bytes += Buffer.byteLength(census);
   await writeFile(join(partial, 'census.json'), census);
-  await writeFile(join(partial, 'pack.json'), `${JSON.stringify({ built: new Date().toISOString(), size: options.size, seed: options.seed, minTurns: options.minTurns, redactionVersion: REDACTION_VERSION, counts, bytes, elapsedMs: Date.now() - started }, null, 2)}\n`);
+  await writeFile(join(partial, 'pack.json'), `${JSON.stringify({ built: new Date().toISOString(), size: options.size, seed: options.seed, minTurns: options.minTurns, redactionVersion: REDACTION_VERSION, keyId: keyIdOf(options.buyerKey), counts, bytes, elapsedMs: Date.now() - started }, null, 2)}\n`);
   // Outside the pack, beside the owners file, and appended, so it maps every pack built from that folder. Written before the rename, so a pack under `out` always has its rows.
   await appendFile(join(dirname(resolve(options.owners)), 'index.jsonl'), index.map((row) => `${JSON.stringify(row)}\n`).join(''));
   // An empty `out` was allowed above, and a folder is renamed only onto a free name.

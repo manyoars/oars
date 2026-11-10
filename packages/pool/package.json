@@ -13,6 +13,7 @@
     "test": "vitest run",
     "erase": "node scripts/erase.mjs",
     "sample-pack": "node scripts/sample-pack.mjs",
+    "deliver": "node scripts/deliver.mjs",
     "grant-standing": "node scripts/grant-standing.mjs",
     "hide-nickname": "node scripts/hide-nickname.mjs",
     "dev": "wrangler dev --port 8788"

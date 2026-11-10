@@ -4,7 +4,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { deliver, keyIdOf, main, recipientsOf, type Delivery } from './deliver.js';
+import { deliver, main, recipientsOf, type Delivery } from './deliver.js';
+import { keyIdOf } from './sample-pack.js';
 
 const dirs: string[] = [];
 afterEach(() => {
