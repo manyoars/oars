@@ -1,5 +1,6 @@
 // What a call touched, in shape and never in value (t870): the class of its target and the classes of its arguments. Both are computed at capture, from
 // the path and the input that only the extractor holds, and stored as closed-list members. The path, the argument values, and the base name never leave it.
+import { PUBLIC_FLAGS, PUBLIC_SUBCOMMANDS } from './public-vocabulary.js';
 import type { TargetBase } from './schema.js';
 
 /** Where a path target sits in the project, as a closed list. `none` is a call with no path target (a shell call, a search, a fetch). */
@@ -259,6 +260,8 @@ export interface CommandWord {
   variable?: string;
   /** The word starts at or after the command's opaque point (`tokenize`): no variable, assignment, or flag value is read from it. */
   opaque?: true;
+  /** The word's raw source starts with an unquoted `NAME=` or `--flag=` and holds a double quote after it (`tokenize`): `quoted` is true, but the name and the joined value are read as for an unquoted word. */
+  joined?: true;
 }
 
 /** A shell command's words as the name read takes them: those before the program (assignments, wrappers), the program's own word, and its arguments. */
@@ -330,7 +333,7 @@ const flagValueNames = (head: CommandWord, args: readonly CommandWord[]): string
   for (let at = 0; at < args.length; at += 1) {
     const word = args[at];
     // A word after the command's opaque point (`tokenize`) may be literal text the reader took for words, so neither its joined value nor the word after it is a name.
-    if (word === undefined || word.quoted || word.opaque === true) continue;
+    if (word === undefined || (word.quoted && word.joined !== true) || word.opaque === true) continue;
     if (word.text === '--') break;
     const joined = JOINED_LONG_FLAG.exec(word.text);
     const flag = joined?.[1] ?? word.text;
@@ -382,13 +385,173 @@ export const argNamesOf = (
   }
   for (const { before, head, args } of commands) {
     for (const word of before) {
-      const assigned = word.quoted || word.opaque === true ? null : ENV_ASSIGNMENT.exec(word.text)?.[1];
+      const assigned = (word.quoted && word.joined !== true) || word.opaque === true ? null : ENV_ASSIGNMENT.exec(word.text)?.[1];
       if (assigned !== undefined && assigned !== null) add('env', assigned);
     }
     for (const word of [...before, head, ...args]) if (word.variable !== undefined) add('env', word.variable);
     for (const name of flagValueNames(head, args)) add('flag', name);
   }
   return [...held.values()].sort((a, b) => NAME_KINDS.indexOf(a.kind) - NAME_KINDS.indexOf(b.kind) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+};
+
+/** What a literal of a command becomes in its template: a closed list, so a template holds no argument text. `<flag>` is a flag-like word whose name is not spelled (an attached value, a cluster off the public list). */
+export const TEMPLATE_SLOTS = ['<text>', '<path>', '<ident>', '<num>', '<url>', '<var>', '<flag>'] as const;
+export type TemplateSlot = (typeof TEMPLATE_SLOTS)[number];
+
+// A command is redacted before it is read, so an scp-style address (`git@host:org/repo`) reaches here as the redactor's email mask and is no URL word.
+const URL_WORD = /^(?:[A-Za-z][A-Za-z0-9+.-]*:\/\/|www\.)/i;
+const NUMBER_WORD = /^[+-]?\d+(?:[.,]\d+)*$/;
+// A separator, a glob character, a home or dot folder, or a file extension: the word names a place, whatever it is called.
+const PATH_WORD = /[\\/*?]|^~|^\.{1,2}$|\.[A-Za-z][A-Za-z0-9]{0,9}$/;
+const SHORT_FLAG_NAME = /^-[A-Za-z]$/;
+
+/** The program as the step identity names it: the basename in lower case, without a Windows launcher suffix. */
+const programName = (text: string): string =>
+  text
+    .replace(/^.*[\\/]/, '')
+    .toLowerCase()
+    .replace(/\.(?:exe|cmd|bat)$/, '');
+
+/** The slot a literal word has, by its shape alone, in this order: URL, number, path, identifier, then any other text. */
+const slotOf = (text: string): TemplateSlot => {
+  if (URL_WORD.test(text)) return '<url>';
+  if (NUMBER_WORD.test(text)) return '<num>';
+  if (PATH_WORD.test(text)) return '<path>';
+  return FLAG_VALUE_NAME.test(text) ? '<ident>' : '<text>';
+};
+
+/**
+ * A flag word as a template holds it, and whether the word after it is text. A number (`head -20`) is `<num>`. A flag keeps its name when it is on the public flag list or is one letter, the two cases the step identity names too; any other flag is `<flag>`
+ * (a private script's flag, a cluster, a value attached to a short flag), so a flag a program or a person made up is not spelled. The value joined to a kept flag is its slot. The next word is text after a text or credential flag, and after any
+ * one-letter flag but `-k` on pytest (`pytest`): the names reader refuses to read that word (`-p` is a password on `sshpass` and a count on `head`), so its type is not sent either.
+ */
+const flagToken = (text: string, redact: (text: string) => string, opaque: boolean, pytest: boolean): { token: string; text: boolean } => {
+  if (NUMBER_WORD.test(text)) return { token: '<num>', text: false };
+  const joined = JOINED_LONG_FLAG.exec(text);
+  const flag = joined?.[1] ?? text;
+  const takesText = TEXT_FLAGS.has(flag) || isCredentialFlag(flag) || (SHORT_FLAG_NAME.test(flag) && !(pytest && SHORT_NAME_FLAGS.has(flag)));
+  if (!PUBLIC_FLAGS.has(flag) && !SHORT_FLAG_NAME.test(flag)) return { token: '<flag>', text: joined === null && takesText };
+  if (joined !== null) return { token: `${redact(flag)}=${opaque || takesText ? '<text>' : slotOf(joined[2] ?? '')}`, text: false };
+  return { token: redact(flag), text: takesText };
+};
+
+/**
+ * One command as a template: its program, its subcommand, and its flags, as written, and every other word as a slot (`git commit -m <text>`, `pytest <path> -k <ident>`). A program given as a path is `<path>`. The subcommand is the first word the
+ * program's own public table lists (`PUBLIC_SUBCOMMANDS`, the table the step identity reads), so no free word of an argument list is ever kept as one. The word after a credential flag, a text flag, or a one-letter flag (but `-k` on pytest), joined or apart, is
+ * `<text>` whatever its shape, so not even the type of a secret is sent. A word after `--`, a quoted word, and a word at or after the command's opaque point (`tokenize`) are never kept words: a flag-shaped one at that point keeps its name and no value. A variable reference is
+ * `<var>` and its name is the names layer's. Every kept word is masked by `redact`, so a credential-shaped word is not stored as it is; the wire gates each one again (`wireTemplate`).
+ */
+const templateOf = ({ head, args }: CommandWords, redact: (text: string) => string): string => {
+  const program = programName(head.text);
+  const table = PUBLIC_SUBCOMMANDS.get(program);
+  const tokens: string[] = [];
+  if (head.variable !== undefined) tokens.push('<var>');
+  else if (head.opaque === true || (head.quoted && /\s/.test(head.text))) tokens.push('<text>');
+  else tokens.push(/[\\/]|^~|^\.{1,2}$/.test(head.text) ? '<path>' : redact(program));
+  const pytest = runsPytest(head, args);
+  let subcommand = false;
+  let textNext = false;
+  let ended = false;
+  for (const word of args) {
+    const text = textNext;
+    textNext = false;
+    const flagLike = (!word.quoted || word.joined === true) && !ended && word.text.startsWith('-') && word.text !== '--';
+    if (word.variable !== undefined) tokens.push('<var>');
+    else if (text || (word.opaque === true && !flagLike)) tokens.push('<text>');
+    else if (ended || (word.quoted && !flagLike)) tokens.push(slotOf(word.text));
+    else if (word.text === '--') {
+      ended = true;
+      tokens.push('--');
+    } else if (flagLike) {
+      const flag = flagToken(word.text, redact, word.opaque === true, pytest);
+      textNext = flag.text;
+      tokens.push(flag.token);
+    } else if (!subcommand && table?.has(word.text) === true) {
+      subcommand = true;
+      tokens.push(redact(word.text));
+    } else tokens.push(slotOf(word.text));
+  }
+  return tokens.join(' ');
+};
+
+/** A call's command templates, one per command in the order they run (`templateOf`). Sent through the wire's one gate, which drops a template whose kept word fails it. */
+export const templatesOf = (commands: readonly CommandWords[], redact: (text: string) => string): string[] => commands.map((command) => templateOf(command, redact));
+
+/** What an edit did, as a closed set: the shape of the change and never its text. Written in this order on the wire. */
+export const DIFF_SHAPES = ['import-added', 'import-removed', 'identifier-renamed', 'lines-added', 'lines-removed', 'lines-changed', 'whitespace-only', 'file-written'] as const;
+export type DiffShape = (typeof DIFF_SHAPES)[number];
+
+// A line that brings a module in, in the forms the common languages share: an import, a from-import, a require, an include, a using directive, and a use declaration.
+const IMPORT_LINE = /^(?:import\s|from\s+\S+\s+import\s|(?:const|let|var)\s.*=\s*require\(|#include\s|using\s+(?:static\s+)?[\w.]+\s*;?$|use\s+[\w:{}, *]+;?$)/;
+const CODE_TOKEN = /[A-Za-z_$][\w$]*|\d+|\s+|[^\w\s$]/g;
+const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
+
+const textLines = (text: string): string[] => text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== '');
+
+/** The lines of `from` that `against` does not hold, by count and in order, so a line moved is no change. */
+const unmatched = (from: readonly string[], against: readonly string[]): string[] => {
+  const spare = new Map<string, number>();
+  for (const line of against) spare.set(line, (spare.get(line) ?? 0) + 1);
+  return from.filter((line) => {
+    const held = spare.get(line) ?? 0;
+    spare.set(line, held - 1);
+    return held <= 0;
+  });
+};
+
+/** Whether `after` is `before` with names replaced: the same tokens apart from identifiers, each old name replaced by one new name and no two by the same, and no replaced name left standing in the line. */
+const isRename = (before: string, after: string): boolean => {
+  const was = Array.from(before.matchAll(CODE_TOKEN), (token) => token[0]);
+  const now = Array.from(after.matchAll(CODE_TOKEN), (token) => token[0]);
+  if (was.length !== now.length) return false;
+  const forward = new Map<string, string>();
+  const backward = new Map<string, string>();
+  for (const [at, old] of was.entries()) {
+    const next = now[at] ?? '';
+    if (old === next) continue;
+    if (!IDENTIFIER.test(old) || !IDENTIFIER.test(next) || (forward.get(old) ?? next) !== next || (backward.get(next) ?? old) !== old) return false;
+    forward.set(old, next);
+    backward.set(next, old);
+  }
+  return forward.size > 0 && !was.some((token, at) => token === now[at] && (forward.has(token) || backward.has(token)));
+};
+
+/** The shapes of one edit, from its old and new text. Whitespace alone is one shape; else the lines that differ are read as imports, renames (a removed and an added line that pair up), changed lines, and lines only added or removed. */
+const shapesOfEdit = (before: string, after: string): Set<DiffShape> => {
+  const held = new Set<DiffShape>();
+  if (before === after) return held;
+  if (before.replace(/\s+/g, '') === after.replace(/\s+/g, '')) return held.add('whitespace-only');
+  const was = textLines(before);
+  const now = textLines(after);
+  const removed = unmatched(was, now);
+  const added = unmatched(now, was);
+  for (const line of removed) if (IMPORT_LINE.test(line)) held.add('import-removed');
+  for (const line of added) if (IMPORT_LINE.test(line)) held.add('import-added');
+  const gone = removed.filter((line) => !IMPORT_LINE.test(line));
+  const come = added.filter((line) => !IMPORT_LINE.test(line));
+  // Lines that changed pair up in the order they stand, so a rename is a pair that reads as one.
+  for (const [at, line] of gone.entries()) {
+    const partner = come[at];
+    if (partner !== undefined) held.add(isRename(line, partner) ? 'identifier-renamed' : 'lines-changed');
+  }
+  if (come.length > gone.length) held.add('lines-added');
+  if (gone.length > come.length) held.add('lines-removed');
+  return held;
+};
+
+/**
+ * What a call that edits a file did, as a closed set (layer 3), never its text: a `Write` is `file-written`; an `Edit` or each entry of a `MultiEdit` is read from its old and new text (`shapesOfEdit`), and the call has the union, in the list's order.
+ * A call that is no edit, or an edit that changes nothing, has none.
+ */
+export const diffShapeOf = (tool: string, input: { readonly [key: string]: unknown }): DiffShape[] => {
+  const text = (value: unknown): string => (typeof value === 'string' ? value : '');
+  const edits = tool === 'MultiEdit' ? (Array.isArray(input.edits) ? input.edits : []) : tool === 'Edit' ? [input] : [];
+  const held = new Set<DiffShape>(tool === 'Write' ? ['file-written'] : []);
+  for (const edit of edits) {
+    if (typeof edit !== 'object' || edit === null) continue;
+    for (const shape of shapesOfEdit(text(Reflect.get(edit, 'old_string')), text(Reflect.get(edit, 'new_string')))) held.add(shape);
+  }
+  return DIFF_SHAPES.filter((shape) => held.has(shape));
 };
 
 /**

@@ -11,13 +11,15 @@ import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { waitUntilFree } from './test-support.js';
 
 const hookBin = fileURLToPath(new URL('../../dist/hook-bin.js', import.meta.url));
 const built = existsSync(hookBin);
 
 const made: string[] = [];
-afterEach(() => {
-  for (const folder of made.splice(0)) rmSync(folder, { recursive: true, force: true });
+
+afterEach(async () => {
+  for (const folder of made.splice(0)) rmSync(await waitUntilFree(folder), { recursive: true, force: true });
 });
 
 /** Whether a process with this pid is still running (signal 0 only tests for it). */

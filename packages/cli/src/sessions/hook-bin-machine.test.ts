@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { messageOf, noticeFile, recordNotice } from './machine-notice.js';
+import { waitUntilFree } from './test-support.js';
 
 // Both programs run: a machine's installed command starts `oars-hook`, which only imports `hook-bin.js`, so a missing import there leaves every Stop a silent exit 0 that `hook-bin.js` alone would never show.
 const PROGRAMS = ['hook-bin.js', 'oars-hook.js'] as const;
@@ -15,8 +16,9 @@ const programOf = (file: (typeof PROGRAMS)[number]): string => fileURLToPath(new
 const built = existsSync(programOf('hook-bin.js'));
 
 const made: string[] = [];
-afterEach(() => {
-  for (const folder of made.splice(0)) rmSync(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+// The detached child has the home folder as its working directory and may still be exiting when its batch and lock are seen, so the folder is removed once nothing holds it (`waitUntilFree`).
+afterEach(async () => {
+  for (const folder of made.splice(0)) rmSync(await waitUntilFree(folder), { recursive: true, force: true });
 });
 
 const home = (): { folder: string; store: string } => {
