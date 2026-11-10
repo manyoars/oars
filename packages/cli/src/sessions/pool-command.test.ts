@@ -165,6 +165,8 @@ describe('the raw prompt states when and what uploads', () => {
   it('names the sender a hook or command starts, covenant acceptance, and the skeleton-only/off exception', () => {
     expect(RAW_PROMPT).toContain('the sender that a session-end hook or any oars command starts (at most about once an hour) uploads');
     expect(RAW_PROMPT).not.toContain('nightly');
+    expect(RAW_PROMPT).toContain('A no stops later sends, and the pool starts erasing the raw copies it already holds for you that night; a large account can take more than one night.');
+    expect(RAW_PROMPT).not.toContain('cannot recall');
     expect(RAW_PROMPT).toContain('once the pool says your account accepted its covenant');
     expect(RAW_PROMPT).toContain('except a folder you set to skeleton only or off');
     expect(RAW_PROMPT).toContain('a block in a shape the redactor does not list yet, a summary the harness writes for a session you left, a file it quotes after compaction, the echo of a command you ran, a reminder the harness puts in the middle of a message, and what an agent reports back are not, and stay as written; the project folder name and working directory on each line also stay readable, apart from the masking above.');
@@ -3135,6 +3137,9 @@ describe('oars pool raw (t884)', () => {
       expect(await scene.cli('pool', 'raw', '--consent', 'no')).toBe(ExitCode.OK);
       expect(pool.calls).toHaveLength(1);
       expect(scene.h.out.join('')).toContain('The pool was told');
+      expect(scene.h.out.join('')).toContain('starts erasing the raw copies it already holds that night; a large account can take more than one night');
+      expect(scene.h.out.join('')).not.toContain('not erased');
+      expect(scene.h.out.join('')).not.toContain('within a day');
     });
 
     it('keeps the local no and exits nonzero when the pool refuses the credential', async () => {
@@ -3226,12 +3231,38 @@ describe('oars pool raw (t884)', () => {
       expect(refused.message).toContain('was not told');
       expect(refused.message).toContain('signed out');
       expect(refused.message).toContain('oars pool login');
-      expect(await choicesOf(scene)).toMatchObject({ rawConsent: 'declined' });
-      await updatePoolChoices(scene.staged.storeDir, (choices) => {
-        choices.rawConsent = 'granted';
-        choices.rawConsentVersion = 'v1';
-      });
+      expect(await choicesOf(scene)).toMatchObject({ rawConsent: 'declined', withdrawalPending: true });
+      // The rerun is still signed out and the local answer is already `declined`, yet the pool still holds the yes: the marker keeps it a failure.
       expect(await scene.cli('pool', 'raw', '--consent', 'no')).toBe(ExitCode.AUTH);
+      expect(await scene.cli('pool', 'raw', '--consent', 'no')).toBe(ExitCode.AUTH);
+    });
+
+    it('clears the marker once the pool is told, so a later no on a signed-out machine is no failure', async () => {
+      const scene = setting({ OARS_POOL_URL: POOL });
+      await signIn(scene);
+      await yes(scene);
+      expect(await scene.cli('pool', 'logout')).toBe(ExitCode.OK);
+      expect(await scene.cli('pool', 'raw', '--consent', 'no')).toBe(ExitCode.AUTH);
+      await signIn(scene);
+      const pool = withdrawing(scene, () => HttpResponse.json({ ok: true }));
+      expect(await scene.cli('pool', 'raw', '--consent', 'no')).toBe(ExitCode.OK);
+      expect(pool.calls).toHaveLength(1);
+      expect(await choicesOf(scene)).toMatchObject({ rawConsent: 'declined', withdrawalPending: false });
+      expect(await scene.cli('pool', 'logout')).toBe(ExitCode.OK);
+      expect(await scene.cli('pool', 'raw', '--consent', 'no')).toBe(ExitCode.OK);
+    });
+
+    it('clears the marker when a yes follows the withdrawal that was never told', async () => {
+      const scene = setting({ OARS_POOL_URL: POOL });
+      await signIn(scene);
+      await yes(scene);
+      expect(await scene.cli('pool', 'logout')).toBe(ExitCode.OK);
+      expect(await scene.cli('pool', 'raw', '--consent', 'no')).toBe(ExitCode.AUTH);
+      expect(await choicesOf(scene)).toMatchObject({ withdrawalPending: true });
+      covenantIs('v1');
+      atTerminal(scene, RAW_PHRASE);
+      expect(await scene.cli('pool', 'raw', '--consent', 'yes')).toBe(ExitCode.OK);
+      expect(await choicesOf(scene)).toMatchObject({ rawConsent: 'granted', withdrawalPending: false });
     });
   });
 

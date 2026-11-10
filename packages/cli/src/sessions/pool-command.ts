@@ -12,7 +12,7 @@ import { makeCoverage, readCoverageSetting, writeCoverageSetting } from './cover
 import { checkSession, exclusionPaths, lastWritten, loadTerms, transcriptFilesOf, type Reason } from './exclusion.js';
 import { localNames, makeRedactor, REDACTION_VERSION, redactTranscript } from './redact.js';
 import { recordSend, recordWire, newTally, tallyBatch } from '../telemetry/wire.js';
-import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, lockedBatch, machineKeys, markShown, noteMachineKey, outboxFolder, partsOf, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
+import { discardStale, FIELD_ROWS, fieldsOf, heldAcross, lockedAcross, rescanPulled, machineKeys, markShown, noteMachineKey, outboxFolder, partsOf, pulledAt, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
 import { deriveConsequences } from './recall-consequence.js';
 import { readRecalls } from './recall-object.js';
 import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, recommendationsOf, sessionsOf, skeletonOf, unpinnedKid, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
@@ -21,7 +21,7 @@ import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './
 import { rawAllowed, rawStale, sendsOf } from './pool-choices.js';
 import { heldRaw, rawParts, removeRawExcept, writeRaw } from './pool-raw.js';
 import { SendLockBusy, withSendLock } from './pool-send-lock.js';
-import { markSent, sentLog } from './pool-sent.js';
+import { markSent, retirePulled, sentLog } from './pool-sent.js';
 import { shellReader } from './projection.js';
 import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
 import { contentHash, FIRST_ORDER_FAMILIES } from './read.js';
@@ -426,6 +426,9 @@ export const postRaw = async (deps: RunDeps, options: { server: string; token: s
 const rawNote = (consent: string | null): string =>
   consent === 'granted' ? '' : consent === 'declined' ? 'You answered no to the raw prompt; oars pool raw --consent yes changes it.' : 'None is queued until you answer the raw prompt with oars pool raw --consent yes.';
 
+/** The exclusion terms in force now, re-read from the term file each time it is asked: empty when the file is missing or unreadable. */
+export const currentTerms = (deps: RunDeps): Promise<string[]> => loadTerms(exclusionPaths(runtimeOf(deps).projectsRoot, deps.env).terms);
+
 /** `deposit --send <hash>`: the send lock the detached sender (hook-bin.js nightly) takes too, then a skip for a hash already in `sent.log`, then the batch lock, then the covenant (accepted here or before, or nothing is sent), then the request. The body is read and hashed again just before the request. */
 const sendBatch = async (deps: RunDeps, options: { outbox: string; server: string; token: string; hash: string; acceptCovenant: string | undefined; via: Sender | undefined }): Promise<Outcome> => {
   const { outbox, server, token, hash } = options;
@@ -436,14 +439,22 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
     return await withSendLock(outbox, async () => {
       // The rule the nightly follows: a hash `sent.log` holds is not posted again. Read under the lock, so two runs cannot both see it unsent.
       const sentAt = (await sentLog(outbox)).get(hash);
-      if (sentAt !== undefined) return { document: { ok: true, server, hash, sent: false, sentAt }, text: `already sent ${hash} at ${sentAt}` };
-      const locked = await lockedBatch(outbox, hash);
+      if (sentAt !== undefined) {
+        await retirePulled(outbox, DEPOSIT);
+        return { document: { ok: true, server, hash, sent: false, sentAt }, text: `already sent ${hash} at ${sentAt}` };
+      }
+      // A pulled batch is rescanned first: one that holds a term of the file now is removed, and with no terms to check against none is sent.
+      const scan = await rescanPulled(outbox, await currentTerms(deps));
+      if (scan.removed.includes(hash)) throw refuse('term_excluded', 'This batch holds a term of your exclusion list now, so it was removed from the outbox and not sent.');
+      const locked = await lockedAcross(outbox, hash);
       if (!locked.ok) throw refuse(locked.code, lockMessages[locked.code]);
+      if (!scan.open && (await heldAcross(outbox)).batches.some((batch) => batch.hash === hash && batch.pulled)) throw refuse('terms_missing', 'This batch was held by a cloud session, and your exclusion term file is missing or empty, so it cannot be checked and was not sent.');
       await openCovenant(deps, server, token, options.acceptCovenant, via);
       const bytes = await unchangedBytes(locked.file, hash);
       if (bytes === undefined) throw refuse('batch_changed', lockMessages.batch_changed);
       await postBatch(deps, { server, token, bytes, hash, via });
       await markSent(outbox, hash, deps.now());
+      await retirePulled(outbox, DEPOSIT);
       return { document: { ok: true, server, hash, sent: true }, text: `Sent batch ${hash} to ${server}.` };
     });
   } catch (error) {
@@ -619,7 +630,7 @@ export const poolDeposit = async (
   // The batch of a session or account this store no longer holds goes too. A machine builds one session at a time and nothing here has the others in hand, so it sweeps nothing: nothing is withdrawn but what a gate refused.
   if (machine === undefined) {
     // The batches a machine's Stop built in this outbox are not this pass's to withdraw: their keys cannot be recomputed here. The key log is read after the folder is listed, so a batch a machine writes during the sweep is already in it.
-    counts.withdrawn += await removeBatchesExcept(outbox, async () => new Set([...built, ...(await machineKeys(outbox))]));
+    counts.withdrawn += await removeBatchesExcept(outbox, async () => new Set([...built, ...(await machineKeys(outbox)), ...(await pulledAt(outbox))]));
     await removeRawExcept(outbox, new Set([...rawKept, ...(await machineKeys(outbox))]));
   }
   await scanned.save();
@@ -662,7 +673,7 @@ export const poolOutbox = async (deps: RunDeps, options: { server?: string | und
   const server = poolServer(deps.env, OUTBOX, options.server);
   const { token } = await signedIn(deps, runtime.storeDir, server, OUTBOX);
   const outbox = outboxFolder(runtime.storeDir, server);
-  const { batches, edited } = await heldBatches(outbox);
+  const { batches, edited } = await heldAcross(outbox);
   const masker = new Masker();
   masker.add(token);
   const sent = await sentLog(outbox);
@@ -806,7 +817,7 @@ export const RAW_PROMPT = [
   'It also does not catch a host with no dot, a public host name outside a link, quoted file contents and command output, a secret split across lines, images and attachments, a JSON env value, your username written another way, another person\'s hyphenated name in a project folder path, or an IPv6 address with a zone or inside a longer word, and a common-word account name is masked everywhere it appears.',
   'The blocks the harness adds on its own (instruction files, memory, skill lists, the system prompt) are replaced by a short marker, but a block in a shape the redactor does not list yet, a summary the harness writes for a session you left, a file it quotes after compaction, the echo of a command you ran, a reminder the harness puts in the middle of a message, and what an agent reports back are not, and stay as written; the project folder name and working directory on each line also stay readable, apart from the masking above.',
   'Yes is also your explicit consent to processing any health, belief, or other special category data about you that a copy holds, for these purposes. You can withdraw it at any time with oars pool raw --consent no, and that reaches copies already sent. Your access does not depend on it.',
-  'Say no, or say nothing, and only skeletons go to the pool. Change your mind any time: oars pool raw --consent yes|no. A no stops later sends only; it cannot recall what was already sent.',
+  'Say no, or say nothing, and only skeletons go to the pool. Change your mind any time: oars pool raw --consent yes|no. A no stops later sends, and the pool starts erasing the raw copies it already holds for you that night; a large account can take more than one night.',
 ].join('\n');
 
 /** What a person types to say yes to the raw prompt: consent is a statement made at a terminal (GDPR Articles 7 and 9(2)(a)), not a flag a script can pass. */
@@ -905,13 +916,15 @@ export const poolRaw = async (deps: RunDeps, options: { consent?: string | undef
   // A yes is tied to the covenant in force when it is given, so the pool is asked which that is before anything is stored. A no needs none.
   const covenant = options.consent === 'yes' ? await typedYes(deps) : null;
   const heardYes = covenant === null ? undefined : await grantAtPool(deps, covenant);
-  // What this machine held before the save: a no on a signed-out machine that held a yes leaves the pool's yes standing.
+  // What this machine held before the save: a no on a signed-out machine that held a yes, or whose earlier no never reached the pool, leaves the pool's yes standing.
   const before = { yes: false };
   const choices = await updatePoolChoices(runtime.storeDir, (current) => {
-    before.yes = current.rawConsent === 'granted';
+    before.yes = current.rawConsent === 'granted' || current.withdrawalPending;
     if (options.consent !== undefined) {
       current.rawConsent = options.consent === 'yes' ? 'granted' : 'declined';
       current.rawConsentVersion = covenant;
+      // A no the pool has not heard stays pending until it does; a yes replaces whatever the pool was owed.
+      current.withdrawalPending = options.consent === 'no' && before.yes;
     }
     if (folder !== undefined) {
       if (mode === 'all') Reflect.deleteProperty(current.folders, folder);
@@ -920,6 +933,12 @@ export const poolRaw = async (deps: RunDeps, options: { consent?: string | undef
   });
   // The local answer is saved above, so a pool that cannot be told leaves it standing and the command fails: a rerun retries.
   const told = options.consent === 'no' ? await withdrawAtPool(deps, before.yes) : heardYes;
+  // The pool heard the withdrawal: nothing is owed it any more.
+  if (told === 'told' && options.consent === 'no') {
+    await updatePoolChoices(runtime.storeDir, (current) => {
+      current.withdrawalPending = false;
+    });
+  }
   const answer = choices.rawConsent === null ? 'not answered yet: only skeletons go to the pool' : choices.rawConsent === 'granted' ? `yes, given under covenant ${choices.rawConsentVersion ?? 'none'}: redacted raw copies leave while that covenant is in force` : 'no: only skeletons go to the pool';
   const switched = Object.entries(choices.folders).map(([entry, set]) => `  ${entry}: ${set === 'off' ? 'nothing sent to the pool' : 'skeletons only'}`);
   const toldLine =
@@ -927,7 +946,7 @@ export const poolRaw = async (deps: RunDeps, options: { consent?: string | undef
       ? []
       : options.consent === 'yes'
         ? [told === 'told' ? 'The pool heard it: raw copies are accepted again from this account for the covenant in force.' : 'This machine holds no sign-in to the pool, so it told the pool nothing. Sign in with oars pool login; if you withdrew before, run this again then.']
-        : [told === 'told' ? 'The pool was told: it no longer accepts raw copies from this account, and keeps a record of the withdrawal. Copies it already holds are not erased by this yet.' : 'This machine holds no sign-in to the pool, so it told the pool nothing. If you said yes from another machine, sign in with oars pool login and run this again.'];
+        : [told === 'told' ? 'The pool was told: it no longer accepts raw copies from this account, keeps a record of the withdrawal, and starts erasing the raw copies it already holds that night; a large account can take more than one night.' : 'This machine holds no sign-in to the pool, so it told the pool nothing. If you said yes from another machine, sign in with oars pool login and run this again.'];
   const lines = [...(choices.rawConsent === null ? [RAW_PROMPT, ''] : []), `Raw copies: ${answer}.`, ...toldLine, ...(switched.length === 0 ? [] : ['Folders switched down:', ...switched])];
   return { document: { ok: true, rawConsent: choices.rawConsent, rawConsentVersion: choices.rawConsentVersion, folders: choices.folders, ...(told === undefined ? {} : { pool: told }) }, text: lines.join('\n') };
 };

@@ -104,6 +104,9 @@ const dump = async (): Promise<string> => {
 
 const aggregates = async (): Promise<string> => JSON.stringify([await all('SELECT key, sessions, clusters, ok, failed FROM cells ORDER BY key'), await all('SELECT key, sessions, clusters FROM strata ORDER BY key'), await all('SELECT kind, key, account, day FROM contributors ORDER BY kind, key, account, day')]);
 
+/** The served totals alone: what an account's erasure must leave as it was. The contributor records are the link to them, and an erasure removes the account's. */
+const totals = async (): Promise<string> => JSON.stringify([await all('SELECT key, sessions, clusters, ok, failed FROM cells ORDER BY key'), await all('SELECT key, sessions, clusters FROM strata ORDER BY key')]);
+
 describe('erasing a raw object', () => {
   it('deletes the object, writes a tombstone and an audit row, and refuses the same object when it is deposited again', async () => {
     const { token, account } = await member();
@@ -322,6 +325,7 @@ describe('erasing a row that holds a leaked secret', () => {
 
 describe('erasing one account under a lawful request', () => {
   it('erases its per-account content and raw objects and keeps its contribution to the aggregate counts', async () => {
+    const user = stubUser(String(next + 1));
     const { token, account } = await member();
     const other = await member();
     expect((await pool.post('/v1/deposits', skeletonWith('00000000000075aa'), token)).status).toBe(201);
@@ -329,11 +333,18 @@ describe('erasing one account under a lawful request', () => {
     expect((await pool.post('/v1/deposits', skeletonWith('00000000000075ac'), other.token)).status).toBe(201);
     const mine = await putRaw(token, new TextEncoder().encode('my transcript'));
     const theirs = await putRaw(other.token, new TextEncoder().encode('their transcript'));
-    const before = await aggregates();
-    const bundleBefore = await pool.get('/bundle/claude-code/2.1.314/1', token);
+    const before = await totals();
+    const theirContributors = await all('SELECT kind, key, account, day FROM contributors WHERE account = ? ORDER BY kind, key, day', other.account);
+    const bundleBefore = await pool.get('/bundle/claude-code/2.1.314/1', other.token);
+
+    // The links to the totals this fixture's two deposits made: the count below is exact, so a step that stops counting a table fails here.
+    const links = await count('SELECT (SELECT COUNT(*) FROM account_repo_keys WHERE account = ?) + (SELECT COUNT(*) FROM deposit_hours WHERE account = ?) + (SELECT COUNT(*) FROM contributors WHERE account = ?) AS held', account, account, account);
+    expect(links).toBe(10);
 
     const erased = await eraseAccount(await store(), account, NOW);
-    expect(erased).toEqual({ rows: 2, objects: 1 });
+    expect(erased.objects).toBe(1);
+    // 2 deposit rows, 1 token, and the 10 links.
+    expect(erased.rows).toBe(13);
 
     // Per-account content: both rows are markers and tombstoned, the raw object is gone and tombstoned.
     expect(await all('SELECT id, skeleton, erased_on FROM deposits WHERE account = ? ORDER BY id', account)).toEqual([
@@ -342,17 +353,22 @@ describe('erasing one account under a lawful request', () => {
     ]);
     expect(await rawKeys(account)).toEqual([]);
     expect(await rawKeys(other.account)).toEqual([`raw/${other.account}/${theirs.hash}`]);
-    expect(await count("SELECT COUNT(*) AS held FROM erasure_tombstones WHERE reason = 'lawful-request'")).toBe(3);
+    expect(await count("SELECT COUNT(*) AS held FROM erasure_tombstones WHERE reason = 'lawful-request' AND kind <> 'account'")).toBe(3);
     // The other account's content stands.
     expect(await count("SELECT COUNT(*) AS held FROM deposits WHERE account = ? AND erased_on IS NULL", other.account)).toBe(1);
-    // Aggregates: opting out removes nothing, so every count, cluster, and contributor record is as it was, and the bundle reads the same.
-    expect(await aggregates()).toBe(before);
-    expect((await pool.get('/bundle/claude-code/2.1.314/1', token)).json).toEqual(bundleBefore.json);
-    // The erased sessions and the erased object cannot come back.
-    expect(await pool.post('/v1/deposits', skeletonWith('00000000000075aa'), token)).toMatchObject({ status: 403, json: { error: 'erased' } });
-    expect((await pool.send(`/v1/raw/${mine.hash}/parts/1`, { method: 'PUT', body: 'my transcript' }, token, grant)).status).toBe(403);
+    // Totals: every served count and cluster is as it was. The account's own contributor records are gone and the other account's stand.
+    expect(await totals()).toBe(before);
+    expect(await count('SELECT COUNT(*) AS held FROM contributors WHERE account = ?', account)).toBe(0);
+    expect(await all('SELECT kind, key, account, day FROM contributors WHERE account = ? ORDER BY kind, key, day', other.account)).toEqual(theirContributors);
+    expect((await pool.get('/bundle/claude-code/2.1.314/1', other.token)).json).toEqual(bundleBefore.json);
+    // The token it held is dead; the person signs in again to the same account, and the erased sessions and the erased object cannot come back.
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000075aa'), token)).status).toBe(401);
+    const again = await pool.signIn('github', user);
+    expect(again.account).toBe(account);
+    expect(await pool.post('/v1/deposits', skeletonWith('00000000000075aa'), again.token)).toMatchObject({ status: 403, json: { error: 'erased' } });
+    expect((await pool.send(`/v1/raw/${mine.hash}/parts/1`, { method: 'PUT', body: 'my transcript' }, again.token, grant)).status).toBe(403);
     // The audit row counts and names no content.
-    expect(await all("SELECT kind, reason, erased_on, rows_erased, objects_erased, account FROM erasure_audit WHERE kind = 'account'")).toEqual([{ kind: 'account', reason: 'lawful-request', erased_on: '2026-11-08', rows_erased: 2, objects_erased: 1, account }]);
+    expect(await all("SELECT kind, reason, erased_on, rows_erased, objects_erased, account FROM erasure_audit WHERE kind = 'account' AND account = ?", account)).toEqual([{ kind: 'account', reason: 'lawful-request', erased_on: '2026-11-08', rows_erased: erased.rows, objects_erased: 1, account }]);
   }, 90_000);
 
   it('scrubs the label and allow list of the account\'s machines and leaves the other account\'s and the hashes', async () => {
@@ -362,7 +378,8 @@ describe('erasing one account under a lawful request', () => {
     expect((await enroll(token, 'a home server')).status).toBe(201);
     expect((await enroll(other.token, 'their box')).status).toBe(201);
     const hashes = await all('SELECT id, key_hash FROM machines WHERE account = ?', account);
-    expect((await eraseAccount(await store(), account, NOW)).rows).toBe(1);
+    // The machine row and the account's one token.
+    expect((await eraseAccount(await store(), account, NOW)).rows).toBe(2);
     expect(await all('SELECT label, allow_repos FROM machines WHERE account = ?', account)).toEqual([{ label: '[erased]', allow_repos: '[]' }]);
     expect(await all('SELECT id, key_hash FROM machines WHERE account = ?', account)).toEqual(hashes);
     expect(await all('SELECT label FROM machines WHERE account = ?', other.account)).toEqual([{ label: 'their box' }]);
@@ -378,8 +395,130 @@ describe('erasing one account under a lawful request', () => {
     const sent = await pool.send('/v1/deposits', { method: 'POST', body: body.slice(0, half) }, token, { 'oars-part': '1/2', 'oars-batch': batch });
     expect(sent.status).toBe(202);
     expect(await count('SELECT COUNT(*) AS held FROM deposit_parts WHERE account = ?', account)).toBe(1);
-    expect((await eraseAccount(await store(), account, NOW)).rows).toBe(1);
+    // The staged part and the account's one token.
+    expect((await eraseAccount(await store(), account, NOW)).rows).toBe(2);
     expect(await count('SELECT COUNT(*) AS held FROM deposit_parts WHERE account = ?', account)).toBe(0);
+  }, 60_000);
+});
+
+describe('erasing one account removes its own rows and its link to the shared totals (GDPR Article 17)', () => {
+  const telemetry = (day: string, install: string, account: string): Promise<unknown> =>
+    pool.db().then((db) => db.prepare("INSERT INTO telemetry_install_days (day, install, account, batches, events, measures) VALUES (?, ?, ?, 2, 5, '[]')").bind(day, install, account).run());
+
+  it('deletes its repo keys and deposit hours, clears its telemetry account, and leaves the other account\'s rows', async () => {
+    const { token, account } = await member();
+    const other = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('0000000000007a01'), token)).status).toBe(201);
+    expect((await pool.post('/v1/deposits', skeletonWith('0000000000007a02'), other.token)).status).toBe(201);
+    const db = await pool.db();
+    for (const holder of [account, other.account]) await db.prepare('INSERT OR IGNORE INTO account_repo_keys (account, repo_key) VALUES (?, ?)').bind(holder, `key-${holder}`).run();
+    await telemetry('2026-11-07', 'install-mine', account);
+    await telemetry('2026-11-07', 'install-theirs', other.account);
+    expect(await count('SELECT COUNT(*) AS held FROM deposit_hours WHERE account = ?', account)).toBeGreaterThan(0);
+
+    await eraseAccount(await store(), account, NOW);
+
+    expect(await count('SELECT COUNT(*) AS held FROM account_repo_keys WHERE account = ?', account)).toBe(0);
+    expect(await count('SELECT COUNT(*) AS held FROM deposit_hours WHERE account = ?', account)).toBe(0);
+    expect(await count('SELECT COUNT(*) AS held FROM account_repo_keys WHERE account = ?', other.account)).toBe(1);
+    expect(await count('SELECT COUNT(*) AS held FROM deposit_hours WHERE account = ?', other.account)).toBeGreaterThan(0);
+    // The row of the telemetry day stays with its counts; only the account id is gone, and the other account's id stands.
+    expect(await count('SELECT COUNT(*) AS held FROM telemetry_install_days WHERE account = ?', account)).toBe(0);
+    expect(await all("SELECT install, batches, events FROM telemetry_install_days WHERE install = 'install-mine'")).toEqual([{ install: 'install-mine', batches: 2, events: 5 }]);
+    expect(await all("SELECT account FROM telemetry_install_days WHERE install = 'install-theirs'")).toEqual([{ account: other.account }]);
+  }, 90_000);
+
+  it('clears the telemetry account of two installs of one day without colliding with each other or with an anonymous row', async () => {
+    const { account } = await member();
+    const other = await member();
+    await telemetry('2026-11-06', 'shared-install', account);
+    await telemetry('2026-11-06', 'shared-install', other.account);
+    await telemetry('2026-11-06', 'shared-install', '');
+    await eraseAccount(await store(), account, NOW);
+    await eraseAccount(await store(), other.account, NOW);
+    expect(await count("SELECT COUNT(*) AS held FROM telemetry_install_days WHERE install = 'shared-install'")).toBe(3);
+    expect(await count("SELECT COUNT(*) AS held FROM telemetry_install_days WHERE install = 'shared-install' AND account IN (?, ?)", account, other.account)).toBe(0);
+  }, 60_000);
+
+  it('makes its tokens unusable and holds no credential, and keeps that a sign-in happened', async () => {
+    const { token, account } = await member();
+    const other = await member();
+    const before = await all('SELECT hash, expires_at FROM tokens WHERE account = ? ORDER BY rowid', account);
+    expect(before).toHaveLength(1);
+    expect((await pool.get('/bundle/claude-code/2.1.314/1', token)).status).not.toBe(401);
+
+    await eraseAccount(await store(), account, NOW);
+
+    const after = await all('SELECT hash, expires_at FROM tokens WHERE account = ? ORDER BY rowid', account);
+    expect(after).toHaveLength(1);
+    expect(fieldOf(after[0], 'expires_at')).toBe(fieldOf(before[0], 'expires_at'));
+    expect(fieldOf(after[0], 'hash')).not.toBe(fieldOf(before[0], 'hash'));
+    expect(String(fieldOf(after[0], 'hash'))).toMatch(/^erased:/);
+    expect((await pool.get('/bundle/claude-code/2.1.314/1', token)).status).toBe(401);
+    expect((await pool.get('/bundle/claude-code/2.1.314/1', other.token)).status).not.toBe(401);
+    expect(await count('SELECT COUNT(*) AS held FROM tokens WHERE account = ?', other.account)).toBe(1);
+  }, 60_000);
+
+  it('keeps the acceptance, the tombstones, and the hash, size, and date of what it erased', async () => {
+    const { token, account } = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('0000000000007b01'), token)).status).toBe(201);
+    const mine = await putRaw(token, new TextEncoder().encode('kept record transcript'));
+    await eraseAccount(await store(), account, NOW);
+    expect(await count('SELECT COUNT(*) AS held FROM covenant_acceptances WHERE account = ?', account)).toBe(1);
+    expect(await count("SELECT COUNT(*) AS held FROM erasure_tombstones WHERE reason = 'lawful-request' AND kind = 'deposit'")).toBeGreaterThan(0);
+    expect(await all('SELECT sha256, bytes, erased_on FROM raw_objects WHERE account = ?', account)).toEqual([{ sha256: mine.hash, bytes: 'kept record transcript'.length, erased_on: '2026-11-08' }]);
+    expect(await count('SELECT COUNT(*) AS held FROM deposits WHERE account = ? AND erased_on IS NOT NULL', account)).toBe(1);
+  }, 60_000);
+
+  it('removes the account from the contributor records, leaves every total as it was, and moves the generation so the next bundle is built without it', async () => {
+    const { token, account } = await member();
+    const other = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('0000000000007c01', 'twinprog'), token)).status).toBe(201);
+    expect((await pool.post('/v1/deposits', skeletonWith('0000000000007c02', 'twinprog'), other.token)).status).toBe(201);
+    expect(await count('SELECT COUNT(*) AS held FROM contributors WHERE account = ?', account)).toBeGreaterThan(0);
+    const before = await totals();
+    const generation = await count('SELECT generation AS held FROM pool_generation');
+    const theirs = await count('SELECT COUNT(*) AS held FROM contributors WHERE account = ?', other.account);
+
+    await eraseAccount(await store(), account, NOW);
+
+    expect(await count('SELECT COUNT(*) AS held FROM contributors WHERE account = ?', account)).toBe(0);
+    expect(await count('SELECT COUNT(*) AS held FROM contributors WHERE account = ?', other.account)).toBe(theirs);
+    expect(await totals()).toBe(before);
+    expect(await count('SELECT generation AS held FROM pool_generation')).toBe(generation + 1);
+    // A rerun finds nothing to remove and moves nothing.
+    expect((await eraseAccount(await store(), account, NOW)).rows).toBe(0);
+    expect(await count('SELECT generation AS held FROM pool_generation')).toBe(generation + 1);
+    expect(await count('SELECT COUNT(*) AS held FROM cells WHERE key LIKE ?', '%')).toBeGreaterThan(0);
+  }, 90_000);
+
+  it('still moves the generation when a run stopped before it did, because the links are not yet gone to hide it', async () => {
+    const { token, account } = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('0000000000007d01', 'stopprog'), token)).status).toBe(201);
+    const generation = await count('SELECT generation AS held FROM pool_generation');
+    const whole = await store();
+    // The run stops at the statement that moves the generation (the process dies, the network drops).
+    const stopping: EraseStore = {
+      ...whole,
+      run: (sql, binds) => (sql.startsWith('UPDATE pool_generation') ? Promise.reject(new Error('stopped')) : whole.run(sql, binds)),
+    };
+    await expect(eraseAccount(stopping, account, NOW)).rejects.toThrow('stopped');
+
+    await eraseAccount(await store(), account, NOW);
+
+    expect(await count('SELECT COUNT(*) AS held FROM contributors WHERE account = ?', account)).toBe(0);
+    expect(await count('SELECT generation AS held FROM pool_generation')).toBe(generation + 1);
+    // A run that finds nothing left moves nothing more.
+    const settled = await count('SELECT generation AS held FROM pool_generation');
+    await eraseAccount(await store(), account, NOW);
+    expect(await count('SELECT generation AS held FROM pool_generation')).toBe(settled);
+  }, 90_000);
+
+  it('does not move the generation for an account that held no link to a total', async () => {
+    const { account } = await member();
+    const generation = await count('SELECT generation AS held FROM pool_generation');
+    await eraseAccount(await store(), account, NOW);
+    expect(await count('SELECT generation AS held FROM pool_generation')).toBe(generation);
   }, 60_000);
 });
 

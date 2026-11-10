@@ -58,7 +58,7 @@ const nameOf = (value: string, what: string): string => {
   return value;
 };
 
-const tombstone = async (store: EraseStore, kind: 'raw-object' | 'deposit' | 'value', digest: string, reason: ErasureReason, now: Date): Promise<void> => {
+const tombstone = async (store: EraseStore, kind: 'raw-object' | 'deposit' | 'value' | 'account', digest: string, reason: ErasureReason, now: Date): Promise<void> => {
   await store.run('INSERT OR IGNORE INTO erasure_tombstones (kind, digest, reason, erased_on) VALUES (?, ?, ?, ?)', [kind, digest, reason, dayOf(now)]);
 };
 
@@ -211,14 +211,27 @@ export const eraseLeakedSecret = async (store: EraseStore, secret: LeakedSecret,
 };
 
 /**
- * Erases one account's content under a lawful request: every deposit row it holds is replaced by the marker and tombstoned, every raw object it holds is deleted and tombstoned, its staged parts are dropped, and the label and allow list of its machines are scrubbed. What stays is
- * the account's contribution to the aggregates (cells, strata, and the contributor records that tell a returning cluster from a new one): opting out removes nothing from them.
+ * Erases one account's content under a lawful request (GDPR Articles 17(1) and 17(3)(e)): every deposit row it holds is replaced by the marker and tombstoned, every raw object it holds is deleted and tombstoned, its staged parts are dropped, the label and allow list of its
+ * machines are scrubbed, its repo keys and deposit hours are deleted, its tokens stop working and hold no credential, and the account id leaves its telemetry days and its contributor records. A telemetry day keeps its counts (the account column holds a placeholder that names no account, one per row, so
+ * two erased accounts of one install never collide), and a token row keeps that a sign-in happened (its expiry). The generation moves, before the links go, when the account held any repo key, deposit hour, or contributor record, so a client fetches the bundle again.
+ * What stays: the totals (`cells`, `strata`, and the clusters held in them: a recount drops the account the next time a deposit touches the cell), `covenant_acceptances` (append-only, and the pool's proof that the covenant was accepted, Article 17(3)(e)), the tombstones, the audit, and the hash, size, and date of every raw object.
+ * The `account` tombstone goes first: it is what lets the database delete the contributor records (migration 0027), and a run that stops halfway runs again to the end.
  */
 export const eraseAccount = async (store: EraseStore, accountId: string, now: Date): Promise<Erased> => {
   const account = nameOf(accountId, 'the account');
+  await tombstone(store, 'account', account, 'lawful-request', now);
   let rows = await store.run('DELETE FROM deposit_parts WHERE account = ?', [account]);
   // A machine's label and allow list are free text and repository names the account typed: they are scrubbed in place, and the row stays because its hashes are what refuse the key. The guard keeps a rerun at zero rows, as every other step does.
   rows += await store.run("UPDATE machines SET label = '[erased]', allow_repos = '[]' WHERE account = ? AND (label <> '[erased]' OR allow_repos <> '[]')", [account]);
+  // A token's hash is the credential and its primary key: it becomes `erased:<rowid>`, which no token hashes to, and the row keeps its expiry and its account, so that a sign-in happened is still on record.
+  rows += await store.run("UPDATE tokens SET hash = 'erased:' || rowid WHERE account = ? AND hash NOT LIKE 'erased:%'", [account]);
+  // The rollup keys a day by install and account, so the account column cannot be emptied for two rows of one install and day: each takes its own placeholder, and the counts it holds stand.
+  rows += await store.run("UPDATE telemetry_install_days SET account = 'erased:' || rowid WHERE account = ?", [account]);
+  // Nothing in a served count changes, so no trigger moves the generation; a client holding the bundle built with the account would be told its copy is current. The generation moves before the links go, while they still show there is something to move it for: a run that stops between the two
+  // moves it again on the rerun (a bump too many), where one moved after the deletes would never move on a rerun that finds the links gone.
+  const held = numberOf((await store.rows('SELECT (SELECT COUNT(*) FROM account_repo_keys WHERE account = ?) + (SELECT COUNT(*) FROM deposit_hours WHERE account = ?) + (SELECT COUNT(*) FROM contributors WHERE account = ?) AS held', [account, account, account]))[0], 'held');
+  if (held > 0) await store.run('UPDATE pool_generation SET generation = generation + 1', []);
+  rows += (await store.run('DELETE FROM account_repo_keys WHERE account = ?', [account])) + (await store.run('DELETE FROM deposit_hours WHERE account = ?', [account])) + (await store.run('DELETE FROM contributors WHERE account = ?', [account]));
   for (const row of await store.rows('SELECT id FROM deposits WHERE account = ? AND erased_on IS NULL', [account])) rows += await dropDeposit(store, account, textOf(row, 'id'), 'lawful-request', now);
   let objects = 0;
   for (const row of await store.rows('SELECT sha256 FROM raw_objects WHERE account = ? AND erased_on IS NULL', [account])) objects += await dropObject(store, account, textOf(row, 'sha256'), 'lawful-request', now);

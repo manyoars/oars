@@ -291,7 +291,8 @@ describe('a raw yes is tied to the covenant in force (GDPR Article 7)', () => {
     expect((await pool.send(partPath(hash, 1), { method: 'PUT', body }, token, grant)).status).toBe(200);
     const row = await consentOf(account);
     expect(fieldOf(row, 'raw_consent_version')).toBe('v1');
-    expect(Number(fieldOf(row, 'raw_consent'))).toBeGreaterThan(1000);
+    // The version moves; the start of the standing yes does not, so the sweep never reaches copies a restated yes covers (t1053).
+    expect(Number(fieldOf(row, 'raw_consent'))).toBe(1000);
   });
 });
 
