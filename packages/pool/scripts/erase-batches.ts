@@ -93,7 +93,17 @@ const withText = async (telemetry: TelemetryStore, seen: readonly Seen[]): Promi
 export const findBatches = async (telemetry: TelemetryStore, account: string, now: Date): Promise<FoundBatch[]> =>
   withText(telemetry, (await survey(telemetry, now)).filter((one) => one.account === account));
 
-/** The batch's text with the install replaced, and the account too when it is `account`, and nothing else touched: the same fields in the same order, so every other record is equal to the original. */
+const DAY_MS = 86_400_000;
+
+/** The Monday 00:00 UTC of the ISO week a time falls in (the rule t1070 uses for `erased:` rows); a value that is not an ISO string is kept, since it can match nothing. */
+const weekStartOf = (value: unknown): unknown => {
+  const at = typeof value === 'string' ? Date.parse(value) : Number.NaN;
+  if (Number.isNaN(at)) return value;
+  const day = Math.floor(at / DAY_MS) * DAY_MS;
+  return new Date(day - ((new Date(day).getUTCDay() + 6) % 7) * DAY_MS).toISOString();
+};
+
+/** The batch's text with the install replaced, the account too when it is `account`, and the times cut to their week (an exact time could be matched to a row of Analytics Engine that holds the old install): the same fields in the same order, counts, commands, and durations untouched. */
 const rewrittenText = (text: string, install: string, account: string): string => {
   const held: unknown = JSON.parse(text);
   if (typeof held !== 'object' || held === null) throw new Error('a found batch is an object');
@@ -101,6 +111,9 @@ const rewrittenText = (text: string, install: string, account: string): string =
   if (typeof batch !== 'object' || batch === null) throw new Error('a found batch holds a batch');
   if (Reflect.get(held, 'account') === account) Reflect.set(held, 'account', ERASED_ACCOUNT);
   Reflect.set(batch, 'install', install);
+  Reflect.set(held, 'received', weekStartOf(Reflect.get(held, 'received')));
+  const events: unknown = Reflect.get(batch, 'events');
+  if (Array.isArray(events)) for (const event of events) if (typeof event === 'object' && event !== null) Reflect.set(event, 'at', weekStartOf(Reflect.get(event, 'at')));
   return JSON.stringify(held);
 };
 
