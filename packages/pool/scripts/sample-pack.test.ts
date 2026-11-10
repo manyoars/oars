@@ -1240,6 +1240,26 @@ describe('an objection keeps a session out (plan S5, Art. 21(1))', () => {
   });
 });
 
+describe('the objections a pack was built under (plan S5, Art. 21(1))', () => {
+  const recorded = (f: Fixture): unknown => (JSON.parse(readFileSync(join(f.out, 'pack.json'), 'utf8')) as { objections?: unknown }).objections;
+
+  it('writes the SHA-256 of objections.jsonl as read into pack.json, or none without the file', async () => {
+    const without = fixture();
+    without.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done')]);
+    await stored(without);
+    await buildPack(without.runtime, options(without));
+    expect(recorded(without)).toBe('none');
+
+    const withFile = fixture();
+    withFile.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done')]);
+    withFile.write('-work-oars', S(2), [user(S(2), 1, 'run the build'), assistant(S(2), 1, 'green')]);
+    await stored(withFile);
+    objectTo(withFile, { session: S(2), received: '2026-06-05T09:00:00.000Z', scope: 'sale' });
+    await buildPack(withFile.runtime, options(withFile));
+    expect(recorded(withFile)).toBe(createHash('sha256').update(readFileSync(join(withFile.root, 'objections.jsonl'))).digest('hex'));
+  });
+});
+
 describe('an objection by name (plan S5, Art. 21(1))', () => {
   it('leaves out a session whose text names the person, and keeps the others', async () => {
     const f = fixture();

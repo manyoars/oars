@@ -4,8 +4,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { deposit, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { deliver, main, recipientsOf, type Delivery } from './deliver.js';
-import { keyIdOf } from './sample-pack.js';
+import { buildPack, keyIdOf } from './sample-pack.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -105,6 +106,45 @@ describe('deliver (plan S5, Art. 15(1)(c) and 19)', () => {
   it('delivers a pack built under the objections file as it is now', async () => {
     const f = fixture({ objections: [{ name: 'Priya Raman', received: '2026-06-09T09:00:00.000Z', scope: 'sale' }] });
     expect((await deliver(args(f))).rows).toHaveLength(2);
+  });
+
+  it('refuses a pack that buildPack wrote when an objection is recorded after it, even one received before the build', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'oars-deliver-build-'));
+    dirs.push(root);
+    const cwd = join(root, 'work', 'app');
+    mkdirSync(cwd, { recursive: true });
+    const projects = join(root, 'projects', '-work-oars');
+    mkdirSync(projects, { recursive: true });
+    const session = S1;
+    const row = (type: string, uuid: string, parentUuid: string | null, timestamp: string, message: object): string =>
+      JSON.stringify({ type, uuid, parentUuid, isSidechain: false, timestamp, version: '2.1.300', sessionId: session, cwd, requestId: 'req_011Cdeliver1', message });
+    writeFileSync(join(projects, `${session}.jsonl`), [
+      row('user', 'aaaaaaaa-b001-4222-8222-222222222222', null, '2026-06-01T10:00:01.000Z', { role: 'user', content: 'add a test' }),
+      row('assistant', 'aaaaaaaa-a001-4222-8222-222222222222', 'aaaaaaaa-b001-4222-8222-222222222222', '2026-06-01T10:00:02.000Z', { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'done' }], usage: { input_tokens: 10, output_tokens: 20 } }),
+    ].join(String.fromCharCode(10)) + String.fromCharCode(10));
+    const runtime: SessionsRuntime = { storeDir: join(root, 'store'), projectsRoot: join(root, 'projects'), sources: [], stdin: process.stdin, stdout: { write: () => true } };
+    await deposit(runtime, { allow: [], redactDomains: [], now: () => Date.parse('2026-06-10T00:00:00Z') });
+    const terms = join(root, 'terms.txt');
+    writeFileSync(terms, 'zorblax');
+    const owners = join(root, 'owners.json');
+    writeFileSync(owners, JSON.stringify([{ folder: '*-oars*', owner: 'Many Oars Co.', license: 'Apache-2.0' }]));
+    const indexKey = join(root, 'index.key');
+    writeFileSync(indexKey, 'ab'.repeat(32));
+    const out = join(root, 'lot-1');
+    await buildPack(runtime, { terms, owners, indexKey, buyerKey: BUYER_KEY, out, size: 25, seed: '1', minTurns: 1 });
+
+    writeFileSync(join(root, 'objections.jsonl'), `${JSON.stringify({ name: 'Priya Raman', received: '2026-05-01T09:00:00.000Z', scope: 'sale' })}
+`);
+    await expect(deliver({ pack: out, recipient: 'Acme Evals Inc.', license: 'term-sheet-v1', buyerKey: BUYER_KEY, owners })).rejects.toThrow(/objections changed since the build/);
+    expect(() => readFileSync(join(root, 'deliveries.jsonl'))).toThrow();
+  });
+
+  it('refuses a pack with no manifest.jsonl as a refusal, not a raw read error', async () => {
+    const f = fixture();
+    writeFileSync(join(f.root, 'deliveries.jsonl'), '');
+    rmSync(join(f.pack, 'manifest.jsonl'));
+    await expect(deliver(args(f))).rejects.toThrow(/manifest.jsonl is missing/);
+    expect(readFileSync(join(f.root, 'deliveries.jsonl'), 'utf8')).toBe('');
   });
 
   it('refuses a pack folder inside a git repository', async () => {
