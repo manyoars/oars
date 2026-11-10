@@ -117,7 +117,7 @@ export const ERASED_ACCOUNT = 'erased:';
 
 /** The accounts with an `account` tombstone: an erasure clears the id from the rows, and the R2 batches still name it, so every rebuild of a day has to map it again. */
 const erasedAccounts = async (env: Env): Promise<Set<string>> => {
-  const held = await env.DB.prepare("SELECT digest FROM erasure_tombstones WHERE kind = 'account'").all();
+  const held = await env.DB.prepare("SELECT digest FROM erasure_tombstones WHERE kind = 'account'").bind().all();
   return new Set(held.results.map((one) => fieldOf(one, 'digest')).filter((digest): digest is string => typeof digest === 'string'));
 };
 
