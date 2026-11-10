@@ -101,7 +101,7 @@ const pointOriginHead = (dir: string, branch = 'main'): void => {
  */
 const holdsAll = (...shas: string[]): Git => {
   const full = (sha: string): string => sha.padEnd(40, '0');
-  return async (_root, args) => {
+  const answer = (args: readonly string[]): string => {
     switch (args[0]) {
       case 'rev-parse': return 'false';
       case 'symbolic-ref': return 'refs/remotes/origin/main';
@@ -110,6 +110,7 @@ const holdsAll = (...shas: string[]): Git => {
       default: return shas.map((sha) => `${full(sha)} commit`).join(String.fromCharCode(10));
     }
   };
+  return (_root, args) => Promise.resolve(answer(args));
 };
 
 /** `ts: null` leaves the timestamp off the assistant and result lines, as a transcript line the harness did not date. */
