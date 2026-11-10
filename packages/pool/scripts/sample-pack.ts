@@ -8,12 +8,16 @@ import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { dirname, join, resolve } from 'node:path';
 import { defaultConfigDir } from '../../cli/src/credentials.js';
-import { checkSession, transcriptFilesOf, type Reason } from '../../cli/src/sessions/exclusion.js';
+import { checkSession, loadTerms, transcriptFilesOf, type Reason } from '../../cli/src/sessions/exclusion.js';
 import { configOf, makeRepoRoot, originUrl } from '../../cli/src/sessions/repo-root.js';
 import { LEADING_TAG, LOCAL_COMMAND_TAGS } from '../../cli/src/sessions/extract.js';
-import { localNames, redactTranscript, REDACTION_VERSION } from '../../cli/src/sessions/redact.js';
+import { bucketOf, floorOf, sessionsOf, skeletonOf, type SessionSkeleton, type SkeletonTool, type TranscriptRoot, type WireGate } from '../../cli/src/sessions/pool-wire.js';
+import { shellReader } from '../../cli/src/sessions/projection.js';
+import { contentHash } from '../../cli/src/sessions/read.js';
+import { localNames, makeRedactor, redactTranscript, REDACTION_VERSION } from '../../cli/src/sessions/redact.js';
 import { harnessOf, type Harness } from '../../cli/src/sessions/schema.js';
-import { loadStore, readRedactDomains, type SessionsRuntime } from '../../cli/src/sessions/store.js';
+import { loadStore, readRedactDomains, readSkeletons, type SessionsRuntime } from '../../cli/src/sessions/store.js';
+import { vocabulary } from '../../cli/src/sessions/vocab-load.js';
 
 export const USAGE = [
   'Usage: sample-pack --terms <file> --owners <file> --index-key <file> --buyer-key <key> --out <dir> [--size <n>] [--seed <text>] [--min-turns <n>]',
@@ -81,6 +85,12 @@ export interface ManifestRow {
   permittedUses: string[];
   training: 'priced-add-on' | 'not-offered';
   transcripts: number;
+  /** The session's model names with the count of prompts run under each: the skeleton's prompt frames, so a name has passed the wire's gate. The store's own `models` counts a line that names a requested model, which most sessions never carry. */
+  models: Tally;
+  /** User plus assistant turns, the count the turn floor reads. */
+  turns: number;
+  /** The file beside the transcripts that holds the session's skeleton. */
+  skeleton: string;
   redactionVersion: string;
   startedAt: string | null;
   endedAt: string | null;
@@ -116,6 +126,8 @@ export interface PackCounts {
   noRepo: number;
   /** A resumed session that replays another's first prompt and is the shorter of the two. */
   duplicate: number;
+  /** The store holds no skeleton for the session (captured before steps and frames, or with no root), so it has none to pack. */
+  noSkeleton: number;
   /** Dropped because the redacted, masked text still held something shaped like a key (`secretIn`); nothing of the session was written. */
   secret: number;
   emitted: number;
@@ -425,6 +437,9 @@ export const secretIn = (text: string): string | undefined => SECRET_SHAPES.find
 
 const EXCLUDED: { readonly [reason in Exclude<Reason, 'clean'>]: keyof PackCounts['excluded'] } = { term: 'term', 'no-raw': 'noRaw', 'no-terms': 'noTerms', unreadable: 'unreadable' };
 
+/** The name of a session's skeleton beside its transcripts, and what its manifest row calls it. */
+const SKELETON_FILE = 'skeleton.json';
+
 /** Where a transcript goes under the session's folder: `main.jsonl`, or its path under the session (`subagents/agent-x.jsonl`). */
 const placeOf = (key: string, session: string, main: boolean): string => (main ? 'main.jsonl' : key.slice(session.length + 1));
 
@@ -451,6 +466,105 @@ const scannable = (text: string): string =>
     })
     .join('\n');
 
+/** A value the store derives with no key of the buyer's, re-derived under the buyer's key: the same input gives a buyer one value, and two buyers two, so no pair of packs joins on it. `length` keeps the wire's shape for it. */
+const keyedUnder = (buyerKey: string, kind: string, value: string, length: number): string => createHmac('sha256', buyerKey).update(`${kind}:${value}`).digest('hex').slice(0, length);
+
+/** The store's repo key is a salted hash that is the same in every pack built from one store, so two buyers could join on it: under the buyer's key it differs per buyer, and one buyer still sees one repository as one key. */
+const repoKeyUnder = (buyerKey: string, repoKey: string): string => keyedUnder(buyerKey, 'repoKey', repoKey, 16);
+
+const withoutDigests = (tool: SkeletonTool): SkeletonTool => {
+  const kept = { ...tool };
+  delete kept.digests;
+  return kept;
+};
+
+/**
+ * The skeleton as a buyer holds it: `id` is the match id, never the key the pool deposit would use, and every `repoKey` is the buyer's. No unkeyed hash of content or timing ships (plan S3, lead 14): a tool's
+ * `digests` are SHA-256 of the unredacted Edit, MultiEdit, and Write text, so a guess at a masked value could be confirmed against one, and are dropped; a transcript's `merkleRoot` and the batch's `timingPrint` are
+ * kept in the wire's shape but re-derived under the buyer's key. Every other value is the wire's own, after its gate.
+ */
+export const skeletonUnder = (skeleton: SessionSkeleton, matchId: string, buyerKey: string): SessionSkeleton => {
+  const framed = <F extends { repoKey?: string }>(frame: F): F => (frame.repoKey === undefined ? frame : { ...frame, repoKey: repoKeyUnder(buyerKey, frame.repoKey) });
+  return {
+    ...skeleton,
+    id: matchId,
+    timingPrint: skeleton.timingPrint === null ? null : keyedUnder(buyerKey, 'timingPrint', skeleton.timingPrint, 16),
+    transcripts: skeleton.transcripts.map((transcript) => ({
+      ...transcript,
+      merkleRoot: keyedUnder(buyerKey, 'merkleRoot', transcript.merkleRoot, 64),
+      frame: framed(transcript.frame),
+      frames: transcript.frames.map(framed),
+      prompts: transcript.prompts.map((prompt) => ({ ...prompt, frame: framed(prompt.frame) })),
+      tools: transcript.tools.map(withoutDigests),
+    })),
+  };
+};
+
+/** Counts by name. A name comes from a transcript (a model), so the keys of the written object are own properties whatever they are. */
+export interface Tally {
+  [name: string]: number;
+}
+
+/**
+ * What the free sample gives away of a lot (plan section 3): the sessions counted by harness, harness version, model, error code, recovery, intervention, prompt class, and turn bucket.
+ * Counts only: no row per session and no id of one. `model` and `errorCode` count what the manifest and skeletons hold in total, so a total here is the manifest's.
+ */
+export interface Census {
+  sessions: number;
+  /** Sessions per harness. */
+  harness: Tally;
+  /** Sessions per harness version (a session that ran under two counts in both). */
+  harnessVersion: Tally;
+  /** Prompts per model, the manifest's `models` summed. */
+  model: Tally;
+  /** Failed calls per error code, over the main transcript and the subagents'. */
+  errorCode: Tally;
+  /** Failed calls by what followed: an edit within the next calls, or none. The store derives `fixed`, `worked around`, and `abandoned` from the transcript's error lines, which a loaded store does not hold. */
+  recovery: Tally;
+  /** Prompts per human intervention, the closed list; a prompt captured before the signal has none and is not counted. */
+  intervention: Tally;
+  /** Prompts per prompt class. */
+  promptClass: Tally;
+  /** Sessions per `calls` bucket of their turns, named by the bucket's lowest turn count. */
+  turnBucket: Tally;
+}
+
+/** Prompts per model over the main transcript and the subagents'; a prompt whose frame names no model is not counted. */
+export const modelsOf = (skeleton: SessionSkeleton): Tally => {
+  const counts = new Map<string, number>();
+  for (const { prompts } of skeleton.transcripts) {
+    for (const { frame } of prompts) if (frame.model !== null) counts.set(frame.model, (counts.get(frame.model) ?? 0) + 1);
+  }
+  return Object.fromEntries([...counts].sort(([a], [b]) => (a < b ? -1 : 1)));
+};
+
+export const censusOf = (rows: readonly ManifestRow[], skeletons: readonly SessionSkeleton[]): Census => {
+  const tallies = { harness: new Map<string, number>(), harnessVersion: new Map<string, number>(), model: new Map<string, number>(), errorCode: new Map<string, number>(), recovery: new Map<string, number>(), intervention: new Map<string, number>(), promptClass: new Map<string, number>(), turnBucket: new Map<string, number>() };
+  const add = (into: Map<string, number>, name: string, by = 1): void => {
+    into.set(name, (into.get(name) ?? 0) + by);
+  };
+  for (const row of rows) {
+    add(tallies.harness, row.harness);
+    for (const version of new Set(row.harnessVersions)) add(tallies.harnessVersion, version);
+    for (const [model, messages] of Object.entries(row.models)) add(tallies.model, model, messages);
+    add(tallies.turnBucket, String(floorOf('calls', bucketOf('calls', row.turns))));
+  }
+  for (const skeleton of skeletons) {
+    for (const transcript of skeleton.transcripts) {
+      for (const prompt of transcript.prompts) {
+        add(tallies.promptClass, prompt.cls);
+        if (prompt.intervention !== undefined) add(tallies.intervention, prompt.intervention);
+      }
+      for (const tool of transcript.tools) {
+        if (tool.errorCode !== null) add(tallies.errorCode, tool.errorCode);
+        if (tool.recoveryCalls !== undefined) add(tallies.recovery, tool.recoveryCalls.editFollowed ? 'edit followed' : 'no edit followed');
+      }
+    }
+  }
+  const sorted = (tally: Map<string, number>): Tally => Object.fromEntries([...tally].sort(([a], [b]) => (a < b ? -1 : 1)));
+  return { sessions: rows.length, harness: sorted(tallies.harness), harnessVersion: sorted(tallies.harnessVersion), model: sorted(tallies.model), errorCode: sorted(tallies.errorCode), recovery: sorted(tallies.recovery), intervention: sorted(tallies.intervention), promptClass: sorted(tallies.promptClass), turnBucket: sorted(tallies.turnBucket) };
+};
+
 type StoredSession = Awaited<ReturnType<typeof loadStore>>['sessions'][number];
 type HarnessRow = NonNullable<(typeof HARNESS_TERMS)[Harness]>;
 
@@ -476,6 +590,11 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   // One injected-block key per buyer: within a pack the same CLAUDE.md gives the same marker, and two buyers' markers cannot be compared.
   const injectedKey = `injected-block:${createHmac('sha256', options.buyerKey).update('injected-block').digest('hex')}`;
   const store = await loadStore(runtime.storeDir);
+  // The wire's own gate, as `oars pool deposit` applies it: the operator's redactor and exclusion terms over every name a skeleton carries.
+  const gate: WireGate = { redact: makeRedactor(domains), terms: await loadTerms(options.terms) };
+  const roots = new Map<string, TranscriptRoot>((await readSkeletons(runtime.storeDir, undefined, true)).skeletons.map(({ session, merkleRoot, leaves }) => [session, { merkleRoot, leaves }]));
+  const recordsOf = new Map(sessionsOf(store, roots).map((records) => [records.main.session, records]));
+  const read = shellReader(vocabulary());
   const frame = store.sessions.filter((session) => session.userTurns > 0);
   // Every session the store knows, so a transcript that names another session names it by that session's match id.
   const sessionIds = new Map(store.sessions.map((session) => [session.session, matchIdOf(options.buyerKey, serverKeyOf(indexKey, session.session))]));
@@ -487,7 +606,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   }
   const order = (session: string): string => createHash('sha256').update(`${options.seed}\n${session}`).digest('hex');
   const drawn = frame.map((session) => ({ session, rank: order(session.session) })).sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0));
-  const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, lead: 0, tooShort: 0, noRepo: 0, duplicate: 0, secret: 0, emitted: 0 };
+  const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, lead: 0, tooShort: 0, noRepo: 0, duplicate: 0, noSkeleton: 0, secret: 0, emitted: 0 };
   const turnsOf = (session: { userTurns: number; assistantTurns: number }): number => session.userTurns + session.assistantTurns;
   // The rules up to the repository one, once per session: the duplicate rule asks them only of the members of a group that shares a first prompt, the draw of the sessions it reaches; a singleton the draw never reaches is never gated.
   const earlyBy = new Map<string, Promise<Early>>();
@@ -514,6 +633,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   };
   let losers: Set<string> | undefined;
   const rows: ManifestRow[] = [];
+  const skeletons: SessionSkeleton[] = [];
   const index: IndexRow[] = [];
   await mkdir(partial, { recursive: true });
   for (const { session: record } of drawn) {
@@ -535,6 +655,14 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
       continue;
     }
     const matchId = matchIdOf(options.buyerKey, serverKeyOf(indexKey, record.session));
+    const records = recordsOf.get(record.session);
+    const built = records === undefined ? null : skeletonOf(records, matchId, read, contentHash, [], gate);
+    if (built === null) {
+      counts.noSkeleton += 1;
+      continue;
+    }
+    const skeleton = skeletonUnder(built, matchId, options.buyerKey);
+    const skeletonText = `${JSON.stringify(skeleton, null, 2)}\n`;
     const files = await transcriptFilesOf(runtime, record.project, record.session);
     const raws = await Promise.all(files.map((file) => readFile(file.path, 'utf8')));
     // The accounts this session's repositories live under: the owners entry's, and what the remote of each working folder names.
@@ -542,7 +670,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     const texts = raws.map((raw) => redactTranscript(raw, domains, names, injectedKey, { handles, toolId: (id) => maskOf(indexKey, options.buyerKey, id), fetchedHosts: true }).text);
     const masked = maskIds(texts, sessionIds, indexKey, options.buyerKey);
     // After redaction and masking, before the first byte is written: a session with a hit leaves no file, manifest row, or index row.
-    if (masked.some((text) => secretIn(scannable(text)) !== undefined)) {
+    if ([...masked, skeletonText].some((text) => secretIn(scannable(text)) !== undefined)) {
       counts.secret += 1;
       continue;
     }
@@ -553,6 +681,9 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
       bytes += Buffer.byteLength(body);
       await writeFile(target, body);
     }
+    bytes += Buffer.byteLength(skeletonText);
+    await writeFile(join(partial, 'sessions', matchId, SKELETON_FILE), skeletonText);
+    skeletons.push(skeleton);
     index.push({ pack: out, session: record.session, project: record.project, matchId });
     rows.push({
       matchId,
@@ -564,6 +695,9 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
       permittedUses: [...PERMITTED_USES],
       training: terms.training,
       transcripts: files.length,
+      models: modelsOf(skeleton),
+      turns: turnsOf(record),
+      skeleton: SKELETON_FILE,
       redactionVersion: REDACTION_VERSION,
       startedAt: record.tsFirst,
       endedAt: record.tsLast,
@@ -573,6 +707,9 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   const manifest = rows.map((row) => `${JSON.stringify(row)}\n`).join('');
   bytes += Buffer.byteLength(manifest);
   await writeFile(join(partial, 'manifest.jsonl'), manifest);
+  const census = `${JSON.stringify(censusOf(rows, skeletons), null, 2)}\n`;
+  bytes += Buffer.byteLength(census);
+  await writeFile(join(partial, 'census.json'), census);
   await writeFile(join(partial, 'pack.json'), `${JSON.stringify({ built: new Date().toISOString(), size: options.size, seed: options.seed, minTurns: options.minTurns, redactionVersion: REDACTION_VERSION, counts, bytes, elapsedMs: Date.now() - started }, null, 2)}\n`);
   // Outside the pack, beside the owners file, and appended, so it maps every pack built from that folder. Written before the rename, so a pack under `out` always has its rows.
   await appendFile(join(dirname(resolve(options.owners)), 'index.jsonl'), index.map((row) => `${JSON.stringify(row)}\n`).join(''));
