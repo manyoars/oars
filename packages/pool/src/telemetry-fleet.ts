@@ -215,7 +215,8 @@ export const anomaliesOf = (rows: readonly InstallDay[], floor: number): { insta
     const batches = new Map<string, number>();
     for (const row of rows) {
       const id = idOf(row);
-      if (id === '') continue;
+      // An erasure leaves `erased:<rowid>` (and the rollup one `erased:` per install-day) where the account was: a stand-in that names no account, so it is no more an account to count or list than the empty id is.
+      if (id === '' || id.startsWith('erased:')) continue;
       events.set(id, (events.get(id) ?? 0) + row.events);
       batches.set(id, (batches.get(id) ?? 0) + row.batches);
     }

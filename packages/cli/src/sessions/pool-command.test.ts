@@ -164,8 +164,11 @@ async function refusalOf(promise: Promise<unknown>): Promise<{ message: string; 
 describe('the raw prompt states when and what uploads', () => {
   it('names the sender a hook or command starts, covenant acceptance, and the skeleton-only/off exception', () => {
     expect(RAW_PROMPT).toContain('the sender that a session-end hook or any oars command starts (at most about once an hour) uploads');
-    expect(RAW_PROMPT).not.toContain('nightly');
-    expect(RAW_PROMPT).toContain('A no stops later sends, and the pool starts erasing the raw copies it already holds for you that night; a large account can take more than one night.');
+    // The sender is not nightly; only the pool's erasure of held copies is, and the prompt says so in those words.
+    expect(RAW_PROMPT).not.toMatch(/nightly (send|upload)/);
+    expect(RAW_PROMPT).toContain("A no stops later sends. If the GDPR or the UK GDPR protects you, it also reaches copies already sent. The pool starts erasing the raw copies it already holds for you at the pool's next nightly run; a large account, or a busy night, can take more than one night.");
+    expect(RAW_PROMPT).toContain('Raw copies are covered by the covenant you accepted, including its license to sell them and to train on them.');
+    expect(RAW_PROMPT).not.toContain('separate from the covenant');
     expect(RAW_PROMPT).not.toContain('cannot recall');
     expect(RAW_PROMPT).toContain('once the pool says your account accepted its covenant');
     expect(RAW_PROMPT).toContain('except a folder you set to skeleton only or off');
@@ -3137,7 +3140,7 @@ describe('oars pool raw (t884)', () => {
       expect(await scene.cli('pool', 'raw', '--consent', 'no')).toBe(ExitCode.OK);
       expect(pool.calls).toHaveLength(1);
       expect(scene.h.out.join('')).toContain('The pool was told');
-      expect(scene.h.out.join('')).toContain('starts erasing the raw copies it already holds that night; a large account can take more than one night');
+      expect(scene.h.out.join('')).toContain("starts erasing at the pool's next nightly run; a large account, or a busy night, can take more than one night");
       expect(scene.h.out.join('')).not.toContain('not erased');
       expect(scene.h.out.join('')).not.toContain('within a day');
     });

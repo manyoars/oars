@@ -287,7 +287,7 @@ describe('main', () => {
   });
 
   it('says what to export when the account erasure has no R2 token to list the telemetry bucket with, after every other step', async () => {
-    const { io, calls, printed } = fake();
+    const { io, calls, printed } = fake({ answer: (sql) => (sql.includes('AS held') ? [{ held: 0 }] : []) });
     expect(await main(['account', '--account', ACCOUNT, '--confirm'], io)).toBe(1);
     expect(printed.join(' ')).toMatch(/R2_ACCESS_KEY_ID/);
     expect(calls.flat().some((arg) => arg.startsWith('INSERT INTO erasure_audit'))).toBe(false);
