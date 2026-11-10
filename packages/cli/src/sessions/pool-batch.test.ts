@@ -70,6 +70,18 @@ describe('a session has ended', () => {
     expect(odd !== undefined && hasEnded(odd, NOW, 0)).toBe(true);
   });
 
+  it('lets the sender build a session only a hold window after its capture, while a person builds it at once', () => {
+    const [old] = sessionsFrom(store({ sessions: [session('m', { frame: framed, rev: NOW - 59 * MINUTE, tsLast: new Date(NOW - 48 * HOUR).toISOString() })], subagents: [] }));
+    expect(old !== undefined && hasEnded(old, NOW, 0)).toBe(true);
+    expect(old !== undefined && hasEnded(old, NOW, 0, undefined, true)).toBe(false);
+    expect(old !== undefined && hasEnded(old, NOW + 2 * MINUTE, 0, undefined, true)).toBe(true);
+  });
+
+  it('caps a last line in the future at the capture: a skewed clock does not hold a session', () => {
+    const [skewed] = sessionsFrom(store({ sessions: [session('m', { frame: framed, rev: NOW - 7 * HOUR, tsLast: new Date(NOW + 30 * HOUR).toISOString() })], subagents: [] }));
+    expect(skewed !== undefined && hasEnded(skewed, NOW, 0)).toBe(true);
+  });
+
   it('holds a dead subagent back no longer than the bound', () => {
     const [dead] = sessionsFrom(from(30, 6));
     expect(dead !== undefined && hasEnded(dead, NOW, 0)).toBe(true);

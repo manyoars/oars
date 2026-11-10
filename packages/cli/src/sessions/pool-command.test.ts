@@ -437,6 +437,17 @@ describe('oars pool login', () => {
     expect(await dark.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.UNREACHABLE);
   });
 
+  it('does not mistake a bug for a bad minute: a poll that throws something other than a CliError ends the login with it', async () => {
+    const scene = setting();
+    poolAt(scene, { polls: [authorized()] });
+    const stderr = scene.h.deps.io.stderr;
+    scene.h.deps.io.stderr = (text) => {
+      if (text.includes('/v1/login/poll')) throw new TypeError('a bug in the printer');
+      stderr(text);
+    };
+    await expect(scene.cli('pool', 'login', '--provider', 'github', '--server', POOL, '--verbose')).rejects.toThrow('a bug in the printer');
+  });
+
   it('adds five seconds on slow_down even after a failed poll', async () => {
     const scene = setting();
     poolAt(scene, { polls: [new HttpResponse(null, { status: 500 }), state('slow_down'), authorized()] });
@@ -981,6 +992,9 @@ describe('oars pool deposit', () => {
       expect(printed).toContain(`No exclusion terms file at ${missing}`);
       expect(printed).toContain('OARS_EXCLUSION_TERMS');
 
+      const json = await poolDeposit(scene.h.deps, { server: POOL });
+      expect(json.document).toMatchObject({ ok: true, termsFile: missing });
+
       // With the file there, the line is gone.
       writeFileSync(missing, 'zorblax\n');
       scene.h.out.length = 0;
@@ -1206,6 +1220,23 @@ ${user('and goes on', stamp(agentHours))}
       await deposited(scene);
       expect(scene.document()).toMatchObject({ sessions: 1, batched: 1, notEnded: 0 });
       expect(outboxFiles(scene)).toHaveLength(1);
+    });
+
+    it('builds a days-old session captured a minute ago for a person at once, but the sender waits the hold window from capture', async () => {
+      const scene = setting();
+      rmSync(join(scene.staged.projectsRoot, 'proj'), { recursive: true, force: true });
+      addProject(scene.staged, FOLDER, MAIN, [user('an old request', new Date(END - 48 * HOUR).toISOString())]);
+      await deposit(scene.staged.runtime, { allow: [FOLDER], redactDomains: [], now: () => END - 60_000 });
+      settle(scene.staged.projectsRoot, END - 49 * HOUR);
+      settle(join(scene.staged.storeDir, 'raw'), END - 49 * HOUR);
+      await signIn(scene);
+      scene.h.deps.now = () => END;
+      const early = await poolDeposit(scene.h.deps, { server: POOL, covenant: 'v1' });
+      expect(early.document).toMatchObject({ sessions: 1, batched: 0, notEnded: 1 });
+      expect(outboxFiles(scene)).toEqual([]);
+      scene.h.deps.now = () => END - 60_000 + HOUR;
+      const later = await poolDeposit(scene.h.deps, { server: POOL, covenant: 'v1' });
+      expect(later.document).toMatchObject({ sessions: 1, batched: 1, notEnded: 0 });
     });
 
     it('counts a captured subagent that has no root as not built', async () => {
