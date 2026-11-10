@@ -44,9 +44,17 @@ describe('waitUntilFree', () => {
       });
     });
     // Windows refuses to move a folder a live process has as its working directory; elsewhere the move works and the wait is a single try, so the proof is the Windows one.
-    if (process.platform === 'win32') expect(() => renameSync(folder, `${folder}.held`)).toThrow();
+    if (process.platform === 'win32') {
+      expect(() => {
+        renameSync(folder, `${folder}.held`);
+      }).toThrow();
+    }
     const waiting = waitUntilFree(folder);
-    const closed = new Promise<void>((resolve) => child.on('close', () => resolve()));
+    const closed = new Promise<void>((resolve) => {
+      child.on('close', () => {
+        resolve();
+      });
+    });
     child.stdin.end();
     await closed;
     expect(await waiting).toBe(`${folder}.free`);
