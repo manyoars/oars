@@ -2,7 +2,7 @@
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Monday is 0. */
-const weekdayOf = (day: Date): number => (day.getUTCDay() + 6) % 7;
+export const weekdayOf = (day: Date): number => (day.getUTCDay() + 6) % 7;
 
 /** The ISO week a moment falls in, as `YYYY-Www`. The year is the Thursday's, so 2021-01-03 is 2020-W53 and 2024-12-30 is 2025-W01. */
 export const isoWeekOf = (ms: number): string => {

@@ -7,7 +7,7 @@ import { countryOf, covenantAccept, covenantNotAccepted, covenantStatus, deposit
 import { answer, bound, brake, notConfigured, refuse, type Env } from './http.js';
 import { receivePart } from './parts.js';
 import { heldBy, recount, repoKeysOf, signalStatements } from './cluster-store.js';
-import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf } from './ingest.js';
+import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf, shapeOf, weekStatements } from './ingest.js';
 import { loginGone, loginPoll, loginStart, logout } from './identity.js';
 import { hashHosts, hashKey } from './ingest-hash.js';
 import { activate, callerOf, enroll, list, machineScope, revoke, rotate, type Caller } from './machines.js';
@@ -84,6 +84,9 @@ const storeDeposit = async (env: Env, caller: Caller, secret: string, text: stri
   // A row held at `none` that now counts is a write too, though its cells are unchanged: its date was never set, and this resend is what sets it.
   const written = netCellCount(next, previous?.increments) + (previous?.none === true && tier !== 'none' ? 1 : 0);
   const countedAt = batchCounts(tier, skeleton, written) ? Date.now() : null;
+  // The moment the row will hold as `counted_at` (the upsert below keeps the first one while the batch still counts), which is the week the deposit counts in on a board.
+  const heldAt = previous?.countedAt ?? null;
+  const countsAt = written === 0 ? heldAt : countedAt === null ? null : (heldAt ?? countedAt);
   const ingest = crypto.randomUUID();
   // One statement, so two deposits at once cannot both take the last of either limit. A redeposit replaces its own row: it adds no row, so it passes the count at the limit, and only its new size counts against the budget.
   const insert = env.DB.prepare(
@@ -99,6 +102,7 @@ const storeDeposit = async (env: Env, caller: Caller, secret: string, text: stri
       ? []
       : [env.DB.prepare('UPDATE machines SET last_deposit_day = ? WHERE id = ? AND EXISTS (SELECT 1 FROM deposits WHERE account = ? AND id = ? AND ingest = ?)').bind(arrived.toISOString().slice(0, 10), machine.id, account, skeleton.id, ingest)]),
     ...incrementStatements(env, account, skeleton.id, ingest, arrived.toISOString().slice(0, 10), next, previous?.increments),
+    ...weekStatements(env, account, skeleton.id, ingest, heldAt === null || previous?.shape === undefined ? null : { at: heldAt, shape: previous.shape }, countsAt === null ? null : { at: countsAt, shape: shapeOf(skeleton) }),
     ...signalStatements(env, account, [account, skeleton.id, ingest], arrived, repoKeysOf(skeleton)),
   ]);
   if ((inserted?.meta.changes ?? 0) === 0) {
