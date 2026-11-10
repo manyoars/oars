@@ -282,6 +282,8 @@ describe('the public text states facts only', () => {
     expect(text).toContain(NOT_OPEN);
     expect(text).toContain('%APPDATA%');
     expect(text).toContain('~/.config');
+    expect(text).toContain('After you accept the covenant, a deposit may be licensed and sold under it.');
+    expect(text).toContain('The pool is not offered in the EU, the EEA, or the UK.');
     expect(text).toContain('session-commons/review');
   });
 
@@ -315,6 +317,9 @@ describe('the public text states facts only', () => {
     for (const off of ['oars telemetry off', 'OARS_TELEMETRY=0', 'DO_NOT_TRACK=1']) expect(leaves).toContain(off);
     expect(leaves).toContain('closed until its covenant opens them');
     expect(leaves).toContain('licensed and sold');
+    expect(leaves).toContain('your harness sends that to its model');
+    expect(leaves).toContain('pool.manyoars.com');
+    expect(leaves).toContain('OARS_POOL_URL');
     expect(leaves).toContain('not offered in the EU, the EEA, or the UK');
     expect(leaves).toContain('docs/telemetry.md');
     expect(text).toContain(NOT_OPEN);
