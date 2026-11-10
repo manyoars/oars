@@ -35,6 +35,10 @@
 // Version 33 (CAPTURE 33) adds the optional `names` to a tool call (`argNamesOf`, `call-shape.ts`): the name tokens its values hold, each with its kind, never a value. It changes no value captured before; an older store's next deposit captures every transcript again,
 // and a call of an older record has none.
 //
+// Version 34 (CAPTURE 34) adds the optional `templates` to a shell call (`templatesOf`, `call-shape.ts`): one template per command, its program, subcommand, and flags with every literal argument as a typed slot, never an argument; and the optional `diffShape` to an
+// edit (`diffShapeOf`): the shapes of the change from a closed list, never its text. It changes no value captured
+// before; an older store's next deposit captures every transcript again, and a call of an older record has none.
+//
 // Version 31 (CAPTURE 31) writes a Codex `token_count` event's `input` and `output` only when the event reported them, as the cache categories already were, so a partial event leaves the other
 // unobserved and not a measured zero (`usageObserved`). It changes a stored value of a Codex session; an older store's next deposit captures every transcript again.
 //
@@ -112,12 +116,12 @@
 // organization domains the operator names. The skeleton holds hashes only.
 
 import type { CanonicalAction } from './actions.js';
-import type { ArgClass, ArgFeature, ArgName, ArgValue, ChangeKind, TargetClass } from './call-shape.js';
+import type { ArgClass, ArgFeature, ArgName, ArgValue, ChangeKind, DiffShape, TargetClass } from './call-shape.js';
 import type { RepoSize } from './public-vocabulary.js';
 import type { SessionFunnel, SessionSetup, SessionTrust } from './session-shape.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '33';
+export const CAPTURE_VERSION = '34';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
@@ -584,6 +588,10 @@ export interface ToolObservation {
   argValues?: ArgValue[];
   /** The name tokens of the call's values (`argNamesOf`), sorted by kind and name: a file's name, a folder's name below the root, a variable's name, a flag value that is a name, a custom agent's name; never a value. Absent when it holds none and on a record captured before CAPTURE 33. Class A. */
   names?: ArgName[];
+  /** One template per command of a shell call (`templatesOf`): its program, subcommand, and flags, as written and masked by the redactor, and every literal argument as a slot of `TEMPLATE_SLOTS`; never an argument. Absent when the call holds no command and on a record captured before CAPTURE 34. Class A. */
+  templates?: string[];
+  /** What an edit did (`diffShapeOf`), a sorted set of `DIFF_SHAPES` members: `file-written` for a write, else the shapes of the old and new text; never the text. Absent on a call that is no edit, an edit that changes nothing, and a record captured before CAPTURE 34. Class A. */
+  diffShape?: DiffShape[];
   /** What changed from the previous call of the same tool in the same prompt (`changeKindOf`), a sorted set of `CHANGE_KINDS` members. Absent on the first such call and on a record captured before CAPTURE 27. Class P. */
   changeKind?: ChangeKind[];
   /** The class of a failed call (`errorCodeOf`): a member of `ERROR_CODES`, never result text. Absent on a call that did not fail and on a record captured before CAPTURE 14. Class P. */

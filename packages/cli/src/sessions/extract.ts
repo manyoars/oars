@@ -7,7 +7,7 @@ import { posix } from 'node:path';
 import { ACTION_TABLES, actionOf, shellOf, type ActionTable, type CanonicalAction } from './actions.js';
 import { exploreCount, strataOf } from './strata.js';
 import { closedFrame, frameIdOf, repoFilesFromIndex, repoSizeOf, stackOf, utcDay } from './frame.js';
-import { argClassOf, argFeaturesOf, argNamesOf, argValuesOf, changeKindOf, targetClassOf, variableOf, type CommandWords, type ComparedCall } from './call-shape.js';
+import { argClassOf, argFeaturesOf, argNamesOf, argValuesOf, changeKindOf, diffShapeOf, targetClassOf, templatesOf, variableOf, type CommandWords, type ComparedCall } from './call-shape.js';
 import { CLOSED_ARG_VALUES, LITERAL, type RepoSize } from './public-vocabulary.js';
 import { linkSteps } from './graph.js';
 import { callIdentity, shellIdentity, UNREAD_SHELL, type WordOfCommand } from './identity.js';
@@ -792,6 +792,9 @@ const substitutionEnd = (text: string, from: number, first: string, budget: { le
   return stack.length === 0 ? at : -1;
 };
 
+/** What an unquoted word holds before its first quote when it is an assignment or a joined long flag: `API_REGION=` and `--region=`, with whatever unquoted text follows the `=`. */
+const JOINED_PREFIX = /^(?:[A-Za-z_][A-Za-z0-9_]*|--[A-Za-z][A-Za-z0-9_-]*)=/;
+
 /**
  * The command's opaque point: its first single quote, heredoc marker, typographic quote (U+2018 to U+201E), block comment opener (`<#`), or stop-parsing token (`--%`). An unexpanded `$name` can only come from literal text, and
  * these are where literal text begins in either shell, so a word that starts before this point is read as the shell reads it, and every word at or after it is opaque: it holds no variable and no flag value, whatever the reader made
@@ -804,7 +807,7 @@ type ShellDialect = 'posix' | 'powershell';
 
 /**
  * `opaqueFrom` is where that point sits in `text` (-1 for none, 0 for a text that is opaque throughout, as a word an opaque word holds is); left out, it is the first point of the text. A substitution opened inside double quotes
- * lowers it to where it opens, since its end is read by a scan that can close early: every word that starts after it is opaque.
+ * lowers it to where it opens, since its end is read by a scan that can close early: every word that starts after it is opaque, as is every word that starts after an unquoted backtick or an escaped double quote, which count only in a POSIX shell (PowerShell's backtick is its escape).
  */
 const tokenize = (text: string, opaqueFrom?: number, dialect: ShellDialect = 'posix'): ShellToken[] => {
   let opaque = opaqueFrom ?? text.search(OPAQUE_POINT);
@@ -814,6 +817,8 @@ const tokenize = (text: string, opaqueFrom?: number, dialect: ShellDialect = 'po
   const escape = powershell ? '`' : '\\';
   let word = '';
   let quoted = false;
+  // The word's raw source starts with an unquoted `NAME=` or `--flag=` before its first quote: the prefix is as written, whatever the quote makes of the rest.
+  let joined = false;
   let started = false;
   let redirected = false;
   let at = 0;
@@ -829,11 +834,14 @@ const tokenize = (text: string, opaqueFrom?: number, dialect: ShellDialect = 'po
       else {
         const variable = variableOf(text.slice(start, at));
         if (variable !== undefined) held.variable = variable;
+        // A single quote or a substitution after the `=` is an opaque point inside the word (the value is literal text there), so only a plain double-quoted value is read.
+        if (joined && (opaque < 0 || opaque >= at)) held.joined = true;
       }
       tokens.push(held);
     }
     word = '';
     quoted = false;
+    joined = false;
     started = false;
     start = -1;
   };
@@ -849,6 +857,9 @@ const tokenize = (text: string, opaqueFrom?: number, dialect: ShellDialect = 'po
     const char = text.charAt(at);
     const next = text.charAt(at + 1);
     const here = at;
+    if ((char === "'" || char === '"') && !quoted && JOINED_PREFIX.test(word)) joined = true;
+    // An unquoted backtick opens a substitution whose end the reader does not scan for: an escaped quote inside it reads as a bare one, so every word that starts after it is opaque, as after a substitution inside double quotes.
+    if (!powershell && char === '`') opaque = opaque < 0 ? at : Math.min(opaque, at);
     if (char === "'") {
       const stop = singleQuotedEnd(text, at, !powershell);
       word += text.slice(at + 1, stop);
@@ -873,6 +884,8 @@ const tokenize = (text: string, opaqueFrom?: number, dialect: ShellDialect = 'po
         } else if (inner === escape && after === '\n') {
           at += 2;
         } else if (inner === escape && after === '"') {
+          // POSIX reads the escaped quote as data, but the same text under PowerShell (a Codex call is stored as `Bash` whatever shell ran it) ends the string there, so every word after it may be read with the quote state inverted.
+          if (!powershell) opaque = opaque < 0 ? at : Math.min(opaque, at);
           word += '"';
           at += 2;
         } else if (end >= 0) {
@@ -978,7 +991,7 @@ const afterPrelude = (words: readonly ShellWord[]): readonly ShellWord[] => {
   for (;;) {
     const word = words[at];
     if (word === undefined) return [];
-    if (word.quoted) return words.slice(at);
+    if (word.quoted && word.joined !== true) return words.slice(at);
     const name = programOf(word) ?? word.text;
     if (BLOCK_WORDS.has(word.text.toLowerCase()) || ASSIGNMENT.test(word.text)) at += 1;
     else if (assignsCommand(words, at)) at += 2;
@@ -1912,6 +1925,10 @@ export const captureSession = (input: ExtractInput): Capture => {
         const argValues = argValuesOf(native, toolInput, CLOSED_ARG_VALUES);
         // A name is stored as the line's text is: masked at capture, so a credential-shaped folder or file name never reaches the store. The mask has no name shape, so the wire still drops it and counts it.
         const names = argNamesOf(native, toolInput, lineRoot ?? lineCwd, lineCwd, shell?.words ?? [], CLOSED_ARG_VALUES).map(({ kind, name }) => ({ kind, name: redact(name) }));
+        // A template keeps a program, a subcommand, and flags as written and every literal as a slot; its kept words are masked as a name is, and the wire gates each one again.
+        const templates = templatesOf(shell?.words ?? [], redact);
+        // An edit is stored as the shapes of its change from a closed list, read from the old and new text and never kept.
+        const diffShape = diffShapeOf(name, toolInput);
         const compared: ComparedCall = { input: toolInput, target: aimed.target, features: argFeatures, values: argValues };
         const lastKey = `${String(cur?.index ?? null)}\n${String(side)}\n${stored}`;
         const before = lastCall.get(lastKey);
@@ -1937,6 +1954,8 @@ export const captureSession = (input: ExtractInput): Capture => {
           argFeatures,
           ...(argValues.length === 0 ? {} : { argValues }),
           ...(names.length === 0 ? {} : { names }),
+          ...(templates.length === 0 ? {} : { templates }),
+          ...(diffShape.length === 0 ? {} : { diffShape }),
           ...(before === undefined ? {} : { changeKind: changeKindOf(before, compared) }),
           durationMs: null,
           toolUseId: id ?? null,

@@ -1,9 +1,10 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { zstdCompressSync } from 'node:zlib';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PassThrough } from 'node:stream';
+import type { DatabaseSync as FixtureDb } from 'node:sqlite';
 import { vi } from 'vitest';
 import { defaultConfigDir } from '../credentials.js';
 import type { CodexHookRuntime } from './codex-hook.js';
@@ -33,6 +34,24 @@ export const removeHeld = (dir: string): void => {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, DELAY_MS);
     }
   }
+};
+
+/**
+ * A folder a process had as its working directory, or held a file open in, cannot be renamed or removed on Windows until the system has closed that process's handles, which comes a moment after its exit is seen: CI failed
+ * twice on `rm` of a temp home with `EPERM` after the detached child's pid was already gone (`hook-bin-stop.test.ts`, `hook-bin-machine.test.ts`). Renaming the folder is the probe for "no process holds it": it changes nothing the
+ * test reads, fails as removal does while a handle is open, and succeeds the moment the handles are closed, so the wait ends on that condition and not on a delay. Anywhere but Windows the first try succeeds. Returns the folder
+ * to remove (the renamed one), or the folder itself when it is already gone.
+ */
+export const waitUntilFree = async (folder: string): Promise<string> => {
+  if (!existsSync(folder)) return folder;
+  const moved = `${folder}.free`;
+  await vi.waitFor(
+    () => {
+      renameSync(folder, moved);
+    },
+    { timeout: 25_000, interval: 50 },
+  );
+  return moved;
 };
 
 export const cleanup = (): void => {
@@ -98,12 +117,22 @@ export interface FixtureComposer {
   bubbles: FixtureBubble[];
 }
 
+/**
+ * A throwaway fixture database that never waits on the disk. It is written once, closed, and read back in the same test, so durability buys nothing, while every commit that syncs makes the test wait on the disk:
+ * on a CI disk shared by hundreds of workers the sixteen commits of one Cursor fixture took 40 seconds (about 7 ms each on a quiet disk). With no sync and the journal in memory the same fixture takes 1 ms.
+ */
+export const openFixtureDb = async (file: string): Promise<FixtureDb> => {
+  const { DatabaseSync: Database } = await import('node:sqlite');
+  const db = new Database(file);
+  db.exec('pragma synchronous = off; pragma journal_mode = memory');
+  return db;
+};
+
 /** A synthetic Cursor `User` folder: one global store and one workspace store per distinct folder. No real prompt text is ever used here. */
 export const stageCursor = async (root: string, composers: readonly FixtureComposer[]): Promise<string> => {
-  const { DatabaseSync } = await import('node:sqlite');
   const user = join(root, 'Cursor', 'User');
   mkdirSync(join(user, 'globalStorage'), { recursive: true });
-  const global = new DatabaseSync(join(user, 'globalStorage', 'state.vscdb'));
+  const global = await openFixtureDb(join(user, 'globalStorage', 'state.vscdb'));
   global.exec('create table ItemTable (key text unique on conflict replace, value blob); create table cursorDiskKV (key text unique on conflict replace, value blob)');
   // One commit for the whole store: every insert on its own is a synced write, which is where a loaded disk spends this staging's time.
   global.exec('begin');
@@ -148,7 +177,7 @@ export const stageCursor = async (root: string, composers: readonly FixtureCompo
     const dir = join(user, 'workspaceStorage', `ws${String(index++)}`);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'workspace.json'), JSON.stringify({ folder: pathToFileURL(folder).href }));
-    const workspace = new DatabaseSync(join(dir, 'state.vscdb'));
+    const workspace = await openFixtureDb(join(dir, 'state.vscdb'));
     workspace.exec('create table ItemTable (key text unique on conflict replace, value blob)');
     workspace.prepare('insert into ItemTable (key, value) values (?, ?)').run('composer.composerData', JSON.stringify({ allComposers: listed.map((composer) => ({ composerId: composer.id })) }));
     workspace.close();
@@ -211,27 +240,26 @@ export interface RawWorkspace {
 }
 
 export const stageRawCursor = async (root: string, composerDocs: readonly { id: string; document: unknown }[], workspaces: readonly RawWorkspace[]): Promise<string> => {
-  const { DatabaseSync } = await import('node:sqlite');
   const user = join(root, 'Cursor', 'User');
   mkdirSync(join(user, 'globalStorage'), { recursive: true });
-  const global = new DatabaseSync(join(user, 'globalStorage', 'state.vscdb'));
+  const global = await openFixtureDb(join(user, 'globalStorage', 'state.vscdb'));
   global.exec('create table cursorDiskKV (key text unique on conflict replace, value blob)');
   const put = global.prepare('insert into cursorDiskKV (key, value) values (?, ?)');
   for (const composer of composerDocs) put.run(`composerData:${composer.id}`, JSON.stringify(composer.document));
   global.close();
-  workspaces.forEach((workspace, index) => {
+  for (const [index, workspace] of workspaces.entries()) {
     const dir = join(user, 'workspaceStorage', `raw${String(index)}`);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'workspace.json'), JSON.stringify(workspace.json));
     if (workspace.listed === undefined) {
       writeFileSync(join(dir, 'state.vscdb'), 'this is not a database');
-      return;
+      continue;
     }
-    const db = new DatabaseSync(join(dir, 'state.vscdb'));
+    const db = await openFixtureDb(join(dir, 'state.vscdb'));
     db.exec('create table ItemTable (key text unique on conflict replace, value blob)');
     db.prepare('insert into ItemTable (key, value) values (?, ?)').run('composer.composerData', JSON.stringify({ allComposers: workspace.listed.map((composerId) => ({ composerId })) }));
     db.close();
-  });
+  }
   return user;
 };
 
