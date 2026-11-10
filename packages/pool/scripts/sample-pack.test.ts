@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as Exclusion from '../../cli/src/sessions/exclusion.js';
 import { SKELETON_FORMAT, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
@@ -501,6 +502,81 @@ describe('the repository pointer and the outcome (plan S4)', { timeout: 30_000 }
     expect(readFileSync(join(f.out, 'manifest.jsonl'), 'utf8')).not.toContain('s3cret');
   });
 
+  it('reads pointer: null and counts noPointer once for a repository with no origin', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    makeRepo(repo);
+    git(repo, ['remote', 'remove', 'origin']);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'feature'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    const counts = await buildPack(f.runtime, options(f));
+    expect(pointerOf(manifest(f.out)[0])).toBeNull();
+    expect(counts).toMatchObject({ emitted: 1, noPointer: 1 });
+  });
+
+  it('never passes a session branch that reads as an option (--all) to rev-list, and still finds the commit through origin/HEAD', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    const shas = makeRepo(repo);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, '--all'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    const spy = vi.fn(runGit);
+    await buildPack(f.runtime, options(f, { git: spy }));
+    const asked = spy.mock.calls.filter(([, args]) => args[0] === 'rev-list');
+    expect(asked.length).toBeGreaterThan(0);
+    expect(asked.some(([, args]) => args.includes('--all') || args.includes('origin/--all'))).toBe(false);
+    expect(pointerOf(manifest(f.out)[0])).toMatchObject({ commit: shas.onMain });
+  });
+
+  it('reads the working directory of a Codex rollout from session_meta.payload.cwd', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    const shas = makeRepo(repo);
+    const owners = join(f.root, 'owners-pointer.json');
+    writeFileSync(owners, JSON.stringify([{ folder: '*', owner: 'Many Oars Co.', license: null, pointer: true }]));
+    const inRepo = codexRollout().map((entry) => {
+      const payload: unknown = Reflect.get(entry, 'payload');
+      return Reflect.get(entry, 'type') === 'session_meta' && typeof payload === 'object' && payload !== null ? { ...entry, payload: { ...payload, cwd: repo } } : entry;
+    });
+    const counts = await buildPack(await withCodex(f, inRepo), options(f, { owners }));
+    expect(counts).toMatchObject({ emitted: 1, noPointer: 0 });
+    expect(pointerOf(manifest(f.out)[0])).toEqual({ remote: REMOTE, commit: shas.onMain });
+  });
+
+  it.each([
+    ['a local path', (repo: string) => join(repo, '..', 'elsewhere', 'app.git')],
+    ['a file: URL', (repo: string) => pathToFileURL(join(repo, '..', 'elsewhere', 'app.git')).href],
+    ['a URL that holds a key shape', () => 'https://example.com/acme/' + 'AK' + 'IA' + 'IOSFODNN7EXAMPLE' + '.git'],
+  ])('reads pointer: null, counted in noPointer, and writes nothing of the remote for %s', async (_name, remoteOf) => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    makeRepo(repo);
+    const remote = remoteOf(repo);
+    git(repo, ['remote', 'set-url', 'origin', remote]);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'feature'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    const counts = await buildPack(f.runtime, options(f));
+    expect(pointerOf(manifest(f.out)[0])).toBeNull();
+    expect(counts).toMatchObject({ emitted: 1, noPointer: 1 });
+    expect(readFileSync(join(f.out, 'manifest.jsonl'), 'utf8')).not.toContain('elsewhere');
+    expect(readFileSync(join(f.out, 'manifest.jsonl'), 'utf8')).not.toContain('IOSFODNN7EXAMPLE');
+  });
+
+  it('keeps an scp-style remote (git@host:owner/repo.git) as written', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    const shas = makeRepo(repo);
+    git(repo, ['remote', 'set-url', 'origin', 'git@example.com:acme/app.git']);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'feature'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    expect(pointerOf(manifest(f.out)[0])).toEqual({ remote: 'git@example.com:acme/app.git', commit: shas.onFeature });
+  });
+
   // A commit the session made: the Bash call, and the result that names the sha the way `git commit` prints it.
   const committed = (session: string, n: number, branch: string, sha: string): string[] => [
     line({ type: 'assistant', uuid: uuidOf(session, 'a', n), parentUuid: null, isSidechain: false, timestamp: at(n), version: '2.1.300', sessionId: session, requestId: requestOf(session, n), message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: `toolu_${String(n)}`, name: 'Bash', input: { command: 'git commit -m work' } }], usage: { input_tokens: 10, output_tokens: 20 } } }),
@@ -518,6 +594,18 @@ describe('the repository pointer and the outcome (plan S4)', { timeout: 30_000 }
     await stored(f);
     await buildPack(f.runtime, options(f));
     expect(outcomeOf(manifest(f.out)[0])).toEqual({ verify: 'na', commits: [{ sha: shas.onMain.slice(0, 7), landed: true }, { sha: shas.onFeature.slice(0, 7), landed: false }] });
+  });
+
+  it('reads landed: null for every commit when the remote default branch is not set (origin/HEAD unset)', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    const shas = makeRepo(repo);
+    git(repo, ['symbolic-ref', '--delete', 'refs/remotes/origin/HEAD']);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'feature'), ...committed(S(1), 3, 'main', shas.onMain), assistant(S(1), 5, 'done')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    expect(outcomeOf(manifest(f.out)[0])).toMatchObject({ commits: [{ sha: shas.onMain.slice(0, 7), landed: null }] });
   });
 
   it('reads landed: null for a sha the repository does not hold, and still lists it', async () => {
