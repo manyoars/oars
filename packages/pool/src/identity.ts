@@ -279,6 +279,13 @@ const WAITING = new Map([
 
 const closedAccount = (): Response => refuse(403, 'account_closed', 'This account is closed. To reopen it, write to privacy@manyoars.com.');
 
+/** A sign-in the pool refuses because the account is closed. The provider step finished, so the person has shown they control the account: the pool stores the time as `proved_at` (the operator confirms a requester against it, GDPR Art. 12(6)) and answers it with the account, so the person can send both in reply to the operator's request for proof. */
+const provedClosed = async (env: Env, account: string): Promise<Response> => {
+  const provedAt = Date.now();
+  await env.DB.prepare('UPDATE accounts SET proved_at = ? WHERE id = ?').bind(provedAt, account).run();
+  return answer(403, { error: 'account_closed', message: `This account is closed. Your sign-in was recorded at ${new Date(provedAt).toISOString()} as proof that you control it. To make a request about it, write to privacy@manyoars.com; if we asked you for proof, reply with the account and that time.`, account, provedAt });
+};
+
 /** Stores a credential's hash only while the account is open, in one statement, so a close that lands after the check in `closedRefusal` cannot leave a live token on a closed account. False when nothing was written. */
 export const storeToken = async (env: Env, account: string, hash: string, expiresAt: number): Promise<boolean> => {
   const stored = await env.DB.prepare('INSERT INTO tokens (hash, account, expires_at) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM accounts WHERE id = ? AND closed_at IS NULL)').bind(hash, account, expiresAt, account).run();
@@ -286,9 +293,8 @@ export const storeToken = async (env: Env, account: string, hash: string, expire
 };
 
 /** The pool's own credential for an account: only its hash is stored. Also when the table sheds the rows past their expiry, since they sign nobody in. */
-const credentialFor = async (env: Env, signingKey: string, kid: string, account: string, providerCreated: number | undefined): Promise<Response> => {
-  const closed = await closedRefusal(env, account);
-  if (closed !== undefined) return closed;
+export const credentialFor = async (env: Env, signingKey: string, kid: string, account: string, providerCreated: number | undefined): Promise<Response> => {
+  if ((await closedRefusal(env, account)) !== undefined) return provedClosed(env, account);
   const token = randomBytes(32).toString('hex');
   const now = Date.now();
   const expiresAt = now + TOKEN_LIFETIME_MS;
@@ -297,7 +303,7 @@ const credentialFor = async (env: Env, signingKey: string, kid: string, account:
     .bind(account, now, providerCreated ?? null)
     .run();
   await env.DB.prepare('DELETE FROM tokens WHERE expires_at <= ?').bind(now).run();
-  if (!(await storeToken(env, account, hashToken(token), expiresAt))) return closedAccount();
+  if (!(await storeToken(env, account, hashToken(token), expiresAt))) return provedClosed(env, account);
   // Newest first by rowid (the table is a rowid table, so a later credential has a later one); everything past the cap is the oldest and is revoked.
   await env.DB.prepare('DELETE FROM tokens WHERE account = ? AND rowid NOT IN (SELECT rowid FROM tokens WHERE account = ? ORDER BY rowid DESC LIMIT ?)').bind(account, account, LIVE_TOKEN_CAP).run();
   return answer(200, { status: 'authorized', token, account, expiresAt, kid, signingKey: publicKeyOf(signingKey) });

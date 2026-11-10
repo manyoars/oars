@@ -1,0 +1,2 @@
+-- When someone last proved they control the account with a sign-in token (t1094): set by a sign-in the pool refuses because the account is closed, and by `POST /v1/account/proof`. The operator reads it to confirm a requester (GDPR Art. 12(6)) before acting on a request about the account. Milliseconds; null until a proof is made. Erasure keeps it, as part of the sign-in record covenant 6.6(d) keeps.
+ALTER TABLE accounts ADD COLUMN proved_at INTEGER;
