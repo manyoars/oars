@@ -2,7 +2,7 @@
 // Usage: node scripts/changelog-section.mjs <version> [changelog]   (default changelog: packages/cli/CHANGELOG.md)
 // The release-cli workflow uses it for the GitHub Release notes. Exit 1 when the section is missing or empty, 2 on bad usage.
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const DEFAULT_CHANGELOG = fileURLToPath(new URL('../packages/cli/CHANGELOG.md', import.meta.url));
 
@@ -38,4 +38,5 @@ const run = () => {
   }
 };
 
-process.exitCode = run();
+// Only when run as a script, so importing sectionOf never sets the exit code.
+if (import.meta.url === pathToFileURL(process.argv[1]).href) process.exitCode = run();

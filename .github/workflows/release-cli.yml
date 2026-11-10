@@ -152,7 +152,7 @@ jobs:
         run: |
           case "$TAG" in cli-v*) ;; *) echo "::error::$TAG is not a cli-v<semver> tag"; exit 1 ;; esac
           version="${TAG#cli-v}"
-          if ! printf '%s' "$version" | grep -Eq '^(0|[1-9][0-9]*).(0|[1-9][0-9]*).(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'; then
+          if ! printf '%s' "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'; then
             echo "::error::$TAG is not cli-v<semver>"
             exit 1
           fi
