@@ -156,9 +156,9 @@ const redactDecoded = (body: string, redactText: Redactor, injected: InjectedRul
     const next = walk(marked, '');
     return next === parsed ? text : `${text.slice(0, text.length - text.trimStart().length)}${JSON.stringify(next)}${text.slice(text.trimEnd().length)}`;
   };
-  // Plain text follows no tool result: a host a fetch named is kept in that result's line only.
-  const redactPlain = (run: readonly string[]): string => {
-    enter();
+  // A top-level plain-text run follows no tool result: a host a fetch named is kept in that result's line only (a string inside the line is not top level).
+  const redactPlain = (run: readonly string[], top: boolean): string => {
+    if (top) enter();
     return redactText(run.join('\n'));
   };
   // `text` is a whole document, or lines of which some are JSON: the JSON ones are walked, the runs between them take the plain-text path.
@@ -177,11 +177,11 @@ const redactDecoded = (body: string, redactText: Redactor, injected: InjectedRul
         run.push(line);
         continue;
       }
-      if (run.length > 0) out.push(redactPlain(run));
+      if (run.length > 0) out.push(redactPlain(run, top));
       run = [];
       out.push(rewrite(line, parsed, top));
     }
-    if (run.length > 0) out.push(redactPlain(run));
+    if (run.length > 0) out.push(redactPlain(run, top));
     return out.join('\n');
   };
   return redactBlock(body, true);

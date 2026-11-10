@@ -108,9 +108,7 @@ describe('hosts the session itself fetched', () => {
 
   it('keeps a fetched host in that call result only: a plain-text line or a top-level array after it gets none', () => {
     const lines = [call('WebFetch', { url: 'https://docs.example.org/page' }, 'toolu_01KeptKeptKeptKept05'), result('see https://docs.example.org/guide', 'toolu_01KeptKeptKeptKept05'), 'plain line at https://docs.example.org/guide', '["https://docs.example.org/guide"]'];
-    const rows = redactTranscript(lines.join('
-'), [], [], 'k', { fetchedHosts: true }).text.split('
-');
+    const rows = redactTranscript(lines.join('\n'), [], [], 'k', { fetchedHosts: true }).text.split('\n');
     expect(rows[1]).toContain('https://docs.example.org/guide');
     expect(rows[2]).toBe('plain line at https://<host>/guide');
     expect(rows[3]).toBe('["https://<host>/guide"]');
