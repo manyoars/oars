@@ -1087,7 +1087,7 @@ plain
     const HOUR = 60 * 60 * 1000;
     // The harness clock of the command tests: the command reads it as now.
     const END = Date.parse('2026-10-23T00:00:00Z');
-    const user = (text: string): string => JSON.stringify({ type: 'user', sessionId: MAIN, cwd: '/w', timestamp: '2026-06-01T00:00:00Z', message: { role: 'user', content: text } });
+    const user = (text: string, at = '2026-06-01T00:00:00Z'): string => JSON.stringify({ type: 'user', sessionId: MAIN, cwd: '/w', timestamp: at, message: { role: 'user', content: text } });
 
     /** Sets every file under a folder to one time, as the harness's files are when nothing has written them since. */
     const settle = (folder: string, at: number): void => {
@@ -1106,15 +1106,17 @@ plain
     const quiet = async (mainHours: number, agentHours: number): Promise<Quiet> => {
       const scene = setting();
       rmSync(join(scene.staged.projectsRoot, 'proj'), { recursive: true, force: true });
-      addProject(scene.staged, FOLDER, MAIN, [user('a plain request')]);
+      // A session's quiet time is its own last line's, so each line is stamped with the clock its capture ran under.
+      const stamp = (hours: number): string => new Date(END - hours * HOUR).toISOString();
+      addProject(scene.staged, FOLDER, MAIN, [user('a plain request', stamp(mainHours))]);
       const agents = join(scene.staged.projectsRoot, FOLDER, MAIN, 'subagents');
       mkdirSync(agents, { recursive: true });
       const agentFile = join(agents, 'agent-a.jsonl');
-      writeFileSync(agentFile, `${user('the subagent starts')}
+      writeFileSync(agentFile, `${user('the subagent starts', stamp(mainHours))}
 `);
       await deposit(scene.staged.runtime, { allow: [FOLDER], redactDomains: [], now: () => END - mainHours * HOUR });
-      writeFileSync(agentFile, `${user('the subagent starts')}
-${user('and goes on')}
+      writeFileSync(agentFile, `${user('the subagent starts', stamp(mainHours))}
+${user('and goes on', stamp(agentHours))}
 `);
       await deposit(scene.staged.runtime, { allow: [FOLDER], redactDomains: [], now: () => END - agentHours * HOUR });
       settle(scene.staged.projectsRoot, END - 10 * HOUR);
@@ -1146,6 +1148,20 @@ ${user('and goes on')}
       await deposited(scene);
       expect(scene.document()).toMatchObject({ sessions: 1, batched: 0, notEnded: 1, withdrawn: 1 });
       expect(outboxFiles(scene)).toEqual([]);
+    });
+
+    it('builds at once from a store captured a minute ago when every transcript last line is two days old', async () => {
+      const scene = setting();
+      rmSync(join(scene.staged.projectsRoot, 'proj'), { recursive: true, force: true });
+      addProject(scene.staged, FOLDER, MAIN, [user('an old request', new Date(END - 48 * HOUR).toISOString())]);
+      await deposit(scene.staged.runtime, { allow: [FOLDER], redactDomains: [], now: () => END - 60_000 });
+      settle(scene.staged.projectsRoot, END - 49 * HOUR);
+      settle(join(scene.staged.storeDir, 'raw'), END - 49 * HOUR);
+      await signIn(scene);
+      scene.h.deps.now = () => END;
+      await deposited(scene);
+      expect(scene.document()).toMatchObject({ sessions: 1, batched: 1, notEnded: 0 });
+      expect(outboxFiles(scene)).toHaveLength(1);
     });
 
     it('counts a captured subagent that has no root as not built', async () => {

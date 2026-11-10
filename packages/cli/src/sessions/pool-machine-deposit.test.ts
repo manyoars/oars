@@ -54,10 +54,14 @@ const document = async (given: Scene, options: { session?: string; send?: string
 };
 
 const ONE = [{ id: sid(1), day: '01', mode: 'default' }];
+/** Where ONE's only line says it was last active; a clock five hours later is inside `session_idle_hours`, which counts from a session's own last line, not from capture. */
+const LAST_LINE = Date.parse('2026-05-01T01:00:00Z');
+const HOUR = 60 * 60 * 1000;
 
 describe('poolDeposit on a machine', () => {
   it('without machine configuration, a session inside session_idle_hours is not ended: nothing is built', async () => {
     const given = await scene({}, ONE);
+    given.h.deps.now = () => LAST_LINE + 5 * HOUR;
     signedIn(given.staged);
     expect(await document(given)).toMatchObject({ sessions: 1, batched: 0, notEnded: 1 });
     expect(batches(given.staged)).toEqual([]);
@@ -96,7 +100,7 @@ describe('poolDeposit on a machine', () => {
     // The person's deposit: no machine configuration, signed in. Its sweep withdraws a batch of a session the store lost, and only that.
     const person = harness({ OARS_EXCLUSION_TERMS: join(given.staged.root, 'terms.txt'), APPDATA: given.staged.root });
     person.deps.sessions = given.staged.runtime;
-    person.deps.now = Date.now;
+    person.deps.now = () => LAST_LINE + 5 * HOUR;
     signedIn(given.staged);
     await poolDeposit(person.deps, { server: POOL });
     expect(batches(given.staged).filter((name) => !name.includes('a'.repeat(16)))).toHaveLength(1);
