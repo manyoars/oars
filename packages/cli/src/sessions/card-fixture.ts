@@ -46,8 +46,8 @@ export const cardStore = (): Store => {
       commits: index === 0 ? 2 : index === 1 ? 1 : 0,
     }),
   );
-  const codexPrompts = [0, 1, 2].map((index) => prompt('s-codex', index, { ts: index === 2 ? '2026-11-06T09:00:00.000Z' : '2026-11-05T09:00:00.000Z', cls: 'explore', model: 'gpt-5-codex', head: PLANTED.promptText, usage: usage({ output: 100 }) }));
-  const cursorPrompts = [prompt('s-cursor', 0, { ts: '2026-11-06T10:00:00.000Z', cls: 'explore', model: PLANTED.longTailModel, head: PLANTED.promptText, usage: usage({ output: 50 }) })];
+  const codexPrompts = [0, 1, 2].map((index) => prompt('s-codex', index, { ts: index === 2 ? '2026-11-06T09:00:00.000Z' : '2026-11-05T09:00:00.000Z', cls: 'explore-only', model: 'gpt-5-codex', head: PLANTED.promptText, usage: usage({ output: 100 }) }));
+  const cursorPrompts = [prompt('s-cursor', 0, { ts: '2026-11-06T10:00:00.000Z', cls: 'explore-only', model: PLANTED.longTailModel, head: PLANTED.promptText, usage: usage({ output: 50 }) })];
   const oldPrompts = [prompt('s-old', 0, { ts: '2026-10-01T09:00:00.000Z', model: 'claude-haiku-5-5', usage: usage({ output: 7777 }), commits: 5 })];
   const tools: ToolObservation[] = [
     ...Array.from({ length: 10 }, (_, n) => call('s-claude', n, n < 5 ? 'Bash' : 'Read', { status: n >= 1 && n <= 4 ? 'error' : 'ok', toolUseId: `c${String(n)}`, commits: n === 0 ? ['aaa111', null] : n === 1 ? ['bbb222'] : undefined })),

@@ -10,6 +10,8 @@ import type { BooksBy, RecallQuery } from './sessions/query.js';
 import { closedQueryOf, formsRefusal, RECALL_FAMILIES } from './sessions/recall-reads.js';
 import { FAMILIES } from './sessions/read.js';
 import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsGoldArms, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsLineage, sessionsMeasure, sessionsRead, sessionsRecall, sessionsRecallCounts, sessionsVerify, type SessionsDeps } from './sessions/command.js';
+import { sessionsCard } from './sessions/card-command.js';
+import type { CardPeriod } from './sessions/card.js';
 import { gateInstall, gatePolicy, gateReplay, gateReport, gateUninstall } from './gate/command.js';
 import { DEADLINE_MS, gateHook } from './gate/hook.js';
 import { managerReader } from './gate/registry.js';
@@ -182,6 +184,20 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .action(async (keyId: string, _options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       emit(deps, flag(options, 'json'), await keysRevoke(deps, { apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')), keyId }));
+    });
+
+  program
+    .command('card')
+    .description('a share-ready card of your own week, month, or year across every harness, read from your local store only: nothing is uploaded and no folder, path, prompt text, or private name is printed')
+    .option('--week', 'the last 7 days (the default)')
+    .option('--month', 'the last 30 days')
+    .option('--year', 'the last 365 days')
+    .option('--text', 'print the card as a table instead of saving a picture')
+    .option('--out <file>', 'save the card here, as .png or .svg: both are written, one with each extension (default oars-card-<period> in the working directory)')
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      const period: CardPeriod = flag(options, 'year') ? 'year' : flag(options, 'month') ? 'month' : 'week';
+      emit(deps, flag(options, 'json'), await sessionsCard(sessionDeps(deps), { period, text: flag(options, 'text'), out: text(options, 'out') }));
     });
 
   const sessions = program.command('sessions').description("deposit and recall your own coding-agent session logs, locally (these commands make no model call and no network call, except `gold arms`, which asks your own Claude subscription; telemetry is separate: oars telemetry)");
