@@ -26,7 +26,7 @@ const storeOf = (): Pick<EraseStore, 'rows' | 'run'> => ({
 
 const accountId = async (n: number): Promise<string> => (await pool.signIn('github', stubUser(String(n)))).account;
 
-const rowsOf = async (account: string): Promise<unknown[]> => (await db.prepare('SELECT granted_at, granted_by, reason FROM board_standing WHERE account = ?').bind(account).all()).results;
+const rowsOf = async (account: string): Promise<readonly unknown[]> => (await db.prepare('SELECT granted_at, granted_by, reason FROM board_standing WHERE account = ?').bind(account).all()).results;
 
 describe('grantStanding', () => {
   it('writes one row with who, when, and why, and holds on a second grant', async () => {
