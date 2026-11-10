@@ -444,9 +444,10 @@ describe('the acceptance rule (plan S1)', () => {
       const out = join(f.root, `pack-${seed}`);
       const counts = await buildPack(f.runtime, options(f, { seed, out, size: 1 }));
       const singles = new Set(gated.filter((session) => session === S(3) || session === S(4)));
-      // The pair is always asked about (the loser is chosen among it); a single only when the draw reached it.
+      // The pair is always asked about (the loser is chosen among it); a single only when the draw reached it. With size 1 and no other rule firing, a singleton the draw reached is emitted, so the singletons gated are exactly the singletons emitted.
       expect(gated).toEqual(expect.arrayContaining([S(1), S(2)]));
-      expect(singles.size).toBeLessThanOrEqual(counts.scanned);
+      expect([...singles].sort()).toEqual(sessionsOf(f, out).filter((session) => session === S(3) || session === S(4)));
+      expect(counts.emitted).toBe(1);
       expect(gated).toHaveLength(new Set(gated).size);
     }
   });
@@ -557,6 +558,19 @@ describe('the secret scan', () => {
     f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done'), read]);
     await stored(f);
     expect(await buildPack(f.runtime, options(f))).toMatchObject({ secret: 0, emitted: 1 });
+  });
+
+  it('blanks a base64 field only on an image: the same field on a non-image object is scanned as written', async () => {
+    const f = fixture();
+    const planted = 'my' + 'AK' + 'IA' + 'IOSFODNN7EXAMPLE';
+    // A tool's own `base64` input (a bare field, then one beside a non-image media type) is text a person could have typed, so a key shape in it still drops the session.
+    const encode = (session: string, n: number, extra: object): string => line({ type: 'user', uuid: uuidOf(session, 'b', n), parentUuid: null, isSidechain: false, timestamp: at(n), version: '2.1.300', sessionId: session, cwd: repoCwd, message: { role: 'user', content: 'encode this' }, ...extra });
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done'), encode(S(1), 5, { toolUseResult: { base64: planted } })]);
+    f.write('-work-oars', S(2), [user(S(2), 1, 'add a spec'), assistant(S(2), 1, 'done'), encode(S(2), 5, { toolUseResult: { file: { base64: planted, type: 'text/plain' } } })]);
+    f.write('-work-oars', S(3), [user(S(3), 1, 'add a doc'), assistant(S(3), 1, 'done'), encode(S(3), 5, { toolUseResult: { file: { base64: planted, type: 'image/png' } } })]);
+    await stored(f);
+    expect(await buildPack(f.runtime, options(f))).toMatchObject({ secret: 2, emitted: 1 });
+    expect(sessionsOf(f)).toEqual([S(3)]);
   });
 
   it('drops a session whose redacted text still holds a key, writes nothing of it, and counts it', async () => {

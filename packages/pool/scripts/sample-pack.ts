@@ -346,13 +346,15 @@ const placeOf = (key: string, session: string, main: boolean): string => (main ?
 
 /**
  * An image's base64 can hold any shape by chance (the redactor keeps it), so the scan reads the line without it: the `data` of a `type: 'base64'` source, and the `base64` of a Read's
- * `toolUseResult.file`, whose object `type` is the media type. Lines with neither are scanned as written.
+ * `toolUseResult.file`, whose object `type` is the media type (`image/...`). A `base64` field on any other object, and a line with neither, is scanned as written.
  */
 const withoutImageData = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(withoutImageData);
   if (!isRecord(value)) return value;
-  const base64 = Reflect.get(value, 'type') === 'base64';
-  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, typeof item === 'string' && ((base64 && key === 'data') || key === 'base64') ? '' : withoutImageData(item)]));
+  const type: unknown = Reflect.get(value, 'type');
+  const source = type === 'base64';
+  const media = typeof type === 'string' && type.startsWith('image/');
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, typeof item === 'string' && ((source && key === 'data') || (media && key === 'base64')) ? '' : withoutImageData(item)]));
 };
 
 /** The text the secret scan reads: the transcript with every base64 image's data left out. */
