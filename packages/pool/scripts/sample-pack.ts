@@ -332,12 +332,26 @@ const isEmptyOrAbsent = async (folder: string): Promise<boolean> => {
   }
 };
 
-// A candidate id: a uuid, or a `req_`/`call_` id. Any other `word_` prefix is not one, or it would eat the first group of a uuid that follows it (`session_<uuid>`). A candidate is
-// rewritten only when it is a known id, so other words that match are left alone.
-const UUID_OR_PREFIXED = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|(?:req|call)_[0-9A-Za-z]+/gi;
+const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 
-// `accountUuid": "<uuid>` as it reads inside a JSON string, the quotes plain or escaped.
-const QUOTED_UUID = /uuid\\*"\s*:\s*\\*"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi;
+// The harness's own prefixed ids, masked wherever they stand (tool output, a pasted log): `toolu_01...`, `msg_01...`, `req_011C...`. A word like `msg_handler_func` is no id, so the tail must run 16 or more
+// characters and hold a digit, as every id the vendor issues does.
+const HARNESS_PREFIXED = '(?:srvtoolu|toolu|msg|req)_(?=[A-Za-z_-]*[0-9])[A-Za-z0-9][A-Za-z0-9_-]{14,}[A-Za-z0-9]';
+
+// A candidate id: a uuid, a harness-prefixed id, or any `req_`/`call_` token. Any other `word_` prefix is not one, or it would eat the first group of a uuid that follows it (`session_<uuid>`). A uuid or
+// a `call_` token is rewritten only when it is a known id, so other words that match are left alone.
+const UUID_OR_PREFIXED = new RegExp(`${UUID}|(?<![A-Za-z0-9])${HARNESS_PREFIXED}|(?:req|call)_[0-9A-Za-z]+`, 'gi');
+const HARNESS_ID = new RegExp(`^${HARNESS_PREFIXED}$`, 'i');
+const WHOLE_UUID = new RegExp(`^${UUID}$`, 'i');
+
+/** A tool-use id the redactor already masked with `maskOf` (`toolu_` and 24 hex): masking it again would only give the one id a second value. Other prefixes are not skipped: a Codex `call_` id is hex of its own. */
+const MASKED_PREFIXED = /^(?:srv)?toolu_[0-9a-f]{24}$/;
+
+/** The keys whose value is an id besides those ending in `uuid`: Claude Code's `requestId`, Codex's `call_id`, `session_id`, and `forked_from_id`, and the line, request, prompt, delivery, and message ids of the store's own records (t1135). */
+const ID_KEYS: readonly string[] = ['requestId', 'call_id', 'session_id', 'forked_from_id', 'requestRef', 'serverClassifierRequest', 'promptId', 'toolUseID', 'tool_use_id', 'deliveryId', 'delivery_id', 'messageId', 'msg_id'];
+
+// `accountUuid": "<uuid>`, `leafUuid: <id>`, `promptId=<id>` as it reads inside a JSON string or pasted output, the quotes plain, escaped, or absent.
+const QUOTED_ID = new RegExp(`(uuid|${ID_KEYS.join('|')})\\\\*["']?\\s*[:=]\\s*\\\\*["']?([0-9A-Za-z][0-9A-Za-z_-]{7,})`, 'gi');
 
 const isRecord = (value: unknown): value is object => typeof value === 'object' && value !== null;
 
@@ -353,18 +367,28 @@ const cwdsOf = (text: string): Set<string> => {
   return found;
 };
 
-/** The keys whose value is an id: Claude Code's `uuid`, `parentUuid`, `leafUuid`, ... and `requestId`, and Codex's `call_id`, `session_id`, and `forked_from_id`. */
-const isIdKey = (key: string): boolean => /uuid$/i.test(key) || ['requestId', 'call_id', 'session_id', 'forked_from_id'].includes(key);
+/** The keys whose value is an id: Claude Code's `uuid`, `parentUuid`, `leafUuid`, ... and the keys in `ID_KEYS`. */
+const isIdKey = (key: string): boolean => /uuid$/i.test(key) || ID_KEYS.includes(key);
 
-/** The line ids a transcript carries: the value of every id key at any depth, and a Codex `session_meta` line's own `id` (a bare `id` is no id key elsewhere). */
-const lineIdsOf = (value: unknown, found: Set<string>): void => {
+/** Whether the uuid and prefixed-token patterns reach `id` whole; any other id (an opaque `ref-7f3a...`) needs a pattern of its own. */
+const reachedWhole = (id: string): boolean => WHOLE_UUID.test(id) || HARNESS_ID.test(id) || /^(?:req|call)_[0-9A-Za-z]+$/i.test(id);
+
+/** An id worth masking by its value: a uuid or prefixed token, or an opaque token of 8 or more characters with a digit in it (a word like `undefined` is no id). */
+const looksLikeId = (value: string): boolean => reachedWhole(value) || (value.length >= 8 && /[0-9]/.test(value) && /^[0-9A-Za-z][0-9A-Za-z._-]*$/.test(value));
+
+/**
+ * The line ids a transcript carries, each with the key it stood under: the value of every id key at any depth, a Codex `session_meta` line's own `id`, and the `id` of an `api-request` line (a bare `id` is
+ * no id key elsewhere: a tool call's `id` is a `toolu_` id the redactor already masks).
+ */
+const lineIdsOf = (value: unknown, found: Map<string, string>): void => {
   if (Array.isArray(value)) for (const item of value) lineIdsOf(item, found);
   else if (isRecord(value)) {
     const payload: unknown = Reflect.get(value, 'payload');
-    const own: unknown = Reflect.get(value, 'type') === 'session_meta' && isRecord(payload) ? Reflect.get(payload, 'id') : undefined;
-    if (typeof own === 'string') found.add(own);
+    const type: unknown = Reflect.get(value, 'type');
+    const own: unknown = type === 'session_meta' && isRecord(payload) ? Reflect.get(payload, 'id') : undefined;
+    if (typeof own === 'string') found.set(own, 'session_meta.id');
     for (const [key, item] of Object.entries(value)) {
-      if (typeof item === 'string' && isIdKey(key)) found.add(item);
+      if (typeof item === 'string' && (isIdKey(key) || (key === 'id' && type === 'api-request'))) found.set(item, key);
       else lineIdsOf(item, found);
     }
   }
@@ -395,24 +419,51 @@ const parsed = (line: string): unknown => {
 };
 
 /**
- * One id under the keyed index, shaped as the id it stands for: a line uuid stays a uuid and a prefixed id (`req_`, `call_`) keeps its prefix.
- * The same function as the match id, so a buyer's masks are stable across packs and no one without the index key can test an id against them.
+ * One id under the keyed index, shaped as the id it stands for: a line uuid stays a uuid, a prefixed id (`req_`, `call_`) keeps its prefix, and any other id becomes hex of its own length (8 to 64).
+ * The same function as the match id, so a buyer's masks are stable across packs and no one without the index key can test an id against them. One raw id has one mask, whatever key it stood under.
  */
 const maskOf = (indexKey: string, buyerKey: string, id: string): string => {
   const hex = matchIdOf(buyerKey, serverKeyOf(indexKey, id));
   const prefix = /^([A-Za-z]+)_/.exec(id)?.[1];
-  return prefix !== undefined ? `${prefix}_${hex.slice(0, 24)}` : `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+  if (prefix !== undefined) return `${prefix}_${hex.slice(0, 24)}`;
+  if (WHOLE_UUID.test(id)) return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+  return hex.slice(0, Math.min(Math.max(id.length, 8), 64));
 };
 
-/** Every store session id (to its match id) and every line id the texts carry, rewritten wherever it occurs: the `sessionId` field, a path, a typed mention. Other text is left alone. */
-const maskIds = (texts: readonly string[], sessions: ReadonlyMap<string, string>, indexKey: string, buyerKey: string): string[] => {
-  const lineIds = new Set<string>();
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** One pattern matching each of `ids` wherever it stands as a whole token, longest first; null when there are none. */
+const wholeTokens = (ids: readonly string[]): RegExp | null => {
+  const longestFirst = [...ids].sort((a, b) => b.length - a.length);
+  return longestFirst.length === 0 ? null : new RegExp(`(?<![A-Za-z0-9])(?:${longestFirst.map(escapeRegExp).join('|')})(?![A-Za-z0-9])`, 'g');
+};
+
+interface IdMasker {
+  /** The text with every known id rewritten. */
+  mask: (text: string) => string;
+  /** Every raw id the session's texts carry as an id, and every store session id, with the key it stood under: what the post-build scan looks for. */
+  known: ReadonlyMap<string, string>;
+}
+
+/**
+ * Every store session id (to its match id) and every line id the texts carry, rewritten wherever it occurs: the `sessionId` field, a path, a typed mention. A harness-prefixed id (`toolu_`, `msg_`, `req_`) is
+ * masked wherever it stands, known or not. A uuid that no line carries as an id stays: it may be the person's own data. Other text is left alone.
+ */
+const idMaskerOf = (texts: readonly string[], sessions: ReadonlyMap<string, string>, indexKey: string, buyerKey: string): IdMasker => {
+  const found = new Map<string, string>();
   for (const text of texts) {
-    for (const line of text.split('\n')) lineIdsOf(parsed(line), lineIds);
-    // A key ending in `uuid` inside a quoted settings file or tool output: no line carries it as a key, but its value is the same kind of id.
-    for (const [, id] of text.matchAll(QUOTED_UUID)) if (id !== undefined) lineIds.add(id);
+    for (const line of text.split('\n')) lineIdsOf(parsed(line), found);
+    // A key ending in `uuid` (or another id key) inside a quoted settings file or tool output: no line carries it as a key, but its value is the same kind of id.
+    for (const [, key, id] of text.matchAll(QUOTED_ID)) if (key !== undefined && id !== undefined) found.set(id, key);
   }
-  return texts.map((text) => text.replace(UUID_OR_PREFIXED, (id) => sessions.get(id) ?? (lineIds.has(id) ? maskOf(indexKey, buyerKey, id) : id)));
+  // An id this module already masked (the redactor masks `toolu_` ids with the same function) is kept as it is: masking it again would give the one id a second value.
+  const lineIds = new Map([...found].filter(([id]) => looksLikeId(id) && !MASKED_PREFIXED.test(id)));
+  const opaque = wholeTokens([...lineIds.keys()].filter((id) => !reachedWhole(id) && !sessions.has(id)));
+  const mask = (text: string): string => {
+    const whole = opaque === null ? text : text.replace(opaque, (id) => maskOf(indexKey, buyerKey, id));
+    return whole.replace(UUID_OR_PREFIXED, (id) => sessions.get(id) ?? (lineIds.has(id) || (HARNESS_ID.test(id) && !MASKED_PREFIXED.test(id)) ? maskOf(indexKey, buyerKey, id) : id));
+  };
+  return { mask, known: new Map([...lineIds, ...[...sessions.keys()].map((session): [string, string] => [session, 'session'])]) };
 };
 
 /** The text of a user message's content, or undefined when it has none to type: a message of only tool results (the harness answering the model) and an image with no words carry nothing the person wrote. Text sent beside a tool result is the person's, so it counts. */
@@ -972,7 +1023,8 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
       counts.objected += 1;
       continue;
     }
-    const masked = maskIds(texts, sessionIds, indexKey, options.buyerKey);
+    const masker = idMaskerOf(texts, sessionIds, indexKey, options.buyerKey);
+    const masked = texts.map(masker.mask);
     // After redaction and masking, before the first byte is written: a session with a hit leaves no file, manifest row, or index row.
     if ([...masked, skeletonText].some((text) => secretIn(scannable(text)) !== undefined)) {
       counts.secret += 1;
