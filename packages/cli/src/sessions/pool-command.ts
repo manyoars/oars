@@ -12,14 +12,14 @@ import { makeCoverage, readCoverageSetting, writeCoverageSetting } from './cover
 import { checkSession, exclusionPaths, lastWritten, loadTerms, transcriptFilesOf, type Reason } from './exclusion.js';
 import { localNames, makeRedactor, REDACTION_VERSION, redactTranscript } from './redact.js';
 import { recordSend, recordWire, newTally, tallyBatch } from '../telemetry/wire.js';
-import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, lockedBatch, machineKeys, markShown, noteMachineKey, outboxFolder, partsOf, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
+import { discardStale, FIELD_ROWS, fieldsOf, heldAcross, lockedAcross, rescanPulled, machineKeys, markShown, noteMachineKey, outboxFolder, partsOf, pulledAt, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
 import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, unpinnedKid, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
 import { carriedDeltas, heldDeltas, keptDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { rawAllowed, rawStale, sendsOf } from './pool-choices.js';
 import { heldRaw, rawParts, removeRawExcept, writeRaw } from './pool-raw.js';
 import { SendLockBusy, withSendLock } from './pool-send-lock.js';
-import { markSent, sentLog } from './pool-sent.js';
+import { markSent, retirePulled, sentLog } from './pool-sent.js';
 import { shellReader } from './projection.js';
 import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
 import { contentHash, FIRST_ORDER_FAMILIES } from './read.js';
@@ -424,6 +424,9 @@ export const postRaw = async (deps: RunDeps, options: { server: string; token: s
 const rawNote = (consent: string | null): string =>
   consent === 'granted' ? '' : consent === 'declined' ? 'You answered no to the raw prompt; oars pool raw --consent yes changes it.' : 'None is queued until you answer the raw prompt with oars pool raw --consent yes.';
 
+/** The exclusion terms in force now, re-read from the term file each time it is asked: empty when the file is missing or unreadable. */
+export const currentTerms = (deps: RunDeps): Promise<string[]> => loadTerms(exclusionPaths(runtimeOf(deps).projectsRoot, deps.env).terms);
+
 /** `deposit --send <hash>`: the send lock the detached sender (hook-bin.js nightly) takes too, then a skip for a hash already in `sent.log`, then the batch lock, then the covenant (accepted here or before, or nothing is sent), then the request. The body is read and hashed again just before the request. */
 const sendBatch = async (deps: RunDeps, options: { outbox: string; server: string; token: string; hash: string; acceptCovenant: string | undefined; via: Sender | undefined }): Promise<Outcome> => {
   const { outbox, server, token, hash } = options;
@@ -434,14 +437,22 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
     return await withSendLock(outbox, async () => {
       // The rule the nightly follows: a hash `sent.log` holds is not posted again. Read under the lock, so two runs cannot both see it unsent.
       const sentAt = (await sentLog(outbox)).get(hash);
-      if (sentAt !== undefined) return { document: { ok: true, server, hash, sent: false, sentAt }, text: `already sent ${hash} at ${sentAt}` };
-      const locked = await lockedBatch(outbox, hash);
+      if (sentAt !== undefined) {
+        await retirePulled(outbox, DEPOSIT);
+        return { document: { ok: true, server, hash, sent: false, sentAt }, text: `already sent ${hash} at ${sentAt}` };
+      }
+      // A pulled batch is rescanned first: one that holds a term of the file now is removed, and with no terms to check against none is sent.
+      const scan = await rescanPulled(outbox, await currentTerms(deps));
+      if (scan.removed.includes(hash)) throw refuse('term_excluded', 'This batch holds a term of your exclusion list now, so it was removed from the outbox and not sent.');
+      const locked = await lockedAcross(outbox, hash);
       if (!locked.ok) throw refuse(locked.code, lockMessages[locked.code]);
+      if (!scan.open && (await heldAcross(outbox)).batches.some((batch) => batch.hash === hash && batch.pulled)) throw refuse('terms_missing', 'This batch was held by a cloud session, and your exclusion term file is missing or empty, so it cannot be checked and was not sent.');
       await openCovenant(deps, server, token, options.acceptCovenant, via);
       const bytes = await unchangedBytes(locked.file, hash);
       if (bytes === undefined) throw refuse('batch_changed', lockMessages.batch_changed);
       await postBatch(deps, { server, token, bytes, hash, via });
       await markSent(outbox, hash, deps.now());
+      await retirePulled(outbox, DEPOSIT);
       return { document: { ok: true, server, hash, sent: true }, text: `Sent batch ${hash} to ${server}.` };
     });
   } catch (error) {
@@ -614,7 +625,7 @@ export const poolDeposit = async (
   // The batch of a session or account this store no longer holds goes too. A machine builds one session at a time and nothing here has the others in hand, so it sweeps nothing: nothing is withdrawn but what a gate refused.
   if (machine === undefined) {
     // The batches a machine's Stop built in this outbox are not this pass's to withdraw: their keys cannot be recomputed here. The key log is read after the folder is listed, so a batch a machine writes during the sweep is already in it.
-    counts.withdrawn += await removeBatchesExcept(outbox, async () => new Set([...built, ...(await machineKeys(outbox))]));
+    counts.withdrawn += await removeBatchesExcept(outbox, async () => new Set([...built, ...(await machineKeys(outbox)), ...(await pulledAt(outbox))]));
     await removeRawExcept(outbox, new Set([...rawKept, ...(await machineKeys(outbox))]));
   }
   await scanned.save();
@@ -657,7 +668,7 @@ export const poolOutbox = async (deps: RunDeps, options: { server?: string | und
   const server = poolServer(deps.env, OUTBOX, options.server);
   const { token } = await signedIn(deps, runtime.storeDir, server, OUTBOX);
   const outbox = outboxFolder(runtime.storeDir, server);
-  const { batches, edited } = await heldBatches(outbox);
+  const { batches, edited } = await heldAcross(outbox);
   const masker = new Masker();
   masker.add(token);
   const sent = await sentLog(outbox);
