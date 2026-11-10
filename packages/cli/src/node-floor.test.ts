@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MIN_NODE, exitIfTooOld, nodeFloorMessage } from './node-floor.js';
 import pkg from '../package.json' with { type: 'json' };
+import clientPkg from '../../client/package.json' with { type: 'json' };
 
 describe('the Node floor', () => {
   it('says the one line on an older Node', () => {
@@ -29,5 +30,8 @@ describe('the Node floor', () => {
   });
   it('matches engines.node', () => {
     expect(pkg.engines.node).toBe(`>=${MIN_NODE}`);
+  });
+  it('the client package states the same Node floor as the CLI, so installing the CLI on the floor prints no engine warning', () => {
+    expect(clientPkg.engines.node).toBe(pkg.engines.node);
   });
 });

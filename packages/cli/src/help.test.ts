@@ -29,6 +29,10 @@ describe('help text states what the code does', () => {
     expect(await helpOf('sessions', 'deposit')).toContain('is hard-linked or copied into the oars archive');
   });
 
+  it('the sessions line names `oars sessions try` as the way to see it on made-up sessions', async () => {
+    expect(await helpOf()).toContain('see it on made-up sessions: oars sessions try');
+  });
+
   it('the program line says coding-agent sessions, not Claude Code sessions', async () => {
     const text = await helpOf();
     expect(text).toContain('a local, searchable record of your own coding-agent sessions');

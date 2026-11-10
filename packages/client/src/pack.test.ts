@@ -61,7 +61,7 @@ describe('the publish fields', () => {
       repository: { type: 'git', url: 'git+https://github.com/manyoars/oars.git', directory: 'packages/client' },
       homepage: 'https://manyoars.com/',
       publishConfig: { access: 'public' },
-      engines: { node: '>=24' },
+      engines: { node: '>=22.23.4' },
     });
     expect(manifest()).not.toHaveProperty('private');
   });
