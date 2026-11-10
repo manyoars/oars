@@ -1111,7 +1111,7 @@ const richSkeleton = (id: string): unknown => {
   for (const held of helper.tools) held.steps.forEach((spawned) => Object.assign(spawned, { agentType: 'acme-agent', parent: 0 }));
   skeleton.transcripts.push(helper);
   skeleton.deltas.push({ deltaKind: 'removed', field: 'package', name: 'acme-pkg-9', registry: 'acme-registry', metric: 'callsPerSession', change: 1 });
-  Object.assign(skeleton, { timingPrint: '5555555555555a5a', acmeExtra: 'acme-extra-field', recommendations: [{ id: 'feedfacecafebeef', arm: 'shown', poolVersion: '2026-11-04T10:11:12.123Z', from: 0, to: 1 }] });
+  Object.assign(skeleton, { claimed: { hostClass: 'ci', launcher: 'scheduled' }, timingPrint: '5555555555555a5a', acmeExtra: 'acme-extra-field', recommendations: [{ id: 'feedfacecafebeef', arm: 'shown', poolVersion: '2026-11-04T10:11:12.123Z', from: 0, to: 1 }] });
   return skeleton;
 };
 
