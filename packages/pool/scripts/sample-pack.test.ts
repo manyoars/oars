@@ -234,6 +234,22 @@ describe('the command line', () => {
     expect(printed.join('\n')).toMatch(/inside a git repository/);
   });
 
+  it('refuses an owners folder inside a git repository, since the operator index lands beside it, and writes nothing', async () => {
+    const f = fixture();
+    mkdirSync(join(f.root, 'repo', '.git'), { recursive: true });
+    const owners = join(f.root, 'repo', 'owners.json');
+    writeFileSync(owners, JSON.stringify(OWNERS));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    const printed: string[] = [];
+    const code = await main(['--terms', f.terms, '--owners', owners, '--index-key', f.indexKey, '--buyer-key', 'sample', '--out', f.out], { runtime: f.runtime, print: (text) => printed.push(text) });
+    expect(code).toBe(2);
+    expect(printed.join('\n')).toMatch(/owners file.*inside a git repository/);
+    expect(existsSync(join(f.root, 'repo', 'index.jsonl'))).toBe(false);
+    expect(existsSync(f.out)).toBe(false);
+    expect(existsSync(`${f.out}.partial`)).toBe(false);
+  });
+
   it('prints the usage when a required option is missing', async () => {
     const f = fixture();
     const printed: string[] = [];
@@ -250,7 +266,7 @@ describe('what a buyer can join on', () => {
     f.write('-work-oars', S(2), [user(S(2), 1, 'run the build'), assistant(S(2), 1, 'green')]);
     await stored(f);
     expect((await buildPack(f.runtime, options(f))).emitted).toBe(2);
-    const raw = [S(1), S(2), uuidOf(S(1), 'b', 1), uuidOf(S(1), 'a', 1), uuidOf(S(1), 'b', 3), requestOf(S(1), 1), requestOf(S(1), 3)];
+    const raw = [S(1), S(2), uuidOf(S(1), 'b', 1), uuidOf(S(1), 'a', 1), uuidOf(S(1), 'a', 3), uuidOf(S(1), 'b', 3), uuidOf(S(2), 'b', 1), uuidOf(S(2), 'a', 1), requestOf(S(1), 1), requestOf(S(1), 3), requestOf(S(2), 1)];
     for (const file of [join(f.out, 'manifest.jsonl'), join(f.out, 'pack.json'), ...packFiles(f.out)]) {
       const text = readFileSync(file, 'utf8');
       for (const id of raw) expect(text, `${id} in ${file}`).not.toContain(id);

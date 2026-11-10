@@ -201,6 +201,8 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   // Built here and renamed to `out` at the end, so a run that stops partway leaves no half pack where a finished one belongs.
   const partial = `${out}.partial`;
   if (insideRepository(out)) throw new PackError('The output folder is inside a git repository. Choose one outside every repository: a pack is never committed.');
+  // `index.jsonl` (session id to match id) is appended beside the owners file, so that folder is held to the same rule as the pack: the map must never be committed.
+  if (insideRepository(dirname(resolve(options.owners)))) throw new PackError('The owners file is inside a git repository, and the operator index is written beside it. Move the owners file outside every repository.');
   if (!(await isEmptyOrAbsent(out))) throw new PackError('The output folder is not empty. Choose a new folder, so one pack never mixes with another.');
   if (!(await isEmptyOrAbsent(partial))) throw new PackError(`An unfinished pack from an earlier run is at ${partial}. Delete it, then run again.`);
   const owners = parseOwners(await readFile(options.owners, 'utf8'));
