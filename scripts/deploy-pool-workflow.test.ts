@@ -39,7 +39,10 @@ describe('deploy-pool workflow', () => {
     expect(on).toMatch(/workflow_run:\n\s+workflows: \[ci\]\n\s+types: \[completed\]\n\s+branches: \[main\]/);
     expect(on).toMatch(/\n {2}workflow_dispatch:/);
     // ci completes on failure and cancel too: only success deploys. A dispatch has no ci run to read.
-    expect(workflow).toMatch(/if: github\.event_name == 'workflow_dispatch' \|\| github\.event\.workflow_run\.conclusion == 'success'/);
+    // A ci run on a pull request from a fork branch named main also matches `branches: [main]`: only a push to this repository deploys.
+    expect(workflow).toContain(
+      "if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository)",
+    );
   });
 
   it('never cancels a running deploy', () => {
@@ -127,8 +130,9 @@ describe('deploy-pool workflow', () => {
     // GET /v1/covenant answers with no sign-in: 200 {version: null, accepted: false} while deposits are closed.
     expect(smoke).toContain('--fail');
     expect(smoke).toContain('--retry');
-    expect(smoke).toContain('accepted');
-    expect(smoke).toContain('version');
+    // The checks themselves, not just the words: a step that checks neither must fail this test.
+    expect(smoke).toContain('a.accepted !== false');
+    expect(smoke).toContain('!("version" in a)');
   });
 
   it('writes the sha, the version, the highest migration, and the smoke answer to the job summary', () => {

@@ -32,8 +32,9 @@ concurrency:
 
 jobs:
   deploy:
-    # ci also completes on failure and cancel: only success deploys.
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    # ci also completes on failure and cancel: only success deploys. ci runs on pull requests too, and `branches: [main]` matches a fork's
+    # branch named main: only a push to this repository starts the job, so the environment's secrets are never in reach of a fork.
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository)
     # GitHub-hosted runners only: this repository is public.
     runs-on: ubuntu-latest
     timeout-minutes: 20
