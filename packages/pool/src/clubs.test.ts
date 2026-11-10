@@ -455,6 +455,28 @@ describe('the brakes on guessing a code and on making clubs', () => {
     await createClub(maker.token, 'maker', 'Real crew');
   });
 
+  it('holds under a burst: 15 wrong codes at once give at most 10 misses and the rest 429, and 8 creates at once make at most 5 clubs', async () => {
+    const guesser = await member();
+    const answers = await Promise.all(Array.from({ length: 15 }, (_, n) => join(guesser.token, `BURST${String(n)}`, 'bow')));
+    expect(answers.filter((one) => one.status === 404)).toHaveLength(10);
+    expect(answers.filter((one) => one.status === 429)).toHaveLength(5);
+    expect(await db.prepare("SELECT COUNT(*) AS n FROM club_attempts WHERE account = ? AND kind = 'guess'").bind(guesser.account).first('n')).toBe(10);
+    const maker = await member();
+    const consent = (await consents()).club;
+    const made = await Promise.all(Array.from({ length: 8 }, (_, n) => pool.post('/v1/clubs', { name: `Burst ${String(n)}`, nickname: `maker${String(n)}`, consent }, maker.token)));
+    expect(made.filter((one) => one.status === 201)).toHaveLength(5);
+    expect(made.filter((one) => one.status === 429)).toHaveLength(3);
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM clubs c JOIN club_members m ON m.club = c.id WHERE m.account = ?').bind(maker.account).first('n')).toBe(5);
+  });
+
+  it('gives back the reservation when the code is right, so right codes never use up the guesses', async () => {
+    const owner = await member();
+    const club = await createClub(owner.token);
+    const guesser = await member();
+    expect((await join(guesser.token, club.code, 'bow')).status).toBe(200);
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM club_attempts WHERE account = ?').bind(guesser.account).first('n')).toBe(0);
+  });
+
   it('keeps no more than a day of an account\'s attempts', async () => {
     const guesser = await member();
     await join(guesser.token, 'OLDONE', 'bow');
