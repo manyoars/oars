@@ -492,29 +492,31 @@ describe('withSendLock', () => {
     const times = { staleMs: 1000, waitMs: 3000, pollMs: 5 };
     let inside = 0;
     let overlapped = false;
-    let bLooked = (): void => undefined;
-    const bLookedAtLock = new Promise<void>((resolve) => {
-      bLooked = resolve;
+    let decided = (): void => undefined;
+    const takeoverDecided = new Promise<void>((resolve) => {
+      decided = resolve;
     });
     const body = async (hold: Promise<void>): Promise<void> => {
       inside += 1;
       overlapped ||= inside > 1;
+      // A second holder means the takeover let B in: release A so the run records the overlap instead of hanging.
+      if (inside > 1) decided();
       await hold;
       inside -= 1;
     };
-    // A is a live holder that stays until B's first stale look has been answered (a signal, not a sleep). B reads A's lock as stale (a stale clock for B's first look only). A takeover that moved the lock aside would be held at its next look until C has taken the free path and is running, so two senders would overlap; the guard takeover never moves it.
-    const live = withSendLock(outbox, () => body(bLookedAtLock), times);
+    // A is a live holder that stays inside until B's takeover is decided: B's second look at the lock (the re-look under the takeover guard) has read the real mtime. B's first look reports the lock stale (a stale clock for that look only). A takeover that
+    // trusts that stale look removes the live lock, so B and C get in beside A; the re-look finds A's lock fresh and keeps it. Signals replace sleeps, and a broken product releases A through the body instead of hanging.
+    const live = withSendLock(outbox, () => body(takeoverDecided), times);
     while (inside === 0) await new Promise((resolve) => setTimeout(resolve, 2));
     const real = await import('node:fs/promises');
     let lookedAtLock = 0;
     const second: LockFs = {
       stat: async (path) => {
         const { mtimeMs } = await real.stat(path);
-        if (path === lock && lookedAtLock === 0) {
-          lookedAtLock += 1;
-          bLooked();
-          return { mtimeMs: mtimeMs - 60_000 };
-        }
+        if (path !== lock) return { mtimeMs };
+        lookedAtLock += 1;
+        if (lookedAtLock === 1) return { mtimeMs: mtimeMs - 60_000 };
+        if (lookedAtLock === 2) decided();
         return { mtimeMs };
       },
     };
