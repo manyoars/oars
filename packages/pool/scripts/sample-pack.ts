@@ -14,8 +14,9 @@ import { bucketOf, floorOf, sessionsOf, skeletonOf, type SessionSkeleton, type S
 import { shellReader } from '../../cli/src/sessions/projection.js';
 import { contentHash } from '../../cli/src/sessions/read.js';
 import { localNames, makeRedactor, redactTranscript, REDACTION_VERSION } from '../../cli/src/sessions/redact.js';
-import { harnessOf, type Harness } from '../../cli/src/sessions/schema.js';
+import { harnessOf, type Harness, type PromptVerify } from '../../cli/src/sessions/schema.js';
 import { loadStore, readRedactDomains, readSkeletons, type SessionsRuntime } from '../../cli/src/sessions/store.js';
+import { runGit, type Git } from '../../cli/src/sessions/survival.js';
 import { vocabulary } from '../../cli/src/sessions/vocab-load.js';
 
 export const USAGE = [
@@ -67,6 +68,26 @@ export interface OwnerRule {
   folder: string;
   owner: string;
   license: string | null;
+  /** The owner opts in to the repository pointer and the outcome block (plan S4): a private remote names the repository and a sha names private work, so nothing is read or shipped without it. */
+  pointer: boolean;
+}
+
+/** Where a session started, read at pack time because the store holds only a salted hash. `commit` is null when no branch of the session and no default branch holds a commit from before it began. */
+export interface RepositoryPointer {
+  remote: string;
+  commit: string | null;
+}
+
+/** One commit the session made (the sha as the shell printed it) and whether the remote's default branch holds it now; null when that cannot be told (the sha is not in the repository, or the remote has no default branch ref). */
+export interface OutcomeCommit {
+  sha: string;
+  landed: boolean | null;
+}
+
+/** A block, not a score: the last prompt's verify, and where each commit went. */
+export interface Outcome {
+  verify: PromptVerify | null;
+  commits: OutcomeCommit[];
 }
 
 /** No session id: a buyer holds only the match id, and the operator's `index.jsonl` maps one to the other. */
@@ -86,6 +107,10 @@ export interface ManifestRow {
   turns: number;
   /** The file beside the transcripts that holds the session's skeleton. */
   skeleton: string;
+  /** Only for an owner who opted in: null when the repository cannot be found (counted in `noPointer`). */
+  pointer?: RepositoryPointer | null;
+  /** Only for an owner who opted in. */
+  outcome?: Outcome;
   redactionVersion: string;
   startedAt: string | null;
   endedAt: string | null;
@@ -101,6 +126,8 @@ export interface PackOptions {
   seed: string;
   /** User plus assistant turns a session needs to be taken; plan S1 sets 20. */
   minTurns: number;
+  /** Runs one read-only git command, as `oars pool deposit` takes `options.git ?? runGit`; a test injects its own. */
+  git?: Git | undefined;
 }
 
 export interface PackCounts {
@@ -119,6 +146,8 @@ export interface PackCounts {
   duplicate: number;
   /** The store holds no skeleton for the session (captured before steps and frames, or with no root), so it has none to pack. */
   noSkeleton: number;
+  /** An emitted session of an owner who opted in whose repository could not be found, so its `pointer` is null. */
+  noPointer: number;
   /** Dropped because the redacted, masked text still held something shaped like a key (`secretIn`); nothing of the session was written. */
   secret: number;
   emitted: number;
@@ -136,7 +165,7 @@ export class PackError extends Error {}
 
 const isText = (value: unknown): value is string => typeof value === 'string';
 
-/** The owners file: a JSON list, each entry a folder glob, an owner, and a license or null. A malformed entry stops the run rather than leaving a session unowned or owned by the wrong entry. */
+/** The owners file: a JSON list, each entry a folder glob, an owner, a license or null, and optionally `"pointer": true`. A malformed entry stops the run rather than leaving a session unowned or owned by the wrong entry. */
 export const parseOwners = (text: string): OwnerRule[] => {
   const parsed: unknown = JSON.parse(text);
   if (!Array.isArray(parsed)) throw new PackError('The owners file must be a JSON list.');
@@ -150,7 +179,10 @@ export const parseOwners = (text: string): OwnerRule[] => {
     if (!isText(folder) || folder === '') throw new PackError(`Owners entry ${String(at + 1)} has no folder.`);
     if (!isText(owner) || owner.trim() === '') throw new PackError(`Owners entry ${String(at + 1)} has no owner.`);
     if (license !== null && !isText(license)) throw new PackError(`Owners entry ${String(at + 1)} needs a license string or null.`);
-    return { folder, owner, license };
+    const raw = field('pointer');
+    const pointer = raw === undefined ? false : raw;
+    if (typeof pointer !== 'boolean') throw new PackError(`Owners entry ${String(at + 1)} needs pointer to be true or false.`);
+    return { folder, owner, license, pointer };
   });
 };
 
@@ -480,6 +512,127 @@ export const censusOf = (rows: readonly ManifestRow[], skeletons: readonly Sessi
   return { sessions: rows.length, harness: sorted(tallies.harness), harnessVersion: sorted(tallies.harnessVersion), model: sorted(tallies.model), errorCode: sorted(tallies.errorCode), recovery: sorted(tallies.recovery), intervention: sorted(tallies.intervention), promptClass: sorted(tallies.promptClass), turnBucket: sorted(tallies.turnBucket) };
 };
 
+const CWD_SCAN_LINES = 200;
+
+/** A line's working directory: a Claude Code line's `cwd`, or a Codex `session_meta`'s `payload.cwd`. */
+const cwdOfLine = (text: string): string | undefined => {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (!isRecord(parsed)) return undefined;
+    const top: unknown = Reflect.get(parsed, 'cwd');
+    if (isText(top) && top !== '') return top;
+    const payload: unknown = Reflect.get(parsed, 'payload');
+    const inner: unknown = isRecord(payload) ? Reflect.get(payload, 'cwd') : undefined;
+    return isText(inner) && inner !== '' ? inner : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/** The first working directory in the raw main transcript, as the harness wrote it: a redacted copy may have changed the path. A later `cd` moves `cwd`, so only the head is read. */
+const firstCwd = async (path: string): Promise<string | undefined> => {
+  const stream = createReadStream(path, { encoding: 'utf8' });
+  const reader = createInterface({ input: stream, crlfDelay: Infinity });
+  let read = 0;
+  try {
+    for await (const text of reader) {
+      read += 1;
+      if (read > CWD_SCAN_LINES) break;
+      const cwd = cwdOfLine(text);
+      if (cwd !== undefined) return cwd;
+    }
+    return undefined;
+  } finally {
+    reader.close();
+    stream.destroy();
+  }
+};
+
+/** The folder git is asked in: the working directory while it exists; else the repository the nearest existing ancestor sits in (a removed worktree sat inside, or beside, the repository it was made from). */
+const repositoryRoot = async (git: Git, cwd: string): Promise<string | null> => {
+  if (existsSync(cwd)) return cwd;
+  let ancestor = dirname(cwd);
+  while (!existsSync(ancestor)) {
+    const parent = dirname(ancestor);
+    if (parent === ancestor) return null;
+    ancestor = parent;
+  }
+  try {
+    const top = (await git(ancestor, ['rev-parse', '--show-toplevel'])).trim();
+    return top === '' ? null : top;
+  } catch {
+    return null;
+  }
+};
+
+/** A remote URL can carry a user name or token (`https://user:token@host/...`); neither is a pointer. A form that is not a URL (`git@host:path`, a folder) is kept as written. */
+const withoutCredentials = (remote: string): string => {
+  try {
+    const url = new URL(remote);
+    if (url.username === '' && url.password === '') return remote;
+    url.username = '';
+    url.password = '';
+    return url.href;
+  } catch {
+    return remote;
+  }
+};
+
+/** Git reads `--before` as a date; epoch seconds cannot be misread as a day, a zone, or a locale. */
+const epochOf = (ts: string): string => String(Math.floor(Date.parse(ts) / 1000));
+
+/** The newest commit from before `tsFirst`: on each of the session's own branches (local, then `origin/`), then on the remote's default branch. Never `HEAD`, which is whatever is checked out now. */
+const startingCommit = async (git: Git, root: string, branches: readonly string[], tsFirst: string | null): Promise<string | null> => {
+  if (tsFirst === null || Number.isNaN(Date.parse(tsFirst))) return null;
+  const before = `--before=${epochOf(tsFirst)}`;
+  const refs = [...branches.filter((branch) => branch !== '' && !branch.startsWith('-')).flatMap((branch) => [branch, `origin/${branch}`]), 'origin/HEAD'];
+  for (const ref of refs) {
+    try {
+      const found = (await git(root, ['rev-list', '-1', before, ref, '--'])).trim();
+      if (found !== '') return found;
+    } catch {
+      // A ref this repository does not have: the next one.
+    }
+  }
+  return null;
+};
+
+const pointerOf = async (git: Git, root: string, branches: readonly string[], tsFirst: string | null): Promise<RepositoryPointer | null> => {
+  try {
+    const remote = withoutCredentials((await git(root, ['remote', 'get-url', 'origin'])).trim());
+    return remote === '' ? null : { remote, commit: await startingCommit(git, root, branches, tsFirst) };
+  } catch {
+    return null;
+  }
+};
+
+/** Whether the remote's default branch holds each sha now (`git branch -r --contains`); null for one it cannot say, never false by default. */
+const landedOf = async (git: Git, root: string | null, shas: readonly string[]): Promise<OutcomeCommit[]> => {
+  let fallback: string | null = null;
+  if (root !== null) {
+    try {
+      fallback = (await git(root, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])).trim();
+    } catch {
+      fallback = null;
+    }
+  }
+  const unsaid = (sha: string): OutcomeCommit => ({ sha, landed: null });
+  const said: OutcomeCommit[] = [];
+  for (const sha of shas) {
+    if (root === null || fallback === null || fallback === '') {
+      said.push(unsaid(sha));
+      continue;
+    }
+    try {
+      const holding = (await git(root, ['branch', '-r', '--contains', sha])).split('\n').map((name) => name.trim());
+      said.push({ sha, landed: holding.includes(fallback) });
+    } catch {
+      said.push(unsaid(sha));
+    }
+  }
+  return said;
+};
+
 type StoredSession = Awaited<ReturnType<typeof loadStore>>['sessions'][number];
 type HarnessRow = NonNullable<(typeof HARNESS_TERMS)[Harness]>;
 
@@ -510,6 +663,21 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   const roots = new Map<string, TranscriptRoot>((await readSkeletons(runtime.storeDir, undefined, true)).skeletons.map(({ session, merkleRoot, leaves }) => [session, { merkleRoot, leaves }]));
   const recordsOf = new Map(sessionsOf(store, roots).map((records) => [records.main.session, records]));
   const read = shellReader(vocabulary());
+  const git = options.git ?? runGit;
+  // The outcome block's inputs, read from the store only when some owner opted in: each main session's last prompt, and the shas its own shell calls made (a subagent's are not attributed to it).
+  const lastVerify = new Map<string, { index: number; verify: PromptVerify | null }>();
+  const madeBy = new Map<string, string[]>();
+  if (owners.some((owner) => owner.pointer)) {
+    for (const prompt of store.prompts) {
+      if ((lastVerify.get(prompt.session)?.index ?? -1) < prompt.index) lastVerify.set(prompt.session, { index: prompt.index, verify: prompt.verify ?? null });
+    }
+    for (const tool of store.tools) {
+      if (tool.side || tool.session !== tool.parent) continue;
+      const shas = madeBy.get(tool.session) ?? [];
+      for (const sha of tool.commits ?? []) if (sha !== null && !shas.includes(sha)) shas.push(sha);
+      madeBy.set(tool.session, shas);
+    }
+  }
   const frame = store.sessions.filter((session) => session.userTurns > 0);
   // Every session the store knows, so a transcript that names another session names it by that session's match id.
   const sessionIds = new Map(store.sessions.map((session) => [session.session, matchIdOf(options.buyerKey, serverKeyOf(indexKey, session.session))]));
@@ -521,7 +689,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   }
   const order = (session: string): string => createHash('sha256').update(`${options.seed}\n${session}`).digest('hex');
   const drawn = frame.map((session) => ({ session, rank: order(session.session) })).sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0));
-  const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, tooShort: 0, noRepo: 0, duplicate: 0, noSkeleton: 0, secret: 0, emitted: 0 };
+  const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, tooShort: 0, noRepo: 0, duplicate: 0, noSkeleton: 0, noPointer: 0, secret: 0, emitted: 0 };
   const turnsOf = (session: { userTurns: number; assistantTurns: number }): number => session.userTurns + session.assistantTurns;
   // The rules up to the repository one, once per session: the duplicate rule asks them only of the members of a group that shares a first prompt, the draw of the sessions it reaches; a singleton the draw never reaches is never gated.
   const earlyBy = new Map<string, Promise<Early>>();
@@ -596,6 +764,15 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     bytes += Buffer.byteLength(skeletonText);
     await writeFile(join(partial, 'sessions', matchId, SKELETON_FILE), skeletonText);
     skeletons.push(skeleton);
+    let opted: Pick<ManifestRow, 'pointer' | 'outcome'> = {};
+    if (owner.pointer) {
+      const main = files.find((file) => file.main);
+      const cwd = main === undefined ? undefined : await firstCwd(main.path);
+      const root = cwd === undefined ? null : await repositoryRoot(git, cwd);
+      const pointer = root === null ? null : await pointerOf(git, root, record.branches, record.tsFirst);
+      if (pointer === null) counts.noPointer += 1;
+      opted = { pointer, outcome: { verify: lastVerify.get(record.session)?.verify ?? null, commits: await landedOf(git, pointer === null ? null : root, madeBy.get(record.session) ?? []) } };
+    }
     index.push({ pack: out, session: record.session, project: record.project, matchId });
     rows.push({
       matchId,
@@ -610,6 +787,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
       models: modelsOf(skeleton),
       turns: turnsOf(record),
       skeleton: SKELETON_FILE,
+      ...opted,
       redactionVersion: REDACTION_VERSION,
       startedAt: record.tsFirst,
       endedAt: record.tsLast,

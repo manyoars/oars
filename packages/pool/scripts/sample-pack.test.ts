@@ -512,7 +512,7 @@ describe('the repository pointer and the outcome (plan S4)', { timeout: 30_000 }
     f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'feature'), ...committed(S(1), 3, 'main', shas.onMain), ...committed(S(1), 5, 'feature', shas.onFeature), assistant(S(1), 7, 'done')]);
     await stored(f);
     await buildPack(f.runtime, options(f));
-    expect(outcomeOf(manifest(f.out)[0])).toEqual({ verify: 'none', commits: [{ sha: shas.onMain.slice(0, 7), landed: true }, { sha: shas.onFeature.slice(0, 7), landed: false }] });
+    expect(outcomeOf(manifest(f.out)[0])).toEqual({ verify: 'na', commits: [{ sha: shas.onMain.slice(0, 7), landed: true }, { sha: shas.onFeature.slice(0, 7), landed: false }] });
   });
 
   it('reads landed: null for a sha the repository does not hold, and still lists it', async () => {
