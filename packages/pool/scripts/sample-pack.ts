@@ -1,10 +1,11 @@
 // The first sale's sample pack (P98 (10) to (12)): a local folder of an operator's own sessions, for the operator to read before any buyer sees one.
 // Nothing here sends anything: it reads a sessions store and the harness's transcripts, and writes one folder that must sit outside every repository.
-// Order, per session: the exclusion gate (A38) first, then a known owner and known harness terms, then the copy, with every injected block stripped.
+// Order, per session: the exclusion gate (A38) first, then a known owner and known harness terms, the turn floor, a repository, and no duplicate, then the copy, with every injected block stripped.
 import { createHash, createHmac } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
 import { appendFile, mkdir, readdir, readFile, rename, rmdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
+import { createInterface } from 'node:readline';
 import { dirname, join, resolve } from 'node:path';
 import { defaultConfigDir } from '../../cli/src/credentials.js';
 import { checkSession, transcriptFilesOf, type Reason } from '../../cli/src/sessions/exclusion.js';
@@ -13,13 +14,14 @@ import { harnessOf, type Harness } from '../../cli/src/sessions/schema.js';
 import { loadStore, readRedactDomains, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 
 export const USAGE = [
-  'Usage: sample-pack --terms <file> --owners <file> --index-key <file> --buyer-key <key> --out <dir> [--size <n>] [--seed <text>]',
+  'Usage: sample-pack --terms <file> --owners <file> --index-key <file> --buyer-key <key> --out <dir> [--size <n>] [--seed <text>] [--min-turns <n>]',
   '  --terms <file>       the exclusion term list (one term per line; a local file, never in a repository)',
   '  --owners <file>      JSON list of {"folder": "<glob over the project folder name>", "owner": "<company>", "license": "<SPDX id>" | null}; first match wins, and a session in a folder no entry names is left out',
   '  --index-key <file>   the matching-index key (64 hex characters or more): a session\'s server key is HMAC-SHA-256 of its id under it. Keep it; a new key gives every session new ids',
   '  --buyer-key <key>    the buyer\'s key: a match id is HMAC-SHA-256 of the server key under it',
   '  --out <dir>          an empty or new folder outside every git repository',
   '  --size <n>           sessions to emit (default 25); --seed <text> orders the draw (default 1)',
+  '  --min-turns <n>      a session needs at least this many turns, user plus assistant (default 20); a shorter one is left out and counted',
   'Reads the store under APPDATA (or XDG_CONFIG_HOME) and the transcripts under CLAUDE_CONFIG_DIR or ~/.claude. Builds in <out>.partial and renames it to --out when done,',
   'and appends each session id and its match id to index.jsonl beside the owners file: the operator\'s only map from one to the other.',
 ].join('\n');
@@ -77,6 +79,8 @@ export interface PackOptions {
   out: string;
   size: number;
   seed: string;
+  /** User plus assistant turns a session needs to be taken; plan S1 sets 20, and Matt confirms the count. */
+  minTurns: number;
 }
 
 export interface PackCounts {
@@ -87,6 +91,12 @@ export interface PackCounts {
   excluded: { term: number; noRaw: number; noTerms: number; unreadable: number };
   noOwner: number;
   noHarnessTerms: number;
+  /** Under `minTurns` user plus assistant turns. */
+  tooShort: number;
+  /** No repository recorded for the session. */
+  noRepo: number;
+  /** A resumed session that replays another's first prompt line and is the shorter of the two. */
+  duplicate: number;
   emitted: number;
 }
 
@@ -191,6 +201,44 @@ const maskIds = (texts: readonly string[], sessions: ReadonlyMap<string, string>
   return texts.map((text) => text.replace(UUID_OR_REQUEST, (id) => sessions.get(id) ?? (lineIds.has(id) ? maskOf(indexKey, buyerKey, id) : id)));
 };
 
+/** What a resumed session shares with the one it continues: its first user line, as the harness replays it, without the session id it rewrites. Undefined when the transcript has no user line. */
+const firstPromptKey = async (path: string): Promise<string | undefined> => {
+  const stream = createReadStream(path, { encoding: 'utf8' });
+  const lines = createInterface({ input: stream, crlfDelay: Infinity });
+  try {
+    for await (const text of lines) {
+      const entry = parsed(text);
+      if (isRecord(entry) && Reflect.get(entry, 'type') === 'user') return JSON.stringify(Object.entries(entry).filter(([key]) => key !== 'sessionId'));
+    }
+    return undefined;
+  } finally {
+    lines.close();
+    stream.destroy();
+  }
+};
+
+interface TurnCount {
+  session: string;
+  project: string;
+  turns: number;
+}
+
+/** The sessions that lose to a longer one replaying their first prompt line (a tie goes to the lower session id), so the rule gives the same lot whichever of the two the draw reaches first. */
+const duplicatesOf = async (runtime: SessionsRuntime, candidates: readonly TurnCount[]): Promise<Set<string>> => {
+  const groups = new Map<string, TurnCount[]>();
+  for (const candidate of candidates) {
+    const main = (await transcriptFilesOf(runtime, candidate.project, candidate.session)).find((file) => file.main);
+    const key = main === undefined ? undefined : await firstPromptKey(main.path);
+    if (key !== undefined) groups.set(key, [...(groups.get(key) ?? []), candidate]);
+  }
+  const losers = new Set<string>();
+  for (const group of groups.values()) {
+    const [winner] = [...group].sort((a, b) => b.turns - a.turns || (a.session < b.session ? -1 : 1));
+    for (const member of group) if (member !== winner) losers.add(member.session);
+  }
+  return losers;
+};
+
 const EXCLUDED: { readonly [reason in Exclude<Reason, 'clean'>]: keyof PackCounts['excluded'] } = { term: 'term', 'no-raw': 'noRaw', 'no-terms': 'noTerms', unreadable: 'unreadable' };
 
 /** Where a transcript goes under the session's folder: `main.jsonl`, or its path under the session (`subagents/agent-x.jsonl`). */
@@ -217,7 +265,9 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   const sessionIds = new Map(store.sessions.map((session) => [session.session, matchIdOf(options.buyerKey, serverKeyOf(indexKey, session.session))]));
   const order = (session: string): string => createHash('sha256').update(`${options.seed}\n${session}`).digest('hex');
   const drawn = frame.map((session) => ({ session, rank: order(session.session) })).sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0));
-  const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, emitted: 0 };
+  const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, tooShort: 0, noRepo: 0, duplicate: 0, emitted: 0 };
+  const turnsOf = (session: { userTurns: number; assistantTurns: number }): number => session.userTurns + session.assistantTurns;
+  let losers: Set<string> | undefined;
   const rows: ManifestRow[] = [];
   const index: IndexRow[] = [];
   await mkdir(partial, { recursive: true });
@@ -238,6 +288,23 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     const terms = HARNESS_TERMS[harness];
     if (terms === undefined) {
       counts.noHarnessTerms += 1;
+      continue;
+    }
+    if (turnsOf(record) < options.minTurns) {
+      counts.tooShort += 1;
+      continue;
+    }
+    if (record.repo === null) {
+      counts.noRepo += 1;
+      continue;
+    }
+    // Read once, on the first session that gets this far, over every session the earlier cheap rules leave: a duplicate's other half may not be drawn at all.
+    losers ??= await duplicatesOf(
+      runtime,
+      frame.filter((session) => turnsOf(session) >= options.minTurns && session.repo !== null).map((session) => ({ session: session.session, project: session.project, turns: turnsOf(session) })),
+    );
+    if (losers.has(record.session)) {
+      counts.duplicate += 1;
       continue;
     }
     const matchId = matchIdOf(options.buyerKey, serverKeyOf(indexKey, record.session));
@@ -268,7 +335,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     counts.emitted += 1;
   }
   await writeFile(join(partial, 'manifest.jsonl'), rows.map((row) => `${JSON.stringify(row)}\n`).join(''));
-  await writeFile(join(partial, 'pack.json'), `${JSON.stringify({ built: new Date().toISOString(), size: options.size, seed: options.seed, redactionVersion: REDACTION_VERSION, counts }, null, 2)}\n`);
+  await writeFile(join(partial, 'pack.json'), `${JSON.stringify({ built: new Date().toISOString(), size: options.size, seed: options.seed, minTurns: options.minTurns, redactionVersion: REDACTION_VERSION, counts }, null, 2)}\n`);
   // Outside the pack, beside the owners file, and appended, so it maps every pack built from that folder. Written before the rename, so a pack under `out` always has its rows.
   await appendFile(join(dirname(resolve(options.owners)), 'index.jsonl'), index.map((row) => `${JSON.stringify(row)}\n`).join(''));
   // An empty `out` was allowed above, and a folder is renamed only onto a free name.
@@ -282,7 +349,7 @@ export interface Io {
   print: (text: string) => void;
 }
 
-const VALUED = new Set(['--terms', '--owners', '--index-key', '--buyer-key', '--out', '--size', '--seed']);
+const VALUED = new Set(['--terms', '--owners', '--index-key', '--buyer-key', '--out', '--size', '--seed', '--min-turns']);
 
 const parseArgs = (argv: readonly string[]): PackOptions | string => {
   const values = new Map<string, string>();
@@ -295,7 +362,9 @@ const parseArgs = (argv: readonly string[]): PackOptions | string => {
   if (terms === undefined || owners === undefined || indexKey === undefined || buyerKey === undefined || out === undefined) return 'Missing a required option.';
   const size = Number(values.get('--size') ?? '25');
   if (!Number.isInteger(size) || size < 1) return '--size takes a whole number of 1 or more.';
-  return { terms, owners, indexKey, buyerKey, out, size, seed: values.get('--seed') ?? '1' };
+  const minTurns = Number(values.get('--min-turns') ?? '20');
+  if (!Number.isInteger(minTurns) || minTurns < 1) return '--min-turns takes a whole number of 1 or more.';
+  return { terms, owners, indexKey, buyerKey, out, size, seed: values.get('--seed') ?? '1', minTurns };
 };
 
 /** The command: 0 when the pack was written, 2 on a usage or input error (nothing written), with counts only on success: no term, path, or transcript text. */
@@ -312,7 +381,7 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
       [
         `Wrote ${String(counts.emitted)} sessions to ${options.out} (manifest.jsonl, sessions/<match id>/).`,
         `Scanned ${String(counts.scanned)} of ${String(counts.frame)} in draw order. Excluded: ${String(term)} for a term, ${String(noRaw)} with no raw, ${String(noTerms)} with no term file, ${String(unreadable)} unreadable.`,
-        `Left out after the gate: ${String(counts.noOwner)} in a folder no owner entry names, ${String(counts.noHarnessTerms)} from a harness with no terms row.`,
+        `Left out after the gate: ${String(counts.noOwner)} in a folder no owner entry names, ${String(counts.noHarnessTerms)} from a harness with no terms row, ${String(counts.tooShort)} under ${String(options.minTurns)} turns, ${String(counts.noRepo)} with no repository, ${String(counts.duplicate)} replaying a longer session.`,
       ].join('\n'),
     );
     return 0;
