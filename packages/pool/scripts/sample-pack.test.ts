@@ -262,12 +262,13 @@ describe('what a buyer can join on', () => {
     const lines = readFileSync(join(f.out, 'sessions', matchId, 'main.jsonl'), 'utf8')
       .split('\n')
       .filter((text) => text !== '')
-      .map((text): { sessionId?: string; uuid?: string; parentUuid?: string | null; requestId?: string } => JSON.parse(text));
+      .map((text): unknown => JSON.parse(text));
+    const field = (entry: unknown, name: string): unknown => (typeof entry === 'object' && entry !== null ? Reflect.get(entry, name) : undefined);
     // Each line names the session by its match id, and the masked parent still names the masked line before it.
-    expect(lines.map((entry) => entry.sessionId)).toEqual([matchId, matchId, matchId]);
-    expect(lines[1]?.parentUuid).toBe(lines[0]?.uuid);
-    expect(lines[0]?.uuid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
-    expect(lines[1]?.requestId).toMatch(/^req_[0-9a-f]{24}$/);
+    expect(lines.map((entry) => field(entry, 'sessionId'))).toEqual([matchId, matchId, matchId]);
+    expect(field(lines[1], 'parentUuid')).toBe(field(lines[0], 'uuid'));
+    expect(field(lines[0], 'uuid')).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(field(lines[1], 'requestId')).toMatch(/^req_[0-9a-f]{24}$/);
     // Another session the text names is masked to that session's own match id, so the buyer sees the link but not the id.
     expect(JSON.stringify(lines[2])).toContain(index.find((row) => row.session === S(2))?.matchId ?? 'none');
   });
@@ -311,7 +312,9 @@ describe('refusals and an unfinished run', () => {
   it('refuses an index key shorter than 64 hex characters', async () => {
     const f = fixture();
     writeFileSync(f.indexKey, 'ab'.repeat(31));
-    expect(await run(f)).toEqual({ code: 2, printed: expect.stringContaining('64 or more hex') });
+    const { code, printed } = await run(f);
+    expect(code).toBe(2);
+    expect(printed).toContain('64 or more hex');
   });
 
   it('refuses an owners file that is not JSON', async () => {
@@ -331,7 +334,9 @@ describe('refusals and an unfinished run', () => {
     expect(existsSync(f.out)).toBe(false);
     expect(existsSync(`${f.out}.partial`)).toBe(true);
     rmSync(join(f.root, 'index.jsonl'), { recursive: true });
-    expect(await run(f)).toEqual({ code: 2, printed: expect.stringContaining('.partial') });
+    const refused = await run(f);
+    expect(refused.code).toBe(2);
+    expect(refused.printed).toContain('.partial');
     rmSync(`${f.out}.partial`, { recursive: true });
     mkdirSync(f.out);
     expect((await run(f)).code).toBe(0);
