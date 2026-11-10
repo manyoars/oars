@@ -129,6 +129,7 @@ const REAL = {
           changeKind: ['key-added'],
           names: [{ kind: 'file', name: 'plan.md' }],
           namesDropped: 1,
+          digests: [{ old: '5d41402abc4b2a76b9719d911017c592', new: '7d793037a0760186574b0282f2f435e7' }],
           steps: [
             { ...STEP, allocated: true, action: 'shell.exec', native: 'Bash', identity: { program: 'npm', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] } },
             { ...STEP, action: 'mcp.call', native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' }, edges: [{ kind: 'next', target: 0 }] },

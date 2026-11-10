@@ -115,7 +115,7 @@ describe('the wire field register', () => {
     const total = [...fieldBytes(REGISTER_FIXTURE).values()].reduce((sum, bytes) => sum + bytes, 0);
     expect(total + envelopeBytes(REGISTER_FIXTURE)).toBe(Buffer.byteLength(canonicalBytes(REGISTER_FIXTURE), 'utf8'));
     expect(envelopeBytes(REGISTER_FIXTURE)).toBe(11);
-    expect(Buffer.byteLength(canonicalBytes(REGISTER_FIXTURE), 'utf8')).toBe(3_937);
+    expect(Buffer.byteLength(canonicalBytes(REGISTER_FIXTURE), 'utf8')).toBe(4_033);
     expect(fieldBytes({ a: [1, 2], b: { c: 'x' }, d: undefined }).get('a')).toBe(4 + 5);
     expect(fieldBytes({ a: [1, 2], b: { c: 'x' }, d: undefined }).get('b')).toBe(4 + 2);
     expect(fieldBytes({ a: [1, 2], b: { c: 'x' }, d: undefined }).get('c')).toBe(7);

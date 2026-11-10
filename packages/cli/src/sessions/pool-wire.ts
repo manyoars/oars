@@ -12,17 +12,18 @@ import type { Recall } from './recall-object.js';
 import type { Read, ReadAsOf } from './read.js';
 import { recoveryCallsOf, RECOVERY_CALLS, type RecoveryCalls } from './recovery-calls.js';
 import { projectLanguage, projectLanguageShare } from './strata.js';
-import { ERROR_CODES, LANGUAGE_SHARES, PROMPT_INTERVENTIONS, type PromptIntervention, type Frame, type FrameStack, type Harness, type LanguageShare, type PromptClass, type PromptObservation, type PullIdentity, type SessionObservation, type ShellIdentity, type StepIdentity, type StepEdge, type StepObservation, type Strata, type ToolObservation, type ToolStatus, type Usage, type UsageField } from './schema.js';
+import { ERROR_CODES, LANGUAGE_SHARES, type EditDigest, PROMPT_INTERVENTIONS, type PromptIntervention, type Frame, type FrameStack, type Harness, type LanguageShare, type PromptClass, type PromptObservation, type PullIdentity, type SessionObservation, type ShellIdentity, type StepIdentity, type StepEdge, type StepObservation, type Strata, type ToolObservation, type ToolStatus, type Usage, type UsageField } from './schema.js';
 
 // Format 3 (step 1 of the wire): a tool carries its `errorCode` and, for a failed call, what followed it (`recoveryCalls`). Formats 1 and 2 are refused by name; nothing is deployed, so nothing is migrated.
 // Format 4 (layer 1 of a call's parameters): a tool may carry `argFeatures`, `argValues`, and `changeKind`. The pool reads formats 3 and 4 (`READ_FORMATS`): a format 3 batch is read as before, and one of those
 // three names in it is a field format 3 does not know, so it goes to the bag and is served from nowhere. The table is "Formats on open" in docs/pool.md.
 // Format 5 (layer 2 of a call's parameters): a tool may carry `names`, the file, directory, and variable names its values held. The pool reads formats 3, 4, and 5, and a name field in a batch of an older format goes to the bag the same way.
 // Format 6 (exposure): a batch may carry `recommendations`, one entry for each recommendation the session was shown or held back from, so the pool can tell shown from held. A batch with none says nothing, and the pool reads that as unknown, never as unexposed.
-// The pool reads formats 3 to 6, and a recommendations list in an older batch goes to the bag the same way.
-export const SKELETON_FORMAT = 6;
+// Format 7 (edit digests): a tool may carry `digests`, the digest of the old and new text of an Edit, MultiEdit, or Write call, so an edit that restores earlier content can be told from one that does not. A `git restore` names its path the way an edit
+// does, in `names`, so it needs no field of its own. The pool reads formats 3 to 7, and a recommendations or digests list in an older batch goes to the bag the same way.
+export const SKELETON_FORMAT = 7;
 /** The formats the parser reads, oldest first: the client builds only the last. */
-export const READ_FORMATS = [3, 4, 5, SKELETON_FORMAT] as const;
+export const READ_FORMATS = [3, 4, 5, 6, SKELETON_FORMAT] as const;
 export type SkeletonFormat = (typeof READ_FORMATS)[number];
 /** The tool fields format 4 added: a format 3 batch that holds one is holding a field it does not define. */
 export const FORMAT_4_TOOL_FIELDS = ['argFeatures', 'argValues', 'changeKind'] as const;
@@ -30,11 +31,17 @@ export const FORMAT_4_TOOL_FIELDS = ['argFeatures', 'argValues', 'changeKind'] a
 export const FORMAT_5_TOOL_FIELDS = ['names', 'namesDropped'] as const;
 /** The batch fields format 6 added: a batch of an older format that holds one is holding a field it does not define. */
 export const FORMAT_6_BATCH_FIELDS = ['recommendations'] as const;
+/** The format that added exposure. A batch of an older format holds no `recommendations`, and its failed calls are checked with the rule they were built under. */
+export const EXPOSURE_FORMAT = 6;
+/** The format that added edit digests. */
+export const DIGEST_FORMAT = 7;
+/** The tool fields format 7 added: a batch of format 6 or older that holds one is holding a field it does not define. */
+export const FORMAT_7_TOOL_FIELDS = ['digests'] as const;
 /**
  * The version of the field list: every field name a batch can hold (`BATCH_FIELDS` in `pool-outbox.ts`). It moves with any field added, so a server told the version knows which names a batch may carry,
  * and a test pins the list to it (`pool-wire-additive.test.ts`). A field is deprecated and left on the list, never removed (conclusion section 17, rule 3).
  */
-export const FIELD_LIST_VERSION = 12;
+export const FIELD_LIST_VERSION = 13;
 export const BUNDLE_FORMAT = 1;
 /** One constant: the pool serves only the vocabulary version the client holds. */
 export { VOCAB_VERSION };
@@ -127,7 +134,15 @@ export interface SkeletonTool {
   names?: SkeletonArgName[];
   /** A `count` bucket of the name tokens the call held that were not sent: one the redactor changes, an exclusion term matches, or that has no name shape. Absent when none was dropped; never the names. */
   namesDropped?: number;
+  /** The old and new text of an Edit (one pair), a MultiEdit (one pair per edit, in order), or a Write (a new digest only), each a digest of the exact text, plain so the same text matches across sessions. Never the text. Absent on any other call. */
+  digests?: SkeletonDigest[];
   steps: SkeletonStep[];
+}
+
+/** One edit's digests: the first 32 hex digits of the SHA-256 of the exact UTF-8 text. A Write has `new` alone, never the digest of an empty string for `old`. */
+export interface SkeletonDigest {
+  old?: string;
+  new: string;
 }
 
 /** One sent key's value features as the wire holds them: each a closed-list member, or `other` for one this reader does not know. */
@@ -479,6 +494,13 @@ export const wireNames = (stored: readonly ArgName[] | undefined, gate: WireGate
   return { names, dropped: known.length - names.length };
 };
 
+/** A digest as capture writes it: the first 32 hex digits of a SHA-256, lowercase. */
+const DIGEST = /^[0-9a-f]{32}$/;
+
+/** A call's edit digests as the wire sends them: a pair whose digest is not that shape is dropped whole, so a corrupt store row costs the pair and never the deposit. */
+export const wireDigests = (stored: readonly EditDigest[] | undefined): SkeletonDigest[] =>
+  (stored ?? []).filter((pair) => DIGEST.test(pair.new) && (pair.old === undefined || DIGEST.test(pair.old))).map((pair) => (pair.old === undefined ? { new: pair.new } : { old: pair.old, new: pair.new }));
+
 /** The basename of a program as capture read it: a path never goes on the wire. */
 const basenameOf = (program: string): string => program.replace(/^.*[\\/]/, '');
 
@@ -715,6 +737,7 @@ const transcriptOf = (
     const argValues = wireValues(tool.argValues, sent, steps[0]?.native);
     const changeKind = wireChange(tool.changeKind);
     const { names, dropped: namesDropped } = wireNames(tool.names, gate);
+    const digests = wireDigests(tool.digests);
     steppedTools.push({
       side,
       prompt: promptPosition,
@@ -731,6 +754,7 @@ const transcriptOf = (
       ...(changeKind.length === 0 ? {} : { changeKind }),
       ...(names.length === 0 ? {} : { names }),
       ...(namesDropped === 0 ? {} : { namesDropped: bucketOf('count', namesDropped) }),
+      ...(digests.length === 0 ? {} : { digests }),
       steps,
     });
   }
@@ -895,7 +919,7 @@ export const OPTIONAL = {
   frame: ['harnessVersion', 'model', 'effort', 'day', 'shell', 'reach', 'repoKey', 'orgSize', 'team', 'repoVisibility', 'hour'],
   stack: ['size', 'languageShares'],
   prompt: ['wallSec', 'explore', 'usageResponses', 'intervention'],
-  tool: ['prompt', 'durationMs', 'errorCode', 'recoveryCalls', 'keys', 'keysDropped', 'targetClass', 'argClass', 'argFeatures', 'argValues', 'changeKind', 'names', 'namesDropped'],
+  tool: ['prompt', 'durationMs', 'errorCode', 'recoveryCalls', 'keys', 'keysDropped', 'targetClass', 'argClass', 'argFeatures', 'argValues', 'changeKind', 'names', 'namesDropped', 'digests'],
   step: ['tokens', 'ms', 'allocated', 'parent', 'skill', 'edges', 'remainingTokens'],
   transcript: ['spawnedIn'],
 } as const satisfies { readonly [level: string]: readonly string[] };
@@ -1292,8 +1316,10 @@ const parseValue = (held: Collected, keys: SentKeys, native: string | undefined,
   return { key, enumValue: key !== OTHER && isClosedValue(native, key, enumValue) ? enumValue : unknownValue(held, under(at, 'enumValue'), enumValue) };
 };
 
+/** The tool fields a format 5 or 6 batch may hold: format 7's are fields it does not know. */
+const FORMAT_6_TOOL: readonly string[] = OPTIONAL.tool.filter((name) => !FORMAT_7_TOOL_FIELDS.some((added) => added === name));
 /** The tool fields a format 4 batch may hold: format 5's are fields it does not know. */
-const FORMAT_4_TOOL: readonly string[] = OPTIONAL.tool.filter((name) => !FORMAT_5_TOOL_FIELDS.some((added) => added === name));
+const FORMAT_4_TOOL: readonly string[] = FORMAT_6_TOOL.filter((name) => !FORMAT_5_TOOL_FIELDS.some((added) => added === name));
 /** The tool fields a format 3 batch may hold: format 4's three are fields it does not know too. */
 const FORMAT_3_TOOL: readonly string[] = FORMAT_4_TOOL.filter((name) => !FORMAT_4_TOOL_FIELDS.some((added) => added === name));
 
@@ -1304,10 +1330,24 @@ const parseName = (held: Collected, value: unknown, at: string): SkeletonArgName
   return { kind: oneOf(held, NAME_KINDS, raw.kind, under(at, 'kind')), name: isWireName(name) ? name : unknownValue(held, under(at, 'name'), name) };
 };
 
+/** A digest is the shape capture writes, or the batch is refused: unlike a name, no newer client's value is a digest of another shape, and the field holds only what a hash can. */
+const digestOf = (value: unknown, at: string): string => {
+  const digest = textOf(value, at);
+  if (!DIGEST.test(digest)) throw new Refused(at, 'not a digest');
+  return digest;
+};
+
+const parseDigest = (held: Collected, value: unknown, at: string): SkeletonDigest => {
+  const raw = fieldsOf(held, value, at, ['new'], ['old']);
+  const old = raw.old === undefined ? undefined : digestOf(raw.old, under(at, 'old'));
+  return { ...(old === undefined ? {} : { old }), new: digestOf(raw.new, under(at, 'new')) };
+};
+
 const parseTool = (held: Collected, harness: WireHarness, value: unknown, at: string): SkeletonTool => {
   const layered = held.format >= 4;
   const named = held.format >= 5;
-  const raw = fieldsOf(held, value, at, ['side', 'status', 'steps'], named ? OPTIONAL.tool : layered ? FORMAT_4_TOOL : FORMAT_3_TOOL);
+  const digested = held.format >= DIGEST_FORMAT;
+  const raw = fieldsOf(held, value, at, ['side', 'status', 'steps'], digested ? OPTIONAL.tool : named ? FORMAT_6_TOOL : layered ? FORMAT_4_TOOL : FORMAT_3_TOOL);
   const status = oneOf(held, STATUSES, raw.status, under(at, 'status'));
   const errorCode = parseErrorCode(held, status, raw.errorCode, under(at, 'errorCode'));
   const recoveryCalls = parseRecovery(held, status, raw.recoveryCalls, under(at, 'recoveryCalls'));
@@ -1322,6 +1362,7 @@ const parseTool = (held: Collected, harness: WireHarness, value: unknown, at: st
   const changeKind = !layered || raw.changeKind === undefined ? undefined : listOf(raw.changeKind, under(at, 'changeKind'), (entry, entryAt) => oneOf(held, CHANGE_KINDS, entry, entryAt));
   const names = !named || raw.names === undefined ? undefined : listOf(raw.names, under(at, 'names'), (entry, entryAt) => parseName(held, entry, entryAt));
   const namesDropped = !named || raw.namesDropped === undefined ? undefined : bucketIn('count', raw.namesDropped, under(at, 'namesDropped'));
+  const digests = !digested || raw.digests === undefined ? undefined : listOf(raw.digests, under(at, 'digests'), (entry, entryAt) => parseDigest(held, entry, entryAt));
   return {
     side: booleanOf(raw.side, under(at, 'side')),
     prompt: orNull(raw.prompt, under(at, 'prompt'), countOf),
@@ -1338,6 +1379,7 @@ const parseTool = (held: Collected, harness: WireHarness, value: unknown, at: st
     ...(changeKind === undefined ? {} : { changeKind }),
     ...(names === undefined ? {} : { names }),
     ...(namesDropped === undefined ? {} : { namesDropped }),
+    ...(digests === undefined ? {} : { digests }),
     steps,
   };
 };
@@ -1380,7 +1422,7 @@ const parseTranscript = (held: Collected, value: unknown, at: string): SkeletonT
   const tools = listOf(raw.tools, under(at, 'tools'), (entry, entryAt) => parseTool(held, harness, entry, entryAt));
   // What followed a call is read off the calls themselves, so a list that disagrees with them is a wrong deposit, not a new reading. A batch of a format before 6 was built when a failed edit still counted, so it is checked with that rule.
   tools.forEach((tool, index) => {
-    if (tool.recoveryCalls !== undefined && JSON.stringify(tool.recoveryCalls) !== JSON.stringify(recoveryCallsOf(tools, index, held.format < 6))) throw new Refused(`${at}.tools[${String(index)}].recoveryCalls`, 'not what followed the call');
+    if (tool.recoveryCalls !== undefined && JSON.stringify(tool.recoveryCalls) !== JSON.stringify(recoveryCallsOf(tools, index, held.format < EXPOSURE_FORMAT))) throw new Refused(`${at}.tools[${String(index)}].recoveryCalls`, 'not what followed the call');
   });
   return { merkleRoot, leaves, harness, frame, frames, spawnedIn, prompts, tools };
 };
@@ -1458,7 +1500,7 @@ export const parseSkeleton = (value: unknown): ParsedSkeleton | Refusal => {
     if (isFields(value) && typeof value.format === 'number' && value.format < READ_FORMATS[0]) throw new Refused('format', `the format ${String(value.format)} form is no longer read; send format ${String(SKELETON_FORMAT)}`);
     // The format is read first, since which batch fields it defines depends on it.
     const declared = isFields(value) ? READ_FORMATS.find((known) => known === value.format) : undefined;
-    const raw = fieldsOf(held, value, '', ['format', 'vocabVersion', 'fieldsVersion', 'id', 'transcripts'], declared !== undefined && declared < 6 ? FORMAT_5_BATCH : OPTIONAL.batch);
+    const raw = fieldsOf(held, value, '', ['format', 'vocabVersion', 'fieldsVersion', 'id', 'transcripts'], declared !== undefined && declared < EXPOSURE_FORMAT ? FORMAT_5_BATCH : OPTIONAL.batch);
     const format = READ_FORMATS.find((known) => known === raw.format);
     if (format === undefined) throw new Refused('format', 'not a format this version reads');
     held.format = format;
@@ -1470,7 +1512,7 @@ export const parseSkeleton = (value: unknown): ParsedSkeleton | Refusal => {
     const deltas = listOrEmpty(raw.deltas, 'deltas', (entry, entryAt) => parseDelta(held, entry, entryAt));
     const transcripts = listOf(raw.transcripts, 'transcripts', (entry, entryAt) => parseTranscript(held, entry, entryAt));
     if (transcripts.length === 0) throw new Refused('transcripts', 'empty');
-    const recommendations = format < 6 ? [] : listOrEmpty(raw.recommendations, 'recommendations', (entry, entryAt) => parseRecommendation(held, entry, entryAt));
+    const recommendations = format < EXPOSURE_FORMAT ? [] : listOrEmpty(raw.recommendations, 'recommendations', (entry, entryAt) => parseRecommendation(held, entry, entryAt));
     // Positions are the only ordinals on the wire, so a window must lie within the main run's own calls: the ones that are not sidechain, which is the line the windows were counted on.
     const mainCalls = (transcripts[0]?.tools ?? []).filter(({ side }) => !side).length;
     recommendations.forEach(({ to }, index) => {

@@ -1,5 +1,5 @@
 // Format 6: a deposit carries each recommendation the session was given or held back from, so shown stays shown and held stays held at the pool, and a session that carries none says nothing (the pool reads that as unknown, never as unexposed).
-// The client builds format 6 only; the pool still reads formats 3, 4, and 5, and a recommendations list in an older batch is a field its format does not define, so it goes to the bag. Every id and version here is invented.
+// Format 6 added exposure and the client now builds format 7; the pool still reads formats 3, 4, and 5, and a recommendations list in an older batch is a field its format does not define, so it goes to the bag. Every id and version here is invented.
 import { describe, expect, it } from 'vitest';
 import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from './pool-fixture.js';
 import { NO_COVERAGE, OPEN_GATE, parseSkeleton, recommendationsOf, skeletonOf, type SessionSkeleton } from './pool-wire.js';

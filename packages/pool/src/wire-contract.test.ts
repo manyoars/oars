@@ -125,14 +125,14 @@ describe('the versions a deposit carries', () => {
     expect(await rowOf()).toMatchObject({ format: SKELETON_FORMAT, vocab_version: '99', fields_version: FIELD_LIST_VERSION + 3 });
   });
 
-  it('keep the names of a format 6 call in the stored skeleton, and still accept a format 4 batch, in which names and namesDropped are fields format 4 does not define', async () => {
+  it('keep the names of a format 7 call in the stored skeleton, and still accept a format 4 batch, in which names and namesDropped are fields format 4 does not define', async () => {
     const names = [{ kind: 'dir', name: 'billing' }, { kind: 'file', name: 'plan.md' }];
     const named = baseline();
     Object.assign(holder(named, 'transcripts', 0, 'tools', 0), { names, namesDropped: 1 });
     expect((await post(named)).status).toBe(201);
     const stored = await rowOf();
     expect(JSON.parse(stored.skeleton)).toMatchObject({ transcripts: [{ tools: [{ names, namesDropped: 1 }] }] });
-    expect(stored).toMatchObject({ format: 6, extensions: '[]', other_values: 0 });
+    expect(stored).toMatchObject({ format: 7, extensions: '[]', other_values: 0 });
 
     const older = { ...baseline(), format: 4 };
     expect((await post(older)).status).toBe(201);
@@ -142,6 +142,25 @@ describe('the versions a deposit carries', () => {
     const bagged = await rowOf();
     expect(JSON.parse(bagged.extensions)).toEqual([{ at: 'transcripts[0].tools[0].names', kind: 'field', value: names }, { at: 'transcripts[0].tools[0].namesDropped', kind: 'field', value: 1 }]);
     expect(bagged.skeleton).not.toContain('billing');
+  });
+
+  it('keep the digests of a format 7 call in the stored skeleton, put them in the bag for a format 6 batch, and refuse one that is no digest', async () => {
+    const digests = [{ old: '5d41402abc4b2a76b9719d911017c592', new: '7d793037a0760186574b0282f2f435e7' }, { new: '098f6bcd4621d373cade4e832627b4f6' }];
+    const edited = baseline();
+    Object.assign(holder(edited, 'transcripts', 0, 'tools', 0), { digests });
+    expect((await post(edited)).status).toBe(201);
+    const stored = await rowOf();
+    expect(JSON.parse(stored.skeleton)).toMatchObject({ transcripts: [{ tools: [{ digests }] }] });
+    expect(stored).toMatchObject({ format: 7, extensions: '[]', other_values: 0 });
+
+    const older = { ...edited, format: 6 };
+    expect((await post(older)).status).toBe(201);
+    const bagged = await rowOf();
+    expect(JSON.parse(bagged.extensions)).toEqual([{ at: 'transcripts[0].tools[0].digests', kind: 'field', value: digests }]);
+    expect(bagged.skeleton).not.toContain('7d793037a0760186574b0282f2f435e7');
+
+    Object.assign(holder(edited, 'transcripts', 0, 'tools', 0), { digests: [{ new: 'let a = 1;' }] });
+    expect(await post(edited)).toMatchObject({ status: 422, json: { field: 'transcripts[0].tools[0].digests[0].new' } });
   });
 });
 
@@ -218,10 +237,10 @@ describe('a value this server does not know', () => {
   });
 });
 
-describe('a format 6 batch with every optional field absent', () => {
+describe('a format 7 batch with every optional field absent', () => {
   /** What an absent optional field reads as, which is what a sent null is. */
   const EMPTY: { [name: string]: unknown } = { deltas: [], recommendations: [], timingPrint: null, languageShares: [] };
-  const ABSENT_ONLY: ReadonlySet<string> = new Set(['claimed', 'reach', 'skill', 'edges', 'recoveryCalls', 'usageResponses', 'allocated', 'repoKey', 'orgSize', 'team', 'repoVisibility', 'hour', 'keys', 'keysDropped', 'targetClass', 'argClass', 'argFeatures', 'argValues', 'changeKind', 'names', 'namesDropped']);
+  const ABSENT_ONLY: ReadonlySet<string> = new Set(['claimed', 'reach', 'skill', 'edges', 'recoveryCalls', 'usageResponses', 'allocated', 'repoKey', 'orgSize', 'team', 'repoVisibility', 'hour', 'keys', 'keysDropped', 'targetClass', 'argClass', 'argFeatures', 'argValues', 'changeKind', 'names', 'namesDropped', 'digests']);
 
   // Each level of the wire with its optional names and where it sits; a level added to OPTIONAL fails the length check below until it is listed here.
   const LEVELS_OPTIONAL: readonly (readonly [readonly string[], (string | number)[]])[] = [
