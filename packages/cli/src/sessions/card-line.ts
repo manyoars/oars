@@ -1,6 +1,6 @@
 // The weekly line: once per ISO week, on the first command a person runs on or after Friday 00:00 local time, stderr gets one line pointing at `oars card --text`.
 // A stable tenth of installs never see it (the holdback), so the loop's effect can be read later. It is for people at a terminal only: never `--json`, a hook, the MCP
-// server, or `oars card` itself. It makes no network call and never fails or delays a command: every error is swallowed.
+// server, a recall, `oars sessions try`, or `oars card` itself. It makes no network call and never fails or delays a command: every error is swallowed.
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
