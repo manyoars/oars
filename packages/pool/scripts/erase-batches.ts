@@ -95,7 +95,7 @@ export const findBatches = async (telemetry: TelemetryStore, account: string, no
 
 const DAY_MS = 86_400_000;
 
-/** The Monday 00:00 UTC of the ISO week a time falls in (the rule t1070 uses for `erased:` rows); a value that is not a time is kept, since it can match nothing. */
+/** The Monday 00:00 UTC of the ISO week a time falls in (the rule t1070 uses for `erased:` rows); a value that is not an ISO string is kept, since it can match nothing. */
 const weekStartOf = (value: unknown): unknown => {
   const at = typeof value === 'string' ? Date.parse(value) : Number.NaN;
   if (Number.isNaN(at)) return value;
