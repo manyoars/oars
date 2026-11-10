@@ -2,26 +2,39 @@
 
 oars keeps a local, searchable record of your coding agent sessions, across Claude Code, Cursor, Codex, and other harnesses. Ask it about an error and it shows how many past sessions hit it, when, and which tools came next. More at [manyoars.com](https://manyoars.com/).
 
-This is the Many Oars open-source monorepo (Apache-2.0): the `oars` command line and its generated client. It holds what a developer installs or imports:
+## Install
 
-| Path | What it is | State |
-|------|------------|-------|
-| `packages/client` | `@manyoars/oars-client`: TypeScript types generated from `openapi/public.json` and a thin `openapi-fetch` wrapper that adds the bearer token, `Idempotency-Key`, and `User-Agent` | published on npm as [`@manyoars/oars-client`](https://www.npmjs.com/package/@manyoars/oars-client) at 0.1.x |
-| `openapi/public.json` | The slice of the platform API that Many Oars exposes to the CLI and coding agents (including the API key operations), generated from the platform's OpenAPI by `scripts/openapi-public.mjs` and the operation list in `openapi/public-operations.json` | here |
-| `packages/cli` | `@manyoars/oars`, the `oars` command: `login`, `keys` (`create`, `list`, `revoke`), `sessions` (a local memory of your own coding-agent sessions: Claude Code, Cursor, Codex, Copilot CLI, Gemini CLI, Grok Build, OpenCode, Pi, and VS Code Copilot Chat), `gate` (a record of the install, MCP, and skill picks your agents make), and `pool` (deposit, outbox, and fetch commands for a pool server: the Many Oars pool, `pool.manyoars.com`, which is live, or one you name) | published on npm as [`@manyoars/oars`](https://www.npmjs.com/package/@manyoars/oars) |
+```sh
+npm install --global @manyoars/oars
+```
 
-Accounts are not open yet: `oars login` uses the Many Oars issuer by default, and until Many Oars sign-in at `login.manyoars.com` is deployed it exits 2 with an error that names `login.manyoars.com`.
+Node 24 or later. Local recall needs no account.
 
-## Session memory
+Sample output (made-up sessions, from `oars sessions try`):
 
-`oars sessions` keeps a local record of your own coding-agent sessions so a repeated error can be looked up. It makes no model call and no network call, except `gold arms`, which sends redacted text through your own Claude subscription. Apart from that and telemetry (on by default, off with `oars telemetry off`, `OARS_TELEMETRY=0`, or `DO_NOT_TRACK=1`; it sends to the pool server in `OARS_POOL_URL`, else to the Many Oars pool at `pool.manyoars.com`, which is live), oars itself sends nothing, except what you opted into with a pool server: after you accept its covenant, the detached sender that a session-end hook or any `oars` command starts, at most about once an hour, sends closed-vocabulary session skeletons, and, only after a separate yes to the raw prompt, a locally redacted (best-effort) copy of each full transcript; `oars pool outbox` prints what is queued when you run it, but the sender builds new batches and sends them in the same run without printing them first, and a session leaves your machine no sooner than an hour after it ends, and a folder can be switched to skeleton only or off; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.
+```
+$ oars sessions recall --error "unexpected EOF while looking for matching quote"
+Bash | bash: -c: line <n>: unexpected EOF while looking for matching quote
+  3 sessions, 3 errors, first 2026-10-06T10:00:15.000Z, last 2026-10-20T10:00:27.000Z
+  harness 2.1.300; followed by Bash x2, Read x1, Write x1; an edit followed 1 times
 
-- **Captured:** the sessions of every project folder and harness store by default; `--allow` narrows it to the folders you name and `--deny` keeps a folder out (a denial wins). Secrets, emails, and the domains you name are masked in the log.
-- **Stored:** under `<config>/oars/sessions/` on your machine (`<config>` is `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `~/.config` elsewhere), including `raw/`, a hard link or copy of each deposited transcript. `raw/` is on by default and holds raw transcripts, unredacted: they keep whatever the transcript held, secrets included. The files in `raw/` stay on your machine; after a yes to the raw prompt (`oars pool raw`) and covenant acceptance, the sender uploads a redacted copy of each (never the file itself), except from a folder set to skeleton only or off.
-- **Commands:** `oars sessions deposit` (or `--allow <folder>`, `--deny <folder>`), `oars sessions recall --error "<text>"`, `oars sessions hook install --scope user`.
-- **Uninstall:** `oars sessions hook uninstall --scope user`, then delete the `<config>/oars/sessions/` and `<config>/oars/telemetry/` folders, and `<config>/oars/credentials.json` if you ran `oars login`. If you ran `gold sample`, also delete `~/.claude/session-commons/review/` (or `$CLAUDE_CONFIG_DIR/session-commons/review/`, or your `--out-dir`). Install raises `cleanupPeriodDays` in your settings to at least 365, and uninstall leaves it raised.
+$ oars sessions recall --context --cwd C:\work\demo
+oars recall: errors that recur in this repository's earlier sessions. Check these before retrying:
+- Bash | bash: -c: line <n>: unexpected EOF while looking for matching quote (3 sessions in the last 300; next: Bash, Read, Write)
+- Write | File has not been read yet. Read it first before writing to it. (2 sessions in the last 300; next: Read, Bash, Write)
+```
 
-The full reference is in [`packages/cli/README.md`](packages/cli/README.md).
+No history yet? `oars sessions try` runs recall, books, and the hook line over made-up sessions in a throwaway store, labeled synthetic and deleted on exit. It never touches your own store.
+
+To use it on your own sessions, run `oars sessions deposit`, then `oars sessions hook install --scope user` to add recall to Claude Code. `oars sessions hook uninstall --scope user` removes only the entries install wrote. Install raises `cleanupPeriodDays` in your settings to at least 365, and uninstall leaves it raised.
+
+## What leaves your machine
+
+- The record stays on your machine, under `<config>/oars/sessions/` (`<config>` is `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `~/.config` elsewhere). `raw/` there holds raw transcripts, unredacted. Session commands make no model call and no network call, except `gold arms`, which sends redacted text through your own Claude subscription. The hooks and the MCP tool add recall text to the running session, and your harness sends that to its model.
+- Telemetry is on by default: counts, sizes, and closed words, never session content. Turn it off with `oars telemetry off`, `OARS_TELEMETRY=0`, or `DO_NOT_TRACK=1`. It sends to the Many Oars pool at `pool.manyoars.com`, or to `OARS_POOL_URL`.
+- Deposits to the Many Oars pool are closed until its covenant opens them. After you accept the covenant, a deposit may be licensed and sold under it. Nothing is sent before you accept, and raw copies need a separate yes.
+- The pool is not offered in the EU, the EEA, or the UK.
+- Every field and every switch is in [docs/telemetry.md](docs/telemetry.md) and [docs/pool.md](docs/pool.md). The full reference is in [`packages/cli/README.md`](packages/cli/README.md).
 
 ## Develop
 
@@ -56,6 +69,18 @@ just openapi-refresh <path to the platform checkout's api-specs/openapi.json>
 That rewrites `openapi/public.json` (the listed operations and the components they reference, keys sorted, so a diff shows only
 real changes) and the client's generated types. The script fails, naming the operation, when a listed `operationId` is not in
 the source.
+
+## Repository layout
+
+This is the Many Oars open-source monorepo (Apache-2.0): the `oars` command line and its generated client. It holds what a developer installs or imports:
+
+| Path | What it is | State |
+|------|------------|-------|
+| `packages/client` | `@manyoars/oars-client`: TypeScript types generated from `openapi/public.json` and a thin `openapi-fetch` wrapper that adds the bearer token, `Idempotency-Key`, and `User-Agent` | published on npm as [`@manyoars/oars-client`](https://www.npmjs.com/package/@manyoars/oars-client) at 0.1.x |
+| `openapi/public.json` | The slice of the platform API that Many Oars exposes to the CLI and coding agents (including the API key operations), generated from the platform's OpenAPI by `scripts/openapi-public.mjs` and the operation list in `openapi/public-operations.json` | here |
+| `packages/cli` | `@manyoars/oars`, the `oars` command: `login`, `keys` (`create`, `list`, `revoke`), `sessions` (a local memory of your own coding-agent sessions: Claude Code, Cursor, Codex, Copilot CLI, Gemini CLI, Grok Build, OpenCode, Pi, and VS Code Copilot Chat), `gate` (a record of the install, MCP, and skill picks your agents make), and `pool` (deposit, outbox, and fetch commands for a pool server: the Many Oars pool, `pool.manyoars.com`, which is live, or one you name) | published on npm as [`@manyoars/oars`](https://www.npmjs.com/package/@manyoars/oars) |
+
+Accounts are not open yet: `oars login` uses the Many Oars issuer by default, and until Many Oars sign-in at `login.manyoars.com` is deployed it exits 2 with an error that names `login.manyoars.com`.
 
 ## License
 

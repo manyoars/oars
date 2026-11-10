@@ -69,13 +69,13 @@ const SECTIONS: readonly Section[] = [
   { name: 'tokens', select: 'rowid AS n, expires_at', table: 'tokens', owner: 'account', order: ['rowid'], keyed: ['n'], page: SMALL_PAGE, view: (row) => ({ expiresAt: count(row, 'expires_at') }) },
   {
     name: 'covenant',
-    select: 'version, accepted_at, text_sha256, input, client',
+    select: 'version, accepted_at, text_sha256, input, client, eu_eea_uk, request_country',
     table: 'covenant_acceptances',
     owner: 'account',
     order: ['version'],
     keyed: ['version'],
     page: SMALL_PAGE,
-    view: (row) => ({ version: text(row, 'version'), acceptedAt: count(row, 'accepted_at'), textSha256: text(row, 'text_sha256'), input: text(row, 'input'), client: text(row, 'client') }),
+    view: (row) => ({ version: text(row, 'version'), acceptedAt: count(row, 'accepted_at'), textSha256: text(row, 'text_sha256'), input: text(row, 'input'), client: text(row, 'client'), euEeaUk: text(row, 'eu_eea_uk'), requestCountry: text(row, 'request_country') }),
   },
   // Every machine the account enrolled, a revoked one too, as its record: the key hashes (`key_hash`, `retired_hash`) are credential material and are not selected.
   {
@@ -132,7 +132,7 @@ const SECTIONS: readonly Section[] = [
   // A deposit as it now reads: an erased one holds the marker the erasure left, and `tombstone` is the day it was erased.
   {
     name: 'deposits',
-    select: 'id, tier, counted_at, format, vocab_version, fields_version, extensions, other_values, deltas, ingest, skeleton, erased_on, machine, host_class, launcher, claimed_host_class, claimed_launcher',
+    select: 'id, tier, counted_at, format, vocab_version, fields_version, extensions, other_values, deltas, ingest, skeleton, erased_on, machine, host_class, launcher, claimed_host_class, claimed_launcher, request_country',
     table: 'deposits',
     owner: 'account',
     order: ['id'],
@@ -156,6 +156,7 @@ const SECTIONS: readonly Section[] = [
       launcher: text(row, 'launcher'),
       claimedHostClass: text(row, 'claimed_host_class'),
       claimedLauncher: text(row, 'claimed_launcher'),
+      requestCountry: text(row, 'request_country'),
     }),
   },
 ];

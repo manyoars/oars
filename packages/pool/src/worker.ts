@@ -3,7 +3,7 @@ import { parseSkeleton, type SessionSkeleton } from '../../cli/src/sessions/pool
 import { batchCounts, batchTier } from './access.js';
 import { fetchBundle, harnessRequired } from './bundle.js';
 import { exportPage, exportRaw } from './export.js';
-import { covenantAccept, covenantNotAccepted, covenantStatus, depositsClosed, hasAccepted } from './covenant.js';
+import { countryOf, covenantAccept, covenantNotAccepted, covenantStatus, depositsClosed, hasAccepted } from './covenant.js';
 import { answer, bound, brake, notConfigured, refuse, type Env } from './http.js';
 import { receivePart } from './parts.js';
 import { heldBy, recount, repoKeysOf, signalStatements } from './cluster-store.js';
@@ -44,7 +44,7 @@ const futureDayField = ({ transcripts }: SessionSkeleton, now: number): string |
 };
 
 /** A whole batch, from the request or joined from its parts: parsed, projected, and written as one deposit. The hash key is read before the body, so a pool with none never gets here. */
-const storeDeposit = async (env: Env, caller: Caller, secret: string, text: string): Promise<Response> => {
+const storeDeposit = async (env: Env, caller: Caller, secret: string, text: string, country: string | null): Promise<Response> => {
   const { account, machine } = caller;
   const stamp = stampOf(machine);
   let body: unknown;
@@ -87,9 +87,9 @@ const storeDeposit = async (env: Env, caller: Caller, secret: string, text: stri
   const ingest = crypto.randomUUID();
   // One statement, so two deposits at once cannot both take the last of either limit. A redeposit replaces its own row: it adds no row, so it passes the count at the limit, and only its new size counts against the budget.
   const insert = env.DB.prepare(
-    'INSERT INTO deposits (account, id, skeleton, deltas, tier, counted_at, ingest, format, vocab_version, fields_version, extensions, other_values, machine, host_class, launcher, claimed_host_class, claimed_launcher) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ((SELECT COUNT(*) FROM deposits WHERE account = ?) < ? OR EXISTS (SELECT 1 FROM deposits WHERE account = ? AND id = ?)) AND (SELECT COALESCE(SUM(LENGTH(CAST(skeleton AS BLOB)) + LENGTH(CAST(deltas AS BLOB)) + LENGTH(CAST(extensions AS BLOB))), 0) FROM deposits WHERE account = ? AND id <> ?) + ? <= ? ON CONFLICT (account, id) DO UPDATE SET skeleton = excluded.skeleton, deltas = excluded.deltas, tier = excluded.tier, ingest = excluded.ingest, format = excluded.format, vocab_version = excluded.vocab_version, fields_version = excluded.fields_version, extensions = excluded.extensions, other_values = excluded.other_values, machine = excluded.machine, host_class = excluded.host_class, launcher = excluded.launcher, claimed_host_class = excluded.claimed_host_class, claimed_launcher = excluded.claimed_launcher, counted_at = CASE WHEN ? = 0 THEN deposits.counted_at WHEN excluded.counted_at IS NULL THEN NULL ELSE COALESCE(deposits.counted_at, excluded.counted_at) END WHERE deposits.ingest = ?',
+    'INSERT INTO deposits (account, id, skeleton, deltas, tier, counted_at, ingest, format, vocab_version, fields_version, extensions, other_values, machine, host_class, launcher, claimed_host_class, claimed_launcher, request_country) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ((SELECT COUNT(*) FROM deposits WHERE account = ?) < ? OR EXISTS (SELECT 1 FROM deposits WHERE account = ? AND id = ?)) AND (SELECT COALESCE(SUM(LENGTH(CAST(skeleton AS BLOB)) + LENGTH(CAST(deltas AS BLOB)) + LENGTH(CAST(extensions AS BLOB))), 0) FROM deposits WHERE account = ? AND id <> ?) + ? <= ? ON CONFLICT (account, id) DO UPDATE SET skeleton = excluded.skeleton, deltas = excluded.deltas, tier = excluded.tier, ingest = excluded.ingest, format = excluded.format, vocab_version = excluded.vocab_version, fields_version = excluded.fields_version, extensions = excluded.extensions, other_values = excluded.other_values, machine = excluded.machine, host_class = excluded.host_class, launcher = excluded.launcher, claimed_host_class = excluded.claimed_host_class, claimed_launcher = excluded.claimed_launcher, request_country = excluded.request_country, counted_at = CASE WHEN ? = 0 THEN deposits.counted_at WHEN excluded.counted_at IS NULL THEN NULL ELSE COALESCE(deposits.counted_at, excluded.counted_at) END WHERE deposits.ingest = ?',
   )
-    .bind(account, skeleton.id, stored, DELTAS, tier, countedAt, ingest, skeleton.format, skeleton.vocabVersion, skeleton.fieldsVersion, bag, others, stamp.machine, stamp.hostClass, stamp.launcher, claim?.hostClass ?? null, claim?.launcher ?? null, account, limit ?? UNLIMITED, account, skeleton.id, account, skeleton.id, new TextEncoder().encode(stored).length + new TextEncoder().encode(DELTAS).length + new TextEncoder().encode(bag).length, budget ?? UNLIMITED, written > 0 ? 1 : 0, previous?.ingest ?? '');
+    .bind(account, skeleton.id, stored, DELTAS, tier, countedAt, ingest, skeleton.format, skeleton.vocabVersion, skeleton.fieldsVersion, bag, others, stamp.machine, stamp.hostClass, stamp.launcher, claim?.hostClass ?? null, claim?.launcher ?? null, country, account, limit ?? UNLIMITED, account, skeleton.id, account, skeleton.id, new TextEncoder().encode(stored).length + new TextEncoder().encode(DELTAS).length + new TextEncoder().encode(bag).length, budget ?? UNLIMITED, written > 0 ? 1 : 0, previous?.ingest ?? '');
   // The row and every increment it writes are one transaction; the increments are guarded by the row's `ingest` mark, so a refused deposit writes none of them.
   const arrived = new Date();
   const [inserted] = await env.DB.batch([
@@ -132,7 +132,7 @@ const deposit = async (request: Request, env: Env): Promise<Response> => {
   if (Number(request.headers.get('content-length')) > MAX_DEPOSIT_BYTES) return tooLarge();
   const text = await request.text();
   if (new TextEncoder().encode(text).length > MAX_DEPOSIT_BYTES) return tooLarge();
-  return request.headers.has('oars-part') ? receivePart(request, env, caller.account, secret, text, (whole) => storeDeposit(env, caller, secret, whole)) : storeDeposit(env, caller, secret, text);
+  return request.headers.has('oars-part') ? receivePart(request, env, caller.account, secret, text, (whole) => storeDeposit(env, caller, secret, whole, countryOf(request))) : storeDeposit(env, caller, secret, text, countryOf(request));
 };
 
 /** A name that does not decode stays as it came: no vocabulary holds it, so the route refuses it by name. */

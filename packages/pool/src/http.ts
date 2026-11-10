@@ -66,6 +66,8 @@ export interface Env {
   CLEAR_FLOOR?: string;
   /** Public floors for single read families, `live=3,tool-day=8`. A name that is not a served read family refuses the whole list. */
   PUBLIC_FLOOR_FAMILIES?: string;
+  /** Closed unless this is exactly `1`: the pool then refuses a covenant acceptance from a person who says they are in the EU, the EEA, or the UK, or whose request comes from there (403 `region_closed`). */
+  PROTECTED_REGIONS_OPEN?: string;
   /** An operator's brake on the rows one account may hold. Unset means no limit: the pool does not ration contribution. */
   MAX_DEPOSITS_PER_ACCOUNT?: string;
   /** An operator's brake on the stored bytes one account may hold. Unset means no limit. */
