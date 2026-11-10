@@ -276,7 +276,11 @@ export const poolLogin = async (deps: RunDeps, options: { server?: string | unde
   const pinned: SignIn = { ...signIn, signingKeys: known === undefined ? signIn.signingKeys : held };
   await mkdirOwnerOnly(storeDir);
   await writeOwnerOnly(signInsFile(storeDir), `${JSON.stringify([...saved.filter((entry) => entry !== known), pinned])}\n`);
-  return { document: { ok: true, server, account: signIn.account, expiresAt: signIn.expiresAt }, text: `Signed in to ${server} as ${signIn.account}.` };
+  // The first deposit stops without a term file, so the login that precedes it says so.
+  const { terms: termsFile } = exclusionPaths(runtimeOf(deps).projectsRoot, deps.env);
+  const bare = (await loadTerms(termsFile)).length === 0;
+  return { document: { ok: true, server, account: signIn.account, expiresAt: signIn.expiresAt, ...(bare ? { termsFile } : {}) }, text: `Signed in to ${server} as ${signIn.account}.${bare ? `
+${termsHint(termsFile)}` : ''}` };
 };
 
 /** The pool is not answering: it could not be reached, or a gateway in front of it says so. */
@@ -495,6 +499,9 @@ const rawNote = (consent: string | null): string =>
 
 /** The exclusion terms in force now, re-read from the term file each time it is asked: empty when the file is missing or unreadable. */
 export const currentTerms = (deps: RunDeps): Promise<string[]> => loadTerms(exclusionPaths(runtimeOf(deps).projectsRoot, deps.env).terms);
+
+/** The one line a person with no exclusion terms needs: where the file goes and what names another. The deposit stays fail-closed without it (the A38 exclusion rule), so the first run says so before the deposit has to. */
+const termsHint = (file: string): string => `No exclusion terms file at ${file}: until it holds a term, one per line, every session stays out of the outbox. Create it there, or set OARS_EXCLUSION_TERMS to the file of your own.`;
 
 /** `deposit --send <hash>`: the send lock the detached sender (hook-bin.js nightly) takes too, then a skip for a hash already in `sent.log`, then the batch lock, then the covenant (accepted here or before, or nothing is sent), then the request. The body is read and hashed again just before the request. */
 const sendBatch = async (deps: RunDeps, options: { outbox: string; server: string; token: string; hash: string; acceptCovenant: string | undefined; region: Region | undefined; via: Sender | undefined }): Promise<Outcome> => {
@@ -718,6 +725,7 @@ export const poolDeposit = async (
     `Raw copies queued: ${String(counts.raw.copies)} (${String(counts.raw.bytes)} bytes, ${String(counts.raw.masked)} values masked). ${rawNote(saved.pool.rawConsent)}`.trim(),
     ...(rawStale(saved.pool, covenant) ? [`Your yes to the raw prompt was given under covenant ${saved.pool.rawConsentVersion ?? 'none'}, not ${covenant ?? ''}, so no raw copy is queued. Run oars pool raw --consent yes to answer for the covenant now in force.`] : []),
     ...(counts.off === 0 ? [] : [`${String(counts.off)} ${counts.off === 1 ? 'session' : 'sessions'} in a folder switched off: nothing of them is queued.`]),
+    ...(termList.length === 0 ? [termsHint(terms)] : []),
     'Run oars pool outbox to print exactly what would be sent.',
   ];
   return { document: { ok: true, server, ...counts }, text: lines.join('\n') };

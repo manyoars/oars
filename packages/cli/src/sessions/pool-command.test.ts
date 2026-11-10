@@ -254,6 +254,32 @@ describe('oars pool login', () => {
     expect(scene.h.out.join('')).toBe(`Signed in to ${POOL} as acct_one.\n`);
   });
 
+  it('names the exclusion-terms file and the variable that sets it when there is none, and says nothing when there is one', async () => {
+    const bare = setting();
+    const missing = join(bare.staged.root, 'no-such-terms.txt');
+    bare.h.deps.env.OARS_EXCLUSION_TERMS = missing;
+    poolAt(bare);
+    expect(await bare.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
+    const lines = bare.h.out.join('').split('\n');
+    expect(lines[0]).toBe(`Signed in to ${POOL} as acct_one.`);
+    expect(bare.h.out.join('')).toContain(missing);
+    expect(bare.h.out.join('')).toContain('OARS_EXCLUSION_TERMS');
+
+    // The default place, when the variable is not set, is named too.
+    const unset = setting();
+    delete unset.h.deps.env.OARS_EXCLUSION_TERMS;
+    poolAt(unset);
+    expect(await unset.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
+    expect(unset.h.out.join('')).toContain(join('session-commons', 'exclusion-terms.txt'));
+
+    // --json stays one document, and an empty file counts as none.
+    const json = setting();
+    writeFileSync(join(json.staged.root, 'terms.txt'), '\n');
+    poolAt(json);
+    expect(await json.cli('pool', 'login', '--provider', 'github', '--server', POOL, '--json')).toBe(ExitCode.OK);
+    expect(json.document()).toMatchObject({ ok: true, termsFile: join(json.staged.root, 'terms.txt') });
+  });
+
   it('goes on with a printed link when no browser opens', async () => {
     const scene = setting();
     scene.h.deps.openBrowser = () => Promise.reject(new Error('no browser'));
@@ -942,6 +968,24 @@ describe('oars pool deposit', () => {
       const scene = await alone([line('a plain request')]);
       scene.h.deps.env.OARS_EXCLUSION_TERMS = join(scene.staged.root, 'no-such-terms.txt');
       await expectNothingBuilt(scene, { folder: 0, term: 0, noRaw: 0, noTerms: 1, unreadable: 0 });
+    });
+
+    it('with no term file, the deposit says where the file goes and what sets it, and stays fail-closed', async () => {
+      const scene = await alone([line('a plain request')]);
+      const missing = join(scene.staged.root, 'no-such-terms.txt');
+      scene.h.deps.env.OARS_EXCLUSION_TERMS = missing;
+      expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+      expect(outboxFiles(scene)).toEqual([]);
+      const printed = scene.h.out.join('');
+      expect(printed).toContain('Wrote 0 of 1 sessions');
+      expect(printed).toContain(`No exclusion terms file at ${missing}`);
+      expect(printed).toContain('OARS_EXCLUSION_TERMS');
+
+      // With the file there, the line is gone.
+      writeFileSync(missing, 'zorblax\n');
+      scene.h.out.length = 0;
+      expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+      expect(scene.h.out.join('')).not.toContain('No exclusion terms file');
     });
 
     describe('a session that passed once and fails a gate later leaves the outbox', () => {
