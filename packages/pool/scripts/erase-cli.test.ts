@@ -471,6 +471,66 @@ describe('main: the find', () => {
   });
 });
 
+describe('main: the deposit find', () => {
+  const NAME = 'Jane Quentin Tenant';
+  const held = (sql: string): unknown[] => {
+    if (sql.startsWith('SELECT account, id, skeleton, extensions, counted_at FROM deposits')) return [{ account: ACCOUNT, id: 'sess-1', skeleton: `{"note":"${NAME}"}`, extensions: '[]', counted_at: Date.parse('2026-11-03T10:00:00Z') }, { account: ACCOUNT, id: 'sess-2', skeleton: '{}', extensions: '[]', counted_at: null }];
+    if (sql.startsWith('SELECT motif_id, motif FROM motifs')) return [{ motif_id: 'm1', motif: `{"program":"${NAME}"}` }];
+    if (sql.startsWith('SELECT rowid, key, harness_bucket, frame_bucket')) return [{ rowid: 1, key: `cell/${NAME}/x`, harness_bucket: 'h', frame_bucket: 'f', motif_id: 'm1' }];
+    if (sql.startsWith('SELECT kind, key, account, day FROM contributors')) return [{ kind: 'cell', key: `cell/${NAME}/x`, account: ACCOUNT, day: '2026-11-03' }];
+    return [];
+  };
+  const verbs = (calls: string[][]): string[] => calls.map((call) => (call[6] ?? '').split(' ')[0] ?? '');
+
+  it('reads the text from stdin and prints each deposit row (account, session, day) and the counts, and changes nothing', async () => {
+    const { io, calls, printed } = fake({ stdin: `${NAME}\n`, answer: held });
+    expect(await main(['row', '--contains', '--value-stdin', '--all-accounts'], io)).toBe(0);
+    expect(printed).toEqual([
+      JSON.stringify({ account: ACCOUNT, session: 'sess-1', day: '2026-11-03' }),
+      JSON.stringify({ depositsHeld: 1, motifsHeld: 1, cellsHeld: 1, contributorsHeld: 1 }),
+    ]);
+    // Only SELECTs reach D1, no R2 call is made, and the text is in no wrangler argument.
+    expect(verbs(calls).every((verb) => verb === 'SELECT')).toBe(true);
+    expect(calls.every((call) => call[0] === 'd1')).toBe(true);
+    expect(calls.flat().join('\n')).not.toContain(NAME);
+    expect(printed.join('\n')).not.toMatch(/Jane|Quentin|Tenant/);
+  });
+
+  it('looks in one account with --account, and the deposit read names it', async () => {
+    const { io, calls } = fake({ stdin: NAME, answer: held });
+    expect(await main(['row', '--contains', '--value-stdin', '--account', ACCOUNT, '--local'], io)).toBe(0);
+    expect(calls[0]?.[6]).toContain(`account = '${ACCOUNT}'`);
+    expect(calls.every((call) => call.includes('--local'))).toBe(true);
+  });
+
+  it('refuses neither or both account flags and a short text, without echoing the text and without a call', async () => {
+    for (const argv of [['row', '--contains', '--value-stdin'], ['row', '--contains', '--value-stdin', '--account', ACCOUNT, '--all-accounts']]) {
+      const { io, calls, printed } = fake({ stdin: NAME, answer: held });
+      expect(await main(argv, io)).toBe(1);
+      expect(printed).toEqual(['name exactly one of an account and every account']);
+      expect(calls).toEqual([]);
+    }
+    const short = fake({ stdin: 'Jane Do\n', answer: held });
+    expect(await main(['row', '--contains', '--value-stdin', '--all-accounts'], short.io)).toBe(1);
+    expect(short.printed[0]).toMatch(/at least 8 characters/);
+    expect(short.printed.join('')).not.toContain('Jane Do');
+    expect(short.calls).toEqual([]);
+  });
+
+  it('is the usage, and never a scrub, when the text is not on stdin, a session is named, or --confirm is given', async () => {
+    for (const argv of [['row', '--contains', '--all-accounts'], ['row', '--contains', '--value-stdin', '--all-accounts', '--confirm'], ['row', '--contains', '--value-stdin', '--account', ACCOUNT, '--id', 'sess-1', '--confirm']]) {
+      const { io, calls, printed } = fake({ stdin: NAME, answer: held });
+      expect(await main(argv, io)).toBe(2);
+      expect(printed).toEqual([USAGE]);
+      expect(calls).toEqual([]);
+    }
+  });
+
+  it('says how to use it in the usage text', () => {
+    expect(USAGE).toContain('row --contains --value-stdin');
+  });
+});
+
 describe('main: the export', () => {
   const TEXT = 'a redacted transcript';
   const HASH = createHash('sha256').update(TEXT).digest('hex');

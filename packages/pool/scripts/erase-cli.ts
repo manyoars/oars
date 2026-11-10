@@ -1,5 +1,5 @@
 // `npm run erase -w packages/pool -- <what> ...`: the operator's erasure command (docs/pool.md, "Erasure"). It changes nothing until `--confirm` is given; without it, it says what it would do.
-import { closeAccount, depositExists, eraseAccount, eraseLeakedSecret, eraseRawObject, findRawContaining, restrictAccount, type Erased, type EraseStore } from './erase.js';
+import { closeAccount, depositExists, eraseAccount, eraseLeakedSecret, eraseRawObject, findDepositsContaining, findRawContaining, restrictAccount, type Erased, type EraseStore } from './erase.js';
 import { exportAccount, type ExportFolder } from './export-account.js';
 import { rawConsentOf, withdrawRaw } from './withdraw-account.js';
 import { wranglerStore, type Lister, type ObjectFiles, type Target, type Wrangler } from './erase-wrangler.js';
@@ -12,6 +12,8 @@ export const USAGE = [
   '  raw <r2-key>                        delete one raw object (raw/<account>/<sha256>), tombstone it, and mark its ledger row',
   '  raw --contains --value-stdin        find the raw objects that hold a text (a person named in a deposit), read from stdin: it prints each object\'s key, account, and size and deletes nothing;',
   '        (--account <id> | --all-accounts)   exactly one; the keys it prints go to `raw <r2-key>`',
+  '  row --contains --value-stdin        find the deposit rows, motifs, cells, and contributor records that hold a text (a person named in a deposit), read from stdin: it prints the account, session, and day of each deposit row and the counts of the rest, and changes nothing;',
+  '        (--account <id> | --all-accounts)   exactly one; the sessions it prints go to `row --account <id> --id <session> --value-stdin`',
   '  row --account <id> --id <session>   replace a deposit row that holds a leaked secret with a marker and tombstone it',
   '        [--value-stdin]               also read the leaked value from stdin: scrub it from aggregates, erase every row that holds it,',
   '                                      and make ingest refuse it again (only its SHA-256 is kept)',
@@ -114,7 +116,15 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
       io.print(summary(await eraseRawObject(store, key, io.now())));
       return 0;
     }
-    if (what === 'row' && options.positional.length === 1 && options.account !== undefined && options.id !== undefined) {
+    // The deposit find reads and changes nothing, so it takes no --confirm. Like the raw find, the text is stdin's alone.
+    if (what === 'row' && options.contains && options.valueStdin && !options.confirm && options.id === undefined && options.positional.length === 1) {
+      const value = (await io.stdin()).replace(/\r?\n$/, '');
+      const found = await findDepositsContaining(store, { ...(options.account === undefined ? {} : { account: options.account }), allAccounts: options.allAccounts }, value);
+      for (const deposit of found.deposits) io.print(JSON.stringify(deposit));
+      io.print(JSON.stringify({ depositsHeld: found.deposits.length, motifsHeld: found.motifs, cellsHeld: found.cells, contributorsHeld: found.contributors }));
+      return 0;
+    }
+    if (what === 'row' && !options.contains && options.positional.length === 1 && options.account !== undefined && options.id !== undefined) {
       if (!options.confirm) {
         // The dry run reads the row, so a mistyped selector shows here and not as a tombstone for a session that was never deposited.
         const found = await depositExists(store, options.account, options.id);

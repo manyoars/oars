@@ -211,12 +211,12 @@ You cannot confirm them against an account, so confirm the claim instead: find t
    `npm run erase -w packages/pool -- raw --contains --value-stdin --all-accounts` (eight characters at least)
 2. It prints each matching key, account, and size, and changes nothing.
 3. Erase each key you accept. Dry run: `npm run erase -w packages/pool -- raw <r2-key>`. Read the line it prints, then add `--confirm`.
-4. Deposit rows (until the deposit find ships): put the text, and its JSON-escaped form, in a temporary SQL file of `SELECT account, id FROM deposits WHERE instr(skeleton, '<text>') > 0 OR instr(extensions, '<text>') > 0`-style reads over `deposits`, `motifs`, `cells`, and `contributors`. Run it with `npx wrangler d1 execute oars-pool --remote --file <file>` from `packages/pool` (this reads production, so only for a live request), then delete the file. `eraseLeakedSecret`'s search in `scripts/erase.ts` has the exact statements.
-5. Deposit skeletons, motifs, cells, and contributors that hold the text. Dry run, text on stdin: `npm run erase -w packages/pool -- row --account <id> --id <session> --value-stdin`. Read the line it prints, then add `--confirm`. That scrubs the text from every place it appears, for every account, and cannot be undone. Later deposits holding the exact text are refused.
-   The account is the one in the raw key or the deposit read. With no known session, the dry run shows "no such row: only the value would be erased".
+4. Deposit rows: `npm run erase -w packages/pool -- row --contains --value-stdin --all-accounts` (the text on stdin, eight characters at least; `--account <id>` looks in one account). It prints each deposit row that holds the text (account, session, and day) and the count of motifs, cells, and contributor records that hold it, never the text, and changes nothing. Run it beside the raw find: the keys and sessions the two print answer whether the pool holds the person's text. Erase each you accept with `row --value-stdin` and `raw <key>`.
+5. Erase what step 4 found. Dry run, text on stdin: `npm run erase -w packages/pool -- row --account <id> --id <session> --value-stdin`. Read the line it prints, then add `--confirm`. That scrubs the text from every place it appears, for every account, and cannot be undone. Later deposits holding the exact text are refused.
+   The account is the one in the raw key or the deposit find. With no known session, the dry run shows "no such row: only the value would be erased".
 
-Gap: **parts of a raw object still uploading are not searched**, and redaction can miss a name written in prose.
+Before you answer, wait seven days from the first search and run the raw find again: a staged part has by then become a raw object, which the find reads, or expired under the `staging/` rule. Redaction can miss a name written in prose.
 
-**Answer to send:** what you found and erased, or that you found nothing, within the month.
+**Answer to send:** what you found and erased, or that you found nothing, within the month. Give the person their text and where it sits (keys, sessions, dates), never the session around it, which is another person's (Art. 15(4)): "The pool holds your text in `<n>` records from `<dates>`. We can erase them. We cannot send the sessions around it, which are another person's (Art. 15(4))."
 
 **Record kept:** dates, and the keys erased. Do not keep the text you searched for.
