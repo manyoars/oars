@@ -27,6 +27,8 @@ You have been invoked in the following environment:
 
 Keep the blue lamp lit.` },
   { form: 'a rules file block on a Unix path', attachment: 'instructions', kind: 'instructions', body: 'Contents of /home/nobody/lamps/.claude/rules/lamps.md (project instructions, checked into the codebase):\n\nKeep the blue lamp lit.' },
+  { form: 'a CLAUDE.md block', attachment: 'instructions', kind: 'instructions', body: 'Contents of /home/nobody/lamps/CLAUDE.md (project instructions, checked into the codebase):\n\nKeep the blue lamp lit.' },
+  { form: 'a MEMORY.md block', attachment: 'instructions', kind: 'instructions', body: `Contents of ${win('C:', 'Users', 'nobody', '.claude', 'projects', 'lamps', 'memory', 'MEMORY.md')} (user's auto-memory, persists across conversations):\n\n- The blue lamp stays lit.` },
 ];
 
 describe('a system-role request blob', () => {
