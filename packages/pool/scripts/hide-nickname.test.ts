@@ -62,6 +62,22 @@ describe('hideNickname', () => {
     expect((await pool.post('/v1/clubs/join', { code, nickname: 'Kind Name', consent: await clubConsent() }, guest.token)).status).toBe(200);
   });
 
+  it('records one hide when the delete failed and the command is run again, and a rejoin hidden later records another', async () => {
+    const { club, code, guest } = await seated(4, 'Rude Name');
+    const later = new Date();
+    const failing: Pick<EraseStore, 'rows' | 'run'> = { rows: storeOf().rows, run: async (sql, binds) => (sql.startsWith('DELETE') ? Promise.reject(new Error('wrangler failed')) : storeOf().run(sql, binds)) };
+    await expect(hideNickname(failing, { club, nickname: 'Rude Name', by: 'matt', reason: 'abuse' }, later)).rejects.toThrow('wrangler failed');
+    expect(await membersOf(club)).toEqual(['Rude Name', 'owner']);
+    expect(await hideNickname(storeOf(), { club, nickname: 'Rude Name', by: 'matt', reason: 'abuse' }, later)).toBe('hidden');
+    expect(await membersOf(club)).toEqual(['owner']);
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM club_hides WHERE club = ?').bind(club).first('n')).toBe(1);
+    // Time passes: the first hide is now older than the seating the member is about to take again.
+    await db.prepare('UPDATE club_hides SET hidden_at = hidden_at - 10000 WHERE club = ?').bind(club).run();
+    expect((await pool.post('/v1/clubs/join', { code, nickname: 'Rude Name', consent: await clubConsent() }, guest.token)).status).toBe(200);
+    expect(await hideNickname(storeOf(), { club, nickname: 'Rude Name', by: 'matt', reason: 'again' }, new Date())).toBe('hidden');
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM club_hides WHERE club = ?').bind(club).first('n')).toBe(2);
+  });
+
   it('refuses a malformed club id, a missing nickname, and a missing who or why, changing nothing', async () => {
     const { club } = await seated(4, 'Keep Me');
     await expect(hideNickname(storeOf(), { club: "x'; DROP", nickname: 'Keep Me', by: 'm', reason: 'r' }, NOW)).rejects.toThrow(/not a club id/);
