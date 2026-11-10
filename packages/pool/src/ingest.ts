@@ -33,11 +33,11 @@ export const shapeOf = ({ transcripts }: SessionSkeleton): Shape => {
   return { steps: steps.length, failed: steps.filter(({ status }) => status === 'error').length, harnesses: [...new Set(transcripts.map(({ harness }) => harness))].sort() };
 };
 
-/** The row an account holds under this id: the mark of the write that set it, whether its tier is `none`, when it first counted (null when it does not), the shape it was counted with, and the increments that write made, or none when the stored skeleton no longer parses (see `previousOf`). */
+/** The row an account holds under this id: the mark of the write that set it, whether its tier is `none`, the `counted_at` it holds (raw: a `none` row keeps the date it had, which the upsert reuses when the row counts again), the shape it was counted with, and the increments that write made, or none when the stored skeleton no longer parses (see `previousOf`). */
 export interface Previous {
   ingest: string;
   none: boolean;
-  countedAt: number | null;
+  heldAt: number | null;
   shape: Shape | undefined;
   increments: Increments | undefined;
 }
@@ -53,12 +53,12 @@ export const previousOf = async (env: Env, account: string, id: string): Promise
   if (typeof text !== 'string' || typeof ingest !== 'string') return undefined;
   const none = fieldOf(held, 'tier') === 'none';
   const at = fieldOf(held, 'counted_at');
-  const countedAt = typeof at === 'number' && !none ? at : null;
+  const heldAt = typeof at === 'number' ? at : null;
   try {
     const parsed = parseSkeleton(JSON.parse(text));
-    return { ingest, none, countedAt, shape: parsed.ok ? shapeOf(parsed.skeleton) : undefined, increments: parsed.ok ? incrementsOf(parsed.skeleton) : undefined };
+    return { ingest, none, heldAt, shape: parsed.ok ? shapeOf(parsed.skeleton) : undefined, increments: parsed.ok ? incrementsOf(parsed.skeleton) : undefined };
   } catch {
-    return { ingest, none, countedAt, shape: undefined, increments: undefined };
+    return { ingest, none, heldAt, shape: undefined, increments: undefined };
   }
 };
 
@@ -147,6 +147,7 @@ export interface Counted {
 /**
  * The statements that move one deposit's counts in `account_weeks`, after the deposit's own row in the same transaction and under the same guard as the increments. `before` is what the row held (null when it did not count), `after` what it holds now (null when it does not):
  * the earlier contribution is taken back from its week and the new one added to its own, so two deposits of one week sum, a session sent again is one session, and a resend keeps its first week because `counted_at` keeps its first moment. The day and harness marks only add: a union cannot be unmixed.
+ * A limit: when a counted row's stored skeleton no longer parses, its shape is unknown, so `before` is null and a resend adds its session to its week again (the same limit `previousOf` notes for the increments).
  */
 export const weekStatements = (env: Env, account: string, id: string, ingest: string, before: Counted | null, after: Counted | null): Bound[] => {
   const guard = [account, id, ingest] as const;
