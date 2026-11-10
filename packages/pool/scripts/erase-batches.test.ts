@@ -163,9 +163,9 @@ describe('rewriting them (Items 2 and 3)', () => {
     // The old ids stand in no batch that names the account or the placeholder, and in no row of the rollup that names an erased account.
     for (const one of after.filter((seen) => seen.key.endsWith('-erased.json'))) expect(one.text).not.toMatch(new RegExp(`${INSTALL_A}|${INSTALL_B}|${fixture.account}`));
     // The anonymous batch of install A is rewritten too, with the same fresh id as A's other batches and no account added.
-    const anonAfter = JSON.parse(after.find((one) => one.key === rewriteKeyOf(fixture.keys.anonA))?.text ?? '{}') as object;
-    expect('account' in anonAfter).toBe(false);
-    expect(installOf(JSON.stringify(anonAfter))).toBe(installOf(after.find((one) => one.key === rewriteKeyOf(fixture.keys.a1))?.text ?? ''));
+    const anonText = after.find((one) => one.key === rewriteKeyOf(fixture.keys.anonA))?.text ?? '{}';
+    expect(fieldOf(JSON.parse(anonText), 'account')).toBeUndefined();
+    expect(installOf(anonText)).toBe(installOf(after.find((one) => one.key === rewriteKeyOf(fixture.keys.a1))?.text ?? ''));
     // The old ids stand in no object within retention (the past one is left to its lifecycle rule) and in no row of the rollup.
     for (const one of after.filter((seen) => seen.key !== fixture.keys.past)) expect(one.text).not.toMatch(new RegExp(`${INSTALL_A}|${INSTALL_B}`));
     const oldRows = (await db.prepare('SELECT install FROM telemetry_install_days WHERE install IN (?, ?)').bind(INSTALL_A, INSTALL_B).all()).results;
