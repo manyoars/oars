@@ -92,8 +92,8 @@ describe('the tarball npm pack would make', () => {
 // docs.stripe.com): ecosystem names, not terms of this product.
 const ECOSYSTEM_LISTS = ['dist/sessions/public-vocabulary.js', 'dist/sessions/public-vocabulary.d.ts'];
 
-// The raw-copy prompt must say the data may be sold (the covenant's sale sentence), so the one file that prints it may name `sell`.
-const SALE_NOTICE = ['dist/sessions/pool-command.js: /\\bsell/i'];
+// The raw-copy prompt must say the data may be sold (the covenant's sale sentence), so the two files that print it (this and the telemetry first-run notice) may name `sell`.
+const SALE_NOTICE = ['dist/sessions/pool-command.js: /\\bsell/i', 'dist/telemetry/consent.js: /\\bsell/i'];
 
 describe('the packed dist names none of the withheld terms', () => {
   it('has no withheld term in any packed dist file, declarations included', () => {

@@ -77,6 +77,10 @@ const seed = async (account: string, tag: string): Promise<void> => {
   await db.prepare('INSERT INTO deposit_hours (account, day, hour) VALUES (?, ?, ?)').bind(account, '2026-11-01', 14).run();
   await db.prepare('INSERT INTO telemetry_install_days (day, install, account, batches, events, measures) VALUES (?, ?, ?, 2, 5, ?)').bind('2026-11-01', `install-${tag}`, account, '{"a":1}').run();
   await db.prepare('INSERT INTO deposit_parts (account, batch, part, count, body, deposit, staged_at) VALUES (?, ?, 0, 3, ?, ?, 1700000400000)').bind(account, `batch-${tag}`, `body-${tag}`, `${tag}-s1`).run();
+  await db.prepare("INSERT INTO account_weeks (account, week, sessions, tool_steps, failed_steps, day_mask, harnesses) VALUES (?, '2026-W45', 3, 9, 1, 5, '[\"claude-code\"]')").bind(account).run();
+  await db.prepare("INSERT INTO club_members (club, account, nickname, joined_at) VALUES ('open', ?, ?, 1700000500000)").bind(account, `nick-${tag}`).run();
+  await db.prepare("INSERT INTO club_consents (account, club, text_sha256, accepted_at) VALUES (?, 'open', ?, 1700000500000)").bind(account, sha256(`consent-${tag}`)).run();
+  await db.prepare('INSERT INTO board_standing (account, granted_at, granted_by, reason) VALUES (?, 1700000600000, ?, ?)').bind(account, `operator-${tag}`, `fleet-${tag}`).run();
   await db.prepare("INSERT INTO erasure_audit (kind, reason, erased_on, rows_erased, objects_erased, account) VALUES ('account', ?, '2026-11-03', 4, 2, ?)").bind(`reason-${tag}`, account).run();
 };
 
@@ -123,6 +127,10 @@ describe('GET /v1/account/export', () => {
     ]);
     expect(rowsOf(pages, 'telemetry')).toEqual([{ day: '2026-11-01', install: 'install-mine', batches: 2, events: 5, measures: { a: 1 } }]);
     expect(rowsOf(pages, 'depositParts')).toEqual([{ batch: 'batch-mine', part: 0, count: 3, stagedAt: 1_700_000_400_000, deposit: 'mine-s1', body: 'body-mine' }]);
+    expect(rowsOf(pages, 'weeks')).toEqual([{ week: '2026-W45', sessions: 3, toolSteps: 9, failedSteps: 1, dayMask: 5, harnesses: ['claude-code'] }]);
+    expect(rowsOf(pages, 'clubs')).toEqual([{ club: 'open', nickname: 'nick-mine', joinedAt: 1_700_000_500_000 }]);
+    expect(rowsOf(pages, 'clubConsents')).toEqual([{ club: 'open', textSha256: sha256('consent-mine'), acceptedAt: 1_700_000_500_000 }]);
+    expect(rowsOf(pages, 'standing')).toEqual([{ grantedAt: 1_700_000_600_000, grantedBy: 'operator-mine', reason: 'fleet-mine' }]);
     expect(rowsOf(pages, 'erasures')).toEqual([{ kind: 'account', reason: 'reason-mine', erasedOn: '2026-11-03', rowsErased: 4, objectsErased: 2 }]);
     // The ledger lists the held object and the tombstoned one, each by the key it is stored under.
     expect(rowsOf(pages, 'rawLedger')).toEqual(
@@ -206,7 +214,7 @@ describe('GET /v1/account/export', () => {
   it('writes nothing', async () => {
     const { token, account } = await pool.signIn('github', stubUser('5409'));
     await seed(account, 'quiet');
-    const count = async (): Promise<number> => Number(fieldOf(await db.prepare('SELECT (SELECT COUNT(*) FROM tokens) + (SELECT COUNT(*) FROM deposits) + (SELECT COUNT(*) FROM raw_objects) + (SELECT COUNT(*) FROM covenant_acceptances) + (SELECT COUNT(*) FROM machines) + (SELECT COUNT(*) FROM covenant_served) + (SELECT COUNT(*) FROM accounts) + (SELECT COUNT(*) FROM deposit_parts) + (SELECT COUNT(*) FROM erasure_audit) + (SELECT COUNT(*) FROM telemetry_install_days) + (SELECT COUNT(*) FROM account_repo_keys) + (SELECT COUNT(*) FROM deposit_hours) AS n').first(), 'n'));
+    const count = async (): Promise<number> => Number(fieldOf(await db.prepare('SELECT (SELECT COUNT(*) FROM tokens) + (SELECT COUNT(*) FROM deposits) + (SELECT COUNT(*) FROM raw_objects) + (SELECT COUNT(*) FROM covenant_acceptances) + (SELECT COUNT(*) FROM machines) + (SELECT COUNT(*) FROM covenant_served) + (SELECT COUNT(*) FROM accounts) + (SELECT COUNT(*) FROM deposit_parts) + (SELECT COUNT(*) FROM erasure_audit) + (SELECT COUNT(*) FROM telemetry_install_days) + (SELECT COUNT(*) FROM account_repo_keys) + (SELECT COUNT(*) FROM deposit_hours) + (SELECT COUNT(*) FROM account_weeks) + (SELECT COUNT(*) FROM club_members) + (SELECT COUNT(*) FROM club_consents) + (SELECT COUNT(*) FROM board_standing) AS n').first(), 'n'));
     const before = await count();
     await everyPage(token);
     expect(await count()).toBe(before);

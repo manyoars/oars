@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "erase": "node scripts/erase.mjs",
+    "grant-standing": "node scripts/grant-standing.mjs",
     "dev": "wrangler dev --port 8788"
   },
   "devDependencies": {

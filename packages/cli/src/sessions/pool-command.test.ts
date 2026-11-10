@@ -1,6 +1,7 @@
 import { createHash, createHmac, webcrypto } from 'node:crypto';
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -173,6 +174,17 @@ describe('the raw prompt states when and what uploads', () => {
     expect(RAW_PROMPT).toContain('once the pool says your account accepted its covenant');
     expect(RAW_PROMPT).toContain('except a folder you set to skeleton only or off');
     expect(RAW_PROMPT).toContain('a block in a shape the redactor does not list yet, a summary the harness writes for a session you left, a file it quotes after compaction, the echo of a command you ran, a reminder the harness puts in the middle of a message, and what an agent reports back are not, and stay as written; the project folder name and working directory on each line also stay readable, apart from the masking above.');
+  });
+});
+
+describe('the raw prompt matches the covenant it points to', () => {
+  const covenant = readFileSync(fileURLToPath(new URL('../../../../docs/covenant/2.0-4c538c50d706.md', import.meta.url)), 'utf8').replace(/\s+/g, ' ');
+
+  it('still licenses Raw Copies (2.3) and reaches copies already sent on withdrawal (6.6(b))', () => {
+    expect(covenant).toContain('The grant covers Skeletons, Raw Copies, every other part of a Deposit');
+    expect(covenant).toContain('Withdrawal reaches Raw Copies already sent');
+    expect(RAW_PROMPT).toContain('covered by the covenant you accepted, including its license to sell them');
+    expect(RAW_PROMPT).toContain('it also reaches copies already sent');
   });
 });
 
