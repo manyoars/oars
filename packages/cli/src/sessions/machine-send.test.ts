@@ -78,12 +78,23 @@ describe('a cloud machine: the proxy holds the token', () => {
     expect(deposits(pool)).toBe(2);
   });
 
-  it('is silent on a hold-only enrollment, where the runtime holds no secret and the pool answers unauthorized', async () => {
+  it('makes no call on a hold-only enrollment, which says so with OARS_HOLD_ONLY', async () => {
+    const { staged, env, deps, outbox } = scene('cloud');
+    env.OARS_HOLD_ONLY = '1';
+    await hold(outbox);
+    const pool = poolOf();
+    expect(await machineSend(deps, senderOf(pool, false))).toEqual({ outcome: 'no-credential', batches: 0 });
+    expect(pool.calls).toEqual([]);
+    expect(existsSync(noticeFile(staged.storeDir))).toBe(false);
+  });
+
+  it('tells the person when a cloud machine without the marker gets 401 unauthorized: the proxy secret is wrong or old', async () => {
     const { staged, deps, outbox } = scene('cloud');
     await hold(outbox);
     const pool = poolOf({ answers: { 'POST /v1/machines/activate': error(401, 'unauthorized') } });
     expect(await machineSend(deps, senderOf(pool, false))).toEqual({ outcome: 'refused', batches: 0 });
-    expect(existsSync(join(staged.storeDir, 'pool-send.log'))).toBe(false);
+    expect(readFileOrEmpty(join(staged.storeDir, 'pool-send.log'))).toContain('unauthorized');
+    expect(takeNotice(staged.storeDir)).toContain('does not know the credential');
   });
 });
 
@@ -118,7 +129,7 @@ describe('a durable machine: activation, rotation, the key file', () => {
     expect(pool.calls.every((call) => call.authorization === `Bearer ${KEY}`)).toBe(true);
   });
 
-  it('recovers from a crash before the key was written: the token is still there, and the run activates and rotates again', async () => {
+  it('a refused rotate leaves the token, and the next run rotates', async () => {
     const { staged, env, deps } = scene('vps');
     writeFileSync(tokenFile(env, staged.storeDir), `${TOKEN}\n`);
     const pool = poolOf({ answers: { 'POST /v1/machines/rotate': error(500, 'internal') } });
@@ -128,6 +139,20 @@ describe('a durable machine: activation, rotation, the key file', () => {
     const next = poolOf();
     await machineSend(deps, senderOf(next, true));
     expect(readFileSync(keyFile(staged.storeDir), 'utf8').trim()).toBe(KEY);
+  });
+
+  it('a rotate the pool made but the machine never wrote down leaves a retired token and no key: every run is told to enroll again', async () => {
+    const { staged, env, deps, outbox } = scene('vps');
+    writeFileSync(tokenFile(env, staged.storeDir), `${TOKEN}
+`);
+    await hold(outbox);
+    const pool = poolOf({ answers: { 'POST /v1/machines/activate': error(401, 'token_retired') } });
+    expect(await machineSend(deps, senderOf(pool, true))).toEqual({ outcome: 'refused', batches: 0 });
+    expect(deposits(pool)).toBe(0);
+    const text = takeNotice(staged.storeDir);
+    expect(text).toContain('Enroll the machine again');
+    expect(text).toContain('oars pool machines');
+    expect(text).not.toContain(TOKEN);
   });
 
   it('holds no credential: it makes no call', async () => {
@@ -250,6 +275,20 @@ describe('the expiry notice', () => {
     const later = nightlyPoolDeps(deps.env, staged.runtime, '0.0.0-test', () => NOW + DAY + 1);
     await machineSend(later, senderOf(pool, true));
     expect(existsSync(noticeFile(staged.storeDir))).toBe(true);
+  });
+
+  it('drops the expiring entry when the key is then found expired or revoked', async () => {
+    for (const code of ['machine_expired', 'machine_revoked']) {
+      const { staged, deps } = scene('vps');
+      writeFileSync(keyFile(staged.storeDir), `${KEY}
+`);
+      await machineSend(deps, senderOf(poolOf({ expiresAt: NOW + 3 * DAY }), true));
+      const later = nightlyPoolDeps(deps.env, staged.runtime, '0.0.0-test', () => NOW + DAY + 1);
+      await machineSend(later, senderOf(poolOf({ answers: { 'GET /v1/covenant': error(401, code) } }), true));
+      const text = takeNotice(staged.storeDir) ?? '';
+      expect(text).not.toContain('expires on');
+      expect(text).toContain(code === 'machine_expired' ? 'has expired' : 'revoked');
+    }
   });
 
   it('prints through messageOf as one message', () => {

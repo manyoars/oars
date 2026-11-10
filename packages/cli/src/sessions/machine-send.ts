@@ -29,7 +29,11 @@ export interface MachineSend {
 /** A cloud VM is new every time, so "activated" is a file in its own store; a durable machine's mark is its key file. */
 const markerOf = (storeDir: string): string => join(storeDir, 'machine-activated');
 
-const DEAD: { [code: string]: NoticeCode } = { machine_expired: 'machine_key_expired', machine_revoked: 'machine_key_revoked' };
+const DEAD: { [code: string]: NoticeCode } = { machine_expired: 'machine_key_expired', machine_revoked: 'machine_key_revoked',
+  // A rotation that succeeded at the pool but died before the key was written leaves a retired token and no key.
+  token_retired: 'machine_key_retired',
+  unauthorized: 'machine_key_unknown',
+};
 
 interface Run {
   deps: RunDeps;
@@ -89,9 +93,7 @@ const activated = async (run: Run, hostClass: string): Promise<MachineCredential
   const call = credential.token === undefined ? {} : { token: credential.token };
   const reply = await ask(deps, DEPOSIT, server, '/v1/machines/activate', { ...call, body: {} }, via);
   if (reply.status !== 200 || !isObject(reply.body)) {
-    // A cloud machine whose runtime holds no network secret is a hold-only enrollment: the pool says the request carries no credential, and that is not a failure to report.
-    const holdOnly = hostClass === 'cloud' && reply.status === 401 && isObject(reply.body) && textIn(reply.body, 'error') === 'unauthorized';
-    return holdOnly ? undefined : failed(run, refusal(DEPOSIT, reply));
+    return failed(run, refusal(DEPOSIT, reply));
   }
   if (Reflect.get(reply.body, 'rotate') !== true) {
     await writeOwnerOnly(markerOf(storeDir), `${new Date(deps.now()).toISOString()}\n`);
@@ -104,6 +106,9 @@ const activated = async (run: Run, hostClass: string): Promise<MachineCredential
   await rm(tokenFile(deps.env, storeDir), { force: true });
   return { source: 'key', token: key };
 };
+
+/** `OARS_HOLD_ONLY` set to anything but empty, `0`, or `false`: the machine holds its sessions and deposits nothing itself. */
+const isHoldOnly = (env: NodeJS.ProcessEnv): boolean => !['', '0', 'false'].includes((env.OARS_HOLD_ONLY ?? '').trim().toLowerCase());
 
 /** A refusal about this one batch (its content), after which the next may still go; anything else (a dead key, a closed pool, an unreachable one) ends the run. */
 const aboutBatch = (error: unknown): boolean => error instanceof CliError && [400, 409, 413, 422].includes(error.problem.status ?? 0);
@@ -121,6 +126,8 @@ export const machineSend = async (deps: RunDeps, via?: Sender): Promise<MachineS
     } catch {
       return none('no-server');
     }
+    // A hold-only enrollment has no pool key to present; `OARS_HOLD_ONLY` says so, and every other cloud 401 is reported.
+    if (isHoldOnly(deps.env)) return none('no-credential');
     const first = await credentialOf(machine.hostClass, deps.env, storeDir);
     if (first === undefined) return none('no-credential');
     const net = watching(deps, storeDir, via ?? networkSender(deps, DEPOSIT));

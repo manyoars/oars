@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
 
-export const NOTICE_CODES = ['vocabulary_expired', 'hold_unconfigured', 'machine_key_expiring', 'machine_key_expired', 'machine_key_revoked'] as const;
+export const NOTICE_CODES = ['vocabulary_expired', 'hold_unconfigured', 'machine_key_expiring', 'machine_key_expired', 'machine_key_revoked', 'machine_key_retired', 'machine_key_unknown'] as const;
 export type NoticeCode = (typeof NOTICE_CODES)[number];
 
 export interface NoticeEntry {
@@ -34,6 +34,8 @@ const TEXT: { [code in NoticeCode]: (entry: NoticeEntry) => string } = {
   machine_key_expiring: (entry) => `The pool key of this machine expires ${entry.expiresAt === undefined ? 'soon' : `on ${new Date(entry.expiresAt).toISOString().slice(0, 10)}`}; after that its deposits are refused. ${LIST} Enroll the machine again with oars pool enroll before then.`,
   machine_key_expired: () => `The pool key of this machine has expired, so its deposits are refused and its batches wait in its outbox. ${LIST} Enroll the machine again with oars pool enroll.`,
   machine_key_revoked: () => 'The account revoked the pool key of this machine, so its deposits are refused and its batches wait in its outbox. See oars pool machines; enroll this machine again with oars pool enroll if the revocation was a mistake.',
+  machine_key_retired: () => `The pool key of this machine was replaced by a rotation that did not finish on this machine, so the pool refuses what is left of it and its batches wait in its outbox. ${LIST} Enroll the machine again with oars pool enroll.`,
+  machine_key_unknown: () => `The pool does not know the credential this machine presents, so its deposits are refused and its batches wait in its outbox. Check the network secret (cloud) or the key file (other machines), or enroll the machine again; ${LIST}`,
 };
 
 const isCode = (value: unknown): value is NoticeCode => NOTICE_CODES.some((code) => code === value);
@@ -66,6 +68,8 @@ export const recordNotice = async (storeDir: string, code: NoticeCode, at: numbe
   const kept = entriesOf(await readFile(noticeFile(storeDir), 'utf8').catch(() => ''));
   // A Map keeps a key's first place when it is set again.
   const byCode = new Map(kept.map((entry) => [entry.code, entry]));
+  // A key that is expired or revoked is no longer "expiring": one message must not say both.
+  if (code === 'machine_key_expired' || code === 'machine_key_revoked') byCode.delete('machine_key_expiring');
   byCode.set(code, { code, at, ...(expiresAt === undefined ? {} : { expiresAt }) });
   const entries = [...byCode.values()];
   await mkdirOwnerOnly(storeDir);

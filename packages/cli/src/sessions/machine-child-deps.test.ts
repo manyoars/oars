@@ -24,7 +24,7 @@ afterEach(() => {
 const SESSION = '99999999-9999-4999-8999-000000000001';
 const NO_WAIT = { quietMs: 0, maxMs: 0, pollMs: 1 };
 /** The pool as a runtime with no network secret sees it: every call is unauthenticated, so the child sends nothing and the test never leaves the machine. */
-const OFFLINE: Sender = () => Promise.resolve({ status: 401, body: { error: 'unauthorized' }, headers: new Headers() });
+const OFFLINE: Sender = () => Promise.reject(new Error('these tests build and hold; the machine is hold-only and must not reach the pool'));
 
 const lineOf = (content: string, cwd = '/w'): string => JSON.stringify({ type: 'user', sessionId: SESSION, cwd, timestamp: '2026-05-01T01:00:00Z', permissionMode: 'default', message: { role: 'user', content } });
 
@@ -50,7 +50,7 @@ const scene = (remote: string, content = 'a plain request'): Scene => {
 const stopText = (given: Scene): string => JSON.stringify({ session_id: SESSION, transcript_path: given.transcript, cwd: given.repo });
 
 const run = (given: Scene, env: { [name: string]: string }, now: () => number = Date.now): Promise<void> =>
-  runMachineChild({ OARS_HOST_CLASS: 'cloud', OARS_MACHINE: 'm-1', APPDATA: given.staged.root, ...env }, given.staged.runtime, '0.0.0-test', now, stopText(given), NO_WAIT, OFFLINE);
+  runMachineChild({ OARS_HOST_CLASS: 'cloud', OARS_MACHINE: 'm-1', OARS_HOLD_ONLY: '1', APPDATA: given.staged.root, ...env }, given.staged.runtime, '0.0.0-test', now, stopText(given), NO_WAIT, OFFLINE);
 
 const batches = (staged: Staged): string[] => {
   const root = join(staged.storeDir, 'pool-outbox');
@@ -89,7 +89,7 @@ describe('runMachineChild: the repository allow list', () => {
     const plain = mkdtempSync(join(tmpdir(), 'oars-machine-plain-'));
     made.push(plain);
     mkdirSync(join(plain, 'work'));
-    await runMachineChild({ OARS_HOST_CLASS: 'cloud', OARS_ALLOW_REPOS: 'owner/name', APPDATA: given.staged.root, ...TERMS }, given.staged.runtime, '0.0.0-test', Date.now, JSON.stringify({ session_id: SESSION, transcript_path: given.transcript, cwd: join(plain, 'work') }), NO_WAIT, OFFLINE);
+    await runMachineChild({ OARS_HOST_CLASS: 'cloud', OARS_ALLOW_REPOS: 'owner/name', OARS_HOLD_ONLY: '1', APPDATA: given.staged.root, ...TERMS }, given.staged.runtime, '0.0.0-test', Date.now, JSON.stringify({ session_id: SESSION, transcript_path: given.transcript, cwd: join(plain, 'work') }), NO_WAIT, OFFLINE);
     expect(batches(given.staged)).toEqual([]);
   });
 });
@@ -215,7 +215,7 @@ describe('runMachineChild: the holding route', () => {
 
   it('tells the person once for a machine with OARS_HOST_CLASS alone, before any gate: no list, no id, no salt, and nothing built or logged', async () => {
     const given = scene('https://github.com/owner/name');
-    await runMachineChild({ OARS_HOST_CLASS: 'cloud', APPDATA: given.staged.root }, given.staged.runtime, '0.0.0-test', Date.now, stopText(given), NO_WAIT, OFFLINE);
+    await runMachineChild({ OARS_HOST_CLASS: 'cloud', OARS_HOLD_ONLY: '1', APPDATA: given.staged.root }, given.staged.runtime, '0.0.0-test', Date.now, stopText(given), NO_WAIT, OFFLINE);
     expect(JSON.parse(readFileSync(noticeFile(given.staged.storeDir), 'utf8'))).toMatchObject({ entries: [{ code: 'hold_unconfigured' }] });
     expect(batches(given.staged)).toEqual([]);
     expect(existsSync(join(given.staged.storeDir, 'pool-send.log'))).toBe(false);
