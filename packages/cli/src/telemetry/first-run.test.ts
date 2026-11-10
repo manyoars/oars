@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { run, type RunDeps } from '../cli.js';
 import { defaultConfigDir } from '../credentials.js';
 import { harness } from '../test-support.js';
+import { NOTICE_VERSION, shownNoticeVersion } from './consent.js';
 import { finishTelemetry } from './observe.js';
 import { readSpool } from './spool.js';
 
@@ -121,6 +122,16 @@ describe('`oars telemetry on` as the first command', () => {
     await run(['telemetry', 'on'], deps);
     expect(firstRuns(dir)).toHaveLength(1);
     expect(spooled(dir).map((event) => event.type)).toEqual(['first-run', 'command', 'command']);
+  });
+
+  it('is not spooled again for an install that saw an older notice, which telemetry on re-marks with the current version', async () => {
+    const { deps, dir } = setup();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'settings.json'), JSON.stringify({ noticeShownAt: '2026-11-01T00:00:00.000Z' }));
+    expect(await run(['telemetry', 'on'], deps)).toBe(0);
+    expect(firstRuns(dir)).toEqual([]);
+    expect(spooled(dir).map((event) => event.type)).toEqual(['command']);
+    expect(shownNoticeVersion(dir)).toBe(NOTICE_VERSION);
   });
 
   it('is spooled when `off` came first and `on` turns telemetry back on, since `off` shows no notice', async () => {
