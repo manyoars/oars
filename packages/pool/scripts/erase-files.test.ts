@@ -1,5 +1,5 @@
 // The scratch files the find reads an object from: real files, in a folder of the run's own.
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -52,6 +52,38 @@ describe('the export folder', () => {
       expect(existsSync(join(parent, 'request-1', 'raw', 'abc'))).toBe(false);
       // A file that is not there is not an error.
       await folder.remove('raw/abc');
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a folder that already holds files, so no copy from an earlier run can be sent, and writes into an empty or missing one', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'oars-export-test-'));
+    try {
+      const used = join(parent, 'used');
+      mkdirSync(used);
+      writeFileSync(join(used, 'account-export-0001.json'), 'stale');
+      await expect(nodeFolder(used).write('account-export-0001.json', 'new')).rejects.toThrow('use a new, empty folder for each run');
+      expect(readFileSync(join(used, 'account-export-0001.json'), 'utf8')).toBe('stale');
+      const empty = join(parent, 'empty');
+      mkdirSync(empty);
+      await nodeFolder(empty).write('account-export-0001.json', 'new');
+      expect(readFileSync(join(empty, 'account-export-0001.json'), 'utf8')).toBe('new');
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('creates the folder readable by the operator alone, 0700 for folders and 0600 for files', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'oars-export-test-'));
+    try {
+      const folder = nodeFolder(join(parent, 'request-2'));
+      await folder.write('raw/abc', asyncPieces([Buffer.from('bytes')]));
+      await folder.write('account-export-0001.json', '{}');
+      expect(statSync(join(parent, 'request-2')).mode & 0o777).toBe(0o700);
+      expect(statSync(join(parent, 'request-2', 'raw')).mode & 0o777).toBe(0o700);
+      expect(statSync(join(parent, 'request-2', 'raw', 'abc')).mode & 0o777).toBe(0o600);
+      expect(statSync(join(parent, 'request-2', 'account-export-0001.json')).mode & 0o777).toBe(0o600);
     } finally {
       rmSync(parent, { recursive: true, force: true });
     }

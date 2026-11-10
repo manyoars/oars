@@ -54,7 +54,7 @@ Rules for how hard to ask:
 4. When they report the files are saved, the answer is complete. If the command fails, send the error line back and retry once the cause is fixed.
 
 **Command (the operator runs it, when the requester cannot run the client):** confirm the account by a token proof first (see "Who is asking": `oars pool prove`, or a refused sign-in; never a machine key). Then, from the repository root:
-`npm run erase -w packages/pool -- export --account <account id> --out <folder> [--raw] [--local]`.
+`npm run erase -w packages/pool -- export --account <account id> --out <folder> [--raw] [--local]`. Use a new, empty folder for each run: the command refuses a folder that already holds files, so a copy from an earlier run is never sent by mistake.
 It only reads, so it takes no `--confirm`. It writes the same `account-export-NNNN.json` pages `oars pool export` writes (one page builder serves both), and with `--raw` each raw object not erased, checked against its name; it lists any that is missing or altered and exits non-zero while still writing the rest. It reads D1 and R2 through your own `wrangler` login, so it needs no token; `--local` reads the local store.
 
 **Operator steps:** 1. Confirm the account (above). 2. Run the command; read the counts it prints. 3. Send the folder as one archive encrypted with a passphrase, and the passphrase by another channel the requester names (Art. 32). 4. Delete your copy of the folder and the archive once they confirm they have it.
