@@ -1,12 +1,15 @@
 // The first sale's sample pack (P98 (10) to (12)): fixture stores, built in a temp folder, with an invented term and invented instruction text.
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as Exclusion from '../../cli/src/sessions/exclusion.js';
 import { SKELETON_FORMAT, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { deposit, loadStore, paths, type SessionsRuntime } from '../../cli/src/sessions/store.js';
+import { runGit } from '../../cli/src/sessions/survival.js';
 import { rolloutLine, stageCodex } from '../../cli/src/sessions/test-support.js';
 import { buildPack, HARNESS_TERMS, main, matchIdOf, ownerOf, parseOwners, secretIn, serverKeyOf, skeletonUnder, USAGE, type Census, type ManifestRow, type PackCounts, type PackOptions, type Tally } from './sample-pack.js';
 
@@ -43,8 +46,8 @@ const uuidOf = (session: string, kind: 'a' | 'b', n: number): string => `${sessi
 const requestOf = (session: string, n: number): string => `req_011C${session.slice(0, 8)}x${String(n)}`;
 // The working directory of a fixture's sessions: a folder with an origin remote, so the store records a repository for them. `fixture()` sets it.
 let repoCwd = '';
-const user = (session: string, n: number, content: string, cwd = repoCwd): string =>
-  line({ type: 'user', uuid: uuidOf(session, 'b', n), parentUuid: null, isSidechain: false, timestamp: at(n), version: '2.1.300', sessionId: session, cwd, message: { role: 'user', content } });
+const user = (session: string, n: number, content: string, cwd = repoCwd, gitBranch?: string): string =>
+  line({ type: 'user', uuid: uuidOf(session, 'b', n), parentUuid: null, isSidechain: false, timestamp: at(n), version: '2.1.300', sessionId: session, cwd, ...(gitBranch === undefined ? {} : { gitBranch }), message: { role: 'user', content } });
 const assistant = (session: string, n: number, text: string): string =>
   line({ type: 'assistant', uuid: uuidOf(session, 'a', n), parentUuid: uuidOf(session, 'b', n), isSidechain: false, timestamp: at(n + 1), version: '2.1.300', sessionId: session, requestId: requestOf(session, n), message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text }], usage: { input_tokens: 10, output_tokens: 20 } } });
 // Where the harness puts CLAUDE.md and the memory index: an `instructions` attachment, and a leading `<system-reminder>` of a user message.
@@ -365,6 +368,290 @@ describe('the skeleton and the manifest fields it adds (plan S3)', () => {
   });
 });
 
+// Each of these runs several real git processes, and a Windows runner spends seconds on them.
+describe('the repository pointer and the outcome (plan S4)', { timeout: 30_000 }, () => {
+  const REMOTE = 'https://example.com/acme/app.git';
+  const OPTED_IN = [{ folder: '*-oars*', owner: 'Many Oars Co.', license: 'Apache-2.0', pointer: true }];
+
+  // A real repository in the fixture's temp folder; git is never run against the oars checkout. Commit dates are fixed so `--before` has something to order.
+  const git = (repo: string, args: readonly string[], when = '2026-05-20T12:00:00Z'): string =>
+    execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], { encoding: 'utf8', env: { ...process.env, GIT_COMMITTER_DATE: when, GIT_AUTHOR_DATE: when } }).trim();
+
+  const commitIn = (repo: string, name: string, when: string): string => {
+    writeFileSync(join(repo, name), `${name}\n`);
+    git(repo, ['add', name]);
+    git(repo, ['commit', '-m', name], when);
+    return git(repo, ['rev-parse', 'HEAD']);
+  };
+
+  interface Shas {
+    base: string;
+    onMain: string;
+    onFeature: string;
+  }
+
+  // `main` is checked out and is the remote's default branch; `feature` holds one more, newer commit. A session on `feature` that read HEAD would get the wrong one.
+  const makeRepo = (repo: string): Shas => {
+    mkdirSync(repo, { recursive: true });
+    git(repo, ['init', '-q', '-b', 'main']);
+    git(repo, ['remote', 'add', 'origin', REMOTE]);
+    const base = commitIn(repo, 'base.txt', '2026-05-01T12:00:00Z');
+    const onMain = commitIn(repo, 'main.txt', '2026-05-20T12:00:00Z');
+    git(repo, ['checkout', '-q', '-b', 'feature']);
+    const onFeature = commitIn(repo, 'feature.txt', '2026-05-25T12:00:00Z');
+    git(repo, ['checkout', '-q', 'main']);
+    git(repo, ['update-ref', 'refs/remotes/origin/main', onMain]);
+    git(repo, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);
+    return { base, onMain, onFeature };
+  };
+
+  const pointerOf = (row: ManifestRow | undefined): unknown => (row === undefined ? undefined : Reflect.get(row, 'pointer'));
+
+  it('gives a session on a branch that is not checked out the newest commit of its own branch before it started, not HEAD', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    const shas = makeRepo(repo);
+    // A commit on the session's own branch dated after it started: the cutoff must keep it out.
+    git(repo, ['checkout', '-q', 'feature']);
+    commitIn(repo, 'after-start.txt', '2026-06-03T12:00:00Z');
+    git(repo, ['checkout', '-q', 'main']);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'feature'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    expect(pointerOf(manifest(f.out)[0])).toMatchObject({ remote: REMOTE, commit: shas.onFeature });
+  });
+
+  it('falls back to origin/<branch> when the local branch is gone, then to origin/HEAD with the same cutoff, and never reads a commit made after the session started', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    const shas = makeRepo(repo);
+    git(repo, ['update-ref', 'refs/remotes/origin/topic', shas.onFeature]);
+    git(repo, ['branch', '-q', '-D', 'feature']);
+    // A commit on main dated after the session began: the cutoff must keep it out.
+    // The remote's default branch holds it too, so the origin/HEAD lookup reaches it unless the cutoff stops it.
+    git(repo, ['update-ref', 'refs/remotes/origin/main', commitIn(repo, 'later.txt', '2026-06-02T12:00:00Z')]);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'topic'), assistant(S(1), 1, 'done')]);
+    f.write('-work-oars', S(2), [user(S(2), 1, 'rename a helper', repo, 'never-pushed'), assistant(S(2), 1, 'done')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    const byTurn = new Map(manifest(f.out).map((row) => [row.matchId, pointerOf(row)]));
+    expect([...byTurn.values()]).toEqual(expect.arrayContaining([expect.objectContaining({ commit: shas.onFeature }), expect.objectContaining({ commit: shas.onMain })]));
+    expect(byTurn.size).toBe(2);
+  });
+
+  it('maps a working directory that no longer exists to the repository it was a worktree of', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    const shas = makeRepo(repo);
+    const gone = join(repo, '.claude', 'worktrees', 't1');
+    mkdirSync(gone, { recursive: true });
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', gone, 'task/t1'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    rmSync(join(repo, '.claude'), { recursive: true });
+    const counts = await buildPack(f.runtime, options(f));
+    expect(pointerOf(manifest(f.out)[0])).toEqual({ remote: REMOTE, commit: shas.onMain });
+    expect(counts.noPointer).toBe(0);
+  });
+
+  it('reads pointer: null for a session whose directory and repository are both gone, and counts it once', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    makeRepo(repo);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'feature'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    rmSync(repo, { recursive: true, force: true });
+    const counts = await buildPack(f.runtime, options(f));
+    const [row] = manifest(f.out);
+    expect(row).toBeDefined();
+    expect(Reflect.get(row ?? {}, 'pointer')).toBeNull();
+    expect(counts).toMatchObject({ emitted: 1, noPointer: 1 });
+  });
+
+  it('makes no git call, writes no pointer or outcome, and counts no noPointer when no owners entry opts in', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    makeRepo(repo);
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'feature'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    const spy = vi.fn(runGit);
+    const counts = await buildPack(f.runtime, options(f, { git: spy }));
+    expect(spy).not.toHaveBeenCalled();
+    const [row] = manifest(f.out);
+    expect(row).toBeDefined();
+    expect(row ? Object.keys(row) : []).not.toEqual(expect.arrayContaining(['pointer']));
+    expect(row ? Object.keys(row) : []).not.toEqual(expect.arrayContaining(['outcome']));
+    expect(counts).toMatchObject({ emitted: 1, noPointer: 0 });
+  });
+
+  it('asks the injected runner for the remote of the working directory, and drops credentials embedded in the remote URL', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    const shas = makeRepo(repo);
+    git(repo, ['remote', 'set-url', 'origin', 'https://builder:s3cret@example.com/acme/app.git']);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'feature'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    const spy = vi.fn(runGit);
+    await buildPack(f.runtime, options(f, { git: spy }));
+    expect(spy).toHaveBeenCalledWith(repo, ['remote', 'get-url', 'origin']);
+    expect(pointerOf(manifest(f.out)[0])).toEqual({ remote: REMOTE, commit: shas.onFeature });
+    expect(readFileSync(join(f.out, 'manifest.jsonl'), 'utf8')).not.toContain('s3cret');
+  });
+
+  it('reads pointer: null and counts noPointer once for a repository with no origin', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    makeRepo(repo);
+    git(repo, ['remote', 'remove', 'origin']);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'feature'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    const counts = await buildPack(f.runtime, options(f));
+    expect(pointerOf(manifest(f.out)[0])).toBeNull();
+    expect(counts).toMatchObject({ emitted: 1, noPointer: 1 });
+  });
+
+  it('never passes a session branch that reads as an option (--all) to rev-list, and still finds the commit through origin/HEAD', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    const shas = makeRepo(repo);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, '--all'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    const spy = vi.fn(runGit);
+    await buildPack(f.runtime, options(f, { git: spy }));
+    const asked = spy.mock.calls.filter(([, args]) => args[0] === 'rev-list');
+    expect(asked.length).toBeGreaterThan(0);
+    expect(asked.some(([, args]) => args.includes('--all') || args.includes('origin/--all'))).toBe(false);
+    expect(pointerOf(manifest(f.out)[0])).toMatchObject({ commit: shas.onMain });
+  });
+
+  it('reads the working directory of a Codex rollout from session_meta.payload.cwd', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    const shas = makeRepo(repo);
+    const owners = join(f.root, 'owners-pointer.json');
+    writeFileSync(owners, JSON.stringify([{ folder: '*', owner: 'Many Oars Co.', license: null, pointer: true }]));
+    const inRepo = codexRollout().map((entry) => {
+      const payload: unknown = Reflect.get(entry, 'payload');
+      return Reflect.get(entry, 'type') === 'session_meta' && typeof payload === 'object' && payload !== null ? { ...entry, payload: { ...payload, cwd: repo } } : entry;
+    });
+    const counts = await buildPack(await withCodex(f, inRepo), options(f, { owners }));
+    expect(counts).toMatchObject({ emitted: 1, noPointer: 0 });
+    expect(pointerOf(manifest(f.out)[0])).toEqual({ remote: REMOTE, commit: shas.onMain });
+  });
+
+  it.each([
+    ['a local path', (repo: string) => join(repo, '..', 'elsewhere', 'app.git')],
+    ['a file: URL', (repo: string) => pathToFileURL(join(repo, '..', 'elsewhere', 'app.git')).href],
+    ['a URL that holds a key shape', () => 'https://example.com/acme/' + 'AK' + 'IA' + 'IOSFODNN7EXAMPLE' + '.git'],
+  ])('reads pointer: null, counted in noPointer, and writes nothing of the remote for %s', async (_name, remoteOf) => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    makeRepo(repo);
+    const remote = remoteOf(repo);
+    git(repo, ['remote', 'set-url', 'origin', remote]);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'feature'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    const counts = await buildPack(f.runtime, options(f));
+    expect(pointerOf(manifest(f.out)[0])).toBeNull();
+    expect(counts).toMatchObject({ emitted: 1, noPointer: 1 });
+    expect(readFileSync(join(f.out, 'manifest.jsonl'), 'utf8')).not.toContain('elsewhere');
+    expect(readFileSync(join(f.out, 'manifest.jsonl'), 'utf8')).not.toContain('IOSFODNN7EXAMPLE');
+  });
+
+  it('keeps an scp-style remote (git@host:owner/repo.git) as written', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    const shas = makeRepo(repo);
+    git(repo, ['remote', 'set-url', 'origin', 'git@example.com:acme/app.git']);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'feature'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    expect(pointerOf(manifest(f.out)[0])).toEqual({ remote: 'git@example.com:acme/app.git', commit: shas.onFeature });
+  });
+
+  // Claude Code records gitBranch "HEAD" for a detached checkout; HEAD is whatever is checked out now, so it is not the session's branch.
+  it('does not read HEAD for a session that started detached (gitBranch HEAD): it goes through origin/HEAD', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    const shas = makeRepo(repo);
+    git(repo, ['checkout', '-q', 'feature']);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'HEAD'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    expect(pointerOf(manifest(f.out)[0])).toEqual({ remote: REMOTE, commit: shas.onMain });
+  });
+
+  it.each([
+    ['ssh://git@example.com/home/alice/app.git'],
+    ['git@example.com:/home/alice/app'],
+    ['ssh://git@example.com/Users/alice/app.git'],
+    ['https://example.com/C:/Users/alice/app.git'],
+  ])('writes pointer: null for a remote whose path names an account on its host (%s)', async (remote) => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    makeRepo(repo);
+    git(repo, ['remote', 'set-url', 'origin', remote]);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'feature'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    const counts = await buildPack(f.runtime, options(f));
+    expect(pointerOf(manifest(f.out)[0])).toBeNull();
+    expect(counts).toMatchObject({ emitted: 1, noPointer: 1 });
+    expect(readFileSync(join(f.out, 'manifest.jsonl'), 'utf8')).not.toContain('alice');
+  });
+
+  // A commit the session made: the Bash call, and the result that names the sha the way `git commit` prints it.
+  const committed = (session: string, n: number, branch: string, sha: string): string[] => [
+    line({ type: 'assistant', uuid: uuidOf(session, 'a', n), parentUuid: null, isSidechain: false, timestamp: at(n), version: '2.1.300', sessionId: session, requestId: requestOf(session, n), message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: `toolu_${String(n)}`, name: 'Bash', input: { command: 'git commit -m work' } }], usage: { input_tokens: 10, output_tokens: 20 } } }),
+    line({ type: 'user', uuid: uuidOf(session, 'b', n), parentUuid: uuidOf(session, 'a', n), isSidechain: false, timestamp: at(n + 1), version: '2.1.300', sessionId: session, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `toolu_${String(n)}`, content: `[${branch} ${sha.slice(0, 7)}] work\n 1 file changed, 1 insertion(+)` }] } }),
+  ];
+
+  const outcomeOf = (row: ManifestRow | undefined): unknown => (row === undefined ? undefined : Reflect.get(row, 'outcome'));
+
+  it('says for each commit the session made whether the remote default branch holds it now: one landed, one not', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    const shas = makeRepo(repo);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'feature'), ...committed(S(1), 3, 'main', shas.onMain), ...committed(S(1), 5, 'feature', shas.onFeature), assistant(S(1), 7, 'done')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    expect(outcomeOf(manifest(f.out)[0])).toEqual({ verify: 'na', commits: [{ sha: shas.onMain.slice(0, 7), landed: true }, { sha: shas.onFeature.slice(0, 7), landed: false }] });
+  });
+
+  it('reads landed: null for every commit when the remote default branch is not set (origin/HEAD unset)', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    const shas = makeRepo(repo);
+    git(repo, ['symbolic-ref', '--delete', 'refs/remotes/origin/HEAD']);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'feature'), ...committed(S(1), 3, 'main', shas.onMain), assistant(S(1), 5, 'done')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    expect(outcomeOf(manifest(f.out)[0])).toMatchObject({ commits: [{ sha: shas.onMain.slice(0, 7), landed: null }] });
+  });
+
+  it('reads landed: null for a sha the repository does not hold, and still lists it', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    makeRepo(repo);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'feature'), ...committed(S(1), 3, 'feature', 'abcdef1234567890abcdef1234567890abcdef12'), assistant(S(1), 5, 'done')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    expect(outcomeOf(manifest(f.out)[0])).toMatchObject({ commits: [{ sha: 'abcdef1', landed: null }] });
+  });
+});
+
 describe('owners file', () => {
   it('matches a folder by its glob, first entry first, without regard to case', () => {
     const rules = parseOwners(JSON.stringify(OWNERS));
@@ -375,6 +662,12 @@ describe('owners file', () => {
 
   it('refuses an entry with no owner', () => {
     expect(() => parseOwners(JSON.stringify([{ folder: '*', owner: '', license: null }]))).toThrow(/owner/);
+  });
+
+  it('reads the pointer opt-in, false unless an entry says true, and names the entry whose value is not a boolean', () => {
+    const rules = parseOwners(JSON.stringify([{ folder: 'a', owner: 'A', license: null }, { folder: 'b', owner: 'B', license: null, pointer: true }, { folder: 'c', owner: 'C', license: null, pointer: false }]));
+    expect(rules.map((rule) => rule.pointer)).toEqual([false, true, false]);
+    for (const bad of ['true', 1, null]) expect(() => parseOwners(JSON.stringify([{ folder: 'a', owner: 'A', license: null }, { folder: 'b', owner: 'B', license: null, pointer: bad }]))).toThrow(/Owners entry 2.*pointer/);
   });
 });
 
