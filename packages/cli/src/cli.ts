@@ -276,6 +276,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
       }
       const session = text(options, 'session') ?? null;
       if (flag(options, 'receipt')) {
+        if (list(options, 'pattern').length > 0 || text(options, 'entity') !== undefined || text(options, 'family') !== undefined || text(options, 'text') !== undefined) throw new CliError('--receipt answers one error: pass --error "<text>" and no other form.', ExitCode.USAGE, 'usage');
         emit(deps, flag(options, 'json'), await sessionsReceipt(sessionDeps(deps), { ...(text(options, 'error') === undefined ? {} : { error: text(options, 'error') }), ...(text(options, 'path') === undefined ? {} : { path: text(options, 'path') }), ...(text(options, 'class') === undefined ? {} : { cls: text(options, 'class') }), ...(count(options, 'since') === undefined ? {} : { sinceDays: count(options, 'since') }) }, session));
         return;
       }

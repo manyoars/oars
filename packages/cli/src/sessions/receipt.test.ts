@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { run } from '../cli.js';
+import { ExitCode } from '../errors.js';
+import { harness } from '../test-support.js';
 import { sessionsDeposit, sessionsReceipt, type SessionsDeps } from './command.js';
 import { handleMessage } from './mcp.js';
 import { error, prompt, session, store } from './pool-fixture.js';
@@ -18,6 +21,8 @@ const PLANTED = {
   rawError: 'ENOENT /home/alice/secret-dir RAW-ERROR-BEYOND-SIGNATURE',
   longTailTool: 'mcp__secretserver__do_thing',
 } as const;
+
+const field = (value: unknown, key: string): unknown => (typeof value === 'object' && value !== null ? Reflect.get(value, key) : undefined);
 
 const SIG = `Bash | npm ERR! failed for ${PLANTED.secret}`;
 const ago = new Date('2026-11-10T00:00:00Z').getTime();
@@ -90,6 +95,17 @@ describe('receiptOf', () => {
     expect(receiptOf(long, { error: 'xxx' }, ago)).toContain(`\`${'x'.repeat(120)}\``);
   });
 
+  it('holds nothing private when the stored signature itself carries a long-tail tool, folder slug, and branch', () => {
+    const sig = `Bash | No such tool available: ${PLANTED.longTailTool} in ${PLANTED.folder} on ${PLANTED.branch}`;
+    const leaky = store({ sessions: [session('s1')], errors: [error('s1', sig, { tool: 'Bash', ts: '2026-11-03T09:00:00.000Z' })] });
+    const block = receiptOf(leaky, { error: 'No such tool available' }, ago) ?? '';
+    expect(block).toContain('No such tool available');
+    expect(block).not.toContain('secretserver');
+    expect(block).not.toContain(PLANTED.folder);
+    expect(block).not.toContain('alice');
+    expect(block).toContain('other');
+  });
+
   it('is null when no earlier session hit the error', () => {
     expect(receiptOf(planted(), { error: 'never seen before' }, ago)).toBeNull();
   });
@@ -116,7 +132,31 @@ describe('sessionsReceipt', () => {
   });
 });
 
-const field = (value: unknown, key: string): unknown => (typeof value === 'object' && value !== null ? Reflect.get(value, key) : undefined);
+describe('oars sessions recall --receipt', () => {
+  const setup = () => {
+    const staged = stage();
+    const h = harness();
+    h.deps.sessions = staged.runtime;
+    return h;
+  };
+
+  it('exits USAGE when another form is given beside --receipt --error', async () => {
+    for (const extra of [['--text', 'y'], ['--entity', 'y'], ['--family', 'recovery'], ['--pattern', 'y']]) {
+      const { deps } = setup();
+      expect(await run(['sessions', 'recall', '--receipt', '--error', 'x', ...extra], deps)).toBe(ExitCode.USAGE);
+    }
+  });
+
+  it('emits { ok: true, receipt } under --json for an error the record holds', async () => {
+    const { deps, out } = setup();
+    expect(await run(['sessions', 'deposit', '--allow', 'proj'], deps)).toBe(ExitCode.OK);
+    out.length = 0;
+    expect(await run(['--json', 'sessions', 'recall', '--receipt', '--error', 'unexpected EOF while looking for matching quote'], deps)).toBe(ExitCode.OK);
+    const document: unknown = JSON.parse(out.join(''));
+    expect(field(document, 'ok')).toBe(true);
+    expect(String(field(document, 'receipt'))).toContain(RECEIPT_FOOTER);
+  });
+});
 
 describe('the MCP recall tool', () => {
   it('does not gain the receipt: its schema keeps its inputs and names none', async () => {
