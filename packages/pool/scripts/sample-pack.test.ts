@@ -1,4 +1,5 @@
 // The first sale's sample pack (P98 (10) to (12)): fixture stores, built in a temp folder, with an invented term and invented instruction text.
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -43,8 +44,8 @@ const uuidOf = (session: string, kind: 'a' | 'b', n: number): string => `${sessi
 const requestOf = (session: string, n: number): string => `req_011C${session.slice(0, 8)}x${String(n)}`;
 // The working directory of a fixture's sessions: a folder with an origin remote, so the store records a repository for them. `fixture()` sets it.
 let repoCwd = '';
-const user = (session: string, n: number, content: string, cwd = repoCwd): string =>
-  line({ type: 'user', uuid: uuidOf(session, 'b', n), parentUuid: null, isSidechain: false, timestamp: at(n), version: '2.1.300', sessionId: session, cwd, message: { role: 'user', content } });
+const user = (session: string, n: number, content: string, cwd = repoCwd, gitBranch?: string): string =>
+  line({ type: 'user', uuid: uuidOf(session, 'b', n), parentUuid: null, isSidechain: false, timestamp: at(n), version: '2.1.300', sessionId: session, cwd, ...(gitBranch === undefined ? {} : { gitBranch }), message: { role: 'user', content } });
 const assistant = (session: string, n: number, text: string): string =>
   line({ type: 'assistant', uuid: uuidOf(session, 'a', n), parentUuid: uuidOf(session, 'b', n), isSidechain: false, timestamp: at(n + 1), version: '2.1.300', sessionId: session, requestId: requestOf(session, n), message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text }], usage: { input_tokens: 10, output_tokens: 20 } } });
 // Where the harness puts CLAUDE.md and the memory index: an `instructions` attachment, and a leading `<system-reminder>` of a user message.
@@ -362,6 +363,56 @@ describe('the skeleton and the manifest fields it adds (plan S3)', () => {
     const text = readFileSync(join(f.out, 'census.json'), 'utf8');
     for (const row of rows) expect(text).not.toContain(row.matchId);
     for (const session of [S(1), S(2)]) expect(text).not.toContain(session);
+  });
+});
+
+describe('the repository pointer and the outcome (plan S4)', () => {
+  const REMOTE = 'https://example.com/acme/app.git';
+  const OPTED_IN = [{ folder: '*-oars*', owner: 'Many Oars Co.', license: 'Apache-2.0', pointer: true }];
+
+  // A real repository in the fixture's temp folder; git is never run against the oars checkout. Commit dates are fixed so `--before` has something to order.
+  const git = (repo: string, args: readonly string[], when = '2026-05-20T12:00:00Z'): string =>
+    execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], { encoding: 'utf8', env: { ...process.env, GIT_COMMITTER_DATE: when, GIT_AUTHOR_DATE: when } }).trim();
+
+  const commitIn = (repo: string, name: string, when: string): string => {
+    writeFileSync(join(repo, name), `${name}\n`);
+    git(repo, ['add', name]);
+    git(repo, ['commit', '-m', name], when);
+    return git(repo, ['rev-parse', 'HEAD']);
+  };
+
+  interface Shas {
+    base: string;
+    onMain: string;
+    onFeature: string;
+  }
+
+  // `main` is checked out and is the remote's default branch; `feature` holds one more, newer commit. A session on `feature` that read HEAD would get the wrong one.
+  const makeRepo = (repo: string): Shas => {
+    mkdirSync(repo, { recursive: true });
+    git(repo, ['init', '-q', '-b', 'main']);
+    git(repo, ['remote', 'add', 'origin', REMOTE]);
+    const base = commitIn(repo, 'base.txt', '2026-05-01T12:00:00Z');
+    const onMain = commitIn(repo, 'main.txt', '2026-05-20T12:00:00Z');
+    git(repo, ['checkout', '-q', '-b', 'feature']);
+    const onFeature = commitIn(repo, 'feature.txt', '2026-05-25T12:00:00Z');
+    git(repo, ['checkout', '-q', 'main']);
+    git(repo, ['update-ref', 'refs/remotes/origin/main', onMain]);
+    git(repo, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);
+    return { base, onMain, onFeature };
+  };
+
+  const pointerOf = (row: ManifestRow | undefined): unknown => (row === undefined ? undefined : Reflect.get(row, 'pointer'));
+
+  it('gives a session on a branch that is not checked out the newest commit of its own branch before it started, not HEAD', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    const shas = makeRepo(repo);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'feature'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    expect(pointerOf(manifest(f.out)[0])).toMatchObject({ remote: REMOTE, commit: shas.onFeature });
   });
 });
 
