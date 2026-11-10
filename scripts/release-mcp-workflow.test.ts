@@ -9,6 +9,20 @@ import { describe, expect, it } from 'vitest';
 const path = join(import.meta.dirname, '..', '.github', 'workflows', 'release-mcp.yml');
 const text = (): string => readFileSync(path, 'utf8').split(String.fromCharCode(13)).join('');
 
+interface PermissionScopes {
+  contents?: string;
+  'id-token'?: string;
+}
+
+interface ParsedWorkflow {
+  permissions: PermissionScopes;
+  jobs: { publish: { permissions: PermissionScopes } };
+}
+
+// A guard, not an assertion: the permission checks below compare exact values, so the shape only has to be an object holding those two keys.
+const isParsedWorkflow = (value: unknown): value is ParsedWorkflow =>
+  typeof value === 'object' && value !== null && 'permissions' in value && 'jobs' in value;
+
 describe('release-mcp workflow', () => {
   it('exists', () => {
     expect(existsSync(path)).toBe(true);
@@ -31,10 +45,14 @@ describe('release-mcp workflow', () => {
   });
 
   it('holds id-token: write and contents: read only, and no stored secret', () => {
-    expect(load(text())).toMatchObject({
-      permissions: { contents: 'read' },
-      jobs: { publish: { permissions: { contents: 'read', 'id-token': 'write' } } },
-    });
+    const parsed = load(text());
+    if (!isParsedWorkflow(parsed)) {
+      throw new Error('release-mcp.yml has no permissions or jobs');
+    }
+    // Exact matches: an added scope (packages: write, actions: write) or a second job must fail.
+    expect(parsed.permissions).toEqual({ contents: 'read' });
+    expect(Object.keys(parsed.jobs)).toEqual(['publish']);
+    expect(parsed.jobs.publish.permissions).toEqual({ contents: 'read', 'id-token': 'write' });
     // Only the one job may mint the token.
     expect(text().match(/^ +id-token: write/gm)).toHaveLength(1);
     expect(text()).not.toContain('secrets.');
