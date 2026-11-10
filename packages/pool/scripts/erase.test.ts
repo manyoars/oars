@@ -1083,7 +1083,7 @@ describe('finding the raw objects that hold a text', () => {
 });
 
 /** The strings a deposit is planted with: each is a value of a class an erased deposit must not keep, and none of them may be in the row after the erasure. */
-const PLANTED = ['feedfacecafebeef', 'acme-finetune-7', 'acmetool', 'acme-flag', 'janedoe-notes', 'acme-private-mcp', 'acme-skill', '2026-11-04T10:11:12.123Z', 'deadbeefdeadbeefdeadbeefdeadbeef', 'cafebabecafebabecafebabecafebabe', '5555555555555a5a', 'acme-native-tool', 'acme-skill-step', 'acme_arg_key', 'acme-pkg-9', 'acme-extra-field'];
+const PLANTED = ['feedfacecafebeef', 'acme-finetune-7', 'acmetool', 'acme-flag', 'janedoe-notes', 'acme-private-mcp', 'acme-skill', '2026-11-04T10:11:12.123Z', 'deadbeefdeadbeefdeadbeefdeadbeef', 'cafebabecafebabecafebabecafebabe', '5555555555555a5a', 'acme-native-tool', 'acme-skill-step', 'acme_arg_key', 'acme-pkg-9', 'acme-extra-field', 'acme-agent'];
 const FIRST_ERROR = [...ERROR_CODES][0] ?? 'other';
 const WEEK_OF_PLANTED_DAY = '2026-11-02';
 
@@ -1105,6 +1105,11 @@ const richSkeleton = (id: string): unknown => {
   const [step] = call.steps;
   if (step !== undefined) Object.assign(step, { identity: { program: 'acmetool', sub: 'deploy', flags: ['--acme-flag'] }, status: 'error', native: 'acme-native-tool', skill: 'acme-skill-step' });
   if (step !== undefined) call.steps.push({ ...structuredClone(step), action: 'web.fetch', native: 'WebFetch', identity: { host: 'hostdigest0123456789abcdef' } });
+  // A subagent run spawned by the first call: its steps carry a type, here one the public list does not hold.
+  const helper = structuredClone(transcript);
+  Object.assign(helper, { spawnedIn: 0 });
+  for (const held of helper.tools) held.steps.forEach((spawned) => Object.assign(spawned, { agentType: 'acme-agent', parent: 0 }));
+  skeleton.transcripts.push(helper);
   skeleton.deltas.push({ deltaKind: 'removed', field: 'package', name: 'acme-pkg-9', registry: 'acme-registry', metric: 'callsPerSession', change: 1 });
   Object.assign(skeleton, { timingPrint: '5555555555555a5a', acmeExtra: 'acme-extra-field', recommendations: [{ id: 'feedfacecafebeef', arm: 'shown', poolVersion: '2026-11-04T10:11:12.123Z', from: 0, to: 1 }] });
   return skeleton;
@@ -1174,6 +1179,33 @@ const columnsOffList = (row: unknown): string[] =>
     return check(value) ? [] : [`${column}: ${String(value)} fails its check`];
   });
 
+/** Per transcript: the counts of prompts, tools, and steps, then the kept values in the order sent. A rebuild that drops or reorders any of them differs from the stored one. */
+const at = (value: unknown, key: string): unknown => (typeof value === 'object' && value !== null ? Object.entries(value).find(([name]) => name === key)?.[1] : undefined);
+const items = (value: unknown, key: string): unknown[] => {
+  const held = at(value, key);
+  return Array.isArray(held) ? held : [];
+};
+const pick = (value: unknown, keys: readonly string[]): unknown => Object.fromEntries(keys.map((key) => [key, at(value, key)]));
+const shapeOf = (skeleton: unknown): unknown => ({
+  transcripts: items(skeleton, 'transcripts').map((transcript) => {
+    const prompts = items(transcript, 'prompts');
+    const tools = items(transcript, 'tools');
+    return {
+      counts: [prompts.length, tools.length, tools.map((tool) => items(tool, 'steps').length)],
+      prompts: prompts.map((prompt) => pick(prompt, ['cls', 'usage', 'wallSec'])),
+      steps: tools.flatMap((tool) => items(tool, 'steps').map((step) => pick(step, ['action', 'tokens', 'ms', 'status']))),
+    };
+  }),
+  deltas: items(skeleton, 'deltas').map((delta) => pick(delta, ['deltaKind', 'field', 'metric', 'change'])),
+  claimed: at(skeleton, 'claimed'),
+  recommendations: items(skeleton, 'recommendations').map((entry) => pick(entry, ['arm', 'from', 'to'])),
+});
+const keptShape = (stored: unknown, kept: unknown): void => {
+  const before = shapeOf(stored);
+  expect(JSON.stringify(before)).toContain('"steps":[{');
+  expect(shapeOf(kept)).toEqual(before);
+};
+
 describe('an erased deposit keeps its anonymous shape', () => {
   const SESSION = '00000000000090aa';
 
@@ -1209,6 +1241,8 @@ describe('an erased deposit keeps its anonymous shape', () => {
       expect(text).toContain(WEEK_OF_PLANTED_DAY);
       expect(text).not.toContain('2026-11-04');
       expect(text).toContain('git');
+      expect(text).toContain('"agentType":"other"');
+      keptShape(JSON.parse(String(fieldOf(stored, 'skeleton'))), skeleton);
     }
   }, 60_000);
 });
@@ -1219,6 +1253,20 @@ describe('anonymizing a skeleton', () => {
     expect(lines).toContain('$.transcripts[0].frame.hour: no allow-list entry for hour');
     expect(lines).toContain('$.transcripts[0].leaves: no allow-list entry for leaves');
     expect(lines).toContain('$.transcripts[0].frame.repoKey: no allow-list entry for repoKey');
+  });
+
+  it('keeps the claimed host class and launcher, the recommendation arm, and the structure of a rich skeleton, in the order sent', () => {
+    const rich: unknown = Object.assign({}, richSkeleton('00000000000095aa'), { claimed: { hostClass: 'ci', launcher: 'scheduled' } });
+    const kept = anonymizeSkeleton(rich, 'lawful-request');
+    expect(kept).toMatchObject({ claimed: { hostClass: 'ci', launcher: 'scheduled' }, recommendations: [{ arm: 'shown', from: 0, to: 1 }] });
+    keptShape(rich, kept);
+  });
+
+  it('turns a rebuild that drops the steps into a failed shape check', () => {
+    const rich = richSkeleton('00000000000096aa');
+    const kept = anonymizeSkeleton(rich, 'lawful-request');
+    const stripped: unknown = JSON.parse(JSON.stringify(kept), (key, value: unknown) => (key === 'steps' ? [] : value));
+    expect(() => { keptShape(rich, stripped); }).toThrow();
   });
 
   it('cuts a day to the Monday of its ISO week (UTC)', () => {

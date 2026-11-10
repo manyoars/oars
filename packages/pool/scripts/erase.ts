@@ -101,7 +101,7 @@ const frameOf = (frame: SkeletonFrame): object => ({
 
 const identityOf = (identity: SkeletonStep['identity']): object | null => {
   if (identity === null) return null;
-  if ('program' in identity) return { program: listedText('program', identity.program), sub: listedOr('sub', identity.sub, identity.program), flags: identity.flags.map((flag) => listedText('flags', flag)), ...held('target', identity.target) };
+  if ('program' in identity) return { program: listedText('program', identity.program), sub: listedOr('sub', identity.sub, identity.program), flags: identity.flags.map((flag) => listedText('flags', flag)) };
   if ('server' in identity) return { server: listedText('server', identity.server), tool: listedText('tool', identity.tool, identity.server) };
   if ('skill' in identity) return { skill: listedText('skill', identity.skill) };
   return { host: null };
