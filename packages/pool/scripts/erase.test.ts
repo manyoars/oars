@@ -307,6 +307,14 @@ describe('erasing a row that holds a leaked secret', () => {
     await expect(eraseLeakedSecret(await store(), { account: "a'; DROP TABLE x; --", id: '00000000000073aa' }, NOW)).rejects.toThrow(/not a pool id/);
   }, 60_000);
 
+  it('takes the request country out of an erased deposit, because the country is an identifier', async () => {
+    const { token, account } = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000079aa'), token, { 'MF-CF-Blob': JSON.stringify({ country: 'DE' }) })).status).toBe(201);
+    expect(await all("SELECT request_country FROM deposits WHERE id = '00000000000079aa'")).toEqual([{ request_country: 'DE' }]);
+    await eraseLeakedSecret(await store(), { account, id: '00000000000079aa' }, NOW);
+    expect(await all("SELECT request_country, erased_on FROM deposits WHERE id = '00000000000079aa'")).toEqual([{ request_country: null, erased_on: '2026-11-08' }]);
+  }, 60_000);
+
   it('refuses a selector that names no deposit row, and writes no tombstone or audit row for it', async () => {
     const { account } = await member();
     const before = await count('SELECT COUNT(*) AS held FROM erasure_tombstones');

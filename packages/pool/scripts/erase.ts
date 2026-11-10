@@ -80,7 +80,7 @@ const dropObject = async (store: EraseStore, account: string, sha256: string, re
 /** The deposit row `account`/`id`: tombstoned, its content replaced by the marker, its tier and counts left. Answers whether a row was changed. */
 const dropDeposit = async (store: EraseStore, account: string, id: string, reason: ErasureReason, now: Date): Promise<number> => {
   await tombstone(store, 'deposit', await depositDigest(account, id), reason, now);
-  return store.run("UPDATE deposits SET skeleton = ?, extensions = '[]', deltas = '[]', erased_on = ? WHERE account = ? AND id = ? AND erased_on IS NULL", [markerOf(reason), dayOf(now), account, id]);
+  return store.run("UPDATE deposits SET skeleton = ?, extensions = '[]', deltas = '[]', request_country = NULL, erased_on = ? WHERE account = ? AND id = ? AND erased_on IS NULL", [markerOf(reason), dayOf(now), account, id]);
 };
 
 /**

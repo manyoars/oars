@@ -55,6 +55,28 @@ export const covenantStatus = async (request: Request, env: Env, texts: Readonly
   return answer(200, { version, accepted: caller !== undefined && (await hasAccepted(env, caller.account, version)), screen: screenOf(version, texts), ...expires });
 };
 
+/**
+ * The two-letter country Cloudflare reports for a request (`request.cf.country`), or `null` when it gives none or something that is not two capital letters. Two letters name a country, not a person, and the covenant lists the country among the identifiers it keeps (Annex C.1).
+ * Cloudflare also reports `XX` (no data) and `T1` (Tor); they are kept as they come, since neither is a protected region.
+ */
+export const countryOf = (request: Request): string | null => {
+  const cf: unknown = Reflect.get(request, 'cf');
+  const country: unknown = typeof cf === 'object' && cf !== null ? Reflect.get(cf, 'country') : undefined;
+  return typeof country === 'string' && /^[A-Z]{2}$/.test(country) ? country : null;
+};
+
+/**
+ * The countries the pool does not take acceptances from while `PROTECTED_REGIONS_OPEN` is not `1`: the 27 EU member states and the EU territory with its own code (Åland and the French outermost regions), Iceland, Liechtenstein, and Norway (the EEA), and the United Kingdom (`GB`). Many Oars Co. has no representative in the EU or the UK (Article 27 of the GDPR and the UK GDPR), so it takes no acceptance from a person there until it appoints one.
+ */
+export const PROTECTED_REGIONS: ReadonlySet<string> = new Set([
+  ...['AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE'],
+  // EU territory that Cloudflare reports under its own ISO code: Åland, and the French outermost regions.
+  ...['AX', 'GF', 'GP', 'MQ', 'RE', 'YT', 'MF'],
+  ...['IS', 'LI', 'NO', 'GB'],
+]);
+
+const regionClosed = (): Response => refuse(403, 'region_closed', 'Many Oars cannot take deposits from the EU, the EEA, or the UK yet. If you are not there, write to privacy@manyoars.com.');
+
 /** The longest `input` or `client` an acceptance may state: a name and a version, so a row stays small whatever a caller sends. */
 const PROOF_FIELD_MAX = 64;
 
@@ -80,10 +102,15 @@ export const covenantAccept = async (request: Request, env: Env, texts: Readonly
   if (input === undefined || input.length > PROOF_FIELD_MAX) return refuse(400, 'missing_field', `An acceptance states how the person answered, in at most ${String(PROOF_FIELD_MAX)} characters.`, 'input');
   const client = textField(body, 'client');
   if (client === undefined || client.length > PROOF_FIELD_MAX) return refuse(400, 'missing_field', `An acceptance names its client, in at most ${String(PROOF_FIELD_MAX)} characters.`, 'client');
+  const answered = textField(body, 'euEeaUk');
+  if (answered !== 'yes' && answered !== 'no') return refuse(400, 'missing_field', 'An acceptance states whether the person is in the EU, the EEA, or the UK: yes or no.', 'euEeaUk');
+  // Closed unless the operator sets the variable to exactly `1`. The person's answer and the request's country are two checks because neither stands for the other: a person may be in the EU behind an address elsewhere, and a request from an EU data center may carry a person who is not.
+  const country = countryOf(request);
+  if (env.PROTECTED_REGIONS_OPEN !== '1' && (answered === 'yes' || (country !== null && PROTECTED_REGIONS.has(country)))) return regionClosed();
   // One transaction: the history row and the column the gate reads change together, and a repeat of a version on record keeps its first time and its first proof (`OR IGNORE`). A client that accepts without reading first still leaves the version's start on record.
   await env.DB.batch([
     servedOf(env, version),
-    env.DB.prepare('INSERT OR IGNORE INTO covenant_acceptances (account, version, accepted_at, text_sha256, input, client) VALUES (?, ?, ?, ?, ?, ?)').bind(account, version, Date.now(), shown, input, client),
+    env.DB.prepare('INSERT OR IGNORE INTO covenant_acceptances (account, version, accepted_at, text_sha256, input, client, eu_eea_uk, request_country) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(account, version, Date.now(), shown, input, client, answered, country),
     env.DB.prepare('UPDATE accounts SET covenant = ? WHERE id = ?').bind(version, account),
   ]);
   return answer(200, { ok: true, version });
