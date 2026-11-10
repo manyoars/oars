@@ -1,0 +1,8 @@
+{
+  "name": "oars",
+  "version": "0.4.0",
+  "description": "Recall from your own past coding agent sessions, kept on your machine, over MCP.",
+  "mcpServers": {
+    "oars": { "command": "oars", "args": ["sessions", "recall", "--mcp"] }
+  }
+}

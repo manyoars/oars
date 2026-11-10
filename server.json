@@ -1,0 +1,24 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.manyoars/oars",
+  "description": "Recall from your own past coding agent sessions, kept on your machine.",
+  "repository": {
+    "url": "https://github.com/manyoars/oars",
+    "source": "github",
+    "subfolder": "packages/cli"
+  },
+  "version": "0.4.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@manyoars/oars",
+      "version": "0.4.0",
+      "transport": { "type": "stdio" },
+      "packageArguments": [
+        { "type": "positional", "value": "sessions" },
+        { "type": "positional", "value": "recall" },
+        { "type": "named", "name": "--mcp" }
+      ]
+    }
+  ]
+}
