@@ -154,8 +154,12 @@ describe('rewriting them (Items 2 and 3)', () => {
       const was = record(before.find((one) => one.key === key)?.text ?? '');
       const now = record(after.find((one) => one.key === rewriteKeyOf(key))?.text ?? '');
       expect(now.account).toBe('erased:');
-      expect(now.received).toBe(was.received);
-      expect(JSON.stringify(now.events)).toBe(JSON.stringify(was.events));
+      // The times are cut to a Monday 00:00 UTC (t1075); everything else in an event comes as it was.
+      expect(new Date(String(now.received)).getUTCDay()).toBe(1);
+      expect(String(now.received)).toMatch(/T00:00:00\.000Z$/);
+      expect(Date.parse(String(now.received))).toBeLessThanOrEqual(Date.parse(String(was.received)));
+      const untimed = (list: unknown): string => JSON.stringify(list, (name, value: unknown) => (name === 'at' ? undefined : value));
+      expect(untimed(now.events)).toBe(untimed(was.events));
       expect(now.install).not.toBe(was.install);
       ids.add(`${was.install}>${now.install}`);
     }
