@@ -109,7 +109,9 @@ describe('the Claude Code plugin and marketplace', () => {
       schtasks: () => Promise.resolve({ code: 0, output: '' }),
     };
     await installHooks(runtime, runtime.userSettings, true);
-    const installed = objectAt(JSON.parse(readFileSync(runtime.userSettings, 'utf8')) as Json, 'hooks');
+    const settings: unknown = JSON.parse(readFileSync(runtime.userSettings, 'utf8'));
+    if (!isRecord(settings)) throw new Error('settings is not an object');
+    const installed = objectAt(settings, 'hooks');
     const shape = (hooks: Json, launch: RegExp): unknown =>
       Object.fromEntries(
         Object.entries(hooks).map(([event, groups]) => {
@@ -128,13 +130,14 @@ describe('the Claude Code plugin and marketplace', () => {
       );
     // The plugin runs the same events with the same matcher, argument, and timeout; only the launcher differs (the bin on PATH, not a path to this build).
     expect(shape(objectAt(plugin, 'hooks'), /oars-hook (\S+)$/)).toEqual(shape(installed, /hook-bin\.js" (\S+)$/));
-    expect(cli.bin).toMatchObject({ 'oars-hook': expect.any(String) as string });
+    expect(Object.keys(objectAt(cli, 'bin'))).toContain('oars-hook');
   });
 
   it('exits quietly when the oars-hook bin is not on PATH', () => {
     for (const groups of Object.values(objectAt(plugin, 'hooks'))) {
       for (const group of Array.isArray(groups) ? groups : []) {
-        const [handler] = listAt(group as Json, 'hooks');
+        if (!isRecord(group)) throw new Error('hook group is not an object');
+        const [handler] = listAt(group, 'hooks');
         expect(String(isRecord(handler) ? handler.command : '')).toMatch(/^command -v oars-hook >\/dev\/null \|\| exit 0; oars-hook \S+$/);
       }
     }
