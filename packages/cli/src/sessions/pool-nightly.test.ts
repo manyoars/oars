@@ -424,17 +424,27 @@ describe('withSendLock', () => {
     const staleLookAnswered = new Promise<void>((resolve) => {
       looked = resolve;
     });
-    const onceStale = (before: () => Promise<void>, after: () => void): LockFs => {
+    const onceStale = (before: () => Promise<void>, afterCreate: () => void): LockFs => {
       let first = true;
+      let lookedStale = false;
       return {
         stat: async (path) => {
           if (first && path === lock) {
             first = false;
             await before();
-            after();
+            lookedStale = true;
             return { mtimeMs: Date.now() - 60_000 };
           }
           return { mtimeMs: statSync(path).mtimeMs };
+        },
+        // After its stale look the late waiter's next create decides the takeover: EEXIST means its lock was rightly kept, so the first holder may leave. A product that removed the lock lets the create succeed and the body runs beside the holder.
+        open: async (path, flags) => {
+          try {
+            return await open(path, flags);
+          } catch (error) {
+            if (lookedStale) afterCreate();
+            throw error;
+          }
         },
       };
     };
@@ -443,6 +453,7 @@ describe('withSendLock', () => {
     const body = async (): Promise<void> => {
       inside += 1;
       overlapped ||= inside > 1;
+      if (inside > 1) looked();
       firstRunning();
       await staleLookAnswered;
       inside -= 1;
