@@ -33,8 +33,9 @@ export const RAW_ROUTES = [
   { method: 'POST', pattern: COMPLETE_ROUTE },
 ] as const;
 
-const stagingPrefix = (account: string, hash: string): string => `staging/${account}/${hash}/`;
-const stagingKey = (account: string, hash: string, part: number): string => `${stagingPrefix(account, hash)}${String(part).padStart(6, '0')}`;
+/** Every staged part of one account lives under this prefix; the route's cap, its withdrawal, and the operator's `erase withdraw` all list it. */
+export const stagedPrefix = (account: string): string => `staging/${account}/`;
+const stagingKey = (account: string, hash: string, part: number): string => `${stagedPrefix(account)}${hash}/${String(part).padStart(6, '0')}`;
 export const objectKey = (account: string, hash: string): string => `raw/${account}/${hash}`;
 
 interface Admitted {
@@ -119,12 +120,12 @@ const putPart = async (request: Request, env: Env, hash: string, part: number): 
   // A part that replaces a staged one adds no object; any other needs room under the account's cap.
   const key = stagingKey(account, hash, part);
   const full = (): Response => refuse(429, 'staging_full', `An account may stage ${String(MAX_STAGED_RAW_PARTS)} raw parts at once. Complete the objects it has begun, or wait: staged parts expire after 7 days.`, undefined, { 'retry-after': String(7 * 24 * 60 * 60) });
-  const staged = (await bucket.list({ prefix: `staging/${account}/`, limit: MAX_STAGED_RAW_PARTS })).objects;
+  const staged = (await bucket.list({ prefix: stagedPrefix(account), limit: MAX_STAGED_RAW_PARTS })).objects;
   const isNew = !staged.some((object) => object.key === key);
   if (staged.length >= MAX_STAGED_RAW_PARTS && isNew) return full();
   await bucket.put(key, body);
   // Parts that arrive together each listed before any put, so the cap is checked again on what is staged now: a new part that finds the page full takes itself back.
-  if (isNew && (await bucket.list({ prefix: `staging/${account}/`, limit: MAX_STAGED_RAW_PARTS })).truncated) {
+  if (isNew && (await bucket.list({ prefix: stagedPrefix(account), limit: MAX_STAGED_RAW_PARTS })).truncated) {
     await bucket.delete([key]);
     return full();
   }
@@ -204,12 +205,18 @@ const complete = async (request: Request, env: Env, hash: string): Promise<Respo
 const dropStaged = async (bucket: RawBucket, account: string): Promise<number> => {
   let dropped = 0;
   for (;;) {
-    const page = (await bucket.list({ prefix: `staging/${account}/`, limit: MAX_STAGED_RAW_PARTS })).objects.map((one) => one.key);
+    const page = (await bucket.list({ prefix: stagedPrefix(account), limit: MAX_STAGED_RAW_PARTS })).objects.map((one) => one.key);
     if (page.length === 0) return dropped;
     await bucket.delete(page);
     dropped += page.length;
   }
 };
+
+/**
+ * The update that records a withdrawal, with the time and the account to bind, in that order. One statement, and a SET expression reads the row as it was, so the version withdrawn is the one the yes answered. With no yes standing it matches no row.
+ * The route and the operator's `erase withdraw` (`scripts/erase.ts`) both run this text, so the row one leaves is the row the other leaves.
+ */
+export const WITHDRAW_RAW_CONSENT = 'UPDATE accounts SET raw_consent_withdrawn_at = ?, raw_consent_withdrawn_version = raw_consent_version, raw_consent = NULL, raw_consent_version = NULL WHERE id = ? AND raw_consent IS NOT NULL';
 
 /**
  * `DELETE /v1/consent/raw`: the account takes its raw yes back (GDPR Article 7(3)). It clears the yes and records the time and the covenant version the yes answered, and answers 200 whether or not a yes stood, so a retry is safe and a second withdrawal keeps the first record.
@@ -218,8 +225,7 @@ const dropStaged = async (bucket: RawBucket, account: string): Promise<number> =
 export const withdrawRawConsent = async (request: Request, env: Env): Promise<Response> => {
   const account = await accountOf(request, env);
   if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
-  // One statement, and a SET expression reads the row as it was, so the version withdrawn is the one the yes answered. With no yes standing it matches no row.
-  await env.DB.prepare('UPDATE accounts SET raw_consent_withdrawn_at = ?, raw_consent_withdrawn_version = raw_consent_version, raw_consent = NULL, raw_consent_version = NULL WHERE id = ? AND raw_consent IS NOT NULL').bind(Date.now(), account).run();
+  await env.DB.prepare(WITHDRAW_RAW_CONSENT).bind(Date.now(), account).run();
   if (env.RAW !== undefined) await dropStaged(env.RAW, account);
   return answer(200, { ok: true });
 };
