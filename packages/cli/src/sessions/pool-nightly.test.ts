@@ -413,27 +413,42 @@ describe('withSendLock', () => {
     utimesSync(lock, old, old);
     let inside = 0;
     let overlapped = false;
-    // Both waiters' first look at the lock reports it stale, but the second look comes only after the first waiter has taken the lock and is running: a takeover that removes the file by path
-    // would delete the first waiter's fresh lock and let the second in beside it.
-    let looked = 0;
-    const fs: LockFs = {
-      stat: async (path) => {
-        if (looked < 2 && path === lock) {
-          looked += 1;
-          if (looked === 2) while (inside === 0) await new Promise((resolve) => setTimeout(resolve, 2));
-          return { mtimeMs: Date.now() - 60_000 };
-        }
-        return { mtimeMs: statSync(path).mtimeMs };
-      },
+    // The second waiter's first look at the lock reports it stale only after the first waiter has taken the lock and is running, and the first holder stays inside until that stale look has been answered: a
+    // takeover that removes the file by path would delete the first waiter's fresh lock and let the second in beside it. Each waiter has its own LockFs, so which waiter looks first (a loaded runner may
+    // schedule either) cannot move the stale look onto the wrong waiter, and signals replace sleeps.
+    let firstRunning = (): void => undefined;
+    const running = new Promise<void>((resolve) => {
+      firstRunning = resolve;
+    });
+    let looked = (): void => undefined;
+    const staleLookAnswered = new Promise<void>((resolve) => {
+      looked = resolve;
+    });
+    const onceStale = (before: () => Promise<void>, after: () => void): LockFs => {
+      let first = true;
+      return {
+        stat: async (path) => {
+          if (first && path === lock) {
+            first = false;
+            await before();
+            after();
+            return { mtimeMs: Date.now() - 60_000 };
+          }
+          return { mtimeMs: statSync(path).mtimeMs };
+        },
+      };
     };
+    const quick = onceStale(() => Promise.resolve(), () => undefined);
+    const late = onceStale(() => running, looked);
     const body = async (): Promise<void> => {
       inside += 1;
       overlapped ||= inside > 1;
-      await new Promise((resolve) => setTimeout(resolve, 80));
+      firstRunning();
+      await staleLookAnswered;
       inside -= 1;
     };
     const times = { staleMs: 1000, waitMs: 2000, pollMs: 5 };
-    await Promise.all([withSendLock(outbox, body, times, fs), withSendLock(outbox, body, times, fs)]);
+    await Promise.all([withSendLock(outbox, body, times, quick), withSendLock(outbox, body, times, late)]);
     expect(overlapped).toBe(false);
     expect(readdirSync(outbox)).toEqual([]);
   });
