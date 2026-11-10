@@ -14,8 +14,7 @@ describe('the Node floor', () => {
     const written: unknown[] = [];
     const codes: number[] = [];
     exitIfTooOld('22.13.0', (text) => written.push(text), (code) => codes.push(code));
-    expect(written).toEqual(['oars needs Node 24 or newer; this is Node 22.13.0.
-']);
+    expect(written).toEqual(['oars needs Node 24 or newer; this is Node 22.13.0.\n']);
     expect(codes).toEqual([1]);
   });
   it('the bin neither writes nor exits on the floor version', () => {
