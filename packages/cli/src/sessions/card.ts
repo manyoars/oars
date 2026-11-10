@@ -46,8 +46,8 @@ export interface Card {
   commits: number;
   /** Commits whose survival is known, and how many survived. */
   survived: BooksShare;
-  /** The harness's own `cost-state` totals, summed over the sessions that have one. */
-  cost: { usd: number | null; recorded: number; of: number };
+  /** The harness's own `cost-state` totals, summed over the sessions that have one. Absent under `--no-cost`, so no output form carries it. */
+  cost?: { usd: number | null; recorded: number; of: number };
 }
 
 const shareOf = (count: number, of: number): BooksShare => ({ count, of, share: of < BOOKS_MIN_PROMPTS ? null : Math.round((count / of) * 1000) / 1000 });
@@ -79,7 +79,7 @@ const strokesOf = (tools: readonly ToolObservation[]): number => {
   return [...bySession.values()].reduce((total, list) => total + firstCopies(list).length, 0);
 };
 
-export const cardOf = (store: Store, survival: ReadonlyMap<string, SurvivalState>, period: CardPeriod, now: number): Card => {
+export const cardOf = (store: Store, survival: ReadonlyMap<string, SurvivalState>, period: CardPeriod, now: number, includeCost = true): Card => {
   const { days, end } = cardWindow(period, now);
   const cutoff = new Date(now - days * DAY_MS).toISOString();
   const prompts = store.prompts.filter((prompt) => prompt.ts !== null && prompt.ts >= cutoff);
@@ -109,7 +109,7 @@ export const cardOf = (store: Store, survival: ReadonlyMap<string, SurvivalState
     verifyAfterEdit: shareOf(verified, edited),
     commits: row?.commits ?? 0,
     survived: row?.survived ?? shareOf(0, 0),
-    cost: { usd: costed.length === 0 ? null : costed.reduce((total, session) => total + (session.costUsd ?? 0), 0), recorded: costed.length, of: sessions.length },
+    ...(includeCost ? { cost: { usd: costed.length === 0 ? null : costed.reduce((total, session) => total + (session.costUsd ?? 0), 0), recorded: costed.length, of: sessions.length } } : {}),
   };
 };
 
@@ -136,7 +136,7 @@ export const cardRows = (card: Card, depositor: string): CardRow[] => [
   { label: 'verified after edit', value: shareText(card.verifyAfterEdit, 'edits') },
   { label: 'commits', value: String(card.commits) },
   { label: 'survived', value: shareText(card.survived, 'settled') },
-  { label: 'cost', value: card.cost.usd === null ? 'not recorded by these harnesses' : `${dollars(card.cost.usd)} (${String(card.cost.recorded)} of ${String(card.cost.of)} sessions recorded one)` },
+  ...(card.cost === undefined ? [] : [{ label: 'cost', value: card.cost.usd === null ? 'not recorded by these harnesses' : `${dollars(card.cost.usd)} (${String(card.cost.recorded)} of ${String(card.cost.of)} sessions recorded one)` }]),
   { label: 'depositor', value: depositor },
 ];
 

@@ -50,7 +50,7 @@ describe('cardOf: the counts', () => {
     const year = cardOf(cardStore(), cardSurvival(), 'year', CARD_NOW);
     expect(year.days).toBe(365);
     expect(year.sessions).toBe(4);
-    expect(year.cost.usd).toBe(100.75);
+    expect(year.cost?.usd).toBe(100.75);
   });
 
   it('prints a share under the books floor as too few and a share at it as a percent', () => {

@@ -129,4 +129,28 @@ describe('oars card through run', () => {
     expect(await run(['card', '--year', '--text'], h.deps)).toBe(0);
     expect(h.out.join('')).toContain('the last 365 days');
   });
+
+  it('--no-cost leaves the cost row and every dollar out of the picture, the table, and the JSON', async () => {
+    const png = join(dir, 'free.png');
+    const svg = join(dir, 'free.svg');
+    expect(await run(['card', '--month', '--out', png, '--no-cost'], wired().deps)).toBe(0);
+    expect(readFileSync(svg, 'utf8')).not.toContain('$');
+    expect(readFileSync(svg, 'utf8')).not.toContain('cost');
+    const withCost = join(dir, 'with.png');
+    await run(['card', '--month', '--out', withCost], wired().deps);
+    const height = (path: string): number => Number(/height="(\d+)"/.exec(readFileSync(path, 'utf8'))?.[1]);
+    expect(height(svg)).toBeLessThan(height(join(dir, 'with.svg')));
+
+    const table = wired();
+    expect(await run(['card', '--month', '--text', '--no-cost'], table.deps)).toBe(0);
+    expect(table.out.join('')).not.toMatch(/\$|cost/);
+
+    const json = wired();
+    expect(await run(['card', '--month', '--text', '--no-cost', '--json'], json.deps)).toBe(0);
+    expect(json.out.join('')).not.toMatch(/\$|cost/);
+
+    const kept = wired();
+    await run(['card', '--month', '--text'], kept.deps);
+    expect(kept.out.join('')).toContain('$1.75');
+  });
 });

@@ -194,10 +194,11 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .option('--year', 'the last 365 days')
     .option('--text', 'print the card as a table instead of saving a picture')
     .option('--out <file>', 'save the card here, as .png or .svg: both are written, one with each extension (default oars-card-<period> in the working directory)')
+    .option('--no-cost', 'leave the cost row out of the picture, the table, and --json')
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       const period: CardPeriod = flag(options, 'year') ? 'year' : flag(options, 'month') ? 'month' : 'week';
-      emit(deps, flag(options, 'json'), await sessionsCard(sessionDeps(deps), { period, text: flag(options, 'text'), out: text(options, 'out') }, deps.env));
+      emit(deps, flag(options, 'json'), await sessionsCard(sessionDeps(deps), { period, text: flag(options, 'text'), out: text(options, 'out'), noCost: options.cost === false }, deps.env));
     });
 
   const sessions = program.command('sessions').description("deposit and recall your own coding-agent session logs, locally (these commands make no model call and no network call, except `gold arms`, which asks your own Claude subscription; telemetry is separate: oars telemetry)");
