@@ -234,6 +234,13 @@ describe('the skeleton and the manifest fields it adds (plan S3)', () => {
     expect(existsSync(join(f.out, 'sessions', row?.matchId ?? '', 'skeleton.json'))).toBe(true);
   });
 
+  const isCensus = (value: unknown): value is Census => typeof value === 'object' && value !== null && 'sessions' in value && 'harness' in value && 'turnBucket' in value;
+  const readCensus = (out: string): Census => {
+    const value: unknown = JSON.parse(readFileSync(join(out, 'census.json'), 'utf8'));
+    if (!isCensus(value)) throw new Error('a census with no sessions');
+    return value;
+  };
+
   const skeletonText = (out: string, matchId: string): string => readFileSync(join(out, 'sessions', matchId, 'skeleton.json'), 'utf8');
   const repoKeysIn = (text: string): string[] => [...text.matchAll(/"repoKey": "([0-9a-f]{16})"/g)].map((found) => found[1] ?? '');
 
@@ -290,7 +297,7 @@ describe('the skeleton and the manifest fields it adds (plan S3)', () => {
     await stored(f);
     await buildPack(f.runtime, options(f));
     const rows = manifest(f.out);
-    const census = JSON.parse(readFileSync(join(f.out, 'census.json'), 'utf8')) as Census;
+    const census = readCensus(f.out);
     const total = (tally: Tally): number => Object.values(tally).reduce((sum, count) => sum + count, 0);
     expect(census.sessions).toBe(rows.length);
     expect(total(census.harness)).toBe(rows.length);
