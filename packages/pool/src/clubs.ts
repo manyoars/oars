@@ -34,17 +34,19 @@ const NAME = /^[\p{L}\p{N}][\p{L}\p{N} ._-]{0,23}$/u;
 
 /** The rule, in the one line a refusal carries. */
 const NICKNAME_RULE = 'A nickname is 2 to 24 letters, digits, spaces, dots, underscores, or hyphens, with no space at either end, no @, and no web address.';
-/** Letters, digits, space, dot, underscore, hyphen; no space at either end. Combining marks (vowel signs in Devanagari, Thai, Tamil, and others) may follow the first character. Length is checked apart, in characters. */
-const NICKNAME = /^[\p{L}\p{N}_.-](?:[\p{L}\p{N}\p{M} _.-]*[\p{L}\p{N}\p{M}_.-])?$/u;
+/** Letters, digits, space, dot, underscore, hyphen; no space at either end. Non-spacing and spacing combining marks (vowel signs in Devanagari, Thai, Tamil, and others) may follow the first character; enclosing marks may not. Length is checked apart, in characters. */
+const NICKNAME = /^[\p{L}\p{N}_.-](?:[\p{L}\p{N}\p{Mn}\p{Mc} _.-]*[\p{L}\p{N}\p{Mn}\p{Mc}_.-])?$/u;
+/** A run of three marks is a stack that spills over its neighbors. */
+const MARK_STACK = /\p{M}{3}/u;
 /** A web address in a name: "www." or a dot before a common top-level domain. The character set already keeps out "@", ":", and "/". */
 const WEB_ADDRESS = /www\.|\.(?:com|net|org|io|dev|app|co|me|ly|xyz|info|biz|gg|tv)(?![\p{L}\p{N}])/iu;
 
-/** The NFKC form of a nickname that follows the rule, else undefined. NFKC first, so a full-width or look-alike form is judged and stored as the plain one. */
+/** The NFKC form of a nickname that follows the rule, else undefined. NFKC first, so a full-width or look-alike form is judged and stored as the plain one. The mark stack is also judged before NFKC, which would fold a letter and its first accent into one character and hide a stack. */
 const nicknameOf = (given: string | undefined): string | undefined => {
   if (given === undefined) return undefined;
   const nickname = given.normalize('NFKC');
   const length = Array.from(nickname).length;
-  return length >= 2 && length <= 24 && NICKNAME.test(nickname) && !WEB_ADDRESS.test(nickname) ? nickname : undefined;
+  return length >= 2 && length <= 24 && NICKNAME.test(nickname) && !MARK_STACK.test(given) && !MARK_STACK.test(nickname) && !WEB_ADDRESS.test(nickname) ? nickname : undefined;
 };
 
 const signedIn = async (request: Request, env: Env): Promise<string | Response> => (await accountOf(request, env)) ?? refuse(401, 'unauthorized', 'Sign in with oars pool login first.');

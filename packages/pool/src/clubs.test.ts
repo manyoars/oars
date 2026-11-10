@@ -113,6 +113,18 @@ describe('creating and joining a club', () => {
     expect(await join(guest.token, club.code, 'stroke')).toMatchObject({ status: 409, json: { error: 'already_member' } });
   });
 
+  it('refuses stacked and enclosing marks in a nickname on join and on create, and keeps a vowel-signed name', async () => {
+    const owner = await member();
+    const club = await createClub(owner.token);
+    const guest = await member();
+    // "a" and three combining acutes; "a" and an enclosing circle (Me).
+    for (const bad of ['á́́b', 'a⃝b']) {
+      expect(await join(guest.token, club.code, bad), bad).toMatchObject({ status: 422, json: { error: 'nickname_invalid' } });
+      expect((await pool.post('/v1/clubs', { name: 'Crew', nickname: bad, consent: (await consents()).club }, guest.token)).status, bad).toBe(422);
+    }
+    expect((await join(guest.token, club.code, 'नमस्ते')).status).toBe(200);
+  });
+
   it('refuses the 51st member and still takes the 50th', async () => {
     const owner = await member();
     const club = await createClub(owner.token, 'm00');
