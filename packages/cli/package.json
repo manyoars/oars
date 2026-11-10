@@ -1,6 +1,6 @@
 {
   "name": "@manyoars/oars",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "mcpName": "io.github.manyoars/oars",
   "description": "A local, searchable record of your coding agent sessions. Reads Claude Code, Cursor, Codex, Copilot CLI, Gemini CLI, and more, and keeps the record on your machine.",
   "homepage": "https://manyoars.com/",
