@@ -155,7 +155,7 @@ Gap: **no exclusion marker for a sale or a manual export.** Nothing is sold toda
 
 **Record kept:** the pool keeps `raw_consent_withdrawn_at` and the covenant version it answered. You keep the dates.
 
-Gap: **the operator cannot withdraw for them.** Only the account's own credential sends the withdrawal. If the requester cannot sign in, erase the raw objects by key with the command in step 4, after listing them from `raw_objects`. The key is `raw/<account>/<sha256>`, from the row's `account` and `sha256` (`packages/pool/scripts/erase-cli.ts:10`). That by-hand erasure does not set the withdrawal.
+Gap: **the operator cannot withdraw for them.** Only the account's own credential sends the withdrawal. A requester who cannot sign in cannot be confirmed (see "Who is asking"), so do not erase for them. Not yet possible. For a confirmed requester whose objects remain, step 4 erases them by key; that does not set the withdrawal.
 
 Gap: **withdrawing the covenant.** Acceptance rows are append-only. Declining a later version stops later deposits. Not yet possible beyond that.
 
@@ -165,6 +165,7 @@ Gap: **withdrawing the covenant.** Acceptance rows are append-only. Declining a 
 
 **Steps:**
 1. Confirm the account.
+1a. Before you close, ask whether they also want an export or an erasure: once closed, the account cannot sign in, so it cannot be confirmed and the export cannot run. Do those first.
 2. Dry run:
    `npm run erase -w packages/pool -- close --account <id>`
 3. Run it:
@@ -174,11 +175,13 @@ Gap: **withdrawing the covenant.** Acceptance rows are append-only. Declining a 
 
 A close erases nothing. If they also want their data deleted, that is a separate Art. 17 request.
 
-**Answer to send:** the date it closed, that no machine of theirs can deposit now, that their data stays unless they ask for erasure, and that reopening is a written request handled by hand.
+**Answer to send:** the date it closed, that no machine of theirs can deposit now, that their data stays, that a later request to erase or export cannot be confirmed once the account is closed, and that reopening needs a written request, and no step for it exists yet.
 
 **Record kept:** the pool sets `accounts.closed_at`, which starts the retention clock in covenant 7.2(a), and writes one audit row. You keep the dates.
 
 Gap: **reopening.** No command reopens an account. Not yet possible.
+
+Gap: **requests after closing.** A closed account cannot sign in, so it cannot be confirmed for erasure, export, or withdrawal. Not yet possible.
 
 ## A third party named in a deposit
 
