@@ -23,10 +23,11 @@ export const PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{12,}/gi, '$1 <secret>'],
   // user:password@host inside a URL
   [/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/:@]+:[^\s/@]+@/gi, '$1<secret>@'],
-  // NAME=value and "name": "value" where the name says it is a secret. A vendor name before a colon (`1password: ...` in prose) is no key. A `token` name
-  // keeps a bare number (a count: `tokens: 12345`, `"inputTokens": 98765`), as the JSON walk does; the second rule is the one that masks a `token` value.
+  // NAME=value and "name": "value" where the name says it is a secret. A vendor name before a colon (`1password: ...` in prose) is no key. A plural
+  // `tokens` name (`tokens`, `max_tokens`, `inputTokens`) is a count and keeps a bare number, as the JSON walk does; any other `token` name masks a number too.
   [/\b(?!1password(?![A-Za-z0-9_-])["']?\s*:\s)([A-Za-z0-9_-]*(?:password|passwd|secret|api[_-]?key|private[_-]?key|credential)[A-Za-z0-9_-]*)(["']?\s*[=:]\s*)(["']?)[^\s"'&,;]{4,}\3/gi, '$1$2$3<secret>$3'],
-  [/\b([A-Za-z0-9_-]*token[A-Za-z0-9_-]*)(["']?\s*[=:]\s*)(["']?)(?!\d+(?![^\s"'&,;]))[^\s"'&,;]{4,}\3/gi, '$1$2$3<secret>$3'],
+  [/\b((?![A-Za-z0-9_-]*tokens(?![A-Za-z0-9_-]))[A-Za-z0-9_-]*token[A-Za-z0-9_-]*)(["']?\s*[=:]\s*)(["']?)[^\s"'&,;]{4,}\3/gi, '$1$2$3<secret>$3'],
+  [/\b([A-Za-z0-9_-]*tokens)(["']?\s*[=:]\s*)(["']?)(?!\d+(?![^\s"'&,;]))[^\s"'&,;]{4,}\3/gi, '$1$2$3<secret>$3'],
 ];
 
 const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g;
