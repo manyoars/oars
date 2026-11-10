@@ -357,26 +357,30 @@ export const argNamesOf = (
   cwd: string | undefined,
   commands: readonly CommandWords[],
   closed: ReadonlyMap<string, ReadonlyMap<string, ReadonlySet<string>>>,
+  restored: readonly string[] = [],
 ): ArgName[] => {
   const held = new Map<string, ArgName>();
   const add = (kind: NameKind, name: string): void => {
     if (name !== '') held.set(`${kind}\0${name}`, { kind, name });
   };
+  const addPath = (value: string, folderArg: boolean): void => {
+    // A value that starts with a variable (`$HOME/notes`, `%USERPROFILE%\notes`) is anchored where the variable points, not at the cwd, so it is read as outside the root.
+    const parts = /^[$%]/.test(value) ? null : partsBelow(value, root, cwd);
+    const inside = (parts ?? []).filter((part) => part !== '..');
+    // Above the root a segment is the machine's, not the project's: only a file's own name is read from such a path, and not even that when the path is a home folder, whose name is the account's.
+    if (parts === null) {
+      if (!folderArg && !HOME_FOLDER.test(value)) add('file', value.replace(/^.*[\\/]/, ''));
+      return;
+    }
+    for (const folder of folderArg ? inside : inside.slice(0, -1)) add('dir', folder);
+    if (!folderArg) add('file', inside.at(-1) ?? '');
+  };
+  // The path a `git restore` names is read as the path an edit names is.
+  for (const path of restored) addPath(path, false);
   for (const [key, value] of Object.entries(input)) {
     const lower = key.toLowerCase();
-    if (typeof value === 'string' && PATH_ARGS.has(lower)) {
-      // A value that starts with a variable (`$HOME/notes`, `%USERPROFILE%\notes`) is anchored where the variable points, not at the cwd, so it is read as outside the root.
-      const parts = /^[$%]/.test(value) ? null : partsBelow(value, root, cwd);
-      const inside = (parts ?? []).filter((part) => part !== '..');
-      const folderArg = DIR_ARGS.has(lower);
-      // Above the root a segment is the machine's, not the project's: only a file's own name is read from such a path, and not even that when the path is a home folder, whose name is the account's.
-      if (parts === null) {
-        if (!folderArg && !HOME_FOLDER.test(value)) add('file', value.replace(/^.*[\\/]/, ''));
-        continue;
-      }
-      for (const folder of folderArg ? inside : inside.slice(0, -1)) add('dir', folder);
-      if (!folderArg) add('file', inside.at(-1) ?? '');
-    } else if (ENV_ARGS.has(lower) && isPlainObject(value)) {
+    if (typeof value === 'string' && PATH_ARGS.has(lower)) addPath(value, DIR_ARGS.has(lower));
+    else if (ENV_ARGS.has(lower) && isPlainObject(value)) {
       for (const name of Object.keys(value)) if (ENV_NAME.test(name)) add('env', name);
     } else if (lower === 'subagent_type' && typeof value === 'string' && closed.get(native)?.get(key)?.has(value) === false) add('agent', value);
   }
