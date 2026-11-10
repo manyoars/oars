@@ -25,13 +25,17 @@ export interface BatchStore {
   telemetry: TelemetryStore;
 }
 
-/** A batch as read from the bucket. */
-export interface FoundBatch {
+/** A batch as surveyed: where it is and what it names, without its text. */
+interface Seen {
   key: string;
   /** The install id the batch carries, lowercased as the rollup keys it. */
   install: string;
   /** The account the batch names; undefined for one that names none (every batch since t956). */
   account: string | undefined;
+}
+
+/** A surveyed batch with its text. */
+export interface FoundBatch extends Seen {
   text: string;
 }
 
@@ -39,8 +43,6 @@ const fieldOf = (value: unknown, key: string): unknown => (typeof value === 'obj
 
 /** Where the rewrite of a batch is put: beside it, derived from its key, so a run that stopped between the rewrite and the delete finds the rewrite again and puts a second one nowhere. */
 export const rewriteKeyOf = (key: string): string => key.replace(/\.json$/, '-erased.json');
-
-const isRewrite = (key: string): boolean => key.endsWith('-erased.json');
 
 /** The days a batch may still stand: the nightly sweep drops a day once it is `RETENTION_DAYS` old, and a day it has not reached yet is still there. */
 const daysOf = (now: Date): string[] => {
@@ -64,21 +66,32 @@ const batchOf = (key: string, text: string): FoundBatch | undefined => {
   return { key, install: install.toLowerCase(), account: typeof account === 'string' ? account : undefined, text };
 };
 
-/** Every batch within retention that `keep` accepts, each read for itself. A rewrite is never one: it is read back only by key. */
-const scan = async (telemetry: TelemetryStore, now: Date, keep: (batch: FoundBatch) => boolean): Promise<FoundBatch[]> => {
-  const found: FoundBatch[] = [];
+/** Every batch and every rewrite within retention, each read once for its install and account (a rewrite is read too: an install shared by two accounts leaves rewrites that name the second one, and carry the first erasure's fresh id). */
+const survey = async (telemetry: TelemetryStore, now: Date): Promise<Seen[]> => {
+  const seen: Seen[] = [];
   for (const day of daysOf(now)) {
     for (const key of await telemetry.list(`telemetry/${day}/`)) {
-      const text = isRewrite(key) ? null : await telemetry.read(key);
+      const text = await telemetry.read(key);
       const batch = text === null ? undefined : batchOf(key, text);
-      if (batch !== undefined && keep(batch)) found.push(batch);
+      if (batch !== undefined) seen.push({ key, install: batch.install, account: batch.account });
     }
+  }
+  return seen;
+};
+
+/** The text of each of the surveyed batches, read again (only the ones that are to be rewritten or deleted are ever read a second time). */
+const withText = async (telemetry: TelemetryStore, seen: readonly Seen[]): Promise<FoundBatch[]> => {
+  const found: FoundBatch[] = [];
+  for (const one of seen) {
+    const text = await telemetry.read(one.key);
+    if (text !== null) found.push({ ...one, text });
   }
   return found;
 };
 
-/** Every batch within retention whose own record names `account`. A rewrite is never one: it names the placeholder. */
-export const findBatches = (telemetry: TelemetryStore, account: string, now: Date): Promise<FoundBatch[]> => scan(telemetry, now, (batch) => batch.account === account);
+/** Every batch (or rewrite) within retention whose own record names `account`. */
+export const findBatches = async (telemetry: TelemetryStore, account: string, now: Date): Promise<FoundBatch[]> =>
+  withText(telemetry, (await survey(telemetry, now)).filter((one) => one.account === account));
 
 /** The batch's text with the install replaced, and the account too when it is `account`, and nothing else touched: the same fields in the same order, so every other record is equal to the original. */
 const rewrittenText = (text: string, install: string, account: string): string => {
@@ -103,19 +116,22 @@ const installOfRewrite = (text: string): string | undefined => {
  * A run that finds no batch naming the account changes nothing.
  */
 export const eraseBatches = async (store: BatchStore, account: string, now: Date, newId: () => string = () => crypto.randomUUID()): Promise<number> => {
-  const named = await findBatches(store.telemetry, account, now);
-  if (named.length === 0) return 0;
-  const installs = new Set(named.map((batch) => batch.install));
-  const found = await scan(store.telemetry, now, (batch) => installs.has(batch.install));
+  const seen = await survey(store.telemetry, now);
+  const installs = new Set(seen.filter((one) => one.account === account).map((one) => one.install));
+  if (installs.size === 0) return 0;
+  const found = await withText(store.telemetry, seen.filter((one) => installs.has(one.install)));
+  // Each rewrite key is read once, and the result serves the settle loop and the write loop.
+  const standing = new Map<string, string | null>();
+  for (const batch of found) standing.set(batch.key, await store.telemetry.read(rewriteKeyOf(batch.key)));
   const ids = new Map<string, string>();
   for (const batch of found) {
-    const rewrite = await store.telemetry.read(rewriteKeyOf(batch.key));
-    const standing = rewrite === null ? undefined : installOfRewrite(rewrite);
-    if (standing !== undefined && !ids.has(batch.install)) ids.set(batch.install, standing);
+    const rewrite = standing.get(batch.key) ?? null;
+    const lent = rewrite === null ? undefined : installOfRewrite(rewrite);
+    if (lent !== undefined && !ids.has(batch.install)) ids.set(batch.install, lent);
   }
   for (const install of installs) if (!ids.has(install)) ids.set(install, newId().toLowerCase());
   for (const batch of found) {
-    if ((await store.telemetry.read(rewriteKeyOf(batch.key))) === null) await store.telemetry.write(rewriteKeyOf(batch.key), rewrittenText(batch.text, ids.get(batch.install) ?? '', account));
+    if (standing.get(batch.key) === null) await store.telemetry.write(rewriteKeyOf(batch.key), rewrittenText(batch.text, ids.get(batch.install) ?? '', account));
   }
   // Every row of the install takes the new id whatever account it names, so the install is one install on each day as before, and the old id stands in no row.
   for (const [old, fresh] of ids) await store.run('UPDATE telemetry_install_days SET install = ? WHERE install = ?', [fresh, old]);

@@ -265,3 +265,50 @@ describe('eraseAccount runs it (Item 4)', () => {
     expect(await all(bucket)).toEqual(settled);
   });
 });
+
+describe('an install shared by two accounts (fix round 2)', () => {
+  it('erases P, then Q: no object names Q, the counts per day hold, and no object or row keeps P\'s fresh id', async () => {
+    const [bucket, db] = [await pool.bucket(), await pool.db()];
+    await clean(bucket, db);
+    const [p, q] = [accountName(), accountName()];
+    await bucket.put('telemetry/2026-11-08/p.json', batchText('2026-11-08', INSTALL_A, p, 'p'));
+    await bucket.put('telemetry/2026-11-08/q.json', batchText('2026-11-08', INSTALL_A, q, 'q'));
+    await bucket.put('telemetry/2026-11-08/c.json', batchText('2026-11-08', INSTALL_C, undefined, 'c'));
+    for (const [install, who] of [[INSTALL_A, p], [INSTALL_A, q], [INSTALL_C, '']] as const) {
+      await db.prepare("INSERT INTO telemetry_install_days (day, install, account, batches, events, measures) VALUES ('2026-11-08', ?, ?, 1, 2, '[]')").bind(install, who).run();
+    }
+    const countsBefore = await installsPerDay(db);
+    const store = storeOf(db, telemetryOf(bucket));
+    let made = 0;
+    const newId = (): string => {
+      made += 1;
+      return `bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb${String(made)}`;
+    };
+    await eraseBatches(store, p, NOW, newId);
+    const firstId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1';
+    await eraseBatches(store, q, NOW, newId);
+    const after = await all(bucket);
+    expect(after.filter((one) => one.text.includes(q))).toEqual([]);
+    expect(after.filter((one) => one.text.includes(firstId))).toEqual([]);
+    expect(after.filter((one) => one.text.includes(INSTALL_A))).toEqual([]);
+    expect((await db.prepare('SELECT install FROM telemetry_install_days WHERE install = ?').bind(firstId).all()).results).toEqual([]);
+    expect(await installsPerDay(db)).toEqual(countsBefore);
+    // Every batch of the shared install carries the one id the rows carry now.
+    const ids = new Set(after.filter((one) => one.text.includes('"cli":"p"') || one.text.includes('"cli":"q"')).map((one) => installOf(one.text)));
+    expect(ids.size).toBe(1);
+  });
+
+  it('reads each batch of the window once, and only the carriers again', async () => {
+    const [bucket, db] = [await pool.bucket(), await pool.db()];
+    await clean(bucket, db);
+    const fixture = await seed(bucket, db);
+    const reads: string[] = [];
+    const inner = telemetryOf(bucket);
+    const counting: TelemetryStore = { ...inner, read: (key) => { reads.push(key); return inner.read(key); } };
+    await eraseBatches(storeOf(db, counting), fixture.account, NOW);
+    const own = reads.filter((key) => !key.endsWith('-erased.json'));
+    // Survey reads each in-window object once; the carriers (5 batches) are read once more for their text; nothing a third time.
+    expect(Math.max(...own.reduce((m, key) => m.set(key, (m.get(key) ?? 0) + 1), new Map<string, number>()).values())).toBeLessThanOrEqual(2);
+    expect(reads.filter((key) => key === rewriteKeyOf(fixture.keys.a1))).toHaveLength(1);
+  });
+});
