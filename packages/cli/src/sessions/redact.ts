@@ -156,10 +156,19 @@ const redactDecoded = (body: string, redactText: Redactor, injected: InjectedRul
     const next = walk(marked, '');
     return next === parsed ? text : `${text.slice(0, text.length - text.trimStart().length)}${JSON.stringify(next)}${text.slice(text.trimEnd().length)}`;
   };
+  // Plain text follows no tool result: a host a fetch named is kept in that result's line only.
+  const redactPlain = (run: readonly string[]): string => {
+    kept = new Set();
+    return redactText(run.join('\n'));
+  };
   // `text` is a whole document, or lines of which some are JSON: the JSON ones are walked, the runs between them take the plain-text path.
   const redactBlock = (text: string, top = false): string => {
     const whole = parseContainer(text);
-    if (whole !== undefined) return rewrite(text, whole, top);
+    // A top-level array line is no tool-result line: it keeps no fetched host.
+    if (whole !== undefined) {
+      if (top && Array.isArray(whole)) kept = new Set();
+      return rewrite(text, whole, top);
+    }
     const out: string[] = [];
     let run: string[] = [];
     for (const line of text.split('\n')) {
@@ -168,11 +177,11 @@ const redactDecoded = (body: string, redactText: Redactor, injected: InjectedRul
         run.push(line);
         continue;
       }
-      if (run.length > 0) out.push(redactText(run.join('\n')));
+      if (run.length > 0) out.push(redactPlain(run));
       run = [];
       out.push(rewrite(line, parsed, top));
     }
-    if (run.length > 0) out.push(redactText(run.join('\n')));
+    if (run.length > 0) out.push(redactPlain(run));
     return out.join('\n');
   };
   return redactBlock(body, true);

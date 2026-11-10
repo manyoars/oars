@@ -230,7 +230,7 @@ const lineIdsOf = (value: unknown, found: Set<string>): void => {
 };
 
 // The account in a remote URL: `https://host/acme/app.git`, `git@host:acme/app.git`, `ssh://git@host/acme/app`.
-const REMOTE_ACCOUNT = /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/\s]+@)?[^/:\s]+[:/]([^/\s]+)\/[^/\s]+$/i;
+const REMOTE_ACCOUNT = /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/\s]+@)?[^/:\s]+(?::\d+(?=\/))?[:/]([^/\s]+)\/[^\s]+$/i;
 
 /** The accounts the `origin` remotes of the repositories a session ran in name (an upstream or submodule url is someone else's account); a folder that is gone, or has no origin, adds none. */
 const accountsOf = (cwds: Iterable<string>): string[] => {
@@ -324,7 +324,7 @@ const typedPromptsOf = async (path: string, limit: number): Promise<string[]> =>
 };
 
 /** The first prompts of an orchestration lead session in any repository: `/loop /orchestrate` and `/orchestrate`. A command is read as its name and arguments, as typed. `/handoff resume` is ordinary work in a child repository, so it is a lead only where an owners entry lists it. */
-export const LEAD_PROMPTS: readonly RegExp[] = [/^\/loop\s+\/orchestrate\b/, /^\/orchestrate\b/];
+export const LEAD_PROMPTS: readonly RegExp[] = [/^\/loop\s+(?:\S+\s+)?\/orchestrate\b/, /^\/orchestrate\b/];
 
 const COMMAND_NAME = /<command-name>\s*([^<]*?)\s*<\/command-name>/;
 const COMMAND_ARGS = /<command-args>([^<]*)<\/command-args>/;
