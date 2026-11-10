@@ -94,7 +94,7 @@ describe('when the line shows', () => {
     expect(said).toHaveLength(2);
   });
 
-  it('shows on a Saturday as the first command of the week, and not before Friday 00:00 local', async () => {
+  it('is not due before Friday 00:00 local, and is due at Friday 00:00', async () => {
     expect(await ask({ now: THURSDAY })).toBe('not_due');
     expect(await ask({ now: Date.parse('2026-11-06T00:00:00Z') })).toBe('shown');
     expect(fridayOrLater(THURSDAY)).toBe(false);
@@ -113,6 +113,7 @@ describe('when the line shows', () => {
     ['the gate hook fires', { path: [], argv: ['gate', 'hook'] }],
     ['the gate hook is observed', { path: ['gate', 'hook'], argv: ['gate', 'hook'] }],
     ['oars card itself runs', { path: ['card'], argv: ['card', '--text'] }],
+    ['a recall runs', { path: ['sessions', 'recall'], argv: ['sessions', 'recall', 'a query'] }],
     ['no command ran', { path: [], argv: ['--help'] }],
   ] satisfies [string, Partial<Parameters<typeof cardLine>[0]>][])('never when %s', async (_name, over) => {
     expect(await ask(over)).toBe('not_due');
@@ -159,6 +160,16 @@ describe('the holdback', () => {
     expect(existsSync(join(telemetry, 'install-id'))).toBe(false);
   });
 
+  it('freezes the arm at the first decision, even when a telemetry id with the opposite arm appears later', async () => {
+    rmSync(join(telemetry, 'install-id'));
+    const first = await ask();
+    const own = readFileSync(join(dir, 'store', 'card-line-id'), 'utf8').trim();
+    writeFileSync(join(telemetry, 'install-id'), `${idFor(!isHeld(own))}
+`);
+    expect(await ask({ now: NEXT_FRIDAY })).toBe(first);
+    expect(readFileSync(join(dir, 'store', 'card-line-id'), 'utf8').trim()).toBe(own);
+  });
+
   it('ignores a telemetry id that is not an id, and a missing telemetry folder', async () => {
     writeFileSync(join(telemetry, 'install-id'), 'not an id');
     expect(['shown', 'held']).toContain(await ask());
@@ -171,6 +182,9 @@ describe('cost and failure', () => {
   it('swallows a store that cannot be read and a store folder that cannot be written', async () => {
     loads.fail = true;
     expect(await ask()).toBe('not_due');
+    expect(await ask({ now: SATURDAY })).toBe('not_due');
+    expect(loads.count).toBe(1);
+    expect(JSON.parse(readFileSync(join(dir, 'store', 'card-line.json'), 'utf8'))).toEqual({ week: '2026-W45', arm: 'not_due' });
     loads.fail = false;
     writeFileSync(join(dir, 'blocked'), 'a file where the folder should be');
     expect(await ask({ storeDir: join(dir, 'blocked', 'store') })).toBe('not_due');

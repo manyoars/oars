@@ -4,6 +4,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { isHook } from '../telemetry/observe.js';
 import type { CardLineArm } from '../telemetry/schema.js';
 import { cardOf } from './card.js';
 import { mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
@@ -22,7 +23,7 @@ export const isoWeekOf = (now: number): string => {
   const date = new Date(now);
   const thursday = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 4 - (date.getDay() || 7), 12);
   const first = new Date(thursday.getFullYear(), 0, 1, 12);
-  const week = Math.ceil(((thursday.getTime() - first.getTime()) / 86_400_000 + 1) / 7);
+  const week = Math.ceil((Math.round((thursday.getTime() - first.getTime()) / 86_400_000) + 1) / 7);
   return `${String(thursday.getFullYear())}-W${String(week).padStart(2, '0')}`;
 };
 
@@ -45,18 +46,17 @@ const readTrimmed = async (file: string): Promise<string | undefined> => {
 };
 
 /**
- * This install's id for the holdback: the telemetry install id when that file exists (never created here, so a person who turned telemetry off gets no new file),
- * else a random value written once into the store folder.
+ * This install's id for the holdback, frozen at the first decision so the arm never flips: the id file in the store folder when it exists; otherwise it is seeded from
+ * the telemetry install id when that file exists (never created here, so a person who turned telemetry off gets no new file), else a random value, and written.
  */
 const holdbackId = async (storeDir: string, telemetryDir: string | undefined): Promise<string> => {
-  const shared = telemetryDir === undefined ? undefined : await readTrimmed(join(telemetryDir, 'install-id'));
-  if (shared !== undefined && UUID.test(shared)) return shared;
   const own = await readTrimmed(join(storeDir, ID_FILE));
   if (own !== undefined && UUID.test(own)) return own;
-  const fresh = randomUUID();
+  const shared = telemetryDir === undefined ? undefined : await readTrimmed(join(telemetryDir, 'install-id'));
+  const id = shared !== undefined && UUID.test(shared) ? shared : randomUUID();
   await mkdirOwnerOnly(storeDir);
-  await writeOwnerOnly(join(storeDir, ID_FILE), `${fresh}\n`);
-  return fresh;
+  await writeOwnerOnly(join(storeDir, ID_FILE), `${id}\n`);
+  return id;
 };
 
 /** Stable per install: the first four bytes of a SHA-256 of the id, taken mod 100, under the holdback percent. */
@@ -75,10 +75,10 @@ export interface CardLineInput {
   stderr: (text: string) => void;
 }
 
-/** A hook, the MCP server, `--json`, or `oars card` itself: the line never goes there. */
+/** A hook, the MCP server, a recall, `--json`, or `oars card` itself: the line never goes there. */
 export const quiet = (input: Pick<CardLineInput, 'argv' | 'path' | 'flags'>): boolean => {
   const { argv, path, flags } = input;
-  return path.length === 0 || path[0] === 'card' || path.includes('hook') || (argv[0] === 'gate' && argv[1] === 'hook') || flags.includes('json') || flags.includes('mcp') || argv.includes('--json');
+  return path.length === 0 || path[0] === 'card' || path.includes('hook') || (path[0] === 'sessions' && path[1] === 'recall') || isHook([...argv], { path: [...path], flags: [...flags] }) || flags.includes('json') || flags.includes('mcp') || argv.includes('--json');
 };
 
 const markedWeek = async (storeDir: string): Promise<string | undefined> => {
@@ -95,16 +95,21 @@ const mark = async (storeDir: string, week: string, arm: CardLineArm): Promise<v
 };
 
 /**
- * Decides and, when due, prints. The week's marker is written before the store is read, so a slow or failing read costs one command a week at most; a week with no
- * session leaves the marker unwritten, so the line can still come later in the week. Returns the arm for the command event; any error reads `not_due`.
+ * Decides and, when due, prints. A store that cannot be read writes the week's marker as `not_due`, so a failing store costs one command a week; a week with no
+ * session leaves the marker unwritten, so it is checked again on each due command and the line can still come later in the week. Returns the arm for the command event; any error reads `not_due`.
  */
 export const cardLine = async (input: CardLineInput): Promise<CardLineArm> => {
   try {
     if (!input.tty || quiet(input) || !fridayOrLater(input.now)) return 'not_due';
     const week = isoWeekOf(input.now);
     if ((await markedWeek(input.storeDir).catch(() => undefined)) === week) return 'not_due';
-    const store = await loadStore(input.storeDir);
-    const card = cardOf(store, await readSurvival(input.storeDir), 'week', input.now);
+    let card: ReturnType<typeof cardOf>;
+    try {
+      card = cardOf(await loadStore(input.storeDir), await readSurvival(input.storeDir), 'week', input.now);
+    } catch {
+      await mark(input.storeDir, week, 'not_due');
+      return 'not_due';
+    }
     if (card.sessions === 0) return 'not_due';
     const held = isHeld(await holdbackId(input.storeDir, input.telemetryDir));
     const arm: CardLineArm = held ? 'held' : 'shown';
