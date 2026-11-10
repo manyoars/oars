@@ -10,14 +10,20 @@ const signedIn = async (pool: TestPool, id: string): Promise<string> => {
   return token;
 };
 
-/** Rows written straight to the ledger, so a test need not post twenty thousand deposits: the count and the stored bytes are what the limits read. */
+/** The most rows one seeding call writes: about 3.4 MB at the test's row size, so no single call holds the Worker's store busy for long on a loaded box (t1068: one 68 MB statement was the only call here that did). */
+const CHUNK_ROWS = 1_000;
+
+/** Rows written straight to the ledger, so a test need not post twenty thousand deposits: the count and the stored bytes are what the limits read. Written in short calls of `CHUNK_ROWS`, each its own small request. */
 const seed = async (pool: TestPool, rows: number, bytesEach: number): Promise<void> => {
   const db = await pool.db();
   const account = textOf(await db.prepare('SELECT id FROM accounts ORDER BY rowid DESC LIMIT 1').first(), 'id');
-  await db
-    .prepare("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?) INSERT INTO deposits (account, id, skeleton) SELECT ?, printf('f%015x', i), substr(hex(zeroblob(?)), 1, ?) FROM n")
-    .bind(rows, account, bytesEach, bytesEach)
-    .run();
+  for (let done = 0; done < rows; done += CHUNK_ROWS) {
+    const count = Math.min(CHUNK_ROWS, rows - done);
+    await db
+      .prepare("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?) INSERT INTO deposits (account, id, skeleton) SELECT ?, printf('f%015x', i + ?), substr(hex(zeroblob(?)), 1, ?) FROM n")
+      .bind(count, account, done, bytesEach, bytesEach)
+      .run();
+  }
 };
 
 describe('the per-account limits', () => {

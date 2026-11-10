@@ -87,10 +87,10 @@ describe('login, deposit, and fetch against a local server', () => {
       expect(one.last()).toMatchObject({ ok: true, sessions: 4, batched: 4, uncaptured: 0, refused: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 } });
       // At the server's word: nothing goes up before the covenant is accepted.
       await expect(one.send(0)).rejects.toMatchObject({ exitCode: ExitCode.AUTH, problem: { code: 'covenant_not_accepted' } });
-      // The flag only names the version this person expects; acceptance is the phrase the screen states, typed at a terminal.
+      // The flag only names the version this person expects; acceptance is the phrase the screen states, typed at a terminal, then the answer to "Are you in the EU, the EEA, or the UK?", which is asked because the flag does not give it.
       Object.assign(one.staged.stdin, { isTTY: true });
       Object.assign(one.staged.runtime, { stderr: { isTTY: true } });
-      one.staged.stdin.write(`${TEST_PHRASE}\n`);
+      one.staged.stdin.write(`${TEST_PHRASE}\nno\n`);
       expect(await one.send(0, 'v1')).toMatchObject({ document: { ok: true, sent: true } });
       for (const index of [1, 2, 3]) expect(await one.send(index)).toMatchObject({ document: { ok: true, sent: true } });
 

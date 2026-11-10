@@ -13,9 +13,10 @@ export const testScreen = (version: string): string =>
 export const COVENANT_TEXTS: ReadonlyMap<string, string> = new Map(['v1', 'v2'].map((version) => [version, testScreen(version)]));
 
 /** The body of an acceptance as the client sends it after a person typed the phrase. */
-export const acceptanceOf = (version = 'v1'): { version: string; textSha256: string; input: string; client: string } => ({
+export const acceptanceOf = (version = 'v1'): { version: string; textSha256: string; input: string; client: string; euEeaUk: string } => ({
   version,
   textSha256: createHash('sha256').update(testScreen(version)).digest('hex'),
   input: 'typed',
   client: 'oars/test',
+  euEeaUk: 'no',
 });
