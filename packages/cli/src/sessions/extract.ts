@@ -31,6 +31,7 @@ import {
   type PullEcosystem,
   type SessionObservation,
   type ShellIdentity,
+  type EditDigest,
   type ShellSegment,
   type Skeleton,
   type SkeletonLine,
@@ -138,6 +139,25 @@ export const isErrorResult = (block: Obj, text: string): boolean => {
   if (truthy(block.is_error)) return true;
   const exit = EXIT_RE.exec(text.trim());
   return exit !== null && exit[1] !== '0';
+};
+
+/** The first 32 hex digits of the SHA-256 of a text's exact UTF-8 bytes: plain, not keyed, so the same text matches across sessions and accounts, and a line ending or a trailing space is a difference. */
+const textDigest = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 32);
+
+/**
+ * The digests of an edit call's text, from the input: an Edit has one old and new pair, a MultiEdit one per edit in order, a Write a new digest only (its old text is not in the call, so no old digest is held, not the digest of an
+ * empty string). Any other tool, and an edit whose input holds no text for the side it needs, has none: a malformed entry of a MultiEdit is skipped.
+ */
+const editDigestsOf = (tool: string, input: Obj): EditDigest[] => {
+  if (tool === 'Write') {
+    const content = str(input.content);
+    return content === undefined ? [] : [{ new: textDigest(content) }];
+  }
+  const edits = tool === 'MultiEdit' && Array.isArray(input.edits) ? input.edits.filter(isObj) : tool === 'Edit' ? [input] : [];
+  return edits.flatMap((edit) => {
+    const [old, replacement] = [str(edit.old_string), str(edit.new_string)];
+    return old === undefined || replacement === undefined ? [] : [{ old: textDigest(old), new: textDigest(replacement) }];
+  });
 };
 
 /** What an Edit, MultiEdit, or Write shows of a manifest: the names it adds and removes (an edit), or lists (a write). Undefined when it shows none. */
@@ -1912,6 +1932,7 @@ export const captureSession = (input: ExtractInput): Capture => {
         const argValues = argValuesOf(native, toolInput, CLOSED_ARG_VALUES);
         // A name is stored as the line's text is: masked at capture, so a credential-shaped folder or file name never reaches the store. The mask has no name shape, so the wire still drops it and counts it.
         const names = argNamesOf(native, toolInput, lineRoot ?? lineCwd, lineCwd, shell?.words ?? [], CLOSED_ARG_VALUES).map(({ kind, name }) => ({ kind, name: redact(name) }));
+        const digests = editDigestsOf(name, toolInput);
         const compared: ComparedCall = { input: toolInput, target: aimed.target, features: argFeatures, values: argValues };
         const lastKey = `${String(cur?.index ?? null)}\n${String(side)}\n${stored}`;
         const before = lastCall.get(lastKey);
@@ -1937,6 +1958,7 @@ export const captureSession = (input: ExtractInput): Capture => {
           argFeatures,
           ...(argValues.length === 0 ? {} : { argValues }),
           ...(names.length === 0 ? {} : { names }),
+          ...(digests.length === 0 ? {} : { digests }),
           ...(before === undefined ? {} : { changeKind: changeKindOf(before, compared) }),
           durationMs: null,
           toolUseId: id ?? null,
