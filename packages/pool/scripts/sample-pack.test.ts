@@ -1219,3 +1219,23 @@ describe('refusals and an unfinished run', () => {
     expect(manifest(f.out)).toHaveLength(1);
   });
 });
+
+// An objection is a local record beside the owners file (plan S5, 2.2): a session id or a person's name, when it arrived, and the scope. It keeps a session out of every later pack (Art. 21(1)).
+const objectTo = (f: Fixture, ...rows: readonly object[]): void => {
+  writeFileSync(join(f.root, 'objections.jsonl'), rows.map((row) => `${JSON.stringify(row)}\n`).join(''));
+};
+
+describe('an objection keeps a session out (plan S5, Art. 21(1))', () => {
+  it('does not emit a session named in objections.jsonl, and counts it', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done')]);
+    f.write('-work-oars', S(2), [user(S(2), 1, 'run the build'), assistant(S(2), 1, 'green')]);
+    await stored(f);
+    objectTo(f, { session: S(2), received: '2026-06-05', scope: 'sale' });
+
+    const counts = await buildPack(f.runtime, options(f));
+
+    expect(sessionsOf(f)).toEqual([S(1)]);
+    expect(counts).toMatchObject({ emitted: 1, objected: 1 });
+  });
+});
