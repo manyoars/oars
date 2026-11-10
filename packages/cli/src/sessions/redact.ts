@@ -132,7 +132,7 @@ const parseContainer = (text: string): Json[] | JsonObject | undefined => {
   }
 };
 
-const redactDecoded = (body: string, redactText: Redactor, injected: InjectedRule, enter: (line: JsonObject) => void): string => {
+const redactDecoded = (body: string, redactText: Redactor, injected: InjectedRule, enter: (line?: JsonObject) => void): string => {
   // A name reaches the strings of an array under it (`"tokens": ["..."]`); an object's own keys name their values.
   const walk = (value: Json, name: string): Json => {
     if (typeof value === 'string') return SECRET_NAME.test(name) && value.length >= 4 ? '<secret>' : redactBlock(value);
@@ -158,7 +158,7 @@ const redactDecoded = (body: string, redactText: Redactor, injected: InjectedRul
   };
   // Plain text follows no tool result: a host a fetch named is kept in that result's line only.
   const redactPlain = (run: readonly string[]): string => {
-    kept = new Set();
+    enter();
     return redactText(run.join('\n'));
   };
   // `text` is a whole document, or lines of which some are JSON: the JSON ones are walked, the runs between them take the plain-text path.
@@ -166,7 +166,7 @@ const redactDecoded = (body: string, redactText: Redactor, injected: InjectedRul
     const whole = parseContainer(text);
     // A top-level array line is no tool-result line: it keeps no fetched host.
     if (whole !== undefined) {
-      if (top && Array.isArray(whole)) kept = new Set();
+      if (top && Array.isArray(whole)) enter();
       return rewrite(text, whole, top);
     }
     const out: string[] = [];
@@ -297,8 +297,8 @@ export const redactTranscript = (body: string, domains: readonly string[] = [], 
   const whole = parseContainer(body);
   for (const parsed of whole !== undefined ? [whole] : body.split('\n').map(parseContainer)) if (parsed !== undefined && !Array.isArray(parsed)) learnInjected(parsed, repeated);
   const calls = pack.fetchedHosts === true ? fetchedBy([...(whole !== undefined ? [whole] : body.split('\n').map(parseContainer))].filter((parsed): parsed is JsonObject => parsed !== undefined && !Array.isArray(parsed))) : new Map<string, Set<string>>();
-  const enter = (line: JsonObject): void => {
-    kept = new Set(blocksOf(line).flatMap((block) => (block['type'] === 'tool_result' && typeof block['tool_use_id'] === 'string' ? [...(calls.get(block['tool_use_id']) ?? [])] : [])));
+  const enter = (line?: JsonObject): void => {
+    kept = new Set(line === undefined ? [] : blocksOf(line).flatMap((block) => (block['type'] === 'tool_result' && typeof block['tool_use_id'] === 'string' ? [...(calls.get(block['tool_use_id']) ?? [])] : [])));
   };
   const redacted = redactDecoded(body, redactText, injectedRule(injectedKey, repeated), enter);
   return { text: redacted, masked: Math.max(0, placeholders(redacted) - placeholders(body)) };
