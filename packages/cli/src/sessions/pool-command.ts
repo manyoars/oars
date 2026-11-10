@@ -13,7 +13,9 @@ import { checkSession, exclusionPaths, lastWritten, loadTerms, transcriptFilesOf
 import { localNames, makeRedactor, REDACTION_VERSION, redactTranscript } from './redact.js';
 import { recordSend, recordWire, newTally, tallyBatch } from '../telemetry/wire.js';
 import { discardStale, FIELD_ROWS, fieldsOf, heldAcross, lockedAcross, rescanPulled, machineKeys, markShown, noteMachineKey, outboxFolder, partsOf, pulledAt, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
-import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, unpinnedKid, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
+import { deriveConsequences } from './recall-consequence.js';
+import { readRecalls } from './recall-object.js';
+import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, recommendationsOf, sessionsOf, skeletonOf, unpinnedKid, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
 import { carriedDeltas, heldDeltas, keptDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { rawAllowed, rawStale, sendsOf } from './pool-choices.js';
@@ -531,7 +533,8 @@ export const poolDeposit = async (
   };
   // The sessions a Stop does not name that still pass the read-only gates: they only fill the windows of a delta, and are never counted, withdrawn, or built.
   const history: SessionRecords[] = [];
-  for (const records of sessionsOf(await loadStore(runtime.storeDir), roots)) {
+  const localStore = await loadStore(runtime.storeDir);
+  for (const records of sessionsOf(localStore, roots)) {
     // The Stop of a machine builds the one session that stopped: the others in the store belong to Stops of their own, so their batches stay as they are. They run the three read-only gates below and no more.
     const named = options.session === undefined || records.main.session === options.session;
     if (named) counts.sessions += 1;
@@ -583,11 +586,13 @@ export const poolDeposit = async (
   const carried = carriedDeltas(account, placed, await sentDeltas(outbox));
   // The coverage bands (t871): the operator's two settings, read here, and the team band counted from the local git log. Nothing is looked up, and anything unread goes as unknown.
   const coverageOf = makeCoverage(runtime, await readCoverageSetting(runtime.storeDir), options.git ?? runGit);
+  // The recommendations each session was shown or held back from, read from the local rows with their windows, so a shown row stays shown at the pool and a session with none sends none (the pool reads that as unknown).
+  const recalls = deriveConsequences(localStore, await readRecalls(runtime.storeDir));
   for (const { records, key } of ready) {
     const delta = carried.get(records.main.session);
     // A machine builds the open session at every Stop and SessionEnd, so the one it names keeps what its own earlier batch carried and takes only what is new; any other deposit builds a session once.
     const entries = machine !== undefined && options.session !== undefined ? keptDeltas(await heldDeltas(outbox, key), delta?.entries ?? []) : delta?.entries;
-    const skeleton = skeletonOf(records, key, shellReader(vocabulary()), contentHash, entries, gate, await coverageOf(records.main));
+    const skeleton = skeletonOf(records, key, shellReader(vocabulary()), contentHash, entries, gate, await coverageOf(records.main), recommendationsOf(recalls, records.main.session));
     if (skeleton === null) {
       counts.uncaptured += 1;
       await withdraw(key);

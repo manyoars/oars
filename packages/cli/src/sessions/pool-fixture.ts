@@ -181,6 +181,7 @@ export const REGISTER_FIXTURE = {
   id: '0123456789abcdef',
   claimed: { hostClass: 'cloud', launcher: 'ci' },
   deltas: [{ deltaKind: 'removed', field: 'package', name: 'typescript', registry: 'npm', metric: 'callsPerSession', change: -2 }],
+  recommendations: [{ id: '0f1e2d3c4b5a6978', arm: 'shown', poolVersion: '2026-11-03T03:00:00.000Z', from: 0, to: 1 }],
   timingPrint: null,
   transcripts: [
     {

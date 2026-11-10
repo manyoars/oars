@@ -1,6 +1,6 @@
 // Reading the pool for a bundle: the stored `index` cells of one harness version, the version-free environment cells, the motifs, and the strata, four statements whose rows grow with the cells and never with deposits. The
 // ledger plane (`deposits`) and the `contributor` records are not read here, so a write to them cannot change what is served.
-import { ENVIRONMENT_BUCKET, harnessBucket, NO_AXES, type Cell, type Grain } from '../../cli/src/sessions/cells.js';
+import { ENVIRONMENT_BUCKET, exposureOfCell, harnessBucket, NO_AXES, type Cell, type Exposure, type Grain } from '../../cli/src/sessions/cells.js';
 import type { Motif, MotifLevel, WindowStep } from '../../cli/src/sessions/motif.js';
 import type { StrataCell } from '../../cli/src/sessions/pool-wire.js';
 import { bucketPrefix } from './derive.js';
@@ -43,6 +43,14 @@ const textField = (row: unknown, key: string): string => {
   return found;
 };
 
+const EXPOSURES: readonly Exposure[] = ['shown', 'held', 'unknown'];
+
+const exposureField = (row: unknown): Exposure => {
+  const found = EXPOSURES.find((reading) => reading === fieldOf(row, 'exposure'));
+  if (found === undefined) throw new Error('a stored cell names no exposure');
+  return found;
+};
+
 const grainField = (row: unknown): Grain => {
   const found = fieldOf(row, 'grain');
   if (!isGrain(found)) throw new Error('a stored cell names no grain');
@@ -65,11 +73,11 @@ const motifOf = (row: unknown): Motif => {
  * served five is the three. Every part is served or the total is not (`environmentOf`), so the difference is nothing.
  */
 export const ENVIRONMENT_CELLS =
-  'SELECT motif_id, frame_bucket, grain, day, exposed, sessions, clusters, clusters_any, ok, failed, tokens, token_sessions, token_prompts, duration_ms FROM cells WHERE harness_bucket = ? AND sessions > 0 AND MAX(clusters, clusters_any) >= ?';
+  'SELECT motif_id, frame_bucket, grain, day, exposed, exposure, sessions, clusters, clusters_any, ok, failed, tokens, token_sessions, token_prompts, duration_ms FROM cells WHERE harness_bucket = ? AND sessions > 0 AND MAX(clusters, clusters_any) >= ?';
 
 /** The parts of those cells: every cell of the given motifs (a JSON array of motif ids), in any bucket or environment. A cell's key starts with its motif, so the join reads each motif's rows through the key's index. */
 export const ENVIRONMENT_PARTS =
-  "SELECT cells.motif_id, cells.frame_bucket, cells.grain, cells.day, cells.exposed, cells.sessions, cells.clusters, cells.clusters_any, cells.ok, cells.failed, cells.tokens, cells.token_sessions, cells.token_prompts, cells.duration_ms FROM json_each(?) AS motif JOIN cells ON cells.key >= motif.value || '/' AND cells.key < motif.value || '0' WHERE cells.sessions > 0";
+  "SELECT cells.motif_id, cells.frame_bucket, cells.grain, cells.day, cells.exposed, cells.exposure, cells.sessions, cells.clusters, cells.clusters_any, cells.ok, cells.failed, cells.tokens, cells.token_sessions, cells.token_prompts, cells.duration_ms FROM json_each(?) AS motif JOIN cells ON cells.key >= motif.value || '/' AND cells.key < motif.value || '0' WHERE cells.sessions > 0";
 
 /** The panel window: four weeks, in days. */
 export const PANEL_DAYS = 28;
@@ -108,6 +116,7 @@ const cellBase = (row: unknown): Omit<Cell, 'tokens'> => ({
   failed: numberField(row, 'failed'),
   durationMs: numberField(row, 'duration_ms'),
   exposed: numberField(row, 'exposed') === 1,
+  exposure: exposureField(row),
 });
 
 /** A cell as held, and the count of every account that holds it, standing or not (`clusters_any`). */
@@ -142,15 +151,15 @@ export const environmentOf = (candidates: readonly Held[], parts: readonly Held[
     const cell = counted(held);
     return cell.clusters >= cellFloor(floors, floor, cellClassOf(cell, motifs.get(cell.motifId)));
   };
-  const under = new Set(parts.filter((part) => !clearsOwn(part)).map(({ cell }) => JSON.stringify([cell.motifId, cell.grain, cell.day, cell.exposed, cell.frameBucket])));
+  const under = new Set(parts.filter((part) => !clearsOwn(part)).map(({ cell }) => JSON.stringify([cell.motifId, cell.grain, cell.day, exposureOfCell(cell), cell.frameBucket])));
   const partsOf = new Map<string, string[]>();
   for (const { cell } of parts) {
-    const key = JSON.stringify([cell.motifId, cell.grain, cell.day, cell.exposed]);
+    const key = JSON.stringify([cell.motifId, cell.grain, cell.day, exposureOfCell(cell)]);
     partsOf.set(key, [...(partsOf.get(key) ?? []), cell.frameBucket]);
   }
   return candidates
     .filter((held) => clearsOwn(held))
-    .filter(({ cell }) => (partsOf.get(JSON.stringify([cell.motifId, cell.grain, cell.day, cell.exposed])) ?? []).every((frame) => !under.has(JSON.stringify([cell.motifId, cell.grain, cell.day, cell.exposed, frame]))))
+    .filter(({ cell }) => (partsOf.get(JSON.stringify([cell.motifId, cell.grain, cell.day, exposureOfCell(cell)])) ?? []).every((frame) => !under.has(JSON.stringify([cell.motifId, cell.grain, cell.day, exposureOfCell(cell), frame]))))
     .map(({ cell }) => cell);
 };
 
@@ -166,7 +175,7 @@ export const storedOf = async (env: Env, harness: string, harnessVersion: string
   const prefix = bucketPrefix(harness, harnessVersion);
   const modelPrefix = `${harness}/${NO_AXES}/`;
   const [cells, candidates, motifs, strata, panel] = await Promise.all([
-    env.DB.prepare('SELECT motif_id, frame_bucket, grain, day, exposed, sessions, clusters, clusters_any, ok, failed, tokens, token_sessions, token_prompts, duration_ms FROM cells WHERE ((harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?) OR (harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?)) AND sessions > 0').bind(bucket, prefix.length, prefix, NO_AXES, modelPrefix.length, modelPrefix).all(),
+    env.DB.prepare('SELECT motif_id, frame_bucket, grain, day, exposed, exposure, sessions, clusters, clusters_any, ok, failed, tokens, token_sessions, token_prompts, duration_ms FROM cells WHERE ((harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?) OR (harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?)) AND sessions > 0').bind(bucket, prefix.length, prefix, NO_AXES, modelPrefix.length, modelPrefix).all(),
     env.DB.prepare(ENVIRONMENT_CELLS).bind(ENVIRONMENT_BUCKET, lowest).all(),
     env.DB.prepare('SELECT motif FROM motifs WHERE motif_id IN (SELECT motif_id FROM cells WHERE ((harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?) OR (harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?)) AND sessions > 0) OR motif_id IN (SELECT motif_id FROM cells WHERE harness_bucket = ? AND sessions > 0 AND MAX(clusters, clusters_any) >= ?)').bind(bucket, prefix.length, prefix, NO_AXES, modelPrefix.length, modelPrefix, ENVIRONMENT_BUCKET, lowest).all(),
     env.DB.prepare('SELECT dimension, value, sessions, clusters FROM strata WHERE clusters >= ? AND sessions > 0').bind(floors.public).all(),
