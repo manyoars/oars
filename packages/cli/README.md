@@ -219,6 +219,23 @@ Replay is local and read-only on your transcripts; it writes `crossings.jsonl` a
 - `oars pool outbox` prints each batch exactly as it would be sent, with its SHA-256, and `--explain` adds each field's rule.
 - `oars pool fetch --harness-version <version>` fetches that version's signed bundle, verifies it against the key pinned at login, and keeps it locally. It prints the public and disclosure floors the bundle states (and any read family on a floor of its own) and holds no floor of its own: the pool sets them, so a change is a deploy and never a new release of oars.
 
+### club
+
+A club shares your counts with the people who hold its code, and nothing else. Members see your nickname, weeks rowing, active days, sessions, and strokes this week. They never see your sessions, projects, prompts, or tokens. You need `oars pool login` first, except for `oars board`.
+
+```
+oars club create "Friday crew" --nickname skipper   # prints the join code once
+oars club join K7M2QX --nickname bow                # a club you were invited to
+oars club join open --nickname bow                  # the open board, once your account has 90 days of standing
+oars club show <club>                               # the members in the pool's order
+oars club leave <club>                              # your row leaves view at once
+oars board                                          # the open board; no sign-in
+```
+
+Create and join show the pool's consent text and wait for you to type `yes` at a terminal. A script on stdin cannot agree for you, and nothing is sent until you do. Send the code only to people you want in the club: it admits, and a member can leave at any time.
+
+A nickname is 2 to 24 letters, digits, spaces, dots, underscores, or hyphens, with no space at either end, no `@`, and no web address. The pool slows wrong codes to 10 an hour and club creation to 5 a day for each account; past that you get `rate_limited` and when to try again. Each command takes `--json`. Errors lead with the cause: `not_signed_in`, `club_full`, `nickname_taken`, `nickname_invalid`, `rate_limited`.
+
 ## The `--json` contract
 
 With `--json`, stdout carries exactly one JSON document and a success exits 0.
