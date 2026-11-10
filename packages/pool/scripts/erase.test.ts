@@ -9,7 +9,7 @@ import { sampleSkeleton } from '../src/sample.js';
 import { PANEL_COUNT } from '../src/stored.js';
 import { acceptanceOf, fieldOf, startPool, stubUser, textOf, type StubUser, type TestBucket, type TestDb, type TestPool } from '../src/test-pool.js';
 import { telemetryOf } from './erase-test-telemetry.js';
-import { anonymizeSkeleton, closeAccount, eraseAccount, eraseLeakedSecret, eraseRawObject, findRawContaining, holdsValue, weekOf, type EraseStore, type RawHit } from './erase.js';
+import { anonymizeSkeleton, closeAccount, eraseAccount, eraseLeakedSecret, eraseRawObject, findRawContaining, holdsValue, restrictAccount, weekOf, type EraseStore, type RawHit } from './erase.js';
 
 let pool: TestPool;
 let next = 7000;
@@ -1339,5 +1339,56 @@ describe('anonymizing a skeleton', () => {
     const before = await markerRows();
     await eraseAccount(await store(), account, NOW);
     expect((await markerRows()) - before).toBe(2);
+  });
+});
+
+describe('restricting one account (GDPR Article 18)', () => {
+  it('refuses its deposit and raw request after a restrict, takes both again after a lift, and writes one audit row for each', async () => {
+    const { token, account } = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000b1001'), token)).status).toBe(201);
+    const deposits = JSON.stringify(await all('SELECT * FROM deposits WHERE account = ?', account));
+    const audits = await count('SELECT COUNT(*) AS held FROM erasure_audit');
+
+    expect(await restrictAccount(await store(), account, false, NOW)).toEqual({ rows: 1, objects: 0 });
+
+    expect(await all('SELECT restricted_at FROM accounts WHERE id = ?', account)).toEqual([{ restricted_at: NOW.getTime() }]);
+    expect(await pool.post('/v1/deposits', skeletonWith('00000000000b1002'), token)).toMatchObject({ status: 403, json: { error: 'account_restricted' } });
+    expect(await putRaw(token, new TextEncoder().encode('held while restricted'))).toMatchObject({ part: 403, complete: 403 });
+    // Nothing a Deposit holds changed, and no credential was revoked: the same token still reads its export.
+    expect(JSON.stringify(await all('SELECT * FROM deposits WHERE account = ?', account))).toBe(deposits);
+    expect((await pool.get('/v1/account/export', token)).status).toBe(200);
+    expect(await all("SELECT kind, reason, erased_on, rows_erased, objects_erased, account FROM erasure_audit WHERE kind = 'restrict' AND account = ?", account)).toEqual([{ kind: 'restrict', reason: 'account-restrict', erased_on: '2026-11-08', rows_erased: 1, objects_erased: 0, account }]);
+
+    expect(await restrictAccount(await store(), account, true, new Date('2026-12-01T00:00:00Z'))).toEqual({ rows: 1, objects: 0 });
+
+    expect(await all('SELECT restricted_at FROM accounts WHERE id = ?', account)).toEqual([{ restricted_at: null }]);
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000b1002'), token)).status).toBe(201);
+    expect(await putRaw(token, new TextEncoder().encode('held after the lift'))).toMatchObject({ part: 200, complete: 201 });
+    expect(await count('SELECT COUNT(*) AS held FROM erasure_audit')).toBe(audits + 2);
+    expect(await all("SELECT reason FROM erasure_audit WHERE kind = 'lift' AND account = ?", account)).toEqual([{ reason: 'account-lift' }]);
+  }, 90_000);
+
+  it('changes nothing on a rerun, keeps the first restricted-at time, and writes no second audit row; a lift of an unrestricted account is the same', async () => {
+    const { account } = await member();
+    expect(await restrictAccount(await store(), account, true, NOW)).toEqual({ rows: 0, objects: 0 });
+    await restrictAccount(await store(), account, false, NOW);
+    const audits = await count('SELECT COUNT(*) AS held FROM erasure_audit');
+    expect(await restrictAccount(await store(), account, false, new Date('2026-12-01T00:00:00Z'))).toEqual({ rows: 0, objects: 0 });
+    expect(await all('SELECT restricted_at FROM accounts WHERE id = ?', account)).toEqual([{ restricted_at: NOW.getTime() }]);
+    expect(await count('SELECT COUNT(*) AS held FROM erasure_audit')).toBe(audits);
+  }, 60_000);
+
+  it('leaves its export, an erasure, and the account erasure of a restricted account running', async () => {
+    const { token, account } = await member();
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000b1003'), token)).status).toBe(201);
+    await restrictAccount(await store(), account, false, NOW);
+    expect((await pool.get('/v1/account/export', token)).status).toBe(200);
+    expect((await eraseAccount(await store(), account, NOW)).rows).toBeGreaterThan(0);
+  }, 90_000);
+
+  it('refuses an account the pool has never seen, and leaves no audit row', async () => {
+    const audits = await count('SELECT COUNT(*) AS held FROM erasure_audit');
+    await expect(restrictAccount(await store(), 'acct_nobody', false, NOW)).rejects.toThrow('No account acct_nobody in the pool.');
+    expect(await count('SELECT COUNT(*) AS held FROM erasure_audit')).toBe(audits);
   });
 });

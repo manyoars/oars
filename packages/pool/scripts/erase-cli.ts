@@ -1,5 +1,5 @@
 // `npm run erase -w packages/pool -- <what> ...`: the operator's erasure command (docs/pool.md, "Erasure"). It changes nothing until `--confirm` is given; without it, it says what it would do.
-import { closeAccount, depositExists, eraseAccount, eraseLeakedSecret, eraseRawObject, findRawContaining, type Erased, type EraseStore } from './erase.js';
+import { closeAccount, depositExists, eraseAccount, eraseLeakedSecret, eraseRawObject, findRawContaining, restrictAccount, type Erased, type EraseStore } from './erase.js';
 import { wranglerStore, type Lister, type ObjectFiles, type Target, type Wrangler } from './erase-wrangler.js';
 
 export { nodeFiles } from './erase-files.js';
@@ -15,6 +15,7 @@ export const USAGE = [
   '                                      and make ingest refuse it again (only its SHA-256 is kept)',
   '  account --account <id>              erase one account\'s deposit rows and raw objects, scrub its machines\' labels and allow lists, delete its repo keys, deposit hours, and contributor records, and disable its tokens, then rewrite each telemetry batch within retention that names it (needs R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY, to list the bucket); the shared totals stay',
   '  close --account <id>               close one account (covenant 6.1): revoke its tokens and machine keys and record when it closed, so sign-in, enrollment, and activation refuse it; its Deposits, raw objects, and the shared totals stay',
+  '  restrict --account <id> [--lift]   restrict one account on the person’s request (GDPR Art. 18), or lift it: it keeps its data stored and takes nothing more (deposits, raw, and telemetry are refused, and its records count toward no shared cell); its export, an erasure, and the sweeps still run, and nothing is revoked',
   'Options: --confirm (without it nothing is changed), --local (the local wrangler state instead of the account\'s)',
   `Runs with the wrangler login already on this machine against D1 database "oars-pool" and R2 buckets "oars-pool-raw" and "oars-telemetry".`,
 ].join('\n');
@@ -40,12 +41,13 @@ interface Options {
   valueStdin: boolean;
   contains: boolean;
   allAccounts: boolean;
+  lift: boolean;
   confirm: boolean;
   local: boolean;
 }
 
 const optionsOf = (argv: readonly string[]): Options | string => {
-  const options: Options = { positional: [], valueStdin: false, contains: false, allAccounts: false, confirm: false, local: false };
+  const options: Options = { positional: [], valueStdin: false, contains: false, allAccounts: false, lift: false, confirm: false, local: false };
   for (let at = 0; at < argv.length; at += 1) {
     const arg = argv[at] ?? '';
     if (arg === '--confirm') options.confirm = true;
@@ -53,6 +55,7 @@ const optionsOf = (argv: readonly string[]): Options | string => {
     else if (arg === '--value-stdin') options.valueStdin = true;
     else if (arg === '--contains') options.contains = true;
     else if (arg === '--all-accounts') options.allAccounts = true;
+    else if (arg === '--lift') options.lift = true;
     else if (arg === '--account' || arg === '--id') {
       const value = argv[at + 1];
       if (value === undefined || value.startsWith('--')) return `${arg} needs a value`;
@@ -110,6 +113,11 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
     if (what === 'close' && options.positional.length === 1 && options.account !== undefined && options.id === undefined) {
       if (!options.confirm) return plan(io, `close account ${options.account} in ${where}: record when it closed, revoke its tokens and machine keys, and delete nothing a Deposit holds`);
       io.print(JSON.stringify({ rowsChanged: (await closeAccount(store, options.account, io.now())).rows }));
+      return 0;
+    }
+    if (what === 'restrict' && options.positional.length === 1 && options.account !== undefined && options.id === undefined) {
+      if (!options.confirm) return plan(io, options.lift ? `lift the restriction on account ${options.account} in ${where}: its deposits, raw requests, and telemetry are taken again and its records count toward shared cells again; tell the person first (Art. 18(3))` : `restrict account ${options.account} in ${where}: record when it was restricted, refuse its deposits, raw requests, and telemetry, and stop counting its records toward shared cells; delete and revoke nothing`);
+      io.print(JSON.stringify({ rowsChanged: (await restrictAccount(store, options.account, options.lift, io.now())).rows }));
       return 0;
     }
     if (what === 'account' && options.positional.length === 1 && options.account !== undefined && options.id === undefined) {

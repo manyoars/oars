@@ -198,7 +198,7 @@ const tombstone = async (store: EraseStore, kind: 'raw-object' | 'deposit' | 'va
   await store.run('INSERT OR IGNORE INTO erasure_tombstones (kind, digest, reason, erased_on) VALUES (?, ?, ?, ?)', [kind, digest, reason, dayOf(now)]);
 };
 
-const audit = async (store: EraseStore, kind: 'raw-object' | 'row' | 'account' | 'close', reason: ErasureReason | 'account-close', account: string, erased: Erased, now: Date): Promise<void> => {
+const audit = async (store: EraseStore, kind: 'raw-object' | 'row' | 'account' | 'close' | 'restrict' | 'lift', reason: ErasureReason | 'account-close' | 'account-restrict' | 'account-lift', account: string, erased: Erased, now: Date): Promise<void> => {
   await store.run('INSERT INTO erasure_audit (kind, reason, erased_on, rows_erased, objects_erased, account) VALUES (?, ?, ?, ?, ?, ?)', [kind, reason, dayOf(now), erased.rows, erased.objects, account]);
 };
 
@@ -443,6 +443,20 @@ export const closeAccount = async (store: EraseStore, accountId: string, now: Da
   const closed = { rows, objects: 0 };
   if (rows > 0) await audit(store, 'close', 'account-close', account, closed, now);
   return closed;
+};
+
+/**
+ * Restricts one account at the person's request (GDPR Art. 18), or lifts the restriction: it sets `accounts.restricted_at` or clears it. While it is set a deposit and a raw request refuse the account 403 `account_restricted`, a telemetry batch that names it rolls into no row, and its
+ * contributor records count toward no shared cell (the count catches up at the next deposit that touches the cell). Nothing is erased and no credential is revoked, so its export, an erasure, the withdrawal sweep, and the retention sweeps still run, and a lift restores the account whole.
+ * The first restricted-at time stands, so a rerun changes nothing and writes no audit row; a lift of an account that is not restricted is the same. An account the pool has never seen is an error, since a mistyped id would otherwise look like success.
+ */
+export const restrictAccount = async (store: EraseStore, accountId: string, lift: boolean, now: Date): Promise<Erased> => {
+  const account = nameOf(accountId, 'the account');
+  if ((await store.rows('SELECT 1 AS found FROM accounts WHERE id = ?', [account])).length === 0) throw new Error(`No account ${account} in the pool.`);
+  const rows = lift ? await store.run('UPDATE accounts SET restricted_at = NULL WHERE id = ? AND restricted_at IS NOT NULL', [account]) : await store.run('UPDATE accounts SET restricted_at = ? WHERE id = ? AND restricted_at IS NULL', [now.getTime(), account]);
+  const changed = { rows, objects: 0 };
+  if (rows > 0) await audit(store, lift ? 'lift' : 'restrict', lift ? 'account-lift' : 'account-restrict', account, changed, now);
+  return changed;
 };
 
 /** A raw object that holds the text the find looked for: its R2 key, its account, and its size as the ledger recorded it. Nothing of what the object says. */

@@ -173,7 +173,7 @@ describe('the wrangler store', () => {
 
 describe('main', () => {
   it('changes nothing without --confirm and says what it would do', async () => {
-    for (const argv of [['raw', `raw/${ACCOUNT}/${SHA}`], ['row', '--account', ACCOUNT, '--id', 's1'], ['row', '--account', ACCOUNT, '--id', 's1', '--value-stdin'], ['account', '--account', ACCOUNT], ['close', '--account', ACCOUNT]]) {
+    for (const argv of [['raw', `raw/${ACCOUNT}/${SHA}`], ['row', '--account', ACCOUNT, '--id', 's1'], ['row', '--account', ACCOUNT, '--id', 's1', '--value-stdin'], ['account', '--account', ACCOUNT], ['close', '--account', ACCOUNT], ['restrict', '--account', ACCOUNT], ['restrict', '--account', ACCOUNT, '--lift']]) {
       const { io, calls, printed } = fake({ rows: [{ found: 1 }] });
       expect(await main(argv, io)).toBe(0);
       // The only call a dry run makes is the SELECT that checks the row named.
@@ -205,6 +205,23 @@ describe('main', () => {
     expect(statements[3]).toContain("UPDATE machines SET state = 'revoked'");
     expect(statements.join(' ')).not.toMatch(/deposits|raw_objects|DELETE FROM (cells|strata|contributors)/);
     expect(printed).toEqual([JSON.stringify({ rowsChanged: 3 })]);
+  });
+
+  it('restricts an account: checks it exists, sets restricted_at once, audits, and deletes and revokes nothing', async () => {
+    const { io, calls, printed } = fake({ rows: [{ found: 1 }] });
+    expect(await main(['restrict', '--account', ACCOUNT, '--confirm'], io)).toBe(0);
+    const statements = calls.map((call) => call[6] ?? '');
+    expect(statements[0]).toBe(`SELECT 1 AS found FROM accounts WHERE id = '${ACCOUNT}'`);
+    expect(statements[1]).toMatch(/^UPDATE accounts SET restricted_at = \d+ WHERE id = 'acct_[0-9a-f]+' AND restricted_at IS NULL$/);
+    expect(statements.join(' ')).not.toMatch(/DELETE|tokens|machines|deposits|raw_objects/);
+    expect(printed).toEqual([JSON.stringify({ rowsChanged: 1 })]);
+  });
+
+  it('lifts a restriction with --lift, clearing restricted_at', async () => {
+    const { io, calls, printed } = fake({ rows: [{ found: 1 }] });
+    expect(await main(['restrict', '--account', ACCOUNT, '--lift', '--confirm'], io)).toBe(0);
+    expect(calls.map((call) => call[6] ?? '')[1]).toMatch(/^UPDATE accounts SET restricted_at = NULL WHERE id = 'acct_[0-9a-f]+' AND restricted_at IS NOT NULL$/);
+    expect(printed).toEqual([JSON.stringify({ rowsChanged: 1 })]);
   });
 
   it('answers exit code 1 and the reason when the account is not in the pool', async () => {
@@ -313,7 +330,7 @@ describe('main', () => {
   });
 
   it('answers a usage error with exit code 2 and the usage', async () => {
-    for (const argv of [[], ['nothing'], ['raw'], ['raw', 'k', 'extra'], ['row', '--account', ACCOUNT], ['account'], ['account', '--account', ACCOUNT, '--id', 's'], ['close'], ['close', '--account', ACCOUNT, '--id', 's'], ['raw', 'k', '--account', ACCOUNT]]) {
+    for (const argv of [[], ['nothing'], ['raw'], ['raw', 'k', 'extra'], ['row', '--account', ACCOUNT], ['account'], ['account', '--account', ACCOUNT, '--id', 's'], ['close'], ['close', '--account', ACCOUNT, '--id', 's'], ['restrict'], ['restrict', '--account', ACCOUNT, '--id', 's'], ['raw', 'k', '--account', ACCOUNT]]) {
       const { io, calls, printed } = fake();
       expect(await main(argv, io)).toBe(2);
       expect(calls).toEqual([]);
