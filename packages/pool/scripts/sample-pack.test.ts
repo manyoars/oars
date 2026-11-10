@@ -1,10 +1,10 @@
 // The first sale's sample pack (P98 (10) to (12)): fixture stores, built in a temp folder, with an invented term and invented instruction text.
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { paths, type SessionsRuntime } from '../../cli/src/sessions/store.js';
-import { deposit } from '../../cli/src/sessions/store.js';
+import { deposit, loadStore, paths, type SessionsRuntime } from '../../cli/src/sessions/store.js';
+import { rolloutLine, stageCodex } from '../../cli/src/sessions/test-support.js';
 import { buildPack, main, matchIdOf, ownerOf, parseOwners, serverKeyOf, USAGE, type ManifestRow, type PackOptions } from './sample-pack.js';
 
 const TERM = 'zorblax';
@@ -25,13 +25,16 @@ const S = (n: number): string => `${String(n).repeat(8)}-1111-4111-8111-11111111
 
 const line = (value: object): string => JSON.stringify(value);
 const at = (n: number): string => `2026-06-01T10:00:${String(n).padStart(2, '0')}.000Z`;
+// Ids shaped as the harness writes them: a uuid per line, `parentUuid` naming the line before, and a `req_` id per request.
+const uuidOf = (session: string, kind: 'a' | 'b', n: number): string => `${session.slice(0, 8)}-${kind}${String(n).padStart(3, '0')}-4222-8222-222222222222`;
+const requestOf = (session: string, n: number): string => `req_011C${session.slice(0, 8)}x${String(n)}`;
 const user = (session: string, n: number, content: string): string =>
-  line({ type: 'user', uuid: `${session}-u${String(n)}`, parentUuid: null, isSidechain: false, timestamp: at(n), version: '2.1.300', sessionId: session, cwd: '/work/app', message: { role: 'user', content } });
+  line({ type: 'user', uuid: uuidOf(session, 'b', n), parentUuid: null, isSidechain: false, timestamp: at(n), version: '2.1.300', sessionId: session, cwd: '/work/app', message: { role: 'user', content } });
 const assistant = (session: string, n: number, text: string): string =>
-  line({ type: 'assistant', uuid: `${session}-a${String(n)}`, parentUuid: `${session}-u${String(n)}`, isSidechain: false, timestamp: at(n + 1), version: '2.1.300', sessionId: session, requestId: `req_${session}_${String(n)}`, message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text }], usage: { input_tokens: 10, output_tokens: 20 } } });
+  line({ type: 'assistant', uuid: uuidOf(session, 'a', n), parentUuid: uuidOf(session, 'b', n), isSidechain: false, timestamp: at(n + 1), version: '2.1.300', sessionId: session, requestId: requestOf(session, n), message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text }], usage: { input_tokens: 10, output_tokens: 20 } } });
 // Where the harness puts CLAUDE.md and the memory index: an `instructions` attachment, and a leading `<system-reminder>` of a user message.
 const instructions = (session: string): string =>
-  line({ type: 'attachment', uuid: `${session}-i`, parentUuid: null, timestamp: at(0), version: '2.1.300', sessionId: session, attachment: { type: 'instructions', files: [{ path: 'CLAUDE.md', kind: 'Project', content: `# Rules\n${CLAUDE_MD_LINE}\n` }, { path: 'memory/MEMORY.md', kind: 'AutoMem', content: `- ${MEMORY_LINE}\n` }] } });
+  line({ type: 'attachment', uuid: uuidOf(session, 'a', 999), parentUuid: null, timestamp: at(0), version: '2.1.300', sessionId: session, attachment: { type: 'instructions', files: [{ path: 'CLAUDE.md', kind: 'Project', content: `# Rules\n${CLAUDE_MD_LINE}\n` }, { path: 'memory/MEMORY.md', kind: 'AutoMem', content: `- ${MEMORY_LINE}\n` }] } });
 const reminded = (session: string, n: number): string => user(session, n, `<system-reminder>\nContents of CLAUDE.md:\n${CLAUDE_MD_LINE}\n# memory index\n${MEMORY_LINE}\n</system-reminder>\n${USER_TEXT}`);
 
 interface Fixture {
@@ -84,11 +87,37 @@ const manifest = (out: string): ManifestRow[] =>
       return value;
     });
 
-const packText = (out: string): string =>
+const packFiles = (out: string): string[] =>
   readdirSync(join(out, 'sessions'), { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile())
-    .map((entry) => readFileSync(join(entry.parentPath, entry.name), 'utf8'))
-    .join('\n');
+    .map((entry) => join(entry.parentPath, entry.name));
+
+const packText = (out: string): string => packFiles(out).map((file) => readFileSync(file, 'utf8')).join('\n');
+
+interface IndexRow {
+  pack: string;
+  session: string;
+  matchId: string;
+}
+
+const isIndexRow = (value: unknown): value is IndexRow => typeof value === 'object' && value !== null && 'session' in value && 'matchId' in value;
+
+// The operator's index, beside the owners file: the only place a session id meets its match id.
+const indexOf = (f: Fixture): IndexRow[] =>
+  readFileSync(join(f.root, 'index.jsonl'), 'utf8')
+    .split('\n')
+    .filter((row) => row !== '')
+    .map((row): IndexRow => {
+      const value: unknown = JSON.parse(row);
+      if (!isIndexRow(value)) throw new Error('an index row with no session');
+      return value;
+    });
+
+/** The session each manifest row stands for, read through the operator's index. */
+const sessionsOf = (f: Fixture, out = f.out): string[] => {
+  const byMatch = new Map(indexOf(f).map((row) => [row.matchId, row.session]));
+  return manifest(out).map((row) => byMatch.get(row.matchId) ?? '');
+};
 
 describe('the exclusion gate (A38), applied first', () => {
   it('leaves out a session whose subagent transcript holds a term, and one with no raw to scan', async () => {
@@ -105,7 +134,7 @@ describe('the exclusion gate (A38), applied first', () => {
     const counts = await buildPack(f.runtime, options(f));
 
     expect(counts).toMatchObject({ scanned: 3, excluded: { term: 1, noRaw: 1, noTerms: 0, unreadable: 0 }, emitted: 1 });
-    expect(manifest(f.out).map((row) => row.session)).toEqual([S(1)]);
+    expect(sessionsOf(f)).toEqual([S(1)]);
   });
 
   it('emits nothing when the term file is missing (fail closed)', async () => {
@@ -141,7 +170,10 @@ describe('the manifest', () => {
     await stored(f);
     const counts = await buildPack(f.runtime, options(f));
     expect(counts).toMatchObject({ scanned: 3, noOwner: 1, emitted: 2 });
-    const rows = manifest(f.out).sort((a, b) => (a.session < b.session ? -1 : 1));
+    const sessions = sessionsOf(f);
+    const rows = manifest(f.out)
+      .map((row, at) => ({ ...row, session: sessions[at] ?? '' }))
+      .sort((a, b) => (a.session < b.session ? -1 : 1));
     expect(rows.map((row) => [row.session, row.repoOwner, row.sourceLicense])).toEqual([
       [S(1), 'Many Oars Co.', 'Apache-2.0'],
       [S(2), 'Switchyard Software Company', null],
@@ -207,5 +239,103 @@ describe('the command line', () => {
     const printed: string[] = [];
     expect(await main(['--terms', f.terms], { runtime: f.runtime, print: (text) => printed.push(text) })).toBe(2);
     expect(printed.join('\n')).toContain(USAGE);
+  });
+});
+
+describe('what a buyer can join on', () => {
+  it('keeps every session id, line uuid, and request id out of the pack, and the index beside the owners file maps the session', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done'), user(S(1), 2, `resume ${S(2)} later`)]);
+    f.write('-work-oars', S(1), [user(S(1), 3, 'look around'), assistant(S(1), 3, 'looked')], 'agent-a1');
+    f.write('-work-oars', S(2), [user(S(2), 1, 'run the build'), assistant(S(2), 1, 'green')]);
+    await stored(f);
+    expect((await buildPack(f.runtime, options(f))).emitted).toBe(2);
+    const raw = [S(1), S(2), uuidOf(S(1), 'b', 1), uuidOf(S(1), 'a', 1), uuidOf(S(1), 'b', 3), requestOf(S(1), 1), requestOf(S(1), 3)];
+    for (const file of [join(f.out, 'manifest.jsonl'), join(f.out, 'pack.json'), ...packFiles(f.out)]) {
+      const text = readFileSync(file, 'utf8');
+      for (const id of raw) expect(text, `${id} in ${file}`).not.toContain(id);
+    }
+    const index = indexOf(f);
+    expect(index.map((row) => row.session).sort()).toEqual([S(1), S(2)]);
+    expect(index.every((row) => row.pack === f.out)).toBe(true);
+    const matchId = index.find((row) => row.session === S(1))?.matchId ?? '';
+    const lines = readFileSync(join(f.out, 'sessions', matchId, 'main.jsonl'), 'utf8')
+      .split('\n')
+      .filter((text) => text !== '')
+      .map((text): { sessionId?: string; uuid?: string; parentUuid?: string | null; requestId?: string } => JSON.parse(text));
+    // Each line names the session by its match id, and the masked parent still names the masked line before it.
+    expect(lines.map((entry) => entry.sessionId)).toEqual([matchId, matchId, matchId]);
+    expect(lines[1]?.parentUuid).toBe(lines[0]?.uuid);
+    expect(lines[0]?.uuid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(lines[1]?.requestId).toMatch(/^req_[0-9a-f]{24}$/);
+    // Another session the text names is masked to that session's own match id, so the buyer sees the link but not the id.
+    expect(JSON.stringify(lines[2])).toContain(index.find((row) => row.session === S(2))?.matchId ?? 'none');
+  });
+});
+
+describe('the harness terms gate', () => {
+  it('leaves out a session from a harness with no terms row, after the exclusion gate has cleared it', async () => {
+    const f = fixture();
+    const id = 'cccc3333-3333-4333-8333-333333333333';
+    const T = (second: number): string => `2026-06-01T10:00:${String(second).padStart(2, '0')}.000Z`;
+    const rollout = [
+      rolloutLine(T(0), 'session_meta', { session_id: id, id, timestamp: T(0), cwd: join(f.root, 'not-a-repo'), originator: 'codex_cli_rs', cli_version: '0.50.0' }),
+      rolloutLine(T(1), 'turn_context', { model: 'gpt-5-codex', cwd: join(f.root, 'not-a-repo') }),
+      rolloutLine(T(2), 'event_msg', { type: 'user_message', message: 'fix the build' }),
+      rolloutLine(T(3), 'event_msg', { type: 'agent_message', message: 'fixed' }),
+    ];
+    const home = stageCodex(f.root, [{ id, lines: rollout }]);
+    // The fixture runtime names no sources, which reads none; this one reads Codex's.
+    const { storeDir, projectsRoot, stdin, stdout } = f.runtime;
+    await deposit({ storeDir, projectsRoot, stdin, stdout, sourceRoots: { codex: home } }, { allow: ['codex'], redactDomains: [], now: () => Date.parse('2026-06-10T00:00:00Z') });
+    const record = (await loadStore(f.runtime.storeDir)).sessions.find((session) => session.harness === 'codex');
+    if (record === undefined) throw new Error('the rollout did not reach the store');
+    // A raw copy where the gate looks, so the exclusion gate clears the session and the harness gate is what decides.
+    f.write(record.project, record.session, rollout.map((entry) => JSON.stringify(entry)));
+    const owners = join(f.root, 'owners-all.json');
+    writeFileSync(owners, JSON.stringify([{ folder: '*', owner: 'Many Oars Co.', license: null }]));
+    expect(await buildPack(f.runtime, options(f, { owners }))).toMatchObject({ scanned: 1, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 1, emitted: 0 });
+    expect(existsSync(join(f.out, 'sessions'))).toBe(false);
+    expect(manifest(f.out)).toEqual([]);
+  });
+});
+
+describe('refusals and an unfinished run', () => {
+  const run = async (f: Fixture, extra: readonly string[] = []): Promise<{ code: number; printed: string }> => {
+    const printed: string[] = [];
+    const args = ['--terms', f.terms, '--owners', f.owners, '--index-key', f.indexKey, '--buyer-key', 'sample', '--out', f.out, ...extra];
+    const code = await main(args, { runtime: f.runtime, print: (text) => printed.push(text) });
+    return { code, printed: printed.join('\n') };
+  };
+
+  it('refuses an index key shorter than 64 hex characters', async () => {
+    const f = fixture();
+    writeFileSync(f.indexKey, 'ab'.repeat(31));
+    expect(await run(f)).toEqual({ code: 2, printed: expect.stringContaining('64 or more hex') });
+  });
+
+  it('refuses an owners file that is not JSON', async () => {
+    const f = fixture();
+    writeFileSync(f.owners, '{');
+    expect((await run(f)).code).toBe(2);
+    expect(existsSync(f.out)).toBe(false);
+  });
+
+  it('leaves no pack under the output folder when the run stops partway, and refuses to build over the unfinished one', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    // The index cannot be written (a folder holds its name), so the run fails after the sessions are copied.
+    mkdirSync(join(f.root, 'index.jsonl'));
+    await expect(buildPack(f.runtime, options(f))).rejects.toThrow();
+    expect(existsSync(f.out)).toBe(false);
+    expect(existsSync(`${f.out}.partial`)).toBe(true);
+    rmSync(join(f.root, 'index.jsonl'), { recursive: true });
+    expect(await run(f)).toEqual({ code: 2, printed: expect.stringContaining('.partial') });
+    rmSync(`${f.out}.partial`, { recursive: true });
+    mkdirSync(f.out);
+    expect((await run(f)).code).toBe(0);
+    expect(existsSync(`${f.out}.partial`)).toBe(false);
+    expect(manifest(f.out)).toHaveLength(1);
   });
 });

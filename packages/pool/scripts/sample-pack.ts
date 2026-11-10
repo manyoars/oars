@@ -3,7 +3,7 @@
 // Order, per session: the exclusion gate (A38) first, then a known owner and known harness terms, then the copy, with every injected block stripped.
 import { createHash, createHmac } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readdir, readFile, rename, rmdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { defaultConfigDir } from '../../cli/src/credentials.js';
@@ -20,7 +20,8 @@ export const USAGE = [
   '  --buyer-key <key>    the buyer\'s key: a match id is HMAC-SHA-256 of the server key under it',
   '  --out <dir>          an empty or new folder outside every git repository',
   '  --size <n>           sessions to emit (default 25); --seed <text> orders the draw (default 1)',
-  'Reads the store under APPDATA (or XDG_CONFIG_HOME) and the transcripts under CLAUDE_CONFIG_DIR or ~/.claude; writes only --out.',
+  'Reads the store under APPDATA (or XDG_CONFIG_HOME) and the transcripts under CLAUDE_CONFIG_DIR or ~/.claude. Builds in <out>.partial and renames it to --out when done,',
+  'and appends each session id and its match id to index.jsonl beside the owners file: the operator\'s only map from one to the other.',
 ].join('\n');
 
 /** What a buyer may do with a session; training is never in this list (it is the `training` field). P98 (11). */
@@ -52,9 +53,9 @@ export interface OwnerRule {
   license: string | null;
 }
 
+/** No session id: a buyer holds only the match id, and the operator's `index.jsonl` maps one to the other. */
 export interface ManifestRow {
   matchId: string;
-  session: string;
   harness: Harness;
   harnessVersions: string[];
   repoOwner: string;
@@ -87,6 +88,14 @@ export interface PackCounts {
   noOwner: number;
   noHarnessTerms: number;
   emitted: number;
+}
+
+/** A line of the operator's `index.jsonl`: which pack a session went to, and under which match id. It never goes into a pack. */
+export interface IndexRow {
+  pack: string;
+  session: string;
+  project: string;
+  matchId: string;
 }
 
 export class PackError extends Error {}
@@ -144,14 +153,56 @@ const isEmptyOrAbsent = async (folder: string): Promise<boolean> => {
   }
 };
 
+const UUID_OR_REQUEST = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|req_[0-9A-Za-z]+/gi;
+
+const isRecord = (value: unknown): value is object => typeof value === 'object' && value !== null;
+
+/** The line ids a transcript carries: the value of every key ending in `uuid` (`uuid`, `parentUuid`, `leafUuid`, ...) and every `requestId`, at any depth. */
+const lineIdsOf = (value: unknown, found: Set<string>): void => {
+  if (Array.isArray(value)) for (const item of value) lineIdsOf(item, found);
+  else if (isRecord(value))
+    for (const [key, item] of Object.entries(value)) {
+      if (typeof item === 'string' && (/uuid$/i.test(key) || key === 'requestId')) found.add(item);
+      else lineIdsOf(item, found);
+    }
+};
+
+const parsed = (line: string): unknown => {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * One id under the keyed index, shaped as the id it stands for: a line uuid stays a uuid and a request id a `req_` id.
+ * The same function as the match id, so a buyer's masks are stable across packs and no one without the index key can test an id against them.
+ */
+const maskOf = (indexKey: string, buyerKey: string, id: string): string => {
+  const hex = matchIdOf(buyerKey, serverKeyOf(indexKey, id));
+  return id.startsWith('req_') ? `req_${hex.slice(0, 24)}` : `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+};
+
+/** Every store session id (to its match id) and every line id the texts carry, rewritten wherever it occurs: the `sessionId` field, a path, a typed mention. Other text is left alone. */
+const maskIds = (texts: readonly string[], sessions: ReadonlyMap<string, string>, indexKey: string, buyerKey: string): string[] => {
+  const lineIds = new Set<string>();
+  for (const text of texts) for (const line of text.split('\n')) lineIdsOf(parsed(line), lineIds);
+  return texts.map((text) => text.replace(UUID_OR_REQUEST, (id) => sessions.get(id) ?? (lineIds.has(id) ? maskOf(indexKey, buyerKey, id) : id)));
+};
+
 const EXCLUDED: { readonly [reason in Exclude<Reason, 'clean'>]: keyof PackCounts['excluded'] } = { term: 'term', 'no-raw': 'noRaw', 'no-terms': 'noTerms', unreadable: 'unreadable' };
 
 /** Where a transcript goes under the session's folder: `main.jsonl`, or its path under the session (`subagents/agent-x.jsonl`). */
 const placeOf = (key: string, session: string, main: boolean): string => (main ? 'main.jsonl' : key.slice(session.length + 1));
 
 export const buildPack = async (runtime: SessionsRuntime, options: PackOptions): Promise<PackCounts> => {
-  if (insideRepository(options.out)) throw new PackError('The output folder is inside a git repository. Choose one outside every repository: a pack is never committed.');
-  if (!(await isEmptyOrAbsent(options.out))) throw new PackError('The output folder is not empty. Choose a new folder, so one pack never mixes with another.');
+  const out = resolve(options.out);
+  // Built here and renamed to `out` at the end, so a run that stops partway leaves no half pack where a finished one belongs.
+  const partial = `${out}.partial`;
+  if (insideRepository(out)) throw new PackError('The output folder is inside a git repository. Choose one outside every repository: a pack is never committed.');
+  if (!(await isEmptyOrAbsent(out))) throw new PackError('The output folder is not empty. Choose a new folder, so one pack never mixes with another.');
+  if (!(await isEmptyOrAbsent(partial))) throw new PackError(`An unfinished pack from an earlier run is at ${partial}. Delete it, then run again.`);
   const owners = parseOwners(await readFile(options.owners, 'utf8'));
   const indexKey = await readIndexKey(options.indexKey);
   const domains = await readRedactDomains(runtime.storeDir);
@@ -160,10 +211,14 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   const injectedKey = `injected-block:${createHmac('sha256', options.buyerKey).update('injected-block').digest('hex')}`;
   const store = await loadStore(runtime.storeDir);
   const frame = store.sessions.filter((session) => session.userTurns > 0);
+  // Every session the store knows, so a transcript that names another session names it by that session's match id.
+  const sessionIds = new Map(store.sessions.map((session) => [session.session, matchIdOf(options.buyerKey, serverKeyOf(indexKey, session.session))]));
   const order = (session: string): string => createHash('sha256').update(`${options.seed}\n${session}`).digest('hex');
   const drawn = frame.map((session) => ({ session, rank: order(session.session) })).sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0));
   const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, emitted: 0 };
   const rows: ManifestRow[] = [];
+  const index: IndexRow[] = [];
+  await mkdir(partial, { recursive: true });
   for (const { session: record } of drawn) {
     if (counts.emitted >= options.size) break;
     counts.scanned += 1;
@@ -185,14 +240,17 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     }
     const matchId = matchIdOf(options.buyerKey, serverKeyOf(indexKey, record.session));
     const files = await transcriptFilesOf(runtime, record.project, record.session);
-    for (const file of files) {
-      const target = join(options.out, 'sessions', matchId, placeOf(file.key, record.session, file.main));
+    const texts: string[] = [];
+    for (const file of files) texts.push(redactTranscript(await readFile(file.path, 'utf8'), domains, names, injectedKey).text);
+    const masked = maskIds(texts, sessionIds, indexKey, options.buyerKey);
+    for (const [at, file] of files.entries()) {
+      const target = join(partial, 'sessions', matchId, placeOf(file.key, record.session, file.main));
       await mkdir(dirname(target), { recursive: true });
-      await writeFile(target, redactTranscript(await readFile(file.path, 'utf8'), domains, names, injectedKey).text);
+      await writeFile(target, masked[at] ?? '');
     }
+    index.push({ pack: out, session: record.session, project: record.project, matchId });
     rows.push({
       matchId,
-      session: record.session,
       harness,
       harnessVersions: [...record.versions],
       repoOwner: owner.owner,
@@ -207,9 +265,13 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     });
     counts.emitted += 1;
   }
-  await mkdir(options.out, { recursive: true });
-  await writeFile(join(options.out, 'manifest.jsonl'), rows.map((row) => `${JSON.stringify(row)}\n`).join(''));
-  await writeFile(join(options.out, 'pack.json'), `${JSON.stringify({ built: new Date().toISOString(), size: options.size, seed: options.seed, redactionVersion: REDACTION_VERSION, counts }, null, 2)}\n`);
+  await writeFile(join(partial, 'manifest.jsonl'), rows.map((row) => `${JSON.stringify(row)}\n`).join(''));
+  await writeFile(join(partial, 'pack.json'), `${JSON.stringify({ built: new Date().toISOString(), size: options.size, seed: options.seed, redactionVersion: REDACTION_VERSION, counts }, null, 2)}\n`);
+  // Outside the pack, beside the owners file, and appended, so it maps every pack built from that folder. Written before the rename, so a pack under `out` always has its rows.
+  await appendFile(join(dirname(resolve(options.owners)), 'index.jsonl'), index.map((row) => `${JSON.stringify(row)}\n`).join(''));
+  // An empty `out` was allowed above, and a folder is renamed only onto a free name.
+  if (existsSync(out)) await rmdir(out);
+  await rename(partial, out);
   return counts;
 };
 
