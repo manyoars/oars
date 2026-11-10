@@ -35,6 +35,7 @@ One per CLI command, written when it ends.
 | `exitCode` | The exit code (0 to 255). |
 | `errorClass` | Present on a non-zero exit: one of `usage`, `auth`, `invalid`, `conflict`, `rate-limited`, `unreachable`, `capped`, `unexpected`, chosen from the exit code. The error's text is never read. |
 | `ci` | Whether the command ran in CI: the closed word described under `first-run`, `none` when no CI variable is set. |
+| `cardLine` | Present when the weekly card line was asked about (a run with a session store): `shown` when it printed `Your week: N sessions, M strokes.` on stderr, `held` when this install is in the fixed tenth that never sees it, `not_due` for any other reason. The holdback is a stable hash of the install id, frozen at the first decision in `card-line-id` in the session store folder, so a new install id does not move it. Closed list; nothing from the line's text or the store is recorded. |
 
 An invented example:
 

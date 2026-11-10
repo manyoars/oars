@@ -9,7 +9,7 @@ import { CliError, ExitCode } from './errors.js';
 import type { BooksBy, RecallQuery } from './sessions/query.js';
 import { closedQueryOf, formsRefusal, RECALL_FAMILIES } from './sessions/recall-reads.js';
 import { FAMILIES } from './sessions/read.js';
-import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsGoldArms, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsLineage, sessionsMeasure, sessionsRead, sessionsRecall, sessionsRecallCounts, sessionsVerify, type SessionsDeps } from './sessions/command.js';
+import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsGoldArms, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsLineage, sessionsMeasure, sessionsRead, sessionsRecall, sessionsReceipt, sessionsRecallCounts, sessionsVerify, type SessionsDeps } from './sessions/command.js';
 import { sessionsCard } from './sessions/card-command.js';
 import type { CardPeriod } from './sessions/card.js';
 import { gateInstall, gatePolicy, gateReplay, gateReport, gateUninstall } from './gate/command.js';
@@ -25,6 +25,8 @@ import { poolCoverage, poolDeposit, poolExport, poolFetch, poolLogin, poolLogout
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 import { telemetryOff, telemetryOn, telemetryReport, telemetryShow, telemetryStatus } from './telemetry/command.js';
+import { cardLine } from './sessions/card-line.js';
+import type { CardLineArm } from './telemetry/schema.js';
 import { recordCrash } from './telemetry/crash.js';
 import { emitOf } from './telemetry/emit.js';
 import { finishTelemetry, isHook, observeCommand, type Observed } from './telemetry/observe.js';
@@ -240,6 +242,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .option('--family <name>', `one read family (${RECALL_FAMILIES.join(', ')}); only recovery and fit are narrowed by --class and --since`)
     .option('--text <text>', 'look for text in the local record')
     .option('--session <id>', 'the session asking, so what it did next can be read for this recall')
+    .option('--receipt', 'with --error: print a redacted Markdown block to paste into an issue on the failing tool (tool, harness, normalized signature, earlier sessions and weeks, what they did next)')
     .option('--counts', 'print counts of recalls by mode, arm, and answer, with how many windows hold a call named like a shown action, instead of answering (see --day)')
     .option('--day <yyyy-mm-dd>', 'with --counts: only this UTC day')
     .option('--mcp', 'serve one recall tool over MCP on stdio instead of answering once')
@@ -250,6 +253,11 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .option('--max-chars <n>', "with --context: the block's length limit (default 1200)", positiveInteger)
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
+      if (flag(options, 'receipt')) {
+        if (flag(options, 'counts') || flag(options, 'mcp') || flag(options, 'context') || list(options, 'pattern').length > 0 || text(options, 'entity') !== undefined || text(options, 'family') !== undefined || text(options, 'text') !== undefined) throw new CliError('--receipt answers one error: pass --error "<text>" and no other form.', ExitCode.USAGE, 'usage');
+        emit(deps, flag(options, 'json'), await sessionsReceipt(sessionDeps(deps), { ...(text(options, 'error') === undefined ? {} : { error: text(options, 'error') }), ...(text(options, 'path') === undefined ? {} : { path: text(options, 'path') }), ...(text(options, 'class') === undefined ? {} : { cls: text(options, 'class') }), ...(count(options, 'since') === undefined ? {} : { sinceDays: count(options, 'since') }) }, text(options, 'session') ?? null));
+        return;
+      }
       if (flag(options, 'counts')) {
         emit(deps, flag(options, 'json'), await sessionsRecallCounts(sessionDeps(deps), text(options, 'day')));
         return;
@@ -737,11 +745,18 @@ const isHookUninstall = (observed: Observed): boolean => observed.path.join(' ')
 /** `sessions try` promises no network call and no read of the real store, and the sender does both. */
 const isSessionsTry = (observed: Observed): boolean => observed.path.join(' ') === 'sessions try';
 
+/** The weekly card line (`sessions/card-line.ts`): stderr only, never an error, never a change to the exit code. */
+const weeklyLine = (argv: string[], deps: RunDeps, observed: Observed): Promise<CardLineArm> =>
+  deps.sessions === undefined
+    ? Promise.resolve('not_due')
+    : cardLine({ storeDir: deps.sessions.storeDir, telemetryDir: deps.telemetry?.dir, now: deps.now(), tty: deps.sessions.stderr?.isTTY === true, argv, path: observed.path, flags: observed.flags, stderr: deps.io.stderr });
+
 /** Runs one invocation (`argv` without the node and script entries) and returns the exit code. Telemetry records it afterward and cannot change it. */
 export const run = async (argv: string[], deps: RunDeps): Promise<ExitCode> => {
   const observed: Observed = { path: [], flags: [] };
   const startedAt = deps.now();
   const exit = await execute(argv, deps, observed);
+  observed.cardLine = await weeklyLine(argv, deps, observed);
   finishTelemetry(deps, argv, observed, startedAt, exit);
   // Never from a gate hook (it runs before every tool call) or from `hook uninstall`; it cannot change the exit code or what the command printed.
   if (deps.catchUp !== undefined && !isHook(argv, observed) && !isHookUninstall(observed) && !isSessionsTry(observed)) await Promise.resolve().then(deps.catchUp).catch(() => undefined);
