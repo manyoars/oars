@@ -192,7 +192,7 @@ describe('Item 4: orchestration lead sessions are not drawn', () => {
     const f = fixture();
     f.write(S(1), [command(f, S(1), '/loop', '/orchestrate'), assistant(S(1), 1, [{ type: 'text', text: 'leading' }])]);
     f.write(S(2), [command(f, S(2), '/orchestrate', ''), assistant(S(2), 1, [{ type: 'text', text: 'leading' }])]);
-    f.write(S(3), [command(f, S(3), '/handoff', 'resume t1086'), assistant(S(3), 1, [{ type: 'text', text: 'leading' }])]);
+    f.write(S(3), [command(f, S(3), '/handoff', 'resume t1086'), assistant(S(3), 1, [{ type: 'text', text: 'working' }])]);
     f.write(S(4), [user(f, S(4), 1, 'orchestrate the loop of the parser'), assistant(S(4), 1, [{ type: 'text', text: 'working' }])]);
     f.write(S(5), [command(f, S(5), '/handoff', 'write a note'), assistant(S(5), 1, [{ type: 'text', text: 'working' }])]);
     const counts = await run(f);

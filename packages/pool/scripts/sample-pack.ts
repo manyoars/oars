@@ -66,6 +66,8 @@ export interface OwnerRule {
   license: string | null;
   /** Accounts (GitHub users or organizations) this entry's repositories live under, masked as `<owner>` besides the one each session's own remote names. */
   handles?: readonly string[];
+  /** First prompts (`/handoff resume`) that mark a session of this entry's repositories as an orchestration lead session, beside `LEAD_PROMPTS`: ordinary work in one repository, a lead's resume in another, so the operator says which. */
+  leadPrompts?: readonly string[];
 }
 
 /** No session id: a buyer holds only the match id, and the operator's `index.jsonl` maps one to the other. */
@@ -145,10 +147,14 @@ export const parseOwners = (text: string): OwnerRule[] => {
     if (!isText(folder) || folder === '') throw new PackError(`Owners entry ${String(at + 1)} has no folder.`);
     if (!isText(owner) || owner.trim() === '') throw new PackError(`Owners entry ${String(at + 1)} has no owner.`);
     if (license !== null && !isText(license)) throw new PackError(`Owners entry ${String(at + 1)} needs a license string or null.`);
-    const handles = field('handles');
-    if (handles === undefined) return { folder, owner, license };
-    if (!Array.isArray(handles) || handles.some((handle: unknown) => !isText(handle) || handle.trim() === '')) throw new PackError(`Owners entry ${String(at + 1)} needs handles as a list of account names.`);
-    return { folder, owner, license, handles: handles.map(String) };
+    const names = (name: string, label: string): string[] | undefined => {
+      const value = field(name);
+      if (value === undefined) return undefined;
+      if (!Array.isArray(value) || value.some((item: unknown) => !isText(item) || item.trim() === '')) throw new PackError(`Owners entry ${String(at + 1)} needs ${name} as a list of ${label}.`);
+      return value.map(String);
+    };
+    const [handles, leadPrompts] = [names('handles', 'account names'), names('leadPrompts', 'first prompts')];
+    return { folder, owner, license, ...(handles === undefined ? {} : { handles }), ...(leadPrompts === undefined ? {} : { leadPrompts }) };
   });
 };
 
@@ -317,8 +323,8 @@ const typedPromptsOf = async (path: string, limit: number): Promise<string[]> =>
   }
 };
 
-/** The first prompts of an orchestration lead session: `/loop /orchestrate`, `/orchestrate`, and `/handoff resume`. A command is read as its name and arguments, as typed. */
-export const LEAD_PROMPTS: readonly RegExp[] = [/^\/loop\s+\/orchestrate\b/, /^\/orchestrate\b/, /^\/handoff\s+resume\b/];
+/** The first prompts of an orchestration lead session in any repository: `/loop /orchestrate` and `/orchestrate`. A command is read as its name and arguments, as typed. `/handoff resume` is ordinary work in a child repository, so it is a lead only where an owners entry lists it. */
+export const LEAD_PROMPTS: readonly RegExp[] = [/^\/loop\s+\/orchestrate\b/, /^\/orchestrate\b/];
 
 const COMMAND_NAME = /<command-name>\s*([^<]*?)\s*<\/command-name>/;
 const COMMAND_ARGS = /<command-args>([^<]*)<\/command-args>/;
@@ -344,10 +350,11 @@ const firstPromptOf = async (path: string): Promise<string | undefined> => {
   }
 };
 
-const isLead = async (runtime: SessionsRuntime, record: { project: string; session: string }, extra: readonly RegExp[] = []): Promise<boolean> => {
+const isLead = async (runtime: SessionsRuntime, record: { project: string; session: string }, extra: readonly RegExp[], listed: readonly string[]): Promise<boolean> => {
   const main = (await transcriptFilesOf(runtime, record.project, record.session)).find((file) => file.main);
   const prompt = main === undefined ? undefined : await firstPromptOf(main.path);
-  return prompt !== undefined && [...LEAD_PROMPTS, ...extra].some((pattern) => pattern.test(prompt));
+  if (prompt === undefined) return false;
+  return [...LEAD_PROMPTS, ...extra].some((pattern) => pattern.test(prompt)) || listed.some((lead) => prompt === lead || prompt.startsWith(`${lead} `));
 };
 
 /** How many typed turns say that two sessions are one conversation: a resume replays the start of the one it continues, so the first few turns agree. */
@@ -495,7 +502,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     const harness = harnessOf(record);
     const terms = HARNESS_TERMS[harness];
     if (terms === undefined) return { left: (c) => { c.noHarnessTerms += 1; } };
-    if (await isLead(runtime, record, options.leadPrompts)) return { left: (c) => { c.lead += 1; } };
+    if (await isLead(runtime, record, options.leadPrompts ?? [], owner.leadPrompts ?? [])) return { left: (c) => { c.lead += 1; } };
     if (turnsOf(record) < options.minTurns) return { left: (c) => { c.tooShort += 1; } };
     if (record.repo === null) return { left: (c) => { c.noRepo += 1; } };
     return { accepted: { owner, harness, terms } };
