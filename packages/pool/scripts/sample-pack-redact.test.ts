@@ -1,0 +1,131 @@
+// t1111: what the sample pack's redaction and selection add for the Fable read of pack 2026-11-10b. Fixture stores in a temp folder; every value is invented.
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { deposit, type SessionsRuntime } from '../../cli/src/sessions/store.js';
+import { buildPack, parseOwners, type OwnerRule, type PackCounts, type PackOptions } from './sample-pack.js';
+
+const dirs: string[] = [];
+afterEach(() => {
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+const BS = String.fromCharCode(92);
+const win = (...parts: string[]): string => parts.join(BS);
+const S = (n: number): string => `${String(n).repeat(8)}-1111-4111-8111-111111111111`;
+const U = (n: number): string => `${String(n).repeat(8)}-5555-4555-8555-555555555555`;
+const line = (value: object): string => JSON.stringify(value);
+const at = (n: number): string => `2026-06-01T10:00:${String(n).padStart(2, '0')}.000Z`;
+const uuidOf = (session: string, kind: 'a' | 'b', n: number): string => `${session.slice(0, 8)}-${kind}${String(n).padStart(3, '0')}-4222-8222-222222222222`;
+
+interface Fixture {
+  root: string;
+  runtime: SessionsRuntime;
+  cwd: string;
+  out: string;
+  options: (extra?: Partial<PackOptions>) => PackOptions;
+  write: (session: string, lines: readonly string[], project?: string) => void;
+  stored: () => Promise<void>;
+  setOwners: (owners: readonly object[]) => void;
+}
+
+/** `remote` is the origin URL of the fixture repository: the account a session's repository lives under is read from it. */
+const fixture = (remote = 'https://github.com/acme-dev/app.git'): Fixture => {
+  const root = mkdtempSync(join(tmpdir(), 'oars-sample-pack-redact-'));
+  dirs.push(root);
+  const projectsRoot = join(root, 'projects');
+  mkdirSync(projectsRoot);
+  const cwd = join(root, 'work', 'app');
+  mkdirSync(join(cwd, '.git'), { recursive: true });
+  writeFileSync(join(cwd, '.git', 'config'), `[remote "origin"]\n\turl = ${remote}\n`);
+  mkdirSync(join(root, 'notes'));
+  writeFileSync(join(root, 'terms.txt'), 'zorblax\n');
+  writeFileSync(join(root, 'owners.json'), JSON.stringify([{ folder: '*-oars*', owner: 'Many Oars Co.', license: 'Apache-2.0' }]));
+  writeFileSync(join(root, 'index.key'), 'ab'.repeat(32));
+  const runtime: SessionsRuntime = { storeDir: join(root, 'store'), projectsRoot, sources: [], stdin: process.stdin, stdout: { write: () => true } };
+  return {
+    root,
+    runtime,
+    cwd,
+    out: join(root, 'pack'),
+    options: (extra = {}) => ({ terms: join(root, 'terms.txt'), owners: join(root, 'owners.json'), indexKey: join(root, 'index.key'), buyerKey: 'sample', out: join(root, 'pack'), size: 25, seed: '1', minTurns: 1, ...extra }),
+    write: (session, lines, project = '-work-oars') => {
+      mkdirSync(join(projectsRoot, project), { recursive: true });
+      writeFileSync(join(projectsRoot, project, `${session}.jsonl`), `${lines.join('\n')}\n`);
+    },
+    stored: async () => {
+      await deposit(runtime, { allow: [], redactDomains: [], now: () => Date.parse('2026-06-10T00:00:00Z') });
+    },
+    setOwners: (owners) => writeFileSync(join(root, 'owners.json'), JSON.stringify(owners)),
+  };
+};
+
+const user = (f: Fixture, session: string, n: number, content: unknown): string =>
+  line({ type: 'user', uuid: uuidOf(session, 'b', n), parentUuid: null, isSidechain: false, timestamp: at(n), version: '2.1.300', sessionId: session, cwd: f.cwd, message: { role: 'user', content } });
+const assistant = (session: string, n: number, content: unknown[]): string =>
+  line({ type: 'assistant', uuid: uuidOf(session, 'a', n), parentUuid: uuidOf(session, 'b', n), isSidechain: false, timestamp: at(n + 1), version: '2.1.300', sessionId: session, message: { role: 'assistant', model: 'claude-opus-5-5', content, usage: { input_tokens: 10, output_tokens: 20 } } });
+
+const packText = (out: string): string =>
+  readdirSync(join(out, 'sessions'), { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => readFileSync(join(entry.parentPath, entry.name), 'utf8'))
+    .join('\n');
+
+const run = async (f: Fixture, extra: Partial<PackOptions> = {}): Promise<PackCounts> => {
+  await f.stored();
+  return buildPack(f.runtime, f.options(extra));
+};
+
+describe('Item 2: the account the repositories live under', () => {
+  it('masks the account of the cwd repository remote as <owner> in a path and a remote URL', async () => {
+    const f = fixture();
+    f.write(S(1), [
+      user(f, S(1), 1, `look at ${win('C:', 'Users', 'dev', 'source', 'repos', 'acme-dev', 'app', 'src')} and /home/dev/src/acme-dev/app/parse.ts`),
+      assistant(S(1), 1, [{ type: 'text', text: 'remotes: git@github.com:acme-dev/app.git and https://github.com/acme-dev/app/pull/3 in folder C--Users-dev-source-repos-acme-dev-app' }]),
+    ]);
+    expect((await run(f)).emitted).toBe(1);
+    const text = packText(f.out);
+    expect(text).not.toContain('acme-dev');
+    expect(text).toContain('/<owner>/app/parse.ts');
+    expect(text).toContain('<email>:<owner>/app.git');
+    expect(text).toContain('https://<host>/<owner>/app/pull/3');
+  });
+
+  it('masks an account the owners entry names, whatever remote the session repository has', async () => {
+    const f = fixture('https://example.com/other/app.git');
+    f.setOwners([{ folder: '*-oars*', owner: 'Many Oars Co.', license: null, handles: ['lamp-co'] }]);
+    f.write(S(1), [user(f, S(1), 1, `open ${win('D:', 'repos', 'lamp-co', 'tool')} please`), assistant(S(1), 1, [{ type: 'text', text: 'opened /srv/lamp-co/tool' }])]);
+    expect((await run(f)).emitted).toBe(1);
+    const text = packText(f.out);
+    expect(text).not.toContain('lamp-co');
+    expect(text).toContain('/<owner>/tool');
+  });
+
+  it('refuses an owners entry whose handles are not a list of names', () => {
+    expect(() => parseOwners(JSON.stringify([{ folder: '*', owner: 'x', license: null, handles: 'lamp-co' }]))).toThrow(/handles/);
+    expect(() => parseOwners(JSON.stringify([{ folder: '*', owner: 'x', license: null, handles: [''] }]))).toThrow(/handles/);
+    const [rule]: OwnerRule[] = parseOwners(JSON.stringify([{ folder: '*', owner: 'x', license: null, handles: ['lamp-co'] }]));
+    expect(rule?.handles).toEqual(['lamp-co']);
+  });
+
+  it('keys accountUuid and organizationUuid under the buyer key: none in the clear, the same value in every session', async () => {
+    const f = fixture();
+    const owner = (session: string): string => line({ type: 'session-owner', sessionId: session, accountUuid: U(7), organizationUuid: U(8) });
+    // A quoted settings file: the ids sit inside a string, so no line carries them as a key.
+    const quoted = JSON.stringify({ oauthAccount: { accountUuid: U(9), organizationUuid: U(6), emailAddress: 'x' } });
+    f.write(S(1), [owner(S(1)), user(f, S(1), 1, 'show settings'), assistant(S(1), 1, [{ type: 'text', text: `settings: ${quoted}` }])]);
+    f.write(S(2), [owner(S(2)), user(f, S(2), 1, 'again'), assistant(S(2), 1, [{ type: 'text', text: 'ok' }])]);
+    expect((await run(f)).emitted).toBe(2);
+    const text = packText(f.out);
+    for (const id of [U(6), U(7), U(8), U(9)]) expect(text, id).not.toContain(id);
+    const masks = text
+      .split('\n')
+      .filter((row) => row.includes('"session-owner"'))
+      .map((row) => ({ account: /"accountUuid":"([^"]+)"/.exec(row)?.[1], organization: /"organizationUuid":"([^"]+)"/.exec(row)?.[1] }));
+    expect(masks).toHaveLength(2);
+    expect(masks[0]).toEqual(masks[1]);
+    expect(masks[0]?.account).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/);
+    expect(masks[0]?.account).not.toBe(masks[0]?.organization);
+  });
+});
