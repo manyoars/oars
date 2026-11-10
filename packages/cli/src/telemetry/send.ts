@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defaultConfigDir } from '../credentials.js';
 import type { HelperSpawn } from '../gate/hook-fill.js';
-import { telemetrySendAllowed } from './consent.js';
+import { NOTICE_VERSION, telemetrySendAllowed } from './consent.js';
 import type { TelemetryRuntime } from './record.js';
 import { installId, readSpool, spoolPaths } from './spool.js';
 
@@ -69,7 +69,7 @@ const post = async (url: string, install: string, events: object[], deps: SendDe
     const response = await (deps.fetch ?? fetch)(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ install, events }),
+      body: JSON.stringify({ install, notice: NOTICE_VERSION, events }),
       redirect: 'manual',
       signal: AbortSignal.timeout(deps.timeoutMs ?? SEND_TIMEOUT_MS),
     });

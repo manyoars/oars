@@ -1,9 +1,9 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { defaultConfigDir } from '../credentials.js';
-import { consentOf, markNoticeShown, NOTICE, setEnabled, telemetrySendAllowed } from './consent.js';
+import { consentOf, markNoticeShown, NOTICE, NOTICE_VERSION, setEnabled, telemetrySendAllowed } from './consent.js';
 import { spoolPaths } from './spool.js';
 
 const roots: string[] = [];
@@ -120,5 +120,43 @@ describe('telemetrySendAllowed: the check the sender calls', () => {
     markNoticeShown(dir, Date.now);
     setEnabled(dir, false);
     expect(telemetrySendAllowed({}, dir)).toBe(false);
+  });
+});
+
+describe('closed regions', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+  it.each(['Europe/Berlin', 'Europe/Paris', 'Europe/London', 'Europe/Oslo', 'Atlantic/Reykjavik', 'Europe/Vaduz', 'Europe/Mariehamn', 'Atlantic/Canary', 'Atlantic/Madeira', 'Atlantic/Azores', 'Indian/Reunion', 'America/Martinique', 'America/Cayenne', 'Europe/Dublin'])('is off in %s, even with a saved on and the notice shown', (zone) => {
+    const dir = folder();
+    setEnabled(dir, true);
+    markNoticeShown(dir, Date.now);
+    expect(consentOf({}, dir, zone)).toEqual({ enabled: false, reason: 'region', noticeShown: true });
+    expect(telemetrySendAllowed({}, dir, zone)).toBe(false);
+  });
+  it.each([''])('counts a blank zone (%j) as closed', (zone) => {
+    expect(consentOf({}, folder(), zone)).toMatchObject({ enabled: false, reason: 'region' });
+  });
+  it.each(['America/New_York', 'Asia/Tokyo', 'Australia/Sydney', 'UTC'])('is on by default in %s', (zone) => {
+    expect(consentOf({}, folder(), zone)).toEqual({ enabled: true, reason: 'default', noticeShown: false });
+  });
+  it('reads the machine zone by default, and a runtime that cannot say is closed', () => {
+    const spy = vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions');
+    spy.mockImplementation(() => ({ timeZone: 'Europe/Madrid' }) as Intl.ResolvedDateTimeFormatOptions);
+    expect(consentOf({}, folder()).reason).toBe('region');
+    spy.mockImplementation(() => {
+      throw new Error('no zone');
+    });
+    expect(consentOf({}, folder()).reason).toBe('region');
+    spy.mockImplementation(() => ({ timeZone: 'America/New_York' }) as Intl.ResolvedDateTimeFormatOptions);
+    expect(consentOf({}, folder()).reason).toBe('default');
+  });
+});
+
+describe('the first-run notice', () => {
+  it('states the covenant sentences word for word, and has a version', () => {
+    expect(NOTICE).toContain('Many Oars Co. may license and sell Usage Data. oars sends no telemetry from a machine whose time zone is in the EU, the EEA, or the UK.');
+    expect(NOTICE).not.toContain('and nowhere else');
+    expect(Number.isInteger(NOTICE_VERSION) && NOTICE_VERSION >= 2).toBe(true);
   });
 });
