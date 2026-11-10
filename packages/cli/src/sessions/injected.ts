@@ -94,6 +94,34 @@ const mapContent = (content: Json | undefined, text: TextRule, result: TextRule,
   return items.some((item, at) => item !== content[at]) ? items : content;
 };
 
+// Harness text a request blob of the system role carries, by what it opens with or names. The whole block is marked, under the kind (and so the hash) its
+// attachment record gets, because it is the same text. First match wins. A system text with none of these forms is left to the other rules.
+const SYSTEM_FORMS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\bSessionStart(?::[\w-]+)? hook\b|\bhook additional context\b/, 'hook-additional-context'],
+  [/following skills are available for use with the Skill tool/i, 'skill-listing'],
+  [/Available agent types/i, 'agent-listing-delta'],
+  [/^\s*#{1,3} MCP Server Instructions\b|following MCP servers have provided instructions/m, 'mcp-instructions-delta'],
+  [/^\s*#{1,3} Environment\s*$|^\s*You have been invoked in the following environment/m, 'environment'],
+  [/Contents of [^\n]*?[\\/]\.claude[\\/]rules[\\/][^\n]*\.md\b|Contents of [^\n]*?(?:CLAUDE|AGENTS|MEMORY)(?:\.local)?\.md\b/, 'instructions'],
+];
+
+// A memory file: an instruction file, the memory index, a note under a `memory` folder, or a rules file.
+const MEMORY_PATH = /(?:^|[\\/])(?:CLAUDE|AGENTS|MEMORY)(?:\.local)?\.md$|[\\/]memory[\\/][^\\/]+\.md$|[\\/]\.claude[\\/]rules[\\/][^\\/]+\.md$/i;
+const MEMORY_MENTION = /(?:CLAUDE|AGENTS|MEMORY)(?:\.local)?\.md\b|[\\/]memory[\\/][^\s"'`\\/]+\.md\b/i;
+const CHANGED = /changed on disk|was modified/i;
+
+/** The kind of harness text a system-role string is, or undefined: one of the forms above, or a note that a memory file changed. */
+const systemKindOf = (text: string): string | undefined => {
+  const form = SYSTEM_FORMS.find(([shape]) => shape.test(text));
+  if (form !== undefined) return form[1];
+  return MEMORY_MENTION.test(text) && CHANGED.test(text) ? 'memory-file' : undefined;
+};
+
+const systemText = (key: string): TextRule => (text) => {
+  const kind = text.trim() === '' || MARKER.test(text.trim()) ? undefined : systemKindOf(text);
+  return kind === undefined ? text : markerOf(key, kind, text);
+};
+
 type Position = 'typed' | 'meta' | 'blob';
 
 const messageRule = (key: string, position: Position, known: ReadonlySet<string>): ((message: JsonObject) => JsonObject) => {
@@ -112,11 +140,24 @@ const messageRule = (key: string, position: Position, known: ReadonlySet<string>
   };
 };
 
-const withMessage = (line: JsonObject, field: string, rule: (message: JsonObject) => JsonObject): JsonObject => {
+const withMessage = (line: JsonObject, field: string, rule: (message: JsonObject) => JsonObject, role = 'user'): JsonObject => {
   const message = line[field];
-  if (!isObject(message) || message['role'] !== 'user') return line;
+  if (!isObject(message) || message['role'] !== role) return line;
   const next = rule(message);
   return next === message ? line : { ...line, [field]: next };
+};
+
+/** The rule for a request blob of the system role: the harness's own forms first, then the text other lines repeat. */
+const systemMessage = (key: string, known: ReadonlySet<string>): ((message: JsonObject) => JsonObject) => {
+  const mark = systemText(key);
+  const text: TextRule = (value) => {
+    const next = mark(value);
+    return next !== value || !known.has(normalize(value)) ? next : markerOf(key, 'meta', value);
+  };
+  return (message) => {
+    const content = mapContent(message['content'], text, text, (tool) => tool);
+    return content === message['content'] || content === undefined ? message : { ...message, content };
+  };
 };
 
 const withField = (line: JsonObject, field: string, change: (value: Json) => Json): JsonObject => {
@@ -188,6 +229,8 @@ export const injectedRule = (key: string, known: ReadonlySet<string> = new Set()
   const userMessage = messageRule(key, 'typed', known);
   const metaMessage = messageRule(key, 'meta', known);
   const blobMessage = messageRule(key, 'blob', known);
+  const systemBlob = systemMessage(key, known);
+  const memory = blocksIn(key, 'memory-file');
   // A meta line's `origin` says where the injected text came from; its `body` and `handback` are that text again, while `kind` stays readable.
   const originText = (origin: Json): Json => {
     if (!isObject(origin)) return origin;
@@ -198,10 +241,16 @@ export const injectedRule = (key: string, known: ReadonlySet<string> = new Set()
       case 'user':
         return line['isMeta'] === true ? withField(withMessage(line, 'message', metaMessage), 'origin', originText) : withMessage(line, 'message', userMessage);
       case 'api-request-blob':
-        return withMessage(line, 'message', blobMessage);
+        return withMessage(withMessage(line, 'message', blobMessage), 'message', systemBlob, 'system');
       case 'attachment': {
         const attachment = line['attachment'];
         const kind = isObject(attachment) ? attachment['type'] : undefined;
+        // A memory file the model edited or that changed on disk: the snippet (and the message it was shown in) is the file's text.
+        const file = isObject(attachment) ? attachment['filename'] : undefined;
+        if (kind === 'edited_text_file' && typeof file === 'string' && MEMORY_PATH.test(file)) {
+          const snippet = (value: Json): Json => (isObject(value) ? withField(value, 'snippet', (text) => mapStrings(text, 'snippet', memory)) : value);
+          return withField(withField(line, 'attachment', snippet), 'rendered', (value) => mapStrings(value, 'rendered', memory));
+        }
         if (typeof kind !== 'string' || !INJECTED_ATTACHMENTS.has(kind)) return line;
         // The record repeats its text as the message the model was shown (`rendered`), so that is the same block again.
         const marked = (value: Json): Json => mapStrings(value, 'attachment', blocksIn(key, kind.replaceAll('_', '-')));
@@ -216,7 +265,7 @@ export const injectedRule = (key: string, known: ReadonlySet<string> = new Set()
         // The hook output a stop-hook summary carries: what a hook printed, its error text, and the command line it ran.
         return line['subtype'] === 'stop_hook_summary'
           ? HOOK_SUMMARY_FIELDS.reduce((acc, name) => withField(acc, name, (value) => mapStrings(value, name, blocksIn(key, 'hook-summary'))), line)
-          : line;
+          : withField(line, 'content', (value) => (typeof value === 'string' ? systemText(key)(value) : value));
       case 'session_meta':
       case 'turn_context':
         return withField(line, 'payload', (payload) => (isObject(payload) ? codexFields(key, payload) : payload));
