@@ -1109,7 +1109,7 @@ describe('finding the deposit rows that hold a text (gap 10, Articles 15(1) and 
     await deposit(a, session.extension, '{}', JSON.stringify([{ name: PERSON }]), LATER);
     await deposit(a, session.clean, '{"note":"nobody"}', '[]', LATER);
     await deposit(b, session.other, JSON.stringify({ note: PERSON }), '[]', SOON);
-    for (const [motif, text] of [[`${tag}m1`, `{"program":"${PERSON}"}`], [`${tag}m2`, `{"program":"${PERSON} again"}`]]) await db.prepare('INSERT INTO motifs (motif_id, motif) VALUES (?, ?)').bind(motif, text).run();
+    for (const { id, text } of [{ id: `${tag}m1`, text: `{"program":"${PERSON}"}` }, { id: `${tag}m2`, text: `{"program":"${PERSON} again"}` }]) await db.prepare('INSERT INTO motifs (motif_id, motif) VALUES (?, ?)').bind(id, text).run();
     await cellOf(`cell/${PERSON}/${tag}1`, `${tag}m1`);
     await cellOf(`cell/${PERSON}/${tag}2`, `${tag}m2`);
     for (const [account, key] of [[a, `cell/${PERSON}/${tag}1`], [b, `cell/${PERSON}/${tag}2`]] as const) await db.prepare("INSERT INTO contributors (kind, key, account, day) VALUES ('cell', ?, ?, '2026-11-03')").bind(key, account).run();
