@@ -437,8 +437,9 @@ describe('withSendLock', () => {
           }
           return { mtimeMs: statSync(path).mtimeMs };
         },
-        // After its stale look the late waiter's next create decides the takeover: EEXIST means its lock was rightly kept, so the first holder may leave. A product that removed the lock lets the create succeed and the body runs beside the holder.
+        // A create waits on the same event as the stale look, so the late waiter cannot take the lock before the quick one holds it (a loaded runner could otherwise land it between the quick waiter's removal and its create). After its stale look the late waiter's next create decides the takeover: EEXIST means its lock was rightly kept, so the first holder may leave. A product that removed the lock lets the create succeed and the body runs beside the holder.
         open: async (path, flags) => {
+          await before();
           try {
             return await open(path, flags);
           } catch (error) {
@@ -491,14 +492,18 @@ describe('withSendLock', () => {
     const times = { staleMs: 1000, waitMs: 3000, pollMs: 5 };
     let inside = 0;
     let overlapped = false;
-    const body = async (ms: number): Promise<void> => {
+    let bLooked = (): void => undefined;
+    const bLookedAtLock = new Promise<void>((resolve) => {
+      bLooked = resolve;
+    });
+    const body = async (hold: Promise<void>): Promise<void> => {
       inside += 1;
       overlapped ||= inside > 1;
-      await new Promise((resolve) => setTimeout(resolve, ms));
+      await hold;
       inside -= 1;
     };
-    // A is a live holder. B reads A's lock as stale (a stale clock for B's first look only). A takeover that moved the lock aside would be held at its next look until C has taken the free path and is running, so two senders would overlap; the guard takeover never moves it.
-    const live = withSendLock(outbox, () => body(300), times);
+    // A is a live holder that stays until B's first stale look has been answered (a signal, not a sleep). B reads A's lock as stale (a stale clock for B's first look only). A takeover that moved the lock aside would be held at its next look until C has taken the free path and is running, so two senders would overlap; the guard takeover never moves it.
+    const live = withSendLock(outbox, () => body(bLookedAtLock), times);
     while (inside === 0) await new Promise((resolve) => setTimeout(resolve, 2));
     const real = await import('node:fs/promises');
     let lookedAtLock = 0;
@@ -507,18 +512,18 @@ describe('withSendLock', () => {
         const { mtimeMs } = await real.stat(path);
         if (path === lock && lookedAtLock === 0) {
           lookedAtLock += 1;
+          bLooked();
           return { mtimeMs: mtimeMs - 60_000 };
         }
-        if (path !== lock) while (inside < 2) await new Promise((resolve) => setTimeout(resolve, 2));
         return { mtimeMs };
       },
     };
     const third = (async () => {
       while (lookedAtLock === 0) await new Promise((resolve) => setTimeout(resolve, 1));
       while (existsSync(lock)) await new Promise((resolve) => setTimeout(resolve, 1));
-      await withSendLock(outbox, () => body(100), times);
+      await withSendLock(outbox, () => body(new Promise((resolve) => setTimeout(resolve, 100))), times);
     })();
-    await Promise.all([live, withSendLock(outbox, () => body(1), times, second).catch(() => undefined), third]);
+    await Promise.all([live, withSendLock(outbox, () => body(Promise.resolve()), times, second).catch(() => undefined), third]);
     expect(overlapped).toBe(false);
   });
 
