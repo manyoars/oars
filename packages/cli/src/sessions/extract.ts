@@ -792,13 +792,14 @@ const substitutionEnd = (text: string, from: number, first: string, budget: { le
   return stack.length === 0 ? at : -1;
 };
 
+/** What an unquoted word holds before its first quote when it is an assignment or a joined long flag: `API_REGION=` and `--region=`, with whatever unquoted text follows the `=`. */
+const JOINED_PREFIX = /^(?:[A-Za-z_][A-Za-z0-9_]*|--[A-Za-z][A-Za-z0-9_-]*)=/;
+
 /**
  * The command's opaque point: its first single quote, heredoc marker, typographic quote (U+2018 to U+201E), block comment opener (`<#`), or stop-parsing token (`--%`). An unexpanded `$name` can only come from literal text, and
  * these are where literal text begins in either shell, so a word that starts before this point is read as the shell reads it, and every word at or after it is opaque: it holds no variable and no flag value, whatever the reader made
  * of the quotes before it. The point does not depend on the dialect, since a harness may run a PowerShell command and not say so (Codex, a nested `pwsh -c`); a PowerShell form in a POSIX command is rare, and the point only sends less.
  */
-/** What an unquoted word holds before its first quote when it is an assignment or a joined long flag: `API_REGION=` and `--region=`, with whatever unquoted text follows the `=`. */
-const JOINED_PREFIX = /^(?:[A-Za-z_][A-Za-z0-9_]*|--[A-Za-z][A-Za-z0-9_-]*)=/;
 const OPAQUE_POINT = /['‘-„]|<<|<#|--%/;
 
 /** The shell a command is written for, which decides its escapes alone: a call whose tool the harness's `shells` table maps to `powershell` (Claude Code's `PowerShell`, and the `powershell` that Copilot, Pi, and Gemini name) reads a backslash as plain and a backtick as the escape, every other call by POSIX's. */
