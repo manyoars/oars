@@ -522,4 +522,40 @@ describe('oars pool hold pull: deleting what was admitted', () => {
     expect(pulledOf(s)).toEqual({ [ID]: currentStamp() });
     expect(branchesOf(s, REPO)).toEqual([`oars-hold/${MACHINE}/${ID}`]);
   }, SLOW);
+
+  it('merges its entry into the pulled.json a send pass changed after the pull read it, so neither entry is lost before the branch is deleted', async () => {
+    const s = await scene();
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, goodFiles(s));
+    // A pass that finishes between the pull's read of pulled.json and its write: it files another id, as an earlier pull would have.
+    const racing: Git = (root, args, stdin) => {
+      if (args[0] === 'fetch') {
+        mkdirSync(s.outbox, { recursive: true });
+        writeFileSync(join(s.outbox, 'pulled.json'), JSON.stringify({ [OTHER_ID]: currentStamp() }));
+      }
+      return runNetGit(root, args, stdin);
+    };
+    const out = await holdPull(s.h.deps, {}, { visibility: PRIVATE, git: runGit, net: racing, remoteOf: (repo) => bareOf(s, repo) });
+    expect(out.document).toMatchObject({ admitted: [{ id: ID, branchDeleted: true }] });
+    expect(pulledOf(s)).toEqual({ [OTHER_ID]: currentStamp(), [ID]: currentStamp() });
+    expect(filed(s)).toHaveLength(1);
+  }, SLOW);
+
+  it('writes nothing while a send pass holds the send lock, and admits and deletes once it lets go', async () => {
+    const s = await scene();
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, goodFiles(s));
+    mkdirSync(s.outbox, { recursive: true });
+    const lock = join(s.outbox, 'send.lock');
+    writeFileSync(lock, 'another-run');
+    const pulling = pull(s);
+    // The pull has fetched and is waiting on the lock: the push of the delete has not run, and nothing is filed.
+    await vi.waitFor(() => { expect(s.network.some((line) => line.startsWith('fetch'))).toBe(true); }, { timeout: 30_000 });
+    await new Promise((done) => setTimeout(done, 1500));
+    expect(filed(s)).toHaveLength(0);
+    expect(existsSync(join(s.outbox, 'pulled.json'))).toBe(false);
+    expect(s.network.some((line) => line.startsWith('push'))).toBe(false);
+    rmSync(lock);
+    expect((await pulling).document).toMatchObject({ admitted: [{ id: ID, branchDeleted: true }] });
+    expect(filed(s)).toHaveLength(1);
+    expect(branchesOf(s, REPO)).toEqual([]);
+  }, SLOW);
 });

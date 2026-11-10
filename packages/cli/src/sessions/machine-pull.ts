@@ -10,7 +10,8 @@ import { termsDigest } from './machine-hold.js';
 import { readMachines, type MachineRecord, type Visibility } from './machine-enroll.js';
 import { derivedSalt } from './machine-ids.js';
 import { poolServer, runtimeOf } from './pool-command.js';
-import { BATCH_FIELDS, STAMP_FOLDER, currentStamp, fieldsOf, holdsTerm, outboxFolder, readPulled, removeBatchOf, writeBatch, writePulled, type Pulled } from './pool-outbox.js';
+import { withSendLock } from './pool-send-lock.js';
+import { BATCH_FIELDS, STAMP_FOLDER, currentStamp, fieldsOf, holdsTerm, outboxFolder, readPulled, removeBatchOf, writeBatch, writePulled } from './pool-outbox.js';
 import { CLAIMED_HOST_CLASSES, CLAIMED_LAUNCHERS, parseSkeleton, type SessionSkeleton } from './pool-wire.js';
 import { localSalt } from './store.js';
 import type { Git } from './survival.js';
@@ -119,8 +120,6 @@ interface Pulling {
   terms: string;
   /** This machine's own exclusion terms, lowercased, as `loadTerms` reads them. */
   list: readonly string[];
-  /** `pulled.json` as it stands: each admitted `id` and the stamp folder it is filed under. */
-  pulled: Pulled;
 }
 
 /** The batch file of a tip as the skeleton the pool's own reader makes of it; throws `Refused` for anything that reader, or the branch's own name, would not take. */
@@ -192,14 +191,18 @@ const admit = async (run: Pulling, tip: Tip, id: string, machine: string): Promi
   const skeleton = await underStamp(stamp, () => skeletonOf(run, tip, id));
   // The stamp's version names the vocabulary the batch was built under: a file that says otherwise is not what its stamp claims.
   if (stamp.slice(0, -9) !== `v${skeleton.vocabVersion}`) throw new Refused('stamp_invalid', 'the stamp does not name the batch\'s vocabulary version');
-  // The order is the batch, then pulled.json, then the older copy: a crash between them leaves the next pull to replace the same id.
-  await writeBatch(run.outbox, id, { ...skeleton, claimed: { hostClass, launcher } }, stamp);
-  run.pulled[id] = stamp;
-  await writePulled(run.outbox, run.pulled);
-  for (const folder of await readdir(run.outbox)) {
-    if (folder !== stamp && STAMP_FOLDER.test(folder)) await removeBatchOf(run.outbox, id, folder);
-  }
-  // The batch and `pulled.json` are durable, so the branch is no longer the only copy; a crash before this line leaves it for the next pull to replace the same id.
+  // The send lock is held across the writes, because the nightly and `--send` change `pulled.json` and prune the current-stamp folder under it: without it a pass could prune the batch before its entry is written, or write its own read of
+  // `pulled.json` over the new entry. The file is read again inside the lock and only this id is merged. The order is the batch, then pulled.json, then the older copy: a crash between them leaves the next pull to replace the same id.
+  await withSendLock(run.outbox, async () => {
+    await writeBatch(run.outbox, id, { ...skeleton, claimed: { hostClass, launcher } }, stamp);
+    const pulled = await readPulled(run.outbox, STEP);
+    pulled[id] = stamp;
+    await writePulled(run.outbox, pulled);
+    for (const folder of await readdir(run.outbox)) {
+      if (folder !== stamp && STAMP_FOLDER.test(folder)) await removeBatchOf(run.outbox, id, folder);
+    }
+  });
+  // The lock is let go first, so a waiting send pass is not held up by the network. The batch and `pulled.json` are durable, so the branch is no longer the only copy; a crash before this line leaves it for the next pull to replace the same id.
   return { repo: tip.repo, branch: tip.branch, id, stamp, branchDeleted: await deleteBranch(run.ports, tip) };
 };
 
@@ -227,7 +230,8 @@ export const holdPull = async (deps: RunDeps, options: { server?: string | undef
   const terms = await loadTerms(termsFile);
   if (terms.length === 0) throw new CliError(`No exclusion terms in ${termsFile}: every branch would be unverifiable. Nothing was fetched.`, ExitCode.USAGE, STEP);
   const sessionSalt = derivedSalt((await (runtime.accountSalt ?? localSalt)(runtime.storeDir)).salt, 'sessionId/1');
-  const pulled = await readPulled(outbox, STEP);
+  // Read once to stop before any fetch when the file is bad; `admit` reads it again under the send lock, where it is changed.
+  await readPulled(outbox, STEP);
   const scratch = await mkdtemp(join(runtime.storeDir, 'hold-pull-'));
   try {
     const tips: Tip[] = [];
@@ -244,7 +248,7 @@ export const holdPull = async (deps: RunDeps, options: { server?: string | undef
         refused.push({ repo, reason: 'repo_unreadable', detail: 'its branches could not be fetched (check this machine\'s git credential for the repository)' });
       }
     }
-    const run: Pulling = { ports, outbox, machines, terms: termsDigest(sessionSalt, terms), list: terms, pulled };
+    const run: Pulling = { ports, outbox, machines, terms: termsDigest(sessionSalt, terms), list: terms };
     const taken = new Set<string>();
     for (const tip of [...tips].sort((a, b) => b.at - a.at || (a.branch < b.branch ? -1 : 1))) {
       try {
