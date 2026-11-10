@@ -475,3 +475,61 @@ describe('main: the export', () => {
     expect(exported.size).toBe(0);
   });
 });
+
+describe('main: the raw withdrawal', () => {
+  const consent = (row: unknown) => (sql: string): unknown[] => (sql.includes('FROM accounts') ? [row] : []);
+  const yes = consent({ raw_consent: 1_700_000_000_000, raw_consent_withdrawn_at: null });
+  const writes = (calls: string[][]): string[] => calls.filter((call) => call[0] === 'd1' && !/^SELECT/.test(call[6] ?? '')).map((call) => call[6] ?? '');
+
+  it('says what it would do and changes nothing without --confirm', async () => {
+    const { io, calls, printed } = fake({ answer: yes });
+    expect(await main(['withdraw', '--account', ACCOUNT, '--local'], io)).toBe(0);
+    expect(printed[0]).toMatch(/^Would withdraw the raw consent of account .* nightly sweep erases the raw objects it holds\. Nothing was changed: run again with --confirm\.$/);
+    expect(writes(calls)).toEqual([]);
+  });
+
+  it('with --confirm runs the route\'s statement, drops each staged part, and prints the line', async () => {
+    const dropped: string[] = [];
+    const { io, calls, printed } = fake({ answer: yes });
+    io.listRaw = (prefix) => Promise.resolve([`${prefix}${SHA}/000001`, `${prefix}${SHA}/000002`]);
+    expect(await main(['withdraw', '--account', ACCOUNT, '--confirm'], io)).toBe(0);
+    dropped.push(...calls.filter((call) => call[0] === 'r2').map((call) => call[3] ?? ''));
+    expect(writes(calls)).toHaveLength(1);
+    expect(writes(calls)[0]).toContain('UPDATE accounts SET raw_consent_withdrawn_at = ');
+    expect(dropped).toEqual([`oars-pool-raw/staging/${ACCOUNT}/${SHA}/000001`, `oars-pool-raw/staging/${ACCOUNT}/${SHA}/000002`]);
+    expect(printed).toEqual(['{"withdrawn":true,"stagedDropped":2}']);
+  });
+
+  it('stops before changing anything when a remote run has no R2 token to list the bucket with', async () => {
+    const { io, calls, printed } = fake({ answer: yes });
+    expect(await main(['withdraw', '--account', ACCOUNT, '--confirm'], io)).toBe(1);
+    expect(printed[0]).toMatch(/oars-pool-raw.*nothing was changed/);
+    expect(writes(calls)).toEqual([]);
+  });
+
+  it('says a local run cannot list R2, and still records the withdrawal', async () => {
+    const { io, printed } = fake({ answer: yes });
+    expect(await main(['withdraw', '--account', ACCOUNT, '--confirm', '--local'], io)).toBe(0);
+    expect(printed).toEqual(['Local R2 cannot be listed: any staged parts in the local state were not dropped.', '{"withdrawn":true,"stagedDropped":0}']);
+  });
+
+  it('says so and changes nothing when no yes stands', async () => {
+    const never = fake({ answer: consent({ raw_consent: null, raw_consent_withdrawn_at: null }) });
+    expect(await main(['withdraw', '--account', ACCOUNT, '--local'], never.io)).toBe(0);
+    expect(never.printed[0]).toMatch(/^No raw consent stands: account .* never gave a raw yes\..*Nothing was changed\.$/);
+    const sure = fake({ answer: consent({ raw_consent: null, raw_consent_withdrawn_at: null }) });
+    expect(await main(['withdraw', '--account', ACCOUNT, '--confirm'], sure.io)).toBe(0);
+    expect(sure.printed).toEqual([`Account ${ACCOUNT} never gave a raw yes: nothing to withdraw, nothing changed.`, '{"withdrawn":false,"stagedDropped":0}']);
+    expect(writes(sure.calls)).toEqual([]);
+    const gone = fake({ answer: consent({ raw_consent: null, raw_consent_withdrawn_at: Date.parse('2026-11-01T00:00:00Z') }) });
+    expect(await main(['withdraw', '--account', ACCOUNT, '--local'], gone.io)).toBe(0);
+    expect(gone.printed[0]).toMatch(/withdrew its raw yes on 2026-11-01.*--confirm only drops any staged parts that remain/);
+  });
+
+  it('needs an account, and says how to use it', async () => {
+    const { io, printed } = fake({ answer: yes });
+    expect(await main(['withdraw'], io)).toBe(2);
+    expect(printed).toEqual([USAGE]);
+    expect(USAGE).toContain('withdraw --account <id>');
+  });
+});

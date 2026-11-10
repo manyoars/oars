@@ -20,6 +20,8 @@ export interface EraseStore {
   readObject: (key: string) => Promise<AsyncIterable<Uint8Array> | null>;
   /** The telemetry bucket, where an account's batches are rewritten (`erase-batches.ts`). */
   telemetry: TelemetryStore;
+  /** Every key of the raw bucket under a prefix, for the staged parts a withdrawal drops (`withdraw-account.ts`); absent when the run cannot list the bucket (wrangler cannot, so the command's own lists through R2's S3 API, `erase-r2-list.ts`). */
+  listRaw?: (prefix: string) => Promise<readonly string[]>;
 }
 
 /** What one erasure removed: ledger rows and aggregate rows whose content was replaced, staged parts dropped, and raw objects deleted. */

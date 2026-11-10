@@ -1,6 +1,7 @@
 // The operator's erasure command (docs/pool.md, "Erasure"). The command is TypeScript that imports the Worker's own digest helpers, so it is bundled with esbuild into memory and run from there:
 //   npm run erase -w packages/pool -- <raw|row|account> ... [--confirm]
 //   npm run erase -w packages/pool -- raw --contains --value-stdin (--account <id> | --all-accounts)   (the find: changes nothing)
+//   npm run erase -w packages/pool -- withdraw --account <id> [--confirm]   (the account's raw withdrawal: dry run without --confirm)
 //   npm run erase -w packages/pool -- export --account <id> --out <folder> [--raw]   (the account's export: changes nothing)
 import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -32,8 +33,10 @@ const files = nodeFiles();
 // An account erasure also rewrites the telemetry batches that name it, and wrangler cannot list a bucket: R2's S3 API does, with an R2 API token the operator exports (read on the bucket `oars-telemetry`). The token goes to Cloudflare only.
 const { R2_ACCOUNT_ID: accountId, R2_ACCESS_KEY_ID: accessKeyId, R2_SECRET_ACCESS_KEY: secretAccessKey } = process.env;
 const list = accountId && accessKeyId && secretAccessKey ? r2Lister({ accountId, accessKeyId, secretAccessKey }, 'oars-telemetry', (url, init) => fetch(url, init), () => new Date()) : undefined;
+// A withdrawal lists the raw bucket for the account's staged parts the same way (read on `oars-pool-raw`). Local R2 has no S3 API, so a `--local` run gets no lister.
+const listRaw = accountId && accessKeyId && secretAccessKey && !process.argv.includes('--local') ? r2Lister({ accountId, accessKeyId, secretAccessKey }, 'oars-pool-raw', (url, init) => fetch(url, init), () => new Date()) : undefined;
 try {
-  process.exitCode = await main(process.argv.slice(2), { stdin, print: (/** @type {string} */ text) => console.log(text), wrangler, files, folder: nodeFolder, ...(list === undefined ? {} : { list }), now: () => new Date() });
+  process.exitCode = await main(process.argv.slice(2), { stdin, print: (/** @type {string} */ text) => console.log(text), wrangler, files, folder: nodeFolder, ...(list === undefined ? {} : { list }), ...(listRaw === undefined ? {} : { listRaw }), now: () => new Date() });
 } finally {
   // The find writes each object it reads to a scratch file; a run that failed halfway must not leave one behind.
   await files.dispose();

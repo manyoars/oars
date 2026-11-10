@@ -14,6 +14,17 @@ export const asyncPieces = (pieces: Iterable<Uint8Array>): AsyncIterable<Uint8Ar
 /** The erasure store over the pool's local D1 and raw bucket, as `wrangler --local` would reach them. */
 export const storeOf = (db: TestDb, bucket: TestBucket, telemetry: TestBucket, chunk = 64 * 1024): EraseStore => ({
   telemetry: telemetryOf(telemetry),
+  // Two keys to a page, as the telemetry listing is, so a prefix that spans pages is read whole.
+  listRaw: async (prefix) => {
+    const keys: string[] = [];
+    let cursor: string | undefined;
+    for (;;) {
+      const page = await bucket.list({ prefix, limit: 2, ...(cursor === undefined ? {} : { cursor }) });
+      keys.push(...page.objects.map((object) => object.key));
+      if (page.truncated !== true) return keys;
+      cursor = page.cursor;
+    }
+  },
   rows: async (sql, binds) => (await db.prepare(sql).bind(...binds).all()).results,
   run: async (sql, binds) => Number(fieldOf(fieldOf(await db.prepare(sql).bind(...binds).run(), 'meta'), 'changes')),
   deleteObject: (key) => bucket.delete([key]),

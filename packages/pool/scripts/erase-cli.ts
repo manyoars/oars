@@ -1,6 +1,7 @@
 // `npm run erase -w packages/pool -- <what> ...`: the operator's erasure command (docs/pool.md, "Erasure"). It changes nothing until `--confirm` is given; without it, it says what it would do.
 import { closeAccount, depositExists, eraseAccount, eraseLeakedSecret, eraseRawObject, findRawContaining, type Erased, type EraseStore } from './erase.js';
 import { exportAccount, type ExportFolder } from './export-account.js';
+import { rawConsentOf, withdrawRaw } from './withdraw-account.js';
 import { wranglerStore, type Lister, type ObjectFiles, type Target, type Wrangler } from './erase-wrangler.js';
 
 export { nodeFiles, nodeFolder } from './erase-files.js';
@@ -17,6 +18,7 @@ export const USAGE = [
   '  account --account <id>              erase one account\'s deposit rows and raw objects, scrub its machines\' labels and allow lists, delete its repo keys, deposit hours, and contributor records, and disable its tokens, then rewrite each telemetry batch within retention that names it (needs R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY, to list the bucket); the shared totals stay',
   '  close --account <id>               close one account (covenant 6.1): revoke its tokens and machine keys and record when it closed, so sign-in, enrollment, and activation refuse it; its Deposits, raw objects, and the shared totals stay',
   '  export --account <id> --out <folder> [--raw]   write the export of the account (the pages `oars pool export` saves, as account-export-NNNN.json) to the folder, and with --raw each raw object not erased under raw/<sha256>: it reads and changes nothing, so it takes no --confirm; run it only for a requester confirmed by a token proof',
+  '  withdraw --account <id>             withdraw the raw consent of one account (Art. 7(3)): record the withdrawal as the route does and drop its staged raw parts (needs R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY, to list the bucket); the nightly sweep erases the raw objects it holds; run it only for a requester confirmed by a token proof',
   'Options: --confirm (without it nothing is changed), --local (the local wrangler state instead of the account\'s)',
   `Runs with the wrangler login already on this machine against D1 database "oars-pool" and R2 buckets "oars-pool-raw" and "oars-telemetry".`,
 ].join('\n');
@@ -30,10 +32,14 @@ export interface Io {
   files: ObjectFiles;
   /** Lists the telemetry bucket (`erase-r2-list.ts`); absent when the operator exported no R2 token. */
   list?: Lister;
+  /** Lists the raw bucket (`erase-r2-list.ts`) for the staged parts a withdrawal drops; absent when the operator exported no R2 token, and always for `--local`, since wrangler cannot list local R2. */
+  listRaw?: Lister;
   /** The folder an export is written to, by path (`erase-files.ts`). */
   folder: (path: string) => ExportFolder;
   now: () => Date;
 }
+
+const NO_RAW_LISTER = 'listing the raw bucket needs an R2 API token: export R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY (read on the bucket oars-pool-raw), then run the withdrawal again; nothing was changed';
 
 const TARGET = { database: 'oars-pool', bucket: 'oars-pool-raw', telemetryBucket: 'oars-telemetry' } as const;
 
@@ -82,7 +88,7 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
   }
   const [what, key, ...extra] = options.positional;
   const target: Target = { ...TARGET, local: options.local };
-  const store: EraseStore = wranglerStore(io.wrangler, target, io.files, io.list);
+  const store: EraseStore = wranglerStore(io.wrangler, target, io.files, io.list, io.listRaw);
   const where = options.local ? 'local state' : 'the remote pool';
   try {
     // The find reads and changes nothing, so it needs no --confirm. The text comes from stdin only: an argument would be in the process table and the shell's history.
@@ -126,6 +132,23 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
       io.print(JSON.stringify({ pages: done.pages, ...(options.raw ? { rawObjects: done.rawObjects, rawFailed: done.failed.length } : {}) }));
       // A raw object the ledger lists and the bucket does not hold, or one that does not hash to its name, makes the copy incomplete: the requester is not sent it as whole.
       return done.failed.length > 0 ? 1 : 0;
+    }
+    if (what === 'withdraw' && options.positional.length === 1 && options.account !== undefined && options.id === undefined) {
+      const consent = await rawConsentOf(store, options.account);
+      if (consent.standing !== 'yes') {
+        const said = consent.standing === 'never' ? `account ${consent.account} never gave a raw yes` : `account ${consent.account} withdrew its raw yes on ${new Date(consent.withdrawnAt ?? 0).toISOString().slice(0, 10)}`;
+        if (!options.confirm) {
+          io.print(`No raw consent stands: ${said}. The account row would not change${consent.standing === 'never' ? '' : '; --confirm only drops any staged parts that remain'}. Nothing was changed.`);
+          return 0;
+        }
+      } else if (!options.confirm) return plan(io, `withdraw the raw consent of account ${consent.account} in ${where}: clear the yes and record the time, and drop its staged raw parts; the nightly sweep erases the raw objects it holds`);
+      // A remote run that cannot list the bucket stops before it changes anything; a local one cannot ever list, and says so after.
+      if (!options.local && io.listRaw === undefined && consent.standing !== 'never') throw new Error(NO_RAW_LISTER);
+      const done = await withdrawRaw(store, consent.account, io.now());
+      if (!done.stagedListed) io.print('Local R2 cannot be listed: any staged parts in the local state were not dropped.');
+      if (consent.standing === 'never') io.print(`Account ${consent.account} never gave a raw yes: nothing to withdraw, nothing changed.`);
+      io.print(JSON.stringify({ withdrawn: done.withdrawn, stagedDropped: done.stagedDropped }));
+      return 0;
     }
     if (what === 'account' && options.positional.length === 1 && options.account !== undefined && options.id === undefined) {
       if (!options.confirm) return plan(io, `erase every deposit row and raw object of account ${options.account} in ${where}, scrub the label and allow list of its machines, delete its repo keys, deposit hours, and contributor records, and disable its tokens`);
