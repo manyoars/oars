@@ -595,7 +595,9 @@ describe('the repository pointer and the outcome (plan S4)', { timeout: 30_000 }
     ['git@example.com:/home/alice/app'],
     ['ssh://git@example.com/Users/alice/app.git'],
     ['https://example.com/C:/Users/alice/app.git'],
-  ])('writes pointer: null for a remote whose path names an account on its host (%s)', async (remote) => {
+    ['alice@example.com:acme/app.git'],
+    ['ssh://example.com/~alice/app.git'],
+  ])('writes pointer: null for a remote whose user or path names an account on its host (%s)', async (remote) => {
     const f = fixture();
     const repo = join(f.root, 'work', 'ptr');
     makeRepo(repo);
