@@ -220,6 +220,18 @@ describe('the manifest', () => {
   });
 });
 
+describe('the skeleton and the manifest fields it adds (plan S3)', () => {
+  it('writes skeleton.json beside each session, and gives its manifest row models, turns, and the skeleton name', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done'), user(S(1), 3, 'and another'), assistant(S(1), 3, 'done too')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    const [row] = manifest(f.out);
+    expect(row).toMatchObject({ models: { 'claude-opus-5-5': 2 }, turns: 4, skeleton: 'skeleton.json' });
+    expect(existsSync(join(f.out, 'sessions', row?.matchId ?? '', 'skeleton.json'))).toBe(true);
+  });
+});
+
 describe('owners file', () => {
   it('matches a folder by its glob, first entry first, without regard to case', () => {
     const rules = parseOwners(JSON.stringify(OWNERS));
