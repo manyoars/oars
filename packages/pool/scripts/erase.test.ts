@@ -1,6 +1,8 @@
 // The operator's erasure against a local pool under Miniflare: each kind leaves a tombstone, the same content is refused when it comes back, an audit row holds no content, and the aggregates keep their counts.
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { admittedNative, PACKAGE_REGISTRIES, PLATFORMS, SHELLS } from '../../cli/src/sessions/pool-wire.js';
+import { FRAMEWORKS, LANGUAGES, projectedAgentType, VOCAB_VERSION } from '../../cli/src/sessions/public-vocabulary.js';
 import { ERROR_CODES } from '../../cli/src/sessions/schema.js';
 import { isListed } from '../src/field-classes.js';
 import { sampleSkeleton } from '../src/sample.js';
@@ -1081,7 +1083,7 @@ describe('finding the raw objects that hold a text', () => {
 });
 
 /** The strings a deposit is planted with: each is a value of a class an erased deposit must not keep, and none of them may be in the row after the erasure. */
-const PLANTED = ['feedfacecafebeef', 'acme-finetune-7', 'acmetool', 'acme-flag', 'janedoe-notes', 'acme-private-mcp', 'acme-skill', '2026-11-04T10:11:12.123Z', 'deadbeefdeadbeefdeadbeefdeadbeef', 'cafebabecafebabecafebabecafebabe', '5555555555555a5a'];
+const PLANTED = ['feedfacecafebeef', 'acme-finetune-7', 'acmetool', 'acme-flag', 'janedoe-notes', 'acme-private-mcp', 'acme-skill', '2026-11-04T10:11:12.123Z', 'deadbeefdeadbeefdeadbeefdeadbeef', 'cafebabecafebabecafebabecafebabe', '5555555555555a5a', 'acme-native-tool', 'acme-skill-step', 'acme_arg_key', 'acme-pkg-9', 'acme-extra-field'];
 const FIRST_ERROR = [...ERROR_CODES][0] ?? 'other';
 const WEEK_OF_PLANTED_DAY = '2026-11-02';
 
@@ -1098,43 +1100,50 @@ const richSkeleton = (id: string): unknown => {
   if (spare !== undefined) transcript.tools.push(...Array.from({ length: 50 }, () => structuredClone(spare)));
   const [call] = transcript.tools;
   if (call === undefined) throw new Error('the sample skeleton holds no tool');
-  Object.assign(call, { status: 'error', errorCode: FIRST_ERROR, durationMs: 1234, keys: ['file_path', 'acme_secret_key'], names: [{ kind: 'file', name: 'janedoe-notes' }], templates: ['acmetool deploy'], digests: [{ old: 'deadbeefdeadbeefdeadbeefdeadbeef', new: 'cafebabecafebabecafebabecafebabe' }] });
+  Object.assign(call, { status: 'error', errorCode: FIRST_ERROR, durationMs: 1234, keys: ['file_path', 'acme_secret_key', 'acme_arg_key'], names: [{ kind: 'file', name: 'janedoe-notes' }], templates: ['acmetool deploy'], digests: [{ old: 'deadbeefdeadbeefdeadbeefdeadbeef', new: 'cafebabecafebabecafebabecafebabe' }] });
+  Object.assign(call, { argFeatures: [{ key: 'acme_arg_key', valueSize: '9-32', patternFeatures: ['literal'] }], argValues: [{ key: 'acme_arg_key', enumValue: 'true' }] });
   const [step] = call.steps;
-  if (step !== undefined) Object.assign(step, { identity: { program: 'acmetool', sub: 'deploy', flags: ['--acme-flag'] }, status: 'error' });
-  Object.assign(skeleton, { timingPrint: '5555555555555a5a', recommendations: [{ id: 'feedfacecafebeef', arm: 'shown', poolVersion: '2026-11-04T10:11:12.123Z', from: 0, to: 1 }] });
+  if (step !== undefined) Object.assign(step, { identity: { program: 'acmetool', sub: 'deploy', flags: ['--acme-flag'] }, status: 'error', native: 'acme-native-tool', skill: 'acme-skill-step' });
+  skeleton.deltas.push({ deltaKind: 'removed', field: 'package', name: 'acme-pkg-9', registry: 'acme-registry', metric: 'callsPerSession', change: 1 });
+  Object.assign(skeleton, { timingPrint: '5555555555555a5a', acmeExtra: 'acme-extra-field', recommendations: [{ id: 'feedfacecafebeef', arm: 'shown', poolVersion: '2026-11-04T10:11:12.123Z', from: 0, to: 1 }] });
   return skeleton;
 };
 
-type Leaf = { path: string; key: string; value: unknown };
+type Leaf = { path: string; key: string; value: unknown; parent: { readonly [field: string]: unknown } };
 
 /** Every leaf of a JSON value with its path and the key it sits under (an array item sits under its array's key). */
-const leavesOf = (value: unknown, path = '$', key = ''): Leaf[] => {
-  if (Array.isArray(value)) return value.flatMap((item, at) => leavesOf(item, `${path}[${String(at)}]`, key));
-  if (typeof value === 'object' && value !== null) return Object.entries(value).flatMap(([name, item]) => leavesOf(item, `${path}.${name}`, name));
-  return [{ path, key, value }];
+const leavesOf = (value: unknown, path = '$', key = '', parent: Leaf['parent'] = {}): Leaf[] => {
+  if (Array.isArray(value)) return value.flatMap((item, at) => leavesOf(item, `${path}[${String(at)}]`, key, parent));
+  if (typeof value === 'object' && value !== null) return Object.entries(value).flatMap(([name, item]) => leavesOf(item, `${path}.${name}`, name, { ...value }));
+  return [{ path, key, value, parent }];
 };
 
 const isMonday = (value: unknown): boolean => typeof value === 'string' && /^\d{4}-\d\d-\d\d$/.test(value) && new Date(`${value}T00:00:00Z`).getUTCDay() === 1;
 const gated = (field: string) => (value: unknown): boolean => typeof value === 'string' && (value === 'other' || isListed(field, value));
+/** A string that is `other` or a member of a real list the test imports. */
+const inList = (list: ReadonlySet<string> | readonly string[]) => (value: unknown): boolean => typeof value === 'string' && (value === 'other' || (Array.isArray(list) ? list.some((known) => known === value) : list instanceof Set && list.has(value)));
+/** A name checked against the list that is the same for everyone, in the context of the sibling field that scopes it (a sub-command of a program, a tool of a server). */
+const scoped = (field: string, scope: string) => (value: unknown, parent: Leaf['parent']): boolean => typeof value === 'string' && (value === 'other' || (typeof parent[scope] === 'string' && isListed(field, value, parent[scope])));
+/** For a key whose parser already closes it to a list of the schema (`oneOf`), so any 1 to 32 character word the parser let through is one of that list. */
 const tag = (value: unknown): boolean => typeof value === 'string' && /^[A-Za-z0-9<>.+_-]{1,32}$/.test(value);
 
 /** The one allow list: a kept leaf is a number or boolean (a bucket, an ordinal, a flag), null, or a string under a key named here whose value passes its check. Any other key is a leaf the erasure should have dropped. */
-const ALLOWED: { readonly [key: string]: (value: unknown) => boolean } = {
+const ALLOWED: { readonly [key: string]: (value: unknown, parent: Leaf['parent']) => boolean } = {
   erased: (value) => value === 'lawful-request',
-  vocabVersion: tag, harness: tag, harnessVersion: gated('harnessVersion'), model: gated('model'), effort: tag, day: isMonday, platform: tag, shell: tag, languages: tag, frameworks: tag, size: tag, language: tag, languageShare: tag,
+  vocabVersion: (value) => value === VOCAB_VERSION || value === 'other', harness: tag, harnessVersion: gated('harnessVersion'), model: gated('model'), effort: tag, day: isMonday, platform: inList(PLATFORMS), shell: inList(SHELLS), languages: inList(LANGUAGES), frameworks: inList(FRAMEWORKS), size: tag, language: inList(LANGUAGES), languageShare: tag,
   mcp: gated('mcp'), skills: gated('skills'), plugins: (value) => value === 'other', orgSize: tag, team: tag, repoVisibility: tag, cls: tag, intervention: tag, status: tag,
-  errorCode: (value) => typeof value === 'string' && ERROR_CODES.has(value), next: tag, action: tag, native: tag, targetClass: tag, argClass: tag, key: gated('key'), enumValue: tag, valueSize: tag, pathDepth: tag, extension: tag, dirKind: tag, patternFeatures: tag, changeKind: tag, diffShape: tag,
-  program: gated('program'), sub: tag, flags: gated('flags'), target: tag, server: gated('server'), tool: tag, skill: gated('skill'), agentType: tag, kind: tag, deltaKind: tag, field: tag, name: gated('name'), registry: tag, metric: tag, arm: tag, hostClass: tag, launcher: tag,
+  errorCode: (value) => typeof value === 'string' && ERROR_CODES.has(value), next: tag, action: tag, native: (value) => typeof value === 'string' && (value === 'other' || admittedNative('claude-code', value)), targetClass: tag, argClass: tag, key: gated('key'), enumValue: tag, valueSize: tag, pathDepth: tag, extension: tag, dirKind: tag, patternFeatures: tag, changeKind: tag, diffShape: tag,
+  program: gated('program'), sub: scoped('sub', 'program'), flags: gated('flags'), target: tag, server: gated('server'), tool: scoped('tool', 'server'), skill: gated('skill'), agentType: (value) => typeof value === 'string' && (value === 'other' || projectedAgentType(value) === value), kind: tag, deltaKind: tag, field: tag, name: gated('name'), registry: inList(PACKAGE_REGISTRIES), metric: tag, arm: tag, hostClass: tag, launcher: tag,
   keys: gated('key'),
 };
 
 /** The paths of every kept leaf that is not on the allow list, each with why. */
 const offList = (value: unknown): string[] =>
-  leavesOf(value).flatMap(({ path, key, value: leaf }) => {
+  leavesOf(value).flatMap(({ path, key, value: leaf, parent }) => {
     if (leaf === null || typeof leaf === 'number' || typeof leaf === 'boolean') return [];
     const check = ALLOWED[key];
     if (check === undefined) return [`${path}: no allow-list entry for ${key}`];
-    return check(leaf) ? [] : [`${path}: ${JSON.stringify(leaf)} fails the ${key} check`];
+    return check(leaf, parent) ? [] : [`${path}: ${JSON.stringify(leaf)} fails the ${key} check`];
   });
 
 const randomHex = (value: unknown): boolean => typeof value === 'string' && /^[0-9a-f]{32}$/.test(value);
@@ -1163,7 +1172,10 @@ describe('an erased deposit keeps its anonymous shape', () => {
     const { token, account } = await member();
     const posted = await pool.post('/v1/deposits', richSkeleton(SESSION), token);
     expect(posted.status).toBe(201);
-    const before = String(fieldOf((await all('SELECT skeleton FROM deposits WHERE account = ? AND id = ?', account, SESSION))[0], 'skeleton'));
+    const stored = (await all('SELECT skeleton, extensions FROM deposits WHERE account = ? AND id = ?', account, SESSION))[0];
+    // The bag holds what the reader set aside (the unknown field, the off-list delta name and registry), so it must be non-empty for the erasure to have cleared something.
+    expect(textOf(stored, 'extensions')).not.toBe('[]');
+    const before = `${String(fieldOf(stored, 'skeleton'))}${textOf(stored, 'extensions')}`;
     for (const planted of PLANTED) expect(before, `the fixture holds ${planted}`).toContain(planted);
     // A time that is not a Monday at midnight: the erasure must cut it to the Monday of its week (Wednesday 14 October 2026 to Monday 12 October).
     await (await pool.db()).prepare('UPDATE deposits SET counted_at = ? WHERE account = ? AND id = ?').bind(Date.UTC(2026, 9, 14, 9, 8, 7, 123), account, SESSION).run();
@@ -1200,6 +1212,14 @@ describe('anonymizing a skeleton', () => {
     expect(kept).toContain('"skills":["other"]');
     expect(kept).toContain('"flags":["other"]');
     expect(kept).toContain('"erased":"lawful-request"');
+  });
+
+  it('turns a native name off the harness action table into other, and keeps one the table lists', () => {
+    const kept = JSON.stringify(anonymizeSkeleton(richSkeleton('00000000000093aa'), 'lawful-request'));
+    expect(kept).not.toContain('acme-native-tool');
+    expect(kept).not.toContain('acme-skill-step');
+    expect(kept).toContain('"native":"other"');
+    expect(kept).toContain('"native":"Bash"');
   });
 
   it('is null for text that is no skeleton, and a lawful erasure then keeps the marker alone, as it does for text that is no JSON', async () => {

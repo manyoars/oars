@@ -1077,8 +1077,8 @@ const allHarnesses = <const T extends readonly Harness[]>(list: [Exclude<Harness
 export const HARNESSES = allHarnesses(['claude-code', 'cursor', 'codex', 'copilot', 'gemini', 'grok', 'opencode', 'pi', 'vscode-copilot', 'otel']);
 const PROMPT_CLASSES = ['no-tools', 'orchestration', 'research', 'edit-verify', 'edit-only', 'explore-only', 'shell-only', 'mixed'] as const satisfies readonly PromptClass[];
 const STATUSES = ['ok', 'error', 'none'] as const satisfies readonly ToolStatus[];
-const PLATFORMS: ReadonlySet<string> = new Set(['aix', 'android', 'cygwin', 'darwin', 'freebsd', 'haiku', 'linux', 'netbsd', 'openbsd', 'sunos', 'win32']);
-const SHELLS: ReadonlySet<string> = new Set(Object.values(ACTION_TABLES).flatMap((table) => Object.values(table.shells)));
+export const PLATFORMS: ReadonlySet<string> = new Set(['aix', 'android', 'cygwin', 'darwin', 'freebsd', 'haiku', 'linux', 'netbsd', 'openbsd', 'sunos', 'win32']);
+export const SHELLS: ReadonlySet<string> = new Set(Object.values(ACTION_TABLES).flatMap((table) => Object.values(table.shells)));
 /** The registries a package comes from; a pull may also come from a skill, plugin, or MCP registry. */
 export const PACKAGE_REGISTRIES = ['npm', 'pypi', 'crates', 'go', 'rubygems', 'homebrew'] as const;
 const NO_NAME: ReadonlySet<string> = new Set();
@@ -1245,7 +1245,7 @@ const parseIdentity = (held: Collected, harness: WireHarness, action: CanonicalA
 };
 
 /** Whether the harness's table names this native, so it can cross as itself; anything else (including the literal) crosses as `private`. */
-const admittedNative = (harness: WireHarness, native: string): boolean => {
+export const admittedNative = (harness: WireHarness, native: string): boolean => {
   if (native === PRIVATE) return true;
   if (harness === OTHER) return false;
   const table = ACTION_TABLES[harness];

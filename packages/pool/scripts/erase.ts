@@ -2,7 +2,7 @@
 // This is a script the operator runs with their own `wrangler` login (`erase-cli.ts`), never a route: the Worker has no way to erase anything and holds no token for it.
 // The ledger never deletes (migrations 0009 and 0011), so a row's content is replaced in place and the row, its counts, and its tier stay. Every step is written so a run that stops halfway runs again to the end: the
 // tombstone goes first (so nothing can come back), then the content, then the audit row.
-import { bucketOf, PACKAGE_REGISTRIES, parseSkeleton, type DeltaEntry, type SkeletonFrame, type SkeletonPrompt, type SkeletonStep, type SkeletonTool } from '../../cli/src/sessions/pool-wire.js';
+import { admittedNative, bucketOf, PACKAGE_REGISTRIES, parseSkeleton, type DeltaEntry, type SkeletonFrame, type SkeletonPrompt, type SkeletonStep, type SkeletonTool, type WireHarness } from '../../cli/src/sessions/pool-wire.js';
 import { VOCAB_VERSION } from '../../cli/src/sessions/public-vocabulary.js';
 import { ERROR_CODES } from '../../cli/src/sessions/schema.js';
 import { isListed } from '../src/field-classes.js';
@@ -107,9 +107,10 @@ const identityOf = (identity: SkeletonStep['identity']): object | null => {
   return { host: null };
 };
 
-const stepOf = (step: SkeletonStep): object => ({
+const stepOf = (harness: WireHarness) => (step: SkeletonStep): object => ({
   action: step.action,
-  native: step.native,
+  // A native name outside the harness's action table is a long-tail name (a private MCP or custom tool): only the table's rows, `private`, and `other` stay.
+  native: step.native === OTHER || admittedNative(harness, step.native) ? step.native : OTHER,
   identity: identityOf(step.identity),
   status: step.status,
   tokens: step.tokens,
@@ -123,7 +124,7 @@ const stepOf = (step: SkeletonStep): object => ({
   ...held('skill', step.skill === undefined ? undefined : listedText('skill', step.skill)),
 });
 
-const toolOf = (tool: SkeletonTool): object => ({
+const toolOf = (harness: WireHarness) => (tool: SkeletonTool): object => ({
   side: tool.side,
   prompt: tool.prompt,
   status: tool.status,
@@ -141,7 +142,7 @@ const toolOf = (tool: SkeletonTool): object => ({
   ...held('namesDropped', tool.namesDropped),
   ...held('templatesDropped', tool.templatesDropped),
   ...held('diffShape', tool.diffShape),
-  steps: tool.steps.map(stepOf),
+  steps: tool.steps.map(stepOf(harness)),
 });
 
 const promptOf = (prompt: SkeletonPrompt): object => ({
@@ -179,7 +180,7 @@ export const anonymizeSkeleton = (stored: unknown, reason: ErasureReason): { rea
     format: skeleton.format,
     vocabVersion: skeleton.vocabVersion === VOCAB_VERSION ? skeleton.vocabVersion : OTHER,
     fieldsVersion: skeleton.fieldsVersion,
-    transcripts: skeleton.transcripts.map((transcript) => ({ harness: transcript.harness, frame: frameOf(transcript.frame), frames: transcript.frames.map(frameOf), spawnedIn: transcript.spawnedIn, prompts: transcript.prompts.map(promptOf), tools: transcript.tools.map(toolOf) })),
+    transcripts: skeleton.transcripts.map((transcript) => ({ harness: transcript.harness, frame: frameOf(transcript.frame), frames: transcript.frames.map(frameOf), spawnedIn: transcript.spawnedIn, prompts: transcript.prompts.map(promptOf), tools: transcript.tools.map(toolOf(transcript.harness)) })),
     deltas: skeleton.deltas.map(deltaOf),
     ...held('claimed', skeleton.claimed === undefined ? undefined : { hostClass: skeleton.claimed.hostClass, launcher: skeleton.claimed.launcher }),
     ...held('recommendations', skeleton.recommendations?.map(({ arm, from, to }) => ({ arm, from, to }))),
@@ -368,7 +369,7 @@ const randomRowid = (): number => {
 
 /**
  * Unlinks the rows an erasure keeps that covenant 6.6(d) does not list (`machines` and `deposits`): they leave the account's pseudonym for one random id per erasure (`erased:` and 32 hex, with a minimal `accounts` row, since the foreign keys need one),
- * so they still join to each other (the counts) and to no one. A machine and a deposit also take a random id each, the machine's fingerprint is blanked and its key revoked and replaced by a random hash (an export and the person's own client hold the old exact values), a deposit's `ingest` mark is replaced, every time is cut to its UTC day (a machine's expiry too, since it is a fixed span from a time that was), and
+ * so they still join to each other (the counts) and to no one. A machine and a deposit also take a random id each, the machine's fingerprint is blanked and its key revoked and replaced by a random hash (an export and the person's own client hold the old exact values), a deposit's `ingest` mark is replaced, every time is cut to the Monday (UTC) of its ISO week (a machine's expiry too, since it is a fixed span from a time that was), and
  * `erased_on` is cleared on the deposits, because a date there would pick out the audit row of that day: a reader that needs "erased" reads the `erased:` prefix. The `accounts` row and each deposit take a random negative rowid for the same reason (a deposit would otherwise keep its place among live ones, which pins its time). `accounts.provider_created`, GitHub's public creation time, is cleared.
  * Raw objects stay on the pseudonym, their date cut to the day: they are 6.6(d)'s hash, size, and date, and their tombstone (the unkeyed hash of the key `raw/<account>/<sha256>`) would give the account back from any row that kept the hash.
  * Rows are found by the account, so a rerun finds none and changes nothing; a run that stops between two statements leaves the rest for a rerun under a second id, which splits the join and links nothing. The random id is written nowhere else, least of all beside the pseudonym.
