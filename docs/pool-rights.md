@@ -83,7 +83,7 @@ What you can do by hand, and only if the requester asks for it:
 
 **Steps:**
 1. Confirm the account (above).
-2. Tell the requester what an erasure leaves, from covenant 6.4 and 6.6(d), before you run it: the shared totals already built, the sign-in and acceptance records, the tombstone, and the hash, size, and date of what was erased. Tell them it does not stop new deposits, and that they should run `oars pool logout` on every machine and close the account if they want no more (see "Closing an account").
+2. Tell the requester what an erasure leaves, from covenant 6.4 and 6.6(d), before you run it: the shared totals already built, the sign-in and acceptance records, each Deposit's anonymous shape (closed lists, buckets, listed names, step order, days cut to the week's Monday), the tombstone, and the hash, size, and date of what was erased. Tell them it does not stop new deposits, and that they should run `oars pool logout` on every machine and close the account if they want no more (see "Closing an account").
 3. Dry run:
    `npm run erase -w packages/pool -- account --account <id>`
 4. Read the line it prints. If it names the right account, run it:
