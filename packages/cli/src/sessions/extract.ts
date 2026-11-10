@@ -807,7 +807,7 @@ type ShellDialect = 'posix' | 'powershell';
 
 /**
  * `opaqueFrom` is where that point sits in `text` (-1 for none, 0 for a text that is opaque throughout, as a word an opaque word holds is); left out, it is the first point of the text. A substitution opened inside double quotes
- * lowers it to where it opens, since its end is read by a scan that can close early: every word that starts after it is opaque, as do an unquoted backtick and, in POSIX, an escaped double quote.
+ * lowers it to where it opens, since its end is read by a scan that can close early: every word that starts after it is opaque, as is every word that starts after an unquoted backtick or an escaped double quote, which count only in a POSIX shell (PowerShell's backtick is its escape).
  */
 const tokenize = (text: string, opaqueFrom?: number, dialect: ShellDialect = 'posix'): ShellToken[] => {
   let opaque = opaqueFrom ?? text.search(OPAQUE_POINT);
