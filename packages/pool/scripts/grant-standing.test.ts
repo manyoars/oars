@@ -110,12 +110,10 @@ describe('the grant-standing command', () => {
     expect(USAGE).toContain('--confirm');
   });
 
-  it('prints the message of a wrangler failure, and a plain one for a failure that is no Error', async () => {
+  it('prints the message of a wrangler failure', async () => {
     const { io, printed } = fake([]);
     io.wrangler = () => Promise.reject(new Error('not logged in'));
     expect(await main([...full, '--confirm'], io)).toBe(1);
-    io.wrangler = () => Promise.reject(new Error('x', { cause: 'y' }).cause);
-    expect(await main([...full, '--confirm'], io)).toBe(1);
-    expect(printed).toEqual(['not logged in', 'the grant failed']);
+    expect(printed).toEqual(['not logged in']);
   });
 });

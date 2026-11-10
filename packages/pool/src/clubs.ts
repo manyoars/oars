@@ -43,7 +43,11 @@ interface Entry {
   strokes: number;
 }
 
-const bits = (mask: number): number => [...mask.toString(2)].filter((digit) => digit === '1').length;
+const bits = (mask: number): number => {
+  let set = 0;
+  for (let rest = mask; rest > 0; rest >>= 1) set += rest & 1;
+  return set;
+};
 
 /** The consecutive weeks ending this week, or last week when this one has none yet. */
 const streakOf = (weeks: ReadonlySet<string>, now: number): number => {

@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { isoWeekOf } from './week.js';
 import { sampleSkeleton } from './sample.js';
-import { acceptanceOf, fieldOf, startPool, stubUser, type TestDb, type TestPool } from './test-pool.js';
+import { acceptanceOf, startPool, stubUser, type TestDb, type TestPool } from './test-pool.js';
 
 let pool: TestPool;
 let db: TestDb;

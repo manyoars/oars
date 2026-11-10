@@ -226,7 +226,7 @@ describe('ranking', () => {
     const text = JSON.stringify((await pool.get(`/v1/clubs/${club.id}`, owner.token)).json);
     expect(text).not.toMatch(/token|cost|usd|duration|price/i);
     expect(text).not.toContain(owner.account);
-    for (const row of rowsOf(JSON.parse(text))) expect(Object.keys(row as object).sort()).toEqual(['activeDays', 'ashore', 'nickname', 'place', 'sessions', 'strokesThisWeek', 'weeksRowing']);
+    for (const row of rowsOf(JSON.parse(text))) expect(Object.keys(Object(row)).sort()).toEqual(['activeDays', 'ashore', 'nickname', 'place', 'sessions', 'strokesThisWeek', 'weeksRowing']);
   });
 });
 
