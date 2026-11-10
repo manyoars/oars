@@ -4,7 +4,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 
 ## Unreleased
 
-- `oars --help` names `oars sessions try` on the `sessions` line, the empty-store message says `oars sessions deposit` reads your own session history, and `@manyoars/oars-client` now declares the CLI's Node floor (22.23.4), so installing the CLI on Node 22 no longer prints engine warnings.
+- `oars --help` names `oars sessions try` on the `sessions` line, the empty-store message says `oars sessions deposit` reads your own session history, and `@manyoars/oars-client` now declares the CLI's Node floor (22.23.4), so installing the CLI on Node 22 no longer prints engine warnings (with @manyoars/oars-client 0.1.2).
 
 ## 0.5.1 (2026-11-10)
 

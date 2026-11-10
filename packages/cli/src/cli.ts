@@ -204,7 +204,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
       emit(deps, flag(options, 'json'), await sessionsCard(sessionDeps(deps), { period, text: flag(options, 'text'), out: text(options, 'out'), noCost: options.cost === false }, deps.env));
     });
 
-  const sessions = program.command('sessions').description("deposit and recall your own coding-agent session logs, locally; see it on made-up sessions: oars sessions try (these commands make no model call and no network call, except `gold arms`, which asks your own Claude subscription; telemetry is separate: oars telemetry)");
+  const sessions = program.command('sessions').description("deposit and recall your own coding-agent session logs, locally; try it on made-up sessions: oars sessions try (these commands make no model call and no network call, except `gold arms`, which asks your own Claude subscription; telemetry is separate: oars telemetry)");
 
   sessions
     .command('deposit')

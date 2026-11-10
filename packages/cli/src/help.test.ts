@@ -30,7 +30,7 @@ describe('help text states what the code does', () => {
   });
 
   it('the sessions line names `oars sessions try` as the way to see it on made-up sessions', async () => {
-    expect(await helpOf()).toContain('see it on made-up sessions: oars sessions try');
+    expect(await helpOf()).toContain('try it on made-up sessions: oars sessions try');
   });
 
   it('the program line says coding-agent sessions, not Claude Code sessions', async () => {
