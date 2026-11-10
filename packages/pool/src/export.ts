@@ -129,6 +129,20 @@ const SECTIONS: readonly Section[] = [
   { name: 'depositParts', select: 'batch, part, count, staged_at, deposit, body', table: 'deposit_parts', owner: 'account', order: ['batch', 'part'], keyed: ['batch', 'part'], page: DEPOSIT_PAGE, view: (row) => ({ batch: text(row, 'batch'), part: count(row, 'part'), count: count(row, 'count'), stagedAt: count(row, 'staged_at'), deposit: text(row, 'deposit'), body: text(row, 'body') }) },
   // What erasure did for the account: the audit rows keyed to it, which hold a reason, a day, and counts and no content.
   { name: 'erasures', select: 'id, kind, reason, erased_on, rows_erased, objects_erased', table: 'erasure_audit', owner: 'account', order: ['id'], keyed: ['id'], page: SMALL_PAGE, view: (row) => ({ kind: text(row, 'kind'), reason: text(row, 'reason'), erasedOn: text(row, 'erased_on'), rowsErased: count(row, 'rows_erased'), objectsErased: count(row, 'objects_erased') }) },
+  // The account's board counts (migration 0036): its own weekly counts, the clubs it sits in under the nickname it typed, the consent it gave to each, and standing granted to it by hand.
+  {
+    name: 'weeks',
+    select: 'week, sessions, tool_steps, failed_steps, day_mask, harnesses',
+    table: 'account_weeks',
+    owner: 'account',
+    order: ['week'],
+    keyed: ['week'],
+    page: SMALL_PAGE,
+    view: (row) => ({ week: text(row, 'week'), sessions: count(row, 'sessions'), toolSteps: count(row, 'tool_steps'), failedSteps: count(row, 'failed_steps'), dayMask: count(row, 'day_mask'), harnesses: json(row, 'harnesses') }),
+  },
+  { name: 'clubs', select: 'club, nickname, joined_at', table: 'club_members', owner: 'account', order: ['club'], keyed: ['club'], page: SMALL_PAGE, view: (row) => ({ club: text(row, 'club'), nickname: text(row, 'nickname'), joinedAt: count(row, 'joined_at') }) },
+  { name: 'clubConsents', select: 'id, club, text_sha256, accepted_at', table: 'club_consents', owner: 'account', order: ['id'], keyed: ['id'], page: SMALL_PAGE, view: (row) => ({ club: text(row, 'club'), textSha256: text(row, 'text_sha256'), acceptedAt: count(row, 'accepted_at') }) },
+  { name: 'standing', select: 'granted_at, granted_by, reason', table: 'board_standing', owner: 'account', order: ['granted_at'], keyed: ['granted_at'], page: SMALL_PAGE, view: (row) => ({ grantedAt: count(row, 'granted_at'), grantedBy: text(row, 'granted_by'), reason: text(row, 'reason') }) },
   // A deposit as it now reads: an erased one holds the marker the erasure left, and `tombstone` is the day it was erased.
   {
     name: 'deposits',
