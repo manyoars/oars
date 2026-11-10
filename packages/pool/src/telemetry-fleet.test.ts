@@ -202,7 +202,7 @@ describe('the fleet read, from the nightly rollup, on the Worker', () => {
     await keep(pool, daysAgo(1), uuid(5), [hook(100)], 'acct-restricted');
     await keep(pool, daysAgo(1), uuid(5), [hook(200)], 'acct-other');
     await nightly(pool);
-    const rolled = async (): Promise<unknown[]> => (await db.prepare('SELECT install, account, batches FROM telemetry_install_days WHERE install = ? ORDER BY account').bind(uuid(5)).all()).results;
+    const rolled = async (): Promise<readonly unknown[]> => (await db.prepare('SELECT install, account, batches FROM telemetry_install_days WHERE install = ? ORDER BY account').bind(uuid(5)).all()).results;
     expect(await rolled()).toEqual([{ install: uuid(5), account: 'acct-other', batches: 1 }]);
     // The batch stays stored: lifting the restriction brings it back at the next rebuild of the day.
     await db.prepare('UPDATE accounts SET restricted_at = NULL WHERE id = ?').bind('acct-restricted').run();

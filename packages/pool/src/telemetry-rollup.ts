@@ -121,7 +121,7 @@ interface Standing {
   restricted: Set<string>;
 }
 
-const idsOf = (held: { results: unknown[] }, column: string): Set<string> => new Set(held.results.map((one) => fieldOf(one, column)).filter((value): value is string => typeof value === 'string'));
+const idsOf = (held: { results: readonly unknown[] }, column: string): Set<string> => new Set(held.results.map((one) => fieldOf(one, column)).filter((value): value is string => typeof value === 'string'));
 
 const standingOf = async (env: Env): Promise<Standing> => {
   const erased = await env.DB.prepare("SELECT digest FROM erasure_tombstones WHERE kind = 'account'").bind().all();

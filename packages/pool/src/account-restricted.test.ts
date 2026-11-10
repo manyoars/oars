@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { heldBy } from './cluster-store.js';
 import { sampleSkeleton } from './sample.js';
-import { acceptanceOf, fieldOf, startPool, stubUser, textOf, type TestPool } from './test-pool.js';
+import { acceptanceOf, fieldOf, poolDbOf, startPool, stubUser, textOf, type TestPool } from './test-pool.js';
 
 let pool: TestPool;
 let next = 9400;
@@ -101,10 +101,10 @@ describe('a restricted account', () => {
   it('holds no cell or stratum for the depositor read once restricted', async () => {
     const { token, account } = await member();
     expect((await pool.post('/v1/deposits', sampleSkeleton(sessionOf(9)), token)).status).toBe(201);
-    const env = { DB: await pool.db() };
-    expect((await heldBy(env as never, account, 'cell')).length).toBeGreaterThan(0);
+    const env = { DB: poolDbOf(await pool.db()) };
+    expect((await heldBy(env, account, 'cell')).length).toBeGreaterThan(0);
     await restrict(account);
-    expect(await heldBy(env as never, account, 'cell')).toEqual([]);
-    expect(await heldBy(env as never, account, 'stratum')).toEqual([]);
+    expect(await heldBy(env, account, 'cell')).toEqual([]);
+    expect(await heldBy(env, account, 'stratum')).toEqual([]);
   }, 60_000);
 });
