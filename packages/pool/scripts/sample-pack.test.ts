@@ -359,6 +359,32 @@ describe('the acceptance rule (plan S1)', () => {
       expect(sessionsOf(f, out).sort()).toEqual([S(2), S(3)]);
     }
   });
+
+  it('chooses a duplicate loser only among sessions that pass every earlier rule: a longer twin another rule drops does not cost the shorter its place', async () => {
+    const f = fixture();
+    const earlier = turns(S(1), 2);
+    const replay = earlier.map((text) => line({ ...replayable(text), sessionId: S(2) }));
+    // The longer twin sits in a folder no owners entry names, so the shorter replay is the one to emit.
+    f.write('-work-oars', S(1), earlier);
+    f.write('-elsewhere-app', S(2), [...replay, ...turns(S(2), 2)]);
+    await stored(f);
+    for (const seed of ['1', '2', '3', '4']) {
+      const out = join(f.root, `pack-${seed}`);
+      expect(await buildPack(f.runtime, options(f, { seed, out }))).toMatchObject({ noOwner: 1, duplicate: 0, emitted: 1 });
+      expect(sessionsOf(f, out)).toEqual([S(1)]);
+    }
+  });
+
+  it('counts a duplicate that also holds a key as a duplicate: the cheaper check runs before the secret scan', async () => {
+    const f = fixture();
+    const earlier = turns(S(1), 2);
+    const planted = 'my' + 'AK' + 'IA' + 'IOSFODNN7EXAMPLE';
+    f.write('-work-oars', S(1), earlier);
+    f.write('-work-oars', S(2), [...earlier.map((text) => line({ ...replayable(text), sessionId: S(2) })), ...turns(S(2), 2)]);
+    f.write('-work-oars', S(3), [...earlier.map((text) => line({ ...replayable(text), sessionId: S(3) })), assistant(S(3), 9, `use ${planted}`)]);
+    await stored(f);
+    expect(await buildPack(f.runtime, options(f))).toMatchObject({ duplicate: 2, secret: 0, emitted: 1 });
+  });
 });
 
 describe('the run record', () => {
@@ -398,8 +424,26 @@ describe('the secret scan', () => {
     expect(secretIn(`prefix${sample}`)).toBe(name);
   });
 
+  it('finds a bare sk- key (OpenAI style) at a word edge, and does not find one stuck to a word', () => {
+    const key = 'sk' + '-proj-' + 'Ab12Cd34Ef56Gh78Ij90Kl';
+    expect(secretIn(`key ${key}`)).toBe('API key');
+    expect(secretIn(`key ${key} here`)).toBe('API key');
+    // The guarded branch keeps its left guard: stuck to a word it is read as a hyphenated word, not a key.
+    expect(secretIn(`task${key}`)).toBeUndefined();
+  });
+
   it('passes ordinary text, a masked value, kebab-case words, and a masked URL', () => {
     for (const text of ['please rename the helper in parse.ts', 'token=<secret>', 'https://<secret>@example.com', 'the task-management-and-planning-notes and a disk-usage-report-for-the-quarter', 'Bearer <secret>']) expect(secretIn(text)).toBeUndefined();
+  });
+
+  it('leaves a base64 image out of the scan: a screenshot whose data holds a key shape is still emitted', async () => {
+    const f = fixture();
+    const shot = 'AI' + 'za' + 'A'.repeat(30);
+    const image = line({ type: 'user', uuid: uuidOf(S(1), 'b', 5), parentUuid: null, isSidechain: false, timestamp: at(5), version: '2.1.300', sessionId: S(1), cwd: repoCwd, message: { role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: `iVBORw0KGgo${shot}AAAA` } }, { type: 'text', text: 'what is on screen' }] } });
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done'), image]);
+    await stored(f);
+    expect(await buildPack(f.runtime, options(f))).toMatchObject({ secret: 0, emitted: 1 });
+    expect(packText(f.out)).toContain(shot);
   });
 
   it('drops a session whose redacted text still holds a key, writes nothing of it, and counts it', async () => {

@@ -79,7 +79,7 @@ export interface PackOptions {
   out: string;
   size: number;
   seed: string;
-  /** User plus assistant turns a session needs to be taken; plan S1 sets 20, and Matt confirms the count. */
+  /** User plus assistant turns a session needs to be taken; plan S1 sets 20. */
   minTurns: number;
 }
 
@@ -268,6 +268,30 @@ const EXCLUDED: { readonly [reason in Exclude<Reason, 'clean'>]: keyof PackCount
 /** Where a transcript goes under the session's folder: `main.jsonl`, or its path under the session (`subagents/agent-x.jsonl`). */
 const placeOf = (key: string, session: string, main: boolean): string => (main ? 'main.jsonl' : key.slice(session.length + 1));
 
+/** A base64 image block's `data` can hold any shape by chance (the redactor keeps it), so the scan reads the line without it. Lines with no such block are scanned as written. */
+const withoutImageData = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(withoutImageData);
+  if (!isRecord(value)) return value;
+  const base64 = Reflect.get(value, 'type') === 'base64';
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, base64 && key === 'data' && typeof item === 'string' ? '' : withoutImageData(item)]));
+};
+
+/** The text the secret scan reads: the transcript with every base64 image's data left out. */
+const scannable = (text: string): string =>
+  text
+    .split('\n')
+    .map((row) => {
+      const entry = row.includes('"base64"') ? parsed(row) : undefined;
+      return entry === undefined ? row : JSON.stringify(withoutImageData(entry));
+    })
+    .join('\n');
+
+type StoredSession = Awaited<ReturnType<typeof loadStore>>['sessions'][number];
+type HarnessRow = NonNullable<(typeof HARNESS_TERMS)[Harness]>;
+
+/** What the rules before the duplicate check decide: the count a session adds to, or what it carries on. */
+type Early = { left: (counts: PackCounts) => void } | { accepted: { owner: OwnerRule; harness: Harness; terms: HarnessRow } };
+
 export const buildPack = async (runtime: SessionsRuntime, options: PackOptions): Promise<PackCounts> => {
   const started = Date.now();
   // Bytes of the pack's `sessions/` files and `manifest.jsonl`; `pack.json` holds the number, so it is not in it.
@@ -294,6 +318,28 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   const drawn = frame.map((session) => ({ session, rank: order(session.session) })).sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0));
   const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, tooShort: 0, noRepo: 0, duplicate: 0, secret: 0, emitted: 0 };
   const turnsOf = (session: { userTurns: number; assistantTurns: number }): number => session.userTurns + session.assistantTurns;
+  // The rules up to the repository one, once per session: the duplicate rule asks them of every session in the frame, the draw asks them again of the ones it reaches.
+  const earlyBy = new Map<string, Promise<Early>>();
+  const early = async (record: StoredSession): Promise<Early> => {
+    const verdict = await checkSession(runtime, options.terms, record.project, record.session);
+    if (verdict.reason !== 'clean') {
+      const reason = EXCLUDED[verdict.reason];
+      return { left: (c) => { c.excluded[reason] += 1; } };
+    }
+    const owner = ownerOf(owners, record.project);
+    if (owner === undefined) return { left: (c) => { c.noOwner += 1; } };
+    const harness = harnessOf(record);
+    const terms = HARNESS_TERMS[harness];
+    if (terms === undefined) return { left: (c) => { c.noHarnessTerms += 1; } };
+    if (turnsOf(record) < options.minTurns) return { left: (c) => { c.tooShort += 1; } };
+    if (record.repo === null) return { left: (c) => { c.noRepo += 1; } };
+    return { accepted: { owner, harness, terms } };
+  };
+  const earlyOf = (record: StoredSession): Promise<Early> => {
+    const known = earlyBy.get(record.session) ?? early(record);
+    earlyBy.set(record.session, known);
+    return known;
+  };
   let losers: Set<string> | undefined;
   const rows: ManifestRow[] = [];
   const index: IndexRow[] = [];
@@ -301,35 +347,18 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   for (const { session: record } of drawn) {
     if (counts.emitted >= options.size) break;
     counts.scanned += 1;
-    const verdict = await checkSession(runtime, options.terms, record.project, record.session);
-    if (verdict.reason !== 'clean') {
-      counts.excluded[EXCLUDED[verdict.reason]] += 1;
+    const decided = await earlyOf(record);
+    if ('left' in decided) {
+      decided.left(counts);
       continue;
     }
-    const owner = ownerOf(owners, record.project);
-    if (owner === undefined) {
-      counts.noOwner += 1;
-      continue;
+    const { owner, harness, terms } = decided.accepted;
+    // Read once, on the first session that gets this far. A loser is chosen only among sessions that pass every rule above, so a longer twin that one of them drops never costs the shorter its place; a duplicate's other half may not be drawn at all.
+    if (losers === undefined) {
+      const candidates: TurnCount[] = [];
+      for (const session of frame) if ('accepted' in (await earlyOf(session))) candidates.push({ session: session.session, project: session.project, turns: turnsOf(session) });
+      losers = await duplicatesOf(runtime, candidates);
     }
-    const harness = harnessOf(record);
-    const terms = HARNESS_TERMS[harness];
-    if (terms === undefined) {
-      counts.noHarnessTerms += 1;
-      continue;
-    }
-    if (turnsOf(record) < options.minTurns) {
-      counts.tooShort += 1;
-      continue;
-    }
-    if (record.repo === null) {
-      counts.noRepo += 1;
-      continue;
-    }
-    // Read once, on the first session that gets this far, over every session the earlier cheap rules leave: a duplicate's other half may not be drawn at all.
-    losers ??= await duplicatesOf(
-      runtime,
-      frame.filter((session) => turnsOf(session) >= options.minTurns && session.repo !== null).map((session) => ({ session: session.session, project: session.project, turns: turnsOf(session) })),
-    );
     if (losers.has(record.session)) {
       counts.duplicate += 1;
       continue;
@@ -340,7 +369,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     for (const file of files) texts.push(redactTranscript(await readFile(file.path, 'utf8'), domains, names, injectedKey).text);
     const masked = maskIds(texts, sessionIds, indexKey, options.buyerKey);
     // After redaction and masking, before the first byte is written: a session with a hit leaves no file, manifest row, or index row.
-    if (masked.some((text) => secretIn(text) !== undefined)) {
+    if (masked.some((text) => secretIn(scannable(text)) !== undefined)) {
       counts.secret += 1;
       continue;
     }
