@@ -9,7 +9,7 @@ import { answer, bound, brake, notConfigured, refuse, type Env } from './http.js
 import { receivePart } from './parts.js';
 import { heldBy, recount, repoKeysOf, signalStatements } from './cluster-store.js';
 import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf, shapeOf, weekStatements } from './ingest.js';
-import { loginGone, loginPoll, loginStart, logout } from './identity.js';
+import { loginGone, loginPoll, loginStart, logout, proveControl } from './identity.js';
 import { hashHosts, hashKey } from './ingest-hash.js';
 import { activate, callerOf, enroll, list, machineScope, revoke, rotate, type Caller } from './machines.js';
 import { stampOf, takeClaim } from './provenance.js';
@@ -180,6 +180,8 @@ export const ROUTES: readonly Route[] = [
   // The account's own copy of what the pool holds (Articles 15(3) and 20), and one raw object of its own. Neither is open to a machine key: a runtime that deposits has no business reading the account back.
   { method: 'GET', path: '/v1/account/export', machine: false, handle: exportPage },
   { method: 'GET', path: '/v1/account/export/raw/:hash', machine: false, handle: (request, env, [hash]) => exportRaw(request, env, decoded(hash ?? '')) },
+  // The account proves it controls itself (the operator confirms a requester against the stored time). Token-only: a machine key never proves a person.
+  { method: 'POST', path: '/v1/account/proof', machine: false, handle: proveControl },
   // Boards (clubs.ts): account-only, so a machine key is refused. The consent route comes before `:id` so that it is not read as a club.
   { method: 'GET', path: '/v1/board', machine: false, handle: (_request, env) => viewBoard(env) },
   { method: 'GET', path: '/v1/clubs/consent', machine: false, handle: () => consentTexts() },
