@@ -71,10 +71,10 @@ describe('a session has ended', () => {
   });
 
   it('lets the sender build a session only a hold window after its capture, while a person builds it at once', () => {
-    const [old] = sessionsFrom(store({ sessions: [session('m', { frame: framed, rev: NOW - 59 * MINUTE, tsLast: new Date(NOW - 48 * HOUR).toISOString() })], subagents: [] }));
+    const [old] = sessionsFrom(store({ sessions: [session('m', { frame: framed, rev: NOW - 59 * 60_000, tsLast: new Date(NOW - 48 * HOUR).toISOString() })], subagents: [] }));
     expect(old !== undefined && hasEnded(old, NOW, 0)).toBe(true);
     expect(old !== undefined && hasEnded(old, NOW, 0, undefined, true)).toBe(false);
-    expect(old !== undefined && hasEnded(old, NOW + 2 * MINUTE, 0, undefined, true)).toBe(true);
+    expect(old !== undefined && hasEnded(old, NOW + 2 * 60_000, 0, undefined, true)).toBe(true);
   });
 
   it('caps a last line in the future at the capture: a skewed clock does not hold a session', () => {

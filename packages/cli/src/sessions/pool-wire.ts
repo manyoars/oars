@@ -359,14 +359,15 @@ export const HOLD_WINDOW_MS = HOUR_MS;
  * Whether a session's batch may be built at `now`: no transcript of it, main or subagent, has gained a line for `SESSION_IDLE_HOURS`. A transcript was last active at its own last line (`tsLast`, the
  * session's clock, not ours), or at its capture (`rev`, epoch milliseconds) when it has none, so a store captured a minute ago from days-old transcripts holds sessions that ended days ago. A transcript can
  * also grow after the last capture, so `written` (the newest write to any raw file of the session, 0 when none is known) counts when it is later than every capture: a write at or before the capture is the
- * file arriving, not the session going on. The hold window counts from the same moment, the end of the session, as `HOLD_WINDOW_MS` says. A subagent that died without an end marker holds its session back at most that long.
+ * file arriving, not the session going on. A last line later than the capture is a bad clock, and the capture caps it. A person's build (`sender` false) takes the ended session at once. The sender, which builds and sends in one run, also waits `HOLD_WINDOW_MS` after the newest capture, so a session oars is seeing for the first time (a days-old transcript of a new harness) leaves no sooner than an hour later, time for `--deny` or a delete. A subagent that died without an end marker holds its session back at most that long.
  */
-export const hasEnded = (records: SessionRecords, now: number, written: number, idleMs: number = SESSION_IDLE_HOURS * HOUR_MS): boolean => {
+export const hasEnded = (records: SessionRecords, now: number, written: number, idleMs: number = SESSION_IDLE_HOURS * HOUR_MS, sender = false): boolean => {
   const lastLines = records.transcripts.map(({ session }) => {
     const ts = session.tsLast === null ? Number.NaN : Date.parse(session.tsLast);
-    return Number.isNaN(ts) ? session.rev : ts;
+    return Number.isNaN(ts) ? session.rev : Math.min(ts, session.rev);
   });
   const captured = Math.max(...records.transcripts.map(({ session }) => session.rev));
+  if (sender && now - captured < HOLD_WINDOW_MS) return false;
   return now - Math.max(written > captured ? written : 0, ...lastLines) >= Math.max(idleMs, HOLD_WINDOW_MS);
 };
 

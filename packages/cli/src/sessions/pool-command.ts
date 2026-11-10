@@ -208,7 +208,11 @@ const awaitCredential = async (deps: RunDeps, server: string, started: Started, 
     waited += wait;
     // `ask` rejects only with the unreachable failure of `send`.
     const [settled] = await Promise.allSettled([ask(deps, LOGIN, server, '/v1/login/poll', { body: { handle: started.handle }, show })]);
-    if (settled.status === 'rejected' && settled.reason instanceof CliError) lastFailure = settled.reason;
+    // A rejection that is not the unreachable failure is a bug, not a bad minute: it ends the login as itself.
+    if (settled.status === 'rejected') {
+      if (!(settled.reason instanceof CliError) || settled.reason.exitCode !== ExitCode.UNREACHABLE) throw settled.reason;
+      lastFailure = settled.reason;
+    }
     const reply = settled.status === 'fulfilled' ? settled.value : undefined;
     if (reply !== undefined && reply.status >= 500) lastFailure = refusal(LOGIN, reply);
     if (reply === undefined || reply.status >= 500) {
@@ -649,7 +653,7 @@ export const poolDeposit = async (
       continue;
     }
     // The batch of a session is built once the session and its subagents have ended; a session still in progress waits, and an earlier batch of it is withdrawn. A machine's Stop is the end of a turn, not of a session: its VM may be reclaimed before the session ends, so it builds the open session as it stands.
-    if (machine === undefined && !hasEnded(records, deps.now(), await lastWritten(runtime, records.main.project, records.main.session))) {
+    if (machine === undefined && !hasEnded(records, deps.now(), await lastWritten(runtime, records.main.project, records.main.session), undefined, options.covenant !== undefined)) {
       counts.notEnded += 1;
       await withdraw(key);
       continue;
@@ -727,7 +731,7 @@ export const poolDeposit = async (
     ...(termList.length === 0 ? [termsHint(terms)] : []),
     'Run oars pool outbox to print exactly what would be sent.',
   ];
-  return { document: { ok: true, server, ...counts }, text: lines.join('\n') };
+  return { document: { ok: true, server, ...counts, ...(termList.length === 0 ? { termsFile: terms } : {}) }, text: lines.join('\n') };
 };
 
 /** Each field of a batch, at any depth, with its row. A field with no row fails the command rather than printing blank. */
