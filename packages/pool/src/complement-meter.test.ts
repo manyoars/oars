@@ -18,6 +18,8 @@ interface Fixture {
 }
 
 /** The combination fixture of `shape-cells.test.ts` (a `keys` cell under the floor beside the `size` and `target` cells that would give it back): one system of several equations. `thin` is the sub-floor cell's count. */
+const fixtureOf = (parts: readonly [Motif, number][]): Fixture => ({ cells: parts.map(([motif, clusters]) => cellOf(motif.motifId, clusters)), motifs: parts.map(([motif]) => motif) });
+
 const comboOf = (action: string, thin = F - 1, extra = 0): Fixture => {
   const motifOf = (facet: Parameters<typeof shapeClass>[1], value: string): Motif => classMotif(shapeClass(action, facet, value));
   const parts: [Motif, number][] = [
@@ -30,7 +32,7 @@ const comboOf = (action: string, thin = F - 1, extra = 0): Fixture => {
   ];
   // More keys, each with a `keys` cell and a `size` cell, make a larger system of the same kind.
   for (let key = 0; key < extra; key++) parts.push([motifOf('keys', `extra${String(key)}`), F + 5], [motifOf('size', `extra${String(key)}=9-32`), 2 * F + 4]);
-  return { cells: parts.map(([motif, clusters]) => cellOf(motif.motifId, clusters)), motifs: parts.map(([motif]) => motif) };
+  return fixtureOf(parts);
 };
 
 const join = (...fixtures: Fixture[]): Fixture => ({ cells: fixtures.flatMap(({ cells }) => cells), motifs: fixtures.flatMap(({ motifs }) => motifs) });
@@ -63,17 +65,30 @@ describe('the meter', () => {
     expect(short.spent).toBeLessThan(full.spent - 1);
   });
 
+  it('charges the terms of the row and of the pivot, not the terms of their union', () => {
+    // Everything here is served, so the rank check withholds nothing and runs once. The `path` key's nesting equation (its total less the two `keys` cells that hold it, 3 terms) and the `size` equation (the same total less the
+    // `size` cell, 2 terms) meet in the one elimination the system makes, which reads 3 + 2 = 5 terms; the union of the two rows is 4. The other two equations (the action's calls, and the `pattern` key's total) pivot on nothing and cost 0.
+    const motifOf = (facet: Parameters<typeof shapeClass>[1], value: string): Motif => classMotif(shapeClass('file.read', facet, value));
+    const pair = fixtureOf([[motifOf('keys', 'path'), F + 5], [motifOf('keys', 'path,pattern'), F + 5], [motifOf('size', 'path=9-32'), 2 * F + 4]]);
+    expect(run(pair)).toEqual({ withheld: new Set(), spent: 5, left: MAX_BUNDLE_UNITS - 5 });
+  });
+
   it('charges an elimination again each time the system is eliminated again', () => {
     const combo = comboOf('file.read');
-    // The same system through one meter twice (a second week or floor with the same cells) costs twice, and the system is eliminated again after each cell the rank check withholds from it, which a system with nothing to withhold is not.
+    // Traced by hand (rows of 3 and 2 terms, then 3 and 4, and so on; each charge is the terms of the row and of its pivot), one pass of the rank check over this system makes eight eliminations of 5, 7, 7, 5, 6, 7, 6, and 8 units: 51.
+    // The check then withholds a cell and runs the system again, so a system with something to withhold costs more than one pass.
+    const FIRST_PASS = 51;
+    // A budget of one pass pays for it exactly (the second pass is refused at its first elimination, which takes nothing); one short stops before the eighth elimination, which takes nothing either.
+    expect(run(combo, FIRST_PASS).spent).toBe(FIRST_PASS);
+    expect(run(combo, FIRST_PASS - 1).spent).toBe(FIRST_PASS - 8);
+    // Left whole, the check withholds two cells from it, so it runs three passes (51, 51, and 42 units by a throwaway counter, 144 in all), and each is charged: a meter that charged only a system's first pass would stop at 51.
+    const once = run(combo).spent;
+    expect(once).toBeGreaterThanOrEqual(2 * FIRST_PASS);
+    // The same cells through one meter twice (a second week or floor with the same cells) cost twice.
     const meter = meterOf();
     withheldOf(combo.cells, combo.motifs, at(F), MAX_SYSTEM_TERMS, meter);
-    const once = MAX_BUNDLE_UNITS - meter.left;
     withheldOf(combo.cells, combo.motifs, at(F), MAX_SYSTEM_TERMS, meter);
     expect(MAX_BUNDLE_UNITS - meter.left).toBe(2 * once);
-    const calm = run(comboOf('file.read', F + 5));
-    expect(calm.withheld.size).toBe(0);
-    expect(once).toBeGreaterThan(2 * calm.spent);
   });
 
   it('is shared by the systems of a bundle: two systems each under the cap whose sum is over the budget', () => {
