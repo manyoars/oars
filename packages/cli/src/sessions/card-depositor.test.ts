@@ -1,7 +1,11 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { run } from '../cli.js';
+import { harness } from '../test-support.js';
+import { cardOf } from './card.js';
+import { cardSvg } from './card-render.js';
 import { CARD_NOW, cardStore, cardSurvival } from './card-fixture.js';
 import type { SessionsDeps } from './command.js';
 import type * as StoreModule from './store.js';
@@ -73,7 +77,7 @@ describe('depositorLine', () => {
 describe('sessionsCard depositor row', () => {
   const deps = (): SessionsDeps => ({ sessions: { storeDir: dir, projectsRoot: join(dir, 'projects'), stdin: process.stdin, stdout: { write: () => true } }, install: undefined, now: () => CARD_NOW });
 
-  it('signed out, the table and the picture read ashore: run oars pool login', async () => {
+  it('signed out, the table reads ashore: run oars pool login', async () => {
     const outcome = await sessionsCard(deps(), { period: 'week', text: true }, {});
     expect(outcome.text).toContain(`depositor            ${ASHORE}`);
     expect(outcome.text).not.toContain('weeks rowing');
@@ -87,5 +91,42 @@ describe('sessionsCard depositor row', () => {
     expect(outcome.text).not.toContain(ASHORE);
     expect(JSON.stringify(outcome)).not.toContain('secret-token');
     expect(JSON.stringify(outcome)).not.toContain('acct_one');
+  });
+});
+
+describe('oars card through run', () => {
+  const wired = (): ReturnType<typeof harness> => {
+    const h = harness();
+    h.deps.now = () => CARD_NOW;
+    h.deps.sessions = { storeDir: dir, projectsRoot: join(dir, 'projects'), stdin: process.stdin, stdout: { write: () => true } };
+    return h;
+  };
+
+  it('saves the SVG and the PNG, prints both paths and one tweet link, and reports them in --json', async () => {
+    const png = join(dir, 'x.png');
+    const svg = join(dir, 'x.svg');
+    const h = wired();
+    expect(await run(['card', '--month', '--out', png], h.deps)).toBe(0);
+    expect(existsSync(png)).toBe(true);
+    expect(existsSync(svg)).toBe(true);
+    const card = cardOf(cardStore(), cardSurvival(), 'month', CARD_NOW);
+    expect(card.days).toBe(30);
+    expect(readFileSync(svg, 'utf8')).toBe(cardSvg(card, ASHORE));
+    expect(readFileSync(svg, 'utf8')).toContain(ASHORE);
+    expect(readFileSync(png).readUInt32BE(16)).toBe(1200);
+    const printed = h.out.join('');
+    expect(printed).toContain(`Saved ${resolve(png)}`);
+    expect(printed).toContain(`Saved ${resolve(svg)}`);
+    expect(printed.match(/https:\/\/x\.com\/intent\/tweet\?text=/g)).toHaveLength(1);
+
+    const json = wired();
+    expect(await run(['card', '--month', '--out', png, '--json'], json.deps)).toBe(0);
+    expect(JSON.parse(json.out.join(''))).toMatchObject({ saved: { png: resolve(png), svg: resolve(svg) } });
+  });
+
+  it('--year --text names the last 365 days', async () => {
+    const h = wired();
+    expect(await run(['card', '--year', '--text'], h.deps)).toBe(0);
+    expect(h.out.join('')).toContain('the last 365 days');
   });
 });

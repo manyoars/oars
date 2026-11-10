@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -40,6 +40,8 @@ describe('sessionsCard', () => {
     const outcome = await sessionsCard(depsOf(join(dir, 'store')), { period: 'week', text: false, out }, {});
     expect(outcome.text).toContain('deposit');
     expect(outcome.document).toMatchObject({ ok: true, saved: null, tweet: null });
+    expect(existsSync(out)).toBe(false);
+    expect(existsSync(out.replace(/\.png$/, '.svg'))).toBe(false);
   });
 
   it('stops when the run has no session store', async () => {
