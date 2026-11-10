@@ -22,6 +22,8 @@ interface Fake {
   printed: string[];
   /** The scratch files the fake has made and not yet removed. */
   scratch: Set<string>;
+  /** The files an export wrote, by path under the folder the command was given, as `<folder>/<name>`. */
+  exported: Map<string, string>;
 }
 
 /** An `Io` whose wrangler answers like `d1 execute --json` (one successful statement changing one row, `rows` as its results) and records every call. `objects` are the R2 objects `r2 object get --file` would write: by key, the bytes. */
@@ -30,6 +32,7 @@ const fake = (options: { rows?: unknown[]; stdin?: string; success?: boolean; an
   const printed: string[] = [];
   const scratch = new Set<string>();
   const written = new Map<string, string>();
+  const exported = new Map<string, string>();
   let made = 0;
   const files: ObjectFiles = {
     temp: () => {
@@ -56,11 +59,26 @@ const fake = (options: { rows?: unknown[]; stdin?: string; success?: boolean; an
     calls,
     printed,
     scratch,
+    exported,
     io: {
       stdin: () => Promise.resolve(options.stdin ?? ''),
       print: (text) => printed.push(text),
       now: () => NOW,
       files,
+      folder: (path) => ({
+        write: async (name, content) => {
+          if (typeof content === 'string') exported.set(`${path}/${name}`, content);
+          else {
+            const chunks: Buffer[] = [];
+            for await (const piece of content) chunks.push(Buffer.from(piece));
+            exported.set(`${path}/${name}`, Buffer.concat(chunks).toString('utf8'));
+          }
+        },
+        remove: (name) => {
+          exported.delete(`${path}/${name}`);
+          return Promise.resolve();
+        },
+      }),
       wrangler: (args) => {
         calls.push([...args]);
         if (args[0] === 'r2' && args[2] === 'get') {
@@ -321,6 +339,15 @@ describe('main', () => {
     }
   });
 
+  it('refuses --raw and --out on every verb but export, so a typo cannot be silently ignored', async () => {
+    for (const argv of [['account', '--account', ACCOUNT, '--out', 'f', '--confirm'], ['close', '--account', ACCOUNT, '--raw', '--confirm'], ['withdraw', '--account', ACCOUNT, '--raw', '--confirm'], ['row', '--account', ACCOUNT, '--id', 's1', '--out', 'f', '--confirm'], ['raw', 'k', '--raw', '--confirm']]) {
+      const { io, calls, printed } = fake();
+      expect(await main(argv, io)).toBe(2);
+      expect(calls).toEqual([]);
+      expect(printed).toEqual([USAGE]);
+    }
+  });
+
   it('answers a bad option or a missing option value with exit code 2', async () => {
     for (const argv of [['--nope'], ['row', '--account'], ['row', '--account', '--id', 'x']]) {
       const { io, printed } = fake();
@@ -400,5 +427,118 @@ describe('main: the find', () => {
   it('says how to use it in the usage text', () => {
     expect(USAGE).toContain('raw --contains --value-stdin');
     expect(USAGE).toContain('--all-accounts');
+  });
+});
+
+describe('main: the export', () => {
+  const TEXT = 'a redacted transcript';
+  const HASH = createHash('sha256').update(TEXT).digest('hex');
+  const KEY = `raw/${ACCOUNT}/${HASH}`;
+  /** The account exists and its ledger lists one standing object and one erased; every other section is empty. */
+  const held = (sql: string): unknown[] => {
+    if (sql.startsWith('SELECT 1 AS found FROM accounts')) return [{ found: 1 }];
+    if (sql.includes('FROM raw_objects')) return [{ sha256: HASH, bytes: TEXT.length, erased_on: null }, { sha256: 'cd'.repeat(32), bytes: 3, erased_on: '2026-11-02' }];
+    return [];
+  };
+
+  it('writes the pages to the folder with no --confirm, reading D1 and nothing else, and prints the page count', async () => {
+    const { io, calls, printed, exported } = fake({ answer: held });
+    expect(await main(['export', '--account', ACCOUNT, '--out', 'req-1', '--local'], io)).toBe(0);
+    expect(printed).toEqual(['{"pages":2}']);
+    expect([...exported.keys()]).toEqual(['req-1/account-export-0001.json', 'req-1/account-export-0002.json']);
+    expect(JSON.parse(exported.get('req-1/account-export-0001.json') ?? '')).toMatchObject({ format: 'oars-pool-account-export', version: 1, account: ACCOUNT, section: 'rawLedger' });
+    // Only reads: every call is a SELECT through d1, local, and no R2 object was fetched.
+    expect(calls.every((call) => call[0] === 'd1' && call.includes('--local') && /^(SELECT)/.test(call[6] ?? ''))).toBe(true);
+  });
+
+  it('with --raw, fetches each object not erased from the raw bucket and writes it under raw/', async () => {
+    const { io, calls, printed, exported, scratch } = fake({ answer: held, objects: new Map([[KEY, TEXT]]) });
+    expect(await main(['export', '--account', ACCOUNT, '--out', 'req-2', '--raw', '--local'], io)).toBe(0);
+    expect(printed).toEqual(['{"pages":2,"rawObjects":1,"rawFailed":0}']);
+    expect(exported.get(`req-2/raw/${HASH}`)).toBe(TEXT);
+    expect(calls.filter((call) => call[0] === 'r2')).toEqual([['r2', 'object', 'get', `oars-pool-raw/${KEY}`, '--file', 'scratch-1', '--local']]);
+    expect(scratch.size).toBe(0);
+  });
+
+  it('exits 1 and names an object the bucket does not hold, with the pages still written', async () => {
+    const { io, printed, exported } = fake({ answer: held, getFails: 'The specified key does not exist.' });
+    expect(await main(['export', '--account', ACCOUNT, '--out', 'req-3', '--raw'], io)).toBe(1);
+    expect(printed).toEqual([`Not saved: raw object ${HASH} is not in the bucket.`, '{"pages":2,"rawObjects":0,"rawFailed":1}']);
+    expect(exported.size).toBe(2);
+  });
+
+  it('needs an account and a folder, and says how to use it', async () => {
+    for (const argv of [['export', '--out', 'x'], ['export', '--account', ACCOUNT], ['export', '--account', ACCOUNT, '--out', 'x', '--id', 'y']]) {
+      const { io, printed, calls } = fake({ answer: held });
+      expect(await main(argv, io)).toBe(2);
+      expect(printed).toEqual([USAGE]);
+      expect(calls).toEqual([]);
+    }
+    expect(USAGE).toContain('export --account <id> --out <folder> [--raw]');
+  });
+
+  it('answers an account the pool has never seen with exit 1 and writes nothing', async () => {
+    const { io, printed, exported } = fake({ answer: () => [] });
+    expect(await main(['export', '--account', ACCOUNT, '--out', 'req-4'], io)).toBe(1);
+    expect(printed).toEqual([`No account ${ACCOUNT} in the pool.`]);
+    expect(exported.size).toBe(0);
+  });
+});
+
+describe('main: the raw withdrawal', () => {
+  const consent = (row: unknown) => (sql: string): unknown[] => (sql.includes('FROM accounts') ? [row] : []);
+  const yes = consent({ raw_consent: 1_700_000_000_000, raw_consent_withdrawn_at: null });
+  const writes = (calls: string[][]): string[] => calls.filter((call) => call[0] === 'd1' && !/^SELECT/.test(call[6] ?? '')).map((call) => call[6] ?? '');
+
+  it('says what it would do and changes nothing without --confirm', async () => {
+    const { io, calls, printed } = fake({ answer: yes });
+    expect(await main(['withdraw', '--account', ACCOUNT, '--local'], io)).toBe(0);
+    expect(printed[0]).toMatch(/^Would withdraw the raw consent of account .* nightly sweep erases the raw objects it holds\. Nothing was changed: run again with --confirm\.$/);
+    expect(writes(calls)).toEqual([]);
+  });
+
+  it('with --confirm runs the route\'s statement, drops each staged part, and prints the line', async () => {
+    const dropped: string[] = [];
+    const { io, calls, printed } = fake({ answer: yes });
+    io.listRaw = (prefix) => Promise.resolve([`${prefix}${SHA}/000001`, `${prefix}${SHA}/000002`]);
+    expect(await main(['withdraw', '--account', ACCOUNT, '--confirm'], io)).toBe(0);
+    dropped.push(...calls.filter((call) => call[0] === 'r2').map((call) => call[3] ?? ''));
+    expect(writes(calls)).toHaveLength(1);
+    expect(writes(calls)[0]).toContain('UPDATE accounts SET raw_consent_withdrawn_at = ');
+    expect(dropped).toEqual([`oars-pool-raw/staging/${ACCOUNT}/${SHA}/000001`, `oars-pool-raw/staging/${ACCOUNT}/${SHA}/000002`]);
+    expect(printed).toEqual(['{"withdrawn":true,"stagedDropped":2}']);
+  });
+
+  it('stops before changing anything when a remote run has no R2 token to list the bucket with', async () => {
+    const { io, calls, printed } = fake({ answer: yes });
+    expect(await main(['withdraw', '--account', ACCOUNT, '--confirm'], io)).toBe(1);
+    expect(printed[0]).toMatch(/oars-pool-raw.*nothing was changed/);
+    expect(writes(calls)).toEqual([]);
+  });
+
+  it('says a local run cannot list R2, and still records the withdrawal', async () => {
+    const { io, printed } = fake({ answer: yes });
+    expect(await main(['withdraw', '--account', ACCOUNT, '--confirm', '--local'], io)).toBe(0);
+    expect(printed).toEqual(['Local R2 cannot be listed: any staged parts in the local state were not dropped.', '{"withdrawn":true,"stagedDropped":0}']);
+  });
+
+  it('says so and changes nothing when no yes stands', async () => {
+    const never = fake({ answer: consent({ raw_consent: null, raw_consent_withdrawn_at: null }) });
+    expect(await main(['withdraw', '--account', ACCOUNT, '--local'], never.io)).toBe(0);
+    expect(never.printed[0]).toMatch(/^No raw consent stands: account .* never gave a raw yes\..*Nothing was changed\.$/);
+    const sure = fake({ answer: consent({ raw_consent: null, raw_consent_withdrawn_at: null }) });
+    expect(await main(['withdraw', '--account', ACCOUNT, '--confirm'], sure.io)).toBe(0);
+    expect(sure.printed).toEqual([`Account ${ACCOUNT} never gave a raw yes: nothing to withdraw, nothing changed.`, '{"withdrawn":false,"stagedDropped":0}']);
+    expect(writes(sure.calls)).toEqual([]);
+    const gone = fake({ answer: consent({ raw_consent: null, raw_consent_withdrawn_at: Date.parse('2026-11-01T00:00:00Z') }) });
+    expect(await main(['withdraw', '--account', ACCOUNT, '--local'], gone.io)).toBe(0);
+    expect(gone.printed[0]).toMatch(/withdrew its raw yes on 2026-11-01.*--confirm only drops any staged parts that remain/);
+  });
+
+  it('needs an account, and says how to use it', async () => {
+    const { io, printed } = fake({ answer: yes });
+    expect(await main(['withdraw'], io)).toBe(2);
+    expect(printed).toEqual([USAGE]);
+    expect(USAGE).toContain('withdraw --account <id>');
   });
 });

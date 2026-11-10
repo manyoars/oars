@@ -195,11 +195,11 @@ ${proofLines(account, provedAt)}`;
 };
 
 /** Polls the pool until the person approves, and returns the pool's answer with the credential. Time is counted in the waits asked for, so a machine that slept through the code still gets one poll that says it expired. */
-const awaitCredential = async (deps: RunDeps, server: string, started: Started, masker: Masker): Promise<Reply> => {
+const awaitCredential = async (deps: RunDeps, server: string, started: Started, show: Masker | undefined): Promise<Reply> => {
   let { intervalMs } = started;
   for (let waited = 0; waited < started.expiresMs; waited += intervalMs) {
     await deps.sleep(intervalMs);
-    const reply = await ask(deps, LOGIN, server, '/v1/login/poll', { body: { handle: started.handle }, show: masker });
+    const reply = await ask(deps, LOGIN, server, '/v1/login/poll', { body: { handle: started.handle }, show });
     if (reply.status !== 200 || !isObject(reply.body)) throw closedProof(reply) ?? refusal(LOGIN, reply);
     const status = textIn(reply.body, 'status');
     if (status === 'authorized') return reply;
@@ -215,17 +215,19 @@ const awaitCredential = async (deps: RunDeps, server: string, started: Started, 
 };
 
 /**
- * `oars pool login` (spec Section 1.4): the pool runs the provider's device flow and this client only shows the code and polls the pool, so no provider token, device code, client ID, or secret is ever here. Every request, which goes to the pool alone,
- * prints before it is sent, with the login handle and the credential masked as `<credential: n bytes>`.
+ * `oars pool login` (spec Section 1.4): the pool runs the provider's device flow and this client only shows the code and polls the pool, so no provider token, device code, client ID, or secret is ever here. With `--verbose`, every request, which goes to the pool alone,
+ * prints before it is sent, with the login handle and the credential masked as `<credential: n bytes>`; without it, a failure's cause is the first line printed.
  */
-export const poolLogin = async (deps: RunDeps, options: { server?: string | undefined; provider?: string | undefined }): Promise<Outcome> => {
+export const poolLogin = async (deps: RunDeps, options: { server?: string | undefined; provider?: string | undefined; verbose?: boolean }): Promise<Outcome> => {
   const { storeDir } = runtimeOf(deps);
   const server = poolServer(deps.env, LOGIN, options.server);
   const { provider } = options;
   if (provider === undefined || POOL_PROVIDERS.every((name) => name !== provider)) throw usage(`The provider is one of ${POOL_PROVIDERS.join(', ')}.`, LOGIN);
   const saved = await loadSignIns(storeDir, LOGIN);
   const masker = new Masker();
-  const startReply = await ask(deps, LOGIN, server, '/v1/login/start', { body: { provider }, show: masker });
+  // The raw request is for a person debugging a pool; without `--verbose` a failure's one-line cause is the first thing printed.
+  const show = options.verbose === true ? masker : undefined;
+  const startReply = await ask(deps, LOGIN, server, '/v1/login/start', { body: { provider }, show });
   if (startReply.status !== 200) throw refusal(LOGIN, startReply);
   const started = startedOf(startReply);
   masker.add(started.handle);
@@ -233,7 +235,7 @@ export const poolLogin = async (deps: RunDeps, options: { server?: string | unde
   await deps.openBrowser(started.verificationUrl).catch(() => {
     deps.io.stderr('Could not open a browser; open the link above yourself.\n');
   });
-  const reply = await awaitCredential(deps, server, started, masker);
+  const reply = await awaitCredential(deps, server, started, show);
   const signIn = signInOf(isObject(reply.body) ? { ...reply.body, server } : undefined);
   if (signIn === undefined) throw new CliError('The pool answered a sign-in with no account, token, or signing key.', ExitCode.UNEXPECTED, LOGIN);
   const known = saved.find((entry) => entry.server === server);

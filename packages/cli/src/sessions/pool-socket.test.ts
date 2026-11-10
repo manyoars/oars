@@ -119,7 +119,7 @@ describe('what is printed is what goes over the socket', () => {
     loop.answers.set(`GET /bundle/claude-code/2.1.314/${VOCAB_VERSION}`, [json(200, { payload, signature: await sign(payload) }, { etag: '"e1"' }), (response) => { response.writeHead(304, { etag: '"e1"' }); response.end(); }]);
     const cli = (...args: string[]): Promise<ExitCode> => run(args, h.deps);
 
-    expect(await cli('pool', 'login', '--provider', 'github', '--server', loop.origin)).toBe(ExitCode.OK);
+    expect(await cli('pool', 'login', '--provider', 'github', '--server', loop.origin, '--verbose')).toBe(ExitCode.OK);
     expect(await cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', loop.origin)).toBe(ExitCode.OK);
     expect(await cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', loop.origin)).toBe(ExitCode.OK);
 
@@ -151,7 +151,7 @@ describe('what is printed is what goes over the socket', () => {
     await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
     const cli = (...args: string[]): Promise<ExitCode> => run(args, h.deps);
 
-    expect(await cli('pool', 'login', '--provider', 'github', '--server', loop.origin)).toBe(ExitCode.OK);
+    expect(await cli('pool', 'login', '--provider', 'github', '--server', loop.origin, '--verbose')).toBe(ExitCode.OK);
     expect(await cli('pool', 'deposit', '--server', loop.origin)).toBe(ExitCode.OK);
     expect(await cli('pool', 'outbox', '--server', loop.origin)).toBe(ExitCode.OK);
     const text = h.out.join('');
@@ -196,7 +196,7 @@ describe('what is printed is what goes over the socket', () => {
       loop.answers.set('POST /v1/deposits', [json(201, { ok: true })]);
       await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
       const cli = (...args: string[]): Promise<ExitCode> => run(args, h.deps);
-      expect(await cli('pool', 'login', '--provider', 'github', '--server', loop.origin)).toBe(ExitCode.OK);
+      expect(await cli('pool', 'login', '--provider', 'github', '--server', loop.origin, '--verbose')).toBe(ExitCode.OK);
       expect(await cli('pool', 'deposit', '--server', loop.origin)).toBe(ExitCode.OK);
       const folder = join(staged.storeDir, 'pool-outbox');
       const name = readdirSync(folder, { recursive: true, encoding: 'utf8' }).find((entry) => entry.endsWith('.jsonl')) ?? '';

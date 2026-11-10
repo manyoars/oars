@@ -8,7 +8,7 @@ What each right reaches, and the reasons, are in [`pool.md`](pool.md) ("Rights a
 
 - **Run the migrations first.** The erase and close commands need every migration through the newest one applied on the live pool. Check before the first request, not during one.
 - **Where requests arrive.** `privacy@manyoars.com` only (covenant 6.1, 6.3, 6.6). A request anywhere else is forwarded there and answered from there.
-- **Run the erase commands from the repository root** with your own `wrangler` login: `npm run erase -w packages/pool -- <what> ...`. Every erase command is a dry run until you add `--confirm`, and says what it would do. `--local` points it at local state, for rehearsal. Never rehearse against the remote pool.
+- **Run the erase commands from the repository root** with your own `wrangler` login: `npm run erase -w packages/pool -- <what> ...`. Every erase command is a dry run until you add `--confirm` (except `export`, which only reads), and says what it would do. `--local` points it at local state, for rehearsal. Never rehearse against the remote pool.
 - **Keep a request register,** outside the repository, because it holds personal data. One entry per request: the date received, the right, the account, the proof used, any extension and its reason with the date you told them, the answer and its date, and for an Art. 16 request any supplementary statement. Art. 5(2) needs you able to show you met each clock, and the pool keeps no request log.
 - **Erase needs R2 keys.** `erase ... account` lists the telemetry bucket, so export `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, and `R2_SECRET_ACCESS_KEY` first.
 
@@ -36,7 +36,7 @@ A machine key is no proof: `oars pool prove` uses the sign-in only, and the pool
 
 Rules for how hard to ask:
 
-- For **erasure and closing**, do steps 1 to 3 whenever the requester asks the operator to act. They cannot be undone. The export (access and portability) runs only on the account's own sign-in, so it needs no check.
+- For **erasure and closing**, do steps 1 to 3 whenever the requester asks the operator to act. They cannot be undone. The requester's own export (access and portability) runs on their own sign-in, so it needs no check. The operator's export (`erase export`) and withdrawal (`erase withdraw`) hand over or change the account's data, so they need steps 1 to 3 first.
 - For a **protected person** (the GDPR or UK GDPR protects them), covenant 6.6(f) says to ask for proof of identity only when you have reasonable doubts. The pool holds no name or email, so an email alone always leaves reasonable doubt (Art. 12(6)), and covenant 6.3 allows requiring a fresh sign-in. A matching `provedAt` from one is that proof.
 - If the requester says they cannot sign in, ask them to run `oars pool login --provider github` (or `google`) and then `oars pool prove --json` first: it needs only their provider sign-in, not the account's machines. If they have no provider sign-in at all, you cannot confirm them. A machine key is no proof: it may sit on a host, not with the person. The pool holds no name or email, and the account id is derived from the sign-in provider's account, so nothing else proves the account is theirs (Art. 11(2) and 12(2)). Tell them so, in writing, within the month. Do not erase, close, or send data on an email alone.
 - A request from someone other than the account holder (a third party named in a deposit) is a different case. See "A third party named in a deposit" at the end.
@@ -48,18 +48,24 @@ Rules for how hard to ask:
 **Command (the requester runs it):** `oars pool export --out <folder>`, and `--raw` to include their raw copies. It signs in with their own credential (`GET /v1/account/export`), writes JSON one file a page, and writes nothing to the pool. Tell them the folder holds the account row, token expiry times, covenant acceptances, machines, repository keys, deposit hours, telemetry day counts, the raw ledger, staged deposit parts, erasure audit rows, and deposit rows as they now read.
 
 **Steps:**
-1. Nothing to confirm: the export runs only on their own sign-in.
+1. Nothing to confirm when they run it themselves: the export runs on their own sign-in.
 2. Reply with the one command, and the folder it will fill. Tell them an erased raw object is not in the copy.
 3. Tell them what is not in it, and why: `contributors`, pooled cells, strata, and bundle reads tie the account to totals over other people (Art. 15(4)), and credential hashes are withheld (Art. 32).
 4. When they report the files are saved, the answer is complete. If the command fails, send the error line back and retry once the cause is fixed.
 
-**Answer to send:** the one command, the list of what the copy holds and leaves out, and the date.
+**Command (the operator runs it, when the requester cannot run the client):** confirm the account by a token proof first (see "Who is asking": `oars pool prove`, or a refused sign-in; never a machine key). Then, from the repository root:
+`npm run erase -w packages/pool -- export --account <account id> --out <folder> [--raw] [--local]`.
+It only reads, so it takes no `--confirm`. It writes the same `account-export-NNNN.json` pages `oars pool export` writes (one page builder serves both), and with `--raw` each raw object not erased, checked against its name; it lists any that is missing or altered and exits non-zero while still writing the rest. It reads D1 and R2 through your own `wrangler` login, so it needs no token; `--local` reads the local store.
+
+**Operator steps:** 1. Confirm the account (above). 2. Run the command; read the counts it prints. 3. Send the folder as one archive encrypted with a passphrase, and the passphrase by another channel the requester names (Art. 32). 4. Delete your copy of the folder and the archive once they confirm they have it.
+
+**Answer to send:** the one command (or, for the operator's copy, the encrypted archive), the list of what the copy holds and leaves out, and the date. For the operator's copy add: "We produced it for you because you cannot run `oars pool export`."
 
 **Record kept:** the dates, which right, how the account was confirmed, and the date answered. The export itself is not kept by the operator: it never passes through you.
 
-Gap: **the operator cannot produce the copy.** The export runs only on the account's own sign-in. A requester who cannot sign in cannot be served; say so. Not yet possible.
+Limit: **no provider sign-in.** If the requester has no provider sign-in at all, nothing they can bring proves the account is theirs, so there is no export to give. Tell them so, in writing (Art. 11(2), 12(2)).
 
-Gap: **recipients.** Covenant 6.6(e) promises to name recipients on request (Art. 15(1)(c)). The pool keeps no register of who fetched which bundle, so you cannot name them. Not yet possible. Say that nothing is sold today ([`flags.md`](flags.md)) and that a bundle holds no account.
+Limit: **recipients.** None to name today. Nothing is sold, and no path hands deposits to anyone ([`flags.md`](flags.md)). Cloudflare runs the pool as processor; name it as that category. A bundle is built from `cells` and `strata` and carries no account's personal data, so the accounts that fetch it receive none of the requester's data and are not their recipients (Art. 15(1)(c)).
 
 ## Art. 16, rectification
 
@@ -99,11 +105,11 @@ What you can do by hand, and only if the requester asks for it:
 
 Gap: **unconfirmed copies.** Whether the account's dashboard holds any R2 setting beyond those in the repository, and Cloudflare's own backups of R2 or D1 beyond Time Travel, are not confirmed. Say so to the requester until someone checks.
 
-Gap: **bundles and client copies.** A bundle already served and a client's `<store>/pool-replica` copy are not recalled. The generation moves, so clients fetch a new bundle.
+Limit: **bundles and client copies.** Not recalled, and need not be: a bundle is built from `cells` and `strata` and carries no account's personal data, so its fetchers received none of the requester's data, and the generation move makes every client fetch the new one, which is the reasonable step (Art. 17(2), Art. 19).
 
-Gap: **the person's own machine.** No command deletes the local store (`raw/`, `state.json`, the outbox). It is theirs; tell them to delete it.
+Limit: **the person's own machine.** The local store is theirs and is never sent, so Many Oars Co. does not hold it (Art. 4(7)). Tell them to delete `<store>/raw/`, `<store>/state.json`, and the outbox, naming the store path `oars` prints.
 
-Gap: **Art. 19, telling recipients.** Covenant 6.6(e) promises to tell each recipient. The pool has no register of recipients. Not yet possible.
+Limit: **Art. 19, telling recipients.** No one to tell: a bundle carries no account's personal data, so its fetchers are not the requester's recipients (Art. 19). When a path hands deposits to anyone, its register names them (C6).
 
 ## Art. 18, restriction
 
@@ -143,6 +149,12 @@ Gap: **no exclusion marker for a sale or a manual export.** Nothing is sold toda
 
 **Command (the requester runs it):** `oars pool raw --consent no`. It stops later raw copies on their machine and tells the pool (`DELETE /v1/consent/raw`), which drops their staged raw parts at once. The pool erases the raw objects it already holds, whole, on its nightly run; a large account can take more than one night. Each erased object keeps a tombstone, and the hash, size, and date stay.
 
+**Command (the operator runs it, when the requester cannot run the client or writes instead, covenant 6.6(b)):** confirm the account by a token proof first (see "Who is asking"; never a machine key). Then, from the repository root:
+`npm run erase -w packages/pool -- withdraw --account <account id> [--confirm] [--local]`.
+It runs the same update the route runs (one shared statement), then deletes the account's staged raw parts, and prints `{"withdrawn":true|false,"stagedDropped":n}`. Without `--confirm` it changes nothing and prints what it would do. With no yes standing on the account it changes nothing and says so. The account row does not change on a rerun or with no yes standing; for an account that already withdrew, `--confirm` drops only staged parts an earlier run left. The remote run lists the staged parts through R2's S3 API, so it needs `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, and `R2_SECRET_ACCESS_KEY` with read on `oars-pool-raw` (and on `oars-telemetry` for the other commands); with no token it stops before changing anything. `--local` records the withdrawal but cannot list R2, so it drops no staged parts.
+
+**Operator steps:** 1. Confirm the account. 2. Dry run, and read the line it prints. 3. Add `--confirm`. 4. The held objects go on the next nightly runs; check as in steps 3 and 4 below.
+
 **Steps:**
 1. Confirm the account.
 2. Reply with the one command. If it prints that the pool was not told, they sign in again with `oars pool login` and rerun it.
@@ -151,13 +163,13 @@ Gap: **no exclusion marker for a sale or a manual export.** Nothing is sold toda
    A number means the pool has it.
 4. A few days later, check the raw objects are gone the same way (`raw_objects` rows with `erased_on` set). If objects remain after several nights, erase them by key (`raw/<account>/<sha256>`, from the row's `account` and `sha256`; `packages/pool/scripts/erase-cli.ts:10`). Dry run: `npm run erase -w packages/pool -- raw <r2-key>`. Read the line it prints, then add `--confirm`.
 
-**Answer to send:** the date the withdrawal landed, that earlier processing is not affected (Art. 7(3)), and that a copy already sold or served is not recalled.
+**Answer to send:** the date the withdrawal landed, that earlier processing is not affected (Art. 7(3)), and that a copy already sold or served is not recalled. For an operator-run withdrawal: "Your withdrawal was recorded on `<date>`. Your raw copies are erased on the pool's next nightly runs; earlier processing is not affected (Art. 7(3)), and a copy already sold or served is not recalled."
 
 **Record kept:** the pool keeps `raw_consent_withdrawn_at` and the covenant version it answered. You keep the dates.
 
-Gap: **the operator cannot withdraw for them.** Only the account's own credential sends the withdrawal. A requester who cannot sign in cannot be confirmed (see "Who is asking"), so do not erase for them. Not yet possible. For a confirmed requester whose objects remain, step 4 erases them by key; that does not set the withdrawal.
+For a confirmed requester whose objects remain after several nights, step 4 erases them by key.
 
-Gap: **withdrawing the covenant.** Acceptance rows are append-only. Declining a later version stops later deposits. Not yet possible beyond that.
+Limit: **withdrawing the covenant.** An acceptance is a contract, not consent (covenant Part C.2), so Art. 7(3) does not reach it. Declining a later version stops later deposits; to stop the processing itself, the right is objection or erasure. The acceptance rows stay as proof of the grant (Art. 17(3)(e); covenant 6.6(d), 7.2(c)).
 
 ## Closing an account (covenant 6.1)
 
@@ -183,7 +195,7 @@ A close erases nothing. If they also want their data deleted, that is a separate
 `npx wrangler d1 execute oars-pool --remote --command "UPDATE accounts SET closed_at = NULL WHERE id = '<account id>' AND closed_at IS NOT NULL"`
 Tokens and machine keys stay revoked, so the person signs in and enrolls their machines again. Note it in the request register.
 
-**Requests after closing.** The proof from `oars pool login --provider github --json` (or `google`) confirms the requester. Then run `erase account` (Art. 17). The operator cannot yet export a closed account's data or record its raw withdrawal; those commands are not written.
+**Requests after closing.** The proof from `oars pool login --provider github --json` (or `google`) confirms the requester. Then run `erase account` (Art. 17), `erase export` (Art. 15 and 20), or `erase withdraw` (Art. 7(3)); each works on a closed account.
 
 ## A third party named in a deposit
 

@@ -8,7 +8,7 @@ oars keeps a local, searchable record of your coding agent sessions, across Clau
 npm install --global @manyoars/oars
 ```
 
-Node 24 or later. ESM only. Local recall needs no account.
+Node 22.23.4 or later. ESM only. Local recall needs no account.
 
 Or run it once without installing:
 
@@ -209,7 +209,7 @@ Replay is local and read-only on your transcripts; it writes `crossings.jsonl` a
 
 `oars pool` uses the Many Oars pool, `https://pool.manyoars.com`, which is live (deposits there are closed until its covenant is published), or a pool server you name with `--server <url>` or `OARS_POOL_URL`. Every other command works without it.
 
-- `oars pool login --provider github|google` asks the pool to start the provider's device flow, prints the user code and link, and polls the pool until you approve; every request prints before it is sent. The pool holds the OAuth client and its secret, so the CLI needs no client ID or secret, and the provider's tokens never reach this machine.
+- `oars pool login --provider github|google` asks the pool to start the provider's device flow, prints the user code and link, and polls the pool until you approve; with `--verbose`, every request prints before it is sent. The pool holds the OAuth client and its secret, so the CLI needs no client ID or secret, and the provider's tokens never reach this machine.
 - `oars pool logout` revokes this machine's credential at the pool, then removes the local sign-in. If the pool cannot be reached it still removes the local sign-in and says the credential was not revoked there.
 - `oars pool deposit` writes a batch of session skeletons (a closed list of fields, each value redacted first; a host is hashed by the pool on arrival) to an outbox for each session that passes your folder allowlist and the exclusion check, and stops: no session data is sent. `--send <hash>` sends one batch that `outbox` printed and that is unchanged on disk, once this account has accepted the pool covenant (a person types the phrase the covenant screen states, at a terminal; `--accept-covenant <version>` only names the version expected and accepts nothing; the screen then asks "Are you in the EU, the EEA, or the UK? (yes/no)" and sends the answer, and `--in-eu-eea-uk <yes|no>` answers it without asking; while the pool is closed to those regions a yes, or a request from them, is refused with `region_closed` and nothing is accepted); before that it reads the covenant, sends no batch, and exits 3 with `covenant_not_accepted`. A hash that was never shown, or a batch that changed, is refused before any request. The detached sender is the other sender: after the pool says your account accepted its covenant, it sends new batches, and raw copies only if you said yes to the raw prompt (`oars pool raw --consent yes`, answered by typing the phrase `I consent to sending raw copies` at a terminal; a yes also tells the pool, and `--consent no` tells it to stop accepting raw copies, whatever a later request states (a machine that held a yes and is signed out exits nonzero: the pool was not told), and the pool's nightly job then erases the raw copies it already holds, starting that night; a large account can take more than one night). With no sign-in, no acceptance, or an unreachable server it sends nothing.
 - `deposit`, `outbox`, `export`, and `fetch` need `oars pool login` first; without it they exit 3 and name the server.

@@ -7,8 +7,8 @@ import { ERROR_CODES } from '../../cli/src/sessions/schema.js';
 import { isListed } from '../src/field-classes.js';
 import { sampleSkeleton } from '../src/sample.js';
 import { PANEL_COUNT } from '../src/stored.js';
-import { acceptanceOf, fieldOf, startPool, stubUser, textOf, type StubUser, type TestBucket, type TestDb, type TestPool } from '../src/test-pool.js';
-import { telemetryOf } from './erase-test-telemetry.js';
+import { acceptanceOf, fieldOf, startPool, stubUser, textOf, type StubUser, type TestPool } from '../src/test-pool.js';
+import { asyncPieces, storeOf } from './erase-test-store.js';
 import { anonymizeSkeleton, closeAccount, eraseAccount, eraseLeakedSecret, eraseRawObject, findRawContaining, holdsValue, weekOf, type EraseStore, type RawHit } from './erase.js';
 
 let pool: TestPool;
@@ -36,33 +36,6 @@ const PART_KEY = 'AKIAFAKEKEY0000PARTS';
 const TWIN_A = 'AKIAFAKEKEY0TWINAAAA';
 const TWIN_B = 'AKIAFAKEKEY0TWINBBBB';
 const VERSION_KEY = 'AKIAFAKEKEY0VERSION';
-
-/** The pieces handed out one at a time, as a stream: each is made only when asked for. */
-const asyncPieces = (pieces: Iterable<Uint8Array>): AsyncIterable<Uint8Array> => ({
-  [Symbol.asyncIterator]: () => {
-    const next = pieces[Symbol.iterator]();
-    return { next: () => Promise.resolve(next.next()) };
-  },
-});
-
-/** The erasure store over the pool's local D1 and raw bucket, as `wrangler --local` would reach them. */
-const storeOf = (db: TestDb, bucket: TestBucket, telemetry: TestBucket, chunk = 64 * 1024): EraseStore => ({
-  telemetry: telemetryOf(telemetry),
-  rows: async (sql, binds) => (await db.prepare(sql).bind(...binds).all()).results,
-  run: async (sql, binds) => Number(fieldOf(fieldOf(await db.prepare(sql).bind(...binds).run(), 'meta'), 'changes')),
-  deleteObject: (key) => bucket.delete([key]),
-  // The object's bytes in pieces of `chunk`, as a file read gives them: the find never holds the whole object.
-  readObject: async (key) => {
-    const found = await bucket.get(key);
-    if (found === null) return null;
-    const bytes = new Uint8Array(await found.arrayBuffer());
-    return asyncPieces(
-      (function* pieces() {
-        for (let at = 0; at < bytes.length; at += chunk) yield bytes.subarray(at, at + chunk);
-      })(),
-    );
-  },
-});
 
 const store = async (chunk?: number): Promise<EraseStore> => storeOf(await pool.db(), await pool.rawBucket(), await pool.bucket(), chunk);
 

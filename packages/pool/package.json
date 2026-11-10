@@ -14,7 +14,8 @@
     "erase": "node scripts/erase.mjs",
     "sample-pack": "node scripts/sample-pack.mjs",
     "grant-standing": "node scripts/grant-standing.mjs",
-    "hide-nickname": "node scripts/hide-nickname.mjs"
+    "hide-nickname": "node scripts/hide-nickname.mjs",
+    "dev": "wrangler dev --port 8788"
   },
   "devDependencies": {
     "aws4fetch": "1.0.20",
