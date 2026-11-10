@@ -174,8 +174,9 @@ const isEmptyOrAbsent = async (folder: string): Promise<boolean> => {
   }
 };
 
-// A candidate id: a uuid, or a prefixed id (`req_...`, `call_...`). A candidate is rewritten only when it is a known id, so other words that match are left alone.
-const UUID_OR_PREFIXED = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[A-Za-z]+_[0-9A-Za-z]+/gi;
+// A candidate id: a uuid, or a `req_`/`call_` id. Any other `word_` prefix is not one, or it would eat the first group of a uuid that follows it (`session_<uuid>`). A candidate is
+// rewritten only when it is a known id, so other words that match are left alone.
+const UUID_OR_PREFIXED = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|(?:req|call)_[0-9A-Za-z]+/gi;
 
 const isRecord = (value: unknown): value is object => typeof value === 'object' && value !== null;
 

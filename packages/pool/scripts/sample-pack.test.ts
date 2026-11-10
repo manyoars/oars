@@ -308,6 +308,17 @@ describe('what a buyer can join on', () => {
     // Another session the text names is masked to that session's own match id, so the buyer sees the link but not the id.
     expect(JSON.stringify(lines[2])).toContain(index.find((row) => row.session === S(2))?.matchId ?? 'none');
   });
+
+  it('masks a session id or a line uuid written after a word and an underscore (session_<uuid>, x_<uuid>), whole', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, `see /tmp/session_${S(1)}.log and x_${uuidOf(S(1), 'b', 2)}`), assistant(S(1), 1, 'done'), user(S(1), 2, 'again')]);
+    await stored(f);
+    expect((await buildPack(f.runtime, options(f))).emitted).toBe(1);
+    const text = packText(f.out);
+    for (const id of [S(1), uuidOf(S(1), 'b', 2)]) expect(text).not.toContain(id);
+    // Not even the first group of either: a prefix of the id is as good a join key.
+    for (const id of [S(1), uuidOf(S(1), 'b', 2)]) expect(text).not.toContain(id.slice(0, 8));
+  });
 });
 
 describe('the acceptance rule (plan S1)', () => {
