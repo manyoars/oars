@@ -69,6 +69,7 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   cacheWrite: 'A bucket of the tokens written to the cache in a prompt, a number, or null when the source never recorded it.',
   change: 'How far a delta moved, a signed bucket of its metric (a lower bound) in a number from -7 to 7 for calls per session and from -11 to 11 for thinking tokens; never the exact count.',
   changeKind: 'What changed from the previous call of the same tool in the same prompt, a sorted set from a closed list: same, key-added, key-removed, feature-changed, value-changed, target-changed; never a value.',
+  claimed: 'The host class and launcher a trusted machine states for a batch it admitted from a held branch, from its own enrollment record; absent on a batch built and sent from the machine itself. Two closed lists, never a name.',
   cls: 'The class of a prompt, one of a closed list of eight, computed from the kinds of tools it used; never its words.',
   day: 'The UTC calendar day of the session as YYYY-MM-DD, or null; never a time of day.',
   deltaKind: 'How a delta changed what the client ran: added, removed, or changed, one of a closed list the field allows; never a value.',
@@ -94,6 +95,7 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   harness: 'Which harness wrote the session, one of a closed list.',
   harnessVersion: 'The harness version: the name as it is after redaction; `private` when redaction changes it, an exclusion term matches it, it is not a name, or it is over 128 characters. A transcript or prompt frame carries the value capture closed it to (the public name, else `<literal>`), sent as it is; the version of a call, which capture keeps as its line names it, goes as the string after the gate.',
   host: 'The host of a web fetch or search, the name as it is after redaction; `private` when redaction changes it, an exclusion term matches it, it is not a name, or it is over 128 characters; null when the step names no host. Capture keeps the host as the address names it, without credentials, path, or query. The pool replaces a host with a keyed hash on arrival and serves it only once enough accounts report it.',
+  hostClass: 'Where a session on a machine ran, one of a closed list: local, vps, cloud, ci, or hosted; stated by the trusted machine from its own enrollment record, never by the machine that built the batch.',
   hour: 'The UTC hour of day, 0 to 23, beside the day; never a minute, a second, or an offset.',
   id: "A hash the client computes per account from the account and the session (for a machine, from the account's session salt and the session's name), so a redeposit replaces and two accounts' sessions cannot be joined. Never the session id.",
   identity: 'What a step called: a shell program with its subcommand and flags, an MCP server and tool, a skill, or a web host, each a name after redaction or `private`; null for an action with none.',
@@ -107,6 +109,7 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   languageShare: 'How much of the files a session touched are in one language, one of four buckets: none, under 10 percent, 10 up to 50, or 50 and over; never a count of files.',
   languageShares: 'The share bucket of each language of the project whose share is known; a language with no share is in the languages list alone.',
   languages: 'The programming languages of the project, each from a closed public list.',
+  launcher: 'What started a session on a machine whose batch a trusted machine admitted, one of a closed list: interactive, orchestrated, scheduled, ci, hosted-run, or unknown; stated by the trusted machine from its own enrollment record, never by the machine that built the batch.',
   leaves: 'How many lines of a transcript its root covers, a count.',
   merkleRoot: 'The Merkle root of a transcript: a SHA-256 over the hashes of its lines, one root for each transcript, the main one first; never a line.',
   metric: 'What a delta measures, calls per session or thinking tokens, one of a closed list the field fixes.',
@@ -340,7 +343,8 @@ const staleFolders = async (outbox: string, stamp: string): Promise<string[]> =>
   return names;
 };
 
-const STAMP_FOLDER = /^v[^./]+-[0-9a-f]{8}$/;
+/** The name of a stamp folder: a vocabulary version, then eight hex digits of the field list and format. No dot or slash, so a name that matches is one path segment. */
+export const STAMP_FOLDER = /^v[^./]+-[0-9a-f]{8}$/;
 
 const batchesIn = async (folder: string): Promise<number> => (await namesIn(folder)).filter((name) => BATCH_FILE.test(name)).length;
 

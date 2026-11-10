@@ -56,7 +56,7 @@ export const githubVisibility = (get: typeof fetch, token: string | undefined): 
   }
 };
 
-/** The trusted machine's record of the machines it enrolled, one JSON line each. Admission of a hold branch (cloud self-deposit, B2b) reads it as the source of `claimed` and refuses a machine id it does not hold. */
+/** The trusted machine's record of the machines it enrolled, one JSON line each. `oars pool hold pull` reads it (`readMachines`) to refuse a branch naming a machine it does not hold, and to write that machine's `claimed` into the batch it admits. */
 export const machinesFile = (storeDir: string): string => join(storeDir, 'machines.jsonl');
 
 /** What an enrollment records about its machine. */
@@ -67,17 +67,43 @@ export interface MachineRecord {
   allowRepos: readonly string[];
 }
 
-/** Appends `record` as one line. The new file is staged beside the old one, owner-only, and renamed onto its name, so a reader sees the old list or the new one, and a crash leaves the old one. */
-const recordMachine = async (storeDir: string, record: MachineRecord): Promise<void> => {
-  const file = machinesFile(storeDir);
-  const earlier = await readFile(file, 'utf8').catch((error: unknown) => {
+/** The file's text; a store that has enrolled no machine has none yet, and any other read error is the caller's. */
+const machinesText = (storeDir: string): Promise<string> =>
+  readFile(machinesFile(storeDir), 'utf8').catch((error: unknown) => {
     if (isMissing(error)) return '';
     throw error;
   });
+
+/** Appends `record` as one line. The new file is staged beside the old one, owner-only, and renamed onto its name, so a reader sees the old list or the new one, and a crash leaves the old one. */
+const recordMachine = async (storeDir: string, record: MachineRecord): Promise<void> => {
+  const file = machinesFile(storeDir);
   const staged = `${file}.${String(process.pid)}`;
-  await writeOwnerOnly(staged, `${earlier}${JSON.stringify(record)}\n`);
+  await writeOwnerOnly(staged, `${await machinesText(storeDir)}${JSON.stringify(record)}\n`);
   await rename(staged, file);
 };
+
+const recordOf = (line: string): MachineRecord | undefined => {
+  let value: unknown;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  if (typeof value !== 'object' || value === null) return undefined;
+  const machine: unknown = Reflect.get(value, 'machine');
+  const hostClass: unknown = Reflect.get(value, 'hostClass');
+  const launcher: unknown = Reflect.get(value, 'launcher');
+  const allowRepos: unknown = Reflect.get(value, 'allowRepos');
+  if (typeof machine !== 'string' || typeof hostClass !== 'string' || typeof launcher !== 'string' || !Array.isArray(allowRepos)) return undefined;
+  const repos: unknown[] = allowRepos;
+  return repos.every((repo): repo is string => typeof repo === 'string' && REPO_NAME.test(repo)) ? { machine, hostClass, launcher, allowRepos: repos } : undefined;
+};
+
+/**
+ * The machines this one enrolled, in the order it enrolled them. A line that is not a record (not JSON, a missing field, a repository that is not owner/name) is left out, so its machine reads as unknown and its branches are refused
+ * rather than admitted on a claim nobody can read. A file that exists and cannot be read throws, as `recordMachine` does.
+ */
+export const readMachines = async (storeDir: string): Promise<MachineRecord[]> => (await machinesText(storeDir)).split('\n').flatMap((line) => recordOf(line) ?? []);
 
 const quoted = (value: string): string => `"${value.replace(/[\\"]/gu, '\\$&')}"`;
 
