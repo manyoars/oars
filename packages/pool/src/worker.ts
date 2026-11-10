@@ -2,6 +2,7 @@
 import { parseSkeleton, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { batchCounts, batchTier } from './access.js';
 import { fetchBundle, harnessRequired } from './bundle.js';
+import { consentTexts, createClub, joinClub, leaveClub, viewClub } from './clubs.js';
 import { exportPage, exportRaw } from './export.js';
 import { countryOf, covenantAccept, covenantNotAccepted, covenantStatus, depositsClosed, hasAccepted } from './covenant.js';
 import { answer, bound, brake, notConfigured, refuse, type Env } from './http.js';
@@ -179,6 +180,12 @@ export const ROUTES: readonly Route[] = [
   // The account's own copy of what the pool holds (Articles 15(3) and 20), and one raw object of its own. Neither is open to a machine key: a runtime that deposits has no business reading the account back.
   { method: 'GET', path: '/v1/account/export', machine: false, handle: exportPage },
   { method: 'GET', path: '/v1/account/export/raw/:hash', machine: false, handle: (request, env, [hash]) => exportRaw(request, env, decoded(hash ?? '')) },
+  // Boards (clubs.ts): account-only, so a machine key is refused. The consent route comes before `:id` so that it is not read as a club.
+  { method: 'GET', path: '/v1/clubs/consent', machine: false, handle: () => consentTexts() },
+  { method: 'POST', path: '/v1/clubs', machine: false, handle: createClub },
+  { method: 'POST', path: '/v1/clubs/join', machine: false, handle: joinClub },
+  { method: 'GET', path: '/v1/clubs/:id', machine: false, handle: (request, env, [id]) => viewClub(request, env, decoded(id ?? '')) },
+  { method: 'DELETE', path: '/v1/clubs/:id/me', machine: false, handle: (request, env, [id]) => leaveClub(request, env, decoded(id ?? '')) },
   { method: 'GET', path: '/v1/covenant', machine: true, handle: (request, env) => covenantStatus(request, env) },
   // The account takes its raw yes back (GDPR Article 7(3)). Account-only: a machine key never speaks for a person's consent.
   { method: 'DELETE', path: '/v1/consent/raw', machine: false, handle: withdrawRawConsent },
