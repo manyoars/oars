@@ -8,7 +8,11 @@ import { isoWeekOf } from './week.js';
 
 /** A club holds at most this many members. */
 const MEMBER_CAP = 50;
-const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+/** The brakes (migration 0037), per account: this many joins with a code no club holds in a rolling hour, and this many clubs made in a rolling day. */
+const GUESSES_PER_HOUR = 10;
+const CREATES_PER_DAY = 5;
 const WEEK_MS = 7 * DAY_MS;
 /** The reserved club the public board lists: it has no code, and its members join it by the code word `OPEN`. */
 const OPEN_CLUB = 'open';
@@ -29,6 +33,21 @@ const hashOfCode = (code: string): string => sha256(`club-code:${code}`);
 const NAME = /^[\p{L}\p{N}][\p{L}\p{N} ._-]{0,23}$/u;
 
 const signedIn = async (request: Request, env: Env): Promise<string | Response> => (await accountOf(request, env)) ?? refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
+
+/** 429 `rate_limited` when the account already has `limit` attempts of this kind inside the window: `retry_after` (seconds, also the `retry-after` header) is when the limit-th newest one leaves it, which is when the next try is allowed. */
+const braked = async (env: Env, account: string, kind: 'guess' | 'create', limit: number, window: number, now: number): Promise<Response | null> => {
+  const edge = await env.DB.prepare('SELECT at FROM club_attempts WHERE account = ? AND kind = ? AND at > ? ORDER BY at DESC LIMIT 1 OFFSET ?').bind(account, kind, now - window, limit - 1).first();
+  if (edge === null) return null;
+  const wait = Math.max(1, Math.ceil((Number(fieldOf(edge, 'at')) + window - now) / 1000));
+  const message = kind === 'guess' ? "Too many joins with a code no club holds. Joining is paused for this account." : `An account makes at most ${String(limit)} clubs a day.`;
+  return answer(429, { error: 'rate_limited', message, retry_after: wait }, { 'retry-after': String(wait) });
+};
+
+/** The statements that record one attempt and drop this account's rows older than a day (no window is longer). */
+const attempt = (env: Env, account: string, kind: 'guess' | 'create', now: number): Bound[] => [
+  env.DB.prepare('DELETE FROM club_attempts WHERE account = ? AND at <= ?').bind(account, now - DAY_MS),
+  env.DB.prepare('INSERT INTO club_attempts (account, kind, at) VALUES (?, ?, ?)').bind(account, kind, now),
+];
 
 const missing = (): Response => refuse(404, 'not_found', 'No such club, or you are not in it.');
 
@@ -112,6 +131,8 @@ const refusalOf = async (env: Env, club: string, account: string, nickname: stri
 export const createClub = async (request: Request, env: Env): Promise<Response> => {
   const account = await signedIn(request, env);
   if (account instanceof Response) return account;
+  const slowed = await braked(env, account, 'create', CREATES_PER_DAY, DAY_MS, Date.now());
+  if (slowed !== null) return slowed;
   const body = await bodyOf(request);
   const name = textField(body, 'name')?.trim();
   if (name === undefined || !NAME.test(name)) return refuse(422, 'bad_name', 'A club name is 1 to 24 letters, digits, spaces, dots, underscores, or hyphens, starting with a letter or digit.', 'name');
@@ -121,7 +142,7 @@ export const createClub = async (request: Request, env: Env): Promise<Response> 
   const code = codeOf();
   const now = Date.now();
   // One transaction: a failure while seating the creator leaves no club with a code and nobody in it.
-  await env.DB.batch([env.DB.prepare('INSERT INTO clubs (id, name, code_hash, created_at) VALUES (?, ?, ?, ?)').bind(id, name, hashOfCode(code), now), ...seating(env, id, account, given.nickname, now, CLUB_SHA, MEMBER_CAP)]);
+  await env.DB.batch([env.DB.prepare('INSERT INTO clubs (id, name, code_hash, created_at) VALUES (?, ?, ?, ?)').bind(id, name, hashOfCode(code), now), ...attempt(env, account, 'create', now), ...seating(env, id, account, given.nickname, now, CLUB_SHA, MEMBER_CAP)]);
   return answer(201, { id, name, code });
 };
 
@@ -129,13 +150,18 @@ export const createClub = async (request: Request, env: Env): Promise<Response> 
 export const joinClub = async (request: Request, env: Env): Promise<Response> => {
   const account = await signedIn(request, env);
   if (account instanceof Response) return account;
+  const slowed = await braked(env, account, 'guess', GUESSES_PER_HOUR, HOUR_MS, Date.now());
+  if (slowed !== null) return slowed;
   const body = await bodyOf(request);
   const code = textField(body, 'code')?.trim().toUpperCase() ?? '';
   const open = code === 'OPEN';
   const given = asked(body, open ? OPEN_SHA : CLUB_SHA);
   if (given instanceof Response) return given;
   const found = await env.DB.prepare(open ? 'SELECT id, name FROM clubs WHERE id = ?' : 'SELECT id, name FROM clubs WHERE code_hash = ?').bind(open ? OPEN_CLUB : hashOfCode(code)).first();
-  if (found === null) return missing();
+  if (found === null) {
+    await env.DB.batch(attempt(env, account, 'guess', Date.now()));
+    return missing();
+  }
   const club = String(fieldOf(found, 'id'));
   const taken = await refusalOf(env, club, account, given.nickname);
   if (taken !== null) return taken;

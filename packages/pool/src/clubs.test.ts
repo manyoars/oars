@@ -430,8 +430,9 @@ describe('the brakes on guessing a code and on making clubs', () => {
     for (let n = 0; n < 9; n += 1) await join(guesser.token, `WRONG${String(n)}`, 'bow');
     expect((await join(guesser.token, club.code, 'bow')).status).toBe(200);
     for (let n = 0; n < 10; n += 1) await join(other.token, `NOPE${String(n)}`, 'oar');
-    expect((await join(guesser.token, 'OPEN', 'again')).status).toBe(200);
-    expect((await join(other.token, 'OPEN', 'oar')).status).toBe(429);
+    const openJoin = async (token: string, nickname: string): Promise<number> => (await pool.post('/v1/clubs/join', { code: 'OPEN', nickname, consent: (await consents()).open }, token)).status;
+    expect(await openJoin(guesser.token, 'again')).toBe(200);
+    expect(await openJoin(other.token, 'oar')).toBe(429);
   });
 
   it('answers the 6th club created in a day 429 rate_limited and takes the 5th, and a day later takes another', async () => {

@@ -1,0 +1,5 @@
+-- Brakes and hides on the boards (t1091). `club_attempts` is the account's own recent tries, per kind: `guess` is a join with a code no club holds, `create` is a club made. A brake counts the rows inside its window (an hour for guesses, a day for creates); a row older than a day is pruned when the account's next one is written.
+CREATE TABLE club_attempts (id INTEGER PRIMARY KEY, account TEXT NOT NULL REFERENCES accounts(id), kind TEXT NOT NULL CHECK (kind IN ('guess', 'create')), at INTEGER NOT NULL) STRICT;
+CREATE INDEX club_attempts_by_account ON club_attempts (account, kind, at);
+-- A member the operator removed by hand (`scripts/hide-nickname.ts`): which club, whose nickname, who decided and why. Written only by that script; no route writes it.
+CREATE TABLE club_hides (id INTEGER PRIMARY KEY, club TEXT NOT NULL REFERENCES clubs(id), account TEXT NOT NULL REFERENCES accounts(id), nickname TEXT NOT NULL, hidden_at INTEGER NOT NULL, hidden_by TEXT NOT NULL, reason TEXT NOT NULL) STRICT;

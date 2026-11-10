@@ -420,7 +420,7 @@ describe('erasing one account removes its own rows and its link to the shared to
   const telemetry = (day: string, install: string, account: string): Promise<unknown> =>
     pool.db().then((db) => db.prepare("INSERT INTO telemetry_install_days (day, install, account, batches, events, measures) VALUES (?, ?, ?, 2, 5, '[]')").bind(day, install, account).run());
 
-  it('deletes its weekly counts, its club memberships, and its hand-granted standing, keeps its consent rows, and leaves the rows of another account', async () => {
+  it('deletes its weekly counts, its club memberships, its club attempts and hides, and its hand-granted standing, keeps its consent rows, and leaves the rows of another account', async () => {
     const { token, account } = await member();
     const other = await member();
     expect((await pool.post('/v1/deposits', skeletonWith('0000000000007b01'), token)).status).toBe(201);
@@ -430,13 +430,15 @@ describe('erasing one account removes its own rows and its link to the shared to
       await db.prepare("INSERT INTO club_members (club, account, nickname, joined_at) VALUES ('open', ?, ?, 1)").bind(holder, `nick-${holder}`).run();
       await db.prepare("INSERT INTO club_consents (account, club, text_sha256, accepted_at) VALUES (?, 'open', 'abc', 1)").bind(holder).run();
       await db.prepare('INSERT INTO board_standing (account, granted_at, granted_by, reason) VALUES (?, 1, ?, ?)').bind(holder, 'operator', 'fleet').run();
+      await db.prepare("INSERT INTO club_attempts (account, kind, at) VALUES (?, 'guess', 1)").bind(holder).run();
+      await db.prepare("INSERT INTO club_hides (club, account, nickname, hidden_at, hidden_by, reason) VALUES ('open', ?, ?, 1, 'operator', 'why')").bind(holder, `hidden-${holder}`).run();
     }
     const held = (table: string, holder: string): Promise<number> => count(`SELECT COUNT(*) AS held FROM ${table} WHERE account = ?`, holder);
     expect(await held('account_weeks', account)).toBe(1);
 
     await eraseAccount(await store(), account, NOW);
 
-    for (const table of ['account_weeks', 'club_members', 'board_standing']) {
+    for (const table of ['account_weeks', 'club_members', 'board_standing', 'club_attempts', 'club_hides']) {
       expect(await held(table, account), table).toBe(0);
       expect(await held(table, other.account), table).toBe(1);
     }
