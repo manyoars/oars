@@ -1,8 +1,9 @@
 // The pool derives a session's cells from its skeleton alone, and the skeleton carries each recommendation's arm and window. A call inside a shown window counts as shown, inside a held window as held, and a call with no evidence counts as unknown:
 // a session with no row (an older client, or one that never recommended) is never read as unexposed, because the pool cannot tell that from a client that did not look. Every id and version here is invented.
 import { describe, expect, it } from 'vitest';
+import { classMotif } from '../../cli/src/sessions/motif.js';
 import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from '../../cli/src/sessions/pool-fixture.js';
-import { NO_COVERAGE, OPEN_GATE, parseSkeleton, recommendationsOf, skeletonOf, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
+import { NO_COVERAGE, OPEN_GATE, OTHER, parseSkeleton, recommendationsOf, skeletonOf, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { makeRecall, type Recall } from '../../cli/src/sessions/recall-object.js';
 import { incrementsOf, type CellRow } from './ingest.js';
 
@@ -47,6 +48,17 @@ const readsBy = (skeleton: SessionSkeleton): Map<string, number> => {
   return counts;
 };
 
+/** The week cells of the one prompt's class (the prompt in `calls()` is an edit-verify), by how that prompt was exposed: the number of prompts each state holds. */
+const promptsBy = (skeleton: SessionSkeleton): Map<string, number> => {
+  const motifId = classMotif('edit-verify').motifId;
+  const counts = new Map<string, number>();
+  for (const cell of incrementsOf(skeleton).cells.values()) {
+    if (cell.grain !== 'week' || cell.motifId !== motifId) continue;
+    counts.set(cell.exposure, (counts.get(cell.exposure) ?? 0) + cell.ok);
+  }
+  return counts;
+};
+
 const keysOf = (skeleton: SessionSkeleton): string[] => [...incrementsOf(skeleton).cells.values()].map(({ key }) => key);
 const lastField = (key: string): string => key.slice(key.lastIndexOf('/') + 1);
 
@@ -81,6 +93,21 @@ describe('the exposure the worker derives from a deposit', () => {
     const counts = readsBy(deposited([SHOWN, both]));
     expect(counts.get('shown')).toBe(2);
     expect(counts.get('held')).toBe(1);
+  });
+
+  it('reads the prompt class cell of a prompt as held, shown, or unknown by the rows its calls sit in', () => {
+    expect(promptsBy(deposited([HELD]))).toEqual(new Map([['held', 1]]));
+    expect(promptsBy(deposited([SHOWN]))).toEqual(new Map([['shown', 1]]));
+    expect(promptsBy(deposited([]))).toEqual(new Map([['unknown', 1]]));
+  });
+
+  it('reads an arm this reader does not know as no evidence: every cell is unknown and none is filed under held', () => {
+    const skeleton = deposited([SHOWN]);
+    const unread: SessionSkeleton = { ...skeleton, recommendations: (skeleton.recommendations ?? []).map((entry) => ({ ...entry, arm: OTHER })) };
+    expect(unread.recommendations?.map(({ arm }) => arm)).toEqual([OTHER]);
+    expect(readsBy(unread)).toEqual(new Map([['unknown', 4]]));
+    expect(promptsBy(unread)).toEqual(new Map([['unknown', 1]]));
+    for (const cell of incrementsOf(unread).cells.values()) expect(cell.exposure).toBe('unknown');
   });
 
   it('writes the row of a shown cell as exposed and a held cell as not', () => {
