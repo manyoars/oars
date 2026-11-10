@@ -10,6 +10,8 @@ coverage/
 
 # Wrangler's local state, from the deploy steps in docs/pool.md
 .wrangler/
+# A local pool's keys (docs/pool.md, "Run a pool locally")
+.dev.vars
 
 # Logs
 npm-debug.log*

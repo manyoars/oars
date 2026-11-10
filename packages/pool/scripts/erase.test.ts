@@ -7,8 +7,8 @@ import { ERROR_CODES } from '../../cli/src/sessions/schema.js';
 import { isListed } from '../src/field-classes.js';
 import { sampleSkeleton } from '../src/sample.js';
 import { PANEL_COUNT } from '../src/stored.js';
-import { acceptanceOf, fieldOf, startPool, stubUser, textOf, type StubUser, type TestBucket, type TestDb, type TestPool } from '../src/test-pool.js';
-import { telemetryOf } from './erase-test-telemetry.js';
+import { acceptanceOf, fieldOf, startPool, stubUser, textOf, type StubUser, type TestPool } from '../src/test-pool.js';
+import { asyncPieces, storeOf } from './erase-test-store.js';
 import { anonymizeSkeleton, closeAccount, eraseAccount, eraseLeakedSecret, eraseRawObject, findRawContaining, holdsValue, restrictAccount, weekOf, type EraseStore, type RawHit } from './erase.js';
 
 let pool: TestPool;
@@ -36,33 +36,6 @@ const PART_KEY = 'AKIAFAKEKEY0000PARTS';
 const TWIN_A = 'AKIAFAKEKEY0TWINAAAA';
 const TWIN_B = 'AKIAFAKEKEY0TWINBBBB';
 const VERSION_KEY = 'AKIAFAKEKEY0VERSION';
-
-/** The pieces handed out one at a time, as a stream: each is made only when asked for. */
-const asyncPieces = (pieces: Iterable<Uint8Array>): AsyncIterable<Uint8Array> => ({
-  [Symbol.asyncIterator]: () => {
-    const next = pieces[Symbol.iterator]();
-    return { next: () => Promise.resolve(next.next()) };
-  },
-});
-
-/** The erasure store over the pool's local D1 and raw bucket, as `wrangler --local` would reach them. */
-const storeOf = (db: TestDb, bucket: TestBucket, telemetry: TestBucket, chunk = 64 * 1024): EraseStore => ({
-  telemetry: telemetryOf(telemetry),
-  rows: async (sql, binds) => (await db.prepare(sql).bind(...binds).all()).results,
-  run: async (sql, binds) => Number(fieldOf(fieldOf(await db.prepare(sql).bind(...binds).run(), 'meta'), 'changes')),
-  deleteObject: (key) => bucket.delete([key]),
-  // The object's bytes in pieces of `chunk`, as a file read gives them: the find never holds the whole object.
-  readObject: async (key) => {
-    const found = await bucket.get(key);
-    if (found === null) return null;
-    const bytes = new Uint8Array(await found.arrayBuffer());
-    return asyncPieces(
-      (function* pieces() {
-        for (let at = 0; at < bytes.length; at += chunk) yield bytes.subarray(at, at + chunk);
-      })(),
-    );
-  },
-});
 
 const store = async (chunk?: number): Promise<EraseStore> => storeOf(await pool.db(), await pool.rawBucket(), await pool.bucket(), chunk);
 
@@ -424,7 +397,7 @@ describe('erasing one account removes its own rows and its link to the shared to
   const telemetry = (day: string, install: string, account: string): Promise<unknown> =>
     pool.db().then((db) => db.prepare("INSERT INTO telemetry_install_days (day, install, account, batches, events, measures) VALUES (?, ?, ?, 2, 5, '[]')").bind(day, install, account).run());
 
-  it('deletes its weekly counts, its club memberships, and its hand-granted standing, keeps its consent rows, and leaves the rows of another account', async () => {
+  it('deletes its weekly counts, its club memberships, its club attempts and hides, and its hand-granted standing, keeps its consent rows, and leaves the rows of another account', async () => {
     const { token, account } = await member();
     const other = await member();
     expect((await pool.post('/v1/deposits', skeletonWith('0000000000007b01'), token)).status).toBe(201);
@@ -434,13 +407,15 @@ describe('erasing one account removes its own rows and its link to the shared to
       await db.prepare("INSERT INTO club_members (club, account, nickname, joined_at) VALUES ('open', ?, ?, 1)").bind(holder, `nick-${holder}`).run();
       await db.prepare("INSERT INTO club_consents (account, club, text_sha256, accepted_at) VALUES (?, 'open', 'abc', 1)").bind(holder).run();
       await db.prepare('INSERT INTO board_standing (account, granted_at, granted_by, reason) VALUES (?, 1, ?, ?)').bind(holder, 'operator', 'fleet').run();
+      await db.prepare("INSERT INTO club_attempts (account, kind, at) VALUES (?, 'guess', 1)").bind(holder).run();
+      await db.prepare("INSERT INTO club_hides (club, account, nickname, hidden_at, hidden_by, reason) VALUES ('open', ?, ?, 1, 'operator', 'why')").bind(holder, `hidden-${holder}`).run();
     }
     const held = (table: string, holder: string): Promise<number> => count(`SELECT COUNT(*) AS held FROM ${table} WHERE account = ?`, holder);
     expect(await held('account_weeks', account)).toBe(1);
 
     await eraseAccount(await store(), account, NOW);
 
-    for (const table of ['account_weeks', 'club_members', 'board_standing']) {
+    for (const table of ['account_weeks', 'club_members', 'board_standing', 'club_attempts', 'club_hides']) {
       expect(await held(table, account), table).toBe(0);
       expect(await held(table, other.account), table).toBe(1);
     }

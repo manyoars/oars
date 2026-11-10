@@ -8,7 +8,7 @@ oars keeps a local, searchable record of your coding agent sessions, across Clau
 npm install --global @manyoars/oars
 ```
 
-Node 24 or later. ESM only. Local recall needs no account.
+Node 22.23.4 or later. ESM only. Local recall needs no account.
 
 Or run it once without installing:
 
@@ -209,7 +209,7 @@ Replay is local and read-only on your transcripts; it writes `crossings.jsonl` a
 
 `oars pool` uses the Many Oars pool, `https://pool.manyoars.com`, which is live (deposits there are closed until its covenant is published), or a pool server you name with `--server <url>` or `OARS_POOL_URL`. Every other command works without it.
 
-- `oars pool login --provider github|google` asks the pool to start the provider's device flow, prints the user code and link, and polls the pool until you approve; every request prints before it is sent. The pool holds the OAuth client and its secret, so the CLI needs no client ID or secret, and the provider's tokens never reach this machine.
+- `oars pool login --provider github|google` asks the pool to start the provider's device flow, prints the user code and link, and polls the pool until you approve; with `--verbose`, every request prints before it is sent. The pool holds the OAuth client and its secret, so the CLI needs no client ID or secret, and the provider's tokens never reach this machine.
 - `oars pool logout` revokes this machine's credential at the pool, then removes the local sign-in. If the pool cannot be reached it still removes the local sign-in and says the credential was not revoked there.
 - `oars pool deposit` writes a batch of session skeletons (a closed list of fields, each value redacted first; a host is hashed by the pool on arrival) to an outbox for each session that passes your folder allowlist and the exclusion check, and stops: no session data is sent. `--send <hash>` sends one batch that `outbox` printed and that is unchanged on disk, once this account has accepted the pool covenant (a person types the phrase the covenant screen states, at a terminal; `--accept-covenant <version>` only names the version expected and accepts nothing; the screen then asks "Are you in the EU, the EEA, or the UK? (yes/no)" and sends the answer, and `--in-eu-eea-uk <yes|no>` answers it without asking; while the pool is closed to those regions a yes, or a request from them, is refused with `region_closed` and nothing is accepted); before that it reads the covenant, sends no batch, and exits 3 with `covenant_not_accepted`. A hash that was never shown, or a batch that changed, is refused before any request. The detached sender is the other sender: after the pool says your account accepted its covenant, it sends new batches, and raw copies only if you said yes to the raw prompt (`oars pool raw --consent yes`, answered by typing the phrase `I consent to sending raw copies` at a terminal; a yes also tells the pool, and `--consent no` tells it to stop accepting raw copies, whatever a later request states (a machine that held a yes and is signed out exits nonzero: the pool was not told), and the pool's nightly job then erases the raw copies it already holds, starting that night; a large account can take more than one night). With no sign-in, no acceptance, or an unreachable server it sends nothing.
 - `deposit`, `outbox`, `export`, and `fetch` need `oars pool login` first; without it they exit 3 and name the server.
@@ -218,6 +218,23 @@ Replay is local and read-only on your transcripts; it writes `crossings.jsonl` a
 - On an enrolled machine the hook child activates its key before its first deposit, rotates it where the disk is durable (`vps`, `ci`; the key lives in `<store>/machine-key`, owner-only), deposits under it, sends the batches its outbox held once the covenant is accepted, and tells you at the next Stop when the key expires within 14 days, has expired, or was revoked (`oars pool machines` lists it). A `cloud` machine's key is held by the network proxy and the child sends no credential of its own. Details: `docs/pool.md`, "Machine keys".
 - `oars pool outbox` prints each batch exactly as it would be sent, with its SHA-256, and `--explain` adds each field's rule.
 - `oars pool fetch --harness-version <version>` fetches that version's signed bundle, verifies it against the key pinned at login, and keeps it locally. It prints the public and disclosure floors the bundle states (and any read family on a floor of its own) and holds no floor of its own: the pool sets them, so a change is a deploy and never a new release of oars.
+
+### club
+
+A club shares your counts with the people who hold its code, and nothing else. Members see your nickname, weeks rowing, active days, sessions, and strokes this week. They never see your sessions, projects, prompts, or tokens. You need `oars pool login` first, except for `oars board`.
+
+```
+oars club create "Friday crew" --nickname skipper   # prints the join code once
+oars club join K7M2QX --nickname bow                # a club you were invited to
+oars club join open --nickname bow                  # the open board; your row shows once your account has standing
+oars club show <club>                               # the members in the pool's order
+oars club leave <club>                              # your row leaves view at once
+oars board                                          # the open board; no sign-in
+```
+
+Create and join show the pool's consent text and wait for you to type `yes` at a terminal. A script on stdin cannot agree for you, and nothing is sent until you do. Send the code only to people you want in the club: it admits, and a member can leave at any time.
+
+A nickname is 2 to 24 letters, digits, spaces, dots, underscores, or hyphens, with no space at either end, no `@`, and no web address. The pool slows wrong codes to 10 an hour and club creation to 5 a day for each account; past that you get `rate_limited` and when to try again. Each command takes `--json`. Errors lead with the cause: `not_signed_in`, `club_full`, `nickname_taken`, `nickname_invalid`, `rate_limited`.
 
 ## The `--json` contract
 

@@ -106,14 +106,14 @@ describe('the packed dist names none of the withheld terms', () => {
 });
 
 describe('the publish fields', () => {
-  it('name the public scoped package at 0.4.0, Apache-2.0, built from this folder of the public repository', () => {
+  it('name the public scoped package at 0.5.0, Apache-2.0, built from this folder of the public repository', () => {
     expect(manifest()).toMatchObject({
       name: '@manyoars/oars',
-      version: '0.4.0',
+      version: '0.5.0',
       license: 'Apache-2.0',
       repository: { type: 'git', url: 'git+https://github.com/manyoars/oars.git', directory: 'packages/cli' },
       publishConfig: { access: 'public' },
-      engines: { node: '>=24' },
+      engines: { node: '>=22.23.4' },
     });
     expect(manifest()).not.toHaveProperty('private');
   });
@@ -307,7 +307,7 @@ describe('the public text states facts only', () => {
     expect(heads.slice(0, 2)).toEqual(['Install', 'What leaves your machine']);
     expect(heads.at(-2)).toBe('Repository layout');
     expect(text.indexOf('npm install --global @manyoars/oars')).toBeLessThan(text.indexOf('Repository layout'));
-    expect(text).toContain('Node 24 or later');
+    expect(text).toContain('Node 22.23.4 or later');
     expect(text).toContain('oars sessions try');
     const leaves = text.slice(text.indexOf('## What leaves your machine'), text.indexOf('## Develop'));
     expect(leaves.split(String.fromCharCode(10)).filter((line) => line.startsWith('- '))).toHaveLength(5);

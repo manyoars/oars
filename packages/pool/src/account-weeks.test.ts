@@ -1,6 +1,6 @@
 // The weekly counts a board is made of (t1083): ingest writes `account_weeks` in the transaction that writes a deposit's cells, from the deposits that count, and from nothing else.
 import { createHash } from 'node:crypto';
-import { afterAll,beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { isoWeekOf } from './week.js';
 import { sampleSkeleton } from './sample.js';
 import { acceptanceOf, startPool, stubUser, type TestDb, type TestPool } from './test-pool.js';

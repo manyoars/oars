@@ -8,7 +8,11 @@ import { isoWeekOf } from './week.js';
 
 /** A club holds at most this many members. */
 const MEMBER_CAP = 50;
-const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+/** The brakes (migration 0037), per account: this many joins with a code no club holds in a rolling hour, and this many clubs made in a rolling day. */
+const GUESSES_PER_HOUR = 10;
+const CREATES_PER_DAY = 5;
 const WEEK_MS = 7 * DAY_MS;
 /** The reserved club the public board lists: it has no code, and its members join it by the code word `OPEN`. */
 const OPEN_CLUB = 'open';
@@ -28,7 +32,39 @@ const hashOfCode = (code: string): string => sha256(`club-code:${code}`);
 /** A nickname or club name: letters and digits first, then those or space, dot, underscore, and hyphen; 24 at most. */
 const NAME = /^[\p{L}\p{N}][\p{L}\p{N} ._-]{0,23}$/u;
 
+/** The rule, in the one line a refusal carries. */
+const NICKNAME_RULE = 'A nickname is 2 to 24 letters, digits, spaces, dots, underscores, or hyphens, with no space at either end, no @, and no web address.';
+/** Letters, digits, space, dot, underscore, hyphen; no space at either end. Combining marks (vowel signs in Devanagari, Thai, Tamil, and others) may follow the first character. Length is checked apart, in characters. */
+const NICKNAME = /^[\p{L}\p{N}_.-](?:[\p{L}\p{N}\p{M} _.-]*[\p{L}\p{N}\p{M}_.-])?$/u;
+/** A web address in a name: "www." or a dot before a common top-level domain. The character set already keeps out "@", ":", and "/". */
+const WEB_ADDRESS = /www\.|\.(?:com|net|org|io|dev|app|co|me|ly|xyz|info|biz|gg|tv)(?![\p{L}\p{N}])/iu;
+
+/** The NFKC form of a nickname that follows the rule, else undefined. NFKC first, so a full-width or look-alike form is judged and stored as the plain one. */
+const nicknameOf = (given: string | undefined): string | undefined => {
+  if (given === undefined) return undefined;
+  const nickname = given.normalize('NFKC');
+  const length = Array.from(nickname).length;
+  return length >= 2 && length <= 24 && NICKNAME.test(nickname) && !WEB_ADDRESS.test(nickname) ? nickname : undefined;
+};
+
 const signedIn = async (request: Request, env: Env): Promise<string | Response> => (await accountOf(request, env)) ?? refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
+
+type Kind = 'guess' | 'create';
+
+/** The 429 `rate_limited` for an account that has `limit` attempts of this kind inside the window: `retry_after` (seconds, also the `retry-after` header) is when the limit-th newest one leaves it, which is when the next try is allowed. */
+const slowed = async (env: Env, account: string, kind: Kind, limit: number, window: number, now: number): Promise<Response> => {
+  const edge = await env.DB.prepare('SELECT at FROM club_attempts WHERE account = ? AND kind = ? AND at > ? ORDER BY at DESC LIMIT 1 OFFSET ?').bind(account, kind, now - window, limit - 1).first();
+  // A reservation that was refused means the window was full; the row can only have left it since, so the wait floors at one second.
+  const wait = edge === null ? 1 : Math.max(1, Math.ceil((Number(fieldOf(edge, 'at')) + window - now) / 1000));
+  const message = kind === 'guess' ? 'Too many joins with a code no club holds. Joining is paused for this account.' : `An account makes at most ${String(limit)} clubs a day.`;
+  return answer(429, { error: 'rate_limited', message, retry_after: wait }, { 'retry-after': String(wait) });
+};
+
+/** The statements that drop this account's rows older than a day (no window is longer) and reserve one attempt, only while the window holds fewer than `limit`. The reservation is one conditional insert, so a burst cannot all pass a read that comes before any write; its `changes` is 1 when it holds, 0 when the window was full. */
+const reserve = (env: Env, account: string, kind: Kind, limit: number, window: number, now: number): Bound[] => [
+  env.DB.prepare('DELETE FROM club_attempts WHERE account = ? AND at <= ?').bind(account, now - DAY_MS),
+  env.DB.prepare('INSERT INTO club_attempts (account, kind, at) SELECT ?, ?, ? WHERE (SELECT COUNT(*) FROM club_attempts WHERE account = ? AND kind = ? AND at > ?) < ?').bind(account, kind, now, account, kind, now - window, limit),
+];
 
 const missing = (): Response => refuse(404, 'not_found', 'No such club, or you are not in it.');
 
@@ -89,15 +125,15 @@ const boardOf = async (env: Env, club: string, now: number, standingOnly = false
 
 /** The nickname and consent a create or a join carries, or the refusal naming the field. */
 const asked = (body: unknown, expected: string): { nickname: string } | Response => {
-  const nickname = textField(body, 'nickname')?.trim();
-  if (nickname === undefined || !NAME.test(nickname)) return refuse(422, 'bad_nickname', 'A nickname is 1 to 24 letters, digits, spaces, dots, underscores, or hyphens, starting with a letter or digit.', 'nickname');
+  const nickname = nicknameOf(textField(body, 'nickname'));
+  if (nickname === undefined) return refuse(422, 'nickname_invalid', NICKNAME_RULE, 'nickname');
   if (textField(body, 'consent') !== expected) return refuse(422, 'consent_required', 'Send the SHA-256 of the consent text shown for this board (GET /v1/clubs/consent) to agree to it.', 'consent');
   return { nickname };
 };
 
 /** The statements that seat the account: the member row and the consent record, the row only while the club has room (the open board has none to keep: its cap is unlimited). */
 const seating = (env: Env, club: string, account: string, nickname: string, now: number, text: string, cap: number): Bound[] => [
-  env.DB.prepare('INSERT OR IGNORE INTO club_members (club, account, nickname, joined_at) SELECT ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM club_members WHERE club = ?) < ?').bind(club, account, nickname, now, club, cap),
+  env.DB.prepare('INSERT OR IGNORE INTO club_members (club, account, nickname, joined_at) SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM clubs WHERE id = ?) AND (SELECT COUNT(*) FROM club_members WHERE club = ?) < ?').bind(club, account, nickname, now, club, club, cap),
   env.DB.prepare('INSERT INTO club_consents (account, club, text_sha256, accepted_at) SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM club_members WHERE club = ? AND account = ? AND joined_at = ? AND nickname = ?)').bind(account, club, text, now, club, account, now, nickname),
 ];
 
@@ -126,8 +162,9 @@ export const createClub = async (request: Request, env: Env): Promise<Response> 
   const id = crypto.randomUUID();
   const code = codeOf();
   const now = Date.now();
-  // One transaction: a failure while seating the creator leaves no club with a code and nobody in it.
-  await env.DB.batch([env.DB.prepare('INSERT INTO clubs (id, name, code_hash, created_at) VALUES (?, ?, ?, ?)').bind(id, name, hashOfCode(code), now), ...seating(env, id, account, given.nickname, now, CLUB_SHA, MEMBER_CAP)]);
+  // One transaction: the reservation first, then the club only if it held (`changes()` is the reservation's), then the creator's seat only if the club exists. A failure leaves no club with a code and nobody in it, and a burst past the limit makes no club.
+  const [, reserved] = await env.DB.batch([...reserve(env, account, 'create', CREATES_PER_DAY, DAY_MS, now), env.DB.prepare('INSERT INTO clubs (id, name, code_hash, created_at) SELECT ?, ?, ?, ? WHERE changes() > 0').bind(id, name, hashOfCode(code), now), ...seating(env, id, account, given.nickname, now, CLUB_SHA, MEMBER_CAP)]);
+  if ((reserved?.meta.changes ?? 0) === 0) return slowed(env, account, 'create', CREATES_PER_DAY, DAY_MS, now);
   return answer(201, { id, name, code });
 };
 
@@ -140,8 +177,13 @@ export const joinClub = async (request: Request, env: Env): Promise<Response> =>
   const open = code === 'OPEN';
   const given = asked(body, open ? OPEN_SHA : CLUB_SHA);
   if (given instanceof Response) return given;
+  // Reserve the guess before looking: the lookup cannot be raced past the limit. A code a club holds gives the reservation back.
+  const now = Date.now();
+  const [, reserved] = await env.DB.batch(reserve(env, account, 'guess', GUESSES_PER_HOUR, HOUR_MS, now));
+  if ((reserved?.meta.changes ?? 0) === 0) return slowed(env, account, 'guess', GUESSES_PER_HOUR, HOUR_MS, now);
   const found = await env.DB.prepare(open ? 'SELECT id, name FROM clubs WHERE id = ?' : 'SELECT id, name FROM clubs WHERE code_hash = ?').bind(open ? OPEN_CLUB : hashOfCode(code)).first();
   if (found === null) return missing();
+  await env.DB.prepare("DELETE FROM club_attempts WHERE id = (SELECT id FROM club_attempts WHERE account = ? AND kind = 'guess' AND at = ? LIMIT 1)").bind(account, now).run();
   const club = String(fieldOf(found, 'id'));
   const taken = await refusalOf(env, club, account, given.nickname);
   if (taken !== null) return taken;

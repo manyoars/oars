@@ -25,6 +25,8 @@ export interface EraseStore {
   readObject: (key: string) => Promise<AsyncIterable<Uint8Array> | null>;
   /** The telemetry bucket, where an account's batches are rewritten (`erase-batches.ts`). */
   telemetry: TelemetryStore;
+  /** Every key of the raw bucket under a prefix, for the staged parts a withdrawal drops (`withdraw-account.ts`); absent when the run cannot list the bucket (wrangler cannot, so the command's own lists through R2's S3 API, `erase-r2-list.ts`). */
+  listRaw?: (prefix: string) => Promise<readonly string[]>;
 }
 
 /** What one erasure removed: ledger rows and aggregate rows whose content was replaced, staged parts dropped, and raw objects deleted. */
@@ -190,7 +192,7 @@ export const anonymizeSkeleton = (stored: unknown, reason: ErasureReason): { rea
   };
 };
 
-const nameOf = (value: string, what: string): string => {
+export const nameOf = (value: string, what: string): string => {
   if (!NAME.test(value)) throw new Error(`${what} is not a pool id: letters, digits, dot, dash, and underscore, 1 to 128`);
   return value;
 };
@@ -417,7 +419,7 @@ export const eraseAccount = async (store: EraseStore, accountId: string, now: Da
   if (held > 0) await store.run('UPDATE pool_generation SET generation = generation + 1', []);
   rows += (await store.run('DELETE FROM account_repo_keys WHERE account = ?', [account])) + (await store.run('DELETE FROM deposit_hours WHERE account = ?', [account])) + (await store.run('DELETE FROM contributors WHERE account = ?', [account]));
   // The board counts (migration 0036) are the account's own: its weekly counts, the nickname it typed in each club, and the standing granted to it by hand go. Its consent rows stay beside `covenant_acceptances`: append-only, a text hash and a time, with no nickname.
-  rows += (await store.run('DELETE FROM account_weeks WHERE account = ?', [account])) + (await store.run('DELETE FROM club_members WHERE account = ?', [account])) + (await store.run('DELETE FROM board_standing WHERE account = ?', [account]));
+  rows += (await store.run('DELETE FROM account_weeks WHERE account = ?', [account])) + (await store.run('DELETE FROM club_members WHERE account = ?', [account])) + (await store.run('DELETE FROM board_standing WHERE account = ?', [account])) + (await store.run('DELETE FROM club_attempts WHERE account = ?', [account])) + (await store.run('DELETE FROM club_hides WHERE account = ?', [account]));
   for (const row of await store.rows('SELECT id FROM deposits WHERE account = ? AND erased_on IS NULL', [account])) rows += await dropDeposit(store, account, textOf(row, 'id'), 'lawful-request', now);
   let objects = 0;
   for (const row of await store.rows('SELECT sha256 FROM raw_objects WHERE account = ? AND erased_on IS NULL', [account])) objects += await dropObject(store, account, textOf(row, 'sha256'), 'lawful-request', now);

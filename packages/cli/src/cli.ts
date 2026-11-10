@@ -17,6 +17,7 @@ import { DEADLINE_MS, gateHook } from './gate/hook.js';
 import { managerReader } from './gate/registry.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
 import { sessionsTry } from './sessions/try.js';
+import { board, clubCreate, clubJoin, clubLeave, clubShow } from './club.js';
 import { githubVisibility, poolEnroll, poolMachineRevoke, poolMachines } from './sessions/machine-enroll.js';
 import { runNetGit } from './sessions/machine-hold.js';
 import { holdPull } from './sessions/machine-pull.js';
@@ -543,7 +544,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
       emit(deps, flag(command.optsWithGlobals(), 'json'), await gateReport(sessionDeps(deps)));
     });
 
-  const pool = program.command('pool').description('sign in to a pool server, deposit session skeletons (a closed list of fields, each value redacted first) and, after a yes to the raw prompt, redacted raw copies, and fetch signed reads; local capture, recall, and reads need none of it');
+  const pool = program.command('pool').description('sign in to a pool server, deposit session skeletons (a closed list of fields, each value redacted first) and, after a yes to the raw prompt, redacted raw copies, and fetch signed reads; local capture, recall, and reads need none of it. The covenant screen, where you type its phrase to accept, appears when you send a batch with oars pool deposit --send <hash> and have not accepted the covenant in force, not at sign-in');
   const serverOption = '--server <url>';
   const serverHelp = 'the pool server, https or plain http to localhost (default: OARS_POOL_URL, else https://pool.manyoars.com)';
 
@@ -558,12 +559,13 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
 
   pool
     .command('login')
-    .description('sign in by GitHub or Google device flow, run here against the provider; prints each request before sending it, and the pool keeps a pseudonym; no harness token is read')
+    .description('sign in by GitHub or Google device flow, run here against the provider; --verbose prints each request before sending it, and the pool keeps a pseudonym; no harness token is read')
     .requiredOption('--provider <name>', 'github or google')
+    .option('--verbose', 'print each request, headers and body, to stderr before it is sent (a credential shows as its size)')
     .option(serverOption, serverHelp)
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
-      emit(deps, flag(options, 'json'), await poolLogin(deps, { server: text(options, 'server'), provider: text(options, 'provider') }));
+      emit(deps, flag(options, 'json'), await poolLogin(deps, { server: text(options, 'server'), provider: text(options, 'provider'), verbose: flag(options, 'verbose') }));
     });
 
   pool
@@ -685,6 +687,55 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       emit(deps, flag(options, 'json'), await poolFetch(deps, { server: text(options, 'server'), harness: text(options, 'harness'), harnessVersion: text(options, 'harnessVersion') ?? '' }));
+    });
+
+  const club = program.command('club').description('private boards for people you invite (docs/pool.md, "Boards"): a club shows the nicknames of its members with weeks rowing, active days, sessions, and strokes this week, and never a session, project, prompt, or token; needs oars pool login');
+  club
+    .command('create')
+    .description('start a club and print its code once; you are its first member. Shows the consent text from the pool and asks you to type yes')
+    .argument('<name>', 'the name of the club (letters, digits, spaces, dots, underscores, and hyphens; 24 at most)')
+    .requiredOption('--nickname <name>', 'the name members of the club see for you (2 to 24 letters, digits, spaces, dots, underscores, or hyphens; no @ or link)')
+    .option(serverOption, serverHelp)
+    .action(async (name: string, _options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await clubCreate(deps, name, { server: text(options, 'server'), nickname: text(options, 'nickname') ?? '' }));
+    });
+  club
+    .command('join')
+    .description('join a club by its code, or the open board with the word open; shows the consent text from the pool for it and asks you to type yes')
+    .argument('<code>', 'the code of the club, or open')
+    .requiredOption('--nickname <name>', 'the name the board shows for you (2 to 24 letters, digits, spaces, dots, underscores, or hyphens; no @ or link)')
+    .option(serverOption, serverHelp)
+    .action(async (code: string, _options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await clubJoin(deps, code, { server: text(options, 'server'), nickname: text(options, 'nickname') ?? '' }));
+    });
+  club
+    .command('leave')
+    .description('leave a club: your row is gone from its board at once')
+    .argument('<club>', 'the id of the club, as oars club create or join printed it')
+    .option(serverOption, serverHelp)
+    .action(async (id: string, _options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await clubLeave(deps, id, { server: text(options, 'server') }));
+    });
+  club
+    .command('show')
+    .description('print the board of a club, in the order the pool gives: nickname, weeks rowing, active days, sessions, and strokes this week; members only')
+    .argument('<club>', 'the id of the club')
+    .option(serverOption, serverHelp)
+    .action(async (id: string, _options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await clubShow(deps, id, { server: text(options, 'server') }));
+    });
+
+  program
+    .command('board')
+    .description('print the open board: people who chose to join it and have 90 days of standing, ranked by weeks rowing, then active days; public, so it needs no sign-in')
+    .option(serverOption, serverHelp)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await board(deps, { server: text(options, 'server') }));
     });
 
   const telemetry = program.command('telemetry').description('what oars records about its own use, on this machine (docs/telemetry.md): status, on, off, show, and report');

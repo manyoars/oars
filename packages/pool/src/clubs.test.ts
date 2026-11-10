@@ -106,8 +106,8 @@ describe('creating and joining a club', () => {
     expect((await pool.post('/v1/clubs/join', { code: club.code, nickname: 'bow' }, guest.token)).status).toBe(422);
     expect((await pool.post('/v1/clubs/join', { code: club.code, nickname: 'bow', consent: sha256('something else') }, guest.token)).json).toMatchObject({ error: 'consent_required' });
     expect(await join(guest.token, 'ZZZZZZ', 'bow')).toMatchObject({ status: 404, json: { error: 'not_found' } });
-    expect((await join(guest.token, club.code, '  ')).status).toBe(422);
-    expect((await join(guest.token, club.code, '<script>')).status).toBe(422);
+    expect(await join(guest.token, club.code, '  ')).toMatchObject({ status: 422, json: { error: 'nickname_invalid' } });
+    expect(await join(guest.token, club.code, '<script>')).toMatchObject({ status: 422, json: { error: 'nickname_invalid' } });
     expect(await join(guest.token, club.code, 'SKIPPER')).toMatchObject({ status: 409, json: { error: 'nickname_taken' } });
     expect((await join(guest.token, club.code, 'bow')).status).toBe(200);
     expect(await join(guest.token, club.code, 'stroke')).toMatchObject({ status: 409, json: { error: 'already_member' } });
@@ -437,5 +437,131 @@ describe('creating a club is one write', () => {
       await db.prepare('DROP TRIGGER doomed_seat').run();
     }
     expect(await db.prepare('SELECT COUNT(*) AS held FROM clubs').first('held')).toBe(before);
+  });
+});
+
+const HOUR = 60 * 60 * 1000;
+
+describe('the brakes on guessing a code and on making clubs', () => {
+  it('answers the 11th wrong code in an hour 429 rate_limited with when to retry, and takes the 10th as an ordinary miss', async () => {
+    const guesser = await member();
+    for (let n = 0; n < 10; n += 1) expect(await join(guesser.token, `WRONG${String(n)}`, 'bow')).toMatchObject({ status: 404, json: { error: 'not_found' } });
+    const braked = await pool.send('/v1/clubs/join', { method: 'POST', body: JSON.stringify({ code: 'WRONGX', nickname: 'bow', consent: (await consents()).club }) }, guesser.token, { 'content-type': 'application/json' });
+    expect(braked.status).toBe(429);
+    expect(braked.json).toMatchObject({ error: 'rate_limited' });
+    expect(typeof fieldOf(braked.json, 'retry_after')).toBe('number');
+    const wait = Number(fieldOf(braked.json, 'retry_after'));
+    expect(wait).toBeGreaterThan(HOUR / 1000 - 60);
+    expect(wait).toBeLessThanOrEqual(HOUR / 1000);
+    expect(braked.headers.get('retry-after')).toBe(String(wait));
+  });
+
+  it('refuses a right code too until the window clears, then lets it in', async () => {
+    const owner = await member();
+    const guesser = await member();
+    const club = await createClub(owner.token);
+    for (let n = 0; n < 10; n += 1) await join(guesser.token, `WRONG${String(n)}`, 'bow');
+    expect(await join(guesser.token, club.code, 'bow')).toMatchObject({ status: 429, json: { error: 'rate_limited' } });
+    await db.prepare("UPDATE club_attempts SET at = at - ? WHERE account = ?").bind(HOUR + 1000, guesser.account).run();
+    expect((await join(guesser.token, club.code, 'bow')).status).toBe(200);
+  });
+
+  it('lets a right code in while the account is inside the limit, and counts only wrong codes, per account', async () => {
+    const owner = await member();
+    const guesser = await member();
+    const other = await member();
+    const club = await createClub(owner.token);
+    for (let n = 0; n < 9; n += 1) await join(guesser.token, `WRONG${String(n)}`, 'bow');
+    expect((await join(guesser.token, club.code, 'bow')).status).toBe(200);
+    for (let n = 0; n < 10; n += 1) await join(other.token, `NOPE${String(n)}`, 'oar');
+    const openJoin = async (token: string, nickname: string): Promise<number> => (await pool.post('/v1/clubs/join', { code: 'OPEN', nickname, consent: (await consents()).open }, token)).status;
+    expect(await openJoin(guesser.token, 'again')).toBe(200);
+    expect(await openJoin(other.token, 'oar')).toBe(429);
+  });
+
+  it('answers the 6th club created in a day 429 rate_limited and takes the 5th, and a day later takes another', async () => {
+    const maker = await member();
+    for (let n = 0; n < 5; n += 1) await createClub(maker.token, `maker${String(n)}`, `Crew ${String(n)}`);
+    const sixth = await pool.post('/v1/clubs', { name: 'Crew 6', nickname: 'maker6', consent: (await consents()).club }, maker.token);
+    expect(sixth.status).toBe(429);
+    expect(sixth.json).toMatchObject({ error: 'rate_limited' });
+    expect(typeof fieldOf(sixth.json, 'retry_after')).toBe('number');
+    expect(Number(fieldOf(sixth.json, 'retry_after'))).toBeLessThanOrEqual(DAY / 1000);
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM clubs WHERE name = ?').bind('Crew 6').first('n')).toBe(0);
+    await db.prepare('UPDATE club_attempts SET at = at - ? WHERE account = ?').bind(DAY + 1000, maker.account).run();
+    await createClub(maker.token, 'maker7', 'Crew 7');
+  });
+
+  it('does not count a refused create (bad name, no consent) against the day', async () => {
+    const maker = await member();
+    for (let n = 0; n < 6; n += 1) expect((await pool.post('/v1/clubs', { name: '!!', nickname: 'maker', consent: (await consents()).club }, maker.token)).status).toBe(422);
+    await createClub(maker.token, 'maker', 'Real crew');
+  });
+
+  it('holds under a burst: 15 wrong codes at once give at most 10 misses and the rest 429, and 8 creates at once make at most 5 clubs', async () => {
+    const guesser = await member();
+    const answers = await Promise.all(Array.from({ length: 15 }, (_, n) => join(guesser.token, `BURST${String(n)}`, 'bow')));
+    expect(answers.filter((one) => one.status === 404)).toHaveLength(10);
+    expect(answers.filter((one) => one.status === 429)).toHaveLength(5);
+    expect(await db.prepare("SELECT COUNT(*) AS n FROM club_attempts WHERE account = ? AND kind = 'guess'").bind(guesser.account).first('n')).toBe(10);
+    const maker = await member();
+    const consent = (await consents()).club;
+    const made = await Promise.all(Array.from({ length: 8 }, (_, n) => pool.post('/v1/clubs', { name: `Burst ${String(n)}`, nickname: `maker${String(n)}`, consent }, maker.token)));
+    expect(made.filter((one) => one.status === 201)).toHaveLength(5);
+    expect(made.filter((one) => one.status === 429)).toHaveLength(3);
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM clubs c JOIN club_members m ON m.club = c.id WHERE m.account = ?').bind(maker.account).first('n')).toBe(5);
+  });
+
+  it('gives back the reservation when the code is right, so right codes never use up the guesses', async () => {
+    const owner = await member();
+    const club = await createClub(owner.token);
+    const guesser = await member();
+    expect((await join(guesser.token, club.code, 'bow')).status).toBe(200);
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM club_attempts WHERE account = ?').bind(guesser.account).first('n')).toBe(0);
+  });
+
+  it('keeps no more than a day of an account\'s attempts', async () => {
+    const guesser = await member();
+    await join(guesser.token, 'OLDONE', 'bow');
+    await db.prepare('UPDATE club_attempts SET at = at - ? WHERE account = ?').bind(2 * DAY, guesser.account).run();
+    await join(guesser.token, 'NEWONE', 'bow');
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM club_attempts WHERE account = ?').bind(guesser.account).first('n')).toBe(1);
+  });
+});
+
+describe('the nickname rule', () => {
+  const rule = /2 to 24/;
+
+  it('refuses a nickname outside the rule as nickname_invalid, with the rule in one line', async () => {
+    const guest = await member();
+    const club = await createClub((await member()).token);
+    for (const nickname of ['a', 'x'.repeat(25), ' lead', 'trail ', 'two@words', 'me@example', 'http://x.io', 'www.example.com', 'visit oars.dev', 'under!score', 'emoji 🚣']) {
+      const refused = await join(guest.token, club.code, nickname);
+      expect(refused, nickname).toMatchObject({ status: 422, json: { error: 'nickname_invalid', field: 'nickname' } });
+      expect(JSON.stringify(refused.json), nickname).toMatch(rule);
+    }
+  });
+
+  it('accepts letters, digits, space, hyphen, underscore, and dot, 2 to 24 long', async () => {
+    for (const nickname of ['ab', 'x'.repeat(24), 'Ana-Maria_2.0', 'two words', 'j.doe', 'v1.2', 'राम', 'हिन्दी', 'ไทย']) {
+      const guest = await member();
+      const club = await createClub((await member()).token);
+      expect(await join(guest.token, club.code, nickname), nickname).toMatchObject({ status: 200, json: { nickname } });
+    }
+  });
+
+  it('stores the NFKC form, so a full-width name and its plain form are one nickname', async () => {
+    const owner = await member();
+    const guest = await member();
+    const club = await createClub(owner.token, 'ｓｋｉｐｐｅｒ２');
+    expect(club.id).toBeTruthy();
+    expect(await join(guest.token, club.code, 'skipper2')).toMatchObject({ status: 409, json: { error: 'nickname_taken' } });
+    expect(namesOf((await pool.get(`/v1/clubs/${club.id}`, owner.token)).json)).toEqual(['skipper2']);
+  });
+
+  it('applies to creating a club as well, and club names keep their own rule', async () => {
+    const maker = await member();
+    expect(await pool.post('/v1/clubs', { name: 'Fine crew', nickname: 'x', consent: (await consents()).club }, maker.token)).toMatchObject({ status: 422, json: { error: 'nickname_invalid' } });
+    expect(await pool.post('/v1/clubs', { name: '!!', nickname: 'maker', consent: (await consents()).club }, maker.token)).toMatchObject({ status: 422, json: { error: 'bad_name' } });
   });
 });

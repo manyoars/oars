@@ -58,7 +58,7 @@ export type Lister = (prefix: string) => Promise<readonly string[]>;
 
 const NO_LISTER = 'listing the telemetry bucket needs an R2 API token: export R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY (read on the bucket oars-telemetry), then run the erasure again; every other step is already done';
 
-export const wranglerStore = (wrangler: Wrangler, target: Target, files: ObjectFiles, list: Lister = () => Promise.reject(new Error(NO_LISTER))): EraseStore => {
+export const wranglerStore = (wrangler: Wrangler, target: Target, files: ObjectFiles, list: Lister = () => Promise.reject(new Error(NO_LISTER)), listRaw?: Lister): EraseStore => {
   const where = target.local ? '--local' : '--remote';
   /** One object's text, read through a scratch file that is removed; null when the object is not there. */
   const textOf = async (key: string): Promise<string | null> => {
@@ -77,6 +77,7 @@ export const wranglerStore = (wrangler: Wrangler, target: Target, files: ObjectF
   };
   const execute = async (sql: string, binds: readonly Bind[]): Promise<unknown> => resultOf(await wrangler(['d1', 'execute', target.database, where, '--json', '--command', inline(sql, binds)]));
   return {
+    ...(listRaw === undefined ? {} : { listRaw }),
     rows: async (sql, binds) => {
       const results = fieldOf(await execute(sql, binds), 'results');
       return Array.isArray(results) ? results.map((row: unknown) => row) : [];
