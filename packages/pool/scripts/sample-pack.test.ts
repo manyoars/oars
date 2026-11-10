@@ -5,9 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as Exclusion from '../../cli/src/sessions/exclusion.js';
+import { SKELETON_FORMAT, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { deposit, loadStore, paths, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { rolloutLine, stageCodex } from '../../cli/src/sessions/test-support.js';
-import { buildPack, HARNESS_TERMS, main, matchIdOf, ownerOf, parseOwners, secretIn, serverKeyOf, USAGE, type Census, type ManifestRow, type PackCounts, type PackOptions, type Tally } from './sample-pack.js';
+import { buildPack, HARNESS_TERMS, main, matchIdOf, ownerOf, parseOwners, secretIn, serverKeyOf, skeletonUnder, USAGE, type Census, type ManifestRow, type PackCounts, type PackOptions, type Tally } from './sample-pack.js';
 
 // Every session the exclusion check was asked about, in call order: the frame-first rule is proved by who was never asked.
 const gated = vi.hoisted((): string[] => []);
@@ -305,6 +306,19 @@ describe('the skeleton and the manifest fields it adds (plan S3)', () => {
     }
     const prints = (text: string): string[] => [...text.matchAll(/"timingPrint": "([0-9a-f]{16})"/g)].map((found) => found[1] ?? '');
     expect(prints(a.text).filter((value) => prints(b.text).includes(value))).toEqual([]);
+  });
+
+  it('re-derives the batch timing print under each buyer key, in 16 hex, and leaves an absent print absent', () => {
+    const print = '0123456789abcdef';
+    const skeleton = (timingPrint: string | null): SessionSkeleton => ({ format: SKELETON_FORMAT, vocabVersion: 'v', fieldsVersion: 1, id: 'store-id', transcripts: [], timingPrint, deltas: [] });
+    const a = skeletonUnder(skeleton(print), 'match', 'buyer-a').timingPrint;
+    const b = skeletonUnder(skeleton(print), 'match', 'buyer-b').timingPrint;
+    expect(a).toMatch(/^[0-9a-f]{16}$/);
+    expect(b).toMatch(/^[0-9a-f]{16}$/);
+    expect(a).not.toBe(print);
+    expect(a).not.toBe(b);
+    expect(skeletonUnder(skeleton(print), 'match', 'buyer-a').timingPrint).toBe(a);
+    expect(skeletonUnder(skeleton(null), 'match', 'buyer-a').timingPrint).toBeNull();
   });
 
   it('counts a session whose store holds no skeleton, and writes nothing of it', async () => {
