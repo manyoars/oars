@@ -112,7 +112,9 @@ describe('oars pool enroll (full)', () => {
     const { h } = scene();
     const sent: Sent[] = [];
     poolAnswering(201, CREATED, sent);
-    await usageRefusal(poolEnroll(h.deps, { ...OPTIONS, days }, PRIVATE), /days is a whole number of days from 1 to 365/u);
+    const visibility = vi.fn(PRIVATE);
+    await usageRefusal(poolEnroll(h.deps, { ...OPTIONS, days }, visibility), /days is a whole number of days from 1 to 365/u);
+    expect(visibility).not.toHaveBeenCalled();
     expect(sent).toEqual([]);
   });
 
