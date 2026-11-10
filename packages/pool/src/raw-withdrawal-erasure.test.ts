@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Env, RawBucket } from './http.js';
 import { sweepWithdrawnRaw, SWEEP_PAGE_CALLS, withdrawRawConsent } from './raw.js';
 import { acceptanceOf, fieldOf, startPool, stubUser, type TestPool } from './test-pool.js';
+import { rawDigest } from './tombstones.js';
 import worker from './worker.js';
 
 let pool: TestPool;
@@ -68,7 +69,8 @@ describe('the nightly cron erases the raw copies of an account that withdrew', (
       [first, second].sort().map((hash) => ({ sha256: hash, bytes: hash === first ? 'first of my transcripts'.length : 'second of my transcripts'.length, erased_on: '2026-11-10' })),
     );
     expect(await all('SELECT erased_on FROM raw_objects WHERE account = ?', theirs.account)).toEqual([{ erased_on: null }]);
-    expect(await count("SELECT COUNT(*) AS held FROM erasure_tombstones WHERE kind = 'raw-object' AND reason = 'consent-withdrawn'")).toBeGreaterThanOrEqual(2);
+    const digests = await Promise.all([first, second].map((hash) => rawDigest(`raw/${mine.account}/${hash}`)));
+    expect(await count("SELECT COUNT(*) AS held FROM erasure_tombstones WHERE kind = 'raw-object' AND reason = 'consent-withdrawn' AND digest IN (?, ?)", ...digests)).toBe(2);
   }, 60_000);
 
   it('writes one audit row for a night that erased something, and none for a night that erased nothing', async () => {
@@ -207,7 +209,7 @@ describe('a withdrawal drops the account\'s staged raw parts at once', () => {
     const pages = [['staging/a/1', 'staging/a/2'], ['staging/a/3'], []];
     const asked: string[] = [];
     const deleted: string[] = [];
-    // A bucket that answers two full pages and then an empty one, as R2 does once a page of 1,000 keys is deleted and more were staged.
+    // A bucket that answers a page, a second page, and then an empty one, as R2 does once a page of 1,000 keys is deleted and more were staged.
     const bucket: RawBucket = {
       put: () => Promise.resolve(undefined),
       get: () => Promise.resolve(null),

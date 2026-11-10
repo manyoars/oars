@@ -507,7 +507,7 @@ describe('erasing one account removes its own rows and its link to the shared to
     await eraseAccount(await store(), account, NOW);
 
     expect(await count('SELECT COUNT(*) AS held FROM contributors WHERE account = ?', account)).toBe(0);
-    expect(await count('SELECT generation AS held FROM pool_generation')).toBeGreaterThanOrEqual(generation + 1);
+    expect(await count('SELECT generation AS held FROM pool_generation')).toBe(generation + 1);
     // A run that finds nothing left moves nothing more.
     const settled = await count('SELECT generation AS held FROM pool_generation');
     await eraseAccount(await store(), account, NOW);
