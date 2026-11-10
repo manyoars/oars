@@ -3,6 +3,7 @@
 // The ledger never deletes (migrations 0009 and 0011), so a row's content is replaced in place and the row, its counts, and its tier stay. Every step is written so a run that stops halfway runs again to the end: the
 // tombstone goes first (so nothing can come back), then the content, then the audit row.
 import { depositDigest, digestOf, rawDigest } from '../src/tombstones.js';
+import { eraseBatches, type TelemetryStore } from './erase-batches.js';
 
 /** The class of an erasure, as the audit and the tombstone record it. */
 export type ErasureReason = 'raw' | 'leaked-secret' | 'lawful-request';
@@ -17,6 +18,8 @@ export interface EraseStore {
   deleteObject: (key: string) => Promise<void>;
   /** One R2 object's bytes in pieces, read as a stream so a large object is never held whole; null when the object is not there. */
   readObject: (key: string) => Promise<AsyncIterable<Uint8Array> | null>;
+  /** The telemetry bucket, where an account's batches are rewritten (`erase-batches.ts`). */
+  telemetry: TelemetryStore;
 }
 
 /** What one erasure removed: ledger rows and aggregate rows whose content was replaced, staged parts dropped, and raw objects deleted. */
@@ -212,7 +215,7 @@ export const eraseLeakedSecret = async (store: EraseStore, secret: LeakedSecret,
 
 /**
  * Erases one account's content under a lawful request (GDPR Articles 17(1) and 17(3)(e)): every deposit row it holds is replaced by the marker and tombstoned, every raw object it holds is deleted and tombstoned, its staged parts are dropped, the label and allow list of its
- * machines are scrubbed, its repo keys and deposit hours are deleted, its tokens stop working and hold no credential, and the account id leaves its telemetry days and its contributor records. A telemetry day keeps its counts (the account column holds a placeholder that names no account, one per row, so
+ * machines are scrubbed, its repo keys and deposit hours are deleted, its tokens stop working and hold no credential, and the account id leaves its telemetry days and its contributor records. Every telemetry batch within retention that names it is rewritten with the rollup's placeholder and a fresh install id (`erase-batches.ts`). A telemetry day keeps its counts (the account column holds a placeholder that names no account, one per row, so
  * two erased accounts of one install never collide), and a token row keeps that a sign-in happened (its expiry). The generation moves, before the links go, when the account held any repo key, deposit hour, or contributor record, so a client fetches the bundle again.
  * What stays: the totals (`cells`, `strata`, and the clusters held in them: a recount drops the account the next time a deposit touches the cell), `covenant_acceptances` (append-only, and the pool's proof that the covenant was accepted, Article 17(3)(e)), the tombstones, the audit, and the hash, size, and date of every raw object.
  * The `account` tombstone goes first: it is what lets the database delete the contributor records (migration 0027), and a run that stops halfway runs again to the end.
@@ -235,6 +238,8 @@ export const eraseAccount = async (store: EraseStore, accountId: string, now: Da
   for (const row of await store.rows('SELECT id FROM deposits WHERE account = ? AND erased_on IS NULL', [account])) rows += await dropDeposit(store, account, textOf(row, 'id'), 'lawful-request', now);
   let objects = 0;
   for (const row of await store.rows('SELECT sha256 FROM raw_objects WHERE account = ? AND erased_on IS NULL', [account])) objects += await dropObject(store, account, textOf(row, 'sha256'), 'lawful-request', now);
+  // The batches the Worker kept in R2 before it stopped reading the account (t956) still name it: they are rewritten last, so a stop anywhere above leaves them for the rerun, and a rerun finds none. They count with the objects.
+  objects += await eraseBatches(store, account, now);
   const erased = { rows, objects };
   await audit(store, 'account', 'lawful-request', account, erased, now);
   return erased;
