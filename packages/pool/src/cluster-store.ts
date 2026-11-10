@@ -27,12 +27,17 @@ export const signalStatements = (env: Env, account: string, guard: readonly [str
   return statements;
 };
 
-type Kind = 'cell' | 'stratum';
+/** What a recount reads and writes through: the Worker's `Env` and the operator's erase store (`scripts/erase.ts`) both fit, so a restriction recounts the cells it touches in the run that sets it. */
+export interface Counting {
+  DB: { prepare: (sql: string) => { bind: (...values: (string | number | null)[]) => Pick<Bound, 'all' | 'run'> } };
+}
+
+export type Kind = 'cell' | 'stratum';
 const TABLE: { [kind in Kind]: string } = { cell: 'cells', stratum: 'strata' };
 /** The columns a recount writes: a cell keeps the count of every holder beside the standing one, a stratum only the standing one. */
 const COLUMNS: { [kind in Kind]: string } = { cell: 'clusters = counts.count, clusters_any = counts.any', stratum: 'clusters = counts.count' };
 
-const rows = async (env: Env, sql: string, ...values: (string | number | null)[]): Promise<readonly unknown[]> => (await env.DB.prepare(sql).bind(...values).all()).results;
+const rows = async (env: Counting, sql: string, ...values: (string | number | null)[]): Promise<readonly unknown[]> => (await env.DB.prepare(sql).bind(...values).all()).results;
 
 const text = (row: unknown, key: string): string => {
   const found = fieldOf(row, key);
@@ -62,8 +67,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * cannot test whether a real account holds a name (S13); their holdings are kept and count once they have stood. `now` is the pool's clock.
  * `count` is that standing count; `any` is the same weighting over every account and is at least 1, since a key with a holder has an account (a lone young account weighs half, which rounds down to 0).
  */
-const countsOf = async (env: Env, kind: Kind, keys: string, now: number): Promise<{ key: string; count: number; any: number }[]> => {
-  const [held, accounts, repoKeys, hours, counted] = await Promise.all([
+const countsOf = async (env: Counting, kind: Kind, keys: string, now: number): Promise<{ key: string; count: number; any: number }[]> => {
+  const [asked, held, accounts, repoKeys, hours, counted] = await Promise.all([
+    rows(env, 'SELECT value AS key FROM json_each(?)', keys),
     rows(env, `SELECT key, account, MIN(day) AS first_day FROM contributors WHERE kind = ? AND key IN (SELECT value FROM json_each(?)) AND ${NOT_RESTRICTED} GROUP BY key, account`, kind, keys),
     rows(env, `SELECT id, first_seen, provider_created, access FROM accounts WHERE id IN (${HOLDING(kind)})`, keys),
     rows(env, `SELECT account, repo_key FROM account_repo_keys WHERE account IN (${HOLDING(kind)})`, keys),
@@ -98,9 +104,10 @@ const countsOf = async (env: Env, kind: Kind, keys: string, now: number): Promis
   // A key whose holders have not stood is written 0, not left at the count an earlier recount gave it. `any` counts the holders that have not stood as well: only a clear cell at a floor of 1 reads it (`stored.ts`). It is at least 1, since a key in `held` has a holder
   // and a lone young account weighs half, which rounds down to 0 in `clusterHolders`: a floor of 1 has no k to protect, so every account counts there.
   // `any` is also at least `count`: a fresh account whose repo keys overlap two standing accounts joins them into one cluster over everyone, which would leave the every-account copy of a cell below the standing count a family floor above the public floor states.
-  return [...new Set(held.map((row) => text(row, 'key')))].map((key) => {
+  // A key asked for that no unrestricted account holds (the one holder was restricted, GDPR Art. 18) is written 0 and 0, so a served count drops with the restriction instead of waiting for a deposit to touch the cell.
+  return [...new Set([...asked, ...held].map((row) => text(row, 'key')))].map((key) => {
     const count = clusterHolders(holders.get(key) ?? []).count;
-    return { key, count, any: Math.max(1, count, clusterHolders(everyone.get(key) ?? []).count) };
+    return { key, count, any: everyone.has(key) ? Math.max(1, count, clusterHolders(everyone.get(key) ?? []).count) : 0 };
   });
 };
 
@@ -109,12 +116,13 @@ export const heldBy = async (env: Env, account: string, kind: Kind): Promise<str
 
 /**
  * Writes the weighted count of each key in `keys` to its row's `clusters`, and for a cell `clusters_any`. It reads what is committed, then writes after awaiting, so a recount that started earlier can write after a later one:
- * a count can lag a deposit until the next deposit that touches the key. A key with no row (a stratum a batch did not write) is left alone. A key none hold stays at the 0 it began with.
+ * a count can lag a deposit until the next deposit that touches the key. A key with no row (a stratum a batch did not write) is left alone. A key none hold is written 0.
+ * `limit` is the size of a chunk in bytes (the Worker's default suits D1; the operator's command, which writes the values into a command line, passes a small one).
  */
-export const recount = async (env: Env, kind: Kind, keys: readonly string[], now: number = Date.now()): Promise<void> => {
-  for (const chunk of chunksOf(keys)) {
+export const recount = async (env: Counting, kind: Kind, keys: readonly string[], now: number = Date.now(), limit?: number): Promise<void> => {
+  for (const chunk of chunksOf(keys, limit)) {
     const counts = await countsOf(env, kind, chunk, now);
-    for (const part of chunksOf(counts)) {
+    for (const part of chunksOf(counts, limit)) {
       await env.DB.prepare(
         `UPDATE ${TABLE[kind]} SET ${COLUMNS[kind]} FROM (SELECT json_extract(value, '$.key') AS key, json_extract(value, '$.count') AS count, json_extract(value, '$.any') AS any FROM json_each(?)) AS counts WHERE ${TABLE[kind]}.key = counts.key`,
       )

@@ -1368,6 +1368,24 @@ describe('restricting one account (GDPR Article 18)', () => {
     expect(await all("SELECT reason FROM erasure_audit WHERE kind = 'lift' AND account = ?", account)).toEqual([{ reason: 'account-lift' }]);
   }, 90_000);
 
+  it('drops the served counts of a cell only the account holds in the same run, and a lift counts it again', async () => {
+    const { token, account } = await member();
+    // A standing account counts at once; a cell no other account deposits to has the account as its one holder.
+    await (await pool.db()).prepare("UPDATE accounts SET access = 'standing' WHERE id = ?").bind(account).run();
+    expect((await pool.post('/v1/deposits', skeletonWith('00000000000b1101', 'soleheld', undefined, '7.7.7'), token)).status).toBe(201);
+    const sole = "SELECT key FROM contributors WHERE kind = 'cell' GROUP BY key HAVING COUNT(DISTINCT account) = 1 AND MAX(account = ?) = 1";
+    const served = async (): Promise<readonly unknown[]> => all(`SELECT clusters, clusters_any FROM cells WHERE key IN (${sole}) ORDER BY key`, account);
+    const before = await served();
+    expect(before.length).toBeGreaterThan(0);
+    expect(before.every((row) => fieldOf(row, 'clusters') === 1 && fieldOf(row, 'clusters_any') === 1)).toBe(true);
+
+    await restrictAccount(await store(), account, false, NOW);
+
+    expect((await served()).every((row) => fieldOf(row, 'clusters') === 0 && fieldOf(row, 'clusters_any') === 0)).toBe(true);
+    await restrictAccount(await store(), account, true, NOW);
+    expect(await served()).toEqual(before);
+  }, 90_000);
+
   it('changes nothing on a rerun, keeps the first restricted-at time, and writes no second audit row; a lift of an unrestricted account is the same', async () => {
     const { account } = await member();
     expect(await restrictAccount(await store(), account, true, NOW)).toEqual({ rows: 0, objects: 0 });
