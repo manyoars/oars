@@ -43,7 +43,8 @@ const accepted = async (deps: RunDeps, server: string, token: string, via: Sende
 /** The pool's 422 for a value or a format its closed vocabulary does not read (a format older than it reads is the same code, on the field `format`). */
 const isVocabularyRefusal = (error: unknown): boolean => error instanceof CliError && error.problem.code === 'closed_vocabulary';
 
-const night = async (deps: RunDeps, net: Sender, tally: NightlyPool): Promise<NightlyPool> => {
+/** One night's send. `nightlyPoolSend` folds what it throws into a note, so a test reads the thrown error here. */
+export const night = async (deps: RunDeps, net: Sender, tally: NightlyPool): Promise<NightlyPool> => {
   const none = (outcome: NightlyOutcome): NightlyPool => ({ outcome, batches: 0, raw: 0 });
   let server: string;
   try {
@@ -74,6 +75,7 @@ const night = async (deps: RunDeps, net: Sender, tally: NightlyPool): Promise<Ni
     // A pulled batch can wait as long as the covenant stays closed, so each pass reads it against the term file as it is now: one that holds a term goes, and with no terms none is sent.
     const scan = await rescanPulled(outbox, await currentTerms(deps));
     if (scan.removed.length > 0) tally.removed = scan.removed.length;
+    let ended: { error: unknown } | undefined;
     try {
       for (const batch of (await heldAcross(outbox)).batches) {
         if (done.has(batch.hash) || (batch.pulled && !scan.open)) continue;
@@ -93,10 +95,16 @@ const night = async (deps: RunDeps, net: Sender, tally: NightlyPool): Promise<Ni
         await markSent(outbox, batch.hash, deps.now());
         tally.batches += 1;
       }
-    } finally {
-      // A pulled batch whose hash is in `sent.log` is done, however the night ended.
-      await retirePulled(outbox, 'pool-nightly');
+    } catch (error) {
+      ended = { error };
     }
+    // A pulled batch whose hash is in `sent.log` is done, however the night ended. A `pulled.json` that cannot be read now must not replace the error that ended the loop; after a clean loop it is the night's error.
+    try {
+      await retirePulled(outbox, 'pool-nightly');
+    } catch (error) {
+      if (ended === undefined) throw error;
+    }
+    if (ended !== undefined) throw ended.error;
     // Raw goes only with its own yes, read again here so an answer changed since the build wins.
     const choices = (await readState(storeDir)).pool;
     if (rawStale(choices, version)) tally.rawHeld = true;

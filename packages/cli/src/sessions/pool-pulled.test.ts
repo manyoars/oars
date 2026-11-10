@@ -3,7 +3,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { nightlyPoolSend } from './pool-nightly.js';
+import { night, nightlyPoolSend } from './pool-nightly.js';
 import { sentLog } from './pool-sent.js';
 import { harness } from '../test-support.js';
 import { poolDeposit, poolOutbox, type Reply, type Sender } from './pool-command.js';
@@ -153,7 +153,6 @@ describe('a pulled batch survives the prune', () => {
   });
 });
 
-
 /** The deposits a pool stand-in took, as the bodies posted. */
 const posted = (pool: Pool): string[] => pool.requests.filter((request) => request.method === 'POST' && request.url.pathname === '/v1/deposits').map((request) => String(request.body));
 
@@ -288,6 +287,28 @@ describe('a refused pulled batch is kept, unsent, and reported', () => {
     const night = await nightlyPoolSend(local.deps, (request) => Promise.resolve(request.url.pathname === '/v1/covenant' ? OPEN : refusal));
     expect(night).toMatchObject({ outcome: 'failed' });
     expect(night).not.toHaveProperty('refused');
+  });
+});
+
+describe('a pulled.json that cannot be read when the night ends', () => {
+  /** Answers the first deposit as `reply` after it breaks `pulled.json`, as a hand edit during a long night would. */
+  const breaking = (s: Scene, reply: Reply): Sender => (request) => {
+    if (request.url.pathname === '/v1/covenant') return Promise.resolve(OPEN);
+    writeFileSync(join(s.outbox, 'pulled.json'), '[1, 2');
+    return Promise.resolve(reply);
+  };
+
+  it('keeps the error that ended the loop, not the one retiring the sent batches raises', async () => {
+    const s = await scene();
+    await admit(s, KEY, OLD);
+    const server = answer(500, { error: 'internal', message: 'The pool failed.' });
+    await expect(night(s.deps, breaking(s, server), { outcome: 'failed', batches: 0, raw: 0 })).rejects.toThrow(/The pool failed/u);
+  });
+
+  it('is the error of the night when the loop ended cleanly', async () => {
+    const s = await scene();
+    await admit(s, KEY, OLD);
+    await expect(night(s.deps, breaking(s, answer(201, { ok: true })), { outcome: 'failed', batches: 0, raw: 0 })).rejects.toThrow(/pulled\.json/u);
   });
 });
 
