@@ -6,8 +6,9 @@ import { run } from '../cli.js';
 import { CliError, ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
 import { checkSession, exclusionPaths, loadTerms, scanStore } from './exclusion.js';
-import { deposit } from './store.js';
-import { cleanup, NOW, stage, type Staged } from './test-support.js';
+import type { Source } from './sources.js';
+import { deposit, loadStore, type SessionsRuntime } from './store.js';
+import { cleanup, NOW, rolloutLine, stage, stageCodex, type Staged } from './test-support.js';
 
 afterEach(() => {
   cleanup();
@@ -448,6 +449,61 @@ describe('loadTerms and exclusionPaths', () => {
     expect(fallback.terms.replaceAll('\\', '/')).toBe('/c/session-commons/exclusion-terms.txt');
     expect(fallback.list).toBe('/o/list');
     expect(exclusionPaths('/c/projects', {}).list.replaceAll('\\', '/')).toBe('/c/session-commons/exclusion-list.jsonl');
+  });
+});
+
+// A Codex session has one file, the rollout in Codex's own store: oars archives nothing for a source, so the gate reaches it through the source (plan S2).
+describe('a session of a source with its own file', () => {
+  const ID = 'cccc3333-3333-4333-8333-333333333333';
+  const rollout = (text: string): object[] => [
+    rolloutLine('2026-06-01T10:00:00.000Z', 'session_meta', { id: ID, timestamp: '2026-06-01T10:00:00.000Z', cwd: '/work/app', originator: 'codex_cli_rs', cli_version: '0.50.0' }),
+    rolloutLine('2026-06-01T10:00:01.000Z', 'event_msg', { type: 'user_message', message: text }),
+    rolloutLine('2026-06-01T10:00:02.000Z', 'event_msg', { type: 'agent_message', message: 'done' }),
+  ];
+  const codexSetup = async (text: string): Promise<{ runtime: SessionsRuntime; termsFile: string; project: string; session: string }> => {
+    const t = setup();
+    const home = stageCodex(t.staged.root, [{ id: ID, lines: rollout(text) }]);
+    const runtime: SessionsRuntime = { ...t.staged.runtime, sourceRoots: { codex: home } };
+    await deposit(runtime, { allow: ['codex'], redactDomains: [], now: () => NOW });
+    const stored = (await loadStore(runtime.storeDir)).sessions[0];
+    if (stored === undefined) throw new Error('the rollout did not reach the store');
+    return { runtime, termsFile: t.termsFile, project: stored.project, session: stored.session };
+  };
+
+  it('keeps a clean rollout and counts the session, with no copy in the harness folder or the raw archive', async () => {
+    const { runtime, termsFile, project, session } = await codexSetup('fix the build');
+    expect(await checkSession(runtime, termsFile, project, session)).toMatchObject({ excluded: false, reason: 'clean' });
+    expect((await scanStore(runtime, termsFile)).counts).toMatchObject({ sessions: 1, excluded: 0, kept: 1, reasons: { noRaw: 0 } });
+  });
+
+  it('excludes a rollout holding a term and counts the hit with the harness files', async () => {
+    const { runtime, termsFile, project, session } = await codexSetup(`ask ${TERM} about it`);
+    expect(await checkSession(runtime, termsFile, project, session)).toMatchObject({ excluded: true, reason: 'term', hits: [{ key: `${session}.jsonl`, main: true, source: 'projects' }] });
+    expect((await scanStore(runtime, termsFile)).counts).toMatchObject({ excluded: 1, reasons: { term: 1 }, hitFiles: { main: 1, subagent: 0 }, bySource: { projects: { main: 1, sessions: 1 }, raw: { main: 0 } } });
+  });
+
+  it('does not read a session id that names no source the runtime reads, or a source whose store keeps no file per session', async () => {
+    const { runtime, termsFile, project, session } = await codexSetup('fix the build');
+    expect(await checkSession({ ...runtime, sourceRoots: {} }, termsFile, project, session)).toMatchObject({ excluded: true, reason: 'no-raw' });
+    const database: Source = {
+      name: 'codex',
+      harness: 'codex',
+      label: 'Codex',
+      root: () => '',
+      storeFile: () => '',
+      open: async () => ({ sessions: [{ id: ID, folder: null, size: 1, mtimeMs: 1 }], transcript: () => '', rejected: 0, unreadable: [], where: () => join(runtime.storeDir, 'codex.db'), close: () => undefined }),
+    };
+    expect(await checkSession({ ...runtime, sources: [database] }, termsFile, project, session)).toMatchObject({ excluded: true, reason: 'no-raw' });
+  });
+
+  it('excludes a session as unreadable when its source cannot be opened, and as no raw when the source holds no store', async () => {
+    const { runtime, termsFile, project, session } = await codexSetup('fix the build');
+    const source = (open: Source['open']): Source => ({ name: 'codex', harness: 'codex', label: 'Codex', root: () => '', storeFile: () => '', open });
+    const failing = source(async () => {
+      throw new Error('locked');
+    });
+    expect(await checkSession({ ...runtime, sources: [failing] }, termsFile, project, session)).toMatchObject({ excluded: true, reason: 'unreadable' });
+    expect(await checkSession({ ...runtime, sources: [source(async () => undefined)] }, termsFile, project, session)).toMatchObject({ excluded: true, reason: 'no-raw' });
   });
 });
 
