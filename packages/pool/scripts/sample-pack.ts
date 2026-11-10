@@ -27,7 +27,7 @@ export const USAGE = [
   '  --buyer-key <key>    the buyer\'s key: a match id is HMAC-SHA-256 of the server key under it',
   '  --out <dir>          an empty or new folder outside every git repository',
   '  --size <n>           sessions to emit (default 25); --seed <text> orders the draw (default 1)',
-  '  objections.jsonl     beside the owners file, optional: a session id or a person's name per line; each session it names, or whose text names the person, is left out and counted (docs/pool.md)',
+  '  objections.jsonl     beside the owners file, optional: a line per objection, naming a session id or a person; each session it names, or whose text names the person, is left out and counted (docs/pool.md)',
   '  --min-turns <n>      a session needs at least this many turns, user plus assistant (default 20); a shorter one is left out and counted',
   'Reads the store under APPDATA (or XDG_CONFIG_HOME) and the transcripts under CLAUDE_CONFIG_DIR or ~/.claude. Builds in <out>.partial and renames it to --out when done,',
   'and appends each session id and its match id to index.jsonl beside the owners file: the operator\'s only map from one to the other.',

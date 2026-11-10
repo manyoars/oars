@@ -47,8 +47,14 @@ const args = (f: Fixture, extra: Partial<Parameters<typeof deliver>[0]> = {}): P
   pack: f.pack, recipient: 'Acme Evals Inc.', license: 'term-sheet-v1', buyerKey: BUYER_KEY, owners: f.owners, now: () => new Date('2026-06-12T08:00:00.000Z'), ...extra,
 });
 
+const isDelivery = (value: unknown): value is Delivery => typeof value === 'object' && value !== null && 'recipient' in value && 'matchId' in value && 'session' in value;
+
 const rowsOf = (f: Fixture): Delivery[] =>
-  readFileSync(join(f.root, 'deliveries.jsonl'), 'utf8').split('\n').filter((row) => row !== '').map((row): Delivery => JSON.parse(row) as Delivery);
+  readFileSync(join(f.root, 'deliveries.jsonl'), 'utf8').split('\n').filter((row) => row !== '').map((row): Delivery => {
+    const value: unknown = JSON.parse(row);
+    if (!isDelivery(value)) throw new Error('a delivery row with no recipient');
+    return value;
+  });
 
 describe('deliver (plan S5, Art. 15(1)(c) and 19)', () => {
   it('appends one row per session for the recipient, never the key', async () => {
