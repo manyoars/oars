@@ -8,8 +8,11 @@ name: release-cli
 #           --ignore-scripts`. Provenance names this repository and this workflow file.
 #   release contents: write only. After publish succeeds it creates the GitHub Release for the tag (title `oars <version>`, notes the matching
 #           section of packages/cli/CHANGELOG.md, marked Latest), so the repository page shows the tool and not a template release.
-# A manual run with the `tag` input runs only the release job for an existing tag (no build, no npm publish, no tag push); it updates the
-# release when one exists. Backfill: gh workflow run release-cli.yml -f tag=cli-v0.4.1 -f latest=true
+# A manual run with the `tag` input works on an existing tag and never pushes or moves one. By default it runs only the release job (no build, no
+# npm publish); it updates the release when one exists. Backfill: gh workflow run release-cli.yml -f tag=cli-v0.4.1 -f latest=true
+# With `publish=true` it runs the whole pipeline (build, publish, release) on that tag's code with this workflow file, which is how a tag whose
+# own workflow run failed gets published without re-tagging: gh workflow run release-cli.yml -f tag=cli-v0.5.0 -f latest=true -f publish=true
+# Start it from main: the tag's commit must still be an ancestor of main, and the run's workflow file is main's.
 #
 # Auth: npm trusted publishing (OIDC), no stored secret. The package's trusted publisher on npmjs.com names the GitHub
 # Actions repository manyoars/oars and the workflow file release-cli.yml (both case-sensitive, no environment), so do
@@ -28,9 +31,18 @@ on:
         required: false
         type: boolean
         default: false
+      publish:
+        description: Also build and publish the tag's code to npm before the release (for a tag whose push run failed); leave off for a backfill
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+
+env:
+  # The tag being published: the pushed tag, or the manual run's input.
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 concurrency:
   group: release-cli-${{ inputs.tag || github.ref }}
@@ -38,7 +50,7 @@ concurrency:
 
 jobs:
   build:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || inputs.publish
     # GitHub-hosted runners only: this repository is public.
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -51,23 +63,26 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          # The tag's code, not the branch a manual run started on (a push already is at the tag).
+          ref: refs/tags/${{ env.TAG }}
       - name: Check the tag is cli-v<semver> (no prerelease) and matches the package version
         run: |
-          semver="${GITHUB_REF_NAME#cli-v}"
+          semver="${TAG#cli-v}"
           if ! printf '%s' "$semver" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
-            echo "::error::$GITHUB_REF_NAME is not cli-v<major.minor.patch> (prerelease tags are not published)"
+            echo "::error::$TAG is not cli-v<major.minor.patch> (prerelease tags are not published)"
             exit 1
           fi
           package="$(node -p "require('./packages/cli/package.json').version")"
           if [ "$semver" != "$package" ]; then
-            echo "::error::$GITHUB_REF_NAME does not match packages/cli/package.json version $package"
+            echo "::error::$TAG does not match packages/cli/package.json version $package"
             exit 1
           fi
       - name: Check the tagged commit is on main
         run: |
           git fetch --no-tags origin main
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD; then
-            echo "::error::$GITHUB_REF_NAME points at $GITHUB_SHA, which is not on main, so it is not published"
+          tagged="$(git rev-parse HEAD)"
+          if ! git merge-base --is-ancestor "$tagged" FETCH_HEAD; then
+            echo "::error::$TAG points at $tagged, which is not on main, so it is not published"
             exit 1
           fi
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -78,7 +93,10 @@ jobs:
       - run: npm ci
       - run: just check
       - name: Pack the tarball that will be published
-        run: npm pack -w packages/cli --pack-destination release-pack
+        # `npm pack` does not create the destination (npm 11 and later fail with ENOENT), and a relative one resolves against the repo root.
+        run: |
+          mkdir -p release-pack
+          npm pack -w packages/cli --pack-destination release-pack
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-tarball
@@ -88,7 +106,7 @@ jobs:
 
   publish:
     needs: build
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || inputs.publish
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -117,8 +135,8 @@ jobs:
             exit 1
           fi
           packed="$(tar -xzOf "$1" package/package.json | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")"
-          if [ "${GITHUB_REF_NAME#cli-v}" != "$packed" ]; then
-            echo "::error::$GITHUB_REF_NAME does not match the tarball's version $packed"
+          if [ "${TAG#cli-v}" != "$packed" ]; then
+            echo "::error::$TAG does not match the tarball's version $packed"
             exit 1
           fi
       # --ignore-scripts and a tarball argument: nothing from the package or its dependencies runs in this job. The path must start with
@@ -128,15 +146,15 @@ jobs:
 
   release:
     needs: publish
-    # A push gets here only after publish succeeded; a manual run skips build and publish, so this job must not wait on them being green.
-    if: ${{ !cancelled() && (needs.publish.result == 'success' || github.event_name == 'workflow_dispatch') }}
+    # A push (or a manual run with publish) gets here only after publish succeeded; a plain manual run skips build and publish, so this job must not
+    # wait on them being green.
+    if: ${{ !cancelled() && (needs.publish.result == 'success' || (github.event_name == 'workflow_dispatch' && !inputs.publish)) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write # create or edit the release; nothing else, and no npm credential
     env:
       GH_TOKEN: ${{ github.token }}
-      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
       # A tag push is always the newest release; a manual backfill says so with the input.
       LATEST: ${{ github.event_name == 'workflow_dispatch' && inputs.latest || github.event_name == 'push' }}
     steps:
