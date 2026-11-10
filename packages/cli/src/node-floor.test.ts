@@ -5,11 +5,11 @@ import pkg from '../package.json' with { type: 'json' };
 describe('the Node floor', () => {
   it('says the one line on an older Node', () => {
     expect(nodeFloorMessage('22.13.0')).toBe('oars needs Node 22.23.4 or newer; this is Node 22.13.0.');
+    expect(nodeFloorMessage('22.23')).toBe('oars needs Node 22.23.4 or newer; this is Node 22.23.');
   });
   it('says nothing on the floor or above', () => {
     expect(nodeFloorMessage('22.23.4')).toBeUndefined();
     expect(nodeFloorMessage('22.24.0')).toBeUndefined();
-    expect(nodeFloorMessage('22.23')).toBe('oars needs Node 22.23.4 or newer; this is Node 22.23.');
     expect(nodeFloorMessage('24.0.0')).toBeUndefined();
     expect(nodeFloorMessage('26.1.2')).toBeUndefined();
   });

@@ -1,6 +1,6 @@
 /**
  * The oldest Node the CLI supports (`engines.node` in package.json): the latest 22.x when the floor leg of `.github/workflows/ci.yml` (`cli-node-floor`) passed the whole CLI suite on it
- * (run 42781000296, v22.23.4). The one proven cause below it is `node:sqlite` URI filenames (`sessions/opencode.ts:91`), which Node 22.13 rejected (t1087 run 42776737858).
+ * (run 42783202609, `cli on Node 22.23.4`). The one proven cause below it is `node:sqlite` URI filenames (`sessions/opencode.ts:91`), which Node 22.13 rejected (t1087 run 42776737858).
  */
 export const MIN_NODE = '22.23.4';
 
