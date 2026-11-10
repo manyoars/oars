@@ -13,24 +13,24 @@ const clause = (version: string, number: string, next: string): string => flat(p
 
 describe('the covenant versions held', () => {
   it('holds 2.0 as filed and 2.1 after it, each under its own id', () => {
-    expect([...COVENANT_FULL_TEXTS.keys()]).toEqual(['2.0-4c538c50d706', '2.1-d72b1b3971e7']);
+    expect([...COVENANT_FULL_TEXTS.keys()]).toEqual(['2.0-4c538c50d706', '2.1-ec0ca3f6ff73']);
     expect([...COVENANT_TEXTS.keys()]).toEqual([...COVENANT_FULL_TEXTS.keys()]);
     expect(COVENANT_VERSION_2).toBe('2.0-4c538c50d706');
-    expect(COVENANT_VERSION_2_1).toBe('2.1-d72b1b3971e7');
+    expect(COVENANT_VERSION_2_1).toBe('2.1-ec0ca3f6ff73');
   });
 
   it('serves 2.1 with its id, its link, and the hash of the screen it shows', () => {
     const screen = screenOf(COVENANT_VERSION_2_1, COVENANT_TEXTS);
-    expect(screen?.link).toBe('https://manyoars.com/covenant/2.1-d72b1b3971e7');
+    expect(screen?.link).toBe('https://manyoars.com/covenant/2.1-ec0ca3f6ff73');
     expect(screen?.sha256).toBe(sha256Of(COVENANT_TEXTS.get(COVENANT_VERSION_2_1) ?? ''));
-    expect(screen?.text).toContain('MANY OARS POOL COVENANT 2.1-d72b1b3971e7\n');
+    expect(screen?.text).toContain('MANY OARS POOL COVENANT 2.1-ec0ca3f6ff73\n');
     expect(screen?.text).not.toContain('2.0-4c538c50d706');
   });
 
   it('says in 6.4 what erase.ts does, and 2.0 still says what it said', () => {
     const now = clause(COVENANT_VERSION_2_1, '6.4', '6.5');
     expect(now).toContain("It deletes the account's Raw Copies, repository keys, deposit hours, and contributor records");
-    expect(now).toContain('It keeps each Deposit, and the record of each machine that sent one, only as an anonymous shape that is no longer tied to the account');
+    expect(now).toContain('It keeps each Deposit, and the record of each machine enrolled under the account, only as an anonymous shape that is no longer tied to the account');
     expect(now).toContain('the acceptance and sign-in records of the account; the telemetry day counts, with the account removed from them; and a hash, size, and date of what was erased');
     expect(now).not.toContain('its repository keys and deposit hours');
     const was = clause(COVENANT_VERSION_2, '6.4', '6.5');
