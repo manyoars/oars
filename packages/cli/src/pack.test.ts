@@ -106,10 +106,10 @@ describe('the packed dist names none of the withheld terms', () => {
 });
 
 describe('the publish fields', () => {
-  it('name the public scoped package at 0.5.1, Apache-2.0, built from this folder of the public repository', () => {
+  it('name the public scoped package at 0.5.2, Apache-2.0, built from this folder of the public repository', () => {
     expect(manifest()).toMatchObject({
       name: '@manyoars/oars',
-      version: '0.5.1',
+      version: '0.5.2',
       license: 'Apache-2.0',
       repository: { type: 'git', url: 'git+https://github.com/manyoars/oars.git', directory: 'packages/cli' },
       publishConfig: { access: 'public' },

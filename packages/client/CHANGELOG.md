@@ -2,7 +2,7 @@
 
 All notable changes to `@manyoars/oars-client`. Versions follow semver.
 
-## 0.1.2
+## 0.1.2 (2026-11-10)
 
 - Node floor lowered from 24 to 22.23.4, the `oars` CLI's floor, so installing the CLI on Node 22 prints no engine warning.
 - Removes an exported helper and its types; `createOarsClient` and the generated types are the public surface.
