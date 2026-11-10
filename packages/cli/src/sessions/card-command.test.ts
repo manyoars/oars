@@ -37,12 +37,12 @@ describe('cardPaths', () => {
 describe('sessionsCard', () => {
   it('says the store is empty over an empty store and writes no picture', async () => {
     const out = join(dir, 'card.png');
-    const outcome = await sessionsCard(depsOf(join(dir, 'store')), { period: 'week', text: false, out });
+    const outcome = await sessionsCard(depsOf(join(dir, 'store')), { period: 'week', text: false, out }, {});
     expect(outcome.text).toContain('deposit');
     expect(outcome.document).toMatchObject({ ok: true, saved: null, tweet: null });
   });
 
   it('stops when the run has no session store', async () => {
-    await expect(sessionsCard(depsOf(undefined), { period: 'week', text: true })).rejects.toThrow('not configured');
+    await expect(sessionsCard(depsOf(undefined), { period: 'week', text: true }, {})).rejects.toThrow('not configured');
   });
 });
