@@ -16,7 +16,7 @@ const block = (text: string, from: string): string => {
   expect(start, `${from} is a top-level key`).toBeGreaterThanOrEqual(0);
   const rest = lines.slice(start + 1);
   const end = rest.findIndex((line) => /^\S/.test(line));
-  return [lines[start], ...(end === -1 ? rest : rest.slice(0, end))].join('\n');
+  return [lines[start], ...(end === -1 ? rest : rest.slice(0, end))].join('\n').trimEnd();
 };
 
 /** The steps, each as the text from its `- ` to the next, in file order. */
@@ -65,7 +65,7 @@ describe('deploy-pool workflow', () => {
     ]);
     expect(workflow.match(/secrets\.CLOUDFLARE_ACCOUNT_ID/g)).toHaveLength(withSecrets.length - 1);
     // Secrets are named here and never echoed.
-    expect(workflow).not.toMatch(/echo[^\n]*(CLOUDFLARE_API_TOKEN|secrets\.)/);
+    expect(workflow).not.toMatch(/echo[^\n]*(\$\{?(TOKEN|CLOUDFLARE_API_TOKEN)\b|\$\{\{ ?secrets\.)/);
     expect(workflow).not.toMatch(/\bset -x\b/);
   });
 
@@ -91,7 +91,7 @@ describe('deploy-pool workflow', () => {
   });
 
   it('installs as ci does', () => {
-    for (const line of ['node-version: 24', 'cache: npm', '- run: npm ci']) {
+    for (const line of ['node-version: 24', 'cache: npm', 'run: npm ci']) {
       expect(workflow).toContain(line);
       expect(ci).toContain(line);
     }
@@ -108,8 +108,8 @@ describe('deploy-pool workflow', () => {
     // `--` after npm exec: without it npm takes wrangler's flags for its own (the --dry-run incident, docs/pool.md step 7).
     expect(deployStep).toMatch(/npm exec -- wrangler deploy /);
     expect(deployStep).toContain('--message');
-    expect(deployStep).toContain('--tag "$SHA"');
-    expect(deployStep).toContain('"$SHA"');
+    expect(deployStep).toContain('--tag "${SHA:0:12}"');
+    expect(deployStep).toContain('--message "deploy $SHA"');
     // The custom domain is attached by every deploy (idempotent), so a plain deploy never drops it.
     expect(deployStep).toContain('--domain pool.manyoars.com');
     expect(steps()[migrations]).toMatch(/npm exec -- wrangler d1 migrations apply oars-pool --remote/);
