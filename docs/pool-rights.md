@@ -9,6 +9,7 @@ What each right reaches, and the reasons, are in [`pool.md`](pool.md) ("Rights a
 - **Run the migrations first.** The erase and close commands need every migration through the newest one applied on the live pool. Check before the first request, not during one.
 - **Where requests arrive.** `privacy@manyoars.com` only (covenant 6.1, 6.3, 6.6). A request anywhere else is forwarded there and answered from there.
 - **Run the erase commands from the repository root** with your own `wrangler` login: `npm run erase -w packages/pool -- <what> ...`. Every erase command is a dry run until you add `--confirm`, and says what it would do. `--local` points it at local state, for rehearsal. Never rehearse against the remote pool.
+- **Keep a request register,** outside the repository, because it holds personal data. One entry per request: the date received, the right, the account, the proof used, any extension and its reason with the date you told them, the answer and its date, and for an Art. 16 request any supplementary statement. Art. 5(2) needs you able to show you met each clock, and the pool keeps no request log.
 - **Erase needs R2 keys.** `erase ... account` lists the telemetry bucket, so export `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, and `R2_SECRET_ACCESS_KEY` first.
 
 ## The clock (Article 12(3)), for every right
@@ -23,25 +24,22 @@ What each right reaches, and the reasons, are in [`pool.md`](pool.md) ("Rights a
 
 The pool holds no email address and no name. An account id is a hash of the sign-in provider's subject (`docs/pool.md`, "Pseudonymous accounts"). So the email's sender proves nothing about the account.
 
-What the pool does have: the account id, the machines enrolled under it (label and id), and the provider sign-in. Use them together:
+What the pool does have is a proof of control: a sign-in the requester makes with their provider, which the pool stores as a time on the account (`accounts.proved_at`). The account id is derived from the provider's account, so only the person who can sign in to it can make that proof. Use it:
 
-1. Ask the requester to run `oars pool login --provider github --json` (or `google`) on their machine, and to send you the `account` and `expiresAt` it prints.
-2. If `oars pool machines` lists any machine, ask for one machine's label and id, or the last deposit day it shows. Only someone signed in to the account sees these. Many accounts list none.
-3. Check both against the pool, read-only, from `packages/pool` (this reads production, so only for a live request):
-   `npx wrangler d1 execute oars-pool --remote --command "SELECT id, closed_at, raw_consent_withdrawn_at FROM accounts WHERE id = '<account id>'"`
-   and the same against `machines` (`id`, `label`, `account`, `last_deposit_day`). Then check the sign-in is fresh:
-   `npx wrangler d1 execute oars-pool --remote --command "SELECT expires_at FROM tokens WHERE account = '<account id>'"`
-   One row must hold exactly the `expiresAt` the requester sent, and that value minus 90 days (the token lifetime, `packages/pool/src/identity.ts:10`) must fall after the date of the email.
-4. If the `expiresAt` matches, and the machine too when the account has one, go on. If not, write back, say what could not be matched, and do not act. The month keeps running.
+1. Reply to the request asking them to run `oars pool prove --json` and to send back the `account` and `provedAt` it prints. If the account is closed, they run `oars pool login --provider github --json` (or `google`) instead: the sign-in is refused with 403 `account_closed`, and the refusal prints the same two values. Note the date you asked.
+2. Read the stored time, read-only, from `packages/pool` (this reads production, so only for a live request):
+   `npx wrangler d1 execute oars-pool --remote --command "SELECT id, closed_at, proved_at FROM accounts WHERE id = '<account id>'"`
+3. `proved_at` must equal the `provedAt` they sent, and fall after your request for proof. If it is older, or no longer equals the row, ask them to run it again.
+4. If it matches, go on. If not, write back, say what could not be matched, and do not act. The month keeps running.
+
+A machine key is no proof: `oars pool prove` uses the sign-in only, and the pool refuses a key on the route (403 `deposit_only`), because a key may sit on a host and not with the person (Art. 32).
 
 Rules for how hard to ask:
 
 - For **erasure and closing**, do steps 1 to 3 whenever the requester asks the operator to act. They cannot be undone. The export (access and portability) runs only on the account's own sign-in, so it needs no check.
-- For a **protected person** (the GDPR or UK GDPR protects them), covenant 6.6(f) says to ask for proof of identity only when you have reasonable doubts. The pool holds no name or email, so an email alone always leaves reasonable doubt (Art. 12(6)), and covenant 6.3 allows requiring a fresh sign-in. A matching `expiresAt` from one is that proof.
-- If the requester says they cannot sign in (they lost the provider account), you cannot confirm them. Say so in writing. Do not erase, close, or send data on an email alone.
+- For a **protected person** (the GDPR or UK GDPR protects them), covenant 6.6(f) says to ask for proof of identity only when you have reasonable doubts. The pool holds no name or email, so an email alone always leaves reasonable doubt (Art. 12(6)), and covenant 6.3 allows requiring a fresh sign-in. A matching `provedAt` from one is that proof.
+- If the requester says they cannot sign in, ask them to run `oars pool prove` first: it needs only the provider sign-in, not the account's machines or a saved credential. If they have no provider sign-in at all, you cannot confirm them. A machine key is no proof: it may sit on a host, not with the person. The pool holds no name or email, and the account id is derived from the sign-in provider's account, so nothing else proves the account is theirs (Art. 11(2) and 12(2)). Tell them so, in writing, within the month. Do not erase, close, or send data on an email alone.
 - A request from someone other than the account holder (a third party named in a deposit) is a different case. See "A third party named in a deposit" at the end.
-
-Gap: no command issues a challenge or checks an id. The check above is by hand.
 
 ## Art. 15, access, and Art. 20, portability
 
@@ -167,21 +165,25 @@ Gap: **withdrawing the covenant.** Acceptance rows are append-only. Declining a 
 
 **Steps:**
 1. Confirm the account.
-2. Before you close, ask whether they also want an export or an erasure: once closed, the account cannot sign in, so it cannot be confirmed and the export cannot run. Do those first.
+2. Before you close, ask whether they also want an export or an erasure: once closed, the account cannot sign in, so `oars pool export` cannot run for them. Do those first. A later request about a closed account can still be confirmed (see the answer below).
 3. Dry run:
    `npm run erase -w packages/pool -- close --account <id>`
-4. Run it:
+4. Read the line it prints. If it names the right account, run it:
    `npm run erase -w packages/pool -- close --account <id> --confirm`
    It prints `{"rowsChanged":n}`.
 5. It revokes every token and every machine key, and from then on sign-in, machine enrollment, and activation answer 403 `account_closed`. A rerun changes nothing.
 
 A close erases nothing. If they also want their data deleted, that is a separate Art. 17 request.
 
-**Answer to send:** the date it closed, that no machine of theirs can deposit now, that their data stays, that a later request to erase or export cannot be confirmed once the account is closed, and that reopening needs a written request, and no step for it exists yet.
+**Answer to send:** the date it closed, that no machine of theirs can deposit now, that their data stays, that a later request about it can still be confirmed: they sign in once with `oars pool login --json`, which the pool refuses and records as proof of control (see "Who is asking"), and that reopening is done by hand on a written request.
 
 **Record kept:** the pool sets `accounts.closed_at`, which starts the retention clock in covenant 7.2(a), and writes one audit row. You keep the dates.
 
-Gap: **reopening.** No command reopens an account. Not yet possible.
+**Reopening** (no article requires it; covenant 6.1 is contract). Confirm the requester as in "Who is asking", then, from `packages/pool`:
+`npx wrangler d1 execute oars-pool --remote --command "UPDATE accounts SET closed_at = NULL WHERE id = '<account id>' AND closed_at IS NOT NULL"`
+Tokens and machine keys stay revoked, so the person signs in and enrolls their machines again. Note it in the request register.
+
+**Requests after closing.** The proof from `oars pool login --json` confirms the requester. Then run `erase account` (Art. 17). The operator cannot yet export a closed account's data or record its raw withdrawal; those commands are not written.
 
 Gap: **requests after closing.** A closed account cannot sign in, so it cannot be confirmed for erasure, export, or withdrawal. Not yet possible.
 
