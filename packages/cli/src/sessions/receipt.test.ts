@@ -90,18 +90,22 @@ describe('receiptOf', () => {
     expect(block).not.toContain('secretserver');
   });
 
-  it('cuts a long signature and names an unlisted harness other', () => {
-    const long = store({ sessions: [session('s1')], errors: [error('s1', `Bash | ${'x'.repeat(300)}`, { tool: 'Bash' })] });
-    expect(receiptOf(long, { error: 'xxx' }, ago)).toContain(`\`${'x'.repeat(120)}\``);
+  it('cuts a long signature, and names the harness other when no stored session holds the error', () => {
+    const long = store({ sessions: [session('s1')], errors: [error('s2', `Bash | ${'x'.repeat(300)}`, { tool: 'Bash' })] });
+    const block = receiptOf(long, { error: 'xxx' }, ago) ?? '';
+    expect(block).toContain(`\`${'x'.repeat(120)}\``);
+    expect(block).toContain('- Harness: other');
   });
 
   it('holds nothing private when the stored signature itself carries a long-tail tool, folder slug, and branch', () => {
     const sig = `Bash | No such tool available: ${PLANTED.longTailTool} in ${PLANTED.folder} on ${PLANTED.branch}`;
-    const leaky = store({ sessions: [session('s1')], errors: [error('s1', sig, { tool: 'Bash', ts: '2026-11-03T09:00:00.000Z' })] });
+    const leaky = store({ sessions: [session('s1', { project: PLANTED.folder, branches: [PLANTED.branch] })], errors: [error('s1', sig, { tool: 'Bash', ts: '2026-11-03T09:00:00.000Z' })] });
     const block = receiptOf(leaky, { error: 'No such tool available' }, ago) ?? '';
     expect(block).toContain('No such tool available');
     expect(block).not.toContain('secretserver');
     expect(block).not.toContain(PLANTED.folder);
+    expect(block).not.toContain(PLANTED.branch);
+    expect(block).not.toContain('secret-repo');
     expect(block).not.toContain('alice');
     expect(block).toContain('other');
   });
@@ -141,7 +145,7 @@ describe('oars sessions recall --receipt', () => {
   };
 
   it('exits USAGE when another form is given beside --receipt --error', async () => {
-    for (const extra of [['--text', 'y'], ['--entity', 'y'], ['--family', 'recovery'], ['--pattern', 'y']]) {
+    for (const extra of [['--text', 'y'], ['--entity', 'y'], ['--family', 'recovery'], ['--pattern', 'y'], ['--counts'], ['--mcp']]) {
       const { deps } = setup();
       expect(await run(['sessions', 'recall', '--receipt', '--error', 'x', ...extra], deps)).toBe(ExitCode.USAGE);
     }

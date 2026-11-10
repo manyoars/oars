@@ -2,7 +2,7 @@
 // harness by listed name, the error's normalized signature, how many earlier sessions hit it and in which weeks, and what those sessions did next. It
 // reads the same match recall does and the same redactor, so nothing here is a second path to a stored string.
 import { ACTION_TABLES } from './actions.js';
-import { localNames, redactTranscript } from './redact.js';
+import { redactTranscript } from './redact.js';
 import { recall, type RecallQuery } from './query.js';
 import { LITERAL } from './public-vocabulary.js';
 import { closedName } from './recall-render.js';
@@ -40,7 +40,7 @@ export const isoWeek = (ts: string): string | undefined => {
 const times = (count: number): string => `${String(count)} ${count === 1 ? 'time' : 'times'}`;
 
 /** The receipt for the best-matching signature of an error text, or null when no earlier session hit it. */
-export const receiptOf = (store: Store, query: RecallQuery, now: number, redactDomains: readonly string[] = []): string | null => {
+export const receiptOf = (store: Store, query: RecallQuery, now: number, redactDomains: readonly string[] = [], names: readonly string[] = []): string | null => {
   const [top] = recall(store, query, now, 1, redactDomains).matches;
   if (top === undefined) return null;
   const rows = store.errors.filter((error) => error.sig === top.sig);
@@ -51,10 +51,15 @@ export const receiptOf = (store: Store, query: RecallQuery, now: number, redactD
   const next = new Map<string, number>();
   for (const { tool, count } of top.followedBy) next.set(listedTool(tool), (next.get(listedTool(tool)) ?? 0) + count);
   const followed = [...next.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, NEXT_SHOWN).map(([tool, count]) => `${tool} x${String(count)}`);
-  // The key is `<tool> | <text>`; the tool is stated by its listed name. The text is cut, then run through the transcript rules (home paths, encoded
-  // folder slugs, local names, secrets) and every unlisted `mcp__` word becomes `other`, with backticks out so the fence holds.
-  const cut = top.sig.slice(top.sig.indexOf(' | ') + 3).slice(0, SIGNATURE_LIMIT);
-  const text = redactTranscript(cut, redactDomains, localNames()).text.replace(MCP_WORD, (word) => listedTool(word)).replaceAll('`', "'");
+  // The key is `<tool> | <text>`; the tool is stated by its listed name. The text first loses the literals the store records for the matched sessions
+  // (branches, project slugs; the transcript rules have no rule for either), then runs through the transcript rules (home paths, encoded folder slugs,
+  // local names, secrets), and only the redacted result is cut. Every unlisted `mcp__` word becomes `other`, with backticks out so the fence holds.
+  const recorded = store.sessions.filter((entry) => sessionIds.has(entry.session));
+  const literals = [...new Set([...recorded.flatMap((entry) => entry.branches.map((branch) => [branch, '<branch>'] as const)), ...recorded.map((entry) => [entry.project, '<project>'] as const)])]
+    .filter(([literal]) => literal.length > 0)
+    .sort((a, b) => b[0].length - a[0].length);
+  const scrubbed = literals.reduce((text, [literal, label]) => text.replaceAll(literal, label), top.sig.slice(top.sig.indexOf(' | ') + 3));
+  const text = redactTranscript(scrubbed, redactDomains, names).text.slice(0, SIGNATURE_LIMIT).replace(MCP_WORD, (word) => listedTool(word)).replaceAll('`', "'");
   return [
     '```markdown',
     '**Error receipt**',

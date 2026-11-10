@@ -8,7 +8,7 @@ import { CliError, ExitCode } from '../errors.js';
 import { loadTerms } from './exclusion.js';
 import { EVALUATOR_MODEL, fillArms, sidecarSaver } from './gold-arms.js';
 import { armsPath, coverageLines, formatScore, isGoldDocument, parseGold, plural, renderGold, sampleGold, scoreGold, type GoldDocument } from './gold.js';
-import { makeRedactor } from './redact.js';
+import { localNames, makeRedactor } from './redact.js';
 import { books, BOOKS_CAVEAT, formatBooks, formatMeasure, formatRecall, measure, type BooksBy } from './query.js';
 import { formatLineage, loadLineage, walkLineage } from './lineage.js';
 import type { Emit } from '../telemetry/emit.js';
@@ -147,7 +147,7 @@ export const sessionsReceipt = async (deps: SessionsDeps, query: PullInput, sid:
   }
   await sessionsRecall(deps, query, sid);
   const { storeDir } = runtimeOf(deps);
-  const block = receiptOf(await loadStore(storeDir), query, deps.now(), await readRedactDomains(storeDir));
+  const block = receiptOf(await loadStore(storeDir), query, deps.now(), await readRedactDomains(storeDir), localNames());
   return { document: { ok: true, receipt: block }, text: block ?? RECEIPT_MISS };
 };
 
