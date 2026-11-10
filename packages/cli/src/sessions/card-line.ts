@@ -75,10 +75,10 @@ export interface CardLineInput {
   stderr: (text: string) => void;
 }
 
-/** A hook, the MCP server, a recall, `--json`, or `oars card` itself: the line never goes there. */
+/** A hook, the MCP server, a recall, `sessions try`, `--json`, or `oars card` itself: the line never goes there. */
 export const quiet = (input: Pick<CardLineInput, 'argv' | 'path' | 'flags'>): boolean => {
   const { argv, path, flags } = input;
-  return path.length === 0 || path[0] === 'card' || path.includes('hook') || (path[0] === 'sessions' && path[1] === 'recall') || isHook([...argv], { path: [...path], flags: [...flags] }) || flags.includes('json') || flags.includes('mcp') || argv.includes('--json');
+  return path.length === 0 || path[0] === 'card' || path.includes('hook') || (path[0] === 'sessions' && (path[1] === 'recall' || path[1] === 'try')) || isHook([...argv], { path: [...path], flags: [...flags] }) || flags.includes('json') || flags.includes('mcp') || argv.includes('--json');
 };
 
 const markedWeek = async (storeDir: string): Promise<string | undefined> => {

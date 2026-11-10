@@ -114,6 +114,7 @@ describe('when the line shows', () => {
     ['the gate hook is observed', { path: ['gate', 'hook'], argv: ['gate', 'hook'] }],
     ['oars card itself runs', { path: ['card'], argv: ['card', '--text'] }],
     ['a recall runs', { path: ['sessions', 'recall'], argv: ['sessions', 'recall', 'a query'] }],
+    ['sessions try runs', { path: ['sessions', 'try'], argv: ['sessions', 'try'] }],
     ['no command ran', { path: [], argv: ['--help'] }],
   ] satisfies [string, Partial<Parameters<typeof cardLine>[0]>][])('never when %s', async (_name, over) => {
     expect(await ask(over)).toBe('not_due');
@@ -164,8 +165,7 @@ describe('the holdback', () => {
     rmSync(join(telemetry, 'install-id'));
     const first = await ask();
     const own = readFileSync(join(dir, 'store', 'card-line-id'), 'utf8').trim();
-    writeFileSync(join(telemetry, 'install-id'), `${idFor(!isHeld(own))}
-`);
+    writeFileSync(join(telemetry, 'install-id'), `${idFor(!isHeld(own))}\n`);
     expect(await ask({ now: NEXT_FRIDAY })).toBe(first);
     expect(readFileSync(join(dir, 'store', 'card-line-id'), 'utf8').trim()).toBe(own);
   });
