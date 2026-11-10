@@ -10,26 +10,30 @@ import { injectedRule, learnInjected, type InjectedRule, type Json, type JsonObj
 export const PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, '<secret>'],
   [/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, '<secret>'],
-  [/\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, '<secret>'],
-  [/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, '<secret>'],
+  // A synthetic fixture quoted in a session is masked like a real token (buyers' scanners flag the prefix, not the value), so the minimums are short and the
+  // left guard is a non-alphanumeric: `FAKE_ghp_...` still starts a token where `\b` would miss it.
+  [/(?<![A-Za-z0-9])gh[pousr]_[A-Za-z0-9]{8,}(?![A-Za-z0-9])/g, '<secret>'],
+  [/(?<![A-Za-z0-9])github_pat_[A-Za-z0-9_]{8,}(?![A-Za-z0-9])/g, '<secret>'],
   [/\bsk-(?:ant-)?[A-Za-z0-9_-]{16,}\b/g, '<secret>'],
-  [/\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{10,}\b/g, '<secret>'],
-  [/\bwhsec_[A-Za-z0-9]{10,}\b/g, '<secret>'],
-  [/\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g, '<secret>'],
+  [/(?<![A-Za-z0-9])(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{6,}(?![A-Za-z0-9])/g, '<secret>'],
+  [/(?<![A-Za-z0-9])whsec_[A-Za-z0-9]{6,}(?![A-Za-z0-9])/g, '<secret>'],
+  [/(?<![A-Za-z0-9])xox[abprs]-[A-Za-z0-9-]{6,}(?![A-Za-z0-9])/g, '<secret>'],
   [/\bAIza[0-9A-Za-z_-]{30,}\b/g, '<secret>'],
   [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, '<secret>'],
   [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{12,}/gi, '$1 <secret>'],
   // user:password@host inside a URL
   [/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/:@]+:[^\s/@]+@/gi, '$1<secret>@'],
-  // NAME=value and "name": "value" where the name says it is a secret
-  [/\b([A-Za-z0-9_-]*(?:password|passwd|secret|token|api[_-]?key|private[_-]?key|credential)[A-Za-z0-9_-]*)(["']?\s*[=:]\s*)(["']?)[^\s"'&,;]{4,}\3/gi, '$1$2$3<secret>$3'],
+  // NAME=value and "name": "value" where the name says it is a secret. A vendor name before a colon (`1password: ...` in prose) is no key. A `token` name
+  // keeps a bare number (a count: `tokens: 12345`, `"inputTokens": 98765`), as the JSON walk does; the second rule is the one that masks a `token` value.
+  [/\b(?!1password(?![A-Za-z0-9_-])["']?\s*:\s)([A-Za-z0-9_-]*(?:password|passwd|secret|api[_-]?key|private[_-]?key|credential)[A-Za-z0-9_-]*)(["']?\s*[=:]\s*)(["']?)[^\s"'&,;]{4,}\3/gi, '$1$2$3<secret>$3'],
+  [/\b([A-Za-z0-9_-]*token[A-Za-z0-9_-]*)(["']?\s*[=:]\s*)(["']?)(?!\d+(?![^\s"'&,;]))[^\s"'&,;]{4,}\3/gi, '$1$2$3<secret>$3'],
 ];
 
 const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g;
 // A pinned alias, `foo@npm:bar@1.0.0` or `jsr:@scope/bar@1.0.0`, ends in `bar@1.0.0`, which EMAIL reads as an address. Digits and dots after
 // the `@` are a version, never a domain, so that one shape right after `npm:` or `jsr:` (and an optional scope) is kept. An all-numeric four-part tail is an
 // IP address, a real host, so it stays masked (as in `extract.ts` `VERSIONED`); any other address stays masked too.
-const ALIAS_PREFIX = /(?<![A-Za-z0-9])(?:npm|jsr):(?:@[A-Za-z0-9._~-]+\/)?$/;
+const ALIAS_PREFIX = /(?<![A-Za-z0-9])(?:npm|jsr):(?:@[A-Za-z0-9._~-]+\/)?$|(?<![A-Za-z0-9._%+-])@[A-Za-z0-9._~-]+\/$/;
 const DOTTED_VERSION = /@(?!\d+\.\d+\.\d+\.\d+$)\d+(?:\.\d+)+$/;
 const TOKEN = /[A-Za-z0-9+_=-]{24,}/g;
 
@@ -127,7 +131,7 @@ const parseContainer = (text: string): Json[] | JsonObject | undefined => {
   }
 };
 
-const redactDecoded = (body: string, redactText: Redactor, injected: InjectedRule): string => {
+const redactDecoded = (body: string, redactText: Redactor, injected: InjectedRule, enter: (line: JsonObject) => void): string => {
   // A name reaches the strings of an array under it (`"tokens": ["..."]`); an object's own keys name their values.
   const walk = (value: Json, name: string): Json => {
     if (typeof value === 'string') return SECRET_NAME.test(name) && value.length >= 4 ? '<secret>' : redactBlock(value);
@@ -146,6 +150,7 @@ const redactDecoded = (body: string, redactText: Redactor, injected: InjectedRul
   // The text as it was when nothing in it changed; otherwise the value written again, inside the whitespace (a `\r`, a newline) it had around it.
   // A transcript line is a top-level object: the harness's own blocks in it are marked first (their hash is of the text as written), then the rest is walked.
   const rewrite = (text: string, parsed: Json[] | JsonObject, top: boolean): string => {
+    if (top && !Array.isArray(parsed)) enter(parsed);
     const marked = top && !Array.isArray(parsed) ? injected(parsed) : parsed;
     const next = walk(marked, '');
     return next === parsed ? text : `${text.slice(0, text.length - text.trimStart().length)}${JSON.stringify(next)}${text.slice(text.trimEnd().length)}`;
@@ -201,7 +206,50 @@ const nameRule = (names: readonly string[]): RegExp | undefined => {
 export interface PackRules {
   /** The accounts the operator's repositories live under (a GitHub user or organization): masked as `<owner>` where one stands as a path segment or after a `:` of a remote. */
   handles?: readonly string[];
+  /** Rewrites a tool use id (`toolu_...`, `srvtoolu_...`) to the value the pack keys it to, so a call and its result still pair; without it the entropy rule masks each as `<secret>`. */
+  toolId?: (id: string) => string;
+  /** Keeps a public host the session itself fetched or searched (the URL or `allowed_domains` of a WebFetch or WebSearch input) in the clear in that call's result. */
+  fetchedHosts?: boolean;
 }
+
+const TOOL_ID = /(?<![A-Za-z0-9])(?:srv)?tool(?:u|use)_(?:bdrk_|vrtx_)?[A-Za-z0-9_-]{8,}/g;
+const FETCH_TOOLS = new Set(['WebFetch', 'WebSearch']);
+const HOST_OF_URL = /^[a-z][a-z0-9+.-]*:\/\/([A-Za-z0-9.-]+)/i;
+const URLS = /\b[a-z][a-z0-9+.-]*:\/\/[^\s/@"'\\]*@?[A-Za-z0-9.-]+/gi;
+// Loopback, an IP literal, a bare name, and the internal suffixes of INTERNAL_NAME are never a public host.
+const INTERNAL_SUFFIX = /\.(?:internal|local|lan|corp|intranet|home|localdomain)$/;
+const publicHost = (host: string): boolean => host.includes('.') && !/^[\d.]+$/.test(host) && !INTERNAL_SUFFIX.test(host) && host !== 'localhost';
+
+const hostsIn = (value: Json, found: Set<string>, listed = false): void => {
+  if (typeof value === 'string') {
+    for (const url of value.match(URLS) ?? []) if (!url.includes('@')) found.add((HOST_OF_URL.exec(url)?.[1] ?? '').toLowerCase());
+    // `allowed_domains` lists bare domains.
+    if (listed) found.add(value.toLowerCase().replace(/^[a-z][a-z0-9+.-]*:\/\//, '').replace(/[/:].*$/, ''));
+  } else if (Array.isArray(value)) for (const item of value) hostsIn(item, found, listed);
+  else if (typeof value === 'object' && value !== null) for (const [key, item] of Object.entries(value)) hostsIn(item, found, key === 'allowed_domains');
+};
+
+/** The blocks of a transcript line's message content, when it has any. */
+const blocksOf = (line: JsonObject): JsonObject[] => {
+  const message = line['message'];
+  const content = typeof message === 'object' && message !== null && !Array.isArray(message) ? message['content'] : undefined;
+  return Array.isArray(content) ? content.filter((block): block is JsonObject => typeof block === 'object' && block !== null && !Array.isArray(block)) : [];
+};
+
+/** The public hosts each WebFetch or WebSearch call of a transcript named, by the call's tool use id. */
+const fetchedBy = (lines: readonly JsonObject[]): Map<string, Set<string>> => {
+  const byId = new Map<string, Set<string>>();
+  for (const line of lines) {
+    for (const block of blocksOf(line)) {
+      const { type, id, name, input } = block;
+      if (type !== 'tool_use' || typeof id !== 'string' || typeof name !== 'string' || !FETCH_TOOLS.has(name) || input === undefined) continue;
+      const found = new Set<string>();
+      hostsIn(input, found);
+      byId.set(id, new Set([...found].filter(publicHost)));
+    }
+  }
+  return byId;
+};
 
 // A handle is a whole path segment (`/acme/app`, `\acme\app`, `git@host:acme/app.git`) or a hyphen-bounded word of an encoded project folder (`-repos-acme-app`).
 const handleRule = (handles: readonly string[]): RegExp | undefined => {
@@ -214,12 +262,16 @@ export const redactTranscript = (body: string, domains: readonly string[] = [], 
   const named = nameRule(names);
   const owner = handleRule(pack.handles ?? []);
   const known = makeRedactor(domains);
-  const redactText: Redactor = (text) => {
+  // The hosts the line being redacted may keep: those its tool results' calls fetched.
+  let kept: ReadonlySet<string> = new Set();
+  const keepHost = (match: string, scheme: string): string => (!match.includes('@') && kept.has((HOST_OF_URL.exec(match)?.[1] ?? '').toLowerCase()) ? match : `${scheme}<host>`);
+  const redactText: Redactor = (original) => {
+    const text = pack.toolId === undefined ? original : original.replace(TOOL_ID, pack.toolId);
     // The names go first: a hyphenated or spaced name must be masked whole before the path rules take its first word.
     const masked = known(rawRules(text));
     const mine = named === undefined ? masked : masked.replace(named, '<user>');
     return (owner === undefined ? mine : mine.replace(owner, '<owner>'))
-      .replace(URL_HOST, '$1<host>')
+      .replace(URL_HOST, keepHost)
       .replace(INTERNAL_NAME, '<host>')
       .replace(IPV4, '<host>')
       .replace(IPV6, '<host>')
@@ -234,9 +286,13 @@ export const redactTranscript = (body: string, domains: readonly string[] = [], 
   const repeated = new Set<string>();
   const whole = parseContainer(body);
   for (const parsed of whole !== undefined ? [whole] : body.split('\n').map(parseContainer)) if (parsed !== undefined && !Array.isArray(parsed)) learnInjected(parsed, repeated);
-  const redacted = redactDecoded(body, redactText, injectedRule(injectedKey, repeated));
+  const calls = pack.fetchedHosts === true ? fetchedBy([...(whole !== undefined ? [whole] : body.split('\n').map(parseContainer))].filter((parsed): parsed is JsonObject => parsed !== undefined && !Array.isArray(parsed))) : new Map<string, Set<string>>();
+  const enter = (line: JsonObject): void => {
+    kept = new Set(blocksOf(line).flatMap((block) => (block['type'] === 'tool_result' && typeof block['tool_use_id'] === 'string' ? [...(calls.get(block['tool_use_id']) ?? [])] : [])));
+  };
+  const redacted = redactDecoded(body, redactText, injectedRule(injectedKey, repeated), enter);
   return { text: redacted, masked: Math.max(0, placeholders(redacted) - placeholders(body)) };
 };
 
 /** The version of the rules above, stated to the pool with every raw part; a change to any rule of `redactTranscript` raises it. */
-export const REDACTION_VERSION = '3';
+export const REDACTION_VERSION = '4';

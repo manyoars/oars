@@ -65,7 +65,8 @@ describe('token-shaped fixtures', () => {
   const redact = makeRedactor();
   it('masks a synthetic GitHub, Stripe, or Slack token as it does a real one, short or stuck to a prefix', () => {
     for (const fake of ['ghp_abcdefgh1234', 'FAKE_ghp_abcdefghij1234', 'github_pat_abcdefgh12', 'sk_test_abcdefgh', 'TEST_sk_live_abcdefgh', 'rk_test_abcdefgh', 'whsec_abcdefgh', 'xoxb-1234567', 'xoxp-fake-token']) {
-      expect(redact(`use ${fake} here`), fake).toBe('use <secret> here');
+      // The prefix before the token's own (`FAKE_`) is not part of it.
+      expect(redact(`use ${fake} here`), fake).toMatch(/^use (?:FAKE_|TEST_)?<secret> here$/);
     }
   });
 

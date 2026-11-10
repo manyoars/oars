@@ -509,7 +509,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     const raws = await Promise.all(files.map((file) => readFile(file.path, 'utf8')));
     // The accounts this session's repositories live under: the owners entry's, and what the remote of each working folder names.
     const handles = [...(owner.handles ?? []), ...(await accountsOf(new Set(raws.flatMap((raw) => [...cwdsOf(raw)]))))];
-    const texts = raws.map((raw) => redactTranscript(raw, domains, names, injectedKey, { handles }).text);
+    const texts = raws.map((raw) => redactTranscript(raw, domains, names, injectedKey, { handles, toolId: (id) => maskOf(indexKey, options.buyerKey, id), fetchedHosts: true }).text);
     const masked = maskIds(texts, sessionIds, indexKey, options.buyerKey);
     // After redaction and masking, before the first byte is written: a session with a hit leaves no file, manifest row, or index row.
     if (masked.some((text) => secretIn(scannable(text)) !== undefined)) {
