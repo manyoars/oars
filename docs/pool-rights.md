@@ -93,11 +93,13 @@ What you can do by hand, and only if the requester asks for it:
 6. One deposit only, or one raw object only, if that is all they asked for:
    `npm run erase -w packages/pool -- row --account <id> --id <session>`, and `npm run erase -w packages/pool -- raw <r2-key>`. Each is a dry run until `--confirm`. Both are for narrower cases; the usual answer is `account`.
 
-**Answer to send:** the counts it printed, the date, the list of what stays (covenant 6.4, 6.6(d)), and that a copy already sold or served cannot be recalled (covenant 6.6(e)).
+**Answer to send:** the counts it printed, the date, the list of what stays (covenant 6.4, 6.6(d)), that a copy already sold or served cannot be recalled (covenant 6.6(e)), the copies below, and the completion date: three months after the run.
 
 **Record kept:** the pool keeps the tombstone and one audit row (`erasure_audit`, kind and reason, the date, the counts). You keep the request dates, the proof used, and the printed counts.
 
-Gap: **backups.** Whether D1 Time Travel or any R2 replication holds the erased data is not stated anywhere in the repository. Tell the requester it is not stated, until someone checks.
+**Copies.** The erasure is complete at the latest copy, three months after the run (the Analytics Engine retention). D1 Time Travel keeps point-in-time copies for 30 days at most (7 days on Workers Free), and a restore inside that window brings the erased rows back, so rerun step 4 after any restore. R2 objects are single copies: no versioning or replication is set.
+
+Gap: **unconfirmed copies.** Whether the account's dashboard holds any R2 setting beyond those in the repository, and Cloudflare's own backups of R2 or D1 beyond Time Travel, are not confirmed. Say so to the requester until someone checks.
 
 Gap: **bundles and client copies.** A bundle already served and a client's `<store>/pool-replica` copy are not recalled. The generation moves, so clients fetch a new bundle.
 
