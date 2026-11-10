@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { zstdCompressSync } from 'node:zlib';
@@ -33,6 +33,24 @@ export const removeHeld = (dir: string): void => {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, DELAY_MS);
     }
   }
+};
+
+/**
+ * A folder a process had as its working directory, or held a file open in, cannot be renamed or removed on Windows until the system has closed that process's handles, which comes a moment after its exit is seen: CI failed
+ * twice on `rm` of a temp home with `EPERM` after the detached child's pid was already gone (`hook-bin-stop.test.ts`, `hook-bin-machine.test.ts`). Renaming the folder is the probe for "no process holds it": it changes nothing the
+ * test reads, fails as removal does while a handle is open, and succeeds the moment the handles are closed, so the wait ends on that condition and not on a delay. Anywhere but Windows the first try succeeds. Returns the folder
+ * to remove (the renamed one), or the folder itself when it is already gone.
+ */
+export const waitUntilFree = async (folder: string): Promise<string> => {
+  if (!existsSync(folder)) return folder;
+  const moved = `${folder}.free`;
+  await vi.waitFor(
+    () => {
+      renameSync(folder, moved);
+    },
+    { timeout: 25_000, interval: 50 },
+  );
+  return moved;
 };
 
 export const cleanup = (): void => {

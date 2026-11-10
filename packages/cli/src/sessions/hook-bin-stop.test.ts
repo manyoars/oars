@@ -6,33 +6,20 @@
 // directory. The sender is still exiting for a few milliseconds after it writes `pool-nightly.json`, so the test waits on the sender's own exit: a preload, passed in `NODE_OPTIONS`, writes
 // the pid of the process started as `nightly` outside the temp home, and the test waits until that pid is gone.
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { waitUntilFree } from './test-support.js';
 
 const hookBin = fileURLToPath(new URL('../../dist/hook-bin.js', import.meta.url));
 const built = existsSync(hookBin);
 
 const made: string[] = [];
 
-/**
- * A folder a process had as its working directory, or held a file open in, cannot be renamed or removed on Windows until the system has closed that process's handles, which comes a moment after its exit is seen: the one CI
- * failure here was `rm` of the temp home with `EPERM` after the sender's pid was already gone. Renaming the folder is the probe for "no process holds it": it changes nothing the test reads, fails as removal does while a handle is
- * open (`EBUSY`), and succeeds the moment the handles are closed, so the wait ends on that condition and not on a delay. Anywhere but Windows the first try succeeds.
- */
-const free = async (folder: string): Promise<string> => {
-  if (!existsSync(folder)) return folder;
-  const moved = `${folder}.free`;
-  await vi.waitFor(() => {
-    renameSync(folder, moved);
-  }, { timeout: 25_000, interval: 50 });
-  return moved;
-};
-
 afterEach(async () => {
-  for (const folder of made.splice(0)) rmSync(await free(folder), { recursive: true, force: true });
+  for (const folder of made.splice(0)) rmSync(await waitUntilFree(folder), { recursive: true, force: true });
 });
 
 /** Whether a process with this pid is still running (signal 0 only tests for it). */
