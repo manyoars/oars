@@ -15,7 +15,7 @@
     "PostToolUseFailure": [
       {
         "matcher": "Read|Edit|MultiEdit|NotebookEdit|Write|Grep|Glob|LSP|Bash|PowerShell|WebSearch|WebFetch|Skill|Agent|Task|TodoWrite|TaskCreate|TaskUpdate|TaskList|TaskGet|EnterPlanMode|ExitPlanMode|AskUserQuestion|StructuredOutput|ToolSearch|SendMessage|ListAgents|Monitor|TaskStop|TaskOutput|BashOutput|KillShell|ScheduleWakeup|Workflow|EnterWorktree|ExitWorktree|mcp__.*",
-        "hooks": [{ "type": "command", "command": "command -v oars-hook >/dev/null || exit 0; oars-hook post-tool", "timeout": 5 }]
+        "hooks": [{ "type": "command", "command": "command -v oars-hook >/dev/null || exit 0; IFS= read -r event; case \"$event\" in '') exit 0;; *'\"tool_name\":\"Bash\"'*|*'\"tool_name\":\"PowerShell\"'*) case \"$event\" in *'Exit code'*) ;; *) exit 0;; esac;; esac; { printf '%s\\n' \"$event\"; cat; } | oars-hook post-tool", "timeout": 5 }]
       }
     ],
     "SessionEnd": [{ "hooks": [{ "type": "command", "command": "command -v oars-hook >/dev/null || exit 0; oars-hook stop", "timeout": 30 }] }]

@@ -1,12 +1,12 @@
 # Install oars into a harness
 
-Each harness below lists `oars` from a manifest in this repository. Every one of them runs the `oars` you already have on your `PATH` (`npm install -g @manyoars/oars`), so install the CLI first; a manifest adds the harness wiring and never the CLI. Each manifest names the CLI version it was cut with (`harness-manifests.test.ts` fails the build when one is stale).
+Each harness below lists `oars` from a manifest in this repository. Each harness plugin or extension below runs the `oars` you already have on your `PATH` (`npm install -g @manyoars/oars`), so install the CLI first; a manifest adds the harness wiring and never the CLI. Each manifest names the CLI version it was cut with (`harness-manifests.test.ts` fails the build when one is stale).
 
 | Harness | One line | What it adds | Manifest |
 |---|---|---|---|
 | Claude Code | `/plugin marketplace add manyoars/oars`, then `/plugin install oars@manyoars` (Claude Code 2.1.275 or later: `/plugin install oars --marketplace manyoars/oars`) | The recall hooks, the recall MCP server, and the `oars-recall` skill | `.claude-plugin/marketplace.json`, `.claude-plugin/plugin.json` |
 | Codex | `codex plugin marketplace add manyoars/oars`, then install `oars` from that marketplace in the plugin directory | The recall MCP server and the `oars-recall` skill; no hooks | `.agents/plugins/marketplace.json`, `plugin.json`, `mcp.json` |
-| Gemini CLI | `gemini extensions install https://github.com/manyoars/oars` | The recall MCP server | `gemini-extension.json` |
+| Gemini CLI | `gemini extensions install https://github.com/manyoars/oars` | The recall MCP server and the `oars-recall` skill | `gemini-extension.json`, `skills/oars-recall/SKILL.md` |
 | Any MCP client | `npx -y @manyoars/oars sessions recall --mcp` as a stdio server | The `oars_recall` tool | `server.json` (the MCP registry entry, `io.github.manyoars/oars`) |
 | Skill only | `npx skills add manyoars/oars` | The `oars-recall` skill | `skills/oars-recall/SKILL.md` |
 
@@ -24,7 +24,7 @@ Installing a manifest sends nothing. A manifest runs the same `oars` as a termin
 
 These steps run after a release, never from a build:
 
-1. Publish `@manyoars/oars` to npm with the version the manifests name. The registry checks `mcpName` in the published `package.json`, so `server.json` can go only after that version is on npm.
+1. The first registry listing needs a release above 0.4.1: npm already has 0.4.0 and 0.4.1, neither with `mcpName`, and npm refuses a republish. Bump all 7 version fields together (step 4), tag `cli-v<that version>`, and let `release-cli.yml` publish it. The registry checks `mcpName` in the published `package.json`, so `server.json` can go only after that version is on npm.
 2. `mcp-publisher login github`, then `mcp-publisher validate` and `mcp-publisher publish` from the repository root (the quickstart: `modelcontextprotocol.io/registry/quickstart`). The namespace `io.github.manyoars/*` needs the login to be a member of the `manyoars` GitHub organization with public membership.
-3. Tag the release so `/plugin marketplace add manyoars/oars` and `gemini extensions install` pick up the manifests; the Gemini gallery also needs the `gemini-cli-extension` repository topic.
+3. The step 1 tag is what `/plugin marketplace add manyoars/oars` and `gemini extensions install` pick up; the Gemini gallery also needs the `gemini-cli-extension` repository topic.
 4. On a version bump, change `version` in `packages/cli/package.json`, `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, `plugin.json`, `gemini-extension.json`, and both places in `server.json`. `harness-manifests.test.ts` fails until they agree.
