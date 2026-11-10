@@ -144,7 +144,7 @@ describe('the versions a deposit carries', () => {
     expect(bagged.skeleton).not.toContain('billing');
   });
 
-  it('keep the templates and diff shape of a format 5 call in the stored skeleton, read a template with a literal in it as other, and bag them from a format 4 batch', async () => {
+  it('keep the templates and diff shape of a format 6 call in the stored skeleton, read a template with a literal in it as other, and bag them from a format 4 batch', async () => {
     const templates = ['git commit -m <text>', 'pytest <path> -k <ident>'];
     const templated = baseline();
     Object.assign(holder(templated, 'transcripts', 0, 'tools', 0), { templates, templatesDropped: 2, diffShape: ['import-added', 'lines-changed'] });

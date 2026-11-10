@@ -140,7 +140,7 @@ The format a batch states decides what the deposit route reads from it. The clie
 | Batch holds | Action at the deposit route |
 |---|---|
 | `format` 6 | read, the tool fields `argFeatures`, `argValues`, `changeKind`, `names`, `namesDropped`, `templates`, `templatesDropped`, and `diffShape` and the batch field `recommendations` included |
-| `format` 5 | read as before; a `recommendations` in it is a field format 5 does not define, so it goes to the extensions bag and counts in no cell, and the parsed batch keeps `format` 5 |
+| `format` 5 | read as before, the tool fields `names`, `namesDropped`, `templates`, `templatesDropped`, and `diffShape` included; a `recommendations` in it is a field format 5 does not define, so it goes to the extensions bag and counts in no cell, and the parsed batch keeps `format` 5 |
 | `format` 4 | read as before; a `names`, `namesDropped`, `templates`, `templatesDropped`, `diffShape`, or `recommendations` in it is a field format 4 does not define, so it goes to the extensions bag and counts in no cell, and the parsed batch keeps `format` 4 |
 | `format` 3 | read as before; an `argFeatures`, `argValues`, `changeKind`, `names`, `namesDropped`, `templates`, `templatesDropped`, `diffShape`, or `recommendations` in it is a field format 3 does not define, so it goes to the extensions bag and counts in no cell, and the parsed batch keeps `format` 3 |
 | `format` 1 or 2 | 422 `closed_vocabulary` naming `format`: "the format n form is no longer read; send format 6" |
