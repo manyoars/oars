@@ -47,7 +47,7 @@ export const normalizeRemote = (url: string): string => {
 };
 
 /** The `url` of `[remote "origin"]` in a git `config`, or null. */
-const originUrl = (config: string): string | null => {
+export const originUrl = (config: string): string | null => {
   let inOrigin = false;
   for (const line of config.split(/\r?\n/)) {
     const section = /^\s*\[(.*)\]\s*$/.exec(line);
@@ -73,25 +73,30 @@ const readOrNull = (path: string): string | null => {
 };
 
 /**
+ * The git `config` text of a repository root, or null: `<root>/.git/config`, or for a linked worktree or submodule (`.git` is a file)
+ * the common directory's, reached through the file's `gitdir:` line and that directory's `commondir` file.
+ */
+export const configOf = (root: string, read: (path: string) => string | null = readOrNull): string | null => {
+  const direct = read(`${root}/.git/config`);
+  if (direct !== null) return direct;
+  const pointer = /^gitdir:\s*(.+?)\s*$/m.exec(read(`${root}/.git`) ?? '')?.[1];
+  if (pointer === undefined) return null;
+  const gitdir = resolveFrom(root, pointer);
+  const common = read(`${gitdir}/commondir`)?.trim();
+  return read(`${common === undefined || common === '' ? gitdir : resolveFrom(gitdir, common)}/config`);
+};
+
+/**
  * A resolver from a repository root to its identity string: `origin:<normalized remote>` when the repository's `config` names an
  * `origin`, else `path:<root>`. The `config` is `<root>/.git/config`, or for a linked worktree (`.git` is a file) the common
  * directory's, reached through the file's `gitdir:` line and that directory's `commondir` file. Any step failing falls back to the path.
  */
 export const makeRepoIdentity = (read: (path: string) => string | null = readOrNull): ((root: string) => string) => {
   const cache = new Map<string, string>();
-  const configOf = (root: string): string | null => {
-    const direct = read(`${root}/.git/config`);
-    if (direct !== null) return direct;
-    const pointer = /^gitdir:\s*(.+?)\s*$/m.exec(read(`${root}/.git`) ?? '')?.[1];
-    if (pointer === undefined) return null;
-    const gitdir = resolveFrom(root, pointer);
-    const common = read(`${gitdir}/commondir`)?.trim();
-    return read(`${common === undefined || common === '' ? gitdir : resolveFrom(gitdir, common)}/config`);
-  };
   return (root) => {
     const known = cache.get(root);
     if (known !== undefined) return known;
-    const url = originUrl(configOf(root) ?? '');
+    const url = originUrl(configOf(root, read) ?? '');
     const identity = url === null ? `path:${root.toLowerCase()}` : `origin:${normalizeRemote(url)}`;
     cache.set(root, identity);
     return identity;

@@ -3,12 +3,13 @@
 // Order, per session: the exclusion gate (A38) first, then a known owner and known harness terms, the turn floor, a repository, and no duplicate, then redaction, masking, and the secret scan, then the copy, with every injected block stripped.
 import { createHash, createHmac } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
-import { appendFile, mkdir, readdir, readFile, rename, rmdir, stat, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readdir, readFile, rename, rmdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { dirname, join, resolve } from 'node:path';
 import { defaultConfigDir } from '../../cli/src/credentials.js';
 import { checkSession, transcriptFilesOf, type Reason } from '../../cli/src/sessions/exclusion.js';
+import { configOf, makeRepoRoot, originUrl } from '../../cli/src/sessions/repo-root.js';
 import { LEADING_TAG, LOCAL_COMMAND_TAGS } from '../../cli/src/sessions/extract.js';
 import { localNames, redactTranscript, REDACTION_VERSION } from '../../cli/src/sessions/redact.js';
 import { harnessOf, type Harness } from '../../cli/src/sessions/schema.js';
@@ -222,34 +223,18 @@ const lineIdsOf = (value: unknown, found: Set<string>): void => {
   }
 };
 
-// `url = <remote>` lines of a git config, and the account in one: `https://host/acme/app.git`, `git@host:acme/app.git`, `ssh://git@host/acme/app`.
-const CONFIG_URL = /^[ \t]*url[ \t]*=[ \t]*(\S+)[ \t]*$/gm;
+// The account in a remote URL: `https://host/acme/app.git`, `git@host:acme/app.git`, `ssh://git@host/acme/app`.
 const REMOTE_ACCOUNT = /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/\s]+@)?[^/:\s]+[:/]([^/\s]+)\/[^/\s]+$/i;
 
-/** The git config a working folder belongs to: its own `.git/config`, or a linked worktree's common one (`.git` is then a file naming `<repo>/.git/worktrees/<name>`). */
-const configOf = async (cwd: string): Promise<string | undefined> => {
-  for (let folder = cwd; ; folder = dirname(folder)) {
-    const dot = join(folder, '.git');
-    try {
-      if ((await stat(dot)).isDirectory()) return join(dot, 'config');
-      const pointer = /^gitdir:\s*(.+)$/m.exec(await readFile(dot, 'utf8'))?.[1];
-      return pointer === undefined ? undefined : join(resolve(folder, pointer.trim()), '..', '..', 'config');
-    } catch {
-      if (dirname(folder) === folder) return undefined;
-    }
-  }
-};
-
-/** The accounts the remotes of the repositories a session ran in name; a folder that is gone, or has no remote, adds none. */
-const accountsOf = async (cwds: Iterable<string>): Promise<string[]> => {
+/** The accounts the `origin` remotes of the repositories a session ran in name (an upstream or submodule url is someone else's account); a folder that is gone, or has no origin, adds none. */
+const accountsOf = (cwds: Iterable<string>): string[] => {
+  const repoRoot = makeRepoRoot();
   const found = new Set<string>();
   for (const cwd of cwds) {
-    const config = await configOf(cwd);
-    const text = config === undefined ? '' : await readFile(config, 'utf8').catch(() => '');
-    for (const [, url] of text.matchAll(CONFIG_URL)) {
-      const account = REMOTE_ACCOUNT.exec(url ?? '')?.[1];
-      if (account !== undefined && !/^\d+$/.test(account)) found.add(account);
-    }
+    const root = repoRoot(cwd);
+    const url = root === null ? null : originUrl(configOf(root) ?? '');
+    const account = url === null ? undefined : REMOTE_ACCOUNT.exec(url)?.[1];
+    if (account !== undefined && !/^\d+$/.test(account)) found.add(account);
   }
   return [...found];
 };
@@ -546,7 +531,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     const files = await transcriptFilesOf(runtime, record.project, record.session);
     const raws = await Promise.all(files.map((file) => readFile(file.path, 'utf8')));
     // The accounts this session's repositories live under: the owners entry's, and what the remote of each working folder names.
-    const handles = [...(owner.handles ?? []), ...(await accountsOf(new Set(raws.flatMap((raw) => [...cwdsOf(raw)]))))];
+    const handles = [...(owner.handles ?? []), ...accountsOf(new Set(raws.flatMap((raw) => [...cwdsOf(raw)])))];
     const texts = raws.map((raw) => redactTranscript(raw, domains, names, injectedKey, { handles, toolId: (id) => maskOf(indexKey, options.buyerKey, id), fetchedHosts: true }).text);
     const masked = maskIds(texts, sessionIds, indexKey, options.buyerKey);
     // After redaction and masking, before the first byte is written: a session with a hit leaves no file, manifest row, or index row.
