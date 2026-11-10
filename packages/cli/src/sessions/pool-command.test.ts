@@ -1435,7 +1435,10 @@ describe('oars pool deposit --send', () => {
 
     describe('the region question', () => {
       const QUESTION = 'Are you in the EU, the EEA, or the UK? (yes/no)';
-      const bodyOf = (pool: { requests: Outgoing[] }): { [field: string]: unknown } => JSON.parse(pool.requests.find((request) => request.url.pathname === '/v1/covenant/accept')?.body ?? '{}');
+      const bodyOf = (pool: { requests: Outgoing[] }): unknown => {
+        const sent: unknown = JSON.parse(pool.requests.find((request) => request.url.pathname === '/v1/covenant/accept')?.body ?? '{}');
+        return sent;
+      };
 
       it('asks after the phrase and before the acceptance call, and sends the answer', async () => {
         const scene = await batched();
@@ -1455,7 +1458,7 @@ describe('oars pool deposit --send', () => {
         const pool = wire(acceptRoutes());
         atTerminal(scene, SCREEN.phrase, 'yes');
         await poolDeposit(scene.h.deps, sendOptions(hash, pool.via));
-        expect(bodyOf(pool).euEeaUk).toBe('yes');
+        expect(bodyOf(pool)).toMatchObject({ euEeaUk: 'yes' });
       });
 
       it('does not ask when the flag gives the answer', async () => {
@@ -1465,7 +1468,7 @@ describe('oars pool deposit --send', () => {
         atTerminal(scene, SCREEN.phrase);
         await poolDeposit(scene.h.deps, { ...sendOptions(hash, pool.via), acceptCovenant: 'v1', inEuEeaUk: 'No' });
         expect(scene.h.err.join('')).not.toContain(QUESTION);
-        expect(bodyOf(pool).euEeaUk).toBe('no');
+        expect(bodyOf(pool)).toMatchObject({ euEeaUk: 'no' });
       });
 
       it('accepts nothing for an answer that is not yes or no, or no answer at all', async () => {
@@ -1496,7 +1499,9 @@ describe('oars pool deposit --send', () => {
         const hash = await printedAndHash(scene);
         const pool = wire(acceptRoutes());
         atTerminal(scene, SCREEN.phrase, 'no');
-        await expect(poolDeposit(scene.h.deps, { ...sendOptions(hash, pool.via), acceptCovenant: 'v1' })).rejects.toMatchObject({ exitCode: ExitCode.USAGE, message: expect.stringContaining('--in-eu-eea-uk') });
+        const refused = poolDeposit(scene.h.deps, { ...sendOptions(hash, pool.via), acceptCovenant: 'v1' });
+        await expect(refused).rejects.toMatchObject({ exitCode: ExitCode.USAGE });
+        await expect(refused).rejects.toThrow('--in-eu-eea-uk');
         expect(scene.h.err.join('')).not.toContain(SCREEN.text);
         expect(paths(pool)).toEqual(['/v1/covenant']);
       });
@@ -1506,14 +1511,18 @@ describe('oars pool deposit --send', () => {
         const hash = await printedAndHash(scene);
         const pool = wire(acceptRoutes());
         atTerminal(scene, SCREEN.phrase);
-        await expect(poolDeposit(scene.h.deps, { ...sendOptions(hash, pool.via), inEuEeaUk: 'maybe' })).rejects.toMatchObject({ exitCode: ExitCode.USAGE, message: expect.stringContaining('--in-eu-eea-uk takes yes or no') });
+        const refused = poolDeposit(scene.h.deps, { ...sendOptions(hash, pool.via), inEuEeaUk: 'maybe' });
+        await expect(refused).rejects.toMatchObject({ exitCode: ExitCode.USAGE });
+        await expect(refused).rejects.toThrow('--in-eu-eea-uk takes yes or no');
         expect(paths(pool)).toEqual([]);
       });
 
       it('refuses the flag without --send, as a usage error', async () => {
         const scene = await batched();
         const pool = wire(acceptRoutes());
-        await expect(poolDeposit(scene.h.deps, { server: POOL, via: pool.via, inEuEeaUk: 'no' })).rejects.toMatchObject({ exitCode: ExitCode.USAGE, message: expect.stringContaining('--in-eu-eea-uk belongs to --send') });
+        const refused = poolDeposit(scene.h.deps, { server: POOL, via: pool.via, inEuEeaUk: 'no' });
+        await expect(refused).rejects.toMatchObject({ exitCode: ExitCode.USAGE });
+        await expect(refused).rejects.toThrow('--in-eu-eea-uk belongs to --send');
         expect(paths(pool)).toEqual([]);
       });
 

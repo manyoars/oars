@@ -60,7 +60,8 @@ export const covenantStatus = async (request: Request, env: Env, texts: Readonly
  * Cloudflare also reports `XX` (no data) and `T1` (Tor); they are kept as they come, since neither is a protected region.
  */
 export const countryOf = (request: Request): string | null => {
-  const country = (request as { cf?: { country?: unknown } }).cf?.country;
+  const cf: unknown = Reflect.get(request, 'cf');
+  const country: unknown = typeof cf === 'object' && cf !== null ? Reflect.get(cf, 'country') : undefined;
   return typeof country === 'string' && /^[A-Z]{2}$/.test(country) ? country : null;
 };
 
