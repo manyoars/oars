@@ -8,7 +8,8 @@ export const CLOSED_ZONES: ReadonlySet<string> = new Set([
   'Europe/Tallinn', 'Europe/Helsinki', 'Europe/Mariehamn', 'Europe/Paris', 'Europe/Berlin', 'Europe/Busingen', 'Europe/Athens', 'Europe/Budapest', 'Europe/Dublin',
   'Europe/Rome', 'Europe/Riga', 'Europe/Vilnius', 'Europe/Luxembourg', 'Europe/Malta', 'Europe/Amsterdam', 'Europe/Warsaw', 'Europe/Lisbon', 'Europe/Bucharest',
   'Europe/Bratislava', 'Europe/Ljubljana', 'Europe/Madrid', 'Europe/Stockholm',
-  // EEA outside the EU, and the UK (with its legacy aliases)
+  // EEA outside the EU, and the UK (with its legacy aliases). Europe/Jersey, Europe/Guernsey, and Europe/Isle_of_Man (Crown dependencies) and
+  // America/St_Barthelemy (outside the EU since 2012) are kept on purpose, to fail closed.
   'Atlantic/Reykjavik', 'Iceland', 'Europe/Vaduz', 'Europe/Oslo', 'Arctic/Longyearbyen', 'Atlantic/Jan_Mayen', 'WET', 'CET', 'MET', 'EET', 'Europe/London', 'Europe/Belfast', 'Europe/Jersey', 'Europe/Guernsey', 'Europe/Isle_of_Man',
   'GB', 'GB-Eire', 'Eire', 'Portugal', 'Poland',
   // Outermost regions and island zones of member states

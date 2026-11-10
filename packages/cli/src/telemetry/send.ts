@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defaultConfigDir } from '../credentials.js';
 import type { HelperSpawn } from '../gate/hook-fill.js';
-import { NOTICE_VERSION, telemetrySendAllowed } from './consent.js';
+import { shownNoticeVersion, telemetrySendAllowed } from './consent.js';
 import type { TelemetryRuntime } from './record.js';
 import { installId, readSpool, spoolPaths } from './spool.js';
 
@@ -64,12 +64,12 @@ const eventOf = (line: string): object | undefined => {
 };
 
 /** True only for a 2xx. A redirect is not followed: a pool never redirects a POST, and a 3xx from anything else is not the pool. */
-const post = async (url: string, install: string, events: object[], deps: SendDeps): Promise<boolean> => {
+const post = async (url: string, install: string, notice: number | undefined, events: object[], deps: SendDeps): Promise<boolean> => {
   try {
     const response = await (deps.fetch ?? fetch)(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ install, notice: NOTICE_VERSION, events }),
+      body: JSON.stringify({ install, notice, events }),
       redirect: 'manual',
       signal: AbortSignal.timeout(deps.timeoutMs ?? SEND_TIMEOUT_MS),
     });
@@ -145,7 +145,7 @@ export const sendSpool = async (deps: SendDeps): Promise<SendResult> => {
     for (let at = 0; at < events.length && !failed; at += BATCH_EVENTS) {
       const batch = events.slice(at, at + BATCH_EVENTS);
       tally.requests += 1;
-      if (await post(`${server}/v1/telemetry`, install, batch.map(({ event }) => event), deps)) {
+      if (await post(`${server}/v1/telemetry`, install, shownNoticeVersion(deps.dir), batch.map(({ event }) => event), deps)) {
         tally.sent += batch.length;
         sent.push(...batch.map(({ line }) => line));
       } else failed = true;

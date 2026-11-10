@@ -457,6 +457,17 @@ describe('sendSpool in a closed region', () => {
     expect(readSpool(dir)).toHaveLength(2);
   });
 
+  it('sends nothing for an install that saw an older notice, then stamps the batch with the notice it saw', async () => {
+    const fake = await serve();
+    zoneIs('America/New_York');
+    const dir = spooled(1, false);
+    writeFileSync(spoolPaths(dir).settings, JSON.stringify({ noticeShownAt: '2026-11-01T00:00:00.000Z' }));
+    expect(await sendWith(dir, { OARS_POOL_URL: fake.origin })).toMatchObject({ outcome: 'not-allowed', requests: 0 });
+    expect(markNoticeShown(dir, () => 0)).toBe(true);
+    expect(await sendWith(dir, { OARS_POOL_URL: fake.origin })).toMatchObject({ outcome: 'sent' });
+    expect(fake.received[0]?.body).toMatchObject({ notice: 2 });
+  });
+
   it('sends from America/New_York, and the batch carries the notice version', async () => {
     const fake = await serve();
     zoneIs('America/New_York');

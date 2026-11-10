@@ -27,6 +27,7 @@ export interface Consent {
 interface Settings {
   enabled?: boolean;
   noticeShownAt?: string;
+  noticeVersion?: number;
 }
 
 const readSettings = (dir: string): Settings => {
@@ -35,7 +36,12 @@ const readSettings = (dir: string): Settings => {
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
     const enabled: unknown = Reflect.get(parsed, 'enabled');
     const shown: unknown = Reflect.get(parsed, 'noticeShownAt');
-    return { ...(typeof enabled === 'boolean' ? { enabled } : {}), ...(typeof shown === 'string' ? { noticeShownAt: shown } : {}) };
+    const version: unknown = Reflect.get(parsed, 'noticeVersion');
+    return {
+      ...(typeof enabled === 'boolean' ? { enabled } : {}),
+      ...(typeof shown === 'string' ? { noticeShownAt: shown } : {}),
+      ...(typeof version === 'number' ? { noticeVersion: version } : {}),
+    };
   } catch {
     return {};
   }
@@ -55,7 +61,8 @@ const DO_NOT_TRACK_WORDS = new Set(['1', 'true']);
 
 export const consentOf = (env: NodeJS.ProcessEnv, dir: string, zone: string | undefined = machineZone()): Consent => {
   const settings = readSettings(dir);
-  const noticeShown = settings.noticeShownAt !== undefined;
+  // An install that saw an older notice (no stored version, or another one) has not seen this one: it sees it again, and sends nothing until then.
+  const noticeShown = settings.noticeShownAt !== undefined && settings.noticeVersion === NOTICE_VERSION;
   // First, so that no setting or `oars telemetry on` turns it back on in a closed region.
   if (isClosedZone(zone)) return { enabled: false, reason: 'region', noticeShown };
   if (OFF_WORDS.has((env.OARS_TELEMETRY ?? '').toLowerCase())) return { enabled: false, reason: 'OARS_TELEMETRY', noticeShown };
@@ -72,12 +79,15 @@ export const setEnabled = (dir: string, enabled: boolean): void => {
 /** Records that the notice was shown; `false` when it could not be recorded (nothing is recorded or sent from a folder that cannot be written). */
 export const markNoticeShown = (dir: string, now: () => number): boolean => {
   try {
-    writeSettings(dir, { ...readSettings(dir), noticeShownAt: new Date(now()).toISOString() });
+    writeSettings(dir, { ...readSettings(dir), noticeShownAt: new Date(now()).toISOString(), noticeVersion: NOTICE_VERSION });
     return true;
   } catch {
     return false;
   }
 };
+
+/** The notice version this install was shown, or `undefined` when none (or an unreadable file). */
+export const shownNoticeVersion = (dir: string): number | undefined => readSettings(dir).noticeVersion;
 
 /** Whether the sender (t875) may send: telemetry on, and the notice shown. Off, or notice not yet shown, means nothing sends. */
 export const telemetrySendAllowed = (env: NodeJS.ProcessEnv, dir: string, zone: string | undefined = machineZone()): boolean => {

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { defaultConfigDir } from '../credentials.js';
-import { consentOf, markNoticeShown, NOTICE, NOTICE_VERSION, setEnabled, telemetrySendAllowed } from './consent.js';
+import { consentOf, markNoticeShown, NOTICE, NOTICE_VERSION, setEnabled, shownNoticeVersion, telemetrySendAllowed } from './consent.js';
 import { spoolPaths } from './spool.js';
 
 const roots: string[] = [];
@@ -60,6 +60,18 @@ describe('consentOf', () => {
 });
 
 describe('the notice', () => {
+  it('is not counted as shown for an install that saw an older notice', () => {
+    const dir = folder();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(spoolPaths(dir).settings, JSON.stringify({ noticeShownAt: '2026-11-01T00:00:00.000Z' }));
+    expect(consentOf({}, dir, 'America/New_York').noticeShown).toBe(false);
+    expect(telemetrySendAllowed({}, dir, 'America/New_York')).toBe(false);
+    expect(shownNoticeVersion(dir)).toBeUndefined();
+    markNoticeShown(dir, Date.now);
+    expect(telemetrySendAllowed({}, dir, 'America/New_York')).toBe(true);
+    expect(shownNoticeVersion(dir)).toBe(NOTICE_VERSION);
+  });
+
   it('is recorded as shown, once', () => {
     const dir = folder();
     expect(markNoticeShown(dir, () => Date.parse('2026-11-06T10:00:00Z'))).toBe(true);

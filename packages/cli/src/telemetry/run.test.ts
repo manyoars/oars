@@ -9,7 +9,7 @@ import { run, type RunDeps } from '../cli.js';
 import { defaultConfigDir } from '../credentials.js';
 import { folderKey } from '../gate/record.js';
 import { harness } from '../test-support.js';
-import { NOTICE, consentOf } from './consent.js';
+import { NOTICE, NOTICE_VERSION, consentOf, shownNoticeVersion } from './consent.js';
 import { readSpool, spoolPaths } from './spool.js';
 
 const roots: string[] = [];
@@ -52,6 +52,18 @@ const block = (dir: string): void => {
 };
 
 describe('the first-run notice', () => {
+  it('prints again for an install that saw an older notice, and records the version', async () => {
+    const { deps, err, dir } = setup();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(spoolPaths(dir).settings, JSON.stringify({ noticeShownAt: '2026-11-01T00:00:00.000Z' }));
+    expect(consentOf(deps.env, dir).noticeShown).toBe(false);
+    expect(await run(['--version'], deps)).toBe(0);
+    expect(err.join('')).toBe(`${NOTICE}
+`);
+    expect(consentOf(deps.env, dir).noticeShown).toBe(true);
+    expect(shownNoticeVersion(dir)).toBe(NOTICE_VERSION);
+  });
+
   it('prints once on stderr, leaves stdout alone, and is recorded as shown', async () => {
     const first = setup();
     expect(await run(['--version'], first.deps)).toBe(0);
@@ -271,7 +283,6 @@ describe('a closed region', () => {
     inZone('Europe/Berlin');
     const { deps, err, dir } = setup();
     expect(await run(['--version'], deps)).toBe(0);
-    expect(err.join('')).not.toContain('NOTICE');
     expect(err.join('')).not.toContain(NOTICE);
     expect(readSpool(dir)).toEqual([]);
   });
