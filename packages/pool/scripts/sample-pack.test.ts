@@ -2,10 +2,20 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { deposit, paths, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { rolloutLine, stageCodex } from '../../cli/src/sessions/test-support.js';
 import { buildPack, HARNESS_TERMS, main, matchIdOf, ownerOf, parseOwners, secretIn, serverKeyOf, USAGE, type ManifestRow, type PackCounts, type PackOptions } from './sample-pack.js';
+
+// Every session the exclusion check was asked about, in call order: the frame-first rule is proved by who was never asked.
+const gated = vi.hoisted((): string[] => []);
+vi.mock('../../cli/src/sessions/exclusion.js', async (original) => {
+  const real = await original<typeof import('../../cli/src/sessions/exclusion.js')>();
+  return { ...real, checkSession: async (...args: Parameters<typeof real.checkSession>): Promise<Awaited<ReturnType<typeof real.checkSession>>> => {
+    gated.push(args[3]);
+    return real.checkSession(...args);
+  } };
+});
 
 const TERM = 'zorblax';
 const CLAUDE_MD_LINE = 'Always fold the green napkins before lunch';
@@ -374,6 +384,26 @@ describe('the acceptance rule (plan S1)', () => {
       const out = join(f.root, `pack-${seed}`);
       expect(await buildPack(f.runtime, options(f, { seed, out }))).toMatchObject({ duplicate: 1, emitted: 1 });
       expect(sessionsOf(f, out)).toEqual([S(2)]);
+    }
+  });
+
+  it('gates only the sessions the draw reaches and the members of a group that shares a first prompt: an undrawn singleton is never asked', async () => {
+    const f = fixture();
+    const earlier = turns(S(1), 2);
+    f.write('-work-oars', S(1), earlier);
+    f.write('-work-oars', S(2), [...earlier.map((text) => line({ ...replayable(text), sessionId: S(2) })), ...turns(S(2), 2)]);
+    f.write('-work-oars', S(3), turns(S(3), 2, 'third'));
+    f.write('-work-oars', S(4), turns(S(4), 2, 'fourth'));
+    await stored(f);
+    for (const seed of ['1', '2', '3', '4', '5', '6']) {
+      gated.length = 0;
+      const out = join(f.root, `pack-${seed}`);
+      const counts = await buildPack(f.runtime, options(f, { seed, out, size: 1 }));
+      const singles = new Set(gated.filter((session) => session === S(3) || session === S(4)));
+      // The pair is always asked about (the loser is chosen among it); a single only when the draw reached it.
+      expect(gated).toEqual(expect.arrayContaining([S(1), S(2)]));
+      expect(singles.size).toBeLessThanOrEqual(counts.scanned);
+      expect(gated).toHaveLength(new Set(gated).size);
     }
   });
 
