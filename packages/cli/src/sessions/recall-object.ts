@@ -3,6 +3,7 @@
 import { createHash } from 'node:crypto';
 import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { Reversion } from './reversion.js';
 import type { Frame } from './schema.js';
 
 const RECALLS_FILE = 'recalls.jsonl';
@@ -52,7 +53,7 @@ export interface RecallAnswer {
   bytes?: number;
   /** What the asker saw, or for a held recall would have seen. It holds structured fields only (`recall-render.ts`). */
   rendered: string;
-  /** The closed names a follow can match: canonical actions, in the order shown. */
+  /** The closed names a name match can find: canonical actions, in the order shown. */
   names: string[];
 }
 
@@ -98,6 +99,11 @@ export interface RecallOutcome {
   stopped: string | null;
   commits: number | null;
   redo: boolean | null;
+  /**
+   * Where the nearest later clean `git revert <sha>` of a commit this prompt made ran, beside the values above and never in place of them. The sha is the whole tie, so null says none was found, not that
+   * none happened: an edit undone any other way, or a commit with no sha, is not read.
+   */
+  reverted: Reversion | null;
 }
 
 /** Derived from the capture records, never captured live. */
@@ -105,7 +111,8 @@ export interface RecallConsequence {
   /** The calls the window holds, by position, and why it ended. */
   window: { from: number; to: number; calls: number; end: 'prompt' | 'calls' | 'session' };
   motifs: string[];
-  followed: boolean;
+  /** Whether an action name the recall carried appears among the window's actions. A match on the name alone: it does not say the call took the advice, was the same use of that action, or went well. */
+  nameMatched: boolean;
   /** `tokens` is null when no call in the window measured any: an older capture has no step costs, and zero would read as a free window. */
   cost: { tokens: number | null; durationMs: number };
   outcome: RecallOutcome;

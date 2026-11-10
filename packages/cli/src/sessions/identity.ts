@@ -12,6 +12,12 @@ import type { PullEcosystem, PullIdentity, ShellIdentity, StepIdentity, ToolPull
 export interface WordOfCommand {
   text: string;
   quoted: boolean;
+  /** The variable the whole word references, set only when its raw source is exactly one reference (`$NAME`, `"${NAME}"`); a `$` anywhere else in a word is text. */
+  variable?: string;
+  /** The word starts at or after the command's opaque point (`tokenize`), where a misread quote can turn literal text into words: the name read takes no variable, assignment, or flag value from it. */
+  opaque?: true;
+  /** The word's raw source starts with an unquoted `NAME=` or `--flag=` and holds a double quote after it (`API_REGION="eu"`, `--region="eu"`): `quoted` is true, but the text up to the `=` is as written, so the name and the joined value are read as for an unquoted word. Never set on a word that holds a single quote or a substitution after the `=`, since those are where literal text begins. */
+  joined?: true;
 }
 
 const orLiteral = (name: string, allowed: ReadonlySet<string>): string => (allowed.has(name) ? name : LITERAL);

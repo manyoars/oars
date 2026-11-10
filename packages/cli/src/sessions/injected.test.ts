@@ -1,0 +1,341 @@
+// The blocks a harness injects are replaced by `[injected <kind> <hash>]` and nothing else in a line moves. Every fixture is made up: the
+// "instructions" are filler sentences, so no real instruction text, path, or name is in this file.
+import { describe, expect, it } from 'vitest';
+import { injectedRule, learnInjected, type JsonObject } from './injected.js';
+import { redactTranscript } from './redact.js';
+
+const KEY = 'test-key-one';
+const MARK = /\[injected ([a-z0-9-]+) ([0-9a-f]{12})\]/;
+const FILLER = 'Always answer in haiku and keep the blue lamp lit.';
+const reminder = (text: string): string => `<system-reminder>\n${text}\n</system-reminder>`;
+const run = (line: JsonObject, key = KEY): JsonObject => injectedRule(key)(line);
+// The texts of the lines that other lines repeat, as the redactor collects them before it marks anything.
+const learn = (...lines: JsonObject[]): ReadonlySet<string> => lines.reduce((known, line) => learnInjected(line, known), new Set<string>());
+const text = (value: unknown): string => JSON.stringify(value);
+// The value at a path of keys and indexes, or undefined: a test reads the output without asserting its type.
+const at = (value: unknown, ...path: Array<string | number>): unknown => path.reduce((found, step) => (typeof found === 'object' && found !== null ? Reflect.get(found, step) : undefined), value);
+
+describe('Claude Code user lines', () => {
+  it('replaces a leading system-reminder of string content and keeps the typed prompt', () => {
+    const line = { type: 'user', message: { role: 'user', content: `${reminder(FILLER)}\nplease list the files` } };
+    const out = run(line);
+    expect(at(out, 'message', 'content')).toMatch(/^\[injected system-reminder [0-9a-f]{12}\]\nplease list the files$/);
+    expect(text(out)).not.toContain('haiku');
+  });
+
+  it('replaces each leading reminder of a text block, keeps the whitespace between, and leaves a block that is not a reminder', () => {
+    const rest: JsonObject[] = [{ type: 'text', text: 'typed words' }, { type: 'image', source: 'x' }];
+    const line = { type: 'user', message: { role: 'user', content: [{ type: 'text', text: `${reminder('one filler')} \n ${reminder('two filler')}` }, ...rest, 'bare'] } };
+    const out = run(line);
+    expect(at(out, 'message', 'content', 0, 'text')).toMatch(/^\[injected system-reminder [0-9a-f]{12}\] \n \[injected system-reminder [0-9a-f]{12}\]$/);
+    expect(at(out, 'message', 'content', 1)).toEqual(rest[0]);
+    expect(at(out, 'message', 'content', 2)).toEqual(rest[1]);
+    expect(at(out, 'message', 'content', 3)).toBe('bare');
+  });
+
+  it('leaves a reminder in the middle of a typed prompt to the other rules', () => {
+    const line = { type: 'user', message: { role: 'user', content: `I pasted this: ${reminder(FILLER)}` } };
+    expect(run(line)).toBe(line);
+  });
+
+  it('replaces every reminder in a tool result, string or blocks, and keeps the output around it', () => {
+    const string: JsonObject = { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: `output\n${reminder(FILLER)}` }] } };
+    const blocks: JsonObject = { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: [{ type: 'text', text: `a ${reminder('first')} b ${reminder('second')}` }, { type: 'image' }] }] } };
+    expect(text(run(string))).toMatch(/output\\n\[injected system-reminder [0-9a-f]{12}\]/);
+    const out = text(run(blocks));
+    expect(out.match(/\[injected system-reminder/g)).toHaveLength(2);
+    expect(out).toContain('a [injected');
+    expect(out).toContain('] b [injected');
+    expect(out).not.toContain('first');
+  });
+
+  it('keeps a tool result with no reminder, and one with no content, the same object', () => {
+    const plain: JsonObject = { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'plain output' }, { type: 'tool_result', tool_use_id: 't2' }] } };
+    expect(run(plain)).toBe(plain);
+  });
+
+  it('replaces the whole text of a meta message, and leaves an empty one and an existing marker', () => {
+    const line = { type: 'user', isMeta: true, message: { role: 'user', content: [{ type: 'text', text: 'Open the green notebook first\nThen fold the paper boat.' }, { type: 'text', text: '  ' }] } };
+    const out = run(line);
+    expect(at(out, 'message', 'content', 0, 'text')).toMatch(/^\[injected meta [0-9a-f]{12}\]$/);
+    expect(at(out, 'message', 'content', 1, 'text')).toBe('  ');
+    expect(run(out)).toBe(out);
+    const caveat = { type: 'user', isMeta: true, message: { role: 'user', content: 'Remember the orange kettle is for tea only' } };
+    expect(at(run(caveat), 'message', 'content')).toMatch(/^\[injected meta /);
+  });
+
+  it('replaces the body and handback of the origin of a meta line, and keeps the origin kind', () => {
+    const origin = { kind: 'peer', body: 'Fold the paper boat before the green lamp is lit', handback: 'Return the orange kettle to the shelf at dusk' };
+    const line = { type: 'user', isMeta: true, origin, message: { role: 'user', content: 'Remember the orange kettle is for tea only' } };
+    const out = run(line);
+    expect(at(out, 'origin', 'body')).toMatch(/^\[injected meta [0-9a-f]{12}\]$/);
+    expect(at(out, 'origin', 'handback')).toMatch(/^\[injected meta [0-9a-f]{12}\]$/);
+    expect(at(out, 'origin', 'kind')).toBe('peer');
+    expect(run(out)).toBe(out);
+    const typed = { type: 'user', origin, message: { role: 'user', content: 'please list the files' } };
+    expect(run(typed)).toBe(typed);
+    const odd = { type: 'user', isMeta: true, origin: 'x', message: { role: 'user', content: '' } };
+    expect(run(odd)).toBe(odd);
+  });
+
+  it('does not touch a message that is not the user role or has no message', () => {
+    expect(run({ type: 'user' })).toEqual({ type: 'user' });
+    const assistant = { type: 'user', message: { role: 'assistant', content: reminder(FILLER) } };
+    expect(run(assistant)).toBe(assistant);
+    const empty = { type: 'user', message: { role: 'user' } };
+    expect(run(empty)).toBe(empty);
+  });
+
+  it('replaces the user message a request blob repeats, not an assistant one', () => {
+    const user = { type: 'api-request-blob', hash: 'abc', message: { role: 'user', content: [{ type: 'text', text: reminder(FILLER) }] } };
+    expect(text(run(user))).toMatch(/\[injected system-reminder/);
+    const assistant = { type: 'api-request-blob', message: { role: 'assistant', content: [{ type: 'text', text: reminder(FILLER) }] } };
+    expect(run(assistant)).toBe(assistant);
+  });
+});
+
+describe('Claude Code attachment records', () => {
+  it('replaces the text of an instruction file, keeps its path, type, and short labels', () => {
+    const line = { type: 'attachment', uuid: 'u1', attachment: { type: 'instructions', files: [{ path: 'docs/ONE.md', kind: 'Project', content: FILLER }] } };
+    const out = run(line);
+    expect(at(out, 'uuid')).toBe('u1');
+    expect(at(out, 'attachment', 'files', 0)).toMatchObject({ path: 'docs/ONE.md', kind: 'Project' });
+    expect(at(out, 'attachment', 'files', 0, 'content')).toMatch(/^\[injected instructions [0-9a-f]{12}\]$/);
+  });
+
+  // Every attachment type the rule owns except `instructions`, which has its own case above: one case each, so a type dropped from the set fails here.
+  const KINDS = [
+    'nested_memory', 'skill_listing', 'invoked_skills', 'dynamic_skill', 'agent_listing_delta', 'deferred_tools_record', 'deferred_tools_delta', 'mcp_instructions_delta',
+    'prompt_snapshot', 'hook_success', 'hook_additional_context', 'hook_blocking_error', 'hook_non_blocking_error', 'hook_cancelled', 'environment', 'session_context',
+    'context_sections', 'credential_org', 'model', 'output_style', 'output_style_instructions', 'command_permissions', 'auto_mode', 'plan_mode', 'team_context',
+  ];
+  it.each(KINDS)('replaces the text of a %s attachment, named by its type', (kind) => {
+    const line = { type: 'attachment', attachment: { type: kind, content: [FILLER, 'second filler block'], stdout: FILLER } };
+    const out = text(run(line));
+    expect(out).not.toContain('haiku');
+    expect(out).toContain(`[injected ${kind.replaceAll('_', '-')} `);
+  });
+
+  it('replaces the rendered copy of an injected attachment, and not that of a queued prompt', () => {
+    const rendered = [{ role: 'user', content: FILLER }];
+    const out = text(run({ type: 'attachment', renderedRole: 'user', rendered, attachment: { type: 'instructions', files: [] } }));
+    expect(out).toMatch(/"rendered":\[\{"role":"user","content":"\[injected instructions [0-9a-f]{12}\]"\}\]/);
+    expect(out).toContain('"renderedRole":"user"');
+    const queued = { type: 'attachment', rendered, attachment: { type: 'queued_command', prompt: FILLER } };
+    expect(run(queued)).toBe(queued);
+  });
+
+  it('leaves a queued prompt, a mentioned file, and a type it does not know', () => {
+    for (const kind of ['queued_command', 'file', 'edited_text_file', 'task_status', 'something_new']) {
+      const line = { type: 'attachment', attachment: { type: kind, prompt: FILLER, content: FILLER } };
+      expect(run(line)).toBe(line);
+    }
+    const bare = { type: 'attachment' };
+    expect(run(bare)).toBe(bare);
+  });
+
+  it('gives the same block the same hash across lines and sessions, and another key another hash', () => {
+    const at = (content: string) => ({ type: 'attachment', attachment: { type: 'instructions', content } });
+    const hash = (line: JsonObject): string | undefined => MARK.exec(text(line))?.[2];
+    expect(hash(run(at(FILLER)))).toBeDefined();
+    expect(hash(run(at(FILLER)))).toBe(hash(run(at(`  ${FILLER.replace(' ', '\n')}\n`))));
+    expect(hash(run(at(FILLER)))).not.toBe(hash(run(at(`${FILLER} More.`))));
+    expect(hash(run(at(FILLER)))).not.toBe(hash(run(at(FILLER), 'test-key-two')));
+  });
+
+  it('is its own fixed point', () => {
+    const once = run({ type: 'attachment', attachment: { type: 'skill_listing', content: FILLER } });
+    expect(run(once)).toBe(once);
+  });
+});
+
+describe('Claude Code request shapes', () => {
+  it('replaces the system prompt and tool descriptions, and keeps tool names and the schema keys', () => {
+    const line = { type: 'api-request-shape', shapeHash: 'h', shape: { system: [{ type: 'text', text: FILLER }], tools: [{ name: 'Read', description: 'Reads a file from the lamp.', input_schema: { type: 'object', properties: { path: { type: 'string', description: 'The path of the blue lamp file' } } } }] } };
+    const out = run(line);
+    expect(at(out, 'shapeHash')).toBe('h');
+    expect(at(out, 'shape', 'system', 0, 'text')).toMatch(/^\[injected system-prompt /);
+    expect(at(out, 'shape', 'tools', 0, 'name')).toBe('Read');
+    expect(at(out, 'shape', 'tools', 0, 'description')).toMatch(/^\[injected tool-definition /);
+    expect(at(out, 'shape', 'tools', 0, 'input_schema', 'properties', 'path', 'description')).toMatch(/^\[injected tool-definition /);
+    expect(at(out, 'shape', 'tools', 0, 'input_schema', 'properties', 'path', 'type')).toBe('string');
+  });
+
+  it('leaves a shape with neither, and one that is not an object', () => {
+    const empty = { type: 'api-request-shape', shape: { other: 1 } };
+    expect(run(empty)).toBe(empty);
+    const odd = { type: 'api-request-shape', shape: 'x' };
+    expect(run(odd)).toBe(odd);
+    const none = { type: 'api-request-shape' };
+    expect(run(none)).toBe(none);
+  });
+});
+
+describe('Codex records', () => {
+  const message = (role: string, body: string) => ({ type: 'response_item', payload: { type: 'message', role, content: [{ type: 'input_text', text: body }] } });
+  it('replaces an environment block, an instruction block, and a developer message by their tag', () => {
+    expect(text(run(message('user', '<environment_context>\n  <cwd>somewhere</cwd>\n</environment_context>')))).toMatch(/\[injected environment-context /);
+    expect(text(run(message('user', '# AGENTS.md instructions for a folder\n\n<INSTRUCTIONS>\nfiller\n</INSTRUCTIONS>')))).toMatch(/\[injected agents-md /);
+    expect(text(run(message('user', '<user_instructions>filler</user_instructions>')))).toMatch(/\[injected user-instructions /);
+    expect(text(run(message('developer', '<permissions instructions>\nfiller\n</permissions instructions>')))).toMatch(/\[injected permissions /);
+    expect(text(run(message('developer', 'No tag at all, just words')))).toMatch(/\[injected developer /);
+    expect(text(run(message('user', '<guardian_tool_descriptions>filler</guardian_tool_descriptions>')))).toMatch(/\[injected guardian-tool-descriptions /);
+  });
+
+  it('leaves a typed user message, an assistant message, and a developer message with no text', () => {
+    for (const line of [message('user', 'what is in this folder?'), message('assistant', '<environment_context>x</environment_context>'), message('developer', '   ')]) expect(run(line)).toBe(line);
+    const marked = run(message('developer', 'No tag at all, just words'));
+    expect(run(marked)).toBe(marked);
+  });
+
+  it('leaves a non-message item, a message with no blocks, and a block with no text', () => {
+    const call = { type: 'response_item', payload: { type: 'function_call', name: 'shell' } };
+    expect(run(call)).toBe(call);
+    const none = { type: 'response_item', payload: { type: 'message', role: 'user' } };
+    expect(run(none)).toBe(none);
+    const image = { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_image' }, 'bare'] } };
+    expect(run(image)).toBe(image);
+    expect(run({ type: 'response_item' })).toEqual({ type: 'response_item' });
+  });
+
+  it('replaces the base instructions of a session and the instruction fields of a turn', () => {
+    const meta = { type: 'session_meta', payload: { id: 's1', base_instructions: { text: FILLER } } };
+    const out = run(meta);
+    expect(at(out, 'payload', 'id')).toBe('s1');
+    expect(at(out, 'payload', 'base_instructions', 'text')).toMatch(/^\[injected base-instructions /);
+    const turn = { type: 'turn_context', payload: { cwd: 'x', user_instructions: FILLER, developer_instructions: FILLER } };
+    expect(text(run(turn)).match(/\[injected (user|developer)-instructions /g)).toHaveLength(2);
+    const legacy = { type: 'session_meta', payload: { id: 's1', instructions: FILLER } };
+    expect(at(run(legacy), 'payload', 'instructions')).toMatch(/^\[injected instructions [0-9a-f]{12}\]$/);
+    const quiet = { type: 'session_meta', payload: { id: 's1' } };
+    expect(run(quiet)).toBe(quiet);
+    expect(run({ type: 'session_meta' })).toEqual({ type: 'session_meta' });
+  });
+});
+
+describe('through the redactor', () => {
+  const quiet = '{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]}}';
+  const loud = `{"type":"user","message":{"role":"user","content":${JSON.stringify(`${reminder(FILLER)}\nhi`)}}}`;
+
+  it('changes only the line with a block: the rest comes out byte for byte, a CRLF stays, and the line still parses', () => {
+    const body = `${quiet}\n${loud}\r\n${quiet}\nnot json at all\n`;
+    const { text: out } = redactTranscript(body, [], [], KEY);
+    const lines = out.split('\n');
+    expect(lines[0]).toBe(quiet);
+    expect(lines[1]?.endsWith('\r')).toBe(true);
+    expect(at(JSON.parse(lines[1] ?? ''), 'message', 'content')).toMatch(/^\[injected system-reminder [0-9a-f]{12}\]\nhi$/);
+    expect(lines.slice(2).join('\n')).toBe(`${quiet}\nnot json at all\n`);
+    expect(out).not.toContain('haiku');
+  });
+
+  it('does not run the rule on JSON held inside a string value', () => {
+    const inner = JSON.stringify({ type: 'user', message: { role: 'user', content: reminder(FILLER) } });
+    const line = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: inner }] } });
+    expect(redactTranscript(`${line}\n`, [], [], KEY).text).toBe(`${line}\n`);
+  });
+
+  it('keeps the marker whole, and the same block hashes the same in two sessions of one key', () => {
+    const one = redactTranscript(`${loud}\n`, [], [], KEY).text;
+    const two = redactTranscript(`${quiet}\n${loud}\n`, [], [], KEY).text;
+    expect(MARK.exec(one)?.[2]).toBe(MARK.exec(two)?.[2]);
+    expect(redactTranscript(one, [], [], KEY).text).toBe(one);
+  });
+
+  it('marks a block even when no key is given', () => {
+    expect(redactTranscript(`${loud}\n`).text).toMatch(MARK);
+  });
+});
+
+describe('Claude Code hook summaries', () => {
+  it('replaces the hook output of a stop-hook summary and keeps its counts, level, and tool id', () => {
+    const line = {
+      type: 'system',
+      subtype: 'stop_hook_summary',
+      hookCount: 2,
+      level: 'suggestion',
+      toolUseID: 'toolu_1',
+      preventedContinuation: false,
+      hookInfos: [{ command: `run-the-lamp ${FILLER}`, durationMs: 12 }],
+      hookErrors: [`failed: ${FILLER}`],
+      hookAdditionalContext: [FILLER],
+    };
+    const out = run(line);
+    expect(text(out)).not.toContain('haiku');
+    expect(at(out, 'hookInfos', 0, 'command')).toMatch(/^\[injected hook-summary [0-9a-f]{12}\]$/);
+    expect(at(out, 'hookInfos', 0, 'durationMs')).toBe(12);
+    expect(at(out, 'hookErrors', 0)).toMatch(/^\[injected hook-summary /);
+    expect(at(out, 'hookAdditionalContext', 0)).toMatch(/^\[injected hook-summary /);
+    expect(out).toMatchObject({ type: 'system', subtype: 'stop_hook_summary', hookCount: 2, level: 'suggestion', toolUseID: 'toolu_1', preventedContinuation: false });
+  });
+
+  it('leaves a system line of another subtype, and a summary with no hook output', () => {
+    const duration = { type: 'system', subtype: 'turn_duration', durationMs: 5, hookErrors: [FILLER] };
+    expect(run(duration)).toBe(duration);
+    const quiet = { type: 'system', subtype: 'stop_hook_summary', hookCount: 0 };
+    expect(run(quiet)).toBe(quiet);
+    const bare = { type: 'system' };
+    expect(run(bare)).toBe(bare);
+  });
+});
+
+describe('a request blob repeats what other lines hold', () => {
+  const META = 'Step one of the lamp routine, then step two of the lamp routine.';
+  const meta = { type: 'user', isMeta: true, message: { role: 'user', content: [{ type: 'text', text: META }] } };
+  const blob = (body: string) => ({ type: 'api-request-blob', hash: 'b1', message: { role: 'user', content: [{ type: 'text', text: body }, { type: 'text', text: 'typed words' }] } });
+  const attachment = { type: 'attachment', rendered: [{ role: 'user', content: FILLER }], attachment: { type: 'instructions', files: [] } };
+
+  it('replaces the text of a meta message under the marker its user line gets', () => {
+    const rule = injectedRule(KEY, learn(meta));
+    const out = rule(blob(`  ${META.replace('Step one', 'Step\n one')} `));
+    expect(at(out, 'message', 'content', 0, 'text')).toBe(at(rule(meta), 'message', 'content', 0, 'text'));
+    expect(at(out, 'message', 'content', 1, 'text')).toBe('typed words');
+  });
+
+  it('replaces the rendered copy of an injected attachment, and leaves text nothing marked', () => {
+    const rule = injectedRule(KEY, learn(attachment));
+    expect(text(rule(blob(FILLER)))).toMatch(/\[injected meta [0-9a-f]{12}\]/);
+    const other = blob('some other typed words');
+    expect(rule(other)).toBe(other);
+  });
+
+  it('does not learn from a queued prompt, an ordinary user line, or a line with no message', () => {
+    const queued = { type: 'attachment', rendered: [{ role: 'user', content: FILLER }], attachment: { type: 'queued_command', prompt: FILLER } };
+    const typed = { type: 'user', message: { role: 'user', content: FILLER } };
+    const empty = { type: 'user', isMeta: true };
+    const plain = blob(FILLER);
+    expect(injectedRule(KEY, learn(queued, typed, empty, { type: 'attachment' }))(plain)).toBe(plain);
+  });
+
+  it('is applied by the redactor across the lines of one transcript', () => {
+    const body = [meta, blob(META)].map((line) => JSON.stringify(line)).join('\n');
+    const lines = redactTranscript(`${body}\n`, [], [], KEY).text.trim().split('\n');
+    expect(MARK.exec(lines[0] ?? '')?.[2]).toBeDefined();
+    expect(MARK.exec(lines[0] ?? '')?.[2]).toBe(MARK.exec(lines[1] ?? '')?.[2]);
+    expect(lines[1]).not.toContain('lamp routine');
+  });
+});
+
+describe('a tool definition a request blob carries', () => {
+  const definition: JsonObject = { name: 'Lamp', description: 'Lights the blue lamp.', input_schema: { type: 'object', properties: { level: { type: 'string', description: 'How bright the blue lamp burns' } } } };
+  const blob: JsonObject = { type: 'api-request-blob', hash: 'b2', message: { role: 'user', content: [{ type: 'tool_reference', tool: { definition } }, { type: 'text', text: 'typed words' }] } };
+
+  it('replaces the descriptions the way the request shape does, and keeps the name and the schema keys', () => {
+    const out = run(blob);
+    expect(text(out)).not.toContain('lamp');
+    expect(at(out, 'message', 'content', 0, 'tool', 'definition', 'name')).toBe('Lamp');
+    expect(at(out, 'message', 'content', 0, 'tool', 'definition', 'description')).toMatch(/^\[injected tool-definition [0-9a-f]{12}\]$/);
+    expect(at(out, 'message', 'content', 0, 'tool', 'definition', 'input_schema', 'properties', 'level', 'description')).toMatch(/^\[injected tool-definition /);
+    expect(at(out, 'message', 'content', 0, 'tool', 'definition', 'input_schema', 'properties', 'level', 'type')).toBe('string');
+    expect(at(out, 'message', 'content', 1, 'text')).toBe('typed words');
+  });
+
+  it('gives the description the hash it has on the request shape', () => {
+    const shape = run({ type: 'api-request-shape', shape: { tools: [definition] } });
+    expect(at(run(blob), 'message', 'content', 0, 'tool', 'definition', 'description')).toBe(at(shape, 'shape', 'tools', 0, 'description'));
+  });
+
+  it('leaves a block with a tool that has no definition', () => {
+    const plain = { type: 'api-request-blob', message: { role: 'user', content: [{ type: 'tool_reference', tool: { name: 'Lamp' } }, { type: 'tool_reference', tool: 'Lamp' }] } };
+    expect(run(plain)).toBe(plain);
+  });
+});

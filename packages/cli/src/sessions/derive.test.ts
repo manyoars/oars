@@ -205,6 +205,15 @@ describe('recovery episodes (recovery_episodes.py)', () => {
     expect(deriveSession(capture, redact).errors[0]?.toolUseId).toBe(id);
   });
 
+  it('does not read an edit whose own result was an error as what followed a failure, so the stored row agrees with `recoveryCalls`', () => {
+    const first = (specs: readonly (readonly [string, string, ToolStatus])[]) => deriveSession(synthetic('s', specs), redact).errors[0];
+    expect(first([['Bash', 'npm test', 'error'], ['Edit', 'a', 'error'], ['Write', 'b', 'error'], ['Read', 'a', 'ok']])?.editFollowed).toBe(false);
+    expect(first([['Bash', 'npm test', 'error'], ['Edit', 'a', 'ok'], ['Read', 'a', 'ok']])?.editFollowed).toBe(true);
+    expect(first([['Bash', 'npm test', 'error'], ['Edit', 'a', 'error'], ['Edit', 'a', 'ok']])?.editFollowed).toBe(true);
+    // The failed edit stays among the calls that followed.
+    expect(first([['Bash', 'npm test', 'error'], ['Edit', 'a', 'error']])?.next).toEqual(['Edit']);
+  });
+
   it('looks 20 calls ahead and no further', () => {
     expect(RECOVERY_WINDOW).toBe(20);
     const filler = Array.from({ length: 19 }, (): readonly [string, string, ToolStatus] => ['TodoWrite', 'TodoWrite', 'ok']);

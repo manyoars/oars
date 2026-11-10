@@ -3,7 +3,7 @@ import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { Outcome } from '../cli.js';
 import { denialOf, parseAllowList, runAllow } from './allow.js';
-import { SOURCES, sourceLabel } from './sources.js';
+import { SOURCES, sourceLabel, type Source } from './sources.js';
 import { CliError, ExitCode } from '../errors.js';
 import { loadTerms } from './exclusion.js';
 import { EVALUATOR_MODEL, fillArms, sidecarSaver } from './gold-arms.js';
@@ -20,7 +20,9 @@ import { MISS_TEXT } from './recall-render.js';
 import { EMPTY_RECALL, emptyBooks, nothingFoundLines, savedListNote } from './empty-state.js';
 import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, inRepository, readIndex, type ContextOptions } from './hook-index.js';
-import { hookStatus, installHooks, removeSchedule, SCHEDULE_REFUSED, scheduleStatus, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
+import { CODEX_TRUST_NOTICE, codexHookStatus, installCodexHook, uninstallCodexHook, type CodexInstall } from './codex-hook-install.js';
+import { enrollmentOf } from './machine.js';
+import { hookStatus, installHooks, installMachineHooks, readSettings, removeSchedule, SCHEDULE_REFUSED, scheduleStatus, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
 import { recordSchedule } from './pool-due.js';
 import { serve } from './mcp.js';
 import { refreshPool, servedPool } from './pool.js';
@@ -33,6 +35,7 @@ import { FAMILIES } from './read.js';
 import { formatNotReadable, notReadable } from './read-readable.js';
 import { formatReads, isFamily, parseSlice, selectReads } from './read-rows.js';
 import { CAPTURE_VERSION, OLDEST_READABLE_CAPTURE, type StepRow } from './schema.js';
+import { harnessFileCounts, type HarnessFiles } from './harness-files.js';
 import { deposit, frozenSessions, loadStore, paths, readCalls, readRedactDomains, readSaved, readSkeletons, skippedFolders, slugOf, type SessionsRuntime, type SkippedScope, type Store } from './store.js';
 import { formatStepCounters, inputKey, newContext, readSteps, stampKey, runDeposit, runStep, stepCounters, stuckSteps, tryLog, type StuckStep } from './steps.js';
 import { formatSelfBaseline, selfBaseline as selfBaselineOf, type SelfBaselineResult } from './baseline.js';
@@ -178,18 +181,20 @@ export const sessionsContext = async (deps: SessionsDeps, options: ContextOption
   const { storeDir } = runtimeOf(deps);
   // The manual recall verb (spec 4.1): its key is what it looks up, the repository's cwd and the harness, known before the work.
   const key = stampKey('context', options.cwd, options.harness ?? '');
-  const block = await runStep(
+  const step = await runStep(
     newContext(storeDir, deps.now, 'manual'),
     'recall',
     async () => {
       const index = (await readIndex(storeDir)) ?? buildIndex(await loadStore(storeDir), await readRedactDomains(storeDir), new Date(deps.now()).toISOString());
       const found = contextBlock(index, options);
-      return { value: found, report: { in: { query: 1 }, out: { matches: found === undefined ? 0 : 1 }, key } };
+      return { value: { found, noProjects: Object.keys(index.projects).length === 0 }, report: { in: { query: 1 }, out: { matches: found === undefined ? 0 : 1 }, key } };
     },
     key,
   );
   // Nothing to inject because the store holds no sessions at all is an empty store, not a quiet repository: say so and name the command that fills it.
-  const text = block ?? ((await loadStore(storeDir)).sessions.length === 0 ? EMPTY_RECALL : 'Nothing recurs in this repository yet.');
+  // An index that names projects answers alone; the store is loaded only when the index is empty, to tell an empty store from an index with nothing to say.
+  const block = step.found;
+  const text = block ?? (step.noProjects && (await loadStore(storeDir)).sessions.length === 0 ? EMPTY_RECALL : 'Nothing recurs in this repository yet.');
   return { document: { ok: true, context: block ?? null }, text };
 };
 
@@ -210,6 +215,12 @@ const skippedNotice = (scope: SkippedScope): string[] => {
   // Main transcripts only: a folder with none holds subagent transcripts only, or could not be listed.
   const transcripts = scope.transcripts === 0 ? 'no main transcript' : scope.transcripts === 1 ? '1 main transcript' : `${String(scope.transcripts)} main transcripts`;
   return [`${folders} ${transcripts}; ${one ? 'it is' : 'they are'} never read: not on the allowlist. Not captured: ${shown}${more}.`];
+};
+
+/** The three counts per harness, as numbers only: no cause, no path, no verdict. */
+const harnessFilesLines = (files: HarnessFiles, table: readonly Source[]): string[] => {
+  const rows = Object.entries(files).map(([harness, counts]) => `  ${harness === 'claude-code' ? 'Claude Code' : sourceLabel(harness, table)}: seen ${String(counts.seen)}, yielded ${String(counts.yielded)}, unreadable ${String(counts.unreadable)}`);
+  return rows.length === 0 ? [] : ['Session files per harness:', ...rows];
 };
 
 /** Scope is an extra, like the step log: a projects root this process cannot list reports an empty scope and fails neither `verify` nor `books`. */
@@ -305,6 +316,8 @@ export interface VerifyReport {
   scope: SkippedScope;
   /** Every session's rows 1 to 10 with a status each (spec 5.4 item 5): `pass`, `fail`, or `not run` when the row had nothing to check. */
   sessionResults: SessionVerification[];
+  /** Per harness, the session files seen, how many yielded records, and how many were unreadable (`harness-files.ts` defines them). Read from the harness's own store on this machine; nothing is sent. */
+  harnessFiles: HarnessFiles;
   /** Layer 4 at T0, local (spec 2.4): each session's raw-file match, recomputed root, and count bindings, with the count of each row of the result table. */
   audit: { counts: T0Counts; sessions: SessionAudit[] };
   /** Layer 2 at T0, local (spec 2.2): each session's week against the operator's own other weeks on its harness; `not run` below 1,000 calls or 4 baseline weeks. */
@@ -346,10 +359,12 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
     // A verify that got here has succeeded, so a verify streak is the one this run ends and is not listed.
     const stuck = stuckSteps(await readSteps(storeDir).catch((): StepRow[] => [])).filter((entry) => entry.step !== 'verify');
     const scope = await scopeOf(runtime);
+    // Like the scope, an extra: a store that cannot be read is an unreadable count inside it, and a failure outside it leaves the section out.
+    const harnessFiles = await harnessFileCounts(runtime).catch((): HarnessFiles => ({}));
     // A local count like the scope: an outbox folder that cannot be read is no reason for `verify` to fail.
     const staleBatches = await staleBatchesAnywhere(storeDir).catch(() => 0);
     const totals: OutboxTotals = await outboxTotals(storeDir).catch(() => ({ sentBatches: 0, sentRaw: 0, rawCopies: 0, rawMasked: 0 }));
-    const report: VerifyReport = { sessions: skeletons.length, unreadable, cvFrozen: frozen.size, scope, invariants: results.map((result) => ({ ...result, pass: result.violations === 0 })), stuck, sessionResults, audit, selfBaseline, staleBatches, ...totals };
+    const report: VerifyReport = { sessions: skeletons.length, unreadable, cvFrozen: frozen.size, scope, harnessFiles, invariants: results.map((result) => ({ ...result, pass: result.violations === 0 })), stuck, sessionResults, audit, selfBaseline, staleBatches, ...totals };
     const failed = [...results.filter((result) => result.violations > 0).map((result) => result.name), ...(unreadable > 0 ? ['unreadable skeletons'] : []), ...merkleFailed, ...stuck.map((entry) => `stuck: ${entry.step}`)];
     const stuckLines = stuck.map((entry) => `FAIL  ${entry.step} is stuck: key ${entry.key} failed ${String(entry.runs)} runs in a row: ${entry.error}`);
     const highWater = mine([...store.sessions, ...store.subagents]).map((session) => `${session.session}:${String(session.rev)}:${session.cv}`).sort();
@@ -358,7 +373,7 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
       failed,
       report,
       document: { ok: true, ...report, newerCaptures: store.newerCaptures },
-      text: [formatVerify(results, skeletons.length), formatAudit(audits), formatSelfBaseline(selfBaseline), ...(resultLines === '' ? [] : [resultLines]), ...(frozen.size > 0 ? [`${String(frozen.size)} cv-frozen sessions: behind the current capture version, but the transcript is gone from the harness and raw/ (or, for a Cursor session, the composer is gone from Cursor), so they cannot be captured again`] : []), ...skippedNotice(scope), ...(staleBatches > 0 ? [`${String(staleBatches)} outbox batches were built under an older vocabulary, field list, or skeleton format; they will never be sent, and oars pool deposit removes them`] : []), ...(totals.sentBatches + totals.sentRaw > 0 ? [`${String(totals.sentBatches)} outbox ${totals.sentBatches === 1 ? 'batch' : 'batches'} and ${String(totals.sentRaw)} raw ${totals.sentRaw === 1 ? 'copy were' : 'copies were'} already sent`] : []), ...(totals.rawCopies > 0 ? [`${String(totals.rawCopies)} queued raw ${totals.rawCopies === 1 ? 'copy holds' : 'copies hold'} ${String(totals.rawMasked)} placeholders (masked values, plus any a transcript already held as text)`] : []), ...newerNotice(store), ...(unreadable > 0 ? [`FAIL  ${String(unreadable)} unreadable skeleton files (torn or corrupted); redeposit to rebuild them`] : []), ...stuckLines].join('\n'),
+      text: [formatVerify(results, skeletons.length), formatAudit(audits), formatSelfBaseline(selfBaseline), ...(resultLines === '' ? [] : [resultLines]), ...(frozen.size > 0 ? [`${String(frozen.size)} cv-frozen sessions: behind the current capture version, but the transcript is gone from the harness and raw/ (or, for a Cursor session, the composer is gone from Cursor), so they cannot be captured again`] : []), ...harnessFilesLines(harnessFiles, runtime.sources ?? SOURCES), ...skippedNotice(scope), ...(staleBatches > 0 ? [`${String(staleBatches)} outbox batches were built under an older vocabulary, field list, or skeleton format; they will never be sent, and oars pool deposit removes them`] : []), ...(totals.sentBatches + totals.sentRaw > 0 ? [`${String(totals.sentBatches)} outbox ${totals.sentBatches === 1 ? 'batch' : 'batches'} and ${String(totals.sentRaw)} raw ${totals.sentRaw === 1 ? 'copy were' : 'copies were'} already sent`] : []), ...(totals.rawCopies > 0 ? [`${String(totals.rawCopies)} queued raw ${totals.rawCopies === 1 ? 'copy holds' : 'copies hold'} ${String(totals.rawMasked)} placeholders (masked values, plus any a transcript already held as text)`] : []), ...newerNotice(store), ...(unreadable > 0 ? [`FAIL  ${String(unreadable)} unreadable skeleton files (torn or corrupted); redeposit to rebuild them`] : []), ...stuckLines].join('\n'),
     };
     const cvBehind = results.find((result) => result.name === CAPTURE_INVARIANTS[0])?.violations ?? 0;
     // The key is the sessions checked, each at its rev and cv, and the code's ev (spec 4.2).
@@ -449,6 +464,17 @@ const installOf = (deps: SessionsDeps): InstallRuntime => {
   return deps.install;
 };
 
+const codexOf = (deps: SessionsDeps): CodexInstall => {
+  const codex = installOf(deps).codex;
+  if (codex === undefined) throw new CliError('The Codex hook is not configured in this run.', ExitCode.UNEXPECTED, 'unexpected');
+  return codex;
+};
+
+/** `--harness codex` writes to the Codex home, so a settings-file flag beside it names a target that does not apply. */
+const refuseSettingsFlags = (options: HookTarget): void => {
+  if (options.scope !== undefined || options.file !== undefined) throw new CliError('--harness codex writes hooks.json in the Codex home; --scope and --file apply to Claude Code settings only.', ExitCode.USAGE, 'usage');
+};
+
 export interface HookTarget {
   scope: Scope | undefined;
   file: string | undefined;
@@ -461,7 +487,46 @@ const hookScope = (options: HookTarget): Scope => options.scope ?? (options.file
 const SENDS_OFF = 'The background sweep and the pool send are off, as you chose with --schedule off (telemetry has its own switch: oars telemetry off). Turn them back on with: oars sessions hook install --schedule on';
 const SENDS_ON = 'Background sweeps and sends are on: a due sweep and send starts from the session-end hook and from any oars command, at most about hourly.';
 
-export const sessionsHookInstall = async (deps: SessionsDeps, options: HookTarget & { keepRetention: boolean; schedule: 'nightly' | 'off' | 'on' | undefined }): Promise<Outcome> => {
+/** `--machine`: the Stop and SessionEnd entries for a cloud VM, a VPS, or a runner, and for a user-scope file the enrollment block too. Refused beside every flag it does not take, before anything is written. */
+const installMachine = async (deps: SessionsDeps, options: HookTarget & { keepRetention?: boolean; schedule: 'nightly' | 'off' | 'on' | undefined; harness?: 'codex' | undefined; env?: readonly string[] | undefined; termsFile?: string | undefined }): Promise<Outcome> => {
+  const refuse = (message: string): CliError => new CliError(message, ExitCode.USAGE, 'usage');
+  if (options.harness !== undefined || options.schedule !== undefined) throw refuse('--machine writes the Stop and SessionEnd entries of a machine; --harness and --schedule do not apply to it.');
+  if (options.keepRetention === true) throw refuse('--keep-retention does not apply to --machine: a machine install leaves cleanupPeriodDays alone.');
+  const scope = hookScope(options);
+  if (scope === 'file') throw refuse('--machine takes --scope project (the .claude/settings.json of a repository, committed) or --scope user (the ~/.claude/settings.json of a VPS or runner).');
+  if (options.file !== undefined) throw refuse('--file does not apply to --machine: it writes the user or project settings file named by --scope.');
+  const runtime = installOf(deps);
+  const file = settingsPath(runtime, scope, undefined);
+  const lines: string[] = [];
+  let result;
+  if (scope === 'project') {
+    if ((options.env ?? []).length > 0 || options.termsFile !== undefined) throw refuse('--env and --terms-file belong to --scope user: a project settings file is committed, and the enrollment block holds salts and terms.');
+    result = await installMachineHooks(file, undefined);
+    lines.push(`Installed ${result.installed.join(' and ')} machine hooks in ${file}. They run only where OARS_HOST_CLASS is set to a class other than local; set it, and the rest of the enrollment block, in the environment that runs the session.`);
+  } else {
+    // A file that cannot be read is refused before the terms file is written.
+    await readSettings(file);
+    const enrollment = await enrollmentOf(options.env ?? [], options.termsFile, runtime.cwd);
+    result = await installMachineHooks(file, enrollment.env);
+    lines.push(`Installed ${result.installed.join(' and ')} machine hooks and the enrollment block in ${file}, which is now readable by its owner only.`);
+    if (enrollment.termsPath !== undefined) lines.push(`The exclusion terms are in ${enrollment.termsPath} (owner-only), named by OARS_EXCLUSION_TERMS.`);
+    if (enrollment.env.OARS_EXCLUSION_TERMS === undefined && enrollment.env.OARS_EXCLUSION_TERMS_INLINE === undefined) lines.push('No exclusion terms were given: with no term file every session is excluded (fail-closed), so nothing will be built.');
+  }
+  return { document: { ok: true, machine: true, install: result }, text: lines.join('\n') };
+};
+
+export const sessionsHookInstall = async (
+  deps: SessionsDeps,
+  options: HookTarget & { keepRetention: boolean; schedule: 'nightly' | 'off' | 'on' | undefined; harness?: 'codex' | undefined; machine?: boolean | undefined; env?: readonly string[] | undefined; termsFile?: string | undefined },
+): Promise<Outcome> => {
+  if (options.machine === true) return installMachine(deps, options);
+  if ((options.env ?? []).length > 0 || options.termsFile !== undefined) throw new CliError('--env and --terms-file belong to --machine.', ExitCode.USAGE, 'usage');
+  if (options.harness === 'codex') {
+    refuseSettingsFlags(options);
+    if (options.schedule !== undefined) throw new CliError('--schedule applies to the Claude Code hooks, not --harness codex.', ExitCode.USAGE, 'usage');
+    const result = await installCodexHook(codexOf(deps));
+    return { document: { ok: true, harness: 'codex', ...result, trust: 'asked by codex' }, text: `Installed ${result.installed.join(', ')} hooks in ${result.file}.\n${CODEX_TRUST_NOTICE}` };
+  }
   const runtime = installOf(deps);
   // `--schedule nightly` asked for the task this version no longer registers: refused before anything is written.
   if (options.schedule === 'nightly') throw new CliError(SCHEDULE_REFUSED, ExitCode.USAGE, 'usage');
@@ -490,7 +555,12 @@ export const sessionsHookInstall = async (deps: SessionsDeps, options: HookTarge
   return { document, text: lines.join('\n') };
 };
 
-export const sessionsHookUninstall = async (deps: SessionsDeps, options: HookTarget): Promise<Outcome> => {
+export const sessionsHookUninstall = async (deps: SessionsDeps, options: HookTarget & { harness?: 'codex' | undefined }): Promise<Outcome> => {
+  if (options.harness === 'codex') {
+    refuseSettingsFlags(options);
+    const result = await uninstallCodexHook(codexOf(deps));
+    return { document: { ok: true, harness: 'codex', ...result }, text: result.removed.length === 0 ? `No Many Oars hooks in ${result.file}.` : `Removed ${result.removed.join(', ')} hooks from ${result.file}; other hooks are untouched.` };
+  }
   const runtime = installOf(deps);
   const file = settingsPath(runtime, hookScope(options), options.file);
   const result = await uninstallHooks(file);
@@ -499,7 +569,11 @@ export const sessionsHookUninstall = async (deps: SessionsDeps, options: HookTar
   return { document: { ok: true, ...result, ...(removed === undefined ? {} : { schedule: removed }) }, text: removed === undefined ? text : `${text}\n${removed}` };
 };
 
-export const sessionsHookStatus = async (deps: SessionsDeps, options: { file: string | undefined }): Promise<Outcome> => {
+export const sessionsHookStatus = async (deps: SessionsDeps, options: { file: string | undefined; harness?: 'codex' | undefined }): Promise<Outcome> => {
+  if (options.harness === 'codex') {
+    const result = await codexHookStatus(codexOf(deps));
+    return { document: { ok: true, harness: 'codex', ...result }, text: `codex: ${result.file}: ${result.installed.length === 0 ? 'no hooks' : result.installed.join(', ')}` };
+  }
   const runtime = installOf(deps);
   const files = await hookStatus(runtime, options.file);
   const schedule = await scheduleStatus(runtime);

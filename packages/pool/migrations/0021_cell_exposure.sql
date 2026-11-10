@@ -1,0 +1,3 @@
+-- A cell's exposure is one of three readings: `shown` (inside a shown recommendation's window), `held` (inside the window of one the holdback withheld), or `unknown` (no recommendation covers it, which the pool cannot tell from a client that never looked). There is no `unexposed`.
+-- Every row stored before this was derived without the input, so each reads `unknown`. The key's last field is the reading's code (0 unknown, 1 shown, 2 held), so a key written before this keeps its meaning and no key is rewritten. `exposed` stays: 1 for a shown cell, 0 for any other.
+ALTER TABLE cells ADD COLUMN exposure TEXT NOT NULL DEFAULT 'unknown' CHECK (exposure IN ('shown', 'held', 'unknown'));

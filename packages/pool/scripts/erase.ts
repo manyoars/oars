@@ -3,6 +3,7 @@
 // The ledger never deletes (migrations 0009 and 0011), so a row's content is replaced in place and the row, its counts, and its tier stay. Every step is written so a run that stops halfway runs again to the end: the
 // tombstone goes first (so nothing can come back), then the content, then the audit row.
 import { depositDigest, digestOf, rawDigest } from '../src/tombstones.js';
+import { eraseBatches, type TelemetryStore } from './erase-batches.js';
 
 /** The class of an erasure, as the audit and the tombstone record it. */
 export type ErasureReason = 'raw' | 'leaked-secret' | 'lawful-request';
@@ -15,6 +16,10 @@ export interface EraseStore {
   run: (sql: string, binds: readonly (string | number | null)[]) => Promise<number>;
   /** Deletes one R2 object; one that is not there is not an error. */
   deleteObject: (key: string) => Promise<void>;
+  /** One R2 object's bytes in pieces, read as a stream so a large object is never held whole; null when the object is not there. */
+  readObject: (key: string) => Promise<AsyncIterable<Uint8Array> | null>;
+  /** The telemetry bucket, where an account's batches are rewritten (`erase-batches.ts`). */
+  telemetry: TelemetryStore;
 }
 
 /** What one erasure removed: ledger rows and aggregate rows whose content was replaced, staged parts dropped, and raw objects deleted. */
@@ -56,11 +61,11 @@ const nameOf = (value: string, what: string): string => {
   return value;
 };
 
-const tombstone = async (store: EraseStore, kind: 'raw-object' | 'deposit' | 'value', digest: string, reason: ErasureReason, now: Date): Promise<void> => {
+const tombstone = async (store: EraseStore, kind: 'raw-object' | 'deposit' | 'value' | 'account', digest: string, reason: ErasureReason, now: Date): Promise<void> => {
   await store.run('INSERT OR IGNORE INTO erasure_tombstones (kind, digest, reason, erased_on) VALUES (?, ?, ?, ?)', [kind, digest, reason, dayOf(now)]);
 };
 
-const audit = async (store: EraseStore, kind: 'raw-object' | 'row' | 'account', reason: ErasureReason, account: string, erased: Erased, now: Date): Promise<void> => {
+const audit = async (store: EraseStore, kind: 'raw-object' | 'row' | 'account' | 'close', reason: ErasureReason | 'account-close', account: string, erased: Erased, now: Date): Promise<void> => {
   await store.run('INSERT INTO erasure_audit (kind, reason, erased_on, rows_erased, objects_erased, account) VALUES (?, ?, ?, ?, ?, ?)', [kind, reason, dayOf(now), erased.rows, erased.objects, account]);
 };
 
@@ -107,10 +112,10 @@ const PAGE = 25;
 export const depositExists = async (store: EraseStore, accountId: string, sessionId: string): Promise<boolean> => (await store.rows('SELECT 1 AS found FROM deposits WHERE account = ? AND id = ?', [nameOf(accountId, 'the account'), nameOf(sessionId, 'the session id')])).length > 0;
 
 /** Reads a table a page at a time in key order, so the caller can look at every row without the value ever being written into a statement. */
-const scan = async (store: EraseStore, table: string, columns: readonly string[], keys: readonly string[], visit: (row: unknown) => Promise<void>, also = ''): Promise<void> => {
+const scan = async (store: EraseStore, table: string, columns: readonly string[], keys: readonly string[], visit: (row: unknown) => Promise<void>, also = '', alsoBinds: readonly string[] = []): Promise<void> => {
   let after: (string | number)[] = keys.map(() => '');
   for (;;) {
-    const page = await store.rows(`SELECT ${columns.join(', ')} FROM ${table} WHERE ${also}(${keys.join(', ')}) > (${keys.map(() => '?').join(', ')}) ORDER BY ${keys.join(', ')} LIMIT ${String(PAGE)}`, after);
+    const page = await store.rows(`SELECT ${columns.join(', ')} FROM ${table} WHERE ${also}(${keys.join(', ')}) > (${keys.map(() => '?').join(', ')}) ORDER BY ${keys.join(', ')} LIMIT ${String(PAGE)}`, [...alsoBinds, ...after]);
     for (const row of page) await visit(row);
     if (page.length < PAGE) return;
     after = keys.map((key) => {
@@ -172,7 +177,7 @@ export const eraseLeakedSecret = async (store: EraseStore, secret: LeakedSecret,
     await scan(store, 'deposits', ['account', 'id', 'skeleton', 'extensions'], ['account', 'id'], (row) => {
       if (textOf(row, 'skeleton').includes(stored) || textOf(row, 'extensions').includes(stored)) held.push({ account: textOf(row, 'account'), id: textOf(row, 'id') });
       return Promise.resolve();
-    }, 'erased_on IS NULL AND ');
+    }, "erased_on IS NULL AND account NOT LIKE 'erased:%' AND ");
     let aggregates = 0;
     await scan(store, 'motifs', ['motif_id', 'motif'], ['motif_id'], async (row) => {
       const motif = textOf(row, 'motif');
@@ -208,17 +213,143 @@ export const eraseLeakedSecret = async (store: EraseStore, secret: LeakedSecret,
   return erased;
 };
 
+/** A random 128-bit id as 32 hex digits. It is drawn, never derived from an account, a machine, or a session, so no key and no input recomputes it. */
+const randomId = (): string => Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, '0')).join('');
+
+/** A random negative rowid, -(1 + a random below 2^52): a kept row moved here sits off the positive range, so the next live row still takes `max(rowid) + 1` and an erased row's place never dates it or orders it by `erasure_audit.id`. */
+const randomRowid = (): number => {
+  const [high = 0, low = 0] = crypto.getRandomValues(new Uint32Array(2));
+  return -(1 + (high % 2 ** 20) * 2 ** 32 + low);
+};
+
+const DAY_MS = 86_400_000;
+
 /**
- * Erases one account's content under a lawful request: every deposit row it holds is replaced by the marker and tombstoned, every raw object it holds is deleted and tombstoned, and its staged parts are dropped. What stays is
- * the account's contribution to the aggregates (cells, strata, and the contributor records that tell a returning cluster from a new one): opting out removes nothing from them.
+ * Unlinks the rows an erasure keeps that covenant 6.6(d) does not list (`machines` and `deposits`): they leave the account's pseudonym for one random id per erasure (`erased:` and 32 hex, with a minimal `accounts` row, since the foreign keys need one),
+ * so they still join to each other (the counts) and to no one. A machine and a deposit also take a random id each, the machine's fingerprint is blanked and its key revoked and replaced by a random hash (an export and the person's own client hold the old exact values), a deposit's `ingest` mark is replaced, every time is cut to its UTC day (a machine's expiry too, since it is a fixed span from a time that was), and
+ * `erased_on` is cleared on the deposits, because a date there would pick out the audit row of that day: a reader that needs "erased" reads the `erased:` prefix. The `accounts` row and each deposit take a random negative rowid for the same reason (a deposit would otherwise keep its place among live ones, which pins its time). `accounts.provider_created`, GitHub's public creation time, is cleared.
+ * Raw objects stay on the pseudonym, their date cut to the day: they are 6.6(d)'s hash, size, and date, and their tombstone (the unkeyed hash of the key `raw/<account>/<sha256>`) would give the account back from any row that kept the hash.
+ * Rows are found by the account, so a rerun finds none and changes nothing; a run that stops between two statements leaves the rest for a rerun under a second id, which splits the join and links nothing. The random id is written nowhere else, least of all beside the pseudonym.
+ */
+const unlink = async (store: EraseStore, account: string): Promise<void> => {
+  await store.run('UPDATE accounts SET provider_created = NULL WHERE id = ? AND provider_created IS NOT NULL', [account]);
+  await store.run('UPDATE raw_objects SET stored_at = stored_at - stored_at % ? WHERE account = ? AND stored_at % ? <> 0', [DAY_MS, account, DAY_MS]);
+  const machines = new Set([...(await store.rows('SELECT id AS machine FROM machines WHERE account = ?', [account])), ...(await store.rows('SELECT DISTINCT machine FROM deposits WHERE account = ? AND machine IS NOT NULL', [account]))].map((row) => textOf(row, 'machine')));
+  const deposits = (await store.rows('SELECT id FROM deposits WHERE account = ?', [account])).map((row) => textOf(row, 'id'));
+  if (machines.size === 0 && deposits.length === 0) return;
+  const erased = `erased:${randomId()}`;
+  await store.run('INSERT INTO accounts (rowid, id, source) SELECT ?, ?, source FROM accounts WHERE id = ?', [randomRowid(), erased, account]);
+  for (const machine of machines) {
+    const renamed = randomId();
+    await store.run('UPDATE deposits SET machine = ? WHERE account = ? AND machine = ?', [renamed, account, machine]);
+    await store.run("UPDATE machines SET id = ?, account = ?, fingerprint_hash = NULL, state = 'revoked', key_hash = ?, retired_hash = NULL, created_at = created_at - created_at % ?, activated_at = activated_at - activated_at % ?, rotated_at = rotated_at - rotated_at % ?, expires_at = expires_at - expires_at % ? WHERE id = ? AND account = ?", [renamed, erased, randomId() + randomId(), DAY_MS, DAY_MS, DAY_MS, DAY_MS, machine, account]);
+  }
+  for (const deposit of deposits) await store.run('UPDATE deposits SET rowid = ?, id = ?, account = ?, ingest = ?, erased_on = NULL, counted_at = counted_at - counted_at % ? WHERE account = ? AND id = ?', [randomRowid(), randomId(), erased, randomId(), DAY_MS, account, deposit]);
+};
+
+/**
+ * Erases one account's content under a lawful request (GDPR Articles 17(1) and 17(3)(e)): every deposit row it holds is replaced by the marker and tombstoned, every raw object it holds is deleted and tombstoned, its staged parts are dropped, the label and allow list of its
+ * machines are scrubbed, its repo keys and deposit hours are deleted, its tokens stop working and hold no credential, and the account id leaves its telemetry days and its contributor records. Every telemetry batch within retention that names it is rewritten with the rollup's placeholder and a fresh install id (`erase-batches.ts`). A telemetry day keeps its counts (the account column holds a placeholder that names no account, one per row, so
+ * two erased accounts of one install never collide), and a token row keeps that a sign-in happened (its expiry). The generation moves, before the links go, when the account held any repo key, deposit hour, or contributor record, so a client fetches the bundle again.
+ * Then the rows that stay but are not 6.6(d)'s (`machines`, `deposits`) leave the pseudonym for a random id (`unlink`); `rows` counts erased content and not those rewrites.
+ * What stays: the totals (`cells`, `strata`, and the clusters held in them: a recount drops the account the next time a deposit touches the cell), `covenant_acceptances` (append-only, and the pool's proof that the covenant was accepted, Article 17(3)(e)), the tombstones, the audit, and the hash, size, and date of every raw object.
+ * The `account` tombstone goes first: it is what lets the database delete the contributor records (migration 0027), and a run that stops halfway runs again to the end.
  */
 export const eraseAccount = async (store: EraseStore, accountId: string, now: Date): Promise<Erased> => {
   const account = nameOf(accountId, 'the account');
+  await tombstone(store, 'account', account, 'lawful-request', now);
   let rows = await store.run('DELETE FROM deposit_parts WHERE account = ?', [account]);
+  // A machine's label and allow list are free text and repository names the account typed: they are scrubbed in place, and the row stays because its hashes are what refuse the key. The guard keeps a rerun at zero rows, as every other step does.
+  rows += await store.run("UPDATE machines SET label = '[erased]', allow_repos = '[]' WHERE account = ? AND (label <> '[erased]' OR allow_repos <> '[]')", [account]);
+  // A token's hash is the credential and its primary key: it becomes `erased:<rowid>`, which no token hashes to, and the row keeps its expiry and its account, so that a sign-in happened is still on record.
+  rows += await store.run("UPDATE tokens SET hash = 'erased:' || rowid WHERE account = ? AND hash NOT LIKE 'erased:%'", [account]);
+  // The rollup keys a day by install and account, so the account column cannot be emptied for two rows of one install and day: each takes its own placeholder, and the counts it holds stand.
+  rows += await store.run("UPDATE telemetry_install_days SET account = 'erased:' || rowid WHERE account = ?", [account]);
+  // Nothing in a served count changes, so no trigger moves the generation; a client holding the bundle built with the account would be told its copy is current. The generation moves before the links go, while they still show there is something to move it for: a run that stops between the two
+  // moves it again on the rerun (a bump too many), where one moved after the deletes would never move on a rerun that finds the links gone.
+  const held = numberOf((await store.rows('SELECT (SELECT COUNT(*) FROM account_repo_keys WHERE account = ?) + (SELECT COUNT(*) FROM deposit_hours WHERE account = ?) + (SELECT COUNT(*) FROM contributors WHERE account = ?) AS held', [account, account, account]))[0], 'held');
+  if (held > 0) await store.run('UPDATE pool_generation SET generation = generation + 1', []);
+  rows += (await store.run('DELETE FROM account_repo_keys WHERE account = ?', [account])) + (await store.run('DELETE FROM deposit_hours WHERE account = ?', [account])) + (await store.run('DELETE FROM contributors WHERE account = ?', [account]));
   for (const row of await store.rows('SELECT id FROM deposits WHERE account = ? AND erased_on IS NULL', [account])) rows += await dropDeposit(store, account, textOf(row, 'id'), 'lawful-request', now);
   let objects = 0;
   for (const row of await store.rows('SELECT sha256 FROM raw_objects WHERE account = ? AND erased_on IS NULL', [account])) objects += await dropObject(store, account, textOf(row, 'sha256'), 'lawful-request', now);
+  // The batches the Worker kept in R2 before it stopped reading the account (t956) still name it: they are rewritten last, so a stop anywhere above leaves them for the rerun, and a rerun finds none. They count with the objects.
+  objects += await eraseBatches(store, account, now);
+  await unlink(store, account);
   const erased = { rows, objects };
   await audit(store, 'account', 'lawful-request', account, erased, now);
   return erased;
+};
+
+/**
+ * Closes one account (covenant 6.1 and 7.2(a)): the time it closed is recorded, every token it holds stops working (the rows go), and every machine key moves to `revoked`. Sign-in, enrollment, and activation refuse it from then on (`account_closed`).
+ * Nothing is erased: its Deposits, raw objects, and the shared totals stay, and erasure is a separate request (`eraseAccount`). The first closed-at time stands, so a rerun changes nothing and writes no audit row; a run that stopped after the record finishes the revocations on the rerun.
+ * The record goes first, so no sign-in can mint a credential between the steps. An account the pool has never seen is an error, since closing a mistyped id would otherwise look like success.
+ */
+export const closeAccount = async (store: EraseStore, accountId: string, now: Date): Promise<Erased> => {
+  const account = nameOf(accountId, 'the account');
+  if ((await store.rows('SELECT 1 AS found FROM accounts WHERE id = ?', [account])).length === 0) throw new Error(`No account ${account} in the pool.`);
+  let rows = await store.run('UPDATE accounts SET closed_at = ? WHERE id = ? AND closed_at IS NULL', [now.getTime(), account]);
+  // An erased account's tokens already hold no credential (`erased:<rowid>`) and stay as the record that a sign-in happened.
+  rows += await store.run("DELETE FROM tokens WHERE account = ? AND hash NOT LIKE 'erased:%'", [account]);
+  rows += await store.run("UPDATE machines SET state = 'revoked' WHERE account = ? AND state <> 'revoked'", [account]);
+  const closed = { rows, objects: 0 };
+  if (rows > 0) await audit(store, 'close', 'account-close', account, closed, now);
+  return closed;
+};
+
+/** A raw object that holds the text the find looked for: its R2 key, its account, and its size as the ledger recorded it. Nothing of what the object says. */
+export interface RawHit {
+  key: string;
+  account: string;
+  bytes: number;
+}
+
+/** What a find read: the objects it opened, how many held the text, and how many ledger rows named an object R2 no longer holds. */
+export interface RawFind {
+  read: number;
+  matched: number;
+  missing: number;
+}
+
+/**
+ * Whether the stream holds any of the texts, found as bytes. Only the last (longest text - 1) bytes of what was read are kept between pieces, so a match across a read boundary is found and memory holds one piece and that tail,
+ * however large the object. It stops reading at the first match. UTF-8 is self-synchronizing, so a byte match of a valid text is a match of the text.
+ */
+export const holdsValue = async (pieces: AsyncIterable<Uint8Array>, texts: readonly Buffer[]): Promise<boolean> => {
+  const keep = Math.max(...texts.map((text) => text.length)) - 1;
+  let tail = Buffer.alloc(0);
+  for await (const piece of pieces) {
+    const window = Buffer.concat([tail, piece]);
+    if (texts.some((text) => window.includes(text))) return true;
+    tail = Buffer.from(window.subarray(Math.max(0, window.length - keep)));
+  }
+  return false;
+};
+
+/**
+ * Finds the raw objects that hold `value`, for a request from a person a deposit names (GDPR Article 17: a third party does not know whose deposit it is, so `allAccounts` looks in every account). It reads each object the ledger holds
+ * and has not marked erased, one at a time and a piece at a time, and calls `found` for each object that holds the value, as it is found. It changes nothing: it runs SELECTs and object reads and no other call, and it reports keys, accounts,
+ * and sizes, never the value or a byte an object holds. The keys it reports go to `eraseRawObject`. The match is an exact substring of the bytes, in the text as given and in the form a JSON transcript writes it (the value scrub's own form).
+ */
+export const findRawContaining = async (store: EraseStore, selector: { account?: string; allAccounts?: boolean }, value: string, found: (hit: RawHit) => void): Promise<RawFind> => {
+  if ((selector.account === undefined) === (selector.allAccounts !== true)) throw new Error('name exactly one of an account and every account');
+  const account = selector.account === undefined ? undefined : nameOf(selector.account, 'the account');
+  if (value.length < MIN_VALUE_LENGTH) throw new Error(`a text to find is at least ${String(MIN_VALUE_LENGTH)} characters, or it would match objects that do not name anyone`);
+  const texts = [...new Set([value, JSON.stringify(value).slice(1, -1)])].map((text) => Buffer.from(text, 'utf8'));
+  const total = { read: 0, matched: 0, missing: 0 };
+  await scan(store, 'raw_objects', ['account', 'sha256', 'bytes'], ['account', 'sha256'], async (row) => {
+    const hit: RawHit = { key: `raw/${textOf(row, 'account')}/${textOf(row, 'sha256')}`, account: textOf(row, 'account'), bytes: numberOf(row, 'bytes') };
+    const pieces = await store.readObject(hit.key);
+    if (pieces === null) {
+      total.missing += 1;
+      return;
+    }
+    total.read += 1;
+    if (await holdsValue(pieces, texts)) {
+      total.matched += 1;
+      found(hit);
+    }
+  }, account === undefined ? 'erased_on IS NULL AND ' : 'erased_on IS NULL AND account = ? AND ', account === undefined ? [] : [account]);
+  return total;
 };

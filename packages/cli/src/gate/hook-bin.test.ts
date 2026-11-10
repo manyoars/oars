@@ -68,7 +68,7 @@ const fakeNpm = (): { folder: string; marker: string } => {
 
 // A manager that cannot answer until the test lets it: a script that logs its start, waits for the `release` file (30 s at most, so a stub the hook failed to stop does not outlive the
 // run), logs its finish, and then prints what `npm view` prints (`answer`) or fails the way it does against an unreachable registry (`down`). One line a start and a finish, so a
-// run that was killed leaves a start and no finish. Nothing but the test writing `release` ends the wait, so the hook's cut ask is cut however slowly the box runs it.
+// run that was killed leaves a start and no finish. Nothing but the test writing `release` ends the wait, so the hook's ask stays open however slowly the box runs it.
 const gatedNpm = (kind: 'answer' | 'down'): { folder: string; log: string; release: string } => {
   const folder = mkdtempSync(join(tmpdir(), `oars-gate-${kind}npm-`));
   made.push(folder);
@@ -165,6 +165,9 @@ const sightWithRow = (payload: string, id: string, npm: { folder: string }, home
 /** How many lines of the manager's log read `word`. */
 const logged = (log: string, word: 'started' | 'ended'): number => (existsSync(log) ? readFileSync(log, 'utf8').split(/\r?\n/).filter((line) => line.trim() === word).length : 0);
 
+// The ends that mean the helper has finished: on Windows the killed hook's stub dies with it, so one end is the helper's; on POSIX the orphaned stub also logs an end once released.
+const helperEnds = process.platform === 'win32' ? 1 : 2;
+
 // A manager that answers an `E404` at once, as `npm view` does for a name the registry it is configured for does not have.
 const missingNpm = (): string => {
   const folder = mkdtempSync(join(tmpdir(), 'oars-gate-missingnpm-'));
@@ -210,18 +213,18 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
 
   // The built hook takes the sight and starts the helper itself, as the harness runs it. `sightHandsOff` (above) runs the one sight that hands off, so the cases pin
   // what follows exactly: two starts (the hook's ask and the helper's), the helper finishing, the lock or the cache left, no start after the hand-off, and a row on every sight after it.
-  it('fills the cache after a cut ask: the built hook starts the helper, and the sight after it reads found and asks nothing', async () => {
+  it('fills the cache after the hand-off at the mark: the built hook starts the helper, and the sight after it reads found and asks nothing', async () => {
     const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install slow-lib' }, cwd: tmpdir(), permission_mode: 'default' });
     const npm = gatedNpm('answer');
     const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
     made.push(home);
     const store = join(home, 'oars', 'sessions');
     await sightHandsOff(payload, npm, home, store);
-    // The hook is gone; the helper's manager, still waiting, answers now (the hook's own ask ends with it on Windows and may still be waiting elsewhere, so only the helper's end is counted on).
+    // The hook is gone; the helper's manager, still waiting, answers now (the killed hook's own ask ends with it on Windows, but on POSIX its orphaned stub also logs an end once released, so two ends are counted there).
     writeFileSync(npm.release, '');
     // The helper is detached: it has finished when it has logged its end, kept its answer, and let go of the lock.
-    await until(() => logged(npm.log, 'ended') >= 1 && existsSync(join(store, 'gate-registry.jsonl')) && lockFiles(store).length === 0);
-    expect(logged(npm.log, 'ended')).toBeGreaterThanOrEqual(1);
+    await until(() => logged(npm.log, 'ended') >= helperEnds && existsSync(join(store, 'gate-registry.jsonl')) && lockFiles(store).length === 0);
+    expect(logged(npm.log, 'ended')).toBeGreaterThanOrEqual(helperEnds);
     expect(existsSync(join(store, 'gate-registry.jsonl'))).toBe(true);
     expect(lockFiles(store)).toEqual([]);
     sightWithRow(payload, 'u-after', npm, home);
@@ -237,11 +240,11 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
     made.push(home);
     const store = join(home, 'oars', 'sessions');
     await sightHandsOff(payload, npm, home, store);
-    // The hook is gone; the helper's manager, still waiting, fails now (the hook's own ask ends with it on Windows and may still be waiting elsewhere, so only the helper's end is counted on).
+    // The hook is gone; the helper's manager, still waiting, fails now (the killed hook's own ask ends with it on Windows, but on POSIX its orphaned stub also logs an end once released, so two ends are counted there).
     writeFileSync(npm.release, '');
-    // A failed ask keeps its lock, so the helper is done when it has logged its end with the lock still there.
-    await until(() => logged(npm.log, 'ended') >= 1 && lockFiles(store).length === 1);
-    expect(logged(npm.log, 'ended')).toBeGreaterThanOrEqual(1);
+    // A failed ask keeps its lock, so the helper is done once `helperEnds` ends are logged with the lock still there.
+    await until(() => logged(npm.log, 'ended') >= helperEnds && lockFiles(store).length === 1);
+    expect(logged(npm.log, 'ended')).toBeGreaterThanOrEqual(helperEnds);
     expect(lockFiles(store)).toHaveLength(1);
     // The lock is held and fresh, so neither later sight asks the manager: the log shows no start beyond the hook's own ask and the helper's.
     sightWithRow(payload, 'u-after-1', npm, home);

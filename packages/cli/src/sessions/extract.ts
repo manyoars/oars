@@ -7,7 +7,7 @@ import { posix } from 'node:path';
 import { ACTION_TABLES, actionOf, shellOf, type ActionTable, type CanonicalAction } from './actions.js';
 import { exploreCount, strataOf } from './strata.js';
 import { closedFrame, frameIdOf, repoFilesFromIndex, repoSizeOf, stackOf, utcDay } from './frame.js';
-import { argClassOf, argFeaturesOf, argValuesOf, changeKindOf, targetClassOf, type ComparedCall } from './call-shape.js';
+import { argClassOf, argFeaturesOf, argNamesOf, argValuesOf, changeKindOf, diffShapeOf, targetClassOf, templatesOf, variableOf, type CommandWords, type ComparedCall } from './call-shape.js';
 import { CLOSED_ARG_VALUES, LITERAL, type RepoSize } from './public-vocabulary.js';
 import { linkSteps } from './graph.js';
 import { callIdentity, shellIdentity, UNREAD_SHELL, type WordOfCommand } from './identity.js';
@@ -31,6 +31,7 @@ import {
   type PullEcosystem,
   type SessionObservation,
   type ShellIdentity,
+  type EditDigest,
   type ShellSegment,
   type Skeleton,
   type SkeletonLine,
@@ -40,6 +41,8 @@ import {
   type ToolObservation,
   type ToolPull,
   USAGE_FIELDS,
+  type MessageUsage,
+  type PlanWindow,
   type Usage,
   type UsageField,
   type UsageKey,
@@ -136,6 +139,25 @@ export const isErrorResult = (block: Obj, text: string): boolean => {
   if (truthy(block.is_error)) return true;
   const exit = EXIT_RE.exec(text.trim());
   return exit !== null && exit[1] !== '0';
+};
+
+/** The first 32 hex digits of the SHA-256 of a text's exact UTF-8 bytes: plain, not keyed, so the same text matches across sessions and accounts, and a line ending or a trailing space is a difference. */
+const textDigest = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 32);
+
+/**
+ * The digests of an edit call's text, from the input: an Edit has one old and new pair, a MultiEdit one per edit in order, a Write a new digest only (its old text is not in the call, so no old digest is held, not the digest of an
+ * empty string). Any other tool, and an edit whose input holds no text for the side it needs, has none: a malformed entry of a MultiEdit is skipped.
+ */
+const editDigestsOf = (tool: string, input: Obj): EditDigest[] => {
+  if (tool === 'Write') {
+    const content = str(input.content);
+    return content === undefined ? [] : [{ new: textDigest(content) }];
+  }
+  const edits = tool === 'MultiEdit' && Array.isArray(input.edits) ? input.edits.filter(isObj) : tool === 'Edit' ? [input] : [];
+  return edits.flatMap((edit) => {
+    const [old, replacement] = [str(edit.old_string), str(edit.new_string)];
+    return old === undefined || replacement === undefined ? [] : [{ old: textDigest(old), new: textDigest(replacement) }];
+  });
 };
 
 /** What an Edit, MultiEdit, or Write shows of a manifest: the names it adds and removes (an edit), or lists (a write). Undefined when it shows none. */
@@ -277,6 +299,28 @@ const readUsage = (message: Obj): LineUsage | undefined => {
   };
 };
 
+/** The usage categories a line reported, as the fields of a `MessageUsage`; a category the source left out is not written. */
+const reportedUsage = (line: LineUsage): Pick<MessageUsage, 'input' | 'cacheWrite' | 'cacheRead' | 'output' | 'thinking'> => {
+  const fields: Pick<MessageUsage, 'input' | 'cacheWrite' | 'cacheRead' | 'output' | 'thinking'> = {};
+  for (const field of USAGE_FIELDS) if (line.observed.includes(field)) fields[field] = line.usage[field];
+  return fields;
+};
+
+const planWindowOf = (raw: unknown): PlanWindow | undefined => {
+  if (!isObj(raw)) return undefined;
+  const usedPercent = num(raw.usedPercent);
+  const windowMinutes = num(raw.windowMinutes);
+  return usedPercent === undefined ? undefined : { usedPercent, ...(windowMinutes === undefined ? {} : { windowMinutes }) };
+};
+
+/** The plan share a Codex line carries (`rateLimits`, written by `rolloutLines`), or undefined when it carries none. */
+const planOf = (line: Obj): MessageUsage['plan'] => {
+  const limits = isObj(line.rateLimits) ? line.rateLimits : undefined;
+  const primary = planWindowOf(limits?.primary);
+  const secondary = planWindowOf(limits?.secondary);
+  return primary === undefined && secondary === undefined ? undefined : { ...(primary === undefined ? {} : { primary }), ...(secondary === undefined ? {} : { secondary }) };
+};
+
 const toSeconds = (timestamp: string | undefined): number | undefined => {
   if (timestamp === undefined) return undefined;
   const millis = Date.parse(timestamp);
@@ -358,6 +402,8 @@ export interface ExtractInput {
   redact: Redactor;
   /** The per-account salt for path targets; the store keeps it beside the log. */
   salt?: string;
+  /** The salt a repository's key is hashed under, derived from the account salt so a machine given it by enrollment keys a repository as the trusted machine does; absent means `salt`. */
+  repoSalt?: string;
   /** The salt's `sid` (first 8 hex of its SHA-256), stamped on every capture record; null when no salt is in play. */
   sid?: string | null;
   /** The repository root holding a working directory (worktree segments already stripped), or null; absent means no repository is known. */
@@ -612,6 +658,9 @@ type ShellLink = 'and' | 'pipe' | 'break' | 'end';
 export interface ShellCommand {
   program: string;
   args: ShellWord[];
+  /** The words before the program (assignments, wrappers, block words) and the program's own word, as written: the name read takes variable names from them. */
+  before: ShellWord[];
+  head: ShellWord;
   read: boolean;
   /** How the next command joins this one. */
   link: ShellLink;
@@ -634,11 +683,15 @@ export interface PlannedCommit {
 }
 
 export interface ShellRead {
+  /** Every command's words, for the name read (`argNamesOf`). */
+  words: CommandWords[];
   segments: ShellSegment[];
   /** The same commands as `segments`, in public names, apart from a pull's package name, which is kept as it is after redaction, with the redacted text they compare by. */
   steps: ShellStepRead[];
   pulls: ToolPull[];
   commitPlan: PlannedCommit[];
+  /** The paths a `git restore` or `git checkout --` names, as written, in the commands whose status the call reports. Not in `segments`: a slashed path stays out of `run`. */
+  restores: string[];
 }
 
 const HEREDOC = /(?<!<)<<-?\s*(?:'([^']+)'|"([^"]+)"|\\?([A-Za-z_][\w.-]*))/g;
@@ -717,19 +770,102 @@ const redactCommand = (command: string, redact: Redactor): string =>
 const MASK = /^<(?:secret|email|org-domain)>/;
 const ONLY_MASKS = /^(?:<(?:secret|email|org-domain)>)+$/;
 
-const tokenize = (text: string): ShellToken[] => {
+/** Where the single-quoted text that opens at `open` ends: the closing quote, or the end of the text. Bash's ANSI-C string (`$'it\'s'`) honors a backslash, so its `\'` is inside it; any other single-quoted text ends at the next `'`. */
+const singleQuotedEnd = (text: string, open: number, ansiC = true): number => {
+  const ansi = ansiC && text.charAt(open - 1) === '$';
+  let end = open + 1;
+  while (end < text.length && text.charAt(end) !== "'") end += ansi && text.charAt(end) === '\\' ? 2 : 1;
+  return Math.min(end, text.length);
+};
+
+/** What closes each opener that can hold quotes of its own inside a double-quoted piece: a command substitution (`$(`, a backtick) or a parameter expansion (`${x:-"a b"}`). */
+const CLOSERS: ReadonlyMap<string, string> = new Map([
+  ['$(', ')'],
+  ['${', '}'],
+  ['`', '`'],
+]);
+
+/**
+ * Where the substitution or expansion that began just before `from`, closed by `first`, ends: past its closing character, or -1 when it never closes (PowerShell's backtick is an escape, not an opener, and a torn command has no end).
+ * Whatever quoting it holds is its own: a quote inside it never ends the double-quoted piece that carries it, so a quote cannot move the reader's state. An explicit stack keeps a crafted command that nests without end from
+ * overflowing the call stack, and `budget` (characters left to scan across one read) keeps one that opens thousands of them from costing a scan to the end of the text each.
+ */
+const substitutionEnd = (text: string, from: number, first: string, budget: { left: number }, powershell: boolean): number => {
+  const stack: string[] = [first];
+  let at = from;
+  // PowerShell's escape is the backtick, and a backslash is an ordinary character there.
+  const escape = powershell ? '`' : '\\';
+  // Inside a double-quoted piece or an expansion a single quote and a bare parenthesis are text; inside a substitution they quote and group.
+  while (at < text.length && stack.length > 0 && budget.left > 0) {
+    budget.left -= 1;
+    const char = text.charAt(at);
+    const top = stack.at(-1);
+    const opener = CLOSERS.get(char === '$' ? char + text.charAt(at + 1) : char);
+    at += 1;
+    if (char === escape) at += 1;
+    else if (char === top) stack.pop();
+    else if (opener !== undefined) {
+      stack.push(opener);
+      at += char === '$' ? 1 : 0;
+    } else if (char === '"') stack.push('"');
+    else if (char === "'" && (top === ')' || top === '`')) at = singleQuotedEnd(text, at - 1, !powershell) + 1;
+    else if (char === '(' && (top === ')' || top === '`')) stack.push(')');
+  }
+  return stack.length === 0 ? at : -1;
+};
+
+/** What an unquoted word holds before its first quote when it is an assignment or a joined long flag: `API_REGION=` and `--region=`, with whatever unquoted text follows the `=`. */
+const JOINED_PREFIX = /^(?:[A-Za-z_][A-Za-z0-9_]*|--[A-Za-z][A-Za-z0-9_-]*)=/;
+
+/**
+ * The command's opaque point: its first single quote, heredoc marker, typographic quote (U+2018 to U+201E), block comment opener (`<#`), or stop-parsing token (`--%`). An unexpanded `$name` can only come from literal text, and
+ * these are where literal text begins in either shell, so a word that starts before this point is read as the shell reads it, and every word at or after it is opaque: it holds no variable and no flag value, whatever the reader made
+ * of the quotes before it. The point does not depend on the dialect, since a harness may run a PowerShell command and not say so (Codex, a nested `pwsh -c`); a PowerShell form in a POSIX command is rare, and the point only sends less.
+ */
+const OPAQUE_POINT = /['‘-„]|<<|<#|--%/;
+
+/** The shell a command is written for, which decides its escapes alone: a call whose tool the harness's `shells` table maps to `powershell` (Claude Code's `PowerShell`, and the `powershell` that Copilot, Pi, and Gemini name) reads a backslash as plain and a backtick as the escape, every other call by POSIX's. */
+type ShellDialect = 'posix' | 'powershell';
+
+/**
+ * `opaqueFrom` is where that point sits in `text` (-1 for none, 0 for a text that is opaque throughout, as a word an opaque word holds is); left out, it is the first point of the text. A substitution opened inside double quotes
+ * lowers it to where it opens, since its end is read by a scan that can close early: every word that starts after it is opaque, as is every word that starts after an unquoted backtick or an escaped double quote, which count only in a POSIX shell (PowerShell's backtick is its escape).
+ */
+const tokenize = (text: string, opaqueFrom?: number, dialect: ShellDialect = 'posix'): ShellToken[] => {
+  let opaque = opaqueFrom ?? text.search(OPAQUE_POINT);
   const tokens: ShellToken[] = [];
+  // PowerShell's escape is the backtick, a backslash is an ordinary character in and out of quotes, `$'` is no ANSI-C string, and a backtick opens no substitution.
+  const powershell = dialect === 'powershell';
+  const escape = powershell ? '`' : '\\';
   let word = '';
   let quoted = false;
+  // The word's raw source starts with an unquoted `NAME=` or `--flag=` before its first quote: the prefix is as written, whatever the quote makes of the rest.
+  let joined = false;
   let started = false;
   let redirected = false;
+  let at = 0;
+  // Where the word's raw source starts in `text`: a word that is exactly one variable reference carries that variable, and any other word carries none, whatever its quotes and `$` marks hold.
+  let start = -1;
+  const budget = { left: 16 * text.length + 1024 };
   const flush = (): void => {
     if (started && redirected) redirected = false;
     else if (started && !quoted && (word === '{' || word === '}')) tokens.push(word === '{' ? 'open' : 'close');
-    else if (started) tokens.push({ text: word, quoted });
+    else if (started) {
+      const held: ShellWord = { text: word, quoted };
+      if (opaque >= 0 && start >= opaque) held.opaque = true;
+      else {
+        const variable = variableOf(text.slice(start, at));
+        if (variable !== undefined) held.variable = variable;
+        // A single quote or a substitution after the `=` is an opaque point inside the word (the value is literal text there), so only a plain double-quoted value is read.
+        if (joined && (opaque < 0 || opaque >= at)) held.joined = true;
+      }
+      tokens.push(held);
+    }
     word = '';
     quoted = false;
+    joined = false;
     started = false;
+    start = -1;
   };
   const op = (token: ShellOp): void => {
     flush();
@@ -739,13 +875,15 @@ const tokenize = (text: string): ShellToken[] => {
     if (token === '\n' && (last === undefined || last === '&&' || last === '||' || last === '|' || last === '\n')) return;
     tokens.push(token);
   };
-  let at = 0;
   while (at < text.length) {
     const char = text.charAt(at);
     const next = text.charAt(at + 1);
+    const here = at;
+    if ((char === "'" || char === '"') && !quoted && JOINED_PREFIX.test(word)) joined = true;
+    // An unquoted backtick opens a substitution whose end the reader does not scan for: an escaped quote inside it reads as a bare one, so every word that starts after it is opaque, as after a substitution inside double quotes.
+    if (!powershell && char === '`') opaque = opaque < 0 ? at : Math.min(opaque, at);
     if (char === "'") {
-      const end = text.indexOf("'", at + 1);
-      const stop = end < 0 ? text.length : end;
+      const stop = singleQuotedEnd(text, at, !powershell);
       word += text.slice(at + 1, stop);
       quoted = true;
       started = true;
@@ -755,19 +893,40 @@ const tokenize = (text: string): ShellToken[] => {
       started = true;
       at += 1;
       while (at < text.length && text.charAt(at) !== '"') {
-        if (text.charAt(at) === '\\' && text.charAt(at + 1) === '\n') at += 2;
-        else if (text.charAt(at) === '\\' && text.charAt(at + 1) === '"') {
+        const inner = text.charAt(at);
+        const after = text.charAt(at + 1);
+        const opener = inner === '$' ? inner + after : inner;
+        const closer = powershell && inner === '`' ? undefined : CLOSERS.get(opener);
+        if (closer === ')' || closer === '`') opaque = opaque < 0 ? at : Math.min(opaque, at);
+        const end = closer === undefined ? -1 : substitutionEnd(text, at + opener.length, closer, budget, powershell);
+        if (inner === escape && (after === escape || after === '$' || after === '`')) {
+          // A backslash pair is one escaped backslash, so the second never escapes the quote after it; an escaped dollar or backtick opens nothing.
+          word += inner + after;
+          at += 2;
+        } else if (inner === escape && after === '\n') {
+          at += 2;
+        } else if (inner === escape && after === '"') {
+          // POSIX reads the escaped quote as data, but the same text under PowerShell (a Codex call is stored as `Bash` whatever shell ran it) ends the string there, so every word after it may be read with the quote state inverted.
+          if (!powershell) opaque = opaque < 0 ? at : Math.min(opaque, at);
           word += '"';
           at += 2;
+        } else if (end >= 0) {
+          // A command substitution stays whole in this word: a quote inside it is its own, and never closes this piece. One that never closes is read as the text it is.
+          word += text.slice(at, end);
+          at = end;
         } else {
-          word += text.charAt(at);
+          word += inner;
           at += 1;
         }
       }
       at += 1;
-    } else if ((char === '\\' || char === '`') && next === '\n') {
+    } else if (!powershell && char === '\\' && next === '\\') {
+      word += '\\\\';
+      started = true;
       at += 2;
-    } else if (char === '\\' && next !== '' && /[\s&|;()<>'"]/.test(next)) {
+    } else if ((char === escape || char === '`') && next === '\n') {
+      at += 2;
+    } else if (char === escape && next !== '' && (powershell || /[\s&|;()<>'"]/.test(next))) {
       word += next;
       started = true;
       at += 2;
@@ -818,6 +977,7 @@ const tokenize = (text: string): ShellToken[] => {
       started = true;
       at += 1;
     }
+    if (started && start < 0) start = here;
   }
   flush();
   return tokens;
@@ -853,7 +1013,7 @@ const afterPrelude = (words: readonly ShellWord[]): readonly ShellWord[] => {
   for (;;) {
     const word = words[at];
     if (word === undefined) return [];
-    if (word.quoted) return words.slice(at);
+    if (word.quoted && word.joined !== true) return words.slice(at);
     const name = programOf(word) ?? word.text;
     if (BLOCK_WORDS.has(word.text.toLowerCase()) || ASSIGNMENT.test(word.text)) at += 1;
     else if (assignsCommand(words, at)) at += 2;
@@ -896,7 +1056,8 @@ const shellArgument = (program: string, args: readonly ShellWord[]): readonly Sh
   const flag = args.findIndex((word) => !word.quoted && isCommandFlag(program, word.text));
   const first = flag < 0 ? undefined : args[flag + 1];
   if (first === undefined) return null;
-  return JOINING_SHELLS.has(program) && !first.quoted ? args.slice(flag + 1) : tokenize(first.text);
+  // The argument's own text is read for its own first quote or marker, unless the word is opaque already: then nothing in it is read.
+  return JOINING_SHELLS.has(program) && !first.quoted ? args.slice(flag + 1) : tokenize(first.text, first.opaque === true ? 0 : undefined);
 };
 
 /** How many shells deep a command is read. Real commands nest two or three; the cap keeps a torn or hostile one from exhausting the stack. */
@@ -918,10 +1079,11 @@ const readCommands = (tokens: readonly ShellToken[], depth = 0): ShellCommand[] 
   const owned = new Map<number, number>();
   const close = (): void => {
     const real = afterPrelude(words);
+    const before = words.slice(0, words.length - real.length);
     words = [];
     const [head, ...args] = real;
     const program = head === undefined ? null : programOf(head);
-    if (program === null) return;
+    if (program === null || head === undefined) return;
     const previous = commands.at(-1);
     if (previous !== undefined) previous.link = linkOf(pending);
     // The tokens say which way each group goes, so they are walked in order: an open pushes, a close pops, and a pipe after that close hides the group.
@@ -935,7 +1097,7 @@ const readCommands = (tokens: readonly ShellToken[], depth = 0): ShellCommand[] 
     });
     owned.clear();
     pending = [];
-    commands.push({ program, args, read: true, link: 'end', hidden: false });
+    commands.push({ program, args, before, head, read: true, link: 'end', hidden: false });
   };
   for (const token of tokens) {
     if (typeof token === 'string') {
@@ -1221,6 +1383,49 @@ const isReadBack = (commands: readonly ShellCommand[], from: number, scope: stri
   return false;
 };
 
+const RESTORE_VALUE_FLAGS = new Set(['-s', '--source', '--pathspec-from-file']);
+const STAGED_FLAG = /^(?:--staged|-[a-zA-Z]*S[a-zA-Z]*)$/;
+const WORKTREE_FLAG = /^(?:--worktree|-[a-zA-Z]*W[a-zA-Z]*)$/;
+const PATCH_FLAG = /^(?:--patch|-[a-zA-Z]*p[a-zA-Z]*)$/;
+
+/** The words a `git restore` or `git checkout --` takes as paths to the working file. `git restore --staged` alone restores the index, and `--patch` restores part of a file, so neither names a whole file; `git checkout` with no `--` may name a branch. */
+const restoredBy = (git: GitCall): string[] => {
+  const words = git.args;
+  if (git.sub === 'checkout') {
+    const dashes = words.findIndex((word) => !word.quoted && word.text === '--');
+    // `git checkout --patch` takes part of a file, as `git restore --patch` does, so it names no whole file.
+    if (dashes < 0 || words.slice(0, dashes).some((word) => !word.quoted && PATCH_FLAG.test(word.text))) return [];
+    return words.slice(dashes + 1).map((word) => word.text);
+  }
+  if (git.sub !== 'restore') return [];
+  const paths: string[] = [];
+  let staged = false;
+  let worktree = false;
+  for (let at = 0; at < words.length; at += 1) {
+    const text = words[at]?.text ?? '';
+    if (text === '--') return staged && !worktree ? [] : [...paths, ...words.slice(at + 1).map((word) => word.text)];
+    if (PATCH_FLAG.test(text)) return [];
+    if (RESTORE_VALUE_FLAGS.has(text)) at += 1;
+    else if (text.startsWith('-')) {
+      staged ||= STAGED_FLAG.test(text);
+      worktree ||= WORKTREE_FLAG.test(text);
+    } else paths.push(text);
+  }
+  return staged && !worktree ? [] : paths;
+};
+
+/**
+ * The paths the call's `git restore` and `git checkout --` commands name, for a command whose status the call reports and that runs in the call's folder: after a `cd`, or under a repository flag (`-C`), a relative path means another folder.
+ * A word that holds a variable is no path.
+ */
+const restoredPaths = (commands: readonly ShellCommand[]): string[] => {
+  const folderAt = commands.findIndex((command) => CHANGES_FOLDER.has(command.program));
+  return (folderAt < 0 ? commands : commands.slice(0, folderAt)).flatMap((command) => {
+    const git = command.read ? gitCall(command) : null;
+    return git === null || git.scope !== '' ? [] : restoredBy(git).filter((path) => path !== '' && !path.includes('$'));
+  });
+};
+
 const commitPlanOf = (commands: readonly ShellCommand[]): PlannedCommit[] =>
   commands.flatMap((command, at) => {
     const git = gitCall(command);
@@ -1228,22 +1433,33 @@ const commitPlanOf = (commands: readonly ShellCommand[]): PlannedCommit[] =>
     return [{ quiet: git.args.some((word) => !word.quoted && QUIET.test(word.text)), readBack: isReadBack(commands, at, git.scope) }];
   });
 
-/** Every simple command of a shell call, in order, after the bodies are dropped and the command is redacted. `oars gate` reads the same commands as capture. */
-export const shellCommands = (command: string, redact: Redactor): ShellCommand[] => readCommands(tokenize(redactCommand(dropBodies(command.replace(/\r\n/g, '\n')), redact)));
+/** Every simple command of a shell call, in order, after the bodies are dropped and the command is redacted. Capture passes the dialect of the tool; `gate/checks.ts:524` and `projection.ts:95` call it with the POSIX default. */
+export const shellCommands = (command: string, redact: Redactor, dialect: ShellDialect = 'posix'): ShellCommand[] => {
+  const whole = command.replace(/\r\n/g, '\n');
+  const kept = dropBodies(whole);
+  const text = redactCommand(kept, redact);
+  // The command's opaque point (`tokenize`) is read on the whole command. Dropping a body or redacting can remove it and leave a later one in its place, and the words between would read as before it: when the first point
+  // moved or a point is gone, the whole text is opaque.
+  const points = (held: string): number => held.match(new RegExp(OPAQUE_POINT.source, 'g'))?.length ?? 0;
+  const moved = kept.search(OPAQUE_POINT) !== whole.search(OPAQUE_POINT) || points(text) !== points(kept);
+  return readCommands(tokenize(text, moved ? 0 : undefined, dialect));
+};
 
 /** A shell call's segments, pulls, and the commits it holds, from the command alone. The command is redacted before anything is kept. */
-export const readShell = (command: string, redact: Redactor): ShellRead => {
-  const commands = shellCommands(command, redact);
+export const readShell = (command: string, redact: Redactor, dialect: ShellDialect = 'posix'): ShellRead => {
+  const commands = shellCommands(command, redact, dialect);
   const kept = commands.slice(-SEGMENTS_PER_CALL_MAX);
   const pulls = new Map<string, ToolPull>();
   for (const { program, args } of commands) {
     for (const pull of pullsOfCommand(program, args).filter(present)) pulls.set(JSON.stringify(pull), pull);
   }
   return {
+    words: commands.map(({ before, head, args }) => ({ before, head, args })),
     segments: kept.map((held) => ({ run: runOf(held), read: held.read })),
     steps: kept.map((held) => ({ identity: shellIdentity(held.program, held.args, pullsOfCommand(held.program, held.args).filter(present), redact), read: held.read, run: runOf(held) })),
     pulls: [...pulls.values()],
     commitPlan: commitPlanOf(commands),
+    restores: restoredPaths(commands),
   };
 };
 
@@ -1498,6 +1714,9 @@ export const captureSession = (input: ExtractInput): Capture => {
   const callsPerResponse = new Map<string, number>();
   const outputPerResponse = new Map<string, number>();
   const seenResponses = new Set<string>();
+  /** The distinct messages that reported usage, by message key, and the tool-use ids each made (kept apart so a call on a line before the first usage line is still tied). */
+  const messageGroups = new Map<string, MessageUsage>();
+  const callsOfMessage = new Map<string, string[]>();
   let promptFingerprint: string | null = null;
   let cur: Current | undefined;
   // The setup, funnel, and trust shape. A subagent's run is the parent's, so it has no run of its own alone.
@@ -1625,6 +1844,13 @@ export const captureSession = (input: ExtractInput): Capture => {
         session.userTurns += 1;
       }
     }
+    // A message is the unit usage belongs to: the same id on every content-block line is one message, and a replayed line is the same one again.
+    // Only Claude Code and Codex report per-message counts; another harness's totals are not a message's, and a synthetic line is the harness speaking.
+    const messageKey = (harness === 'claude-code' || harness === 'codex') && messageModel !== '<synthetic>' && type === 'assistant' && role === 'assistant' ? str(message.id) || str(o.requestId) || `line ${String(position)}` : undefined;
+    if (messageKey !== undefined && lineUsage !== undefined && !messageGroups.has(messageKey)) {
+      const plan = planOf(o);
+      messageGroups.set(messageKey, { id: str(message.id) || str(o.requestId) || null, calls: [], ...(side ? { side: true } : {}), ...reportedUsage(lineUsage), ...(plan === undefined ? {} : { plan }) });
+    }
     if (type === 'assistant' && role === 'assistant') {
       session.assistantTurns += 1;
       if (!side && lineUsage !== undefined && firstOfResponse) {
@@ -1747,7 +1973,7 @@ export const captureSession = (input: ExtractInput): Capture => {
         else if (name === 'WebSearch' && str(toolInput.query) !== undefined && str(toolInput.query) !== '') searches.add(redact(str(toolInput.query) ?? ''));
         else if (SHELL.has(name)) session.bashCmds += 1;
         const aimed = targetOf(name, toolInput, lineCwd, salt, redact, lineRoot);
-        const shell = SHELL.has(name) || named.action === 'shell.exec' ? readShell(str(toolInput.command) ?? '', redact) : undefined;
+        const shell = SHELL.has(name) || named.action === 'shell.exec' ? readShell(str(toolInput.command) ?? '', redact, shellName === 'powershell' ? 'powershell' : 'posix') : undefined;
         for (const held of shell?.steps ?? []) framePrograms.add(held.identity.program);
         drafts.push(draftsOf(actions, named, native, shell, aimed.target, toolInput, redact));
         responseOfCall.push(response);
@@ -1763,6 +1989,15 @@ export const captureSession = (input: ExtractInput): Capture => {
         // Depth reads below the repository root, else the working folder, as the target's hash does; a relative value is taken from the working folder first.
         const argFeatures = argFeaturesOf(native, toolInput, lineRoot ?? lineCwd, lineCwd);
         const argValues = argValuesOf(native, toolInput, CLOSED_ARG_VALUES);
+        // A name is stored as the line's text is: masked at capture, so a credential-shaped folder or file name never reaches the store. The mask has no name shape, so the wire still drops it and counts it.
+        const names = argNamesOf(native, toolInput, lineRoot ?? lineCwd, lineCwd, shell?.words ?? [], CLOSED_ARG_VALUES, shell?.restores ?? []).map(({ kind, name }) => ({ kind, name: redact(name) }));
+        const digests = editDigestsOf(name, toolInput);
+        // A restored path is hashed as an edit's target is, so the two compare; the same call's folder and repository anchor a relative one.
+        const restores = [...new Set((shell?.restores ?? []).map((path) => hashPath(path, lineCwd, lineRoot, salt).hash))];
+        // A template keeps a program, a subcommand, and flags as written and every literal as a slot; its kept words are masked as a name is, and the wire gates each one again.
+        const templates = templatesOf(shell?.words ?? [], redact);
+        // An edit is stored as the shapes of its change from a closed list, read from the old and new text and never kept.
+        const diffShape = diffShapeOf(name, toolInput);
         const compared: ComparedCall = { input: toolInput, target: aimed.target, features: argFeatures, values: argValues };
         const lastKey = `${String(cur?.index ?? null)}\n${String(side)}\n${stored}`;
         const before = lastCall.get(lastKey);
@@ -1787,6 +2022,11 @@ export const captureSession = (input: ExtractInput): Capture => {
           argClass: argClassOf(toolInput),
           argFeatures,
           ...(argValues.length === 0 ? {} : { argValues }),
+          ...(names.length === 0 ? {} : { names }),
+          ...(digests.length === 0 ? {} : { digests }),
+          ...(restores.length === 0 ? {} : { restores }),
+          ...(templates.length === 0 ? {} : { templates }),
+          ...(diffShape.length === 0 ? {} : { diffShape }),
           ...(before === undefined ? {} : { changeKind: changeKindOf(before, compared) }),
           durationMs: null,
           toolUseId: id ?? null,
@@ -1801,6 +2041,7 @@ export const captureSession = (input: ExtractInput): Capture => {
           ...(manifest === undefined ? {} : { manifest }),
         };
         tools.push(call);
+        if (id !== undefined && messageKey !== undefined) callsOfMessage.set(messageKey, [...(callsOfMessage.get(messageKey) ?? []), id]);
         if (id !== undefined) callById.set(id, { call, at: lineSeconds, plan: shell?.commitPlan ?? [] });
       } else if (blockType === 'tool_result') {
         const text = resultText(block);
@@ -1849,7 +2090,7 @@ export const captureSession = (input: ExtractInput): Capture => {
   const kept = [...files].sort().slice(0, FILES_PER_SESSION_MAX);
   session.files = kept;
   session.fileHashes = [...new Set(kept.flatMap((path) => [...(fileHashes.get(path) ?? [])]))].sort();
-  session.repo = sessionRoot === null ? null : sha256(`${salt}\nrepo:${identityOf(sessionRoot)}`).slice(0, 16);
+  session.repo = sessionRoot === null ? null : sha256(`${input.repoSalt ?? salt}\nrepo:${identityOf(sessionRoot)}`).slice(0, 16);
   session.urls = [...urls].sort();
   session.searches = [...searches].sort();
 
@@ -1901,6 +2142,8 @@ export const captureSession = (input: ExtractInput): Capture => {
       frameId,
     }));
   }
+  for (const [key, group] of messageGroups) group.calls = callsOfMessage.get(key) ?? [];
+  if (messageGroups.size > 0) session.messageUsage = [...messageGroups.values()];
   // The strata: the file's evidence once, and each prompt's own `explore` from one pass over the calls. The size is the one the frame holds, so a re-capture that carries `repoSize` keeps `repoFiles` too.
   const packageNames = tools.flatMap((call) => [...(call.packages ?? []).map((pkg) => pkg.package), ...(call.manifest?.seen ?? []), ...(call.manifest?.added ?? [])]);
   const fileStrata = strataOf({ paths: framePaths, packages: packageNames, size });

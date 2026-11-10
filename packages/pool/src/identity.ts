@@ -102,17 +102,26 @@ export const hashToken = (token: string): string => createHash('sha256').update(
 
 const hasAccount = (row: unknown): row is { account: string } => textField(row, 'account') !== undefined;
 
+/** The bearer token a request presents, whatever it is a token of. */
+export const bearerOf = (request: Request): string | undefined => /^Bearer (.+)$/.exec(request.headers.get('authorization') ?? '')?.[1];
+
 /** The account a bearer token belongs to. Only the token's hash is stored, so a read of the database signs nobody in. */
 export const accountOf = async (request: Request, env: Env): Promise<string | undefined> => {
-  const token = /^Bearer (.+)$/.exec(request.headers.get('authorization') ?? '')?.[1];
+  const token = bearerOf(request);
   if (token === undefined) return undefined;
   const row = await env.DB.prepare('SELECT account FROM tokens WHERE hash = ? AND expires_at > ?').bind(hashToken(token), Date.now()).first();
   return hasAccount(row) ? row.account : undefined;
 };
 
+/** The refusal for a closed account (covenant 6.1: the operator closed it on request), or undefined when it is open or the pool has never seen it. Sign-in, machine enrollment, and activation answer it, so a closed account cannot get a new credential by any route. */
+export const closedRefusal = async (env: Env, account: string): Promise<Response | undefined> => {
+  const row = await env.DB.prepare('SELECT closed_at FROM accounts WHERE id = ?').bind(account).first();
+  return row === null || fieldOf(row, 'closed_at') === null ? undefined : closedAccount();
+};
+
 /** `DELETE /v1/login`: revokes the credential the request presents, so a copy of it signs nobody in. 204 when it was live; a revoked, expired, or unknown credential gets the usual 401. */
 export const logout = async (request: Request, env: Env): Promise<Response> => {
-  const token = /^Bearer (.+)$/.exec(request.headers.get('authorization') ?? '')?.[1];
+  const token = bearerOf(request);
   const revoked = token === undefined ? undefined : await env.DB.prepare('DELETE FROM tokens WHERE hash = ? AND expires_at > ?').bind(hashToken(token), Date.now()).run();
   return revoked?.meta.changes === 1 ? new Response(null, { status: 204 }) : refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
 };
@@ -268,8 +277,18 @@ const WAITING = new Map([
   ['access_denied', 'denied'],
 ]);
 
+const closedAccount = (): Response => refuse(403, 'account_closed', 'This account is closed. To reopen it, write to privacy@manyoars.com.');
+
+/** Stores a credential's hash only while the account is open, in one statement, so a close that lands after the check in `closedRefusal` cannot leave a live token on a closed account. False when nothing was written. */
+export const storeToken = async (env: Env, account: string, hash: string, expiresAt: number): Promise<boolean> => {
+  const stored = await env.DB.prepare('INSERT INTO tokens (hash, account, expires_at) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM accounts WHERE id = ? AND closed_at IS NULL)').bind(hash, account, expiresAt, account).run();
+  return stored.meta.changes === 1;
+};
+
 /** The pool's own credential for an account: only its hash is stored. Also when the table sheds the rows past their expiry, since they sign nobody in. */
 const credentialFor = async (env: Env, signingKey: string, kid: string, account: string, providerCreated: number | undefined): Promise<Response> => {
+  const closed = await closedRefusal(env, account);
+  if (closed !== undefined) return closed;
   const token = randomBytes(32).toString('hex');
   const now = Date.now();
   const expiresAt = now + TOKEN_LIFETIME_MS;
@@ -278,7 +297,7 @@ const credentialFor = async (env: Env, signingKey: string, kid: string, account:
     .bind(account, now, providerCreated ?? null)
     .run();
   await env.DB.prepare('DELETE FROM tokens WHERE expires_at <= ?').bind(now).run();
-  await env.DB.prepare('INSERT INTO tokens (hash, account, expires_at) VALUES (?, ?, ?)').bind(hashToken(token), account, expiresAt).run();
+  if (!(await storeToken(env, account, hashToken(token), expiresAt))) return closedAccount();
   // Newest first by rowid (the table is a rowid table, so a later credential has a later one); everything past the cap is the oldest and is revoked.
   await env.DB.prepare('DELETE FROM tokens WHERE account = ? AND rowid NOT IN (SELECT rowid FROM tokens WHERE account = ? ORDER BY rowid DESC LIMIT ?)').bind(account, account, LIVE_TOKEN_CAP).run();
   return answer(200, { status: 'authorized', token, account, expiresAt, kid, signingKey: publicKeyOf(signingKey) });

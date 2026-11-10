@@ -1,4 +1,4 @@
-// The entry the hook starts, detached, after a cut ask: `node hook-fill-main.js <storeDir> <class> <name> <cwd>`. It prints nothing, answers nothing, and exits 0 whatever
+// The entry the hook starts, detached, at the hand-off mark or after an ask with no time to start: `node hook-fill-main.js <storeDir> <class> <name> <cwd>`. It prints nothing, answers nothing, and exits 0 whatever
 // happens; nobody waits on it.
 import { CROSSING_CLASSES } from './checks.js';
 import { FILL_TIMEOUT_MS, runFill } from './hook-fill.js';

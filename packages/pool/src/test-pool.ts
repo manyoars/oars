@@ -2,11 +2,13 @@
 import { createHash, webcrypto } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { build } from 'esbuild';
+import { build, type PluginBuild } from 'esbuild';
 import { convertV4MiniflareOptions, CoreHeaders, Miniflare, ProxyOps, Request as StubRequest, Response as StubResponse } from 'miniflare';
 import { Agent, buildConnector } from 'undici';
 import { expect } from 'vitest';
 import type { Bound, PoolDb } from './http.js';
+
+export { acceptanceOf } from './test-covenant-texts.js';
 
 interface Statement {
   first: (column?: string) => Promise<unknown>;
@@ -17,6 +19,7 @@ interface Statement {
 /** The D1 calls these tests make. Miniflare's own return type names a package whose ambient types clash with Node's, so it is named here. */
 export interface TestDb {
   prepare: (sql: string) => Statement & { bind: (...values: (string | number | null)[]) => Statement };
+  batch: (statements: readonly Statement[]) => Promise<unknown>;
 }
 
 /** The R2 calls these tests make, named for the same reason as `TestDb`. */
@@ -165,8 +168,13 @@ export const keepAliveSender = (entry: () => Promise<URL>): KeepAliveSender => {
     const small = typeof held === 'string' ? Buffer.byteLength(held) <= WHOLE_BODY_BYTES : held instanceof Uint8Array && held.byteLength <= WHOLE_BODY_BYTES;
     const body = forward.body === null ? undefined : small ? new Uint8Array(await forward.arrayBuffer()) : forward.body;
     let response: Response;
+    const started = Date.now();
+    const connectsBefore = connects;
     try {
       response = await fetch(new URL(`${sent.pathname}${sent.search}`, base), { method: forward.method, headers, ...(body === undefined ? {} : body instanceof Uint8Array ? { body } : { body, duplex: 'half' }), redirect: forward.redirect, dispatcher });
+    } catch (error) {
+      // undici reports a reset as `fetch failed` over a bare socket error, which names no call; a flake on a loaded box leaves nothing else behind, so say which call it was (t1068). A connect since the call began means it did not ride an idle socket.
+      throw new Error(`${forward.method} ${sent.pathname} failed after ${String(Date.now() - started)} ms on a ${connects === connectsBefore ? 'reused' : 'new'} connection: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     } finally {
       if (counted) inFlight -= 1;
     }
@@ -321,7 +329,9 @@ const clientIds = (parsed: object): { [name: string]: string } => {
  * public tool keep meaning what they say; a test of the split passes its own `CLEAR_FLOOR` (`floor-split.test.ts`), and the default of 1 is `wrangler.jsonc`'s.
  */
 export const startPool = async (bindings: { [name: string]: string } = {}, options: { raw?: boolean } = {}): Promise<TestPool> => {
-  const bundled = await build({ entryPoints: [fileIn('./worker.ts')], bundle: true, write: false, format: 'esm', platform: 'node', conditions: ['workerd', 'worker'], external: ['node:*'] });
+  // The Worker bundles the stand-in covenant texts for `v1` and `v2` in place of the shipped ones: the pool refuses an acceptance for a version it holds no text for, and the shipped module holds none until a covenant's wording is settled.
+  const standIn = { name: 'stand-in-covenant-texts', setup: (builder: PluginBuild): void => { builder.onResolve({ filter: /(^|\/)covenant-texts\.js$/ }, () => ({ path: fileIn('./test-covenant-texts.ts') })); } };
+  const bundled = await build({ entryPoints: [fileIn('./worker.ts')], bundle: true, write: false, format: 'esm', platform: 'node', conditions: ['workerd', 'worker'], external: ['node:*'], plugins: [standIn] });
   const contents = bundled.outputFiles[0]?.text;
   if (contents === undefined) throw new Error('the bundle is empty');
   const config = wranglerConfig();
@@ -348,9 +358,12 @@ export const startPool = async (bindings: { [name: string]: string } = {}, optio
   const db = async (): Promise<TestDb> => (await miniflare.getBindings<{ DB: TestDb }>()).DB;
   const bucket = async (): Promise<TestBucket> => (await miniflare.getBindings<{ TELEMETRY: TestBucket }>()).TELEMETRY;
   const database = await db();
+  // One batch, not one round trip per statement: the migrations are about 90 statements, so the hook no longer pays one round trip per statement when the machine is busy.
+  const statements: Statement[] = [];
   for (const file of readdirSync(fileIn('../migrations')).sort()) {
-    for (const line of readFileSync(fileIn(`../migrations/${file}`), 'utf8').split('\n')) if (line.trim() !== '' && !line.startsWith('--')) await database.prepare(line).run();
+    for (const line of readFileSync(fileIn(`../migrations/${file}`), 'utf8').split('\n')) if (line.trim() !== '' && !line.startsWith('--')) statements.push(database.prepare(line));
   }
+  await database.batch(statements);
 
   const rawBucket = async (): Promise<TestBucket> => (await miniflare.getBindings<{ RAW: TestBucket }>()).RAW;
 

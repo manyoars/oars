@@ -57,7 +57,7 @@ export const recordSchedule = async (storeDir: string, mode: 'on' | 'off'): Prom
 };
 
 /** One masked line in `pool-send.log`, the place a failure of the trigger or the sender goes. Never throws. */
-const logFailure = async (storeDir: string, at: number, error: unknown): Promise<void> => {
+export const logFailure = async (storeDir: string, at: number, error: unknown): Promise<void> => {
   const line = await errorLine(storeDir, error).catch(() => 'unknown error');
   await mkdir(storeDir, { recursive: true }).then(() => appendFile(join(storeDir, LOG), `${new Date(at).toISOString()} ${line}\n`, 'utf8')).catch(() => undefined);
 };
@@ -107,8 +107,7 @@ export const catchUp = async (deps: CatchUpDeps): Promise<CatchUpResult> => {
     return 'started';
   } catch (error) {
     // The mark is already written when the start itself failed; the debounce holds until SEND_EVERY_MS after the mark, and the next trigger after that retries.
-    const line = await errorLine(deps.storeDir, error).catch(() => 'unknown error');
-    await mkdir(deps.storeDir, { recursive: true }).then(() => appendFile(join(deps.storeDir, LOG), `${new Date(deps.now()).toISOString()} ${line}\n`, 'utf8')).catch(() => undefined);
+    await logFailure(deps.storeDir, deps.now(), error);
     return 'failed';
   }
 };

@@ -3,7 +3,7 @@
 // one `cellsOf`, so a session gives the same cells at the pool and on the machine. This file reads no file system: the pool's Worker bundles it.
 
 import { ARG_CLASSES, CHANGE_KINDS, type ArgFeature, type ArgValue } from './call-shape.js';
-import { bucketFields, deriveCells, ENVIRONMENT_BUCKET, isEnvironmentCell, type CellSet, type Grain } from './cells.js';
+import { bucketFields, deriveCells, ENVIRONMENT_BUCKET, EXPOSURE_CODES, exposureOfCell, isEnvironmentCell, type CellSet, type ExposureGraph, type Exposure, type Grain, type HeldStep } from './cells.js';
 import type { Motif } from './motif.js';
 import { bucketOf, floorOf, OTHER, OPEN_GATE, projectedSteps, wireChange, wireFeatures, wireKeys, wireValues, type SkeletonArgFeature, type SkeletonArgValue, type SessionSkeleton, type ShellReader, type SkeletonFrame, type SkeletonPrompt, type SkeletonTool, type SkeletonTranscript } from './pool-wire.js';
 import { NO_RECALLS, type RecallGraph } from './recall-consequence.js';
@@ -17,7 +17,10 @@ export interface CellRow {
   frameBucket: string;
   grain: Grain;
   day: string;
+  /** 1 for a shown cell, 0 for any other: the column the cell table held before held and unknown were told apart. */
   exposed: number;
+  /** Shown, held, or unknown; its code (`EXPOSURE_CODES`) is the last field of `key`. */
+  exposure: Exposure;
   sessions: number;
   ok: number;
   failed: number;
@@ -97,7 +100,7 @@ export const cellsOf = (store: Store, graph: RecallGraph = NO_RECALLS): CellSet 
   const named = new Set(marginal.motifs.filter(({ level, steps }) => level === 'named' && steps.length === 1 && steps[0]?.identity !== null).map(({ motifId }) => motifId));
   const motifs = new Map([...whole.motifs, ...marginal.motifs.filter(({ motifId }) => named.has(motifId))].map((motif) => [motif.motifId, motif]));
   const order = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
-  const cells = [...whole.cells, ...marginal.cells.filter(({ motifId }) => named.has(motifId))].sort((a, b) => order(a.motifId, b.motifId) || order(a.frameBucket, b.frameBucket) || order(a.grain, b.grain) || order(a.day, b.day) || Number(a.exposed) - Number(b.exposed));
+  const cells = [...whole.cells, ...marginal.cells.filter(({ motifId }) => named.has(motifId))].sort((a, b) => order(a.motifId, b.motifId) || order(a.frameBucket, b.frameBucket) || order(a.grain, b.grain) || order(a.day, b.day) || EXPOSURE_CODES[exposureOfCell(a)] - EXPOSURE_CODES[exposureOfCell(b)]);
   return { cells, motifs: [...motifs.values()].sort((a, b) => order(a.motifId, b.motifId)) };
 };
 
@@ -318,15 +321,44 @@ export const storeOf = (skeletons: readonly SessionSkeleton[]): Store => {
   return store;
 };
 
-/** Whole cells and strata, summed over a batch's own sessions: the same cells a store of that batch alone derives. */
+const callKey = (tool: Pick<ToolObservation, 'session' | 'n'>): string => `${tool.session}#${String(tool.n)}`;
+const promptKey = (session: string, index: number | null): string => `${session}#${String(index)}`;
+
+/**
+ * The graph a deposit derives its cells under: the recommendations the skeleton carries, placed on the main run's calls that are not sidechain (the line the windows were counted on). A call in a shown window is shown, in a held
+ * one held, and one the batch has no row for is unknown: the graph adds no step and never reads a call as unexposed, since no row cannot be told from a client that did not look. An arm this reader does not know places nothing.
+ */
+export const exposureGraphOf = (store: Store, skeleton: SessionSkeleton): ExposureGraph => {
+  const main = `${skeleton.id}#0`;
+  const line = store.tools.filter((tool) => tool.session === main && !tool.side).sort((a, b) => a.n - b.n);
+  const shown = { calls: new Set<string>(), prompts: new Set<string>() };
+  const held = { calls: new Set<string>(), prompts: new Set<string>() };
+  for (const { arm, from, to } of skeleton.recommendations ?? []) {
+    if (arm === OTHER) continue;
+    const into = arm === 'shown' ? shown : held;
+    for (const tool of line.slice(from, to)) {
+      into.calls.add(callKey(tool));
+      into.prompts.add(promptKey(tool.session, tool.prompt));
+    }
+  }
+  return {
+    place: (tool, steps): HeldStep[] => steps.map((step) => ({ step, exposed: shown.calls.has(callKey(tool)), held: held.calls.has(callKey(tool)) })),
+    exposedPrompt: (session, index) => shown.prompts.has(promptKey(session, index)),
+    heldPrompt: (session, index) => held.prompts.has(promptKey(session, index)),
+  };
+};
+
+/** Whole cells and strata, summed over a batch's own sessions: the same cells a store of that batch alone derives, under the exposure the batch carries. */
 export const incrementsOf = (skeleton: SessionSkeleton): Increments => {
-  const derived = cellsOf(storeOf([skeleton]));
+  const store = storeOf([skeleton]);
+  const derived = cellsOf(store, exposureGraphOf(store, skeleton));
   const cells = new Map<string, CellRow>();
   for (const cell of derived.cells) {
+    const exposure = exposureOfCell(cell);
     const exposed = cell.exposed ? 1 : 0;
-    const key = `${cell.motifId}/${cell.frameBucket}/${cell.grain}/${cell.day}/${String(exposed)}`;
+    const key = `${cell.motifId}/${cell.frameBucket}/${cell.grain}/${cell.day}/${String(EXPOSURE_CODES[exposure])}`;
     // The served column is a running sum, so a cell no session of this batch recorded tokens for adds nothing to it; the sum itself holds only what was observed, and `tokenSessions` and `tokenPrompts` say how much of the cell it covers.
-    cells.set(key, { key, harnessBucket: isEnvironmentCell(cell) ? ENVIRONMENT_BUCKET : bucketFields(cell.frameBucket).harnessBucket, motifId: cell.motifId, frameBucket: cell.frameBucket, grain: cell.grain, day: cell.day, exposed, sessions: cell.sessions, ok: cell.ok, failed: cell.failed, tokens: cell.tokens ?? 0, tokenSessions: cell.tokenSessions ?? 0, tokenPrompts: cell.tokenPrompts ?? 0, durationMs: cell.durationMs });
+    cells.set(key, { key, harnessBucket: isEnvironmentCell(cell) ? ENVIRONMENT_BUCKET : bucketFields(cell.frameBucket).harnessBucket, motifId: cell.motifId, frameBucket: cell.frameBucket, grain: cell.grain, day: cell.day, exposed, exposure, sessions: cell.sessions, ok: cell.ok, failed: cell.failed, tokens: cell.tokens ?? 0, tokenSessions: cell.tokenSessions ?? 0, tokenPrompts: cell.tokenPrompts ?? 0, durationMs: cell.durationMs });
   }
   // A session counts once per value, so each value is one session of this batch.
   const strata = new Map<string, StratumRow>();

@@ -1,11 +1,11 @@
-// The raw tier serves nothing in v1: a guard over the pool's source and its route table, the way ledger.test.ts guards deletes. Only the upload touches the raw bucket or its ledger table,
-// and no route returns a raw byte, a hash, or a count per account. A later layer that serves raw needs a new brief and a change to this file.
+// The raw tier serves nothing to anyone but the account that deposited it: a guard over the pool's source and its route table, the way ledger.test.ts guards deletes. The upload (`raw.ts`) touches the raw bucket and its ledger table and answers no byte, hash, or count;
+// the one read is `export.ts`, an account's own copy under GDPR Article 15(3), which may only `get` one object by its owner's key. A later layer that serves raw needs a new brief and a change to this file.
 import { readdirSync, readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RAW_ROUTES } from './raw.js';
-import { fieldOf, startPool, stubUser, type TestPool } from './test-pool.js';
+import { acceptanceOf, fieldOf, startPool, stubUser, type TestPool } from './test-pool.js';
 
 const here = (relative: string): URL => new URL(relative, import.meta.url);
 
@@ -15,6 +15,8 @@ const code = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').rep
 const keysOf = (value: unknown): string[] => (typeof value === 'object' && value !== null ? Object.keys(value).sort() : []);
 
 const RAW_HOME = 'raw.ts';
+/** The one other file that touches raw state: it reads an account its own object back (`GET /v1/account/export/raw/:hash`) and writes nothing. */
+const COPY_HOME = 'export.ts';
 /** Names that reach raw state: the R2 binding, the ledger table, the consent column, and the staging keys. */
 const RAW_STATE = /\bRAW\b|raw_objects|raw_consent|staging\//;
 /** What `raw.ts` may call on the bucket: it writes staged parts, reads them back to assemble, assembles through a multipart upload, and removes its own staged parts. It lists one account's own staging prefix to bound it (S12), and uses the keys only to refuse a part; it never heads. */
@@ -26,6 +28,14 @@ const ANSWER_KEYS = new Set(['ok', 'stored', 'part']);
 const offences = (files: { [name: string]: string }): string[] =>
   Object.entries(files).flatMap(([name, text]) => {
     const body = code(text);
+    if (basename(name) === COPY_HOME) {
+      const calls = [...body.matchAll(/\bRAW\.(\w+)\(/g)].map(([, method]) => method ?? '');
+      return [
+        ...calls.filter((method) => method !== 'get').map((method) => `${name}: calls RAW.${method}`),
+        ...(calls.filter((method) => method === 'get').length > 1 ? [`${name}: more than one RAW.get`] : []),
+        ...(body.match(/\bnew Response\(/g)?.length ?? 0) > 1 ? [`${name}: builds more than one Response of its own`] : [],
+      ];
+    }
     if (basename(name) !== RAW_HOME) {
       // `http.ts` declares the optional binding and its types; nothing else may name raw state.
       const declaresOnly = basename(name) === 'http.ts' && body.replace(/\bRAW\?: RawBucket;/, '').search(RAW_STATE) === -1;
@@ -49,11 +59,11 @@ const sourceFiles = (): { [name: string]: string } =>
       .map((file) => [`src/${file}`, readFileSync(here(file), 'utf8')]),
   );
 
-describe('the raw tier is reachable from the upload only', () => {
-  it('finds raw state only in raw.ts, and the bucket used only to stage, assemble, and clean up', () => {
+describe('the raw tier is reachable from the upload (raw.ts) and the owner copy (export.ts) only', () => {
+  it('finds raw state only in raw.ts and export.ts, and the bucket used only to stage, assemble, and clean up', () => {
     const files = sourceFiles();
     // Check the scan reached the files that serve: derive, stored, bundle, and the route table.
-    for (const name of ['src/raw.ts', 'src/derive.ts', 'src/stored.ts', 'src/bundle.ts', 'src/worker.ts', 'src/http.ts']) expect(Object.keys(files), name).toContain(name);
+    for (const name of ['src/raw.ts', 'src/export.ts', 'src/derive.ts', 'src/stored.ts', 'src/bundle.ts', 'src/worker.ts', 'src/http.ts']) expect(Object.keys(files), name).toContain(name);
     expect(offences(files)).toEqual([]);
   });
 
@@ -82,6 +92,20 @@ describe('the raw tier is reachable from the upload only', () => {
     expect(offences(files)).toEqual([offence]);
   });
 
+  it.each([
+    ['export.ts writing an object', { 'src/export.ts': 'await env.RAW.put(key, bytes)' }, 'src/export.ts: calls RAW.put'],
+    ['export.ts listing the bucket', { 'src/export.ts': 'await env.RAW.list({ prefix })' }, 'src/export.ts: calls RAW.list'],
+    ['export.ts deleting an object', { 'src/export.ts': 'await env.RAW.delete([key])' }, 'src/export.ts: calls RAW.delete'],
+    ['export.ts reading two objects', { 'src/export.ts': 'await env.RAW.get(a); await env.RAW.get(b);' }, 'src/export.ts: more than one RAW.get'],
+    ['export.ts answering twice with bytes', { 'src/export.ts': 'new Response(a.body); new Response(b.body);' }, 'src/export.ts: builds more than one Response of its own'],
+  ])('names %s', (_label, files, offence) => {
+    expect(offences(files)).toEqual([offence]);
+  });
+
+  it('lets export.ts read one object and answer with it', () => {
+    expect(offences({ 'src/export.ts': 'const object = await env.RAW.get(key); return new Response(object.body, { status: 200 });' })).toEqual([]);
+  });
+
   it('lets raw.ts stage, assemble, list its staging prefix, and answer ok', () => {
     const text = 'await bucket.put(k, b); const s = await bucket.get(k); await bucket.createMultipartUpload(k); await bucket.delete(ks); await bucket.list({ prefix }); return answer(201, { ok: true, stored: true });';
     expect(offences({ 'src/raw.ts': text })).toEqual([]);
@@ -100,11 +124,11 @@ describe('no route serves a raw byte, a hash, or a count', () => {
 
   it('answers 404 to every method on every raw path but the two uploads, and puts no stored byte in any answer', async () => {
     const { token } = await pool.signIn('github', stubUser('8801'));
-    await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+    await pool.post('/v1/covenant/accept', acceptanceOf('v1'), token);
     const marker = 'SERVE-MARKER-must-never-come-back';
     const bytes = new TextEncoder().encode(marker.repeat(10));
     const hash = Buffer.from(await crypto.subtle.digest('SHA-256', bytes)).toString('hex');
-    const headers = { 'oars-redaction-version': '1', 'oars-capture-version': 'cap-1', 'oars-raw-consent': 'granted' };
+    const headers = { 'oars-redaction-version': '1', 'oars-capture-version': 'cap-1', 'oars-raw-consent': 'granted', 'oars-raw-consent-version': 'v1' };
     const part = await pool.send(`/v1/raw/${hash}/parts/1`, { method: 'PUT', body: bytes }, token, headers);
     const done = await pool.send(`/v1/raw/${hash}/complete`, { method: 'POST', body: JSON.stringify({ parts: 1, bytes: bytes.length }) }, token, headers);
     expect([part.status, done.status]).toEqual([200, 201]);
@@ -128,9 +152,9 @@ describe('no route serves a raw byte, a hash, or a count', () => {
         expect(text, `${method} ${path}`).not.toContain(marker);
       }
     }
-    // The routes that do answer carry no raw figure: the covenant status is its two fields.
+    // The routes that do answer carry no raw figure: the covenant status is its three fields.
     const status = await pool.get('/v1/covenant', token);
-    expect(keysOf(status.json)).toEqual(['accepted', 'version']);
+    expect(keysOf(status.json)).toEqual(['accepted', 'screen', 'version']);
     expect(fieldOf(status.json, 'accepted')).toBe(true);
   }, 60_000);
 });

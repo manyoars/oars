@@ -1,4 +1,4 @@
-// The built `dist/hook-bin.js nightly`, run as the scheduled task runs it, in a temp home with a pool stub on localhost (t884 fix round): the nightly entry calls the pool send, which reads the covenant first and sends nothing unless it is accepted.
+// The built `dist/hook-bin.js nightly`, run as the detached sender runs it, in a temp home with a pool stub on localhost: the nightly entry calls the pool send, which reads the covenant first and sends nothing unless it is accepted.
 // Like `telemetry/hook-bin-telemetry.test.ts` it reads `dist/`, which the root `check` builds before the tests run; without a build it is skipped.
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

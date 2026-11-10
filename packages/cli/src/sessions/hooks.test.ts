@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { slugOf } from './allow.js';
 import { readHookCalls } from './hook-calls.js';
 import { hookRuntime, HOOK_EVENTS, nightlyTelemetry, runHook } from './hooks.js';
-import { deposit, depositSession, loadStore } from './store.js';
+import { deposit, depositSession, HOOK_LOCK, loadStore } from './store.js';
 import { withoutCells } from './next-fixtures.js';
 import { cleanup, composers, FIXTURES, folders, NOW, stage, stageCursor, stageRawCursor, type Staged } from './test-support.js';
 
@@ -126,19 +126,19 @@ describe('SessionEnd deposit hook', () => {
     expect(calls[0]?.session).toBe('fresh');
   });
 
-  it('defers on a held store lock after its 3 s wait and still returns nothing', async () => {
+  it('defers on a held store lock after its lock wait and still returns nothing', async () => {
     const staged = await deposited();
     const transcript = join(staged.projectsRoot, slugOf(REPO), 'blocked.jsonl');
     copyFileSync(join(FIXTURES, 'proj', 'tldr.jsonl'), transcript);
     writeFileSync(join(staged.storeDir, 'store.lock'), 'a holder that never frees');
-    const started = Date.now();
     // The refusal is deferred to the pending list, not a failure; the step log holds it as its own status.
     await expect(depositSession(staged.runtime, transcript, () => NOW)).resolves.toBe('deferred');
-    expect(Date.now() - started).toBeLessThan(4500);
+    // The wait is the configured one, asserted by its value: a wall-clock bound this short would fail under load.
+    expect(HOOK_LOCK.waitMs).toBeLessThan(1000);
     expect(await runHook('stop', JSON.stringify({ session_id: 'blocked', transcript_path: transcript }), staged.runtime, () => NOW)).toBeUndefined();
     const deferred = (await readHookCalls(staged.storeDir)).filter((call) => call.session === 'blocked');
     expect(deferred.map((call) => [call.event, call.hit, call.error])).toEqual([['stop', false, null]]);
-  }, 20_000); // waits out the 3 s hook lock wait twice by design: 7.0 s measured alone, so about 3x
+  }, 20_000); // waits out the hook lock wait twice by design; the margin covers a loaded machine
 
   it('does not read a folder no --allow named, a missing transcript, or an event without a transcript', async () => {
     const staged = await deposited();

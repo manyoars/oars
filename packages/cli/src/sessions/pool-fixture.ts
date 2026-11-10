@@ -179,7 +179,9 @@ export const REGISTER_FIXTURE = {
   vocabVersion: VOCAB_VERSION,
   fieldsVersion: FIELD_LIST_VERSION,
   id: '0123456789abcdef',
+  claimed: { hostClass: 'cloud', launcher: 'ci' },
   deltas: [{ deltaKind: 'removed', field: 'package', name: 'typescript', registry: 'npm', metric: 'callsPerSession', change: -2 }],
+  recommendations: [{ id: '0f1e2d3c4b5a6978', arm: 'shown', poolVersion: '2026-11-03T03:00:00.000Z', from: 0, to: 1 }],
   timingPrint: null,
   transcripts: [
     {
@@ -217,6 +219,13 @@ export const REGISTER_FIXTURE = {
           argFeatures: [{ key: 'command', valueSize: '9-32', patternFeatures: ['literal'] }],
           argValues: [{ key: 'run_in_background', enumValue: 'true' }],
           changeKind: ['key-added'],
+          names: [{ kind: 'env', name: 'NODE_ENV' }, { kind: 'file', name: 'plan.md' }],
+          namesDropped: 1,
+          templates: ['npm run <ident>', 'git commit -m <text>'],
+          templatesDropped: 1,
+          diffShape: ['import-added', 'lines-changed'],
+          // The parser does not ask which tool holds a digest either, so the fixture carries one pair on the call that sends names.
+          digests: [{ old: '5d41402abc4b2a76b9719d911017c592', new: '7d793037a0760186574b0282f2f435e7' }],
           steps: [
             { ...REGISTER_STEP, allocated: true, skill: 'commit', action: 'shell.exec', native: 'Bash', identity: { program: 'npm', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] } },
             { ...REGISTER_STEP, edges: [{ kind: 'next', target: 0 }], action: 'mcp.call', native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' } },

@@ -8,7 +8,7 @@ import type { Env } from './http.js';
 import { sampleSkeleton } from './sample.js';
 import { DEFAULT_FLOORS } from './floors.js';
 import { storedOf } from './stored.js';
-import { fieldOf, startPool, stubUser, type TestPool } from './test-pool.js';
+import { acceptanceOf, fieldOf, startPool, stubUser, type TestPool } from './test-pool.js';
 
 let pool: TestPool;
 
@@ -33,7 +33,7 @@ const RECORDED = { input: bucketOf('tokens', 64_000), cacheWrite: 0, cacheRead: 
 
 const deposit = async (target: TestPool, id: string, skeletons: SessionSkeleton[]): Promise<void> => {
   const { token } = await target.signIn('github', stubUser(id));
-  await target.post('/v1/covenant/accept', { version: 'v1' }, token);
+  await target.post('/v1/covenant/accept', acceptanceOf('v1'), token);
   for (const skeleton of skeletons) expect((await target.post('/v1/deposits', skeleton, token)).status).toBe(201);
 };
 

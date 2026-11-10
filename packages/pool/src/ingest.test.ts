@@ -6,7 +6,7 @@ import type { SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import type { Bound, Env, PoolDb } from './http.js';
 import { chunksOf, incrementsOf } from './ingest.js';
 import { sampleSkeleton, withPairs } from './sample.js';
-import { fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
+import { acceptanceOf, fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
 import worker from './worker.js';
 
 interface Held {
@@ -61,7 +61,7 @@ const strataOracle = (byAccount: readonly (readonly SessionSkeleton[])[]): { key
 
 const accountOn = async (target: TestPool, id: string): Promise<string> => {
   const { token } = await target.signIn('github', stubUser(id));
-  await target.post('/v1/covenant/accept', { version: 'v1' }, token);
+  await target.post('/v1/covenant/accept', acceptanceOf('v1'), token);
   return token;
 };
 
@@ -319,9 +319,9 @@ describe('a large deposit', () => {
     expect(JSON.stringify([...wanted.cells.values()]).length).toBeGreaterThan(2 * 1024 * 1024);
     expect(JSON.stringify(skeleton).length).toBeLessThan(1024 * 1024);
     // The sizes docs/pool.md states, so they cannot drift unseen: the skeleton as the worker stores it, the cells, and their JSON. Each call's `"errorCode":null,` is 17 bytes of the skeleton (t868: 818,998 before it; t869 adds 17 for the transcript's null `spawnedIn`), and the three `unknown` coverage bands are 128 bytes on the two frames (t871).
-    expect(new TextEncoder().encode(JSON.stringify(skeleton)).length).toBe(887_140);
+    expect(new TextEncoder().encode(JSON.stringify(skeleton)).length).toBe(887_141);
     expect(wanted.cells.size).toBe(11_548);
-    expect(JSON.stringify([...wanted.cells.values()]).length).toBe(3_746_485);
+    expect(JSON.stringify([...wanted.cells.values()]).length).toBe(3_988_993);
     await inFreshPool({}, async (target) => {
       const token = await accountOn(target, '9101');
       const response = await target.post('/v1/deposits', skeleton, token);
@@ -331,7 +331,7 @@ describe('a large deposit', () => {
       expect(await total(target)).toBe(expected);
       const db = await target.db();
       // What the account's byte limit counts: the skeleton, the deltas column (`[]`), and the extensions bag (`[]`), two bytes each.
-      expect(await db.prepare('SELECT LENGTH(CAST(skeleton AS BLOB)) + LENGTH(CAST(deltas AS BLOB)) + LENGTH(CAST(extensions AS BLOB)) AS bytes FROM deposits').first('bytes')).toBe(887_144);
+      expect(await db.prepare('SELECT LENGTH(CAST(skeleton AS BLOB)) + LENGTH(CAST(deltas AS BLOB)) + LENGTH(CAST(extensions AS BLOB)) AS bytes FROM deposits').first('bytes')).toBe(887_145);
       expect(await db.prepare('SELECT COUNT(*) AS count FROM cells').first('count')).toBe(wanted.cells.size);
       expect(await db.prepare('SELECT COUNT(*) AS count FROM motifs').first('count')).toBe(wanted.motifs.length);
       expect(await db.prepare("SELECT COUNT(*) AS count FROM contributors WHERE kind = 'cell'").first('count')).toBe(wanted.cells.size);
@@ -342,12 +342,12 @@ describe('a large deposit', () => {
   // The sizes docs/pool.md states for the sample deposit (one session, one prompt, two shell steps), so the figure cannot drift unseen.
   it('stores the sample deposit in the bytes docs/pool.md states', async () => {
     const skeleton = sampleSkeleton('0000000000009103');
-    expect(new TextEncoder().encode(JSON.stringify(skeleton)).length).toBe(1_938);
+    expect(new TextEncoder().encode(JSON.stringify(skeleton)).length).toBe(1_939);
     await inFreshPool({}, async (target) => {
       const token = await accountOn(target, '9103');
       expect((await target.post('/v1/deposits', skeleton, token)).status).toBe(201);
       const db = await target.db();
-      expect(await db.prepare('SELECT LENGTH(CAST(skeleton AS BLOB)) AS bytes FROM deposits').first('bytes')).toBe(1_938);
+      expect(await db.prepare('SELECT LENGTH(CAST(skeleton AS BLOB)) AS bytes FROM deposits').first('bytes')).toBe(1_939);
       expect(await db.prepare('SELECT LENGTH(CAST(deltas AS BLOB)) AS bytes FROM deposits').first('bytes')).toBe(2);
       expect(await db.prepare('SELECT LENGTH(CAST(extensions AS BLOB)) AS bytes FROM deposits').first('bytes')).toBe(2);
     });

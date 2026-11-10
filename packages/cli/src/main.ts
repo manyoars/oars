@@ -7,6 +7,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { openBrowser } from './browser.js';
 import { run } from './cli.js';
 import { defaultConfigDir, fileCredentialStore } from './credentials.js';
+import { codexRoot } from './sessions/codex.js';
 import { cursorRoot } from './sessions/cursor.js';
 import { claudeEvaluator, runClaude } from './sessions/gold-arms.js';
 import { catchUpOnStore } from './sessions/pool-due.js';
@@ -43,6 +44,7 @@ process.exitCode = await run(process.argv.slice(2), {
     hookBin: fileURLToPath(new URL('./hook-bin.js', import.meta.url)),
     userSettings: join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'settings.json'),
     cwd: process.cwd(),
+    codex: { home: codexRoot(process.env), nodePath: process.execPath, hookBin: fileURLToPath(new URL('./sessions/codex-hook-bin.js', import.meta.url)) },
     schtasks: (args) =>
       new Promise((resolve) => {
         let output = '';
@@ -69,5 +71,6 @@ process.exitCode = await run(process.argv.slice(2), {
     sourceRoots: Object.fromEntries(SOURCES.map((source) => [source.name, source.root(process.platform, process.env, homedir())])),
     stdin: process.stdin,
     stdout: process.stdout,
+    stderr: process.stderr,
   },
 });

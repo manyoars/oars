@@ -10,12 +10,18 @@ import type { BooksBy, RecallQuery } from './sessions/query.js';
 import { closedQueryOf, formsRefusal, RECALL_FAMILIES } from './sessions/recall-reads.js';
 import { FAMILIES } from './sessions/read.js';
 import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsGoldArms, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsLineage, sessionsMeasure, sessionsRead, sessionsRecall, sessionsRecallCounts, sessionsVerify, type SessionsDeps } from './sessions/command.js';
+import { sessionsCard } from './sessions/card-command.js';
+import type { CardPeriod } from './sessions/card.js';
 import { gateInstall, gatePolicy, gateReplay, gateReport, gateUninstall } from './gate/command.js';
 import { DEADLINE_MS, gateHook } from './gate/hook.js';
 import { managerReader } from './gate/registry.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
 import { sessionsTry } from './sessions/try.js';
-import { poolCoverage, poolDeposit, poolFetch, poolLogin, poolLogout, poolOutbox, poolRaw } from './sessions/pool-command.js';
+import { githubVisibility, poolEnroll, poolMachineRevoke, poolMachines } from './sessions/machine-enroll.js';
+import { runNetGit } from './sessions/machine-hold.js';
+import { holdPull } from './sessions/machine-pull.js';
+import { runGit } from './sessions/survival.js';
+import { poolCoverage, poolDeposit, poolExport, poolFetch, poolLogin, poolLogout, poolOutbox, poolRaw } from './sessions/pool-command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 import { telemetryOff, telemetryOn, telemetryReport, telemetryShow, telemetryStatus } from './telemetry/command.js';
@@ -180,6 +186,20 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
       emit(deps, flag(options, 'json'), await keysRevoke(deps, { apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')), keyId }));
     });
 
+  program
+    .command('card')
+    .description('a share-ready card of your own week, month, or year across every harness, read from your local store only: nothing is uploaded and no folder, path, prompt text, or private name is printed')
+    .option('--week', 'the last 7 days (the default)')
+    .option('--month', 'the last 30 days')
+    .option('--year', 'the last 365 days')
+    .option('--text', 'print the card as a table instead of saving a picture')
+    .option('--out <file>', 'save the card here, as .png or .svg: both are written, one with each extension (default oars-card-<period> in the working directory)')
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      const period: CardPeriod = flag(options, 'year') ? 'year' : flag(options, 'month') ? 'month' : 'week';
+      emit(deps, flag(options, 'json'), await sessionsCard(sessionDeps(deps), { period, text: flag(options, 'text'), out: text(options, 'out') }, deps.env));
+    });
+
   const sessions = program.command('sessions').description("deposit and recall your own coding-agent session logs, locally (these commands make no model call and no network call, except `gold arms`, which asks your own Claude subscription; telemetry is separate: oars telemetry)");
 
   sessions
@@ -220,7 +240,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .option('--family <name>', `one read family (${RECALL_FAMILIES.join(', ')}); only recovery and fit are narrowed by --class and --since`)
     .option('--text <text>', 'look for text in the local record')
     .option('--session <id>', 'the session asking, so what it did next can be read for this recall')
-    .option('--counts', 'print counts of recalls by mode, arm, and answer, with what followed, instead of answering (see --day)')
+    .option('--counts', 'print counts of recalls by mode, arm, and answer, with how many windows hold a call named like a shown action, instead of answering (see --day)')
     .option('--day <yyyy-mm-dd>', 'with --counts: only this UTC day')
     .option('--mcp', 'serve one recall tool over MCP on stdio instead of answering once')
     .option('--context', "print the repository's top recurring errors as a short block for injection into a session (see --cwd, --harness, --top, --max-chars)")
@@ -401,12 +421,22 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     return value === 'user' || value === 'project' || value === 'file' ? value : undefined;
   };
 
+  const harnessOption = (value: string): 'codex' => {
+    if (value !== 'codex') throw new InvalidArgumentError('it must be codex (Claude Code is the default and needs no flag).');
+    return value;
+  };
+  const harnessOf = (options: OptionValues): 'codex' | undefined => (text(options, 'harness') === 'codex' ? 'codex' : undefined);
+
   hook
     .command('install')
     .description('merge the SessionStart, UserPromptSubmit, PreToolUse, PostToolUseFailure, and SessionEnd hooks into a settings file (existing hooks are kept), raise cleanupPeriodDays to at least 365, and, on Windows, remove the nightly task an earlier version registered (oars installs no scheduler: a due sweep and send, at most about hourly, starts from the session-end hook and from any oars command; telemetry goes only while it is on, and pool batches only after you accept a pool covenant)')
     .option('--scope <scope>', 'user (~/.claude/settings.json; the default), project (./.claude/settings.json), or file (needs --file; implied by --file)', scopeOption)
     .option('--file <path>', 'the settings file for --scope file')
+    .option('--harness <harness>', 'codex: install the opt-in Codex recording hook in hooks.json in the Codex home instead (Codex asks you to trust it before it runs; it records tool and token rows locally while codex is allowed)', harnessOption)
     .option('--keep-retention', 'leave cleanupPeriodDays as it is (the harness deletes raw transcripts older than it)')
+    .option('--machine', 'write the Stop and SessionEnd entries of a machine (a cloud VM, a VPS, or a runner): they run oars-hook, which builds the batch of its session at each Stop only where OARS_HOST_CLASS names a class other than local; --scope project (committed) or --scope user')
+    .option('--env <name=value>', 'with --machine --scope user: one variable of the enrollment block for the env block of that file (OARS_HOST_CLASS is required; repeat the flag; OARS_EXCLUSION_TERMS_INLINE: one term per line; a comma is part of the term); the file is then made owner-only', (value: string, before: string[] | undefined): string[] => [...(before ?? []), value])
+    .option('--terms-file <path>', 'with --machine --scope user: write the OARS_EXCLUSION_TERMS_INLINE terms to this owner-only file and name it in OARS_EXCLUSION_TERMS, so the settings file holds no term')
     .option('--schedule <mode>', 'off: no background sweep or pool send from the session-end hook or from commands (telemetry has its own switch: oars telemetry off), and remove the task an earlier version registered; on: clear that choice; nightly is refused, because sends now ride the hook and commands', (value: string) => {
       if (value !== 'nightly' && value !== 'off' && value !== 'on') throw new InvalidArgumentError('it must be off or on (nightly is no longer registered).');
       return value;
@@ -422,6 +452,10 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
           file: text(options, 'file'),
           keepRetention: flag(options, 'keepRetention'),
           schedule: schedule === 'nightly' || schedule === 'off' || schedule === 'on' ? schedule : undefined,
+          harness: harnessOf(options),
+          machine: flag(options, 'machine'),
+          env: list(options, 'env'),
+          termsFile: text(options, 'termsFile'),
         }),
       );
     });
@@ -431,18 +465,20 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .description('remove only the hooks `install` wrote from a settings file (cleanupPeriodDays stays; it also removes the task an earlier version registered)')
     .option('--scope <scope>', 'user (the default), project, or file (needs --file; implied by --file)', scopeOption)
     .option('--file <path>', 'the settings file for --scope file')
+    .option('--harness <harness>', 'codex: remove only the Codex recording hook from hooks.json in the Codex home', harnessOption)
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
-      emit(deps, flag(options, 'json'), await sessionsHookUninstall(sessionDeps(deps), { scope: scopeOf(options), file: text(options, 'file') }));
+      emit(deps, flag(options, 'json'), await sessionsHookUninstall(sessionDeps(deps), { scope: scopeOf(options), file: text(options, 'file'), harness: harnessOf(options) }));
     });
 
   hook
     .command('status')
     .description('what is installed in the user and project settings (and --file), and whether a task an earlier version registered is still there')
     .option('--file <path>', 'one more settings file to report')
+    .option('--harness <harness>', 'codex: report the Codex recording hook in hooks.json in the Codex home instead', harnessOption)
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
-      emit(deps, flag(options, 'json'), await sessionsHookStatus(sessionDeps(deps), { file: text(options, 'file') }));
+      emit(deps, flag(options, 'json'), await sessionsHookStatus(sessionDeps(deps), { file: text(options, 'file'), harness: harnessOf(options) }));
     });
 
   const gate = program.command('gate').description('record the install, fetch-and-run, MCP, and skill picks your agents make, live through a hook or from logs already on disk, without judging them');
@@ -522,9 +558,56 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     });
 
   pool
+    .command('enroll')
+    .description('enroll a machine: print the whole configuration a cloud VM needs (host class, launcher, a new machine id, the repositories, two salts derived from this machine\'s, and your exclusion terms) after checking that each repository is private (GH_TOKEN or GITHUB_TOKEN lets the check see a private one). With --hold-only that is all, and no pool credential is used; without it the pool also issues a one-time enrollment token for the machine, which needs oars pool login')
+    .option('--hold-only', 'hold in the session\'s own repository and send nothing to the pool: no login, no token')
+    .option('--host-class <class>', 'vps, cloud, ci, or hosted')
+    .option('--launcher <launcher>', 'interactive, orchestrated, or scheduled')
+    .option('--allow-repos <repos>', 'the repositories the machine may hold, as owner/name; repeat the flag or separate them with commas', collect)
+    .option('--name <label>', 'without --hold-only: the label the pool lists this machine by (letters, digits, spaces, dots, underscores, and hyphens; 64 at most)')
+    .option('--days <n>', 'without --hold-only: how many days the machine\'s key lives from its activation, 1 to 365 (default 90)')
+    .option(serverOption, serverHelp)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      const token = deps.env.GH_TOKEN ?? deps.env.GITHUB_TOKEN;
+      emit(deps, flag(options, 'json'), await poolEnroll(deps, { holdOnly: flag(options, 'holdOnly'), hostClass: text(options, 'hostClass'), launcher: text(options, 'launcher'), allowRepos: list(options, 'allowRepos'), name: text(options, 'name'), days: text(options, 'days'), server: text(options, 'server') }, githubVisibility(fetch, token)));
+    });
+
+  const machines = pool
+    .command('machines')
+    .description('list the machines enrolled with the pool: label, id, host class, launcher, state, last deposit day, and expiry; needs oars pool login')
+    .option(serverOption, serverHelp)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await poolMachines(deps, { server: text(options, 'server') }));
+    });
+  machines
+    .command('revoke')
+    .argument('<id>', 'the machine\'s id, as oars pool machines lists it')
+    .description('revoke one machine: its key is refused from its next request')
+    .option(serverOption, serverHelp)
+    .action(async (id: string, _options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await poolMachineRevoke(deps, id, { server: text(options, 'server') }));
+    });
+
+  pool
+    .command('hold')
+    .description('the trusted machine\'s side of the holding route')
+    .command('pull')
+    .description('on the trusted machine, read the oars-hold/* branch tips of every enrolled machine\'s private repositories (each repository\'s visibility is checked again on every run) and admit each batch that passes every gate to the outbox; a branch that does not is reported and left where it is. Uses this machine\'s own git credential and GH_TOKEN or GITHUB_TOKEN for the visibility check')
+    .option(serverOption, serverHelp)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      const token = deps.env.GH_TOKEN ?? deps.env.GITHUB_TOKEN;
+      const ports = { visibility: githubVisibility(fetch, token), git: runGit, net: runNetGit, remoteOf: (repo: string) => `https://github.com/${repo}.git` };
+      emit(deps, flag(options, 'json'), await holdPull(deps, { server: text(options, 'server') }, ports));
+    });
+
+  pool
     .command('deposit')
-    .description('write a batch to the outbox for each session that passes the folder allowlist and the exclusion check, and stop: nothing is sent, and only counts print. --send <hash> sends one batch that oars pool outbox printed and that is unchanged, once this account has accepted the pool covenant')
-    .option('--accept-covenant <version>', 'accept this version of the pool covenant before sending (with --send)')
+    .description('write a batch to the outbox for each session that passes the folder allowlist and the exclusion check, and stop: no session data is sent, and only counts print. --send <hash> sends one batch that oars pool outbox printed and that is unchanged, once this account has accepted the pool covenant')
+    .option('--accept-covenant <version>', 'name the covenant version you expect, with --send: on a terminal the screen is shown and you type its phrase yourself, and off a terminal this is refused')
     .option('--send <hash>', 'the SHA-256 of a batch that oars pool outbox printed')
     .option(serverOption, serverHelp)
     .action(async (_options: OptionValues, command: Command) => {
@@ -561,6 +644,17 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       emit(deps, flag(options, 'json'), await poolOutbox(deps, { server: text(options, 'server'), explain: flag(options, 'explain') }));
+    });
+
+  pool
+    .command('export')
+    .description('save a copy of what the pool holds about your account to a folder, as JSON, one file a page, and write nothing to the pool; with --raw also save your own raw transcripts that still stand (GDPR Articles 15 and 20)')
+    .requiredOption('--out <folder>', 'the folder to save the export in; its files are owner-only, and a rerun overwrites the same ones')
+    .option('--raw', 'also fetch each raw transcript you deposited that has not been erased, into <folder>/raw')
+    .option(serverOption, serverHelp)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await poolExport(deps, { server: text(options, 'server'), out: text(options, 'out') ?? '', raw: flag(options, 'raw') }));
     });
 
   pool
@@ -639,6 +733,8 @@ const execute = async (argv: string[], deps: RunDeps, observed: Observed): Promi
 
 /** `sessions hook uninstall` is the first step of removing the store, so it must not start a sweep that would recreate what the person is about to delete. */
 const isHookUninstall = (observed: Observed): boolean => observed.path.join(' ') === 'sessions hook uninstall';
+/** `sessions try` promises no network call and no read of the real store, and the sender does both. */
+const isSessionsTry = (observed: Observed): boolean => observed.path.join(' ') === 'sessions try';
 
 /** Runs one invocation (`argv` without the node and script entries) and returns the exit code. Telemetry records it afterward and cannot change it. */
 export const run = async (argv: string[], deps: RunDeps): Promise<ExitCode> => {
@@ -647,6 +743,6 @@ export const run = async (argv: string[], deps: RunDeps): Promise<ExitCode> => {
   const exit = await execute(argv, deps, observed);
   finishTelemetry(deps, argv, observed, startedAt, exit);
   // Never from a gate hook (it runs before every tool call) or from `hook uninstall`; it cannot change the exit code or what the command printed.
-  if (deps.catchUp !== undefined && !isHook(argv, observed) && !isHookUninstall(observed)) await Promise.resolve().then(deps.catchUp).catch(() => undefined);
+  if (deps.catchUp !== undefined && !isHook(argv, observed) && !isHookUninstall(observed) && !isSessionsTry(observed)) await Promise.resolve().then(deps.catchUp).catch(() => undefined);
   return exit;
 };

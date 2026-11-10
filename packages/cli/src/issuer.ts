@@ -8,12 +8,12 @@ import type { RunDeps } from './cli.js';
 export const PRODUCTION_ISSUER_URL = 'https://login.manyoars.com/realms/aor';
 
 const UNAVAILABLE =
-  'Cannot reach Many Oars sign-in at login.manyoars.com (Many Oars and its pool at pool.manyoars.com may not be deployed yet). Pass --issuer-url or set OARS_ISSUER_URL to use another issuer.';
+  'Cannot reach Many Oars sign-in at login.manyoars.com (it may not be deployed yet). Pass --issuer-url or set OARS_ISSUER_URL to use another issuer.';
 
 /**
  * The built-in issuer is in use only when neither `--issuer-url` nor `OARS_ISSUER_URL` named one. If that issuer does not answer
  * discovery (no answer, an error status, or a body that is not discovery JSON), the platform is not up yet, so say so (exit 2) and
- * name the pool. An issuer the developer named keeps its own error.
+ * name the sign-in host. An issuer the developer named keeps its own error.
  */
 export const discoverIssuer = async <T>(deps: RunDeps, flag: string | undefined, discover: () => Promise<T>): Promise<T> => {
   try {

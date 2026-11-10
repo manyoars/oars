@@ -58,15 +58,29 @@ const capturedSkeleton = (): SessionSkeleton => {
 const shellIdentities = (skeleton: SessionSkeleton): unknown[] => skeleton.transcripts.flatMap(({ tools }) => tools.flatMap(({ steps }) => steps.filter(({ action }) => action === 'shell.exec').map(({ identity }) => identity)));
 
 describe('the leak test: a private name in a path, a program, a package, an argument, and a branch', () => {
-  // A program, MCP server, or pull name is a long-tail name and travels as a name, for the pool to count (it holds it below the floor). A path, an argument, a branch, a token, and a pattern never do.
-  it('leaves none of those bytes anywhere in the batch but a program, server, pull, or native tool name', () => {
+  // A program, MCP server, or pull name is a long-tail name and travels as a name, for the pool to count (it holds it below the floor). A path, an argument, a branch, a token, and a pattern never do. A file's own name and a
+  // flag's one-word value are name tokens (layer 2): they travel in `names`, each with its kind, and nowhere else.
+  it('leaves none of those bytes anywhere in the batch but a program, server, pull, or native tool name, or a name token', () => {
     const skeleton = capturedSkeleton();
     const named = new Set(['program', 'server', 'native']);
     // `name` is exempt only on a pull (the one object with a `registry` and a `version`; a delta has no `version`), so a delta's `name` is still scanned.
-    const text = JSON.stringify(skeleton, function (this: object, key: string, value: unknown) {
-      return named.has(key) || (key === 'name' && 'registry' in this && 'version' in this) ? undefined : value;
-    }).toLowerCase();
-    for (const bytes of [PLANTED.toLowerCase(), 'acme-deploy', 'abc123', 'secret.ts', 'feat/']) expect(text).not.toContain(bytes);
+    const scanned = (skip: ReadonlySet<string>): string =>
+      JSON.stringify(skeleton, function (this: object, key: string, value: unknown) {
+        // A template names its program as a step's identity does, so its first word is exempt like `program`; every other word of it is scanned.
+        if (key === 'templates' && Array.isArray(value)) return value.map((template) => String(template).split(' ').slice(1).join(' '));
+        return skip.has(key) || (key === 'name' && 'registry' in this && 'version' in this) ? undefined : value;
+      }).toLowerCase();
+    const text = scanned(named);
+    for (const bytes of [PLANTED.toLowerCase(), 'acme-deploy', 'feat/']) expect(text).not.toContain(bytes);
+    const apartFromNames = scanned(new Set([...named, 'names']));
+    for (const bytes of ['abc123', 'secret.ts']) expect(apartFromNames).not.toContain(bytes);
+    // A file's name crosses as a name token. The value after a credential-named flag (`--token abc123`) is no name and crosses nowhere.
+    expect(text).toContain('secret.ts');
+    expect(text).not.toContain('abc123');
+    // The templates hold the program and a public flag, and a slot where each argument stood.
+    const templates = skeleton.transcripts.flatMap((transcript) => transcript.tools.flatMap((tool) => tool.templates ?? []));
+    expect(templates).toContain(`${PLANTED.toLowerCase()} --token <text>`);
+    expect(templates).toContain('git commit -m <text> --amend');
     expect(JSON.stringify(shellIdentities(skeleton))).toContain('"program":"acme-deploy"');
     expect(JSON.stringify(shellIdentities(skeleton))).toContain(`"name":"${PLANTED.toLowerCase()}-pkg"`);
   });
@@ -280,8 +294,8 @@ describe('what a batch sends in place of a count', () => {
 
   it('puts an empty `deltas` on the form, and refuses an entry that is not one', () => {
     const whole = sample();
-    expect(whole).toMatchObject({ format: 4, deltas: [] });
+    expect(whole).toMatchObject({ format: 7, deltas: [] });
     expect(parseSkeleton({ ...whole, deltas: [{}] })).toMatchObject({ ok: false, field: 'deltas[0].deltaKind' });
-    expect(parseSkeleton({ ...whole, format: 1 })).toMatchObject({ ok: false, field: 'format', reason: 'the format 1 form is no longer read; send format 4' });
+    expect(parseSkeleton({ ...whole, format: 1 })).toMatchObject({ ok: false, field: 'format', reason: 'the format 1 form is no longer read; send format 7' });
   });
 });

@@ -1,9 +1,9 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { isMissing } from './pool-outbox.js';
+import { heldBatchOf, isMissing } from './pool-outbox.js';
 import { appendOwnerOnly, mkdirOwnerOnly } from './owner-only.js';
 import { contentHash } from './read.js';
-import { bucketOf, PACKAGE_REGISTRIES, type BucketKind, type DeltaEntry, type SessionRecords } from './pool-wire.js';
+import { bucketOf, PACKAGE_REGISTRIES, parseSkeleton, type BucketKind, type DeltaEntry, type SessionRecords } from './pool-wire.js';
 import { PRIVATE, PUBLIC_PACKAGES, publicEffort } from './public-vocabulary.js';
 import { harnessOf } from './schema.js';
 
@@ -240,4 +240,26 @@ export const carriedDeltas = (account: string, sessions: readonly Gated[], sent:
     if (entries.length > 0) carried.set(filler.id, { entries, marks });
   }
   return carried;
+};
+
+/** The delta entries the batch under `key` in this outbox already carries; none when it has no batch, or one this reader does not take. */
+export const heldDeltas = async (outbox: string, key: string): Promise<DeltaEntry[]> => {
+  const held = await heldBatchOf(outbox, key);
+  if (held === undefined) return [];
+  const parsed = parseSkeleton(JSON.parse(held.bytes));
+  return parsed.ok ? parsed.skeleton.deltas : [];
+};
+
+/**
+ * What a machine's Stop writes for the one open session it builds again: the deltas its own earlier batch carried, then the new ones. A session keeps exactly what its own batch carried, so the batch that replaces its own never loses a delta, and one that did
+ * not carry a held delta never takes it, whichever session fills the window now. A delta that appears in both (a batch written before its mark was) is written once.
+ */
+export const keptDeltas = (held: readonly DeltaEntry[], fresh: readonly DeltaEntry[]): DeltaEntry[] => {
+  const seen = new Set<string>();
+  return [...held, ...fresh].filter(({ deltaKind, field, name, registry, metric, change }) => {
+    const identity = JSON.stringify([deltaKind, field, name, registry, metric, change]);
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
 };

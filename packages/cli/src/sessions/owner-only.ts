@@ -5,7 +5,7 @@ import { appendFile, chmod, mkdir, writeFile } from 'node:fs/promises';
 
 const POSIX = process.platform !== 'win32';
 
-const isMissing = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ENOENT';
+export const isMissing = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ENOENT';
 
 /** Narrows a file that exists to 0600 before bytes go into it; a file not made yet is created 0600 by the write itself. */
 const narrow = async (file: string): Promise<void> => {
@@ -23,8 +23,8 @@ export const appendOwnerOnly = async (file: string, text: string): Promise<void>
   await appendFile(file, text, { encoding: 'utf8', mode: 0o600 });
 };
 
-/** Writes `text` to `file`, readable and writable by the owner only, whether or not the file existed. */
-export const writeOwnerOnly = async (file: string, text: string): Promise<void> => {
+/** Writes `text` (or bytes, kept exactly as they are) to `file`, readable and writable by the owner only, whether or not the file existed. */
+export const writeOwnerOnly = async (file: string, text: string | Uint8Array): Promise<void> => {
   await narrow(file);
   await writeFile(file, text, { encoding: 'utf8', mode: 0o600 });
 };

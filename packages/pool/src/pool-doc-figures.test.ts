@@ -1,5 +1,5 @@
 // Every size or count figure in docs/pool.md that the code determines is computed here and compared with the number the doc prints (t913). A merge or a
-// new field that moves a size now fails this test, so the doc is fixed before review. The figure sits in the doc as `887,140<!-- figure:skeleton -->`; a
+// new field that moves a size now fails this test, so the doc is fixed before review. The figure sits in the doc as `887,141<!-- figure:skeleton -->`; a
 // rounded one names its step, `1,900<!-- figure:sample~100 -->`, and must equal the computed value rounded to that step, so it stays true within its rounding.
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +10,7 @@ import type { SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { incrementsOf } from './ingest.js';
 import { MAX_ASSEMBLED_BYTES } from './parts.js';
 import { sampleSkeleton } from './sample.js';
-import { startPool, stubUser } from './test-pool.js';
+import { acceptanceOf, startPool, stubUser } from './test-pool.js';
 
 const DOC = readFileSync(fileURLToPath(new URL('../../../docs/pool.md', import.meta.url)), 'utf8');
 
@@ -35,7 +35,7 @@ const storedRow = async (built: SessionSkeleton): Promise<{ stored: number; exte
   const target = await startPool();
   try {
     const { token } = await target.signIn('github', stubUser('9201'));
-    await target.post('/v1/covenant/accept', { version: 'v1' }, token);
+    await target.post('/v1/covenant/accept', acceptanceOf('v1'), token);
     const posted = await target.post('/v1/deposits', built, token);
     if (posted.status !== 201) throw new Error(`the large deposit was refused with ${String(posted.status)}`);
     const db = await target.db();

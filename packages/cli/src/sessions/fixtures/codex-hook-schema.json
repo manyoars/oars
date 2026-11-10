@@ -1,0 +1,28 @@
+{
+  "note": "Field names and kinds of the Codex 0.167.0 command-hook payloads this hook reads, from a recorded run with values dropped. Common to every event: cwd, hook_event_name, session_id, transcript_path (string).",
+  "common": { "cwd": "string", "hook_event_name": "string", "session_id": "string", "transcript_path": "string" },
+  "SessionStart": { "model": "string", "permission_mode": "string", "source": "string" },
+  "PostToolUse": {
+    "model": "string",
+    "permission_mode": "string",
+    "tool_input": { "command": "string" },
+    "tool_name": "string",
+    "tool_use_id": "string",
+    "tool_response": "string",
+    "turn_id": "string"
+  },
+  "PostModelRequest": {
+    "model": "string",
+    "turn_id": "string",
+    "status": "string",
+    "error": "null",
+    "token_usage": {
+      "input_tokens": "number",
+      "cached_input_tokens": "number",
+      "cache_write_input_tokens": "number",
+      "output_tokens": "number",
+      "reasoning_output_tokens": "number",
+      "total_tokens": "number"
+    }
+  }
+}

@@ -1,9 +1,14 @@
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { zstdCompressSync } from 'node:zlib';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PassThrough } from 'node:stream';
+import type { DatabaseSync as FixtureDb } from 'node:sqlite';
+import { vi } from 'vitest';
+import { defaultConfigDir } from '../credentials.js';
+import type { CodexHookRuntime } from './codex-hook.js';
+import { appendOwnerOnly } from './owner-only.js';
 import type { SessionsRuntime } from './store.js';
 
 export const FIXTURES = fileURLToPath(new URL('./fixtures/', import.meta.url));
@@ -29,6 +34,24 @@ export const removeHeld = (dir: string): void => {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, DELAY_MS);
     }
   }
+};
+
+/**
+ * A folder a process had as its working directory, or held a file open in, cannot be renamed or removed on Windows until the system has closed that process's handles, which comes a moment after its exit is seen: CI failed
+ * twice on `rm` of a temp home with `EPERM` after the detached child's pid was already gone (`hook-bin-stop.test.ts`, `hook-bin-machine.test.ts`). Renaming the folder is the probe for "no process holds it": it changes nothing the
+ * test reads, fails as removal does while a handle is open, and succeeds the moment the handles are closed, so the wait ends on that condition and not on a delay. Anywhere but Windows the first try succeeds. Returns the folder
+ * to remove (the renamed one), or the folder itself when it is already gone.
+ */
+export const waitUntilFree = async (folder: string): Promise<string> => {
+  if (!existsSync(folder)) return folder;
+  const moved = `${folder}.free`;
+  await vi.waitFor(
+    () => {
+      renameSync(folder, moved);
+    },
+    { timeout: 25_000, interval: 50 },
+  );
+  return moved;
 };
 
 export const cleanup = (): void => {
@@ -94,13 +117,25 @@ export interface FixtureComposer {
   bubbles: FixtureBubble[];
 }
 
+/**
+ * A throwaway fixture database that never waits on the disk. It is written once, closed, and read back in the same test, so durability buys nothing, while every commit that syncs makes the test wait on the disk:
+ * on a CI disk shared by hundreds of workers the sixteen commits of one Cursor fixture took 40 seconds (about 7 ms each on a quiet disk). With no sync and the journal in memory the same fixture takes 1 ms.
+ */
+export const openFixtureDb = async (file: string): Promise<FixtureDb> => {
+  const { DatabaseSync: Database } = await import('node:sqlite');
+  const db = new Database(file);
+  db.exec('pragma synchronous = off; pragma journal_mode = memory');
+  return db;
+};
+
 /** A synthetic Cursor `User` folder: one global store and one workspace store per distinct folder. No real prompt text is ever used here. */
 export const stageCursor = async (root: string, composers: readonly FixtureComposer[]): Promise<string> => {
-  const { DatabaseSync } = await import('node:sqlite');
   const user = join(root, 'Cursor', 'User');
   mkdirSync(join(user, 'globalStorage'), { recursive: true });
-  const global = new DatabaseSync(join(user, 'globalStorage', 'state.vscdb'));
+  const global = await openFixtureDb(join(user, 'globalStorage', 'state.vscdb'));
   global.exec('create table ItemTable (key text unique on conflict replace, value blob); create table cursorDiskKV (key text unique on conflict replace, value blob)');
+  // One commit for the whole store: every insert on its own is a synced write, which is where a loaded disk spends this staging's time.
+  global.exec('begin');
   const put = global.prepare('insert into cursorDiskKV (key, value) values (?, ?)');
   const byFolder = new Map<string, FixtureComposer[]>();
   for (const composer of composers) {
@@ -135,13 +170,14 @@ export const stageCursor = async (root: string, composers: readonly FixtureCompo
   // A composer that was opened and left holds no message.
   put.run('composerData:empty', JSON.stringify({ composerId: 'empty', createdAt: 1, fullConversationHeadersOnly: [] }));
   put.run('composerData:torn', '{not json');
+  global.exec('commit');
   global.close();
   let index = 0;
   for (const [folder, listed] of byFolder) {
     const dir = join(user, 'workspaceStorage', `ws${String(index++)}`);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'workspace.json'), JSON.stringify({ folder: pathToFileURL(folder).href }));
-    const workspace = new DatabaseSync(join(dir, 'state.vscdb'));
+    const workspace = await openFixtureDb(join(dir, 'state.vscdb'));
     workspace.exec('create table ItemTable (key text unique on conflict replace, value blob)');
     workspace.prepare('insert into ItemTable (key, value) values (?, ?)').run('composer.composerData', JSON.stringify({ allComposers: listed.map((composer) => ({ composerId: composer.id })) }));
     workspace.close();
@@ -204,27 +240,26 @@ export interface RawWorkspace {
 }
 
 export const stageRawCursor = async (root: string, composerDocs: readonly { id: string; document: unknown }[], workspaces: readonly RawWorkspace[]): Promise<string> => {
-  const { DatabaseSync } = await import('node:sqlite');
   const user = join(root, 'Cursor', 'User');
   mkdirSync(join(user, 'globalStorage'), { recursive: true });
-  const global = new DatabaseSync(join(user, 'globalStorage', 'state.vscdb'));
+  const global = await openFixtureDb(join(user, 'globalStorage', 'state.vscdb'));
   global.exec('create table cursorDiskKV (key text unique on conflict replace, value blob)');
   const put = global.prepare('insert into cursorDiskKV (key, value) values (?, ?)');
   for (const composer of composerDocs) put.run(`composerData:${composer.id}`, JSON.stringify(composer.document));
   global.close();
-  workspaces.forEach((workspace, index) => {
+  for (const [index, workspace] of workspaces.entries()) {
     const dir = join(user, 'workspaceStorage', `raw${String(index)}`);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'workspace.json'), JSON.stringify(workspace.json));
     if (workspace.listed === undefined) {
       writeFileSync(join(dir, 'state.vscdb'), 'this is not a database');
-      return;
+      continue;
     }
-    const db = new DatabaseSync(join(dir, 'state.vscdb'));
+    const db = await openFixtureDb(join(dir, 'state.vscdb'));
     db.exec('create table ItemTable (key text unique on conflict replace, value blob)');
     db.prepare('insert into ItemTable (key, value) values (?, ?)').run('composer.composerData', JSON.stringify({ allComposers: workspace.listed.map((composerId) => ({ composerId })) }));
     db.close();
-  });
+  }
   return user;
 };
 
@@ -557,6 +592,8 @@ export const stageOpencode = async (root: string, sessions: readonly OpencodeFix
     create table session_message (id text primary key, session_id text not null, type text not null, seq integer not null, time_created integer not null, time_updated integer not null, data text not null);
     create table session_part (message_id text not null, session_id text not null, ordinal integer not null, type text not null, call_id text, time_created integer not null, time_updated integer not null, data text not null, primary key (message_id, ordinal));
   `);
+  // One commit for the whole store (see stageCursor): the journal mode above is set first, and the rows follow in a single transaction.
+  db.exec('begin');
   for (const session of sessions) {
     db.prepare('insert into session_v2 (id, parent_id, fork_session_id, directory, version, agent, time_created, time_updated) values (?, ?, ?, ?, ?, ?, ?, ?)').run(
       session.id,
@@ -575,6 +612,73 @@ export const stageOpencode = async (root: string, sessions: readonly OpencodeFix
       db.prepare('insert into session_part (message_id, session_id, ordinal, type, call_id, time_created, time_updated, data) values (?, ?, ?, ?, ?, ?, ?, ?)').run(part.messageId, session.id, part.ordinal, part.type, null, session.created, session.created, JSON.stringify(part.data));
     }
   }
+  db.exec('commit');
   db.close();
   return dir;
+};
+
+// Shared by the Codex recording hook's tests: a store under a temp folder that the environment points at, and payloads built from the recorded schema fixture.
+const hookDirs: string[] = [];
+
+export const AT = Date.parse('2026-11-09T12:00:00Z');
+
+export type Obj = { [key: string]: unknown };
+const isObj = (value: unknown): value is Obj => typeof value === 'object' && value !== null && !Array.isArray(value);
+const rec = (value: unknown): Obj => (isObj(value) ? value : {});
+const schema: Obj = rec(JSON.parse(readFileSync(join(FIXTURES, 'codex-hook-schema.json'), 'utf8')));
+
+const sample = (kind: unknown): unknown => {
+  if (kind === 'string') return 'x';
+  if (kind === 'number') return 7;
+  if (kind === 'null') return null;
+  return Object.fromEntries(Object.entries(rec(kind)).map(([name, inner]) => [name, sample(inner)]));
+};
+
+/** A payload with every field the fixture lists for the event, each holding a stand-in of its kind; `over` replaces or adds fields. */
+export const payloadOf = (event: 'SessionStart' | 'PostToolUse' | 'PostModelRequest', over: Obj = {}): Obj => ({
+  ...rec(sample(schema.common)),
+  ...rec(sample(schema[event])),
+  hook_event_name: event,
+  ...over,
+});
+
+export interface HookStore {
+  root: string;
+  home: string;
+  storeDir: string;
+  runtime: CodexHookRuntime;
+  rows: () => Obj[];
+  notes: () => Obj[];
+  saveState: (text: string) => void;
+}
+
+export const linesOf = (file: string): Obj[] => (existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter((line) => line !== '').map((line) => rec(JSON.parse(line))) : []);
+
+/** A fresh machine under a temp folder: APPDATA and XDG_CONFIG_HOME point there, and the store path is confirmed to be under it before anything runs. */
+export const stageHook = (): HookStore => {
+  const root = mkdtempSync(join(tmpdir(), 'oars-codex-hook-'));
+  hookDirs.push(root);
+  const home = join(root, 'home');
+  mkdirSync(home);
+  vi.stubEnv('APPDATA', join(root, 'appdata'));
+  vi.stubEnv('XDG_CONFIG_HOME', join(root, 'config'));
+  const storeDir = join(defaultConfigDir(process.env, process.platform, home), 'oars', 'sessions');
+  if (!storeDir.startsWith(root)) throw new Error(`The store path ${storeDir} is outside the temp folder ${root}.`);
+  mkdirSync(storeDir, { recursive: true });
+  return {
+    root,
+    home,
+    storeDir,
+    runtime: { storeDir, home, now: () => AT, append: appendOwnerOnly },
+    rows: () => linesOf(join(storeDir, 'hook-rows.jsonl')),
+    notes: () => linesOf(join(storeDir, 'hook-calls.jsonl')),
+    saveState: (text) => {
+      writeFileSync(join(storeDir, 'state.json'), text);
+    },
+  };
+};
+
+export const cleanHook = (): void => {
+  vi.unstubAllEnvs();
+  for (const dir of hookDirs.splice(0)) removeHeld(dir);
 };

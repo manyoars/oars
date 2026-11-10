@@ -1,4 +1,4 @@
-import { rmSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { run } from '../cli.js';
@@ -88,6 +88,18 @@ describe('empty states', () => {
     expect(out.join('')).toBe(`${EMPTY_RECALL}\n`);
   });
 
+  it('recall --context over a populated index answers without loading the store, even when the store cannot load', async () => {
+    const staged = stage();
+    const h = harness();
+    h.deps.sessions = staged.runtime;
+    await run(['sessions', 'deposit'], h.deps);
+    h.out.length = 0;
+    rmSync(paths(staged.storeDir).observations);
+    mkdirSync(paths(staged.storeDir).observations);
+    expect(await run(['sessions', 'recall', '--context', '--cwd', join('elsewhere', 'x')], h.deps)).toBe(ExitCode.OK);
+    expect(h.out.join('')).toContain('Nothing recurs');
+  });
+
   it('a plain deposit that applies a saved --allow list says so and names where it is saved; without a saved list it says nothing', async () => {
     const staged = stage();
     const h = harness();
@@ -106,7 +118,7 @@ describe('empty states', () => {
 
   it('the saved-list note shortens a long list', () => {
     const entries = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
-    expect(savedListNote(entries, ['a'], 'state.json')).toEqual(['Used the --allow list saved by an earlier run (b, c, d, e, f, and 1 more), kept in state.json. Name folders with --allow to change it.']);
+    expect(savedListNote(entries, ['a'], 'state.json')).toEqual(['Used the --allow list saved by an earlier run (b, c, d, e, f, and 1 more), kept in state.json. `--allow` adds folders to it and `--deny` leaves one out.']);
   });
 
   it('a saved denial alone prints no saved-list note, and an --allow over a saved denial prints none either', async () => {

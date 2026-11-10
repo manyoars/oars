@@ -94,6 +94,18 @@ describe('a command runs the catch-up', () => {
     await run(['--version'], deps);
     expect(calls).toBe(1);
   });
+  it('is not run from sessions try, which promises no network call and no read of the real store', async () => {
+    const { deps } = harness();
+    let calls = 0;
+    deps.catchUp = () => {
+      calls += 1;
+      return Promise.resolve();
+    };
+    await run(['sessions', 'try'], deps);
+    expect(calls).toBe(0);
+    await run(['--version'], deps);
+    expect(calls).toBe(1);
+  });
 });
 
 describe('the SessionEnd hook runs the catch-up', () => {

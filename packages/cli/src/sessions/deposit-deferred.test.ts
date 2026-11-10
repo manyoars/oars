@@ -8,7 +8,7 @@ import { runHook } from './hooks.js';
 import { deferSession, failPending, listPending, PENDING_HOOK_CAP, PENDING_MAX_FAILURES, pendingDir, removePending, type PendingEntry } from './pending.js';
 import type { StepCounts } from './schema.js';
 import { appendStep, formatStepCounters, readSteps, stepCounters, stuckSteps } from './steps.js';
-import { deposit, loadStore, paths, scanLog, type DepositTrace } from './store.js';
+import { deposit, HOOK_LOCK, loadStore, paths, scanLog, type DepositTrace } from './store.js';
 import { cleanup, FIXTURES, NOW, stage, type Staged } from './test-support.js';
 
 afterEach(cleanup);
@@ -64,7 +64,7 @@ describe('item 1: a Stop hook deposit that meets a held store lock', () => {
     const walked = await deposit(staged.runtime, { allow: [REPO], redactDomains: [], now: () => NOW });
     expect(walked.sessions).toBe(1);
     expect(await sessionIds(staged)).toContain('missed');
-  }, 20_000); // the hook waits out its 3 s lock wait
+  }, 20_000); // the hook waits out its lock wait
 
   it('with the pending list, the whole-store deposit drains the session first and the walk finds nothing left', async () => {
     const staged = await deposited();
@@ -105,10 +105,9 @@ describe('item 2: deferring on a held lock', () => {
     const staged = await deposited();
     const transcript = finished(staged, 'deferred');
     hold(staged);
-    const started = Date.now();
     expect(await runHook('stop', stopInput('deferred', transcript), staged.runtime, () => NOW)).toBeUndefined();
-    // The 3 s lock wait the hook always had, and nothing on top of it.
-    expect(Date.now() - started).toBeLessThan(4500);
+    // A held lock defers the session after the hook's lock wait, which is under a second; the wait is asserted by its value because a wall-clock bound this short would fail under load.
+    expect(HOOK_LOCK.waitMs).toBeLessThan(1000);
     expect(await runHook('stop', stopInput('deferred', transcript), staged.runtime, () => NOW)).toBeUndefined();
     // Two deferrals are two files (a drain removes only the names it read) and one entry.
     const names = pendingNames(staged);

@@ -1,7 +1,7 @@
 // The hook entry points. Each takes the hook's stdin and returns the text for stdout (or undefined for none). They are fail-open:
 // any error inside one is swallowed, so a hook can never fail or block a Claude Code session. Each call is counted in
 // `hook-calls.jsonl` with its own duration, so `measure` can count recall calls per session and the timings can be checked.
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { defaultConfigDir } from '../credentials.js';
 import { noEmit, type Emit } from '../telemetry/emit.js';
@@ -10,6 +10,7 @@ import { cursorRoot } from './cursor.js';
 import { SOURCES, sourceLabel } from './sources.js';
 import { ACTION_TABLES, actionOf } from './actions.js';
 import { errorCodeOf, signatureOf } from './extract.js';
+import { recordCandidates } from './candidates.js';
 import { appendHookCall } from './hook-calls.js';
 import { contextBlock, readIndex, type HookIndex } from './hook-index.js';
 import type { Recall } from './recall-object.js';
@@ -24,7 +25,7 @@ import { deposit, depositSession, readSaved, type SessionsRuntime } from './stor
 import { recordSurvival } from './survival.js';
 import type { NightlyTelemetry } from '../telemetry/health.js';
 
-export type HookEvent = HookCall['event'];
+export type HookEvent = Exclude<HookCall['event'], 'codex-record'>;
 
 export const HOOK_EVENTS: readonly HookEvent[] = ['session-start', 'prompt', 'pre-tool', 'post-tool', 'stop', 'nightly'];
 
@@ -90,6 +91,8 @@ const positionsTable = async (runtime: SessionsRuntime, input: Input, now: () =>
 
 const sessionStart = async (runtime: SessionsRuntime, input: Input, now: () => number): Promise<Outcome> => {
   const cwd = str(input.cwd);
+  const session = str(input.session_id);
+  if (session !== undefined && cwd !== undefined) await recordCandidates(runtime.storeDir, { session, cwd, claudeDir: dirname(runtime.projectsRoot), at: new Date(now()).toISOString() });
   const index = await readIndex(runtime.storeDir);
   const block = index === undefined || cwd === undefined ? undefined : contextBlock(index, { cwd, top: TOP, maxChars: MAX_CHARS });
   const recall = await positionsTable(runtime, input, now, index, false);

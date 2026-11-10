@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { batchHash, BATCH_FIELDS, canonicalBytes, currentStamp, FIELD_ROWS, fieldsOf, writeBatch } from './pool-outbox.js';
+import { batchHash, BATCH_FIELDS, canonicalBytes, currentStamp, FIELD_ROWS, fieldsOf, heldBatchOf, removeBatchesExcept, writeBatch } from './pool-outbox.js';
 import { VOCAB_VERSION } from './public-vocabulary.js';
 import { FIELD_LIST_VERSION, parseSkeleton, SKELETON_FORMAT } from './pool-wire.js';
 
@@ -73,6 +73,18 @@ describe('the outbox', () => {
     await writeBatch(dir, KEY, { ...BATCH, z: 'e' });
     expect(readdirSync(first.folder)).toContain('readme.txt');
   });
+
+  it('reads the one batch of a session whole, and none of another session, an unwritten one, or an edited file', async () => {
+    const dir = temp();
+    expect(await heldBatchOf(dir, KEY)).toBeUndefined();
+    const written = await writeBatch(dir, KEY, BATCH);
+    await writeBatch(dir, OTHER, { ...BATCH, z: 'e' });
+    expect(await heldBatchOf(dir, KEY)).toEqual({ key: KEY, hash: HASH, file: join(written.folder, `${KEY}.${HASH}.jsonl`), bytes: BYTES });
+    expect((await heldBatchOf(dir, OTHER))?.bytes).toBe(canonicalBytes({ ...BATCH, z: 'e' }));
+    expect(await heldBatchOf(dir, 'cccccccccccccccc')).toBeUndefined();
+    writeFileSync(join(written.folder, `${KEY}.${HASH}.jsonl`), `${BYTES}edited`);
+    expect(await heldBatchOf(dir, KEY)).toBeUndefined();
+  });
 });
 
 // A batch the vocabulary accepts, holding every field the format has: each identity form, a pull, and a nested stack. It is kept by hand: a new optional field (one the parser takes as absent) must be added here, or only the `--explain` test on a staged batch can catch its missing row.
@@ -87,7 +99,9 @@ const REAL = {
   vocabVersion: VOCAB_VERSION,
   fieldsVersion: FIELD_LIST_VERSION,
   id: '0123456789abcdef',
+  claimed: { hostClass: 'cloud', launcher: 'ci' },
   deltas: [{ deltaKind: 'removed', field: 'package', name: 'typescript', registry: 'npm', metric: 'callsPerSession', change: -2 }],
+  recommendations: [{ id: 'fedcba9876543210', arm: 'held', poolVersion: '2026-11-03T03:00:00.000Z', from: 0, to: 1 }],
   timingPrint: null,
   transcripts: [
     {
@@ -113,6 +127,12 @@ const REAL = {
           argFeatures: [{ key: 'command', valueSize: '9-32', pathDepth: '1', extension: 'source', dirKind: 'test', patternFeatures: ['anchor'] }],
           argValues: [{ key: 'command', enumValue: 'true' }],
           changeKind: ['key-added'],
+          names: [{ kind: 'file', name: 'plan.md' }],
+          namesDropped: 1,
+          templates: ['npm run <ident>'],
+          templatesDropped: 1,
+          diffShape: ['import-added', 'lines-changed'],
+          digests: [{ old: '5d41402abc4b2a76b9719d911017c592', new: '7d793037a0760186574b0282f2f435e7' }],
           steps: [
             { ...STEP, allocated: true, action: 'shell.exec', native: 'Bash', identity: { program: 'npm', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] } },
             { ...STEP, action: 'mcp.call', native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' }, edges: [{ kind: 'next', target: 0 }] },
@@ -148,5 +168,24 @@ describe('the stamp', () => {
     expect(currentStamp(BATCH_FIELDS, SKELETON_FORMAT + 1)).not.toBe(currentStamp());
     expect(currentStamp([...BATCH_FIELDS, 'extra'])).not.toBe(currentStamp());
     expect(currentStamp()).toBe(currentStamp(BATCH_FIELDS, SKELETON_FORMAT));
+  });
+});
+
+describe('removeBatchesExcept with a reader', () => {
+  it('asks for the kept keys only after the folder is listed, so a batch written in between is not swept', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'oars-sweep-'));
+    roots.push(root);
+    const folder = join(root, currentStamp());
+    mkdirSync(folder, { recursive: true });
+    const old = `${'a'.repeat(16)}.${'b'.repeat(64)}.jsonl`;
+    const late = `${'c'.repeat(16)}.${'d'.repeat(64)}.jsonl`;
+    writeFileSync(join(folder, old), '{}');
+    // The reader stands for the moment a machine notes its key and writes its batch: a read taken before the listing would miss both.
+    const removed = await removeBatchesExcept(root, () => {
+      writeFileSync(join(folder, late), '{}');
+      return Promise.resolve(new Set<string>());
+    });
+    expect(removed).toBe(1);
+    expect(readdirSync(folder)).toEqual([late]);
   });
 });

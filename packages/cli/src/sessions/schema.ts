@@ -30,6 +30,32 @@
 // reads, not moved ones. A Copilot CLI session with rotated `events.N.jsonl` archives is now read as one session, so its `prompts`, `tools`, `lines`, and skeleton move; one
 // with no archives is unchanged. EXTRACTOR stays 11. A version-16 store's next deposit captures every transcript again from the harness or `raw/`.
 //
+// Version 32 (CAPTURE 32) is the machine repoKey salt: `repoKey` is derived from the machine's own salt, so every stored repoKey moves and an older store's next deposit captures every transcript again.
+//
+// Version 35 (CAPTURE 35) adds two optional fields to a tool call: `digests` (an Edit, MultiEdit, or Write call's old and new text, each as a digest) and `restores` (the files a `git restore` or `git checkout --` names, hashed as `target` is), and a
+// `git restore` path also gives its file and folder names to `names`. It changes no value captured before; an older store's next deposit captures every transcript again, and a call of an older record has none.
+//
+// Version 33 (CAPTURE 33) adds the optional `names` to a tool call (`argNamesOf`, `call-shape.ts`): the name tokens its values hold, each with its kind, never a value. It changes no value captured before; an older store's next deposit captures every transcript again,
+// and a call of an older record has none.
+//
+// Version 34 (CAPTURE 34) adds the optional `templates` to a shell call (`templatesOf`, `call-shape.ts`): one template per command, its program, subcommand, and flags with every literal argument as a typed slot, never an argument; and the optional `diffShape` to an
+// edit (`diffShapeOf`): the shapes of the change from a closed list, never its text. It changes no value captured
+// before; an older store's next deposit captures every transcript again, and a call of an older record has none.
+//
+// Version 31 (CAPTURE 31) writes a Codex `token_count` event's `input` and `output` only when the event reported them, as the cache categories already were, so a partial event leaves the other
+// unobserved and not a measured zero (`usageObserved`). It changes a stored value of a Codex session; an older store's next deposit captures every transcript again.
+//
+// Version 30 (CAPTURE 30) adds the optional `local`, `dotClaude`, and `rules` counts to `loadedInstructions`: how many `CLAUDE.local.md`, `.claude/CLAUDE.md`, and `.claude/rules/` files the transcript shows
+// loaded from the working folder. It changes no other value; an older store's next deposit captures every transcript again, and a record from before then reads those three as unknown.
+//
+// Version 29 (CAPTURE 29) adds the optional `loadedInstructions` to the session record: counts of the instruction files the transcript shows loaded, by level, never a path. It changes no value captured
+// before; an older store's next deposit captures every transcript again, and a session recorded before then has none until it is.
+//
+// Version 28 (CAPTURE 28) adds the optional `messageUsage` to the session record: one entry per distinct model message (a Claude Code `message.id`, a Codex response), holding that message's token counts,
+// the ids of the tool calls it made, and, for Codex, the plan percent used and window length when the event held a rate-limit block (`MessageUsage`). Numbers and ids only; the counts are never split across the
+// message's calls. For a Codex event that did not report a cache category, that category is no longer observed, so `usageObserved` omits it and the skeleton and pool wire send null where they sent a zero bucket; no other value changes and EXTRACTOR stays as it is. A version-27 store's next deposit captures every transcript again, and a session recorded before then has no `messageUsage`
+// until it is: nothing reads the field back into the older record. A file that reports no usage gets none either way.
+//
 // Version 27 (CAPTURE 27) adds three optional fields to a tool call (`call-shape.ts`), each computed from the input at capture and stored as closed-list members, never a value: `argFeatures` (per key, the value's size and,
 // for a path, its depth, extension class, and folder kind, for a pattern what it uses), `argValues` (a boolean, or a string its tool's closed list holds), and `changeKind` (what changed from the previous call of the
 // same tool in the prompt). It changes no value captured before, so EXTRACTOR stays as it is; a version-26 store's next deposit captures every transcript again, and a call of an older record has none of them.
@@ -93,12 +119,12 @@
 // organization domains the operator names. The skeleton holds hashes only.
 
 import type { CanonicalAction } from './actions.js';
-import type { ArgClass, ArgFeature, ArgValue, ChangeKind, TargetClass } from './call-shape.js';
+import type { ArgClass, ArgFeature, ArgName, ArgValue, ChangeKind, DiffShape, TargetClass } from './call-shape.js';
 import type { RepoSize } from './public-vocabulary.js';
 import type { SessionFunnel, SessionSetup, SessionTrust } from './session-shape.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '27';
+export const CAPTURE_VERSION = '35';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
@@ -140,6 +166,35 @@ export interface Usage {
   cacheRead: number;
   output: number;
   thinking: number;
+}
+
+/**
+ * One model message's token counts (class L: numbers and ids only, never content). Claude Code writes a message over several content-block lines that each repeat the same `usage`, so
+ * a message is counted once, keyed by its `message.id` (else the line's `requestId`); a Codex response is keyed by the response id the reader gives it. The counts belong to the
+ * message and are never split across its tool calls: `calls` lists the tool-use ids the message made, and a later read can allocate. A category the source did not report is absent,
+ * never a zero. Summing these over a session record gives the deduplicated total for the file, `side` entries included.
+ */
+export interface MessageUsage {
+  /** The message id, else the request id; null when the line holds neither (each such line is its own message). */
+  id: string | null;
+  /** The tool-use ids of the calls this message made, in order; empty when it made none. */
+  calls: string[];
+  /** True for a message on a sidechain line of a main transcript, which the session's `usage` total leaves out. */
+  side?: true;
+  input?: number;
+  cacheWrite?: number;
+  cacheRead?: number;
+  output?: number;
+  /** From `output_tokens_details.thinking_tokens` (Codex: the reasoning output tokens); absent when the source did not report it. */
+  thinking?: number;
+  /** Codex only: the plan share used as the response's event reported it. Absent when the event held no rate-limit block, never a zero. */
+  plan?: { primary?: PlanWindow; secondary?: PlanWindow };
+}
+
+/** One plan window a Codex event reports (`rate_limits.primary` or `.secondary`): the percent used and the window's length in minutes when given. */
+export interface PlanWindow {
+  usedPercent: number;
+  windowMinutes?: number;
 }
 
 /** The five usage categories, in the order a record lists the ones it observed. */
@@ -222,7 +277,7 @@ export interface CaptureEnv {
 /**
  * One per transcript, captured: the `parse_sessions.py` record, minus anything that is raw content. Classes (spec Section 1.2):
  * `L` local-only: `project`, `files`. `A` account store: `session`, `parent`, `spawnedBy`, `spawnedIn`, `branches`, `urls`, `searches`, `tldrs`,
- * `confidences`, `promptFingerprint`, `repo`, `fileHashes`, `tools`, `setup`, `funnel`, `trust`, `at`, `tsFirst`, `tsLast`. `P` pooled: `kind`, `cv`, `rev`, `sid`,
+ * `confidences`, `promptFingerprint`, `repo`, `fileHashes`, `tools`, `setup`, `funnel`, `trust`, `loadedInstructions`, `at`, `tsFirst`, `tsLast`. `P` pooled: `kind`, `cv`, `rev`, `sid`,
  * the counts, `versions`, `models`, `env`, `costUsd`, `usage` (`at`, `tsFirst`, and `tsLast` at UTC day). `agentType`, `frame`, and `frameId` moved to `A` at EXTRACTOR 11:
  * a custom agent's name is private, and the joined frame is one value that links rows.
  */
@@ -301,12 +356,29 @@ export interface SessionObservation {
   usageObserved?: UsageField[];
   /** How many responses reported any usage (class P); compare with `assistantTurns` or `turns` for the share a sum covers. Same absence rule as `usageObserved`. */
   usageResponses?: number;
+  /** One entry per distinct model message that reported usage, in file order (CAPTURE 28); see `MessageUsage`. Absent when the file reports no usage, and on a record captured before version 28. */
+  messageUsage?: MessageUsage[];
   /** What the transcript shows of the setup the session ran with (class A); absent when it shows none, and on a record captured before version 12. */
   setup?: SessionSetup;
   /** The tool names at each funnel stage the transcript shows (class A); same absence rules. */
   funnel?: SessionFunnel;
   /** How often a human or a policy stopped the session and how long it ran alone (class A); same absence rules. */
   trust?: SessionTrust;
+  /**
+   * The instruction files the transcript shows loaded, as counts and levels, never a path (class A; `load-status.ts` joins it with the session-start snapshot). Absent when the
+   * transcript holds no such record. Added at CAPTURE 29.
+   */
+  loadedInstructions?: LoadedInstructions;
+}
+
+/** What a transcript shows loaded. `levels` is folders above the working folder, one entry per project file. */
+export interface LoadedInstructions {
+  user: number;
+  levels: number[];
+  /** Files loaded from the working folder, by kind; absent on a record captured before version 30. */
+  local?: number;
+  dotClaude?: number;
+  rules?: number;
 }
 
 /**
@@ -517,6 +589,16 @@ export interface ToolObservation {
   argFeatures?: ArgFeature[];
   /** Each argument's closed value (`argValuesOf`): a boolean, or a string on its tool's list in `CLOSED_ARG_VALUES`; a value off the list is not stored. Absent on a record captured before CAPTURE 27, and when the call held none. Class A, as `argFeatures`. */
   argValues?: ArgValue[];
+  /** The name tokens of the call's values (`argNamesOf`), sorted by kind and name: a file's name, a folder's name below the root, a variable's name, a flag value that is a name, a custom agent's name; never a value. Absent when it holds none and on a record captured before CAPTURE 33. Class A. */
+  names?: ArgName[];
+  /** The old and new text of an Edit (one pair), a MultiEdit (one pair per edit, in order), or a Write (a new digest only), as a digest of the exact text (`editDigestsOf`); a line ending is a difference. Absent on any other call and on a record captured before CAPTURE 35. Class A, as `target`: the digest is plain, so the same text matches across sessions and accounts. */
+  digests?: EditDigest[];
+  /** The files a `git restore` or `git checkout --` in a command whose status the call reports names, hashed as `target` is, so a restore reads against an earlier edit of the same path. Absent when the call restores none and on a record captured before CAPTURE 35. Class A. */
+  restores?: string[];
+  /** One template per command of a shell call (`templatesOf`): its program, subcommand, and flags, as written and masked by the redactor, and every literal argument as a slot of `TEMPLATE_SLOTS`; never an argument. Absent when the call holds no command and on a record captured before CAPTURE 34. Class A. */
+  templates?: string[];
+  /** What an edit did (`diffShapeOf`), a sorted set of `DIFF_SHAPES` members: `file-written` for a write, else the shapes of the old and new text; never the text. Absent on a call that is no edit, an edit that changes nothing, and a record captured before CAPTURE 34. Class A. */
+  diffShape?: DiffShape[];
   /** What changed from the previous call of the same tool in the same prompt (`changeKindOf`), a sorted set of `CHANGE_KINDS` members. Absent on the first such call and on a record captured before CAPTURE 27. Class P. */
   changeKind?: ChangeKind[];
   /** The class of a failed call (`errorCodeOf`): a member of `ERROR_CODES`, never result text. Absent on a call that did not fail and on a record captured before CAPTURE 14. Class P. */
@@ -545,6 +627,12 @@ export interface ToolObservation {
   manifest?: ToolManifest;
   /** One entry per commit a clean shell call made, in order: the sha its result names, or null when it names none (CAPTURE 6). Absent when it made none. */
   commits?: Array<string | null>;
+}
+
+/** The digest of one edit's text: the first 32 hex digits of the SHA-256 of the exact UTF-8 text. A Write has `new` only, never the digest of an empty string for `old`. */
+export interface EditDigest {
+  old?: string;
+  new: string;
 }
 
 /** One command of a shell call. */
@@ -766,7 +854,7 @@ export interface RecallCall {
 /** One hook invocation, appended to `hook-calls.jsonl` by the hook itself; `measure` counts these per session. Class A: `session`, `at`, `error`; P: `event`, `hit`, `ms`, `startMs`. */
 export interface HookCall {
   at: string;
-  event: 'session-start' | 'prompt' | 'pre-tool' | 'post-tool' | 'stop' | 'nightly';
+  event: 'session-start' | 'prompt' | 'pre-tool' | 'post-tool' | 'stop' | 'nightly' | 'codex-record';
   /** The Claude Code session the hook ran in; null for the nightly run. */
   session: string | null;
   /** Whether the hook had something to say (an injected block, a recall hit, or a session deposited). */

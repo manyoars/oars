@@ -179,6 +179,50 @@ describe('the fleet read, from the nightly rollup, on the Worker', () => {
     expect((await (await pool.db()).prepare('SELECT batches, events FROM telemetry_install_days').all()).results).toEqual(rows.results);
   }, 60_000);
 
+  it('rolls a batch of an account with an account tombstone under a placeholder, so a rebuilt day never brings the erased id back (GDPR Article 17)', async () => {
+    await (await pool.db()).prepare("INSERT INTO erasure_tombstones (kind, digest, reason, erased_on) VALUES ('account', ?, 'lawful-request', ?)").bind('acct-erased', today()).run();
+    await keep(pool, daysAgo(1), uuid(1), [hook(100)], 'acct-erased');
+    await keep(pool, daysAgo(1), uuid(1), [hook(200)], 'acct-erased');
+    await keep(pool, daysAgo(1), uuid(1), [hook(300)], 'acct-kept');
+    await keep(pool, daysAgo(1), uuid(2), [hook(400)]);
+    await nightly(pool);
+    const rows = await (await pool.db()).prepare('SELECT install, account, batches, events FROM telemetry_install_days ORDER BY install, account').all();
+    expect(rows.results).toEqual([
+      { install: uuid(1), account: 'acct-kept', batches: 1, events: 1 },
+      { install: uuid(1), account: 'erased:', batches: 2, events: 2 },
+      { install: uuid(2), account: '', batches: 1, events: 1 },
+    ]);
+    await nightly(pool);
+    expect((await (await pool.db()).prepare('SELECT account FROM telemetry_install_days').all()).results.map((one) => fieldOf(one, 'account')).sort()).toEqual(['', 'acct-kept', 'erased:']);
+  }, 60_000);
+
+  it('rolls a first-run event into one cell on its install-day: the surface in the metric, a hit only for a run in CI, once however many batches carried it', async () => {
+    const firstRun = { v: 1, id: 'x', at: '2026-11-09T12:00:00.000Z', type: 'first-run', cli: '0.4.0', os: 'linux', data: { ci: 'github-actions', surface: 'npx' } };
+    await keep(pool, daysAgo(1), uuid(7), [firstRun, hook(100)]);
+    await keep(pool, daysAgo(1), uuid(7), [firstRun]);
+    await nightly(pool);
+    const row = await (await pool.db()).prepare('SELECT events, measures FROM telemetry_install_days').first();
+    const cells: unknown = JSON.parse(String(fieldOf(row, 'measures')));
+    expect(fieldOf(row, 'events')).toBe(2);
+    expect(Array.isArray(cells) ? cells.filter((cell: unknown) => String(fieldOf(cell, 'metric')).startsWith('first-run.')) : []).toEqual([
+      { metric: 'first-run.npx', dimension: 'cli', value: '0.4.0', kind: 'rate', n: 1, hits: 1, buckets: [] },
+    ]);
+  }, 60_000);
+
+  it('rolls a covenant-shown event up by covenant version, one count per event however many batches carried it', async () => {
+    const shown = (id: string, version: string): object => ({ v: 1, id, at: '2026-11-09T12:00:00.000Z', type: 'covenant-shown', cli: '0.4.0', os: 'linux', data: { version } });
+    await keep(pool, daysAgo(1), uuid(7), [shown('a', '2026-11-10'), shown('b', '2026-11-10'), shown('c', '2026-12-01'), hook(100)]);
+    await keep(pool, daysAgo(1), uuid(7), [shown('a', '2026-11-10')]);
+    await nightly(pool);
+    const row = await (await pool.db()).prepare('SELECT events, measures FROM telemetry_install_days').first();
+    const cells: unknown = JSON.parse(String(fieldOf(row, 'measures')));
+    expect(fieldOf(row, 'events')).toBe(4);
+    expect(Array.isArray(cells) ? cells.filter((cell: unknown) => String(fieldOf(cell, 'metric')).startsWith('covenant-shown.')) : []).toEqual([
+      { metric: 'covenant-shown.2026-11-10', dimension: 'cli', value: '0.4.0', kind: 'rate', n: 2, hits: 2, buckets: [] },
+      { metric: 'covenant-shown.2026-12-01', dimension: 'cli', value: '0.4.0', kind: 'rate', n: 1, hits: 1, buckets: [] },
+    ]);
+  }, 60_000);
+
   it('skips an object that is not a batch and an install id that is not an install, and keeps a cell cap on a row', async () => {
     const bucket = await pool.bucket();
     await bucket.put(`telemetry/${daysAgo(1)}/junk.json`, 'not json');
@@ -375,12 +419,46 @@ describe('the counting rules', () => {
     expect(measurablesOf(rows.filter((one) => one.install !== uuid(5) && one.install !== uuid(6)), daysAgo(1), DEFAULT_PUBLIC_FLOOR).firstFleetRead).toBeNull();
   });
 
+  it('serves no cell for a first-run event, and a fleet of five installs that each sent one leaves firstFleetRead null', () => {
+    // The cell is 0 or 1 per install: a median over it measures nothing, and it must not be what first serves the read.
+    const firstRuns = [1, 2, 3, 4, 5].map((at) => row(daysAgo(1), uuid(at), { entries: [entry('0.4.0', 1, at === 1 ? 1 : 0, 'rate', 'first-run.npx')] }));
+    expect(fleetCells(firstRuns, DEFAULT_PUBLIC_FLOOR)).toEqual([]);
+    expect(measurablesOf(firstRuns, daysAgo(0), DEFAULT_PUBLIC_FLOOR).firstFleetRead).toBeNull();
+    // A cell that is not a first-run cell still serves beside it.
+    const beside = firstRuns.map((one) => ({ ...one, entries: [...one.entries, entry('2.1.5', 5, 5)] }));
+    expect(fleetCells(beside, DEFAULT_PUBLIC_FLOOR).map((cell) => cell.metric)).toEqual(['hook.pre-tool.hit']);
+  });
+
+  it('serves no cell for a covenant-shown event, and a fleet of five installs that each showed one leaves firstFleetRead null', () => {
+    // A count of shows is for the operator's query: a median over it is not a fleet measure, and it must not be what first serves the read.
+    const shown = [1, 2, 3, 4, 5].map((at) => row(daysAgo(1), uuid(at), { entries: [entry('0.4.0', 2, 2, 'rate', 'covenant-shown.2026-11-10')] }));
+    expect(fleetCells(shown, DEFAULT_PUBLIC_FLOOR)).toEqual([]);
+    expect(measurablesOf(shown, daysAgo(0), DEFAULT_PUBLIC_FLOOR).firstFleetRead).toBeNull();
+    // A cell that is not a record-only cell still serves beside it.
+    const beside = shown.map((one) => ({ ...one, entries: [...one.entries, entry('2.1.5', 5, 5)] }));
+    expect(fleetCells(beside, DEFAULT_PUBLIC_FLOOR).map((cell) => cell.metric)).toEqual(['hook.pre-tool.hit']);
+  });
+
   it('finds the first fleet read against the widest served window: five installs a week apart serve a 30 day cell on the day the fifth reports', () => {
     const entries = [entry('2.1.5', 3, 3)];
     const rows = [28, 21, 14, 7, 0].map((ago, at) => row(daysAgo(ago), uuid(at + 1), { entries }));
     expect(fleetCells(rows, DEFAULT_PUBLIC_FLOOR)).toHaveLength(1);
     expect(measurablesOf(rows, daysAgo(0), DEFAULT_PUBLIC_FLOOR).firstFleetRead).toBe(daysAgo(0));
     expect(measurablesOf(rows.slice(0, 4), daysAgo(0), DEFAULT_PUBLIC_FLOOR).firstFleetRead).toBeNull();
+  });
+
+  it('neither counts nor lists an erased placeholder as an account: each `erased:` id is a stand-in, and the rollup merges every erased account of an install-day into one', () => {
+    const counts = [18, 19, 20, 20, 21, 22, 19, 20];
+    const rows = counts.map((events, at) => row(daysAgo(1), uuid(at + 1), { events, batches: 1, account: `acct-${String(at % 5)}` }));
+    const base = anomaliesOf(rows, DEFAULT_PUBLIC_FLOOR);
+    // One huge merged placeholder and one numbered one: neither is an account, so the account count and the outliers stay as they were.
+    const withErased = [...rows, row(daysAgo(1), uuid(20), { events: 5000, batches: 1, account: 'erased:' }), row(daysAgo(1), uuid(21), { events: 7000, batches: 1, account: 'erased:12' })];
+    const found = anomaliesOf(withErased, DEFAULT_PUBLIC_FLOOR);
+    expect(found.accounts).toBe(base.accounts);
+    expect(found.outliers.filter((one) => one.entity === 'account')).toEqual(base.outliers.filter((one) => one.entity === 'account'));
+    expect(found.outliers.some((one) => one.entity === 'account' && one.id.startsWith('erased:'))).toBe(false);
+    // The install behind a placeholder still counts as an install.
+    expect(found.installs).toBe(base.installs + 2);
   });
 
   it('lists a far count among installs and among accounts, and lists none without a baseline of DEFAULT_PUBLIC_FLOOR', () => {

@@ -25,7 +25,8 @@
     "node": ">=24"
   },
   "bin": {
-    "oars": "./dist/bin.js"
+    "oars": "./dist/bin.js",
+    "oars-hook": "./dist/oars-hook.js"
   },
   "files": [
     "dist",

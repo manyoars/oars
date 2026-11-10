@@ -1,8 +1,9 @@
 // The outbox (`oars pool deposit` and `oars pool outbox`): every batch that may leave this machine is first written here, as canonical JSON lines, and `deposit` stops. Nothing in this file
 // looks inside a batch except to name its fields, at every depth, for `--explain`; what a batch holds is the projection's business.
 import { createHash } from 'node:crypto';
-import { readdir, readFile, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readdir, readFile, rename, rm } from 'node:fs/promises';
+import { basename, join } from 'node:path';
+import { CliError, ExitCode } from '../errors.js';
 import { appendOwnerOnly, mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
 import { SKELETON_FORMAT, VOCAB_VERSION } from './pool-wire.js';
 import { contentHash } from './read.js';
@@ -65,14 +66,17 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   argClass: 'The kinds of value a call\'s arguments held, a sorted set of a closed list: path, url, pattern, command, number, flag, text, and none; never a value.',
   argFeatures: 'Each sent key\'s value features, sorted by key: the value\'s size bucket and, for a path, its depth, extension class, and folder kind, for a pattern what it uses; each from a closed list, never the value.',
   argValues: 'Each sent key\'s closed value: a boolean as true or false, or a member of the tool\'s closed list for the key (an output mode, a built-in subagent type); a value off the list is not sent.',
+  arm: 'Whether a recommendation reached the asker or was withheld by the holdback, one of a closed list: shown or held. The local row\'s arm, never what was shown.',
   cacheRead: 'A bucket of the tokens read from the cache in a prompt, a number, or null when the source never recorded it.',
   cacheWrite: 'A bucket of the tokens written to the cache in a prompt, a number, or null when the source never recorded it.',
   change: 'How far a delta moved, a signed bucket of its metric (a lower bound) in a number from -7 to 7 for calls per session and from -11 to 11 for thinking tokens; never the exact count.',
   changeKind: 'What changed from the previous call of the same tool in the same prompt, a sorted set from a closed list: same, key-added, key-removed, feature-changed, value-changed, target-changed; never a value.',
+  claimed: 'The host class and launcher a trusted machine states for a batch it admitted from a held branch, from its own enrollment record; absent on a batch built and sent from the machine itself. Two closed lists, never a name.',
   cls: 'The class of a prompt, one of a closed list of eight, computed from the kinds of tools it used; never its words.',
   day: 'The UTC calendar day of the session as YYYY-MM-DD, or null; never a time of day.',
   deltaKind: 'How a delta changed what the client ran: added, removed, or changed, one of a closed list the field allows; never a value.',
   deltas: 'The changes the client found between its own before and after windows, each sent once with the session that filled the after window: a kind, a field, a name, a registry, a metric, and a bucketed change; never a session id, a root, a date, or an exact value.',
+  digests: 'The digest of the old and new text of an Edit (one pair), a MultiEdit (one pair per edit, in order), or a Write (a new digest only): the first 32 hex digits of the SHA-256 of the exact text, so a line ending is a difference and the same text gives the same digest in any session. Never the text.',
   dirKind: 'The kind of the folders a path argument names, one of a closed list: root, source, test, doc, generated, hidden, other; never a folder name.',
   durationMs: 'The time of one tool call in milliseconds, exact, a number or null.',
   effort: 'The effort level the model ran at, only when it is a public one; else the literal placeholder.',
@@ -91,15 +95,17 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   edges: 'The edges arriving at a step, each a kind and the position of the step it names, in the same transcript or, for a spawned edge, in the transcript that spawned this one; absent when none arrive.',
   frames: 'The distinct frames a transcript\'s steps ran in, each as a frame above with the reach of the session; a step names one by position.',
   frameworks: 'The frameworks of the project, each from a closed public list; never a path or a name of yours.',
+  from: 'The first call of a recommendation\'s window, a position in the main run\'s calls that are not sidechain, a number; with `to`, the calls a recommendation covers. No text and no time.',
   harness: 'Which harness wrote the session, one of a closed list.',
   harnessVersion: 'The harness version: the name as it is after redaction; `private` when redaction changes it, an exclusion term matches it, it is not a name, or it is over 128 characters. A transcript or prompt frame carries the value capture closed it to (the public name, else `<literal>`), sent as it is; the version of a call, which capture keeps as its line names it, goes as the string after the gate.',
   host: 'The host of a web fetch or search, the name as it is after redaction; `private` when redaction changes it, an exclusion term matches it, it is not a name, or it is over 128 characters; null when the step names no host. Capture keeps the host as the address names it, without credentials, path, or query. The pool replaces a host with a keyed hash on arrival and serves it only once enough accounts report it.',
+  hostClass: 'Where a session on a machine ran, one of a closed list: local, vps, cloud, ci, or hosted; stated by the trusted machine from its own enrollment record, never by the machine that built the batch.',
   hour: 'The UTC hour of day, 0 to 23, beside the day; never a minute, a second, or an offset.',
-  id: "A hash the client computes per account from the account and the session, so a redeposit replaces and two accounts' sessions cannot be joined. Never the session id.",
+  id: "A hash the client computes per account from the account and the session (for a machine, from the account's session salt and the session's name), so a redeposit replaces and two accounts' sessions cannot be joined. Never the session id.",
   identity: 'What a step called: a shell program with its subcommand and flags, an MCP server and tool, a skill, or a web host, each a name after redaction or `private`; null for an action with none.',
   input: 'A bucket of the input tokens in a prompt, a number, or null when the source never recorded it.',
   key: 'The key name an argument feature or closed value belongs to: one of the call\'s sent keys.',
-  kind: 'How an edge came about, one of a closed list: next, spawned, retried, or after-error.',
+  kind: 'How an edge came about, one of a closed list: next, spawned, retried, or after-error; in a name token, what the name is, one of a closed list: file, dir, env, flag, or agent.',
   keys: 'The input key names of a call, sorted: a public tool\'s from its published list and any other tool\'s only when each passes the name gate; none for a tool that went as private. Names only, never a value.',
   keysDropped: 'A bucket of the key names of a call that were not sent, off a public tool\'s list or kept private by the gate, a number; never the names.',
   intervention: 'Whether a human stepped in after a prompt\'s work and how, one of a closed list: none, after-error (the prompt\'s last call failed), redo (the next prompt edited the same file), revert (the next prompt undid the edit), user-stop (the human rejected a call or interrupted the turn), or unknown; absent when the prompt predates the signal. An outcome row, not a grade; never the next prompt\'s words.',
@@ -107,23 +113,33 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   languageShare: 'How much of the files a session touched are in one language, one of four buckets: none, under 10 percent, 10 up to 50, or 50 and over; never a count of files.',
   languageShares: 'The share bucket of each language of the project whose share is known; a language with no share is in the languages list alone.',
   languages: 'The programming languages of the project, each from a closed public list.',
+  launcher: 'What started a session on a machine whose batch a trusted machine admitted, one of a closed list: interactive, orchestrated, scheduled, ci, hosted-run, or unknown; stated by the trusted machine from its own enrollment record, never by the machine that built the batch.',
   leaves: 'How many lines of a transcript its root covers, a count.',
   merkleRoot: 'The Merkle root of a transcript: a SHA-256 over the hashes of its lines, one root for each transcript, the main one first; never a line.',
   metric: 'What a delta measures, calls per session or thinking tokens, one of a closed list the field fixes.',
   model: 'The model name: the name as it is after redaction; `private` when redaction changes it, an exclusion term matches it, it is not a name, or it is over 128 characters. A transcript or prompt frame carries the value capture closed it to (the public name, else `<literal>`), sent as it is; the model of a call, which capture keeps as its line names it, goes as the string after the gate.',
   ms: 'A bucket of the milliseconds a step took (a lower bound), a number or null; never the exact time.',
-  name: 'The name of a package a shell command pulled or a delta removed, as capture kept it: the name as it is after redaction; `private` when redaction changes it, an exclusion term matches it, it is not a name, or it is over 128 characters. A plugin in a delta is always private, and null when a delta names its field alone.',
+  name: 'The name of a package a shell command pulled or a delta removed, or a name token of a call (a file, folder, or variable name), as capture kept it: the name as it is after redaction; `private` when redaction changes it, an exclusion term matches it, it is not a name, or it is over 128 characters (a name token that fails is dropped and counted, never sent as `private`). A plugin in a delta is always private, and null when a delta names its field alone.',
   native: 'The name the harness gave the tool: the name as it is after redaction; `private` when redaction changes it, an exclusion term matches it, it is not a name, or it is over 128 characters.',
+  names: 'The name tokens of a call\'s values, sorted by kind and name: file names, the names of the folders of a path below the session root, environment variable names, flag values that are names, and a custom agent\'s name, each with its kind. A name is sent as written, so it can identify a project; one the redactor changes, an exclusion term matches, or that is not a name is dropped; never a value, a path, or a command.',
+  namesDropped: 'A bucket of the name tokens of a call that were not sent, because the redactor changes them, an exclusion term matches them, or they are not names, a number; never the names.',
+  new: 'The digest of the text an edit wrote, 32 hex digits, in a digest pair; never the text.',
+  templates: 'One template per shell command of a call, in the order the commands run: its program\'s base name in lower case, without a Windows launcher suffix, its subcommand where the program\'s own public list has one, and its flags that are on the public list or one letter, as written, and every other word as a slot (`<text>`, `<path>`, `<ident>`, `<num>`, `<url>`, `<var>`, `<flag>`), so `git commit -m <text>` and `pytest <path> -k <ident>`; a program given as a path is `<path>`, and the word after a credential, text, or one-letter flag (but `-k` on pytest) is `<text>`. A kept word is sent as written, so it can identify a project; a template with a word the redactor changes, an exclusion term matches, or that is not a name is dropped whole; never an argument, a path, or a value.',
+  diffShape: 'What an edit did, a sorted set from a closed list: import-added, import-removed, identifier-renamed, lines-added, lines-removed, lines-changed, whitespace-only, file-written. The shape of the change, read on the machine from the old and new text; never the text, a line, or a name.',
+  templatesDropped: 'A bucket of the templates of a call that were not sent, because a program, subcommand, or flag in them is changed by the redactor, matched by an exclusion term, or not a name, a number; never the templates.',
   next: 'The actions of up to the next 5 calls of the same prompt after a failed call, each one of the closed list of canonical actions: what followed, never a fix; no command, path, or text.',
+  old: 'The digest of the text an edit replaced, 32 hex digits, in a digest pair; absent for a Write, whose call does not hold the file\'s earlier text, and never the digest of an empty string.',
   output: 'A bucket of the output tokens in a prompt, a number, or null when the source never recorded it.',
   parent: 'The position of the call that spawned this step, in the tools of the transcript that spawnedIn names, a number, or null.',
   pathDepth: 'How many folders a path argument sits below the repository or the working folder, a bucket: 0, 1, 2, 3-4, 5-8, over-8, or outside for an absolute path under neither; never the path.',
   patternFeatures: 'What a pattern argument uses, a sorted set from a closed list: alternation, anchor, class, escape, group, literal, quantifier, recursive, wildcard; never the pattern.',
   platform: 'The operating system family, one of a closed list.',
+  poolVersion: 'The deposit time of the pool snapshot a recommendation answered from, as the local row holds it.',
   program: 'The program a shell command ran, its basename only: the name as it is after redaction; `private` when redaction changes it, an exclusion term matches it, it is not a name, or it is over 128 characters.',
   prompt: 'Which prompt of the batch a tool call follows, a position in this batch, or null.',
   prompts: 'The prompts of a transcript: each a class, bucketed counts and tokens, and a frame; never their words.',
   pulls: 'The packages a shell command pulled from a registry: the registry, the public package name, and its version.',
+  recommendations: 'The recommendations the main session was shown or held back from, each an id, an arm, the pool version it answered from, and a window of calls; never the query, the text shown, or the evidence. Absent when the session had none, which the pool reads as unknown exposure, never as unexposed.',
   recoveryCalls: 'For a failed call, what followed it: the actions of up to its next 5 calls and whether one wrote a file. Absent on a call that did not fail; never a signature or text.',
   registry: 'Which registry a pull or a removed package came from, one of a closed list; null for a delta whose name is private or absent.',
   remainingTokens: 'A bucket of the tokens the run spent after a step (a lower bound), a number, or null when steps follow and none reported tokens: the bucket of the exact sum, with the subagent runs a main-run step spawned later in the session.',
@@ -149,6 +165,7 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   target: 'The position of the step an edge names, a number counted over the steps of one transcript in call order.',
   targetClass: 'The class of the path a call touched, one of a closed list: source, test, config, doc, lockfile, generated, data, none, other; never the path or its name.',
   timingPrint: 'A hash of the call durations of the main transcript in the order they ran, or null under 50 timed calls; the calls of a subagent are not in it.',
+  to: 'The end of a recommendation\'s window, one past its last call, a position in the main run\'s calls that are not sidechain, a number; with `from`, the calls a recommendation covers.',
   tokens: 'A bucket of tokens (a lower bound of the count), a number or null; a step holds one, never the exact count.',
   tool: 'The tool of an MCP call: the name as it is after redaction, beside a server that is not private and in a harness whose spelling delimits the server; else the literal placeholder.',
   tools: 'The tool calls of a transcript, each a status and duration and its steps, in the order they ran; never their targets or arguments.',
@@ -207,12 +224,15 @@ const namesIn = async (folder: string): Promise<string[]> => {
 };
 
 /** Removes every batch under this stamp whose session is not in `kept`, and returns how many went. A session that fails a gate, leaves the allowlist, or is gone from the store never enters the outbox, so an earlier pass's batch of it cannot stay. */
-export const removeBatchesExcept = async (outbox: string, kept: ReadonlySet<string>, stamp: string = currentStamp(), only?: string): Promise<number> => {
+export const removeBatchesExcept = async (outbox: string, kept: ReadonlySet<string> | (() => Promise<ReadonlySet<string>>), stamp: string = currentStamp(), only?: string): Promise<number> => {
   const folder = join(outbox, stamp);
   let removed = 0;
-  for (const name of await namesIn(folder)) {
+  const names = await namesIn(folder);
+  // A reader is asked once the names are in hand: a key it reads then covers every batch listed above.
+  const keep = typeof kept === 'function' ? await kept() : kept;
+  for (const name of names) {
     const found = BATCH_FILE.exec(name);
-    if (found !== null && !kept.has(found[1] ?? '') && (only === undefined || found[1] === only)) {
+    if (found !== null && !keep.has(found[1] ?? '') && (only === undefined || found[1] === only)) {
       await rm(join(folder, name), { force: true });
       removed += 1;
     }
@@ -238,26 +258,87 @@ export const unchangedBytes = async (file: string, hash: string): Promise<string
 export interface Held {
   /** The session's key in the outbox (the batch's account-hashed id). */
   key: string;
+  /** The stamp folder the batch is filed under. */
+  stamp: string;
+  /** Whether `oars pool hold pull` admitted it (its key is listed in `pulled.json` at this stamp), as against a batch this machine built. */
+  pulled: boolean;
   hash: string;
   file: string;
   bytes: string;
 }
 
-/** The batches built under this client's vocabulary, field list, and skeleton format, and how many of their files no longer hash to their names. An edited file is not printed and cannot be sent: run `deposit` again to rebuild it. */
+/**
+ * The batches filed under this stamp, and how many of their files no longer hash to their names. An edited file is not printed and cannot be sent: run `deposit` again to rebuild it. Under the current stamp that is every batch this client built;
+ * under any other stamp it is only a batch `pulled.json` lists there, since anything else in that folder is stale and is never printed or sent.
+ */
 export const heldBatches = async (outbox: string, stamp: string = currentStamp()): Promise<{ batches: Held[]; edited: number }> => {
   const folder = join(outbox, stamp);
+  const listed = await pulledAt(outbox, stamp);
+  const here = stamp === currentStamp();
   const batches: Held[] = [];
   let edited = 0;
   for (const name of await namesIn(folder)) {
     const found = BATCH_FILE.exec(name);
     if (found === null) continue;
     const [, key = '', hash = ''] = found;
+    if (!here && !listed.has(key)) continue;
     const file = join(folder, name);
     const bytes = await unchangedBytes(file, hash);
     if (bytes === undefined) edited += 1;
-    else batches.push({ key, hash, file, bytes });
+    else batches.push({ key, stamp, pulled: listed.has(key), hash, file, bytes });
   }
   return { batches, edited };
+};
+
+/** The stamps a send reads: the current one, then every other stamp `pulled.json` lists. A listed name that is not a stamp folder is not a path this reads. */
+export const sendStamps = async (outbox: string): Promise<string[]> => {
+  const others = new Set(Object.values(await readPulled(outbox, POOL_STEP)).filter((stamp) => stamp !== currentStamp() && STAMP_FOLDER.test(stamp)));
+  return [currentStamp(), ...[...others].sort()];
+};
+
+/** `heldBatches` over every stamp a send reads, the current one first. */
+export const heldAcross = async (outbox: string): Promise<{ batches: Held[]; edited: number }> => {
+  const all: Held[] = [];
+  let edited = 0;
+  for (const stamp of await sendStamps(outbox)) {
+    const held = await heldBatches(outbox, stamp);
+    all.push(...held.batches);
+    edited += held.edited;
+  }
+  return { batches: all, edited };
+};
+
+/** The held batch of one session under this stamp, read whole only when its file still hashes to its name; undefined when the session has none, or its file was edited. */
+export const heldBatchOf = async (outbox: string, key: string, stamp: string = currentStamp()): Promise<Omit<Held, 'stamp' | 'pulled'> | undefined> => {
+  const folder = join(outbox, stamp);
+  for (const name of await namesIn(folder)) {
+    const found = BATCH_FILE.exec(name);
+    if (found?.[1] !== key) continue;
+    const hash = found[2] ?? '';
+    const file = join(folder, name);
+    const bytes = await unchangedBytes(file, hash);
+    if (bytes !== undefined) return { key, hash, file, bytes };
+  }
+  return undefined;
+};
+
+const machineKeysFile = (outbox: string): string => join(outbox, 'machine-keys.log');
+
+/** The batch keys a machine's Stop built, one per line. A person's `oars pool deposit` shares the outbox and cannot recompute them (the machine's name is in the key), so its sweep keeps these instead of treating them as batches of sessions the store lost. */
+export const machineKeys = async (outbox: string): Promise<Set<string>> => {
+  try {
+    return new Set((await readFile(machineKeysFile(outbox), 'utf8')).split('\n').filter((line) => line !== ''));
+  } catch (error) {
+    if (isAbsent(error)) return new Set();
+    throw error;
+  }
+};
+
+/** Notes that a machine built this key; a key already noted adds no line. */
+export const noteMachineKey = async (outbox: string, key: string): Promise<void> => {
+  if ((await machineKeys(outbox)).has(key)) return;
+  await mkdirOwnerOnly(outbox);
+  await appendOwnerOnly(machineKeysFile(outbox), `${key}\n`);
 };
 
 const shownFile = (outbox: string): string => join(outbox, 'shown.log');
@@ -284,13 +365,101 @@ export type LockRefusal = 'batch_unknown' | 'batch_not_shown' | 'batch_changed';
  * because covenant acceptance is its consent and it prints nothing; the other two checks still hold.
  */
 export const lockedBatch = async (outbox: string, hash: string, options: { stamp?: string; requireShown?: boolean } = {}): Promise<{ ok: true; file: string; bytes: string } | { ok: false; code: LockRefusal }> => {
-  const folder = join(outbox, options.stamp ?? currentStamp());
-  const name = (await namesIn(folder)).find((entry) => BATCH_FILE.exec(entry)?.[2] === hash);
+  const stamp = options.stamp ?? currentStamp();
+  const folder = join(outbox, stamp);
+  // Under any stamp but the current one, only a pulled batch is a batch: the rest of that folder is stale.
+  const listed = stamp === currentStamp() ? undefined : await pulledAt(outbox, stamp);
+  const name = (await namesIn(folder)).find((entry) => {
+    const found = BATCH_FILE.exec(entry);
+    return found?.[2] === hash && (listed === undefined || listed.has(found[1] ?? ''));
+  });
   if (name === undefined) return { ok: false, code: 'batch_unknown' };
   if (options.requireShown !== false && !(await wasShown(outbox, hash))) return { ok: false, code: 'batch_not_shown' };
   const file = join(folder, name);
   const bytes = await unchangedBytes(file, hash);
   return bytes === undefined ? { ok: false, code: 'batch_changed' } : { ok: true, file, bytes };
+};
+
+const PULLED = 'pulled.json';
+
+/** The batches `oars pool hold pull` admitted and has not seen sent: each `id` (the outbox key) and the stamp folder it is filed under. */
+export interface Pulled {
+  [id: string]: string;
+}
+
+/** `pulled.json` as it stands; none when the file is missing. A file that is not a list of ids and stamps fails the command that reads it, so nothing is pruned or sent on a guess. */
+export const readPulled = async (outbox: string, step: string): Promise<Pulled> => {
+  let text: string;
+  try {
+    text = await readFile(join(outbox, PULLED), 'utf8');
+  } catch (error) {
+    if (isMissing(error)) return {};
+    throw error;
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    value = undefined;
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value) || !Object.values(value).every((stamp) => typeof stamp === 'string')) {
+    throw new CliError(`${join(outbox, PULLED)} is not a list of ids and stamps. Move it aside and run the command again; nothing was changed.`, ExitCode.INVALID, step);
+  }
+  return Object.fromEntries(Object.entries(value).map(([id, stamp]) => [id, String(stamp)]));
+};
+
+/** Staged and renamed, so a crash leaves the whole old file or the whole new one. */
+export const writePulled = async (outbox: string, pulled: Pulled): Promise<void> => {
+  await mkdirOwnerOnly(outbox);
+  const staged = join(outbox, `${PULLED}.tmp`);
+  await writeOwnerOnly(staged, `${JSON.stringify(Object.fromEntries(Object.entries(pulled).sort(([a], [b]) => (a < b ? -1 : 1))), null, 2)}\n`);
+  await rename(staged, join(outbox, PULLED));
+};
+
+const POOL_STEP = 'pool-outbox';
+
+/** Whether any string or key in `value` holds one of `terms`, compared lowercased the way the local gate compares a transcript. */
+export const holdsTerm = (value: unknown, terms: readonly string[]): boolean => {
+  if (typeof value === 'string') {
+    const lower = value.toLowerCase();
+    return terms.some((term) => lower.includes(term));
+  }
+  if (Array.isArray(value)) return value.some((entry) => holdsTerm(entry, terms));
+  if (typeof value === 'object' && value !== null) return Object.entries(value).some(([key, entry]) => holdsTerm(key, terms) || holdsTerm(entry, terms));
+  return false;
+};
+
+/**
+ * The exclusion rescan of a send pass: every pulled batch is read against the trusted machine's current term file, and one that now holds a term is removed, with its `pulled.json` entry, and its hash returned. A batch can wait as long as the covenant
+ * stays closed, so the terms it was admitted under may not be the terms now. With no terms (a missing or empty file) nothing can be checked: `open` is false, nothing is removed, and the caller sends no pulled batch.
+ */
+export const rescanPulled = async (outbox: string, terms: readonly string[]): Promise<{ open: boolean; removed: string[] }> => {
+  if (terms.length === 0) return { open: false, removed: [] };
+  const pulled = await readPulled(outbox, POOL_STEP);
+  const removed: string[] = [];
+  for (const [id, stamp] of Object.entries(pulled)) {
+    const held = STAMP_FOLDER.test(stamp) ? await heldBatchOf(outbox, id, stamp) : undefined;
+    // The file is canonical JSON this client wrote, and its bytes just hashed to its name.
+    if (held === undefined || !holdsTerm(JSON.parse(held.bytes), terms)) continue;
+    await rm(held.file, { force: true });
+    Reflect.deleteProperty(pulled, id);
+    removed.push(held.hash);
+  }
+  if (removed.length > 0) await writePulled(outbox, pulled);
+  return { open: true, removed };
+};
+
+/** The keys `pulled.json` lists at this stamp: the batches of that folder that no local build made and no stale pass may touch. */
+export const pulledAt = async (outbox: string, stamp: string = currentStamp()): Promise<Set<string>> =>
+  new Set(Object.entries(await readPulled(outbox, POOL_STEP)).filter(([, at]) => at === stamp).map(([id]) => id));
+
+/** `lockedBatch` over every stamp a send reads: the first stamp that holds the hash answers, whether it locks or refuses. */
+export const lockedAcross = async (outbox: string, hash: string, options: { requireShown?: boolean } = {}): ReturnType<typeof lockedBatch> => {
+  for (const stamp of await sendStamps(outbox)) {
+    const locked = await lockedBatch(outbox, hash, { ...options, stamp });
+    if (locked.ok || locked.code !== 'batch_unknown') return locked;
+  }
+  return { ok: false, code: 'batch_unknown' };
 };
 
 /** Folders of an outbox other than the current stamp's: batches built under another vocabulary, field list, or skeleton format. */
@@ -302,14 +471,23 @@ const staleFolders = async (outbox: string, stamp: string): Promise<string[]> =>
   return names;
 };
 
-const STAMP_FOLDER = /^v[^./]+-[0-9a-f]{8}$/;
+/** The name of a stamp folder: a vocabulary version, then eight hex digits of the field list and format. No dot or slash, so a name that matches is one path segment. */
+export const STAMP_FOLDER = /^v[^./]+-[0-9a-f]{8}$/;
 
-const batchesIn = async (folder: string): Promise<number> => (await namesIn(folder)).filter((name) => BATCH_FILE.test(name)).length;
+/** The keys of the batch files in one folder. */
+const keysIn = async (folder: string): Promise<string[]> => (await namesIn(folder)).flatMap((name) => BATCH_FILE.exec(name)?.[1] ?? []);
 
-/** Batches in one server's outbox that were built under another vocabulary, field list, or skeleton format: never printed, never sent. */
+/** The batch files of one stale folder, and which of them a stale pass may touch: a key `pulled.json` lists at this folder's stamp is spared, by key and not by folder, so a local batch sharing the folder is still stale. */
+const staleIn = async (folder: string, pulled: Pulled): Promise<string[]> => {
+  const stamp = basename(folder);
+  return (await keysIn(folder)).filter((key) => pulled[key] !== stamp);
+};
+
+/** Batches in one server's outbox that were built under another vocabulary, field list, or skeleton format: never printed, never sent. A pulled batch is not one of them, at the stamp it is listed under. */
 export const staleBatches = async (outbox: string, stamp: string = currentStamp()): Promise<number> => {
+  const pulled = await readPulled(outbox, POOL_STEP);
   let count = 0;
-  for (const folder of await staleFolders(outbox, stamp)) count += await batchesIn(folder);
+  for (const folder of await staleFolders(outbox, stamp)) count += (await staleIn(folder, pulled)).length;
   return count;
 };
 
@@ -321,10 +499,24 @@ export const staleBatchesAnywhere = async (storeDir: string, stamp: string = cur
   return count;
 };
 
-/** Removes one server's stale batches, and returns how many there were. */
+/** Removes one server's stale batches, and returns how many there were. A folder that holds a pulled batch loses only the files of the others; one that holds none goes whole. */
 export const discardStale = async (outbox: string, stamp: string = currentStamp()): Promise<number> => {
-  const count = await staleBatches(outbox, stamp);
-  for (const folder of await staleFolders(outbox, stamp)) await rm(folder, { recursive: true, force: true });
+  const pulled = await readPulled(outbox, POOL_STEP);
+  let count = 0;
+  for (const folder of await staleFolders(outbox, stamp)) {
+    const listed = Object.values(pulled).includes(basename(folder));
+    if (!listed) {
+      count += (await keysIn(folder)).length;
+      await rm(folder, { recursive: true, force: true });
+      continue;
+    }
+    const stale = await staleIn(folder, pulled);
+    for (const name of await namesIn(folder)) {
+      const found = BATCH_FILE.exec(name);
+      if (found === null || stale.includes(found[1] ?? '')) await rm(join(folder, name), { recursive: true, force: true });
+    }
+    count += stale.length;
+  }
   return count;
 };
 

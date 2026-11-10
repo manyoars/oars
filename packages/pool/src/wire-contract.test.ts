@@ -124,6 +124,70 @@ describe('the versions a deposit carries', () => {
     expect((await post({ ...baseline(), fieldsVersion: FIELD_LIST_VERSION + 3, vocabVersion: '99' })).status).toBe(201);
     expect(await rowOf()).toMatchObject({ format: SKELETON_FORMAT, vocab_version: '99', fields_version: FIELD_LIST_VERSION + 3 });
   });
+
+  it('keep the names of a format 7 call in the stored skeleton, and still accept a format 4 batch, in which names and namesDropped are fields format 4 does not define', async () => {
+    const names = [{ kind: 'dir', name: 'billing' }, { kind: 'file', name: 'plan.md' }];
+    const named = baseline();
+    Object.assign(holder(named, 'transcripts', 0, 'tools', 0), { names, namesDropped: 1 });
+    expect((await post(named)).status).toBe(201);
+    const stored = await rowOf();
+    expect(JSON.parse(stored.skeleton)).toMatchObject({ transcripts: [{ tools: [{ names, namesDropped: 1 }] }] });
+    expect(stored).toMatchObject({ format: 7, extensions: '[]', other_values: 0 });
+
+    const older = { ...baseline(), format: 4 };
+    expect((await post(older)).status).toBe(201);
+    expect(await rowOf()).toMatchObject({ format: 4, extensions: '[]', other_values: 0 });
+    Object.assign(holder(older, 'transcripts', 0, 'tools', 0), { names, namesDropped: 1 });
+    expect((await post(older)).status).toBe(201);
+    const bagged = await rowOf();
+    expect(JSON.parse(bagged.extensions)).toEqual([{ at: 'transcripts[0].tools[0].names', kind: 'field', value: names }, { at: 'transcripts[0].tools[0].namesDropped', kind: 'field', value: 1 }]);
+    expect(bagged.skeleton).not.toContain('billing');
+  });
+
+  it('keep the digests of a format 7 call in the stored skeleton, put them in the bag for a format 6 batch, and refuse one that is no digest', async () => {
+    const digests = [{ old: '5d41402abc4b2a76b9719d911017c592', new: '7d793037a0760186574b0282f2f435e7' }, { new: '098f6bcd4621d373cade4e832627b4f6' }];
+    const edited = baseline();
+    Object.assign(holder(edited, 'transcripts', 0, 'tools', 0), { digests });
+    expect((await post(edited)).status).toBe(201);
+    const stored = await rowOf();
+    expect(JSON.parse(stored.skeleton)).toMatchObject({ transcripts: [{ tools: [{ digests }] }] });
+    expect(stored).toMatchObject({ format: 7, extensions: '[]', other_values: 0 });
+
+    const older = { ...edited, format: 6 };
+    expect((await post(older)).status).toBe(201);
+    const bagged = await rowOf();
+    expect(JSON.parse(bagged.extensions)).toEqual([{ at: 'transcripts[0].tools[0].digests', kind: 'field', value: digests }]);
+    expect(bagged.skeleton).not.toContain('7d793037a0760186574b0282f2f435e7');
+
+    Object.assign(holder(edited, 'transcripts', 0, 'tools', 0), { digests: [{ new: 'let a = 1;' }] });
+    expect(await post(edited)).toMatchObject({ status: 422, json: { field: 'transcripts[0].tools[0].digests[0].new' } });
+  });
+
+  it('keep the templates and diff shape of a format 7 call in the stored skeleton, read a template with a literal in it as other, and bag them from a format 4 batch', async () => {
+    const templates = ['git commit -m <text>', 'pytest <path> -k <ident>'];
+    const templated = baseline();
+    Object.assign(holder(templated, 'transcripts', 0, 'tools', 0), { templates, templatesDropped: 2, diffShape: ['import-added', 'lines-changed'] });
+    expect((await post(templated)).status).toBe(201);
+    const stored = await rowOf();
+    expect(JSON.parse(stored.skeleton)).toMatchObject({ transcripts: [{ tools: [{ templates, templatesDropped: 2, diffShape: ['import-added', 'lines-changed'] }] }] });
+    expect(stored).toMatchObject({ format: 7, extensions: '[]', other_values: 0 });
+
+    // A template whose word is a literal (a quoted sentence, a path in a flag's place) is not one the wire sends: it is read as `other`, counted, and never stored.
+    const literal = baseline();
+    Object.assign(holder(literal, 'transcripts', 0, 'tools', 0), { templates: ['git commit -m "fix the acme bug"', 'cat /home/acme/plan.md'] });
+    expect((await post(literal)).status).toBe(201);
+    const refused = await rowOf();
+    expect(JSON.parse(refused.skeleton)).toMatchObject({ transcripts: [{ tools: [{ templates: ['other', 'other'] }] }] });
+    expect(refused.skeleton).not.toContain('acme');
+    expect(refused.other_values).toBeGreaterThan(0);
+
+    const older = { ...baseline(), format: 4 };
+    Object.assign(holder(older, 'transcripts', 0, 'tools', 0), { templates, templatesDropped: 2, diffShape: ['import-added', 'lines-changed'] });
+    expect((await post(older)).status).toBe(201);
+    const bagged = await rowOf();
+    expect(JSON.parse(bagged.extensions)).toEqual([{ at: 'transcripts[0].tools[0].templates', kind: 'field', value: templates }, { at: 'transcripts[0].tools[0].templatesDropped', kind: 'field', value: 2 }, { at: 'transcripts[0].tools[0].diffShape', kind: 'field', value: ['import-added', 'lines-changed'] }]);
+    expect(bagged.skeleton).not.toContain('pytest');
+  });
 });
 
 describe('a field this server does not know', () => {
@@ -199,10 +263,10 @@ describe('a value this server does not know', () => {
   });
 });
 
-describe('a format 4 batch with every optional field absent', () => {
+describe('a format 7 batch with every optional field absent', () => {
   /** What an absent optional field reads as, which is what a sent null is. */
-  const EMPTY: { [name: string]: unknown } = { deltas: [], timingPrint: null, languageShares: [] };
-  const ABSENT_ONLY: ReadonlySet<string> = new Set(['reach', 'skill', 'edges', 'recoveryCalls', 'usageResponses', 'allocated', 'repoKey', 'orgSize', 'team', 'repoVisibility', 'hour', 'keys', 'keysDropped', 'targetClass', 'argClass', 'argFeatures', 'argValues', 'changeKind']);
+  const EMPTY: { [name: string]: unknown } = { deltas: [], recommendations: [], timingPrint: null, languageShares: [] };
+  const ABSENT_ONLY: ReadonlySet<string> = new Set(['claimed', 'reach', 'skill', 'edges', 'recoveryCalls', 'usageResponses', 'allocated', 'repoKey', 'orgSize', 'team', 'repoVisibility', 'hour', 'keys', 'keysDropped', 'targetClass', 'argClass', 'argFeatures', 'argValues', 'changeKind', 'names', 'namesDropped', 'templates', 'templatesDropped', 'diffShape', 'digests']);
 
   // Each level of the wire with its optional names and where it sits; a level added to OPTIONAL fails the length check below until it is listed here.
   const LEVELS_OPTIONAL: readonly (readonly [readonly string[], (string | number)[]])[] = [
@@ -250,12 +314,12 @@ describe('a format 4 batch with every optional field absent', () => {
 });
 
 describe('the bag', () => {
-  it('is read by nothing that serves: no source file outside the deposit route names the column', () => {
+  it('is read by nothing that serves a read: no source file outside the deposit route and the account\'s own export (Article 15 copy) names the column', () => {
     const dir = fileURLToPath(new URL('.', import.meta.url));
     const readers = readdirSync(dir)
       .filter((file) => file.endsWith('.ts') && !file.endsWith('.test.ts'))
       .filter((file) => /\bextensions\b|\bother_values\b/.test(readFileSync(`${dir}${file}`, 'utf8')));
-    expect(readers).toEqual(['worker.ts']);
+    expect(readers).toEqual(['export.ts', 'worker.ts']);
   });
 
   it('is left out of a bundle: a stored bag changes no cell a bundle is derived from', async () => {

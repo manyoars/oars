@@ -8,6 +8,7 @@ import { CliError, ExitCode } from '../errors.js';
 import { cellsOf, projectedStore } from './cell-increments.js';
 import { poolOf, serializeCells, UNKNOWN, type Cell, type Pool } from './cells.js';
 import type { Motif } from './motif.js';
+import { LOAD_STATUS_FILE, loadStatusLines } from './load-status.js';
 import { shellReader } from './projection.js';
 import { contentHash, FIRST_ORDER_FAMILIES, frozenRead, makeRead, orderResolver, type FirstOrderFamily, type OrderResolver, type Read, type ReadAsOf } from './read.js';
 import { deriveConsequences, recallGraphOf } from './recall-consequence.js';
@@ -114,6 +115,7 @@ export const refreshPool = async (storeDir: string, store: Store): Promise<{ poo
   const pool = poolOf(set, store.errors);
   const files = poolFiles(storeDir);
   await writeAtomic(files.consequences, recalls.flatMap(({ id, n, consequence }) => (consequence === undefined ? [] : [`${JSON.stringify({ id, n, consequence })}\n`])).join(''));
+  await writeAtomic(join(storeDir, LOAD_STATUS_FILE), await loadStatusLines(storeDir, store.sessions));
   await writeAtomic(files.cells, serializeCells(set.cells));
   await writeAtomic(files.motifs, set.motifs.map((motif) => `${JSON.stringify(motif)}\n`).join(''));
   const file = files.reads(pool.version);

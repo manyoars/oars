@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { frame, printOf, prompt, session, sessionsFrom, step, storedNames, store, tool } from '../../cli/src/sessions/pool-fixture.js';
 import { parseSkeleton, skeletonOf, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { sampleSkeleton } from './sample.js';
-import { startPool, stubUser, type Answer, type TestPool } from './test-pool.js';
+import { acceptanceOf, startPool, stubUser, type Answer, type TestPool } from './test-pool.js';
 import worker from './worker.js';
 
 const TOKEN = 'a-test-token';
@@ -96,7 +96,7 @@ describe('a harness version that does not decode', () => {
 describe('deposits per account', () => {
   const signedIn = async (limited: TestPool, id: string): Promise<string> => {
     const { token } = await limited.signIn('github', stubUser(id));
-    await limited.post('/v1/covenant/accept', { version: 'v1' }, token);
+    await limited.post('/v1/covenant/accept', acceptanceOf('v1'), token);
     return token;
   };
 
@@ -184,7 +184,7 @@ describe('stored bytes per account', () => {
   };
   const signedIn = async (limited: TestPool, id: string): Promise<string> => {
     const { token } = await limited.signIn('github', stubUser(id));
-    await limited.post('/v1/covenant/accept', { version: 'v1' }, token);
+    await limited.post('/v1/covenant/accept', acceptanceOf('v1'), token);
     return token;
   };
 

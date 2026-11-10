@@ -18,6 +18,7 @@
 //   pipeline-runs.jsonl     the step log: one line per run of a pipeline step, appended when the step ends (steps.ts)
 //   pending/<hash>.<uuid>.json  one file per Stop deposit the store lock refused: the transcript path only, taken by the next deposit (pending.ts)
 import type { GoldEvaluator } from './gold-arms.js';
+import { derivedSalt } from './machine-ids.js';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { performance } from 'node:perf_hooks';
@@ -73,10 +74,14 @@ export interface SessionsRuntime {
   sources?: readonly Source[];
   /** Where the account's salt comes from; absent means this machine's own (`localSalt`). The seam an account identity replaces (M4). */
   accountSalt?: (storeDir: string) => Promise<AccountSalt>;
+  /** The salt repository keys are hashed under; a machine takes it from its enrollment (`OARS_REPO_SALT`). Absent means the one derived from the account salt, as the trusted machine computes it. */
+  repoSalt?: string;
   /** The fresh single-turn reader behind `gold arms`; absent in a run that has none. */
   evaluator?: GoldEvaluator | undefined;
   stdin: NodeJS.ReadableStream;
   stdout: { write: (text: string) => unknown };
+  /** Only its `isTTY` is read: the covenant screen is written to stderr, so a person is at a terminal only when stderr is one too. */
+  stderr?: { isTTY?: boolean | undefined } | undefined;
 }
 
 interface FileState {
@@ -106,9 +111,15 @@ export interface State {
   pool: PoolChoices;
 }
 
-/** The answer to the raw-copy prompt (`granted`, `declined`, or not asked yet) and the per-folder switches (an `--allow`-style entry mapped to what it may send). */
+/**
+ * The answer to the raw-copy prompt (`granted`, `declined`, or not asked yet) and the per-folder switches (an `--allow`-style entry mapped to what it may send).
+ * A yes carries the covenant version in force when it was given, because the prompt names the sale and training use that covenant states. A yes with no version predates that wording and reads as not asked.
+ */
 export interface PoolChoices {
   rawConsent: 'granted' | 'declined' | null;
+  rawConsentVersion: string | null;
+  /** True from a typed no that the pool was not told, while this machine held a yes, until the pool hears the withdrawal or a new yes is typed: the pool may still hold the yes, so a rerun of the no must not read the local `declined` as nothing to tell. */
+  withdrawalPending: boolean;
   folders: { [entry: string]: FolderSend };
 }
 export type FolderSend = 'skeleton' | 'off';
@@ -122,6 +133,7 @@ export const paths = (storeDir: string) => ({
   skeletons: join(storeDir, 'skeletons'),
   calls: join(storeDir, 'mcp-calls.jsonl'),
   hookCalls: join(storeDir, 'hook-calls.jsonl'),
+  hookRows: join(storeDir, 'hook-rows.jsonl'),
   pipelineRuns: join(storeDir, 'pipeline-runs.jsonl'),
   salt: join(storeDir, 'salt'),
   raw: join(storeDir, 'raw'),
@@ -183,12 +195,14 @@ export const readState = async (storeDir: string): Promise<State> => {
       const pool = isRecord(parsed.pool) ? parsed.pool : {};
       const folders: PoolChoices['folders'] = {};
       if (isRecord(pool.folders)) for (const [entry, mode] of Object.entries(pool.folders)) if (mode === 'skeleton' || mode === 'off') folders[entry] = mode;
-      return { files, redactDomains: domains, allow, pool: { rawConsent: pool.rawConsent === 'granted' || pool.rawConsent === 'declined' ? pool.rawConsent : null, folders } };
+      const yesVersion = typeof pool.rawConsentVersion === 'string' && pool.rawConsentVersion !== '' ? pool.rawConsentVersion : null;
+      const granted = pool.rawConsent === 'granted' && yesVersion !== null;
+      return { files, redactDomains: domains, allow, pool: { rawConsent: granted ? 'granted' : pool.rawConsent === 'declined' ? 'declined' : null, rawConsentVersion: granted ? yesVersion : null, withdrawalPending: pool.withdrawalPending === true && !granted, folders } };
     }
   } catch (error) {
     if (!isMissing(error) && !(error instanceof SyntaxError)) throw error;
   }
-  return { files: {}, redactDomains: [], allow: [], pool: { rawConsent: null, folders: {} } };
+  return { files: {}, redactDomains: [], allow: [], pool: { rawConsent: null, rawConsentVersion: null, withdrawalPending: false, folders: {} } };
 };
 
 /** Changes the pool choices under the store lock, so a deposit running at the same time keeps them (it writes the state it read). */
@@ -264,7 +278,7 @@ export interface DepositResult {
   missing: string[];
 }
 
-const projectFolders = async (projectsRoot: string): Promise<string[]> => {
+export const projectFolders = async (projectsRoot: string): Promise<string[]> => {
   try {
     return (await readdir(projectsRoot, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
   } catch (error) {
@@ -318,6 +332,8 @@ interface DepositContext {
   domains: string[];
   redact: ReturnType<typeof makeRedactor>;
   salt: AccountSalt;
+  /** The salt a repository's key is hashed under. */
+  repoSalt: string;
   repoRoot: (cwd: string) => string | null;
   repoIdentity: (root: string) => string;
   /** This process's versions, read once per deposit (it parses package.json). */
@@ -348,6 +364,7 @@ const contextFor = async (runtime: SessionsRuntime, state: State, now: () => num
     domains: [...state.redactDomains].sort(),
     redact: makeRedactor(state.redactDomains),
     salt,
+    repoSalt: runtime.repoSalt ?? derivedSalt(salt.salt, 'repoKey/1'),
     repoRoot: makeRepoRoot(),
     repoIdentity: makeRepoIdentity(),
     captureRuntime: captureRuntime(),
@@ -373,7 +390,7 @@ interface SpawnPoint {
 }
 
 /** A transcript to deposit: a main session file, or a subagent's under `<session>/subagents/` (register A24). */
-interface Transcript {
+export interface Transcript {
   file: string;
   /** `<session>`, or `<parent>~agent-x` / `<parent>~wf_y~agent-x` for a subagent. */
   session: string;
@@ -384,7 +401,7 @@ interface Transcript {
   fromRaw?: boolean;
 }
 
-const mainTranscript = (folder: string, name: string): Transcript => ({ file: join(folder, name), session: name.slice(0, -'.jsonl'.length), relative: name });
+export const mainTranscript = (folder: string, name: string): Transcript => ({ file: join(folder, name), session: name.slice(0, -'.jsonl'.length), relative: name });
 
 export const listDir = async (dir: string) => {
   try {
@@ -436,7 +453,7 @@ export const subagentFiles = async (folder: string, sessions: readonly string[])
 };
 
 // The subagent transcripts of the given sessions, each with its `.meta.json` read.
-const subagentTranscripts = async (folder: string, sessions: readonly string[]): Promise<Transcript[]> => {
+export const subagentTranscripts = async (folder: string, sessions: readonly string[]): Promise<Transcript[]> => {
   const found: Transcript[] = [];
   for (const { dir, path, parent, name } of await subagentFiles(folder, sessions)) {
     const agent = name.slice(0, -'.jsonl'.length);
@@ -557,6 +574,7 @@ const depositFile = async (context: DepositContext, project: string, transcript:
     bytes: info.size,
     redact: context.redact,
     salt: context.salt.salt,
+    repoSalt: context.repoSalt,
     sid: context.salt.sid,
     repoRoot: context.repoRoot,
     repoIdentity: context.repoIdentity,
@@ -936,13 +954,13 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
 };
 
 /** The table in force: the runtime's own (a test's), else every source. */
-const sourcesOf = (runtime: SessionsRuntime): readonly Source[] => runtime.sources ?? SOURCES;
+export const sourcesOf = (runtime: SessionsRuntime): readonly Source[] => runtime.sources ?? SOURCES;
 
 /** A source's name is the first `state.json` key segment, and no project folder uses it, so the Claude Code walk skips it. */
 const isSource = (table: readonly Source[], name: string): boolean => table.some((source) => source.name === name);
 
 /** The roots the runtime names, by source name; `cursorRoot` stays the alias of the Cursor entry. */
-const sourceRoots = (runtime: SessionsRuntime): Map<string, string> =>
+export const sourceRoots = (runtime: SessionsRuntime): Map<string, string> =>
   new Map(Object.entries({ ...(runtime.cursorRoot === undefined ? {} : { cursor: runtime.cursorRoot }), ...runtime.sourceRoots }));
 
 /** Reports an unreadable source store or file, once per reason: the full path for the terminal, the base name for the hook-call record. */
@@ -1018,6 +1036,7 @@ const readSource = async (context: DepositContext, source: Source, root: string,
         bytes: Buffer.byteLength(text),
         redact: context.redact,
         salt: context.salt.salt,
+        repoSalt: context.repoSalt,
         sid: context.salt.sid,
         repoRoot: context.repoRoot,
         repoIdentity: context.repoIdentity,
@@ -1207,7 +1226,7 @@ const rawRelatives = async (dir: string, path: string[]): Promise<string[]> => {
   return found.sort();
 };
 
-const HOOK_LOCK: LockOptions = { waitMs: 3_000, staleMs: 600_000 };
+export const HOOK_LOCK: LockOptions = { waitMs: 500, staleMs: 600_000 };
 
 export type SessionDeposit = 'deposited' | 'unchanged' | 'not-allowed' | 'missing' | 'deferred';
 
@@ -1219,7 +1238,7 @@ export type SessionDeposit = 'deposited' | 'unchanged' | 'not-allowed' | 'missin
  */
 export const depositSession = async (runtime: SessionsRuntime, transcript: string, now: () => number, trace?: DepositTrace): Promise<SessionDeposit> => {
   try {
-    // The hook path waits 3 s for the lock, well under the harness's 30 s ceiling on the hook (install.ts), so a SessionEnd behind the nightly deposit cannot hold session exit.
+    // The hook path waits under a second for the lock, well under the harness's 30 s ceiling on the hook (install.ts), so a SessionEnd behind the sender's sweep cannot hold session exit; `deferSession` covers a lock still held.
     return await withLock(runtime.storeDir, (held) => depositSessionLocked(runtime, transcript, now, held, trace), HOOK_LOCK);
   } catch (error) {
     if (!(error instanceof StoreLockedError)) throw error;
@@ -1416,12 +1435,26 @@ const internTool = (tool: ToolObservation, intern: (value: string) => string): T
   ...(tool.segments === undefined ? {} : { segments: tool.segments.map((segment) => ({ ...segment, run: intern(segment.run) })) }),
 });
 
+/** What a read keeps beyond the default. */
+export type LoadOptions = {
+  /** Keep each session's `messageUsage` entries. Nothing in the store reads them yet, and on a large store they are a third more heap, so a read holds them only when asked. */
+  messageUsage?: boolean;
+};
+
+const withoutMessageUsage = (session: SessionObservation): SessionObservation => {
+  if (session.messageUsage === undefined) return session;
+  const rest = { ...session };
+  Reflect.deleteProperty(rest, 'messageUsage');
+  return rest;
+};
+
 /**
  * The store as a reader sees it: for each session only the highest `rev`. A version-3 or later session is derived here from its capture records
  * (EXTRACTOR_VERSION rules); a session whose last deposit was version 2 keeps the prompt and error lines that deposit wrote.
  * `afterFirstPass` runs between the two passes over the log: a seam for the test that compacts the log there.
+ * `options.messageUsage` keeps the per-message usage entries on each session record; without it they are dropped as the record is read.
  */
-export const loadStore = async (storeDir: string, afterFirstPass?: () => Promise<void>): Promise<Store> => {
+export const loadStore = async (storeDir: string, afterFirstPass?: () => Promise<void>, options: LoadOptions = {}): Promise<Store> => {
   // Two passes, so a superseded record is never held: the first keeps one number per session, the second keeps only the records at that rev.
   // A re-capture leaves the old copies in the log until a compaction, and holding them as well doubled the heap of every read.
   // Both passes read one open file: a lock-free reader can meet a compaction between them, and a second open would see the compacted log, where
@@ -1442,7 +1475,7 @@ export const loadStore = async (storeDir: string, afterFirstPass?: () => Promise
     for await (const line of logLines(file, held)) {
       const observation = observationOf(line);
       if (observation === undefined || observation.rev !== latest.get(observation.session)) continue;
-      if (observation.kind === 'session') of(observation.session).session = observation;
+      if (observation.kind === 'session') of(observation.session).session = options.messageUsage === true ? observation : withoutMessageUsage(observation);
       else if (observation.kind === 'user-prompt') of(observation.session).prompts.push(observation);
       else if (observation.kind === 'tool') of(observation.session).tools.push(internTool(observation, intern));
       else if (observation.kind === 'error-line') of(observation.session).errorLines.push(observation);

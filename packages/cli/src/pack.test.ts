@@ -51,6 +51,15 @@ describe('the tarball npm pack would make', () => {
     expect(paths).toContain(target);
   });
 
+  it('lists the oars-hook bin a machine hook runs, and its source carries the shebang', () => {
+    const bin = manifest().bin;
+    const target = isRecord(bin) && typeof bin['oars-hook'] === 'string' ? bin['oars-hook'].replace(/^\.\//, '') : undefined;
+
+    expect(target).toBe('dist/oars-hook.js');
+    expect(paths).toContain(target);
+    expect(readFileSync(`${cliFolder}src/oars-hook.ts`, 'utf8').startsWith('#!/usr/bin/env node\n')).toBe(true);
+  });
+
   it('lists every vocabulary snapshot and the manifest that pins them', () => {
     expect(paths.filter((path) => path.startsWith('vocab/')).sort()).toEqual(
       readdirSync(`${cliFolder}vocab`).sort().map((name) => `vocab/${name}`),
@@ -83,11 +92,15 @@ describe('the tarball npm pack would make', () => {
 // docs.stripe.com): ecosystem names, not terms of this product.
 const ECOSYSTEM_LISTS = ['dist/sessions/public-vocabulary.js', 'dist/sessions/public-vocabulary.d.ts'];
 
+// The raw-copy prompt must say the data may be sold (the covenant's sale sentence), so the one file that prints it may name `sell`.
+const SALE_NOTICE = ['dist/sessions/pool-command.js: /\\bsell/i'];
+
 describe('the packed dist names none of the withheld terms', () => {
   it('has no withheld term in any packed dist file, declarations included', () => {
     const hits = packedPaths()
       .filter((path) => path.startsWith('dist/') && !ECOSYSTEM_LISTS.includes(path))
-      .flatMap((path) => withheldIn(readFileSync(join(cliFolder, path), 'utf8')).map((term) => `${path}: ${term}`));
+      .flatMap((path) => withheldIn(readFileSync(join(cliFolder, path), 'utf8')).map((term) => `${path}: ${term}`))
+      .filter((hit) => !SALE_NOTICE.includes(hit));
     expect(hits).toEqual([]);
   }, 120_000);
 });
@@ -144,7 +157,7 @@ const DENY_LIST = [
   'joins no cluster',
 ];
 
-const NOT_OPEN = 'Accounts are not open yet: `oars login` uses the Many Oars issuer by default, and until Many Oars sign-in at `login.manyoars.com` (and its pool at `pool.manyoars.com`) is deployed it exits 2 with an error that names `login.manyoars.com`.';
+const NOT_OPEN = 'Accounts are not open yet: `oars login` uses the Many Oars issuer by default, and until Many Oars sign-in at `login.manyoars.com` is deployed it exits 2 with an error that names `login.manyoars.com`.';
 
 const WITHHELD_TERMS = [
   /\bprices?\b/i,
@@ -265,11 +278,19 @@ describe('the public text states facts only', () => {
     expect(text).toContain('raw transcripts');
     expect(text).toMatch(/unredacted/);
     expect(text).toContain('except `gold arms`, which sends redacted text through your own Claude subscription');
-    expect(text).toContain('Apart from that and telemetry (on by default, off with `oars telemetry off`, `OARS_TELEMETRY=0`, or `DO_NOT_TRACK=1`; it sends to the pool server in `OARS_POOL_URL`, else to the Many Oars pool at `pool.manyoars.com`, which is not deployed yet, so until it is a send fails and the events stay in the spool), oars itself sends nothing, except what you opted into with a pool server: after you accept its covenant, the detached sender that a session-end hook or any `oars` command starts, at most about once an hour, sends closed-vocabulary session skeletons, and, only after a separate yes to the raw prompt, a locally redacted (best-effort) copy of each full transcript; `oars pool outbox` prints what is queued when you run it, but the sender builds new batches and sends them in the same run without printing them first, and a session leaves your machine no sooner than an hour after it ends, and a folder can be switched to skeleton only or off; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.');
+    expect(text).toContain('Apart from that and telemetry (on by default, off with `oars telemetry off`, `OARS_TELEMETRY=0`, or `DO_NOT_TRACK=1`; it sends to the pool server in `OARS_POOL_URL`, else to the Many Oars pool at `pool.manyoars.com`, which is live), oars itself sends nothing, except what you opted into with a pool server: after you accept its covenant, the detached sender that a session-end hook or any `oars` command starts, at most about once an hour, sends closed-vocabulary session skeletons, and, only after a separate yes to the raw prompt, a locally redacted (best-effort) copy of each full transcript; `oars pool outbox` prints what is queued when you run it, but the sender builds new batches and sends them in the same run without printing them first, and a session leaves your machine no sooner than an hour after it ends, and a folder can be switched to skeleton only or off; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.');
     expect(text).toContain(NOT_OPEN);
     expect(text).toContain('%APPDATA%');
     expect(text).toContain('~/.config');
     expect(text).toContain('session-commons/review');
+  });
+
+  // The package page is read before install, so its account of what telemetry records matches the first-run notice (`NOTICE` in telemetry/consent.ts).
+  it('packages/cli/README.md says each command records whether it ran in CI, one first-run event, and the covenant version each time the screen is shown', () => {
+    const text = readFileSync(join(cliFolder, 'README.md'), 'utf8');
+    expect(text).toContain('a closed error class, whether it ran in CI (a closed word), the oars version');
+    expect(text).toContain('Each install also records one `first-run` event, on its first run (whether it ran in CI and how this copy was installed, as closed words), and one `covenant-shown` event, holding only the covenant version, each time the covenant screen is shown at a terminal, whether or not the person then accepts.');
+    expect(text).toContain('Nothing else is recorded');
   });
 
   it('the root README gives the hook commands in the forms that run, with --scope user', () => {

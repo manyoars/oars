@@ -4,29 +4,44 @@
 
 import { ACTION_TABLES, CANONICAL_ACTIONS, mcpOf, type CanonicalAction } from './actions.js';
 import { CLOSED_ARG_VALUES, CUSTOM_AGENT, FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRIVATE, publicEffort, publicVersion, PUBLIC_PACKAGES, projectedAgentType, PUBLIC_FLAGS, REPO_SIZES, TOOL_INPUT_KEYS, VOCAB_VERSION, type RepoSize } from './public-vocabulary.js';
-import { ARG_CLASSES, CHANGE_KINDS, DIRECTORY_KINDS, EXTENSION_CLASSES, PATH_DEPTHS, PATTERN_FEATURES, TARGET_CLASSES, VALUE_SIZES, type ArgClass, type ArgFeature, type ArgValue, type ChangeKind, type DirectoryKind, type ExtensionClass, type PathDepth, type PatternFeature, type TargetClass, type ValueSize } from './call-shape.js';
+import { ARG_CLASSES, CHANGE_KINDS, DIFF_SHAPES, DIRECTORY_KINDS, EXTENSION_CLASSES, NAME_KINDS, PATH_DEPTHS, PATTERN_FEATURES, TARGET_CLASSES, TEMPLATE_SLOTS, VALUE_SIZES, type ArgClass, type ArgFeature, type ArgName, type ArgValue, type ChangeKind, type DiffShape, type DirectoryKind, type ExtensionClass, type NameKind, type PathDepth, type PatternFeature, type TargetClass, type ValueSize } from './call-shape.js';
 import type { Cell } from './cells.js';
 import type { Redactor } from './redact.js';
 import type { Motif } from './motif.js';
+import type { Recall } from './recall-object.js';
 import type { Read, ReadAsOf } from './read.js';
 import { recoveryCallsOf, RECOVERY_CALLS, type RecoveryCalls } from './recovery-calls.js';
 import { projectLanguage, projectLanguageShare } from './strata.js';
-import { ERROR_CODES, LANGUAGE_SHARES, PROMPT_INTERVENTIONS, type PromptIntervention, type Frame, type FrameStack, type Harness, type LanguageShare, type PromptClass, type PromptObservation, type PullIdentity, type SessionObservation, type ShellIdentity, type StepIdentity, type StepEdge, type StepObservation, type Strata, type ToolObservation, type ToolStatus, type Usage, type UsageField } from './schema.js';
+import { ERROR_CODES, LANGUAGE_SHARES, type EditDigest, PROMPT_INTERVENTIONS, type PromptIntervention, type Frame, type FrameStack, type Harness, type LanguageShare, type PromptClass, type PromptObservation, type PullIdentity, type SessionObservation, type ShellIdentity, type StepIdentity, type StepEdge, type StepObservation, type Strata, type ToolObservation, type ToolStatus, type Usage, type UsageField } from './schema.js';
 
 // Format 3 (step 1 of the wire): a tool carries its `errorCode` and, for a failed call, what followed it (`recoveryCalls`). Formats 1 and 2 are refused by name; nothing is deployed, so nothing is migrated.
 // Format 4 (layer 1 of a call's parameters): a tool may carry `argFeatures`, `argValues`, and `changeKind`. The pool reads formats 3 and 4 (`READ_FORMATS`): a format 3 batch is read as before, and one of those
 // three names in it is a field format 3 does not know, so it goes to the bag and is served from nowhere. The table is "Formats on open" in docs/pool.md.
-export const SKELETON_FORMAT = 4;
+// Format 5 (layer 2 of a call's parameters): a tool may carry `names`, the file, directory, and variable names its values held. The pool reads formats 3, 4, and 5, and a name field in a batch of an older format goes to the bag the same way.
+// Format 6 (exposure): a batch may carry `recommendations`, one entry for each recommendation the session was shown or held back from, so the pool can tell shown from held. A batch with none says nothing, and the pool reads that as unknown, never as unexposed.
+// Format 7 (edit digests): a tool may carry `digests`, the digest of the old and new text of an Edit, MultiEdit, or Write call, so an edit that restores earlier content can be told from one that does not. A `git restore` names its path the way an edit
+// does, in `names`, so it needs no field of its own. The pool reads formats 3 to 7, and a recommendations or digests list in an older batch goes to the bag the same way.
+export const SKELETON_FORMAT = 7;
 /** The formats the parser reads, oldest first: the client builds only the last. */
-export const READ_FORMATS = [3, SKELETON_FORMAT] as const;
+export const READ_FORMATS = [3, 4, 5, 6, SKELETON_FORMAT] as const;
 export type SkeletonFormat = (typeof READ_FORMATS)[number];
 /** The tool fields format 4 added: a format 3 batch that holds one is holding a field it does not define. */
 export const FORMAT_4_TOOL_FIELDS = ['argFeatures', 'argValues', 'changeKind'] as const;
+/** The tool fields format 5 added: a batch of format 4 or 3 that holds one is holding a field it does not define. */
+export const FORMAT_5_TOOL_FIELDS = ['names', 'namesDropped', 'templates', 'templatesDropped', 'diffShape'] as const;
+/** The batch fields format 6 added: a batch of an older format that holds one is holding a field it does not define. */
+export const FORMAT_6_BATCH_FIELDS = ['recommendations'] as const;
+/** The format that added exposure. A batch of an older format holds no `recommendations`, and its failed calls are checked with the rule they were built under. */
+export const EXPOSURE_FORMAT = 6;
+/** The format that added edit digests. */
+export const DIGEST_FORMAT = 7;
+/** The tool fields format 7 added: a batch of format 6 or older that holds one is holding a field it does not define. */
+export const FORMAT_7_TOOL_FIELDS = ['digests'] as const;
 /**
  * The version of the field list: every field name a batch can hold (`BATCH_FIELDS` in `pool-outbox.ts`). It moves with any field added, so a server told the version knows which names a batch may carry,
  * and a test pins the list to it (`pool-wire-additive.test.ts`). A field is deprecated and left on the list, never removed (conclusion section 17, rule 3).
  */
-export const FIELD_LIST_VERSION = 9;
+export const FIELD_LIST_VERSION = 14;
 export const BUNDLE_FORMAT = 1;
 /** One constant: the pool serves only the vocabulary version the client holds. */
 export { VOCAB_VERSION };
@@ -115,7 +130,25 @@ export interface SkeletonTool {
   argValues?: SkeletonArgValue[];
   /** What changed from the previous call of the same tool in the same prompt (layer 1), a sorted set of `CHANGE_KINDS` members. Absent on the first such call and on a call captured before it. */
   changeKind?: Array<ChangeKind | typeof OTHER>;
+  /** The name tokens of the call's values (layer 2), sorted by kind and name: file, directory, and variable names, flag values that are names, a custom agent's name. Each passed the one gate (`wireName`); never a value. Absent when none is sent. */
+  names?: SkeletonArgName[];
+  /** A `count` bucket of the name tokens the call held that were not sent: one the redactor changes, an exclusion term matches, or that has no name shape. Absent when none was dropped; never the names. */
+  namesDropped?: number;
+  /** The old and new text of an Edit (one pair), a MultiEdit (one pair per edit, in order), or a Write (a new digest only), each a digest of the exact text, plain so the same text matches across sessions. Never the text. Absent on any other call. */
+  digests?: SkeletonDigest[];
+  /** One template per shell command of the call (layer 3), in the order the commands run: its program, subcommand, and flags, and every literal argument as a slot of `TEMPLATE_SLOTS`. Each kept word passed the one gate (`wireName`, `wireFlag`); never an argument. Absent when none is sent. */
+  templates?: string[];
+  /** A `count` bucket of the templates the call held that were not sent: one with a kept word the redactor changes, an exclusion term matches, or that has no name shape. Absent when none was dropped; never the templates. */
+  templatesDropped?: number;
+  /** What an edit did (layer 3), a sorted set of `DIFF_SHAPES` members: the shape of the change and never its text. Absent for a call that is no edit and for one that changed nothing. */
+  diffShape?: Array<DiffShape | typeof OTHER>;
   steps: SkeletonStep[];
+}
+
+/** One edit's digests: the first 32 hex digits of the SHA-256 of the exact UTF-8 text. A Write has `new` alone, never the digest of an empty string for `old`. */
+export interface SkeletonDigest {
+  old?: string;
+  new: string;
 }
 
 /** One sent key's value features as the wire holds them: each a closed-list member, or `other` for one this reader does not know. */
@@ -126,6 +159,12 @@ export interface SkeletonArgFeature {
   extension?: ExtensionClass | typeof OTHER;
   dirKind?: DirectoryKind | typeof OTHER;
   patternFeatures?: Array<PatternFeature | typeof OTHER>;
+}
+
+/** One name token as the wire holds it: its kind from the closed list (`other` for one this reader does not know) and the name as sent, which has the shape of a name (`other` when it has none). */
+export interface SkeletonArgName {
+  kind: NameKind | typeof OTHER;
+  name: string;
 }
 
 /** One sent key's closed value as the wire holds it, or `other` for one off the list this reader holds. */
@@ -166,6 +205,19 @@ export type Team = (typeof TEAMS)[number];
 /** Whether the repository is public or private (an operator's setting, read locally, never looked up). */
 export const REPO_VISIBILITIES = ['public', 'private', 'unknown'] as const;
 export type RepoVisibility = (typeof REPO_VISIBILITIES)[number];
+
+/** Where a session ran, as a trusted machine states it for a batch it admitted: the five host classes an enrollment knows (`HOST_CLASSES` in `machine.ts`, not imported: the pool bundles this file). */
+export const CLAIMED_HOST_CLASSES = ['local', 'vps', 'cloud', 'ci', 'hosted'] as const;
+export type ClaimedHostClass = (typeof CLAIMED_HOST_CLASSES)[number];
+/** What started the session, as an enrollment declares it. */
+export const CLAIMED_LAUNCHERS = ['interactive', 'orchestrated', 'scheduled', 'ci', 'hosted-run', 'unknown'] as const;
+export type ClaimedLauncher = (typeof CLAIMED_LAUNCHERS)[number];
+
+/** The host class and launcher the trusted machine states for a batch a cloud VM held: a claim of the depositor's own machine, never a fact the pool stamped. `other` is a value this reader does not know. */
+export interface Claimed {
+  hostClass: ClaimedHostClass | typeof OTHER;
+  launcher: ClaimedLauncher | typeof OTHER;
+}
 
 /** What the pool can state about whom a deposit covers. It is not a filter: no read uses it. Anything not read locally is `unknown`. */
 export interface Coverage {
@@ -241,6 +293,22 @@ export interface DeltaEntry {
   change: number;
 }
 
+/** Whether a recommendation reached the asker (`shown`) or was withheld by the holdback (`held`). The local row's arm, as the closed list holds it. */
+export const RECOMMENDATION_ARMS = ['shown', 'held'] as const;
+export type RecommendationArm = (typeof RECOMMENDATION_ARMS)[number];
+
+/**
+ * One recommendation of the session as the local row holds it: its `id`, the `arm` it was drawn into, the `poolVersion` it answered from, and the window of calls it covers, `from` up to but not including `to`, as positions in the
+ * main run's calls that are not sidechain (the line the local consequence window reads). It holds no text, query, or evidence. `other` is an arm this reader does not know.
+ */
+export interface SkeletonRecommendation {
+  id: string;
+  arm: RecommendationArm | typeof OTHER;
+  poolVersion: string;
+  from: number;
+  to: number;
+}
+
 export interface SessionSkeleton {
   format: SkeletonFormat;
   /** The vocabulary version the client built the batch under: stored with it, so a read can tell a batch of an older list from a current one. */
@@ -253,8 +321,12 @@ export interface SessionSkeleton {
   transcripts: SkeletonTranscript[];
   /** One for the batch: a hash of the main transcript's non-null call durations in call order, only with `MIN_TIMED_CALLS` of them; a subagent's calls never join it. */
   timingPrint: string | null;
+  /** Only on a batch a trusted machine admitted from a held branch: the machine writes it from its own enrollment record, never the client that built the batch. */
+  claimed?: Claimed;
   /** The batch's client-built delta entries (Section 2, "Deltas"): changes between the client's own before and after windows, each carried once, by the batch of the session that filled the after window. */
   deltas: DeltaEntry[];
+  /** The recommendations the main session was shown or held back from (format 6), in window order. Absent when it had none, and a pool reads absent as unknown exposure, never as unexposed. */
+  recommendations?: SkeletonRecommendation[];
 }
 
 /** A usage category's `tokens` bucket, or null when the record says the source never recorded it. A record that predates `usageObserved` reads every category as observed. */
@@ -351,14 +423,17 @@ export const OPEN_GATE: WireGate = { redact: (text) => text, terms: [] };
 /** The redactor leaves the name and each of its underscore-delimited parts as they are: `_` is a word character to it, so a host inside `mcp__git.acme.internal__run` is invisible to a pass over the whole name. */
 const unchanged = (gate: WireGate, name: string): boolean => gate.redact(name) === name && name.split(/_+/).every((part) => gate.redact(part) === part);
 
+/** Whether a name clears the one gate: it has the name shape, the redactor leaves it as it is, and it holds none of the exclusion terms. A name token that is really the word `private` passes; only this says a name was refused. */
+const passesGate = (gate: WireGate, name: string, hasShape: (name: string) => boolean): boolean => {
+  const lower = name.toLowerCase();
+  return hasShape(name) && unchanged(gate, name) && !gate.terms.some((term) => term !== '' && lower.includes(term.toLowerCase()));
+};
+
 /**
  * A name as the wire holds it: the value itself, or `private` when it counts as redacted. A value counts as redacted when the redactor changes it, it holds an exclusion term, it fails the name shape, or it is over
  * `NAME_MAX` characters, because a secret, an employer's name, or a mis-parsed command is not a name and nothing downstream can take it back. `keys` (t870) sends its names through this same function.
  */
-export const wireName = (gate: WireGate, name: string, hasShape: (name: string) => boolean = isWireName): string => {
-  const lower = name.toLowerCase();
-  return hasShape(name) && unchanged(gate, name) && !gate.terms.some((term) => term !== '' && lower.includes(term.toLowerCase())) ? name : PRIVATE;
-};
+export const wireName = (gate: WireGate, name: string, hasShape: (name: string) => boolean = isWireName): string => (passesGate(gate, name, hasShape) ? name : PRIVATE);
 
 const FLAG_DASHES = /^-{1,2}/;
 const SHORT_FLAG = /^-[A-Za-z]$/;
@@ -414,6 +489,57 @@ export const wireValues = (stored: readonly ArgValue[] | undefined, sent: Readon
 
 /** A call's change kinds as the wire sends them: the closed-list members, in the list's order. */
 export const wireChange = (stored: readonly ChangeKind[] | undefined): ChangeKind[] => CHANGE_KINDS.filter((kind) => stored?.includes(kind) === true);
+
+/** A call's diff shapes as the wire sends them: the closed-list members, in the list's order. */
+export const wireDiffShape = (stored: readonly DiffShape[] | undefined): DiffShape[] => DIFF_SHAPES.filter((shape) => stored?.includes(shape) === true);
+
+/**
+ * A call's name tokens as the wire sends them (layer 2): every stored token whose kind is on the closed list, through the one gate (`wireName`): a token the operator's exclusion terms or the redactor's secret shapes match, or that has no name shape,
+ * is dropped and counted in `dropped`. No floor, no threshold: a name is sent as it is.
+ */
+export const wireNames = (stored: readonly ArgName[] | undefined, gate: WireGate): { names: ArgName[]; dropped: number } => {
+  const known = (stored ?? []).filter(({ kind }) => NAME_KINDS.includes(kind));
+  const names = known.filter(({ name }) => passesGate(gate, name, isWireName));
+  return { names, dropped: known.length - names.length };
+};
+
+/** A digest as capture writes it: the first 32 hex digits of a SHA-256, lowercase. */
+const DIGEST = /^[0-9a-f]{32}$/;
+
+/** A call's edit digests as the wire sends them: a pair whose digest is not that shape is dropped whole, so a corrupt store row costs the pair and never the deposit. */
+export const wireDigests = (stored: readonly EditDigest[] | undefined): SkeletonDigest[] =>
+  (stored ?? []).filter((pair) => DIGEST.test(pair.new) && (pair.old === undefined || DIGEST.test(pair.old))).map((pair) => (pair.old === undefined ? { new: pair.new } : { old: pair.old, new: pair.new }));
+const TEMPLATE_SLOT_LIST: readonly string[] = TEMPLATE_SLOTS;
+/**
+ * Whether every word of a template is one the wire may carry: a slot of `TEMPLATE_SLOTS`, the `--` marker, a flag with a slot joined to it, a flag, or a name (the program or subcommand), the last two as the caller judges them. A template is a single line of words
+ * set apart by one space, since no name or flag holds a space.
+ */
+const templateHolds = (template: string, name: (word: string) => boolean, flag: (word: string) => boolean): boolean =>
+  template.split(' ').every((word) => {
+    if (TEMPLATE_SLOT_LIST.includes(word) || word === '--') return true;
+    if (!word.startsWith('-')) return name(word);
+    const joined = word.indexOf('=');
+    return joined < 0 ? flag(word) : flag(word.slice(0, joined)) && TEMPLATE_SLOT_LIST.includes(word.slice(joined + 1));
+  });
+
+/** Whether a received template has the shape the wire sends: the pool's check, which holds no operator terms and no redactor. */
+export const isWireTemplate = (template: string): boolean => templateHolds(template, isWireName, isWireFlag);
+
+/**
+ * A call's command templates as the wire sends them (layer 3): every stored template whose kept words (program, subcommand, flags) all clear the one gate, as a name or a flag does. A template with a word the redactor changes, an exclusion term matches, or that
+ * has no name shape is dropped whole and counted in `dropped`. No floor, no threshold: a template is sent as it is, and a literal is only ever a slot.
+ */
+export const wireTemplates = (stored: readonly string[] | undefined, gate: WireGate): { templates: string[]; dropped: number } => {
+  const known = stored ?? [];
+  const templates = known.filter((template) =>
+    templateHolds(
+      template,
+      (word) => wireName(gate, word) !== PRIVATE,
+      (flag) => wireFlag(gate, flag) !== PRIVATE,
+    ),
+  );
+  return { templates, dropped: known.length - templates.length };
+};
 
 /** The basename of a program as capture read it: a path never goes on the wire. */
 const basenameOf = (program: string): string => program.replace(/^.*[\\/]/, '');
@@ -650,6 +776,10 @@ const transcriptOf = (
     const argFeatures = wireFeatures(tool.argFeatures, sent);
     const argValues = wireValues(tool.argValues, sent, steps[0]?.native);
     const changeKind = wireChange(tool.changeKind);
+    const { names, dropped: namesDropped } = wireNames(tool.names, gate);
+    const digests = wireDigests(tool.digests);
+    const { templates, dropped: templatesDropped } = wireTemplates(tool.templates, gate);
+    const diffShape = wireDiffShape(tool.diffShape);
     steppedTools.push({
       side,
       prompt: promptPosition,
@@ -664,6 +794,12 @@ const transcriptOf = (
       ...(argFeatures.length === 0 ? {} : { argFeatures }),
       ...(argValues.length === 0 ? {} : { argValues }),
       ...(changeKind.length === 0 ? {} : { changeKind }),
+      ...(names.length === 0 ? {} : { names }),
+      ...(namesDropped === 0 ? {} : { namesDropped: bucketOf('count', namesDropped) }),
+      ...(digests.length === 0 ? {} : { digests }),
+      ...(templates.length === 0 ? {} : { templates }),
+      ...(templatesDropped === 0 ? {} : { templatesDropped: bucketOf('count', templatesDropped) }),
+      ...(diffShape.length === 0 ? {} : { diffShape }),
       steps,
     });
   }
@@ -689,6 +825,15 @@ const transcriptOf = (
   return { merkleRoot: root.merkleRoot, leaves: root.leaves, harness, frame: transcriptFrame, frames, spawnedIn: spawner?.index ?? null, prompts: framedPrompts, tools: steppedTools };
 };
 
+/**
+ * The recommendations of one session, from the local rows after `deriveConsequences` has given each its window. Only a row that showed or withheld something is carried: a miss recommended nothing, so it is neither shown nor held, and
+ * a row with no window has no calls to place. They go in window order, then by id, so one store builds one batch.
+ */
+export const recommendationsOf = (recalls: readonly Recall[], session: string): SkeletonRecommendation[] =>
+  recalls
+    .flatMap(({ sid, id, arm, poolVersion, answer, consequence }) => (sid === session && answer.kind === 'hit' && consequence !== undefined ? [{ id, arm, poolVersion, from: consequence.window.from, to: consequence.window.to }] : []))
+    .sort((a, b) => a.from - b.from || a.to - b.to || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
 /** The hash a batch's timing print is made with, over the durations in call order: the client's `contentHash` (D1's `hP`). */
 export type Print = (durations: readonly number[]) => string;
 
@@ -696,7 +841,7 @@ export type Print = (durations: readonly number[]) => string;
  * The skeleton of a session; null when any record of it was captured before steps and frames, or a transcript of it has no root, which holds no closed reading to send. The batch holds the main
  * transcript's run first, then each subagent's as its own run; its `id` is the main session's, and its one `timingPrint` is over the main transcript's calls alone.
  */
-export const skeletonOf = (records: SessionRecords, id: string, read: ShellReader, print: Print, deltas: readonly DeltaEntry[] = [], gate: WireGate = OPEN_GATE, coverage: Coverage = NO_COVERAGE): SessionSkeleton | null => {
+export const skeletonOf = (records: SessionRecords, id: string, read: ShellReader, print: Print, deltas: readonly DeltaEntry[] = [], gate: WireGate = OPEN_GATE, coverage: Coverage = NO_COVERAGE, recommendations: readonly SkeletonRecommendation[] = []): SessionSkeleton | null => {
   const mainTools = byCall(records.transcripts[0]?.tools ?? []);
   const places = records.transcripts.map(({ tools }) => placesOf(tools));
   const spawners = places[0]?.calls ?? new Map<number, number>();
@@ -731,7 +876,7 @@ export const skeletonOf = (records: SessionRecords, id: string, read: ShellReade
     transcripts.push(transcript);
   }
   const durations = mainTools.flatMap(({ durationMs }) => (durationMs === null ? [] : [durationMs]));
-  return { format: SKELETON_FORMAT, vocabVersion: VOCAB_VERSION, fieldsVersion: FIELD_LIST_VERSION, id, transcripts, timingPrint: durations.length < MIN_TIMED_CALLS ? null : print(durations), deltas: [...deltas] };
+  return { format: SKELETON_FORMAT, vocabVersion: VOCAB_VERSION, fieldsVersion: FIELD_LIST_VERSION, id, transcripts, timingPrint: durations.length < MIN_TIMED_CALLS ? null : print(durations), deltas: [...deltas], ...(recommendations.length === 0 ? {} : { recommendations: recommendations.map((entry) => ({ ...entry })) }) };
 };
 
 /**
@@ -811,15 +956,15 @@ const unknownValue = (held: Collected, at: string, sent: string): typeof OTHER =
 /** The fields a client may send a literal beside (`<field>Literal`) when the field itself says `other`: the enumerated fields, whose values a closed list holds. */
 export const ENUMERATED_FIELDS: ReadonlySet<string> = new Set(['harness', 'harnessVersion', 'model', 'effort', 'platform', 'shell', 'size', 'languages', 'frameworks', 'language', 'languageShare', 'cls', 'status', 'action', 'native', 'agentType', 'program', 'sub', 'flags', 'registry', 'name', 'version', 'server', 'tool', 'skill', 'host', 'deltaKind', 'field', 'metric', 'intervention']);
 /**
- * The fields that may be absent at formats 3 and 4 (a format 3 batch reads `OPTIONAL.tool` less `FORMAT_4_TOOL_FIELDS`), by the level of the batch that holds them. An absent one reads as null, or as empty for a list, exactly as a sent null does, so a batch with all of them left out is
+ * The fields that may be absent at formats 3, 4, and 5 (a format 4 batch reads `OPTIONAL.tool` less `FORMAT_5_TOOL_FIELDS`, and a format 3 batch also less `FORMAT_4_TOOL_FIELDS`), by the level of the batch that holds them. An absent one reads as null, or as empty for a list, exactly as a sent null does, so a batch with all of them left out is
  * served from what remains. A field the cells need to be sound (a harness, a status, a bucket of tokens) is never here.
  */
 export const OPTIONAL = {
-  batch: ['timingPrint', 'deltas'],
+  batch: ['timingPrint', 'deltas', 'claimed', 'recommendations'],
   frame: ['harnessVersion', 'model', 'effort', 'day', 'shell', 'reach', 'repoKey', 'orgSize', 'team', 'repoVisibility', 'hour'],
   stack: ['size', 'languageShares'],
   prompt: ['wallSec', 'explore', 'usageResponses', 'intervention'],
-  tool: ['prompt', 'durationMs', 'errorCode', 'recoveryCalls', 'keys', 'keysDropped', 'targetClass', 'argClass', 'argFeatures', 'argValues', 'changeKind'],
+  tool: ['prompt', 'durationMs', 'errorCode', 'recoveryCalls', 'keys', 'keysDropped', 'targetClass', 'argClass', 'argFeatures', 'argValues', 'changeKind', 'names', 'namesDropped', 'templates', 'templatesDropped', 'diffShape', 'digests'],
   step: ['tokens', 'ms', 'allocated', 'parent', 'skill', 'edges', 'remainingTokens'],
   transcript: ['spawnedIn'],
 } as const satisfies { readonly [level: string]: readonly string[] };
@@ -967,6 +1112,12 @@ const parseReach = (held: Collected, value: unknown, at: string): Reach => {
   };
   if (!filled && reach.mcp.length + reach.skills.length + reach.plugins.length > 0) throw new Refused(at, 'an unfilled reach lists nothing');
   return reach;
+};
+
+/** A claim, each member held to its closed list. */
+const parseClaimed = (held: Collected, value: unknown, at: string): Claimed => {
+  const raw = fieldsOf(held, value, at, ['hostClass', 'launcher']);
+  return { hostClass: oneOf(held, CLAIMED_HOST_CLASSES, raw.hostClass, under(at, 'hostClass')), launcher: oneOf(held, CLAIMED_LAUNCHERS, raw.launcher, under(at, 'launcher')) };
 };
 
 /** Sixteen lowercase hex characters and nothing else, so no path or remote text can ride in a repo key. */
@@ -1210,12 +1361,42 @@ const parseValue = (held: Collected, keys: SentKeys, native: string | undefined,
   return { key, enumValue: key !== OTHER && isClosedValue(native, key, enumValue) ? enumValue : unknownValue(held, under(at, 'enumValue'), enumValue) };
 };
 
-/** The tool fields a format 3 batch may hold: format 4's three are fields it does not know. */
-const FORMAT_3_TOOL: readonly string[] = OPTIONAL.tool.filter((name) => !FORMAT_4_TOOL_FIELDS.some((added) => added === name));
+/** The tool fields a format 5 or 6 batch may hold: format 7's are fields it does not know. */
+const FORMAT_6_TOOL: readonly string[] = OPTIONAL.tool.filter((name) => !FORMAT_7_TOOL_FIELDS.some((added) => added === name));
+/** The tool fields a format 4 batch may hold: format 5's are fields it does not know. */
+const FORMAT_4_TOOL: readonly string[] = FORMAT_6_TOOL.filter((name) => !FORMAT_5_TOOL_FIELDS.some((added) => added === name));
+/** The tool fields a format 3 batch may hold: format 4's three are fields it does not know too. */
+const FORMAT_3_TOOL: readonly string[] = FORMAT_4_TOOL.filter((name) => !FORMAT_4_TOOL_FIELDS.some((added) => added === name));
 
+/** A name token: its kind off the closed list, and a name that has the shape of one. Either off its list or shape reads as `other` and goes to the bag, as any value off a list does. */
+const parseName = (held: Collected, value: unknown, at: string): SkeletonArgName => {
+  const raw = fieldsOf(held, value, at, ['kind', 'name']);
+  const name = textOf(raw.name, under(at, 'name'));
+  return { kind: oneOf(held, NAME_KINDS, raw.kind, under(at, 'kind')), name: isWireName(name) ? name : unknownValue(held, under(at, 'name'), name) };
+};
+
+/** A digest is the shape capture writes, or the batch is refused: unlike a name, no newer client's value is a digest of another shape, and the field holds only what a hash can. */
+const digestOf = (value: unknown, at: string): string => {
+  const digest = textOf(value, at);
+  if (!DIGEST.test(digest)) throw new Refused(at, 'not a digest');
+  return digest;
+};
+
+const parseDigest = (held: Collected, value: unknown, at: string): SkeletonDigest => {
+  const raw = fieldsOf(held, value, at, ['new'], ['old']);
+  const old = raw.old === undefined ? undefined : digestOf(raw.old, under(at, 'old'));
+  return { ...(old === undefined ? {} : { old }), new: digestOf(raw.new, under(at, 'new')) };
+};
+
+const parseTemplate = (held: Collected, value: unknown, at: string): string => {
+  const template = textOf(value, at);
+  return isWireTemplate(template) ? template : unknownValue(held, at, template);
+};
 const parseTool = (held: Collected, harness: WireHarness, value: unknown, at: string): SkeletonTool => {
   const layered = held.format >= 4;
-  const raw = fieldsOf(held, value, at, ['side', 'status', 'steps'], layered ? OPTIONAL.tool : FORMAT_3_TOOL);
+  const named = held.format >= 5;
+  const digested = held.format >= DIGEST_FORMAT;
+  const raw = fieldsOf(held, value, at, ['side', 'status', 'steps'], digested ? OPTIONAL.tool : named ? FORMAT_6_TOOL : layered ? FORMAT_4_TOOL : FORMAT_3_TOOL);
   const status = oneOf(held, STATUSES, raw.status, under(at, 'status'));
   const errorCode = parseErrorCode(held, status, raw.errorCode, under(at, 'errorCode'));
   const recoveryCalls = parseRecovery(held, status, raw.recoveryCalls, under(at, 'recoveryCalls'));
@@ -1228,6 +1409,12 @@ const parseTool = (held: Collected, harness: WireHarness, value: unknown, at: st
   const argFeatures = !layered || raw.argFeatures === undefined ? undefined : listOf(raw.argFeatures, under(at, 'argFeatures'), (entry, entryAt) => parseFeature(held, sentKeys, entry, entryAt));
   const argValues = !layered || raw.argValues === undefined ? undefined : listOf(raw.argValues, under(at, 'argValues'), (entry, entryAt) => parseValue(held, sentKeys, steps[0]?.native, entry, entryAt));
   const changeKind = !layered || raw.changeKind === undefined ? undefined : listOf(raw.changeKind, under(at, 'changeKind'), (entry, entryAt) => oneOf(held, CHANGE_KINDS, entry, entryAt));
+  const names = !named || raw.names === undefined ? undefined : listOf(raw.names, under(at, 'names'), (entry, entryAt) => parseName(held, entry, entryAt));
+  const namesDropped = !named || raw.namesDropped === undefined ? undefined : bucketIn('count', raw.namesDropped, under(at, 'namesDropped'));
+  const digests = !digested || raw.digests === undefined ? undefined : listOf(raw.digests, under(at, 'digests'), (entry, entryAt) => parseDigest(held, entry, entryAt));
+  const templates = !named || raw.templates === undefined ? undefined : listOf(raw.templates, under(at, 'templates'), (entry, entryAt) => parseTemplate(held, entry, entryAt));
+  const templatesDropped = !named || raw.templatesDropped === undefined ? undefined : bucketIn('count', raw.templatesDropped, under(at, 'templatesDropped'));
+  const diffShape = !named || raw.diffShape === undefined ? undefined : listOf(raw.diffShape, under(at, 'diffShape'), (entry, entryAt) => oneOf(held, DIFF_SHAPES, entry, entryAt));
   return {
     side: booleanOf(raw.side, under(at, 'side')),
     prompt: orNull(raw.prompt, under(at, 'prompt'), countOf),
@@ -1242,6 +1429,12 @@ const parseTool = (held: Collected, harness: WireHarness, value: unknown, at: st
     ...(argFeatures === undefined ? {} : { argFeatures }),
     ...(argValues === undefined ? {} : { argValues }),
     ...(changeKind === undefined ? {} : { changeKind }),
+    ...(names === undefined ? {} : { names }),
+    ...(namesDropped === undefined ? {} : { namesDropped }),
+    ...(digests === undefined ? {} : { digests }),
+    ...(templates === undefined ? {} : { templates }),
+    ...(templatesDropped === undefined ? {} : { templatesDropped }),
+    ...(diffShape === undefined ? {} : { diffShape }),
     steps,
   };
 };
@@ -1282,9 +1475,9 @@ const parseTranscript = (held: Collected, value: unknown, at: string): SkeletonT
   const spawnedIn = orNull(raw.spawnedIn, under(at, 'spawnedIn'), countOf);
   const prompts = listOf(raw.prompts, under(at, 'prompts'), (entry, entryAt) => parsePrompt(held, entry, entryAt));
   const tools = listOf(raw.tools, under(at, 'tools'), (entry, entryAt) => parseTool(held, harness, entry, entryAt));
-  // What followed a call is read off the calls themselves, so a list that disagrees with them is a wrong deposit, not a new reading.
+  // What followed a call is read off the calls themselves, so a list that disagrees with them is a wrong deposit, not a new reading. A batch of a format before 6 was built when a failed edit still counted, so it is checked with that rule.
   tools.forEach((tool, index) => {
-    if (tool.recoveryCalls !== undefined && JSON.stringify(tool.recoveryCalls) !== JSON.stringify(recoveryCallsOf(tools, index))) throw new Refused(`${at}.tools[${String(index)}].recoveryCalls`, 'not what followed the call');
+    if (tool.recoveryCalls !== undefined && JSON.stringify(tool.recoveryCalls) !== JSON.stringify(recoveryCallsOf(tools, index, held.format < EXPOSURE_FORMAT))) throw new Refused(`${at}.tools[${String(index)}].recoveryCalls`, 'not what followed the call');
   });
   return { merkleRoot, leaves, harness, frame, frames, spawnedIn, prompts, tools };
 };
@@ -1335,6 +1528,24 @@ export interface ParsedSkeleton {
 }
 
 const VOCAB_TEXT = /^[0-9A-Za-z._-]{1,32}$/;
+/** The deposit time of the pool a recommendation answered from: an instant, or a version word. */
+const POOL_VERSION = /^[0-9A-Za-z:.+_-]{1,40}$/;
+
+/** The batch fields a batch of format 5 or older may hold: format 6's are fields it does not know. */
+const FORMAT_5_BATCH: readonly string[] = OPTIONAL.batch.filter((name) => !FORMAT_6_BATCH_FIELDS.some((added) => added === name));
+
+/** One recommendation: a hash id, its arm off the closed list, the version it answered from, and a window that is two counts in order. Past-the-calls is checked once the transcripts are known. */
+const parseRecommendation = (held: Collected, value: unknown, at: string): SkeletonRecommendation => {
+  const raw = fieldsOf(held, value, at, ['id', 'arm', 'poolVersion', 'from', 'to']);
+  const id = textOf(raw.id, under(at, 'id'));
+  if (!ID.test(id)) throw new Refused(under(at, 'id'), 'not a hash');
+  const poolVersion = textOf(raw.poolVersion, under(at, 'poolVersion'));
+  if (!POOL_VERSION.test(poolVersion)) throw new Refused(under(at, 'poolVersion'), 'not a version');
+  const from = countOf(raw.from, under(at, 'from'));
+  const to = countOf(raw.to, under(at, 'to'));
+  if (to < from) throw new Refused(under(at, 'to'), 'ends before it starts');
+  return { id, arm: oneOf(held, RECOMMENDATION_ARMS, raw.arm, under(at, 'arm')), poolVersion, from, to };
+};
 
 /** The skeleton in `value`, rebuilt from the fields read, with the bag of what was set aside; else the first field that is a shape error, and why. */
 export const parseSkeleton = (value: unknown): ParsedSkeleton | Refusal => {
@@ -1342,7 +1553,9 @@ export const parseSkeleton = (value: unknown): ParsedSkeleton | Refusal => {
   try {
     // The earlier forms are named, since their fields would otherwise read as a list of strangers; any other format is a form this reader does not know.
     if (isFields(value) && typeof value.format === 'number' && value.format < READ_FORMATS[0]) throw new Refused('format', `the format ${String(value.format)} form is no longer read; send format ${String(SKELETON_FORMAT)}`);
-    const raw = fieldsOf(held, value, '', ['format', 'vocabVersion', 'fieldsVersion', 'id', 'transcripts'], OPTIONAL.batch);
+    // The format is read first, since which batch fields it defines depends on it.
+    const declared = isFields(value) ? READ_FORMATS.find((known) => known === value.format) : undefined;
+    const raw = fieldsOf(held, value, '', ['format', 'vocabVersion', 'fieldsVersion', 'id', 'transcripts'], declared !== undefined && declared < EXPOSURE_FORMAT ? FORMAT_5_BATCH : OPTIONAL.batch);
     const format = READ_FORMATS.find((known) => known === raw.format);
     if (format === undefined) throw new Refused('format', 'not a format this version reads');
     held.format = format;
@@ -1354,6 +1567,12 @@ export const parseSkeleton = (value: unknown): ParsedSkeleton | Refusal => {
     const deltas = listOrEmpty(raw.deltas, 'deltas', (entry, entryAt) => parseDelta(held, entry, entryAt));
     const transcripts = listOf(raw.transcripts, 'transcripts', (entry, entryAt) => parseTranscript(held, entry, entryAt));
     if (transcripts.length === 0) throw new Refused('transcripts', 'empty');
+    const recommendations = format < EXPOSURE_FORMAT ? [] : listOrEmpty(raw.recommendations, 'recommendations', (entry, entryAt) => parseRecommendation(held, entry, entryAt));
+    // Positions are the only ordinals on the wire, so a window must lie within the main run's own calls: the ones that are not sidechain, which is the line the windows were counted on.
+    const mainCalls = (transcripts[0]?.tools ?? []).filter(({ side }) => !side).length;
+    recommendations.forEach(({ to }, index) => {
+      if (to > mainCalls) throw new Refused(`recommendations[${String(index)}].to`, 'past the main run\'s calls');
+    });
     // A counting batch is what lifts the fetch cap, so a deposit has to hold something to derive from.
     if (transcripts.every(({ prompts, tools }) => prompts.length === 0 && tools.length === 0)) throw new Refused('transcripts', 'holds no prompt and no tool');
     // The main run's calls make the one print, so it exists exactly when the main run holds enough timed calls; a subagent's calls never decide it.
@@ -1414,7 +1633,8 @@ export const parseSkeleton = (value: unknown): ParsedSkeleton | Refusal => {
         before += steps.length;
       });
     });
-    return { ok: true, skeleton: { format, vocabVersion, fieldsVersion, id, transcripts, timingPrint, deltas }, extensions: held.extensions, others: held.others };
+    const claimed = raw.claimed === undefined ? {} : { claimed: parseClaimed(held, raw.claimed, 'claimed') };
+    return { ok: true, skeleton: { format, vocabVersion, fieldsVersion, id, transcripts, timingPrint, deltas, ...claimed, ...(recommendations.length === 0 ? {} : { recommendations }) }, extensions: held.extensions, others: held.others };
   } catch (error) {
     if (error instanceof Refused) return { ok: false, field: error.field, reason: error.reason };
     throw error;
