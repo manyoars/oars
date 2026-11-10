@@ -20,6 +20,10 @@ const S2 = '22222222-1111-4111-8111-111111111111';
 const M1 = 'a1'.repeat(32);
 const M2 = 'b2'.repeat(32);
 
+const KEY_ID = keyIdOf(BUYER_KEY);
+const CODEX = 'codex-cccc3333-3333-4333-8333-333333333333';
+const hashOf = (text: string): string => createHash('sha256').update(text).digest('hex');
+
 interface Fixture {
   root: string;
   owners: string;
@@ -27,9 +31,13 @@ interface Fixture {
 }
 
 /** A pack as `buildPack` leaves it (pack.json, manifest.jsonl, sessions/<match id>/main.jsonl) and the operator's index beside the owners file. */
-const fixture = (extra: { built?: string; keyId?: string; parent?: string } = {}): Fixture => {
+const fixture = (extra: { built?: string; keyId?: string; parent?: string; git?: boolean; objections?: readonly object[]; packJson?: object; sessions?: readonly [string, string] } = {}): Fixture => {
   const root = mkdtempSync(join(tmpdir(), 'oars-deliver-'));
   dirs.push(root);
+  if (extra.git === true) mkdirSync(join(root, '.git'));
+  const [first, second] = extra.sessions ?? [S1, S2];
+  const objections = extra.objections?.map((row) => `${JSON.stringify(row)}\n`).join('');
+  if (objections !== undefined) writeFileSync(join(root, 'objections.jsonl'), objections);
   const owners = join(root, 'owners.json');
   writeFileSync(owners, '[]');
   const pack = join(extra.parent ?? root, 'lot-1');
@@ -37,9 +45,9 @@ const fixture = (extra: { built?: string; keyId?: string; parent?: string } = {}
   mkdirSync(join(pack, 'sessions', M2), { recursive: true });
   writeFileSync(join(pack, 'sessions', M1, 'main.jsonl'), '{"text":"ask Priya Raman about the schema"}\n');
   writeFileSync(join(pack, 'sessions', M2, 'main.jsonl'), '{"text":"run the build"}\n');
-  writeFileSync(join(pack, 'pack.json'), JSON.stringify({ built: extra.built ?? BUILT, keyId: extra.keyId ?? keyIdOf(BUYER_KEY) }));
+  writeFileSync(join(pack, 'pack.json'), JSON.stringify(extra.packJson ?? { built: extra.built ?? BUILT, keyId: extra.keyId ?? KEY_ID, objections: objections === undefined ? 'none' : hashOf(objections) }));
   writeFileSync(join(pack, 'manifest.jsonl'), [M1, M2].map((matchId) => `${JSON.stringify({ matchId })}\n`).join(''));
-  writeFileSync(join(root, 'index.jsonl'), [{ pack, session: S1, project: 'p', matchId: M1 }, { pack, session: S2, project: 'p', matchId: M2 }].map((row) => `${JSON.stringify(row)}\n`).join(''));
+  writeFileSync(join(root, 'index.jsonl'), [{ pack, session: first, project: 'p', matchId: M1 }, { pack, session: second, project: 'p', matchId: M2 }].map((row) => `${JSON.stringify(row)}\n`).join(''));
   return { root, owners, pack };
 };
 
@@ -60,7 +68,7 @@ describe('deliver (plan S5, Art. 15(1)(c) and 19)', () => {
   it('appends one row per session for the recipient, never the key', async () => {
     const f = fixture();
 
-    const written = await deliver(args(f));
+    const { rows: written } = await deliver(args(f));
 
     const keyId = createHash('sha256').update(BUYER_KEY).digest('hex').slice(0, 16);
     expect(rowsOf(f)).toEqual([
@@ -80,17 +88,23 @@ describe('deliver (plan S5, Art. 15(1)(c) and 19)', () => {
     ]);
   });
 
-  it('refuses a pack built before the newest objection, and writes nothing', async () => {
+  it('refuses a pack built before an objection that arrived after the build, and writes nothing', async () => {
     const f = fixture();
     writeFileSync(join(f.root, 'objections.jsonl'), `${JSON.stringify({ name: 'Priya Raman', received: '2026-06-11T09:00:00.000Z', scope: 'sale' })}\n`);
-    await expect(deliver(args(f))).rejects.toThrow(/built before the newest objection/);
+    await expect(deliver(args(f))).rejects.toThrow(/objections changed since the build: rebuild/);
     expect(() => readFileSync(join(f.root, 'deliveries.jsonl'))).toThrow();
   });
 
-  it('delivers a pack built after the newest objection', async () => {
+  it('refuses a pack built before an objection that arrived before the build but was recorded after it', async () => {
     const f = fixture();
     writeFileSync(join(f.root, 'objections.jsonl'), `${JSON.stringify({ name: 'Priya Raman', received: '2026-06-09T09:00:00.000Z', scope: 'sale' })}\n`);
-    expect(await deliver(args(f))).toHaveLength(2);
+    await expect(deliver(args(f))).rejects.toThrow(/objections changed since the build: rebuild/);
+    expect(() => readFileSync(join(f.root, 'deliveries.jsonl'))).toThrow();
+  });
+
+  it('delivers a pack built under the objections file as it is now', async () => {
+    const f = fixture({ objections: [{ name: 'Priya Raman', received: '2026-06-09T09:00:00.000Z', scope: 'sale' }] });
+    expect((await deliver(args(f))).rows).toHaveLength(2);
   });
 
   it('refuses a pack folder inside a git repository', async () => {
@@ -100,6 +114,61 @@ describe('deliver (plan S5, Art. 15(1)(c) and 19)', () => {
     const f = fixture({ parent });
     await expect(deliver(args(f))).rejects.toThrow(/inside a git repository/);
     expect(() => readFileSync(join(f.root, 'deliveries.jsonl'))).toThrow();
+  });
+
+  it('refuses the owners file in a git repository, with the pack outside, and writes nothing', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'oars-deliver-out-'));
+    dirs.push(outside);
+    const f = fixture({ git: true, parent: outside });
+    await expect(deliver(args(f))).rejects.toThrow(/owners file is inside a git repository/);
+    expect(() => readFileSync(join(f.root, 'deliveries.jsonl'))).toThrow();
+  });
+
+  it('refuses a folder with no pack.json, leaving deliveries.jsonl as it was', async () => {
+    const f = fixture();
+    writeFileSync(join(f.root, 'deliveries.jsonl'), '');
+    rmSync(join(f.pack, 'pack.json'));
+    await expect(deliver(args(f))).rejects.toThrow(/pack\.json is missing/);
+    expect(readFileSync(join(f.root, 'deliveries.jsonl'), 'utf8')).toBe('');
+  });
+
+  it('refuses a pack.json with no build time, leaving deliveries.jsonl as it was', async () => {
+    const f = fixture({ packJson: { keyId: KEY_ID, objections: 'none' } });
+    writeFileSync(join(f.root, 'deliveries.jsonl'), '');
+    await expect(deliver(args(f))).rejects.toThrow(/no build time/);
+    expect(readFileSync(join(f.root, 'deliveries.jsonl'), 'utf8')).toBe('');
+  });
+
+  it('refuses a manifest row with no match id, leaving deliveries.jsonl as it was', async () => {
+    const f = fixture();
+    writeFileSync(join(f.pack, 'manifest.jsonl'), `${JSON.stringify({ harness: 'codex' })}\n`);
+    writeFileSync(join(f.root, 'deliveries.jsonl'), '');
+    await expect(deliver(args(f))).rejects.toThrow(/row with no match id/);
+    expect(readFileSync(join(f.root, 'deliveries.jsonl'), 'utf8')).toBe('');
+  });
+
+  it('refuses a deliveries.jsonl line that is not a delivery, leaving the file as it was, and makes recipients exit 2', async () => {
+    const f = fixture();
+    const bad = `${JSON.stringify({ recipient: 'Acme Evals Inc.' })}\n`;
+    writeFileSync(join(f.root, 'deliveries.jsonl'), bad);
+    await expect(deliver(args(f))).rejects.toThrow(/not a delivery/);
+    expect(readFileSync(join(f.root, 'deliveries.jsonl'), 'utf8')).toBe(bad);
+    const printed: string[] = [];
+    expect(await main(['recipients', S1, '--owners', f.owners], { print: (text) => printed.push(text) })).toBe(2);
+    expect(printed.join('\n')).toMatch(/not a delivery/);
+  });
+
+  it('skips a (recipient, lot, match id) already recorded, and says how many', async () => {
+    const f = fixture();
+    await deliver(args(f));
+    const again = await deliver(args(f));
+    expect(again).toMatchObject({ rows: [], skipped: 2 });
+    expect(rowsOf(f)).toHaveLength(2);
+    const printed: string[] = [];
+    const io = { print: (text: string) => printed.push(text), now: () => new Date('2026-06-13T08:00:00.000Z') };
+    expect(await main(['--pack', f.pack, '--recipient', 'Acme Evals Inc.', '--license', 'term-sheet-v1', '--buyer-key', BUYER_KEY, '--owners', f.owners], io)).toBe(0);
+    expect(printed.join('\n')).toMatch(/2 already recorded/);
+    expect(rowsOf(f)).toHaveLength(2);
   });
 
   it('refuses a buyer key that is not the one the pack was built under', async () => {
@@ -161,6 +230,13 @@ describe('deliver recipients (Art. 15(1)(c) and 19)', () => {
     await deliver(args(f));
     const found = await recipientsOf(f.owners, 'priya raman');
     expect(found.map((row) => row.session)).toEqual([S1]);
+  });
+
+  it('answers a query by the bare transcript id of a delivered Codex session', async () => {
+    const f = fixture({ sessions: [CODEX, S2] });
+    await deliver(args(f));
+    const found = await recipientsOf(f.owners, 'cccc3333-3333-4333-8333-333333333333');
+    expect(found.map((row) => [row.recipient, row.matchId, row.session])).toEqual([['Acme Evals Inc.', M1, CODEX]]);
   });
 
   it('prints none and exits 0 for a session never delivered', async () => {

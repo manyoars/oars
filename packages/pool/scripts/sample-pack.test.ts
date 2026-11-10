@@ -1278,6 +1278,73 @@ describe('an objection by name (plan S5, Art. 21(1))', () => {
   });
 });
 
+describe('an objections line that cannot be read stops the run, naming the line and the field (plan S5)', () => {
+  const GOOD = { session: S(9), received: '2026-06-05T09:00:00.000Z', scope: 'sale' };
+  const refused = async (line: string, message: RegExp): Promise<void> => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    writeFileSync(join(f.root, 'objections.jsonl'), `${JSON.stringify(GOOD)}
+${line}
+`);
+    await expect(buildPack(f.runtime, options(f))).rejects.toThrow(message);
+  };
+
+  it('refuses a bare date for received: a pack built later that day must be told from one built before', async () => {
+    await refused(JSON.stringify({ session: S(2), received: '2026-06-05', scope: 'sale' }), /objections\.jsonl line 2 needs received to be an ISO date and time/);
+  });
+
+  it('refuses a line that is not JSON', async () => {
+    await refused('{"session": ', /objections\.jsonl line 2 is not JSON/);
+  });
+
+  it('refuses a scope outside sale, training, and all', async () => {
+    await refused(JSON.stringify({ session: S(2), received: '2026-06-05T09:00:00.000Z', scope: 'some' }), /objections\.jsonl line 2 needs scope to be one of/);
+  });
+
+  it('refuses an empty session', async () => {
+    await refused(JSON.stringify({ session: '', received: '2026-06-05T09:00:00.000Z', scope: 'sale' }), /objections\.jsonl line 2 needs session to be a session id/);
+  });
+
+  it('refuses a blank name', async () => {
+    await refused(JSON.stringify({ name: '   ', received: '2026-06-05T09:00:00.000Z', scope: 'sale' }), /objections\.jsonl line 2 needs name to be a person's name/);
+  });
+});
+
+describe('an objection by the bare Codex id, and the duplicate rule (plan S5, Art. 21(1))', () => {
+  const turns = (session: string, count: number): string[] => Array.from({ length: count }, (_, n) => [user(session, 2 * n + 1, `ask ${String(n)}`), assistant(session, 2 * n + 1, `answer ${String(n)}`)]).flat();
+  const replayable = (text: string): object => {
+    const value: unknown = JSON.parse(text);
+    return typeof value === 'object' && value !== null ? value : {};
+  };
+
+  it('keeps out a Codex session an objection names by its transcript id, without the harness prefix', async () => {
+    const f = fixture();
+    const runtime = await withCodex(f, codexRollout());
+    const owners = ownersAll(f);
+    objectTo(f, { session: CODEX_ID, received: '2026-06-05T09:00:00.000Z', scope: 'sale' });
+
+    const counts = await buildPack(runtime, options(f, { owners }));
+
+    expect(counts).toMatchObject({ emitted: 0, objected: 1 });
+  });
+
+  it('does not let an objected longer session drop its shorter replay as a duplicate', async () => {
+    const f = fixture();
+    const earlier = turns(S(1), 2);
+    const replay = earlier.map((text) => line({ ...replayable(text), sessionId: S(2) }));
+    f.write('-work-oars', S(1), earlier);
+    f.write('-work-oars', S(2), [...replay, ...turns(S(2), 2)]);
+    await stored(f);
+    objectTo(f, { session: S(2), received: '2026-06-05T09:00:00.000Z', scope: 'sale' });
+
+    const counts = await buildPack(f.runtime, options(f));
+
+    expect(counts).toMatchObject({ duplicate: 0, objected: 1, emitted: 1 });
+    expect(sessionsOf(f)).toEqual([S(1)]);
+  });
+});
+
 describe('the run record names the buyer key (plan S5)', () => {
   it('writes the first 16 hex of the key SHA-256 into pack.json, never the key', async () => {
     const f = fixture();
