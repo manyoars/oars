@@ -65,7 +65,7 @@ const tombstone = async (store: EraseStore, kind: 'raw-object' | 'deposit' | 'va
   await store.run('INSERT OR IGNORE INTO erasure_tombstones (kind, digest, reason, erased_on) VALUES (?, ?, ?, ?)', [kind, digest, reason, dayOf(now)]);
 };
 
-const audit = async (store: EraseStore, kind: 'raw-object' | 'row' | 'account', reason: ErasureReason, account: string, erased: Erased, now: Date): Promise<void> => {
+const audit = async (store: EraseStore, kind: 'raw-object' | 'row' | 'account' | 'close', reason: ErasureReason | 'account-close', account: string, erased: Erased, now: Date): Promise<void> => {
   await store.run('INSERT INTO erasure_audit (kind, reason, erased_on, rows_erased, objects_erased, account) VALUES (?, ?, ?, ?, ?, ?)', [kind, reason, dayOf(now), erased.rows, erased.objects, account]);
 };
 
@@ -243,6 +243,23 @@ export const eraseAccount = async (store: EraseStore, accountId: string, now: Da
   const erased = { rows, objects };
   await audit(store, 'account', 'lawful-request', account, erased, now);
   return erased;
+};
+
+/**
+ * Closes one account (covenant 6.1 and 7.2(a)): the time it closed is recorded, every token it holds stops working (the rows go), and every machine key moves to `revoked`. Sign-in, enrollment, and activation refuse it from then on (`account_closed`).
+ * Nothing is erased: its Deposits, raw objects, and the shared totals stay, and erasure is a separate request (`eraseAccount`). The first closed-at time stands, so a rerun changes nothing and writes no audit row; a run that stopped after the record finishes the revocations on the rerun.
+ * The record goes first, so no sign-in can mint a credential between the steps. An account the pool has never seen is an error, since closing a mistyped id would otherwise look like success.
+ */
+export const closeAccount = async (store: EraseStore, accountId: string, now: Date): Promise<Erased> => {
+  const account = nameOf(accountId, 'the account');
+  if ((await store.rows('SELECT 1 AS found FROM accounts WHERE id = ?', [account])).length === 0) throw new Error(`No account ${account} in the pool.`);
+  let rows = await store.run('UPDATE accounts SET closed_at = ? WHERE id = ? AND closed_at IS NULL', [now.getTime(), account]);
+  // An erased account's tokens already hold no credential (`erased:<rowid>`) and stay as the record that a sign-in happened.
+  rows += await store.run("DELETE FROM tokens WHERE account = ? AND hash NOT LIKE 'erased:%'", [account]);
+  rows += await store.run("UPDATE machines SET state = 'revoked' WHERE account = ? AND state <> 'revoked'", [account]);
+  const closed = { rows, objects: 0 };
+  if (rows > 0) await audit(store, 'close', 'account-close', account, closed, now);
+  return closed;
 };
 
 /** A raw object that holds the text the find looked for: its R2 key, its account, and its size as the ledger recorded it. Nothing of what the object says. */
