@@ -565,16 +565,23 @@ const repositoryRoot = async (git: Git, cwd: string): Promise<string | null> => 
   }
 };
 
-/** A remote URL can carry a user name or token (`https://user:token@host/...`); neither is a pointer. A form that is not a URL (`git@host:path`, a folder) is kept as written. */
-const withoutCredentials = (remote: string): string => {
+const REMOTE_PROTOCOLS: readonly string[] = ['http:', 'https:', 'ssh:', 'git:'];
+const SCP_REMOTE = /^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:(?!\/\/)[^\s]+$/;
+
+/**
+ * The remote as a buyer may read it, or null. A URL can carry a user name or token (`https://user:token@host/...`); neither is a pointer. Only a network URL or `user@host:path` is
+ * kept: a folder (`C:/Users/<name>/...`, `/home/<name>/...`) or a `file:` URL would put the operator's account name and home path into a manifest that the transcripts' masking never reaches.
+ */
+const publicRemote = (remote: string): string | null => {
+  if (SCP_REMOTE.test(remote)) return remote;
   try {
     const url = new URL(remote);
-    if (url.username === '' && url.password === '') return remote;
+    if (!REMOTE_PROTOCOLS.includes(url.protocol)) return null;
     url.username = '';
     url.password = '';
     return url.href;
   } catch {
-    return remote;
+    return null;
   }
 };
 
@@ -599,8 +606,11 @@ const startingCommit = async (git: Git, root: string, branches: readonly string[
 
 const pointerOf = async (git: Git, root: string, branches: readonly string[], tsFirst: string | null): Promise<RepositoryPointer | null> => {
   try {
-    const remote = withoutCredentials((await git(root, ['remote', 'get-url', 'origin'])).trim());
-    return remote === '' ? null : { remote, commit: await startingCommit(git, root, branches, tsFirst) };
+    const remote = publicRemote((await git(root, ['remote', 'get-url', 'origin'])).trim());
+    if (remote === null) return null;
+    const pointer = { remote, commit: await startingCommit(git, root, branches, tsFirst) };
+    // The row is written after the transcripts' scan, so the same test runs here: a remote that holds a key shape is no pointer.
+    return secretIn(JSON.stringify(pointer)) === undefined ? pointer : null;
   } catch {
     return null;
   }
