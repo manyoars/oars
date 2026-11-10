@@ -322,20 +322,22 @@ describe('GET /v1/clubs/consent', () => {
   });
 });
 
-/** A pool database for a route called directly, in which the reads that look for an existing row see nothing: the other request's insert has not happened yet when they run, and has when the write does. */
+/** A pool database for a route called directly, in which the reads that look for an existing row see nothing until the write has run: the other request's insert had not happened when they ran, and has when the write does. */
 const blind = (hidden: RegExp): PoolDb => {
   const base = poolDbOf(db);
   const real = new WeakMap<Bound, ReturnType<TestDb['prepare']>>();
+  let written = false;
   return {
     prepare: (sql) => ({
       bind: (...values): Bound => {
         const bound = base.prepare(sql).bind(...values);
-        const seen: Bound = hidden.test(sql) ? { ...bound, first: () => Promise.resolve(null) } : bound;
+        const seen: Bound = hidden.test(sql) && !written ? { ...bound, first: () => Promise.resolve(null) } : bound;
         real.set(seen, db.prepare(sql).bind(...values));
         return seen;
       },
     }),
     batch: async (statements) => {
+      written = true;
       const done = await db.batch(statements.map((statement) => real.get(statement)!));
       return (done as unknown[]).map((one) => ({ meta: { changes: Number(fieldOf(fieldOf(one, 'meta'), 'changes')) } }));
     },
