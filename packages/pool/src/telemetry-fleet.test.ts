@@ -179,6 +179,23 @@ describe('the fleet read, from the nightly rollup, on the Worker', () => {
     expect((await (await pool.db()).prepare('SELECT batches, events FROM telemetry_install_days').all()).results).toEqual(rows.results);
   }, 60_000);
 
+  it('rolls a batch of an account with an account tombstone under a placeholder, so a rebuilt day never brings the erased id back (GDPR Article 17)', async () => {
+    await (await pool.db()).prepare("INSERT INTO erasure_tombstones (kind, digest, reason, erased_on) VALUES ('account', ?, 'lawful-request', ?)").bind('acct-erased', today()).run();
+    await keep(pool, daysAgo(1), uuid(1), [hook(100)], 'acct-erased');
+    await keep(pool, daysAgo(1), uuid(1), [hook(200)], 'acct-erased');
+    await keep(pool, daysAgo(1), uuid(1), [hook(300)], 'acct-kept');
+    await keep(pool, daysAgo(1), uuid(2), [hook(400)]);
+    await nightly(pool);
+    const rows = await (await pool.db()).prepare('SELECT install, account, batches, events FROM telemetry_install_days ORDER BY install, account').all();
+    expect(rows.results).toEqual([
+      { install: uuid(1), account: 'acct-kept', batches: 1, events: 1 },
+      { install: uuid(1), account: 'erased:', batches: 2, events: 2 },
+      { install: uuid(2), account: '', batches: 1, events: 1 },
+    ]);
+    await nightly(pool);
+    expect((await (await pool.db()).prepare('SELECT account FROM telemetry_install_days').all()).results.map((one) => fieldOf(one, 'account')).sort()).toEqual(['', 'acct-kept', 'erased:']);
+  }, 60_000);
+
   it('rolls a first-run event into one cell on its install-day: the surface in the metric, a hit only for a run in CI, once however many batches carried it', async () => {
     const firstRun = { v: 1, id: 'x', at: '2026-11-09T12:00:00.000Z', type: 'first-run', cli: '0.4.0', os: 'linux', data: { ci: 'github-actions', surface: 'npx' } };
     await keep(pool, daysAgo(1), uuid(7), [firstRun, hook(100)]);

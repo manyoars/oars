@@ -249,11 +249,13 @@ describe('main', () => {
     expect(calls.flat().some((arg) => arg.includes(value))).toBe(false);
   });
 
-  it('erases an account', async () => {
-    const { io, printed } = fake();
+  it('erases an account, and moves the generation when it held links to the totals', async () => {
+    // The count of links is a SELECT that always answers one row; the rest of the account's rows are empty.
+    const { io, calls, printed } = fake({ answer: (sql) => (sql.includes('AS held') ? [{ held: 2 }] : []) });
     expect(await main(['account', '--account', ACCOUNT, '--confirm'], io)).toBe(0);
     expect(printed).toHaveLength(1);
     expect(printed[0]).toMatch(/^\{"rowsErased":\d+,"objectsErased":\d+\}$/);
+    expect(calls.flat().some((arg) => arg.startsWith('UPDATE pool_generation'))).toBe(true);
   });
 
   it('answers a usage error with exit code 2 and the usage', async () => {

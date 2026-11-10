@@ -1,8 +1,8 @@
 // `oars pool`: the only part of the sessions code that talks to a remote. The server is the one named by flag or environment, else the Many Oars pool; nothing leaves until a command that sends is run or, after covenant acceptance, the detached sender (hook-bin.js nightly) sends. Sign-in runs the provider's device flow here and reads no harness token; a session leaves only as a skeleton of a closed list of fields, each value redacted first, and only after the exclusion check found it clean. Local capture, recall,
 // and reads never come through here.
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import type { Outcome, RunDeps } from '../cli.js';
 import { emitOf } from '../telemetry/emit.js';
@@ -39,6 +39,7 @@ export const DEPOSIT = 'pool-deposit';
 const OUTBOX = 'pool-outbox';
 const POOL_DEPOSITS = '/v1/deposits';
 const FETCH = 'pool-fetch';
+const EXPORT = 'pool-export';
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 export const POOL_PROVIDERS = ['github', 'google'] as const;
 const DEFAULT_INTERVAL_SEC = 5;
@@ -100,6 +101,8 @@ interface Call {
   type?: string;
   /** Headers beyond the usual ones (the raw routes state their redaction and capture versions, and the raw consent). */
   extra?: Array<[string, string]>;
+  /** The answer's bytes are kept as bytes when it is a 200, not read as JSON: the person's own raw copy. */
+  binary?: boolean;
 }
 
 /** How a request leaves this machine. The command line passes none, so a send goes over the network (`networkSender`); a test passes one to read what would leave. */
@@ -122,11 +125,11 @@ const outgoing = (deps: RunDeps, server: string, path: string, init: Call): Outg
 /** One call to the pool. A redirect is an error: it could carry a batch or a token somewhere the checks on the named server never saw. */
 export const ask = (deps: RunDeps, step: string, server: string, path: string, init: Call, via?: Sender): Promise<Reply> => {
   const request = outgoing(deps, server, path, init);
-  return via === undefined ? send(deps, step, request, init.show) : via(request);
+  return via === undefined ? send(deps, step, request, init.show, init.binary === true) : via(request);
 };
 
 /** Prints the request when asked to, then sends exactly those headers and that body. */
-const send = async (deps: RunDeps, step: string, request: Outgoing, show: Masker | undefined): Promise<Reply> => {
+const send = async (deps: RunDeps, step: string, request: Outgoing, show: Masker | undefined, binary = false): Promise<Reply> => {
   if (show !== undefined) deps.io.stderr(`${printed(request, show)}
 `);
   let response: Response;
@@ -137,7 +140,7 @@ const send = async (deps: RunDeps, step: string, request: Outgoing, show: Masker
   }
   let body: unknown;
   try {
-    body = await response.json();
+    body = binary && response.status === 200 ? new Uint8Array(await response.arrayBuffer()) : await response.json();
   } catch {
     body = undefined;
   }
@@ -809,7 +812,7 @@ export const RAW_PROMPT = [
   'It also does not catch a host with no dot, a public host name outside a link, quoted file contents and command output, a secret split across lines, images and attachments, a JSON env value, your username written another way, another person\'s hyphenated name in a project folder path, or an IPv6 address with a zone or inside a longer word, and a common-word account name is masked everywhere it appears.',
   'The blocks the harness adds on its own (instruction files, memory, skill lists, the system prompt) are replaced by a short marker, but a block in a shape the redactor does not list yet, a summary the harness writes for a session you left, a file it quotes after compaction, the echo of a command you ran, a reminder the harness puts in the middle of a message, and what an agent reports back are not, and stay as written; the project folder name and working directory on each line also stay readable, apart from the masking above.',
   'Yes is also your explicit consent to processing any health, belief, or other special category data about you that a copy holds, for these purposes. You can withdraw it at any time with oars pool raw --consent no, and that reaches copies already sent. Your access does not depend on it.',
-  'Say no, or say nothing, and only skeletons go to the pool. Change your mind any time: oars pool raw --consent yes|no. A no stops later sends only; it cannot recall what was already sent.',
+  'Say no, or say nothing, and only skeletons go to the pool. Change your mind any time: oars pool raw --consent yes|no. A no stops later sends, and the pool starts erasing the raw copies it already holds for you that night; a large account can take more than one night.',
 ].join('\n');
 
 /** What a person types to say yes to the raw prompt: consent is a statement made at a terminal (GDPR Articles 7 and 9(2)(a)), not a flag a script can pass. */
@@ -908,13 +911,15 @@ export const poolRaw = async (deps: RunDeps, options: { consent?: string | undef
   // A yes is tied to the covenant in force when it is given, so the pool is asked which that is before anything is stored. A no needs none.
   const covenant = options.consent === 'yes' ? await typedYes(deps) : null;
   const heardYes = covenant === null ? undefined : await grantAtPool(deps, covenant);
-  // What this machine held before the save: a no on a signed-out machine that held a yes leaves the pool's yes standing.
+  // What this machine held before the save: a no on a signed-out machine that held a yes, or whose earlier no never reached the pool, leaves the pool's yes standing.
   const before = { yes: false };
   const choices = await updatePoolChoices(runtime.storeDir, (current) => {
-    before.yes = current.rawConsent === 'granted';
+    before.yes = current.rawConsent === 'granted' || current.withdrawalPending;
     if (options.consent !== undefined) {
       current.rawConsent = options.consent === 'yes' ? 'granted' : 'declined';
       current.rawConsentVersion = covenant;
+      // A no the pool has not heard stays pending until it does; a yes replaces whatever the pool was owed.
+      current.withdrawalPending = options.consent === 'no' && before.yes;
     }
     if (folder !== undefined) {
       if (mode === 'all') Reflect.deleteProperty(current.folders, folder);
@@ -923,6 +928,12 @@ export const poolRaw = async (deps: RunDeps, options: { consent?: string | undef
   });
   // The local answer is saved above, so a pool that cannot be told leaves it standing and the command fails: a rerun retries.
   const told = options.consent === 'no' ? await withdrawAtPool(deps, before.yes) : heardYes;
+  // The pool heard the withdrawal: nothing is owed it any more.
+  if (told === 'told' && options.consent === 'no') {
+    await updatePoolChoices(runtime.storeDir, (current) => {
+      current.withdrawalPending = false;
+    });
+  }
   const answer = choices.rawConsent === null ? 'not answered yet: only skeletons go to the pool' : choices.rawConsent === 'granted' ? `yes, given under covenant ${choices.rawConsentVersion ?? 'none'}: redacted raw copies leave while that covenant is in force` : 'no: only skeletons go to the pool';
   const switched = Object.entries(choices.folders).map(([entry, set]) => `  ${entry}: ${set === 'off' ? 'nothing sent to the pool' : 'skeletons only'}`);
   const toldLine =
@@ -930,7 +941,7 @@ export const poolRaw = async (deps: RunDeps, options: { consent?: string | undef
       ? []
       : options.consent === 'yes'
         ? [told === 'told' ? 'The pool heard it: raw copies are accepted again from this account for the covenant in force.' : 'This machine holds no sign-in to the pool, so it told the pool nothing. Sign in with oars pool login; if you withdrew before, run this again then.']
-        : [told === 'told' ? 'The pool was told: it no longer accepts raw copies from this account, and keeps a record of the withdrawal. Copies it already holds are not erased by this yet.' : 'This machine holds no sign-in to the pool, so it told the pool nothing. If you said yes from another machine, sign in with oars pool login and run this again.'];
+        : [told === 'told' ? 'The pool was told: it no longer accepts raw copies from this account, keeps a record of the withdrawal, and starts erasing the raw copies it already holds that night; a large account can take more than one night.' : 'This machine holds no sign-in to the pool, so it told the pool nothing. If you said yes from another machine, sign in with oars pool login and run this again.'];
   const lines = [...(choices.rawConsent === null ? [RAW_PROMPT, ''] : []), `Raw copies: ${answer}.`, ...toldLine, ...(switched.length === 0 ? [] : ['Folders switched down:', ...switched])];
   return { document: { ok: true, rawConsent: choices.rawConsent, rawConsentVersion: choices.rawConsentVersion, folders: choices.folders, ...(told === undefined ? {} : { pool: told }) }, text: lines.join('\n') };
 };
@@ -959,4 +970,125 @@ export const poolCoverage = async (deps: RunDeps, options: { orgSize?: string | 
   if (changed) await writeCoverageSetting(storeDir, setting);
   const lines = [`Organization size: ${setting.orgSize}`, `Repository visibility: ${setting.repoVisibility}`, 'Both stay on this machine until a deposit states them as bands; nothing is looked up. The team band is counted from each repository\'s local git log at deposit.'];
   return { document: { ok: true, saved: changed, ...setting }, text: lines.join('\n') };
+};
+
+/** What the pool's export pages say they are (`export.ts` in the pool). A page of another format or version is refused, not guessed at. */
+const EXPORT_FORMAT = 'oars-pool-account-export';
+const EXPORT_VERSION = 1;
+
+/** One page's file, numbered from 1 in the order the pool gave the pages. */
+const exportPageFile = (page: number): string => `account-export-${String(page).padStart(4, '0')}.json`;
+const EXPORT_PAGE_FILE = /^account-export-(\d{4,})\.json$/;
+
+const exportPageOf = (body: unknown): { rows: readonly unknown[]; next: string | null; section: unknown } | string => {
+  if (!isObject(body) || Reflect.get(body, 'format') !== EXPORT_FORMAT) return 'is not an account export page';
+  const version: unknown = Reflect.get(body, 'version');
+  if (version !== EXPORT_VERSION) return `is version ${String(version)}, and this client reads version ${String(EXPORT_VERSION)}`;
+  const rows: unknown = Reflect.get(body, 'rows');
+  const next: unknown = Reflect.get(body, 'next');
+  if (!Array.isArray(rows) || (next !== null && typeof next !== 'string')) return 'carries no rows or no cursor';
+  const held: readonly unknown[] = rows;
+  return { rows: held, next, section: Reflect.get(body, 'section') };
+};
+
+/** One thing the export could not do: what it was, and the pool's answer when there was one. */
+interface ExportFailure {
+  what: string;
+  reply?: Reply;
+  code?: string;
+}
+
+const plural = (count: number, one: string, many = `${one}s`): string => `${String(count)} ${count === 1 ? one : many}`;
+
+const answered = ({ status, body }: Reply): string => {
+  const message = isObject(body) ? textIn(body, 'message') : undefined;
+  return `HTTP ${String(status)}${message === undefined ? '' : `: ${message}`}`;
+};
+
+/** `oars pool export`: the person's own copy of what the pool holds about their account, saved to a folder (GDPR Articles 15(3) and 20). It follows the pool's cursor page by page and keeps each page as a file; with `raw` it also fetches each raw object the ledger lists that still stands. It writes nothing to the pool. A failed page stops the walk (there is no cursor past it); a failed object does not stop the others. Every failure is named in the error, with what was saved. */
+export const poolExport = async (deps: RunDeps, options: { server?: string | undefined; out: string; raw?: boolean | undefined; via?: Sender | undefined }): Promise<Outcome> => {
+  const { storeDir } = runtimeOf(deps);
+  const server = poolServer(deps.env, EXPORT, options.server);
+  const { token } = await signedIn(deps, storeDir, server, EXPORT);
+  const folder = resolve(options.out);
+  await mkdirOwnerOnly(folder);
+  const credential = new Masker();
+  credential.add(token);
+  const failures: ExportFailure[] = [];
+  const standing: string[] = [];
+  let erased = 0;
+  let rows = 0;
+  let pages = 0;
+  const cursors = new Set<string>();
+  let cursor: string | null = null;
+  do {
+    const number = pages + 1;
+    const reply: Reply = await ask(deps, EXPORT, server, cursor === null ? '/v1/account/export' : `/v1/account/export?cursor=${encodeURIComponent(cursor)}`, { token, show: credential }, options.via);
+    if (reply.status !== 200) {
+      failures.push({ what: `page ${String(number)} (${answered(reply)})`, reply });
+      break;
+    }
+    const read = exportPageOf(reply.body);
+    if (typeof read === 'string') {
+      failures.push({ what: `page ${String(number)} ${read}`, code: 'export_invalid' });
+      break;
+    }
+    await writeOwnerOnly(join(folder, exportPageFile(number)), `${JSON.stringify(reply.body, null, 2)}\n`);
+    pages = number;
+    rows += read.rows.length;
+    for (const row of read.section === 'rawLedger' ? read.rows : []) {
+      const hash = isObject(row) ? textIn(row, 'sha256') : undefined;
+      if (hash === undefined || !/^[0-9a-f]{64}$/.test(hash)) failures.push({ what: `page ${String(number)} lists a raw object with no SHA-256`, code: 'export_invalid' });
+      else if (isObject(row) && Reflect.get(row, 'tombstone') !== null) erased += 1;
+      else standing.push(hash);
+    }
+    cursor = read.next;
+    if (cursor !== null && cursors.has(cursor)) {
+      failures.push({ what: `page ${String(number)} named a cursor the pool had already given`, code: 'export_invalid' });
+      break;
+    }
+    if (cursor !== null) cursors.add(cursor);
+  } while (cursor !== null);
+
+  let saved = 0;
+  const rawFolder = join(folder, 'raw');
+  if (options.raw === true) await mkdirOwnerOnly(rawFolder);
+  if (options.raw === true) {
+    for (const hash of standing) {
+      const reply = await ask(deps, EXPORT, server, `/v1/account/export/raw/${hash}`, { token, show: credential, binary: true }, options.via);
+      if (reply.status !== 200) failures.push({ what: `raw object ${hash} (${answered(reply)})`, reply });
+      else if (!(reply.body instanceof Uint8Array)) failures.push({ what: `raw object ${hash} came with no bytes`, code: 'export_invalid' });
+      else if (createHash('sha256').update(reply.body).digest('hex') !== hash) failures.push({ what: `raw object ${hash} did not hash to its name`, code: 'raw_unverified' });
+      else {
+        await writeOwnerOnly(join(rawFolder, hash), reply.body);
+        saved += 1;
+      }
+    }
+  }
+
+  const counts = [plural(pages, 'page'), ...(options.raw === true ? [plural(saved, 'raw object')] : [])];
+  const lead = failures[0];
+  if (lead !== undefined) {
+    const message = `The export to ${folder} is incomplete: ${failures.map(({ what }) => what).join('; ')}. Saved ${counts.join(' and ')} there.`;
+    const refused = lead.reply === undefined ? undefined : refusal(EXPORT, lead.reply);
+    throw new CliError(message, refused?.exitCode ?? ExitCode.INVALID, EXPORT, { ...(refused?.problem ?? {}), title: message, ...(lead.code === undefined ? {} : { code: lead.code }) });
+  }
+  // A shorter export than the last one leaves no page of the older one to be read as part of this.
+  for (const name of await readdir(folder)) {
+    const found = EXPORT_PAGE_FILE.exec(name);
+    if (found !== null && Number(found[1]) > pages) await rm(join(folder, name));
+  }
+  // The same for raw copies: one whose object the pool has since erased must not read as a copy of something it still holds. Only a file named like a SHA-256 is ours to remove.
+  if (options.raw === true) {
+    const held = new Set(standing);
+    for (const name of await readdir(rawFolder)) {
+      if (/^[0-9a-f]{64}$/.test(name) && !held.has(name)) await rm(join(rawFolder, name));
+    }
+  }
+  const ledger = standing.length + erased;
+  const rawNote = options.raw === true ? (erased > 0 ? ` ${plural(erased, 'raw object')} listed in the ledger ${erased === 1 ? 'was' : 'were'} erased, so no copy of ${erased === 1 ? 'it' : 'them'} remains.` : '') : standing.length > 0 ? ` The ledger lists ${plural(ledger, 'raw object')}: run again with --raw to save your copies of the ${standing.length === 1 ? 'one' : 'ones'} that stand.` : '';
+  return {
+    document: { ok: true, server, folder, pages, rows, raw: { requested: options.raw === true, saved, erased } },
+    text: `Saved your pool export to ${folder}: ${[...counts, plural(rows, 'row')].join(', ')}.${rawNote}`,
+  };
 };
