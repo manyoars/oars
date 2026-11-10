@@ -1,4 +1,5 @@
 import { createHash, createHmac, webcrypto } from 'node:crypto';
+import { COVENANT_TEXTS, COVENANT_VERSION_2_1 } from '../../../pool/src/covenant-texts.js';
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -178,7 +179,7 @@ describe('the raw prompt states when and what uploads', () => {
 });
 
 describe('the raw prompt matches the covenant it points to', () => {
-  const covenant = readFileSync(fileURLToPath(new URL('../../../../docs/covenant/2.0-4c538c50d706.md', import.meta.url)), 'utf8').replace(/\s+/g, ' ');
+  const covenant = readFileSync(fileURLToPath(new URL('../../../../docs/covenant/2.1-d72b1b3971e7.md', import.meta.url)), 'utf8').replace(/\s+/g, ' ');
 
   it('still licenses Raw Copies (2.3) and reaches copies already sent on withdrawal (6.6(b))', () => {
     expect(covenant).toContain('The grant covers Skeletons, Raw Copies, every other part of a Deposit');
@@ -1592,6 +1593,20 @@ describe('oars pool deposit --send', () => {
       const accepted = pool.requests.find((request) => request.url.pathname === '/v1/covenant/accept');
       expect(JSON.parse(accepted?.body ?? '{}')).toEqual({ version: 'v1', textSha256: SCREEN.sha256, input: 'typed', client: `oars/${scene.h.deps.version}`, euEeaUk: 'no' });
       expect(paths(pool)).toEqual(['/v1/covenant', '/v1/covenant/accept', '/v1/deposits']);
+    });
+
+    it('presents covenant 2.1 as the pool holds it: its id, its text, and the hash of that text', async () => {
+      const held = COVENANT_TEXTS.get(COVENANT_VERSION_2_1) ?? '';
+      const screen = { text: held, link: `https://manyoars.com/covenant/${COVENANT_VERSION_2_1}`, phrase: 'I AGREE', sha256: createHash('sha256').update(held).digest('hex') };
+      const scene = await batched();
+      const hash = await printedAndHash(scene);
+      const pool = wire({ ...acceptRoutes(answer(200, { version: COVENANT_VERSION_2_1, accepted: false, screen })), 'POST /v1/covenant/accept': answer(200, { ok: true, version: COVENANT_VERSION_2_1 }) });
+      atTerminal(scene, 'I AGREE', 'no');
+      await poolDeposit(scene.h.deps, sendOptions(hash, pool.via));
+      expect(scene.h.err.join('')).toContain(`MANY OARS POOL COVENANT 2.1-d72b1b3971e7
+`);
+      const accepted = pool.requests.find((request) => request.url.pathname === '/v1/covenant/accept');
+      expect(JSON.parse(accepted?.body ?? '{}')).toMatchObject({ version: '2.1-d72b1b3971e7', textSha256: screen.sha256, input: 'typed' });
     });
 
     describe('the region question', () => {
