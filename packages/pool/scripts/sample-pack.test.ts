@@ -207,7 +207,7 @@ describe('the manifest', () => {
     expect(rows[0]?.harnessTerms).toEqual([
       { name: 'Anthropic Consumer Terms', version: 'effective 2025-10-08' },
       { name: 'Anthropic Usage Policy', version: 'the version in force when the session was made' },
-      { name: 'Anthropic Usage Policy, current', version: 'effective 2026-11-12; bars using outputs to train an AI model without prior authorization from Anthropic' },
+      { name: 'Anthropic Usage Policy, from 2026-11-12', version: 'effective 2026-11-12; bars using outputs to train an AI model without prior authorization from Anthropic' },
     ]);
     expect(rows[0]?.matchId).toMatch(/^[0-9a-f]{64}$/);
     expect(readdirSync(join(f.out, 'sessions'))).toEqual(expect.arrayContaining(rows.map((row) => row.matchId)));
@@ -1112,7 +1112,7 @@ describe('a Codex session (plan S2)', () => {
         harnessTerms: [
           { name: 'OpenAI Terms of Use', version: 'effective 2026-01-01' },
           { name: 'OpenAI Usage Policies', version: 'the version in force when the session was made' },
-          { name: 'OpenAI Usage Policies, current', version: 'effective 2026-11-20; bars supplying training material or signals for a model meant to substitute for an OpenAI model' },
+          { name: 'OpenAI Usage Policies, from 2026-11-20', version: 'effective 2026-11-20; bars supplying training material or signals for a model meant to substitute for an OpenAI model' },
         ],
       },
     ]);
