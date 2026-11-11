@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import type { RunDeps } from '../cli.js';
 import { CliError } from '../errors.js';
 import { machineOf } from './machine.js';
-import { ask, currentTerms, DEPOSIT, isObject, networkSender, poolDeposit, poolServer, postBatch, postRaw, runtimeOf, signedIn, textIn, vocabularyExpired, type Sender } from './pool-command.js';
+import { ask, currentTerms, DEPOSIT, isObject, networkSender, poolDeposit, poolServer, postBatch, postRaw, runtimeOf, SEND_STALL_MS, signedIn, textIn, vocabularyExpired, type Sender } from './pool-command.js';
 import { rawStale } from './pool-choices.js';
 import { heldAcross, lockedBatch, outboxFolder, rescanPulled } from './pool-outbox.js';
 import { heldRaw } from './pool-raw.js';
@@ -125,7 +125,8 @@ export const nightlyPoolSend = async (deps: RunDeps, via?: Sender): Promise<Nigh
   const tally: NightlyPool = { outcome: 'failed', batches: 0, raw: 0 };
   let result: NightlyPool;
   try {
-    result = await night(deps, via ?? networkSender(deps, DEPOSIT), tally);
+    // A pool that goes silent ends the night after SEND_STALL_MS, so it cannot hold the send lock (and with it every `deposit --send`) for as long as the pool stalls. The next run sends what this one did not.
+    result = await night(deps, via ?? networkSender(deps, DEPOSIT, { stallMs: SEND_STALL_MS }), tally);
   } catch {
     result = { ...tally, outcome: 'failed' };
   }

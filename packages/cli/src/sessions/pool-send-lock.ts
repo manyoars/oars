@@ -1,5 +1,5 @@
 // One sender at a time per outbox: the detached sender (hook-bin.js nightly) and `deposit --send` both take this lock, so a batch is never posted twice by two runs that overlap. The lock is a file created
-// with `wx` beside `sent.log`, so it holds across processes as well as inside one. A run that finds it held waits; a lock older than `staleMs` belongs to a run that died, and is taken over by one waiter only, under a guard file. The holder touches the file while it runs, so a long send (a first night of raw parts) is never mistaken for a dead run, and it removes the file only if the file still names its own run.
+// with `wx` beside `sent.log`, so it holds across processes as well as inside one. A run that finds it held waits; a holder on this host whose pid is not running is taken over at once, and a lock untouched for `staleMs` belongs to a run that died (the rule for a holder whose liveness cannot be read: an empty or older-format file, another host's pid). Either takeover is by one waiter only, under a guard file. The holder touches the file while it runs, so a long send (a first night of raw parts) is never mistaken for a dead run, and it removes the file only if the file still names its own run.
 import { randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, rm, stat, utimes, type FileHandle } from 'node:fs/promises';
 import { hostname } from 'node:os';
@@ -55,6 +55,8 @@ export interface BusyDetail {
   untouchedMs: number;
   waitedMs: number;
   staleMs: number;
+  /** Whether the holder is a process on this host: its heartbeat then keeps the lock fresh while it lives, so only its end (not the clock) frees the lock. */
+  local: boolean;
 }
 
 export interface LockWait {
@@ -66,7 +68,7 @@ export interface LockWait {
 
 export class SendLockBusy extends Error {
   readonly detail: BusyDetail;
-  constructor(detail: BusyDetail = { holder: undefined, ageMs: 0, untouchedMs: 0, waitedMs: 0, staleMs: DEFAULT_TIMES.staleMs }) {
+  constructor(detail: BusyDetail = { holder: undefined, ageMs: 0, untouchedMs: 0, waitedMs: 0, staleMs: DEFAULT_TIMES.staleMs, local: false }) {
     super('Another oars run is sending from this outbox.');
     this.detail = detail;
   }
@@ -176,7 +178,7 @@ export const withSendLock = async <T>(outbox: string, run: () => Promise<T>, tim
       noticed = true;
       wait.onWait?.({ holder, ageMs, waitMs });
     }
-    if (at >= giveUp) throw new SendLockBusy({ holder, ageMs, untouchedMs, waitedMs: at - began, staleMs });
+    if (at >= giveUp) throw new SendLockBusy({ holder, ageMs, untouchedMs, waitedMs: at - began, staleMs, local: holder?.host === self.host });
     await clock.sleep(pollMs);
   }
   const beat = setInterval(() => {

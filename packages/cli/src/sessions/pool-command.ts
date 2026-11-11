@@ -20,7 +20,7 @@ import { carriedDeltas, heldDeltas, keptDeltas, markDeltasSent, placedOf, sentDe
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { rawAllowed, rawStale, sendsOf } from './pool-choices.js';
 import { heldRaw, rawParts, removeRawExcept, writeRaw } from './pool-raw.js';
-import { SendInterrupted, SendLockBusy, watchInterrupt, withSendLock, type BusyDetail, type Waiting } from './pool-send-lock.js';
+import { SendInterrupted, SendLockBusy, watchInterrupt, withSendLock, type BusyDetail, type LockFs, type LockTimes, type Waiting } from './pool-send-lock.js';
 import { markSent, retirePulled, sentLog } from './pool-sent.js';
 import { shellReader } from './projection.js';
 import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
@@ -133,10 +133,10 @@ export const ask = (deps: RunDeps, step: string, server: string, path: string, i
   return via === undefined ? send(deps, step, request, init.show, init.binary === true) : via(request);
 };
 
-/** What an interactive `--send` sends under: the longest the pool gets to answer one request, and the signal that ends the request when the person (or the program that launched the send) ends the run. */
+/** What a guarded send runs under: the longest the pool gets to answer one request, and (for an interactive `--send`) the signal that ends the request when the person, or the program that launched the send, ends the run. The background sender has no one to interrupt it. */
 export interface Guard {
   stallMs: number;
-  signal: AbortSignal;
+  signal?: AbortSignal;
 }
 
 /** The pool took the request and then said nothing for `Guard.stallMs`. */
@@ -152,10 +152,26 @@ const PLAIN_REASONS: ReadonlyArray<readonly [RegExp, string]> = [
 ];
 const RETRY = 'Nothing was marked sent. Run the same command to try again.';
 
+/** What `deposit` says after it writes the outbox: the covenant (the person's consent, docs/covenant 2.1) already lets the background sender send what is queued, with or without this command. A machine's batches are never sent by it. */
+const SENT_LATER = 'Nothing was sent yet. Once the covenant is accepted, oars sends what is queued automatically, in the background.';
+
+/**
+ * What a person reads after a send they stopped (Ctrl-C, a closed terminal, a launcher that died): the batch stays queued, and the background sender (hook-bin.js nightly, started by a later oars command
+ * or the end of a session, about once an hour at most, not on a timer) sends it once the covenant is accepted, whether or not this command ever finishes. The second line is added only when a request carrying the batch had gone out.
+ * The folder switch and the sign-out are the two real ways to stop that: the sender builds the outbox again first, which withdraws a folder that is off, and it sends nothing without a sign-in.
+ */
+export const stoppedText = (received: boolean): string =>
+  [
+    'Stopped. This batch stays queued, and once the covenant is accepted oars sends it automatically in the background.',
+    ...(received ? ['The pool may already have received it.'] : []),
+    'To keep a folder out, run oars pool raw --folder <folder> --mode off.',
+    'To stop this machine sending, run oars pool logout.',
+  ].join('\n');
+
 /** Why a guarded request ended without an answer, in plain words: a stall, an interrupt, or a network failure whose raw reason is kept after the sentence. The exit code is the unreachable one, as before. */
-const guardedFailure = (step: string, cause: unknown, origin: string, guard: Guard): CliError => {
+const guardedFailure = (step: string, cause: unknown, origin: string, guard: Guard, received: boolean): CliError => {
   if (cause instanceof PoolStalled) return new CliError(`The pool at ${origin} did not answer within ${String(guard.stallMs / 1000)} seconds. ${RETRY}`, ExitCode.UNREACHABLE, step);
-  if (cause instanceof SendInterrupted) return new CliError(`${cause.message} ${RETRY}`, ExitCode.UNEXPECTED, step);
+  if (cause instanceof SendInterrupted) return new CliError(stoppedText(received), ExitCode.UNEXPECTED, step);
   const unreachable = unreachableError(step, cause, origin);
   const raw = unreachable.message.slice(`Cannot reach the server at ${origin}: `.length);
   const plain = PLAIN_REASONS.find(([pattern]) => pattern.test(raw));
@@ -168,17 +184,20 @@ const send = async (deps: RunDeps, step: string, request: Outgoing, show: Masker
 `);
   const stop = new AbortController();
   const relay = (): void => {
-    stop.abort(guard?.signal.reason);
+    stop.abort(guard?.signal?.reason);
   };
-  guard?.signal.addEventListener('abort', relay, { once: true });
-  if (guard?.signal.aborted === true) relay();
+  guard?.signal?.addEventListener('abort', relay, { once: true });
+  if (guard?.signal?.aborted === true) relay();
   const timer = guard === undefined ? undefined : setTimeout(() => {
         stop.abort(new PoolStalled());
       }, guard.stallMs);
-  const failure = (error: unknown): CliError => (guard === undefined ? unreachableError(step, error, request.url.origin) : guardedFailure(step, stop.signal.aborted ? stop.signal.reason : error, request.url.origin, guard));
+  // Whether the batch itself had gone out when the run ended: only the deposit request carries it, and only when it went out before the run was stopped.
+  let started = false;
+  const failure = (error: unknown): CliError => (guard === undefined ? unreachableError(step, error, request.url.origin) : guardedFailure(step, stop.signal.aborted ? stop.signal.reason : error, request.url.origin, guard, started && request.url.pathname === POOL_DEPOSITS));
   try {
     let response: Response;
     try {
+      started = !stop.signal.aborted;
       response = await fetch(request.url, { method: request.method, headers: request.headers, redirect: 'error', ...(guard === undefined ? {} : { signal: stop.signal }), ...(request.body === undefined ? {} : { body: request.body }) });
     } catch (error) {
       throw failure(error);
@@ -194,7 +213,7 @@ const send = async (deps: RunDeps, step: string, request: Outgoing, show: Masker
     return { status: response.status, body, headers: response.headers };
   } finally {
     clearTimeout(timer);
-    guard?.signal.removeEventListener('abort', relay);
+    guard?.signal?.removeEventListener('abort', relay);
   }
 };
 
@@ -566,7 +585,13 @@ export const currentTerms = (deps: RunDeps): Promise<string[]> => loadTerms(excl
 const termsHint = (file: string): string => `No exclusion terms file at ${file}: until it holds a term, one per line, every session stays out of the outbox. Create it there, or set OARS_EXCLUSION_TERMS to the file of your own.`;
 
 /** `deposit --send <hash>`: the send lock the detached sender (hook-bin.js nightly) takes too, then a skip for a hash already in `sent.log`, then the batch lock, then the covenant (accepted here or before, or nothing is sent), then the request. The body is read and hashed again just before the request. */
-const sendBatch = async (deps: RunDeps, options: { outbox: string; server: string; token: string; hash: string; acceptCovenant: string | undefined; region: Region | undefined; via: Sender | undefined }): Promise<Outcome> => {
+/** What a test replaces in the send lock: its times and its clock, pause, and process checks, so a wait runs on driven time. */
+export interface SendLock {
+  times: Partial<LockTimes>;
+  fs: LockFs;
+}
+
+const sendBatch = async (deps: RunDeps, options: { outbox: string; server: string; token: string; hash: string; acceptCovenant: string | undefined; region: Region | undefined; via: Sender | undefined; lock: SendLock | undefined }): Promise<Outcome> => {
   const { outbox, server, token, hash } = options;
   if (!/^[0-9a-f]{64}$/.test(hash)) throw usage('--send takes the SHA-256 that oars pool outbox printed: 64 hexadecimal characters.', DEPOSIT);
   const refuse = (code: string, title: string): CliError => new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code, title, status: 409 });
@@ -595,7 +620,7 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
       await markSent(outbox, hash, deps.now());
       await retirePulled(outbox, DEPOSIT);
       return { document: { ok: true, server, hash, sent: true }, text: `Sent batch ${hash} to ${server}.` };
-    }, {}, undefined, {
+    }, options.lock?.times, options.lock?.fs, {
       onWait: (waiting) => {
         deps.io.stderr(`${waitingLine(waiting)}\n`);
       },
@@ -603,14 +628,18 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
     });
   } catch (error) {
     if (error instanceof SendLockBusy) throw refuse('send_locked', busyLine(error.detail));
-    if (error instanceof SendInterrupted) throw new CliError(`${error.message} Nothing was sent. Run the same command to try again.`, ExitCode.UNEXPECTED, DEPOSIT);
+    if (error instanceof SendInterrupted) throw new CliError(stoppedText(false), ExitCode.UNEXPECTED, DEPOSIT);
     throw error;
   } finally {
     interrupt.stop();
   }
 };
 
-/** How long the pool gets to answer one request of an interactive send before the send ends. */
+/**
+ * How long the pool gets to answer one request of a send (an interactive `--send` and the background sender) before the send ends. It is a deadline for the whole request, the upload and the answer together,
+ * not an idle timeout: a batch is one session's skeleton, whose largest fixture is 887 KB (docs/pool.md), which a link of 240 kbit/s or better uploads inside 30 seconds. A slower link fails each try with the stall
+ * sentence; resetting the timer once headers arrive would not help it, because the upload is what is slow.
+ */
 export const SEND_STALL_MS = 30_000;
 
 /** A span in words a person can plan around: seconds under two minutes, else whole minutes. */
@@ -625,10 +654,16 @@ export const waitingLine = ({ holder, ageMs, waitMs }: Waiting): string =>
     ? `Another oars run holds this outbox's send lock (the lock does not name its process; it was last touched ${span(ageMs)} ago). Waiting up to ${span(waitMs)} for it; Ctrl-C stops this run.`
     : `Another oars run (pid ${String(holder.pid)}) took this outbox's send lock ${span(ageMs)} ago and is still sending. Waiting up to ${span(waitMs)} for it; Ctrl-C stops this run.`;
 
-/** What a send that gave up says: nothing was sent, who held the lock, and the true time after which a retry is certain to find it free (a hung holder is taken over once its lock has gone untouched for staleMs). */
-export const busyLine = ({ holder, ageMs, untouchedMs, waitedMs, staleMs }: BusyDetail): string => {
+/**
+ * What a send that gave up says: nothing was sent, who held the lock, and when a retry can succeed. A live holder on this host touches the lock every quarter of staleMs, even while it waits on a stalled pool, so the clock
+ * never frees its lock: the true condition is its end (a dead holder is taken over at once). Only a holder the lock does not name, or one on another host, whose liveness cannot be read, is decided by the clock: a
+ * retry is certain once the lock has gone untouched for staleMs.
+ */
+export const busyLine = ({ holder, local, ageMs, untouchedMs, waitedMs, staleMs }: BusyDetail): string => {
   const who = holder === undefined ? 'Another oars run' : `Another oars run (pid ${String(holder.pid)})`;
-  return `${who} has held this outbox's send lock for ${span(ageMs)} and was still sending after the ${span(waitedMs)} this run waited, so nothing was sent. Run the same command again once it ends. If it has hung, oars takes the lock over about ${span(Math.max(1, staleMs - untouchedMs))} from now.`;
+  const held = `${who} has held this outbox's send lock for ${span(ageMs)} and was still sending after the ${span(waitedMs)} this run waited, so nothing was sent.`;
+  if (holder !== undefined && local) return `${held} A retry succeeds as soon as pid ${String(holder.pid)} ends.`;
+  return `${held} Run the same command again once it ends. If it has hung, oars takes the lock over about ${span(Math.max(1, staleMs - untouchedMs))} from now.`;
 };
 
 /** The covenant version the pool names, or `undefined` when it cannot be asked or names none. The route is public, so no credential goes with it. */
@@ -654,7 +689,7 @@ export const machineKeyOf = (machine: MachineConfig, session: string): string =>
  */
 export const poolDeposit = async (
   deps: RunDeps,
-  options: { server?: string | undefined; acceptCovenant?: string | undefined; inEuEeaUk?: string | undefined; send?: string | undefined; via?: Sender | undefined; git?: Git | undefined; session?: string | undefined; covenant?: string | undefined },
+  options: { server?: string | undefined; acceptCovenant?: string | undefined; inEuEeaUk?: string | undefined; send?: string | undefined; via?: Sender | undefined; git?: Git | undefined; session?: string | undefined; covenant?: string | undefined; lock?: SendLock | undefined },
 ): Promise<Outcome> => {
   const runtime = runtimeOf(deps);
   const server = poolServer(deps.env, DEPOSIT, options.server);
@@ -672,7 +707,7 @@ export const poolDeposit = async (
   if (options.inEuEeaUk !== undefined && region === undefined) throw usage(`${REGION_FLAG} takes yes or no, not "${options.inEuEeaUk}". Nothing was accepted.`, DEPOSIT);
   const outbox = outboxFolder(runtime.storeDir, server);
   await mkdirOwnerOnly(outbox);
-  if (options.send !== undefined) return sendBatch(deps, { outbox, server, token, hash: options.send, acceptCovenant: options.acceptCovenant, region, via: options.via });
+  if (options.send !== undefined) return sendBatch(deps, { outbox, server, token, hash: options.send, acceptCovenant: options.acceptCovenant, region, via: options.via, lock: options.lock });
   const { terms } = exclusionPaths(runtime.projectsRoot, deps.env);
   const saved = await readState(runtime.storeDir);
   // A yes to the raw prompt counts only for the covenant it was given under, so an interactive build asks the pool which is in force; the nightly already knows and passes it. A pool that cannot be asked, or names none, leaves it unknown and the build goes on as before.
@@ -811,7 +846,7 @@ export const poolDeposit = async (
   // Counts only: how many sessions each gate kept out, never a folder, a term, or a name.
   emitOf(deps)('deposit', { step: 'build', sessions: counts.sessions, batched: counts.batched, bytes: builtBytes, excludedFolder: folder, excludedTerm: term, excludedNoRaw: noRaw, excludedNoTerms: noTerms, excludedUnreadable: unreadable, notEnded: counts.notEnded, uncaptured: counts.uncaptured, refused: counts.refused, withdrawn: counts.withdrawn, discarded });
   const lines = [
-    `Wrote ${String(counts.batched)} of ${String(counts.sessions)} sessions to the outbox for ${server}. Nothing was sent.`,
+    `Wrote ${String(counts.batched)} of ${String(counts.sessions)} sessions to the outbox for ${server}. ${machine === undefined ? SENT_LATER : 'Nothing was sent.'}`,
     `Kept out by the session gates, never built: ${String(folder)} in a folder not on the allowlist, ${String(term)} for a term, ${String(noRaw)} with no raw to scan, ${String(noTerms)} with no term file, ${String(unreadable)} unreadable.`,
     `Not built: ${String(counts.uncaptured)} captured before steps and frames or with no root, ${String(counts.notEnded)} not ended (a transcript gained a line within ${String(SESSION_IDLE_HOURS)} hours), ${String(counts.refused)} refused by the vocabulary${counts.refusedFields.length === 0 ? '' : ` (${counts.refusedFields.join(', ')})`}.`,
     ...(counts.withdrawn === 0 ? [] : [`Removed ${String(counts.withdrawn)} ${counts.withdrawn === 1 ? 'batch' : 'batches'} of sessions that no longer pass the gates, have not ended, or are no longer in the store.`]),

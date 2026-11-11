@@ -16,7 +16,7 @@ import { busyLine, DEFAULT_POOL_URL, networkSender, OFFER_AFTER, OFFER_BEFORE, p
 import { localNames } from './redact.js';
 import { batchHash, canonicalBytes, FIELD_ROWS, fieldsOf, outboxFolder, writeBatch } from './pool-outbox.js';
 import { markSent, sentHashes } from './pool-sent.js';
-import { SendInterrupted, withSendLock } from './pool-send-lock.js';
+import { SendInterrupted, withSendLock, type LockFs, type LockTimes } from './pool-send-lock.js';
 import type { Outgoing } from './pool-print.js';
 import { REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
 import type * as PoolWire from './pool-wire.js';
@@ -3308,29 +3308,52 @@ describe('oars pool deposit --send holds the send lock (t884 fix round)', () => 
     const scene = await batched();
     expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
     const hash = printedHashes(scene)[0] ?? '';
-    vi.useFakeTimers({ toFake: ['Date'] });
-    try {
-      const outbox = outboxFolder(scene.staged.storeDir, POOL);
-      mkdirSync(outbox, { recursive: true });
-      writeFileSync(join(outbox, 'send.lock'), '');
-      const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201, { ok: true }) });
-      const sending = poolDeposit(scene.h.deps, sendOptions(hash, pool.via));
-      // The lock waits on the wall clock, so the test moves a clock that only Date reads, a minute at a time, until the wait is over.
-      const clock = setInterval(() => {
-        vi.setSystemTime(Date.now() + 60_000);
-      }, 10);
-      const failed = await sending.catch((error: unknown) => error).finally(() => {
-        clearInterval(clock);
-      });
-      expect(failed).toMatchObject({ exitCode: ExitCode.CONFLICT, problem: { code: 'send_locked' } });
-      expect(pool.requests).toEqual([]);
-    } finally {
-      vi.useRealTimers();
-    }
+    const outbox = outboxFolder(scene.staged.storeDir, POOL);
+    mkdirSync(outbox, { recursive: true });
+    writeFileSync(join(outbox, 'send.lock'), '');
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201, { ok: true }) });
+    // The lock's clock is the test's: each pause moves it, so the give-up comes at the wait and no real time passes.
+    const clock = drivenLock();
+    const failed = await poolDeposit(scene.h.deps, { ...sendOptions(hash, pool.via), lock: clock.lock }).catch((error: unknown) => error);
+    expect(failed).toMatchObject({ exitCode: ExitCode.CONFLICT, problem: { code: 'send_locked' } });
+    expect(clock.at() - LOCK_FROM).toBe(120_000);
+    expect(pool.requests).toEqual([]);
   });
 });
 
+/** Where the driven send lock's clock starts, in epoch ms: a lock file is read as last touched then. */
+const LOCK_FROM = 1_000_000;
+/** A send lock whose clock and pause the test drives: a pause moves the clock by the asked time and tells `onPause` the time it was asked at, so no real time passes. Only the pids in `alive` are running. */
+const drivenLock = (onPause: (at: number) => void = () => undefined, alive: number[] = []): { lock: { times: Partial<LockTimes>; fs: LockFs }; at: () => number } => {
+  const state = { at: LOCK_FROM };
+  return {
+    lock: {
+      times: { pollMs: 250 },
+      fs: {
+        stat: () => Promise.resolve({ mtimeMs: LOCK_FROM }),
+        running: (pid) => alive.includes(pid),
+        clock: {
+          now: () => state.at,
+          sleep: (ms) => {
+            onPause(state.at);
+            state.at += ms;
+            return Promise.resolve();
+          },
+        },
+      },
+    },
+    at: () => state.at,
+  };
+};
+
 describe('oars pool deposit --send says what it is doing and stops when told (t1143)', () => {
+  /** What a stopped send tells the person: the batch stays queued and goes automatically once the covenant is accepted, how to keep a folder out, and how to stop this machine sending. */
+  const STOPPED = [
+    'Stopped. This batch stays queued, and once the covenant is accepted oars sends it automatically in the background.',
+    'To keep a folder out, run oars pool raw --folder <folder> --mode off.',
+    'To stop this machine sending, run oars pool logout.',
+  ].join('\n');
+  const STOPPED_AFTER_SENDING = STOPPED.replace('\nTo keep', '\nThe pool may already have received it.\nTo keep');
   const holder = { run: 'r', pid: 4242, host: 'laptop', since: 0 };
   const sendingScene = async (): Promise<{ scene: Scene; hash: string; outbox: string }> => {
     const scene = await batched();
@@ -3379,39 +3402,86 @@ describe('oars pool deposit --send says what it is doing and stops when told (t1
     expect(existsSync(join(outbox, 'send.lock'))).toBe(false);
   });
 
-  it('prints who holds a live lock and how long it will wait, then refuses with the true time after which a retry can succeed', async () => {
+  it('prints who holds a live lock within a second, then refuses at the wait with the true condition for a retry', async () => {
     const { scene, hash, outbox } = await sendingScene();
-    vi.useFakeTimers({ toFake: ['Date'] });
     mkdirSync(outbox, { recursive: true });
-    // This process is alive, so the lock is a live holder's.
-    writeFileSync(join(outbox, 'send.lock'), JSON.stringify({ ...holder, pid: process.pid, host: hostname(), since: Date.now() }));
+    // This process is alive, so the lock is a live holder's: the clock rule never fires for it, because it keeps touching the file.
+    writeFileSync(join(outbox, 'send.lock'), JSON.stringify({ ...holder, pid: process.pid, host: hostname(), since: LOCK_FROM - 60_500 }));
     const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201, { ok: true }) });
-    const sending = poolDeposit(scene.h.deps, sendOptions(hash, pool.via));
-    // The lock waits on the wall clock, so the test moves a clock that only Date reads, a minute at a time, until the wait is over.
-    const clock = setInterval(() => {
-      vi.setSystemTime(Date.now() + 60_000);
-    }, 10);
-    const failed = await sending.catch((error: unknown) => error).finally(() => {
-      clearInterval(clock);
+    let printedAt: number | undefined;
+    const clock = drivenLock((at) => {
+      if (printedAt === undefined && scene.h.err.length > 0) printedAt = at;
+    }, [process.pid]);
+    const failed = await poolDeposit(scene.h.deps, { ...sendOptions(hash, pool.via), lock: clock.lock }).catch((error: unknown) => error);
+    // The notice comes at the first poll 500 ms into the wait: after the notice time, well within a second, and nowhere near the give-up.
+    expect(printedAt).toBeDefined();
+    expect((printedAt ?? 0) - LOCK_FROM).toBeGreaterThanOrEqual(500);
+    expect((printedAt ?? 0) - LOCK_FROM).toBeLessThan(1000);
+    expect(scene.h.err.join('')).toBe(`Another oars run (pid ${String(process.pid)}) took this outbox's send lock 61 seconds ago and is still sending. Waiting up to 2 minutes for it; Ctrl-C stops this run.\n`);
+    expect(failed).toMatchObject({
+      exitCode: ExitCode.CONFLICT,
+      problem: { code: 'send_locked' },
+      message: `Another oars run (pid ${String(process.pid)}) has held this outbox's send lock for 3 minutes and was still sending after the 2 minutes this run waited, so nothing was sent. A retry succeeds as soon as pid ${String(process.pid)} ends.`,
     });
-    expect(failed).toMatchObject({ exitCode: ExitCode.CONFLICT, problem: { code: 'send_locked' } });
-    const lines = scene.h.err.join('').split('\n').filter((line) => line !== '');
-    expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatch(new RegExp(`^Another oars run \\(pid ${String(process.pid)}\\) took this outbox's send lock \\d+ (seconds|minutes) ago and is still sending\\. Waiting up to 2 minutes for it; Ctrl-C stops this run\\.$`));
-    expect(failed instanceof Error ? failed.message : '').toMatch(new RegExp(`^Another oars run \\(pid ${String(process.pid)}\\) has held this outbox's send lock for \\d+ minutes and was still sending after the \\d+ minutes this run waited, so nothing was sent\\. Run the same command again once it ends\\. If it has hung, oars takes the lock over about \\d+ minutes from now\\.$`));
+    expect(clock.at() - LOCK_FROM).toBe(120_000);
     expect(pool.requests).toEqual([]);
+    expect(JSON.parse(readFileSync(join(outbox, 'send.lock'), 'utf8'))).toMatchObject({ pid: process.pid });
   });
 
   it('words the waiting line and the busy refusal from the real constants', () => {
     const named = { run: 'r', pid: 4242, host: 'laptop', since: 0 };
     expect(waitingLine({ holder: named, ageMs: 90_000, waitMs: 120_000 })).toBe("Another oars run (pid 4242) took this outbox's send lock 90 seconds ago and is still sending. Waiting up to 2 minutes for it; Ctrl-C stops this run.");
     expect(waitingLine({ holder: undefined, ageMs: 30_000, waitMs: 120_000 })).toBe("Another oars run holds this outbox's send lock (the lock does not name its process; it was last touched 30 seconds ago). Waiting up to 2 minutes for it; Ctrl-C stops this run.");
-    expect(busyLine({ holder: named, ageMs: 180_000, untouchedMs: 120_000, waitedMs: 120_000, staleMs: 600_000 })).toBe(
+    // A live holder on this host keeps the lock fresh, so no clock ever frees it: the only true promise is that its end does.
+    expect(busyLine({ holder: named, local: true, ageMs: 180_000, untouchedMs: 1_000, waitedMs: 120_000, staleMs: 600_000 })).toBe(
+      "Another oars run (pid 4242) has held this outbox's send lock for 3 minutes and was still sending after the 2 minutes this run waited, so nothing was sent. A retry succeeds as soon as pid 4242 ends.",
+    );
+    // A holder on another computer, or one the lock does not name, cannot be read: the clock decides, and a retry is certain once the lock has gone untouched for staleMs.
+    expect(busyLine({ holder: named, local: false, ageMs: 180_000, untouchedMs: 120_000, waitedMs: 120_000, staleMs: 600_000 })).toBe(
       "Another oars run (pid 4242) has held this outbox's send lock for 3 minutes and was still sending after the 2 minutes this run waited, so nothing was sent. Run the same command again once it ends. If it has hung, oars takes the lock over about 8 minutes from now.",
     );
-    expect(busyLine({ holder: undefined, ageMs: 600_000, untouchedMs: 600_000, waitedMs: 1000, staleMs: 600_000 })).toBe(
+    expect(busyLine({ holder: undefined, local: false, ageMs: 600_000, untouchedMs: 600_000, waitedMs: 1000, staleMs: 600_000 })).toBe(
       "Another oars run has held this outbox's send lock for 10 minutes and was still sending after the 1 second this run waited, so nothing was sent. Run the same command again once it ends. If it has hung, oars takes the lock over about 1 second from now.",
     );
+  });
+
+  it('stops a send waiting for a live holder when the person presses Ctrl-C: nothing is requested, the holder keeps its lock, and no signal hook stays behind', async () => {
+    const { scene, hash, outbox } = await sendingScene();
+    mkdirSync(outbox, { recursive: true });
+    writeFileSync(join(outbox, 'send.lock'), JSON.stringify({ ...holder, pid: process.pid, host: hostname(), since: LOCK_FROM }));
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201, { ok: true }) });
+    const hooks = (): number[] => ['SIGINT', 'SIGTERM', 'SIGHUP'].map((name) => process.listenerCount(name));
+    const before = hooks();
+    let pauses = 0;
+    // The second poll is where the person presses Ctrl-C: the listener the send installed is the real one.
+    const clock = drivenLock(() => {
+      pauses += 1;
+      if (pauses === 2) process.emit('SIGINT');
+    }, [process.pid]);
+    expect(hooks()).toEqual(before);
+    const failed = await poolDeposit(scene.h.deps, { ...sendOptions(hash, pool.via), lock: clock.lock }).catch((error: unknown) => error);
+    expect(failed).toMatchObject({ exitCode: ExitCode.UNEXPECTED, message: STOPPED });
+    expect(pauses).toBe(2);
+    expect(pool.requests).toEqual([]);
+    expect(JSON.parse(readFileSync(join(outbox, 'send.lock'), 'utf8'))).toMatchObject({ pid: process.pid });
+    expect(hooks()).toEqual(before);
+  });
+
+  it('tells a person who deposits that nothing was sent yet, that the background sender sends once the covenant is accepted, and still points to the outbox', async () => {
+    const scene = setting();
+    await capture(scene);
+    await signIn(scene);
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    const lines = scene.h.out.join('').trimEnd().split('\n');
+    expect(lines[0]).toMatch(/^Wrote \d+ of \d+ sessions to the outbox for \S+\. Nothing was sent yet\. Once the covenant is accepted, oars sends what is queued automatically, in the background\.$/);
+    expect(lines.at(-1)).toBe('Run oars pool outbox to print exactly what would be sent.');
+  });
+
+  it("keeps 'Nothing was sent.' for a machine, which the background sender never sends for", async () => {
+    const scene = setting({ OARS_HOST_CLASS: 'cloud' });
+    const { text } = await poolDeposit(scene.h.deps, { server: POOL });
+    expect(text.split('\n')[0]).toMatch(/\. Nothing was sent\.$/);
+    expect(text).not.toContain('automatically');
   });
 
   it('ends a send the pool never answers after 30 seconds with a plain sentence, marks nothing sent, and frees the lock', async () => {
@@ -3460,8 +3530,8 @@ describe('oars pool deposit --send says what it is doing and stops when told (t1
     const inflight = sender(request).catch((error: unknown) => error);
     await reached(calls);
     stop.abort(new SendInterrupted('signal', 'Interrupted by SIGINT.'));
-    expect(await inflight).toMatchObject({ exitCode: ExitCode.UNEXPECTED, message: 'Interrupted by SIGINT. Nothing was marked sent. Run the same command to try again.' });
-    expect(await sender(request).catch((error: unknown) => error)).toMatchObject({ message: 'Interrupted by SIGINT. Nothing was marked sent. Run the same command to try again.' });
+    expect(await inflight).toMatchObject({ exitCode: ExitCode.UNEXPECTED, message: STOPPED_AFTER_SENDING });
+    expect(await sender(request).catch((error: unknown) => error)).toMatchObject({ message: STOPPED });
   });
 });
 

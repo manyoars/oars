@@ -312,8 +312,49 @@ describe('the nightly send takes the send lock (t884 fix round)', () => {
   });
 });
 
+describe('the nightly send on a pool that goes silent (t1143)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('ends the send after 30 seconds, records a failed night with nothing sent, and releases the send lock', async () => {
+    const here = await scene('granted');
+    const outbox = outboxFolder(here.staged.storeDir, POOL);
+    const calls: string[] = [];
+    // A pool that accepts the covenant read, then takes the batch and says nothing until the request is aborted.
+    vi.stubGlobal('fetch', (url: URL, init?: RequestInit): Promise<Response> => {
+      calls.push(`${init?.method ?? 'GET'} ${url.pathname}`);
+      if (url.pathname === '/v1/covenant') return Promise.resolve(new Response(JSON.stringify({ version: 'v1', accepted: true }), { status: 200, headers: { 'content-type': 'application/json' } }));
+      return new Promise<Response>((_, reject) => {
+        const ended = (): void => {
+          const reason: unknown = init?.signal?.reason;
+          reject(reason instanceof Error ? reason : new Error('aborted'));
+        };
+        if (init?.signal?.aborted === true) ended();
+        init?.signal?.addEventListener('abort', ended);
+      });
+    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let ended = false;
+    const night = nightlyPoolSend(here.deps).finally(() => {
+      ended = true;
+    });
+    // The build before the send does real file work, so wait for the request itself (a real-time bound only ends a test that would hang).
+    for (const stop = Date.now() + 20_000; Date.now() < stop && !calls.includes('POST /v1/deposits');) await new Promise((resolve) => setImmediate(resolve));
+    expect(calls).toContain('POST /v1/deposits');
+    expect(existsSync(join(outbox, 'send.lock'))).toBe(true);
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(ended).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await night).toMatchObject({ outcome: 'failed', batches: 0, raw: 0 });
+    expect(existsSync(join(outbox, 'send.lock'))).toBe(false);
+    expect(existsSync(join(outbox, 'sent.log'))).toBe(false);
+  });
+});
+
 describe('withSendLock', () => {
-  const folder = (): string => join(stage().root, 'outbox');
+  const folder =(): string => join(stage().root, 'outbox');
 
   it('runs one holder at a time and removes the lock file when the holder throws', async () => {
     const outbox = folder();
