@@ -45,6 +45,12 @@ const createClub = async (token: string, nickname = 'skipper', name = 'Friday cr
 
 const join = async (token: string, code: string, nickname: string): Promise<{ status: number; json: unknown }> => pool.post('/v1/clubs/join', { code, nickname, consent: (await consents()).club }, token);
 
+/** Seats `count` filler members straight into a club, one batch, with an account row each. The cap tests need a club that is nearly full, and a sign-in costs a device-flow round trip each (51 of them held a loaded runner past 30 s, t1137); the join path is what those tests exercise, not sign-up. */
+const fill = async (club: string, count: number): Promise<void> => {
+  const rows = Array.from({ length: count }, (_, n) => ({ account: `filler-${crypto.randomUUID()}`, nickname: `f${String(n + 1).padStart(2, '0')}` }));
+  await db.batch(rows.flatMap((row) => [db.prepare('INSERT INTO accounts (id) VALUES (?)').bind(row.account), db.prepare('INSERT INTO club_members (club, account, nickname, joined_at) VALUES (?, ?, ?, ?)').bind(club, row.account, row.nickname, Date.now())]));
+};
+
 const leave = (token: string, id: string): ReturnType<TestPool['send']> => pool.send(`/v1/clubs/${id}/me`, { method: 'DELETE' }, token);
 
 /** Weekly counts as ingest would have written them: `weeksAgo` lists the weeks (0 is this one) with a counting deposit. */
@@ -128,14 +134,13 @@ describe('creating and joining a club', () => {
   it('refuses the 51st member and still takes the 50th', async () => {
     const owner = await member();
     const club = await createClub(owner.token, 'm00');
-    for (let n = 1; n < 50; n += 1) {
-      const guest = await member();
-      expect((await join(guest.token, club.code, `m${String(n).padStart(2, '0')}`)).status, String(n)).toBe(200);
-    }
+    await fill(club.id, 48);
+    const fiftieth = await member();
+    expect((await join(fiftieth.token, club.code, 'fiftieth')).status).toBe(200);
     const late = await member();
     expect(await join(late.token, club.code, 'late')).toMatchObject({ status: 409, json: { error: 'club_full' } });
     expect(await db.prepare('SELECT COUNT(*) AS held FROM club_members WHERE club = ?').bind(club.id).first('held')).toBe(50);
-  }, 120_000);
+  });
 
   it('needs a sign-in on every club route', async () => {
     expect((await pool.post('/v1/clubs', {})).status).toBe(401);
@@ -431,7 +436,7 @@ describe('joins that race past the checks', () => {
     const club = await createClub(owner.token, 'm00');
     const guest = await member();
     expect((await answered(await joinClub(await requestOf('/v1/clubs/join', guest.token, { code: club.code, nickname: 'room' }), envOf(checks)))).status).toBe(200);
-    for (let n = 1; n < 49; n += 1) await db.prepare('INSERT INTO club_members (club, account, nickname, joined_at) VALUES (?, ?, ?, ?)').bind(club.id, (await member()).account, `f${String(n)}`, Date.now()).run();
+    await fill(club.id, 48);
     const late = await member();
     const raced = await joinClub(await requestOf('/v1/clubs/join', late.token, { code: club.code, nickname: 'late' }), envOf(checks));
     expect(await answered(raced)).toMatchObject({ status: 409, json: { error: 'club_full' } });
