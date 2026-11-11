@@ -1,10 +1,10 @@
 // The first sale's sample pack (P98 (10) to (12)): fixture stores, built in a temp folder, with an invented term and invented instruction text.
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as Exclusion from '../../cli/src/sessions/exclusion.js';
 import { SKELETON_FORMAT, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
@@ -1571,5 +1571,32 @@ describe('a pack refuses to finish with a raw id left in it (t1135 item 4)', () 
     await stored(f);
     expect((await buildPack(f.runtime, options(f))).emitted).toBe(1);
     expect(existsSync(`${f.out}.partial`)).toBe(false);
+  });
+});
+
+describe('the bundled command (t1135 item 5)', () => {
+  // `npm run sample-pack` bundles sample-pack.ts into memory and imports it from a data: URL, where import.meta.url is not a file URL: the vocabulary has to be found some other way.
+  const script = fileURLToPath(new URL('sample-pack.mjs', import.meta.url));
+
+  it('prints its usage and exits 2 when run with no options', () => {
+    const run = spawnSync(process.execPath, [script], { encoding: 'utf8' });
+    expect(run.stderr).not.toContain('Invalid URL');
+    expect(run.stdout).toContain('Missing a required option.');
+    expect(run.status).toBe(2);
+  });
+
+  it('loads the shipped vocabulary and writes a pack from a store', async () => {
+    const f = fixture();
+    const config = join(f.root, 'config');
+    const runtime: SessionsRuntime = { ...f.runtime, storeDir: join(config, 'oars', 'sessions') };
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 3, 'done')]);
+    await deposit(runtime, { allow: [], redactDomains: [], now: () => Date.parse('2026-06-10T00:00:00Z') });
+    const env = { ...process.env, APPDATA: config, XDG_CONFIG_HOME: config, CLAUDE_CONFIG_DIR: join(f.root) };
+    const args = ['--terms', f.terms, '--owners', f.owners, '--index-key', f.indexKey, '--buyer-key', 'sample', '--out', f.out, '--min-turns', '1'];
+    const run = spawnSync(process.execPath, [script, ...args], { encoding: 'utf8', env });
+    expect(run.stderr).not.toContain('Invalid URL');
+    expect(run.stdout).toContain('Wrote 1 sessions');
+    expect(run.status).toBe(0);
+    expect(manifest(f.out)).toHaveLength(1);
   });
 });
