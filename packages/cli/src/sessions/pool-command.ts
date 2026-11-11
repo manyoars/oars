@@ -407,7 +407,7 @@ export const OFFER_BEFORE: readonly string[] = [
 export const OFFER_AFTER: readonly string[] = ['Accepted. Sending your batch now.', 'Run oars pool fetch --help for your first pool download.'];
 
 /** A send stops here when the server is closed or wants a covenant accepted, before the batch is read for the last time. */
-const openCovenant = async (deps: RunDeps, server: string, token: string, accept: string | undefined, region: Region | undefined, via: Sender): Promise<void> => {
+const openCovenant = async (deps: RunDeps, server: string, token: string, accept: string | undefined, region: Region | undefined, via: Sender, signal?: AbortSignal): Promise<void> => {
   const reply = await ask(deps, DEPOSIT, server, '/v1/covenant', { token }, via);
   if (reply.status !== 200 || !isObject(reply.body)) throw refusal(DEPOSIT, reply);
   const version = textIn(reply.body, 'version');
@@ -430,10 +430,12 @@ const openCovenant = async (deps: RunDeps, server: string, token: string, accept
   deps.io.stderr(`\n${screen.text}\n\n> `);
   emitOf(deps)('covenant-shown', { version });
   // One reader for both lines: a second one opened after the first closed would lose a line the first had already taken from a pipe.
-  const lines = createInterface({ input: runtimeOf(deps).stdin, terminal: false });
+  // A stop signal (Ctrl-C, a closed terminal) closes the reader, so a read that is waiting for the person ends with the signal's reason instead of holding the process open.
+  const lines = createInterface({ input: runtimeOf(deps).stdin, terminal: false, ...(signal === undefined ? {} : { signal }) });
   const iterator = lines[Symbol.asyncIterator]();
   const nextLine = async (): Promise<string | undefined> => {
     const next = await iterator.next();
+    if (signal?.aborted === true) throw signal.reason;
     return next.done === true ? undefined : next.value;
   };
   let answered: Region | undefined = region;
@@ -612,7 +614,7 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
       const locked = await lockedAcross(outbox, hash);
       if (!locked.ok) throw refuse(locked.code, lockMessages[locked.code]);
       if (!scan.open && (await heldAcross(outbox)).batches.some((batch) => batch.hash === hash && batch.pulled)) throw refuse('terms_missing', 'This batch was held by a cloud session, and your exclusion term file is missing or empty, so it cannot be checked and was not sent.');
-      await openCovenant(deps, server, token, options.acceptCovenant, options.region, via);
+      await openCovenant(deps, server, token, options.acceptCovenant, options.region, via, interrupt.signal);
       const bytes = await unchangedBytes(locked.file, hash);
       if (bytes === undefined) throw refuse('batch_changed', lockMessages.batch_changed);
       deps.io.stderr(`Sending batch ${hash.slice(0, 12)} to ${server}...\n`);
