@@ -3363,10 +3363,10 @@ describe('oars pool deposit --send says what it is doing and stops when told (t1
     return { scene, hash, outbox: outboxFolder(scene.staged.storeDir, POOL) };
   };
   /** A fetch that answers the covenant as accepted and holds every other request until its signal aborts, as a pool that took the connection and went silent does. */
-  const stalledPool = (calls: string[]): void => {
+  const stalledPool = (calls: string[], answersCovenant = true): void => {
     vi.stubGlobal('fetch', (url: URL, init?: RequestInit): Promise<Response> => {
       calls.push(`${init?.method ?? 'GET'} ${url.pathname}`);
-      if (url.pathname === '/v1/covenant') return Promise.resolve(new Response(JSON.stringify({ version: 'v1', accepted: true }), { status: 200, headers: { 'content-type': 'application/json' } }));
+      if (answersCovenant && url.pathname === '/v1/covenant') return Promise.resolve(new Response(JSON.stringify({ version: 'v1', accepted: true }), { status: 200, headers: { 'content-type': 'application/json' } }));
       return new Promise<Response>((_, reject) => {
         // Like fetch: a signal that already aborted rejects at once.
         const ended = (): void => {
@@ -3507,7 +3507,7 @@ describe('oars pool deposit --send says what it is doing and stops when told (t1
     expect(text).not.toContain('automatically');
   });
 
-  it('ends a send the pool never answers after 30 seconds with a plain sentence, marks nothing sent, and frees the lock', async () => {
+  it('ends a send whose deposit the pool never answers after 30 seconds with a plain sentence that says the pool may have received it, marks nothing sent, and frees the lock', async () => {
     const { scene, hash, outbox } = await sendingScene();
     const calls: string[] = [];
     stalledPool(calls);
@@ -3522,9 +3522,21 @@ describe('oars pool deposit --send says what it is doing and stops when told (t1
     await vi.advanceTimersByTimeAsync(29_999);
     expect(ended).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
-    expect(await sending).toMatchObject({ exitCode: ExitCode.UNREACHABLE, message: `The pool at ${POOL} did not answer within 30 seconds. Nothing was marked sent. Run the same command to try again.` });
+    expect(await sending).toMatchObject({ exitCode: ExitCode.UNREACHABLE, message: `The pool at ${POOL} did not answer within 30 seconds. Nothing was marked sent. The pool may already have received it. Run the same command to try again.` });
     expect([...(await sentHashes(outbox))]).toEqual([]);
     expect(existsSync(join(outbox, 'send.lock'))).toBe(false);
+  });
+
+  it('does not say the pool may have received it when the stall came before the deposit went out', async () => {
+    const { scene, hash } = await sendingScene();
+    const calls: string[] = [];
+    stalledPool(calls, false);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const sending = poolDeposit(scene.h.deps, sendOptions(hash, undefined)).catch((error: unknown) => error);
+    for (let polls = 0; polls < 5000 && calls.length === 0; polls += 1) await new Promise((resolve) => setImmediate(resolve));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(await sending).toMatchObject({ exitCode: ExitCode.UNREACHABLE, message: `The pool at ${POOL} did not answer within 30 seconds. Nothing was marked sent. Run the same command to try again.` });
+    expect(calls).toEqual(['GET /v1/covenant']);
   });
 
   it('says a dropped connection in plain words and keeps the raw reason in parentheses', async () => {
