@@ -3460,7 +3460,7 @@ describe('oars pool deposit --send says what it is doing and stops when told (t1
     }, [process.pid]);
     expect(hooks()).toEqual(before);
     const failed = await poolDeposit(scene.h.deps, { ...sendOptions(hash, pool.via), lock: clock.lock }).catch((error: unknown) => error);
-    expect(failed).toMatchObject({ exitCode: ExitCode.UNEXPECTED, message: STOPPED });
+    expect(failed).toMatchObject({ exitCode: ExitCode.INTERRUPTED, message: STOPPED });
     expect(pauses).toBe(2);
     expect(pool.requests).toEqual([]);
     expect(JSON.parse(readFileSync(join(outbox, 'send.lock'), 'utf8'))).toMatchObject({ pid: process.pid });
@@ -3482,7 +3482,7 @@ describe('oars pool deposit --send says what it is doing and stops when told (t1
     expect(ended).toBe(false);
     process.emit('SIGINT');
     // No bound of its own: a red run (the reader never freed) is ended by the suite's test timeout.
-    expect(await sending).toMatchObject({ exitCode: ExitCode.UNEXPECTED, message: STOPPED });
+    expect(await sending).toMatchObject({ exitCode: ExitCode.INTERRUPTED, message: STOPPED });
     expect(pool.requests.map((request) => `${request.method} ${request.url.pathname}`)).toEqual(['GET /v1/covenant']);
     expect(hooks()).toEqual(before);
   });
@@ -3534,7 +3534,7 @@ describe('oars pool deposit --send says what it is doing and stops when told (t1
     await reached(calls);
     expect(calls).toEqual(['GET /v1/covenant', 'POST /v1/deposits']);
     process.emit('SIGINT');
-    expect(await sending).toMatchObject({ exitCode: ExitCode.UNEXPECTED, message: STOPPED_AFTER_SENDING });
+    expect(await sending).toMatchObject({ exitCode: ExitCode.INTERRUPTED, message: STOPPED_AFTER_SENDING });
     expect([...(await sentHashes(outbox))]).toEqual([]);
     expect(existsSync(join(outbox, 'send.lock'))).toBe(false);
     expect(hooks()).toEqual(before);
@@ -3577,9 +3577,21 @@ describe('oars pool deposit --send says what it is doing and stops when told (t1
     const request: Outgoing = { method: 'POST', url: new URL('/v1/deposits', POOL), headers };
     const inflight = sender(request).catch((error: unknown) => error);
     await reached(calls);
-    stop.abort(new SendInterrupted('signal', 'Interrupted by SIGINT.'));
-    expect(await inflight).toMatchObject({ exitCode: ExitCode.UNEXPECTED, message: STOPPED_AFTER_SENDING });
+    stop.abort(new SendInterrupted('signal', 'Interrupted by SIGINT.', 'SIGINT'));
+    expect(await inflight).toMatchObject({ exitCode: ExitCode.INTERRUPTED, message: STOPPED_AFTER_SENDING });
     expect(await sender(request).catch((error: unknown) => error)).toMatchObject({ message: STOPPED });
+  });
+
+  it.each([
+    ['a kill (SIGTERM)', new SendInterrupted('signal', 'Interrupted by SIGTERM.', 'SIGTERM')],
+    ['a launcher that died', new SendInterrupted('launcher', 'The program that started this send is gone.')],
+  ])('keeps the unexpected exit code when the send is ended by %s: only Ctrl-C exits 130', async (_name, interrupt) => {
+    const { scene } = await sendingScene();
+    const stop = new AbortController();
+    stop.abort(interrupt);
+    const sender = networkSender(scene.h.deps, 'deposit', { stallMs: 30_000, signal: stop.signal });
+    const request: Outgoing = { method: 'POST', url: new URL('/v1/deposits', POOL), headers: [] };
+    expect(await sender(request).catch((error: unknown) => error)).toMatchObject({ exitCode: ExitCode.UNEXPECTED, message: STOPPED });
   });
 });
 

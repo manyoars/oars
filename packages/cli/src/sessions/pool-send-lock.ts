@@ -196,7 +196,7 @@ export const withSendLock = async <T>(outbox: string, run: () => Promise<T>, tim
 
 /** Why an interactive send ended before it finished: a signal reached it, or the process that launched it is gone. */
 export class SendInterrupted extends Error {
-  constructor(readonly kind: 'signal' | 'launcher', message: string) {
+  constructor(readonly kind: 'signal' | 'launcher', message: string, readonly signal?: NodeJS.Signals) {
     super(message);
     this.name = 'SendInterrupted';
   }
@@ -224,7 +224,7 @@ export const watchInterrupt = (host: InterruptHost = { on: (event, listener) => 
   const listeners = SIGNALS.map((name): [NodeJS.Signals, () => void] => [
     name,
     () => {
-      controller.abort(new SendInterrupted('signal', `Interrupted by ${name}.`));
+      controller.abort(new SendInterrupted('signal', `Interrupted by ${name}.`, name));
     },
   ]);
   for (const [name, listener] of listeners) host.on(name, listener);

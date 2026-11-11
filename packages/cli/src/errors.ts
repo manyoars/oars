@@ -14,6 +14,8 @@ export const ExitCode = {
   UNREACHABLE: 8,
   /** `pool fetch` hit the pool's weekly cap: nothing is wrong, and the bundle on disk is untouched. */
   CAPPED: 10,
+  /** A send the person ended with Ctrl-C (SIGINT): the shell convention, 128 plus the signal number. */
+  INTERRUPTED: 130,
 } as const;
 export type ExitCode = (typeof ExitCode)[keyof typeof ExitCode];
 

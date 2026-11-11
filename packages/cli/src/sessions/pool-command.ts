@@ -172,10 +172,13 @@ export const stoppedText = (received: boolean): string =>
     'To stop this machine sending, run oars pool logout.',
   ].join('\n');
 
+/** The failure for a send the person or the launcher ended: Ctrl-C (SIGINT) exits 130, the shell convention, and any other way of stopping keeps the unexpected code. The text is the same for all of them. */
+const stopped = (step: string, cause: SendInterrupted, received: boolean): CliError => new CliError(stoppedText(received), cause.signal === 'SIGINT' ? ExitCode.INTERRUPTED : ExitCode.UNEXPECTED, step);
+
 /** Why a guarded request ended without an answer, in plain words: a stall, an interrupt, or a network failure whose raw reason is kept after the sentence. The exit code is the unreachable one, as before. */
 const guardedFailure = (step: string, cause: unknown, origin: string, guard: Guard, received: boolean): CliError => {
   if (cause instanceof PoolStalled) return new CliError(`The pool at ${origin} did not answer within ${String(guard.stallMs / 1000)} seconds. ${received ? `${NOT_MARKED} ${MAY_HAVE_RECEIVED} ${TRY_AGAIN}` : RETRY}`, ExitCode.UNREACHABLE, step);
-  if (cause instanceof SendInterrupted) return new CliError(stoppedText(received), ExitCode.UNEXPECTED, step);
+  if (cause instanceof SendInterrupted) return stopped(step, cause, received);
   const unreachable = unreachableError(step, cause, origin);
   const raw = unreachable.message.slice(`Cannot reach the server at ${origin}: `.length);
   const plain = PLAIN_REASONS.find(([pattern]) => pattern.test(raw));
@@ -634,7 +637,7 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
     });
   } catch (error) {
     if (error instanceof SendLockBusy) throw refuse('send_locked', busyLine(error.detail));
-    if (error instanceof SendInterrupted) throw new CliError(stoppedText(false), ExitCode.UNEXPECTED, DEPOSIT);
+    if (error instanceof SendInterrupted) throw stopped(DEPOSIT, error, false);
     throw error;
   } finally {
     interrupt.stop();

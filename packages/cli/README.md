@@ -258,6 +258,7 @@ Exit codes:
 | 7 | rate limited |
 | 8 | the server could not be reached (the platform, the issuer, or a pool server) |
 | 10 | `pool fetch` hit the pool's weekly fetch cap; the bundle on disk is untouched, and the message says when to try again |
+| 130 | `pool deposit --send` was ended with Ctrl-C (SIGINT); the batch stays queued |
 
 ## Source
 
