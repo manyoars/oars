@@ -3362,11 +3362,16 @@ describe('oars pool deposit --send says what it is doing and stops when told (t1
     scene.h.err.length = 0;
     return { scene, hash, outbox: outboxFolder(scene.staged.storeDir, POOL) };
   };
-  /** A fetch that answers the covenant as accepted and holds every other request until its signal aborts, as a pool that took the connection and went silent does. */
-  const stalledPool = (calls: string[], answersCovenant = true): void => {
+  /** A fetch that answers the covenant as accepted and holds every other request until its signal aborts, as a pool that took the connection and went silent does. Returns a promise the handler resolves when the first held request arrives, so a test goes on exactly when that request is in flight and not after a count of ticks. */
+  const stalledPool = (calls: string[], answersCovenant = true): Promise<void> => {
+    let arrived: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      arrived = resolve;
+    });
     vi.stubGlobal('fetch', (url: URL, init?: RequestInit): Promise<Response> => {
       calls.push(`${init?.method ?? 'GET'} ${url.pathname}`);
       if (answersCovenant && url.pathname === '/v1/covenant') return Promise.resolve(new Response(JSON.stringify({ version: 'v1', accepted: true }), { status: 200, headers: { 'content-type': 'application/json' } }));
+      arrived();
       return new Promise<Response>((_, reject) => {
         // Like fetch: a signal that already aborted rejects at once.
         const ended = (): void => {
@@ -3377,12 +3382,10 @@ describe('oars pool deposit --send says what it is doing and stops when told (t1
         init?.signal?.addEventListener('abort', ended);
       });
     });
+    return held;
   };
   const resetBy = (cause: Error): void => {
     vi.stubGlobal('fetch', (url: URL): Promise<Response> => (url.pathname === '/v1/covenant' ? Promise.resolve(new Response(JSON.stringify({ version: 'v1', accepted: true }), { status: 200, headers: { 'content-type': 'application/json' } })) : Promise.reject(new TypeError('fetch failed', { cause }))));
-  };
-  const reached = async (calls: string[]): Promise<void> => {
-    for (let polls = 0; polls < 5000 && !calls.includes('POST /v1/deposits'); polls += 1) await new Promise((resolve) => setImmediate(resolve));
   };
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -3474,11 +3477,21 @@ describe('oars pool deposit --send says what it is doing and stops when told (t1
     const pool = wire({ 'GET /v1/covenant': UNACCEPTED, 'POST /v1/covenant/accept': answer(200, { ok: true, version: 'v1' }), 'POST /v1/deposits': answer(201, { ok: true }) });
     const hooks = (): number[] => ['SIGINT', 'SIGTERM', 'SIGHUP'].map((name) => process.listenerCount(name));
     const before = hooks();
+    // The screen's prompt is written to stderr; the wrapper signals that write, so the test goes on exactly when the screen waits for its line.
+    const stderr = scene.h.deps.io.stderr;
+    let prompted: () => void = () => undefined;
+    const waiting = new Promise<void>((resolve) => {
+      prompted = resolve;
+    });
+    scene.h.deps.io.stderr = (text) => {
+      stderr(text);
+      if (scene.h.err.join('').includes(`${SCREEN.text}\n\n> `)) prompted();
+    };
     let ended = false;
     const sending = poolDeposit(scene.h.deps, sendOptions(hash, pool.via)).catch((error: unknown) => error).finally(() => {
       ended = true;
     });
-    for (let polls = 0; polls < 5000 && !scene.h.err.join('').includes(`${SCREEN.text}\n\n> `); polls += 1) await new Promise((resolve) => setImmediate(resolve));
+    await waiting;
     expect(ended).toBe(false);
     process.emit('SIGINT');
     // No bound of its own: a red run (the reader never freed) is ended by the suite's test timeout.
@@ -3507,13 +3520,13 @@ describe('oars pool deposit --send says what it is doing and stops when told (t1
   it('ends a send whose deposit the pool never answers after 30 seconds with a plain sentence that says the pool may have received it, marks nothing sent, and frees the lock', async () => {
     const { scene, hash, outbox } = await sendingScene();
     const calls: string[] = [];
-    stalledPool(calls);
+    const held = stalledPool(calls);
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     let ended = false;
     const sending = poolDeposit(scene.h.deps, sendOptions(hash, undefined)).catch((error: unknown) => error).finally(() => {
       ended = true;
     });
-    await reached(calls);
+    await held;
     expect(calls).toEqual(['GET /v1/covenant', 'POST /v1/deposits']);
     expect(scene.h.err.join('')).toBe(`Sending batch ${hash.slice(0, 12)} to ${POOL}...\n`);
     await vi.advanceTimersByTimeAsync(29_999);
@@ -3527,11 +3540,11 @@ describe('oars pool deposit --send says what it is doing and stops when told (t1
   it('ends a send whose deposit is in flight when the person presses Ctrl-C: says the pool may have received it, marks nothing sent, frees the lock, and leaves no signal hook', async () => {
     const { scene, hash, outbox } = await sendingScene();
     const calls: string[] = [];
-    stalledPool(calls);
+    const held = stalledPool(calls);
     const hooks = (): number[] => ['SIGINT', 'SIGTERM', 'SIGHUP'].map((name) => process.listenerCount(name));
     const before = hooks();
     const sending = poolDeposit(scene.h.deps, sendOptions(hash, undefined)).catch((error: unknown) => error);
-    await reached(calls);
+    await held;
     expect(calls).toEqual(['GET /v1/covenant', 'POST /v1/deposits']);
     process.emit('SIGINT');
     expect(await sending).toMatchObject({ exitCode: ExitCode.UNEXPECTED, message: STOPPED_AFTER_SENDING });
@@ -3543,10 +3556,10 @@ describe('oars pool deposit --send says what it is doing and stops when told (t1
   it('does not say the pool may have received it when the stall came before the deposit went out', async () => {
     const { scene, hash } = await sendingScene();
     const calls: string[] = [];
-    stalledPool(calls, false);
+    const held = stalledPool(calls, false);
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const sending = poolDeposit(scene.h.deps, sendOptions(hash, undefined)).catch((error: unknown) => error);
-    for (let polls = 0; polls < 5000 && calls.length === 0; polls += 1) await new Promise((resolve) => setImmediate(resolve));
+    await held;
     await vi.advanceTimersByTimeAsync(30_000);
     expect(await sending).toMatchObject({ exitCode: ExitCode.UNREACHABLE, message: `The pool at ${POOL} did not answer within 30 seconds. Nothing was marked sent. Run the same command to try again.` });
     expect(calls).toEqual(['GET /v1/covenant']);
@@ -3570,13 +3583,13 @@ describe('oars pool deposit --send says what it is doing and stops when told (t1
   it('ends the request in flight when the run is interrupted, and does not start one on a signal that already fired', async () => {
     const { scene } = await sendingScene();
     const calls: string[] = [];
-    stalledPool(calls);
+    const held = stalledPool(calls);
     const stop = new AbortController();
     const sender = networkSender(scene.h.deps, 'deposit', { stallMs: 30_000, signal: stop.signal });
     const headers: Array<[string, string]> = [];
     const request: Outgoing = { method: 'POST', url: new URL('/v1/deposits', POOL), headers };
     const inflight = sender(request).catch((error: unknown) => error);
-    await reached(calls);
+    await held;
     stop.abort(new SendInterrupted('signal', 'Interrupted by SIGINT.'));
     expect(await inflight).toMatchObject({ exitCode: ExitCode.UNEXPECTED, message: STOPPED_AFTER_SENDING });
     expect(await sender(request).catch((error: unknown) => error)).toMatchObject({ message: STOPPED });
