@@ -1774,6 +1774,33 @@ describe('a raw id quoted as escaped JSON, and an id seen in another session (t1
     expect(quoting.split(mask).length - 1).toBe(2);
   });
 
+  it('masks an opaque id another session writes inside a longer run, before a suffix or after a separator', async () => {
+    const classifier = 'cls-5d1e0a93b7c24f68';
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), harnessLine(S(1), 21, 'api-request', { serverClassifierRequest: classifier }), assistant(S(1), 1, 'done')]);
+    f.write('-work-oars', S(2), [user(S(2), 1, 'run the build'), result(S(2), 20, `wrote ${classifier}.json then ${classifier}-retry and agent_${classifier} twice`), assistant(S(2), 1, 'green')]);
+    await stored(f);
+    expect((await buildPack(f.runtime, options(f))).emitted).toBe(2);
+    const text = packText(f.out);
+    expect(text).not.toContain(classifier);
+    const mask = /"serverClassifierRequest":"([^"]+)"/.exec(text)?.[1] ?? 'missing';
+    expect(text).toContain(`${mask}.json then ${mask}-retry and agent_${mask} twice`);
+  });
+
+  it('refuses to finish when an opaque id of another session is left before a suffix where the masks cannot see it', async () => {
+    const classifier = 'cls-5d1e0a93b7c24f68';
+    const hidden = classifier.replace('-', String.fromCharCode(92) + 'u002d');
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), harnessLine(S(1), 21, 'api-request', { serverClassifierRequest: classifier }), assistant(S(1), 1, 'done')]);
+    f.write('-work-oars', S(2), [user(S(2), 1, 'run the build'), harnessLine(S(2), 20, 'system', { content: 'PLANTED' }).replace('PLANTED', `see ${hidden}.json and ${hidden}-retry`), assistant(S(2), 1, 'green')]);
+    await stored(f);
+    const failure = await buildPack(f.runtime, options(f)).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(String(failure)).toMatch(/raw id[^\n]*: 2/);
+    expect(String(failure)).not.toContain(classifier);
+    expect(existsSync(f.out)).toBe(false);
+  });
+
   it('refuses to finish when a raw id from another session is left in a file where the masks cannot see it, and names a count, never the id', async () => {
     const prompt = 'f0e1d2c3-b4a5-4968-8776-65544332211f';
     // The id with its hyphens written as JSON escapes: a mask reads the raw bytes and misses it, the decoded text holds it.
