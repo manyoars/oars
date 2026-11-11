@@ -1543,3 +1543,32 @@ describe('the skeleton names a transcript file (t1135 item 3)', () => {
     expect(skeleton).not.toContain(S(2).slice(0, 8));
   });
 });
+
+describe('a pack refuses to finish with a raw id left in it (t1135 item 4)', () => {
+  // A store session id with its hyphens written as JSON escapes: the masks read the raw bytes and miss it, the decoded text holds it.
+  const hidden = (session: string): string => session.split('-').join(`${String.fromCharCode(92)}u002d`);
+  const planted = (): string => user(S(1), 2, 'PLANTED').replace('PLANTED', `see ${hidden(S(2))} here`);
+
+  it('keeps the .partial folder, counts the hit by key, and exits 2 with no pack folder', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), planted(), assistant(S(1), 3, 'done')]);
+    f.write('-work-oars', S(2), [user(S(2), 1, 'run the build'), assistant(S(2), 1, 'green')]);
+    await stored(f);
+    const printed: string[] = [];
+    const code = await main(['--terms', f.terms, '--owners', f.owners, '--index-key', f.indexKey, '--buyer-key', 'sample', '--out', f.out, '--min-turns', '1'], { runtime: f.runtime, print: (text) => printed.push(text) });
+    expect(code).toBe(2);
+    expect(existsSync(`${f.out}.partial`)).toBe(true);
+    expect(existsSync(f.out)).toBe(false);
+    expect(printed.join('\n')).toMatch(/raw id[^\n]*session: 1/);
+    // The refusal names a count, never the id.
+    expect(printed.join('\n')).not.toContain(S(2));
+  });
+
+  it('finishes a pack with no raw id as before', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 3, 'done')]);
+    await stored(f);
+    expect((await buildPack(f.runtime, options(f))).emitted).toBe(1);
+    expect(existsSync(`${f.out}.partial`)).toBe(false);
+  });
+});
