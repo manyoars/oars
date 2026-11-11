@@ -47,8 +47,8 @@ const IN_FORCE = 'the version in force when the session was made';
 /**
  * The terms each harness puts on its user, with each page's version as the page itself prints it, read on 2026-11-10 (t1103, M2): Anthropic's Consumer Terms (effective 2025-10-08) and
  * Usage Policy (the page read is effective 2026-11-12), OpenAI's Terms of Use (effective 2026-01-01) and Usage Policies (the page read is effective 2026-11-20). A session made before a page's
- * effective date rests on the version before it, which was not read, so a policy row says "the version in force when the session was made" and the page read follows as its own `, current` row
- * with what it adds (t1135 item 7). `training` is `priced-add-on` only where the terms allow training on outputs; the current Anthropic Usage Policy forbids it "without prior authorization from Anthropic", and OpenAI's
+ * effective date rests on the version before it, which was not read, so a policy row says "the version in force when the session was made" and the page read follows as its own row named by its effective date
+ * with what it adds (t1135 item 7). `training` is `priced-add-on` only where the terms allow training on outputs; the Anthropic Usage Policy from 2026-11-12 forbids it "without prior authorization from Anthropic", and OpenAI's
  * bars supplying training material for a model that substitutes for OpenAI's.
  * A harness with no row here is left out of a pack: a session whose terms are not known carries no rights to state.
  */
@@ -57,7 +57,7 @@ export const HARNESS_TERMS: { readonly [harness in Harness]?: { terms: readonly 
     terms: [
       { name: 'Anthropic Consumer Terms', version: 'effective 2025-10-08' },
       { name: 'Anthropic Usage Policy', version: IN_FORCE },
-      { name: 'Anthropic Usage Policy, current', version: 'effective 2026-11-12; bars using outputs to train an AI model without prior authorization from Anthropic' },
+      { name: 'Anthropic Usage Policy, from 2026-11-12', version: 'effective 2026-11-12; bars using outputs to train an AI model without prior authorization from Anthropic' },
     ],
     training: 'not-offered',
   },
@@ -65,7 +65,7 @@ export const HARNESS_TERMS: { readonly [harness in Harness]?: { terms: readonly 
     terms: [
       { name: 'OpenAI Terms of Use', version: 'effective 2026-01-01' },
       { name: 'OpenAI Usage Policies', version: IN_FORCE },
-      { name: 'OpenAI Usage Policies, current', version: 'effective 2026-11-20; bars supplying training material or signals for a model meant to substitute for an OpenAI model' },
+      { name: 'OpenAI Usage Policies, from 2026-11-20', version: 'effective 2026-11-20; bars supplying training material or signals for a model meant to substitute for an OpenAI model' },
     ],
     training: 'not-offered',
   },
@@ -343,7 +343,8 @@ const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 
 // The harness's own prefixed ids, masked wherever they stand (tool output, a pasted log): `toolu_01...`, `msg_01...`, `req_011C...`. A word like `msg_handler_func` is no id, so the tail must run 16 or more
 // characters and hold a digit, as every id the vendor issues does.
-const HARNESS_PREFIXED = '(?:srvtoolu|toolu|msg|req)_(?=[A-Za-z_-]*[0-9])[A-Za-z0-9][A-Za-z0-9_-]{14,}[A-Za-z0-9]';
+const ID_TAIL = '_(?=[A-Za-z_-]*[0-9])[A-Za-z0-9][A-Za-z0-9_-]{14,}[A-Za-z0-9]';
+const HARNESS_PREFIXED = `(?:srvtoolu|toolu|msg|req)${ID_TAIL}`;
 
 // A candidate id: a uuid, a harness-prefixed id, or any `req_`/`call_` token. Any other `word_` prefix is not one, or it would eat the first group of a uuid that follows it (`session_<uuid>`). A uuid or
 // a `call_` token is rewritten only when it is a known id, so other words that match are left alone.
@@ -355,7 +356,7 @@ const WHOLE_UUID = new RegExp(`^${UUID}$`, 'i');
 const MASKED_PREFIXED = /^(?:(?:srv)?toolu|msg|req)_[0-9a-f]{24}$/;
 
 /** A `msg_` or `req_` id as the vendor issues it (mixed case, high entropy), found anywhere in raw transcript text. */
-const VENDOR_ID = new RegExp(`(?<![A-Za-z0-9])(?:msg|req)_(?=[A-Za-z_-]*[0-9])[A-Za-z0-9][A-Za-z0-9_-]{14,}[A-Za-z0-9]`, 'g');
+const VENDOR_ID = new RegExp(`(?<![A-Za-z0-9])(?:msg|req)${ID_TAIL}`, 'g');
 
 /** The keys whose value is an id besides those ending in `uuid`: Claude Code's `requestId`, Codex's `call_id`, `session_id`, and `forked_from_id`, and the line, request, prompt, delivery, and message ids of the store's own records (t1135). */
 const ID_KEYS: readonly string[] = ['requestId', 'call_id', 'session_id', 'forked_from_id', 'requestRef', 'serverClassifierRequest', 'promptId', 'toolUseID', 'tool_use_id', 'deliveryId', 'delivery_id', 'messageId', 'msg_id'];
