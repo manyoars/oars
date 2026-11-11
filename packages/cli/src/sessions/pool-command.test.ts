@@ -15,6 +15,7 @@ import { harness, server, useServer, type Harness } from '../test-support.js';
 import { busyLine, DEFAULT_POOL_URL, networkSender, OFFER_AFTER, OFFER_BEFORE, poolCoverage, poolDeposit, poolRaw, poolRemove, poolServer, RAW_PHRASE, RAW_PROMPT, waitingLine, type Reply, type Sender } from './pool-command.js';
 import { localNames } from './redact.js';
 import { batchHash, canonicalBytes, currentStamp, FIELD_ROWS, fieldsOf, heldAcross, outboxFolder, readPulled, writeBatch, writePulled } from './pool-outbox.js';
+import { heldRaw, writeRaw } from './pool-raw.js';
 import { markSent, sentHashes } from './pool-sent.js';
 import { SendInterrupted, withSendLock, type LockFs, type LockTimes } from './pool-send-lock.js';
 import type { Outgoing } from './pool-print.js';
@@ -3338,6 +3339,21 @@ describe('oars pool remove <hash> (t1149 item 2)', () => {
     expect([...(await sentHashes(outboxFolder(scene.staged.storeDir, POOL)))]).not.toContain(hash);
   });
 
+  it('takes the queued raw copies of the same session with it, and keeps those of another session', async () => {
+    const scene = await batched();
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    const hash = printedHashes(scene)[0] ?? '';
+    const outbox = outboxFolder(scene.staged.storeDir, POOL);
+    const key = (await heldAcross(outbox)).batches.find((batch) => batch.hash === hash)?.key ?? '';
+    await writeRaw(outbox, key, 1, 'first part');
+    await writeRaw(outbox, key, 2, 'second part');
+    const other = await writeRaw(outbox, 'f'.repeat(16), 1, 'another session');
+    scene.h.out.length = 0;
+    expect(await scene.cli('pool', 'remove', hash, '--server', POOL)).toBe(ExitCode.OK);
+    expect(scene.h.out.join('')).toContain('2 queued raw copies of the same session went with it.');
+    expect((await heldRaw(outbox)).copies.map((copy) => copy.hash)).toEqual([other.hash]);
+  });
+
   it('says so when the batch was already sent, and drops a pulled batch from pulled.json', async () => {
     const scene = await batched();
     expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
@@ -3659,6 +3675,24 @@ describe('oars pool deposit --send says what it is doing and stops when told (t1
     expect(await poolDeposit(scene.h.deps, sendOptions(hash, undefined)).catch((error: unknown) => error)).toMatchObject({
       exitCode: ExitCode.UNREACHABLE,
       message: `Cannot reach the pool at ${POOL}: nothing is listening there (connect ECONNREFUSED 127.0.0.1:1). Nothing was marked sent. Run the same command to try again.`,
+    });
+  });
+
+  it('says the pool may have received the batch for ETIMEDOUT, which an open socket raises after the body was written', async () => {
+    const { scene, hash } = await sendingScene();
+    resetBy(Object.assign(new Error('read ETIMEDOUT'), { code: 'ETIMEDOUT' }));
+    expect(await poolDeposit(scene.h.deps, sendOptions(hash, undefined)).catch((error: unknown) => error)).toMatchObject({
+      exitCode: ExitCode.UNREACHABLE,
+      message: `Cannot reach the pool at ${POOL}: the connection timed out (read ETIMEDOUT). Nothing was marked sent. The pool may already have received it. Run the same command to try again.`,
+    });
+  });
+
+  it('does not say the pool may have received the batch when the connect itself timed out', async () => {
+    const { scene, hash } = await sendingScene();
+    resetBy(Object.assign(new Error(''), { code: 'UND_ERR_CONNECT_TIMEOUT' }));
+    expect(await poolDeposit(scene.h.deps, sendOptions(hash, undefined)).catch((error: unknown) => error)).toMatchObject({
+      exitCode: ExitCode.UNREACHABLE,
+      message: `Cannot reach the pool at ${POOL}: the connection timed out (UND_ERR_CONNECT_TIMEOUT). Nothing was marked sent. Run the same command to try again.`,
     });
   });
 

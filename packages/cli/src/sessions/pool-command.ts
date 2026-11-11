@@ -143,12 +143,13 @@ export interface Guard {
 /** The pool took the request and then said nothing for `Guard.stallMs`. */
 class PoolStalled extends Error {}
 
-/** A newcomer's words for the network failures a stalled or restarted pool produces; the raw reason follows the sentence in parentheses. The flag marks a failure that comes after the request began to go out, where the pool may hold the batch: a refused, unresolved, or timed-out connection fails before any of it was sent. */
+/** A newcomer's words for the network failures a stalled or restarted pool produces; the raw reason follows the sentence in parentheses. The flag marks a failure that comes after the request began to go out, where the pool may hold the batch: a refused, unresolved, or connect-timed-out connection fails before any of it was sent, while ETIMEDOUT can also come from a retransmit timeout on an open socket after the body was written. */
 const PLAIN_REASONS: ReadonlyArray<readonly [RegExp, string, boolean]> = [
   [/ECONNRESET|socket hang up|UND_ERR_SOCKET/, 'the connection was dropped before the pool answered', true],
   [/ECONNREFUSED/, 'nothing is listening there', false],
   [/ENOTFOUND|EAI_AGAIN/, 'that name did not resolve', false],
-  [/ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT/, 'the connection timed out', false],
+  [/UND_ERR_CONNECT_TIMEOUT/, 'the connection timed out', false],
+  [/ETIMEDOUT/, 'the connection timed out', true],
   [/EPIPE/, 'the connection closed while the batch was going out', true],
 ];
 const NOT_MARKED = 'Nothing was marked sent.';
@@ -691,6 +692,8 @@ export const poolRemove = async (deps: RunDeps, hash: string, options: { server?
       const found = (await heldAcross(outbox)).batches.find((batch) => batch.hash === hash);
       if (found === undefined) throw refuse('batch_unknown', 'No batch with that hash is in the outbox, so nothing was removed. Run oars pool outbox to list them.');
       await rm(found.file, { force: true });
+      // The session's queued raw copies go in the same lock: the background sender posts every raw copy it holds without looking for its batch, and a batch the person withdrew must take the session's transcript with it (GDPR Article 7(3)). A pulled batch never had one here.
+      const rawGone = await removeRawExcept(outbox, new Set(), found.key);
       if (found.pulled) {
         const pulled = await readPulled(outbox, REMOVE);
         Reflect.deleteProperty(pulled, found.key);
@@ -699,6 +702,7 @@ export const poolRemove = async (deps: RunDeps, hash: string, options: { server?
       const sentAt = (await sentLog(outbox)).get(hash);
       const text = [
         `Removed batch ${hash} from the outbox for ${server}. Nothing was sent, and nothing at the pool changed.`,
+        ...(rawGone === 0 ? [] : [`${String(rawGone)} queued raw ${rawGone === 1 ? 'copy' : 'copies'} of the same session went with it.`]),
         ...(sentAt === undefined ? [] : [`It was already sent at ${sentAt}; removing it here does not take it back from the pool.`]),
         found.pulled ? 'It came from a cloud session: only oars pool hold pull admits it again.' : 'A later oars pool deposit builds it again while its session passes the folder allowlist; to keep a folder out, run oars pool raw --folder <folder> --mode off.',
       ].join('\n');
