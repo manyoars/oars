@@ -351,8 +351,11 @@ const UUID_OR_PREFIXED = new RegExp(`${UUID}|(?<![A-Za-z0-9])${HARNESS_PREFIXED}
 const HARNESS_ID = new RegExp(`^${HARNESS_PREFIXED}$`, 'i');
 const WHOLE_UUID = new RegExp(`^${UUID}$`, 'i');
 
-/** A tool-use id the redactor already masked with `maskOf` (`toolu_` and 24 hex): masking it again would only give the one id a second value. Other prefixes are not skipped: a Codex `call_` id is hex of its own. */
-const MASKED_PREFIXED = /^(?:srv)?toolu_[0-9a-f]{24}$/;
+/** An id this module already masked with `maskOf` (`toolu_`, `msg_`, or `req_` and 24 hex): masking it again would only give the one id a second value. Other prefixes are not skipped: a Codex `call_` id is hex of its own. */
+const MASKED_PREFIXED = /^(?:(?:srv)?toolu|msg|req)_[0-9a-f]{24}$/;
+
+/** A `msg_` or `req_` id as the vendor issues it (mixed case, high entropy), found anywhere in raw transcript text. */
+const VENDOR_ID = new RegExp(`(?<![A-Za-z0-9])(?:msg|req)_(?=[A-Za-z_-]*[0-9])[A-Za-z0-9][A-Za-z0-9_-]{14,}[A-Za-z0-9]`, 'g');
 
 /** The keys whose value is an id besides those ending in `uuid`: Claude Code's `requestId`, Codex's `call_id`, `session_id`, and `forked_from_id`, and the line, request, prompt, delivery, and message ids of the store's own records (t1135). */
 const ID_KEYS: readonly string[] = ['requestId', 'call_id', 'session_id', 'forked_from_id', 'requestRef', 'serverClassifierRequest', 'promptId', 'toolUseID', 'tool_use_id', 'deliveryId', 'delivery_id', 'messageId', 'msg_id'];
@@ -1036,7 +1039,8 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     const raws = await Promise.all(files.map((file) => readFile(file.path, 'utf8')));
     // The accounts this session's repositories live under: the owners entry's, and what the remote of each working folder names.
     const handles = [...(owner.handles ?? []), ...accountsOf(new Set(raws.flatMap((raw) => [...cwdsOf(raw)])))];
-    const texts = raws.map((raw) => redactTranscript(raw, domains, names, injectedKey, { handles, toolId: (id) => maskOf(indexKey, options.buyerKey, id), fetchedHosts: true }).text);
+    // `msg_` and `req_` ids go through the keyed mask first: redaction's entropy rule would turn a real one (mixed case, high entropy) into `<secret>` and cut the link between its lines. `toolu_` ids reach the redactor's `toolId` hook.
+    const texts = raws.map((raw) => redactTranscript(raw.replace(VENDOR_ID, (id) => maskOf(indexKey, options.buyerKey, id)), domains, names, injectedKey, { handles, toolId: (id) => maskOf(indexKey, options.buyerKey, id), fetchedHosts: true }).text);
     // The person's name is looked for in the raw text, the redacted text, and the decoded strings: a JSON escape hides it from the raw bytes, and redaction decodes a line only when it masks something in it, so the decoding is done here.
     const searched = [...texts, ...raws, ...raws.flatMap(decodedStrings)].map(squashed);
     if (objectedNames.some((name) => searched.some((text) => text.includes(name)))) {
