@@ -414,7 +414,7 @@ const looksLikeId = (value: string): boolean => reachedWhole(value) || (value.le
 
 /**
  * The line ids a transcript carries, each with the key it stood under: the value of every id key at any depth, a Codex `session_meta` line's own `id`, and the `id` of an `api-request` line (a bare `id` is
- * no id key elsewhere: a tool call's `id` is a `toolu_` id the redactor already masks).
+ * no id key elsewhere: a tool call's `id` is a `toolu_` id the redactor already masks). An `id` whose value is a whole uuid is an id at any depth: a synthetic assistant line's `message.id` is one (t1147).
  */
 const lineIdsOf = (value: unknown, found: Map<string, string>): void => {
   if (Array.isArray(value)) for (const item of value) lineIdsOf(item, found);
@@ -424,7 +424,7 @@ const lineIdsOf = (value: unknown, found: Map<string, string>): void => {
     const own: unknown = type === 'session_meta' && isRecord(payload) ? Reflect.get(payload, 'id') : undefined;
     if (typeof own === 'string') found.set(own, 'session_meta.id');
     for (const [key, item] of Object.entries(value)) {
-      if (typeof item === 'string' && (isIdKey(key) || (key === 'id' && type === 'api-request'))) found.set(item, key);
+      if (typeof item === 'string' && (isIdKey(key) || (key === 'id' && (type === 'api-request' || WHOLE_UUID.test(item))))) found.set(item, key);
       else lineIdsOf(item, found);
     }
   }
