@@ -136,6 +136,8 @@ export interface PackOptions {
   leadPrompts?: readonly RegExp[];
   /** Runs one read-only git command, as `oars pool deposit` takes `options.git ?? runGit`; a test injects its own. */
   git?: Git | undefined;
+  /** The vocabulary folder, for a caller bundled into a `data:` URL (sample-pack.mjs), where the CLI cannot find its own shipped copy. */
+  vocabDir?: URL | undefined;
 }
 
 export interface PackCounts {
@@ -935,7 +937,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   const gate: WireGate = { redact: makeRedactor(domains), terms: await loadTerms(options.terms) };
   const roots = new Map<string, TranscriptRoot>((await readSkeletons(runtime.storeDir, undefined, true)).skeletons.map(({ session, merkleRoot, leaves }) => [session, { merkleRoot, leaves }]));
   const recordsOf = new Map(sessionsOf(store, roots).map((records) => [records.main.session, records]));
-  const read = shellReader(vocabulary());
+  const read = shellReader(vocabulary(options.vocabDir));
   const git = options.git ?? runGit;
   // The outcome block's inputs, read from the store only when some owner opted in: each main session's last prompt, and the shas its own shell calls made (a subagent's are not attributed to it).
   const lastVerify = new Map<string, { index: number; verify: PromptVerify | null }>();
@@ -1110,6 +1112,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
 export interface Io {
   runtime: SessionsRuntime;
   print: (text: string) => void;
+  vocabDir?: URL | undefined;
 }
 
 const VALUED = new Set(['--terms', '--owners', '--index-key', '--buyer-key', '--out', '--size', '--seed', '--min-turns']);
@@ -1138,7 +1141,7 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
     return 2;
   }
   try {
-    const counts = await buildPack(io.runtime, options);
+    const counts = await buildPack(io.runtime, { ...options, vocabDir: io.vocabDir });
     const { term, noRaw, noTerms, unreadable } = counts.excluded;
     io.print(
       [

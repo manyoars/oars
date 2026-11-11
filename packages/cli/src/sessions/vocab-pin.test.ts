@@ -20,7 +20,7 @@ import {
   TOOL_INPUT_KEYS,
   VOCAB_VERSION,
 } from './public-vocabulary.js';
-import { VOCAB_DIR } from './vocab-load.js';
+import { vocabDir } from './vocab-load.js';
 
 const sha256 = (data: string | Buffer): string => createHash('sha256').update(data).digest('hex');
 const sorted = (set: ReadonlySet<string>): string[] => [...set].sort();
@@ -35,7 +35,7 @@ interface Manifest {
   files: { [file: string]: { bytes: number; sha256: string } };
 }
 const manifest = (): Manifest => {
-  const parsed: unknown = JSON.parse(readFileSync(new URL('manifest.json', VOCAB_DIR), 'utf8'));
+  const parsed: unknown = JSON.parse(readFileSync(new URL('manifest.json', vocabDir()), 'utf8'));
   const snapshotDate: unknown = Reflect.get(Object(parsed), 'snapshotDate');
   const listed: unknown = Reflect.get(Object(parsed), 'files');
   if (typeof snapshotDate !== 'string' || typeof listed !== 'object' || listed === null) throw new Error('manifest.json is malformed');
@@ -49,7 +49,7 @@ const manifest = (): Manifest => {
   return { snapshotDate, files };
 };
 
-const fileDigests = (): { [file: string]: string } => Object.fromEntries(Object.keys(manifest().files).map((file) => [file, sha256(readFileSync(new URL(file, VOCAB_DIR)))]));
+const fileDigests = (): { [file: string]: string } => Object.fromEntries(Object.keys(manifest().files).map((file) => [file, sha256(readFileSync(new URL(file, vocabDir())))]));
 
 /**
  * Each VOCAB_VERSION with the digest of every snapshot file's bytes and of the curated lists. Append an entry for a new version; never edit a
@@ -83,7 +83,7 @@ describe('the pinned vocabulary', () => {
     const { snapshotDate, files } = manifest();
     expect(snapshotDate).toBe(VOCAB_SNAPSHOT_DATE);
     for (const [file, held] of Object.entries(files)) {
-      const bytes = readFileSync(new URL(file, VOCAB_DIR));
+      const bytes = readFileSync(new URL(file, vocabDir()));
       expect({ file, bytes: bytes.length, sha256: sha256(bytes) }).toEqual({ file, ...held });
     }
   });

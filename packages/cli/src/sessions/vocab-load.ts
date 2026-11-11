@@ -27,8 +27,11 @@ export interface Vocabulary {
   harnessVersions: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
-/** packages/cli/vocab/, from src/sessions/ in a test and from dist/sessions/ once built: the same depth. */
-export const VOCAB_DIR = new URL('../../vocab/', import.meta.url);
+/**
+ * packages/cli/vocab/, from src/sessions/ in a test and from dist/sessions/ once built: the same depth. A function, not a constant: a bundle imported from a
+ * `data:` URL (the pool's sample-pack command) has no file location, and building this URL at load time would throw before that caller could pass its own folder.
+ */
+export const vocabDir = (): URL => new URL('../../vocab/', import.meta.url);
 
 const isRecord = (value: unknown): value is { [key: string]: unknown } => typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -61,7 +64,7 @@ const packageSnapshot = (dir: URL, file: string): PackageSnapshot => {
 export const PACKAGE_FILES = ['npm.json', 'pypi.json', 'crates.json', 'rubygems.json', 'homebrew.json', 'go.json', 'maven.json'] as const;
 
 /** Reads and checks every snapshot under `dir` (default: the shipped folder). */
-export const readVocabulary = (dir: URL = VOCAB_DIR): Vocabulary => {
+export const readVocabulary = (dir: URL = vocabDir()): Vocabulary => {
   const manifest = readJson(dir, 'manifest.json');
   const snapshotDate = manifest['snapshotDate'];
   if (snapshotDate !== VOCAB_SNAPSHOT_DATE) {
@@ -86,5 +89,5 @@ export const readVocabulary = (dir: URL = VOCAB_DIR): Vocabulary => {
 };
 
 let loaded: Vocabulary | undefined;
-/** The shipped vocabulary, read once on first use: reading 6 MB of JSON is not free, and most commands never project. */
-export const vocabulary = (): Vocabulary => (loaded ??= readVocabulary());
+/** The shipped vocabulary, read once on first use: reading 6 MB of JSON is not free, and most commands never project. `dir` is for a caller that cannot locate the folder itself. */
+export const vocabulary = (dir?: URL): Vocabulary => (loaded ??= readVocabulary(dir));
