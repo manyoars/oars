@@ -12,7 +12,7 @@ import { makeCoverage, readCoverageSetting, writeCoverageSetting } from './cover
 import { checkSession, exclusionPaths, lastWritten, loadTerms, transcriptFilesOf, type Reason } from './exclusion.js';
 import { localNames, makeRedactor, REDACTION_VERSION, redactTranscript } from './redact.js';
 import { recordSend, recordWire, newTally, tallyBatch } from '../telemetry/wire.js';
-import { discardStale, FIELD_ROWS, fieldsOf, heldAcross, lockedAcross, rescanPulled, machineKeys, markShown, noteMachineKey, outboxFolder, partsOf, pulledAt, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
+import { discardStale, FIELD_ROWS, fieldsOf, heldAcross, lockedAcross, rescanPulled, machineKeys, markShown, noteMachineKey, outboxFolder, partsOf, pulledAt, readPulled, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, writePulled, type LockRefusal } from './pool-outbox.js';
 import { deriveConsequences } from './recall-consequence.js';
 import { readRecalls } from './recall-object.js';
 import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, recommendationsOf, sessionsOf, skeletonOf, unpinnedKid, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
@@ -39,6 +39,7 @@ const LOGIN = 'pool-login';
 const LOGOUT = 'pool-logout';
 export const DEPOSIT = 'pool-deposit';
 const OUTBOX = 'pool-outbox';
+const REMOVE = 'pool-remove';
 const POOL_DEPOSITS = '/v1/deposits';
 const FETCH = 'pool-fetch';
 const EXPORT = 'pool-export';
@@ -673,6 +674,40 @@ export const busyLine = ({ holder, local, ageMs, untouchedMs, waitedMs, staleMs 
   const held = `${who} has held this outbox's send lock for ${span(ageMs)} and was still sending after the ${span(waitedMs)} this run waited, so nothing was sent.`;
   if (holder !== undefined && local) return `${held} A retry succeeds as soon as pid ${String(holder.pid)} ends.`;
   return `${held} Run the same command again once it ends. If it has hung, oars takes the lock over about ${span(Math.max(1, staleMs - untouchedMs))} from now.`;
+};
+
+/**
+ * `oars pool remove <hash>`: takes one batch out of this machine's outbox, the batch `oars pool outbox` printed under that hash. It takes the send lock without waiting, because a send in progress may be reading the very file, and refuses while another run holds it.
+ * It reads nothing from the pool and sends nothing, so it needs no sign-in, and it changes only files here. A batch built from a local session is built again by a later `oars pool deposit` while its session still passes the folder allowlist; one a cloud session held is admitted again only by `oars pool hold pull`.
+ */
+export const poolRemove = async (deps: RunDeps, hash: string, options: { server?: string | undefined; lock?: SendLock | undefined }): Promise<Outcome> => {
+  const runtime = runtimeOf(deps);
+  const server = poolServer(deps.env, REMOVE, options.server);
+  if (!/^[0-9a-f]{64}$/.test(hash)) throw usage('remove takes the SHA-256 that oars pool outbox printed: 64 hexadecimal characters.', REMOVE);
+  const outbox = outboxFolder(runtime.storeDir, server);
+  const refuse = (code: string, title: string): CliError => new CliError(title, ExitCode.CONFLICT, REMOVE, { code, title, status: 409 });
+  try {
+    return await withSendLock(outbox, async () => {
+      const found = (await heldAcross(outbox)).batches.find((batch) => batch.hash === hash);
+      if (found === undefined) throw refuse('batch_unknown', 'No batch with that hash is in the outbox, so nothing was removed. Run oars pool outbox to list them.');
+      await rm(found.file, { force: true });
+      if (found.pulled) {
+        const pulled = await readPulled(outbox, REMOVE);
+        Reflect.deleteProperty(pulled, found.key);
+        await writePulled(outbox, pulled);
+      }
+      const sentAt = (await sentLog(outbox)).get(hash);
+      const text = [
+        `Removed batch ${hash} from the outbox for ${server}. Nothing was sent, and nothing at the pool changed.`,
+        ...(sentAt === undefined ? [] : [`It was already sent at ${sentAt}; removing it here does not take it back from the pool.`]),
+        found.pulled ? 'It came from a cloud session: only oars pool hold pull admits it again.' : 'A later oars pool deposit builds it again while its session passes the folder allowlist; to keep a folder out, run oars pool raw --folder <folder> --mode off.',
+      ].join('\n');
+      return { document: { ok: true, server, hash, removed: true }, text };
+    }, { ...options.lock?.times, waitMs: 0 }, options.lock?.fs);
+  } catch (error) {
+    if (error instanceof SendLockBusy) throw refuse('send_locked', `Another oars run${error.detail.holder === undefined ? '' : ` (pid ${String(error.detail.holder.pid)})`} holds this outbox's send lock, so nothing was removed. Run the same command again once it ends.`);
+    throw error;
+  }
 };
 
 /** The covenant version the pool names, or `undefined` when it cannot be asked or names none. The route is public, so no credential goes with it. */

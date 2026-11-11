@@ -12,9 +12,9 @@ import { defaultConfigDir } from '../credentials.js';
 import { ExitCode } from '../errors.js';
 import { readSpool } from '../telemetry/spool.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
-import { busyLine, DEFAULT_POOL_URL, networkSender, OFFER_AFTER, OFFER_BEFORE, poolCoverage, poolDeposit, poolRaw, poolServer, RAW_PHRASE, RAW_PROMPT, waitingLine, type Reply, type Sender } from './pool-command.js';
+import { busyLine, DEFAULT_POOL_URL, networkSender, OFFER_AFTER, OFFER_BEFORE, poolCoverage, poolDeposit, poolRaw, poolRemove, poolServer, RAW_PHRASE, RAW_PROMPT, waitingLine, type Reply, type Sender } from './pool-command.js';
 import { localNames } from './redact.js';
-import { batchHash, canonicalBytes, FIELD_ROWS, fieldsOf, outboxFolder, writeBatch } from './pool-outbox.js';
+import { batchHash, canonicalBytes, currentStamp, FIELD_ROWS, fieldsOf, heldAcross, outboxFolder, readPulled, writeBatch, writePulled } from './pool-outbox.js';
 import { markSent, sentHashes } from './pool-sent.js';
 import { SendInterrupted, withSendLock, type LockFs, type LockTimes } from './pool-send-lock.js';
 import type { Outgoing } from './pool-print.js';
@@ -3318,6 +3318,73 @@ describe('oars pool deposit --send holds the send lock (t884 fix round)', () => 
     expect(failed).toMatchObject({ exitCode: ExitCode.CONFLICT, problem: { code: 'send_locked' } });
     expect(clock.at() - LOCK_FROM).toBe(120_000);
     expect(pool.requests).toEqual([]);
+  });
+});
+
+describe('oars pool remove <hash> (t1149 item 2)', () => {
+  const heldHashes = async (scene: Scene): Promise<string[]> => (await heldAcross(outboxFolder(scene.staged.storeDir, POOL))).batches.map((batch) => batch.hash);
+
+  it('removes the one batch, says what it removed, and sends and changes nothing at the pool', async () => {
+    const scene = await batched();
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    const hash = printedHashes(scene)[0] ?? '';
+    expect(await heldHashes(scene)).toContain(hash);
+    scene.seen.length = 0;
+    scene.h.out.length = 0;
+    expect(await scene.cli('pool', 'remove', hash, '--server', POOL)).toBe(ExitCode.OK);
+    expect(scene.h.out.join('')).toContain(`Removed batch ${hash} from the outbox for ${POOL}. Nothing was sent, and nothing at the pool changed.`);
+    expect(await heldHashes(scene)).not.toContain(hash);
+    expect(scene.seen).toEqual([]);
+    expect([...(await sentHashes(outboxFolder(scene.staged.storeDir, POOL)))]).not.toContain(hash);
+  });
+
+  it('says so when the batch was already sent, and drops a pulled batch from pulled.json', async () => {
+    const scene = await batched();
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    const hash = printedHashes(scene)[0] ?? '';
+    const outbox = outboxFolder(scene.staged.storeDir, POOL);
+    const held = (await heldAcross(outbox)).batches.find((batch) => batch.hash === hash);
+    await writePulled(outbox, { [held?.key ?? '']: currentStamp() });
+    await markSent(outbox, hash, Date.UTC(2026, 10, 11));
+    scene.h.out.length = 0;
+    expect(await scene.cli('pool', 'remove', hash, '--server', POOL)).toBe(ExitCode.OK);
+    const printed = scene.h.out.join('');
+    expect(printed).toContain('It was already sent at');
+    expect(printed).toContain('only oars pool hold pull admits it again');
+    expect(await readPulled(outbox, 'test')).toEqual({});
+    expect(await heldHashes(scene)).not.toContain(hash);
+  });
+
+  it('refuses while a send holds the lock, and removes nothing', async () => {
+    const scene = await batched();
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    const hash = printedHashes(scene)[0] ?? '';
+    const outbox = outboxFolder(scene.staged.storeDir, POOL);
+    let release: () => void = () => undefined;
+    let taken: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      taken = resolve;
+    });
+    const holder = withSendLock(outbox, () => new Promise<void>((resolve) => {
+      release = resolve;
+      taken();
+    }));
+    await held;
+    const failed = await poolRemove(scene.h.deps, hash, { server: POOL }).catch((error: unknown) => error);
+    expect(failed).toMatchObject({ exitCode: ExitCode.CONFLICT, problem: { code: 'send_locked' } });
+    expect(await heldHashes(scene)).toContain(hash);
+    release();
+    await holder;
+  });
+
+  it('fails clearly for a hash that is not in the outbox, and for text that is not a hash', async () => {
+    const scene = await batched();
+    const before = await heldHashes(scene);
+    const absent = await scene.cli('pool', 'remove', 'a'.repeat(64), '--server', POOL);
+    expect(absent).toBe(ExitCode.CONFLICT);
+    expect(scene.h.err.join('')).toContain('No batch with that hash is in the outbox, so nothing was removed.');
+    expect(await scene.cli('pool', 'remove', 'not-a-hash', '--server', POOL)).toBe(ExitCode.USAGE);
+    expect(await heldHashes(scene)).toEqual(before);
   });
 });
 

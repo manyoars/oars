@@ -22,7 +22,7 @@ import { githubVisibility, poolEnroll, poolMachineRevoke, poolMachines } from '.
 import { runNetGit } from './sessions/machine-hold.js';
 import { holdPull } from './sessions/machine-pull.js';
 import { runGit } from './sessions/survival.js';
-import { poolCoverage, poolDeposit, poolExport, poolFetch, poolLogin, poolLogout, poolOutbox, poolProve, poolRaw } from './sessions/pool-command.js';
+import { poolCoverage, poolDeposit, poolExport, poolFetch, poolLogin, poolLogout, poolOutbox, poolProve, poolRaw, poolRemove } from './sessions/pool-command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 import { telemetryOff, telemetryOn, telemetryReport, telemetryShow, telemetryStatus } from './telemetry/command.js';
@@ -656,6 +656,16 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       emit(deps, flag(options, 'json'), await poolOutbox(deps, { server: text(options, 'server'), explain: flag(options, 'explain') }));
+    });
+
+  pool
+    .command('remove')
+    .argument('<hash>', 'the SHA-256 of a batch, as oars pool outbox prints it')
+    .description('remove one batch from the outbox on this machine; nothing is sent, and nothing at the pool changes. It refuses while a send holds the outbox lock. A later oars pool deposit builds the batch again while its session passes the folder allowlist')
+    .option(serverOption, serverHelp)
+    .action(async (hash: string, _options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await poolRemove(deps, hash, { server: text(options, 'server') }));
     });
 
   pool
