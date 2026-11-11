@@ -1773,4 +1773,87 @@ describe('a raw id quoted as escaped JSON, and an id seen in another session (t1
     // The quoted copies carry the very mask of the line's own id, so the link holds.
     expect(quoting.split(mask).length - 1).toBe(2);
   });
+
+  it('refuses to finish when a raw id from another session is left in a file where the masks cannot see it, and names a count, never the id', async () => {
+    const prompt = 'f0e1d2c3-b4a5-4968-8776-65544332211f';
+    // The id with its hyphens written as JSON escapes: a mask reads the raw bytes and misses it, the decoded text holds it.
+    const hidden = prompt.split('-').join(String.fromCharCode(92) + 'u002d');
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), harnessLine(S(1), 20, 'user', { promptId: prompt }), assistant(S(1), 1, 'done')]);
+    f.write('-work-oars', S(2), [user(S(2), 1, 'run the build'), harnessLine(S(2), 20, 'system', { content: 'PLANTED' }).replace('PLANTED', `see ${hidden} here`), assistant(S(2), 1, 'green')]);
+    await stored(f);
+    const failure = await buildPack(f.runtime, options(f)).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(String(failure)).toMatch(/raw id[^\n]*promptId: 1/);
+    expect(String(failure)).not.toContain(prompt);
+    expect(existsSync(`${f.out}.partial`)).toBe(true);
+    expect(existsSync(f.out)).toBe(false);
+  });
+});
+
+describe('--sessions builds the pack from a list (t1138)', () => {
+  // Each session asks its own thing: the same first prompt in two sessions makes the shorter one a duplicate.
+  const turns = (session: string, count: number, label = session.slice(0, 1)): string[] => Array.from({ length: count }, (_, n) => [user(session, 2 * n + 1, `ask ${label} ${String(n)}`), assistant(session, 2 * n + 1, `answer ${String(n)}`)]).flat();
+  const command = (f: Fixture, extra: readonly string[]): string[] => ['--terms', f.terms, '--owners', f.owners, '--index-key', f.indexKey, '--buyer-key', 'sample', '--out', f.out, '--min-turns', '3', ...extra];
+  const listOf = (f: Fixture, ids: readonly string[]): string => {
+    const file = join(f.root, 'sessions.txt');
+    writeFileSync(file, `${ids.join('\r\n')}\n\n`);
+    return file;
+  };
+
+  it('builds exactly the listed sessions, in the file\'s order, and ignores size and seed because they are refused beside it', async () => {
+    const f = fixture();
+    for (const n of [1, 2, 3]) f.write('-work-oars', S(n), turns(S(n), 2));
+    await stored(f);
+    const printed: string[] = [];
+    const code = await main(command(f, ['--sessions', listOf(f, [S(3), S(1), S(3)])]), { runtime: f.runtime, print: (text) => printed.push(text) });
+    expect(code).toBe(0);
+    expect(printed.join('\n')).toContain('Wrote 2 sessions');
+    expect(printed.join('\n')).not.toContain('Left out of the list');
+    expect(sessionsOf(f)).toEqual([S(3), S(1)]);
+    const record: unknown = JSON.parse(readFileSync(join(f.out, 'pack.json'), 'utf8'));
+    expect(record).toMatchObject({ size: 2, seed: null, listed: 2 });
+  });
+
+  it('prints each listed session that is left out with its reason', async () => {
+    const f = fixture();
+    const earlier = turns(S(1), 2);
+    const replay = earlier.map((text) => line({ ...(JSON.parse(text) as object), sessionId: S(2) }));
+    const key = 'my' + 'AK' + 'IA' + 'IOSFODNN7EXAMPLE';
+    f.write('-work-oars', S(1), earlier);
+    f.write('-work-oars', S(2), [...replay, ...turns(S(2), 2)]);
+    f.write('-work-oars', S(3), turns(S(3), 2, 'other'));
+    f.write('-work-oars', S(4), [...turns(S(4), 2), user(S(4), 9, `${TERM} is here`)]);
+    f.write('-work-other', S(5), turns(S(5), 2));
+    f.write('-work-oars', S(6), turns(S(6), 1));
+    f.write('-work-oars', S(7), [user(S(7), 1, 'add a test'), assistant(S(7), 1, `set it to ${key} and rerun`), ...turns(S(7), 2).slice(2)]);
+    f.write('-work-oars', S(8), [user(S(8), 1, 'you are the build lead'), assistant(S(8), 1, 'ok'), ...turns(S(8), 2).slice(2)]);
+    await stored(f);
+    const left = new Map<string, string>();
+    const counts = await buildPack(f.runtime, options(f, { minTurns: 3, leadPrompts: [/^you are the build lead/], sessions: [S(1), S(2), S(3), S(4), S(5), S(6), S(7), S(8), S(9)], onDrop: (session, reason) => left.set(session, reason) }));
+    expect(Object.fromEntries(left)).toEqual({ [S(1)]: 'duplicate', [S(4)]: 'term', [S(5)]: 'noOwner', [S(6)]: 'tooShort', [S(7)]: 'secret', [S(8)]: 'lead', [S(9)]: 'notFound' });
+    expect(counts).toMatchObject({ emitted: 2 });
+    expect(sessionsOf(f).sort()).toEqual([S(2), S(3)]);
+  });
+
+  it('prints those lines from the command, and refuses --size or --seed beside --sessions, an unreadable file, and an empty one', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), turns(S(1), 2));
+    await stored(f);
+    const file = listOf(f, [S(1), S(9)]);
+    const printed: string[] = [];
+    expect(await main(command(f, ['--sessions', file]), { runtime: f.runtime, print: (text) => printed.push(text) })).toBe(0);
+    expect(printed.join('\n')).toContain(`Left out of the list: ${S(9)} notFound`);
+    for (const flag of [['--size', '3'], ['--seed', 'x']]) {
+      const refused: string[] = [];
+      expect(await main(command(f, ['--sessions', file, ...flag]), { runtime: f.runtime, print: (text) => refused.push(text) })).toBe(2);
+      expect(refused.join('\n')).toMatch(/without --size or --seed/);
+      expect(refused.join('\n')).toContain('--sessions <file>');
+    }
+    for (const bad of [join(f.root, 'missing.txt'), listOf(f, [])]) {
+      const refused: string[] = [];
+      expect(await main(command({ ...f, out: join(f.root, 'again') }, ['--sessions', bad]), { runtime: f.runtime, print: (text) => refused.push(text) })).toBe(2);
+      expect(refused.join('\n')).toMatch(/Cannot read the --sessions file|lists no session/);
+    }
+  });
 });
