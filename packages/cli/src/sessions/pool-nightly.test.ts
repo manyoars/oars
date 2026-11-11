@@ -8,9 +8,10 @@ import { mkdirSync } from 'node:fs';
 import { harness } from '../test-support.js';
 import { nightlyPoolDeps } from './pool-nightly-deps.js';
 import { nightlyPoolSend } from './pool-nightly.js';
-import type { Reply, Sender } from './pool-command.js';
+import { poolDeposit, poolRemove, type Reply, type Sender } from './pool-command.js';
 import type { Outgoing } from './pool-print.js';
-import { batchHash, outboxFolder } from './pool-outbox.js';
+import { batchHash, heldAcross, outboxFolder } from './pool-outbox.js';
+import { heldRaw } from './pool-raw.js';
 import { SendLockBusy, withSendLock, type LockFs } from './pool-send-lock.js';
 import { deposit, updatePoolChoices } from './store.js';
 import { cleanup, NOW, settledClock, stage, type Staged } from './test-support.js';
@@ -72,6 +73,59 @@ const outboxFiles = (staged: Staged, suffix: string): string[] => {
   return existsSync(root) ? readdirSync(root, { recursive: true, encoding: 'utf8' }).filter((name) => name.endsWith(suffix)) : [];
 };
 const header = (request: Outgoing, name: string): string | undefined => request.headers.find(([key]) => key === name)?.[1];
+
+describe('the nightly pool send after oars pool remove (t1149 item 8)', () => {
+  const built = async (): Promise<{ here: Scene; outbox: string; batches: { hash: string; key: string }[] }> => {
+    const here = await scene('granted');
+    await poolDeposit(here.deps, { server: POOL, covenant: 'v1' });
+    const outbox = outboxFolder(here.staged.storeDir, POOL);
+    return { here, outbox, batches: (await heldAcross(outbox)).batches };
+  };
+
+  it('posts nothing for a removed session, with its batch or its raw copies, while the other sessions still go', async () => {
+    const { here, outbox, batches } = await built();
+    const gone = batches[0];
+    expect(batches.length).toBeGreaterThan(1);
+    const rawBefore = (await heldRaw(outbox)).copies;
+    const goneRaw = rawBefore.filter((copy) => copy.key === gone?.key);
+    expect(goneRaw.length).toBeGreaterThan(0);
+    await poolRemove(here.deps, gone?.hash ?? '', { server: POOL });
+    const pool = wire(OK_RAW);
+    const result = await nightlyPoolSend(here.deps, pool.via);
+    expect(result.outcome).toBe('sent');
+    const posted = pool.requests.filter((request) => request.method === 'POST' && request.url.pathname === '/v1/deposits').map((request) => batchHash(request.body ?? ''));
+    expect(posted).not.toContain(gone?.hash);
+    expect(posted.sort()).toEqual(batches.slice(1).map((batch) => batch.hash).sort());
+    const putHashes = rawPuts(pool).map((put) => /\/v1\/raw\/([0-9a-f]{64})\/parts\//.exec(put.url.pathname)?.[1]);
+    for (const copy of goneRaw) expect(putHashes).not.toContain(copy.hash);
+    expect(putHashes).toHaveLength(rawBefore.length - goneRaw.length);
+    // A second night finds the same exclusion: the list outlives the night.
+    const again = wire(OK_RAW);
+    await nightlyPoolSend(here.deps, again.via);
+    expect(again.requests.filter((request) => request.method === 'POST' && request.url.pathname === '/v1/deposits')).toEqual([]);
+  });
+
+  it('sends the session again after --restore', async () => {
+    const { here, batches } = await built();
+    const gone = batches[0];
+    await poolRemove(here.deps, gone?.hash ?? '', { server: POOL });
+    await poolRemove(here.deps, gone?.hash ?? '', { server: POOL, restore: true });
+    const pool = wire(OK_RAW);
+    await nightlyPoolSend(here.deps, pool.via);
+    const posted = pool.requests.filter((request) => request.method === 'POST' && request.url.pathname === '/v1/deposits').map((request) => batchHash(request.body ?? ''));
+    expect(posted).toContain(gone?.hash);
+  });
+
+  it('fails the night and sends nothing when the removed list is damaged, rather than sending everything', async () => {
+    const { here, outbox, batches } = await built();
+    await poolRemove(here.deps, batches[0]?.hash ?? '', { server: POOL });
+    writeFileSync(join(outbox, 'removed.json'), '{ not json');
+    const pool = wire(OK_RAW);
+    const result = await nightlyPoolSend(here.deps, pool.via);
+    expect(result.outcome).toBe('failed');
+    expect(pool.requests.filter((request) => request.method !== 'GET')).toEqual([]);
+  });
+});
 
 describe('the nightly pool send', () => {
   it('sends new batches and the redacted raw parts once the covenant is accepted and raw consent is granted', async () => {

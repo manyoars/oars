@@ -3354,6 +3354,49 @@ describe('oars pool remove <hash> (t1149 item 2)', () => {
     expect((await heldRaw(outbox)).copies.map((copy) => copy.hash)).toEqual([other.hash]);
   });
 
+  it('keeps the session out of the next deposit, says so, and brings it back with --restore', async () => {
+    const scene = await batched();
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    const hash = printedHashes(scene)[0] ?? '';
+    const before = await heldHashes(scene);
+    scene.h.out.length = 0;
+    expect(await scene.cli('pool', 'remove', hash, '--server', POOL)).toBe(ExitCode.OK);
+    expect(scene.h.out.join('')).toContain(`stays out of every later oars pool deposit, the background sender's included, until you run oars pool remove ${hash} --restore.`);
+    scene.h.out.length = 0;
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    expect(scene.h.out.join('')).toContain('1 session you removed with oars pool remove: nothing of them is built, queued, or sent.');
+    expect(await heldHashes(scene)).toEqual(before.filter((held) => held !== hash));
+    scene.h.out.length = 0;
+    expect(await scene.cli('pool', 'remove', hash, '--restore', '--server', POOL)).toBe(ExitCode.OK);
+    expect(scene.h.out.join('')).toContain(`Restored the session of batch ${hash} for ${POOL}. Nothing was sent. A later oars pool deposit builds it again`);
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    expect((await heldHashes(scene)).sort()).toEqual(before.sort());
+    expect(scene.seen).toEqual([]);
+  });
+
+  it('fails clearly to restore a hash nothing removed', async () => {
+    const scene = await batched();
+    expect(await scene.cli('pool', 'remove', 'b'.repeat(64), '--restore', '--server', POOL)).toBe(ExitCode.CONFLICT);
+    expect(scene.h.err.join('')).toContain('No removed batch has that hash, so nothing was restored.');
+  });
+
+  it('fails clearly on a damaged removed list, in remove, restore, and deposit, and changes nothing', async () => {
+    const scene = await batched();
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    const hash = printedHashes(scene)[0] ?? '';
+    const outbox = outboxFolder(scene.staged.storeDir, POOL);
+    const before = await heldHashes(scene);
+    for (const damaged of ['{ not json', '["a"]', '{"a":1}']) {
+      writeFileSync(join(outbox, 'removed.json'), damaged);
+      for (const args of [['remove', hash], ['remove', hash, '--restore'], ['deposit']]) {
+        scene.h.err.length = 0;
+        expect(await scene.cli('pool', ...args, '--server', POOL)).toBe(ExitCode.INVALID);
+        expect(scene.h.err.join('')).toContain('is not a list of removed sessions. Move it aside');
+      }
+    }
+    expect(await heldHashes(scene)).toEqual(before);
+  });
+
   it('says so when the batch was already sent, and drops a pulled batch from pulled.json', async () => {
     const scene = await batched();
     expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);

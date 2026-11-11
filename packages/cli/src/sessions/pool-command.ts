@@ -12,7 +12,7 @@ import { makeCoverage, readCoverageSetting, writeCoverageSetting } from './cover
 import { checkSession, exclusionPaths, lastWritten, loadTerms, transcriptFilesOf, type Reason } from './exclusion.js';
 import { localNames, makeRedactor, REDACTION_VERSION, redactTranscript } from './redact.js';
 import { recordSend, recordWire, newTally, tallyBatch } from '../telemetry/wire.js';
-import { discardStale, FIELD_ROWS, fieldsOf, heldAcross, lockedAcross, rescanPulled, machineKeys, markShown, noteMachineKey, outboxFolder, partsOf, pulledAt, readPulled, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, writePulled, type LockRefusal } from './pool-outbox.js';
+import { discardStale, FIELD_ROWS, fieldsOf, heldAcross, lockedAcross, rescanPulled, machineKeys, markShown, noteMachineKey, outboxFolder, partsOf, pulledAt, readPulled, readRemoved, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, writePulled, writeRemoved, type LockRefusal } from './pool-outbox.js';
 import { deriveConsequences } from './recall-consequence.js';
 import { readRecalls } from './recall-object.js';
 import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, recommendationsOf, sessionsOf, skeletonOf, unpinnedKid, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
@@ -515,6 +515,8 @@ interface DepositCounts {
   raw: { copies: number; bytes: number; masked: number };
   /** Captured before steps and frames, or with a transcript that has no root, so it holds no closed reading to build. Re-capture would give it one. */
   uncaptured: number;
+  /** Sessions a person took out of the outbox with `oars pool remove`: skipped whole, not built, queued, or used to fill a window, until `--restore`. */
+  removedByPerson: number;
   /** Passed the gates but has a transcript, main or subagent, that gained a line within `session_idle_hours`: its batch waits until the session has ended. */
   notEnded: number;
   /** Refused by the vocabulary here; the count of those and which fields, never a value. */
@@ -679,9 +681,9 @@ export const busyLine = ({ holder, local, ageMs, untouchedMs, waitedMs, staleMs 
 
 /**
  * `oars pool remove <hash>`: takes one batch out of this machine's outbox, the batch `oars pool outbox` printed under that hash. It takes the send lock without waiting, because a send in progress may be reading the very file, and refuses while another run holds it.
- * It reads nothing from the pool and sends nothing, so it needs no sign-in, and it changes only files here. A batch built from a local session is built again by a later `oars pool deposit` while its session still passes the folder allowlist; one a cloud session held is admitted again only by `oars pool hold pull`.
+ * It reads nothing from the pool and sends nothing, so it needs no sign-in, and it changes only files here. The session of a local batch goes on `removed.json`, which `poolDeposit` (and so the background sender) honors: nothing of it is built, queued, or sent until `--restore <hash>` takes it off. One a cloud session held is admitted again only by `oars pool hold pull`.
  */
-export const poolRemove = async (deps: RunDeps, hash: string, options: { server?: string | undefined; lock?: SendLock | undefined }): Promise<Outcome> => {
+export const poolRemove = async (deps: RunDeps, hash: string, options: { server?: string | undefined; restore?: boolean | undefined; lock?: SendLock | undefined }): Promise<Outcome> => {
   const runtime = runtimeOf(deps);
   const server = poolServer(deps.env, REMOVE, options.server);
   if (!/^[0-9a-f]{64}$/.test(hash)) throw usage('remove takes the SHA-256 that oars pool outbox printed: 64 hexadecimal characters.', REMOVE);
@@ -689,8 +691,19 @@ export const poolRemove = async (deps: RunDeps, hash: string, options: { server?
   const refuse = (code: string, title: string): CliError => new CliError(title, ExitCode.CONFLICT, REMOVE, { code, title, status: 409 });
   try {
     return await withSendLock(outbox, async () => {
+      if (options.restore === true) {
+        const removed = await readRemoved(outbox, REMOVE);
+        const key = Object.keys(removed).find((candidate) => removed[candidate] === hash);
+        if (key === undefined) throw refuse('removal_unknown', 'No removed batch has that hash, so nothing was restored. The hash is the one oars pool remove printed when it removed the batch.');
+        Reflect.deleteProperty(removed, key);
+        await writeRemoved(outbox, removed);
+        return { document: { ok: true, server, hash, restored: true }, text: `Restored the session of batch ${hash} for ${server}. Nothing was sent. A later oars pool deposit builds it again while the session passes the gates.` };
+      }
+      const removed = await readRemoved(outbox, REMOVE);
       const found = (await heldAcross(outbox)).batches.find((batch) => batch.hash === hash);
       if (found === undefined) throw refuse('batch_unknown', 'No batch with that hash is in the outbox, so nothing was removed. Run oars pool outbox to list them.');
+      // The session goes on the list first: the build pass would otherwise rebuild it on its next run, the background sender's included, and send what the person withdrew (GDPR Article 7(3)). A list that cannot be read has already failed above, with the batch untouched.
+      if (!found.pulled) await writeRemoved(outbox, { ...removed, [found.key]: hash });
       await rm(found.file, { force: true });
       // The session's queued raw copies go in the same lock: the background sender posts every raw copy it holds without looking for its batch, and a batch the person withdrew must take the session's transcript with it (GDPR Article 7(3)). A pulled batch never had one here.
       const rawGone = await removeRawExcept(outbox, new Set(), found.key);
@@ -704,7 +717,7 @@ export const poolRemove = async (deps: RunDeps, hash: string, options: { server?
         `Removed batch ${hash} from the outbox for ${server}. Nothing was sent, and nothing at the pool changed.`,
         ...(rawGone === 0 ? [] : [`${String(rawGone)} queued raw ${rawGone === 1 ? 'copy' : 'copies'} of the same session went with it.`]),
         ...(sentAt === undefined ? [] : [`It was already sent at ${sentAt}; removing it here does not take it back from the pool.`]),
-        found.pulled ? 'It came from a cloud session: only oars pool hold pull admits it again.' : 'A later oars pool deposit builds it again while its session passes the folder allowlist; to keep a folder out, run oars pool raw --folder <folder> --mode off.',
+        found.pulled ? 'It came from a cloud session: only oars pool hold pull admits it again.' : `Its session stays out of every later oars pool deposit, the background sender's included, until you run oars pool remove ${hash} --restore.`,
       ].join('\n');
       return { document: { ok: true, server, hash, removed: true }, text };
     }, { ...options.lock?.times, waitMs: 0 }, options.lock?.fs);
@@ -765,7 +778,7 @@ export const poolDeposit = async (
   const injectedKey = `injected-block:${(await localSalt(runtime.storeDir)).salt}`;
   const allow = compileAllow(saved.allow);
   const discarded = await discardStale(outbox);
-  const counts: DepositCounts = { sessions: 0, batched: 0, excluded: { folder: 0, term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, off: 0, raw: { copies: 0, bytes: 0, masked: 0 }, uncaptured: 0, notEnded: 0, refused: 0, refusedFields: [], discarded, withdrawn: 0 };
+  const counts: DepositCounts = { sessions: 0, batched: 0, excluded: { folder: 0, term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, off: 0, raw: { copies: 0, bytes: 0, masked: 0 }, uncaptured: 0, removedByPerson: 0, notEnded: 0, refused: 0, refusedFields: [], discarded, withdrawn: 0 };
   // The one gate on a name: the operator's redactor and exclusion terms (t881). Everything else the pool classes itself.
   const termList = await loadTerms(terms);
   const gate: WireGate = { redact: makeRedactor(await readRedactDomains(runtime.storeDir)), terms: termList };
@@ -788,12 +801,19 @@ export const poolDeposit = async (
   // The sessions a Stop does not name that still pass the read-only gates: they only fill the windows of a delta, and are never counted, withdrawn, or built.
   const history: SessionRecords[] = [];
   const localStore = await loadStore(runtime.storeDir);
+  // A damaged list stops the pass before anything is built: it must never read as "nothing was removed".
+  const removedKeys = new Set(Object.keys(await readRemoved(outbox, DEPOSIT)));
   for (const records of sessionsOf(localStore, roots)) {
     // The Stop of a machine builds the one session that stopped: the others in the store belong to Stops of their own, so their batches stay as they are. They run the three read-only gates below and no more.
     const named = options.session === undefined || records.main.session === options.session;
     if (named) counts.sessions += 1;
     // Hashed with the account, so a redeposit replaces its own batch and two accounts' copies of one session cannot be joined.
     const key = machine === undefined ? contentHash([account, records.main.session]) : machineKeyOf(machine, records.main.session);
+    // Withdrawn by the person with `oars pool remove`: nothing of the session is built, queued, or read for a window, and its batch and raw copies are already gone.
+    if (removedKeys.has(key)) {
+      if (named) counts.removedByPerson += 1;
+      continue;
+    }
     if (!allow.allows(records.main.project)) {
       if (named) {
         counts.excluded.folder += 1;
@@ -901,6 +921,7 @@ export const poolDeposit = async (
     ...(discarded === 0 ? [] : [`Discarded ${String(discarded)} ${discarded === 1 ? 'batch' : 'batches'} built under an older vocabulary, field list, or skeleton format.`]),
     `Raw copies queued: ${String(counts.raw.copies)} (${String(counts.raw.bytes)} bytes, ${String(counts.raw.masked)} values masked). ${rawNote(saved.pool.rawConsent)}`.trim(),
     ...(rawStale(saved.pool, covenant) ? [`Your yes to the raw prompt was given under covenant ${saved.pool.rawConsentVersion ?? 'none'}, not ${covenant ?? ''}, so no raw copy is queued. Run oars pool raw --consent yes to answer for the covenant now in force.`] : []),
+    ...(counts.removedByPerson === 0 ? [] : [`${String(counts.removedByPerson)} ${counts.removedByPerson === 1 ? 'session' : 'sessions'} you removed with oars pool remove: nothing of them is built, queued, or sent. oars pool remove <hash> --restore brings one back.`]),
     ...(counts.off === 0 ? [] : [`${String(counts.off)} ${counts.off === 1 ? 'session' : 'sessions'} in a folder switched off: nothing of them is queued.`]),
     ...(termList.length === 0 ? [termsHint(terms)] : []),
     'Run oars pool outbox to print exactly what would be sent.',

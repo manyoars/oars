@@ -416,6 +416,43 @@ export const writePulled = async (outbox: string, pulled: Pulled): Promise<void>
   await rename(staged, join(outbox, PULLED));
 };
 
+const REMOVED = 'removed.json';
+
+/** The sessions a person took out of the outbox with `oars pool remove`: each outbox key and the hash of the batch that was removed, which is how `--restore` names the way back. Local only; nothing in it goes to the pool. */
+export interface Removed {
+  [key: string]: string;
+}
+
+/** `removed.json` as it stands; none when the file is missing. A file that is not a list of keys and hashes fails the command that reads it, so a damaged list never becomes "send everything". */
+export const readRemoved = async (outbox: string, step: string): Promise<Removed> => {
+  let text: string;
+  try {
+    text = await readFile(join(outbox, REMOVED), 'utf8');
+  } catch (error) {
+    if (isMissing(error)) return {};
+    throw error;
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    value = undefined;
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value) || !Object.values(value).every((hash) => typeof hash === 'string')) {
+    throw new CliError(`${join(outbox, REMOVED)} is not a list of removed sessions. Move it aside and run the command again; nothing was changed, built, or sent.`, ExitCode.INVALID, step);
+  }
+  return Object.fromEntries(Object.entries(value).map(([key, hash]) => [key, String(hash)]));
+};
+
+/** Staged and renamed, like `pulled.json`: a crash leaves the whole old list or the whole new one. */
+export const writeRemoved = async (outbox: string, removed: Removed): Promise<void> => {
+  await mkdirOwnerOnly(outbox);
+  const staged = join(outbox, `${REMOVED}.tmp`);
+  await writeOwnerOnly(staged, `${JSON.stringify(Object.fromEntries(Object.entries(removed).sort(([a], [b]) => (a < b ? -1 : 1))), null, 2)}
+`);
+  await rename(staged, join(outbox, REMOVED));
+};
+
 const POOL_STEP = 'pool-outbox';
 
 /** Whether any string or key in `value` holds one of `terms`, compared lowercased the way the local gate compares a transcript. */

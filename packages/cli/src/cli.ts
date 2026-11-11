@@ -661,11 +661,12 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
   pool
     .command('remove')
     .argument('<hash>', 'the SHA-256 of a batch, as oars pool outbox prints it')
-    .description('remove one batch from the outbox on this machine; nothing is sent, and nothing at the pool changes. It refuses while a send holds the outbox lock. A later oars pool deposit builds the batch again while its session passes the folder allowlist')
+    .description('remove one batch and its queued raw copies from the outbox on this machine; nothing is sent, and nothing at the pool changes. Its session stays out of every later oars pool deposit, the background sender included, until --restore. It refuses while a send holds the outbox lock')
+    .option('--restore', 'take the session of an earlier removal off the list, so a later oars pool deposit builds it again (the hash is the one remove printed)')
     .option(serverOption, serverHelp)
     .action(async (hash: string, _options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
-      emit(deps, flag(options, 'json'), await poolRemove(deps, hash, { server: text(options, 'server') }));
+      emit(deps, flag(options, 'json'), await poolRemove(deps, hash, { server: text(options, 'server'), restore: flag(options, 'restore') }));
     });
 
   pool
