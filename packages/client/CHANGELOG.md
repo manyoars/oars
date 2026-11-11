@@ -2,6 +2,10 @@
 
 All notable changes to `@manyoars/oars-client`. Versions follow semver.
 
+## 0.1.3 (2026-11-11)
+
+- The copyright holder in the LICENSE file is now Many Oars Co., which received the project from Switchyard Software Company by written assignment effective 2026-11-11. The license terms and the generated types are unchanged.
+
 ## 0.1.2 (2026-11-10)
 
 - Node floor lowered from 24 to 22.23.4, the `oars` CLI's floor, so installing the CLI on Node 22 prints no engine warning.
