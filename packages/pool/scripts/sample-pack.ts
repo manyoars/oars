@@ -530,7 +530,10 @@ const idMaskerOf = (texts: readonly string[], sessions: ReadonlyMap<string, stri
       else if (HARNESS_ID.test(token) && !/^[A-Za-z]+_[0-9a-f]{24}$/.test(token)) hit('prefixed id');
     }
     if (opaque !== null) for (const [token] of text.matchAll(opaque)) hit(lineIds.get(token) ?? 'id');
-    for (const { key, pattern } of narrow) for (const _found of text.matchAll(pattern)) hit(key);
+    for (const { key, pattern } of narrow) {
+      const count = [...text.matchAll(pattern)].length;
+      if (count > 0) hits.set(key, (hits.get(key) ?? 0) + count);
+    }
     return hits;
   };
   return { mask, scan };

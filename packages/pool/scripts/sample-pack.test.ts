@@ -1572,6 +1572,7 @@ describe('realistic harness ids keep their link through redaction (t1135 item 10
 
 describe('a keyed value that is no id shape stays under its key, and every keyed id is masked before redaction (t1135 round 4)', () => {
   const harnessLine = (session: string, n: number, type: string, fields: object): string => line({ type, uuid: uuidOf(session, 'a', n), parentUuid: null, isSidechain: false, timestamp: at(n), version: '2.1.300', sessionId: session, ...fields });
+  const fieldOf = (entry: unknown, name: string): unknown => (typeof entry === 'object' && entry !== null ? Reflect.get(entry, name) : undefined);
   const packLines = (f: Fixture): string[] => {
     const matchId = manifest(f.out)[0]?.matchId ?? '';
     return readFileSync(join(f.out, 'sessions', matchId, 'main.jsonl'), 'utf8')
@@ -1587,7 +1588,7 @@ describe('a keyed value that is no id shape stays under its key, and every keyed
     expect((await buildPack(f.runtime, options(f))).emitted).toBe(1);
     const lines = packLines(f);
     const entries = lines.map((text): unknown => JSON.parse(text));
-    const delivery = entries.map((entry) => (typeof entry === 'object' && entry !== null ? Reflect.get(entry, 'deliveryId') : undefined)).find((value) => value !== undefined);
+    const delivery = entries.map((entry) => fieldOf(entry, 'deliveryId')).find((value) => value !== undefined);
     expect(delivery).not.toBe('1');
     expect(typeof delivery).toBe('string');
     expect(lines.join('\n')).toContain('"input_tokens":1');
@@ -1613,7 +1614,7 @@ describe('a keyed value that is no id shape stays under its key, and every keyed
     expect(text).not.toContain(raw);
     expect(text).not.toContain('<secret>');
     const entries = packLines(f).map((row): unknown => JSON.parse(row));
-    const valueOf = (key: string): unknown => entries.map((entry) => (typeof entry === 'object' && entry !== null ? Reflect.get(entry, key) : undefined)).find((value) => value !== undefined);
+    const valueOf = (key: string): unknown => entries.map((entry) => fieldOf(entry, key)).find((value) => value !== undefined);
     expect(typeof valueOf('deliveryId')).toBe('string');
     expect(valueOf('deliveryId')).toBe(valueOf('delivery_id'));
   });
