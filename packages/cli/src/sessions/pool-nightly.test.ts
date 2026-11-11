@@ -354,7 +354,7 @@ describe('the nightly send on a pool that goes silent (t1143)', () => {
 });
 
 describe('withSendLock', () => {
-  const folder =(): string => join(stage().root, 'outbox');
+  const folder = (): string => join(stage().root, 'outbox');
 
   it('runs one holder at a time and removes the lock file when the holder throws', async () => {
     const outbox = folder();

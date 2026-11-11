@@ -150,7 +150,11 @@ const PLAIN_REASONS: ReadonlyArray<readonly [RegExp, string]> = [
   [/ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT/, 'the connection timed out'],
   [/EPIPE/, 'the connection closed while the batch was going out'],
 ];
-const RETRY = 'Nothing was marked sent. Run the same command to try again.';
+const NOT_MARKED = 'Nothing was marked sent.';
+const TRY_AGAIN = 'Run the same command to try again.';
+const RETRY = `${NOT_MARKED} ${TRY_AGAIN}`;
+/** Said after a stop or a stall once the request carrying the batch had gone out: the pool may hold it even though nothing here saw the answer. */
+const MAY_HAVE_RECEIVED = 'The pool may already have received it.';
 
 /** What `deposit` says after it writes the outbox: the covenant (the person's consent, docs/covenant 2.1) already lets the background sender send what is queued, with or without this command. A machine's batches are never sent by it. */
 const SENT_LATER = 'Nothing was sent yet. Once the covenant is accepted, oars sends what is queued automatically, in the background.';
@@ -163,14 +167,14 @@ const SENT_LATER = 'Nothing was sent yet. Once the covenant is accepted, oars se
 export const stoppedText = (received: boolean): string =>
   [
     'Stopped. This batch stays queued, and once the covenant is accepted oars sends it automatically in the background.',
-    ...(received ? ['The pool may already have received it.'] : []),
+    ...(received ? [MAY_HAVE_RECEIVED] : []),
     'To keep a folder out, run oars pool raw --folder <folder> --mode off.',
     'To stop this machine sending, run oars pool logout.',
   ].join('\n');
 
 /** Why a guarded request ended without an answer, in plain words: a stall, an interrupt, or a network failure whose raw reason is kept after the sentence. The exit code is the unreachable one, as before. */
 const guardedFailure = (step: string, cause: unknown, origin: string, guard: Guard, received: boolean): CliError => {
-  if (cause instanceof PoolStalled) return new CliError(`The pool at ${origin} did not answer within ${String(guard.stallMs / 1000)} seconds. ${RETRY}`, ExitCode.UNREACHABLE, step);
+  if (cause instanceof PoolStalled) return new CliError(`The pool at ${origin} did not answer within ${String(guard.stallMs / 1000)} seconds. ${received ? `${NOT_MARKED} ${MAY_HAVE_RECEIVED} ${TRY_AGAIN}` : RETRY}`, ExitCode.UNREACHABLE, step);
   if (cause instanceof SendInterrupted) return new CliError(stoppedText(received), ExitCode.UNEXPECTED, step);
   const unreachable = unreachableError(step, cause, origin);
   const raw = unreachable.message.slice(`Cannot reach the server at ${origin}: `.length);
@@ -586,13 +590,13 @@ export const currentTerms = (deps: RunDeps): Promise<string[]> => loadTerms(excl
 /** The one line a person with no exclusion terms needs: where the file goes and what names another. The deposit stays fail-closed without it (the A38 exclusion rule), so the first run says so before the deposit has to. */
 const termsHint = (file: string): string => `No exclusion terms file at ${file}: until it holds a term, one per line, every session stays out of the outbox. Create it there, or set OARS_EXCLUSION_TERMS to the file of your own.`;
 
-/** `deposit --send <hash>`: the send lock the detached sender (hook-bin.js nightly) takes too, then a skip for a hash already in `sent.log`, then the batch lock, then the covenant (accepted here or before, or nothing is sent), then the request. The body is read and hashed again just before the request. */
 /** What a test replaces in the send lock: its times and its clock, pause, and process checks, so a wait runs on driven time. */
 export interface SendLock {
   times: Partial<LockTimes>;
   fs: LockFs;
 }
 
+/** `deposit --send <hash>`: the send lock the detached sender (hook-bin.js nightly) takes too, then a skip for a hash already in `sent.log`, then the batch lock, then the covenant (accepted here or before, or nothing is sent), then the request. The body is read and hashed again just before the request. */
 const sendBatch = async (deps: RunDeps, options: { outbox: string; server: string; token: string; hash: string; acceptCovenant: string | undefined; region: Region | undefined; via: Sender | undefined; lock: SendLock | undefined }): Promise<Outcome> => {
   const { outbox, server, token, hash } = options;
   if (!/^[0-9a-f]{64}$/.test(hash)) throw usage('--send takes the SHA-256 that oars pool outbox printed: 64 hexadecimal characters.', DEPOSIT);
