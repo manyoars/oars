@@ -3481,13 +3481,10 @@ describe('oars pool deposit --send says what it is doing and stops when told (t1
     for (let polls = 0; polls < 5000 && !scene.h.err.join('').includes(`${SCREEN.text}\n\n> `); polls += 1) await new Promise((resolve) => setImmediate(resolve));
     expect(ended).toBe(false);
     process.emit('SIGINT');
-    const failed = await Promise.race([sending, new Promise((resolve) => setTimeout(resolve, 2000, 'still waiting for a line'))]);
-    expect(failed).toMatchObject({ exitCode: ExitCode.UNEXPECTED, message: STOPPED });
+    // No bound of its own: a red run (the reader never freed) is ended by the suite's test timeout.
+    expect(await sending).toMatchObject({ exitCode: ExitCode.UNEXPECTED, message: STOPPED });
     expect(pool.requests.map((request) => `${request.method} ${request.url.pathname}`)).toEqual(['GET /v1/covenant']);
     expect(hooks()).toEqual(before);
-    // Free the reader the red run leaves waiting, so a failing run does not hang its file.
-    scene.staged.stdin.end();
-    await sending;
   });
 
   it('tells a person who deposits that nothing was sent yet, that the background sender sends once the covenant is accepted, and still points to the outbox', async () => {
@@ -3525,6 +3522,22 @@ describe('oars pool deposit --send says what it is doing and stops when told (t1
     expect(await sending).toMatchObject({ exitCode: ExitCode.UNREACHABLE, message: `The pool at ${POOL} did not answer within 30 seconds. Nothing was marked sent. The pool may already have received it. Run the same command to try again.` });
     expect([...(await sentHashes(outbox))]).toEqual([]);
     expect(existsSync(join(outbox, 'send.lock'))).toBe(false);
+  });
+
+  it('ends a send whose deposit is in flight when the person presses Ctrl-C: says the pool may have received it, marks nothing sent, frees the lock, and leaves no signal hook', async () => {
+    const { scene, hash, outbox } = await sendingScene();
+    const calls: string[] = [];
+    stalledPool(calls);
+    const hooks = (): number[] => ['SIGINT', 'SIGTERM', 'SIGHUP'].map((name) => process.listenerCount(name));
+    const before = hooks();
+    const sending = poolDeposit(scene.h.deps, sendOptions(hash, undefined)).catch((error: unknown) => error);
+    await reached(calls);
+    expect(calls).toEqual(['GET /v1/covenant', 'POST /v1/deposits']);
+    process.emit('SIGINT');
+    expect(await sending).toMatchObject({ exitCode: ExitCode.UNEXPECTED, message: STOPPED_AFTER_SENDING });
+    expect([...(await sentHashes(outbox))]).toEqual([]);
+    expect(existsSync(join(outbox, 'send.lock'))).toBe(false);
+    expect(hooks()).toEqual(before);
   });
 
   it('does not say the pool may have received it when the stall came before the deposit went out', async () => {
