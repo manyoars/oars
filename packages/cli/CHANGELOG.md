@@ -4,6 +4,8 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 
 ## Unreleased
 
+- `oars pool deposit --send` prints three short lines on stderr before the covenant screen (what a deposit gives, the weekly fetch limit a counting deposit lifts for 90 days, and a pointer to the full text) and two after a successful acceptance (sending starts, and `oars pool fetch --help` for a first download). They sit outside the screen: the covenant text, its id `2.1-ec0ca3f6ff73`, and the hash recorded at acceptance are unchanged, and nothing prints on a wrong phrase, a refusal, or a failed post.
+
 ## 0.5.2 (2026-11-10)
 
 - Wire format 7 and field list 14 are unchanged from 0.5.0 (`CAPTURE_VERSION` 35); the pool reads formats 3 to 7.

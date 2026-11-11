@@ -330,6 +330,17 @@ const regionOf = (text: string | undefined): Region | undefined => {
   return answer === 'yes' || answer === 'no' ? answer : undefined;
 };
 
+/**
+ * The CLI's own words around the covenant screen, never inside it: the screen text and the hash of it that the pool records stay exactly what the pool served. They say what a deposit gives and what to run next, and
+ * they promise only access, as covenant 2.1 does ("What you get" and Section 4.3). The third line points at the full text because Part A is a summary and Section 16.2 makes the full covenant the whole agreement.
+ */
+export const OFFER_BEFORE: readonly string[] = [
+  'Depositing gives your account access to the pool.',
+  'A counting deposit lifts the weekly limit on pool fetches for 90 days.',
+  'The covenant is the whole deal. Its full text is linked below. Read it before you type.',
+];
+export const OFFER_AFTER: readonly string[] = ['Accepted. Sending your batch now.', 'Run oars pool fetch --help for your first pool download.'];
+
 /** A send stops here when the server is closed or wants a covenant accepted, before the batch is read for the last time. */
 const openCovenant = async (deps: RunDeps, server: string, token: string, accept: string | undefined, region: Region | undefined, via: Sender): Promise<void> => {
   const reply = await ask(deps, DEPOSIT, server, '/v1/covenant', { token }, via);
@@ -350,6 +361,7 @@ const openCovenant = async (deps: RunDeps, server: string, token: string, accept
   if (!isTerminal(deps)) {
     throw notAccepted(`Covenant ${version} is not accepted for this account. Accepting it takes a person at a terminal who reads it and types its phrase: run this command from one. Nothing was accepted.`);
   }
+  deps.io.stderr(`${OFFER_BEFORE.join('\n')}\n`);
   deps.io.stderr(`\n${screen.text}\n\n> `);
   emitOf(deps)('covenant-shown', { version });
   // One reader for both lines: a second one opened after the first closed would lose a line the first had already taken from a pipe.
@@ -374,6 +386,7 @@ const openCovenant = async (deps: RunDeps, server: string, token: string, accept
   const body = { version, textSha256: createHash('sha256').update(screen.text).digest('hex'), input: 'typed', client: `oars/${deps.version}`, euEeaUk: answered };
   const accepted = await ask(deps, DEPOSIT, server, '/v1/covenant/accept', { token, body }, via);
   if (accepted.status !== 200) throw refusal(DEPOSIT, accepted);
+  deps.io.stderr(`${OFFER_AFTER.join('\n')}\n`);
   // A yes to the raw prompt belongs to the covenant it was given under, and a covenant can change what that prompt covers: accepting another version asks the raw question again.
   const reset = { done: false };
   await updatePoolChoices(runtimeOf(deps).storeDir, (choices) => {
