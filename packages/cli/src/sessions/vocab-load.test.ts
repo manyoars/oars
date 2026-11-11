@@ -88,4 +88,15 @@ describe('vocabulary', () => {
     expect(first.snapshotDate).toBe(VOCAB_SNAPSHOT_DATE);
     expect(first.programs.has('grep')).toBe(true);
   });
+
+  it('reads each folder it is given once, and does not hand the first folder to a later one', () => {
+    const other = folder({ 'models.json': { ids: ['only-in-the-other-folder'] } });
+    const shipped = vocabulary();
+    const given = vocabulary(other);
+    expect(given).not.toBe(shipped);
+    expect(given.models.has('only-in-the-other-folder')).toBe(true);
+    expect(shipped.models.has('only-in-the-other-folder')).toBe(false);
+    expect(vocabulary(other)).toBe(given);
+    expect(vocabulary()).toBe(shipped);
+  });
 });

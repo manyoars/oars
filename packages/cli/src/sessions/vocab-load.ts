@@ -88,6 +88,12 @@ export const readVocabulary = (dir: URL = vocabDir()): Vocabulary => {
   };
 };
 
-let loaded: Vocabulary | undefined;
-/** The shipped vocabulary, read once on first use: reading 6 MB of JSON is not free, and most commands never project. `dir` is for a caller that cannot locate the folder itself. */
-export const vocabulary = (dir?: URL): Vocabulary => (loaded ??= readVocabulary(dir));
+const loaded = new Map<string, Vocabulary>();
+/** The vocabulary of a folder (the shipped one by default), read once per folder on first use: reading 6 MB of JSON is not free, and most commands never project. `dir` is for a caller that cannot locate the folder itself. */
+export const vocabulary = (dir: URL = vocabDir()): Vocabulary => {
+  const held = loaded.get(dir.href);
+  if (held !== undefined) return held;
+  const read = readVocabulary(dir);
+  loaded.set(dir.href, read);
+  return read;
+};
