@@ -1504,13 +1504,17 @@ describe('a raw id inside text (t1135 item 2)', () => {
   it('masks a leafUuid, promptId, and a known line uuid written in tool output, plain, quoted, or after a colon', async () => {
     const leaf = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
     const prompt = 'f0e1d2c3-b4a5-4968-8776-65544332211f';
-    const lineUuid = uuidOf(S(1), 'b', 77);
+    const lineUuid = uuidOf(S(1), 'a', 77);
     const text = await built((s) => [
       harnessLine(s, 77, 'system', { content: 'x' }),
       result(s, 20, `summary leafUuid: ${leaf}\nraw {"promptId":"${prompt}"} and ${lineUuid}`),
     ]);
-    for (const id of [leaf, prompt]) expect(text).not.toContain(id);
-    expect(text).not.toContain(uuidOf(S(1), 'a', 77));
+    for (const id of [leaf, prompt, lineUuid]) expect(text).not.toContain(id);
+    // The line's own uuid field and its mention in the tool text carry one mask, so it appears at least twice.
+    const carrier = text.split('\n').find((row) => row.includes('"content":"x"'));
+    const mask = String(JSON.parse(carrier ?? '{}').uuid);
+    expect(mask).toMatch(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/);
+    expect(text.split(mask).length - 1).toBeGreaterThanOrEqual(2);
   });
 
   it('leaves a lone uuid that no line carries as an id: it may be the person\'s own data', async () => {
@@ -1523,6 +1527,45 @@ describe('a raw id inside text (t1135 item 2)', () => {
     const text = await built((s) => [result(s, 20, 'calls msg_handler_func and req_queue_length')]);
     expect(text).toContain('msg_handler_func');
     expect(text).toContain('req_queue_length');
+  });
+});
+
+describe('realistic harness ids keep their link through redaction (t1135 item 10)', () => {
+  // Real ids are mixed-case and high-entropy: the entropy rule would turn them into `<secret>` unless the pack masks them first.
+  const REQUEST = 'req_011CVz8kQ3mT9xYpL2wR4nBd';
+  const MESSAGE = 'msg_01HqT7vKp3XcZ9mWbN2rYs5L';
+  const harnessLine = (session: string, n: number, type: string, fields: object): string => line({ type, uuid: uuidOf(session, 'a', n), parentUuid: null, isSidechain: false, timestamp: at(n), version: '2.1.300', sessionId: session, ...fields });
+  const underKey = async (buyerKey: string, lines: (session: string) => string[]): Promise<string> => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), ...lines(S(1)), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    expect((await buildPack(f.runtime, options(f, { buyerKey }))).emitted).toBe(1);
+    return packText(f.out);
+  };
+  const requests = (text: string): string[] => [...text.matchAll(/req_[0-9a-f]{24}/g)].map((found) => found[0]);
+  const messages = (text: string): string[] => [...text.matchAll(/msg_[0-9a-f]{24}/g)].map((found) => found[0]);
+
+  it('gives a requestRef and its requestId one req_ mask, different under another buyer key', async () => {
+    const lines = (s: string): string[] => [harnessLine(s, 20, 'api-request', { requestRef: REQUEST }), harnessLine(s, 21, 'system', { requestId: REQUEST })];
+    const one = await underKey('sample', lines);
+    expect(one).not.toContain(REQUEST);
+    expect(one).not.toContain('<secret>');
+    expect(requests(one).filter((id) => id === requests(one)[0])).toHaveLength(2);
+    const two = await underKey('another', lines);
+    expect(requests(two)[0]).not.toBe(requests(one)[0]);
+  });
+
+  it('gives a msg_id and its mention in tool text one msg_ mask, different under another buyer key', async () => {
+    const lines = (s: string): string[] => [
+      harnessLine(s, 20, 'system', { msg_id: MESSAGE }),
+      harnessLine(s, 21, 'user', { message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_01TextCarrier000000001', content: `see ${MESSAGE}` }] } }),
+    ];
+    const one = await underKey('sample', lines);
+    expect(one).not.toContain(MESSAGE);
+    expect(one).not.toContain('<secret>');
+    expect(messages(one).filter((id) => id === messages(one)[0])).toHaveLength(2);
+    const two = await underKey('another', lines);
+    expect(messages(two)[0]).not.toBe(messages(one)[0]);
   });
 });
 
