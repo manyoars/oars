@@ -1887,3 +1887,37 @@ describe('--sessions builds the pack from a list (t1138)', () => {
     }
   });
 });
+
+describe('a synthetic assistant line whose message.id is a uuid (t1147)', () => {
+  const synthetic = (session: string, n: number, id: string): string =>
+    line({ type: 'assistant', uuid: uuidOf(session, 'a', n), parentUuid: uuidOf(session, 'b', n), isSidechain: false, timestamp: at(n + 1), version: '2.1.300', sessionId: session, message: { diagnostics: null, id, role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'No response requested.' }], usage: { input_tokens: 0, output_tokens: 0 } } });
+  const mainId = '9b1d4e72-3c58-4a0f-8e26-5d7a1c0b9f34';
+  const sideId = 'a37c5e10-82d4-4b69-9f13-0e6b8d2a4c75';
+
+  it('masks the id in the main file and in a sidechain file, to one value per id', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), synthetic(S(1), 5, mainId), assistant(S(1), 1, 'done')]);
+    f.write('-work-oars', S(1), [user(S(1), 3, 'look around'), synthetic(S(1), 7, sideId), synthetic(S(1), 9, mainId), assistant(S(1), 3, 'looked')], 'agent-a1');
+    await stored(f);
+    expect((await buildPack(f.runtime, options(f))).emitted).toBe(1);
+    const text = packText(f.out);
+    expect(text).not.toContain(mainId);
+    expect(text).not.toContain(sideId);
+    const masks = [...text.matchAll(/"id":"([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})"/g)].map((match) => match[1]);
+    // Three synthetic lines, two distinct ids: the main id carries the same mask in both files.
+    expect(masks).toHaveLength(3);
+    expect(new Set(masks).size).toBe(2);
+  });
+
+  it('counts the id when it is left where the masks cannot see it', async () => {
+    const hidden = mainId.split('-').join(String.fromCharCode(92) + 'u002d');
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), synthetic(S(1), 5, mainId), assistant(S(1), 1, 'done')]);
+    f.write('-work-oars', S(2), [user(S(2), 1, 'run the build'), line({ type: 'system', uuid: uuidOf(S(2), 'a', 20), parentUuid: null, timestamp: at(20), version: '2.1.300', sessionId: S(2), content: 'PLANTED' }).replace('PLANTED', `see ${hidden} here`), assistant(S(2), 1, 'green')]);
+    await stored(f);
+    const failure = await buildPack(f.runtime, options(f)).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(String(failure)).toMatch(/raw id[^\n]*id: 1/);
+    expect(String(failure)).not.toContain(mainId);
+  });
+});
