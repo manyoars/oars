@@ -462,22 +462,62 @@ interface IdMasker {
 }
 
 /**
- * Every store session id (to its match id) and every line id the texts carry, rewritten wherever it occurs: the `sessionId` field, a path, a typed mention. A harness-prefixed id (`toolu_`, `msg_`, `req_`) is
- * masked wherever it stands, known or not. A uuid that no line carries as an id stays: it may be the person's own data. Other text is left alone.
+ * A pattern for each key naming the values `entries` hold under it: the key, its quote and separator (plain, escaped, or absent), then the value as a whole token. Used for a keyed value that is no id shape (`"1"`, `"main"`):
+ * it is masked only where it stands under its key, never wherever the same word or number appears.
  */
-const idMaskerOf = (texts: readonly string[], sessions: ReadonlyMap<string, string>, indexKey: string, buyerKey: string): IdMasker => {
+const underKeys = (entries: ReadonlyMap<string, string>): { key: string; pattern: RegExp }[] => {
+  const byKey = new Map<string, string[]>();
+  for (const [value, key] of entries) byKey.set(key, [...(byKey.get(key) ?? []), value]);
+  return [...byKey].map(([key, values]) => ({
+    key,
+    pattern: new RegExp(`((?<![A-Za-z0-9_])${escapeRegExp(key)}\\\\*["']?\\s*[:=]\\s*\\\\*["']?)(${[...values].sort((a, b) => b.length - a.length).map(escapeRegExp).join('|')})(?![A-Za-z0-9._-])`, 'g'),
+  }));
+};
+
+/** The ids a pack masks before redaction: the raw value of every named id key and of an api-request `id` that is no uuid or harness-prefixed id (those have their own routes). */
+const keyedOpaque = (texts: readonly string[], sessions: ReadonlyMap<string, string>): Map<string, string> => {
+  const found = new Map<string, string>();
+  for (const text of texts) for (const row of text.split('\n')) lineIdsOf(parsed(row), found);
+  return new Map([...found].filter(([id, key]) => (key === 'id' || ID_KEYS.includes(key)) && looksLikeId(id) && !WHOLE_UUID.test(id) && !HARNESS_ID.test(id) && !MASKED_PREFIXED.test(id) && !sessions.has(id)));
+};
+
+/**
+ * The raw transcripts with every keyed opaque id already masked, and those masks: redaction's entropy rule would turn a mixed-case, high-entropy `deliveryId` into `<secret>` and cut its link, so the keyed mask comes
+ * first, as it does for a `msg_` or `req_` id. The masks are handed on so the later pass does not mask them a second time.
+ */
+const premasked = (raws: readonly string[], sessions: ReadonlyMap<string, string>, indexKey: string, buyerKey: string): { texts: string[]; masks: Set<string> } => {
+  const ids = keyedOpaque(raws, sessions);
+  const pattern = wholeTokens([...ids.keys()]);
+  const masks = new Set<string>();
+  const texts = raws.map((raw) => (pattern === null ? raw : raw.replace(pattern, (id) => {
+    const mask = maskOf(indexKey, buyerKey, id);
+    masks.add(mask);
+    return mask;
+  })));
+  return { texts, masks };
+};
+
+/**
+ * Every store session id (to its match id) and every line id the texts carry, rewritten wherever it occurs: the `sessionId` field, a path, a typed mention. A harness-prefixed id (`toolu_`, `msg_`, `req_`) is
+ * masked wherever it stands, known or not. A uuid that no line carries as an id stays: it may be the person's own data. A keyed value that is no id shape (`"1"`, `"main"`) is masked only under its key. Other text is left alone.
+ * `done` holds the masks `premasked` already wrote.
+ */
+const idMaskerOf = (texts: readonly string[], sessions: ReadonlyMap<string, string>, indexKey: string, buyerKey: string, done: ReadonlySet<string>): IdMasker => {
   const found = new Map<string, string>();
   for (const text of texts) {
     for (const line of text.split('\n')) lineIdsOf(parsed(line), found);
     // A key ending in `uuid` (or another id key) inside a quoted settings file or tool output: no line carries it as a key, but its value is the same kind of id.
     for (const [, key, id] of text.matchAll(QUOTED_ID)) if (key !== undefined && id !== undefined && looksLikeId(id)) found.set(id, key);
   }
-  // An id this module already masked (the redactor masks `toolu_` ids with the same function) is kept as it is: masking it again would give the one id a second value.
-  const lineIds = new Map([...found].filter(([id]) => keyedId(id) && !MASKED_PREFIXED.test(id)));
+  // An id this module already masked (the redactor masks `toolu_` ids with the same function, `premasked` the rest) is kept as it is: masking it again would give the one id a second value.
+  const keyed = new Map([...found].filter(([id]) => keyedId(id) && !MASKED_PREFIXED.test(id) && !done.has(id)));
+  const lineIds = new Map([...keyed].filter(([id]) => looksLikeId(id)));
+  const narrow = underKeys(new Map([...keyed].filter(([id]) => !looksLikeId(id) && !sessions.has(id))));
   const opaque = wholeTokens([...lineIds.keys()].filter((id) => !reachedWhole(id) && !sessions.has(id)));
   const mask = (text: string): string => {
     const whole = opaque === null ? text : text.replace(opaque, (id) => maskOf(indexKey, buyerKey, id));
-    return whole.replace(UUID_OR_PREFIXED, (id) => sessions.get(id) ?? (lineIds.has(id) || (HARNESS_ID.test(id) && !MASKED_PREFIXED.test(id)) ? maskOf(indexKey, buyerKey, id) : id));
+    const ids = whole.replace(UUID_OR_PREFIXED, (id) => sessions.get(id) ?? (lineIds.has(id) || (HARNESS_ID.test(id) && !MASKED_PREFIXED.test(id)) ? maskOf(indexKey, buyerKey, id) : id));
+    return narrow.reduce((rest, { pattern }) => rest.replace(pattern, (_all, lead: string, value: string) => `${lead}${maskOf(indexKey, buyerKey, value)}`), ids);
   };
   const known = new Map([...lineIds, ...[...sessions.keys()].map((session): [string, string] => [session, 'session'])]);
   const scan = (text: string): ReadonlyMap<string, number> => {
@@ -490,6 +530,7 @@ const idMaskerOf = (texts: readonly string[], sessions: ReadonlyMap<string, stri
       else if (HARNESS_ID.test(token) && !/^[A-Za-z]+_[0-9a-f]{24}$/.test(token)) hit('prefixed id');
     }
     if (opaque !== null) for (const [token] of text.matchAll(opaque)) hit(lineIds.get(token) ?? 'id');
+    for (const { key, pattern } of narrow) for (const _found of text.matchAll(pattern)) hit(key);
     return hits;
   };
   return { mask, scan };
@@ -1045,15 +1086,16 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     const raws = await Promise.all(files.map((file) => readFile(file.path, 'utf8')));
     // The accounts this session's repositories live under: the owners entry's, and what the remote of each working folder names.
     const handles = [...(owner.handles ?? []), ...accountsOf(new Set(raws.flatMap((raw) => [...cwdsOf(raw)])))];
-    // `msg_` and `req_` ids go through the keyed mask first: redaction's entropy rule would turn a real one (mixed case, high entropy) into `<secret>` and cut the link between its lines. `toolu_` ids reach the redactor's `toolId` hook.
-    const texts = raws.map((raw) => redactTranscript(raw.replace(VENDOR_ID, (id) => maskOf(indexKey, options.buyerKey, id)), domains, names, injectedKey, { handles, toolId: (id) => maskOf(indexKey, options.buyerKey, id), fetchedHosts: true }).text);
+    // Keyed opaque ids, then `msg_` and `req_` ids, go through the keyed mask first: redaction's entropy rule would turn a real one (mixed case, high entropy) into `<secret>` and cut the link between its lines. `toolu_` ids reach the redactor's `toolId` hook.
+    const early = premasked(raws, sessionIds, indexKey, options.buyerKey);
+    const texts = early.texts.map((raw) => redactTranscript(raw.replace(VENDOR_ID, (id) => maskOf(indexKey, options.buyerKey, id)), domains, names, injectedKey, { handles, toolId: (id) => maskOf(indexKey, options.buyerKey, id), fetchedHosts: true }).text);
     // The person's name is looked for in the raw text, the redacted text, and the decoded strings: a JSON escape hides it from the raw bytes, and redaction decodes a line only when it masks something in it, so the decoding is done here.
     const searched = [...texts, ...raws, ...raws.flatMap(decodedStrings)].map(squashed);
     if (objectedNames.some((name) => searched.some((text) => text.includes(name)))) {
       counts.objected += 1;
       continue;
     }
-    const masker = idMaskerOf(texts, sessionIds, indexKey, options.buyerKey);
+    const masker = idMaskerOf(texts, sessionIds, indexKey, options.buyerKey, early.masks);
     const masked = texts.map(masker.mask);
     // The skeleton is built from the store, not the transcript: a tool call that named a transcript file by its session id carries that id in its `names`, so it goes through the same masks.
     const skeletonText = masker.mask(skeletonRaw);
