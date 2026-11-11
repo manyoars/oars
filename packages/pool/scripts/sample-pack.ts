@@ -441,8 +441,8 @@ const wholeTokens = (ids: readonly string[]): RegExp | null => {
 interface IdMasker {
   /** The text with every known id rewritten. */
   mask: (text: string) => string;
-  /** Every raw id the session's texts carry as an id, and every store session id, with the key it stood under: what the post-build scan looks for. */
-  known: ReadonlyMap<string, string>;
+  /** The raw ids left in a text, counted by the key each stood under (`session` for a store session id, `prefixed id` for a `toolu_`, `msg_`, or `req_` shape): what the post-build scan looks for. */
+  scan: (text: string) => ReadonlyMap<string, number>;
 }
 
 /**
@@ -463,7 +463,20 @@ const idMaskerOf = (texts: readonly string[], sessions: ReadonlyMap<string, stri
     const whole = opaque === null ? text : text.replace(opaque, (id) => maskOf(indexKey, buyerKey, id));
     return whole.replace(UUID_OR_PREFIXED, (id) => sessions.get(id) ?? (lineIds.has(id) || (HARNESS_ID.test(id) && !MASKED_PREFIXED.test(id)) ? maskOf(indexKey, buyerKey, id) : id));
   };
-  return { mask, known: new Map([...lineIds, ...[...sessions.keys()].map((session): [string, string] => [session, 'session'])]) };
+  const known = new Map([...lineIds, ...[...sessions.keys()].map((session): [string, string] => [session, 'session'])]);
+  const scan = (text: string): ReadonlyMap<string, number> => {
+    const hits = new Map<string, number>();
+    const hit = (key: string): void => void hits.set(key, (hits.get(key) ?? 0) + 1);
+    for (const [token] of text.matchAll(UUID_OR_PREFIXED)) {
+      const key = known.get(token) ?? known.get(token.toLowerCase());
+      // A mask this module wrote has a harness prefix and 24 hex; a raw id of that shape is not issued.
+      if (key !== undefined) hit(key);
+      else if (HARNESS_ID.test(token) && !/^[A-Za-z]+_[0-9a-f]{24}$/.test(token)) hit('prefixed id');
+    }
+    if (opaque !== null) for (const [token] of text.matchAll(opaque)) hit(lineIds.get(token) ?? 'id');
+    return hits;
+  };
+  return { mask, scan };
 };
 
 /** The text of a user message's content, or undefined when it has none to type: a message of only tool results (the harness answering the model) and an image with no words carry nothing the person wrote. Text sent beside a tool result is the person's, so it counts. */
@@ -1041,6 +1054,13 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     }
     bytes += Buffer.byteLength(skeletonText);
     await writeFile(join(partial, 'sessions', matchId, SKELETON_FILE), skeletonText);
+    // After the files are written, before the next session: an id the masks missed (one a JSON escape hides from the raw bytes shows in the decoded strings) stops the build, and the folder stays for a look.
+    const left = new Map<string, number>();
+    for (const body of [...masked, skeletonText]) for (const [key, count] of masker.scan([body, ...decodedStrings(body)].join('\n'))) left.set(key, (left.get(key) ?? 0) + count);
+    if (left.size > 0) {
+      const byKey = [...left].map(([key, count]) => `${key}: ${String(count)}`).join(', ');
+      throw new PackError(`A raw id is left in the pack (${byKey}). The unfinished pack stays at ${partial}; delete it after a look, fix the masks, then run again.`);
+    }
     skeletons.push(skeleton);
     let opted: Pick<ManifestRow, 'pointer' | 'outcome'> = {};
     if (owner.pointer) {

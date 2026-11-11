@@ -1547,7 +1547,8 @@ describe('the skeleton names a transcript file (t1135 item 3)', () => {
 describe('a pack refuses to finish with a raw id left in it (t1135 item 4)', () => {
   // A store session id with its hyphens written as JSON escapes: the masks read the raw bytes and miss it, the decoded text holds it.
   const hidden = (session: string): string => session.split('-').join(`${String.fromCharCode(92)}u002d`);
-  const planted = (): string => user(S(1), 2, 'PLANTED').replace('PLANTED', `see ${hidden(S(2))} here`);
+  // No cwd or other value the redactor would mask on the line: it re-encodes a line it changes, and the escape would go with it.
+  const planted = (): string => line({ type: 'system', uuid: uuidOf(S(1), 'a', 40), parentUuid: null, timestamp: at(40), sessionId: S(1), content: 'PLANTED' }).replace('PLANTED', `see ${hidden(S(2))} here`);
 
   it('keeps the .partial folder, counts the hit by key, and exits 2 with no pack folder', async () => {
     const f = fixture();
