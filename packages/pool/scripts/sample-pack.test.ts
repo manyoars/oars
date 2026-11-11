@@ -1739,6 +1739,7 @@ describe('a raw id quoted as escaped JSON, and an id seen in another session (t1
     { name: 'serverClassifierContext.request', quoted: (id) => `{"serverClassifierContext":{"request":"${id}"}}` },
     { name: 'base', quoted: (id) => `{"base":"${id}"}` },
   ];
+  const bs = String.fromCharCode(92);
   const NIL = '00000000-0000-0000-0000-000000000000';
   const fresh = '4c2e8a10-7b3d-4f59-9a61-d0e5c3b7a812';
 
@@ -1750,7 +1751,7 @@ describe('a raw id quoted as escaped JSON, and an id seen in another session (t1
     const text = packText(f.out);
     expect(text).not.toContain(fresh);
     // The key stays, a uuid-shaped mask stands where the id was, and the nil uuid is a code literal, not an id.
-    expect(text).toMatch(new RegExp(`[a-zA-Z]+${String.raw`\`}+":${String.raw`\`}+"${UUID_SHAPE.source}`));
+    expect(text).toMatch(new RegExp(`[a-zA-Z]+${bs}${bs}+":${bs}${bs}+"${UUID_SHAPE.source}`));
     expect(text).toContain(NIL);
   });
 
