@@ -1172,11 +1172,16 @@ describe('a Codex session (plan S2)', () => {
     expect(packText(f.out)).toContain('and the lint');
   });
 
-  it('writes no raw call id when the redactor took it first as a secret', async () => {
+  it('masks a mixed-case call id once, so the Codex call and its output share one call_<24 hex> and no secret appears', async () => {
     const f = fixture();
     const random = 'call_Qx7LmN2vTz9RkPb4WcYd8HsJ';
     expect(await packed(f, codexRollout(random))).toMatchObject({ emitted: 1 });
-    expect(packText(f.out)).not.toContain(random);
+    const text = packText(f.out);
+    expect(text).not.toContain(random);
+    expect(text).not.toContain('<secret>');
+    const masks = text.match(/call_[0-9a-f]{24}/g) ?? [];
+    expect(masks.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(masks).size).toBe(1);
   });
 });
 
