@@ -679,6 +679,14 @@ export const busyLine = ({ holder, local, ageMs, untouchedMs, waitedMs, staleMs 
   return `${held} Run the same command again once it ends. If it has hung, oars takes the lock over about ${span(Math.max(1, staleMs - untouchedMs))} from now.`;
 };
 
+/** The session id behind an outbox key, found by deriving the key of each session in the store the way `poolDeposit` does: under every account signed in to this server, or under the machine's environment. `undefined` when the store no longer holds the session. */
+const sessionOfKey = async (deps: RunDeps, storeDir: string, server: string, key: string): Promise<string | undefined> => {
+  const machine = machineOf(deps.env);
+  const accounts = machine === undefined ? (await loadSignIns(storeDir, REMOVE)).filter((entry) => entry.server === server).map((entry) => entry.account) : [];
+  const keysOf = (session: string): string[] => (machine === undefined ? accounts.map((account) => contentHash([account, session])) : [machineKeyOf(machine, session)]);
+  return (await loadStore(storeDir)).sessions.map((observed) => observed.session).find((session) => keysOf(session).includes(key));
+};
+
 /**
  * `oars pool remove <hash>`: takes one batch out of this machine's outbox, the batch `oars pool outbox` printed under that hash. It takes the send lock without waiting, because a send in progress may be reading the very file, and refuses while another run holds it.
  * It reads nothing from the pool and sends nothing, so it needs no sign-in, and it changes only files here. The session of a local batch goes on `removed.json`, which `poolDeposit` (and so the background sender) honors: nothing of it is built, queued, or sent until `--restore <hash>` takes it off. One a cloud session held is admitted again only by `oars pool hold pull`.
@@ -693,7 +701,7 @@ export const poolRemove = async (deps: RunDeps, hash: string, options: { server?
     return await withSendLock(outbox, async () => {
       if (options.restore === true) {
         const removed = await readRemoved(outbox, REMOVE);
-        const key = Object.keys(removed).find((candidate) => removed[candidate] === hash);
+        const key = Object.keys(removed).find((candidate) => removed[candidate]?.hash === hash);
         if (key === undefined) throw refuse('removal_unknown', 'No removed batch has that hash, so nothing was restored. The hash is the one oars pool remove printed when it removed the batch.');
         Reflect.deleteProperty(removed, key);
         await writeRemoved(outbox, removed);
@@ -703,7 +711,8 @@ export const poolRemove = async (deps: RunDeps, hash: string, options: { server?
       const found = (await heldAcross(outbox)).batches.find((batch) => batch.hash === hash);
       if (found === undefined) throw refuse('batch_unknown', 'No batch with that hash is in the outbox, so nothing was removed. Run oars pool outbox to list them.');
       // The session goes on the list first: the build pass would otherwise rebuild it on its next run, the background sender's included, and send what the person withdrew (GDPR Article 7(3)). A list that cannot be read has already failed above, with the batch untouched.
-      if (!found.pulled) await writeRemoved(outbox, { ...removed, [found.key]: hash });
+      const session = found.pulled ? undefined : await sessionOfKey(deps, runtime.storeDir, server, found.key);
+      if (!found.pulled) await writeRemoved(outbox, { ...removed, [found.key]: session === undefined ? { hash } : { hash, session } });
       await rm(found.file, { force: true });
       // The session's queued raw copies go in the same lock: the background sender posts every raw copy it holds without looking for its batch, and a batch the person withdrew must take the session's transcript with it (GDPR Article 7(3)). A pulled batch never had one here.
       const rawGone = await removeRawExcept(outbox, new Set(), found.key);
@@ -717,7 +726,8 @@ export const poolRemove = async (deps: RunDeps, hash: string, options: { server?
         `Removed batch ${hash} from the outbox for ${server}. Nothing was sent, and nothing at the pool changed.`,
         ...(rawGone === 0 ? [] : [`${String(rawGone)} queued raw ${rawGone === 1 ? 'copy' : 'copies'} of the same session went with it.`]),
         ...(sentAt === undefined ? [] : [`It was already sent at ${sentAt}; removing it here does not take it back from the pool.`]),
-        found.pulled ? 'It came from a cloud session: only oars pool hold pull admits it again.' : `Its session stays out of every later oars pool deposit, the background sender's included, until you run oars pool remove ${hash} --restore.`,
+        ...(found.pulled ? ['It came from a cloud session: only oars pool hold pull admits it again.'] : [`Its session stays out of every later oars pool deposit, the background sender's included, until you run oars pool remove ${hash} --restore.`]),
+        ...(found.pulled || session !== undefined ? [] : ['No session in the store matches it, so the exclusion holds for this account and machine settings only.']),
       ].join('\n');
       return { document: { ok: true, server, hash, removed: true }, text };
     }, { ...options.lock?.times, waitMs: 0 }, options.lock?.fs);
@@ -802,7 +812,10 @@ export const poolDeposit = async (
   const history: SessionRecords[] = [];
   const localStore = await loadStore(runtime.storeDir);
   // A damaged list stops the pass before anything is built: it must never read as "nothing was removed".
-  const removedKeys = new Set(Object.keys(await readRemoved(outbox, DEPOSIT)));
+  const removedList = await readRemoved(outbox, DEPOSIT);
+  const removedKeys = new Set(Object.keys(removedList));
+  // By session id too: the key follows the account and the machine's environment, so a login under another account would otherwise build the same session again.
+  const removedSessions = new Set(Object.values(removedList).flatMap((entry) => (entry.session === undefined ? [] : [entry.session])));
   for (const records of sessionsOf(localStore, roots)) {
     // The Stop of a machine builds the one session that stopped: the others in the store belong to Stops of their own, so their batches stay as they are. They run the three read-only gates below and no more.
     const named = options.session === undefined || records.main.session === options.session;
@@ -810,7 +823,7 @@ export const poolDeposit = async (
     // Hashed with the account, so a redeposit replaces its own batch and two accounts' copies of one session cannot be joined.
     const key = machine === undefined ? contentHash([account, records.main.session]) : machineKeyOf(machine, records.main.session);
     // Withdrawn by the person with `oars pool remove`: nothing of the session is built, queued, or read for a window, and its batch and raw copies are already gone.
-    if (removedKeys.has(key)) {
+    if (removedKeys.has(key) || removedSessions.has(records.main.session)) {
       if (named) counts.removedByPerson += 1;
       continue;
     }

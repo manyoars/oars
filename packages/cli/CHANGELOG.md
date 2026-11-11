@@ -5,7 +5,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 ## Unreleased
 
 - `oars pool deposit --send` ended by Ctrl-C now exits 130, the shell convention for an interrupt; the text is unchanged, and any other way of stopping keeps its exit code.
-- `oars pool remove <hash>` removes one batch and its queued raw copies from the outbox on this machine, says what it removed, and changes nothing at the pool, keeps the session out of every later deposit, the background sender's included, until `--restore`; it refuses while a send holds the lock, and a hash not in the outbox fails with `batch_unknown`.
+- `oars pool remove <hash>` removes one batch and its queued raw copies from this machine's outbox and keeps that session out of every later deposit, the background sender's included, until `--restore`; nothing is sent, and it refuses while a send holds the lock.
 - `oars pool deposit --send` now says the pool may already have received the batch when the connection drops after the request went out, and marks nothing sent.
 
 ## 0.5.3 (2026-11-11)

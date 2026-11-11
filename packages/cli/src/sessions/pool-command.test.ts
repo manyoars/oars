@@ -14,7 +14,7 @@ import { readSpool } from '../telemetry/spool.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
 import { busyLine, DEFAULT_POOL_URL, networkSender, OFFER_AFTER, OFFER_BEFORE, poolCoverage, poolDeposit, poolRaw, poolRemove, poolServer, RAW_PHRASE, RAW_PROMPT, waitingLine, type Reply, type Sender } from './pool-command.js';
 import { localNames } from './redact.js';
-import { batchHash, canonicalBytes, currentStamp, FIELD_ROWS, fieldsOf, heldAcross, outboxFolder, readPulled, writeBatch, writePulled } from './pool-outbox.js';
+import { batchHash, canonicalBytes, currentStamp, FIELD_ROWS, fieldsOf, heldAcross, outboxFolder, readPulled, readRemoved, writeBatch, writePulled } from './pool-outbox.js';
 import { heldRaw, writeRaw } from './pool-raw.js';
 import { markSent, sentHashes } from './pool-sent.js';
 import { SendInterrupted, withSendLock, type LockFs, type LockTimes } from './pool-send-lock.js';
@@ -3372,6 +3372,64 @@ describe('oars pool remove <hash> (t1149 item 2)', () => {
     expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
     expect((await heldHashes(scene)).sort()).toEqual(before.sort());
     expect(scene.seen).toEqual([]);
+  });
+
+  it('keeps the session out after a login under another account, because the list holds the session id', async () => {
+    const scene = await batched();
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    const hash = printedHashes(scene)[0] ?? '';
+    const outbox = outboxFolder(scene.staged.storeDir, POOL);
+    expect(await scene.cli('pool', 'remove', hash, '--server', POOL)).toBe(ExitCode.OK);
+    expect(Object.values(await readRemoved(outbox, 'test')).map((entry) => entry.session)).toEqual([expect.any(String)]);
+    poolAt(scene, { polls: [HttpResponse.json({ ...okLogin(), account: 'acct_two' })] });
+    expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
+    scene.h.out.length = 0;
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    expect(scene.h.out.join('')).toContain('Wrote 3 of 4 sessions');
+    expect(scene.h.out.join('')).toContain('1 session you removed with oars pool remove');
+  });
+
+  const machineScene = async (): Promise<{ scene: Scene; outbox: string; hash: string }> => {
+    const scene = setting({ OARS_HOST_CLASS: 'cloud', OARS_MACHINE: 'm1' });
+    await capture(scene);
+    const outbox = outboxFolder(scene.staged.storeDir, POOL);
+    expect((await poolDeposit(scene.h.deps, { server: POOL })).text).toContain('Wrote 4 of 4 sessions');
+    return { scene, outbox, hash: (await heldAcross(outbox)).batches[0]?.hash ?? '' };
+  };
+
+  it('keeps a machine session out after the machine settings change', async () => {
+    const { scene, hash } = await machineScene();
+    expect((await poolRemove(scene.h.deps, hash, { server: POOL })).text).not.toContain('No session in the store matches it');
+    scene.h.deps.env.OARS_MACHINE = 'm3';
+    const again = (await poolDeposit(scene.h.deps, { server: POOL })).text;
+    expect(again).toContain('Wrote 3 of 4 sessions');
+    expect(again).toContain('1 session you removed with oars pool remove');
+  });
+
+  it('says the exclusion holds for this account and machine settings only when no session in the store matches the batch, and restore clears it', async () => {
+    const { scene, outbox, hash } = await machineScene();
+    scene.h.deps.env.OARS_MACHINE = 'm2';
+    expect((await poolRemove(scene.h.deps, hash, { server: POOL })).text).toContain('No session in the store matches it, so the exclusion holds for this account and machine settings only.');
+    expect(Object.values(await readRemoved(outbox, 'test'))).toEqual([{ hash }]);
+    expect(await poolRemove(scene.h.deps, hash, { server: POOL, restore: true })).toMatchObject({ document: { restored: true } });
+    expect(await readRemoved(outbox, 'test')).toEqual({});
+  });
+
+  it('still skips a session by the key alone for an entry that holds no session id', async () => {
+    const scene = await batched();
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    const hash = printedHashes(scene)[0] ?? '';
+    const outbox = outboxFolder(scene.staged.storeDir, POOL);
+    const before = await heldHashes(scene);
+    expect(await scene.cli('pool', 'remove', hash, '--server', POOL)).toBe(ExitCode.OK);
+    const [key = ''] = Object.keys(await readRemoved(outbox, 'test'));
+    for (const entry of [JSON.stringify(hash), JSON.stringify({ hash })]) {
+      writeFileSync(join(outbox, 'removed.json'), `{ "${key}": ${entry} }`);
+      scene.h.out.length = 0;
+      expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+      expect(scene.h.out.join('')).toContain('1 session you removed with oars pool remove');
+      expect(await heldHashes(scene)).toEqual(before.filter((held) => held !== hash));
+    }
   });
 
   it('fails clearly to restore a hash nothing removed', async () => {

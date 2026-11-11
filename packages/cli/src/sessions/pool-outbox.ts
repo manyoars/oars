@@ -418,12 +418,25 @@ export const writePulled = async (outbox: string, pulled: Pulled): Promise<void>
 
 const REMOVED = 'removed.json';
 
-/** The sessions a person took out of the outbox with `oars pool remove`: each outbox key and the hash of the batch that was removed, which is how `--restore` names the way back. Local only; nothing in it goes to the pool. */
-export interface Removed {
-  [key: string]: string;
+/** One session a person took out with `oars pool remove`: the hash of the batch that was removed, which is how `--restore` names the way back, and the session id when it could be resolved. The outbox key derives from the account or the machine's environment, so only the session id keeps the session out after either changes; an entry with no id (the session was gone from the store, or the file is older) skips by key alone. */
+export interface RemovedEntry {
+  hash: string;
+  session?: string;
 }
 
-/** `removed.json` as it stands; none when the file is missing. A file that is not a list of keys and hashes fails the command that reads it, so a damaged list never becomes "send everything". */
+/** The sessions a person took out of the outbox with `oars pool remove`, by outbox key. Local only; nothing in it goes to the pool. */
+export interface Removed {
+  [key: string]: RemovedEntry;
+}
+
+const removedEntryOf = (value: unknown): RemovedEntry | undefined => {
+  if (typeof value === 'string') return { hash: value };
+  if (typeof value !== 'object' || value === null || Array.isArray(value) || !('hash' in value) || typeof value.hash !== 'string') return undefined;
+  if (!('session' in value)) return { hash: value.hash };
+  return typeof value.session === 'string' ? { hash: value.hash, session: value.session } : undefined;
+};
+
+/** `removed.json` as it stands; none when the file is missing. A file that is not a list of keys and entries fails the command that reads it, so a damaged list never becomes "send everything". A bare string is an entry with only a hash, the form before session ids were kept. */
 export const readRemoved = async (outbox: string, step: string): Promise<Removed> => {
   let text: string;
   try {
@@ -438,10 +451,13 @@ export const readRemoved = async (outbox: string, step: string): Promise<Removed
   } catch {
     value = undefined;
   }
-  if (typeof value !== 'object' || value === null || Array.isArray(value) || !Object.values(value).every((hash) => typeof hash === 'string')) {
+  const entries = typeof value !== 'object' || value === null || Array.isArray(value) ? undefined : Object.entries(value).map(([key, entry]): [string, RemovedEntry | undefined] => [key, removedEntryOf(entry)]);
+  const kept: [string, RemovedEntry][] = [];
+  for (const [key, entry] of entries ?? []) if (entry !== undefined) kept.push([key, entry]);
+  if (entries === undefined || kept.length !== entries.length) {
     throw new CliError(`${join(outbox, REMOVED)} is not a list of removed sessions. Move it aside and run the command again; nothing was changed, built, or sent.`, ExitCode.INVALID, step);
   }
-  return Object.fromEntries(Object.entries(value).map(([key, hash]) => [key, String(hash)]));
+  return Object.fromEntries(kept);
 };
 
 /** Staged and renamed, like `pulled.json`: a crash leaves the whole old list or the whole new one. */
