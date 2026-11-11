@@ -3624,7 +3624,41 @@ describe('oars pool deposit --send says what it is doing and stops when told (t1
     resetBy(Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }));
     expect(await poolDeposit(scene.h.deps, sendOptions(hash, undefined)).catch((error: unknown) => error)).toMatchObject({
       exitCode: ExitCode.UNREACHABLE,
-      message: `Cannot reach the pool at ${POOL}: the connection was dropped before the pool answered (read ECONNRESET). Nothing was marked sent. Run the same command to try again.`,
+      message: `Cannot reach the pool at ${POOL}: the connection was dropped before the pool answered (read ECONNRESET). Nothing was marked sent. The pool may already have received it. Run the same command to try again.`,
+    });
+  });
+
+  it('says the pool may have received the batch when the connection drops after the deposit request went out, driven by the handler, and marks nothing sent', async () => {
+    const { scene, hash, outbox } = await sendingScene();
+    const calls: string[] = [];
+    let drop: (cause: Error) => void = () => undefined;
+    vi.stubGlobal('fetch', (url: URL, init?: RequestInit): Promise<Response> => {
+      calls.push(`${init?.method ?? 'GET'} ${url.pathname}`);
+      if (url.pathname === '/v1/covenant') return Promise.resolve(new Response(JSON.stringify({ version: 'v1', accepted: true }), { status: 200, headers: { 'content-type': 'application/json' } }));
+      return new Promise<Response>((_, reject) => {
+        drop = (cause) => {
+          reject(new TypeError('fetch failed', { cause }));
+        };
+      });
+    });
+    const sending = poolDeposit(scene.h.deps, sendOptions(hash, undefined)).catch((error: unknown) => error);
+    await reached(calls);
+    expect(calls).toEqual(['GET /v1/covenant', 'POST /v1/deposits']);
+    drop(Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }));
+    expect(await sending).toMatchObject({
+      exitCode: ExitCode.UNREACHABLE,
+      message: `Cannot reach the pool at ${POOL}: the connection was dropped before the pool answered (read ECONNRESET). Nothing was marked sent. The pool may already have received it. Run the same command to try again.`,
+    });
+    expect([...(await sentHashes(outbox))]).toEqual([]);
+    expect(existsSync(join(outbox, 'send.lock'))).toBe(false);
+  });
+
+  it('does not say the pool may have received the batch when the connection was refused', async () => {
+    const { scene, hash } = await sendingScene();
+    resetBy(Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:1'), { code: 'ECONNREFUSED' }));
+    expect(await poolDeposit(scene.h.deps, sendOptions(hash, undefined)).catch((error: unknown) => error)).toMatchObject({
+      exitCode: ExitCode.UNREACHABLE,
+      message: `Cannot reach the pool at ${POOL}: nothing is listening there (connect ECONNREFUSED 127.0.0.1:1). Nothing was marked sent. Run the same command to try again.`,
     });
   });
 

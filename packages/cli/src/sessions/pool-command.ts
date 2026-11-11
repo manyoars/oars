@@ -143,13 +143,13 @@ export interface Guard {
 /** The pool took the request and then said nothing for `Guard.stallMs`. */
 class PoolStalled extends Error {}
 
-/** A newcomer's words for the network failures a stalled or restarted pool produces; the raw reason follows the sentence in parentheses. */
-const PLAIN_REASONS: ReadonlyArray<readonly [RegExp, string]> = [
-  [/ECONNRESET|socket hang up|UND_ERR_SOCKET/, 'the connection was dropped before the pool answered'],
-  [/ECONNREFUSED/, 'nothing is listening there'],
-  [/ENOTFOUND|EAI_AGAIN/, 'that name did not resolve'],
-  [/ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT/, 'the connection timed out'],
-  [/EPIPE/, 'the connection closed while the batch was going out'],
+/** A newcomer's words for the network failures a stalled or restarted pool produces; the raw reason follows the sentence in parentheses. The flag marks a failure that comes after the request began to go out, where the pool may hold the batch: a refused, unresolved, or timed-out connection fails before any of it was sent. */
+const PLAIN_REASONS: ReadonlyArray<readonly [RegExp, string, boolean]> = [
+  [/ECONNRESET|socket hang up|UND_ERR_SOCKET/, 'the connection was dropped before the pool answered', true],
+  [/ECONNREFUSED/, 'nothing is listening there', false],
+  [/ENOTFOUND|EAI_AGAIN/, 'that name did not resolve', false],
+  [/ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT/, 'the connection timed out', false],
+  [/EPIPE/, 'the connection closed while the batch was going out', true],
 ];
 const NOT_MARKED = 'Nothing was marked sent.';
 const TRY_AGAIN = 'Run the same command to try again.';
@@ -183,7 +183,7 @@ const guardedFailure = (step: string, cause: unknown, origin: string, guard: Gua
   const unreachable = unreachableError(step, cause, origin);
   const raw = unreachable.message.slice(`Cannot reach the server at ${origin}: `.length);
   const plain = PLAIN_REASONS.find(([pattern]) => pattern.test(raw));
-  return plain === undefined ? unreachable : new CliError(`Cannot reach the pool at ${origin}: ${plain[1]} (${raw}). ${RETRY}`, ExitCode.UNREACHABLE, step);
+  return plain === undefined ? unreachable : new CliError(`Cannot reach the pool at ${origin}: ${plain[1]} (${raw}). ${received && plain[2] ? `${NOT_MARKED} ${MAY_HAVE_RECEIVED} ${TRY_AGAIN}` : RETRY}`, ExitCode.UNREACHABLE, step);
 };
 
 /** Prints the request when asked to, then sends exactly those headers and that body. A guarded request also ends when its stall time passes or its signal aborts, and fails in plain words. */
