@@ -1570,6 +1570,65 @@ describe('realistic harness ids keep their link through redaction (t1135 item 10
   });
 });
 
+describe('a keyed value that is no id shape stays under its key, and every keyed id is masked before redaction (t1135 round 4)', () => {
+  const harnessLine = (session: string, n: number, type: string, fields: object): string => line({ type, uuid: uuidOf(session, 'a', n), parentUuid: null, isSidechain: false, timestamp: at(n), version: '2.1.300', sessionId: session, ...fields });
+  const packLines = (f: Fixture): string[] => {
+    const matchId = manifest(f.out)[0]?.matchId ?? '';
+    return readFileSync(join(f.out, 'sessions', matchId, 'main.jsonl'), 'utf8')
+      .split('\n')
+      .filter((text) => text !== '');
+  };
+
+  it('masks deliveryId "1" under its key and leaves "input_tokens":1 a number, every line still parsing', async () => {
+    const f = fixture();
+    const usage = line({ type: 'system', uuid: uuidOf(S(1), 'a', 51), parentUuid: null, timestamp: at(51), sessionId: S(1), stats: { input_tokens: 1 }, note: 'main branch' });
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), harnessLine(S(1), 50, 'system', { deliveryId: '1' }), usage, assistant(S(1), 1, 'done')]);
+    await stored(f);
+    expect((await buildPack(f.runtime, options(f))).emitted).toBe(1);
+    const lines = packLines(f);
+    const entries = lines.map((text): unknown => JSON.parse(text));
+    const delivery = entries.map((entry) => (typeof entry === 'object' && entry !== null ? Reflect.get(entry, 'deliveryId') : undefined)).find((value) => value !== undefined);
+    expect(delivery).not.toBe('1');
+    expect(typeof delivery).toBe('string');
+    expect(lines.join('\n')).toContain('"input_tokens":1');
+  });
+
+  it('masks a word value only where it stands under its key, not in the person\'s prose', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'merge into main today'), harnessLine(S(1), 50, 'system', { deliveryId: 'main' }), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    expect((await buildPack(f.runtime, options(f))).emitted).toBe(1);
+    const text = packText(f.out);
+    expect(text).toContain('merge into main today');
+    expect(text).not.toContain('"deliveryId":"main"');
+  });
+
+  it('gives a mixed-case, high-entropy deliveryId and delivery_id one mask and no <secret>', async () => {
+    const raw = 'Dq7Xv2LmK9pZr4TnB8wYc3Hs';
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), harnessLine(S(1), 50, 'system', { deliveryId: raw }), harnessLine(S(1), 51, 'system', { delivery_id: raw }), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    expect((await buildPack(f.runtime, options(f))).emitted).toBe(1);
+    const text = packText(f.out);
+    expect(text).not.toContain(raw);
+    expect(text).not.toContain('<secret>');
+    const entries = packLines(f).map((row): unknown => JSON.parse(row));
+    const valueOf = (key: string): unknown => entries.map((entry) => (typeof entry === 'object' && entry !== null ? Reflect.get(entry, key) : undefined)).find((value) => value !== undefined);
+    expect(typeof valueOf('deliveryId')).toBe('string');
+    expect(valueOf('deliveryId')).toBe(valueOf('delivery_id'));
+  });
+
+  it.each(['requestRef', 'serverClassifierRequest', 'promptId', 'toolUseID', 'messageId', 'call_id'])('keeps a mixed-case, high-entropy %s as a mask, not <secret>', async (key) => {
+    const raw = 'Qw3Er5Ty7Ui9Op1As2Df4Gh6';
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), harnessLine(S(1), 50, 'system', { [key]: raw }), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    expect((await buildPack(f.runtime, options(f))).emitted).toBe(1);
+    expect(packText(f.out)).not.toContain(raw);
+    expect(packText(f.out)).not.toContain('<secret>');
+  });
+});
+
 describe('the skeleton names a transcript file (t1135 item 3)', () => {
   it('writes the match id, not the store session id, where a tool call named the transcript file', async () => {
     const f = fixture();
@@ -1621,7 +1680,7 @@ describe('a pack refuses to finish with a raw id left in it (t1135 item 4)', () 
     expect(packText(f.out)).not.toContain(id);
     const g = fixture();
     const hiddenId = id.replace('r', `${String.fromCharCode(92)}u0072`);
-    const planted = line({ type: 'system', uuid: uuidOf(S(1), 'a', 42), parentUuid: null, timestamp: at(42), sessionId: S(1), content: 'PLANTED' }).replace('PLANTED', `see ${hiddenId} here`);
+    const planted = line({ type: 'system', uuid: uuidOf(S(1), 'a', 42), parentUuid: null, timestamp: at(42), sessionId: S(1), content: 'PLANTED' }).replace('PLANTED', `deliveryId: ${hiddenId} here`);
     g.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), carrier, planted, assistant(S(1), 3, 'done')]);
     await stored(g);
     await expect(buildPack(g.runtime, options(g))).rejects.toThrow(/deliveryId: 1/);
