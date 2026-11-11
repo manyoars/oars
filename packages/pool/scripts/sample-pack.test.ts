@@ -1512,7 +1512,8 @@ describe('a raw id inside text (t1135 item 2)', () => {
     for (const id of [leaf, prompt, lineUuid]) expect(text).not.toContain(id);
     // The line's own uuid field and its mention in the tool text carry one mask, so it appears at least twice.
     const carrier = text.split('\n').find((row) => row.includes('"content":"x"'));
-    const mask = String(JSON.parse(carrier ?? '{}').uuid);
+    const parsedRow: unknown = JSON.parse(carrier ?? '{}');
+    const mask = String(typeof parsedRow === 'object' && parsedRow !== null ? Reflect.get(parsedRow, 'uuid') : undefined);
     expect(mask).toMatch(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/);
     expect(text.split(mask).length - 1).toBeGreaterThanOrEqual(2);
   });
