@@ -39,6 +39,18 @@ describe('release-cli workflow', () => {
     expect(refuse).toContain('exit 1');
   });
 
+  it('passes the ref to the refusal step through env, so no expression sits inside the script', () => {
+    const refuse = job('refuse-non-main');
+    expect(refuse).toContain('REF: ${{ github.ref }}');
+    expect(refuse).toContain('$REF');
+    expect(refuse.split('run:')[1]).not.toContain('${{');
+  });
+
+  it('names every job in the header comment', () => {
+    const header = workflow.split(/^on:/m)[0];
+    for (const name of ['refuse-non-main', 'build', 'publish', 'release']) expect(header).toContain(name);
+  });
+
   it('lets a manual run build and publish the tag, only when asked', () => {
     expect(workflow).toContain('TAG: ${{ inputs.tag || github.ref_name }}');
     expect(workflow).toMatch(/\n {6}publish:\n {8}description: [^\n]+\n {8}required: false\n {8}type: boolean\n {8}default: false/);
