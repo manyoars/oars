@@ -3250,8 +3250,12 @@ describe('oars pool deposit --send says what it is doing and stops when told (t1
       if (url.pathname === '/v1/covenant') return Promise.resolve(new Response(JSON.stringify({ version: 'v1', accepted: true }), { status: 200, headers: { 'content-type': 'application/json' } }));
       return new Promise<Response>((_, reject) => {
         // Like fetch: a signal that already aborted rejects at once.
-        if (init?.signal?.aborted === true) reject(init.signal.reason);
-        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+        const ended = (): void => {
+          const reason: unknown = init?.signal?.reason;
+          reject(reason instanceof Error ? reason : new Error('aborted'));
+        };
+        if (init?.signal?.aborted === true) ended();
+        init?.signal?.addEventListener('abort', ended);
       });
     });
   };
@@ -3298,7 +3302,7 @@ describe('oars pool deposit --send says what it is doing and stops when told (t1
     const lines = scene.h.err.join('').split('\n').filter((line) => line !== '');
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatch(new RegExp(`^Another oars run \\(pid ${String(process.pid)}\\) took this outbox's send lock \\d+ (seconds|minutes) ago and is still sending\\. Waiting up to 2 minutes for it; Ctrl-C stops this run\\.$`));
-    expect(String((failed as Error).message)).toMatch(new RegExp(`^Another oars run \\(pid ${String(process.pid)}\\) has held this outbox's send lock for \\d+ minutes and was still sending after the \\d+ minutes this run waited, so nothing was sent\\. Run the same command again once it ends\\. If it has hung, oars takes the lock over about \\d+ minutes from now\\.$`));
+    expect(failed instanceof Error ? failed.message : '').toMatch(new RegExp(`^Another oars run \\(pid ${String(process.pid)}\\) has held this outbox's send lock for \\d+ minutes and was still sending after the \\d+ minutes this run waited, so nothing was sent\\. Run the same command again once it ends\\. If it has hung, oars takes the lock over about \\d+ minutes from now\\.$`));
     expect(pool.requests).toEqual([]);
   });
 
@@ -3355,7 +3359,8 @@ describe('oars pool deposit --send says what it is doing and stops when told (t1
     stalledPool(calls);
     const stop = new AbortController();
     const sender = networkSender(scene.h.deps, 'deposit', { stallMs: 30_000, signal: stop.signal });
-    const request = { method: 'POST', url: new URL('/v1/deposits', POOL), headers: [] as Array<[string, string]> };
+    const headers: Array<[string, string]> = [];
+    const request: Outgoing = { method: 'POST', url: new URL('/v1/deposits', POOL), headers };
     const inflight = sender(request).catch((error: unknown) => error);
     await reached(calls);
     stop.abort(new SendInterrupted('signal', 'Interrupted by SIGINT.'));

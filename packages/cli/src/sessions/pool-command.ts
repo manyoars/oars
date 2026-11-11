@@ -167,10 +167,14 @@ const send = async (deps: RunDeps, step: string, request: Outgoing, show: Masker
   if (show !== undefined) deps.io.stderr(`${printed(request, show)}
 `);
   const stop = new AbortController();
-  const relay = (): void => stop.abort(guard?.signal.reason);
+  const relay = (): void => {
+    stop.abort(guard?.signal.reason);
+  };
   guard?.signal.addEventListener('abort', relay, { once: true });
   if (guard?.signal.aborted === true) relay();
-  const timer = guard === undefined ? undefined : setTimeout(() => stop.abort(new PoolStalled()), guard.stallMs);
+  const timer = guard === undefined ? undefined : setTimeout(() => {
+        stop.abort(new PoolStalled());
+      }, guard.stallMs);
   const failure = (error: unknown): CliError => (guard === undefined ? unreachableError(step, error, request.url.origin) : guardedFailure(step, stop.signal.aborted ? stop.signal.reason : error, request.url.origin, guard));
   try {
     let response: Response;
@@ -578,7 +582,12 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
       await markSent(outbox, hash, deps.now());
       await retirePulled(outbox, DEPOSIT);
       return { document: { ok: true, server, hash, sent: true }, text: `Sent batch ${hash} to ${server}.` };
-    }, {}, undefined, { onWait: (waiting) => deps.io.stderr(`${waitingLine(waiting)}\n`), signal: interrupt.signal });
+    }, {}, undefined, {
+      onWait: (waiting) => {
+        deps.io.stderr(`${waitingLine(waiting)}\n`);
+      },
+      signal: interrupt.signal,
+    });
   } catch (error) {
     if (error instanceof SendLockBusy) throw refuse('send_locked', busyLine(error.detail));
     if (error instanceof SendInterrupted) throw new CliError(`${error.message} Nothing was sent. Run the same command to try again.`, ExitCode.UNEXPECTED, DEPOSIT);

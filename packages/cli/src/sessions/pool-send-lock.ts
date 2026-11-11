@@ -92,7 +92,10 @@ const holderOf = async (file: string): Promise<Holder | undefined> => {
     return undefined;
   }
   if (typeof parsed !== 'object' || parsed === null) return undefined;
-  const [run, pid, host, since]: unknown[] = [Reflect.get(parsed, 'run'), Reflect.get(parsed, 'pid'), Reflect.get(parsed, 'host'), Reflect.get(parsed, 'since')];
+  const run: unknown = Reflect.get(parsed, 'run');
+  const pid: unknown = Reflect.get(parsed, 'pid');
+  const host: unknown = Reflect.get(parsed, 'host');
+  const since: unknown = Reflect.get(parsed, 'since');
   return typeof run === 'string' && typeof pid === 'number' && Number.isInteger(pid) && pid > 0 && typeof host === 'string' && typeof since === 'number' ? { run, pid, host, since } : undefined;
 };
 
@@ -216,7 +219,12 @@ const SIGNALS: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
  */
 export const watchInterrupt = (host: InterruptHost = { on: (event, listener) => process.on(event, listener), off: (event, listener) => process.off(event, listener), parent: process.ppid, running, checkMs: 1000 }): { signal: AbortSignal; stop: () => void } => {
   const controller = new AbortController();
-  const listeners = SIGNALS.map((name): [NodeJS.Signals, () => void] => [name, () => controller.abort(new SendInterrupted('signal', `Interrupted by ${name}.`))]);
+  const listeners = SIGNALS.map((name): [NodeJS.Signals, () => void] => [
+    name,
+    () => {
+      controller.abort(new SendInterrupted('signal', `Interrupted by ${name}.`));
+    },
+  ]);
   for (const [name, listener] of listeners) host.on(name, listener);
   const timer = setInterval(() => {
     if (!host.running(host.parent)) controller.abort(new SendInterrupted('launcher', 'The program that started this send is gone.'));
