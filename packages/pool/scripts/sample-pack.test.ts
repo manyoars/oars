@@ -1727,3 +1727,49 @@ describe('the bundled command (t1135 item 5)', () => {
     expect(manifest(f.out)).toHaveLength(1);
   });
 });
+
+describe('a raw id quoted as escaped JSON, and an id seen in another session (t1138)', () => {
+  const harnessLine = (session: string, n: number, type: string, fields: object): string => line({ type, uuid: uuidOf(session, 'a', n), parentUuid: null, isSidechain: false, timestamp: at(n), version: '2.1.300', sessionId: session, ...fields });
+  const result = (session: string, n: number, text: string): string => harnessLine(session, n, 'user', { message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_01TextCarrier000000001', content: text }] } });
+  const UUID_SHAPE = /[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/;
+  // The text one level down: a JSON document written into a string gets its quotes backslash-escaped, so a document pasted into a document is escaped twice.
+  const escaped = (text: string, depth: 1 | 2): string => (depth === 1 ? text : JSON.stringify(text).slice(1, -1));
+  const FORMS: readonly { name: string; quoted: (id: string) => string }[] = [
+    { name: 'message.id', quoted: (id) => `{"message":{"diagnostics":null,"id":"${id}"}}` },
+    { name: 'serverClassifierContext.request', quoted: (id) => `{"serverClassifierContext":{"request":"${id}"}}` },
+    { name: 'base', quoted: (id) => `{"base":"${id}"}` },
+  ];
+  const NIL = '00000000-0000-0000-0000-000000000000';
+  const fresh = '4c2e8a10-7b3d-4f59-9a61-d0e5c3b7a812';
+
+  it.each(FORMS.flatMap((form) => ([1, 2] as const).map((depth) => ({ ...form, depth }))))('masks an id no line carries in $name, escaped to depth $depth', async ({ quoted, depth }) => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), result(S(1), 20, `pasted: ${escaped(quoted(fresh), depth)} and ${escaped(quoted(NIL), depth)}`), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    expect((await buildPack(f.runtime, options(f))).emitted).toBe(1);
+    const text = packText(f.out);
+    expect(text).not.toContain(fresh);
+    // The key stays, a uuid-shaped mask stands where the id was, and the nil uuid is a code literal, not an id.
+    expect(text).toMatch(new RegExp(`[a-zA-Z]+${String.raw`\`}+":${String.raw`\`}+"${UUID_SHAPE.source}`));
+    expect(text).toContain(NIL);
+  });
+
+  it('masks an id a line carries under a key to one value, wherever another session quotes it bare or escaped', async () => {
+    const prompt = 'f0e1d2c3-b4a5-4968-8776-65544332211f';
+    const classifier = 'cls-5d1e0a93b7c24f68';
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), harnessLine(S(1), 20, 'user', { promptId: prompt }), harnessLine(S(1), 21, 'api-request', { serverClassifierRequest: classifier }), assistant(S(1), 1, 'done')]);
+    f.write('-work-oars', S(2), [user(S(2), 1, 'run the build'), result(S(2), 20, `see ${prompt} and ${escaped(`{"serverClassifierContext":{"request":"${prompt}"}}`, 2)}`), result(S(2), 21, `log ${classifier} ok`), assistant(S(2), 1, 'green')]);
+    await stored(f);
+    expect((await buildPack(f.runtime, options(f))).emitted).toBe(2);
+    const text = packText(f.out);
+    expect(text).not.toContain(prompt);
+    expect(text).not.toContain(classifier);
+    const byFile = (n: 1 | 2): string => readFileSync(packFiles(f.out).filter((file) => file.endsWith('main.jsonl'))[n - 1] ?? '', 'utf8');
+    const owned = [byFile(1), byFile(2)].find((body) => body.includes('"promptId"')) ?? '';
+    const mask = /"promptId":"([0-9a-f-]{36})"/.exec(owned)?.[1] ?? 'missing';
+    const quoting = [byFile(1), byFile(2)].find((body) => body.includes('see ')) ?? '';
+    // The quoted copies carry the very mask of the line's own id, so the link holds.
+    expect(quoting.split(mask).length - 1).toBe(2);
+  });
+});
