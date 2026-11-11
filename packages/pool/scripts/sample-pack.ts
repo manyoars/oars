@@ -566,14 +566,23 @@ const idMaskerOf = (texts: readonly string[], sessions: ReadonlyMap<string, stri
 /** An id of the opaque kind (no uuid or prefixed shape) as it stands in text: a run of id characters, which may begin after a separator inside it (`agent_ref-7f3a9c21`). */
 const OPAQUE_RUN = /(?<![A-Za-z0-9])[0-9A-Za-z][0-9A-Za-z._-]{6,}[0-9A-Za-z]/g;
 
-/** The ids of a run, from each place a separator lets one begin: the run itself, then what follows each separator. The offset where the id starts, and the id. */
-const opaqueIn = (run: string, ids: ReadonlyMap<string, string>): { at: number; id: string } | undefined => {
+/**
+ * Every id of a run, as a slice that begins at the run start or just after a separator and ends at the run end or just before one (`dlv-11aa22bb33.json`, `cls-5d1e0a93b7c24f68-retry`), left to right and never overlapping.
+ * Only the lengths in `lengths` are tried at each start, so a long dotted or dashed run costs its start count times the number of distinct id lengths, not its square.
+ */
+const opaqueIn = (run: string, ids: ReadonlyMap<string, string>, lengths: ReadonlySet<number>): { at: number; id: string }[] => {
+  const found: { at: number; id: string }[] = [];
+  let from = 0;
   for (let at = 0; at < run.length; at += 1) {
-    if (at > 0 && /[A-Za-z0-9]/.test(run[at - 1] ?? '')) continue;
-    const id = run.slice(at);
-    if (ids.has(id)) return { at, id };
+    if (at < from || (at > 0 && /[A-Za-z0-9]/.test(run[at - 1] ?? ''))) continue;
+    for (const length of lengths) {
+      const end = at + length;
+      if (end > run.length || (end < run.length && /[A-Za-z0-9]/.test(run[end] ?? ''))) continue;
+      const id = run.slice(at, end);
+      if (ids.has(id)) { found.push({ at, id }); from = end; break; }
+    }
   }
-  return undefined;
+  return found;
 };
 
 /**
@@ -584,6 +593,7 @@ const opaqueIn = (run: string, ids: ReadonlyMap<string, string>): { at: number; 
  */
 const packMaskerOf = (ids: ReadonlyMap<string, string>, sessions: ReadonlyMap<string, string>, indexKey: string, buyerKey: string): IdMasker => {
   const opaque = new Map([...ids].filter(([id]) => !reachedWhole(id) && /[A-Za-z]/.test(id) && !sessions.has(id)));
+  const lengths = new Set([...opaque.keys()].map((id) => id.length));
   const known = new Map([...ids, ...[...sessions.keys()].map((session): [string, string] => [session, 'session'])]);
   const knownOf = (token: string): string | undefined => (ids.has(token) ? token : ids.has(token.toLowerCase()) ? token.toLowerCase() : undefined);
   const mask = (text: string): string => {
@@ -594,8 +604,13 @@ const packMaskerOf = (ids: ReadonlyMap<string, string>, sessions: ReadonlyMap<st
       return id !== undefined || (HARNESS_ID.test(token) && !MASKED_PREFIXED.test(token)) ? maskOf(indexKey, buyerKey, id ?? token) : token;
     });
     return opaque.size === 0 ? shaped : shaped.replace(OPAQUE_RUN, (run) => {
-      const found = opaqueIn(run, opaque);
-      return found === undefined ? run : `${run.slice(0, found.at)}${maskOf(indexKey, buyerKey, found.id)}`;
+      let rest = 0;
+      const out: string[] = [];
+      for (const { at, id } of opaqueIn(run, opaque, lengths)) {
+        out.push(run.slice(rest, at), maskOf(indexKey, buyerKey, id));
+        rest = at + id.length;
+      }
+      return out.length === 0 ? run : `${out.join('')}${run.slice(rest)}`;
     });
   };
   const scan = (text: string): ReadonlyMap<string, number> => {
@@ -606,7 +621,7 @@ const packMaskerOf = (ids: ReadonlyMap<string, string>, sessions: ReadonlyMap<st
       if (key !== undefined) hit(key);
       else if (HARNESS_ID.test(token) && !/^[A-Za-z]+_[0-9a-f]{24}$/.test(token)) hit('prefixed id');
     }
-    if (opaque.size > 0) for (const [run] of text.matchAll(OPAQUE_RUN)) { const found = opaqueIn(run, opaque); if (found !== undefined) hit(opaque.get(found.id) ?? 'id'); }
+    if (opaque.size > 0) for (const [run] of text.matchAll(OPAQUE_RUN)) for (const { id } of opaqueIn(run, opaque, lengths)) hit(opaque.get(id) ?? 'id');
     return hits;
   };
   return { ids, mask, scan };
@@ -1038,10 +1053,10 @@ export const bareOf = (session: string): string => {
 type StoredSession = Awaited<ReturnType<typeof loadStore>>['sessions'][number];
 type HarnessRow = NonNullable<(typeof HARNESS_TERMS)[Harness]>;
 
-/** What the rules before the duplicate check decide: the count a session adds to, or what it carries on. */
 /** Every count of a pack, flat, by name: what rose while one session was handled says why it was left out. */
 const tally = (counts: PackCounts): Map<string, number> => new Map([...Object.entries(counts), ...Object.entries(counts.excluded)].flatMap(([key, count]): [string, number][] => (typeof count === 'number' ? [[key, count]] : [])));
 
+/** What the rules before the duplicate check decide: the count a session adds to, or what it carries on. */
 type Early = { left: (counts: PackCounts) => void } | { accepted: { owner: OwnerRule; harness: Harness; terms: HarnessRow } };
 
 export const buildPack = async (runtime: SessionsRuntime, options: PackOptions): Promise<PackCounts> => {
@@ -1322,7 +1337,7 @@ const sessionsIn = async (file: string): Promise<string[]> => {
   return ids;
 };
 
-/** The command: 0 when the pack was written, 2 on a usage or input error (nothing written), with counts only on success: no term, path, or transcript text. */
+/** The command: 0 when the pack was written, 2 on a usage or input error (nothing written), with counts only on success (and, with --sessions, each listed session left out, by its store id): no term, path, or transcript text. */
 export const main = async (argv: readonly string[], io: Io): Promise<number> => {
   const parsed = parseArgs(argv);
   if (typeof parsed === 'string') {
