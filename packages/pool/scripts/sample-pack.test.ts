@@ -29,7 +29,7 @@ const MEMORY_LINE = 'violet-otter memory: the kettle lives on shelf nine';
 const USER_TEXT = 'please rename the helper in parse.ts';
 const OWNERS = [
   { folder: '*-oars*', owner: 'Many Oars Co.', license: 'Apache-2.0' },
-  { folder: '*-shop*', owner: 'Switchyard Software Company', license: null },
+  { folder: '*-shop*', owner: 'Example Shop Co.', license: null },
 ];
 const dirs: string[] = [];
 
@@ -201,7 +201,7 @@ describe('the manifest', () => {
       .sort((a, b) => (a.session < b.session ? -1 : 1));
     expect(rows.map((row) => [row.session, row.repoOwner, row.sourceLicense])).toEqual([
       [S(1), 'Many Oars Co.', 'Apache-2.0'],
-      [S(2), 'Switchyard Software Company', null],
+      [S(2), 'Example Shop Co.', null],
     ]);
     expect(rows[0]).toMatchObject({ harness: 'claude-code', harnessVersions: ['2.1.300'], permittedUses: ['evaluation', 'benchmarking', 'task-design'], training: 'not-offered', transcripts: 1 });
     expect(rows[0]?.harnessTerms).toEqual([
