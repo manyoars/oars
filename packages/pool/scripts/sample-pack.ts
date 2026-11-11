@@ -42,25 +42,30 @@ export interface HarnessTerms {
   version: string;
 }
 
+const IN_FORCE = 'the version in force when the session was made';
+
 /**
- * The terms each harness puts on its user, with each page's version as the page itself prints it, read on 2026-11-10 (t1103): Anthropic's Consumer Terms (effective 2025-10-08) and
- * Usage Policy (effective 2026-11-12), OpenAI's Terms of Use (effective 2026-01-01) and Usage Policies (effective 2026-11-20). A lot sold before an effective date rests on the version before it.
- * `training` is `priced-add-on` only where the terms allow training on outputs; Anthropic's Usage Policy forbids it "without prior authorization from Anthropic", and OpenAI's bars
- * supplying training material for a model that substitutes for OpenAI's.
+ * The terms each harness puts on its user, with each page's version as the page itself prints it, read on 2026-11-10 (t1103, M2): Anthropic's Consumer Terms (effective 2025-10-08) and
+ * Usage Policy (the page read is effective 2026-11-12), OpenAI's Terms of Use (effective 2026-01-01) and Usage Policies (the page read is effective 2026-11-20). A session made before a page's
+ * effective date rests on the version before it, which was not read, so a policy row says "the version in force when the session was made" and the page read follows as its own `, current` row
+ * with what it adds (t1135 item 7). `training` is `priced-add-on` only where the terms allow training on outputs; the current Anthropic Usage Policy forbids it "without prior authorization from Anthropic", and OpenAI's
+ * bars supplying training material for a model that substitutes for OpenAI's.
  * A harness with no row here is left out of a pack: a session whose terms are not known carries no rights to state.
  */
 export const HARNESS_TERMS: { readonly [harness in Harness]?: { terms: readonly HarnessTerms[]; training: 'priced-add-on' | 'not-offered' } } = {
   'claude-code': {
     terms: [
       { name: 'Anthropic Consumer Terms', version: 'effective 2025-10-08' },
-      { name: 'Anthropic Usage Policy', version: 'effective 2026-11-12' },
+      { name: 'Anthropic Usage Policy', version: IN_FORCE },
+      { name: 'Anthropic Usage Policy, current', version: 'effective 2026-11-12; bars using outputs to train an AI model without prior authorization from Anthropic' },
     ],
     training: 'not-offered',
   },
   codex: {
     terms: [
       { name: 'OpenAI Terms of Use', version: 'effective 2026-01-01' },
-      { name: 'OpenAI Usage Policies', version: 'effective 2026-11-20' },
+      { name: 'OpenAI Usage Policies', version: IN_FORCE },
+      { name: 'OpenAI Usage Policies, current', version: 'effective 2026-11-20; bars supplying training material or signals for a model meant to substitute for an OpenAI model' },
     ],
     training: 'not-offered',
   },
