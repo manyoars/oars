@@ -1011,7 +1011,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
       continue;
     }
     const skeleton = skeletonUnder(built, matchId, options.buyerKey);
-    const skeletonText = `${JSON.stringify(skeleton, null, 2)}\n`;
+    const skeletonRaw = `${JSON.stringify(skeleton, null, 2)}\n`;
     const files = await transcriptFilesOf(runtime, record.project, record.session);
     const raws = await Promise.all(files.map((file) => readFile(file.path, 'utf8')));
     // The accounts this session's repositories live under: the owners entry's, and what the remote of each working folder names.
@@ -1025,6 +1025,8 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     }
     const masker = idMaskerOf(texts, sessionIds, indexKey, options.buyerKey);
     const masked = texts.map(masker.mask);
+    // The skeleton is built from the store, not the transcript: a tool call that named a transcript file by its session id carries that id in its `names`, so it goes through the same masks.
+    const skeletonText = masker.mask(skeletonRaw);
     // After redaction and masking, before the first byte is written: a session with a hit leaves no file, manifest row, or index row.
     if ([...masked, skeletonText].some((text) => secretIn(scannable(text)) !== undefined)) {
       counts.secret += 1;
