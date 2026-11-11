@@ -4,6 +4,8 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 
 ## Unreleased
 
+- `oars pool deposit --send` now takes over a send lock whose holder is no longer running at once (it used to wait ten minutes), says within a second who holds a live lock and how long it will wait, and ends with a refusal that gives the true time after which a retry can succeed. It prints `Sending batch <hash> to <server>...` when a send starts, ends a pool that does not answer within 30 seconds with a plain sentence that nothing was marked sent, states a dropped connection in plain words with the raw reason in parentheses, and stops waiting or sending when you press Ctrl-C, close the terminal, or the program that started it is killed. Exit codes are unchanged.
+
 ## 0.5.2 (2026-11-10)
 
 - Wire format 7 and field list 14 are unchanged from 0.5.0 (`CAPTURE_VERSION` 35); the pool reads formats 3 to 7.

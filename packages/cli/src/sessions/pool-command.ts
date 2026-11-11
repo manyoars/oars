@@ -20,7 +20,7 @@ import { carriedDeltas, heldDeltas, keptDeltas, markDeltasSent, placedOf, sentDe
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { rawAllowed, rawStale, sendsOf } from './pool-choices.js';
 import { heldRaw, rawParts, removeRawExcept, writeRaw } from './pool-raw.js';
-import { SendLockBusy, withSendLock } from './pool-send-lock.js';
+import { SendInterrupted, SendLockBusy, watchInterrupt, withSendLock, type BusyDetail, type Waiting } from './pool-send-lock.js';
 import { markSent, retirePulled, sentLog } from './pool-sent.js';
 import { shellReader } from './projection.js';
 import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
@@ -133,27 +133,69 @@ export const ask = (deps: RunDeps, step: string, server: string, path: string, i
   return via === undefined ? send(deps, step, request, init.show, init.binary === true) : via(request);
 };
 
-/** Prints the request when asked to, then sends exactly those headers and that body. */
-const send = async (deps: RunDeps, step: string, request: Outgoing, show: Masker | undefined, binary = false): Promise<Reply> => {
-  if (show !== undefined) deps.io.stderr(`${printed(request, show)}
-`);
-  let response: Response;
-  try {
-    response = await fetch(request.url, { method: request.method, headers: request.headers, redirect: 'error', ...(request.body === undefined ? {} : { body: request.body }) });
-  } catch (error) {
-    throw unreachableError(step, error, request.url.origin);
-  }
-  let body: unknown;
-  try {
-    body = binary && response.status === 200 ? new Uint8Array(await response.arrayBuffer()) : await response.json();
-  } catch {
-    body = undefined;
-  }
-  return { status: response.status, body, headers: response.headers };
+/** What an interactive `--send` sends under: the longest the pool gets to answer one request, and the signal that ends the request when the person (or the program that launched the send) ends the run. */
+export interface Guard {
+  stallMs: number;
+  signal: AbortSignal;
+}
+
+/** The pool took the request and then said nothing for `Guard.stallMs`. */
+class PoolStalled extends Error {}
+
+/** A newcomer's words for the network failures a stalled or restarted pool produces; the raw reason follows the sentence in parentheses. */
+const PLAIN_REASONS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/ECONNRESET|socket hang up|UND_ERR_SOCKET/, 'the connection was dropped before the pool answered'],
+  [/ECONNREFUSED/, 'nothing is listening there'],
+  [/ENOTFOUND|EAI_AGAIN/, 'that name did not resolve'],
+  [/ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT/, 'the connection timed out'],
+  [/EPIPE/, 'the connection closed while the batch was going out'],
+];
+const RETRY = 'Nothing was marked sent. Run the same command to try again.';
+
+/** Why a guarded request ended without an answer, in plain words: a stall, an interrupt, or a network failure whose raw reason is kept after the sentence. The exit code is the unreachable one, as before. */
+const guardedFailure = (step: string, cause: unknown, origin: string, guard: Guard): CliError => {
+  if (cause instanceof PoolStalled) return new CliError(`The pool at ${origin} did not answer within ${String(guard.stallMs / 1000)} seconds. ${RETRY}`, ExitCode.UNREACHABLE, step);
+  if (cause instanceof SendInterrupted) return new CliError(`${cause.message} ${RETRY}`, ExitCode.UNEXPECTED, step);
+  const unreachable = unreachableError(step, cause, origin);
+  const raw = unreachable.message.slice(`Cannot reach the server at ${origin}: `.length);
+  const plain = PLAIN_REASONS.find(([pattern]) => pattern.test(raw));
+  return plain === undefined ? unreachable : new CliError(`Cannot reach the pool at ${origin}: ${plain[1]} (${raw}). ${RETRY}`, ExitCode.UNREACHABLE, step);
 };
 
-/** The sender `deposit --send` uses when none is given: the request goes out over the network as built. The loopback test passes it to read what reaches the socket. */
-export const networkSender = (deps: RunDeps, step: string): Sender => (request) => send(deps, step, request, undefined);
+/** Prints the request when asked to, then sends exactly those headers and that body. A guarded request also ends when its stall time passes or its signal aborts, and fails in plain words. */
+const send = async (deps: RunDeps, step: string, request: Outgoing, show: Masker | undefined, binary = false, guard?: Guard): Promise<Reply> => {
+  if (show !== undefined) deps.io.stderr(`${printed(request, show)}
+`);
+  const stop = new AbortController();
+  const relay = (): void => stop.abort(guard?.signal.reason);
+  guard?.signal.addEventListener('abort', relay, { once: true });
+  if (guard?.signal.aborted === true) relay();
+  const timer = guard === undefined ? undefined : setTimeout(() => stop.abort(new PoolStalled()), guard.stallMs);
+  const failure = (error: unknown): CliError => (guard === undefined ? unreachableError(step, error, request.url.origin) : guardedFailure(step, stop.signal.aborted ? stop.signal.reason : error, request.url.origin, guard));
+  try {
+    let response: Response;
+    try {
+      response = await fetch(request.url, { method: request.method, headers: request.headers, redirect: 'error', ...(guard === undefined ? {} : { signal: stop.signal }), ...(request.body === undefined ? {} : { body: request.body }) });
+    } catch (error) {
+      throw failure(error);
+    }
+    let body: unknown;
+    try {
+      body = binary && response.status === 200 ? new Uint8Array(await response.arrayBuffer()) : await response.json();
+    } catch (error) {
+      // An answer that began and then stalled is no answer; one that ended badly is read as no body, as before.
+      if (stop.signal.aborted) throw failure(error);
+      body = undefined;
+    }
+    return { status: response.status, body, headers: response.headers };
+  } finally {
+    clearTimeout(timer);
+    guard?.signal.removeEventListener('abort', relay);
+  }
+};
+
+/** The sender `deposit --send` uses when none is given: the request goes out over the network as built. The loopback test passes it to read what reaches the socket. An interactive send passes a `Guard`. */
+export const networkSender = (deps: RunDeps, step: string, guard?: Guard): Sender => (request) => send(deps, step, request, undefined, false, guard);
 
 /** The server's named refusal, as a failure: its `error` is the problem's code in `--json`. */
 export const refusal = (step: string, { status, body }: Reply): CliError => {
@@ -509,9 +551,11 @@ const termsHint = (file: string): string => `No exclusion terms file at ${file}:
 /** `deposit --send <hash>`: the send lock the detached sender (hook-bin.js nightly) takes too, then a skip for a hash already in `sent.log`, then the batch lock, then the covenant (accepted here or before, or nothing is sent), then the request. The body is read and hashed again just before the request. */
 const sendBatch = async (deps: RunDeps, options: { outbox: string; server: string; token: string; hash: string; acceptCovenant: string | undefined; region: Region | undefined; via: Sender | undefined }): Promise<Outcome> => {
   const { outbox, server, token, hash } = options;
-  const via = options.via ?? networkSender(deps, DEPOSIT);
   if (!/^[0-9a-f]{64}$/.test(hash)) throw usage('--send takes the SHA-256 that oars pool outbox printed: 64 hexadecimal characters.', DEPOSIT);
   const refuse = (code: string, title: string): CliError => new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code, title, status: 409 });
+  // Ctrl-C, a kill, a closed terminal, or a launcher that died ends the wait for the lock and the request in flight, so a send the person gave up on cannot finish later.
+  const interrupt = watchInterrupt();
+  const via = options.via ?? networkSender(deps, DEPOSIT, { stallMs: SEND_STALL_MS, signal: interrupt.signal });
   try {
     return await withSendLock(outbox, async () => {
       // The rule the nightly follows: a hash `sent.log` holds is not posted again. Read under the lock, so two runs cannot both see it unsent.
@@ -529,15 +573,40 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
       await openCovenant(deps, server, token, options.acceptCovenant, options.region, via);
       const bytes = await unchangedBytes(locked.file, hash);
       if (bytes === undefined) throw refuse('batch_changed', lockMessages.batch_changed);
+      deps.io.stderr(`Sending batch ${hash.slice(0, 12)} to ${server}...\n`);
       await postBatch(deps, { server, token, bytes, hash, via });
       await markSent(outbox, hash, deps.now());
       await retirePulled(outbox, DEPOSIT);
       return { document: { ok: true, server, hash, sent: true }, text: `Sent batch ${hash} to ${server}.` };
-    });
+    }, {}, undefined, { onWait: (waiting) => deps.io.stderr(`${waitingLine(waiting)}\n`), signal: interrupt.signal });
   } catch (error) {
-    if (error instanceof SendLockBusy) throw refuse('send_locked', 'Another oars run is sending from this outbox. Try again in a minute.');
+    if (error instanceof SendLockBusy) throw refuse('send_locked', busyLine(error.detail));
+    if (error instanceof SendInterrupted) throw new CliError(`${error.message} Nothing was sent. Run the same command to try again.`, ExitCode.UNEXPECTED, DEPOSIT);
     throw error;
+  } finally {
+    interrupt.stop();
   }
+};
+
+/** How long the pool gets to answer one request of an interactive send before the send ends. */
+export const SEND_STALL_MS = 30_000;
+
+/** A span in words a person can plan around: seconds under two minutes, else whole minutes. */
+const span = (ms: number): string => {
+  const seconds = Math.max(1, Math.round(ms / 1000));
+  return seconds < 120 ? `${String(seconds)} second${seconds === 1 ? '' : 's'}` : `${String(Math.round(seconds / 60))} minutes`;
+};
+
+/** What the person reads within a second of a send that has to wait: whose lock it is, how old it is, and how long this run waits. */
+export const waitingLine = ({ holder, ageMs, waitMs }: Waiting): string =>
+  holder === undefined
+    ? `Another oars run holds this outbox's send lock (the lock does not name its process; it was last touched ${span(ageMs)} ago). Waiting up to ${span(waitMs)} for it; Ctrl-C stops this run.`
+    : `Another oars run (pid ${String(holder.pid)}) took this outbox's send lock ${span(ageMs)} ago and is still sending. Waiting up to ${span(waitMs)} for it; Ctrl-C stops this run.`;
+
+/** What a send that gave up says: nothing was sent, who held the lock, and the true time after which a retry is certain to find it free (a hung holder is taken over once its lock has gone untouched for staleMs). */
+export const busyLine = ({ holder, ageMs, untouchedMs, waitedMs, staleMs }: BusyDetail): string => {
+  const who = holder === undefined ? 'Another oars run' : `Another oars run (pid ${String(holder.pid)})`;
+  return `${who} has held this outbox's send lock for ${span(ageMs)} and was still sending after the ${span(waitedMs)} this run waited, so nothing was sent. Run the same command again once it ends. If it has hung, oars takes the lock over about ${span(Math.max(1, staleMs - untouchedMs))} from now.`;
 };
 
 /** The covenant version the pool names, or `undefined` when it cannot be asked or names none. The route is public, so no credential goes with it. */

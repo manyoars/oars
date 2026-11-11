@@ -1,6 +1,6 @@
 import { createHash, createHmac, webcrypto } from 'node:crypto';
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { http, HttpResponse } from 'msw';
@@ -12,11 +12,11 @@ import { defaultConfigDir } from '../credentials.js';
 import { ExitCode } from '../errors.js';
 import { readSpool } from '../telemetry/spool.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
-import { DEFAULT_POOL_URL, networkSender, poolCoverage, poolDeposit, poolRaw, poolServer, RAW_PHRASE, RAW_PROMPT, type Reply, type Sender } from './pool-command.js';
+import { busyLine, DEFAULT_POOL_URL, networkSender, poolCoverage, poolDeposit, poolRaw, poolServer, RAW_PHRASE, RAW_PROMPT, waitingLine, type Reply, type Sender } from './pool-command.js';
 import { localNames } from './redact.js';
 import { batchHash, canonicalBytes, FIELD_ROWS, fieldsOf, outboxFolder, writeBatch } from './pool-outbox.js';
 import { markSent, sentHashes } from './pool-sent.js';
-import { withSendLock } from './pool-send-lock.js';
+import { SendInterrupted, withSendLock } from './pool-send-lock.js';
 import type { Outgoing } from './pool-print.js';
 import { REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
 import type * as PoolWire from './pool-wire.js';
@@ -3231,6 +3231,136 @@ describe('oars pool deposit --send holds the send lock (t884 fix round)', () => 
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('oars pool deposit --send says what it is doing and stops when told (t1143)', () => {
+  const holder = { run: 'r', pid: 4242, host: 'laptop', since: 0 };
+  const sendingScene = async (): Promise<{ scene: Scene; hash: string; outbox: string }> => {
+    const scene = await batched();
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    const hash = printedHashes(scene)[0] ?? '';
+    scene.h.err.length = 0;
+    return { scene, hash, outbox: outboxFolder(scene.staged.storeDir, POOL) };
+  };
+  /** A fetch that answers the covenant as accepted and holds every other request until its signal aborts, as a pool that took the connection and went silent does. */
+  const stalledPool = (calls: string[]): void => {
+    vi.stubGlobal('fetch', (url: URL, init?: RequestInit): Promise<Response> => {
+      calls.push(`${init?.method ?? 'GET'} ${url.pathname}`);
+      if (url.pathname === '/v1/covenant') return Promise.resolve(new Response(JSON.stringify({ version: 'v1', accepted: true }), { status: 200, headers: { 'content-type': 'application/json' } }));
+      return new Promise<Response>((_, reject) => {
+        // Like fetch: a signal that already aborted rejects at once.
+        if (init?.signal?.aborted === true) reject(init.signal.reason);
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+      });
+    });
+  };
+  const resetBy = (cause: Error): void => {
+    vi.stubGlobal('fetch', (url: URL): Promise<Response> => (url.pathname === '/v1/covenant' ? Promise.resolve(new Response(JSON.stringify({ version: 'v1', accepted: true }), { status: 200, headers: { 'content-type': 'application/json' } })) : Promise.reject(new TypeError('fetch failed', { cause }))));
+  };
+  const reached = async (calls: string[]): Promise<void> => {
+    for (let polls = 0; polls < 5000 && !calls.includes('POST /v1/deposits'); polls += 1) await new Promise((resolve) => setImmediate(resolve));
+  };
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('takes over a lock left by a dead run at once, with no waiting line, and leaves no signal hook behind', async () => {
+    const { scene, hash, outbox } = await sendingScene();
+    mkdirSync(outbox, { recursive: true });
+    // A pid no machine runs: the holder died without releasing the lock.
+    writeFileSync(join(outbox, 'send.lock'), JSON.stringify({ ...holder, pid: 2_147_483_646, host: hostname(), since: Date.now() }));
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201, { ok: true }) });
+    const hooks = process.listenerCount('SIGINT') + process.listenerCount('SIGTERM') + process.listenerCount('SIGHUP');
+    expect(await poolDeposit(scene.h.deps, sendOptions(hash, pool.via))).toMatchObject({ document: { ok: true, hash, sent: true } });
+    expect(scene.h.err.join('')).toBe(`Sending batch ${hash.slice(0, 12)} to ${POOL}...\n`);
+    expect(process.listenerCount('SIGINT') + process.listenerCount('SIGTERM') + process.listenerCount('SIGHUP')).toBe(hooks);
+    expect(existsSync(join(outbox, 'send.lock'))).toBe(false);
+  });
+
+  it('prints who holds a live lock and how long it will wait, then refuses with the true time after which a retry can succeed', async () => {
+    const { scene, hash, outbox } = await sendingScene();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    mkdirSync(outbox, { recursive: true });
+    // This process is alive, so the lock is a live holder's.
+    writeFileSync(join(outbox, 'send.lock'), JSON.stringify({ ...holder, pid: process.pid, host: hostname(), since: Date.now() }));
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201, { ok: true }) });
+    const sending = poolDeposit(scene.h.deps, sendOptions(hash, pool.via));
+    // The lock waits on the wall clock, so the test moves a clock that only Date reads, a minute at a time, until the wait is over.
+    const clock = setInterval(() => {
+      vi.setSystemTime(Date.now() + 60_000);
+    }, 10);
+    const failed = await sending.catch((error: unknown) => error).finally(() => {
+      clearInterval(clock);
+    });
+    expect(failed).toMatchObject({ exitCode: ExitCode.CONFLICT, problem: { code: 'send_locked' } });
+    const lines = scene.h.err.join('').split('\n').filter((line) => line !== '');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(new RegExp(`^Another oars run \\(pid ${String(process.pid)}\\) took this outbox's send lock \\d+ (seconds|minutes) ago and is still sending\\. Waiting up to 2 minutes for it; Ctrl-C stops this run\\.$`));
+    expect(String((failed as Error).message)).toMatch(new RegExp(`^Another oars run \\(pid ${String(process.pid)}\\) has held this outbox's send lock for \\d+ minutes and was still sending after the \\d+ minutes this run waited, so nothing was sent\\. Run the same command again once it ends\\. If it has hung, oars takes the lock over about \\d+ minutes from now\\.$`));
+    expect(pool.requests).toEqual([]);
+  });
+
+  it('words the waiting line and the busy refusal from the real constants', () => {
+    const named = { run: 'r', pid: 4242, host: 'laptop', since: 0 };
+    expect(waitingLine({ holder: named, ageMs: 90_000, waitMs: 120_000 })).toBe("Another oars run (pid 4242) took this outbox's send lock 90 seconds ago and is still sending. Waiting up to 2 minutes for it; Ctrl-C stops this run.");
+    expect(waitingLine({ holder: undefined, ageMs: 30_000, waitMs: 120_000 })).toBe("Another oars run holds this outbox's send lock (the lock does not name its process; it was last touched 30 seconds ago). Waiting up to 2 minutes for it; Ctrl-C stops this run.");
+    expect(busyLine({ holder: named, ageMs: 180_000, untouchedMs: 120_000, waitedMs: 120_000, staleMs: 600_000 })).toBe(
+      "Another oars run (pid 4242) has held this outbox's send lock for 3 minutes and was still sending after the 2 minutes this run waited, so nothing was sent. Run the same command again once it ends. If it has hung, oars takes the lock over about 8 minutes from now.",
+    );
+    expect(busyLine({ holder: undefined, ageMs: 600_000, untouchedMs: 600_000, waitedMs: 1000, staleMs: 600_000 })).toBe(
+      "Another oars run has held this outbox's send lock for 10 minutes and was still sending after the 1 second this run waited, so nothing was sent. Run the same command again once it ends. If it has hung, oars takes the lock over about 1 second from now.",
+    );
+  });
+
+  it('ends a send the pool never answers after 30 seconds with a plain sentence, marks nothing sent, and frees the lock', async () => {
+    const { scene, hash, outbox } = await sendingScene();
+    const calls: string[] = [];
+    stalledPool(calls);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let ended = false;
+    const sending = poolDeposit(scene.h.deps, sendOptions(hash, undefined)).catch((error: unknown) => error).finally(() => {
+      ended = true;
+    });
+    await reached(calls);
+    expect(calls).toEqual(['GET /v1/covenant', 'POST /v1/deposits']);
+    expect(scene.h.err.join('')).toBe(`Sending batch ${hash.slice(0, 12)} to ${POOL}...\n`);
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(ended).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await sending).toMatchObject({ exitCode: ExitCode.UNREACHABLE, message: `The pool at ${POOL} did not answer within 30 seconds. Nothing was marked sent. Run the same command to try again.` });
+    expect([...(await sentHashes(outbox))]).toEqual([]);
+    expect(existsSync(join(outbox, 'send.lock'))).toBe(false);
+  });
+
+  it('says a dropped connection in plain words and keeps the raw reason in parentheses', async () => {
+    const { scene, hash } = await sendingScene();
+    resetBy(Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }));
+    expect(await poolDeposit(scene.h.deps, sendOptions(hash, undefined)).catch((error: unknown) => error)).toMatchObject({
+      exitCode: ExitCode.UNREACHABLE,
+      message: `Cannot reach the pool at ${POOL}: the connection was dropped before the pool answered (read ECONNRESET). Nothing was marked sent. Run the same command to try again.`,
+    });
+  });
+
+  it('leaves a reason it has no words for as it was', async () => {
+    const { scene, hash } = await sendingScene();
+    resetBy(new Error('certificate has expired'));
+    expect(await poolDeposit(scene.h.deps, sendOptions(hash, undefined)).catch((error: unknown) => error)).toMatchObject({ exitCode: ExitCode.UNREACHABLE, message: `Cannot reach the server at ${POOL}: certificate has expired` });
+  });
+
+  it('ends the request in flight when the run is interrupted, and does not start one on a signal that already fired', async () => {
+    const { scene } = await sendingScene();
+    const calls: string[] = [];
+    stalledPool(calls);
+    const stop = new AbortController();
+    const sender = networkSender(scene.h.deps, 'deposit', { stallMs: 30_000, signal: stop.signal });
+    const request = { method: 'POST', url: new URL('/v1/deposits', POOL), headers: [] as Array<[string, string]> };
+    const inflight = sender(request).catch((error: unknown) => error);
+    await reached(calls);
+    stop.abort(new SendInterrupted('signal', 'Interrupted by SIGINT.'));
+    expect(await inflight).toMatchObject({ exitCode: ExitCode.UNEXPECTED, message: 'Interrupted by SIGINT. Nothing was marked sent. Run the same command to try again.' });
+    expect(await sender(request).catch((error: unknown) => error)).toMatchObject({ message: 'Interrupted by SIGINT. Nothing was marked sent. Run the same command to try again.' });
   });
 });
 
