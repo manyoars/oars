@@ -12,7 +12,11 @@ import { defaultConfigDir } from '../credentials.js';
 import { ExitCode } from '../errors.js';
 import { readSpool } from '../telemetry/spool.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
+<<<<<<< HEAD
 import { busyLine, DEFAULT_POOL_URL, networkSender, poolCoverage, poolDeposit, poolRaw, poolServer, RAW_PHRASE, RAW_PROMPT, waitingLine, type Reply, type Sender } from './pool-command.js';
+=======
+import { DEFAULT_POOL_URL, networkSender, OFFER_AFTER, OFFER_BEFORE, poolCoverage, poolDeposit, poolRaw, poolServer, RAW_PHRASE, RAW_PROMPT, type Reply, type Sender } from './pool-command.js';
+>>>>>>> origin/main
 import { localNames } from './redact.js';
 import { batchHash, canonicalBytes, FIELD_ROWS, fieldsOf, outboxFolder, writeBatch } from './pool-outbox.js';
 import { markSent, sentHashes } from './pool-sent.js';
@@ -1594,6 +1598,102 @@ describe('oars pool deposit --send', () => {
       const accepted = pool.requests.find((request) => request.url.pathname === '/v1/covenant/accept');
       expect(JSON.parse(accepted?.body ?? '{}')).toEqual({ version: 'v1', textSha256: SCREEN.sha256, input: 'typed', client: `oars/${scene.h.deps.version}`, euEeaUk: 'no' });
       expect(paths(pool)).toEqual(['/v1/covenant', '/v1/covenant/accept', '/v1/deposits']);
+    });
+
+    describe('the offer lines around the screen (t1142)', () => {
+      /** A sender that notes what had been printed to stderr when each request arrived, then answers as the wire does. */
+      const watching = (routes: { [route: string]: Reply | Reply[] }, scene: Awaited<ReturnType<typeof batched>>): { pool: ReturnType<typeof wire>; printedAt: Map<string, string>; via: Sender } => {
+        const pool = wire(routes);
+        const printedAt = new Map<string, string>();
+        const via: Sender = async (request) => {
+          printedAt.set(request.url.pathname, scene.h.err.join(''));
+          return pool.via(request);
+        };
+        return { pool, printedAt, via };
+      };
+      const ALL = [...OFFER_BEFORE, ...OFFER_AFTER];
+
+      it('prints the before lines on stderr immediately ahead of the unchanged blank line and screen', async () => {
+        const scene = await batched();
+        const hash = await printedAndHash(scene);
+        atTerminal(scene, SCREEN.phrase, 'no');
+        await poolDeposit(scene.h.deps, sendOptions(hash, wire(acceptRoutes()).via));
+        const err = scene.h.err.join('');
+        expect(err).toContain(`${OFFER_BEFORE.join('\n')}\n\n${SCREEN.text}\n\n> `);
+        expect(err.indexOf(OFFER_BEFORE[0] ?? '')).toBeLessThan(err.indexOf(SCREEN.text));
+      });
+
+      it('records the hash of the screen text alone, so the lines never reach what was accepted', async () => {
+        const scene = await batched();
+        const hash = await printedAndHash(scene);
+        const pool = wire(acceptRoutes());
+        atTerminal(scene, SCREEN.phrase, 'no');
+        await poolDeposit(scene.h.deps, sendOptions(hash, pool.via));
+        const accepted = pool.requests.find((request) => request.url.pathname === '/v1/covenant/accept');
+        const recorded: unknown = JSON.parse(accepted?.body ?? '{}');
+        expect(recorded).toMatchObject({ textSha256: createHash('sha256').update(SCREEN_TEXT).digest('hex') });
+        expect(recorded).toMatchObject({ textSha256: SCREEN.sha256 });
+        expect(scene.h.err.join('')).toContain(OFFER_BEFORE[0] ?? '');
+      });
+
+      it('prints the after lines once the acceptance post succeeds, before the batch is sent', async () => {
+        const scene = await batched();
+        const hash = await printedAndHash(scene);
+        const watched = watching(acceptRoutes(), scene);
+        atTerminal(scene, SCREEN.phrase, 'no');
+        await poolDeposit(scene.h.deps, sendOptions(hash, watched.via));
+        const afterBlock = `${OFFER_AFTER.join('\n')}\n`;
+        expect(watched.printedAt.get('/v1/covenant/accept')).not.toContain(OFFER_AFTER[0] ?? '');
+        expect(watched.printedAt.get('/v1/deposits')).toContain(afterBlock);
+        expect(scene.h.err.join('').split(OFFER_AFTER[0] ?? '').length - 1).toBe(1);
+      });
+
+      it('prints no after line on a wrong phrase', async () => {
+        const scene = await batched();
+        const hash = await printedAndHash(scene);
+        atTerminal(scene, 'not the phrase');
+        await refusalOf(poolDeposit(scene.h.deps, sendOptions(hash, wire(acceptRoutes()).via)));
+        const err = scene.h.err.join('');
+        for (const line of OFFER_AFTER) expect(err).not.toContain(line);
+        expect(err).toContain(OFFER_BEFORE[0] ?? '');
+      });
+
+      it('prints no after line when the region is closed', async () => {
+        const scene = await batched();
+        const hash = await printedAndHash(scene);
+        const pool = wire({ ...acceptRoutes(), 'POST /v1/covenant/accept': answer(403, { error: 'region_closed', message: 'closed' }) });
+        atTerminal(scene, SCREEN.phrase, 'yes');
+        await refusalOf(poolDeposit(scene.h.deps, sendOptions(hash, pool.via)));
+        for (const line of OFFER_AFTER) expect(scene.h.err.join('')).not.toContain(line);
+      });
+
+      it('prints no after line when the acceptance post fails', async () => {
+        const scene = await batched();
+        const hash = await printedAndHash(scene);
+        const pool = wire({ ...acceptRoutes(), 'POST /v1/covenant/accept': answer(500, { error: 'boom', message: 'no' }) });
+        atTerminal(scene, SCREEN.phrase, 'no');
+        await refusalOf(poolDeposit(scene.h.deps, sendOptions(hash, pool.via)));
+        for (const line of OFFER_AFTER) expect(scene.h.err.join('')).not.toContain(line);
+      });
+
+      it('prints no line at all off a terminal, or when the account has accepted already', async () => {
+        const off = await batched();
+        await refusalOf(poolDeposit(off.h.deps, sendOptions(await printedAndHash(off), wire(acceptRoutes()).via)));
+        const done = await batched();
+        await poolDeposit(done.h.deps, sendOptions(await printedAndHash(done), wire(acceptRoutes(answer(200, { version: 'v1', accepted: true, screen: SCREEN }))).via));
+        for (const scene of [off, done]) for (const line of ALL) expect(scene.h.err.join('')).not.toContain(line);
+      });
+
+      it('names no money, payment, or price, and no earnings', () => {
+        for (const line of ALL) expect(line).not.toMatch(/money|pay|paid|price|\$|earn/i);
+      });
+
+      it('names a command that exists: fetch is a pool subcommand and --help is its help', async () => {
+        const scene = await batched();
+        expect(await scene.cli('pool', 'fetch', '--help')).toBe(ExitCode.OK);
+        expect(scene.h.out.join('')).toContain('fetch the signed bundle for one harness version');
+        expect(OFFER_AFTER.join(' ')).toContain('oars pool fetch --help');
+      });
     });
 
     it('presents covenant 2.1 as the pool holds it: its id, its text, and the hash of that text', async () => {
