@@ -3467,6 +3467,29 @@ describe('oars pool deposit --send says what it is doing and stops when told (t1
     expect(hooks()).toEqual(before);
   });
 
+  it('stops a send waiting on the covenant screen when the person presses Ctrl-C: nothing is accepted or posted, and no signal hook stays behind', async () => {
+    const { scene, hash } = await sendingScene();
+    // A terminal that has typed nothing: the screen waits for its line.
+    atTerminal(scene);
+    const pool = wire({ 'GET /v1/covenant': UNACCEPTED, 'POST /v1/covenant/accept': answer(200, { ok: true, version: 'v1' }), 'POST /v1/deposits': answer(201, { ok: true }) });
+    const hooks = (): number[] => ['SIGINT', 'SIGTERM', 'SIGHUP'].map((name) => process.listenerCount(name));
+    const before = hooks();
+    let ended = false;
+    const sending = poolDeposit(scene.h.deps, sendOptions(hash, pool.via)).catch((error: unknown) => error).finally(() => {
+      ended = true;
+    });
+    for (let polls = 0; polls < 5000 && !scene.h.err.join('').includes(`${SCREEN.text}\n\n> `); polls += 1) await new Promise((resolve) => setImmediate(resolve));
+    expect(ended).toBe(false);
+    process.emit('SIGINT');
+    const failed = await Promise.race([sending, new Promise((resolve) => setTimeout(resolve, 2000, 'still waiting for a line'))]);
+    expect(failed).toMatchObject({ exitCode: ExitCode.UNEXPECTED, message: STOPPED });
+    expect(pool.requests.map((request) => `${request.method} ${request.url.pathname}`)).toEqual(['GET /v1/covenant']);
+    expect(hooks()).toEqual(before);
+    // Free the reader the red run leaves waiting, so a failing run does not hang its file.
+    scene.staged.stdin.end();
+    await sending;
+  });
+
   it('tells a person who deposits that nothing was sent yet, that the background sender sends once the covenant is accepted, and still points to the outbox', async () => {
     const scene = setting();
     await capture(scene);
