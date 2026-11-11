@@ -1818,7 +1818,10 @@ describe('--sessions builds the pack from a list (t1138)', () => {
   it('prints each listed session that is left out with its reason', async () => {
     const f = fixture();
     const earlier = turns(S(1), 2);
-    const replay = earlier.map((text) => line({ ...(JSON.parse(text) as object), sessionId: S(2) }));
+    const replay = earlier.map((text) => {
+      const parsed: unknown = JSON.parse(text);
+      return line({ ...(typeof parsed === 'object' ? parsed : {}), sessionId: S(2) });
+    });
     const key = 'my' + 'AK' + 'IA' + 'IOSFODNN7EXAMPLE';
     f.write('-work-oars', S(1), earlier);
     f.write('-work-oars', S(2), [...replay, ...turns(S(2), 2)]);
