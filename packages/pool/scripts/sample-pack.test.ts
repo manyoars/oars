@@ -1610,6 +1610,22 @@ describe('a pack refuses to finish with a raw id left in it (t1135 item 4)', () 
     expect(printed.join('\n')).not.toContain(S(2));
   });
 
+  it('masks a short, digit-free id under a named id key, and the scan counts it where the masks miss it', async () => {
+    const id = 'shortone';
+    const f = fixture();
+    const carrier = line({ type: 'system', uuid: uuidOf(S(1), 'a', 41), parentUuid: null, timestamp: at(41), sessionId: S(1), deliveryId: id });
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), carrier, assistant(S(1), 3, 'done')]);
+    await stored(f);
+    expect((await buildPack(f.runtime, options(f))).emitted).toBe(1);
+    expect(packText(f.out)).not.toContain(id);
+    const g = fixture();
+    const hiddenId = id.replace('r', `${String.fromCharCode(92)}u0072`);
+    const planted = line({ type: 'system', uuid: uuidOf(S(1), 'a', 42), parentUuid: null, timestamp: at(42), sessionId: S(1), content: 'PLANTED' }).replace('PLANTED', `see ${hiddenId} here`);
+    g.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), carrier, planted, assistant(S(1), 3, 'done')]);
+    await stored(g);
+    await expect(buildPack(g.runtime, options(g))).rejects.toThrow(/deliveryId: 1/);
+  });
+
   it('finishes a pack with no raw id as before', async () => {
     const f = fixture();
     f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 3, 'done')]);

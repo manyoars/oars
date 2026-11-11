@@ -383,8 +383,14 @@ const isIdKey = (key: string): boolean => /uuid$/i.test(key) || ID_KEYS.includes
 /** Whether the uuid and prefixed-token patterns reach `id` whole; any other id (an opaque `ref-7f3a...`) needs a pattern of its own. */
 const reachedWhole = (id: string): boolean => WHOLE_UUID.test(id) || HARNESS_ID.test(id) || /^(?:req|call)_[0-9A-Za-z]+$/i.test(id);
 
-/** An id worth masking by its value: a uuid or prefixed token, or an opaque token of 8 or more characters with a digit in it (a word like `undefined` is no id). */
-const looksLikeId = (value: string): boolean => reachedWhole(value) || (value.length >= 8 && /[0-9]/.test(value) && /^[0-9A-Za-z][0-9A-Za-z._-]*$/.test(value));
+/** The characters an id the opaque pattern can match is made of. */
+const TOKEN = /^[0-9A-Za-z][0-9A-Za-z._-]*$/;
+
+/** A value found under a named id key is an id whatever its length: a uuid, a prefixed token, or any token of id characters. */
+const keyedId = (value: string): boolean => reachedWhole(value) || TOKEN.test(value);
+
+/** An id worth masking by its value when text only hints at it (`QUOTED_ID`): a uuid or prefixed token, or an opaque token of 8 or more characters with a digit in it (a word like `undefined` is no id). */
+const looksLikeId = (value: string): boolean => reachedWhole(value) || (value.length >= 8 && /[0-9]/.test(value) && TOKEN.test(value));
 
 /**
  * The line ids a transcript carries, each with the key it stood under: the value of every id key at any depth, a Codex `session_meta` line's own `id`, and the `id` of an `api-request` line (a bare `id` is
@@ -464,10 +470,10 @@ const idMaskerOf = (texts: readonly string[], sessions: ReadonlyMap<string, stri
   for (const text of texts) {
     for (const line of text.split('\n')) lineIdsOf(parsed(line), found);
     // A key ending in `uuid` (or another id key) inside a quoted settings file or tool output: no line carries it as a key, but its value is the same kind of id.
-    for (const [, key, id] of text.matchAll(QUOTED_ID)) if (key !== undefined && id !== undefined) found.set(id, key);
+    for (const [, key, id] of text.matchAll(QUOTED_ID)) if (key !== undefined && id !== undefined && looksLikeId(id)) found.set(id, key);
   }
   // An id this module already masked (the redactor masks `toolu_` ids with the same function) is kept as it is: masking it again would give the one id a second value.
-  const lineIds = new Map([...found].filter(([id]) => looksLikeId(id) && !MASKED_PREFIXED.test(id)));
+  const lineIds = new Map([...found].filter(([id]) => keyedId(id) && !MASKED_PREFIXED.test(id)));
   const opaque = wholeTokens([...lineIds.keys()].filter((id) => !reachedWhole(id) && !sessions.has(id)));
   const mask = (text: string): string => {
     const whole = opaque === null ? text : text.replace(opaque, (id) => maskOf(indexKey, buyerKey, id));
