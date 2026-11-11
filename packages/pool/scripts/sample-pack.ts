@@ -21,7 +21,7 @@ import { runGit, type Git } from '../../cli/src/sessions/survival.js';
 import { vocabulary } from '../../cli/src/sessions/vocab-load.js';
 
 export const USAGE = [
-  'Usage: sample-pack --terms <file> --owners <file> --index-key <file> --buyer-key <key> --out <dir> [--size <n>] [--seed <text>] [--min-turns <n>]',
+  'Usage: sample-pack --terms <file> --owners <file> --index-key <file> --buyer-key <key> --out <dir> [--size <n>] [--seed <text>] [--min-turns <n>] [--sessions <file>]',
   '  --terms <file>       the exclusion term list (one term per line; a local file, never in a repository)',
   '  --owners <file>      JSON list of {"folder": "<glob over the project folder name>", "owner": "<company>", "license": "<SPDX id>" | null}; first match wins, and a session in a folder no entry names is left out',
   '  --index-key <file>   the matching-index key (64 hex characters or more): a session\'s server key is HMAC-SHA-256 of its id under it. Keep it; a new key gives every session new ids',
@@ -29,6 +29,7 @@ export const USAGE = [
   '  --out <dir>          an empty or new folder outside every git repository',
   '  --size <n>           sessions to emit (default 25); --seed <text> orders the draw (default 1)',
   '  objections.jsonl     beside the owners file, optional: a line per objection, naming a session id or a person; each session it names, or whose text names the person, is left out and counted (docs/pool.md)',
+  '  --sessions <file>    build the pack from exactly the store session ids in this file (one per line) in place of the seeded draw; every rule still applies, and each listed session left out is printed with the reason (term, noOwner, lead, tooShort, duplicate, secret, notFound, ...). Not with --size or --seed',
   '  --min-turns <n>      a session needs at least this many turns, user plus assistant (default 20); a shorter one is left out and counted',
   'Reads the store under APPDATA (or XDG_CONFIG_HOME) and the transcripts under CLAUDE_CONFIG_DIR or ~/.claude. Builds in <out>.partial and renames it to --out when done,',
   'and appends each session id and its match id to index.jsonl beside the owners file: the operator\'s only map from one to the other.',
@@ -143,6 +144,10 @@ export interface PackOptions {
   git?: Git | undefined;
   /** The vocabulary folder, for a caller bundled into a `data:` URL (sample-pack.mjs), where the CLI cannot find its own shipped copy. */
   vocabDir?: URL | undefined;
+  /** Store session ids to build the pack from, in place of the seeded draw (`--sessions`): every other rule still applies, and `size` and `seed` are not used. */
+  sessions?: readonly string[] | undefined;
+  /** Told of each listed session that does not make the pack, with the count that kept it out (`term`, `noOwner`, `lead`, `tooShort`, `duplicate`, `secret`, ..., or `notFound`). */
+  onDrop?: ((session: string, reason: string) => void) | undefined;
 }
 
 export interface PackCounts {
@@ -364,6 +369,20 @@ const ID_KEYS: readonly string[] = ['requestId', 'call_id', 'session_id', 'forke
 // `accountUuid": "<uuid>`, `leafUuid: <id>`, `promptId=<id>` as it reads inside a JSON string or pasted output, the quotes plain, escaped, or absent.
 const QUOTED_ID = new RegExp(`(uuid|${ID_KEYS.join('|')})\\\\*["']?\\s*[:=]\\s*\\\\*["']?([0-9A-Za-z][0-9A-Za-z_-]{7,})`, 'gi');
 
+/**
+ * A uuid under a key inside JSON that was written into a string (a transcript pasted or read into a tool result), so its quotes are backslash-escaped, once or more: `\"id\":\"<uuid>\"`,
+ * `\"serverClassifierContext\":{\"request\":\"<uuid>\"`, `\"base\":\"<uuid>\"`. No line of the pack need carry the id as a key for these to be ids (t1138). An unescaped key is a real line field, read by `lineIdsOf`.
+ * A prefixed id (`toolu_`, `msg_`, `req_`) under these keys is masked wherever it stands, so only the uuid shape needs the key.
+ */
+const ESCAPED_KEYED: readonly { key: string; pattern: RegExp }[] = [
+  { key: 'id', pattern: new RegExp(`(?<![A-Za-z0-9_])id\\\\+"\\s*:\\s*\\\\+"(${UUID})`, 'gi') },
+  { key: 'request', pattern: new RegExp(`serverClassifierContext\\\\+"\\s*:\\s*\\{\\s*\\\\+"request\\\\+"\\s*:\\s*\\\\+"(${UUID})`, 'gi') },
+  { key: 'base', pattern: new RegExp(`(?<![A-Za-z0-9_])base\\\\+"\\s*:\\s*\\\\+"(${UUID})`, 'gi') },
+];
+
+/** The nil uuid is a code literal, never an id. */
+const NIL_UUID = '00000000-0000-0000-0000-000000000000';
+
 const isRecord = (value: unknown): value is object => typeof value === 'object' && value !== null;
 
 /** The working folders a raw transcript names (the `cwd` of a line), read before redaction. */
@@ -456,6 +475,8 @@ const wholeTokens = (ids: readonly string[]): RegExp | null => {
 };
 
 interface IdMasker {
+  /** The ids it masks by value, each with the key it stood under. */
+  ids: ReadonlyMap<string, string>;
   /** The text with every known id rewritten. */
   mask: (text: string) => string;
   /** The raw ids left in a text, counted by the key each stood under (`session` for a store session id, `prefixed id` for a `toolu_`, `msg_`, or `req_` shape): what the post-build scan looks for. */
@@ -486,7 +507,7 @@ const keyedOpaque = (texts: readonly string[], sessions: ReadonlyMap<string, str
  * The raw transcripts with every keyed opaque id already masked, and those masks: redaction's entropy rule would turn a mixed-case, high-entropy `deliveryId` into `<secret>` and cut its link, so the keyed mask comes
  * first, as it does for a `msg_` or `req_` id. The masks are handed on so the later pass does not mask them a second time.
  */
-const premasked = (raws: readonly string[], sessions: ReadonlyMap<string, string>, indexKey: string, buyerKey: string): { texts: string[]; masks: Set<string> } => {
+const premasked = (raws: readonly string[], sessions: ReadonlyMap<string, string>, indexKey: string, buyerKey: string): { texts: string[]; masks: Set<string>; ids: ReadonlyMap<string, string> } => {
   const ids = keyedOpaque(raws, sessions);
   const pattern = wholeTokens([...ids.keys()]);
   const masks = new Set<string>();
@@ -495,7 +516,7 @@ const premasked = (raws: readonly string[], sessions: ReadonlyMap<string, string
     masks.add(mask);
     return mask;
   })));
-  return { texts, masks };
+  return { texts, masks, ids };
 };
 
 /**
@@ -509,6 +530,8 @@ const idMaskerOf = (texts: readonly string[], sessions: ReadonlyMap<string, stri
     for (const line of text.split('\n')) lineIdsOf(parsed(line), found);
     // A key ending in `uuid` (or another id key) inside a quoted settings file or tool output: no line carries it as a key, but its value is the same kind of id.
     for (const [, key, id] of text.matchAll(QUOTED_ID)) if (key !== undefined && id !== undefined && looksLikeId(id)) found.set(id, key);
+    // A uuid under `id`, `request` (of a classifier context), or `base` inside JSON written into a string: no line need carry it (t1138).
+    for (const { key, pattern } of ESCAPED_KEYED) for (const [, id] of text.matchAll(pattern)) if (id !== undefined && id !== NIL_UUID) found.set(id, key);
   }
   // An id this module already masked (the redactor masks `toolu_` ids with the same function, `premasked` the rest) is kept as it is: masking it again would give the one id a second value.
   const keyed = new Map([...found].filter(([id]) => keyedId(id) && !MASKED_PREFIXED.test(id) && !done.has(id)));
@@ -537,7 +560,56 @@ const idMaskerOf = (texts: readonly string[], sessions: ReadonlyMap<string, stri
     }
     return hits;
   };
-  return { mask, scan };
+  return { ids: lineIds, mask, scan };
+};
+
+/** An id of the opaque kind (no uuid or prefixed shape) as it stands in text: a run of id characters, which may begin after a separator inside it (`agent_ref-7f3a9c21`). */
+const OPAQUE_RUN = /(?<![A-Za-z0-9])[0-9A-Za-z][0-9A-Za-z._-]{6,}[0-9A-Za-z]/g;
+
+/** The ids of a run, from each place a separator lets one begin: the run itself, then what follows each separator. The offset where the id starts, and the id. */
+const opaqueIn = (run: string, ids: ReadonlyMap<string, string>): { at: number; id: string } | undefined => {
+  for (let at = 0; at < run.length; at += 1) {
+    if (at > 0 && /[A-Za-z0-9]/.test(run[at - 1] ?? '')) continue;
+    const id = run.slice(at);
+    if (ids.has(id)) return { at, id };
+  }
+  return undefined;
+};
+
+/**
+ * The masker for the whole pack, run over every file once it is written (t1138): each raw id that any emitted session masked, under whatever key, is replaced wherever it stands in any other session's text, at
+ * any depth of escaping, with the value `maskOf` gives it. One pass per shape over a text, each match looked up in a map; the id set is never looped over per text. A uuid or prefixed id is found by its shape; an opaque
+ * id (`ref-7f3a...`, `dlv-11aa...`) by the run of id characters it stands in, and only when it holds a letter, so a numeric string never turns an equal JSON number into hex. `ids` holds only id shapes (`looksLikeId`):
+ * a narrow keyed value (`"1"`, `"main"`) stays under its key in its own session.
+ */
+const packMaskerOf = (ids: ReadonlyMap<string, string>, sessions: ReadonlyMap<string, string>, indexKey: string, buyerKey: string): IdMasker => {
+  const opaque = new Map([...ids].filter(([id]) => !reachedWhole(id) && /[A-Za-z]/.test(id) && !sessions.has(id)));
+  const known = new Map([...ids, ...[...sessions.keys()].map((session): [string, string] => [session, 'session'])]);
+  const knownOf = (token: string): string | undefined => (ids.has(token) ? token : ids.has(token.toLowerCase()) ? token.toLowerCase() : undefined);
+  const mask = (text: string): string => {
+    const shaped = text.replace(UUID_OR_PREFIXED, (token) => {
+      const session = sessions.get(token);
+      if (session !== undefined) return session;
+      const id = knownOf(token);
+      return id !== undefined || (HARNESS_ID.test(token) && !MASKED_PREFIXED.test(token)) ? maskOf(indexKey, buyerKey, id ?? token) : token;
+    });
+    return opaque.size === 0 ? shaped : shaped.replace(OPAQUE_RUN, (run) => {
+      const found = opaqueIn(run, opaque);
+      return found === undefined ? run : `${run.slice(0, found.at)}${maskOf(indexKey, buyerKey, found.id)}`;
+    });
+  };
+  const scan = (text: string): ReadonlyMap<string, number> => {
+    const hits = new Map<string, number>();
+    const hit = (key: string): void => void hits.set(key, (hits.get(key) ?? 0) + 1);
+    for (const [token] of text.matchAll(UUID_OR_PREFIXED)) {
+      const key = known.get(token) ?? known.get(token.toLowerCase());
+      if (key !== undefined) hit(key);
+      else if (HARNESS_ID.test(token) && !/^[A-Za-z]+_[0-9a-f]{24}$/.test(token)) hit('prefixed id');
+    }
+    if (opaque.size > 0) for (const [run] of text.matchAll(OPAQUE_RUN)) { const found = opaqueIn(run, opaque); if (found !== undefined) hit(opaque.get(found.id) ?? 'id'); }
+    return hits;
+  };
+  return { ids, mask, scan };
 };
 
 /** The text of a user message's content, or undefined when it has none to type: a message of only tool results (the harness answering the model) and an image with no words carry nothing the person wrote. Text sent beside a tool result is the person's, so it counts. */
@@ -967,6 +1039,9 @@ type StoredSession = Awaited<ReturnType<typeof loadStore>>['sessions'][number];
 type HarnessRow = NonNullable<(typeof HARNESS_TERMS)[Harness]>;
 
 /** What the rules before the duplicate check decide: the count a session adds to, or what it carries on. */
+/** Every count of a pack, flat, by name: what rose while one session was handled says why it was left out. */
+const tally = (counts: PackCounts): Map<string, number> => new Map([...Object.entries(counts), ...Object.entries(counts.excluded)].flatMap(([key, count]): [string, number][] => (typeof count === 'number' ? [[key, count]] : [])));
+
 type Early = { left: (counts: PackCounts) => void } | { accepted: { owner: OwnerRule; harness: Harness; terms: HarnessRow } };
 
 export const buildPack = async (runtime: SessionsRuntime, options: PackOptions): Promise<PackCounts> => {
@@ -1022,7 +1097,17 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     if (harnessOf(session) !== 'claude-code' && session.session.startsWith(prefix) && match !== undefined) sessionIds.set(session.session.slice(prefix.length), match);
   }
   const order = (session: string): string => createHash('sha256').update(`${options.seed}\n${session}`).digest('hex');
-  const drawn = frame.map((session) => ({ session, rank: order(session.session) })).sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0));
+  const shuffled = frame.map((session) => ({ session, rank: order(session.session) })).sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0)).map(({ session }) => session);
+  // `--sessions`: the listed sessions in the file's order in place of the draw. One the store does not know, or that has no user turn, is told of now; the rest meet every rule below.
+  const listed = options.sessions === undefined ? undefined : new Set(options.sessions);
+  const storeById = new Map(store.sessions.map((session) => [session.session, session]));
+  const drawn = listed === undefined ? shuffled : [...listed].flatMap((id) => {
+    const record = storeById.get(id);
+    if (record === undefined) options.onDrop?.(id, 'notFound');
+    else if (record.userTurns === 0) options.onDrop?.(id, 'tooShort');
+    return record === undefined || record.userTurns === 0 ? [] : [record];
+  });
+  const limit = listed === undefined ? options.size : Infinity;
   const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, lead: 0, tooShort: 0, noRepo: 0, duplicate: 0, noSkeleton: 0, noPointer: 0, objected: 0, secret: 0, emitted: 0 };
   const turnsOf = (session: { userTurns: number; assistantTurns: number }): number => session.userTurns + session.assistantTurns;
   // The rules up to the repository one, once per session: the duplicate rule asks them only of the members of a group that shares a first prompt, the draw of the sessions it reaches; a singleton the draw never reaches is never gated.
@@ -1052,9 +1137,24 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   const rows: ManifestRow[] = [];
   const skeletons: SessionSkeleton[] = [];
   const index: IndexRow[] = [];
+  // The files written so far, and the raw ids behind every mask the emitted sessions carry (to the key each stood under): what the pass over the whole pack needs.
+  const written: string[] = [];
+  const packIds = new Map<string, string>();
   await mkdir(partial, { recursive: true });
-  for (const { session: record } of drawn) {
-    if (counts.emitted >= options.size) break;
+  // A listed session that is not emitted is told of with the count that rose while it was handled.
+  let pending: { session: string; before: Map<string, number>; emitted: number } | undefined;
+  const settle = (): void => {
+    if (pending === undefined) return;
+    const { session, before, emitted } = pending;
+    pending = undefined;
+    if (counts.emitted > emitted) return;
+    const rose = [...tally(counts)].find(([key, count]) => key !== 'scanned' && count > (before.get(key) ?? 0));
+    options.onDrop?.(session, rose?.[0] ?? 'notFound');
+  };
+  for (const record of drawn) {
+    settle();
+    if (counts.emitted >= limit) break;
+    if (listed !== undefined) pending = { session: record.session, before: tally(counts), emitted: counts.emitted };
     counts.scanned += 1;
     // Before this session's own gate: an objection is honored even for a session the other rules would have left out anyway, and it is the first reason counted.
     if (isObjected(record)) {
@@ -1114,9 +1214,12 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
       const body = masked[at] ?? '';
       bytes += Buffer.byteLength(body);
       await writeFile(target, body);
+      written.push(target);
     }
     bytes += Buffer.byteLength(skeletonText);
-    await writeFile(join(partial, 'sessions', matchId, SKELETON_FILE), skeletonText);
+    const skeletonTarget = join(partial, 'sessions', matchId, SKELETON_FILE);
+    await writeFile(skeletonTarget, skeletonText);
+    written.push(skeletonTarget);
     // After the files are written, before the next session: an id the masks missed (one a JSON escape hides from the raw bytes shows in the decoded strings) stops the build, and the folder stays for a look.
     const left = new Map<string, number>();
     for (const body of [...masked, skeletonText]) for (const [key, count] of masker.scan([body, ...decodedStrings(body)].join('\n'))) left.set(key, (left.get(key) ?? 0) + count);
@@ -1124,6 +1227,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
       const byKey = [...left].map(([key, count]) => `${key}: ${String(count)}`).join(', ');
       throw new PackError(`A raw id is left in the pack (${byKey}). The unfinished pack stays at ${partial}; delete it after a look, fix the masks, then run again.`);
     }
+    for (const [id, key] of [...early.ids, ...masker.ids]) if (id !== NIL_UUID) packIds.set(id, key);
     skeletons.push(skeleton);
     let opted: Pick<ManifestRow, 'pointer' | 'outcome'> = {};
     if (owner.pointer) {
@@ -1155,13 +1259,26 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     });
     counts.emitted += 1;
   }
+  settle();
+  // Every file again, now that every emitted session's ids are known: an id one session masked under a key is masked wherever another session quotes it, and a raw one that is left stops the build.
+  const finisher = packMaskerOf(packIds, sessionIds, indexKey, options.buyerKey);
+  for (const target of written) {
+    const before = await readFile(target, 'utf8');
+    const body = finisher.mask(before);
+    if (body !== before) {
+      await writeFile(target, body);
+      bytes += Buffer.byteLength(body) - Buffer.byteLength(before);
+    }
+    const left = finisher.scan([body, ...decodedStrings(body)].join('\n'));
+    if (left.size > 0) throw new PackError(`A raw id is left in the pack (${[...left].map(([key, count]) => `${key}: ${String(count)}`).join(', ')}). The unfinished pack stays at ${partial}; delete it after a look, fix the masks, then run again.`);
+  }
   const manifest = rows.map((row) => `${JSON.stringify(row)}\n`).join('');
   bytes += Buffer.byteLength(manifest);
   await writeFile(join(partial, 'manifest.jsonl'), manifest);
   const census = `${JSON.stringify(censusOf(rows, skeletons), null, 2)}\n`;
   bytes += Buffer.byteLength(census);
   await writeFile(join(partial, 'census.json'), census);
-  await writeFile(join(partial, 'pack.json'), `${JSON.stringify({ built: new Date().toISOString(), size: options.size, seed: options.seed, minTurns: options.minTurns, redactionVersion: REDACTION_VERSION, keyId: keyIdOf(options.buyerKey), objections: objectionsHash, counts, bytes, elapsedMs: Date.now() - started }, null, 2)}\n`);
+  await writeFile(join(partial, 'pack.json'), `${JSON.stringify({ built: new Date().toISOString(), size: listed === undefined ? options.size : counts.emitted, seed: listed === undefined ? options.seed : null, ...(listed === undefined ? {} : { listed: listed.size }), minTurns: options.minTurns, redactionVersion: REDACTION_VERSION, keyId: keyIdOf(options.buyerKey), objections: objectionsHash, counts, bytes, elapsedMs: Date.now() - started }, null, 2)}\n`);
   // Outside the pack, beside the owners file, and appended, so it maps every pack built from that folder. Written before the rename, so a pack under `out` always has its rows.
   await appendFile(join(dirname(resolve(options.owners)), 'index.jsonl'), index.map((row) => `${JSON.stringify(row)}\n`).join(''));
   // An empty `out` was allowed above, and a folder is renamed only onto a free name.
@@ -1176,9 +1293,9 @@ export interface Io {
   vocabDir?: URL | undefined;
 }
 
-const VALUED = new Set(['--terms', '--owners', '--index-key', '--buyer-key', '--out', '--size', '--seed', '--min-turns']);
+const VALUED = new Set(['--terms', '--owners', '--index-key', '--buyer-key', '--out', '--size', '--seed', '--min-turns', '--sessions']);
 
-const parseArgs = (argv: readonly string[]): PackOptions | string => {
+const parseArgs = (argv: readonly string[]): (Omit<PackOptions, 'sessions' | 'onDrop'> & { sessionsFile?: string }) | string => {
   const values = new Map<string, string>();
   for (let at = 0; at < argv.length; at += 2) {
     const [flag, value] = [argv[at] ?? '', argv[at + 1]];
@@ -1187,28 +1304,43 @@ const parseArgs = (argv: readonly string[]): PackOptions | string => {
   }
   const [terms, owners, indexKey, buyerKey, out] = ['--terms', '--owners', '--index-key', '--buyer-key', '--out'].map((flag) => values.get(flag));
   if (terms === undefined || owners === undefined || indexKey === undefined || buyerKey === undefined || out === undefined) return 'Missing a required option.';
+  const sessionsFile = values.get('--sessions');
+  if (sessionsFile !== undefined && (values.has('--size') || values.has('--seed'))) return '--sessions takes the place of the seeded draw: give it without --size or --seed.';
   const size = Number(values.get('--size') ?? '25');
   if (!Number.isInteger(size) || size < 1) return '--size takes a whole number of 1 or more.';
   const minTurns = Number(values.get('--min-turns') ?? '20');
   if (!Number.isInteger(minTurns) || minTurns < 1) return '--min-turns takes a whole number of 1 or more.';
-  return { terms, owners, indexKey, buyerKey, out, size, seed: values.get('--seed') ?? '1', minTurns };
+  return { terms, owners, indexKey, buyerKey, out, size, seed: values.get('--seed') ?? '1', minTurns, ...(sessionsFile === undefined ? {} : { sessionsFile }) };
+};
+
+/** The session ids a `--sessions` file lists: one per line, blank lines skipped, each once, in the file's order. */
+const sessionsIn = async (file: string): Promise<string[]> => {
+  const text = await readFile(file, 'utf8').catch(() => undefined);
+  if (text === undefined) throw new PackError(`Cannot read the --sessions file ${file}.`);
+  const ids = [...new Set(text.split(/\r?\n/).map((id) => id.trim()).filter((id) => id !== ''))];
+  if (ids.length === 0) throw new PackError(`The --sessions file ${file} lists no session.`);
+  return ids;
 };
 
 /** The command: 0 when the pack was written, 2 on a usage or input error (nothing written), with counts only on success: no term, path, or transcript text. */
 export const main = async (argv: readonly string[], io: Io): Promise<number> => {
-  const options = parseArgs(argv);
-  if (typeof options === 'string') {
-    io.print(`${options}\n${USAGE}`);
+  const parsed = parseArgs(argv);
+  if (typeof parsed === 'string') {
+    io.print(`${parsed}\n${USAGE}`);
     return 2;
   }
+  const { sessionsFile, ...options } = parsed;
   try {
-    const counts = await buildPack(io.runtime, { ...options, vocabDir: io.vocabDir });
+    const sessions = sessionsFile === undefined ? undefined : await sessionsIn(sessionsFile);
+    const dropped: string[] = [];
+    const counts = await buildPack(io.runtime, { ...options, size: sessions?.length ?? options.size, sessions, onDrop: (session, reason) => dropped.push(`Left out of the list: ${session} ${reason}`), vocabDir: io.vocabDir });
     const { term, noRaw, noTerms, unreadable } = counts.excluded;
     io.print(
       [
         `Wrote ${String(counts.emitted)} sessions to ${options.out} (manifest.jsonl, sessions/<match id>/).`,
         `Scanned ${String(counts.scanned)} of ${String(counts.frame)} in draw order. Excluded: ${String(term)} for a term, ${String(noRaw)} with no raw, ${String(noTerms)} with no term file, ${String(unreadable)} unreadable.`,
         `Left out after the gate: ${String(counts.noOwner)} in a folder no owner entry names, ${String(counts.noHarnessTerms)} from a harness with no terms row, ${String(counts.tooShort)} under ${String(options.minTurns)} turns, ${String(counts.noRepo)} with no repository, ${String(counts.duplicate)} replaying a longer session, ${String(counts.objected)} under an objection, ${String(counts.secret)} holding a secret after redaction.`,
+        ...dropped,
       ].join('\n'),
     );
     return 0;
