@@ -12,11 +12,7 @@ import { defaultConfigDir } from '../credentials.js';
 import { ExitCode } from '../errors.js';
 import { readSpool } from '../telemetry/spool.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
-<<<<<<< HEAD
-import { busyLine, DEFAULT_POOL_URL, networkSender, poolCoverage, poolDeposit, poolRaw, poolServer, RAW_PHRASE, RAW_PROMPT, waitingLine, type Reply, type Sender } from './pool-command.js';
-=======
-import { DEFAULT_POOL_URL, networkSender, OFFER_AFTER, OFFER_BEFORE, poolCoverage, poolDeposit, poolRaw, poolServer, RAW_PHRASE, RAW_PROMPT, type Reply, type Sender } from './pool-command.js';
->>>>>>> origin/main
+import { busyLine, DEFAULT_POOL_URL, networkSender, OFFER_AFTER, OFFER_BEFORE, poolCoverage, poolDeposit, poolRaw, poolServer, RAW_PHRASE, RAW_PROMPT, waitingLine, type Reply, type Sender } from './pool-command.js';
 import { localNames } from './redact.js';
 import { batchHash, canonicalBytes, FIELD_ROWS, fieldsOf, outboxFolder, writeBatch } from './pool-outbox.js';
 import { markSent, sentHashes } from './pool-sent.js';
