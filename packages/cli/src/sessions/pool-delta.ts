@@ -225,19 +225,41 @@ export interface Carried {
 export const carriedDeltas = (account: string, sessions: readonly Gated[], sent: ReadonlySet<string>): Map<string, Carried> => {
   const carried = new Map<string, Carried>();
   for (const { index, before, after, filler } of windowsOf(sessions)) {
-    const entries: DeltaEntry[] = [];
-    const marks: string[] = [];
-    for (const entry of deltasOf(
-      before.map(({ records }) => records),
-      // The outcome is fixed at the fill: sessions after the filler change nothing, so a delta is the same whenever it is built.
-      after.slice(0, DELTA_MIN_SESSIONS).map(({ records }) => records),
-    )) {
-      const mark = deltaMark(account, entry, index);
-      if (sent.has(mark)) continue;
-      entries.push(entry);
-      marks.push(mark);
-    }
-    if (entries.length > 0) carried.set(filler.id, { entries, marks });
+    // The outcome is fixed at the fill: sessions after the filler change nothing, so a delta is the same whenever it is built.
+    const found = carriedIn(account, index, before.map(({ records }) => records), after.slice(0, DELTA_MIN_SESSIONS).map(({ records }) => records), sent);
+    if (found.entries.length > 0) carried.set(filler.id, found);
+  }
+  return carried;
+};
+
+const carriedIn = (account: string, index: number, before: readonly SessionRecords[], after: readonly SessionRecords[], sent: ReadonlySet<string>): Carried => {
+  const found: Carried = { entries: [], marks: [] };
+  for (const entry of deltasOf(before, after)) {
+    const mark = deltaMark(account, entry, index);
+    if (sent.has(mark)) continue;
+    found.entries.push(entry);
+    found.marks.push(mark);
+  }
+  return found;
+};
+
+/**
+ * The same deltas as `carriedDeltas`, one window at a time: `sessions` are placed from their session records alone, and `load` reads the full records of the ids one window needs (all of the window before, the first `DELTA_MIN_SESSIONS` after).
+ * What is held at once is one window's records, never the history.
+ */
+export const carriedDeltasByWindow = async (account: string, sessions: readonly Gated[], sent: ReadonlySet<string>, load: (ids: ReadonlySet<string>) => Promise<ReadonlyMap<string, SessionRecords>>): Promise<Map<string, Carried>> => {
+  const carried = new Map<string, Carried>();
+  for (const { index, before, after, filler } of windowsOf(sessions)) {
+    const needed = [...before, ...after.slice(0, DELTA_MIN_SESSIONS)];
+    const records = await load(new Set(needed.map(({ id }) => id)));
+    const found = carriedIn(
+      account,
+      index,
+      before.flatMap(({ id }) => records.get(id) ?? []),
+      after.slice(0, DELTA_MIN_SESSIONS).flatMap(({ id }) => records.get(id) ?? []),
+      sent,
+    );
+    if (found.entries.length > 0) carried.set(filler.id, found);
   }
   return carried;
 };

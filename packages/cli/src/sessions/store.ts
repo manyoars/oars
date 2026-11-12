@@ -1439,6 +1439,10 @@ const internTool = (tool: ToolObservation, intern: (value: string) => string): T
 export type LoadOptions = {
   /** Keep each session's `messageUsage` entries. Nothing in the store reads them yet, and on a large store they are a third more heap, so a read holds them only when asked. */
   messageUsage?: boolean;
+  /** Read only these sessions' rows (main and subagent ids): a build that handles a chunk at a time holds that chunk, not the history. */
+  only?: ReadonlySet<string>;
+  /** Keep the session records alone, with no prompt, tool, or error rows: enough to gate and place a session without holding its content. */
+  sessionsOnly?: boolean;
 };
 
 const withoutMessageUsage = (session: SessionObservation): SessionObservation => {
@@ -1475,6 +1479,8 @@ export const loadStore = async (storeDir: string, afterFirstPass?: () => Promise
     for await (const line of logLines(file, held)) {
       const observation = observationOf(line);
       if (observation === undefined || observation.rev !== latest.get(observation.session)) continue;
+      if (options.only !== undefined && !options.only.has(observation.session)) continue;
+      if (options.sessionsOnly === true && observation.kind !== 'session') continue;
       if (observation.kind === 'session') of(observation.session).session = options.messageUsage === true ? observation : withoutMessageUsage(observation);
       else if (observation.kind === 'user-prompt') of(observation.session).prompts.push(observation);
       else if (observation.kind === 'tool') of(observation.session).tools.push(internTool(observation, intern));
@@ -1498,11 +1504,11 @@ export const loadStore = async (storeDir: string, afterFirstPass?: () => Promise
     store.tools.push(...tools);
     if (session.parent !== null) {
       store.subagents.push(session);
-      if (isReadable(session.cv)) agents.push({ session, prompts, tools, errorLines, parent: session.parent });
+      if (isReadable(session.cv) && options.sessionsOnly !== true) agents.push({ session, prompts, tools, errorLines, parent: session.parent });
       continue;
     }
     store.sessions.push(session);
-    if (!isReadable(session.cv)) continue;
+    if (!isReadable(session.cv) || options.sessionsOnly === true) continue;
     const derived = deriveSession({ session, prompts, tools, errorLines }, redact);
     store.prompts.push(...derived.prompts);
     store.errors.push(...derived.errors);

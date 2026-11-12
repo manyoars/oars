@@ -16,7 +16,7 @@ import { discardStale, FIELD_ROWS, fieldsOf, heldAcross, lockedAcross, namesHeld
 import { deriveConsequences } from './recall-consequence.js';
 import { readRecalls } from './recall-object.js';
 import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, recommendationsOf, sessionsOf, skeletonOf, unpinnedKid, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
-import { carriedDeltas, heldDeltas, keptDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
+import { carriedDeltasByWindow, heldDeltas, keptDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { rawAllowed, rawStale, sendsOf } from './pool-choices.js';
 import { heldRaw, rawParts, removeRawExcept, writeRaw } from './pool-raw.js';
@@ -30,7 +30,7 @@ import { CAPTURE_VERSION, harnessOf as sessionHarness, type Harness } from './sc
 import { machineIdOf } from './machine-ids.js';
 import { machineOf, type MachineConfig } from './machine.js';
 import { scanCache } from './machine-scan-cache.js';
-import { loadStore, localSalt, readRedactDomains, readSkeletons, readState, updatePoolChoices, type SessionsRuntime } from './store.js';
+import { loadStore, localSalt, readRedactDomains, readSkeletons, readState, updatePoolChoices, type SessionsRuntime, type Store } from './store.js';
 import { runGit, type Git } from './survival.js';
 import { vocabulary } from './vocab-load.js';
 import { mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
@@ -165,6 +165,9 @@ const RETRY = `${NOT_MARKED} ${TRY_AGAIN}`;
 const MAY_HAVE_RECEIVED = 'The pool may already have received it.';
 
 /** What `deposit` says after it writes the outbox: the covenant (the person's consent, docs/covenant 2.1) already lets the background sender send what is queued, with or without this command. A machine's batches are never sent by it. */
+/** How many sessions a build reads and writes at once: the most whose prompts and tools are in memory together. */
+const BUILD_CHUNK = 100;
+
 const SENT_LATER = 'Nothing was sent yet. Once the covenant is accepted, oars sends what is queued automatically, in the background.';
 
 /**
@@ -906,6 +909,7 @@ export const poolDeposit = async (
   const refusedFields = new Set<string>();
   const roots = new Map<string, TranscriptRoot>((await readSkeletons(runtime.storeDir, undefined, true)).skeletons.map(({ session, merkleRoot, leaves }) => [session, { merkleRoot, leaves }]));
   // The sessions that pass both gates and have ended, in the order the store holds them: the windows of a delta are counted over these alone, and the batch of each is built after, once its deltas are known.
+  // Only the session records are held for the gates; a session's prompts and tools are read again when its window or its batch needs them (BUILD_CHUNK at a time), so the history is never in memory at once.
   const ready: { records: SessionRecords; key: string }[] = [];
   // A session that fails a gate loses its earlier batch at once, so a later throw in this pass cannot leave one in the outbox.
   const withdraw = async (key: string): Promise<void> => {
@@ -914,7 +918,14 @@ export const poolDeposit = async (
   };
   // The sessions a Stop does not name that still pass the read-only gates: they only fill the windows of a delta, and are never counted, withdrawn, or built.
   const history: SessionRecords[] = [];
-  const localStore = await loadStore(runtime.storeDir);
+  const localStore = await loadStore(runtime.storeDir, undefined, { sessionsOnly: true });
+  const childrenOf = new Map<string, string[]>();
+  for (const agent of localStore.subagents) childrenOf.set(agent.parent ?? '', [...(childrenOf.get(agent.parent ?? '') ?? []), agent.session]);
+  // The full records of some sessions (and their subagents), read from the log with nothing else.
+  const readRecords = async (ids: ReadonlySet<string>): Promise<{ store: Store; records: Map<string, SessionRecords> }> => {
+    const store = await loadStore(runtime.storeDir, undefined, { only: new Set([...ids].flatMap((id) => [id, ...(childrenOf.get(id) ?? [])])) });
+    return { store, records: new Map(sessionsOf(store, roots).map((records) => [records.main.session, records])) };
+  };
   // A damaged list stops the pass before anything is built: it must never read as "nothing was removed".
   const removedList = await readRemoved(outbox, DEPOSIT);
   const removedKeys = new Set(Object.keys(removedList));
@@ -974,49 +985,55 @@ export const poolDeposit = async (
   // A delta is built from the sessions that passed, carried by the batch of the session that filled its after window, and marked sent only once that batch is written: a deposit that stops first builds it again.
   // A cloud machine has no history of its own to compare a window against (every VM starts clean), so it carries none.
   const placed = machine?.hostClass === 'cloud' ? [] : [...ready.map(({ records }) => records), ...history].flatMap((records) => placedOf(records) ?? []);
-  const carried = carriedDeltas(account, placed, await sentDeltas(outbox));
+  const carried = await carriedDeltasByWindow(account, placed, await sentDeltas(outbox), async (ids) => (await readRecords(ids)).records);
   // The coverage bands (t871): the operator's two settings, read here, and the team band counted from the local git log. Nothing is looked up, and anything unread goes as unknown.
   const coverageOf = makeCoverage(runtime, await readCoverageSetting(runtime.storeDir), options.git ?? runGit);
   // The recommendations each session was shown or held back from, read from the local rows with their windows, so a shown row stays shown at the pool and a session with none sends none (the pool reads that as unknown).
-  const recalls = deriveConsequences(localStore, await readRecalls(runtime.storeDir));
-  for (const { records, key } of ready) {
-    const delta = carried.get(records.main.session);
-    // A machine builds the open session at every Stop and SessionEnd, so the one it names keeps what its own earlier batch carried and takes only what is new; any other deposit builds a session once.
-    const entries = machine !== undefined && options.session !== undefined ? keptDeltas(await heldDeltas(outbox, key), delta?.entries ?? []) : delta?.entries;
-    const skeleton = skeletonOf(records, key, shellReader(vocabulary()), contentHash, entries, gate, await coverageOf(records.main), recommendationsOf(recalls, records.main.session));
-    if (skeleton === null) {
-      counts.uncaptured += 1;
-      await withdraw(key);
-      continue;
-    }
-    const parsed = parseSkeleton(skeleton);
-    // The server reads a value outside its lists as `other` and keeps a field it does not know, so the parser no longer refuses either: the emitter is the privacy control, and a batch this client built holds neither.
-    const refusedAt = parsed.ok ? parsed.extensions[0]?.at : parsed.field;
-    if (!parsed.ok || refusedAt !== undefined) {
-      counts.refused += 1;
-      refusedFields.add(refusedAt ?? '');
-      await withdraw(key);
-      continue;
-    }
-    // Noted before the batch is written: a person's sweep that runs between the two lines would delete a batch it cannot yet tell is a machine's.
-    if (machine !== undefined) await noteMachineKey(outbox, key);
-    builtBytes += (await writeBatch(outbox, key, parsed.skeleton)).bytes;
-    // The raw copy comes only after both gates and only with a yes to the raw prompt and a folder not at skeleton only: each transcript of the session, redacted here, before it is queued.
-    if (rawAllowed(saved.pool, records.main.project, covenant)) {
-      let place = 0;
-      for (const file of await transcriptFilesOf(runtime, records.main.project, records.main.session)) {
-        const redacted = redactTranscript(await readFile(file.path, 'utf8'), saved.redactDomains, names, injectedKey);
-        counts.raw.bytes += (await writeRaw(outbox, key, place, redacted.text)).bytes;
-        counts.raw.copies += 1;
-        counts.raw.masked += redacted.masked;
-        place += 1;
+  const recorded = await readRecalls(runtime.storeDir);
+  for (let from = 0; from < ready.length; from += BUILD_CHUNK) {
+    const chunk = ready.slice(from, from + BUILD_CHUNK);
+    const { store: chunkStore, records: full } = await readRecords(new Set(chunk.map(({ records }) => records.main.session)));
+    const recalls = deriveConsequences(chunkStore, recorded);
+    for (const { records: head, key } of chunk) {
+      const records = full.get(head.main.session);
+      const delta = carried.get(head.main.session);
+      // A machine builds the open session at every Stop and SessionEnd, so the one it names keeps what its own earlier batch carried and takes only what is new; any other deposit builds a session once.
+      const entries = machine !== undefined && options.session !== undefined ? keptDeltas(await heldDeltas(outbox, key), delta?.entries ?? []) : delta?.entries;
+      const skeleton = records === undefined ? null : skeletonOf(records, key, shellReader(vocabulary()), contentHash, entries, gate, await coverageOf(head.main), recommendationsOf(recalls, head.main.session));
+      if (skeleton === null) {
+        counts.uncaptured += 1;
+        await withdraw(key);
+        continue;
       }
-      rawKept.add(key);
+      const parsed = parseSkeleton(skeleton);
+      // The server reads a value outside its lists as `other` and keeps a field it does not know, so the parser no longer refuses either: the emitter is the privacy control, and a batch this client built holds neither.
+      const refusedAt = parsed.ok ? parsed.extensions[0]?.at : parsed.field;
+      if (!parsed.ok || refusedAt !== undefined) {
+        counts.refused += 1;
+        refusedFields.add(refusedAt ?? '');
+        await withdraw(key);
+        continue;
+      }
+      // Noted before the batch is written: a person's sweep that runs between the two lines would delete a batch it cannot yet tell is a machine's.
+      if (machine !== undefined) await noteMachineKey(outbox, key);
+      builtBytes += (await writeBatch(outbox, key, parsed.skeleton)).bytes;
+      // The raw copy comes only after both gates and only with a yes to the raw prompt and a folder not at skeleton only: each transcript of the session, redacted here, before it is queued.
+      if (rawAllowed(saved.pool, head.main.project, covenant)) {
+        let place = 0;
+        for (const file of await transcriptFilesOf(runtime, head.main.project, head.main.session)) {
+          const redacted = redactTranscript(await readFile(file.path, 'utf8'), saved.redactDomains, names, injectedKey);
+          counts.raw.bytes += (await writeRaw(outbox, key, place, redacted.text)).bytes;
+          counts.raw.copies += 1;
+          counts.raw.masked += redacted.masked;
+          place += 1;
+        }
+        rawKept.add(key);
+      }
+      tallyBatch(wireTally, parsed.skeleton);
+      await markDeltasSent(outbox, delta?.marks ?? []);
+      built.add(key);
+      counts.batched += 1;
     }
-    tallyBatch(wireTally, parsed.skeleton);
-    await markDeltasSent(outbox, delta?.marks ?? []);
-    built.add(key);
-    counts.batched += 1;
   }
   // The batch of a session or account this store no longer holds goes too. A machine builds one session at a time and nothing here has the others in hand, so it sweeps nothing: nothing is withdrawn but what a gate refused.
   if (machine === undefined) {

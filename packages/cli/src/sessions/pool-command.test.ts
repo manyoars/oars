@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { createHash, createHmac, webcrypto } from 'node:crypto';
 import { getHeapStatistics } from 'node:v8';
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -31,7 +31,7 @@ import { appendRecall, makeRecall, type Recall } from './recall-object.js';
 import { contentHash } from './read.js';
 import { deposit, loadStore, localSalt, paths, updatePoolChoices, type PoolChoices } from './store.js';
 import { spoolEvents } from '../telemetry/read-events.js';
-import { addProject, cleanup, NOW, payloadOf, rolloutLine, settledClock, stage, stageCodex, TEST_FLOOR, type Staged } from './test-support.js';
+import { addProject, cleanup, FIXTURES, NOW, payloadOf, rolloutLine, settledClock, stage, stageCodex, TEST_FLOOR, type Staged } from './test-support.js';
 
 // The session gates must stop a session before the projection runs; the real projection is wrapped so a test can see whether it was called.
 vi.mock('./pool-wire.js', async (importOriginal) => {
@@ -4505,28 +4505,55 @@ describe('oars pool deposit --send-all (t1199)', () => {
   });
 });
 
-// The memory proof (t1199 item 4): 7,000 batches of 64 KB (448 MB, more than a 512 MB heap holds as strings in one array) are shown and sent in a child
-// run under --max-old-space-size=512, which fails if either command holds the history. The child is this file filtered to the one test.
+// The memory proof (t1199 item 4). Opt-in, because it writes hundreds of megabytes and spawns a second vitest over this file; it is not in `npm run test`, `just check`, or CI. Run it with
+//   OARS_MEMORY_PROOF=1 just build oars exec -w packages/cli vitest run src/sessions/pool-command.test.ts -t memory
+// Two children, each under a V8 heap too small for the history held whole:
+//   outbox: 7,000 batches of 64 KB (448 MB as strings) are shown by `pool outbox` and sent by `--send-all` under --max-old-space-size=256;
+//   build: 7,000 captured sessions are built by `pool deposit` under --max-old-space-size=BUILD_HEAP_MB (the old build loaded the whole store and failed there).
 const MEMORY_CHILD = process.env.OARS_SEND_ALL_MEMORY_CHILD;
-describe('oars pool outbox and deposit --send-all memory (t1199)', () => {
-  it.skipIf(MEMORY_CHILD !== undefined)('complete 7,000 batches in a 512 MB heap', () => {
-    const report = join(tmpdir(), `oars-send-all-memory-${String(process.pid)}.json`);
-    const result = spawnSync(process.execPath, [fileURLToPath(new URL('../../../../node_modules/vitest/vitest.mjs', import.meta.url)), 'run', fileURLToPath(import.meta.url), '-t', 'child of the memory proof'], {
-      env: { ...process.env, OARS_SEND_ALL_MEMORY_CHILD: report, NODE_OPTIONS: '--max-old-space-size=512' },
-      encoding: 'utf8',
-      maxBuffer: 64 * 1024 * 1024,
-    });
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    const parsed: unknown = JSON.parse(readFileSync(report, 'utf8'));
-    const [limitMb, peakRssMb, sent] = ['limitMb', 'peakRssMb', 'sent'].map((name) => Number(at(parsed, name)));
-    rmSync(report, { force: true });
-    expect(limitMb).toBeLessThan(800);
-    expect(sent).toBe(7000);
-    // Recorded for the report: the peak resident set of the child that showed and sent them.
-    console.info(`send-all memory proof: peak RSS ${String(peakRssMb)} MB under a ${String(limitMb)} MB heap`);
+const MEMORY_MODE = process.env.OARS_MEMORY_MODE;
+const BUILD_HEAP_MB = Number(process.env.OARS_MEMORY_BUILD_HEAP ?? 160);
+const memoryChild = (mode: 'outbox' | 'build', heapMb: number, seed = ''): { limitMb: number; peakRssMb: number; count: number } => {
+  const report = join(tmpdir(), `oars-memory-${mode}-${String(process.pid)}.json`);
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('../../../../node_modules/vitest/vitest.mjs', import.meta.url)), 'run', fileURLToPath(import.meta.url), '-t', `child of the memory proof ${mode}`], {
+    env: { ...process.env, OARS_SEND_ALL_MEMORY_CHILD: report, OARS_MEMORY_MODE: mode, OARS_MEMORY_SEED: seed, NODE_OPTIONS: `--max-old-space-size=${String(heapMb)}` },
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  expect(result.status, `${result.stdout}
+${result.stderr}`).toBe(0);
+  const parsed: unknown = JSON.parse(readFileSync(report, 'utf8'));
+  rmSync(report, { force: true });
+  return { limitMb: Number(at(parsed, 'limitMb')), peakRssMb: Number(at(parsed, 'peakRssMb')), count: Number(at(parsed, 'count')) };
+};
+const finish = (count: number): void => {
+  writeFileSync(MEMORY_CHILD ?? '', JSON.stringify({ limitMb: Math.round(getHeapStatistics().heap_size_limit / 1048576), peakRssMb: Math.round(process.resourceUsage().maxRSS / 1024), count }));
+};
+
+describe('oars pool outbox, deposit, and deposit --send-all memory (t1199)', () => {
+  it.runIf(process.env.OARS_MEMORY_PROOF === '1' && MEMORY_CHILD === undefined)('memory-outbox: show and send 7,000 batches of 64 KB in a 256 MB heap', () => {
+    const { limitMb, peakRssMb, count } = memoryChild('outbox', 256);
+    expect(limitMb).toBeLessThan(448);
+    expect(count).toBe(7000);
+    console.info(`memory proof outbox: peak RSS ${String(peakRssMb)} MB under a ${String(limitMb)} MB heap limit`);
   }, 540_000);
 
-  it.skipIf(MEMORY_CHILD === undefined)('child of the memory proof', async () => {
+  it.runIf(process.env.OARS_MEMORY_PROOF === '1' && MEMORY_CHILD === undefined)('memory-build: build 7,000 sessions with pool deposit in a small heap', async () => {
+    const scene = setting();
+    const template = readFileSync(join(FIXTURES, 'proj', 'errors-a.jsonl'), 'utf8');
+    const first = Date.parse('2026-05-28T20:26:41.000Z');
+    // One session an hour, so a delta window holds a bounded few hundred of them, not the history.
+    for (let n = 1; n <= 7000; n += 1) {
+      const shifted = Date.parse('2025-01-01T00:00:00.000Z') + n * 3_600_000 - first;
+      writeFileSync(join(scene.staged.projectsRoot, 'proj', `m${String(n)}.jsonl`), template.replaceAll('errors-a', `m${String(n)}`).replace(/"timestamp": "([^"]+)"/g, (_all, ts: string) => `"timestamp": "${new Date(Date.parse(ts) + shifted).toISOString()}"`));
+    }
+    await capture(scene);
+    const { limitMb, peakRssMb, count } = memoryChild('build', BUILD_HEAP_MB, scene.staged.root);
+    expect(count).toBeGreaterThanOrEqual(7000);
+    console.info(`memory proof build: peak RSS ${String(peakRssMb)} MB under a ${String(limitMb)} MB heap limit`);
+  }, 540_000);
+
+  it.skipIf(MEMORY_CHILD === undefined || MEMORY_MODE !== 'outbox')('child of the memory proof outbox', async () => {
     const scene = setting();
     await signIn(scene);
     const folder = join(outboxFolder(scene.staged.storeDir, POOL), currentStamp());
@@ -4545,6 +4572,17 @@ describe('oars pool outbox and deposit --send-all memory (t1199)', () => {
     };
     const outcome = await poolDeposit(scene.h.deps, { server: POOL, sendAll: true, via });
     expect(outcome.document).toMatchObject({ sent: 7000, failed: 0 });
-    writeFileSync(MEMORY_CHILD ?? '', JSON.stringify({ limitMb: Math.round(getHeapStatistics().heap_size_limit / 1048576), peakRssMb: Math.round(process.resourceUsage().maxRSS / 1024), sent: landed }));
+    finish(landed);
+  }, 540_000);
+
+  it.skipIf(MEMORY_CHILD === undefined || MEMORY_MODE !== 'build')('child of the memory proof build', async () => {
+    const scene = setting();
+    await signIn(scene);
+    // The store is captured by the parent in a default heap: the capture's own derive pass (`refresh`, store.ts) reads the whole store and is not what is proved here.
+    cpSync(join(String(process.env.OARS_MEMORY_SEED), 'store'), scene.staged.storeDir, { recursive: true });
+    cpSync(join(String(process.env.OARS_MEMORY_SEED), 'projects'), scene.staged.projectsRoot, { recursive: true });
+    const outcome = await poolDeposit(scene.h.deps, { server: POOL });
+    expect(Number(at(outcome.document, 'batched'))).toBeGreaterThanOrEqual(7000);
+    finish(Number(at(outcome.document, 'batched')));
   }, 540_000);
 });
