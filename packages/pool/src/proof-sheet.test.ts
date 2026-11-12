@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { fieldOf } from './http.js';
 import { startPool, type TestDb, type TestPool } from './test-pool.js';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -14,15 +15,10 @@ const forVersion = (version: string): string => {
   return SQL.replace(EDIT, `SELECT '${version}' AS named`);
 };
 
-interface Line {
-  metric: string;
-  detail: string;
-  value: number;
-  as_of: string | null;
-}
-
-const lines = async (db: TestDb, sql: string): Promise<Line[]> => (await db.prepare(sql).all()).results as unknown as Line[];
-const valueOf = (rows: Line[], metric: string, detail = '(all)'): number | undefined => rows.find((row) => row.metric === metric && row.detail === detail)?.value;
+type Line = unknown;
+const lines = async (db: TestDb, sql: string): Promise<readonly Line[]> => (await db.prepare(sql).all()).results;
+const lineOf = (rows: readonly Line[], metric: string, detail = '(all)'): Line => rows.find((row) => fieldOf(row, 'metric') === metric && fieldOf(row, 'detail') === detail);
+const valueOf = (rows: readonly Line[], metric: string, detail = '(all)'): unknown => fieldOf(lineOf(rows, metric, detail), 'value');
 
 const install = (db: TestDb, day: string, id: string, account: string): Promise<unknown> =>
   db.prepare("INSERT INTO telemetry_install_days (day, install, account, batches, events, measures) VALUES (?, ?, ?, 1, 1, '{}')").bind(day, id, account).run();
@@ -40,7 +36,7 @@ const cell = (db: TestDb, key: string, clusters: number, clustersAny: number, se
 describe('queries/proof-sheet.sql', () => {
   let pool: TestPool;
   let db: TestDb;
-  let rows: Line[];
+  let rows: readonly Line[] = [];
 
   beforeAll(async () => {
     pool = await startPool({ COVENANT_VERSION: '' });
@@ -90,8 +86,8 @@ describe('queries/proof-sheet.sql', () => {
     expect(valueOf(rows, 'pack_grade_sessions', 'codex')).toBe(5);
     expect(valueOf(rows, 'pack_grade_sessions', 'mixed')).toBe(1);
     expect(valueOf(rows, 'served_cells')).toBe(2);
-    expect(rows.find((row) => row.metric === 'installs')?.as_of).toBe('2026-11-12');
-    expect(rows.find((row) => row.metric === 'accepted')?.as_of).toBe('2026-11-12');
+    expect(fieldOf(lineOf(rows, 'installs'), 'as_of')).toBe('2026-11-12');
+    expect(fieldOf(lineOf(rows, 'accepted'), 'as_of')).toBe('2026-11-12');
   });
 
   it('joins installs to accounts: the install of an accepting account counts as an accepted install', () => {
@@ -103,7 +99,7 @@ describe('queries/proof-sheet.sql', () => {
   it('an install with no account is counted once as an install', () => {
     // c1 names no account and d1 names one on only one of its days: both are in the 4 installs, and a1 seen on two days is one.
     expect(valueOf(rows, 'installs')).toBe(4);
-    expect(valueOf(rows, 'installs_with_account')).toBeLessThan(valueOf(rows, 'installs') ?? 0);
+    expect(valueOf(rows, 'installs_with_account')).toBe(3);
   });
 
   it('prints zeros for a version the pool never served, and no account id', async () => {

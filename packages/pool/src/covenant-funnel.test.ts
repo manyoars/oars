@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { fieldOf } from './http.js';
 import { startPool, type TestDb, type TestPool } from './test-pool.js';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -28,16 +29,7 @@ const accept = (db: TestDb, account: string, version: string, at: number): Promi
 const deposit = (db: TestDb, account: string, id: string, countedAt: number | null, tier = 'skeleton'): Promise<unknown> =>
   db.prepare("INSERT INTO deposits (account, id, skeleton, tier, counted_at) VALUES (?, ?, '{}', ?, ?)").bind(account, id, tier, countedAt).run();
 
-interface FunnelRow {
-  country: string;
-  installs: number | null;
-  accepted: number;
-  depositing_4w: number;
-  raw_yes: number;
-  raw_yes_share: number | null;
-}
-
-const rowsOf = async (db: TestDb, sql: string): Promise<FunnelRow[]> => (await db.prepare(sql).all()).results as unknown as FunnelRow[];
+const rowsOf = async (db: TestDb, sql: string): Promise<readonly unknown[]> => (await db.prepare(sql).all()).results;
 
 describe('queries/covenant-funnel.sql', () => {
   let pool: TestPool;
@@ -127,8 +119,8 @@ describe('queries/covenant-funnel.sql', () => {
 
     it('the funnel splits by request country', async () => {
       const rows = await rowsOf(db, forVersion('v4'));
-      expect(rows.map((row) => row.country)).toEqual(['(all)', '(none)', 'IN', 'other']);
-      const by = (country: string): unknown => rows.find((row) => row.country === country);
+      expect(rows.map((row) => fieldOf(row, 'country'))).toEqual(['(all)', '(none)', 'IN', 'other']);
+      const by = (country: string): unknown => rows.find((row) => fieldOf(row, 'country') === country);
       expect(by('(all)')).toMatchObject({ accepted: 9, depositing_4w: 5, raw_yes: 4, raw_yes_share: 0.444 });
       expect(by('IN')).toMatchObject({ accepted: 5, depositing_4w: 3, raw_yes: 2, raw_yes_share: 0.4, installs: null });
       expect(by('other')).toMatchObject({ accepted: 3, depositing_4w: 2, raw_yes: 2, raw_yes_share: 0.667 });
@@ -136,7 +128,7 @@ describe('queries/covenant-funnel.sql', () => {
 
     it('a null country gets its own row', async () => {
       const rows = await rowsOf(db, forVersion('v4'));
-      expect(rows.find((row) => row.country === '(none)')).toMatchObject({ accepted: 1, depositing_4w: 0, raw_yes: 0, raw_yes_share: 0 });
+      expect(rows.find((row) => fieldOf(row, 'country') === '(none)')).toMatchObject({ accepted: 1, depositing_4w: 0, raw_yes: 0, raw_yes_share: 0 });
     });
 
     it('prints counts only: no account id on any row, and no country with fewer than five accounts', async () => {
