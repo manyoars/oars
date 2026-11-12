@@ -58,25 +58,12 @@ describe('the Grok Build reader on its fixture', () => {
       tools: out.tools.map((tool) => [tool.tool, tool.status]),
       errorLines: out.errorLines.map((entry) => entry.line),
     }).toEqual({
-      'userTurns': 1,
-      'assistantTurns': 3,
-      'models': {
-        'grok-build': 3
-      },
-      'version': null,
-      'tools': [
-        [
-          'Bash',
-          'error'
-        ],
-        [
-          'Edit',
-          'ok'
-        ]
-      ],
-      'errorLines': [
-        'make: *** No rule to make target'
-      ]
+      userTurns: 1,
+      assistantTurns: 3,
+      models: { 'grok-build': 3 },
+      version: null,
+      tools: [['Bash', 'error'], ['Edit', 'ok']],
+      errorLines: ['make: *** No rule to make target'],
     });
   });
 });

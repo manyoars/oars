@@ -52,25 +52,12 @@ describe('the Copilot CLI reader on its fixture', () => {
       tools: out.tools.map((tool) => [tool.tool, tool.status]),
       errorLines: out.errorLines.map((entry) => entry.line),
     }).toEqual({
-      'userTurns': 1,
-      'assistantTurns': 2,
-      'models': {
-        'claude-sonnet-4.5': 2
-      },
-      'version': '1.0.105',
-      'tools': [
-        [
-          'Bash',
-          'error'
-        ],
-        [
-          'Edit',
-          'ok'
-        ]
-      ],
-      'errorLines': [
-        'make: *** No rule to make target'
-      ]
+      userTurns: 1,
+      assistantTurns: 2,
+      models: { 'claude-sonnet-4.5': 2 },
+      version: '1.0.105',
+      tools: [['Bash', 'error'], ['Edit', 'ok']],
+      errorLines: ['make: *** No rule to make target'],
     });
   });
 });

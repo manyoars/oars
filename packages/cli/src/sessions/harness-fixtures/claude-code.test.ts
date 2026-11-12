@@ -40,25 +40,12 @@ describe('the Claude Code reader on its fixture', () => {
       tools: out.tools.map((tool) => [tool.tool, tool.status]),
       errorLines: out.errorLines.map((entry) => entry.line),
     }).toEqual({
-      'userTurns': 1,
-      'assistantTurns': 3,
-      'models': {
-        'claude-sonnet-5-5': 3
-      },
-      'version': '2.1.300',
-      'tools': [
-        [
-          'Bash',
-          'error'
-        ],
-        [
-          'Edit',
-          'ok'
-        ]
-      ],
-      'errorLines': [
-        'make: *** No rule to make target'
-      ]
+      userTurns: 1,
+      assistantTurns: 3,
+      models: { 'claude-sonnet-5-5': 3 },
+      version: '2.1.300',
+      tools: [['Bash', 'error'], ['Edit', 'ok']],
+      errorLines: ['make: *** No rule to make target'],
     });
   });
 });

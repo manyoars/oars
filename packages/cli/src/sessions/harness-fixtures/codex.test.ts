@@ -52,25 +52,12 @@ describe('the Codex reader on its fixture', () => {
       tools: out.tools.map((tool) => [tool.tool, tool.status]),
       errorLines: out.errorLines.map((entry) => entry.line),
     }).toEqual({
-      'userTurns': 1,
-      'assistantTurns': 3,
-      'models': {
-        'gpt-5-codex': 3
-      },
-      'version': '0.50.0',
-      'tools': [
-        [
-          'Bash',
-          'error'
-        ],
-        [
-          'Edit',
-          'ok'
-        ]
-      ],
-      'errorLines': [
-        'make: *** No rule to make target'
-      ]
+      userTurns: 1,
+      assistantTurns: 3,
+      models: { 'gpt-5-codex': 3 },
+      version: '0.50.0',
+      tools: [['Bash', 'error'], ['Edit', 'ok']],
+      errorLines: ['make: *** No rule to make target'],
     });
   });
 });

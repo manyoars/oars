@@ -1,6 +1,6 @@
 # Harness reader fixtures
 
-One made-up session per reader, each with a test beside it (`<reader>.test.ts`). Nothing here was copied from a real store: the prompts, paths (`/work/app`), and ids are invented. Each session has one prompt, a shell call that exits 2, and an edit, so a reader that loses an outcome, a tool, a model, or a version turns exactly its own test red.
+One made-up session per reader, each with a test beside it (`<reader>.test.ts`). Nothing here was copied from a real store: the prompts, paths, and ids are invented. Every fixture uses the project path `/work/app` except `cursor.json` and `opencode.json`, whose readers resolve a real folder, so their tests replace the `FOLDER` placeholder with a temp folder at test time. Each session has one prompt, a shell call that exits 2, and an edit (Cursor's also reads `src/a.ts` first), so a reader that loses an outcome, a tool, a model, or a version turns exactly its own test red.
 
 | Reader | Fixture | Staged by the test as |
 |--------|---------|-----------------------|
