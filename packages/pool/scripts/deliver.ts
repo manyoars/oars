@@ -3,15 +3,17 @@
 import type { Dirent } from 'node:fs';
 import { appendFile, readdir, readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
+import { resolveBuyerKey, BUYER_KEY_FILE_USAGE } from '../src/buyer-key.js';
 import { bareOf, decodedStrings, insideRepository, isAbsent, isText, keyIdOf, PackError, readObjections, squashed } from './sample-pack.js';
 
 export const USAGE = [
-  'Usage: deliver --pack <dir> --recipient <name> --license <id> --buyer-key <key> --owners <file>',
+  'Usage: deliver --pack <dir> --recipient <name> --license <id> (--buyer-key-file <path> | --buyer-key <key>) --owners <file>',
   '       deliver recipients <session id or person\'s name> --owners <file>',
   '  --pack <dir>         a pack built by sample-pack, outside every git repository',
   '  --recipient <name>   the buyer\'s legal name as on the term sheet',
   '  --license <id>       the term sheet\'s version, so the rights the recipient holds are the ones it signed',
   '  --buyer-key <key>    the key the pack was built under (checked against pack.json; it is never written down)',
+  BUYER_KEY_FILE_USAGE,
   '  --owners <file>      the owners file; deliveries.jsonl, index.jsonl, and objections.jsonl sit beside it',
   'deliver appends one row per session to deliveries.jsonl, when you send the pack: it sends nothing itself, and it refuses a pack built under other objections than objections.jsonl holds now (rebuild, then deliver).',
   'recipients prints each recipient of a session, or of every session whose text names the person, with the match id that recipient holds it under (Art. 15(1)(c), 19).',
@@ -162,7 +164,7 @@ export interface Io {
   now?: (() => Date) | undefined;
 }
 
-const VALUED = new Set(['--pack', '--recipient', '--license', '--buyer-key', '--owners']);
+const VALUED = new Set(['--pack', '--recipient', '--license', '--buyer-key', '--buyer-key-file', '--owners']);
 
 const flagsOf = (argv: readonly string[]): Map<string, string> | string => {
   const values = new Map<string, string>();
@@ -180,7 +182,7 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
   const query = asking ? argv[1] : undefined;
   const flags = flagsOf(asking ? argv.slice(2) : argv);
   const owners = typeof flags === 'string' ? undefined : flags.get('--owners');
-  const [pack, recipient, license, buyerKey] = typeof flags === 'string' ? [] : ['--pack', '--recipient', '--license', '--buyer-key'].map((flag) => flags.get(flag));
+  const [pack, recipient, license, buyerKey, buyerKeyFile] = typeof flags === 'string' ? [] : ['--pack', '--recipient', '--license', '--buyer-key', '--buyer-key-file'].map((flag) => flags.get(flag));
   const usage = (reason: string): number => {
     io.print(`${reason}\n${USAGE}`);
     return 2;
@@ -194,8 +196,10 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
       io.print(found.length === 0 ? 'No recipient holds this session: nothing in deliveries.jsonl names it.' : found.map((row) => [row.recipient, `match id ${row.matchId}`, `lot ${row.lot}`, `delivered ${row.deliveredAt}`, `license ${row.license}`, `session ${row.session}`].join('\t')).join('\n'));
       return 0;
     }
-    if (pack === undefined || recipient === undefined || license === undefined || buyerKey === undefined) return usage('Missing a required option.');
-    const { rows, skipped } = await deliver({ pack, recipient, license, buyerKey, owners, now: io.now });
+    const resolved = await resolveBuyerKey(buyerKey, buyerKeyFile);
+    if (resolved !== undefined && 'refusal' in resolved) throw new PackError(resolved.refusal);
+    if (pack === undefined || recipient === undefined || license === undefined || resolved === undefined) return usage('Missing a required option.');
+    const { rows, skipped } = await deliver({ pack, recipient, license, buyerKey: resolved.key, owners, now: io.now });
     io.print(`Recorded ${String(rows.length)} sessions of ${rows[0]?.lot ?? pack} as delivered to ${recipient.trim()} in ${DELIVERIES_FILE} (${String(skipped)} already recorded, skipped). Nothing was sent: send the pack yourself.`);
     return 0;
   } catch (error) {

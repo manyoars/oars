@@ -1921,3 +1921,47 @@ describe('a synthetic assistant line whose message.id is a uuid (t1147)', () => 
     expect(String(failure)).not.toContain(mainId);
   });
 });
+
+describe('--buyer-key-file', () => {
+  const base = (f: Fixture): string[] => ['--terms', f.terms, '--owners', f.owners, '--index-key', f.indexKey, '--out', f.out, '--min-turns', '1'];
+  const keyFile = (f: Fixture, text: string): string => {
+    const file = join(f.root, 'buyer.key');
+    writeFileSync(file, text);
+    return file;
+  };
+  const run = async (f: Fixture, extra: string[]): Promise<{ code: number; text: string }> => {
+    const printed: string[] = [];
+    const code = await main([...base(f), ...extra], { runtime: f.runtime, print: (text) => printed.push(text) });
+    return { code, text: printed.join('\n') };
+  };
+
+  it('builds a pack whose keyId equals the one built with the same key by --buyer-key', async () => {
+    const byFlag = fixture();
+    expect((await run(byFlag, ['--buyer-key', 'sample-secret'])).code).toBe(0);
+    const byFile = fixture();
+    expect((await run(byFile, ['--buyer-key-file', keyFile(byFile, 'sample-secret\r\n')])).code).toBe(0);
+    const keyId = (f: Fixture): string => (JSON.parse(readFileSync(join(f.out, 'pack.json'), 'utf8')) as { keyId: string }).keyId;
+    expect(keyId(byFile)).toBe(keyId(byFlag));
+  });
+
+  it('refuses both flags, a missing file, and an empty file, and writes no pack', async () => {
+    const f = fixture();
+    const both = await run(f, ['--buyer-key', 'sample-secret', '--buyer-key-file', keyFile(f, 'sample-secret')]);
+    expect(both.code).toBe(2);
+    expect(both.text).toMatch(/not both/);
+    expect(both.text).not.toContain('sample-secret');
+    const missing = await run(f, ['--buyer-key-file', join(f.root, 'absent.key')]);
+    expect(missing.code).toBe(2);
+    expect(missing.text).toMatch(/Cannot read the --buyer-key-file/);
+    const empty = await run(f, ['--buyer-key-file', keyFile(f, ' \n')]);
+    expect(empty.code).toBe(2);
+    expect(empty.text).toMatch(/is empty/);
+    expect(existsSync(f.out)).toBe(false);
+  });
+
+  it('lists the file flag in the usage, as the route for a real key', async () => {
+    expect(USAGE).toMatch(/--buyer-key-file <path>[^\n]*logged by npm and just/);
+    const f = fixture();
+    expect((await run(f, [])).text).toMatch(/Missing a required option/);
+  });
+});

@@ -1,5 +1,6 @@
 // The first sale's hand-over register (docs/pool.md, "The sample pack"). Bundled with esbuild into memory like sample-pack.mjs, since it imports that command's TypeScript:
-//   npm run deliver -w packages/pool -- --pack <dir> --recipient <name> --license <id> --buyer-key <key> --owners <file>
+//   node packages/pool/scripts/deliver.mjs --pack <dir> --recipient <name> --license <id> --buyer-key-file <path> --owners <file>
+//   (plain node, so no npm debug log holds the key; --buyer-key <key> still works for a throwaway key)
 //   npm run deliver -w packages/pool -- recipients <session id or name> --owners <file>
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
