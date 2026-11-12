@@ -7,6 +7,7 @@ import { appendFile, mkdir, readdir, readFile, rename, rmdir, writeFile } from '
 import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { dirname, join, resolve } from 'node:path';
+import { BUYER_KEY_FILE_USAGE, resolveBuyerKey } from '../src/buyer-key.js';
 import { defaultConfigDir } from '../../cli/src/credentials.js';
 import { checkSession, loadTerms, transcriptFilesOf, type Reason } from '../../cli/src/sessions/exclusion.js';
 import { configOf, makeRepoRoot, originUrl } from '../../cli/src/sessions/repo-root.js';
@@ -21,11 +22,12 @@ import { runGit, type Git } from '../../cli/src/sessions/survival.js';
 import { vocabulary } from '../../cli/src/sessions/vocab-load.js';
 
 export const USAGE = [
-  'Usage: sample-pack --terms <file> --owners <file> --index-key <file> --buyer-key <key> --out <dir> [--size <n>] [--seed <text>] [--min-turns <n>] [--sessions <file>]',
+  'Usage: sample-pack --terms <file> --owners <file> --index-key <file> (--buyer-key-file <path> | --buyer-key <key>) --out <dir> [--size <n>] [--seed <text>] [--min-turns <n>] [--sessions <file>]',
   '  --terms <file>       the exclusion term list (one term per line; a local file, never in a repository)',
   '  --owners <file>      JSON list of {"folder": "<glob over the project folder name>", "owner": "<company>", "license": "<SPDX id>" | null}; first match wins, and a session in a folder no entry names is left out',
   '  --index-key <file>   the matching-index key (64 hex characters or more): a session\'s server key is HMAC-SHA-256 of its id under it. Keep it; a new key gives every session new ids',
   '  --buyer-key <key>    the buyer\'s key: a match id is HMAC-SHA-256 of the server key under it',
+  BUYER_KEY_FILE_USAGE,
   '  --out <dir>          an empty or new folder outside every git repository',
   '  --size <n>           sessions to emit (default 25); --seed <text> orders the draw (default 1)',
   '  objections.jsonl     beside the owners file, optional: a line per objection, naming a session id or a person; each session it names, or whose text names the person, is left out and counted (docs/pool.md)',
@@ -1308,17 +1310,20 @@ export interface Io {
   vocabDir?: URL | undefined;
 }
 
-const VALUED = new Set(['--terms', '--owners', '--index-key', '--buyer-key', '--out', '--size', '--seed', '--min-turns', '--sessions']);
+const VALUED = new Set(['--terms', '--owners', '--index-key', '--buyer-key', '--buyer-key-file', '--out', '--size', '--seed', '--min-turns', '--sessions']);
 
-const parseArgs = (argv: readonly string[]): (Omit<PackOptions, 'sessions' | 'onDrop'> & { sessionsFile?: string }) | string => {
+const parseArgs = async (argv: readonly string[]): Promise<(Omit<PackOptions, 'sessions' | 'onDrop'> & { sessionsFile?: string }) | string> => {
   const values = new Map<string, string>();
   for (let at = 0; at < argv.length; at += 2) {
     const [flag, value] = [argv[at] ?? '', argv[at + 1]];
     if (!VALUED.has(flag) || value === undefined) return `Unknown or incomplete option: ${flag}`;
     values.set(flag, value);
   }
-  const [terms, owners, indexKey, buyerKey, out] = ['--terms', '--owners', '--index-key', '--buyer-key', '--out'].map((flag) => values.get(flag));
-  if (terms === undefined || owners === undefined || indexKey === undefined || buyerKey === undefined || out === undefined) return 'Missing a required option.';
+  const [terms, owners, indexKey, out] = ['--terms', '--owners', '--index-key', '--out'].map((flag) => values.get(flag));
+  const resolved = await resolveBuyerKey(values.get('--buyer-key'), values.get('--buyer-key-file'));
+  if (resolved !== undefined && 'refusal' in resolved) return resolved.refusal;
+  if (terms === undefined || owners === undefined || indexKey === undefined || resolved === undefined || out === undefined) return 'Missing a required option.';
+  const buyerKey = resolved.key;
   const sessionsFile = values.get('--sessions');
   if (sessionsFile !== undefined && (values.has('--size') || values.has('--seed'))) return '--sessions takes the place of the seeded draw: give it without --size or --seed.';
   const size = Number(values.get('--size') ?? '25');
@@ -1339,7 +1344,7 @@ const sessionsIn = async (file: string): Promise<string[]> => {
 
 /** The command: 0 when the pack was written, 2 on a usage or input error (nothing written), with counts only on success (and, with --sessions, each listed session left out, by its store id): no term, path, or transcript text. */
 export const main = async (argv: readonly string[], io: Io): Promise<number> => {
-  const parsed = parseArgs(argv);
+  const parsed = await parseArgs(argv);
   if (typeof parsed === 'string') {
     io.print(`${parsed}\n${USAGE}`);
     return 2;

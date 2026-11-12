@@ -1,5 +1,5 @@
 // The first sale's sample pack (docs/pool.md, "The sample pack"). The command is TypeScript that imports the CLI's own exclusion gate and redaction, so it is bundled with esbuild into memory and run from there:
-//   npm run sample-pack -w packages/pool -- --terms <file> --owners <file> --index-key <file> --buyer-key <key> --out <dir> [--size <n>] [--seed <text>]
+//   npm run sample-pack -w packages/pool -- --terms <file> --owners <file> --index-key <file> --buyer-key-file <path> --out <dir> [--size <n>] [--seed <text>]
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
