@@ -20,6 +20,22 @@ Each harness below lists `oars` from a manifest in this repository. Each harness
 
 Installing a manifest sends nothing. A manifest runs the same `oars` as a terminal does, so the rules in `telemetry.md` and `pool.md` apply unchanged: telemetry events go to the Many Oars pool only while telemetry is on (`oars telemetry off`, `OARS_TELEMETRY=0`, or `DO_NOT_TRACK=1` stops them), and pool batches go only after you accept a pool covenant. The `surface` field of the `first-run` event is read from the folder `oars` runs in, and these manifests run the `oars` on your `PATH`, so it reads `npm-global` (or `npx` for the registry line), not `claude-plugin`, `codex-plugin`, or `gemini-extension`.
 
+## Versions last tested
+
+Each reader is pinned by a made-up session fixture and a test (`packages/cli/src/sessions/harness-fixtures/`). The table says which version each fixture was modeled on and how that is known: "stamped" means the version is written inside the fixture, "source" means the fixture follows the upstream source at the named commit, which the reader's own test file cites. No row says the newest release of a harness reads correctly; the weekly workflow `harness-readers.yml` reruns the same tests against each harness's latest npm release and prints the versions it ran, so a change shows up as one red reader.
+
+| Harness | Version the fixture is modeled on | How we know | Date |
+|---------|-----------------------------------|-------------|------|
+| Claude Code | 2.1.300 | stamped | 2026-11-12 |
+| Codex | 0.50.0 | stamped | 2026-11-12 |
+| Copilot CLI | 1.0.105 | stamped | 2026-11-12 |
+| OpenCode | 2.2.5 | stamped | 2026-11-12 |
+| Gemini CLI | not stamped | source, google-gemini/gemini-cli at 89e9d25d | 2026-11-12 |
+| Grok Build | not stamped | source, xai-org/grok-build at 2bdd1d6 | 2026-11-12 |
+| Pi | not stamped | source, badlogic/pi-mono at 085c84e | 2026-11-12 |
+| VS Code Copilot Chat | not stamped | source, microsoft/vscode at f92b8f3a | 2026-11-12 |
+| Cursor | not stamped | no public source; shapes follow the local store the reader was written against | 2026-11-12 |
+
 ## Publishing (maintainers)
 
 These steps run after a release, never from a build:
