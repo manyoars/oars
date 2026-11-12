@@ -1,10 +1,11 @@
 // The registry read of a sample pack row: for one match id under one buyer key id, which lots it was built into and under which terms, who received it under which license, and whether an objection has withdrawn it since.
 // It reads the operator folder and the pack folders `index.jsonl` names, and writes nothing. A row carries what a recipient already holds (the match id) and what the register says about it:
 // never a session id, an owner, a project folder, an objector's name, or a key, so the same rows can later be served to the buyer who holds the key.
-import type { Dirent } from 'node:fs';
 import { access, readdir, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { DELIVERIES_FILE, deliveriesOf, fieldOf, indexOf, lotOf } from './deliver.js';
+import { noticeOf, noticesOf, type Notice } from './notices.js';
+import { idsIn, MATCH_ID, sound } from './operator-files.js';
 import { bareOf, decodedStrings, isAbsent, isText, PackError, readObjections, squashed, type HarnessTerms, type Objection } from './sample-pack.js';
 
 export const USAGE = [
@@ -13,10 +14,10 @@ export const USAGE = [
   '  <match id>         the 64 hex characters a recipient holds a session under',
   '  --ids <file>       a file of match ids, one per line',
   '  --key-id <id>      the id of the buyer key the match ids belong to (keyId in pack.json: 16 hex characters), never the key',
-  '  --operator <dir>   the folder the owners file sits in, with index.jsonl, deliveries.jsonl, and objections.jsonl',
+  '  --operator <dir>   the folder the owners file sits in, with index.jsonl, deliveries.jsonl, objections.jsonl, and notices.jsonl',
   '  --json             one JSON document in place of the table',
   'It prints one row per match id: built, delivered, withdrawn (an objection in objections.jsonl covers it), or unknown (the register holds no such id under this key).',
-  'A value reads unknown when no operator file records it: the covenant version always, and the erasure at a recipient for a delivered row that was withdrawn. It reads files only and writes nothing.',
+  'A value reads unknown when no operator file records it: the covenant version always, and the erasure at a recipient for a delivered row that was withdrawn, until `notices` records a notice (notice-sent) or its confirmation (confirmed). It reads files only and writes nothing.',
 ].join('\n');
 
 export const UNKNOWN = 'unknown';
@@ -35,11 +36,21 @@ export interface LotStatus {
   training: string;
 }
 
+/** `none-due` (the row is not withdrawn), `unknown` (it is, or may be, and no notice is recorded), `notice-sent`, or `confirmed`. */
+export type ErasureState = 'none-due' | Unknown | 'notice-sent' | 'confirmed';
+
+/** Where the erasure at one recipient stands, with the date of the notice or of its confirmation. */
+export interface DeliveryErasure {
+  state: ErasureState;
+  at: string | undefined;
+}
+
 export interface DeliveryStatus {
   lot: string;
   recipient: string;
   license: string;
   deliveredAt: string;
+  erasure: DeliveryErasure;
 }
 
 /** An objection that covers the row: by its session, or by a person's name found in its delivered text. The name itself is never carried. */
@@ -58,8 +69,8 @@ export interface LicenseStatus {
   deliveries: DeliveryStatus[];
   /** Unknown when an objection names a person and the row's text is no longer on the machine to look in. */
   withdrawn: Withdrawal[] | Unknown;
-  /** Whether each recipient was told to erase a withdrawn row, and did, is recorded nowhere yet: unknown for a delivered row that is (or may be) withdrawn, and for an unknown row. */
-  erasure: 'none-due' | Unknown;
+  /** The least advanced erasure among the row's deliveries (`unknown` before `notice-sent` before `confirmed`; `none-due` when nothing is owed or the row was never delivered), and `unknown` for an unknown row. Each delivery carries its own, with the date. */
+  erasure: ErasureState;
   /** No operator file records a covenant version. */
   covenant: Unknown;
 }
@@ -81,16 +92,9 @@ const parsed = (text: string, what: string): unknown => {
   }
 };
 
-const sound = async <T>(what: string, read: Promise<T>): Promise<T> => {
-  try {
-    return await read;
-  } catch (error) {
-    if (error instanceof SyntaxError) throw new PackError(`${what} holds a line that is not JSON.`);
-    throw error;
-  }
-};
-
 const linesIn = (text: string): string[] => text.split(String.fromCharCode(10)).map((row) => row.trim()).filter((row) => row !== '');
+
+const unreadable = (lot: string): PackError => new PackError(`pack folder of lot ${lot} cannot be read.`);
 
 interface PackRead {
   keyId: unknown;
@@ -100,14 +104,15 @@ interface PackRead {
 
 /** A pack folder's own record, or nothing when the folder is no longer where the index says. */
 const packOf = async (pack: string): Promise<PackRead | undefined> => {
+  const lot = lotOf(pack);
   let texts: [string, string];
   try {
     texts = [await readFile(join(pack, 'pack.json'), 'utf8'), await readFile(join(pack, 'manifest.jsonl'), 'utf8')];
   } catch (error) {
     if (isAbsent(error)) return undefined;
-    throw error;
+    // EACCES or EISDIR: the engine's own message holds the pack's path, which no refusal carries.
+    throw unreadable(lot);
   }
-  const lot = lotOf(pack);
   const record = parsed(texts[0], `pack.json of lot ${lot}`);
   const rows = new Map<string, unknown>();
   for (const [at, line] of linesIn(texts[1]).entries()) {
@@ -134,25 +139,35 @@ const termsOf = (row: unknown): Pick<LotStatus, 'harnessTerms' | 'permittedUses'
 };
 
 /** The text of a row's delivered files in each folder still on the machine, squashed as an objection's name is, or nothing when no folder is left to read. */
-const textsOf = async (folders: readonly string[]): Promise<string[] | undefined> => {
+const textsOf = async (folders: readonly { folder: string; lot: string }[]): Promise<string[] | undefined> => {
   let texts: string[] | undefined;
-  for (const folder of folders) {
-    let found: Dirent[];
+  for (const { folder, lot } of folders) {
+    const found: string[] = [];
     try {
-      found = await readdir(folder, { recursive: true, withFileTypes: true });
+      for (const file of (await readdir(folder, { recursive: true, withFileTypes: true })).filter((item) => item.isFile())) {
+        // Raw text and decoded JSON strings, as `deliver recipients` reads them: an escape in the file can hide a name from the raw bytes.
+        const text = await readFile(join(file.parentPath, file.name), 'utf8');
+        found.push(...[text, ...decodedStrings(text)].map(squashed));
+      }
     } catch (error) {
       if (isAbsent(error)) continue;
-      throw error;
+      throw unreadable(lot);
     }
-    texts ??= [];
-    for (const file of found.filter((item) => item.isFile())) {
-      // Raw text and decoded JSON strings, as `deliver recipients` reads them: an escape in the file can hide a name from the raw bytes.
-      const text = await readFile(join(file.parentPath, file.name), 'utf8');
-      texts.push(...[text, ...decodedStrings(text)].map(squashed));
-    }
+    texts = [...(texts ?? []), ...found];
   }
   return texts;
 };
+
+/** Where the erasure at one recipient stands. A recorded notice shows whether or not an objection covers the row now; with none, the row owes nothing only when it is known not to be withdrawn. */
+const erasureOf = (notice: Notice | undefined, withdrawn: Withdrawal[] | Unknown): DeliveryErasure => {
+  if (notice === undefined) return { state: withdrawn !== UNKNOWN && withdrawn.length === 0 ? 'none-due' : UNKNOWN, at: undefined };
+  return notice.confirmedAt === undefined ? { state: 'notice-sent', at: notice.sentAt } : { state: 'confirmed', at: notice.confirmedAt };
+};
+
+const PROGRESS: { [state in ErasureState]: number } = { unknown: 0, 'notice-sent': 1, confirmed: 2, 'none-due': 2 };
+
+/** The state furthest from done among the deliveries, so a row reads `confirmed` only when every recipient confirmed. */
+const leastOf = (states: readonly ErasureState[]): ErasureState => states.reduce((least, state) => (PROGRESS[state] < PROGRESS[least] ? state : least));
 
 const unknownRow = (matchId: string): LicenseStatus => ({ matchId, state: 'unknown', keyVerified: false, lots: [], deliveries: [], withdrawn: UNKNOWN, erasure: UNKNOWN, covenant: UNKNOWN });
 
@@ -169,6 +184,7 @@ export const licenseStatus = async (operator: string, keyId: string, matchIds: r
   const index = await sound('index.jsonl', indexOf(dir));
   const deliveries = await sound(DELIVERIES_FILE, deliveriesOf(dir));
   const { objections } = await readObjections(dir);
+  const notices = await noticesOf(dir);
   const names = objections.flatMap((objection): { wanted: string; objection: Objection }[] => (objection.name === undefined ? [] : [{ wanted: squashed(objection.name.trim()), objection }]));
   const packs = new Map<string, Promise<PackRead | undefined>>();
   const packAt = (pack: string): Promise<PackRead | undefined> => {
@@ -184,7 +200,7 @@ export const licenseStatus = async (operator: string, keyId: string, matchIds: r
     // A match id is an HMAC under one buyer key, so it belongs to one key: whichever a delivery records, or the pack.json of a pack that lists it.
     const keys = new Set(sent.map((row) => row.keyId));
     const lots: LotStatus[] = [];
-    const folders: string[] = [];
+    const folders: { folder: string; lot: string }[] = [];
     // The index is appended per build, so a lot's newest line names the folder it was last built into.
     for (const [lot, pack] of new Map(entries.map((entry) => [lotOf(entry.pack), entry.pack]))) {
       const found = await packAt(pack);
@@ -194,7 +210,7 @@ export const licenseStatus = async (operator: string, keyId: string, matchIds: r
         continue;
       }
       if (isText(found.keyId)) keys.add(found.keyId);
-      folders.push(join(pack, 'sessions', matchId));
+      folders.push({ folder: join(pack, 'sessions', matchId), lot });
       lots.push({ lot, built: isText(found.built) ? found.built : UNKNOWN, listed: true, ...termsOf(row) });
     }
     const held = entries.length > 0 || sent.length > 0;
@@ -210,7 +226,7 @@ export const licenseStatus = async (operator: string, keyId: string, matchIds: r
     const texts = names.length === 0 ? [] : await textsOf(folders);
     for (const { wanted, objection } of names) if (texts?.some((text) => text.includes(wanted)) === true) covering.push({ received: objection.received, scope: objection.scope, basis: 'name' });
     const withdrawn = covering.length === 0 && texts === undefined ? UNKNOWN : covering;
-    const delivered = sent.map(({ lot, recipient, license, deliveredAt }): DeliveryStatus => ({ lot, recipient, license, deliveredAt }));
+    const delivered = sent.map(({ lot, recipient, license, deliveredAt }): DeliveryStatus => ({ lot, recipient, license, deliveredAt, erasure: erasureOf(noticeOf(notices, recipient, matchId), withdrawn) }));
     rows.push({
       matchId,
       state: withdrawn !== UNKNOWN && withdrawn.length > 0 ? 'withdrawn' : delivered.length > 0 ? 'delivered' : 'built',
@@ -218,7 +234,7 @@ export const licenseStatus = async (operator: string, keyId: string, matchIds: r
       lots,
       deliveries: delivered,
       withdrawn,
-      erasure: delivered.length === 0 || (withdrawn !== UNKNOWN && withdrawn.length === 0) ? 'none-due' : UNKNOWN,
+      erasure: delivered.length === 0 ? 'none-due' : leastOf(delivered.map(({ erasure }) => erasure.state)),
       covenant: UNKNOWN,
     });
   }
@@ -227,13 +243,18 @@ export const licenseStatus = async (operator: string, keyId: string, matchIds: r
 
 const HEADER = ['match id', 'state', 'lots', 'delivered to', 'withdrawn', 'recipient erasure', 'covenant'];
 
+/** The row's erasure, or at each recipient with its date once a notice is recorded for any of them. */
+const erasureCell = (row: LicenseStatus): string => (row.deliveries.some(({ erasure }) => erasure.at !== undefined)
+  ? row.deliveries.map(({ recipient, erasure }) => `${recipient} ${erasure.state}${erasure.at === undefined ? '' : ` ${erasure.at}`}`).join('; ')
+  : row.erasure);
+
 const cellsOf = (row: LicenseStatus): string[] => [
   row.matchId,
   row.state === 'unknown' || row.keyVerified ? row.state : `${row.state} (key not verified)`,
   row.lots.map(({ lot, listed }) => (listed === false ? `${lot} (not in the pack now)` : lot)).join('; ') || '-',
   row.deliveries.map(({ recipient, lot, license, deliveredAt }) => `${recipient} (${lot}, ${license}, ${deliveredAt})`).join('; ') || '-',
   row.withdrawn === UNKNOWN ? UNKNOWN : row.withdrawn.map(({ received, scope, basis }) => `${received} ${scope} (${basis})`).join('; ') || '-',
-  row.erasure,
+  erasureCell(row),
   row.covenant,
 ];
 
@@ -251,7 +272,6 @@ export interface Io {
 }
 
 const VALUED = new Set(['--ids', '--key-id', '--operator']);
-const MATCH_ID = /^[0-9a-f]{64}$/i;
 const KEY_ID = /^[0-9a-f]{16}$/;
 
 interface Asked {
@@ -276,21 +296,6 @@ const askedOf = (argv: readonly string[]): Asked | string => {
     else return 'Give one match id, or a file of them with --ids.';
   }
   return asked;
-};
-
-const idsIn = async (file: string): Promise<string[]> => {
-  let text: string;
-  try {
-    text = await readFile(file, 'utf8');
-  } catch (error) {
-    if (isAbsent(error)) throw new PackError('The --ids file is missing.');
-    throw error;
-  }
-  const ids = text.split(String.fromCharCode(10)).map((row, at): [string, number] => [row.trim(), at + 1]).filter(([row]) => row !== '');
-  const wrong = ids.find(([row]) => !MATCH_ID.test(row));
-  if (wrong !== undefined) throw new PackError(`Line ${String(wrong[1])} of the --ids file is not a match id (64 hex characters).`);
-  if (ids.length === 0) throw new PackError('The --ids file names no match id.');
-  return ids.map(([row]) => row);
 };
 
 /** 0 when the question was answered (an unknown id is an answer), 2 on a usage error or a file that cannot be read as what it should be. */

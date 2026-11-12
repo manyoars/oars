@@ -4,8 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { deliver } from './deliver.js';
+import { main as notices } from './notices.js';
 import { licenseStatus, main, USAGE, type LicenseStatus, type StatusReport } from './license-status.js';
-import { HARNESS_TERMS, keyIdOf, PERMITTED_USES, type IndexRow } from './sample-pack.js';
+import { HARNESS_TERMS, keyIdOf, PackError, PERMITTED_USES, type IndexRow } from './sample-pack.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -76,6 +77,11 @@ const object = (f: Fixture, rows: readonly object[]): void => {
   writeFileSync(join(f.operator, 'objections.jsonl'), rows.map((row) => `${JSON.stringify(row)}\n`).join(''));
 };
 
+/** Records a notice or its confirmation through the command, as the operator does. */
+const notice = async (f: Fixture, kind: 'sent' | 'confirmed', recipient: string, matchId: string, at: string): Promise<void> => {
+  expect(await notices([kind, matchId, '--recipient', recipient, '--operator', f.operator], { print: () => undefined, now: () => new Date(at) })).toBe(0);
+};
+
 const only = (report: StatusReport): LicenseStatus => {
   const [row] = report.rows;
   if (row === undefined || report.rows.length !== 1) throw new Error('expected one row');
@@ -99,7 +105,7 @@ describe('licenseStatus', () => {
     await send(f, packOf(f, 'lot-1', [[S1, M1], [S2, M2]]), 'Acme Evals Inc.', 'term-sheet-v1');
 
     expect(only(await licenseStatus(f.operator, KEY_ID, [M2]))).toEqual({
-      matchId: M2, state: 'delivered', keyVerified: true, lots: [LOT_1], deliveries: [{ lot: 'lot-1', recipient: 'Acme Evals Inc.', license: 'term-sheet-v1', deliveredAt: SENT }], withdrawn: [], erasure: 'none-due', covenant: 'unknown',
+      matchId: M2, state: 'delivered', keyVerified: true, lots: [LOT_1], deliveries: [{ lot: 'lot-1', recipient: 'Acme Evals Inc.', license: 'term-sheet-v1', deliveredAt: SENT, erasure: { state: 'none-due', at: undefined } }], withdrawn: [], erasure: 'none-due', covenant: 'unknown',
     });
   });
 
@@ -184,8 +190,8 @@ describe('licenseStatus', () => {
     expect(row.state).toBe('delivered');
     expect(row.lots).toEqual([LOT_1, { ...LOT_1, lot: 'lot-2' }]);
     expect(row.deliveries).toEqual([
-      { lot: 'lot-1', recipient: 'Acme Evals Inc.', license: 'term-sheet-v1', deliveredAt: SENT },
-      { lot: 'lot-2', recipient: 'Beta Labs Ltd', license: 'term-sheet-v2', deliveredAt: '2026-07-01T10:00:00.000Z' },
+      { lot: 'lot-1', recipient: 'Acme Evals Inc.', license: 'term-sheet-v1', deliveredAt: SENT, erasure: { state: 'none-due', at: undefined } },
+      { lot: 'lot-2', recipient: 'Beta Labs Ltd', license: 'term-sheet-v2', deliveredAt: '2026-07-01T10:00:00.000Z', erasure: { state: 'none-due', at: undefined } },
     ]);
   });
 
@@ -203,6 +209,76 @@ describe('licenseStatus', () => {
     packOf(f, 'lot-1', [[S1, M1]], { indexOnly: true });
 
     expect(only(await licenseStatus(f.operator, KEY_ID, [M1]))).toMatchObject({ state: 'built', keyVerified: false, withdrawn: [], lots: [{ lot: 'lot-1', listed: 'unknown' }] });
+  });
+
+  it('reads the erasure at each recipient from the notice register: unknown with no notice, then notice-sent and confirmed with their dates', async () => {
+    const f = fixture();
+    const pack = packOf(f, 'lot-1', [[S1, M1], [S2, M2]]);
+    await send(f, pack, 'Acme Evals Inc.', 'term-sheet-v1');
+    await send(f, pack, 'Beta Labs Ltd', 'term-sheet-v2');
+    object(f, [{ session: S2, received: '2026-06-13T09:00:00Z', scope: 'all' }]);
+    const erasures = async (): Promise<unknown> => {
+      const row = only(await licenseStatus(f.operator, KEY_ID, [M2]));
+      return [row.erasure, row.deliveries.map(({ recipient, erasure }) => [recipient, erasure])];
+    };
+
+    expect(await erasures()).toEqual(['unknown', [['Acme Evals Inc.', { state: 'unknown', at: undefined }], ['Beta Labs Ltd', { state: 'unknown', at: undefined }]]]);
+
+    await notice(f, 'sent', 'Acme Evals Inc.', M2, '2026-07-01T09:00:00.000Z');
+    expect(await erasures()).toEqual(['unknown', [['Acme Evals Inc.', { state: 'notice-sent', at: '2026-07-01T09:00:00.000Z' }], ['Beta Labs Ltd', { state: 'unknown', at: undefined }]]]);
+
+    await notice(f, 'confirmed', 'Acme Evals Inc.', M2, '2026-07-03T10:30:00.000Z');
+    await notice(f, 'sent', 'Beta Labs Ltd', M2, '2026-07-02T09:00:00.000Z');
+    expect(await erasures()).toEqual(['notice-sent', [['Acme Evals Inc.', { state: 'confirmed', at: '2026-07-03T10:30:00.000Z' }], ['Beta Labs Ltd', { state: 'notice-sent', at: '2026-07-02T09:00:00.000Z' }]]]);
+
+    await notice(f, 'confirmed', 'Beta Labs Ltd', M2, '2026-07-04T08:00:00.000Z');
+    expect(await erasures()).toEqual(['confirmed', [['Acme Evals Inc.', { state: 'confirmed', at: '2026-07-03T10:30:00.000Z' }], ['Beta Labs Ltd', { state: 'confirmed', at: '2026-07-04T08:00:00.000Z' }]]]);
+  });
+
+  it('reads a notice recorded for a row no objection covers as it stands, and leaves the other rows none-due', async () => {
+    const f = fixture();
+    await send(f, packOf(f, 'lot-1', [[S1, M1], [S2, M2]]), 'Acme Evals Inc.', 'term-sheet-v1');
+    await notice(f, 'sent', 'Acme Evals Inc.', M1, '2026-07-01T09:00:00.000Z');
+
+    const report = await licenseStatus(f.operator, KEY_ID, [M1, M2]);
+
+    expect(report.rows.map((row) => [row.state, row.erasure])).toEqual([['delivered', 'notice-sent'], ['delivered', 'none-due']]);
+  });
+
+  it('refuses a register line that is cut, naming the file and not quoting it', async () => {
+    const f = fixture();
+    await send(f, packOf(f, 'lot-1', [[S1, M1]]), 'Acme Evals Inc.', 'term-sheet-v1');
+    writeFileSync(join(f.operator, 'notices.jsonl'), `{"recipient":"Acme Evals Inc.","session":"${S1}"
+`);
+
+    await expect(licenseStatus(f.operator, KEY_ID, [M1])).rejects.toThrow(/^notices\.jsonl holds a line that is not JSON\.$/);
+  });
+
+  it('refuses a pack folder it cannot read, naming the lot and not the path', async () => {
+    const f = fixture();
+    const pack = packOf(f, 'lot-1', [[S1, M1]]);
+    rmSync(join(pack, 'pack.json'));
+    mkdirSync(join(pack, 'pack.json'));
+
+    const error: unknown = await licenseStatus(f.operator, KEY_ID, [M1]).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(PackError);
+    expect(String(error)).toMatch(/pack folder of lot lot-1 cannot be read\./);
+    expect(String(error)).not.toContain(f.root);
+  });
+
+  it('refuses delivered text it cannot read, naming the lot and not the path', async () => {
+    const f = fixture();
+    const pack = packOf(f, 'lot-1', [[S1, M1]]);
+    object(f, [{ name: PERSON, received: '2026-06-13T09:00:00Z', scope: 'sale' }]);
+    rmSync(join(pack, 'sessions', M1), { recursive: true });
+    writeFileSync(join(pack, 'sessions', M1), 'a file where the folder of the row should be');
+
+    const error: unknown = await licenseStatus(f.operator, KEY_ID, [M1]).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(PackError);
+    expect(String(error)).toMatch(/pack folder of lot lot-1 cannot be read\./);
+    expect(String(error)).not.toContain(f.root);
   });
 
   it('refuses a folder with no index, so a mistyped folder never reads as every id unknown', async () => {
@@ -245,6 +321,19 @@ describe('license-status (the command)', () => {
     expect(lines[3]).toMatch(new RegExp(`^${M3}\\s+delivered\\s+lot-2\\s+Beta Labs Ltd \\(lot-2, term-sheet-v2, ${SENT}\\)\\s+-\\s+none-due\\s+unknown$`));
     expect(lines[4]).toMatch(new RegExp(`^${ABSENT}\\s+unknown\\s+-\\s+-\\s+unknown\\s+unknown\\s+unknown$`));
     expect(lines[5]).toBe(`4 match ids under key id ${KEY_ID}: 1 unknown.`);
+  });
+
+  it('prints the erasure at each recipient with its date in the table and in the JSON', async () => {
+    const f = await full();
+    await notice(f, 'sent', 'Acme Evals Inc.', M1, '2026-07-01T09:00:00.000Z');
+    await notice(f, 'confirmed', 'Acme Evals Inc.', M1, '2026-07-03T10:30:00.000Z');
+    await notice(f, 'sent', 'Beta Labs Ltd', M1, '2026-07-02T09:00:00.000Z');
+
+    const table = await run([M1, '--key-id', KEY_ID, '--operator', f.operator]);
+    const json = await run([M1, '--key-id', KEY_ID, '--operator', f.operator, '--json']);
+
+    expect(table.text.split('\n')[1]).toMatch(/Acme Evals Inc\. confirmed 2026-07-03T10:30:00\.000Z; Beta Labs Ltd notice-sent 2026-07-02T09:00:00\.000Z\s+unknown$/);
+    expect(JSON.parse(json.text)).toMatchObject({ rows: [{ erasure: 'notice-sent', deliveries: [{ recipient: 'Acme Evals Inc.', erasure: { state: 'confirmed', at: '2026-07-03T10:30:00.000Z' } }, { recipient: 'Beta Labs Ltd', erasure: { state: 'notice-sent', at: '2026-07-02T09:00:00.000Z' } }] }] });
   });
 
   it('prints the same rows as one JSON document with --json', async () => {
@@ -295,7 +384,10 @@ describe('license-status (the command)', () => {
     writeFileSync(join(f.operator, 'index.jsonl'), `{"session":"${S1}",\n`, { flag: 'a' });
     outputs.push((await run([M1, '--key-id', KEY_ID, '--operator', f.operator])).text);
 
-    expect(outputs).toHaveLength(9);
+    writeFileSync(join(f.operator, 'notices.jsonl'), `{"recipient":"Acme Evals Inc.","session":"${S1}"\n`);
+    outputs.push((await run([M1, '--key-id', KEY_ID, '--operator', f.operator])).text);
+
+    expect(outputs).toHaveLength(10);
     for (const output of outputs) {
       expect(output).not.toBe('');
       for (const secret of secrets) expect(output).not.toContain(secret);
