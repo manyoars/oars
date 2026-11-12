@@ -72,7 +72,7 @@ export interface LicenseStatus {
   /** The least advanced erasure among the row's deliveries (`unknown` before `notice-sent` before `confirmed`; `none-due` when nothing is owed or the row was never delivered), and `unknown` for an unknown row. Each delivery carries its own, with the date. */
   erasure: ErasureState;
   /** The covenant version (and `acceptedAt`) the manifest row of a deposit pack states, or `unknown` for an operator row. */
-  covenant: string | Unknown;
+  covenant: string;
 }
 
 export interface StatusReport {
@@ -139,7 +139,7 @@ const termsOf = (row: unknown): Pick<LotStatus, 'harnessTerms' | 'permittedUses'
 };
 
 /** The covenant a deposit row was accepted under, from the manifest row alone (no pool call): the version named in `sourceLicense`, and `acceptedAt` when the row has it. An operator row names none. */
-const covenantOf = (row: unknown): string | Unknown => {
+const covenantOf = (row: unknown): string => {
   const license = fieldOf(row, 'sourceLicense');
   const version = isText(license) ? /^manyoars-covenant (\S+) sha256:/.exec(license)?.[1] : undefined;
   if (version === undefined) return UNKNOWN;
@@ -211,7 +211,7 @@ export const licenseStatus = async (operator: string, keyId: string, matchIds: r
     const keys = new Set(sent.map((row) => row.keyId));
     const lots: LotStatus[] = [];
     const folders: { folder: string; lot: string }[] = [];
-    let covenant: string | Unknown = UNKNOWN;
+    let covenant: string = UNKNOWN;
     // The index is appended per build, so a lot's newest line names the folder it was last built into.
     for (const [lot, pack] of new Map(entries.map((entry) => [lotOf(entry.pack), entry.pack]))) {
       const found = await packAt(pack);

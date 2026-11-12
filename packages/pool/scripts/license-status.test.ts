@@ -104,7 +104,10 @@ describe('licenseStatus', () => {
     const f = fixture();
     const pack = packOf(f, 'lot-1', [[S1, M1], [S2, M2], [BARE, M3]]);
     const manifest = join(pack, 'manifest.jsonl');
-    const rows = readFileSync(manifest, 'utf8').split('\n').filter((line) => line !== '').map((line): { [key: string]: unknown } => JSON.parse(line));
+    const rows = readFileSync(manifest, 'utf8').split('\n').filter((line) => line !== '').map((line): { [key: string]: unknown } => {
+      const parsed: unknown = JSON.parse(line);
+      return typeof parsed === 'object' && parsed !== null ? { ...parsed } : {};
+    });
     const deposit = rows.map((row) => (row.matchId === M2
       ? { ...row, repoOwner: 'depositor:0123456789abcdef', sourceLicense: 'manyoars-covenant 2.1 sha256:' + 'ab'.repeat(32), acceptedAt: '2026-07-01T00:00:00.000Z' }
       : row.matchId === M3 ? { ...row, sourceLicense: 'manyoars-covenant 2.0 sha256:' + 'cd'.repeat(32) } : row));
