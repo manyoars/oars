@@ -3,8 +3,8 @@
 // Order, per session: the exclusion gate (A38) first, then a known owner and known harness terms, the turn floor, a repository, and no duplicate, then redaction, masking, and the secret scan, then the copy, with every injected block stripped.
 import { createHash, createHmac } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
-import { appendFile, mkdir, readdir, readFile, rename, rmdir, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { appendFile, mkdir, mkdtemp, readdir, readFile, rename, rm, rmdir, writeFile } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { dirname, join, resolve } from 'node:path';
 import { BUYER_KEY_FILE_USAGE, resolveBuyerKey } from '../src/buyer-key.js';
@@ -20,15 +20,17 @@ import { harnessOf, type Harness, type PromptVerify } from '../../cli/src/sessio
 import { loadStore, readRedactDomains, readSkeletons, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { runGit, type Git } from '../../cli/src/sessions/survival.js';
 import { vocabulary } from '../../cli/src/sessions/vocab-load.js';
+import { captureDeposits, covenantLicenseOf, depositorOf, hasRepoKey, type DepositBuild, type DepositCounts, type Paired } from './deposit-input.js';
 
 export const USAGE = [
-  'Usage: sample-pack --terms <file> --owners <file> --index-key <file> (--buyer-key-file <path> | --buyer-key <key>) --out <dir> [--size <n>] [--seed <text>] [--min-turns <n>] [--sessions <file>] [--strip-thinking]',
+  'Usage: sample-pack --terms <file> --owners <file> --index-key <file> (--buyer-key-file <path> | --buyer-key <key>) --out <dir> [--size <n>] [--seed <text>] [--min-turns <n>] [--sessions <file>] [--deposits <folder>] [--strip-thinking]',
   '  --terms <file>       the exclusion term list (one term per line; a local file, never in a repository)',
   '  --owners <file>      JSON list of {"folder": "<glob over the project folder name>", "owner": "<company>", "license": "<SPDX id>" | null}; first match wins, and a session in a folder no entry names is left out',
   '  --index-key <file>   the matching-index key (64 hex characters or more): a session\'s server key is HMAC-SHA-256 of its id under it. Keep it; a new key gives every session new ids',
   '  --buyer-key <key>    the buyer\'s key: a match id is HMAC-SHA-256 of the server key under it',
   BUYER_KEY_FILE_USAGE,
   '  --out <dir>          an empty or new folder outside every git repository',
+  '  --deposits <folder>  a folder `pull-deposits` wrote: its Raw Copies are drawn in place of the store\'s sessions, each row naming a depositor and the covenant (--owners still names the folder of the index and the objections)',
   '  --size <n>           sessions to emit (default 25); --seed <text> orders the draw (default 1)',
   '  objections.jsonl     beside the owners file, optional: a line per objection, naming a session id or a person; each session it names, or whose text names the person, is left out and counted (docs/pool.md)',
   '  --sessions <file>    build the pack from exactly the store session ids in this file (one per line) in place of the seeded draw; every rule still applies, and each listed session left out is printed with the reason (term, noOwner, lead, tooShort, duplicate, secret, notFound, ...). Not with --size or --seed',
@@ -136,6 +138,12 @@ export interface ManifestRow {
   endedAt: string | null;
 }
 
+/**
+ * A row built from a deposit also holds when the cited covenant acceptance was made, as an ISO time (docs/pool-deposit-title.md section 1). It is a type of its own, not an optional field of `ManifestRow`,
+ * because `validate-pack.ts` types its field table by `ManifestRow`: brief 3 lists `acceptedAt` there and in `docs/session-record.md`, and moves it into the interface.
+ */
+export type DepositManifestRow = ManifestRow & { acceptedAt: string };
+
 export interface PackOptions {
   terms: string;
   owners: string;
@@ -158,6 +166,8 @@ export interface PackOptions {
   stripThinking?: boolean | undefined;
   /** Told of each listed session that does not make the pack, with the count that kept it out (`term`, `noOwner`, `lead`, `tooShort`, `duplicate`, `secret`, ..., or `notFound`). */
   onDrop?: ((session: string, reason: string) => void) | undefined;
+  /** A folder `pull-deposits` wrote (`--deposits`): the Raw Copies in it are captured into a throwaway store and drawn in place of the operator's own sessions. Each row names the depositor and the covenant, not an owner. */
+  deposits?: string | undefined;
 }
 
 export interface PackCounts {
@@ -185,6 +195,8 @@ export interface PackCounts {
   /** Dropped because the redacted, masked text still held something shaped like a key (`secretIn`); nothing of the session was written. */
   secret: number;
   emitted: number;
+  /** Only for a pack built `--deposits`: why Raw Copies were left out before the rules above. */
+  deposits?: DepositCounts;
 }
 
 /** A line of the operator's `index.jsonl`: which pack a session went to, and under which match id. It never goes into a pack. */
@@ -193,6 +205,10 @@ export interface IndexRow {
   session: string;
   project: string;
   matchId: string;
+  /** Only for a row built from a deposit, and never in a pack: the pool account, the covenant it cites, and the exact time of acceptance. */
+  account?: string;
+  covenant?: string;
+  acceptedAt?: number;
 }
 
 export class PackError extends Error {}
@@ -1114,12 +1130,24 @@ type StoredSession = Awaited<ReturnType<typeof loadStore>>['sessions'][number];
 type HarnessRow = NonNullable<(typeof HARNESS_TERMS)[Harness]>;
 
 /** Every count of a pack, flat, by name: what rose while one session was handled says why it was left out. */
-const tally = (counts: PackCounts): Map<string, number> => new Map([...Object.entries(counts), ...Object.entries(counts.excluded)].flatMap(([key, count]): [string, number][] => (typeof count === 'number' ? [[key, count]] : [])));
+const tally = (counts: PackCounts): Map<string, number> => new Map([...Object.entries(counts), ...Object.entries(counts.excluded), ...Object.entries(counts.deposits ?? {})].flatMap(([key, count]): [string, number][] => (typeof count === 'number' ? [[key, count]] : [])));
 
 /** What the rules before the duplicate check decide: the count a session adds to, or what it carries on. */
-type Early = { left: (counts: PackCounts) => void } | { accepted: { owner: OwnerRule; harness: Harness; terms: HarnessRow } };
+type Early = { left: (counts: PackCounts) => void } | { accepted: { owner: OwnerRule; harness: Harness; terms: HarnessRow; paired?: Paired } };
 
+/** The pack of the operator's own sessions, or with `deposits` a pack of the Raw Copies a pull wrote: captured into a throwaway store that is removed whatever the outcome. */
 export const buildPack = async (runtime: SessionsRuntime, options: PackOptions): Promise<PackCounts> => {
+  if (options.deposits === undefined) return packFrom(runtime, options, undefined);
+  const scratch = await mkdtemp(join(tmpdir(), 'oars-deposits-'));
+  try {
+    const input = await captureDeposits(runtime, resolve(options.deposits), scratch, await readRedactDomains(runtime.storeDir), Date.now);
+    return await packFrom(input.runtime, options, input);
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+};
+
+const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: DepositBuild | undefined): Promise<PackCounts> => {
   const started = Date.now();
   // Bytes of the pack's `sessions/` files and `manifest.jsonl`; `pack.json` holds the number, so it is not in it.
   let bytes = 0;
@@ -1135,7 +1163,12 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   const indexKey = await readIndexKey(options.indexKey);
   const { objections, hash: objectionsHash } = await readObjections(dirname(resolve(options.owners)));
   const objectedSessions = new Set(objections.flatMap(({ session }) => (session === undefined ? [] : [session])));
-  const isObjected = (record: { session: string; harness?: Harness }): boolean => objectedSessions.has(record.session) || objectedSessions.has(bareOf(record.session));
+  const isObjected = (record: { session: string; project: string; harness?: Harness }): boolean => {
+    if (objectedSessions.has(record.session) || objectedSessions.has(bareOf(record.session))) return true;
+    // A pulled copy is named by its hash; the person objects by the id the harness wrote.
+    const paired = input?.verdictOf(record.project, record.session);
+    return paired !== undefined && 'paired' in paired && objectedSessions.has(paired.paired.session);
+  };
   const objectedNames = objections.flatMap(({ name }) => (name === undefined ? [] : [squashed(name.trim())]));
   const domains = await readRedactDomains(runtime.storeDir);
   const names = localNames();
@@ -1165,6 +1198,12 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   const frame = store.sessions.filter((session) => session.userTurns > 0);
   // Every session the store knows, so a transcript that names another session names it by that session's match id.
   const sessionIds = new Map(store.sessions.map((session) => [session.session, matchIdOf(options.buyerKey, serverKeyOf(indexKey, session.session))]));
+  // A pulled copy is stored under its hash, while its lines carry the harness's own `sessionId`: that id is the session too, and must mask to the same match id.
+  for (const session of store.sessions) {
+    const verdict = input?.verdictOf(session.project, session.session);
+    const match = sessionIds.get(session.session);
+    if (verdict !== undefined && 'paired' in verdict && match !== undefined) sessionIds.set(verdict.paired.session, match);
+  }
   // A source's store id is `<harness>-<id>` while its file names the bare id (a Codex rollout's `session_meta.id`): both are the session.
   for (const session of store.sessions) {
     const prefix = `${harnessOf(session)}-`;
@@ -1183,7 +1222,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     return record === undefined || record.userTurns === 0 ? [] : [record];
   });
   const limit = listed === undefined ? options.size : Infinity;
-  const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, lead: 0, tooShort: 0, noRepo: 0, duplicate: 0, noSkeleton: 0, noPointer: 0, objected: 0, secret: 0, emitted: 0 };
+  const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, lead: 0, tooShort: 0, noRepo: 0, duplicate: 0, noSkeleton: 0, noPointer: 0, objected: 0, secret: 0, emitted: 0, ...(input === undefined ? {} : { deposits: input.counts }) };
   const turnsOf = (session: { userTurns: number; assistantTurns: number }): number => session.userTurns + session.assistantTurns;
   // The rules up to the repository one, once per session: the duplicate rule asks them only of the members of a group that shares a first prompt, the draw of the sessions it reaches; a singleton the draw never reaches is never gated.
   const earlyBy = new Map<string, Promise<Early>>();
@@ -1193,15 +1232,20 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
       const reason = EXCLUDED[verdict.reason];
       return { left: (c) => { c.excluded[reason] += 1; } };
     }
-    const owner = ownerOf(owners, record.project);
+    // A deposit's owner is the depositor and its license the covenant (section 1); the owners file names the operator's own folders and has no say over a pulled one.
+    const deposited = input?.verdictOf(record.project, record.session);
+    if (deposited !== undefined && 'left' in deposited) return { left: (c) => { if (c.deposits !== undefined) c.deposits[deposited.left] += 1; } };
+    const paired = deposited?.paired;
+    const owner = paired === undefined ? ownerOf(owners, record.project) : { folder: record.project, owner: depositorOf(options.buyerKey, paired.account), license: covenantLicenseOf(paired.accepted), pointer: false };
     if (owner === undefined) return { left: (c) => { c.noOwner += 1; } };
     const harness = harnessOf(record);
     const terms = HARNESS_TERMS[harness];
     if (terms === undefined) return { left: (c) => { c.noHarnessTerms += 1; } };
     if (await isLead(runtime, record, options.leadPrompts ?? [], owner.leadPrompts ?? [])) return { left: (c) => { c.lead += 1; } };
     if (turnsOf(record) < options.minTurns) return { left: (c) => { c.tooShort += 1; } };
-    if (record.repo === null) return { left: (c) => { c.noRepo += 1; } };
-    return { accepted: { owner, harness, terms } };
+    // A deposit's repository is the key its skeleton carries: the build machine holds no clone.
+    if (paired === undefined ? record.repo === null : !hasRepoKey(paired)) return { left: (c) => { c.noRepo += 1; } };
+    return { accepted: { owner, harness, terms, ...(paired === undefined ? {} : { paired }) } };
   };
   const earlyOf = (record: StoredSession): Promise<Early> => {
     const known = earlyBy.get(record.session) ?? early(record);
@@ -1210,7 +1254,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   };
   let losers: Set<string> | undefined;
   const reasoning: Reasoning = options.stripThinking === true ? 'stripped' : 'kept';
-  const rows: ManifestRow[] = [];
+  const rows: (ManifestRow | DepositManifestRow)[] = [];
   const skeletons: SessionSkeleton[] = [];
   const index: IndexRow[] = [];
   // The files written so far, and the raw ids behind every mask the emitted sessions carry (to the key each stood under): what the pass over the whole pack needs.
@@ -1242,7 +1286,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
       decided.left(counts);
       continue;
     }
-    const { owner, harness, terms } = decided.accepted;
+    const { owner, harness, terms, paired } = decided.accepted;
     // Read once, on the first session that gets this far. A loser is chosen only among sessions that pass every rule above, so a longer twin that one of them drops never costs the shorter its place; a duplicate's other half may not be drawn at all.
     if (losers === undefined) {
       // An objected session is no member of a group: a longer one that never ships must not cost its shorter replay the place.
@@ -1316,7 +1360,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
       if (pointer === null) counts.noPointer += 1;
       opted = { pointer, outcome: { verify: lastVerify.get(record.session)?.verify ?? null, commits: await landedOf(git, pointer === null ? null : root, madeBy.get(record.session) ?? []) } };
     }
-    index.push({ pack: out, session: record.session, project: record.project, matchId });
+    index.push({ pack: out, session: record.session, project: record.project, matchId, ...(paired === undefined ? {} : { account: paired.account, covenant: paired.accepted.version, acceptedAt: paired.accepted.accepted_at }) });
     rows.push({
       matchId,
       harness,
@@ -1335,6 +1379,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
       redactionVersion: REDACTION_VERSION,
       startedAt: record.tsFirst,
       endedAt: record.tsLast,
+      ...(paired === undefined ? {} : { acceptedAt: new Date(paired.accepted.accepted_at).toISOString() }),
     });
     counts.emitted += 1;
   }
@@ -1372,7 +1417,7 @@ export interface Io {
   vocabDir?: URL | undefined;
 }
 
-const VALUED = new Set(['--terms', '--owners', '--index-key', '--buyer-key', '--buyer-key-file', '--out', '--size', '--seed', '--min-turns', '--sessions']);
+const VALUED = new Set(['--terms', '--owners', '--index-key', '--buyer-key', '--buyer-key-file', '--out', '--size', '--seed', '--min-turns', '--sessions', '--deposits']);
 
 const parseArgs = async (argv: readonly string[]): Promise<(Omit<PackOptions, 'sessions' | 'onDrop'> & { sessionsFile?: string }) | string> => {
   const values = new Map<string, string>();
@@ -1398,7 +1443,7 @@ const parseArgs = async (argv: readonly string[]): Promise<(Omit<PackOptions, 's
   if (!Number.isInteger(size) || size < 1) return '--size takes a whole number of 1 or more.';
   const minTurns = Number(values.get('--min-turns') ?? '20');
   if (!Number.isInteger(minTurns) || minTurns < 1) return '--min-turns takes a whole number of 1 or more.';
-  return { terms, owners, indexKey, buyerKey, out, size, seed: values.get('--seed') ?? '1', minTurns, ...(stripThinking ? { stripThinking } : {}), ...(sessionsFile === undefined ? {} : { sessionsFile }) };
+  return { terms, owners, indexKey, buyerKey, out, size, seed: values.get('--seed') ?? '1', minTurns, ...(stripThinking ? { stripThinking } : {}), ...(sessionsFile === undefined ? {} : { sessionsFile }), ...(values.has('--deposits') ? { deposits: values.get('--deposits') } : {}) };
 };
 
 /** The session ids a `--sessions` file lists: one per line, blank lines skipped, each once, in the file's order. */
@@ -1428,6 +1473,7 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
         `Wrote ${String(counts.emitted)} sessions to ${options.out} (manifest.jsonl, sessions/<match id>/).`,
         `Scanned ${String(counts.scanned)} of ${String(counts.frame)} in draw order. Excluded: ${String(term)} for a term, ${String(noRaw)} with no raw, ${String(noTerms)} with no term file, ${String(unreadable)} unreadable.`,
         `Left out after the gate: ${String(counts.noOwner)} in a folder no owner entry names, ${String(counts.noHarnessTerms)} from a harness with no terms row, ${String(counts.tooShort)} under ${String(options.minTurns)} turns, ${String(counts.noRepo)} with no repository, ${String(counts.duplicate)} replaying a longer session, ${String(counts.objected)} under an objection, ${String(counts.secret)} holding a secret after redaction.`,
+        ...(counts.deposits === undefined ? [] : [`Left out of the deposits: ${String(counts.deposits.unlinked)} with no deposit row, ${String(counts.deposits.tierNone)} of tier none, ${String(counts.deposits.protectedRegion)} from a protected region, ${String(counts.deposits.noGrant)} with no proved acceptance.`]),
         ...dropped,
       ].join('\n'),
     );

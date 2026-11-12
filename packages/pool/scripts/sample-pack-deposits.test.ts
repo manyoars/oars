@@ -1,11 +1,15 @@
 // Brief 2 of docs/pool-deposit-title.md section 5: `sample-pack --deposits`. Fixtures only: no real store, no network, and every folder is a temp one.
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { contentHash } from '../../cli/src/sessions/read.js';
 import { redactTranscript } from '../../cli/src/sessions/redact.js';
 import { deposit, loadStore, paths, type SessionsRuntime } from '../../cli/src/sessions/store.js';
+import { citedAcceptance, depositorOf, type DepositAcceptance } from './deposit-input.js';
+import { buildPack, type PackCounts, type PackOptions } from './sample-pack.js';
+import { validate } from './validate-pack.js';
 
 const dirs: string[] = [];
 
@@ -70,5 +74,208 @@ describe('the two assumptions of the deposit input (docs/pool-deposit-title.md s
     const archived = readFileSync(join(paths(folder.runtime.storeDir).raw, 'deposit', `${folder.sha}.jsonl`), 'utf8');
     const ids = archived.split('\n').filter((row) => row !== '').map((row) => (JSON.parse(row) as { sessionId?: unknown }).sessionId);
     expect(ids).toEqual([SESSION, SESSION]);
+  });
+});
+
+const ACCT = 'acct_one';
+const ACC_A: DepositAcceptance = { version: '2.0-4c538c50d706', text_sha256: 'a'.repeat(64), accepted_at: Date.parse('2026-05-01T00:00:00Z') };
+const ACC_B: DepositAcceptance = { version: '2.1-ec0ca3f6ff73', text_sha256: 'b'.repeat(64), accepted_at: Date.parse('2026-07-01T00:00:00Z') };
+const KEYED_SKELETON = '{"frame":{"repoKey":"0123456789abcdef"}}';
+const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex');
+const SID = (n: number): string => `${String(n).repeat(8)}-1111-4111-8111-111111111111`;
+
+interface Part {
+  session: string;
+  text?: string;
+  tier?: string;
+  countedAt?: number | null;
+  country?: string | null;
+  /** The deposit row; false leaves the Raw Copy with none. */
+  row?: boolean;
+  skeleton?: string;
+}
+
+/** A transcript for one harness session, redacted as the depositor's machine does before it is queued. */
+const copyOf = (session: string, prompt = 'please rename the helper in parse.ts'): string => {
+  const head = session.slice(0, 8);
+  const rows = [
+    line({ type: 'user', uuid: `${head}-b001-4222-8222-222222222222`, parentUuid: null, isSidechain: false, timestamp: at(1), version: '2.1.300', sessionId: session, cwd: '/home/dana/work/app', message: { role: 'user', content: prompt } }),
+    line({ type: 'assistant', uuid: `${head}-a001-4222-8222-222222222222`, parentUuid: `${head}-b001-4222-8222-222222222222`, isSidechain: false, timestamp: at(2), version: '2.1.300', sessionId: session, requestId: `req_011C${head}x1`, message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'thinking', thinking: 'reasoning about parse', signature: 'sig' }, { type: 'text', text: 'renamed' }], usage: { input_tokens: 10, output_tokens: 20 } } }),
+  ];
+  return redactTranscript(`${rows.join('\n')}\n`, [], ['dana']).text;
+};
+
+interface Pulled {
+  root: string;
+  folder: string;
+  runtime: SessionsRuntime;
+  terms: string;
+  owners: string;
+  indexKey: string;
+  out: string;
+}
+
+/** A folder as `pull-deposits` writes it, an operator runtime with an empty store, and the files a build needs beside them. */
+const pull = (parts: readonly Part[], acceptances: readonly DepositAcceptance[] = [ACC_B]): Pulled => {
+  const root = mkdtempSync(join(tmpdir(), 'oars-deposit-pack-'));
+  dirs.push(root);
+  const folder = join(root, 'pulled');
+  mkdirSync(join(folder, ACCT, 'projects', 'deposit'), { recursive: true });
+  writeFileSync(join(folder, 'accounts.jsonl'), `${line({ account: ACCT, acceptances })}\n`);
+  const rows = parts
+    .filter((part) => part.row !== false)
+    .map((part) => line({ id: contentHash([ACCT, part.session]), tier: part.tier ?? 'skeleton', counted_at: part.countedAt === undefined ? Date.parse('2026-08-01T00:00:00Z') : part.countedAt, request_country: part.country === undefined ? 'US' : part.country, skeleton: part.skeleton ?? KEYED_SKELETON }));
+  writeFileSync(join(folder, ACCT, 'deposits.jsonl'), rows.map((row) => `${row}\n`).join(''));
+  for (const part of parts) {
+    const text = part.text ?? copyOf(part.session);
+    writeFileSync(join(folder, ACCT, 'projects', 'deposit', `${sha256(text)}.jsonl`), text);
+  }
+  mkdirSync(join(root, 'opprojects'));
+  const terms = join(root, 'terms.txt');
+  writeFileSync(terms, 'zorblax\n');
+  const owners = join(root, 'owners.json');
+  writeFileSync(owners, JSON.stringify([{ folder: '*-oars*', owner: 'Many Oars Co.', license: 'Apache-2.0' }]));
+  const indexKey = join(root, 'index.key');
+  writeFileSync(indexKey, 'ab'.repeat(32));
+  return { root, folder, terms, owners, indexKey, out: join(root, 'pack'), runtime: { storeDir: join(root, 'opstore'), projectsRoot: join(root, 'opprojects'), sources: [], stdin: process.stdin, stdout: { write: () => true } } };
+};
+
+const optionsOf = (p: Pulled, extra: Partial<PackOptions> = {}): PackOptions => ({ terms: p.terms, owners: p.owners, indexKey: p.indexKey, buyerKey: 'sample', out: p.out, size: 25, seed: '1', minTurns: 1, deposits: p.folder, ...extra });
+
+const built = (p: Pulled, extra: Partial<PackOptions> = {}): Promise<PackCounts> => buildPack(p.runtime, optionsOf(p, extra));
+
+const rowsOf = (file: string): unknown[] =>
+  readFileSync(file, 'utf8')
+    .split('\n')
+    .filter((row) => row !== '')
+    .map((row): unknown => JSON.parse(row));
+
+const fieldOf = (row: unknown, key: string): unknown => (typeof row === 'object' && row !== null ? Reflect.get(row, key) : undefined);
+
+const filesUnder = (dir: string): string[] => readdirSync(dir).flatMap((name) => (statSync(join(dir, name)).isDirectory() ? filesUnder(join(dir, name)) : [join(dir, name)]));
+
+const packText = (out: string): string => filesUnder(out).map((file) => readFileSync(file, 'utf8')).join('\n');
+
+describe('sample-pack --deposits (docs/pool-deposit-title.md section 5, brief 2)', () => {
+  it('a deposit row carries the depositor value, the covenant license, and acceptedAt', async () => {
+    const p = pull([{ session: SID(1) }]);
+    const counts = await built(p);
+    expect(counts.emitted).toBe(1);
+    const [row] = rowsOf(join(p.out, 'manifest.jsonl'));
+    expect(row).toMatchObject({ repoOwner: depositorOf('sample', ACCT), sourceLicense: `manyoars-covenant ${ACC_B.version} sha256:${ACC_B.text_sha256}`, acceptedAt: '2026-07-01T00:00:00.000Z' });
+    expect(String(fieldOf(row, 'repoOwner'))).toMatch(/^depositor:[0-9a-f]{16}$/);
+    // The account and the exact time stay in the operator's index, never in the pack.
+    expect(rowsOf(join(p.root, 'index.jsonl'))[0]).toMatchObject({ account: ACCT, covenant: ACC_B.version, acceptedAt: ACC_B.accepted_at });
+    expect(packText(p.out)).not.toContain(ACCT);
+  });
+
+  it('a deposit cites the acceptance with accepted_at at or before counted_at, else the newest', async () => {
+    const before = Date.parse('2026-06-01T00:00:00Z');
+    expect(citedAcceptance([ACC_A, ACC_B], Date.parse('2026-08-01T00:00:00Z'))).toBe(ACC_B);
+    expect(citedAcceptance([ACC_A, ACC_B], before)).toBe(ACC_A);
+    expect(citedAcceptance([ACC_A, ACC_B], ACC_B.accepted_at)).toBe(ACC_B);
+    // Counted before every acceptance, or never: the newest stands (section 14.2 carries the grant back).
+    expect(citedAcceptance([ACC_A, ACC_B], Date.parse('2026-01-01T00:00:00Z'))).toBe(ACC_B);
+    expect(citedAcceptance([ACC_A, ACC_B], null)).toBe(ACC_B);
+    expect(citedAcceptance([], before)).toBeUndefined();
+    const p = pull([{ session: SID(1), countedAt: before }], [ACC_A, ACC_B]);
+    await built(p);
+    expect(rowsOf(join(p.out, 'manifest.jsonl'))[0]).toMatchObject({ sourceLicense: `manyoars-covenant ${ACC_A.version} sha256:${ACC_A.text_sha256}`, acceptedAt: '2026-05-01T00:00:00.000Z' });
+  });
+
+  it('two buyer keys give two depositor values, and one key gives one across packs', async () => {
+    const p = pull([{ session: SID(1) }]);
+    await built(p);
+    const first = fieldOf(rowsOf(join(p.out, 'manifest.jsonl'))[0], 'repoOwner');
+    rmSync(p.out, { recursive: true, force: true });
+    await built(p, { buyerKey: 'another' });
+    const second = fieldOf(rowsOf(join(p.out, 'manifest.jsonl'))[0], 'repoOwner');
+    expect(first).toBe(depositorOf('sample', ACCT));
+    expect(second).toBe(depositorOf('another', ACCT));
+    expect(first).not.toBe(second);
+    expect(depositorOf('sample', 'acct_two')).not.toBe(first);
+  });
+
+  it('a Raw Copy with no deposit row is counted unlinked', async () => {
+    const p = pull([{ session: SID(1) }, { session: SID(2), row: false }]);
+    const counts = await built(p);
+    expect(counts.emitted).toBe(1);
+    expect(counts.deposits).toEqual({ unlinked: 1, tierNone: 0, protectedRegion: 0, noGrant: 0 });
+  });
+
+  it('tier none and a protected country are left out', async () => {
+    const p = pull([{ session: SID(1) }, { session: SID(2), tier: 'none' }, { session: SID(3), country: 'DE' }, { session: SID(4), country: 'GB' }]);
+    const counts = await built(p);
+    expect(counts.emitted).toBe(1);
+    expect(counts.deposits).toEqual({ unlinked: 0, tierNone: 1, protectedRegion: 2, noGrant: 0 });
+  });
+
+  it('an account with no acceptance is counted noGrant', async () => {
+    const p = pull([{ session: SID(1) }], []);
+    const counts = await built(p);
+    expect(counts.emitted).toBe(0);
+    expect(counts.deposits).toEqual({ unlinked: 0, tierNone: 0, protectedRegion: 0, noGrant: 1 });
+  });
+
+  it('leaves out a deposit whose skeleton holds no repository key', async () => {
+    const p = pull([{ session: SID(1), skeleton: '{"frame":{}}' }]);
+    const counts = await built(p);
+    expect(counts.emitted).toBe(0);
+    expect(counts.noRepo).toBe(1);
+  });
+
+  it('leaves out a pulled transcript that holds an exclusion term', async () => {
+    const p = pull([{ session: SID(1), text: copyOf(SID(1), 'ask zorblax about it') }, { session: SID(2) }]);
+    const counts = await built(p);
+    expect(counts.emitted).toBe(1);
+    expect(counts.excluded.term).toBe(1);
+  });
+
+  it('redacts again and strips reasoning on request: a key-shaped value and the thinking never reach the pack', async () => {
+    const dirty = copyOf(SID(1), 'use the key').replace('use the key', `use ${SECRET}`);
+    const p = pull([{ session: SID(1), text: dirty }]);
+    await built(p, { stripThinking: true });
+    const body = packText(p.out);
+    expect(body).not.toContain(SECRET);
+    expect(body).not.toContain('reasoning about parse');
+    expect(rowsOf(join(p.out, 'manifest.jsonl'))[0]).toMatchObject({ reasoning: 'stripped' });
+  });
+
+  it('keeps reasoning by default', async () => {
+    const p = pull([{ session: SID(1) }]);
+    await built(p);
+    expect(packText(p.out)).toContain('reasoning about parse');
+  });
+
+  it('honors an objection that names the harness session id, though the store names the copy by its hash', async () => {
+    const p = pull([{ session: SID(1) }, { session: SID(2) }]);
+    writeFileSync(join(p.root, 'objections.jsonl'), `${line({ session: SID(1), received: '2026-11-01T00:00:00.000Z', scope: 'sale' })}\n`);
+    const counts = await built(p);
+    expect(counts.objected).toBe(1);
+    expect(counts.emitted).toBe(1);
+  });
+
+  it('keeps the must-not list: the only finding on a deposit pack is acceptedAt, which brief 3 lists', async () => {
+    const p = pull([{ session: SID(1) }]);
+    await built(p);
+    const result = await validate(p.out);
+    expect(result?.violations.filter((found) => !found.field.endsWith('acceptedAt'))).toEqual([]);
+    expect(result?.violations.some((found) => found.field.endsWith('acceptedAt'))).toBe(true);
+  });
+
+  it('writes nothing into the pulled folder', async () => {
+    const p = pull([{ session: SID(1) }]);
+    const before = filesUnder(p.folder).sort();
+    await built(p);
+    expect(filesUnder(p.folder).sort()).toEqual(before);
+  });
+
+  it('builds without --deposits as before: no deposits count in the counts or in pack.json', async () => {
+    const p = pull([]);
+    mkdirSync(join(p.root, 'opprojects', 'repos-oars'), { recursive: true });
+    const counts = await buildPack(p.runtime, optionsOf(p, { deposits: undefined }));
+    expect(counts.deposits).toBeUndefined();
+    expect(readFileSync(join(p.out, 'pack.json'), 'utf8')).not.toContain('"deposits"');
+    expect(readFileSync(join(p.out, 'manifest.jsonl'), 'utf8')).not.toContain('acceptedAt');
   });
 });
