@@ -8,7 +8,7 @@ import { contentHash } from '../../cli/src/sessions/read.js';
 import { redactTranscript } from '../../cli/src/sessions/redact.js';
 import { deposit, loadStore, paths, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { citedAcceptance, depositorOf, type DepositAcceptance } from './deposit-input.js';
-import { buildPack, type PackCounts, type PackOptions } from './sample-pack.js';
+import { buildPack, main, matchIdOf, serverKeyOf, type PackCounts, type PackOptions } from './sample-pack.js';
 import { validate } from './validate-pack.js';
 
 const dirs: string[] = [];
@@ -271,6 +271,29 @@ describe('sample-pack --deposits (docs/pool-deposit-title.md section 5, brief 2)
     const before = filesUnder(p.folder).sort();
     await built(p);
     expect(filesUnder(p.folder).sort()).toEqual(before);
+  });
+
+  it('a deposit row takes its match id from the harness session id, so one session has one match id per buyer', async () => {
+    const p = pull([{ session: SID(1) }]);
+    await built(p);
+    const indexKey = readFileSync(p.indexKey, 'utf8');
+    expect(fieldOf(rowsOf(join(p.out, 'manifest.jsonl'))[0], 'matchId')).toBe(matchIdOf('sample', serverKeyOf(indexKey, SID(1))));
+  });
+
+  it('two Raw Copies of one harness session ship as one row', async () => {
+    const p = pull([{ session: SID(1) }, { session: SID(1), text: copyOf(SID(1), 'a longer, different prompt for the same session') }]);
+    const counts = await built(p);
+    expect(counts.emitted).toBe(1);
+    expect(rowsOf(join(p.out, 'manifest.jsonl'))).toHaveLength(1);
+  });
+
+  it('--deposits on the command line builds from the folder and prints what was left out', async () => {
+    const p = pull([{ session: SID(1) }, { session: SID(2), row: false }]);
+    const printed: string[] = [];
+    const code = await main(['--terms', p.terms, '--owners', p.owners, '--index-key', p.indexKey, '--buyer-key', 'sample', '--out', p.out, '--min-turns', '1', '--deposits', p.folder], { runtime: p.runtime, print: (text) => printed.push(text) });
+    expect(code).toBe(0);
+    expect(rowsOf(join(p.out, 'manifest.jsonl'))).toHaveLength(1);
+    expect(printed.join(' ')).toContain('Left out of the deposits: 1 with no deposit row');
   });
 
   it('builds without --deposits as before: no deposits count in the counts or in pack.json', async () => {

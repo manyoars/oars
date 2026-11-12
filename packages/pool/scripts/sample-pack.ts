@@ -1196,8 +1196,13 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
     }
   }
   const frame = store.sessions.filter((session) => session.userTurns > 0);
+  // A deposit-sourced session takes its match id from the harness session id (the docs' section 3), not the Raw Copy's hash, so one session has one match id per buyer on either path.
+  const matchKeyOf = (session: { project: string; session: string }): string => {
+    const verdict = input?.verdictOf(session.project, session.session);
+    return verdict !== undefined && 'paired' in verdict ? verdict.paired.session : session.session;
+  };
   // Every session the store knows, so a transcript that names another session names it by that session's match id.
-  const sessionIds = new Map(store.sessions.map((session) => [session.session, matchIdOf(options.buyerKey, serverKeyOf(indexKey, session.session))]));
+  const sessionIds = new Map(store.sessions.map((session) => [session.session, matchIdOf(options.buyerKey, serverKeyOf(indexKey, matchKeyOf(session)))]));
   // A pulled copy is stored under its hash, while its lines carry the harness's own `sessionId`: that id is the session too, and must mask to the same match id.
   for (const session of store.sessions) {
     const verdict = input?.verdictOf(session.project, session.session);
@@ -1210,6 +1215,7 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
     const match = sessionIds.get(session.session);
     if (harnessOf(session) !== 'claude-code' && session.session.startsWith(prefix) && match !== undefined) sessionIds.set(session.session.slice(prefix.length), match);
   }
+  const shippedMatches = new Set<string>();
   const order = (session: string): string => createHash('sha256').update(`${options.seed}\n${session}`).digest('hex');
   const shuffled = frame.map((session) => ({ session, rank: order(session.session) })).sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0)).map(({ session }) => session);
   // `--sessions`: the listed sessions in the file's order in place of the draw. One the store does not know, or that has no user turn, is told of now; the rest meet every rule below.
@@ -1297,7 +1303,12 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
       counts.duplicate += 1;
       continue;
     }
-    const matchId = matchIdOf(options.buyerKey, serverKeyOf(indexKey, record.session));
+    const matchId = matchIdOf(options.buyerKey, serverKeyOf(indexKey, matchKeyOf(record)));
+    // Two Raw Copies of one harness session share a match id: the first ships, the rest are duplicates.
+    if (shippedMatches.has(matchId)) {
+      counts.duplicate += 1;
+      continue;
+    }
     const records = recordsOf.get(record.session);
     const built = records === undefined ? null : skeletonOf(records, matchId, read, contentHash, [], gate);
     if (built === null) {
@@ -1360,6 +1371,7 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
       if (pointer === null) counts.noPointer += 1;
       opted = { pointer, outcome: { verify: lastVerify.get(record.session)?.verify ?? null, commits: await landedOf(git, pointer === null ? null : root, madeBy.get(record.session) ?? []) } };
     }
+    shippedMatches.add(matchId);
     index.push({ pack: out, session: record.session, project: record.project, matchId, ...(paired === undefined ? {} : { account: paired.account, covenant: paired.accepted.version, acceptedAt: paired.accepted.accepted_at }) });
     rows.push({
       matchId,
