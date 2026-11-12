@@ -66,6 +66,13 @@ describe('queries/proof-sheet.sql', () => {
     await cell(db, 'k2', 2, 6);
     await cell(db, 'k3', 4, 4);
     await cell(db, 'k4', 9, 9, 0);
+    await week(db, 'acc-b', '2026-11-16', 3, []);
+    await deposit(db, 'acc-b', 'd9', START + 40 * DAY);
+    // 300 more installs first seen on one later day: the sheet's installs is not capped at the funnel's cohort of 300.
+    await db
+      .prepare("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 300) INSERT INTO telemetry_install_days (day, install, account, batches, events, measures) SELECT '2026-11-13', 'bulk-' || i, '', 1, 1, '{}' FROM n")
+      .run();
+    rows = await lines(db, forVersion('v2'));
   }, 60_000);
 
   afterAll(async () => {
@@ -77,29 +84,30 @@ describe('queries/proof-sheet.sql', () => {
     expect(header).toContain('--remote --json --command="$(cat queries/proof-sheet.sql)"');
   });
 
-  it('the proof sheet counts match the seeded store', async () => {
-    rows = await lines(db, forVersion('v2'));
-    expect(valueOf(rows, 'installs')).toBe(4);
+  it('the proof sheet counts match the seeded store', () => {
+    expect(valueOf(rows, 'installs')).toBe(304);
     expect(valueOf(rows, 'accepted')).toBe(2);
     expect(valueOf(rows, 'depositing_4w')).toBe(1);
     expect(valueOf(rows, 'pack_grade_sessions', 'claude')).toBe(6);
     expect(valueOf(rows, 'pack_grade_sessions', 'codex')).toBe(5);
     expect(valueOf(rows, 'pack_grade_sessions', 'mixed')).toBe(1);
-    expect(valueOf(rows, 'served_cells')).toBe(2);
-    expect(fieldOf(lineOf(rows, 'installs'), 'as_of')).toBe('2026-11-12');
+    expect(valueOf(rows, 'pack_grade_sessions', '(none)')).toBe(3);
+    expect(valueOf(rows, 'served_cells')).toBe(1);
+    expect(fieldOf(lineOf(rows, 'installs'), 'as_of')).toBe('2026-11-13');
     expect(fieldOf(lineOf(rows, 'accepted'), 'as_of')).toBe('2026-11-12');
+    expect(fieldOf(lineOf(rows, 'depositing_4w'), 'as_of')).toBe('2026-12-09');
   });
 
-  it('joins installs to accounts: the install of an accepting account counts as an accepted install', () => {
-    expect(valueOf(rows, 'installs_with_account')).toBe(3);
-    expect(valueOf(rows, 'accepted_installs')).toBe(2);
-    expect(valueOf(rows, 'depositing_4w_installs')).toBe(1);
+  it('prints no install-to-account number: telemetry_install_days.account is empty in production', () => {
+    const metrics = rows.map((row) => fieldOf(row, 'metric'));
+    expect(metrics).not.toContain('installs_with_account');
+    expect(metrics).not.toContain('accepted_installs');
+    expect(metrics).not.toContain('depositing_4w_installs');
   });
 
   it('an install with no account is counted once as an install', () => {
-    // c1 names no account and d1 names one on only one of its days: both are in the 4 installs, and a1 seen on two days is one.
-    expect(valueOf(rows, 'installs')).toBe(4);
-    expect(valueOf(rows, 'installs_with_account')).toBe(3);
+    // c1 names no account, d1 names one on only one of its days, a1 is seen on two days: 4 installs plus the 300 bulk ones, each once.
+    expect(valueOf(rows, 'installs')).toBe(304);
   });
 
   it('prints zeros for a version the pool never served, and no account id', async () => {
