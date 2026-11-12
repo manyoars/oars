@@ -111,7 +111,6 @@ Title is one gate of several. A Raw Copy also needs the raw yes, and section 2 l
 - The builder reads one local store and one transcript folder, both named by the environment (`sample-pack.ts:1443-1445`).
 
 **Design: pull once, then build offline.**
-
 1. `pull-deposits` is a new script, `packages/pool/scripts/pull-deposits.ts`, run by the operator. It calls only `rows` and
    `readObject` of `EraseStore`, so it cannot write. It writes a lot-input folder outside every repository: `accounts.jsonl`
    (account, cited version, `text_sha256`, `accepted_at`), and per account `deposits.jsonl` (id, tier, `request_country`,
@@ -120,10 +119,8 @@ Title is one gate of several. A Raw Copy also needs the raw yes, and section 2 l
    the CLI's own capture (`captureSession`, `packages/cli/src/sessions/extract.ts:1631`), pairs each session with its deposit
    row by the recomputed id, and then runs every existing rule. Title (section 1) stands where `ownerOf` stands (`:1196`). The
    repository test (`:1203`) reads the skeleton's `repoKey` (`pool-wire.ts:231`), because the build machine holds no clone.
+   Two things are not verified here, so brief 2 tests them first: capture reads a redacted transcript, and `sessionId` survives.
 3. A Raw Copy that pairs with no deposit row is left out and counted `unlinked`. Brief 5 stores the link, so the count ends.
-
-Not verified here, so brief 2 proves both with its first tests: the capture reads a redacted transcript, and the redactor
-leaves `sessionId` in place.
 
 **What a deposit must pass.** The default is more data, kept longer. No rule below sets an age limit, and the grant does not
 end with time (Section 2.5, `2.1:109-113`).
@@ -135,7 +132,7 @@ end with time (Section 2.5, `2.1:109-113`).
 | Not restricted | Art. 18(2): restricted data is stored and not otherwise used | `accounts.restricted_at` (`0039_account_restricted.sql:2`) | Pull, whole account |
 | Raw yes in force | Art. 7(3) and 9(2)(a) (`0026:1`) | `raw_consent_version` (`0026:4`); the nightly sweep erases held copies after a withdrawal (`src/nightly.ts:27`) | Pull: the column is not null |
 | Tier is not `none` | No law. The batch failed its challenge or root check (`src/access.ts:5`) | `deposits.tier` (`0004_access.sql:2`) | Build, after pairing |
-| Not from a protected region | Art. 44 to 46; the covenant's Transfers promise (`2.1:407-412`) | Acceptance is refused while `PROTECTED_REGIONS_OPEN` is not `1` (`src/covenant.ts:109`); `deposits.request_country` (`0035:5`) | Build: left out, counted `protectedRegion`; expected zero while the gate is closed |
+| Not from a protected region | Art. 44 to 46; the covenant's Transfers promise (`2.1:407-412`) | Acceptance is refused while `PROTECTED_REGIONS_OPEN` is not `1` (`src/covenant.ts:109`); `deposits.request_country` (`0035:5`) | Build: left out, counted `protectedRegion`; expected zero while the gate is closed. Opening it first needs a record of each buyer's transfer safeguard, which is not in this plan |
 | Exclusion terms | No law. The depositor's list and the operator's list | Depositor, before a copy is queued (`pool-command.ts:826-830`); operator, `checkSession` (`sample-pack.ts:1189`) | Unchanged, over the pulled transcripts |
 | Harness terms | Each vendor's terms | `HARNESS_TERMS` (`sample-pack.ts:59`); a harness with no row is left out | Unchanged |
 | Redaction and secret scan | The page promise (`docs/pool.md:416-422`) | Depositor (`pool-command.ts:829`), version on the ledger row (`src/raw.ts:199`); builder, again | Unchanged; see the gap below |
@@ -144,33 +141,28 @@ end with time (Section 2.5, `2.1:109-113`).
 | No objection | Art. 21(1) | `objections.jsonl` (`sample-pack.ts:1136-1139`) | By session, name, or account (section 4) |
 
 Gap: the builder's owner-handle rule reads `.git/config` on the build machine (`docs/pool.md:416-422`), and the depositor's
-redaction passes no handles (`pool-command.ts:829`). A repository owner's handle can survive in a deposit-sourced transcript.
-Call 1 decides. Opening protected regions needs a record of each buyer's transfer safeguard first; that is not in this plan.
+redaction passes no handles (`pool-command.ts:829`). So an owner's handle can survive in a deposit-sourced transcript (Call 1).
 
 ## 3. The operator's own sessions
 
-- **The path.** Matt's account deposits like any other: the same command, the same raw yes (`pool-command.ts:826`), under
-  his own proved acceptance. `pull-deposits` returns his sessions with everyone's, and they are packed as `depositor:<hex>`
-  rows under the covenant. Nothing in the deposit path knows which account is the operator's.
+- **The path.** Matt's account deposits like any other, with the same raw yes (`pool-command.ts:826`) and his own proved
+  acceptance. His sessions come back from `pull-deposits` as `depositor:<hex>` rows. Nothing marks the operator's account.
 - **Match ids do not move.** A deposit-sourced session takes its match id as a store session does, from the buyer key, the
   index key, and the harness session id (`sample-pack.ts:1167`). So one session has one match id per buyer on either path.
-- **`deliver` is untouched.** It resolves a match id through `index.jsonl` (`deliver.ts:118`) and reads each indexed pack
-  folder (`:149`). A deposit-sourced build appends rows of the same shape with the optional values of section 1. No row is
-  rewritten or removed, so the r2 to r6 folders and their `operator/index.jsonl` rows stay as they are.
+- **`deliver` is untouched.** It resolves a match id through `index.jsonl` (`deliver.ts:118`) and reads each indexed pack folder
+  (`:149`). A deposit build only appends rows, so the r2 to r6 folders and their `operator/index.jsonl` rows are never pruned.
 - **Lot 1 r6 stays byte-identical.** `--deposits` is an added input. Without it the builder runs the code it runs today.
   Brief 2's first test builds the existing fixture pack without the flag and compares bytes.
-- **What `owners.json` is still for.** It anchors the operator folder: `index.jsonl`, `deliveries.jsonl`, and
-  `objections.jsonl` sit beside it (`deliver.ts:17`, `license-status.ts:176-190`). It names a real owner and a repository
-  license where Matt wants the row to say so, with the pointer and outcome block only a local clone gives
-  (`sample-pack.ts:128`, `:1153`). It is the only source for sessions never deposited. And it rebuilds lot 1.
+- **What `owners.json` is still for.** It anchors the operator folder, where `index.jsonl`, `deliveries.jsonl`, and
+  `objections.jsonl` sit (`deliver.ts:17`). It names a real owner and repository license, with the pointer and outcome block
+  only a local clone gives (`sample-pack.ts:128`, `:1151-1154`). It is the only source for sessions never deposited, and for lot 1.
 
 ## 4. Rights follow-through for a row already sold
 
 The covenant sets the frame. A deletion "does not reach a copy already licensed or sold, except that Many Oars Co. will tell a
-recipient where the law requires it to" (Section 6.4, `2.1:183`). So each right becomes: stop further sale, and tell each
-recipient. GDPR and UK GDPR both apply, and the article numbers are the same in each.
+recipient where the law requires it to" (Section 6.4, `2.1:183`). So each right becomes: stop further sale, tell each recipient.
 
-| Right | Article | Pool side today | What reaches the sold row |
+| Right | Article (GDPR and UK GDPR) | Pool side today | What reaches the sold row |
 |---|---|---|---|
 | Erasure, or the unlink that stands in for it (`docs/pool-rights.md:144`) | Art. 17(1); recipients told under Art. 19 | `erase account` (`erase-cli.ts:176`): rows are erased or kept under an `erased:` account (`docs/pool.md:515`) | Register line, then `notices` per recipient. The pack row needs no relink: `depositor:` never named the account |
 | Restriction | Art. 18(1) and (2); recipients told under Art. 19 | `erase restrict` sets `restricted_at` (`erase-cli.ts:146`, `0039:2`) | Register line; no new pack holds the account until it is lifted |
@@ -179,13 +171,11 @@ recipient. GDPR and UK GDPR both apply, and the article numbers are the same in 
 
 The carrier is one line keyed by account in the register that exists, `objections.jsonl`:
 `{"account": "<id>", "right": "erasure" | "restriction" | "objection", "received": "<time>", "scope": "sale" | "training" | "all"}`.
-Existing code then does the work. `sample-pack` leaves the account out of every later build (`sample-pack.ts:1136-1139`).
-`deliver` refuses every pack built before the line, because the hash of the file changed (`deliver.ts:115-117`). `license-status`
-answers a buyer per match id (`license-status.ts:187-189`), and `notices` records that each recipient was told (`notices.ts:98`).
-The index and the register keep the account id after an erasure, as the pool keeps the acceptance record (6.4, `2.1:181`;
-6.6(d), `2.1:203-204`). Art. 17(3)(e) allows what the defence of legal claims needs.
-
-Missing in code:
+`sample-pack` then leaves the account out of every later build (`sample-pack.ts:1136-1139`). `deliver` refuses every pack built
+before the line, because the hash of the file changed (`deliver.ts:115-117`). `license-status` answers a buyer per match id
+(`license-status.ts:187-189`), and `notices` records that each recipient was told (`notices.ts:98`). The index and the register
+keep the account id after an erasure, as the pool keeps the acceptance record (6.4, `2.1:181`; 6.6(d), `2.1:203-204`).
+Art. 17(3)(e) allows what the defense of legal claims needs. Missing in code, one sentence per gap:
 
 1. No operator file is keyed by account: an index row holds `pack`, `session`, `project`, and `matchId` (`sample-pack.ts:191`).
 2. `Objection` holds `session` and `name`, with no `account` and no `right` (`sample-pack.ts:204-207`).
@@ -207,15 +197,13 @@ Five briefs, in order, each at most 5 Items and 2 packages. Each writes the name
 | 5 | Stored link (cli, pool) | Migration `0041` (next free at `a91fe1e2`; check again): `raw_objects.deposit`, `raw_objects.place`, and with Call 4 `deposits.received_at`, `deposits.covenant_version`; `pool-command.ts:574`, `:580`; `src/raw.ts:184`, `:199`; `src/worker.ts:126-134` | `complete stores the session key and place`; `a repeat complete fills an empty link`; `a client that sends no header still stores`; `the builder uses the stored link before the recomputed one` |
 
 Brief 3 gives a pack that builds and validates. It is not sellable before brief 4: until then the objection of an account
-cannot be checked before the hand-over (Art. 21(1)). Briefs 1 to 4 need no migration.
-
-The count of deposits eligible today is the query below, kept as `packages/pool/queries/deposit-eligible.sql` by brief 1. The
-lead or Matt runs it the way `queries/covenant-funnel.sql:2` shows. It is an upper bound: SQL cannot compare `text_sha256`
-with the held screen, a session can hold several Raw Copies, and pairing and the build rules come after.
+cannot be checked before the hand-over (Art. 21(1)). Briefs 1 to 4 need no migration. The count of deposits eligible today is
+the query below, kept as `packages/pool/queries/deposit-eligible.sql` by brief 1. The lead or Matt runs it the way
+`queries/covenant-funnel.sql:2` shows. It is an upper bound: SQL cannot compare `text_sha256` with the held screen, a session
+can hold several Raw Copies, and pairing and the build rules come after.
 
 ```sql
-WITH ok AS (SELECT a.id FROM accounts a WHERE a.restricted_at IS NULL AND a.raw_consent_version IS NOT NULL AND EXISTS (SELECT 1 FROM covenant_acceptances c
-  WHERE c.account = a.id AND c.version IN ('2.0-4c538c50d706', '2.1-ec0ca3f6ff73') AND c.text_sha256 IS NOT NULL AND c.input IS NOT NULL))
+WITH ok AS (SELECT a.id FROM accounts a WHERE a.restricted_at IS NULL AND a.raw_consent_version IS NOT NULL AND EXISTS (SELECT 1 FROM covenant_acceptances c WHERE c.account = a.id AND c.version IN ('2.0-4c538c50d706', '2.1-ec0ca3f6ff73') AND c.text_sha256 IS NOT NULL AND c.input IS NOT NULL))
 SELECT (SELECT COUNT(*) FROM ok) AS accounts, (SELECT COUNT(*) FROM raw_objects r JOIN ok ON ok.id = r.account WHERE r.erased_on IS NULL) AS raw_copies,
   (SELECT COUNT(*) FROM deposits d JOIN ok ON ok.id = d.account WHERE d.erased_on IS NULL AND d.tier <> 'none') AS deposits;
 ```
@@ -225,7 +213,7 @@ SELECT (SELECT COUNT(*) FROM ok) AS accounts, (SELECT COUNT(*) FROM raw_objects 
 | Call | Options | Recommendation | Best honest case against it |
 |---|---|---|---|
 | 1. Owner handles in Raw Copies (section 2 gap) | (a) Pack them as redacted today. (b) Mask handles at deposit from now on (a sixth brief in cli: `pool-command.ts:829`, `redact.ts:273`, a new `REDACTION_VERSION`) and leave out older copies | (b) | (a) gives more data now, a handle is often public, and the depositor promised the rights (Section 8(b), `2.1:249-251`). But a handle undoes the `depositor:` pseudonym for that row |
-| 2. Where rights lines live | (a) Account lines in `objections.jsonl`, with `erase` printing the line. (b) A pool `objections` table carried by the pull | (a) | (b) is one authority, the operator cannot forget the line, and it survives the loss of the operator machine. It costs a migration, a command, and a pull change before the first sale |
+| 2. Where rights lines live | (a) Account lines in `objections.jsonl`, with `erase` printing the line. (b) A pool `objections` table, which `docs/pool.md:430` says ships with the first pool lot, carried by the pull | (a) | (b) is one authority, the operator cannot forget the line, and it survives the loss of the operator machine. It costs a migration, a command, and a pull change before the first sale |
 | 3. Future lots from Matt | (a) Keep both paths: the owners file for rows that name him, deposits for the rest. (b) Deposits only | (a) | (b) is one code path and proves the depositor path on the operator data. It gives up the owner name, the repository license, and the pointer on his rows |
 | 4. Proof per deposit | (a) Cite the newest proved acceptance only (section 1). (b) Also record `received_at` and `covenant_version` on each new deposit (brief 5) | (b) | (a) needs no migration, and Section 14.2 already covers earlier Deposits. But a time not recorded cannot be recovered if counsel later asks for proof per deposit |
 
