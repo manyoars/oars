@@ -12,6 +12,7 @@ import { deposit, loadStore, paths, type SessionsRuntime } from '../../cli/src/s
 import { runGit } from '../../cli/src/sessions/survival.js';
 import { rolloutLine, stageCodex } from '../../cli/src/sessions/test-support.js';
 import { buildPack, decodedStrings, HARNESS_TERMS, main, matchIdOf, ownerOf, parseOwners, secretIn, serverKeyOf, skeletonUnder, USAGE, type Census, type ManifestRow, type PackCounts, type PackOptions, type Tally } from './sample-pack.js';
+import { MANIFEST_OBJECTS, validate } from './validate-pack.js';
 
 // Every session the exclusion check was asked about, in call order: the frame-first rule is proved by who was never asked.
 const gated = vi.hoisted((): string[] => []);
@@ -238,6 +239,17 @@ describe('the skeleton and the manifest fields it adds (plan S3)', () => {
     const [row] = manifest(f.out);
     expect(row).toMatchObject({ models: { 'claude-opus-5-5': 2 }, turns: 4, skeleton: 'skeleton.json' });
     expect(existsSync(join(f.out, 'sessions', row?.matchId ?? '', 'skeleton.json'))).toBe(true);
+  });
+
+  it('builds a Claude Code pack that the public spec validator accepts (docs/session-record.md)', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done'), user(S(1), 3, 'and another'), assistant(S(1), 3, 'done too')]);
+    f.write('-work-oars', S(2), [user(S(2), 1, 'run the build'), assistant(S(2), 1, 'built')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    const result = await validate(f.out);
+    expect(result?.violations).toEqual([]);
+    expect(result).toMatchObject({ rows: 2, records: 2 });
   });
 
   const isCensus = (value: unknown): value is Census => typeof value === 'object' && value !== null && 'sessions' in value && 'harness' in value && 'turnBucket' in value;
@@ -544,6 +556,22 @@ describe('the repository pointer and the outcome (plan S4)', { timeout: 30_000 }
     const counts = await buildPack(await withCodex(f, inRepo), options(f, { owners }));
     expect(counts).toMatchObject({ emitted: 1, noPointer: 0 });
     expect(pointerOf(manifest(f.out)[0])).toEqual({ remote: REMOTE, commit: shas.onMain });
+    expect((await validate(f.out))?.violations).toEqual([]);
+  });
+
+  it('builds an opt-in pack whose row holds exactly the spec\'s fields, and the validator accepts it', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    const shas = makeRepo(repo);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'feature'), ...committed(S(1), 3, 'main', shas.onMain), assistant(S(1), 7, 'done')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    const [row] = manifest(f.out);
+    expect(Object.keys(row ?? {}).sort()).toEqual(Object.keys(MANIFEST_OBJECTS.row ?? {}).sort());
+    const result = await validate(f.out);
+    expect(result?.violations).toEqual([]);
+    expect(result).toMatchObject({ rows: 1, records: 1 });
   });
 
   it.each([
