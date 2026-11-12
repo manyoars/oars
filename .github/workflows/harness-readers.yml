@@ -39,5 +39,8 @@ jobs:
         run: |
           export HOME="$RUNNER_TEMP/home" APPDATA="$RUNNER_TEMP/appdata" XDG_CONFIG_HOME="$RUNNER_TEMP/xdg"
           mkdir -p "$HOME" "$APPDATA" "$XDG_CONFIG_HOME"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
           node packages/cli/src/sessions/harness-fixtures/version-watch.mjs 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
-          exit "${PIPESTATUS[0]}"
+          status="${PIPESTATUS[0]}"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
