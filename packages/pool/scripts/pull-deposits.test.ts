@@ -156,6 +156,23 @@ describe('pull-deposits', () => {
     expect([...files.keys()].filter((name) => name.startsWith(`${account}/projects/`))).toEqual([`${account}/projects/deposit/${sha('standing copy')}.jsonl`]);
   });
 
+  it('leaves out an erased: account and its deposits', async () => {
+    const account = await seeded({ deposits: [{ id: 'x1' }] });
+    const db = await pool.db();
+    const erased = `erased:${'ab12'.repeat(8)}`;
+    // The row `erase account` leaves: a minimal accounts row, with the deposits moved onto it.
+    await db.prepare('INSERT INTO accounts (id, source) SELECT ?, source FROM accounts WHERE id = ?').bind(erased, account).run();
+    await db.prepare("INSERT INTO deposits (account, id, skeleton, tier, counted_at, request_country, deltas) VALUES (?, 'x2', '{}', 'skeleton', 2000, 'US', '[]')").bind(erased).run();
+    const { folder, files } = memory();
+    const before = await (await store()).rows('SELECT COUNT(*) AS n FROM accounts WHERE id LIKE ?', ['erased:%']);
+    const done = await pullDeposits(await store(), folder);
+    expect(fieldOf(before[0], 'n')).toBeGreaterThanOrEqual(1);
+    expect(pulledAccounts(files)).toContain(account);
+    expect(pulledAccounts(files)).not.toContain(erased);
+    expect([...files.keys()].filter((name) => name.startsWith('erased:'))).toEqual([]);
+    expect(done.leftOut.erased).toBeGreaterThanOrEqual(1);
+  });
+
   it('names a raw copy the bucket does not hold or that does not hash to its name, and does not write it', async () => {
     const account = await seeded({ raw: [{ text: 'missing', stored: false }, { text: 'altered', stored: false }] });
     await (await pool.rawBucket()).put(objectKey(account, sha('altered')), 'something else');

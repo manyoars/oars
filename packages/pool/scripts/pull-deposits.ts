@@ -22,9 +22,11 @@ export interface Pulled {
   rawCopies: number;
   /** Raw Copies the ledger lists and the bucket does not hold, or that do not hash to their name; they are not written. */
   failed: string[];
-  /** Accounts left out whole: restricted, no raw yes in force, or no proved acceptance. */
-  leftOut: { restricted: number; noRawYes: number; noProvedAcceptance: number };
+  /** Accounts left out whole: an `erased:` account, restricted, no raw yes in force, or no proved acceptance. */
+  leftOut: { erased: number; restricted: number; noRawYes: number; noProvedAcceptance: number };
 }
+
+const ERASED = 'erased:';
 
 const SHA256 = /^[0-9a-f]{64}$/;
 
@@ -75,15 +77,22 @@ const proved = (row: unknown): Proved | null => {
 
 /** Pulls every eligible account into the folder: `accounts.jsonl`, then per account `<account>/deposits.jsonl` and `<account>/projects/deposit/<sha256>.jsonl` for each Raw Copy not erased. */
 export const pullDeposits = async (store: ReadOnlyStore, folder: ExportFolder): Promise<Pulled> => {
-  const pulled: Pulled = { accounts: 0, deposits: 0, rawCopies: 0, failed: [], leftOut: { restricted: 0, noRawYes: 0, noProvedAcceptance: 0 } };
+  const pulled: Pulled = { accounts: 0, deposits: 0, rawCopies: 0, failed: [], leftOut: { erased: 0, restricted: 0, noRawYes: 0, noProvedAcceptance: 0 } };
   let accountsFile = '';
   for (const row of await store.rows(ACCOUNTS, [])) {
-    const account = nameOf(textOf(row, 'id'), 'the account');
-    if (numberOrNull(row, 'restricted_at') !== null) {
+    const id = textOf(row, 'id');
+    // `erase account` moves what it keeps onto an `erased:<hex>` account, which is no pool id and nobody's to sell.
+    if (id.startsWith(ERASED)) {
+      pulled.leftOut.erased += 1;
+      continue;
+    }
+    const account = nameOf(id, 'the account');
+    // Fail closed: any value set in either column leaves the account out, whatever type the driver returns.
+    if (fieldOf(row, 'restricted_at') !== null && fieldOf(row, 'restricted_at') !== undefined) {
       pulled.leftOut.restricted += 1;
       continue;
     }
-    if (textOrNull(row, 'raw_consent_version') === null) {
+    if (fieldOf(row, 'raw_consent_version') === null || fieldOf(row, 'raw_consent_version') === undefined) {
       pulled.leftOut.noRawYes += 1;
       continue;
     }
