@@ -290,7 +290,9 @@ const checkPack = async (folder: string): Promise<Result> => {
       continue;
     }
     const skeleton = isText(value.skeleton) && FILE_NAME.test(value.skeleton) ? value.skeleton : undefined;
-    const lines = files.filter((file) => file !== skeleton).sort();
+    const others = files.filter((file) => file !== skeleton).sort();
+    const lines = others.filter((file) => file.endsWith('.jsonl'));
+    for (const file of others) if (!file.endsWith('.jsonl')) found.push({ where: `${session}/${file}`, field: '(file)', rule: 'not a transcript file' });
     if (!lines.includes(MAIN_FILE)) found.push({ where: `${session}/${MAIN_FILE}`, field: '(file)', rule: 'missing' });
     if (isCount(value.transcripts) && value.transcripts !== lines.length) found.push({ where, field: 'transcripts', rule: 'not the number of transcript files in the session folder' });
     for (const file of lines) found.push(...(await checkTranscript(join(folder, 'sessions', id, file), `${session}/${file}`)));

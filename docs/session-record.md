@@ -92,14 +92,14 @@ One JSON object per line. Types: `text` is a non-empty string; `count` is a whol
 
 ## Record
 
-One JSON object, `skeleton.json`. Its meanings are the wire field register (`pool-outbox.ts`, `FIELD_ROWS`); the lines below shorten it. A record is read by the pool's own reader (`parseSkeleton`), so a record that conforms here is one the pool reads. The reader names the first shape error it finds, so a record with several reports one at a time. Types: `bucket` is a whole number standing for a range, never an exact count; `name` is a string after redaction, or `private`; `class` is a value from a closed list, or `other`.
+One JSON object, `skeleton.json`. Its meanings are the wire field register (`pool-outbox.ts`, `FIELD_ROWS`); the lines below shorten it. A record is read by the pool's own reader (`parseSkeleton`), so a record that conforms here is one the pool reads. The reader names the first shape error it finds, so a record with several reports one at a time. Types: `text` and `count` are as in the manifest; `bucket` is a whole number of 0 or more standing for a range, never an exact count; `signed bucket` is the same but may be negative, within a limit the reader sets by metric; `name` is a string after redaction, or `private`; `class` is a value from a closed list, or `other`; `hex` is lowercase hex digits of the length the field fixes, and `16 hex` is exactly 16 of them; `bool` is true or false; `UTC day` is `YYYY-MM-DD`.
 
 ### Record object `batch`
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| format | count | yes | The record format number. |
-| vocabVersion | count | yes | The version of the closed lists the record was built under. |
+| format | count | yes | The record format number: the reader's `SKELETON_FORMAT`, 7 at spec version 1 (it also reads 3 to 6). |
+| vocabVersion | text | yes | The version of the closed lists the record was built under. |
 | fieldsVersion | count | yes | The version of the field list the record was built from. |
 | id | match id | yes | The session's match id, the same as its row's. |
 | transcripts | list of `transcript` | yes | The main transcript, then each subagent. |
@@ -232,7 +232,7 @@ One JSON object, `skeleton.json`. Its meanings are the wire field register (`poo
 
 ### Record object `identity`
 
-The members depend on the step's action; each is a name after redaction or `private`.
+The members depend on the step's action; each is a name after redaction or `private`. A shell step carries `program`, `sub`, and `flags` (and may carry `pulls`); an MCP step carries `server` and `tool`; a web step carries `host`. "Required" below means required for that action.
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
@@ -307,7 +307,7 @@ The members depend on the step's action; each is a name after redaction or `priv
 | name | name or null | yes | The name, or null when only the field is named. |
 | registry | class or null | yes | The registry a package came from. |
 | metric | class | yes | What the delta measures. |
-| change | count | yes | A signed bucket of how far the metric moved. |
+| change | signed bucket | yes | A signed bucket of how far the metric moved. |
 
 ### Record object `recommendation`
 

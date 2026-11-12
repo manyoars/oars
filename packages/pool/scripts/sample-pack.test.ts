@@ -252,6 +252,38 @@ describe('the skeleton and the manifest fields it adds (plan S3)', () => {
     expect(result).toMatchObject({ rows: 2, records: 2 });
   });
 
+  it("types each field of the page's batch table as the record a real pack holds does", async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    const [row] = manifest(f.out);
+    const record: unknown = JSON.parse(readFileSync(join(f.out, 'sessions', row?.matchId ?? '', 'skeleton.json'), 'utf8'));
+    if (typeof record !== 'object' || record === null) throw new Error('a record that is not an object');
+    const page = readFileSync(fileURLToPath(new URL('../../../docs/session-record.md', import.meta.url)), 'utf8');
+    const table = page.split(/^### /m).find((part) => part.startsWith('Record object `batch`')) ?? '';
+    const cells = table.split(/\r?\n/).map((text) => text.split('|').map((cell) => cell.trim())).filter((parts) => parts.length >= 6 && parts[1] !== 'Field' && !/^-+$/.test(parts[1] ?? ''));
+    expect(cells.length).toBeGreaterThan(5);
+    const holds = (word: string, value: unknown): boolean => {
+      if (word === 'null') return value === null;
+      if (word === 'count') return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+      if (word === 'text') return typeof value === 'string' && value.length > 0;
+      if (word === 'match id') return typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
+      if (word === 'hex') return typeof value === 'string' && /^[0-9a-f]+$/.test(value);
+      if (word === 'object') return typeof value === 'object' && value !== null && !Array.isArray(value);
+      if (word.startsWith('list of')) return Array.isArray(value);
+      throw new Error(`the page uses a type word this test does not know: ${word}`);
+    };
+    const held = new Map(Object.entries(record));
+    for (const [, name = '', type = '', required = ''] of cells) {
+      if (!held.has(name)) {
+        expect(required, `${name} is required but the record has none`).toBe('no');
+        continue;
+      }
+      expect(type.split(' or ').some((word) => holds(word, held.get(name))), `${name} is typed ${type}`).toBe(true);
+    }
+  });
+
   const isCensus = (value: unknown): value is Census => typeof value === 'object' && value !== null && 'sessions' in value && 'harness' in value && 'turnBucket' in value;
   const readCensus = (out: string): Census => {
     const value: unknown = JSON.parse(readFileSync(join(out, 'census.json'), 'utf8'));

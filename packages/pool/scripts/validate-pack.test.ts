@@ -248,6 +248,14 @@ describe('a pack', () => {
     expect((await lines(pack({ record: digested }))).out).toEqual([expect.stringContaining('tools[0].digests: not allowed')]);
   });
 
+  it('reports a file in a session folder that is not a transcript, and never counts it', async () => {
+    const folder = pack();
+    writeFileSync(join(folder, 'sessions', MATCH, 'notes.txt'), 'private notes');
+    const printed = await lines(folder);
+    expect(printed.out).toEqual([`sessions/${MATCH}/notes.txt (file): not a transcript file`]);
+    expect(printed.code).toBe(1);
+  });
+
   it('reports a transcript count that does not match the folder, a folder no row names, and a missing folder', async () => {
     const folder = pack({ row: { ...row(), transcripts: 2 } });
     mkdirSync(join(folder, 'sessions', OTHER_MATCH));
