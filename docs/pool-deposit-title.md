@@ -192,3 +192,30 @@ Missing in code:
 3. `deliver recipients` and `license-status` have no account lookup (`deliver.ts:11`, `license-status.ts:187-189`).
 4. `erase account` and `erase restrict` do not print the register line, so the step rests on the runbook alone.
 5. The Art. 15 export has no recipients section and omits `restricted_at` (`src/export.ts:59-60`); both are answered by hand.
+
+## 5. Build plan
+
+Five briefs, in order, each at most 5 Items and 2 packages. Each writes the named tests first and sees them fail. Gate for each:
+`just -f $env:ORCH_ROOT/justfile build oars run test -w packages/pool` (brief 5 also `-w packages/cli`), then `build oars run check`.
+
+| # | Brief and packages | Files and anchors | Tests to write first |
+|---|---|---|---|
+| 1 | `pull-deposits` (pool) | New `scripts/pull-deposits.ts`, `.mjs`, `.test.ts`; `package.json:14`; new `queries/deposit-eligible.sql`; reuses `scripts/erase.ts:17`, `erase-wrangler.ts`, `erase-test-store.ts` | `pulls an account with a proved acceptance`; `leaves out an acceptance with no text hash`; `leaves out a restricted account and one with no raw yes`; `leaves out erased rows`; `calls neither run nor deleteObject`; `refuses a folder inside a repository` |
+| 2 | `sample-pack --deposits` (pool, reading cli) | `sample-pack.ts:1395` option, `:1144-1147` store, `:1196-1197` owner, `:1203` repository, `:1324-1325` manifest, `:1362` index, `:176-182` counts; `extract.ts:1631`; `read.ts:20` | `without --deposits the fixture pack is byte for byte the same`; `capture reads a redacted Raw Copy and keeps sessionId`; `a deposit row carries the depositor value, the covenant license, and acceptedAt`; `two buyer keys give two depositor values`; `a Raw Copy with no deposit row is counted unlinked`; `tier none and a protected country are left out` |
+| 3 | Spec and checks (pool, docs) | `docs/session-record.md:50`, `:61`; `validate-pack.ts:89-90`; `license-status.ts:239`; `docs/pool.md:458`, `:549` | `validate-pack accepts a row with acceptedAt`; `validate-pack refuses an acceptedAt that is not a time`; `license-status prints the covenant of a deposit row` |
+| 4 | Rights by account (pool, docs). **First sellable pack holding a third-party deposit** | `sample-pack.ts:204-207`, `:252`, `:1136-1139`; `deliver.ts:11`, `:137`, `:184`; `license-status.ts:187-189`; `erase-cli.ts:146`, `:176`; `docs/pool-rights.md:70`, `:144`, `:152`; `docs/pool.md:430` | `an account line leaves out every session of the account`; `deliver refuses a pack built before an account line`; `deliver recipients --account lists each recipient and match id`; `license-status reports the match ids of an account line`; `erase account prints the register line` |
+| 5 | Stored link (cli, pool) | Migration `0041` (next free at `a91fe1e2`; check again): `raw_objects.deposit`, `raw_objects.place`, and with Call 4 `deposits.received_at`, `deposits.covenant_version`; `pool-command.ts:574`, `:580`; `src/raw.ts:184`, `:199`; `src/worker.ts:126-134` | `complete stores the session key and place`; `a repeat complete fills an empty link`; `a client that sends no header still stores`; `the builder uses the stored link before the recomputed one` |
+
+Brief 3 gives a pack that builds and validates. It is not sellable before brief 4: until then the objection of an account
+cannot be checked before the hand-over (Art. 21(1)). Briefs 1 to 4 need no migration.
+
+The count of deposits eligible today is the query below, kept as `packages/pool/queries/deposit-eligible.sql` by brief 1. The
+lead or Matt runs it the way `queries/covenant-funnel.sql:2` shows. It is an upper bound: SQL cannot compare `text_sha256`
+with the held screen, a session can hold several Raw Copies, and pairing and the build rules come after.
+
+```sql
+WITH ok AS (SELECT a.id FROM accounts a WHERE a.restricted_at IS NULL AND a.raw_consent_version IS NOT NULL AND EXISTS (SELECT 1 FROM covenant_acceptances c
+  WHERE c.account = a.id AND c.version IN ('2.0-4c538c50d706', '2.1-ec0ca3f6ff73') AND c.text_sha256 IS NOT NULL AND c.input IS NOT NULL))
+SELECT (SELECT COUNT(*) FROM ok) AS accounts, (SELECT COUNT(*) FROM raw_objects r JOIN ok ON ok.id = r.account WHERE r.erased_on IS NULL) AS raw_copies,
+  (SELECT COUNT(*) FROM deposits d JOIN ok ON ok.id = d.account WHERE d.erased_on IS NULL AND d.tier <> 'none') AS deposits;
+```
