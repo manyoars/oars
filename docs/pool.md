@@ -4,7 +4,9 @@ The pool is an optional server that accounts sign in to, deposit session skeleto
 
 ## Commands
 
-Every command takes the server from `--server <url>`, else `OARS_POOL_URL`, else the Many Oars pool, `https://pool.manyoars.com` (live, with deposits closed until its covenant is published). Plain http goes only to localhost. The server is an origin with no credentials, path, or query, and a redirect is refused, so a token or a skeleton cannot be moved elsewhere.
+Every command takes the server from `--server <url>`, else `OARS_POOL_URL`, else the Many Oars pool, `https://pool.manyoars.com` (live and open for deposits). Plain http goes only to localhost. The server is an origin with no credentials, path, or query, and a redirect is refused, so a token or a skeleton cannot be moved elsewhere.
+
+**The way in.** `oars pool join --provider github|google --harness-version <version>` runs the commands below in order: `login`, `deposit`, `outbox --explain`, `deposit --send` for each batch that was shown, and `fetch`. It shows and asks what they show and ask, and says in one line what each step is doing. If a step stops, it prints that step's own error and names the command to run again; run again, it skips a sign-in you hold, a batch already prepared, and a batch already sent. The table is the same path step by step.
 
 | Command | What it does |
 |---------|--------------|

@@ -4,6 +4,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 
 ## Unreleased
 
+- `oars pool join` takes you from nothing to a first deposit and your first fetch in one command: it runs `login`, `deposit`, `outbox --explain`, `deposit --send`, and `fetch` in order, asks and shows what they do, and when a step stops, running it again continues from there.
 - `oars pool deposit --send` ended by Ctrl-C now exits 130, the shell convention for an interrupt; the text is unchanged, and any other way of stopping keeps its exit code.
 - `oars pool remove <hash>` removes one batch and its queued raw copies from this machine's outbox and keeps that session out of every later deposit, the background sender's included, until `--restore`; nothing is sent, and it refuses while a send holds the lock.
 - `oars pool deposit --send` now says the pool may already have received the batch when the connection drops after the request went out, and marks nothing sent.

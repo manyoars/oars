@@ -315,7 +315,7 @@ describe('the public text states facts only', () => {
     expect(leaves).toMatch(/unredacted/);
     expect(leaves).toContain('Telemetry is on by default');
     for (const off of ['oars telemetry off', 'OARS_TELEMETRY=0', 'DO_NOT_TRACK=1']) expect(leaves).toContain(off);
-    expect(leaves).toContain('closed until its covenant opens them');
+    expect(leaves).toContain('Deposits to the Many Oars pool are open');
     expect(leaves).toContain('licensed under it');
     expect(leaves).toContain('your harness sends that to its model');
     expect(leaves).toContain('pool.manyoars.com');

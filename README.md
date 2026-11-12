@@ -32,7 +32,7 @@ To use it on your own sessions, run `oars sessions deposit`, then `oars sessions
 
 - The record stays on your machine, under `<config>/oars/sessions/` (`<config>` is `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `~/.config` elsewhere). `raw/` there holds raw transcripts, unredacted. Session commands make no model call and no network call, except `gold arms`, which sends redacted text through your own Claude subscription. The hooks and the MCP tool add recall text to the running session, and your harness sends that to its model.
 - Telemetry is on by default: counts, sizes, and closed words, never session content. Turn it off with `oars telemetry off`, `OARS_TELEMETRY=0`, or `DO_NOT_TRACK=1`. It sends to the Many Oars pool at `pool.manyoars.com`, or to `OARS_POOL_URL`.
-- Deposits to the Many Oars pool are closed until its covenant opens them. After you accept the covenant, a deposit may be licensed under it. Nothing is sent before you accept, and raw copies need a separate yes.
+- Deposits to the Many Oars pool are open. After you accept the covenant, a deposit may be licensed under it. Nothing is sent before you accept, and raw copies need a separate yes.
 - The pool is not offered in the EU, the EEA, or the UK.
 - Every field and every switch is in [docs/telemetry.md](docs/telemetry.md) and [docs/pool.md](docs/pool.md). The full reference is in [`packages/cli/README.md`](packages/cli/README.md).
 
