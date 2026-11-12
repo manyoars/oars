@@ -52,25 +52,12 @@ describe('the VS Code Copilot Chat reader on its fixture', () => {
       tools: out.tools.map((tool) => [tool.tool, tool.status]),
       errorLines: out.errorLines.map((entry) => entry.line),
     }).toEqual({
-      'userTurns': 1,
-      'assistantTurns': 1,
-      'models': {
-        'copilot/claude-sonnet-4.5': 1
-      },
-      'version': null,
-      'tools': [
-        [
-          'Bash',
-          'error'
-        ],
-        [
-          'Edit',
-          'ok'
-        ]
-      ],
-      'errorLines': [
-        'make: *** No rule to make target'
-      ]
+      userTurns: 1,
+      assistantTurns: 1,
+      models: { 'copilot/claude-sonnet-4.5': 1 },
+      version: '0.32.4',
+      tools: [['Bash', 'error'], ['Edit', 'ok']],
+      errorLines: ['make: *** No rule to make target'],
     });
   });
 });

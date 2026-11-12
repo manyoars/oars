@@ -57,29 +57,12 @@ describe('the Cursor reader on its fixture', () => {
       tools: out.tools.map((tool) => [tool.tool, tool.status]),
       errorLines: out.errorLines.map((entry) => entry.line),
     }).toEqual({
-      'userTurns': 1,
-      'assistantTurns': 4,
-      'models': {
-        'default': 4
-      },
-      'version': null,
-      'tools': [
-        [
-          'Read',
-          'ok'
-        ],
-        [
-          'Edit',
-          'ok'
-        ],
-        [
-          'Bash',
-          'error'
-        ]
-      ],
-      'errorLines': [
-        'make: *** No rule to make target'
-      ]
+      userTurns: 1,
+      assistantTurns: 4,
+      models: { 'fixture-model-1': 4 },
+      version: null,
+      tools: [['Read', 'ok'], ['Edit', 'ok'], ['Bash', 'error']],
+      errorLines: ['make: *** No rule to make target'],
     });
   });
 });

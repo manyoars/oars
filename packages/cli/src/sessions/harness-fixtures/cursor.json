@@ -19,7 +19,10 @@
           },
           "status": "completed"
         },
-        "createdAt": "2026-06-01T10:00:05.000Z"
+        "createdAt": "2026-06-01T10:00:05.000Z",
+        "modelInfo": {
+          "modelName": "fixture-model-1"
+        }
       },
       {
         "type": 2,
@@ -31,7 +34,10 @@
           },
           "status": "completed"
         },
-        "createdAt": "2026-06-01T10:00:10.000Z"
+        "createdAt": "2026-06-01T10:00:10.000Z",
+        "modelInfo": {
+          "modelName": "fixture-model-1"
+        }
       },
       {
         "type": 2,
@@ -46,7 +52,10 @@
             "output": "make: *** No rule to make target"
           }
         },
-        "createdAt": "2026-06-01T10:00:20.000Z"
+        "createdAt": "2026-06-01T10:00:20.000Z",
+        "modelInfo": {
+          "modelName": "fixture-model-1"
+        }
       },
       {
         "type": 2,
@@ -55,7 +64,10 @@
         "tokens": [
           900,
           60
-        ]
+        ],
+        "modelInfo": {
+          "modelName": "fixture-model-1"
+        }
       }
     ]
   }

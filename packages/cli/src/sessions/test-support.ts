@@ -106,6 +106,8 @@ export interface FixtureBubble {
   tool?: { name: string; params: unknown; status: 'completed' | 'error' | 'cancelled'; error?: string; result?: unknown; decision?: string };
   /** `timingInfo.clientStartTime`, epoch milliseconds (or a small relative clock). */
   clientStart?: number;
+  /** The bubble's own model, which the reader prefers over the composer's `modelConfig`. */
+  modelInfo?: { modelName: string };
 }
 
 export interface FixtureComposer {
@@ -158,6 +160,7 @@ export const stageCursor = async (root: string, composers: readonly FixtureCompo
           text: bubble.text ?? '',
           ...(bubble.createdAt === undefined ? {} : { createdAt: bubble.createdAt }),
           ...(bubble.clientStart === undefined ? {} : { timingInfo: { clientStartTime: bubble.clientStart } }),
+          ...(bubble.modelInfo === undefined ? {} : { modelInfo: bubble.modelInfo }),
           tokenCount: { inputTokens: bubble.tokens?.[0] ?? 0, outputTokens: bubble.tokens?.[1] ?? 0 },
           ...(bubble.tool === undefined
             ? {}

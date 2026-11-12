@@ -12,6 +12,14 @@
       "variableData": {
         "variables": []
       },
+      "agent": {
+        "id": "github.copilot.editsAgent",
+        "name": "agent",
+        "extensionId": {
+          "value": "GitHub.copilot-chat"
+        },
+        "extensionVersion": "0.32.4"
+      },
       "response": [
         {
           "value": "running it"

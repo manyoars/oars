@@ -33,7 +33,7 @@ Each reader is pinned by a made-up session fixture and a test (`packages/cli/src
 | Gemini CLI | not stamped | source, google-gemini/gemini-cli at 89e9d25d | 2026-11-12 |
 | Grok Build | not stamped | source, xai-org/grok-build at 2bdd1d6 | 2026-11-12 |
 | Pi | not stamped | source, badlogic/pi-mono at 085c84e | 2026-11-12 |
-| VS Code Copilot Chat | not stamped | source, microsoft/vscode at f92b8f3a | 2026-11-12 |
+| VS Code Copilot Chat | 0.32.4 | stamped | 2026-11-12 |
 | Cursor | not stamped | no public source; shapes follow the local store the reader was written against | 2026-11-12 |
 
 ## Publishing (maintainers)
