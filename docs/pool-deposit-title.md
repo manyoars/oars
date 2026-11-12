@@ -5,9 +5,6 @@ Design page. It changes no code. Anchors are as of oars `a91fe1e2`.
 Ruling (Matt, 2026-11-12): a covenant acceptance is title enough for a pack row. A depositor does not declare repositories.
 Fact owed: counsel has not confirmed that the grant is title enough for sale. This page records that and does not reopen it.
 
-Status: section 1 is written. Sections 2 to 6 (deposit input, the operator's own sessions, rights follow-through, build plan,
-calls for Matt) are not written yet.
-
 ## 1. The title rule
 
 ### What exists today
@@ -103,8 +100,6 @@ Title is one gate of several. A Raw Copy also needs the raw yes, and section 2 l
 
 ## 2. The deposit input
 
-**Today.**
-
 - The one operator read path is `erase export --account <id> --out <folder> --raw` (`packages/pool/scripts/erase-cli.ts:152`,
   `scripts/export-account.ts:32`) over `EraseStore` (`scripts/erase.ts:17`). It is the Art. 15 and 20 copy of one account. It
   lists no accounts, omits `restricted_at`, and a change to its shape moves its version (`docs/pool.md:528`). It is not reused.
@@ -168,3 +163,32 @@ Call 1 decides. Opening protected regions needs a record of each buyer's transfe
   `objections.jsonl` sit beside it (`deliver.ts:17`, `license-status.ts:176-190`). It names a real owner and a repository
   license where Matt wants the row to say so, with the pointer and outcome block only a local clone gives
   (`sample-pack.ts:128`, `:1153`). It is the only source for sessions never deposited. And it rebuilds lot 1.
+
+## 4. Rights follow-through for a row already sold
+
+The covenant sets the frame. A deletion "does not reach a copy already licensed or sold, except that Many Oars Co. will tell a
+recipient where the law requires it to" (Section 6.4, `2.1:183`). So each right becomes: stop further sale, and tell each
+recipient. GDPR and UK GDPR both apply, and the article numbers are the same in each.
+
+| Right | Article | Pool side today | What reaches the sold row |
+|---|---|---|---|
+| Erasure, or the unlink that stands in for it (`docs/pool-rights.md:144`) | Art. 17(1); recipients told under Art. 19 | `erase account` (`erase-cli.ts:176`): rows are erased or kept under an `erased:` account (`docs/pool.md:515`) | Register line, then `notices` per recipient. The pack row needs no relink: `depositor:` never named the account |
+| Restriction | Art. 18(1) and (2); recipients told under Art. 19 | `erase restrict` sets `restricted_at` (`erase-cli.ts:146`, `0039:2`) | Register line; no new pack holds the account until it is lifted |
+| Objection | Art. 21(1) | Recorded only: "the first sale path loads those records" (`docs/pool-rights.md:152`) | Register line with its scope |
+| Access to recipients | Art. 15(1)(c) | `deliver recipients <session or name>` (`deliver.ts:137`); a pool account finds nothing (`docs/pool-rights.md:70`) | `deliver recipients --account <id>` |
+
+The carrier is one line keyed by account in the register that exists, `objections.jsonl`:
+`{"account": "<id>", "right": "erasure" | "restriction" | "objection", "received": "<time>", "scope": "sale" | "training" | "all"}`.
+Existing code then does the work. `sample-pack` leaves the account out of every later build (`sample-pack.ts:1136-1139`).
+`deliver` refuses every pack built before the line, because the hash of the file changed (`deliver.ts:115-117`). `license-status`
+answers a buyer per match id (`license-status.ts:187-189`), and `notices` records that each recipient was told (`notices.ts:98`).
+The index and the register keep the account id after an erasure, as the pool keeps the acceptance record (6.4, `2.1:181`;
+6.6(d), `2.1:203-204`). Art. 17(3)(e) allows what the defence of legal claims needs.
+
+Missing in code:
+
+1. No operator file is keyed by account: an index row holds `pack`, `session`, `project`, and `matchId` (`sample-pack.ts:191`).
+2. `Objection` holds `session` and `name`, with no `account` and no `right` (`sample-pack.ts:204-207`).
+3. `deliver recipients` and `license-status` have no account lookup (`deliver.ts:11`, `license-status.ts:187-189`).
+4. `erase account` and `erase restrict` do not print the register line, so the step rests on the runbook alone.
+5. The Art. 15 export has no recipients section and omits `restricted_at` (`src/export.ts:59-60`); both are answered by hand.
