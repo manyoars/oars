@@ -100,3 +100,54 @@ where it prints `unknown` today (`packages/pool/scripts/license-status.ts:239`, 
   (`docs/pool.md:515`). It joins to no acceptance, so the rule itself leaves it out. No extra check is needed for title.
 
 Title is one gate of several. A Raw Copy also needs the raw yes, and section 2 lists every other exclusion.
+
+## 2. The deposit input
+
+**Today.**
+
+- The one operator read path is `erase export --account <id> --out <folder> --raw` (`packages/pool/scripts/erase-cli.ts:152`,
+  `scripts/export-account.ts:32`) over `EraseStore` (`scripts/erase.ts:17`). It is the Art. 15 and 20 copy of one account. It
+  lists no accounts, omits `restricted_at`, and a change to its shape moves its version (`docs/pool.md:528`). It is not reused.
+- A Raw Copy has no stored link to its deposit row: `raw_objects` holds account, hash, size, two versions, and a time
+  (`migrations/0011_raw_tier.sql:3`). The link can be recomputed. `deposits.id` is the skeleton `id`
+  (`packages/cli/src/sessions/pool-wire.ts:853`), which the client sets to `contentHash([account, session])`
+  (`pool-command.ts:754`, `:807`; `read.ts:20`), and a transcript line carries its `sessionId` (`sample-pack.ts:583`).
+  A machine's session under a session salt cannot be recomputed (`pool-command.ts:688`).
+- The builder reads one local store and one transcript folder, both named by the environment (`sample-pack.ts:1443-1445`).
+
+**Design: pull once, then build offline.**
+
+1. `pull-deposits` is a new script, `packages/pool/scripts/pull-deposits.ts`, run by the operator. It calls only `rows` and
+   `readObject` of `EraseStore`, so it cannot write. It writes a lot-input folder outside every repository: `accounts.jsonl`
+   (account, cited version, `text_sha256`, `accepted_at`), and per account `deposits.jsonl` (id, tier, `request_country`,
+   skeleton) and `projects/deposit/<sha256>.jsonl` (each Raw Copy). This is the only production read. The build makes none.
+2. `sample-pack --deposits <folder>` takes each account folder in turn. It captures the Raw Copies into a throwaway store with
+   the CLI's own capture (`captureSession`, `packages/cli/src/sessions/extract.ts:1631`), pairs each session with its deposit
+   row by the recomputed id, and then runs every existing rule. Title (section 1) stands where `ownerOf` stands (`:1196`). The
+   repository test (`:1203`) reads the skeleton's `repoKey` (`pool-wire.ts:231`), because the build machine holds no clone.
+3. A Raw Copy that pairs with no deposit row is left out and counted `unlinked`. Brief 5 stores the link, so the count ends.
+
+Not verified here, so brief 2 proves both with its first tests: the capture reads a redacted transcript, and the redactor
+leaves `sessionId` in place.
+
+**What a deposit must pass.** The default is more data, kept longer. No rule below sets an age limit, and the grant does not
+end with time (Section 2.5, `2.1:109-113`).
+
+| Rule | What sets it | Where it is enforced today | In the deposit path |
+|---|---|---|---|
+| Proved acceptance | Section 1 | `covenant_acceptances` (`0020:3`, `0022:3-5`) | Pull, per account |
+| Not erased | GDPR and UK GDPR Art. 17; covenant 6.4 (`2.1:177-184`) | `erased_on` on both tables (`0018_erasure.sql:12-13`); `erased:` accounts (`docs/pool.md:515`) | Pull, per row |
+| Not restricted | Art. 18(2): restricted data is stored and not otherwise used | `accounts.restricted_at` (`0039_account_restricted.sql:2`) | Pull, whole account |
+| Raw yes in force | Art. 7(3) and 9(2)(a) (`0026:1`) | `raw_consent_version` (`0026:4`); the nightly sweep erases held copies after a withdrawal (`src/nightly.ts:27`) | Pull: the column is not null |
+| Tier is not `none` | No law. The batch failed its challenge or root check (`src/access.ts:5`) | `deposits.tier` (`0004_access.sql:2`) | Build, after pairing |
+| Not from a protected region | Art. 44 to 46; the covenant's Transfers promise (`2.1:407-412`) | Acceptance is refused while `PROTECTED_REGIONS_OPEN` is not `1` (`src/covenant.ts:109`); `deposits.request_country` (`0035:5`) | Build: left out, counted `protectedRegion`; expected zero while the gate is closed |
+| Exclusion terms | No law. The depositor's list and the operator's list | Depositor, before a copy is queued (`pool-command.ts:826-830`); operator, `checkSession` (`sample-pack.ts:1189`) | Unchanged, over the pulled transcripts |
+| Harness terms | Each vendor's terms | `HARNESS_TERMS` (`sample-pack.ts:59`); a harness with no row is left out | Unchanged |
+| Redaction and secret scan | The page promise (`docs/pool.md:416-422`) | Depositor (`pool-command.ts:829`), version on the ledger row (`src/raw.ts:199`); builder, again | Unchanged; see the gap below |
+| Reasoning text | Vendor terms, per lot (`docs/pool.md:420`) | `--strip-thinking` (`sample-pack.ts:1212`, `:1268`) | Unchanged; kept by default |
+| Must-not list | `docs/session-record.md:31-37` | `validate-pack.ts` | Unchanged; brief 3 lists `acceptedAt` first |
+| No objection | Art. 21(1) | `objections.jsonl` (`sample-pack.ts:1136-1139`) | By session, name, or account (section 4) |
+
+Gap: the builder's owner-handle rule reads `.git/config` on the build machine (`docs/pool.md:416-422`), and the depositor's
+redaction passes no handles (`pool-command.ts:829`). A repository owner's handle can survive in a deposit-sourced transcript.
+Call 1 decides. Opening protected regions needs a record of each buyer's transfer safeguard first; that is not in this plan.
