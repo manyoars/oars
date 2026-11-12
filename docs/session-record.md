@@ -58,6 +58,7 @@ One JSON object per line. Types: `text` is a non-empty string; `count` is a whol
 | skeleton | file name | no | The record's file name in the session folder. |
 | pointer | object or null | no | The repository the session worked in, for an owner who opted in; see `pointer`. |
 | outcome | object | no | What happened to the work, for an owner who opted in; see `outcome`. |
+| reasoning | `kept` or `stripped` | no | Whether the transcripts hold the model's reasoning blocks (`kept`) or the seller left them out (`stripped`). A row without it comes from a pack built before the field, and holds them. |
 | redactionVersion | text | yes | The version of the redaction the transcripts went through. |
 | startedAt | time or null | yes | When the session began. |
 | endedAt | time or null | yes | When the session ended. |

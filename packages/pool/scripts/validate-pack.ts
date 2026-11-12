@@ -98,6 +98,8 @@ const ROW_FIELDS: { readonly [K in keyof Required<ManifestRow>]: FieldSpec } = {
   skeleton: optional(shaped(FILE_NAME, 'not a file name')),
   pointer: optional(objectOrNull),
   outcome: optional(object),
+  // Optional: a pack built before the field existed holds the reasoning and says nothing.
+  reasoning: optional(oneOf(['kept', 'stripped'])),
   redactionVersion: required(text),
   startedAt: required(instantOrNull),
   endedAt: required(instantOrNull),

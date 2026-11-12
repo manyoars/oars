@@ -2041,3 +2041,121 @@ describe('--buyer-key-file', () => {
     expect((await run(f, [])).text).toMatch(/Missing a required option/);
   });
 });
+
+describe('stripping the reasoning of the model (--strip-thinking, t1165)', () => {
+  const THOUGHT = 'weighing the napkin plan before answering';
+  const SIGNATURE = 'EsoBCkYIBxgCKkDq2sig';
+  const REDACTED = 'EuYBredactedthinkingblob';
+  const reasoned = (session: string, n: number, blocks: readonly object[]): string =>
+    line({ type: 'assistant', uuid: uuidOf(session, 'a', n), parentUuid: uuidOf(session, 'b', n), isSidechain: false, timestamp: at(n + 1), version: '2.1.300', sessionId: session, requestId: requestOf(session, n), message: { role: 'assistant', model: 'claude-opus-5-5', content: blocks, usage: { input_tokens: 10, output_tokens: 20 } } });
+  const claudeLines = (): string[] => [
+    user(S(1), 1, USER_TEXT),
+    reasoned(S(1), 1, [{ type: 'thinking', thinking: THOUGHT, signature: SIGNATURE }, { type: 'text', text: 'first answer' }]),
+    user(S(1), 3, 'and the next'),
+    reasoned(S(1), 3, [{ type: 'thinking', thinking: '', signature: SIGNATURE }]),
+    user(S(1), 5, 'and one more'),
+    reasoned(S(1), 5, [{ type: 'redacted_thinking', data: REDACTED }, { type: 'text', text: 'last answer' }]),
+  ];
+  const built = async (f: Fixture, lines: readonly string[], extra: Partial<PackOptions> = {}): Promise<PackCounts> => {
+    f.write('-work-oars', S(1), lines);
+    await stored(f);
+    return buildPack(f.runtime, options(f, extra));
+  };
+  const linesOf = (out: string): string[] => transcriptText(out).split('\n').filter((row) => row !== '');
+  const packJson = (out: string): unknown => JSON.parse(readFileSync(join(out, 'pack.json'), 'utf8'));
+
+  it('removes every thinking and redacted_thinking block whole, with no signature left, and keeps the line of a message that held only thinking', async () => {
+    const f = fixture();
+    expect((await built(f, claudeLines(), { stripThinking: true })).emitted).toBe(1);
+    const text = transcriptText(f.out);
+    for (const gone of [THOUGHT, SIGNATURE, REDACTED, '"thinking"', 'redacted_thinking', 'signature']) expect(text).not.toContain(gone);
+    expect(text).toContain('first answer');
+    expect(text).toContain('last answer');
+    const rows = linesOf(f.out).map((row): unknown => JSON.parse(row));
+    expect(rows).toHaveLength(6);
+    const emptied = rows.filter((row) => typeof row === 'object' && row !== null && 'message' in row && typeof row.message === 'object' && row.message !== null && 'content' in row.message && Array.isArray(row.message.content) && row.message.content.length === 0);
+    expect(emptied).toHaveLength(1);
+  });
+
+  it('leaves every other byte as it is: the lines match the kept build one for one, and a transcript with no reasoning is identical', async () => {
+    const f = fixture();
+    const keptOut = join(f.root, 'kept');
+    await built(f, claudeLines(), { out: keptOut });
+    expect(transcriptText(keptOut)).toContain(THOUGHT);
+    expect(transcriptText(keptOut)).toContain(SIGNATURE);
+    await buildPack(f.runtime, options(f, { stripThinking: true }));
+    expect(linesOf(f.out)).toHaveLength(linesOf(keptOut).length);
+    const plain = fixture();
+    plain.write('-work-oars', S(1), [user(S(1), 1, USER_TEXT), assistant(S(1), 1, 'an answer'), user(S(1), 3, 'then'), assistant(S(1), 3, 'another')]);
+    await stored(plain);
+    const plainKept = join(plain.root, 'kept');
+    await buildPack(plain.runtime, options(plain, { out: plainKept }));
+    await buildPack(plain.runtime, options(plain, { stripThinking: true }));
+    expect(transcriptText(plain.out)).toBe(transcriptText(plainKept));
+    expect(manifest(plain.out).map((row) => ({ ...row, reasoning: undefined }))).toEqual(manifest(plainKept).map((row) => ({ ...row, reasoning: undefined })));
+  });
+
+  it('records reasoning: stripped or kept on pack.json and on each manifest row', async () => {
+    const stripped = fixture();
+    await built(stripped, claudeLines(), { stripThinking: true });
+    expect(packJson(stripped.out)).toMatchObject({ reasoning: 'stripped' });
+    expect(manifest(stripped.out).map((row) => row.reasoning)).toEqual(['stripped']);
+    const kept = fixture();
+    await built(kept, claudeLines());
+    expect(packJson(kept.out)).toMatchObject({ reasoning: 'kept' });
+    expect(manifest(kept.out).map((row) => row.reasoning)).toEqual(['kept']);
+    expect((await validate(stripped.out))?.violations).toEqual([]);
+    expect((await validate(kept.out))?.violations).toEqual([]);
+  });
+
+  it('keeps the skeleton, with its thinking-token bucket, as it is', async () => {
+    const f = fixture();
+    const keptOut = join(f.root, 'kept');
+    await built(f, claudeLines(), { out: keptOut });
+    await buildPack(f.runtime, options(f, { stripThinking: true }));
+    const skeletonOf = (out: string): string => readFileSync(packFiles(out).filter((file) => file.endsWith('skeleton.json'))[0] ?? '', 'utf8');
+    expect(skeletonOf(f.out)).toBe(skeletonOf(keptOut));
+  });
+
+  it('drops a Codex reasoning item, its events, and the same items in a compaction, and keeps the rest', async () => {
+    const f = fixture();
+    const secret = 'codex private chain of thought';
+    const rollout = codexRollout();
+    const withReasoning = [
+      ...rollout.slice(0, 6),
+      rolloutLine(codexTime(6), 'response_item', { type: 'reasoning', summary: [{ type: 'summary_text', text: secret }], content: null, encrypted_content: 'gAAAAABencryptedblob' }),
+      rolloutLine(codexTime(6), 'event_msg', { type: 'agent_reasoning', text: secret }),
+      rolloutLine(codexTime(6), 'event_msg', { type: 'agent_reasoning_raw_content', text: secret }),
+      rolloutLine(codexTime(6), 'compacted', { message: '', replacement_history: [{ type: 'reasoning', summary: [], encrypted_content: 'gAAAAABencryptedblob' }, { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'kept in compaction' }] }] }),
+      ...rollout.slice(6),
+    ];
+    const runtime = await withCodex(f, withReasoning);
+    const counts = await buildPack(runtime, options(f, { owners: ownersAll(f), stripThinking: true }));
+    expect(counts.emitted).toBe(1);
+    const text = transcriptText(f.out);
+    for (const gone of [secret, 'gAAAAABencryptedblob', '"reasoning"', 'agent_reasoning']) expect(text).not.toContain(gone);
+    expect(text).toContain('kept in compaction');
+    expect(text).toContain('fixed');
+    expect(linesOf(f.out)).toHaveLength(rollout.length + 1);
+  });
+
+  it('leaves a line that is not JSON, and a line with no content list, as written', async () => {
+    const f = fixture();
+    const lines = [...claudeLines(), 'not json at all', line({ type: 'summary', summary: 'a title', leafUuid: uuidOf(S(1), 'a', 5) })];
+    await built(f, lines, { stripThinking: true });
+    expect(transcriptText(f.out)).toContain('not json at all');
+    expect(transcriptText(f.out)).toContain('a title');
+  });
+
+  it('takes the flag on the command line, with no value', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), claudeLines());
+    await stored(f);
+    const printed: string[] = [];
+    const code = await main(['--terms', f.terms, '--owners', f.owners, '--index-key', f.indexKey, '--buyer-key', 'sample', '--min-turns', '1', '--strip-thinking', '--out', f.out], { runtime: f.runtime, print: (text) => printed.push(text) });
+    expect(code, printed.join('\n')).toBe(0);
+    expect(packJson(f.out)).toMatchObject({ reasoning: 'stripped' });
+    expect(transcriptText(f.out)).not.toContain(THOUGHT);
+    expect(USAGE).toMatch(/--strip-thinking/);
+  });
+});
