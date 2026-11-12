@@ -10,13 +10,14 @@ import { insideRepository, isAbsent, isText, PackError } from './sample-pack.js'
 export const USAGE = [
   'Usage: notices sent <match id> --recipient <name> --operator <dir>',
   '       notices sent --ids <file> --recipient <name> --operator <dir>',
-  '       notices confirmed (<match id> | --ids <file>) --recipient <name> --operator <dir>',
+  '       notices confirmed (<match id> | --ids <file>) --recipient <name> --operator <dir> [--at <date>]',
   '  sent               record that the recipient was told to erase these rows (Art. 17(2), 19)',
   '  confirmed          record that the recipient confirmed it erased them; each needs a notice recorded first',
   '  <match id>         the 64 hex characters the recipient holds the session under',
   '  --ids <file>       a file of match ids, one per line',
   '  --recipient <name> the buyer\'s legal name, as deliveries.jsonl holds it: every id needs a delivery to this recipient',
   '  --operator <dir>   the folder the owners file sits in, outside every git repository; notices.jsonl is appended there',
+  '  --at <date>        confirmed only: when the recipient replied, an ISO date or date-time with a zone (default: now); not in the future',
   'It appends to notices.jsonl and sends nothing: tell the recipient yourself. All the lines are written or none, and a line already recorded is skipped and counted.',
 ].join('\n');
 
@@ -28,6 +29,8 @@ export interface Notice {
   matchId: string;
   sentAt: string;
   confirmedAt: string | undefined;
+  /** When the line was written, kept only when `confirmedAt` was given by the operator and so says when the recipient replied, not when this was recorded. */
+  recordedAt: string | undefined;
 }
 
 /** The register in file order; empty when no notice was ever recorded. A line that is not a notice is named by its number and never quoted. */
@@ -37,7 +40,8 @@ export const noticesOf = async (dir: string): Promise<Notice[]> => {
     text = await readFile(join(dir, NOTICES_FILE), 'utf8');
   } catch (error) {
     if (isAbsent(error)) return [];
-    throw error;
+    // Node's own message holds the operator folder path, which an output never carries.
+    throw new PackError(`${NOTICES_FILE} cannot be read.`);
   }
   const lines = text.split(String.fromCharCode(10)).map((row, at): [string, number] => [row.trim(), at + 1]).filter(([row]) => row !== '');
   return lines.map(([row, at]): Notice => {
@@ -47,9 +51,9 @@ export const noticesOf = async (dir: string): Promise<Notice[]> => {
     } catch {
       throw new PackError(`${NOTICES_FILE} holds a line that is not JSON.`);
     }
-    const [recipient, matchId, sentAt, confirmedAt] = ['recipient', 'matchId', 'sentAt', 'confirmedAt'].map((name) => fieldOf(value, name));
-    if (!isText(recipient) || !isText(matchId) || !isText(sentAt) || (confirmedAt !== undefined && !isText(confirmedAt))) throw new PackError(`Line ${String(at)} of ${NOTICES_FILE} is not a notice.`);
-    return { recipient, matchId, sentAt, confirmedAt };
+    const [recipient, matchId, sentAt, confirmedAt, recordedAt] = ['recipient', 'matchId', 'sentAt', 'confirmedAt', 'recordedAt'].map((name) => fieldOf(value, name));
+    if (!isText(recipient) || !isText(matchId) || !isText(sentAt) || (confirmedAt !== undefined && !isText(confirmedAt)) || (recordedAt !== undefined && !isText(recordedAt))) throw new PackError(`Line ${String(at)} of ${NOTICES_FILE} is not a notice.`);
+    return { recipient, matchId, sentAt, confirmedAt, recordedAt };
   });
 };
 
@@ -62,6 +66,8 @@ export interface RecordOptions {
   matchIds: readonly string[];
   /** False records that the notice was sent, true that the recipient confirmed it. */
   confirmed: boolean;
+  /** When the recipient replied, if before the call (`instantOf` has checked it); only with `confirmed`. The line then also records the time of the call. */
+  repliedAt?: Date | undefined;
   /** When the operator did it. A test injects its own. */
   now?: (() => Date) | undefined;
 }
@@ -71,6 +77,20 @@ export interface Recorded {
   rows: Notice[];
   skipped: number;
 }
+
+const ZONED = /^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2}))?$/;
+
+/** The instant an operator-given `--at` names (a plain date is midnight UTC), or why it cannot be taken. The reason never repeats the value. */
+export const instantOf = (text: string, now: Date): Date | string => {
+  const word = text.trim();
+  const match = ZONED.exec(word);
+  const date = new Date(word.length === 10 ? `${word}T00:00:00.000Z` : word);
+  const [year, month, day] = [1, 2, 3].map((group) => Number(match?.[group]));
+  // A date that rolls over (February 30, month 13) parses, so the month and day are compared back.
+  const real = new Date(Date.UTC(year ?? 0, (month ?? 1) - 1, day));
+  if (match === null || Number.isNaN(date.getTime()) || real.getUTCMonth() !== (month ?? 1) - 1 || real.getUTCDate() !== day) return 'Give --at as an ISO date or date-time with a zone, such as 2026-07-03 or 2026-07-03T10:30:00Z.';
+  return date.getTime() > now.getTime() ? '--at is in the future: record the day the recipient replied.' : date;
+};
 
 const idsOf = (ids: readonly string[]): string => `match id${ids.length === 1 ? '' : 's'} ${ids.join(', ')}`;
 
@@ -92,10 +112,10 @@ export const recordNotices = async (options: RecordOptions): Promise<Recorded> =
   for (const matchId of ids) {
     const current = noticeOf(notices, recipient, matchId);
     if (!options.confirmed) {
-      if (current === undefined) rows.push({ recipient, matchId, sentAt: at, confirmedAt: undefined });
+      if (current === undefined) rows.push({ recipient, matchId, sentAt: at, confirmedAt: undefined, recordedAt: undefined });
       else skipped += 1;
     } else if (current === undefined) unnoticed.push(matchId);
-    else if (current.confirmedAt === undefined) rows.push({ ...current, confirmedAt: at });
+    else if (current.confirmedAt === undefined) rows.push(options.repliedAt === undefined ? { ...current, confirmedAt: at } : { ...current, confirmedAt: options.repliedAt.toISOString(), recordedAt: at });
     else skipped += 1;
   }
   if (unnoticed.length > 0) throw new PackError(`No erasure notice to this recipient is recorded for ${idsOf(unnoticed)}: record the notice first.`);
@@ -108,7 +128,7 @@ export interface Io {
   now?: (() => Date) | undefined;
 }
 
-const VALUED = new Set(['--ids', '--recipient', '--operator']);
+const VALUED = new Set(['--ids', '--recipient', '--operator', '--at']);
 
 interface Asked {
   values: Map<string, string>;
@@ -142,15 +162,19 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
   if (kind !== 'sent' && kind !== 'confirmed') return usage('Say whether the notice was sent or confirmed.');
   const asked = askedOf(argv.slice(1));
   if (typeof asked === 'string') return usage(asked);
-  const [ids, recipient, operator] = ['--ids', '--recipient', '--operator'].map((flag) => asked.values.get(flag));
+  const [ids, recipient, operator, at] = ['--ids', '--recipient', '--operator', '--at'].map((flag) => asked.values.get(flag));
+  if (at !== undefined && kind !== 'confirmed') return usage('--at goes with confirmed only: a notice is recorded at the time of the call.');
   if ((asked.matchId === undefined) === (ids === undefined)) return usage('Give a match id, or a file of them with --ids.');
   if (recipient === undefined || recipient.trim() === '') return usage('Missing --recipient.');
   if (operator === undefined) return usage('Missing --operator.');
   if (asked.matchId !== undefined && !MATCH_ID.test(asked.matchId)) return usage('A match id is 64 hex characters.');
+  const now = io.now ?? ((): Date => new Date());
+  const replied = at === undefined ? undefined : instantOf(at, now());
+  if (typeof replied === 'string') return usage(replied);
   try {
     const matchIds = asked.matchId !== undefined ? [asked.matchId] : await idsIn(ids ?? '');
     const confirmed = kind === 'confirmed';
-    const { rows, skipped } = await recordNotices({ operator, recipient: recipient.trim(), matchIds: matchIds.map((matchId) => matchId.toLowerCase()), confirmed, now: io.now });
+    const { rows, skipped } = await recordNotices({ operator, recipient: recipient.trim(), matchIds: matchIds.map((matchId) => matchId.toLowerCase()), confirmed, repliedAt: replied, now });
     const what = confirmed ? `erasure confirmation${rows.length === 1 ? '' : 's'} from` : `erasure notice${rows.length === 1 ? '' : 's'} as sent to`;
     io.print(`Recorded ${String(rows.length)} ${what} ${recipient.trim()} in ${NOTICES_FILE} (${String(skipped)} already recorded, skipped). Nothing was sent: ${confirmed ? 'this only records what the recipient told you' : 'send the notice yourself'}.`);
     return 0;

@@ -240,11 +240,16 @@ describe('notices (the command)', () => {
     expect(text).toMatch(/inside a git repository/);
   });
 
-  it('rethrows a failure that is not a refusal', async () => {
+  it('refuses a register it cannot read, naming the file and not the path', async () => {
     const f = fixture();
     mkdirSync(join(f.operator, NOTICES_FILE));
 
-    await expect(run(['sent', M1, '--recipient', ACME, '--operator', f.operator])).rejects.toThrow();
+    const { code, text } = await run(['sent', M1, '--recipient', ACME, '--operator', f.operator]);
+
+    expect(code).toBe(2);
+    expect(text).toBe('notices.jsonl cannot be read.');
+    expect(text).not.toContain(f.root);
+    await expect(noticesOf(f.operator)).rejects.toThrow(/^notices\.jsonl cannot be read\.$/);
   });
 
   it('prints no session id, owner, project folder, pack path, or key, in any output or refusal', async () => {
@@ -262,6 +267,7 @@ describe('notices (the command)', () => {
       (await run(['sent', M1, '--recipient', BUYER_KEY, '--operator', f.operator])).text,
       (await run(['confirmed', M2, ...asked])).text,
       (await run(['sent', 'f9'.repeat(32), ...asked])).text,
+      (await run(['confirmed', M1, '--at', BUYER_KEY, ...asked])).text,
     ];
     // A register line, a delivery line, and an ids line cut short.
     writeFileSync(join(f.operator, NOTICES_FILE), `{"recipient":"${ACME}","session":"${S1}"\n`, { flag: 'a' });
@@ -271,7 +277,7 @@ describe('notices (the command)', () => {
     writeFileSync(join(f.operator, 'ids.txt'), `${M1}\n${S1}\n`);
     outputs.push((await run(['sent', '--ids', join(f.operator, 'ids.txt'), ...asked])).text);
 
-    expect(outputs).toHaveLength(12);
+    expect(outputs).toHaveLength(13);
     for (const output of outputs) {
       expect(output).not.toBe('');
       for (const secret of secrets) expect(output).not.toContain(secret);
@@ -286,5 +292,76 @@ describe('notices (the command)', () => {
     await run(['sent', M1, '--recipient', ACME, '--operator', f.operator]);
 
     expect(fetched).toHaveBeenCalledTimes(0);
+  });
+});
+
+describe('notices confirmed --at', () => {
+  const T_REPLY = '2026-07-02T08:30:00.000Z';
+
+  const sentFirst = async (): Promise<{ root: string; operator: string }> => {
+    const f = fixture();
+    await run(['sent', M1, '--recipient', ACME, '--operator', f.operator]);
+    return f;
+  };
+
+  it('records the recipient own time as the confirmation time, and when the line was written beside it', async () => {
+    const f = await sentFirst();
+
+    const { code } = await run(['confirmed', M1, '--at', '2026-07-02T10:30:00+02:00', '--recipient', ACME, '--operator', f.operator], T2);
+
+    expect(code).toBe(0);
+    expect(rowsOf(f.operator)[1]).toEqual({ recipient: ACME, matchId: M1, sentAt: T1, confirmedAt: T_REPLY, recordedAt: T2 });
+    expect((await noticesOf(f.operator)).at(-1)?.confirmedAt).toBe(T_REPLY);
+  });
+
+  it('takes a plain date as midnight UTC of that day', async () => {
+    const f = await sentFirst();
+
+    expect((await run(['confirmed', M1, '--at', '2026-07-02', '--recipient', ACME, '--operator', f.operator], T2)).code).toBe(0);
+
+    expect(rowsOf(f.operator)[1]).toEqual({ recipient: ACME, matchId: M1, sentAt: T1, confirmedAt: '2026-07-02T00:00:00.000Z', recordedAt: T2 });
+  });
+
+  it('leaves the line as it was without --at: the time of the call, and no recordedAt', async () => {
+    const f = await sentFirst();
+
+    await run(['confirmed', M1, '--recipient', ACME, '--operator', f.operator], T2);
+
+    expect(rowsOf(f.operator)[1]).toEqual({ recipient: ACME, matchId: M1, sentAt: T1, confirmedAt: T2 });
+  });
+
+  it('refuses a value that is not an ISO date or date-time with a zone, and writes nothing', async () => {
+    const f = await sentFirst();
+    const before = snapshot(f.root);
+
+    for (const bad of ['yesterday', '2026-02-30', '2026-07-02T10:30:00', '07/02/2026', '2026-13-01', '']) {
+      const { code, text } = await run(['confirmed', M1, '--at', bad, '--recipient', ACME, '--operator', f.operator], T2);
+      expect(code).toBe(2);
+      expect(text).toMatch(/^Give --at as an ISO date or date-time with a zone/);
+      expect(text).toContain(USAGE);
+    }
+
+    expect(snapshot(f.root)).toEqual(before);
+  });
+
+  it('refuses a time after the call, and writes nothing', async () => {
+    const f = await sentFirst();
+    const before = snapshot(f.root);
+
+    const { code, text } = await run(['confirmed', M1, '--at', '2026-07-04T00:00:00Z', '--recipient', ACME, '--operator', f.operator], T2);
+
+    expect(code).toBe(2);
+    expect(text).toMatch(/^--at is in the future/);
+    expect(snapshot(f.root)).toEqual(before);
+  });
+
+  it('refuses --at on a sent notice, which is always the time of the call', async () => {
+    const f = fixture();
+
+    const { code, text } = await run(['sent', M1, '--at', '2026-06-30', '--recipient', ACME, '--operator', f.operator]);
+
+    expect(code).toBe(2);
+    expect(text).toMatch(/^--at goes with confirmed only/);
+    expect(() => registerOf(f.operator)).toThrow();
   });
 });

@@ -164,7 +164,8 @@ const erasureOf = (notice: Notice | undefined, withdrawn: Withdrawal[] | Unknown
   return notice.confirmedAt === undefined ? { state: 'notice-sent', at: notice.sentAt } : { state: 'confirmed', at: notice.confirmedAt };
 };
 
-const PROGRESS: { [state in ErasureState]: number } = { unknown: 0, 'notice-sent': 1, confirmed: 2, 'none-due': 2 };
+// `none-due` ranks past `confirmed` on purpose: a row confirmed at one recipient and owing nothing at another reads `confirmed`, whatever the delivery order.
+const PROGRESS: { [state in ErasureState]: number } = { unknown: 0, 'notice-sent': 1, confirmed: 2, 'none-due': 3 };
 
 /** The state furthest from done among the deliveries, so a row reads `confirmed` only when every recipient confirmed. */
 const leastOf = (states: readonly ErasureState[]): ErasureState => states.reduce((least, state) => (PROGRESS[state] < PROGRESS[least] ? state : least));

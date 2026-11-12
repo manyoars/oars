@@ -245,6 +245,21 @@ describe('licenseStatus', () => {
     expect(report.rows.map((row) => [row.state, row.erasure])).toEqual([['delivered', 'notice-sent'], ['delivered', 'none-due']]);
   });
 
+  it('reads a row confirmed at one recipient and none-due at the other as confirmed, whichever delivery comes first', async () => {
+    const reads: string[] = [];
+    for (const confirmedAt of ['Acme Evals Inc.', 'Beta Labs Ltd']) {
+      const f = fixture();
+      await send(f, packOf(f, 'lot-1', [[S1, M1]]), 'Acme Evals Inc.', 'term-sheet-v1');
+      await send(f, packOf(f, 'lot-2', [[S1, M1]]), 'Beta Labs Ltd', 'term-sheet-v2');
+      await notice(f, 'sent', confirmedAt, M1, '2026-07-01T09:00:00.000Z');
+      await notice(f, 'confirmed', confirmedAt, M1, '2026-07-02T09:00:00.000Z');
+      const row = only(await licenseStatus(f.operator, KEY_ID, [M1]));
+      reads.push(`${row.erasure}:${row.deliveries.map(({ recipient, erasure }) => `${recipient}=${erasure.state}`).join(',')}`);
+    }
+
+    expect(reads).toEqual(['confirmed:Acme Evals Inc.=confirmed,Beta Labs Ltd=none-due', 'confirmed:Acme Evals Inc.=none-due,Beta Labs Ltd=confirmed']);
+  });
+
   it('refuses a register line that is cut, naming the file and not quoting it', async () => {
     const f = fixture();
     await send(f, packOf(f, 'lot-1', [[S1, M1]]), 'Acme Evals Inc.', 'term-sheet-v1');
@@ -384,14 +399,19 @@ describe('license-status (the command)', () => {
     writeFileSync(join(f.operator, 'index.jsonl'), `{"session":"${S1}",\n`, { flag: 'a' });
     outputs.push((await run([M1, '--key-id', KEY_ID, '--operator', f.operator])).text);
 
-    writeFileSync(join(f.operator, 'notices.jsonl'), `{"recipient":"Acme Evals Inc.","session":"${S1}"\n`);
-    outputs.push((await run([M1, '--key-id', KEY_ID, '--operator', f.operator])).text);
+    // The register cut on a fresh fixture, so index.jsonl and deliveries.jsonl are sound and the run reaches the notices refusal itself.
+    const cut = await full();
+    writeFileSync(join(cut.operator, 'notices.jsonl'), `{"recipient":"Acme Evals Inc.","session":"${S1}"\n`);
+    const cutOutput = (await run([M1, '--key-id', KEY_ID, '--operator', cut.operator])).text;
+    expect(cutOutput).toContain('notices.jsonl holds a line that is not JSON.');
+    outputs.push(cutOutput);
 
     expect(outputs).toHaveLength(10);
     for (const output of outputs) {
       expect(output).not.toBe('');
       for (const secret of secrets) expect(output).not.toContain(secret);
     }
+    expect(cutOutput).not.toContain(cut.root);
     expect(USAGE).toMatch(/never the key/);
   });
 
