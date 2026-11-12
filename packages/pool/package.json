@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "erase": "node scripts/erase.mjs",
+    "pull-deposits": "node scripts/pull-deposits.mjs",
     "sample-pack": "node scripts/sample-pack.mjs",
     "deliver": "node scripts/deliver.mjs",
     "license-status": "node scripts/license-status.mjs",
