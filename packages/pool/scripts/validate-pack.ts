@@ -146,7 +146,9 @@ const checkObject = (name: string, value: Fields, at: string, where: string): Vi
     }
     const nested = NESTED[name]?.[key];
     if (nested === undefined) continue;
-    if (Array.isArray(entry)) entry.forEach((item: unknown, index) => void (isFields(item) && found.push(...checkObject(nested, item, `${under(key)}[${String(index)}]`, where))));
+    if (Array.isArray(entry)) entry.forEach((item: unknown, index) => {
+        if (isFields(item)) found.push(...checkObject(nested, item, `${under(key)}[${String(index)}]`, where));
+      });
     else if (isFields(entry)) found.push(...checkObject(nested, entry, under(key), where));
   }
   for (const key of Object.keys(value)) if (!Object.hasOwn(table, key)) found.push({ where, field: under(key), rule: 'unknown field' });
@@ -183,7 +185,7 @@ export const checkRecord = (value: unknown, where: string, matchId?: string): Vi
       if (digests !== undefined) found.push({ where, field: `transcripts[${String(transcript)}].tools[${String(call)}].digests`, rule: 'not allowed: a plain digest of unredacted text' });
     });
   });
-  const { id: _id, ...rest } = value;
+  const rest = Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'id'));
   return [...found, ...rawIdsIn(rest).map((field) => ({ where, field, rule: RAW_ID }))];
 };
 

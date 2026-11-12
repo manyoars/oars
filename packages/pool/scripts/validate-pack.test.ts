@@ -65,8 +65,7 @@ describe('the page and the writer cannot drift', () => {
     expect([...new Set(page)].sort()).toEqual([...written].sort());
   });
 
-  it.each(Object.keys(OPTIONAL))('lists the %s fields the reader allows to be absent as optional, and the rest as required', (level) => {
-    const optional = (OPTIONAL as { readonly [level: string]: readonly string[] })[level] ?? [];
+  it.each(Object.entries(OPTIONAL))('lists the %s fields the reader allows to be absent as optional, and the rest as required', (level, optional) => {
     const page = tableOf('Record', level).fields;
     expect(page.filter((field) => !field.required).map((field) => field.name).sort()).toEqual(optional.filter((name) => name !== 'digests').sort());
     expect(page.filter((field) => field.required).length).toBeGreaterThan(0);
@@ -89,6 +88,9 @@ const OTHER_MATCH = 'b2'.repeat(32);
 const frame = (): object => ({ harness: 'claude-code', platform: 'linux', stack: { languages: [], frameworks: [] } });
 
 /** The smallest record the pool's reader accepts: one transcript, one prompt, no tools. */
+const without = (value: { [key: string]: unknown }, key: string): { [key: string]: unknown } => Object.fromEntries(Object.entries(value).filter(([name]) => name !== key));
+const objects = (value: unknown): { [key: string]: unknown }[] => (Array.isArray(value) ? value.filter((item): item is { [key: string]: unknown } => typeof item === 'object' && item !== null) : []);
+
 const record = (id = MATCH): { [key: string]: unknown } => ({
   format: SKELETON_FORMAT,
   vocabVersion: '1',
@@ -190,12 +192,12 @@ describe('a pack', () => {
   });
 
   it('conforms with no record, when the row names none', async () => {
-    const { skeleton: _skeleton, ...bare } = row();
+    const bare = without(row(), 'skeleton');
     expect(found((await validate(pack({ row: bare, record: undefined })))?.violations)).toEqual([]);
   });
 
   it('reports a missing required field by its name', async () => {
-    const { redactionVersion: _removed, ...short } = row();
+    const short = without(row(), 'redactionVersion');
     const printed = await lines(pack({ row: short }));
     expect(printed.code).toBe(1);
     expect(printed.out).toEqual(['manifest.jsonl:1 redactionVersion: missing']);
@@ -216,7 +218,7 @@ describe('a pack', () => {
   it('reports a raw id in a row, in a record, and in a transcript, and never the id', async () => {
     const uuid = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
     const tool = 'toolu_01A09q90qw90lq917835lq9';
-    const dirty = { ...record(), transcripts: [{ ...(record().transcripts as { [key: string]: unknown }[])[0], frames: [{ ...frame(), model: tool }] }] };
+    const dirty = { ...record(), transcripts: [{ ...objects(record().transcripts)[0], frames: [{ ...frame(), model: tool }] }] };
     const printed = await lines(pack({ row: { ...row(), repoOwner: uuid }, record: dirty, main: `${JSON.stringify({ type: 'user', content: `see ${tool}` })}\n` }));
     expect(printed.code).toBe(1);
     expect(printed.out).toContain('manifest.jsonl:1 repoOwner: holds a raw id');
@@ -240,7 +242,7 @@ describe('a pack', () => {
     expect((await lines(pack({ record: { ...record(), fieldsVersion: 'x' } }))).out).toHaveLength(1);
     expect((await lines(pack({ record: record(OTHER_MATCH) }))).out).toEqual([`sessions/${MATCH}/skeleton.json id: not the match id of its manifest row`]);
     const digested = record();
-    const [main0] = digested.transcripts as { [key: string]: unknown }[];
+    const [main0] = objects(digested.transcripts);
     const tool = { side: false, status: 'ok', steps: [{ action: 'other', native: 'private', identity: null, status: 'ok', agentType: null, frame: 0 }], digests: [{ new: 'ab'.repeat(16) }] };
     digested.transcripts = [{ ...main0, tools: [tool] }];
     expect((await lines(pack({ record: digested }))).out).toEqual([expect.stringContaining('tools[0].digests: not allowed')]);
