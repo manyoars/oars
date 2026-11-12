@@ -70,6 +70,7 @@ const instantOrNull: Check = (value) => (value === null ? undefined : !isText(va
 const time: Check = (value) => (!isText(value) ? 'not a string' : Number.isNaN(Date.parse(value)) ? 'not a date and time' : undefined);
 const oneOf = (list: readonly string[]): Check => (value) => (isText(value) && list.includes(value) ? undefined : 'not one of the listed values');
 const shaped = (shape: RegExp, rule: string): Check => (value) => (!isText(value) ? 'not a string' : shape.test(value) ? undefined : rule);
+const isoTime = shaped(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/, 'not an ISO 8601 time');
 const listOf = (item: Check): Check => (value) => (!Array.isArray(value) ? 'not a list' : value.map(item).find((rule) => rule !== undefined));
 
 const required = (check: Check): FieldSpec => ({ required: true, check });
@@ -104,7 +105,7 @@ const ROW_FIELDS: { readonly [K in keyof Required<DepositManifestRow>]: FieldSpe
   // Optional: a pack built before the field existed holds the reasoning and says nothing.
   reasoning: optional(oneOf(['kept', 'stripped'])),
   // Optional: a deposit row has it (checkRow ties it to a depositor owner value); an operator row does not.
-  acceptedAt: optional(time),
+  acceptedAt: optional((value) => isoTime(value) ?? time(value)),
   redactionVersion: required(text),
   startedAt: required(instantOrNull),
   endedAt: required(instantOrNull),
@@ -169,7 +170,10 @@ export const checkRow = (value: unknown, where: string): Violation[] => {
   const raw = rawIdsIn(value).filter((field) => field !== 'matchId');
   const found = checkObject('row', value, '', where);
   // acceptedAt is the proof of a depositor's grant; a row owned by anyone else has no such grant to date.
-  if (Object.hasOwn(value, 'acceptedAt') && !(isText(value.repoOwner) && DEPOSITOR_OWNER.test(value.repoOwner))) found.push({ where, field: 'acceptedAt', rule: 'only a row with a depositor: owner value has it' });
+  const depositor = isText(value.repoOwner) && DEPOSITOR_OWNER.test(value.repoOwner);
+  // ...and a depositor row with none cites no acceptance, so it never validates.
+  if (depositor && !Object.hasOwn(value, 'acceptedAt')) found.push({ where, field: 'acceptedAt', rule: 'missing' });
+  if (Object.hasOwn(value, 'acceptedAt') && !depositor) found.push({ where, field: 'acceptedAt', rule: 'only a row with a depositor: owner value has it' });
   return [...found, ...raw.map((field) => ({ where, field, rule: RAW_ID }))];
 };
 

@@ -113,7 +113,7 @@ describe('licenseStatus', () => {
       : row.matchId === M3 ? { ...row, sourceLicense: 'manyoars-covenant 2.0 sha256:' + 'cd'.repeat(32) } : row));
     writeFileSync(manifest, deposit.map((row) => `${JSON.stringify(row)}\n`).join(''));
     const report = await licenseStatus(f.operator, KEY_ID, [M1, M2, M3]);
-    expect(report.rows.map(({ matchId, covenant }) => [matchId, covenant])).toEqual([[M1, 'unknown'], [M2, '2.1, accepted 2026-07-01T00:00:00.000Z'], [M3, '2.0']]);
+    expect(report.rows.map(({ matchId, covenant }) => [matchId, covenant])).toEqual([[M1, 'unknown'], [M2, '2.1, accepted 2026-07-01T00:00:00.000Z'], [M3, 'unknown']]);
     const out: string[] = [];
     expect(await main([M2, '--key-id', KEY_ID, '--operator', f.operator], { print: (line) => out.push(line) })).toBe(0);
     expect(out.join('\n')).toContain('2.1, accepted 2026-07-01T00:00:00.000Z');

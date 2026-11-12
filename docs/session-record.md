@@ -32,8 +32,8 @@ A session folder is named by its row's `matchId`, and a folder no row names does
 
 - A raw id: a UUID, or a harness's tool, message, or request id (`toolu_`, `srvtoolu_`, `msg_`, `req_`) left unmasked, in a manifest row, a record, or a transcript line. A transcript line's `sessionId` is the match id.
 - A field this page does not list, in a row or a record.
-- A file the manifest does not list: a pack holds `pack.json`, `manifest.jsonl`, and, under `sessions/<matchId>/`, only the transcripts and the record its row names.
-- A `acceptedAt` on a row whose `repoOwner` is not a `depositor:<16 hex>` value: the field belongs to rows built from a pool deposit.
+- A file the manifest does not list: a pack holds `pack.json`, `manifest.jsonl`, `census.json`, and, under `sessions/<matchId>/`, only the transcripts and the record its row names.
+- An `acceptedAt` on a row whose `repoOwner` is not a `depositor:<16 hex>` value: the field belongs to rows built from a pool deposit. The reverse holds too: a row with a `depositor:<16 hex>` owner and no `acceptedAt` cites no acceptance and does not conform.
 - A `<field>Literal` field beside an `other`.
 - A digest of the text of an edit (`digests` on a tool call): a plain hash of text that was not masked.
 - A row with an empty `harnessTerms`, or `training` among `permittedUses` (`training` has its own field).
@@ -61,7 +61,7 @@ One JSON object per line. Types: `text` is a non-empty string; `count` is a whol
 | pointer | object or null | no | The repository the session worked in, for an owner who opted in; see `pointer`. |
 | outcome | object | no | What happened to the work, for an owner who opted in; see `outcome`. |
 | reasoning | `kept` or `stripped` | no | Whether the transcripts hold the model's reasoning blocks (`kept`) or the seller left them out (`stripped`). A row without it comes from a pack built before the field, and holds them. |
-| acceptedAt | time | no | Present only on a row built from a pool deposit: when the depositor accepted the covenant cited in `sourceLicense`, as an ISO 8601 time with milliseconds. A row without it is an operator row. A row with it has a `repoOwner` of the form `depositor:<16 hex>`. |
+| acceptedAt | time | no | Present only on a row built from a pool deposit: when the depositor accepted the covenant cited in `sourceLicense`, as an ISO 8601 time with milliseconds (`2026-07-01T00:00:00.000Z`). A row without it is an operator row. A row with it has a `repoOwner` of the form `depositor:<16 hex>`, and a row with that owner must have it. |
 | redactionVersion | text | yes | The version of the redaction the transcripts went through. |
 | startedAt | time or null | yes | When the session began. |
 | endedAt | time or null | yes | When the session ended. |

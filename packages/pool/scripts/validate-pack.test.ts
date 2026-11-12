@@ -210,11 +210,11 @@ describe('a pack', () => {
   });
 
   it('validate-pack refuses an acceptedAt that is not a time', async () => {
-    for (const bad of ['yesterday-planted', null, 5]) {
+    for (const bad of ['yesterday-planted', '2026-07-01', '1', null, 5]) {
       const printed = await lines(pack({ row: { ...row(), ...DEPOSIT, acceptedAt: bad } }));
       expect(printed.code).toBe(1);
       expect(printed.out).toHaveLength(1);
-      expect(printed.out[0]).toMatch(/^manifest\.jsonl:1 acceptedAt: not a (string|date and time)/);
+      expect(printed.out[0]).toMatch(/^manifest\.jsonl:1 acceptedAt: not (a string|a date and time|an ISO 8601 time)/);
       expect(printed.out.join('\n')).not.toContain('planted');
     }
   });
@@ -225,6 +225,12 @@ describe('a pack', () => {
       expect(printed.code).toBe(1);
       expect(printed.out).toEqual(['manifest.jsonl:1 acceptedAt: only a row with a depositor: owner value has it']);
     }
+  });
+
+  it('validate-pack refuses a depositor row with no acceptedAt', async () => {
+    const printed = await lines(pack({ row: { ...row(), repoOwner: DEPOSIT.repoOwner, sourceLicense: DEPOSIT.sourceLicense } }));
+    expect(printed.code).toBe(1);
+    expect(printed.out).toEqual(['manifest.jsonl:1 acceptedAt: missing']);
   });
 
   it('an operator row has no acceptedAt and still conforms', async () => {

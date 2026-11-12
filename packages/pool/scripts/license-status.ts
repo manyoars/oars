@@ -140,6 +140,9 @@ const termsOf = (row: unknown): Pick<LotStatus, 'harnessTerms' | 'permittedUses'
 
 /** The covenant a deposit row was accepted under, from the manifest row alone (no pool call): the version named in `sourceLicense`, and `acceptedAt` when the row has it. An operator row names none. */
 const covenantOf = (row: unknown): string => {
+  // Only a deposit row (a depositor: owner) has a covenant; an operator row's license string is not one.
+  const owner = fieldOf(row, 'repoOwner');
+  if (!isText(owner) || !/^depositor:[0-9a-f]{16}$/.test(owner)) return UNKNOWN;
   const license = fieldOf(row, 'sourceLicense');
   const version = isText(license) ? /^manyoars-covenant (\S+) sha256:/.exec(license)?.[1] : undefined;
   if (version === undefined) return UNKNOWN;
