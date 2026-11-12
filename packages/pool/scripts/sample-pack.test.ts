@@ -11,7 +11,7 @@ import { SKELETON_FORMAT, type SessionSkeleton } from '../../cli/src/sessions/po
 import { deposit, loadStore, paths, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { runGit } from '../../cli/src/sessions/survival.js';
 import { rolloutLine, stageCodex } from '../../cli/src/sessions/test-support.js';
-import { buildPack, decodedStrings, HARNESS_TERMS, main, matchIdOf, ownerOf, parseOwners, secretIn, serverKeyOf, skeletonUnder, USAGE, type Census, type ManifestRow, type PackCounts, type PackOptions, type Tally } from './sample-pack.js';
+import { buildPack, decodedStrings, HARNESS_TERMS, keyIdOf, main, matchIdOf, ownerOf, parseOwners, secretIn, serverKeyOf, skeletonUnder, USAGE, type Census, type ManifestRow, type PackCounts, type PackOptions, type Tally } from './sample-pack.js';
 
 // Every session the exclusion check was asked about, in call order: the frame-first rule is proved by who was never asked.
 const gated = vi.hoisted((): string[] => []);
@@ -1940,8 +1940,8 @@ describe('--buyer-key-file', () => {
     expect((await run(byFlag, ['--buyer-key', 'sample-secret'])).code).toBe(0);
     const byFile = fixture();
     expect((await run(byFile, ['--buyer-key-file', keyFile(byFile, 'sample-secret\r\n')])).code).toBe(0);
-    const keyId = (f: Fixture): string => (JSON.parse(readFileSync(join(f.out, 'pack.json'), 'utf8')) as { keyId: string }).keyId;
-    expect(keyId(byFile)).toBe(keyId(byFlag));
+    expect(JSON.parse(readFileSync(join(byFile.out, 'pack.json'), 'utf8'))).toMatchObject({ keyId: keyIdOf('sample-secret') });
+    expect(JSON.parse(readFileSync(join(byFlag.out, 'pack.json'), 'utf8'))).toMatchObject({ keyId: keyIdOf('sample-secret') });
   });
 
   it('refuses both flags, a missing file, and an empty file, and writes no pack', async () => {
