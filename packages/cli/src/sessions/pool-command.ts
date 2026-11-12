@@ -79,9 +79,15 @@ export const runtimeOf = (deps: RunDeps): SessionsRuntime => {
   return deps.sessions;
 };
 
-export const signedIn = async (deps: RunDeps, storeDir: string, server: string, step: string): Promise<SignIn> => {
+/** The sign-in held for this server that has not expired, or undefined. */
+const heldSignIn = async (deps: RunDeps, storeDir: string, server: string, step: string): Promise<SignIn | undefined> => {
   const found = (await loadSignIns(storeDir, step)).find((entry) => entry.server === server);
-  if (found === undefined || found.expiresAt <= deps.now()) throw new CliError(`Not signed in to ${server}. Run oars pool login first.`, ExitCode.AUTH, step);
+  return found === undefined || found.expiresAt <= deps.now() ? undefined : found;
+};
+
+export const signedIn = async (deps: RunDeps, storeDir: string, server: string, step: string): Promise<SignIn> => {
+  const found = await heldSignIn(deps, storeDir, server, step);
+  if (found === undefined) throw new CliError(`Not signed in to ${server}. Run oars pool login first.`, ExitCode.AUTH, step);
   return found;
 };
 
@@ -1094,6 +1100,72 @@ export const poolFetch = async (deps: RunDeps, options: { server?: string | unde
     document: { ok: true, server, harness, harnessVersion, file, unchanged: false, cells: cells.length, motifs: motifs.length, reads: reads.length, asOf, ...(floors === undefined ? {} : { floors }) },
     text: `Fetched ${harness} ${harnessVersion}: ${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs, verified against the pinned key and kept at ${file}.${floorSentence(floors)}`,
   };
+};
+
+const JOIN = 'pool-join';
+const JOIN_AGAIN = 'Run oars pool join again to continue from here.';
+
+/**
+ * `oars pool join`: the five commands of a first deposit in one run, each by the handler the command itself uses: `login`, `deposit`, `outbox --explain`, `deposit --send <hash>` for each batch not yet sent, then `fetch`. It asks and checks
+ * nothing they do not, and a step that stops ends the run with that step's own error. Run again it skips what stands: a held sign-in, a prepared batch not yet sent, a batch in `sent.log`.
+ * With `json` the steps' texts are not printed (stdout holds one document); without it each prints as it finishes, so the explanation is on screen before the send asks anything.
+ */
+export const poolJoin = async (
+  deps: RunDeps,
+  options: { server?: string | undefined; provider?: string | undefined; verbose?: boolean; acceptCovenant?: string | undefined; inEuEeaUk?: string | undefined; harness?: string | undefined; harnessVersion: string; json?: boolean; via?: Sender | undefined; lock?: SendLock | undefined },
+): Promise<Outcome> => {
+  const { storeDir } = runtimeOf(deps);
+  const server = poolServer(deps.env, JOIN, options.server);
+  const say = (line: string): void => {
+    deps.io.stderr(`${line}
+`);
+  };
+  const show = (outcome: Outcome): Outcome => {
+    if (options.json !== true) deps.io.stdout(`${outcome.text}
+`);
+    return outcome;
+  };
+  const outbox = outboxFolder(storeDir, server);
+  const unsent = async (): Promise<string[]> => {
+    const sent = await sentLog(outbox);
+    return (await heldAcross(outbox)).batches.flatMap(({ hash }) => (sent.has(hash) ? [] : [hash]));
+  };
+  try {
+    const held = await heldSignIn(deps, storeDir, server, LOGIN);
+    let login: object = { skipped: true, account: held?.account };
+    if (held === undefined) {
+      say(`Signing in to ${server}.`);
+      login = show(await poolLogin(deps, { server, provider: options.provider, verbose: options.verbose })).document;
+    } else {
+      say(`Already signed in to ${server} as ${held.account}.`);
+    }
+    let prepared: object = { skipped: true };
+    if ((await unsent()).length > 0) {
+      say('Your outbox already holds a prepared batch; not preparing it again.');
+    } else {
+      say('Preparing your deposit in the outbox.');
+      prepared = show(await poolDeposit(deps, { server })).document;
+    }
+    say('Showing what will be sent, field by field.');
+    const shown = show(await poolOutbox(deps, { server, explain: true })).document;
+    const hashes = await unsent();
+    const sends: object[] = [];
+    if (hashes.length === 0) {
+      say((await heldAcross(outbox)).batches.length === 0 ? 'No session is ready to deposit yet; sending nothing.' : 'Everything prepared is already sent; sending nothing.');
+    } else {
+      say(`Sending ${plural(hashes.length, 'batch', 'batches')} to ${server}.`);
+      for (const hash of hashes) sends.push(show(await poolDeposit(deps, { server, send: hash, acceptCovenant: options.acceptCovenant, inEuEeaUk: options.inEuEeaUk, via: options.via, lock: options.lock })).document);
+    }
+    say(`Fetching the bundle for ${options.harness ?? 'your most used harness'} ${options.harnessVersion}.`);
+    const fetched = show(await poolFetch(deps, { server, harness: options.harness, harnessVersion: options.harnessVersion }));
+    return {
+      document: { ok: true, server, login, deposit: prepared, outbox: shown, sends, fetch: fetched.document },
+      text: `Joined ${server}: ${plural(sends.length, 'batch', 'batches')} sent this run, and the ${options.harnessVersion} bundle is kept.`,
+    };
+  } catch (error) {
+    say(JOIN_AGAIN);
+    throw error;
+  }
 };
 
 const RAW = 'pool-raw';

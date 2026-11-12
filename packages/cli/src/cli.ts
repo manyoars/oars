@@ -22,7 +22,7 @@ import { githubVisibility, poolEnroll, poolMachineRevoke, poolMachines } from '.
 import { runNetGit } from './sessions/machine-hold.js';
 import { holdPull } from './sessions/machine-pull.js';
 import { runGit } from './sessions/survival.js';
-import { poolCoverage, poolDeposit, poolExport, poolFetch, poolLogin, poolLogout, poolOutbox, poolProve, poolRaw, poolRemove } from './sessions/pool-command.js';
+import { poolCoverage, poolDeposit, poolExport, poolFetch, poolJoin, poolLogin, poolLogout, poolOutbox, poolProve, poolRaw, poolRemove } from './sessions/pool-command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 import { telemetryOff, telemetryOn, telemetryReport, telemetryShow, telemetryStatus } from './telemetry/command.js';
@@ -547,6 +547,22 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
   const pool = program.command('pool').description('sign in to a pool server, deposit session skeletons (a closed list of fields, each value redacted first) and, after a yes to the raw prompt, redacted raw copies, and fetch signed reads; local capture, recall, and reads need none of it. The covenant screen, where you type its phrase to accept, appears when you send a batch with oars pool deposit --send <hash> and have not accepted the covenant in force, not at sign-in');
   const serverOption = '--server <url>';
   const serverHelp = 'the pool server, https or plain http to localhost (default: OARS_POOL_URL, else https://pool.manyoars.com)';
+
+  pool
+    .command('join')
+    .description('sign in, deposit, and fetch in one command: it runs login, deposit, outbox --explain, deposit --send, and fetch in that order, and asks what each asks. Run it again after a stop to continue from there')
+    .option('--provider <name>', 'github or google, for the sign-in step (not needed once signed in)')
+    .option('--verbose', 'print each sign-in request, headers and body, to stderr before it is sent (a credential shows as its size)')
+    .option('--accept-covenant <version>', 'name the covenant version you expect, as deposit --send takes it: on a terminal the screen is shown and you type its phrase yourself, and off a terminal this is refused')
+    .option('--in-eu-eea-uk <yes|no>', 'answer "Are you in the EU, the EEA, or the UK?" when you accept, as deposit --send takes it')
+    .option('--harness <name>', 'the harness whose bundle to fetch (default: the one your local store holds the most sessions of, claude-code when none leads)')
+    .requiredOption('--harness-version <version>', 'the public harness version whose bundle to fetch, as fetch takes it')
+    .option(serverOption, serverHelp)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      const json = flag(options, 'json');
+      emit(deps, json, await poolJoin(deps, { server: text(options, 'server'), provider: text(options, 'provider'), verbose: flag(options, 'verbose'), acceptCovenant: text(options, 'acceptCovenant'), inEuEeaUk: text(options, 'inEuEeaUk'), harness: text(options, 'harness'), harnessVersion: text(options, 'harnessVersion') ?? '', json }));
+    });
 
   pool
     .command('logout')
