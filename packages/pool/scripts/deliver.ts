@@ -42,7 +42,7 @@ export interface DeliverOptions {
   now?: (() => Date) | undefined;
 }
 
-const fieldOf = (value: unknown, name: string): unknown => {
+export const fieldOf = (value: unknown, name: string): unknown => {
   if (typeof value !== 'object' || value === null) return undefined;
   const found: unknown = Reflect.get(value, name);
   return found;
@@ -59,24 +59,27 @@ const linesOf = async (file: string): Promise<unknown[]> => {
   return text.split(String.fromCharCode(10)).filter((row) => row.trim() !== '').map((row): unknown => JSON.parse(row));
 };
 
-const deliveriesOf = async (dir: string): Promise<Delivery[]> =>
+export const deliveriesOf = async (dir: string): Promise<Delivery[]> =>
   (await linesOf(join(dir, DELIVERIES_FILE))).flatMap((row): Delivery[] => {
     const [recipient, lot, keyId, matchId, session, deliveredAt, license] = ['recipient', 'lot', 'keyId', 'matchId', 'session', 'deliveredAt', 'license'].map((name) => fieldOf(row, name));
     if (!isText(recipient) || !isText(lot) || !isText(keyId) || !isText(matchId) || !isText(session) || !isText(deliveredAt) || !isText(license)) throw new PackError(`${DELIVERIES_FILE} holds a line that is not a delivery.`);
     return [{ recipient, lot, keyId, matchId, session, deliveredAt, license }];
   });
 
-interface IndexEntry {
+export interface IndexEntry {
   pack: string;
   session: string;
   matchId: string;
 }
 
-const indexOf = async (dir: string): Promise<IndexEntry[]> =>
+export const indexOf = async (dir: string): Promise<IndexEntry[]> =>
   (await linesOf(join(dir, 'index.jsonl'))).flatMap((row): IndexEntry[] => {
     const [pack, session, matchId] = ['pack', 'session', 'matchId'].map((name) => fieldOf(row, name));
     return isText(pack) && isText(session) && isText(matchId) ? [{ pack, session, matchId }] : [];
   });
+
+/** A lot's name is its pack folder's name: what `deliveries.jsonl` records, and what `license-status` reads the index by. */
+export const lotOf = (pack: string): string => pack.split(/[\\/]/).pop() ?? pack;
 
 const textOf = async (file: string, what: string): Promise<string> => {
   try {
@@ -119,7 +122,7 @@ export const deliver = async (options: DeliverOptions): Promise<Delivered> => {
     return matchId;
   });
   const deliveredAt = (options.now ?? ((): Date => new Date()))().toISOString();
-  const lot = pack.split(/[\\/]/).pop() ?? pack;
+  const lot = lotOf(pack);
   const held = new Set((await deliveriesOf(dir)).filter((row) => row.recipient === recipient && row.lot === lot).map((row) => row.matchId));
   const rows = matchIds.filter((matchId) => !held.has(matchId)).map((matchId): Delivery => {
     const session = sessions.get(matchId);
