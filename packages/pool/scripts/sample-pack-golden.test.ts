@@ -56,8 +56,8 @@ it('without --deposits the fixture pack is byte for byte the same', async () => 
   for (const file of filesUnder(out).sort()) {
     const name = relative(out, file).split(sep).join('/');
     const text = readFileSync(file, 'utf8');
-    // The temp folder's name is the one thing a run adds, and it reaches the working directory and the hash over the lines (a path differs by platform); the build time and duration are not content.
-    entries.push([name, (name === 'pack.json' ? text.replace(/"built": "[^"]*"/, '"built": "-"').replace(/"elapsedMs": \d+/, '"elapsedMs": 0') : text).split(JSON.stringify(root).slice(1, -1)).join('<root>').split(root).join('<root>').split(root.split(sep).join('/')).join('<root>').replace(/oars-pack-golden-[A-Za-z0-9]+/g, 'oars-pack-golden-X').replace(/"cwd":"[^"]*"/g, '"cwd":"<cwd>"').replace(/"merkleRoot": "[0-9a-f]+"/g, '"merkleRoot": "<root-hash>"')]);
+    // The temp folder's name is the one thing a run adds, and it reaches the working directory and the hash over the lines (a path differs by platform); the platform name and the byte total follow the OS; the build time and duration are not content.
+    entries.push([name, (name === 'pack.json' ? text.replace(/"built": "[^"]*"/, '"built": "-"').replace(/"elapsedMs": \d+/, '"elapsedMs": 0') : text).split(JSON.stringify(root).slice(1, -1)).join('<root>').split(root).join('<root>').split(root.split(sep).join('/')).join('<root>').replace(/oars-pack-golden-[A-Za-z0-9]+/g, 'oars-pack-golden-X').replace(/"cwd":"[^"]*"/g, '"cwd":"<cwd>"').replace(/"merkleRoot": "[0-9a-f]+"/g, '"merkleRoot": "<root-hash>"').replace(/"platform": "[a-z0-9]+"/g, '"platform": "<platform>"').replace(/"bytes": \d+/, '"bytes": 0')]);
   }
   const pack = Object.fromEntries(entries);
   expect(Object.keys(pack).length).toBeGreaterThan(3);
