@@ -14,4 +14,12 @@ One made-up session per reader, each with a test beside it (`<reader>.test.ts`).
 | Cursor | `cursor.json` | rows written into a `state.vscdb` |
 | OpenCode | `opencode.json` | rows written into an `opencode.db` |
 
-When a harness release changes its format, update the fixture to the new shape, keep the old one beside it if the old shape is still readable, and record the version in `docs/harness-install.md`.
+## Refreshing a fixture
+
+The weekly workflow `harness-readers.yml` fails when a harness's latest npm release is past the allowance in `versions.json` (default: a different minor). The reader tests do not: they read these static files. To refresh one:
+
+1. Find a newer session file of that harness on your machine (for example the newest under `~/.claude/projects` or `~/.codex/sessions`).
+2. Run `node packages/cli/src/sessions/harness-fixtures/shape.mjs <claude-code|codex|copilot|gemini|grok|pi|vscode-copilot> <file>`. It reads only that file and prints field paths and value types the file has and the fixture lacks, and the reverse, never a value; a key that is not a plain identifier prints as `*`. Cursor and OpenCode keep rows in a database, so compare those by hand.
+3. Add the fields the reader reads (or may soon read) to the fixture with invented values. Never paste a prompt, path, id, or any other content from the real file.
+4. Set `modeledOn` in `versions.json` to the version the file records, and the same version in the table in `docs/harness-install.md` (a test fails when they differ).
+5. Run the harness-fixtures tests; if the reader's summary changed, update the expectation and say why. Keep the old fixture beside the new one if the old shape is still readable.

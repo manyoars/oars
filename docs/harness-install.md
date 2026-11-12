@@ -22,12 +22,12 @@ Installing a manifest sends nothing. A manifest runs the same `oars` as a termin
 
 ## Versions last tested
 
-Each reader is pinned by a made-up session fixture and a test (`packages/cli/src/sessions/harness-fixtures/`). The table says which version each fixture was modeled on and how that is known: "stamped" means the version is written inside the fixture, "source" means the fixture follows the upstream source at the named commit, which the reader's own test file cites. It mirrors `versions.json` in that folder, and a test fails when the two disagree. No row says the newest release of a harness reads correctly: the reader tests read static fixtures, not an installed harness, so they stay green when a harness changes its format. The weekly workflow `harness-readers.yml` is what goes red: it fails when a harness's latest npm release is past the allowance in `versions.json` (by default a different minor from the fixture's version) and names the harness and both versions. It installs nothing. Refresh steps are in the folder's `README.md`. Most "stamped" versions were carried over from the reader's existing tests and were not recorded from a live install; a row changes only when a fixture is refreshed from a real session file.
+Each reader is pinned by a made-up session fixture and a test (`packages/cli/src/sessions/harness-fixtures/`). The table says which version each fixture was modeled on and how that is known: "stamped" means the version is written inside the fixture, "source" means the fixture follows the upstream source at the named commit, which the reader's own test file cites. It mirrors `versions.json` in that folder, and a test fails when the two disagree. No row says the newest release of a harness reads correctly: the reader tests read static fixtures, not an installed harness, so they stay green when a harness changes its format. The weekly workflow `harness-readers.yml` is what goes red: it fails when a harness's latest npm release is past the allowance in `versions.json` (by default a different minor from the fixture's version) and names the harness and both versions. It installs nothing. Refresh steps are in the folder's `README.md`. The Claude Code and Codex rows were refreshed from a real session file of that version (structure only; the fixtures stay invented). The other "stamped" versions were carried over from the reader's existing tests and were not recorded from a live install.
 
 | Harness | Version the fixture is modeled on | How we know | Date |
 |---------|-----------------------------------|-------------|------|
-| Claude Code | 2.1.300 | stamped | 2026-11-12 |
-| Codex | 0.50.0 | stamped | 2026-11-12 |
+| Claude Code | 2.1.322 | stamped | 2026-11-12 |
+| Codex | 0.167.0 | stamped | 2026-11-12 |
 | Copilot CLI | 1.0.105 | stamped | 2026-11-12 |
 | OpenCode | 2.2.5 | stamped | 2026-11-12 |
 | Gemini CLI | not stamped | source, google-gemini/gemini-cli at 89e9d25d | 2026-11-12 |

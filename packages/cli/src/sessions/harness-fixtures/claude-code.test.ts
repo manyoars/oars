@@ -43,7 +43,7 @@ describe('the Claude Code reader on its fixture', () => {
       userTurns: 1,
       assistantTurns: 3,
       models: { 'claude-sonnet-5-5': 3 },
-      version: '2.1.300',
+      version: '2.1.322',
       tools: [['Bash', 'error'], ['Edit', 'ok']],
       errorLines: ['make: *** No rule to make target'],
     });
