@@ -1944,19 +1944,35 @@ describe('--buyer-key-file', () => {
     expect(JSON.parse(readFileSync(join(byFlag.out, 'pack.json'), 'utf8'))).toMatchObject({ keyId: keyIdOf('sample-secret') });
   });
 
-  it('refuses both flags, a missing file, and an empty file, and writes no pack', async () => {
+  it('refuses both flags', async () => {
     const f = fixture();
     const both = await run(f, ['--buyer-key', 'sample-secret', '--buyer-key-file', keyFile(f, 'sample-secret')]);
     expect(both.code).toBe(2);
     expect(both.text).toMatch(/not both/);
     expect(both.text).not.toContain('sample-secret');
+    expect(existsSync(f.out)).toBe(false);
+  });
+
+  it('refuses a missing file', async () => {
+    const f = fixture();
     const missing = await run(f, ['--buyer-key-file', join(f.root, 'absent.key')]);
     expect(missing.code).toBe(2);
     expect(missing.text).toMatch(/Cannot read the --buyer-key-file/);
+    expect(existsSync(f.out)).toBe(false);
+  });
+
+  it('refuses an empty file', async () => {
+    const f = fixture();
     const empty = await run(f, ['--buyer-key-file', keyFile(f, ' \n')]);
     expect(empty.code).toBe(2);
     expect(empty.text).toMatch(/is empty/);
     expect(existsSync(f.out)).toBe(false);
+  });
+
+  it('strips a leading byte order mark, so the keyId equals the plain key', async () => {
+    const f = fixture();
+    expect((await run(f, ['--buyer-key-file', keyFile(f, '\uFEFFsample-secret\n')])).code).toBe(0);
+    expect(JSON.parse(readFileSync(join(f.out, 'pack.json'), 'utf8'))).toMatchObject({ keyId: keyIdOf('sample-secret') });
   });
 
   it('lists the file flag in the usage, as the route for a real key', async () => {

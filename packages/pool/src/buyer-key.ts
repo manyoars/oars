@@ -14,6 +14,7 @@ export const resolveBuyerKey = async (key: string | undefined, file: string | un
   if (file === undefined) return key === undefined ? undefined : { key };
   const text = await readFile(file, 'utf8').catch(() => undefined);
   if (text === undefined) return { refusal: `Cannot read the --buyer-key-file ${file}.` };
-  const trimmed = text.trimEnd();
+  // A BOM (Windows PowerShell 5 Out-File, some editors) is not part of the key.
+  const trimmed = text.replace(/^\uFEFF/, '').trimEnd();
   return trimmed === '' ? { refusal: `The --buyer-key-file ${file} is empty.` } : { key: trimmed };
 };
