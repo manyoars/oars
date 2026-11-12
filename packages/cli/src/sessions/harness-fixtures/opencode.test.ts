@@ -5,8 +5,10 @@ import { captureSession, type Capture } from '../extract.js';
 import { makeRedactor } from '../redact.js';
 import { makeRepoIdentity, makeRepoRoot } from '../repo-root.js';
 import { SOURCES } from '../sources.js';
-import { cleanup, folders, stage, stageOpencode } from '../test-support.js';
+import { cleanup, stage, folders, stageOpencode, type OpencodeFixture } from '../test-support.js';
 import { verifyCaptured, verifySkeleton } from '../verify.js';
+
+const isRows = (value: unknown): value is OpencodeFixture[] => Array.isArray(value);
 
 afterEach(cleanup);
 
@@ -35,8 +37,10 @@ describe('the OpenCode reader on its fixture', () => {
     const s = stage();
     const source = SOURCES.find((entry) => entry.name === "opencode");
     if (source === undefined) throw new Error('no such source');
-    const rows = (JSON.parse(readFileSync(FIXTURE, 'utf8')) as { folder?: string; directory?: string }[]).map((row) => ({ ...row, ...(row.folder === undefined ? { directory: folders(s.root).repo } : { folder: folders(s.root).repo }) }));
-    const root = await stageOpencode(s.root, rows as never);
+    const parsed: unknown = JSON.parse(readFileSync(FIXTURE, 'utf8').replaceAll('FOLDER', JSON.stringify(folders(s.root).repo).slice(1, -1)));
+    if (!isRows(parsed)) throw new Error('fixture is not a list of sessions');
+    const rows = parsed;
+    const root = await stageOpencode(s.root, rows);
     const store = await source.open(root);
     expect(store?.sessions).toHaveLength(1);
     expect(store?.unreadable).toEqual([]);

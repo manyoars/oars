@@ -35,7 +35,7 @@ describe('the Codex reader on its fixture', () => {
     const s = stage();
     const source = SOURCES.find((entry) => entry.name === "codex");
     if (source === undefined) throw new Error('no such source');
-    const root = stageCodex(s.root, [{ id: "11111111-1111-4111-8111-111111111111", lines: readFileSync(FIXTURE, "utf8").trim().split("\n").map((l) => JSON.parse(l) as unknown) }]);
+    const root = stageCodex(s.root, [{ id: "11111111-1111-4111-8111-111111111111", lines: readFileSync(FIXTURE, "utf8") }]);
     const store = await source.open(root);
     expect(store?.sessions).toHaveLength(1);
     expect(store?.unreadable).toEqual([]);

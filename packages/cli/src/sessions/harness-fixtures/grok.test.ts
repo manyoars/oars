@@ -13,6 +13,11 @@ afterEach(cleanup);
 // Grok Build: a made-up session (no real prompt, path, name, or key) in the shape the reader expects; see harness-fixtures/README.md.
 // A harness release that changes this format turns this one test red.
 const FIXTURE = fileURLToPath(new URL('./grok.updates.jsonl', import.meta.url));
+const objectOf = (file: string): object => {
+  const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'));
+  if (typeof parsed !== 'object' || parsed === null) throw new Error('fixture is not an object');
+  return parsed;
+};
 const sibling = (part: string): string => FIXTURE.replace('updates.jsonl', `${part}.json`);
 
 const capture = (text: string): Capture =>
@@ -36,7 +41,7 @@ describe('the Grok Build reader on its fixture', () => {
     const s = stage();
     const source = SOURCES.find((entry) => entry.name === "grok");
     if (source === undefined) throw new Error('no such source');
-    const root = stageGrok(s.root, [{ id: "sess", cwd: "/work/app", updates: readFileSync(FIXTURE, "utf8"), usage: JSON.parse(readFileSync(sibling("usage"), "utf8")) as object, summary: JSON.parse(readFileSync(sibling("summary"), "utf8")) as object }]);
+    const root = stageGrok(s.root, [{ id: "sess", cwd: "/work/app", updates: readFileSync(FIXTURE, "utf8"), usage: objectOf(sibling("usage")), summary: objectOf(sibling("summary")) }]);
     const store = await source.open(root);
     expect(store?.sessions).toHaveLength(1);
     expect(store?.unreadable).toEqual([]);

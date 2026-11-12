@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { captureSession, type Capture } from '../extract.js';
 import { makeRedactor } from '../redact.js';
 import { makeRepoIdentity, makeRepoRoot } from '../repo-root.js';
-import { cleanup, stage } from '../test-support.js';
+import { cleanup } from '../test-support.js';
 import { verifyCaptured, verifySkeleton } from '../verify.js';
 
 afterEach(cleanup);
@@ -29,7 +29,7 @@ const capture = (text: string): Capture =>
   });
 
 describe('the Claude Code reader on its fixture', () => {
-  it('parses the fixture into a session record that passes the capture invariants', async () => {
+  it('parses the fixture into a session record that passes the capture invariants', () => {
     const out = capture(readFileSync(FIXTURE, 'utf8'));
     expect([...verifySkeleton(out.skeleton), ...verifyCaptured([out.session], out.tools)].filter((entry) => entry.violations > 0)).toEqual([]);
     expect({
