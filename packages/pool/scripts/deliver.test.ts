@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { deposit, type SessionsRuntime } from '../../cli/src/sessions/store.js';
-import { deliver, main, recipientsOf, type Delivery } from './deliver.js';
+import { USAGE, deliver, main, recipientsOf, type Delivery } from './deliver.js';
 import { buildPack, keyIdOf } from './sample-pack.js';
 
 const dirs: string[] = [];
@@ -329,6 +329,10 @@ describe('--buyer-key-file', () => {
     expect(rowsOf(f)[0]?.keyId).toBe(KEY_ID);
   });
 
+  it('lists --buyer-key-file in the usage text as the route for a real key', () => {
+    expect(USAGE).toMatch(/--buyer-key-file <path>[^\n]*logged by npm and just/);
+  });
+
   it('refuses both --buyer-key and --buyer-key-file', async () => {
     const f = fixture();
     const printed: string[] = [];
@@ -342,6 +346,7 @@ describe('--buyer-key-file', () => {
     const printed: string[] = [];
     expect(await main(argv(f, '--buyer-key-file', join(f.root, 'absent.key')), { print: (text) => printed.push(text) })).toBe(2);
     expect(printed.join('\n')).toMatch(/Cannot read the --buyer-key-file/);
+    expect(existsSync(join(f.root, 'deliveries.jsonl'))).toBe(false);
   });
 
   it('refuses an empty file', async () => {
@@ -349,6 +354,7 @@ describe('--buyer-key-file', () => {
     const printed: string[] = [];
     expect(await main(argv(f, '--buyer-key-file', keyFile(f, '\n')), { print: (text) => printed.push(text) })).toBe(2);
     expect(printed.join('\n')).toMatch(/is empty/);
+    expect(existsSync(join(f.root, 'deliveries.jsonl'))).toBe(false);
   });
 
   it('refuses a key from a file that is not the pack\'s, without printing the key', async () => {

@@ -1,11 +1,18 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { resolveBuyerKey } from './buyer-key.js';
 
+const dirs: string[] = [];
+afterEach(() => {
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
 const keyFile = (text: string): string => {
-  const file = join(mkdtempSync(join(tmpdir(), 'buyer-key-')), 'k.key');
+  const dir = mkdtempSync(join(tmpdir(), 'buyer-key-'));
+  dirs.push(dir);
+  const file = join(dir, 'k.key');
   writeFileSync(file, text);
   return file;
 };
@@ -26,8 +33,9 @@ describe('resolveBuyerKey', () => {
   it('returns a refusal for both flags, a missing file, and an empty file, never the key', async () => {
     const both = await resolveBuyerKey('abc', keyFile('abc'));
     expect(both).toEqual({ refusal: 'Give --buyer-key or --buyer-key-file, not both.' });
-    const missing = await resolveBuyerKey(undefined, join(tmpdir(), 'no-such-buyer-key-file'));
-    expect(missing).toMatchObject({ refusal: expect.stringContaining('Cannot read') });
-    expect(await resolveBuyerKey(undefined, keyFile(' \n'))).toMatchObject({ refusal: expect.stringContaining('is empty') });
+    const absent = join(tmpdir(), 'no-such-buyer-key-file');
+    expect(await resolveBuyerKey(undefined, absent)).toEqual({ refusal: `Cannot read the --buyer-key-file ${absent}.` });
+    const empty = keyFile(' \n');
+    expect(await resolveBuyerKey(undefined, empty)).toEqual({ refusal: `The --buyer-key-file ${empty} is empty.` });
   });
 });

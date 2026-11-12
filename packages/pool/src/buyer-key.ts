@@ -3,7 +3,7 @@
 import { readFile } from 'node:fs/promises';
 
 /** The usage line both commands print for the file flag. */
-export const BUYER_KEY_FILE_USAGE = '  --buyer-key-file <path>  read the buyer key from this file (trailing whitespace trimmed): the route for a real key, because a --buyer-key value on the command line is logged by npm and just';
+export const BUYER_KEY_FILE_USAGE = '  --buyer-key-file <path>  read the buyer key from this file (a leading byte order mark and trailing whitespace trimmed): the route for a real key, because a --buyer-key value on the command line is logged by npm and just';
 
 /**
  * The buyer key from `--buyer-key` or `--buyer-key-file`, or a one-line refusal. A refusal names the flags and the path, never the key or any part of it.
