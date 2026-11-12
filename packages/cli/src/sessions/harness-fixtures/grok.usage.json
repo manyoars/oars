@@ -1,0 +1,27 @@
+{
+  "sessionId": "sess",
+  "updatedAt": "2026-06-01T10:01:39.000Z",
+  "session": {
+    "inputTokens": 900,
+    "outputTokens": 60,
+    "cachedReadTokens": 400,
+    "cacheCreationTokens": 100,
+    "reasoningTokens": 7,
+    "modelCalls": 2,
+    "totalTokens": 960
+  },
+  "turns": [
+    {
+      "turnNumber": 1,
+      "endedAt": "2026-06-01T10:00:10.000Z",
+      "inputTokens": 900,
+      "outputTokens": 60,
+      "cachedReadTokens": 400,
+      "cacheCreationTokens": 100,
+      "reasoningTokens": 7,
+      "modelCalls": 2,
+      "primaryModelId": "grok-build",
+      "totalTokens": 960
+    }
+  ]
+}

@@ -1,0 +1,91 @@
+[
+  {
+    "id": "ses_a",
+    "directory": "FOLDER",
+    "created": 1780308000000,
+    "updated": 1780308009000,
+    "version": "2.2.5",
+    "messages": [
+      {
+        "id": "msg_1",
+        "type": "user",
+        "seq": 1,
+        "created": 1780308001000,
+        "data": {
+          "time": {
+            "created": 1780308001000
+          },
+          "text": "fix the build"
+        }
+      },
+      {
+        "id": "msg_2",
+        "type": "assistant",
+        "seq": 2,
+        "created": 1780308002000,
+        "data": {
+          "agent": "build",
+          "model": {
+            "id": "claude-sonnet-5-5",
+            "providerID": "anthropic"
+          },
+          "time": {
+            "created": 1780308002000
+          },
+          "content": [
+            {
+              "type": "tool",
+              "id": "c1",
+              "name": "shell",
+              "time": {
+                "created": 1780308003000
+              },
+              "state": {
+                "status": "completed",
+                "input": {
+                  "command": "make"
+                },
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "make: *** No rule to make target\nExited with code 2"
+                  }
+                ],
+                "metadata": {
+                  "truncated": false,
+                  "exit": 2
+                }
+              }
+            },
+            {
+              "type": "tool",
+              "id": "c2",
+              "name": "edit",
+              "time": {
+                "created": 1780308004000
+              },
+              "state": {
+                "status": "completed",
+                "input": {
+                  "path": "src/a.ts",
+                  "oldString": "a",
+                  "newString": "b"
+                },
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Edited"
+                  }
+                ]
+              }
+            },
+            {
+              "type": "text",
+              "text": "done"
+            }
+          ]
+        }
+      }
+    ]
+  }
+]
