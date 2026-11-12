@@ -5,6 +5,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 ## Unreleased
 
 - The weekly `harness-readers` workflow now fails when a harness's latest npm release is past the version its fixture was modeled on (`versions.json`, default a different minor), and a local `shape.mjs` tool lists the field names a real session file has that a fixture lacks, with no values. The Claude Code and Codex fixtures are refreshed to 2.1.322 and 0.167.0, including a Codex code-mode cell.
+- `oars pool deposit --send-all` sends, in order and one batch at a time, every batch that `oars pool outbox` printed and that is unchanged (the covenant rule of `--send`; a batch never printed or changed is skipped and counted; not with `--send`). A failed batch stops the run with the sent, skipped, failed, and left counts and a non-zero exit, a 429 or a 5xx is tried up to three times, and running it again sends only what `sent.log` does not hold. `oars pool outbox` and `--send-all` read one batch at a time, so a history of thousands of batches runs in a 512 MB heap.
 
 ## 0.5.4 (2026-11-12)
 

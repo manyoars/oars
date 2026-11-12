@@ -669,14 +669,15 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
 
   pool
     .command('deposit')
-    .description('write a batch to the outbox for each session that passes the folder allowlist and the exclusion check, and stop: no session data is sent, and only counts print. --send <hash> sends one batch that oars pool outbox printed and that is unchanged, once this account has accepted the pool covenant')
+    .description('write a batch to the outbox for each session that passes the folder allowlist and the exclusion check, and stop: no session data is sent, and only counts print. --send <hash> sends one batch that oars pool outbox printed and that is unchanged, and --send-all sends every such batch, once this account has accepted the pool covenant')
     .option('--accept-covenant <version>', 'name the covenant version you expect, with --send: on a terminal the screen is shown and you type its phrase yourself, and off a terminal this is refused')
     .option('--in-eu-eea-uk <yes|no>', 'answer "Are you in the EU, the EEA, or the UK?" when you accept, with --send; without it a person is asked, with or without --accept-covenant. While the pool is closed to those regions, yes is refused')
     .option('--send <hash>', 'the SHA-256 of a batch that oars pool outbox printed')
+    .option('--send-all', 'send, in order, every batch that oars pool outbox printed and that is unchanged, one at a time, under the same covenant rule as --send; a batch never printed or changed is skipped and counted. A batch that fails (after up to three tries on 429 and 5xx) stops the run with the counts and a non-zero exit; run it again to send what is left, since a batch already sent is never sent twice. Not with --send')
     .option(serverOption, serverHelp)
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
-      emit(deps, flag(options, 'json'), await poolDeposit(deps, { server: text(options, 'server'), acceptCovenant: text(options, 'acceptCovenant'), inEuEeaUk: text(options, 'inEuEeaUk'), send: text(options, 'send') }));
+      emit(deps, flag(options, 'json'), await poolDeposit(deps, { server: text(options, 'server'), acceptCovenant: text(options, 'acceptCovenant'), inEuEeaUk: text(options, 'inEuEeaUk'), send: text(options, 'send'), sendAll: flag(options, 'sendAll') }));
     });
 
   pool
