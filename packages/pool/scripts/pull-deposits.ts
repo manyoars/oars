@@ -63,7 +63,7 @@ const DEPOSITS = `SELECT id, tier, counted_at, request_country, skeleton FROM de
 const RAW_COPIES = 'SELECT sha256 FROM raw_objects WHERE account = ? AND erased_on IS NULL ORDER BY sha256';
 
 /** Every row of a query that ends in `id > ?`, a page at a time in `id` order, after the leading binds; the cursor is read from the last row and bound, never written into the statement. */
-const paged = async function* (store: ReadOnlyStore, sql: string, leading: readonly string[]): AsyncGenerator<unknown> {
+const paged = async function* (store: ReadOnlyStore, sql: string, leading: readonly string[]): AsyncGenerator<unknown, void> {
   let after = '';
   for (;;) {
     const page = await store.rows(sql, [...leading, after]);

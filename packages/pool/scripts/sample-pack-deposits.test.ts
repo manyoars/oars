@@ -72,7 +72,10 @@ describe('the two assumptions of the deposit input (docs/pool-deposit-title.md s
     // The store's session id is the file name, here the Raw Copy's hash: the harness id is not what names a pulled session, so the builder must read it from the line.
     expect(store.sessions[0]?.session).toBe(folder.sha);
     const archived = readFileSync(join(paths(folder.runtime.storeDir).raw, 'deposit', `${folder.sha}.jsonl`), 'utf8');
-    const ids = archived.split('\n').filter((row) => row !== '').map((row) => (JSON.parse(row) as { sessionId?: unknown }).sessionId);
+    const ids = archived.split('\n').filter((row) => row !== '').map((row): unknown => {
+      const parsed: unknown = JSON.parse(row);
+      return typeof parsed === 'object' && parsed !== null ? Reflect.get(parsed, 'sessionId') : undefined;
+    });
     expect(ids).toEqual([SESSION, SESSION]);
   });
 });
