@@ -29,7 +29,8 @@ export const registerRows = (doc: string): RegisterRow[] => {
   const end = rest.indexOf('\n## ', 1);
   const section = end === -1 ? rest : rest.slice(0, end);
   return section
-    .split('\n')
+    // A Windows checkout (core.autocrlf) gives CRLF lines, and the row pattern ends at `$`.
+    .split(/\r?\n/)
     .map((line) => /^\| `([A-Za-z]+)` \| (.+) \| (clear|thresholded|hashed at ingest|raw tier)(?: \([^|]*\))?(?:; [^|]*)? \| (yes|partly|no)(?:[^|]*) \| ([\d,]+) \|$/.exec(line))
     .flatMap((match) => (match === null ? [] : [{ field: match[1] ?? '', consumer: match[2] ?? '', projection: match[3] ?? '', rederives: match[4] ?? '', bytes: Number((match[5] ?? '').replaceAll(',', '')) }]));
 };
