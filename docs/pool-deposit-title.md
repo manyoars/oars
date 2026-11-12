@@ -219,3 +219,14 @@ WITH ok AS (SELECT a.id FROM accounts a WHERE a.restricted_at IS NULL AND a.raw_
 SELECT (SELECT COUNT(*) FROM ok) AS accounts, (SELECT COUNT(*) FROM raw_objects r JOIN ok ON ok.id = r.account WHERE r.erased_on IS NULL) AS raw_copies,
   (SELECT COUNT(*) FROM deposits d JOIN ok ON ok.id = d.account WHERE d.erased_on IS NULL AND d.tier <> 'none') AS deposits;
 ```
+
+## 6. Calls for Matt
+
+| Call | Options | Recommendation | Best honest case against it |
+|---|---|---|---|
+| 1. Owner handles in Raw Copies (section 2 gap) | (a) Pack them as redacted today. (b) Mask handles at deposit from now on (a sixth brief in cli: `pool-command.ts:829`, `redact.ts:273`, a new `REDACTION_VERSION`) and leave out older copies | (b) | (a) gives more data now, a handle is often public, and the depositor promised the rights (Section 8(b), `2.1:249-251`). But a handle undoes the `depositor:` pseudonym for that row |
+| 2. Where rights lines live | (a) Account lines in `objections.jsonl`, with `erase` printing the line. (b) A pool `objections` table carried by the pull | (a) | (b) is one authority, the operator cannot forget the line, and it survives the loss of the operator machine. It costs a migration, a command, and a pull change before the first sale |
+| 3. Future lots from Matt | (a) Keep both paths: the owners file for rows that name him, deposits for the rest. (b) Deposits only | (a) | (b) is one code path and proves the depositor path on the operator data. It gives up the owner name, the repository license, and the pointer on his rows |
+| 4. Proof per deposit | (a) Cite the newest proved acceptance only (section 1). (b) Also record `received_at` and `covenant_version` on each new deposit (brief 5) | (b) | (a) needs no migration, and Section 14.2 already covers earlier Deposits. But a time not recorded cannot be recovered if counsel later asks for proof per deposit |
+
+Fact owed, not reopened: counsel has not confirmed that the covenant grant is title enough for sale (top of this page).
