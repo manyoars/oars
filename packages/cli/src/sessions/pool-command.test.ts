@@ -4512,7 +4512,7 @@ describe('oars pool deposit --send-all (t1199)', () => {
 //   build: 7,000 captured sessions are built by `pool deposit` under --max-old-space-size=BUILD_HEAP_MB (the old build loaded the whole store and failed there).
 const MEMORY_CHILD = process.env.OARS_SEND_ALL_MEMORY_CHILD;
 const MEMORY_MODE = process.env.OARS_MEMORY_MODE;
-const BUILD_HEAP_MB = Number(process.env.OARS_MEMORY_BUILD_HEAP ?? 160);
+const BUILD_HEAP_MB = Number(process.env.OARS_MEMORY_BUILD_HEAP ?? 400);
 const memoryChild = (mode: 'outbox' | 'build', heapMb: number, seed = ''): { limitMb: number; peakRssMb: number; count: number } => {
   const report = join(tmpdir(), `oars-memory-${mode}-${String(process.pid)}.json`);
   const result = spawnSync(process.execPath, [fileURLToPath(new URL('../../../../node_modules/vitest/vitest.mjs', import.meta.url)), 'run', fileURLToPath(import.meta.url), '-t', `child of the memory proof ${mode}`], {
