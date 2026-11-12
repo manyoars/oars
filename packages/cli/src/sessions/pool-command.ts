@@ -962,8 +962,11 @@ const explained = (bytes: string): { [field: string]: string } => {
   return rows;
 };
 
-/** `oars pool outbox`: prints each batch as it would be sent (a batch past one request prints each part's request, in order), the request line and every header included, with the bearer credential as its size and nothing else masked, then its SHA-256, and records that it was shown. `--explain` adds each field's rule. */
-export const poolOutbox = async (deps: RunDeps, options: { server?: string | undefined; explain?: boolean | undefined }): Promise<Outcome> => {
+/**
+ * `oars pool outbox`: prints each batch as it would be sent (a batch past one request prints each part's request, in order), the request line and every header included, with the bearer credential as its size and nothing else masked, then its SHA-256, and records that it was shown. `--explain` adds each field's rule.
+ * With `print` each batch is written as soon as it is built and marked shown right after, and the outcome carries no text: an outbox of thousands of sessions is far past V8's string length as one string. Without it (`--json`) the document carries each batch's request, and `--json` writes it element by element.
+ */
+export const poolOutbox = async (deps: RunDeps, options: { server?: string | undefined; explain?: boolean | undefined; print?: ((chunk: string) => void) | undefined }): Promise<Outcome> => {
   const runtime = runtimeOf(deps);
   const server = poolServer(deps.env, OUTBOX, options.server);
   const { token } = await signedIn(deps, runtime.storeDir, server, OUTBOX);
@@ -972,26 +975,37 @@ export const poolOutbox = async (deps: RunDeps, options: { server?: string | und
   const masker = new Masker();
   masker.add(token);
   const sent = await sentLog(outbox);
-  const shown: Array<{ hash: string; request: string; sent?: string; fields?: { [field: string]: string } }> = [];
+  const { print } = options;
+  const shown: Array<{ hash: string; request?: string; sent?: string; fields?: { [field: string]: string } }> = [];
+  // Blocks are separated by a blank line; each is written alone, so no string holds more than one batch.
+  const state = { wrote: false };
+  const put = (block: string): void => {
+    print?.(`${state.wrote ? '\n\n' : ''}${block}`);
+    state.wrote = true;
+  };
   for (const batch of batches) {
     const fields = options.explain === true ? explained(batch.bytes) : undefined;
     // A batch past one request prints every part's request, in the order they are sent.
     const request = callsOf(token, batch.bytes, batch.hash).map((call) => printed(outgoing(deps, server, POOL_DEPOSITS, call), masker)).join('\n');
-    shown.push({ hash: batch.hash, request, ...(sent.has(batch.hash) ? { sent: sent.get(batch.hash) ?? '' } : {}), ...(fields === undefined ? {} : { fields }) });
+    const at = sent.get(batch.hash);
+    put([request, `sha256: ${batch.hash}`, ...(at === undefined ? [] : [`sent: ${at}`]), ...Object.entries(fields ?? {}).map(([field, row]) => `  ${field}: ${row}`)].join('\n'));
+    shown.push({ hash: batch.hash, ...(print === undefined ? { request } : {}), ...(at === undefined ? {} : { sent: at }), ...(fields === undefined ? {} : { fields }) });
+    await markShown(outbox, batch.hash, deps.now());
   }
   const { copies } = await heldRaw(outbox);
-  const rawBlocks = copies.flatMap((copy) =>
-    rawParts(copy.body).map((part, at, all) => [`raw part ${String(at + 1)}/${String(all.length)} sha256: ${copy.hash} bytes: ${String(Buffer.byteLength(part))}${sent.has(copy.hash) ? ` sent: ${sent.get(copy.hash) ?? ''}` : ''}`, ...(options.explain === true ? [part] : [])].join('\n')),
-  );
-  for (const { hash } of shown) await markShown(outbox, hash, deps.now());
+  for (const copy of copies) {
+    const parts = rawParts(copy.body);
+    for (const [at, part] of parts.entries()) put([`raw part ${String(at + 1)}/${String(parts.length)} sha256: ${copy.hash} bytes: ${String(Buffer.byteLength(part))}${sent.has(copy.hash) ? ` sent: ${sent.get(copy.hash) ?? ''}` : ''}`, ...(options.explain === true ? [part] : [])].join('\n'));
+  }
   const stale = await staleBatches(outbox);
-  const blocks = shown.map(({ hash, request, sent: at, fields }) => [request, `sha256: ${hash}`, ...(at === undefined ? [] : [`sent: ${at}`]), ...Object.entries(fields ?? {}).map(([field, row]) => `  ${field}: ${row}`)].join('\n'));
   const notes = [
     ...(edited === 0 ? [] : [`${String(edited)} ${edited === 1 ? 'batch was' : 'batches were'} edited on disk since ${edited === 1 ? 'it was' : 'they were'} written and ${edited === 1 ? 'is' : 'are'} not printed or sent. Run oars pool deposit to build ${edited === 1 ? 'it' : 'them'} again.`]),
     ...(stale === 0 ? [] : [`${String(stale)} ${stale === 1 ? 'batch was' : 'batches were'} built under an older vocabulary, field list, or skeleton format and will never be sent.`]),
   ];
-  const text = shown.length === 0 && rawBlocks.length === 0 ? ['The outbox is empty. Run oars pool deposit first.', ...notes].join('\n') : [...blocks, ...rawBlocks, ...notes].join('\n\n');
-  return { document: { ok: true, server, batches: shown, raw: copies.map(({ hash, bytes }) => ({ hash, bytes, ...(sent.has(hash) ? { sent: sent.get(hash) ?? '' } : {}) })), edited, stale }, text };
+  if (!state.wrote) put(['The outbox is empty. Run oars pool deposit first.', ...notes].join('\n'));
+  else for (const note of notes) put(note);
+  print?.('\n');
+  return { document: { ok: true, server, batches: shown, raw: copies.map(({ hash, bytes }) => ({ hash, bytes, ...(sent.has(hash) ? { sent: sent.get(hash) ?? '' } : {}) })), edited, stale }, text: '', output: print === undefined ? 'chunked' : 'streamed' };
 };
 
 /**
@@ -1108,11 +1122,11 @@ const JOIN_AGAIN = 'Run oars pool join again to continue from here.';
 /**
  * `oars pool join`: the five commands of a first deposit in one run, each by the handler the command itself uses: `login`, `deposit`, `outbox --explain`, `deposit --send <hash>` for each batch not yet sent, then `fetch`. It asks and checks
  * nothing they do not, and a step that stops ends the run with that step's own error. Run again it skips what stands: a held sign-in, a prepared batch not yet sent, a batch in `sent.log`.
- * With `json` the steps' texts are not printed (stdout holds one document); without it each prints as it finishes, so the explanation is on screen before the send asks anything.
+ * Each step's text prints as it finishes, so the explanation is on screen before the send asks anything: on stdout, or with `json` on stderr, so stdout holds the one document.
  */
 export const poolJoin = async (
   deps: RunDeps,
-  options: { server?: string | undefined; provider?: string | undefined; verbose?: boolean; acceptCovenant?: string | undefined; inEuEeaUk?: string | undefined; harness?: string | undefined; harnessVersion: string; json?: boolean; via?: Sender | undefined; lock?: SendLock | undefined },
+  options: { server?: string | undefined; provider?: string | undefined; verbose?: boolean; acceptCovenant?: string | undefined; inEuEeaUk?: string | undefined; harness?: string | undefined; harnessVersion: string; json?: boolean },
 ): Promise<Outcome> => {
   const { storeDir } = runtimeOf(deps);
   const server = poolServer(deps.env, JOIN, options.server);
@@ -1120,8 +1134,9 @@ export const poolJoin = async (
     deps.io.stderr(`${line}
 `);
   };
+  const screen = options.json === true ? deps.io.stderr : deps.io.stdout;
   const show = (outcome: Outcome): Outcome => {
-    if (options.json !== true) deps.io.stdout(`${outcome.text}
+    if (outcome.output !== 'streamed') screen(`${outcome.text}
 `);
     return outcome;
   };
@@ -1147,14 +1162,14 @@ export const poolJoin = async (
       prepared = show(await poolDeposit(deps, { server })).document;
     }
     say('Showing what will be sent, field by field.');
-    const shown = show(await poolOutbox(deps, { server, explain: true })).document;
+    const shown = show(await poolOutbox(deps, { server, explain: true, print: screen })).document;
     const hashes = await unsent();
     const sends: object[] = [];
     if (hashes.length === 0) {
       say((await heldAcross(outbox)).batches.length === 0 ? 'No session is ready to deposit yet; sending nothing.' : 'Everything prepared is already sent; sending nothing.');
     } else {
       say(`Sending ${plural(hashes.length, 'batch', 'batches')} to ${server}.`);
-      for (const hash of hashes) sends.push(show(await poolDeposit(deps, { server, send: hash, acceptCovenant: options.acceptCovenant, inEuEeaUk: options.inEuEeaUk, via: options.via, lock: options.lock })).document);
+      for (const hash of hashes) sends.push(show(await poolDeposit(deps, { server, send: hash, acceptCovenant: options.acceptCovenant, inEuEeaUk: options.inEuEeaUk })).document);
     }
     say(`Fetching the bundle for ${options.harness ?? 'your most used harness'} ${options.harnessVersion}.`);
     const fetched = show(await poolFetch(deps, { server, harness: options.harness, harnessVersion: options.harnessVersion }));

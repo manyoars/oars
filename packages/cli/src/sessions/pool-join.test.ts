@@ -183,6 +183,7 @@ describe('oars pool join', () => {
       await capture(s);
       server.use(http.post(`${POOL}/v1/login/start`, () => HttpResponse.json({ error: 'provider_down', message: 'The provider is down.' }, { status: 503 })));
       expect(await s.cli(...joinArgs)).not.toBe(ExitCode.OK);
+      expect(err(s)).toContain('The provider is down.');
       expect(err(s)).toContain(AGAIN);
       expect(s.calls).toEqual([]);
       expect(outboxFiles(s)).toEqual([]);
@@ -192,6 +193,7 @@ describe('oars pool join', () => {
       const s = await scene({ deposits: [HttpResponse.json({ error: 'rate_limited', message: 'Slow down.' }, { status: 429 })] });
       await capture(s);
       expect(await s.cli(...joinArgs)).not.toBe(ExitCode.OK);
+      expect(err(s)).toContain('Slow down.');
       expect(err(s)).toContain(AGAIN);
       expect(count(s, `GET /bundle/claude-code/${VERSION}/${VOCAB_VERSION}`)).toBe(0);
       expect(sentLogs(s)).toBe('');
@@ -201,6 +203,7 @@ describe('oars pool join', () => {
       const s = await scene({ bundles: [() => Promise.resolve(new HttpResponse(null, { status: 500 }))] });
       await capture(s);
       expect(await s.cli(...joinArgs)).not.toBe(ExitCode.OK);
+      expect(err(s)).toContain('The pool answered HTTP 500');
       expect(err(s)).toContain(AGAIN);
       expect(sentLogs(s)).toMatch(/^[0-9a-f]{64} /);
     });
@@ -277,18 +280,86 @@ describe('oars pool join', () => {
     expect(JSON.parse(out(s))).toMatchObject({ ok: true, server: POOL, fetch: { ok: true, harnessVersion: VERSION } });
   });
 
+  it('with --json the explanation is on screen (stderr) before the first send, and stdout stays one document', async () => {
+    const s = await scene();
+    await capture(s);
+    expect(await s.cli(...joinArgs, '--json')).toBe(ExitCode.OK);
+    const sentAt = s.calls.indexOf('POST /v1/deposits');
+    expect(s.errAt[sentAt]).toContain('sha256: ');
+    expect(s.h.out).toHaveLength(1);
+    expect(sentLogs(s)).toMatch(/^[0-9a-f]{64} /);
+  });
+
+  describe('the outbox prints batch by batch, never as one string (a large outbox passed the V8 string limit)', () => {
+    const prepared = async (): Promise<Scene> => {
+      const s = await scene();
+      await capture(s);
+      expect(await s.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
+      expect(await s.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+      s.h.out.length = 0;
+      return s;
+    };
+    const hashes = (chunk: string): number => (chunk.match(/^sha256: [0-9a-f]{64}$/gm) ?? []).length;
+
+    it.each([['outbox', []], ['outbox --explain', ['--explain']]])('%s writes each batch on its own', async (_name, extra) => {
+      const s = await prepared();
+      expect(await s.cli('pool', 'outbox', ...extra, '--server', POOL)).toBe(ExitCode.OK);
+      expect(s.h.out.length).toBeGreaterThan(1);
+      for (const chunk of s.h.out) expect(hashes(chunk)).toBeLessThanOrEqual(1);
+      expect(hashes(out(s))).toBe(outboxFiles(s).length);
+      expect(out(s).endsWith('\n')).toBe(true);
+    });
+
+    it('records each printed batch as shown, so the send that follows passes', async () => {
+      const s = await prepared();
+      expect(await s.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+      const hash = /^sha256: ([0-9a-f]{64})$/m.exec(out(s))?.[1] ?? '';
+      expect(await s.cli('pool', 'deposit', '--send', hash, '--server', POOL)).toBe(ExitCode.OK);
+    });
+
+    it('--json is one write while the document fits in a string, and pieces that parse as the same document once it does not', async () => {
+      const s = await prepared();
+      expect(await s.cli('pool', 'outbox', '--json', '--server', POOL)).toBe(ExitCode.OK);
+      expect(s.h.out).toHaveLength(1);
+      const whole = out(s);
+      s.h.out.length = 0;
+      // V8 throws RangeError for a string past its length; here the same error is raised for the whole document, which is what a large outbox does.
+      const real = JSON.stringify.bind(JSON);
+      const spy = vi.spyOn(JSON, 'stringify').mockImplementation((value: unknown) => {
+        if (typeof value === 'object' && value !== null && 'batches' in value && 'raw' in value) throw new RangeError('Invalid string length');
+        return real(value);
+      });
+      try {
+        expect(await s.cli('pool', 'outbox', '--json', '--server', POOL)).toBe(ExitCode.OK);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(s.h.out.length).toBeGreaterThan(1);
+      for (const piece of s.h.out) expect(piece.length).toBeLessThan(whole.length);
+      expect(out(s)).toBe(whole);
+    });
+
+    it('an empty outbox still says so', async () => {
+      const s = await scene();
+      expect(await s.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
+      s.h.out.length = 0;
+      expect(await s.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+      expect(out(s)).toBe('The outbox is empty. Run oars pool deposit first.\n');
+    });
+  });
+
   describe('help', () => {
     it('oars pool --help lists join in a short sentence', async () => {
       const s = await scene();
       expect(await s.cli('pool', '--help')).toBe(ExitCode.OK);
-      expect(out(s).replace(/\s+/g, ' ')).toContain('join [options] sign in, deposit, and fetch in one command');
+      expect(out(s).replace(/\s+/g, ' ')).toContain('join [options] run login, deposit, outbox --explain, deposit --send, and fetch in one command');
     });
 
     it('oars pool join --help describes it in one or two short sentences and takes the flags the five commands take', async () => {
       const s = await scene();
       expect(await s.cli('pool', 'join', '--help')).toBe(ExitCode.OK);
       const help = out(s);
-      expect(help).toContain('sign in, deposit, and fetch in one command');
+      expect(help).toContain('run login, deposit, outbox --explain, deposit --send, and fetch in one command');
       for (const option of ['--provider', '--harness-version', '--harness', '--accept-covenant', '--in-eu-eea-uk', '--verbose', '--server']) expect(help).toContain(option);
     });
   });

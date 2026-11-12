@@ -60,6 +60,8 @@ export interface RunDeps {
 export interface Outcome {
   document: object;
   text: string;
+  /** `streamed`: the handler already wrote `text` as it went, so nothing is printed from it. `chunked`: `--json` falls back to writing the document one array element at a time when it is past V8's string length. */
+  output?: 'streamed' | 'chunked';
 }
 
 const flag = (options: OptionValues, name: string): boolean => options[name] === true;
@@ -94,7 +96,41 @@ const isoTime = (value: string): string => {
   return new Date(parsed).toISOString();
 };
 
+/** The document as one string, or `undefined` when it is past V8's string length (`RangeError: Invalid string length`). */
+const stringified = (document: object): string | undefined => {
+  try {
+    return JSON.stringify(document);
+  } catch (error) {
+    if (error instanceof RangeError) return undefined;
+    throw error;
+  }
+};
+
+/** `JSON.stringify(document)` plus a newline, in pieces: each top-level array goes out one element at a time, so no piece is longer than its largest element. */
+const jsonPieces = function* (document: object): Generator<string> {
+  yield '{';
+  for (const [at, [key, value]] of Object.entries(document).entries()) {
+    const head = `${at === 0 ? '' : ','}${JSON.stringify(key)}:`;
+    if (!Array.isArray(value)) {
+      yield `${head}${JSON.stringify(value)}`;
+      continue;
+    }
+    yield `${head}[`;
+    for (const [index, item] of value.entries()) yield `${index === 0 ? '' : ','}${JSON.stringify(item)}`;
+    yield ']';
+  }
+  yield '}\n';
+};
+
 const emit = (deps: RunDeps, json: boolean, outcome: Outcome): void => {
+  if (json && outcome.output === 'chunked') {
+    // One write when the document fits in a string, as every other command; past V8's string length, the pieces.
+    const whole = stringified(outcome.document);
+    for (const piece of whole === undefined ? jsonPieces(outcome.document) : [`${whole}
+`]) deps.io.stdout(piece);
+    return;
+  }
+  if (!json && outcome.output === 'streamed') return;
   deps.io.stdout(`${json ? JSON.stringify(outcome.document) : outcome.text}\n`);
 };
 
@@ -544,13 +580,13 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
       emit(deps, flag(command.optsWithGlobals(), 'json'), await gateReport(sessionDeps(deps)));
     });
 
-  const pool = program.command('pool').description('sign in to a pool server, deposit session skeletons (a closed list of fields, each value redacted first) and, after a yes to the raw prompt, redacted raw copies, and fetch signed reads; local capture, recall, and reads need none of it. The covenant screen, where you type its phrase to accept, appears when you send a batch with oars pool deposit --send <hash> and have not accepted the covenant in force, not at sign-in');
+  const pool = program.command('pool').description('sign in to a pool server, deposit session skeletons (a closed list of fields, each value redacted first) and, after a yes to the raw prompt, redacted raw copies, and fetch signed reads; local capture, recall, and reads need none of it. The covenant screen, where you type its phrase to accept, appears when you send a batch with oars pool deposit --send <hash> or oars pool join and have not accepted the covenant in force, not at sign-in');
   const serverOption = '--server <url>';
   const serverHelp = 'the pool server, https or plain http to localhost (default: OARS_POOL_URL, else https://pool.manyoars.com)';
 
   pool
     .command('join')
-    .description('sign in, deposit, and fetch in one command: it runs login, deposit, outbox --explain, deposit --send, and fetch in that order, and asks what each asks. Run it again after a stop to continue from there')
+    .description('run login, deposit, outbox --explain, deposit --send, and fetch in one command. Run it again after a stop to continue from there')
     .option('--provider <name>', 'github or google, for the sign-in step (not needed once signed in)')
     .option('--verbose', 'print each sign-in request, headers and body, to stderr before it is sent (a credential shows as its size)')
     .option('--accept-covenant <version>', 'name the covenant version you expect, as deposit --send takes it: on a terminal the screen is shown and you type its phrase yourself, and off a terminal this is refused')
@@ -671,7 +707,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .option(serverOption, serverHelp)
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
-      emit(deps, flag(options, 'json'), await poolOutbox(deps, { server: text(options, 'server'), explain: flag(options, 'explain') }));
+      emit(deps, flag(options, 'json'), await poolOutbox(deps, { server: text(options, 'server'), explain: flag(options, 'explain'), ...(flag(options, 'json') ? {} : { print: deps.io.stdout }) }));
     });
 
   pool
