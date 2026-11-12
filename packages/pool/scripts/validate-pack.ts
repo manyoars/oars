@@ -6,7 +6,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { parseSkeleton } from '../../cli/src/sessions/pool-wire.js';
-import type { HarnessTerms, ManifestRow, Outcome, OutcomeCommit, RepositoryPointer } from './sample-pack.js';
+import type { DepositManifestRow, HarnessTerms, Outcome, OutcomeCommit, RepositoryPointer } from './sample-pack.js';
 
 /** The version of the spec page this validator checks against; the page states the same string. */
 export const SPEC_VERSION = '1';
@@ -41,6 +41,8 @@ const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 // The harness id shapes the pack writer masks wherever they stand (`HARNESS_PREFIXED` in sample-pack.ts), and the one form a mask has: the prefix and 24 lowercase hex characters.
 const PREFIXED_ID = /(?<![A-Za-z0-9])(?:srvtoolu|toolu|msg|req)_(?=[A-Za-z_-]*[0-9])[A-Za-z0-9][A-Za-z0-9_-]{14,}[A-Za-z0-9]/g;
 const MASKED_ID = /^[a-z]+_[0-9a-f]{24}(?![0-9A-Za-z])/;
+/** A deposit row's owner: the keyed pseudonym of the depositor (16 hex), never an account id. */
+const DEPOSITOR_OWNER = /^depositor:[0-9a-f]{16}$/;
 const HARNESS_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const USE_NAME = /^[a-z][a-z0-9-]{0,63}$/;
 const FILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -65,6 +67,7 @@ const text: Check = (value) => (!isText(value) ? 'not a string' : value === '' ?
 const textOrNull: Check = (value) => (value === null ? undefined : text(value));
 const count: Check = (value) => (isCount(value) ? undefined : 'not a whole number');
 const instantOrNull: Check = (value) => (value === null ? undefined : !isText(value) ? 'not a string or null' : Number.isNaN(Date.parse(value)) ? 'not a date and time' : undefined);
+const time: Check = (value) => (!isText(value) ? 'not a string' : Number.isNaN(Date.parse(value)) ? 'not a date and time' : undefined);
 const oneOf = (list: readonly string[]): Check => (value) => (isText(value) && list.includes(value) ? undefined : 'not one of the listed values');
 const shaped = (shape: RegExp, rule: string): Check => (value) => (!isText(value) ? 'not a string' : shape.test(value) ? undefined : rule);
 const listOf = (item: Check): Check => (value) => (!Array.isArray(value) ? 'not a list' : value.map(item).find((rule) => rule !== undefined));
@@ -82,7 +85,7 @@ const TERMS_FIELDS: { readonly [K in keyof Required<HarnessTerms>]: FieldSpec } 
 const POINTER_FIELDS: { readonly [K in keyof Required<RepositoryPointer>]: FieldSpec } = { remote: required(text), commit: required(textOrNull) };
 const COMMIT_FIELDS: { readonly [K in keyof Required<OutcomeCommit>]: FieldSpec } = { sha: required(text), landed: required((value) => (value === null || typeof value === 'boolean' ? undefined : 'not true, false, or null')) };
 const OUTCOME_FIELDS: { readonly [K in keyof Required<Outcome>]: FieldSpec } = { verify: required((value) => (value === null ? undefined : oneOf(VERIFY)(value))), commits: required(objects) };
-const ROW_FIELDS: { readonly [K in keyof Required<ManifestRow>]: FieldSpec } = {
+const ROW_FIELDS: { readonly [K in keyof Required<DepositManifestRow>]: FieldSpec } = {
   matchId: required(shaped(MATCH_ID, 'not a match id')),
   harness: required(shaped(HARNESS_NAME, 'not a harness name')),
   harnessVersions: required(listOf(text)),
@@ -100,6 +103,8 @@ const ROW_FIELDS: { readonly [K in keyof Required<ManifestRow>]: FieldSpec } = {
   outcome: optional(object),
   // Optional: a pack built before the field existed holds the reasoning and says nothing.
   reasoning: optional(oneOf(['kept', 'stripped'])),
+  // Optional: a deposit row has it (checkRow ties it to a depositor owner value); an operator row does not.
+  acceptedAt: optional(time),
   redactionVersion: required(text),
   startedAt: required(instantOrNull),
   endedAt: required(instantOrNull),
@@ -162,7 +167,10 @@ export const checkRow = (value: unknown, where: string): Violation[] => {
   if (!isFields(value)) return [{ where, field: '(row)', rule: 'not a JSON object' }];
   // A match id of the wrong shape is reported once, by its own rule, not again as a raw id.
   const raw = rawIdsIn(value).filter((field) => field !== 'matchId');
-  return [...checkObject('row', value, '', where), ...raw.map((field) => ({ where, field, rule: RAW_ID }))];
+  const found = checkObject('row', value, '', where);
+  // acceptedAt is the proof of a depositor's grant; a row owned by anyone else has no such grant to date.
+  if (Object.hasOwn(value, 'acceptedAt') && !(isText(value.repoOwner) && DEPOSITOR_OWNER.test(value.repoOwner))) found.push({ where, field: 'acceptedAt', rule: 'only a row with a depositor: owner value has it' });
+  return [...found, ...raw.map((field) => ({ where, field, rule: RAW_ID }))];
 };
 
 // The record parser is the pool's own, and the pool's id is 16 hex characters where a pack's is the match id: the id is checked here and the parser is handed a stand-in.

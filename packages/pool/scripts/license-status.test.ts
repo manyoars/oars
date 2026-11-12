@@ -100,6 +100,22 @@ describe('licenseStatus', () => {
     });
   });
 
+  it('license-status prints the covenant of a deposit row', async () => {
+    const f = fixture();
+    const pack = packOf(f, 'lot-1', [[S1, M1], [S2, M2], [BARE, M3]]);
+    const manifest = join(pack, 'manifest.jsonl');
+    const rows = readFileSync(manifest, 'utf8').split('\n').filter((line) => line !== '').map((line): { [key: string]: unknown } => JSON.parse(line));
+    const deposit = rows.map((row) => (row.matchId === M2
+      ? { ...row, repoOwner: 'depositor:0123456789abcdef', sourceLicense: 'manyoars-covenant 2.1 sha256:' + 'ab'.repeat(32), acceptedAt: '2026-07-01T00:00:00.000Z' }
+      : row.matchId === M3 ? { ...row, sourceLicense: 'manyoars-covenant 2.0 sha256:' + 'cd'.repeat(32) } : row));
+    writeFileSync(manifest, deposit.map((row) => `${JSON.stringify(row)}\n`).join(''));
+    const report = await licenseStatus(f.operator, KEY_ID, [M1, M2, M3]);
+    expect(report.rows.map(({ matchId, covenant }) => [matchId, covenant])).toEqual([[M1, 'unknown'], [M2, '2.1, accepted 2026-07-01T00:00:00.000Z'], [M3, '2.0']]);
+    const out: string[] = [];
+    expect(await main([M2, '--key-id', KEY_ID, '--operator', f.operator], { print: (line) => out.push(line) })).toBe(0);
+    expect(out.join('\n')).toContain('2.1, accepted 2026-07-01T00:00:00.000Z');
+  });
+
   it('reads a delivered row with its recipient, license, and date', async () => {
     const f = fixture();
     await send(f, packOf(f, 'lot-1', [[S1, M1], [S2, M2]]), 'Acme Evals Inc.', 'term-sheet-v1');

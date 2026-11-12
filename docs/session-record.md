@@ -47,7 +47,7 @@ One JSON object per line. Types: `text` is a non-empty string; `count` is a whol
 | matchId | match id | yes | The session's id for this buyer: a keyed hash, never the harness's session id. |
 | harness | name | yes | Which harness wrote the session, lowercase, such as `claude-code` or `codex`. |
 | harnessVersions | list of text | yes | The harness versions seen in the session. |
-| repoOwner | text | yes | The owner of the repositories the session worked in. |
+| repoOwner | text | yes | The owner of the repositories the session worked in. On a row built from a pool deposit it is `depositor:<16 hex>`: a keyed pseudonym of the depositor, one value per buyer key, never an account id. |
 | sourceLicense | text or null | yes | The license of the source the session worked on, or null when unknown. |
 | harnessTerms | list of objects | yes | The terms the session ran under, at least one; see `harnessTerms`. |
 | permittedUses | list of use names | yes | What the seller permits, such as `evaluation`; never `training`. |
@@ -59,6 +59,7 @@ One JSON object per line. Types: `text` is a non-empty string; `count` is a whol
 | pointer | object or null | no | The repository the session worked in, for an owner who opted in; see `pointer`. |
 | outcome | object | no | What happened to the work, for an owner who opted in; see `outcome`. |
 | reasoning | `kept` or `stripped` | no | Whether the transcripts hold the model's reasoning blocks (`kept`) or the seller left them out (`stripped`). A row without it comes from a pack built before the field, and holds them. |
+| acceptedAt | time | no | Present only on a row built from a pool deposit: when the depositor accepted the covenant cited in `sourceLicense`, as an ISO 8601 time with milliseconds. A row without it is an operator row. A row with it has a `repoOwner` of the form `depositor:<16 hex>`. |
 | redactionVersion | text | yes | The version of the redaction the transcripts went through. |
 | startedAt | time or null | yes | When the session began. |
 | endedAt | time or null | yes | When the session ended. |

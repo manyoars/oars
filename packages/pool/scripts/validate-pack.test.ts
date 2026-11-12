@@ -203,6 +203,35 @@ describe('a pack', () => {
     expect(printed.out).toEqual(['manifest.jsonl:1 redactionVersion: missing']);
   });
 
+  const DEPOSIT = { repoOwner: 'depositor:0123456789abcdef', sourceLicense: 'manyoars-covenant 2.1 sha256:abc', acceptedAt: '2026-07-01T00:00:00.000Z' };
+
+  it('validate-pack accepts a row with acceptedAt', async () => {
+    expect(found((await validate(pack({ row: { ...row(), ...DEPOSIT } })))?.violations)).toEqual([]);
+  });
+
+  it('validate-pack refuses an acceptedAt that is not a time', async () => {
+    for (const bad of ['yesterday-planted', null, 5]) {
+      const printed = await lines(pack({ row: { ...row(), ...DEPOSIT, acceptedAt: bad } }));
+      expect(printed.code).toBe(1);
+      expect(printed.out).toHaveLength(1);
+      expect(printed.out[0]).toMatch(/^manifest\.jsonl:1 acceptedAt: not a (string|date and time)/);
+      expect(printed.out.join('\n')).not.toContain('planted');
+    }
+  });
+
+  it('validate-pack refuses acceptedAt on a row whose owner is not a depositor value', async () => {
+    for (const owner of ['Acme', 'depositor:xyz', 'depositor:0123456789abcdef0']) {
+      const printed = await lines(pack({ row: { ...row(), ...DEPOSIT, repoOwner: owner } }));
+      expect(printed.code).toBe(1);
+      expect(printed.out).toEqual(['manifest.jsonl:1 acceptedAt: only a row with a depositor: owner value has it']);
+    }
+  });
+
+  it('an operator row has no acceptedAt and still conforms', async () => {
+    expect(Object.hasOwn(row(), 'acceptedAt')).toBe(false);
+    expect(found((await validate(pack()))?.violations)).toEqual([]);
+  });
+
   it('reports a field the spec does not list', async () => {
     const printed = await lines(pack({ row: { ...row(), extra: 1 } }));
     expect(printed.out).toEqual(['manifest.jsonl:1 extra: unknown field']);
