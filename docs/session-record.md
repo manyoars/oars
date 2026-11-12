@@ -32,6 +32,8 @@ A session folder is named by its row's `matchId`, and a folder no row names does
 
 - A raw id: a UUID, or a harness's tool, message, or request id (`toolu_`, `srvtoolu_`, `msg_`, `req_`) left unmasked, in a manifest row, a record, or a transcript line. A transcript line's `sessionId` is the match id.
 - A field this page does not list, in a row or a record.
+- A file the manifest does not list: a pack holds `pack.json`, `manifest.jsonl`, and, under `sessions/<matchId>/`, only the transcripts and the record its row names.
+- A `acceptedAt` on a row whose `repoOwner` is not a `depositor:<16 hex>` value: the field belongs to rows built from a pool deposit.
 - A `<field>Literal` field beside an `other`.
 - A digest of the text of an edit (`digests` on a tool call): a plain hash of text that was not masked.
 - A row with an empty `harnessTerms`, or `training` among `permittedUses` (`training` has its own field).
