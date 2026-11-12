@@ -2082,9 +2082,11 @@ describe('stripping the reasoning of the model (--strip-thinking, t1165)', () =>
     const keptOut = join(f.root, 'kept');
     await built(f, claudeLines(), { out: keptOut });
     expect(transcriptText(keptOut)).toContain(THOUGHT);
-    expect(transcriptText(keptOut)).toContain(SIGNATURE);
+    expect(transcriptText(keptOut)).toContain(`"signature":"${SIGNATURE}"`);
+    expect(transcriptText(keptOut)).toContain(`"data":"${REDACTED}"`);
     await buildPack(f.runtime, options(f, { stripThinking: true }));
     expect(linesOf(f.out)).toHaveLength(linesOf(keptOut).length);
+    for (const at of [0, 2, 4]) expect(linesOf(f.out)[at]).toBe(linesOf(keptOut)[at]);
     const plain = fixture();
     plain.write('-work-oars', S(1), [user(S(1), 1, USER_TEXT), assistant(S(1), 1, 'an answer'), user(S(1), 3, 'then'), assistant(S(1), 3, 'another')]);
     await stored(plain);
@@ -2117,7 +2119,7 @@ describe('stripping the reasoning of the model (--strip-thinking, t1165)', () =>
     expect(skeletonOf(f.out)).toBe(skeletonOf(keptOut));
   });
 
-  it('drops a Codex reasoning item, its events, and the same items in a compaction, and keeps the rest', async () => {
+  it('keeps a Codex reasoning item and its events as stubs with no reasoning field, drops the same items in a compaction, and keeps the rest', async () => {
     const f = fixture();
     const secret = 'codex private chain of thought';
     const rollout = codexRollout();
@@ -2130,13 +2132,19 @@ describe('stripping the reasoning of the model (--strip-thinking, t1165)', () =>
       ...rollout.slice(6),
     ];
     const runtime = await withCodex(f, withReasoning);
+    const keptOut = join(f.root, 'kept');
+    await buildPack(runtime, options(f, { owners: ownersAll(f), out: keptOut }));
+    expect(transcriptText(keptOut)).toContain(secret);
     const counts = await buildPack(runtime, options(f, { owners: ownersAll(f), stripThinking: true }));
     expect(counts.emitted).toBe(1);
     const text = transcriptText(f.out);
-    for (const gone of [secret, 'gAAAAABencryptedblob', '"reasoning"', 'agent_reasoning']) expect(text).not.toContain(gone);
+    for (const gone of [secret, 'gAAAAABencryptedblob', 'summary_text']) expect(text).not.toContain(gone);
     expect(text).toContain('kept in compaction');
     expect(text).toContain('fixed');
-    expect(linesOf(f.out)).toHaveLength(rollout.length + 1);
+    expect(linesOf(f.out)).toHaveLength(linesOf(keptOut).length);
+    expect(linesOf(f.out)).toHaveLength(rollout.length + 4);
+    const stubs = linesOf(f.out).filter((row) => /"reasoning"|agent_reasoning/.test(row)).map((row): unknown => JSON.parse(row));
+    expect(stubs.map((row) => (typeof row === 'object' && row !== null && 'payload' in row ? row.payload : undefined))).toEqual([{ type: 'reasoning' }, { type: 'agent_reasoning' }, { type: 'agent_reasoning_raw_content' }]);
   });
 
   it('leaves a line that is not JSON, and a line with no content list, as written', async () => {

@@ -302,9 +302,16 @@ const withoutReasoning = (value: unknown): { value: unknown; changed: boolean } 
   return { value: Object.fromEntries(walked.map(([key, entry]) => [key, entry.value])), changed: walked.some(([, entry]) => entry.changed) };
 };
 
+/** The fields of a Codex reasoning item or reasoning event that hold the reasoning: the summary, the content, the text of an event, and the encrypted content. */
+const REASONING_FIELDS = new Set(['summary', 'content', 'text', 'encrypted_content']);
+
+/** A Codex reasoning payload without its reasoning fields: its `type` and any id stay. */
+const reasoningStub = (payload: { readonly [key: string]: unknown } | undefined): { readonly [key: string]: unknown } =>
+  Object.fromEntries(Object.entries(payload ?? {}).filter(([key]) => !REASONING_FIELDS.has(key)));
+
 /**
  * A transcript without the model's reasoning (`--strip-thinking`): every `thinking` and `redacted_thinking` block, with its text, `signature`, and encrypted `data`, and every Codex `reasoning` item, whole.
- * A message left with no content keeps its line with an empty `content`, so a line count still matches the harness's; a Codex reasoning item or reasoning event is a line of its own, so the line goes.
+ * A message left with no content keeps its line with an empty `content`, so a line count still matches the harness's; a Codex reasoning item or reasoning event is a line of its own, so the line stays as a stub with its `type` and ids and no reasoning field.
  * A line that changes is written again by `JSON.stringify` with its keys in their order; every other line, including one that is not JSON, is kept as written.
  */
 export const stripReasoning = (raw: string): string =>
@@ -319,7 +326,7 @@ export const stripReasoning = (raw: string): string =>
       }
       const fields = fieldsOf(parsed);
       const payload = String(fieldsOf(fields?.payload)?.type);
-      if ((fields?.type === 'response_item' && REASONING_TYPES.has(payload)) || (fields?.type === 'event_msg' && REASONING_EVENTS.has(payload))) return [];
+      if ((fields?.type === 'response_item' && REASONING_TYPES.has(payload)) || (fields?.type === 'event_msg' && REASONING_EVENTS.has(payload))) return [JSON.stringify({ ...fields, payload: reasoningStub(fieldsOf(fields.payload)) })];
       const stripped = withoutReasoning(parsed);
       return [stripped.changed ? JSON.stringify(stripped.value) : text];
     })
