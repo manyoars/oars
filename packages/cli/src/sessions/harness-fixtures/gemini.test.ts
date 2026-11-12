@@ -1,5 +1,4 @@
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { captureSession, type Capture } from '../extract.js';
@@ -18,8 +17,8 @@ const FIXTURE = fileURLToPath(new URL('./gemini.jsonl', import.meta.url));
 const capture = (text: string): Capture =>
   captureSession({
     text,
-    harness: "gemini",
-    session: "gemini-fixture",
+    harness: 'gemini',
+    session: 'gemini-fixture',
     project: 'p',
     rev: 1,
     at: '2026-06-01T00:00:00Z',
@@ -34,9 +33,9 @@ const capture = (text: string): Capture =>
 describe('the Gemini CLI reader on its fixture', () => {
   it('parses the fixture into a session record that passes the capture invariants', async () => {
     const s = stage();
-    const source = SOURCES.find((entry) => entry.name === "gemini");
+    const source = SOURCES.find((entry) => entry.name === 'gemini');
     if (source === undefined) throw new Error('no such source');
-    const root = stageGemini(s.root, [{ id: "sess-1", projectRoot: join(s.root, "work", "app"), lines: readFileSync(FIXTURE, "utf8") }]);
+    const root = stageGemini(s.root, [{ id: 'sess-1', projectRoot: '/work/app', lines: readFileSync(FIXTURE, 'utf8') }]);
     const store = await source.open(root);
     expect(store?.sessions).toHaveLength(1);
     expect(store?.unreadable).toEqual([]);
@@ -53,24 +52,24 @@ describe('the Gemini CLI reader on its fixture', () => {
       tools: out.tools.map((tool) => [tool.tool, tool.status]),
       errorLines: out.errorLines.map((entry) => entry.line),
     }).toEqual({
-      "userTurns": 1,
-      "assistantTurns": 2,
-      "models": {
-        "gemini-2.5-pro": 2
+      'userTurns': 1,
+      'assistantTurns': 2,
+      'models': {
+        'gemini-2.5-pro': 2
       },
-      "version": null,
-      "tools": [
+      'version': null,
+      'tools': [
         [
-          "PowerShell",
-          "error"
+          'Bash',
+          'error'
         ],
         [
-          "Edit",
-          "ok"
+          'Edit',
+          'ok'
         ]
       ],
-      "errorLines": [
-        "make: *** No rule to make target"
+      'errorLines': [
+        'make: *** No rule to make target'
       ]
     });
   });

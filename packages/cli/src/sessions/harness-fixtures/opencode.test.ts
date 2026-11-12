@@ -19,8 +19,8 @@ const FIXTURE = fileURLToPath(new URL('./opencode.json', import.meta.url));
 const capture = (text: string): Capture =>
   captureSession({
     text,
-    harness: "opencode",
-    session: "opencode-fixture",
+    harness: 'opencode',
+    session: 'opencode-fixture',
     project: 'p',
     rev: 1,
     at: '2026-06-01T00:00:00Z',
@@ -35,7 +35,7 @@ const capture = (text: string): Capture =>
 describe('the OpenCode reader on its fixture', () => {
   it('parses the fixture into a session record that passes the capture invariants', async () => {
     const s = stage();
-    const source = SOURCES.find((entry) => entry.name === "opencode");
+    const source = SOURCES.find((entry) => entry.name === 'opencode');
     if (source === undefined) throw new Error('no such source');
     const parsed: unknown = JSON.parse(readFileSync(FIXTURE, 'utf8').replaceAll('FOLDER', JSON.stringify(folders(s.root).repo).slice(1, -1)));
     if (!isRows(parsed)) throw new Error('fixture is not a list of sessions');
@@ -57,24 +57,24 @@ describe('the OpenCode reader on its fixture', () => {
       tools: out.tools.map((tool) => [tool.tool, tool.status]),
       errorLines: out.errorLines.map((entry) => entry.line),
     }).toEqual({
-      "userTurns": 1,
-      "assistantTurns": 1,
-      "models": {
-        "claude-sonnet-5-5": 1
+      'userTurns': 1,
+      'assistantTurns': 1,
+      'models': {
+        'claude-sonnet-5-5': 1
       },
-      "version": "2.2.5",
-      "tools": [
+      'version': '2.2.5',
+      'tools': [
         [
-          "Bash",
-          "error"
+          'Bash',
+          'error'
         ],
         [
-          "Edit",
-          "ok"
+          'Edit',
+          'ok'
         ]
       ],
-      "errorLines": [
-        "make: *** No rule to make target"
+      'errorLines': [
+        'make: *** No rule to make target'
       ]
     });
   });

@@ -17,8 +17,8 @@ const FIXTURE = fileURLToPath(new URL('./codex.jsonl', import.meta.url));
 const capture = (text: string): Capture =>
   captureSession({
     text,
-    harness: "codex",
-    session: "codex-fixture",
+    harness: 'codex',
+    session: 'codex-fixture',
     project: 'p',
     rev: 1,
     at: '2026-06-01T00:00:00Z',
@@ -33,9 +33,9 @@ const capture = (text: string): Capture =>
 describe('the Codex reader on its fixture', () => {
   it('parses the fixture into a session record that passes the capture invariants', async () => {
     const s = stage();
-    const source = SOURCES.find((entry) => entry.name === "codex");
+    const source = SOURCES.find((entry) => entry.name === 'codex');
     if (source === undefined) throw new Error('no such source');
-    const root = stageCodex(s.root, [{ id: "11111111-1111-4111-8111-111111111111", lines: readFileSync(FIXTURE, "utf8") }]);
+    const root = stageCodex(s.root, [{ id: '11111111-1111-4111-8111-111111111111', lines: readFileSync(FIXTURE, 'utf8') }]);
     const store = await source.open(root);
     expect(store?.sessions).toHaveLength(1);
     expect(store?.unreadable).toEqual([]);
@@ -52,24 +52,24 @@ describe('the Codex reader on its fixture', () => {
       tools: out.tools.map((tool) => [tool.tool, tool.status]),
       errorLines: out.errorLines.map((entry) => entry.line),
     }).toEqual({
-      "userTurns": 1,
-      "assistantTurns": 3,
-      "models": {
-        "gpt-5-codex": 3
+      'userTurns': 1,
+      'assistantTurns': 3,
+      'models': {
+        'gpt-5-codex': 3
       },
-      "version": "0.50.0",
-      "tools": [
+      'version': '0.50.0',
+      'tools': [
         [
-          "Bash",
-          "error"
+          'Bash',
+          'error'
         ],
         [
-          "Edit",
-          "ok"
+          'Edit',
+          'ok'
         ]
       ],
-      "errorLines": [
-        "make: *** No rule to make target"
+      'errorLines': [
+        'make: *** No rule to make target'
       ]
     });
   });

@@ -19,8 +19,8 @@ const FIXTURE = fileURLToPath(new URL('./cursor.json', import.meta.url));
 const capture = (text: string): Capture =>
   captureSession({
     text,
-    harness: "cursor",
-    session: "cursor-fixture",
+    harness: 'cursor',
+    session: 'cursor-fixture',
     project: 'p',
     rev: 1,
     at: '2026-06-01T00:00:00Z',
@@ -35,7 +35,7 @@ const capture = (text: string): Capture =>
 describe('the Cursor reader on its fixture', () => {
   it('parses the fixture into a session record that passes the capture invariants', async () => {
     const s = stage();
-    const source = SOURCES.find((entry) => entry.name === "cursor");
+    const source = SOURCES.find((entry) => entry.name === 'cursor');
     if (source === undefined) throw new Error('no such source');
     const parsed: unknown = JSON.parse(readFileSync(FIXTURE, 'utf8').replaceAll('FOLDER', JSON.stringify(folders(s.root).repo).slice(1, -1)));
     if (!isRows(parsed)) throw new Error('fixture is not a list of sessions');
@@ -57,28 +57,28 @@ describe('the Cursor reader on its fixture', () => {
       tools: out.tools.map((tool) => [tool.tool, tool.status]),
       errorLines: out.errorLines.map((entry) => entry.line),
     }).toEqual({
-      "userTurns": 1,
-      "assistantTurns": 4,
-      "models": {
-        "default": 4
+      'userTurns': 1,
+      'assistantTurns': 4,
+      'models': {
+        'default': 4
       },
-      "version": null,
-      "tools": [
+      'version': null,
+      'tools': [
         [
-          "Read",
-          "ok"
+          'Read',
+          'ok'
         ],
         [
-          "Edit",
-          "ok"
+          'Edit',
+          'ok'
         ],
         [
-          "Bash",
-          "error"
+          'Bash',
+          'error'
         ]
       ],
-      "errorLines": [
-        "make: *** No rule to make target"
+      'errorLines': [
+        'make: *** No rule to make target'
       ]
     });
   });

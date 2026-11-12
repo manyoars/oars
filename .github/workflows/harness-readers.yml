@@ -23,6 +23,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npm run build
       # Only harnesses with a public npm package are listed; the others (Cursor, VS Code Copilot Chat, Grok Build) have no npm install here.
       # `npm view` reads the registry and installs nothing, and no harness runs, so no real store is read; HOME and the config
       # folders still point at a temporary folder before any command.

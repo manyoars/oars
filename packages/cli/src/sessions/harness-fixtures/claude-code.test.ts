@@ -16,7 +16,7 @@ const FIXTURE = fileURLToPath(new URL('./claude-code.jsonl', import.meta.url));
 const capture = (text: string): Capture =>
   captureSession({
     text,
-    session: "claude-code-fixture",
+    session: 'claude-code-fixture',
     project: 'p',
     rev: 1,
     at: '2026-06-01T00:00:00Z',
@@ -40,24 +40,24 @@ describe('the Claude Code reader on its fixture', () => {
       tools: out.tools.map((tool) => [tool.tool, tool.status]),
       errorLines: out.errorLines.map((entry) => entry.line),
     }).toEqual({
-      "userTurns": 1,
-      "assistantTurns": 3,
-      "models": {
-        "claude-sonnet-5-5": 3
+      'userTurns': 1,
+      'assistantTurns': 3,
+      'models': {
+        'claude-sonnet-5-5': 3
       },
-      "version": "2.1.300",
-      "tools": [
+      'version': '2.1.300',
+      'tools': [
         [
-          "Bash",
-          "error"
+          'Bash',
+          'error'
         ],
         [
-          "Edit",
-          "ok"
+          'Edit',
+          'ok'
         ]
       ],
-      "errorLines": [
-        "make: *** No rule to make target"
+      'errorLines': [
+        'make: *** No rule to make target'
       ]
     });
   });

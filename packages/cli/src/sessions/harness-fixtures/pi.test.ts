@@ -18,8 +18,8 @@ const FIXTURE = fileURLToPath(new URL('./pi.jsonl', import.meta.url));
 const capture = (text: string): Capture =>
   captureSession({
     text,
-    harness: "pi",
-    session: "pi-fixture",
+    harness: 'pi',
+    session: 'pi-fixture',
     project: 'p',
     rev: 1,
     at: '2026-06-01T00:00:00Z',
@@ -34,9 +34,9 @@ const capture = (text: string): Capture =>
 describe('the Pi reader on its fixture', () => {
   it('parses the fixture into a session record that passes the capture invariants', async () => {
     const s = stage();
-    const source = SOURCES.find((entry) => entry.name === "pi");
+    const source = SOURCES.find((entry) => entry.name === 'pi');
     if (source === undefined) throw new Error('no such source');
-    const root = source.root("linux", { PI_CODING_AGENT_DIR: stagePi(s.root, [{ id: "sess", cwd: "/work/app", lines: readFileSync(FIXTURE, "utf8") }]) }, join(s.root, "no-home"));
+    const root = source.root('linux', { PI_CODING_AGENT_DIR: stagePi(s.root, [{ id: 'sess', cwd: '/work/app', lines: readFileSync(FIXTURE, 'utf8') }]) }, join(s.root, 'no-home'));
     const store = await source.open(root);
     expect(store?.sessions).toHaveLength(1);
     expect(store?.unreadable).toEqual([]);
@@ -53,24 +53,24 @@ describe('the Pi reader on its fixture', () => {
       tools: out.tools.map((tool) => [tool.tool, tool.status]),
       errorLines: out.errorLines.map((entry) => entry.line),
     }).toEqual({
-      "userTurns": 1,
-      "assistantTurns": 3,
-      "models": {
-        "claude-sonnet-4-5": 3
+      'userTurns': 1,
+      'assistantTurns': 3,
+      'models': {
+        'claude-sonnet-4-5': 3
       },
-      "version": null,
-      "tools": [
+      'version': null,
+      'tools': [
         [
-          "Bash",
-          "error"
+          'Bash',
+          'error'
         ],
         [
-          "Edit",
-          "ok"
+          'Edit',
+          'ok'
         ]
       ],
-      "errorLines": [
-        "make: *** No rule to make target"
+      'errorLines': [
+        'make: *** No rule to make target'
       ]
     });
   });

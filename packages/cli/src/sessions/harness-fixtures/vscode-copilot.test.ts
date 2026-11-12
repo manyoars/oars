@@ -17,8 +17,8 @@ const FIXTURE = fileURLToPath(new URL('./vscode-copilot.json', import.meta.url))
 const capture = (text: string): Capture =>
   captureSession({
     text,
-    harness: "vscode-copilot",
-    session: "vscode-copilot-fixture",
+    harness: 'vscode-copilot',
+    session: 'vscode-copilot-fixture',
     project: 'p',
     rev: 1,
     at: '2026-06-01T00:00:00Z',
@@ -33,9 +33,9 @@ const capture = (text: string): Capture =>
 describe('the VS Code Copilot Chat reader on its fixture', () => {
   it('parses the fixture into a session record that passes the capture invariants', async () => {
     const s = stage();
-    const source = SOURCES.find((entry) => entry.name === "vscode-copilot");
+    const source = SOURCES.find((entry) => entry.name === 'vscode-copilot');
     if (source === undefined) throw new Error('no such source');
-    const root = stageVscode(s.root, [{ id: "sess-1", data: readFileSync(FIXTURE, "utf8"), hash: "ws0", workspace: { folder: "file:///work/app" } }]);
+    const root = stageVscode(s.root, [{ id: 'sess-1', data: readFileSync(FIXTURE, 'utf8'), hash: 'ws0', workspace: { folder: 'file:///work/app' } }]);
     const store = await source.open(root);
     expect(store?.sessions).toHaveLength(1);
     expect(store?.unreadable).toEqual([]);
@@ -52,24 +52,24 @@ describe('the VS Code Copilot Chat reader on its fixture', () => {
       tools: out.tools.map((tool) => [tool.tool, tool.status]),
       errorLines: out.errorLines.map((entry) => entry.line),
     }).toEqual({
-      "userTurns": 1,
-      "assistantTurns": 1,
-      "models": {
-        "copilot/claude-sonnet-4.5": 1
+      'userTurns': 1,
+      'assistantTurns': 1,
+      'models': {
+        'copilot/claude-sonnet-4.5': 1
       },
-      "version": null,
-      "tools": [
+      'version': null,
+      'tools': [
         [
-          "Bash",
-          "error"
+          'Bash',
+          'error'
         ],
         [
-          "Edit",
-          "ok"
+          'Edit',
+          'ok'
         ]
       ],
-      "errorLines": [
-        "make: *** No rule to make target"
+      'errorLines': [
+        'make: *** No rule to make target'
       ]
     });
   });

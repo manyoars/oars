@@ -17,8 +17,8 @@ const FIXTURE = fileURLToPath(new URL('./copilot.jsonl', import.meta.url));
 const capture = (text: string): Capture =>
   captureSession({
     text,
-    harness: "copilot",
-    session: "copilot-fixture",
+    harness: 'copilot',
+    session: 'copilot-fixture',
     project: 'p',
     rev: 1,
     at: '2026-06-01T00:00:00Z',
@@ -33,9 +33,9 @@ const capture = (text: string): Capture =>
 describe('the Copilot CLI reader on its fixture', () => {
   it('parses the fixture into a session record that passes the capture invariants', async () => {
     const s = stage();
-    const source = SOURCES.find((entry) => entry.name === "copilot");
+    const source = SOURCES.find((entry) => entry.name === 'copilot');
     if (source === undefined) throw new Error('no such source');
-    const root = stageCopilot(s.root, [{ id: "sess-1", lines: readFileSync(FIXTURE, "utf8") }]);
+    const root = stageCopilot(s.root, [{ id: 'sess-1', lines: readFileSync(FIXTURE, 'utf8') }]);
     const store = await source.open(root);
     expect(store?.sessions).toHaveLength(1);
     expect(store?.unreadable).toEqual([]);
@@ -52,24 +52,24 @@ describe('the Copilot CLI reader on its fixture', () => {
       tools: out.tools.map((tool) => [tool.tool, tool.status]),
       errorLines: out.errorLines.map((entry) => entry.line),
     }).toEqual({
-      "userTurns": 1,
-      "assistantTurns": 2,
-      "models": {
-        "claude-sonnet-4.5": 2
+      'userTurns': 1,
+      'assistantTurns': 2,
+      'models': {
+        'claude-sonnet-4.5': 2
       },
-      "version": "1.0.105",
-      "tools": [
+      'version': '1.0.105',
+      'tools': [
         [
-          "Bash",
-          "error"
+          'Bash',
+          'error'
         ],
         [
-          "Edit",
-          "ok"
+          'Edit',
+          'ok'
         ]
       ],
-      "errorLines": [
-        "make: *** No rule to make target"
+      'errorLines': [
+        'make: *** No rule to make target'
       ]
     });
   });

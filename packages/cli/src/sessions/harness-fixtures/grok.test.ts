@@ -23,8 +23,8 @@ const sibling = (part: string): string => FIXTURE.replace('updates.jsonl', `${pa
 const capture = (text: string): Capture =>
   captureSession({
     text,
-    harness: "grok",
-    session: "grok-fixture",
+    harness: 'grok',
+    session: 'grok-fixture',
     project: 'p',
     rev: 1,
     at: '2026-06-01T00:00:00Z',
@@ -39,9 +39,9 @@ const capture = (text: string): Capture =>
 describe('the Grok Build reader on its fixture', () => {
   it('parses the fixture into a session record that passes the capture invariants', async () => {
     const s = stage();
-    const source = SOURCES.find((entry) => entry.name === "grok");
+    const source = SOURCES.find((entry) => entry.name === 'grok');
     if (source === undefined) throw new Error('no such source');
-    const root = stageGrok(s.root, [{ id: "sess", cwd: "/work/app", updates: readFileSync(FIXTURE, "utf8"), usage: objectOf(sibling("usage")), summary: objectOf(sibling("summary")) }]);
+    const root = stageGrok(s.root, [{ id: 'sess', cwd: '/work/app', updates: readFileSync(FIXTURE, 'utf8'), usage: objectOf(sibling('usage')), summary: objectOf(sibling('summary')) }]);
     const store = await source.open(root);
     expect(store?.sessions).toHaveLength(1);
     expect(store?.unreadable).toEqual([]);
@@ -58,24 +58,24 @@ describe('the Grok Build reader on its fixture', () => {
       tools: out.tools.map((tool) => [tool.tool, tool.status]),
       errorLines: out.errorLines.map((entry) => entry.line),
     }).toEqual({
-      "userTurns": 1,
-      "assistantTurns": 3,
-      "models": {
-        "grok-build": 3
+      'userTurns': 1,
+      'assistantTurns': 3,
+      'models': {
+        'grok-build': 3
       },
-      "version": null,
-      "tools": [
+      'version': null,
+      'tools': [
         [
-          "Bash",
-          "error"
+          'Bash',
+          'error'
         ],
         [
-          "Edit",
-          "ok"
+          'Edit',
+          'ok'
         ]
       ],
-      "errorLines": [
-        "make: *** No rule to make target"
+      'errorLines': [
+        'make: *** No rule to make target'
       ]
     });
   });
