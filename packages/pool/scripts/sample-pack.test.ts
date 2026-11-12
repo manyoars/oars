@@ -2125,7 +2125,7 @@ describe('stripping the reasoning of the model (--strip-thinking, t1165)', () =>
     const rollout = codexRollout();
     const withReasoning = [
       ...rollout.slice(0, 6),
-      rolloutLine(codexTime(6), 'response_item', { type: 'reasoning', summary: [{ type: 'summary_text', text: secret }], content: null, encrypted_content: 'gAAAAABencryptedblob' }),
+      rolloutLine(codexTime(6), 'response_item', { type: 'reasoning', id: 'rs_0a1b2c3d4e5f', summary: [{ type: 'summary_text', text: secret }], content: null, encrypted_content: 'gAAAAABencryptedblob' }),
       rolloutLine(codexTime(6), 'event_msg', { type: 'agent_reasoning', text: secret }),
       rolloutLine(codexTime(6), 'event_msg', { type: 'agent_reasoning_raw_content', text: secret }),
       rolloutLine(codexTime(6), 'compacted', { message: '', replacement_history: [{ type: 'reasoning', summary: [], encrypted_content: 'gAAAAABencryptedblob' }, { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'kept in compaction' }] }] }),
@@ -2144,7 +2144,18 @@ describe('stripping the reasoning of the model (--strip-thinking, t1165)', () =>
     expect(linesOf(f.out)).toHaveLength(linesOf(keptOut).length);
     expect(linesOf(f.out)).toHaveLength(rollout.length + 4);
     const stubs = linesOf(f.out).filter((row) => /"reasoning"|agent_reasoning/.test(row)).map((row): unknown => JSON.parse(row));
-    expect(stubs.map((row) => (typeof row === 'object' && row !== null && 'payload' in row ? row.payload : undefined))).toEqual([{ type: 'reasoning' }, { type: 'agent_reasoning' }, { type: 'agent_reasoning_raw_content' }]);
+    expect(stubs.map((row) => (typeof row === 'object' && row !== null && 'payload' in row ? row.payload : undefined))).toEqual([{ type: 'reasoning', id: 'rs_0a1b2c3d4e5f' }, { type: 'agent_reasoning' }, { type: 'agent_reasoning_raw_content' }]);
+  });
+
+  it('still leaves out a session whose objected person only the reasoning names (the objection search reads the unstripped transcript)', async () => {
+    const f = fixture();
+    const lines = claudeLines();
+    lines[1] = reasoned(S(1), 1, [{ type: 'thinking', thinking: 'is this Zoe Quill again?', signature: SIGNATURE }, { type: 'text', text: 'first answer' }]);
+    f.write('-work-oars', S(1), lines);
+    await stored(f);
+    objectTo(f, { name: 'Zoe Quill', received: '2026-06-05T09:00:00.000Z', scope: 'sale' });
+    const counts = await buildPack(f.runtime, options(f, { stripThinking: true }));
+    expect(counts).toMatchObject({ emitted: 0, objected: 1 });
   });
 
   it('leaves a line that is not JSON, and a line with no content list, as written', async () => {

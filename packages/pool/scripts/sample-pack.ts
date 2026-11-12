@@ -1263,15 +1263,16 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     const skeleton = skeletonUnder(built, matchId, options.buyerKey);
     const skeletonRaw = `${JSON.stringify(skeleton, null, 2)}\n`;
     const files = await transcriptFilesOf(runtime, record.project, record.session);
-    // Before anything reads the text, so a name or an id that only the reasoning held is neither searched for nor masked: it is not delivered.
-    const raws = (await Promise.all(files.map((file) => readFile(file.path, 'utf8')))).map((raw) => (options.stripThinking === true ? stripReasoning(raw) : raw));
+    const unstripped = await Promise.all(files.map((file) => readFile(file.path, 'utf8')));
+    // Only the copy that is delivered loses its reasoning, before redaction reads it: a name or an id that only the reasoning held is not masked, since it is not delivered. The objection search below still reads the whole transcript.
+    const raws = options.stripThinking === true ? unstripped.map(stripReasoning) : unstripped;
     // The accounts this session's repositories live under: the owners entry's, and what the remote of each working folder names.
     const handles = [...(owner.handles ?? []), ...accountsOf(new Set(raws.flatMap((raw) => [...cwdsOf(raw)])))];
     // Keyed opaque ids, then `msg_` and `req_` ids, go through the keyed mask first: redaction's entropy rule would turn a real one (mixed case, high entropy) into `<secret>` and cut the link between its lines. `toolu_` ids reach the redactor's `toolId` hook.
     const early = premasked(raws, sessionIds, indexKey, options.buyerKey);
     const texts = early.texts.map((raw) => redactTranscript(raw.replace(VENDOR_ID, (id) => maskOf(indexKey, options.buyerKey, id)), domains, names, injectedKey, { handles, toolId: (id) => maskOf(indexKey, options.buyerKey, id), fetchedHosts: true }).text);
     // The person's name is looked for in the raw text, the redacted text, and the decoded strings: a JSON escape hides it from the raw bytes, and redaction decodes a line only when it masks something in it, so the decoding is done here.
-    const searched = [...texts, ...raws, ...raws.flatMap(decodedStrings)].map(squashed);
+    const searched = [...texts, ...unstripped, ...unstripped.flatMap(decodedStrings)].map(squashed);
     if (objectedNames.some((name) => searched.some((text) => text.includes(name)))) {
       counts.objected += 1;
       continue;
