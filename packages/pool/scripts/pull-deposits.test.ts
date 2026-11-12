@@ -147,13 +147,33 @@ describe('pull-deposits', () => {
   it('leaves out erased rows', async () => {
     const account = await seeded({
       deposits: [{ id: 'e1', erasedOn: '2026-11-01' }, { id: 'e2' }],
-      raw: [{ text: 'erased copy', erasedOn: '2026-11-01', stored: false }, { text: 'standing copy' }],
+      raw: [{ text: 'erased copy', erasedOn: '2026-11-01', stored: true }, { text: 'standing copy' }],
     });
     const { folder, files } = memory();
     const done = await pullDeposits(await store(), folder);
     expect(done.failed).toEqual([]);
     expect(jsonl(files.get(`${account}/deposits.jsonl`)).map((row) => fieldOf(row, 'id'))).toEqual(['e2']);
     expect([...files.keys()].filter((name) => name.startsWith(`${account}/projects/`))).toEqual([`${account}/projects/deposit/${sha('standing copy')}.jsonl`]);
+  });
+
+  it('reads accounts and deposits a page of 25 at a time, and misses none past the first page', async () => {
+    const account = await seeded({ deposits: Array.from({ length: 27 }, (_, n) => ({ id: `p${String(n).padStart(2, '0')}` })) });
+    // More accounts than one page, so the account read must page too.
+    const others: string[] = [];
+    for (let n = 0; n < 26; n += 1) others.push(await seeded({ deposits: [{ id: `q${String(n)}` }] }));
+    const real = await store();
+    const statements: string[] = [];
+    const counting: EraseStore = { ...real, rows: (sql, binds) => (statements.push(sql), real.rows(sql, binds)) };
+    const { folder, files } = memory();
+    await pullDeposits(counting, folder);
+    expect(jsonl(files.get(`${account}/deposits.jsonl`)).map((row) => fieldOf(row, 'id'))).toEqual(Array.from({ length: 27 }, (_, n) => `p${String(n).padStart(2, '0')}`));
+    expect(pulledAccounts(files)).toEqual(expect.arrayContaining([account, ...others]));
+    for (const table of ['accounts', 'deposits']) {
+      const reads = statements.filter((sql) => sql.includes(`FROM ${table} `));
+      expect(reads.length).toBeGreaterThan(0);
+      for (const sql of reads) expect(sql).toMatch(/ AND id > \? ORDER BY id LIMIT 25$| WHERE id > \? ORDER BY id LIMIT 25$/);
+    }
+    expect(statements.filter((sql) => sql.includes('FROM deposits ') && sql.includes('LIMIT 25')).length).toBeGreaterThanOrEqual(2);
   });
 
   it('leaves out an erased: account and its deposits', async () => {
