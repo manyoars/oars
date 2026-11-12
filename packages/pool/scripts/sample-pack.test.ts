@@ -11,7 +11,8 @@ import { SKELETON_FORMAT, type SessionSkeleton } from '../../cli/src/sessions/po
 import { deposit, loadStore, paths, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { runGit } from '../../cli/src/sessions/survival.js';
 import { rolloutLine, stageCodex } from '../../cli/src/sessions/test-support.js';
-import { buildPack, decodedStrings, HARNESS_TERMS, main, matchIdOf, ownerOf, parseOwners, secretIn, serverKeyOf, skeletonUnder, USAGE, type Census, type ManifestRow, type PackCounts, type PackOptions, type Tally } from './sample-pack.js';
+import { buildPack, decodedStrings, HARNESS_TERMS, keyIdOf, main, matchIdOf, ownerOf, parseOwners, secretIn, serverKeyOf, skeletonUnder, USAGE, type Census, type ManifestRow, type PackCounts, type PackOptions, type Tally } from './sample-pack.js';
+import { MANIFEST_OBJECTS, validate } from './validate-pack.js';
 
 // Every session the exclusion check was asked about, in call order: the frame-first rule is proved by who was never asked.
 const gated = vi.hoisted((): string[] => []);
@@ -238,6 +239,49 @@ describe('the skeleton and the manifest fields it adds (plan S3)', () => {
     const [row] = manifest(f.out);
     expect(row).toMatchObject({ models: { 'claude-opus-5-5': 2 }, turns: 4, skeleton: 'skeleton.json' });
     expect(existsSync(join(f.out, 'sessions', row?.matchId ?? '', 'skeleton.json'))).toBe(true);
+  });
+
+  it('builds a Claude Code pack that the public spec validator accepts (docs/session-record.md)', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done'), user(S(1), 3, 'and another'), assistant(S(1), 3, 'done too')]);
+    f.write('-work-oars', S(2), [user(S(2), 1, 'run the build'), assistant(S(2), 1, 'built')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    const result = await validate(f.out);
+    expect(result?.violations).toEqual([]);
+    expect(result).toMatchObject({ rows: 2, records: 2 });
+  });
+
+  it("types each field of the page's batch table as the record a real pack holds does", async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    const [row] = manifest(f.out);
+    const record: unknown = JSON.parse(readFileSync(join(f.out, 'sessions', row?.matchId ?? '', 'skeleton.json'), 'utf8'));
+    if (typeof record !== 'object' || record === null) throw new Error('a record that is not an object');
+    const page = readFileSync(fileURLToPath(new URL('../../../docs/session-record.md', import.meta.url)), 'utf8');
+    const table = page.split(/^### /m).find((part) => part.startsWith('Record object `batch`')) ?? '';
+    const cells = table.split(/\r?\n/).map((text) => text.split('|').map((cell) => cell.trim())).filter((parts) => parts.length >= 6 && parts[1] !== 'Field' && !/^-+$/.test(parts[1] ?? ''));
+    expect(cells.length).toBeGreaterThan(5);
+    const holds = (word: string, value: unknown): boolean => {
+      if (word === 'null') return value === null;
+      if (word === 'count') return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+      if (word === 'text') return typeof value === 'string' && value.length > 0;
+      if (word === 'match id') return typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
+      if (word === 'hex') return typeof value === 'string' && /^[0-9a-f]+$/.test(value);
+      if (word === 'object') return typeof value === 'object' && value !== null && !Array.isArray(value);
+      if (word.startsWith('list of')) return Array.isArray(value);
+      throw new Error(`the page uses a type word this test does not know: ${word}`);
+    };
+    const held = new Map(Object.entries(record));
+    for (const [, name = '', type = '', required = ''] of cells) {
+      if (!held.has(name)) {
+        expect(required, `${name} is required but the record has none`).toBe('no');
+        continue;
+      }
+      expect(type.split(' or ').some((word) => holds(word, held.get(name))), `${name} is typed ${type}`).toBe(true);
+    }
   });
 
   const isCensus = (value: unknown): value is Census => typeof value === 'object' && value !== null && 'sessions' in value && 'harness' in value && 'turnBucket' in value;
@@ -544,6 +588,22 @@ describe('the repository pointer and the outcome (plan S4)', { timeout: 30_000 }
     const counts = await buildPack(await withCodex(f, inRepo), options(f, { owners }));
     expect(counts).toMatchObject({ emitted: 1, noPointer: 0 });
     expect(pointerOf(manifest(f.out)[0])).toEqual({ remote: REMOTE, commit: shas.onMain });
+    expect((await validate(f.out))?.violations).toEqual([]);
+  });
+
+  it('builds an opt-in pack whose row holds exactly the spec\'s fields, and the validator accepts it', async () => {
+    const f = fixture();
+    const repo = join(f.root, 'work', 'ptr');
+    const shas = makeRepo(repo);
+    writeFileSync(f.owners, JSON.stringify(OPTED_IN));
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test', repo, 'feature'), ...committed(S(1), 3, 'main', shas.onMain), assistant(S(1), 7, 'done')]);
+    await stored(f);
+    await buildPack(f.runtime, options(f));
+    const [row] = manifest(f.out);
+    expect(Object.keys(row ?? {}).sort()).toEqual(Object.keys(MANIFEST_OBJECTS.row ?? {}).sort());
+    const result = await validate(f.out);
+    expect(result?.violations).toEqual([]);
+    expect(result).toMatchObject({ rows: 1, records: 1 });
   });
 
   it.each([
@@ -1919,5 +1979,202 @@ describe('a synthetic assistant line whose message.id is a uuid (t1147)', () => 
     expect(failure).toBeInstanceOf(Error);
     expect(String(failure)).toMatch(/raw id[^\n]*id: 1/);
     expect(String(failure)).not.toContain(mainId);
+  });
+});
+
+describe('--buyer-key-file', () => {
+  const base = (f: Fixture): string[] => ['--terms', f.terms, '--owners', f.owners, '--index-key', f.indexKey, '--out', f.out, '--min-turns', '1'];
+  const keyFile = (f: Fixture, text: string): string => {
+    const file = join(f.root, 'buyer.key');
+    writeFileSync(file, text);
+    return file;
+  };
+  const run = async (f: Fixture, extra: string[]): Promise<{ code: number; text: string }> => {
+    const printed: string[] = [];
+    const code = await main([...base(f), ...extra], { runtime: f.runtime, print: (text) => printed.push(text) });
+    return { code, text: printed.join('\n') };
+  };
+
+  it('builds a pack whose keyId equals the one built with the same key by --buyer-key', async () => {
+    const byFlag = fixture();
+    expect((await run(byFlag, ['--buyer-key', 'sample-secret'])).code).toBe(0);
+    const byFile = fixture();
+    expect((await run(byFile, ['--buyer-key-file', keyFile(byFile, 'sample-secret\r\n')])).code).toBe(0);
+    expect(JSON.parse(readFileSync(join(byFile.out, 'pack.json'), 'utf8'))).toMatchObject({ keyId: keyIdOf('sample-secret') });
+    expect(JSON.parse(readFileSync(join(byFlag.out, 'pack.json'), 'utf8'))).toMatchObject({ keyId: keyIdOf('sample-secret') });
+  });
+
+  it('refuses both flags', async () => {
+    const f = fixture();
+    const both = await run(f, ['--buyer-key', 'sample-secret', '--buyer-key-file', keyFile(f, 'sample-secret')]);
+    expect(both.code).toBe(2);
+    expect(both.text).toMatch(/not both/);
+    expect(both.text).not.toContain('sample-secret');
+    expect(existsSync(f.out)).toBe(false);
+  });
+
+  it('refuses a missing file', async () => {
+    const f = fixture();
+    const missing = await run(f, ['--buyer-key-file', join(f.root, 'absent.key')]);
+    expect(missing.code).toBe(2);
+    expect(missing.text).toMatch(/Cannot read the --buyer-key-file/);
+    expect(existsSync(f.out)).toBe(false);
+  });
+
+  it('refuses an empty file', async () => {
+    const f = fixture();
+    const empty = await run(f, ['--buyer-key-file', keyFile(f, ' \n')]);
+    expect(empty.code).toBe(2);
+    expect(empty.text).toMatch(/is empty/);
+    expect(existsSync(f.out)).toBe(false);
+  });
+
+  it('strips a leading byte order mark, so the keyId equals the plain key', async () => {
+    const f = fixture();
+    expect((await run(f, ['--buyer-key-file', keyFile(f, '\uFEFFsample-secret\n')])).code).toBe(0);
+    expect(JSON.parse(readFileSync(join(f.out, 'pack.json'), 'utf8'))).toMatchObject({ keyId: keyIdOf('sample-secret') });
+  });
+
+  it('lists the file flag in the usage, as the route for a real key', async () => {
+    expect(USAGE).toMatch(/--buyer-key-file <path>[^\n]*logged by npm and just/);
+    const f = fixture();
+    expect((await run(f, [])).text).toMatch(/Missing a required option/);
+  });
+});
+
+describe('stripping the reasoning of the model (--strip-thinking, t1165)', () => {
+  const THOUGHT = 'weighing the napkin plan before answering';
+  const SIGNATURE = 'EsoBCkYIBxgCKkDq2sig';
+  const REDACTED = 'EuYBredactedthinkingblob';
+  const reasoned = (session: string, n: number, blocks: readonly object[]): string =>
+    line({ type: 'assistant', uuid: uuidOf(session, 'a', n), parentUuid: uuidOf(session, 'b', n), isSidechain: false, timestamp: at(n + 1), version: '2.1.300', sessionId: session, requestId: requestOf(session, n), message: { role: 'assistant', model: 'claude-opus-5-5', content: blocks, usage: { input_tokens: 10, output_tokens: 20 } } });
+  const claudeLines = (): string[] => [
+    user(S(1), 1, USER_TEXT),
+    reasoned(S(1), 1, [{ type: 'thinking', thinking: THOUGHT, signature: SIGNATURE }, { type: 'text', text: 'first answer' }]),
+    user(S(1), 3, 'and the next'),
+    reasoned(S(1), 3, [{ type: 'thinking', thinking: '', signature: SIGNATURE }]),
+    user(S(1), 5, 'and one more'),
+    reasoned(S(1), 5, [{ type: 'redacted_thinking', data: REDACTED }, { type: 'text', text: 'last answer' }]),
+  ];
+  const built = async (f: Fixture, lines: readonly string[], extra: Partial<PackOptions> = {}): Promise<PackCounts> => {
+    f.write('-work-oars', S(1), lines);
+    await stored(f);
+    return buildPack(f.runtime, options(f, extra));
+  };
+  const linesOf = (out: string): string[] => transcriptText(out).split('\n').filter((row) => row !== '');
+  const packJson = (out: string): unknown => JSON.parse(readFileSync(join(out, 'pack.json'), 'utf8'));
+
+  it('removes every thinking and redacted_thinking block whole, with no signature left, and keeps the line of a message that held only thinking', async () => {
+    const f = fixture();
+    expect((await built(f, claudeLines(), { stripThinking: true })).emitted).toBe(1);
+    const text = transcriptText(f.out);
+    for (const gone of [THOUGHT, SIGNATURE, REDACTED, '"thinking"', 'redacted_thinking', 'signature']) expect(text).not.toContain(gone);
+    expect(text).toContain('first answer');
+    expect(text).toContain('last answer');
+    const rows = linesOf(f.out).map((row): unknown => JSON.parse(row));
+    expect(rows).toHaveLength(6);
+    const emptied = rows.filter((row) => typeof row === 'object' && row !== null && 'message' in row && typeof row.message === 'object' && row.message !== null && 'content' in row.message && Array.isArray(row.message.content) && row.message.content.length === 0);
+    expect(emptied).toHaveLength(1);
+  });
+
+  it('leaves every other byte as it is: the lines match the kept build one for one, and a transcript with no reasoning is identical', async () => {
+    const f = fixture();
+    const keptOut = join(f.root, 'kept');
+    await built(f, claudeLines(), { out: keptOut });
+    expect(transcriptText(keptOut)).toContain(THOUGHT);
+    expect(transcriptText(keptOut)).toContain(`"signature":"${SIGNATURE}"`);
+    expect(transcriptText(keptOut)).toContain(`"data":"${REDACTED}"`);
+    await buildPack(f.runtime, options(f, { stripThinking: true }));
+    expect(linesOf(f.out)).toHaveLength(linesOf(keptOut).length);
+    for (const at of [0, 2, 4]) expect(linesOf(f.out)[at]).toBe(linesOf(keptOut)[at]);
+    const plain = fixture();
+    plain.write('-work-oars', S(1), [user(S(1), 1, USER_TEXT), assistant(S(1), 1, 'an answer'), user(S(1), 3, 'then'), assistant(S(1), 3, 'another')]);
+    await stored(plain);
+    const plainKept = join(plain.root, 'kept');
+    await buildPack(plain.runtime, options(plain, { out: plainKept }));
+    await buildPack(plain.runtime, options(plain, { stripThinking: true }));
+    expect(transcriptText(plain.out)).toBe(transcriptText(plainKept));
+    expect(manifest(plain.out).map((row) => ({ ...row, reasoning: undefined }))).toEqual(manifest(plainKept).map((row) => ({ ...row, reasoning: undefined })));
+  });
+
+  it('records reasoning: stripped or kept on pack.json and on each manifest row', async () => {
+    const stripped = fixture();
+    await built(stripped, claudeLines(), { stripThinking: true });
+    expect(packJson(stripped.out)).toMatchObject({ reasoning: 'stripped' });
+    expect(manifest(stripped.out).map((row) => row.reasoning)).toEqual(['stripped']);
+    const kept = fixture();
+    await built(kept, claudeLines());
+    expect(packJson(kept.out)).toMatchObject({ reasoning: 'kept' });
+    expect(manifest(kept.out).map((row) => row.reasoning)).toEqual(['kept']);
+    expect((await validate(stripped.out))?.violations).toEqual([]);
+    expect((await validate(kept.out))?.violations).toEqual([]);
+  });
+
+  it('keeps the skeleton, with its thinking-token bucket, as it is', async () => {
+    const f = fixture();
+    const keptOut = join(f.root, 'kept');
+    await built(f, claudeLines(), { out: keptOut });
+    await buildPack(f.runtime, options(f, { stripThinking: true }));
+    const skeletonOf = (out: string): string => readFileSync(packFiles(out).filter((file) => file.endsWith('skeleton.json'))[0] ?? '', 'utf8');
+    expect(skeletonOf(f.out)).toBe(skeletonOf(keptOut));
+  });
+
+  it('keeps a Codex reasoning item and its events as stubs with no reasoning field, drops the same items in a compaction, and keeps the rest', async () => {
+    const f = fixture();
+    const secret = 'codex private chain of thought';
+    const rollout = codexRollout();
+    const withReasoning = [
+      ...rollout.slice(0, 6),
+      rolloutLine(codexTime(6), 'response_item', { type: 'reasoning', id: 'rs_0a1b2c3d4e5f', summary: [{ type: 'summary_text', text: secret }], content: null, encrypted_content: 'gAAAAABencryptedblob' }),
+      rolloutLine(codexTime(6), 'event_msg', { type: 'agent_reasoning', text: secret }),
+      rolloutLine(codexTime(6), 'event_msg', { type: 'agent_reasoning_raw_content', text: secret }),
+      rolloutLine(codexTime(6), 'compacted', { message: '', replacement_history: [{ type: 'reasoning', summary: [], encrypted_content: 'gAAAAABencryptedblob' }, { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'kept in compaction' }] }] }),
+      ...rollout.slice(6),
+    ];
+    const runtime = await withCodex(f, withReasoning);
+    const keptOut = join(f.root, 'kept');
+    await buildPack(runtime, options(f, { owners: ownersAll(f), out: keptOut }));
+    expect(transcriptText(keptOut)).toContain(secret);
+    const counts = await buildPack(runtime, options(f, { owners: ownersAll(f), stripThinking: true }));
+    expect(counts.emitted).toBe(1);
+    const text = transcriptText(f.out);
+    for (const gone of [secret, 'gAAAAABencryptedblob', 'summary_text']) expect(text).not.toContain(gone);
+    expect(text).toContain('kept in compaction');
+    expect(text).toContain('fixed');
+    expect(linesOf(f.out)).toHaveLength(linesOf(keptOut).length);
+    expect(linesOf(f.out)).toHaveLength(rollout.length + 4);
+    const stubs = linesOf(f.out).filter((row) => /"reasoning"|agent_reasoning/.test(row)).map((row): unknown => JSON.parse(row));
+    expect(stubs.map((row) => (typeof row === 'object' && row !== null && 'payload' in row ? row.payload : undefined))).toEqual([{ type: 'reasoning', id: 'rs_0a1b2c3d4e5f' }, { type: 'agent_reasoning' }, { type: 'agent_reasoning_raw_content' }]);
+  });
+
+  it('still leaves out a session whose objected person only the reasoning names (the objection search reads the unstripped transcript)', async () => {
+    const f = fixture();
+    const lines = claudeLines();
+    lines[1] = reasoned(S(1), 1, [{ type: 'thinking', thinking: 'is this Zoe Quill again?', signature: SIGNATURE }, { type: 'text', text: 'first answer' }]);
+    f.write('-work-oars', S(1), lines);
+    await stored(f);
+    objectTo(f, { name: 'Zoe Quill', received: '2026-06-05T09:00:00.000Z', scope: 'sale' });
+    const counts = await buildPack(f.runtime, options(f, { stripThinking: true }));
+    expect(counts).toMatchObject({ emitted: 0, objected: 1 });
+  });
+
+  it('leaves a line that is not JSON, and a line with no content list, as written', async () => {
+    const f = fixture();
+    const lines = [...claudeLines(), 'not json at all', line({ type: 'summary', summary: 'a title', leafUuid: uuidOf(S(1), 'a', 5) })];
+    await built(f, lines, { stripThinking: true });
+    expect(transcriptText(f.out)).toContain('not json at all');
+    expect(transcriptText(f.out)).toContain('a title');
+  });
+
+  it('takes the flag on the command line, with no value', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), claudeLines());
+    await stored(f);
+    const printed: string[] = [];
+    const code = await main(['--terms', f.terms, '--owners', f.owners, '--index-key', f.indexKey, '--buyer-key', 'sample', '--min-turns', '1', '--strip-thinking', '--out', f.out], { runtime: f.runtime, print: (text) => printed.push(text) });
+    expect(code, printed.join('\n')).toBe(0);
+    expect(packJson(f.out)).toMatchObject({ reasoning: 'stripped' });
+    expect(transcriptText(f.out)).not.toContain(THOUGHT);
+    expect(USAGE).toMatch(/--strip-thinking/);
   });
 });

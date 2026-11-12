@@ -7,6 +7,7 @@ import { appendFile, mkdir, readdir, readFile, rename, rmdir, writeFile } from '
 import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { dirname, join, resolve } from 'node:path';
+import { BUYER_KEY_FILE_USAGE, resolveBuyerKey } from '../src/buyer-key.js';
 import { defaultConfigDir } from '../../cli/src/credentials.js';
 import { checkSession, loadTerms, transcriptFilesOf, type Reason } from '../../cli/src/sessions/exclusion.js';
 import { configOf, makeRepoRoot, originUrl } from '../../cli/src/sessions/repo-root.js';
@@ -21,16 +22,18 @@ import { runGit, type Git } from '../../cli/src/sessions/survival.js';
 import { vocabulary } from '../../cli/src/sessions/vocab-load.js';
 
 export const USAGE = [
-  'Usage: sample-pack --terms <file> --owners <file> --index-key <file> --buyer-key <key> --out <dir> [--size <n>] [--seed <text>] [--min-turns <n>] [--sessions <file>]',
+  'Usage: sample-pack --terms <file> --owners <file> --index-key <file> (--buyer-key-file <path> | --buyer-key <key>) --out <dir> [--size <n>] [--seed <text>] [--min-turns <n>] [--sessions <file>] [--strip-thinking]',
   '  --terms <file>       the exclusion term list (one term per line; a local file, never in a repository)',
   '  --owners <file>      JSON list of {"folder": "<glob over the project folder name>", "owner": "<company>", "license": "<SPDX id>" | null}; first match wins, and a session in a folder no entry names is left out',
   '  --index-key <file>   the matching-index key (64 hex characters or more): a session\'s server key is HMAC-SHA-256 of its id under it. Keep it; a new key gives every session new ids',
   '  --buyer-key <key>    the buyer\'s key: a match id is HMAC-SHA-256 of the server key under it',
+  BUYER_KEY_FILE_USAGE,
   '  --out <dir>          an empty or new folder outside every git repository',
   '  --size <n>           sessions to emit (default 25); --seed <text> orders the draw (default 1)',
   '  objections.jsonl     beside the owners file, optional: a line per objection, naming a session id or a person; each session it names, or whose text names the person, is left out and counted (docs/pool.md)',
   '  --sessions <file>    build the pack from exactly the store session ids in this file (one per line) in place of the seeded draw; every rule still applies, and each listed session left out is printed with the reason (term, noOwner, lead, tooShort, duplicate, secret, notFound, ...). Not with --size or --seed',
   '  --min-turns <n>      a session needs at least this many turns, user plus assistant (default 20); a shorter one is left out and counted',
+  '  --strip-thinking     leave the reasoning of the model out of the transcripts: every thinking and redacted_thinking block (text, signature, encrypted data) and every Codex reasoning item; the manifest and pack.json say reasoning: stripped (kept otherwise). The thinking-token count in the skeleton stays',
   'Reads the store under APPDATA (or XDG_CONFIG_HOME) and the transcripts under CLAUDE_CONFIG_DIR or ~/.claude. Builds in <out>.partial and renames it to --out when done,',
   'and appends each session id and its match id to index.jsonl beside the owners file: the operator\'s only map from one to the other.',
 ].join('\n');
@@ -102,6 +105,9 @@ export interface Outcome {
   commits: OutcomeCommit[];
 }
 
+/** What a pack holds of the model's reasoning: every block (`kept`) or none (`stripped`). */
+export type Reasoning = 'kept' | 'stripped';
+
 /** No session id: a buyer holds only the match id, and the operator's `index.jsonl` maps one to the other. */
 export interface ManifestRow {
   matchId: string;
@@ -123,6 +129,8 @@ export interface ManifestRow {
   pointer?: RepositoryPointer | null;
   /** Only for an owner who opted in. */
   outcome?: Outcome;
+  /** Whether the transcripts still carry the model's reasoning (`kept`, the default) or `--strip-thinking` took it out (`stripped`); the skeleton's thinking-token count is the same either way. */
+  reasoning: Reasoning;
   redactionVersion: string;
   startedAt: string | null;
   endedAt: string | null;
@@ -146,6 +154,8 @@ export interface PackOptions {
   vocabDir?: URL | undefined;
   /** Store session ids to build the pack from, in place of the seeded draw (`--sessions`): every other rule still applies, and `size` and `seed` are not used. */
   sessions?: readonly string[] | undefined;
+  /** Take every `thinking` and `redacted_thinking` block and every Codex reasoning item out of the transcripts (`--strip-thinking`); the manifest and `pack.json` say `reasoning: stripped`. */
+  stripThinking?: boolean | undefined;
   /** Told of each listed session that does not make the pack, with the count that kept it out (`term`, `noOwner`, `lead`, `tooShort`, `duplicate`, `secret`, ..., or `notFound`). */
   onDrop?: ((session: string, reason: string) => void) | undefined;
 }
@@ -271,6 +281,56 @@ export const readObjections = async (dir: string): Promise<{ objections: Objecti
   });
   return { objections, hash: createHash('sha256').update(text).digest('hex') };
 };
+
+/** A content block that carries the model's reasoning (Claude Code: its text, its `signature`, or the encrypted `data` of a `redacted_thinking`), and a Codex reasoning item (summary, content, `encrypted_content`). */
+const REASONING_TYPES = new Set(['thinking', 'redacted_thinking', 'reasoning']);
+/** The Codex events that repeat a reasoning item's text on a line of their own. */
+const REASONING_EVENTS = new Set(['agent_reasoning', 'agent_reasoning_raw_content', 'agent_reasoning_section_break']);
+
+const fieldsOf = (value: unknown): { readonly [key: string]: unknown } | undefined => (typeof value === 'object' && value !== null && !Array.isArray(value) ? { ...value } : undefined);
+
+/** `value` with every reasoning block left out of every list it holds (a message's `content`, a compaction's `replacement_history`, a nested message); `changed` says whether any was. Key order is kept. */
+const withoutReasoning = (value: unknown): { value: unknown; changed: boolean } => {
+  if (Array.isArray(value)) {
+    const kept = value.filter((item: unknown) => !REASONING_TYPES.has(String(fieldsOf(item)?.type)));
+    const walked = kept.map(withoutReasoning);
+    return { value: walked.map((entry) => entry.value), changed: kept.length !== value.length || walked.some((entry) => entry.changed) };
+  }
+  const fields = fieldsOf(value);
+  if (fields === undefined) return { value, changed: false };
+  const walked = Object.entries(fields).map(([key, item]) => [key, withoutReasoning(item)] as const);
+  return { value: Object.fromEntries(walked.map(([key, entry]) => [key, entry.value])), changed: walked.some(([, entry]) => entry.changed) };
+};
+
+/** The fields of a Codex reasoning item or reasoning event that hold the reasoning: the summary, the content, the text of an event, and the encrypted content. */
+const REASONING_FIELDS = new Set(['summary', 'content', 'text', 'encrypted_content']);
+
+/** A Codex reasoning payload without its reasoning fields: its `type` and any id stay. */
+const reasoningStub = (payload: { readonly [key: string]: unknown } | undefined): { readonly [key: string]: unknown } =>
+  Object.fromEntries(Object.entries(payload ?? {}).filter(([key]) => !REASONING_FIELDS.has(key)));
+
+/**
+ * A transcript without the model's reasoning (`--strip-thinking`): every `thinking` and `redacted_thinking` block, with its text, `signature`, and encrypted `data`, and every Codex `reasoning` item, whole.
+ * A message left with no content keeps its line with an empty `content`, so a line count still matches the harness's; a Codex reasoning item or reasoning event is a line of its own, so the line stays as a stub with its `type` and ids and no reasoning field.
+ * A line that changes is written again by `JSON.stringify` with its keys in their order; every other line, including one that is not JSON, is kept as written.
+ */
+export const stripReasoning = (raw: string): string =>
+  raw
+    .split('\n')
+    .flatMap((text): string[] => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        return [text];
+      }
+      const fields = fieldsOf(parsed);
+      const payload = String(fieldsOf(fields?.payload)?.type);
+      if ((fields?.type === 'response_item' && REASONING_TYPES.has(payload)) || (fields?.type === 'event_msg' && REASONING_EVENTS.has(payload))) return [JSON.stringify({ ...fields, payload: reasoningStub(fieldsOf(fields.payload)) })];
+      const stripped = withoutReasoning(parsed);
+      return [stripped.changed ? JSON.stringify(stripped.value) : text];
+    })
+    .join('\n');
 
 /** Every string a transcript holds once its JSON is decoded, keys and values, including JSON carried inside a string: a name a `\u` escape hides from the raw bytes is found here whether or not redaction rewrote the line. */
 export const decodedStrings = (body: string): string[] => {
@@ -1149,6 +1209,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     return known;
   };
   let losers: Set<string> | undefined;
+  const reasoning: Reasoning = options.stripThinking === true ? 'stripped' : 'kept';
   const rows: ManifestRow[] = [];
   const skeletons: SessionSkeleton[] = [];
   const index: IndexRow[] = [];
@@ -1202,14 +1263,16 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
     const skeleton = skeletonUnder(built, matchId, options.buyerKey);
     const skeletonRaw = `${JSON.stringify(skeleton, null, 2)}\n`;
     const files = await transcriptFilesOf(runtime, record.project, record.session);
-    const raws = await Promise.all(files.map((file) => readFile(file.path, 'utf8')));
+    const unstripped = await Promise.all(files.map((file) => readFile(file.path, 'utf8')));
+    // Only the copy that is delivered loses its reasoning, before redaction reads it: a name or an id that only the reasoning held is not masked, since it is not delivered. The objection search below still reads the whole transcript.
+    const raws = options.stripThinking === true ? unstripped.map(stripReasoning) : unstripped;
     // The accounts this session's repositories live under: the owners entry's, and what the remote of each working folder names.
     const handles = [...(owner.handles ?? []), ...accountsOf(new Set(raws.flatMap((raw) => [...cwdsOf(raw)])))];
     // Keyed opaque ids, then `msg_` and `req_` ids, go through the keyed mask first: redaction's entropy rule would turn a real one (mixed case, high entropy) into `<secret>` and cut the link between its lines. `toolu_` ids reach the redactor's `toolId` hook.
     const early = premasked(raws, sessionIds, indexKey, options.buyerKey);
     const texts = early.texts.map((raw) => redactTranscript(raw.replace(VENDOR_ID, (id) => maskOf(indexKey, options.buyerKey, id)), domains, names, injectedKey, { handles, toolId: (id) => maskOf(indexKey, options.buyerKey, id), fetchedHosts: true }).text);
     // The person's name is looked for in the raw text, the redacted text, and the decoded strings: a JSON escape hides it from the raw bytes, and redaction decodes a line only when it masks something in it, so the decoding is done here.
-    const searched = [...texts, ...raws, ...raws.flatMap(decodedStrings)].map(squashed);
+    const searched = [...texts, ...unstripped, ...unstripped.flatMap(decodedStrings)].map(squashed);
     if (objectedNames.some((name) => searched.some((text) => text.includes(name)))) {
       counts.objected += 1;
       continue;
@@ -1268,6 +1331,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
       turns: turnsOf(record),
       skeleton: SKELETON_FILE,
       ...opted,
+      reasoning,
       redactionVersion: REDACTION_VERSION,
       startedAt: record.tsFirst,
       endedAt: record.tsLast,
@@ -1293,7 +1357,7 @@ export const buildPack = async (runtime: SessionsRuntime, options: PackOptions):
   const census = `${JSON.stringify(censusOf(rows, skeletons), null, 2)}\n`;
   bytes += Buffer.byteLength(census);
   await writeFile(join(partial, 'census.json'), census);
-  await writeFile(join(partial, 'pack.json'), `${JSON.stringify({ built: new Date().toISOString(), size: listed === undefined ? options.size : counts.emitted, seed: listed === undefined ? options.seed : null, ...(listed === undefined ? {} : { listed: listed.size }), minTurns: options.minTurns, redactionVersion: REDACTION_VERSION, keyId: keyIdOf(options.buyerKey), objections: objectionsHash, counts, bytes, elapsedMs: Date.now() - started }, null, 2)}\n`);
+  await writeFile(join(partial, 'pack.json'), `${JSON.stringify({ built: new Date().toISOString(), size: listed === undefined ? options.size : counts.emitted, seed: listed === undefined ? options.seed : null, ...(listed === undefined ? {} : { listed: listed.size }), minTurns: options.minTurns, reasoning, redactionVersion: REDACTION_VERSION, keyId: keyIdOf(options.buyerKey), objections: objectionsHash, counts, bytes, elapsedMs: Date.now() - started }, null, 2)}\n`);
   // Outside the pack, beside the owners file, and appended, so it maps every pack built from that folder. Written before the rename, so a pack under `out` always has its rows.
   await appendFile(join(dirname(resolve(options.owners)), 'index.jsonl'), index.map((row) => `${JSON.stringify(row)}\n`).join(''));
   // An empty `out` was allowed above, and a folder is renamed only onto a free name.
@@ -1308,24 +1372,33 @@ export interface Io {
   vocabDir?: URL | undefined;
 }
 
-const VALUED = new Set(['--terms', '--owners', '--index-key', '--buyer-key', '--out', '--size', '--seed', '--min-turns', '--sessions']);
+const VALUED = new Set(['--terms', '--owners', '--index-key', '--buyer-key', '--buyer-key-file', '--out', '--size', '--seed', '--min-turns', '--sessions']);
 
-const parseArgs = (argv: readonly string[]): (Omit<PackOptions, 'sessions' | 'onDrop'> & { sessionsFile?: string }) | string => {
+const parseArgs = async (argv: readonly string[]): Promise<(Omit<PackOptions, 'sessions' | 'onDrop'> & { sessionsFile?: string }) | string> => {
   const values = new Map<string, string>();
-  for (let at = 0; at < argv.length; at += 2) {
+  let stripThinking = false;
+  for (let at = 0; at < argv.length; at += 1) {
     const [flag, value] = [argv[at] ?? '', argv[at + 1]];
+    if (flag === '--strip-thinking') {
+      stripThinking = true;
+      continue;
+    }
     if (!VALUED.has(flag) || value === undefined) return `Unknown or incomplete option: ${flag}`;
     values.set(flag, value);
+    at += 1;
   }
-  const [terms, owners, indexKey, buyerKey, out] = ['--terms', '--owners', '--index-key', '--buyer-key', '--out'].map((flag) => values.get(flag));
-  if (terms === undefined || owners === undefined || indexKey === undefined || buyerKey === undefined || out === undefined) return 'Missing a required option.';
+  const [terms, owners, indexKey, out] = ['--terms', '--owners', '--index-key', '--out'].map((flag) => values.get(flag));
+  const resolved = await resolveBuyerKey(values.get('--buyer-key'), values.get('--buyer-key-file'));
+  if (resolved !== undefined && 'refusal' in resolved) return resolved.refusal;
+  if (terms === undefined || owners === undefined || indexKey === undefined || resolved === undefined || out === undefined) return 'Missing a required option.';
+  const buyerKey = resolved.key;
   const sessionsFile = values.get('--sessions');
   if (sessionsFile !== undefined && (values.has('--size') || values.has('--seed'))) return '--sessions takes the place of the seeded draw: give it without --size or --seed.';
   const size = Number(values.get('--size') ?? '25');
   if (!Number.isInteger(size) || size < 1) return '--size takes a whole number of 1 or more.';
   const minTurns = Number(values.get('--min-turns') ?? '20');
   if (!Number.isInteger(minTurns) || minTurns < 1) return '--min-turns takes a whole number of 1 or more.';
-  return { terms, owners, indexKey, buyerKey, out, size, seed: values.get('--seed') ?? '1', minTurns, ...(sessionsFile === undefined ? {} : { sessionsFile }) };
+  return { terms, owners, indexKey, buyerKey, out, size, seed: values.get('--seed') ?? '1', minTurns, ...(stripThinking ? { stripThinking } : {}), ...(sessionsFile === undefined ? {} : { sessionsFile }) };
 };
 
 /** The session ids a `--sessions` file lists: one per line, blank lines skipped, each once, in the file's order. */
@@ -1339,7 +1412,7 @@ const sessionsIn = async (file: string): Promise<string[]> => {
 
 /** The command: 0 when the pack was written, 2 on a usage or input error (nothing written), with counts only on success (and, with --sessions, each listed session left out, by its store id): no term, path, or transcript text. */
 export const main = async (argv: readonly string[], io: Io): Promise<number> => {
-  const parsed = parseArgs(argv);
+  const parsed = await parseArgs(argv);
   if (typeof parsed === 'string') {
     io.print(`${parsed}\n${USAGE}`);
     return 2;

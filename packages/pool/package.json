@@ -14,6 +14,9 @@
     "erase": "node scripts/erase.mjs",
     "sample-pack": "node scripts/sample-pack.mjs",
     "deliver": "node scripts/deliver.mjs",
+    "license-status": "node scripts/license-status.mjs",
+    "notices": "node scripts/notices.mjs",
+    "validate-pack": "node scripts/validate-pack.mjs",
     "grant-standing": "node scripts/grant-standing.mjs",
     "hide-nickname": "node scripts/hide-nickname.mjs",
     "dev": "wrangler dev --port 8788"

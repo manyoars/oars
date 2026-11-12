@@ -1,11 +1,11 @@
 // The hand-over register for lot 1 (plan S5, 2.2): fixtures only. A pack is written by hand here; no store, transcript root, or network is read.
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { deposit, type SessionsRuntime } from '../../cli/src/sessions/store.js';
-import { deliver, main, recipientsOf, type Delivery } from './deliver.js';
+import { USAGE, deliver, main, recipientsOf, type Delivery } from './deliver.js';
 import { buildPack, keyIdOf } from './sample-pack.js';
 
 const dirs: string[] = [];
@@ -304,5 +304,65 @@ describe('deliver recipients (Art. 15(1)(c) and 19)', () => {
     const printed: string[] = [];
     expect(await main(['recipients', S2, '--owners', f.owners], { print: (text) => printed.push(text) })).toBe(0);
     expect(printed.join('\n')).toContain(`Acme Evals Inc.\tmatch id ${M2}`);
+  });
+});
+
+describe('--buyer-key-file', () => {
+  const argv = (f: Fixture, ...key: string[]): string[] => ['--pack', f.pack, '--recipient', 'Acme Evals Inc.', '--license', 'term-sheet-v1', ...key, '--owners', f.owners];
+  const keyFile = (f: Fixture, text: string): string => {
+    const file = join(f.root, 'buyer.key');
+    writeFileSync(file, text);
+    return file;
+  };
+
+  it('accepts a key from a file, with the same effect as the same key by flag', async () => {
+    const byFlag = fixture();
+    expect(await main(argv(byFlag, '--buyer-key', BUYER_KEY), { print: () => undefined })).toBe(0);
+    const byFile = fixture();
+    expect(await main(argv(byFile, '--buyer-key-file', keyFile(byFile, BUYER_KEY)), { print: () => undefined })).toBe(0);
+    expect(rowsOf(byFile).map((row) => [row.keyId, row.matchId])).toEqual(rowsOf(byFlag).map((row) => [row.keyId, row.matchId]));
+  });
+
+  it('trims a trailing newline and whitespace from the file', async () => {
+    const f = fixture();
+    expect(await main(argv(f, '--buyer-key-file', keyFile(f, `${BUYER_KEY}\r\n \n`)), { print: () => undefined })).toBe(0);
+    expect(rowsOf(f)[0]?.keyId).toBe(KEY_ID);
+  });
+
+  it('lists --buyer-key-file in the usage text as the route for a real key', () => {
+    expect(USAGE).toMatch(/--buyer-key-file <path>[^\n]*logged by npm and just/);
+  });
+
+  it('refuses both --buyer-key and --buyer-key-file', async () => {
+    const f = fixture();
+    const printed: string[] = [];
+    expect(await main(argv(f, '--buyer-key', BUYER_KEY, '--buyer-key-file', keyFile(f, BUYER_KEY)), { print: (text) => printed.push(text) })).toBe(2);
+    expect(printed.join('\n')).toMatch(/not both/);
+    expect(printed.join('\n')).not.toContain(BUYER_KEY);
+  });
+
+  it('refuses a missing file', async () => {
+    const f = fixture();
+    const printed: string[] = [];
+    expect(await main(argv(f, '--buyer-key-file', join(f.root, 'absent.key')), { print: (text) => printed.push(text) })).toBe(2);
+    expect(printed.join('\n')).toMatch(/Cannot read the --buyer-key-file/);
+    expect(existsSync(join(f.root, 'deliveries.jsonl'))).toBe(false);
+  });
+
+  it('refuses an empty file', async () => {
+    const f = fixture();
+    const printed: string[] = [];
+    expect(await main(argv(f, '--buyer-key-file', keyFile(f, '\n')), { print: (text) => printed.push(text) })).toBe(2);
+    expect(printed.join('\n')).toMatch(/is empty/);
+    expect(existsSync(join(f.root, 'deliveries.jsonl'))).toBe(false);
+  });
+
+  it('refuses a key from a file that is not the pack\'s, without printing the key', async () => {
+    const f = fixture();
+    const printed: string[] = [];
+    expect(await main(argv(f, '--buyer-key-file', keyFile(f, 'another-secret-key')), { print: (text) => printed.push(text) })).toBe(2);
+    expect(printed.join('\n')).toMatch(/buyer key is not the one/);
+    expect(printed.join('\n')).not.toContain('another-secret-key');
+    expect(existsSync(join(f.root, 'deliveries.jsonl'))).toBe(false);
   });
 });
