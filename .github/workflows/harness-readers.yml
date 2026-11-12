@@ -1,7 +1,9 @@
 name: harness-readers
 
-# Weekly, not daily: GitHub Actions minutes are shared. Reruns the per-reader fixture tests and reports which harness versions are
-# current on npm, so a release that changes a transcript format is seen as a version line next to one red reader. It pushes nothing.
+# Weekly, not daily: GitHub Actions minutes are shared. Two checks, both here and never in `ci`, so a harness release cannot redden main or a
+# task branch. The reader tests read static made-up fixtures, so they stay green when a harness changes its format. The version watch is the
+# red signal: it fails the run when a harness's latest npm release is past the allowance in versions.json (default: a different minor from
+# the version its fixture was modeled on), naming the harness and both versions. It pushes nothing.
 on:
   schedule:
     - cron: '23 6 * * 1'
@@ -24,22 +26,18 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      # Only harnesses with a public npm package are listed; the others (Cursor, VS Code Copilot Chat, Grok Build) have no npm install here.
-      # `npm view` reads the registry and installs nothing, and no harness runs, so no real store is read; HOME and the config
-      # folders still point at a temporary folder before any command.
-      - name: Latest harness releases
-        env:
-          HARNESS_PACKAGES: '@anthropic-ai/claude-code @openai/codex @github/copilot @google/gemini-cli opencode-ai @earendil-works/pi-coding-agent'
-        run: |
-          export HOME="$RUNNER_TEMP/home" APPDATA="$RUNNER_TEMP/appdata" XDG_CONFIG_HOME="$RUNNER_TEMP/xdg"
-          mkdir -p "$HOME" "$APPDATA" "$XDG_CONFIG_HOME"
-          for pkg in $HARNESS_PACKAGES; do
-            version="$(npm view "$pkg" version 2>/dev/null || echo unavailable)"
-            echo "$pkg $version"
-            echo "- $pkg: $version" >> "$GITHUB_STEP_SUMMARY"
-          done
       - name: Reader fixture tests
         run: |
           export HOME="$RUNNER_TEMP/home" APPDATA="$RUNNER_TEMP/appdata" XDG_CONFIG_HOME="$RUNNER_TEMP/xdg"
           npx vitest run src/sessions/harness-fixtures
         working-directory: packages/cli
+      # Only harnesses with a public npm package are checked; the others (Cursor, VS Code Copilot Chat, Grok Build) have none here.
+      # `npm view` reads the registry and installs nothing, and no harness runs, so no real store is read; HOME and the config
+      # folders still point at a temporary folder before any command. The script prints every latest version and exits 1 on a stale one.
+      - name: Version watch
+        if: ${{ !cancelled() }}
+        run: |
+          export HOME="$RUNNER_TEMP/home" APPDATA="$RUNNER_TEMP/appdata" XDG_CONFIG_HOME="$RUNNER_TEMP/xdg"
+          mkdir -p "$HOME" "$APPDATA" "$XDG_CONFIG_HOME"
+          node packages/cli/src/sessions/harness-fixtures/version-watch.mjs 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "${PIPESTATUS[0]}"

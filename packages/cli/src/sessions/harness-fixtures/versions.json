@@ -1,0 +1,13 @@
+{
+  "harnesses": [
+    { "name": "Claude Code", "package": "@anthropic-ai/claude-code", "modeledOn": "2.1.300", "allowance": "minor", "basis": "stamped" },
+    { "name": "Codex", "package": "@openai/codex", "modeledOn": "0.50.0", "allowance": "minor", "basis": "stamped" },
+    { "name": "Copilot CLI", "package": "@github/copilot", "modeledOn": "1.0.105", "allowance": "minor", "basis": "stamped" },
+    { "name": "OpenCode", "package": "opencode-ai", "modeledOn": "2.2.5", "allowance": "minor", "basis": "stamped" },
+    { "name": "Gemini CLI", "package": "@google/gemini-cli", "modeledOn": null, "allowance": "minor", "basis": "source, google-gemini/gemini-cli at 89e9d25d" },
+    { "name": "Grok Build", "package": null, "modeledOn": null, "allowance": "minor", "basis": "source, xai-org/grok-build at 2bdd1d6" },
+    { "name": "Pi", "package": "@earendil-works/pi-coding-agent", "modeledOn": null, "allowance": "minor", "basis": "source, badlogic/pi-mono at 085c84e" },
+    { "name": "VS Code Copilot Chat", "package": null, "modeledOn": "0.32.4", "allowance": "minor", "basis": "stamped" },
+    { "name": "Cursor", "package": null, "modeledOn": null, "allowance": "minor", "basis": "no public source; shapes follow the local store the reader was written against" }
+  ]
+}
