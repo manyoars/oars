@@ -151,3 +151,20 @@ end with time (Section 2.5, `2.1:109-113`).
 Gap: the builder's owner-handle rule reads `.git/config` on the build machine (`docs/pool.md:416-422`), and the depositor's
 redaction passes no handles (`pool-command.ts:829`). A repository owner's handle can survive in a deposit-sourced transcript.
 Call 1 decides. Opening protected regions needs a record of each buyer's transfer safeguard first; that is not in this plan.
+
+## 3. The operator's own sessions
+
+- **The path.** Matt's account deposits like any other: the same command, the same raw yes (`pool-command.ts:826`), under
+  his own proved acceptance. `pull-deposits` returns his sessions with everyone's, and they are packed as `depositor:<hex>`
+  rows under the covenant. Nothing in the deposit path knows which account is the operator's.
+- **Match ids do not move.** A deposit-sourced session takes its match id as a store session does, from the buyer key, the
+  index key, and the harness session id (`sample-pack.ts:1167`). So one session has one match id per buyer on either path.
+- **`deliver` is untouched.** It resolves a match id through `index.jsonl` (`deliver.ts:118`) and reads each indexed pack
+  folder (`:149`). A deposit-sourced build appends rows of the same shape with the optional values of section 1. No row is
+  rewritten or removed, so the r2 to r6 folders and their `operator/index.jsonl` rows stay as they are.
+- **Lot 1 r6 stays byte-identical.** `--deposits` is an added input. Without it the builder runs the code it runs today.
+  Brief 2's first test builds the existing fixture pack without the flag and compares bytes.
+- **What `owners.json` is still for.** It anchors the operator folder: `index.jsonl`, `deliveries.jsonl`, and
+  `objections.jsonl` sit beside it (`deliver.ts:17`, `license-status.ts:176-190`). It names a real owner and a repository
+  license where Matt wants the row to say so, with the pointer and outcome block only a local clone gives
+  (`sample-pack.ts:128`, `:1153`). It is the only source for sessions never deposited. And it rebuilds lot 1.
