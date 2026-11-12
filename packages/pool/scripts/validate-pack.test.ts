@@ -210,13 +210,15 @@ describe('a pack', () => {
   });
 
   it('validate-pack refuses an acceptedAt that is not a time', async () => {
-    for (const bad of ['yesterday-planted', '2026-07-01', '1', null, 5]) {
+    for (const bad of ['yesterday-planted', '2026-07-01', '1', '2026-13-01T00:00:00.000Z', null, 5]) {
       const printed = await lines(pack({ row: { ...row(), ...DEPOSIT, acceptedAt: bad } }));
       expect(printed.code).toBe(1);
       expect(printed.out).toHaveLength(1);
       expect(printed.out[0]).toMatch(/^manifest\.jsonl:1 acceptedAt: not (a string|a date and time|an ISO 8601 time)/);
       expect(printed.out.join('\n')).not.toContain('planted');
     }
+    // ISO-shaped but not a real time: only the Date.parse guard refuses it.
+    expect((await lines(pack({ row: { ...row(), ...DEPOSIT, acceptedAt: '2026-13-01T00:00:00.000Z' } }))).out).toEqual(['manifest.jsonl:1 acceptedAt: not a date and time']);
   });
 
   it('validate-pack refuses acceptedAt on a row whose owner is not a depositor value', async () => {

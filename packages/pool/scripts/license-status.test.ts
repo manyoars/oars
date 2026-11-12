@@ -26,6 +26,10 @@ const BARE = 'cccc3333-3333-4333-8333-333333333333';
 const M1 = 'a1'.repeat(32);
 const M2 = 'b2'.repeat(32);
 const M3 = 'c3'.repeat(32);
+const M4 = 'e5'.repeat(32);
+const M5 = 'f6'.repeat(32);
+const S4 = '44444444-1111-4111-8111-111111111111';
+const S5 = '55555555-1111-4111-8111-111111111111';
 const ABSENT = 'd4'.repeat(32);
 const OWNER = 'Quillfeather Holdings';
 const PROJECT = 'C:/Users/quillfeather/work/ledger';
@@ -102,7 +106,7 @@ describe('licenseStatus', () => {
 
   it('license-status prints the covenant of a deposit row', async () => {
     const f = fixture();
-    const pack = packOf(f, 'lot-1', [[S1, M1], [S2, M2], [BARE, M3]]);
+    const pack = packOf(f, 'lot-1', [[S1, M1], [S2, M2], [BARE, M3], [S4, M4], [S5, M5]]);
     const manifest = join(pack, 'manifest.jsonl');
     const rows = readFileSync(manifest, 'utf8').split('\n').filter((line) => line !== '').map((line): { [key: string]: unknown } => {
       const parsed: unknown = JSON.parse(line);
@@ -110,10 +114,12 @@ describe('licenseStatus', () => {
     });
     const deposit = rows.map((row) => (row.matchId === M2
       ? { ...row, repoOwner: 'depositor:0123456789abcdef', sourceLicense: 'manyoars-covenant 2.1 sha256:' + 'ab'.repeat(32), acceptedAt: '2026-07-01T00:00:00.000Z' }
-      : row.matchId === M3 ? { ...row, sourceLicense: 'manyoars-covenant 2.0 sha256:' + 'cd'.repeat(32) } : row));
+      : row.matchId === M3 ? { ...row, sourceLicense: 'manyoars-covenant 2.0 sha256:' + 'cd'.repeat(32) }
+      : row.matchId === M4 ? { ...row, repoOwner: 'depositor:0123456789abcdef', sourceLicense: 'MIT', acceptedAt: '2026-07-01T00:00:00.000Z' }
+      : row.matchId === M5 ? { ...row, repoOwner: 'depositor:0123456789abcdef', sourceLicense: 'manyoars-covenant 2.0 sha256:' + 'ef'.repeat(32) } : row));
     writeFileSync(manifest, deposit.map((row) => `${JSON.stringify(row)}\n`).join(''));
-    const report = await licenseStatus(f.operator, KEY_ID, [M1, M2, M3]);
-    expect(report.rows.map(({ matchId, covenant }) => [matchId, covenant])).toEqual([[M1, 'unknown'], [M2, '2.1, accepted 2026-07-01T00:00:00.000Z'], [M3, 'unknown']]);
+    const report = await licenseStatus(f.operator, KEY_ID, [M1, M2, M3, M4, M5]);
+    expect(report.rows.map(({ matchId, covenant }) => [matchId, covenant])).toEqual([[M1, 'unknown'], [M2, '2.1, accepted 2026-07-01T00:00:00.000Z'], [M3, 'unknown'], [M4, 'unknown'], [M5, '2.0']]);
     const out: string[] = [];
     expect(await main([M2, '--key-id', KEY_ID, '--operator', f.operator], { print: (line) => out.push(line) })).toBe(0);
     expect(out.join('\n')).toContain('2.1, accepted 2026-07-01T00:00:00.000Z');

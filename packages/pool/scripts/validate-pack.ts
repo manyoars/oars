@@ -67,7 +67,7 @@ const text: Check = (value) => (!isText(value) ? 'not a string' : value === '' ?
 const textOrNull: Check = (value) => (value === null ? undefined : text(value));
 const count: Check = (value) => (isCount(value) ? undefined : 'not a whole number');
 const instantOrNull: Check = (value) => (value === null ? undefined : !isText(value) ? 'not a string or null' : Number.isNaN(Date.parse(value)) ? 'not a date and time' : undefined);
-const time: Check = (value) => (!isText(value) ? 'not a string' : Number.isNaN(Date.parse(value)) ? 'not a date and time' : undefined);
+const real: Check = (value) => (isText(value) && Number.isNaN(Date.parse(value)) ? 'not a date and time' : undefined);
 const oneOf = (list: readonly string[]): Check => (value) => (isText(value) && list.includes(value) ? undefined : 'not one of the listed values');
 const shaped = (shape: RegExp, rule: string): Check => (value) => (!isText(value) ? 'not a string' : shape.test(value) ? undefined : rule);
 const isoTime = shaped(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/, 'not an ISO 8601 time');
@@ -105,7 +105,7 @@ const ROW_FIELDS: { readonly [K in keyof Required<DepositManifestRow>]: FieldSpe
   // Optional: a pack built before the field existed holds the reasoning and says nothing.
   reasoning: optional(oneOf(['kept', 'stripped'])),
   // Optional: a deposit row has it (checkRow ties it to a depositor owner value); an operator row does not.
-  acceptedAt: optional((value) => isoTime(value) ?? time(value)),
+  acceptedAt: optional((value) => isoTime(value) ?? real(value)),
   redactionVersion: required(text),
   startedAt: required(instantOrNull),
   endedAt: required(instantOrNull),
