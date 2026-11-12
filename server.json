@@ -7,12 +7,12 @@
     "source": "github",
     "subfolder": "packages/cli"
   },
-  "version": "0.5.3",
+  "version": "0.5.4",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@manyoars/oars",
-      "version": "0.5.3",
+      "version": "0.5.4",
       "transport": { "type": "stdio" },
       "packageArguments": [
         { "type": "positional", "value": "sessions" },
