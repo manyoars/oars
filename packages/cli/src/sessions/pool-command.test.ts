@@ -4686,6 +4686,7 @@ describe('oars pool outbox, deposit, and deposit --send-all memory (t1199)', () 
     const { limitMb, peakRssMb, count, seconds, steps } = memoryChild('refreshbound', REFRESH_HEAP_MB, scene.staged.root);
     expect(count).toBeGreaterThanOrEqual(70);
     console.info(`memory proof refreshbound: peak RSS ${String(peakRssMb)} MB under a ${String(limitMb)} MB heap limit in ${String(seconds)} s; ${steps}`);
+    if (process.env.OARS_MEMORY_NOTE !== undefined) writeFileSync(process.env.OARS_MEMORY_NOTE, `peak RSS ${String(peakRssMb)} MB under a ${String(limitMb)} MB heap limit in ${String(seconds)} s; ${steps}`);
   }, 540_000);
 
   it.skipIf(MEMORY_CHILD === undefined || MEMORY_MODE !== 'refreshbound')('child of the memory proof refreshbound', async () => {
