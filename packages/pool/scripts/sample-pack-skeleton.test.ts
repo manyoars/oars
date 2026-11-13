@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, relative, sep } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { LITERAL, PRIVATE, PUBLIC_PROGRAMS } from '../../cli/src/sessions/public-vocabulary.js';
+import { ERROR_CODES, PROMPT_CLASSES, PROMPT_INTERVENTIONS } from '../../cli/src/sessions/schema.js';
 import { deposit, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { buildPack, HARNESS_TERMS, main, NO_OBJECTIONS, PERMITTED_USES, type ManifestRow, type PackOptions } from './sample-pack.js';
 import { cardOf, writeCard } from './skeleton-card.js';
@@ -76,14 +77,52 @@ const RULES: { readonly [key: string]: (value: string) => boolean } = {
   program: (v) => PUBLIC_PROGRAMS.has(v) || [LITERAL, PRIVATE].includes(v), sub: (v) => NAME.test(v), flags: (v) => FLAG.test(v), key: (v) => NAME.test(v), valueSize: (v) => /^[0-9a-z+-]{1,12}$/.test(v), pathDepth: (v) => /^\d{1,3}\+?$/.test(v), extension: (v) => NAME.test(v), dirKind: (v) => NAME.test(v),
 };
 
+// A count table's keys are strings in the upload too: each table's keys are judged by its parent field.
+const KEY_RULES: { readonly [field: string]: (key: string) => boolean } = {
+  model: (k) => NAME.test(k), models: (k) => NAME.test(k), harness: oneOf(...Object.keys(HARNESS_TERMS)), harnessVersion: (k) => VERSION.test(k),
+  errorCode: (k) => ERROR_CODES.has(k), recovery: oneOf('edit followed', 'no edit followed'), intervention: oneOf(...PROMPT_INTERVENTIONS),
+  promptClass: oneOf(...PROMPT_CLASSES), turnBucket: (k) => /^\d{1,6}$/.test(k),
+};
+
 const audit = (value: unknown, where: string, key = ''): string[] => {
   if (typeof value === 'string') {
     const rule = RULES[key];
     return rule?.(value) === true ? [] : [`${where}${key === '' ? '' : `.${key}`}`];
   }
   if (Array.isArray(value)) return value.flatMap((item) => audit(item, where, key));
-  if (typeof value === 'object' && value !== null) return Object.entries(value).flatMap(([name, item]) => audit(item, where, name));
+  if (typeof value === 'object' && value !== null) {
+    const keyRule = KEY_RULES[key];
+    return Object.entries(value).flatMap(([name, item]) => [...(keyRule === undefined || keyRule(name) ? [] : [`${where}.${key}{${name}}`]), ...audit(item, where, name)]);
+  }
   return [];
+};
+
+// The card: every line is the template's fixed text, a slot the build fills with a number, a date, or a version, or a count-table row whose name is judged by the table's title.
+const CARD_TABLES: { readonly [title: string]: string } = {
+  'Sessions per harness': 'harness', 'Sessions per harness version': 'harnessVersion', 'Prompts per model': 'model', 'Failed calls per error code': 'errorCode',
+  'Failed calls by what followed': 'recovery', 'Prompts per human intervention': 'intervention', 'Sessions per turn bucket (lowest turn count of the bucket)': 'turnBucket',
+};
+const CARD_LINES: readonly RegExp[] = [
+  /^$/, /^---$/, /^license: other$/, /^license_link: https:\/\/manyoars\.com\/packs#rights$/, /^tags:$/, /^ {2}- agent-traces$/, /^# Many Oars: open session skeletons$/, /^## What is counted$/,
+  /^\d+ coding-agent session skeletons, published by Many Oars Co\., each a record of the session's steps, errors, recoveries, and human interventions\. No transcript text is in this release, and every session ended at least \d+ days before it was built( \(\d{4}-\d{2}-\d{2}\))?\.$/,
+  /^- License and rights: https:\/\/manyoars\.com\/packs#rights\.$/,
+  /^- Redaction version: [0-9A-Za-z][0-9A-Za-z.+-]{0,40}; model reasoning: (kept|stripped|unknown)\. Redaction is best effort\.$/,
+  /^- Layout: `manifest\.jsonl` \(one row per session, `transcripts: 0`\), `sessions\/<match id>\/skeleton\.json`, `census\.json` \(counts only\), and `pack\.json` \(how it was built\)\.$/,
+  /^- Check it: `npm run validate-pack -w packages\/pool -- <this folder>` in the Many Oars repository \(spec: `docs\/session-record\.md`\)\. It needs no key, account, or network\.$/,
+  /^- Fresher sessions, whole transcripts, and rights for use: https:\/\/manyoars\.com\/packs\.$/,
+];
+const auditCard = (text: string): string[] => {
+  let table = '';
+  return text.split('\n').flatMap((row, at) => {
+    const title = /^\*\*(.+)\*\*$/.exec(row)?.[1];
+    if (title !== undefined) {
+      table = CARD_TABLES[title] ?? '';
+      return table === '' ? [`README.md:${String(at + 1)} table title`] : [];
+    }
+    const entry = /^- `(.+)`: \d+$/.exec(row)?.[1];
+    if (entry !== undefined) return KEY_RULES[table]?.(entry) === true ? [] : [`README.md:${String(at + 1)} ${table}{${entry}}`];
+    return CARD_LINES.some((pattern) => pattern.test(row)) ? [] : [`README.md:${String(at + 1)} line`];
+  });
 };
 
 interface Built {
@@ -242,6 +281,7 @@ describe('a skeleton-only build', () => {
     documents.push(['manifest.jsonl', manifest(opts.out)]);
     const bad = documents.flatMap(([name, document]) => audit(document, name.replace(/[0-9a-f]{64}/, '<id>')));
     expect(bad).toEqual([]);
+    expect(auditCard(readFileSync(join(opts.out, 'README.md'), 'utf8'))).toEqual([]);
     expect(documents.map(([name]) => name)).toContain('pack.json');
     // The fixture reaches the tool keys: the audited skeletons carry them, so their rules ran on real output.
     const text = JSON.stringify(documents);
@@ -270,6 +310,11 @@ describe('a skeleton-only build', () => {
     expect(audit({ templates: ['git commit -m <text>', 'pytest <path> -k <ident>'] }, 'x')).toEqual([]);
     expect(audit({ id: '11111111-1111-4111-8111-111111111111' }, 'x')).toHaveLength(1);
     expect(audit({ day: 'last tuesday' }, 'x')).toHaveLength(1);
+    expect(audit({ model: { 'fix the login bug': 1 } }, 'x')).toHaveLength(1);
+    expect(audit({ models: { 'claude-opus-5-5': 2, 'fix the bug': 1 } }, 'x')).toHaveLength(1);
+    expect(audit({ recovery: { 'edit followed': 1, 'the secret plan': 1 } }, 'x')).toHaveLength(1);
+    expect(audit({ errorCode: { '127': 1, 'file not found in acme': 1 } }, 'x')).toHaveLength(1);
+    expect(audit({ harness: { 'claude-code': 1 }, harnessVersion: { '2.1.300': 1 }, errorCode: { other: 2 }, promptClass: { 'edit-verify': 1 }, turnBucket: { '20': 1 } }, 'x')).toEqual([]);
     expect(audit({ model: 'private', templates: ['git commit -m <text>'], names: [{ name: 'parse.ts' }] }, 'x')).toEqual([]);
   });
 });
@@ -290,6 +335,15 @@ describe('the data card', () => {
     expect(next).toContain('2 coding-agent session skeletons');
     expect(next).toContain('at least 60 days');
     expect(next).not.toEqual(card);
+  });
+
+  it('the card audit fails on a line the template lacks and on a census name that is free text', () => {
+    const good = cardOf({ olderThanDays: 30, built: '2026-11-13T00:00:00Z', redactionVersion: '4', reasoning: 'kept' }, { sessions: 1, harness: { 'claude-code': 1 }, harnessVersion: {}, model: { 'claude-opus-5-5': 1 }, errorCode: {}, recovery: { 'edit followed': 1 }, intervention: {}, promptClass: {}, turnBucket: { '2': 1 } });
+    expect(auditCard(good)).toEqual([]);
+    expect(auditCard(good.replace('`claude-opus-5-5`', '`fix the login bug`'))).toHaveLength(1);
+    expect(auditCard(good.replace('`edit followed`', '`the secret plan`'))).toHaveLength(1);
+    expect(auditCard(`${good}\nPlease fix the login bug for acme.`)).toHaveLength(1);
+    expect(auditCard(good.replace('Prompts per model', 'Prompts about acme'))).not.toEqual([]);
   });
 
   it('refuses a census or pack whose numbers are not numbers', () => {
@@ -316,13 +370,18 @@ describe('the command', () => {
     const f = await fixture();
     const printed: string[] = [];
     const common = ['--terms', join(f.root, 'terms.txt'), '--owners', f.owners, '--index-key', join(f.root, 'index.key'), '--buyer-key', 'open', '--min-turns', '1'];
-    expect(await main([...common, '--out', join(f.root, 'cli1'), '--skeleton-only', '--older-than', '-1'], { runtime: f.runtime, print: (t) => printed.push(t) })).toBe(2);
+    expect(await main([...common, '--out', join(f.root, 'cli1'), '--skeleton-only', '--older-than', '-1'], { runtime: f.runtime, print: (t) => printed.push(t), now: () => NOW })).toBe(2);
     expect(printed.join('\n')).toContain('--older-than takes a number of days');
     printed.length = 0;
-    expect(await main([...common, '--out', join(f.root, 'cli2'), '--skeleton-only'], { runtime: f.runtime, print: (t) => printed.push(t) })).toBe(0);
+    expect(await main([...common, '--out', join(f.root, 'cli2'), '--skeleton-only'], { runtime: f.runtime, print: (t) => printed.push(t), now: () => NOW })).toBe(0);
     expect(printed.join('\n')).toContain('Left out as newer than the age limit');
     printed.length = 0;
-    expect(await main([...common, '--out', join(f.root, 'cli3'), '--skeleton-only', '--exclude-manifest', join(f.root, 'cli2')], { runtime: f.runtime, print: (t) => printed.push(t) })).toBe(0);
+    expect(await main([...common, '--out', join(f.root, 'cli3'), '--skeleton-only', '--exclude-manifest', join(f.root, 'cli2')], { runtime: f.runtime, print: (t) => printed.push(t), now: () => NOW })).toBe(0);
     expect(printed.join('\n')).toContain('held by the excluded lot: 3');
+    // pack.json `built` follows the clock the command was given.
+    expect(JSON.parse(readFileSync(join(f.root, 'cli2', 'pack.json'), 'utf8'))).toMatchObject({ built: new Date(NOW).toISOString() });
+    const later = Date.parse('2027-03-01T00:00:00Z');
+    expect(await main([...common, '--out', join(f.root, 'cli4'), '--skeleton-only'], { runtime: f.runtime, print: () => undefined, now: () => later })).toBe(0);
+    expect(JSON.parse(readFileSync(join(f.root, 'cli4', 'pack.json'), 'utf8'))).toMatchObject({ built: new Date(later).toISOString() });
   });
 });

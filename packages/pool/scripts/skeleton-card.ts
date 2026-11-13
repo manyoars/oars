@@ -41,7 +41,7 @@ export const cardOf = (pack: unknown, census: unknown): string => {
     '',
     '# Many Oars: open session skeletons',
     '',
-    `${String(sessions)} coding-agent session skeletons from Many Oars Co., each a record of the session's steps, errors, recoveries, and human interventions. No transcript text is in this release, and every session ended at least ${String(days)} days before it was built${typeof built === 'string' ? ` (${built.slice(0, 10)})` : ''}.`,
+    `${String(sessions)} coding-agent session skeletons, published by Many Oars Co., each a record of the session's steps, errors, recoveries, and human interventions. No transcript text is in this release, and every session ended at least ${String(days)} days before it was built${typeof built === 'string' ? ` (${built.slice(0, 10)})` : ''}.`,
     '',
     `- License and rights: ${CARD_LICENSE.link}.`,
     `- Redaction version: ${typeof redaction === 'string' ? redaction : 'unknown'}; model reasoning: ${typeof reasoning === 'string' ? reasoning : 'unknown'}. Redaction is best effort.`,

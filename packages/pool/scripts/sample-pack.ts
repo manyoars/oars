@@ -1451,6 +1451,8 @@ export interface Io {
   runtime: SessionsRuntime;
   print: (text: string) => void;
   vocabDir?: URL | undefined;
+  /** The build clock; the wall clock when absent. */
+  now?: (() => number) | undefined;
 }
 
 const VALUED = new Set(['--terms', '--owners', '--index-key', '--buyer-key', '--buyer-key-file', '--out', '--size', '--seed', '--min-turns', '--sessions', '--deposits', '--older-than', '--exclude-manifest']);
@@ -1509,7 +1511,7 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
   try {
     const sessions = sessionsFile === undefined ? undefined : await sessionsIn(sessionsFile);
     const dropped: string[] = [];
-    const counts = await buildPack(io.runtime, { ...options, size: sessions?.length ?? options.size, sessions, onDrop: (session, reason) => dropped.push(`Left out of the list: ${session} ${reason}`), vocabDir: io.vocabDir });
+    const counts = await buildPack(io.runtime, { ...options, size: sessions?.length ?? options.size, sessions, onDrop: (session, reason) => dropped.push(`Left out of the list: ${session} ${reason}`), vocabDir: io.vocabDir, now: io.now });
     const { term, noRaw, noTerms, unreadable } = counts.excluded;
     io.print(
       [
