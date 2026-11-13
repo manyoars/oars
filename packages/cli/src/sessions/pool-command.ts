@@ -998,6 +998,7 @@ export const poolDeposit = async (
   const history: SessionRecords[] = [];
   // One scan of the log for the whole build: the head read and every chunk read take its revs, so a deposit reads the log's revs once, not once per chunk.
   const { latest, spans, identity } = await scanLog(paths(runtime.storeDir).observations, undefined, true);
+  await runtime.afterScan?.();
   const localStore = await loadStore(runtime.storeDir, undefined, { sessionsOnly: true, latest });
   const childrenOf = new Map<string, string[]>();
   for (const agent of localStore.subagents) {

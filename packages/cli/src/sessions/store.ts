@@ -82,6 +82,8 @@ export interface SessionsRuntime {
   stdout: { write: (text: string) => unknown };
   /** Only its `isTTY` is read: the covenant screen is written to stderr, so a person is at a terminal only when stderr is one too. */
   stderr?: { isTTY?: boolean | undefined } | undefined;
+  /** A seam for tests: awaited right after a build's scan of the log and before any session is loaded, so a test can change the log in exactly that window. */
+  afterScan?: () => Promise<void>;
 }
 
 interface FileState {

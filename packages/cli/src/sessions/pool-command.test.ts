@@ -1271,15 +1271,15 @@ ${user('and goes on', stamp(agentHours))}
       // A compaction renames a rewritten log into place; here the rewrite keeps every live row but starts with a long line a reader skips, so each offset the scan recorded now points elsewhere.
       const swap = `${log}.swap`;
       writeFileSync(swap, `${['x'.repeat(200_000), ...rows].join('\n')}\n`);
-      const now = scene.h.deps.now;
       let swapped = false;
-      scene.h.deps.now = () => {
-        // The first clock read inside `poolDeposit` is the session gate, after the scan of the log and before any chunk load.
-        if (!swapped && (new Error().stack ?? '').split(String.fromCharCode(10))[2]?.includes('at poolDeposit ') === true) {
+      // The seam runs right after the build's scan of the log and before any chunk load.
+      scene.h.deps.sessions = {
+        ...scene.staged.runtime,
+        afterScan: () => {
           renameSync(swap, log);
           swapped = true;
-        }
-        return now();
+          return Promise.resolve();
+        },
       };
       await deposited(scene);
       expect(swapped).toBe(true);
