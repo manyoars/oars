@@ -1386,15 +1386,47 @@ interface LogScan {
   superseded: boolean;
   /** Sessions whose newest capture record was written by a newer oars, counted as `loadStore` counts them. */
   newerCaptures: number;
+  /** Set when asked for: each session's record lines as flat `[start, length, ...]` byte pairs (the newline included), over every rev. Only lines this scan saw are in it, so a row appended after the scan is never read through it. */
+  spans?: Map<string, number[]>;
 }
 
-export const scanLog = async (file: string, held?: FileHandle): Promise<LogScan> => {
+/** The log's lines with the byte range each takes (its newline included), read as bytes so an offset is a file position. The same split as `logLines`: on 0x0a alone. */
+const logSpans = async function* (file: string, held?: FileHandle): AsyncGenerator<{ line: string; start: number; length: number }> {
+  let rest = Buffer.alloc(0);
+  let at = 0;
+  try {
+    const stream = held === undefined ? createReadStream(file, { highWaterMark: 1 << 20 }) : held.createReadStream({ highWaterMark: 1 << 20, start: 0, autoClose: false });
+    const chunks: AsyncIterable<Buffer> = stream;
+    for await (const chunk of chunks) {
+      let buffer = Buffer.concat([rest, chunk]);
+      let from = 0;
+      for (let end = buffer.indexOf(10, from); end !== -1; end = buffer.indexOf(10, from)) {
+        yield { line: buffer.toString('utf8', from, end), start: at + from, length: end + 1 - from };
+        from = end + 1;
+      }
+      buffer = buffer.subarray(from);
+      at += from;
+      rest = buffer;
+    }
+  } catch (error) {
+    if (!isMissing(error)) throw error;
+  }
+  yield { line: rest.toString('utf8'), start: at, length: rest.length };
+};
+
+export const scanLog = async (file: string, held?: FileHandle, withSpans = false): Promise<LogScan> => {
   const latest = new Map<string, number>();
   const cvAt = new Map<string, { rev: number; cv: string }>();
+  const spans = withSpans ? new Map<string, number[]>() : undefined;
   let superseded = false;
-  for await (const line of logLines(file, held)) {
+  for await (const { line, start, length } of withSpans ? logSpans(file, held) : plainLines(file, held)) {
     const observation = observationOf(line);
     if (observation === undefined) continue;
+    if (spans !== undefined) {
+      const own = spans.get(observation.session) ?? [];
+      own.push(start, length);
+      spans.set(observation.session, own);
+    }
     const seen = latest.get(observation.session);
     superseded ||= seen !== undefined && seen !== observation.rev;
     latest.set(observation.session, Math.max(seen ?? 0, observation.rev));
@@ -1403,7 +1435,11 @@ export const scanLog = async (file: string, held?: FileHandle): Promise<LogScan>
   }
   let newerCaptures = 0;
   for (const [session, held] of cvAt) if (held.rev === latest.get(session) && Number(held.cv) > Number(CAPTURE_VERSION)) newerCaptures += 1;
-  return { latest, superseded, newerCaptures };
+  return spans === undefined ? { latest, superseded, newerCaptures } : { latest, superseded, newerCaptures, spans };
+};
+
+const plainLines = async function* (file: string, held?: FileHandle): AsyncGenerator<{ line: string; start: number; length: number }> {
+  for await (const line of logLines(file, held)) yield { line, start: 0, length: 0 };
 };
 
 /** Returns the first copy it was given of each string, so the strings a log repeats are held once. */
@@ -1457,6 +1493,33 @@ export type LoadOptions = {
   sessionsOnly?: boolean;
   /** The revs of an earlier `scanLog`: the read skips its own first pass. A build that reads chunk after chunk scans once; a row written after that scan is not seen, like a session that began after the build did. */
   latest?: ReadonlyMap<string, number>;
+  /** With `only`: the byte spans of an earlier `scanLog(file, held, true)`. The read seeks to the lines of the wanted sessions instead of streaming the whole log; a span that no longer holds a line of its session at its rev (a compaction moved the log, a read came up short) is skipped, never misread. */
+  spans?: ReadonlyMap<string, readonly number[]>;
+  /** A seam: called once for every log line the read looks at. */
+  lineRead?: () => void;
+};
+
+/** The wanted sessions' lines, in file order, read by seeking: adjacent spans are one read. */
+const spanLines = async function* (held: FileHandle, spans: ReadonlyMap<string, readonly number[]>, ids: ReadonlySet<string>): AsyncGenerator<string> {
+  const wanted: { start: number; length: number }[] = [];
+  for (const id of ids) {
+    const own = spans.get(id) ?? [];
+    for (let n = 0; n < own.length; n += 2) wanted.push({ start: own[n] ?? 0, length: own[n + 1] ?? 0 });
+  }
+  wanted.sort((a, b) => a.start - b.start);
+  for (let n = 0; n < wanted.length; ) {
+    const first = wanted[n] ?? { start: 0, length: 0 };
+    let end = first.start + first.length;
+    n += 1;
+    for (let next = wanted[n]; next !== undefined && next.start === end; next = wanted[n]) {
+      end += next.length;
+      n += 1;
+    }
+    const buffer = Buffer.alloc(end - first.start);
+    const { bytesRead } = await held.read(buffer, 0, buffer.length, first.start);
+    // A short read (the log shrank) yields what is there; a torn last line fails its parse and is skipped.
+    for (const line of buffer.toString('utf8', 0, bytesRead).split('\n')) if (line !== '') yield line;
+  }
 };
 
 const withoutMessageUsage = (session: SessionObservation): SessionObservation => {
@@ -1490,7 +1553,9 @@ export const loadStore = async (storeDir: string, afterFirstPass?: () => Promise
   try {
     const latest = options.latest ?? (await scanLog(file, held)).latest;
     await afterFirstPass?.();
-    for await (const line of logLines(file, held)) {
+    const { only, spans } = options;
+    for await (const line of held !== undefined && only !== undefined && spans !== undefined ? spanLines(held, spans, only) : logLines(file, held)) {
+      options.lineRead?.();
       // A read of a few sessions skips the JSON parse of every other line: the cheap check can only keep a line, never drop one that names a wanted session.
       if (options.only !== undefined && !namesAny(line, options.only)) continue;
       const observation = observationOf(line);

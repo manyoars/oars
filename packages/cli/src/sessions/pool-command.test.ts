@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { createHash, createHmac, webcrypto } from 'node:crypto';
-import { getHeapStatistics } from 'node:v8';
+import { getHeapStatistics, setFlagsFromString } from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -29,7 +30,7 @@ import { hookRowOf } from './codex-hook.js';
 import { parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey, type SkeletonFrame } from './pool-wire.js';
 import { appendRecall, makeRecall, type Recall } from './recall-object.js';
 import { contentHash } from './read.js';
-import { deposit, loadStore, localSalt, paths, updatePoolChoices, type PoolChoices } from './store.js';
+import { deposit, derive, loadStore, localSalt, paths, updatePoolChoices, type PoolChoices } from './store.js';
 import { spoolEvents } from '../telemetry/read-events.js';
 import { addProject, cleanup, FIXTURES, NOW, payloadOf, rolloutLine, settledClock, stage, stageCodex, TEST_FLOOR, type Staged } from './test-support.js';
 
@@ -4585,7 +4586,7 @@ describe('oars pool deposit --send-all (t1199)', () => {
 const MEMORY_CHILD = process.env.OARS_SEND_ALL_MEMORY_CHILD;
 const MEMORY_MODE = process.env.OARS_MEMORY_MODE;
 const BUILD_HEAP_MB = Number(process.env.OARS_MEMORY_BUILD_HEAP ?? 160);
-const memoryChild = (mode: 'outbox' | 'build', heapMb: number, seed = ''): { limitMb: number; peakRssMb: number; count: number; seconds: number } => {
+const memoryChild = (mode: 'outbox' | 'build' | 'refresh', heapMb: number, seed = ''): { limitMb: number; peakRssMb: number; count: number; seconds: number; steps: string } => {
   const report = join(tmpdir(), `oars-memory-${mode}-${String(process.pid)}.json`);
   const started = Date.now();
   const result = spawnSync(process.execPath, [fileURLToPath(new URL('../../../../node_modules/vitest/vitest.mjs', import.meta.url)), 'run', fileURLToPath(import.meta.url), '-t', `child of the memory proof ${mode}`], {
@@ -4597,10 +4598,10 @@ const memoryChild = (mode: 'outbox' | 'build', heapMb: number, seed = ''): { lim
 ${result.stderr}`).toBe(0);
   const parsed: unknown = JSON.parse(readFileSync(report, 'utf8'));
   rmSync(report, { force: true });
-  return { limitMb: Number(at(parsed, 'limitMb')), peakRssMb: Number(at(parsed, 'peakRssMb')), count: Number(at(parsed, 'count')), seconds: Math.round((Date.now() - started) / 1000) };
+  return { limitMb: Number(at(parsed, 'limitMb')), peakRssMb: Number(at(parsed, 'peakRssMb')), count: Number(at(parsed, 'count')), steps: typeof at(parsed, 'steps') === 'string' ? String(at(parsed, 'steps')) : '', seconds: Math.round((Date.now() - started) / 1000) };
 };
-const finish = (count: number): void => {
-  writeFileSync(MEMORY_CHILD ?? '', JSON.stringify({ limitMb: Math.round(getHeapStatistics().heap_size_limit / 1048576), peakRssMb: Math.round(process.resourceUsage().maxRSS / 1024), count }));
+const finish = (count: number, steps = ''): void => {
+  writeFileSync(MEMORY_CHILD ?? '', JSON.stringify({ steps, limitMb: Math.round(getHeapStatistics().heap_size_limit / 1048576), peakRssMb: Math.round(process.resourceUsage().maxRSS / 1024), count }));
 };
 
 describe('oars pool outbox, deposit, and deposit --send-all memory (t1199)', () => {
@@ -4611,19 +4612,58 @@ describe('oars pool outbox, deposit, and deposit --send-all memory (t1199)', () 
     console.info(`memory proof outbox: peak RSS ${String(peakRssMb)} MB under a ${String(limitMb)} MB heap limit in ${String(seconds)} s`);
   }, 540_000);
 
-  it.runIf(process.env.OARS_MEMORY_PROOF === '1' && MEMORY_CHILD === undefined)('memory-build: build 7,000 sessions with pool deposit in a small heap', async () => {
+  // The shared 7,000-session store: one session an hour, so a delta window holds a bounded few hundred of them, not the history.
+  const seedSevenThousand = async (): Promise<ReturnType<typeof setting>> => {
     const scene = setting();
     const template = readFileSync(join(FIXTURES, 'proj', 'errors-a.jsonl'), 'utf8');
     const first = Date.parse('2026-05-28T20:26:41.000Z');
-    // One session an hour, so a delta window holds a bounded few hundred of them, not the history.
     for (let n = 1; n <= 7000; n += 1) {
       const shifted = Date.parse('2025-01-01T00:00:00.000Z') + n * 3_600_000 - first;
       writeFileSync(join(scene.staged.projectsRoot, 'proj', `m${String(n)}.jsonl`), template.replaceAll('errors-a', `m${String(n)}`).replace(/"timestamp": "([^"]+)"/g, (_all, ts: string) => `"timestamp": "${new Date(Date.parse(ts) + shifted).toISOString()}"`));
     }
     await capture(scene);
+    return scene;
+  };
+
+  it.runIf(process.env.OARS_MEMORY_PROOF === '1' && MEMORY_CHILD === undefined)('memory-build: build 7,000 sessions with pool deposit in a small heap', async () => {
+    const scene = await seedSevenThousand();
     const { limitMb, peakRssMb, count, seconds } = memoryChild('build', BUILD_HEAP_MB, scene.staged.root);
     expect(count).toBeGreaterThanOrEqual(7000);
     console.info(`memory proof build: peak RSS ${String(peakRssMb)} MB under a ${String(limitMb)} MB heap limit in ${String(seconds)} s`);
+  }, 540_000);
+
+  // t1237 item 1: records numbers, asserts none. The steps of `refresh` run one by one over 7,000 sessions in a roomy heap; the reading after each is the live heap once collected and the peak RSS so far, so the step that raises the peak is named.
+  it.runIf(process.env.OARS_MEMORY_PROOF === '1' && MEMORY_CHILD === undefined)('memory-refresh: which step of refresh holds the peak over 7,000 sessions', async () => {
+    const scene = await seedSevenThousand();
+    const { peakRssMb, steps, seconds } = memoryChild('refresh', 8192, scene.staged.root);
+    console.info(`memory proof refresh: peak RSS ${String(peakRssMb)} MB in ${String(seconds)} s; ${steps}`);
+  }, 540_000);
+
+  it.skipIf(MEMORY_CHILD === undefined || MEMORY_MODE !== 'refresh')('child of the memory proof refresh', async () => {
+    const scene = setting();
+    cpSync(join(String(process.env.OARS_MEMORY_SEED), 'store'), scene.staged.storeDir, { recursive: true });
+    setFlagsFromString('--expose-gc');
+    const collect: unknown = runInNewContext('gc');
+    const readings: string[] = [];
+    const sample = (step: string): void => {
+      if (typeof collect === 'function') Reflect.apply(collect, undefined, []);
+      readings.push(`${step}: heap ${String(Math.round(process.memoryUsage().heapUsed / 1048576))} MB, peak RSS so far ${String(Math.round(process.resourceUsage().maxRSS / 1024))} MB`);
+    };
+    sample('start');
+    const store = await loadStore(scene.staged.storeDir);
+    sample('loadStore');
+    derive(store, '2026-01-01T00:00:00.000Z');
+    sample('derive');
+    const { currentPool } = await import('./pool.js');
+    const current = await currentPool(scene.staged.storeDir, store);
+    sample('currentPool');
+    const { nextByFrame } = await import('./recall-frames.js');
+    const next = current === undefined ? undefined : nextByFrame(current.pool, store);
+    sample('nextByFrame');
+    const { buildIndex } = await import('./hook-index.js');
+    buildIndex(store, [], '2026-01-01T00:00:00.000Z', current?.reads ?? [], next);
+    sample('buildIndex');
+    finish(store.sessions.length, readings.join(' | '));
   }, 540_000);
 
   it.skipIf(MEMORY_CHILD === undefined || MEMORY_MODE !== 'outbox')('child of the memory proof outbox', async () => {

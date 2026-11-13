@@ -136,6 +136,44 @@ describe('deposit', () => {
     expect(none.sessions).toEqual([]);
   });
 
+  it('seeks to the lines of the wanted sessions by the byte spans of a scan, and reads no other line (spanseek)', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options(['proj']));
+    const file = paths(staged.storeDir).observations;
+    const { latest, spans } = await scanLog(file, undefined, true);
+    const ids = [...latest.keys()];
+    expect(ids.length).toBeGreaterThan(1);
+    const only = new Set([ids[0] ?? '']);
+    let streamed = 0;
+    const byStream = await loadStore(staged.storeDir, undefined, { latest, only, lineRead: () => { streamed += 1; } });
+    let seeked = 0;
+    const bySeek = await loadStore(staged.storeDir, undefined, { latest, only, spans, lineRead: () => { seeked += 1; } });
+    expect(bySeek).toEqual(byStream);
+    expect(seeked).toBe((spans?.get(ids[0] ?? '') ?? []).length / 2);
+    expect(seeked).toBeLessThan(streamed);
+    // Everything wanted at once equals the whole read, order included.
+    expect(await loadStore(staged.storeDir, undefined, { latest, only: new Set(ids), spans })).toEqual(await loadStore(staged.storeDir));
+  });
+
+  it('ignores a row appended between the scan and the chunk load, and skips a span a rewrite moved (spanappend)', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options(['proj']));
+    const file = paths(staged.storeDir).observations;
+    const { latest, spans } = await scanLog(file, undefined, true);
+    const only = new Set(latest.keys());
+    const before = await loadStore(staged.storeDir, undefined, { latest, only, spans });
+    const first = [...only][0] ?? '';
+    // A live session writing: a newer rev of a scanned session, and a torn half line with no newline.
+    const row = readFileSync(file, 'utf8').split('\n').find((line) => line.includes(`"session":"${first}"`)) ?? '';
+    appendFileSync(file, `${row.replace(/"rev":\d+/, '"rev":99')}\n{"kind":"sess`);
+    expect(await loadStore(staged.storeDir, undefined, { latest, only, spans })).toEqual(before);
+    // A log rewritten shorter than the scan: no span is misread as another session's row.
+    writeFileSync(file, 'not a row\n');
+    const after = await loadStore(staged.storeDir, undefined, { latest, only, spans });
+    expect(after.sessions).toEqual([]);
+    expect(after.errors).toEqual([]);
+  });
+
   it('re-deposits a changed file under a higher rev and a reader keeps only the latest', async () => {
     const staged = stage();
     await deposit(staged.runtime, options(['proj']));
