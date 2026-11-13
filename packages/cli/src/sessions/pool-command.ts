@@ -30,7 +30,7 @@ import { CAPTURE_VERSION, harnessOf as sessionHarness, type Harness } from './sc
 import { machineIdOf } from './machine-ids.js';
 import { machineOf, type MachineConfig } from './machine.js';
 import { scanCache } from './machine-scan-cache.js';
-import { loadStore, localSalt, readRedactDomains, readSkeletons, readState, updatePoolChoices, type SessionsRuntime, type Store } from './store.js';
+import { loadStore, paths, scanLog, localSalt, readRedactDomains, readSkeletons, readState, updatePoolChoices, type SessionsRuntime, type Store } from './store.js';
 import { runGit, type Git } from './survival.js';
 import { vocabulary } from './vocab-load.js';
 import { mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
@@ -944,12 +944,14 @@ export const poolDeposit = async (
   };
   // The sessions a Stop does not name that still pass the read-only gates: they only fill the windows of a delta, and are never counted, withdrawn, or built.
   const history: SessionRecords[] = [];
-  const localStore = await loadStore(runtime.storeDir, undefined, { sessionsOnly: true });
+  // One scan of the log for the whole build: the head read and every chunk read take its revs, so a deposit reads the log's revs once, not once per chunk.
+  const { latest } = await scanLog(paths(runtime.storeDir).observations);
+  const localStore = await loadStore(runtime.storeDir, undefined, { sessionsOnly: true, latest });
   const childrenOf = new Map<string, string[]>();
   for (const agent of localStore.subagents) childrenOf.set(agent.parent ?? '', [...(childrenOf.get(agent.parent ?? '') ?? []), agent.session]);
   // The full records of some sessions (and their subagents), read from the log with nothing else.
   const readRecords = async (ids: ReadonlySet<string>): Promise<{ store: Store; records: Map<string, SessionRecords> }> => {
-    const store = await loadStore(runtime.storeDir, undefined, { only: new Set([...ids].flatMap((id) => [id, ...(childrenOf.get(id) ?? [])])) });
+    const store = await loadStore(runtime.storeDir, undefined, { latest, only: new Set([...ids].flatMap((id) => [id, ...(childrenOf.get(id) ?? [])])) });
     return { store, records: new Map(sessionsOf(store, roots).map((records) => [records.main.session, records])) };
   };
   // A damaged list stops the pass before anything is built: it must never read as "nothing was removed".

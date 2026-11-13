@@ -1451,6 +1451,8 @@ export type LoadOptions = {
   only?: ReadonlySet<string>;
   /** Keep the session records alone, with no prompt, tool, or error rows: enough to gate and place a session without holding its content. */
   sessionsOnly?: boolean;
+  /** The revs of an earlier `scanLog`: the read skips its own first pass. A build that reads chunk after chunk scans once; a row written after that scan is not seen, like a session that began after the build did. */
+  latest?: ReadonlyMap<string, number>;
 };
 
 const withoutMessageUsage = (session: SessionObservation): SessionObservation => {
@@ -1482,7 +1484,7 @@ export const loadStore = async (storeDir: string, afterFirstPass?: () => Promise
   };
   const held = await openLog(file);
   try {
-    const { latest } = await scanLog(file, held);
+    const latest = options.latest ?? (await scanLog(file, held)).latest;
     await afterFirstPass?.();
     for await (const line of logLines(file, held)) {
       // A read of a few sessions skips the JSON parse of every other line: the cheap check can only keep a line, never drop one that names a wanted session.

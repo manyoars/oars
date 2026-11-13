@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { compactLog, deposit, depositSession, derive, loadStore, paths, readCalls, readRedactDomains, readSkeletons, slugOf, withLock } from './store.js';
+import { compactLog, deposit, scanLog, depositSession, derive, loadStore, paths, readCalls, readRedactDomains, readSkeletons, slugOf, withLock } from './store.js';
 import { CAPTURE_VERSION, EXTRACTOR_VERSION } from './schema.js';
 import { addProject, cleanup, NOW, stage } from './test-support.js';
 
@@ -111,6 +111,19 @@ describe('deposit', () => {
     expect(heads.prompts).toEqual([]);
     expect(heads.tools).toEqual([]);
     expect(heads.errors).toEqual([]);
+  });
+
+  it('takes the revs of a scan it is given and does not scan the log again', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options(['proj']));
+    const whole = await loadStore(staged.storeDir);
+    const { latest } = await scanLog(paths(staged.storeDir).observations);
+    const same = await loadStore(staged.storeDir, undefined, { latest });
+    expect(same.sessions).toEqual(whole.sessions);
+    expect(same.tools).toEqual(whole.tools);
+    // A scan that knows no session keeps no row: proof the log is not scanned again to find the revs.
+    const none = await loadStore(staged.storeDir, undefined, { latest: new Map() });
+    expect(none.sessions).toEqual([]);
   });
 
   it('re-deposits a changed file under a higher rev and a reader keeps only the latest', async () => {
