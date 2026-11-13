@@ -4,6 +4,8 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 
 ## Unreleased
 
+- The `release-mcp` workflow waits (every 15 seconds, up to 10 minutes) until npm serves the tagged `@manyoars/oars` version before listing it on the MCP registry, and fails with one line naming the package, version, and time waited if it never does.
+
 ## 0.5.5 (2026-11-13)
 
 - Wire format 7 and field list 14 are unchanged from 0.5.4 (`CAPTURE_VERSION` 35); the pool reads formats 3 to 7.

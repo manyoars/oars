@@ -85,4 +85,12 @@ describe('release-mcp workflow', () => {
     expect(workflow).toContain('registry_${MCP_PUBLISHER_VERSION}_checksums.txt');
     expect(workflow).toContain('sha256sum --check');
   });
+
+  it('waits for npm to serve the tagged version before it publishes, within the job timeout', () => {
+    const workflow = text();
+    const wait = workflow.indexOf('node scripts/wait-for-npm-version.mjs @manyoars/oars "${TAG#cli-v}"');
+    expect(wait).toBeGreaterThan(-1);
+    expect(wait).toBeLessThan(workflow.indexOf('run: mcp-publisher publish'));
+    expect(workflow).toContain('timeout-minutes: 20');
+  });
 });

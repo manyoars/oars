@@ -42,7 +42,7 @@ jobs:
       || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     # GitHub-hosted runners only: this repository is public.
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     permissions:
       contents: read
       id-token: write # the registry's GitHub OIDC login; nothing else
@@ -71,6 +71,10 @@ jobs:
             echo "::error::$TAG does not match server.json version $listed"
             exit 1
           fi
+      # release-cli's publish step ends before npm serves the version (0.5.5 took about 3 minutes), and the registry checks the npm package when called.
+      # The script is the repository's own, run from the tag's checkout; it installs nothing and holds no secret.
+      - name: Wait until npm serves the tagged version
+        run: node scripts/wait-for-npm-version.mjs @manyoars/oars "${TAG#cli-v}"
       - name: Install mcp-publisher (pinned, checked against the release checksums)
         run: |
           base="https://github.com/modelcontextprotocol/registry/releases/download/v${MCP_PUBLISHER_VERSION}"
