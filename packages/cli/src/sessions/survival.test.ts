@@ -14,6 +14,10 @@ import { harness, removeTestDirs } from '../test-support.js';
 import { readHookCalls } from './hook-calls.js';
 import { runHook } from './hooks.js';
 
+// Process creation is the cost on a Windows runner: a loaded one took up to 3 s for one git process (a spawn timed under eight concurrent spawners: median 1.2 s, max 2.9 s), and the 30 s default
+// covers 10 of them. Five tests start more, counted from a git trace: 24 (a partial clone whose protocol the clone allows), 23 (a partial clone, and the change of state across three reads), 19 (a revert across a merge),
+// and 16 (a chain of reverts). Their bound is the most of those, 24 x 3 s.
+const GIT_HEAVY = 24 * 3_000;
 const NOW = Date.parse('2026-06-30T00:00:00Z');
 const OLD = '2026-06-01T00:00:00.000Z';
 const dirs: string[] = [];
@@ -204,7 +208,7 @@ describe('recordSurvival', () => {
     const { s, project } = await staged(repo, [{ sha: undone }, { sha: redone }]);
     await recordSurvival(s.runtime, [project], () => NOW);
     expect(Object.fromEntries(await readSurvival(s.storeDir))).toEqual({ [undone]: 'reverted', [redone]: 'survived' });
-  });
+  }, GIT_HEAVY);
 
   it('reads a revert of a revert as undoing it even when clock skew dates the undoing commit older, across a merge', async () => {
     const repo = makeRepo();
@@ -224,7 +228,7 @@ describe('recordSurvival', () => {
     const { s, project } = await staged(repo, [{ sha: undone }]);
     await recordSurvival(s.runtime, [project], () => NOW);
     expect(Object.fromEntries(await readSurvival(s.storeDir))).toEqual({ [undone]: 'survived' });
-  });
+  }, GIT_HEAVY);
 
   it('reads a commit left on a branch the default branch never took as unreachable', async () => {
     const repo = makeRepo();
@@ -291,7 +295,7 @@ describe('recordSurvival', () => {
     const before = objectsOf(clone);
     expect(await recordSurvival(s.runtime, [project], () => NOW)).toEqual({ survived: 0, reverted: 0, unreachable: 0, unknown: 1 });
     expect(objectsOf(clone)).toEqual(before);
-  });
+  }, GIT_HEAVY);
 
   it('fetches nothing even where the clone allows its own protocol: a per-protocol key beats `protocol.allow`, so only the environment holds', async () => {
     const { clone, sha } = partialCloneLacking();
@@ -300,7 +304,7 @@ describe('recordSurvival', () => {
     const before = objectsOf(clone);
     expect(await recordSurvival(s.runtime, [project], () => NOW)).toEqual({ survived: 0, reverted: 0, unreachable: 0, unknown: 1 });
     expect(objectsOf(clone)).toEqual(before);
-  });
+  }, GIT_HEAVY);
 
   it('reads an absent repository as unknown', async () => {
     const parent = mkdtempSync(join(tmpdir(), 'oars-survival-'));
@@ -369,7 +373,7 @@ describe('recordSurvival', () => {
       { sha, state: 'survived', day: '2026-07-02' },
     ]);
     expect((await readSurvival(s.storeDir)).get(sha)).toBe('survived');
-  });
+  }, GIT_HEAVY);
 
   it('keeps a known state when a later read fails, so a passing git failure does not undo an observation', async () => {
     const { repo, sha } = shared();

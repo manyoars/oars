@@ -1,10 +1,11 @@
 // `oars pool hold pull` (`machine-pull.ts`): the trusted machine admits what a VM held on its branches. Each case runs against bare repositories in a temp folder that stand for the private repositories, with the branches made by git plumbing as
 // the VM makes them; GitHub's visibility record is injected, so nothing reaches a network.
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { http, HttpResponse } from 'msw';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { run, type Outcome } from '../cli.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
 import { derivedSalt } from './machine-ids.js';
@@ -20,8 +21,11 @@ import { localSalt } from './store.js';
 import { runGit, type Git } from './survival.js';
 import { cleanup, stage, type Staged } from './test-support.js';
 
-// Each case runs a dozen git processes, which a Windows runner starts slowly.
-const SLOW = 60_000;
+// Process creation is the cost on a Windows runner: a loaded one took up to 3 s for one git process (a spawn timed under eight concurrent spawners: median 1.2 s, max 2.9 s). A case's bound is its git
+// processes (the test's own commands and the product's, counted from a git trace) times that. The most any case starts is 50 (two pulls over two repositories), so 50 x 3 s.
+const PROCESS_BOUND_MS = 3_000;
+const MOST_PROCESSES = 50;
+const SLOW = MOST_PROCESSES * PROCESS_BOUND_MS;
 
 useServer();
 afterEach(() => {
@@ -44,6 +48,26 @@ Reflect.deleteProperty(BRANCH_BATCH, 'claimed');
 
 const RECORD: MachineRecord = { machine: MACHINE, hostClass: 'cloud', launcher: 'orchestrated', allowRepos: [REPO] };
 
+const stubGitHousekeepingOff = (): void => {
+  vi.stubEnv('GIT_CONFIG_COUNT', '3');
+  vi.stubEnv('GIT_CONFIG_KEY_0', 'gc.auto');
+  vi.stubEnv('GIT_CONFIG_VALUE_0', '0');
+  vi.stubEnv('GIT_CONFIG_KEY_1', 'maintenance.auto');
+  vi.stubEnv('GIT_CONFIG_VALUE_1', 'false');
+  vi.stubEnv('GIT_CONFIG_KEY_2', 'receive.autogc');
+  vi.stubEnv('GIT_CONFIG_VALUE_2', 'false');
+};
+
+// An empty bare repository is made once and copied, which starts no git process: `git init` is one for every repository a case holds in.
+let bareTemplate = '';
+beforeAll(() => {
+  bareTemplate = mkdtempSync(join(tmpdir(), 'oars-machine-pull-bare-template-'));
+  execFileSync('git', ['-C', bareTemplate, 'init', '--bare', '-q']);
+}, SLOW);
+afterAll(() => {
+  rmSync(bareTemplate, { recursive: true, force: true });
+});
+
 interface Scene {
   staged: Staged;
   h: Harness;
@@ -59,6 +83,8 @@ const scene = async (machines: readonly MachineRecord[] = [RECORD], terms = `${T
   const staged = stage();
   const termsFile = join(staged.root, 'terms.txt');
   writeFileSync(termsFile, terms);
+  // A fetch or a push starts a `gc --auto` or `maintenance run --auto` child of its own, which no case is about: auto gc, maintenance, and the receiving side's auto gc are off for every git a case starts (`afterEach` restores the environment).
+  stubGitHousekeepingOff();
   const h = harness({ OARS_EXCLUSION_TERMS: termsFile });
   h.deps.sessions = staged.runtime;
   mkdirSync(staged.storeDir, { recursive: true });
@@ -87,8 +113,7 @@ const goodFiles = (s: Scene, id = ID): { [file: string]: string } => ({
 const hold = (s: Scene, repo: string, name: string, files: { [file: string]: string }, at = 1_700_000_000, parent?: string): string => {
   const bare = bareOf(s, repo);
   if (!existsSync(bare)) {
-    mkdirSync(bare, { recursive: true });
-    gitIn(bare, ['init', '--bare', '-q']);
+    cpSync(bareTemplate, bare, { recursive: true });
   }
   const data = (text: string): string => `data ${String(Buffer.byteLength(text))}\n${text}\n`;
   const lines = [`commit refs/heads/${name}\n`, 'mark :1\n', `committer t <t@example.com> ${String(at)} +0000\n`, data('oars hold [skip ci]\n'), ...(parent === undefined ? [] : [`from ${parent}\n`]), 'deleteall\n'];
@@ -120,7 +145,7 @@ describe('oars pool hold pull: who may hold', () => {
     expect(filed(s)[0]).toMatch(new RegExp(`^${ID}\\.[0-9a-f]{64}\\.jsonl$`, 'u'));
   }, SLOW);
 
-  it('rechecks every repository on every run: one that is public, or whose record cannot be read, is refused and reported, and none of its branches is read', async () => {
+  it('rechecks every repository on every run: one that is public is refused and reported, though an earlier run admitted it, and none of its branches is read', async () => {
     const s = await scene([{ ...RECORD, allowRepos: [REPO, OTHER_REPO] }]);
     hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, goodFiles(s));
     hold(s, OTHER_REPO, `oars-hold/${MACHINE}/${OTHER_ID}`, goodFiles(s, OTHER_ID));
@@ -133,9 +158,14 @@ describe('oars pool hold pull: who may hold', () => {
     const second = await pull(s, (repo) => Promise.resolve(repo === REPO ? 'public' : 'private'));
     expect(second.document).toMatchObject({ admitted: [{ repo: OTHER_REPO }], refused: [{ repo: REPO, reason: 'repo_public' }] });
     expect(s.network.some((line) => line.includes(bareOf(s, REPO)))).toBe(false);
-    s.network.length = 0;
-    const third = await pull(s, (repo) => Promise.resolve(repo === REPO ? 'unknown' : 'private'));
-    expect(third.document).toMatchObject({ refused: [{ repo: REPO, reason: 'repo_unconfirmed' }] });
+  }, SLOW);
+
+  it('refuses and reports a repository whose record cannot be read, and none of its branches is read', async () => {
+    const s = await scene([{ ...RECORD, allowRepos: [REPO, OTHER_REPO] }]);
+    hold(s, REPO, `oars-hold/${MACHINE}/${ID}`, goodFiles(s));
+    hold(s, OTHER_REPO, `oars-hold/${MACHINE}/${OTHER_ID}`, goodFiles(s, OTHER_ID));
+    const out = await pull(s, (repo) => Promise.resolve(repo === REPO ? 'unknown' : 'private'));
+    expect(out.document).toMatchObject({ admitted: [{ repo: OTHER_REPO }], refused: [{ repo: REPO, reason: 'repo_unconfirmed' }] });
     expect(s.network.some((line) => line.includes(bareOf(s, REPO)))).toBe(false);
   }, SLOW);
 

@@ -8,9 +8,10 @@ import { holdBatch, holdBranch, holdCommit, runNetGit, termsDigest, type HoldDep
 import { runGit, type Git } from './survival.js';
 
 // Process creation is the cost on a Windows runner: a loaded one took up to 3 s for one git process (a spawn timed under eight concurrent spawners: median 1.2 s, max 2.9 s). A case's bound is its git
-// processes (the test's own commands and the product's) times that; the slowest case, a push refused three times with a fetch between, starts fewer than 20.
+// processes (the test's own commands and the product's, counted from a git trace) times that. The most any case starts is 50 (a push refused once for a branch another VM moved, with two checkouts and a fetch), so 50 x 3 s.
 const PROCESS_BOUND_MS = 3_000;
-const SLOW = 20 * PROCESS_BOUND_MS;
+const MOST_PROCESSES = 50;
+const SLOW = MOST_PROCESSES * PROCESS_BOUND_MS;
 
 const made: string[] = [];
 afterEach(() => {
@@ -20,15 +21,17 @@ afterEach(() => {
 const git = (cwd: string, ...args: string[]): string => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
 
 // A repository with work costs 11 git processes to build and a bare one 1, and a push or a fetch starts a `gc --auto` or `maintenance run --auto` child on top of its own processes. Each is built once and copied
-// per case, and `gc.auto` and `maintenance.auto` are off for every git a case starts, so a case starts only the processes it is about.
+// per case, and auto gc, maintenance, and the receiving side's auto gc are off for every git a case starts, so a case starts only the processes it is about.
 let work = '';
 let bareTemplate = '';
 beforeAll(() => {
-  vi.stubEnv('GIT_CONFIG_COUNT', '2');
+  vi.stubEnv('GIT_CONFIG_COUNT', '3');
   vi.stubEnv('GIT_CONFIG_KEY_0', 'gc.auto');
   vi.stubEnv('GIT_CONFIG_VALUE_0', '0');
   vi.stubEnv('GIT_CONFIG_KEY_1', 'maintenance.auto');
   vi.stubEnv('GIT_CONFIG_VALUE_1', 'false');
+  vi.stubEnv('GIT_CONFIG_KEY_2', 'receive.autogc');
+  vi.stubEnv('GIT_CONFIG_VALUE_2', 'false');
   work = buildRepoWithWork();
   bareTemplate = mkdtempSync(join(tmpdir(), 'oars-machine-hold-bare-template-'));
   git(bareTemplate, 'init', '-q', '--bare');
