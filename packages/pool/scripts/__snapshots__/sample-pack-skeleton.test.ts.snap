@@ -2,7 +2,8 @@
 
 exports[`the data card > is README.md, made from pack.json and census.json, and a number in it changes with the fixture 1`] = `
 "---
-license: cc-by-4.0
+license: other
+license_link: https://manyoars.com/packs#rights
 tags:
   - agent-traces
 ---
@@ -11,7 +12,7 @@ tags:
 
 3 coding-agent session skeletons from Many Oars Co., each a record of the session's steps, errors, recoveries, and human interventions. No transcript text is in this release, and every session ended at least 30 days before it was built (2026-11-13).
 
-- License: CC BY 4.0.
+- License and rights: https://manyoars.com/packs#rights.
 - Redaction version: 4; model reasoning: kept. Redaction is best effort.
 - Layout: \`manifest.jsonl\` (one row per session, \`transcripts: 0\`), \`sessions/<match id>/skeleton.json\`, \`census.json\` (counts only), and \`pack.json\` (how it was built).
 - Check it: \`npm run validate-pack -w packages/pool -- <this folder>\` in the Many Oars repository (spec: \`docs/session-record.md\`). It needs no key, account, or network.
@@ -31,12 +32,21 @@ tags:
 
 - \`claude-opus-5-5\`: 3
 
+**Failed calls per error code**
+
+- \`other\`: 1
+
+**Failed calls by what followed**
+
+- \`edit followed\`: 1
+
 **Prompts per human intervention**
 
 - \`unknown\`: 3
 
 **Sessions per turn bucket (lowest turn count of the bucket)**
 
-- \`2\`: 3
+- \`2\`: 2
+- \`3\`: 1
 "
 `;

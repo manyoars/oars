@@ -299,6 +299,10 @@ const checkPack = async (folder: string): Promise<Result> => {
   let records = 0;
   let transcripts = 0;
   const named = new Set<string>();
+  // A skeleton-only release says 0 on every row; a pack that says 0 on some rows and not on others is neither kind.
+  const empty = rows.filter(({ value }) => isFields(value) && value.transcripts === 0).length;
+  const skeletonOnlyPack = rows.length > 0 && empty === rows.length;
+  if (empty > 0 && !skeletonOnlyPack) found.push({ where: MANIFEST_FILE, field: 'transcripts', rule: 'mixes rows that say 0 with rows that carry transcripts' });
   for (const { where, value } of rows) {
     const id = isFields(value) ? value.matchId : undefined;
     if (!isFields(value) || !isText(id) || !MATCH_ID.test(id) || named.has(id)) continue;
@@ -340,7 +344,7 @@ const checkPack = async (folder: string): Promise<Result> => {
     if (!isAbsent(error)) throw error;
   }
   // A file at the pack root other than the manifest and the build's own bookkeeping, or directly under sessions/, is in no row.
-  const BOOKKEEPING = new Set([MANIFEST_FILE, 'pack.json', 'census.json', 'README.md']);
+  const BOOKKEEPING = new Set([MANIFEST_FILE, 'pack.json', 'census.json', ...(skeletonOnlyPack ? ['README.md'] : [])]);
   const loose = async (path: string, skip: ReadonlySet<string>): Promise<string[]> => {
     try {
       return (await readdir(join(folder, path), { withFileTypes: true })).filter((entry) => entry.isFile() && !skip.has(entry.name)).map((entry) => (path === '' ? entry.name : `${path}/${entry.name}`)).sort();

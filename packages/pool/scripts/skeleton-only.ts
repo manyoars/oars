@@ -2,7 +2,7 @@
 import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
-/** The delay Matt ruled on 2026-11-12 for the public slice: fresh sessions stay paid. */
+/** The delay ruled on 2026-11-12 for the public slice: fresh sessions stay paid. */
 export const SKELETON_DEFAULT_DAYS = 30;
 
 const DAY_MS = 86_400_000;

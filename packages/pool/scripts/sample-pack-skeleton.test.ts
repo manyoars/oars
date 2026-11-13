@@ -5,7 +5,7 @@ import { join, relative, sep } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { LITERAL, PRIVATE, PUBLIC_PROGRAMS } from '../../cli/src/sessions/public-vocabulary.js';
 import { deposit, type SessionsRuntime } from '../../cli/src/sessions/store.js';
-import { buildPack, HARNESS_TERMS, main, PERMITTED_USES, type ManifestRow, type PackOptions } from './sample-pack.js';
+import { buildPack, HARNESS_TERMS, main, NO_OBJECTIONS, PERMITTED_USES, type ManifestRow, type PackOptions } from './sample-pack.js';
 import { cardOf, writeCard } from './skeleton-card.js';
 import { validate } from './validate-pack.js';
 
@@ -70,7 +70,7 @@ const RULES: { readonly [key: string]: (value: string) => boolean } = {
   argClass: (v) => NAME.test(v), changeKind: (v) => NAME.test(v), diffShape: (v) => NAME.test(v), keys: (v) => NAME.test(v), kind: (v) => NAME.test(v), value: (v) => NAME.test(v), format: (v) => NAME.test(v),
   templates: TEMPLATE,
   // pack.json: the build's own bookkeeping. `seed` has no rule, so a free-text --seed written there fails.
-  built: (v) => DATE.test(v), keyId: (v) => HEX16.test(v), objections: (v) => HEX64.test(v),
+  built: (v) => DATE.test(v), keyId: (v) => HEX16.test(v), objections: (v) => HEX64.test(v) || v === NO_OBJECTIONS, enumValue: (v) => NAME.test(v),
   // Skeleton fields the first fixture did not reach: each is a name or a size, and the program is from the gated list.
   shell: (v) => NAME.test(v), language: (v) => NAME.test(v), languages: (v) => NAME.test(v), languageShare: (v) => NAME.test(v), next: (v) => NAME.test(v), action: (v) => NAME.test(v), native: (v) => NAME.test(v),
   program: (v) => PUBLIC_PROGRAMS.has(v) || [LITERAL, PRIVATE].includes(v), sub: (v) => NAME.test(v), flags: (v) => FLAG.test(v), key: (v) => NAME.test(v), valueSize: (v) => /^[0-9a-z+-]{1,12}$/.test(v), pathDepth: (v) => /^\d{1,3}\+?$/.test(v), extension: (v) => NAME.test(v), dirKind: (v) => NAME.test(v),
@@ -180,16 +180,14 @@ describe('a skeleton-only build', () => {
     const full = f.options();
     await buildPack(f.runtime, full);
     expect((await validate(full.out))?.violations).toEqual([]);
-    writeFileSync(join(full.out, 'README.md'), 'a card
-');
+    writeFileSync(join(full.out, 'README.md'), 'a card\n');
     expect((await validate(full.out))?.violations.some((v) => v.where === 'README.md')).toBe(true);
     rmSync(join(full.out, 'README.md'));
     // One row rewritten to say 0, its transcripts removed: the pack now mixes the two kinds.
     const rows = manifest(full.out);
     const [first] = rows;
     for (const file of readdirSync(join(full.out, 'sessions', first?.matchId ?? ''))) if (file.endsWith('.jsonl')) rmSync(join(full.out, 'sessions', first?.matchId ?? '', file));
-    writeFileSync(join(full.out, 'manifest.jsonl'), rows.map((row, at) => `${JSON.stringify(at === 0 ? { ...row, transcripts: 0 } : row)}
-`).join(''));
+    writeFileSync(join(full.out, 'manifest.jsonl'), rows.map((row, at) => `${JSON.stringify(at === 0 ? { ...row, transcripts: 0 } : row)}\n`).join(''));
     expect((await validate(full.out))?.violations.some((v) => v.field === 'transcripts' && /mixes/.test(v.rule))).toBe(true);
   });
 

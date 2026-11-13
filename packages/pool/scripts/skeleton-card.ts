@@ -4,7 +4,8 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export const LOTS_PAGE = 'https://manyoars.com/packs';
-export const CARD_LICENSE = 'CC BY 4.0';
+// The license is the owner's to choose before an upload; until then the card states the rights page, as the lots page does. One constant, so a ruling changes one line.
+export const CARD_LICENSE = { id: 'other', link: `${LOTS_PAGE}#rights` } as const;
 export const CARD_TAG = 'agent-traces';
 
 interface Counted {
@@ -32,7 +33,8 @@ export const cardOf = (pack: unknown, census: unknown): string => {
   const turns = counted(field(census, 'turnBucket'), 'census turnBucket');
   return [
     '---',
-    'license: cc-by-4.0',
+    `license: ${CARD_LICENSE.id}`,
+    `license_link: ${CARD_LICENSE.link}`,
     'tags:',
     `  - ${CARD_TAG}`,
     '---',
@@ -41,7 +43,7 @@ export const cardOf = (pack: unknown, census: unknown): string => {
     '',
     `${String(sessions)} coding-agent session skeletons from Many Oars Co., each a record of the session's steps, errors, recoveries, and human interventions. No transcript text is in this release, and every session ended at least ${String(days)} days before it was built${typeof built === 'string' ? ` (${built.slice(0, 10)})` : ''}.`,
     '',
-    `- License: ${CARD_LICENSE}.`,
+    `- License and rights: ${CARD_LICENSE.link}.`,
     `- Redaction version: ${typeof redaction === 'string' ? redaction : 'unknown'}; model reasoning: ${typeof reasoning === 'string' ? reasoning : 'unknown'}. Redaction is best effort.`,
     '- Layout: `manifest.jsonl` (one row per session, `transcripts: 0`), `sessions/<match id>/skeleton.json`, `census.json` (counts only), and `pack.json` (how it was built).',
     '- Check it: `npm run validate-pack -w packages/pool -- <this folder>` in the Many Oars repository (spec: `docs/session-record.md`). It needs no key, account, or network.',

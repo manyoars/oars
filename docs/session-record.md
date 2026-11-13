@@ -20,7 +20,7 @@ sessions/<matchId>/skeleton.json  the record, when the row names one
 pack.json, census.json            build bookkeeping the spec does not check
 ```
 
-A session folder is named by its row's `matchId`, and a folder no row names does not conform. A row's `transcripts` is the number of transcript files in its folder (the record is not one). A skeleton-only release (`sample-pack --skeleton-only`, sessions older than a set number of days) writes no transcript: every row says `transcripts: 0` and names its `skeleton`. A transcript keeps each harness's own line format; this spec checks its ids only.
+A session folder is named by its row's `matchId`, and a folder no row names does not conform. A row's `transcripts` is the number of transcript files in its folder (the record is not one). A skeleton-only release (`sample-pack --skeleton-only`, sessions older than a set number of days) writes no transcript: every row says `transcripts: 0` and names its `skeleton`; its `pack.json` carries no `seed`, since the operator types that text. A public release is built with a throwaway buyer key that stays private: match ids and `repoKey`s are keyed by it, so a published key would let anyone recompute them. A transcript keeps each harness's own line format; this spec checks its ids only.
 
 ## What a conforming file must contain
 
@@ -33,7 +33,7 @@ A session folder is named by its row's `matchId`, and a folder no row names does
 
 - A raw id: a UUID, or a harness's tool, message, or request id (`toolu_`, `srvtoolu_`, `msg_`, `req_`) left unmasked, in a manifest row, a record, or a transcript line. A transcript line's `sessionId` is the match id.
 - A field this page does not list, in a row or a record.
-- A file the manifest does not list: a pack root holds `manifest.jsonl` (plus the build's `pack.json`, `census.json`, and, for a skeleton-only release, a `README.md` data card, none of which the spec checks), nothing sits directly under `sessions/`, and, under `sessions/<matchId>/`, only the transcripts and the record its row names.
+- A file the manifest does not list: a pack root holds `manifest.jsonl` (plus the build's `pack.json` and `census.json`, and, when every row says `transcripts: 0`, a `README.md` data card, none of which the spec checks), nothing sits directly under `sessions/`, and, under `sessions/<matchId>/`, only the transcripts and the record its row names.
 - An `acceptedAt` on a row whose `repoOwner` is not a `depositor:<16 hex>` value: the field belongs to rows built from a pool deposit. The reverse holds too: a row with a `depositor:<16 hex>` owner and no `acceptedAt` cites no acceptance and does not conform.
 - A row with a `depositor:<16 hex>` owner whose `sourceLicense` is not a `manyoars-covenant <version> sha256:<hex>` string: it cites no covenant.
 - A `<field>Literal` field beside an `other`.
@@ -56,7 +56,7 @@ One JSON object per line. Types: `text` is a non-empty string; `count` is a whol
 | harnessTerms | list of objects | yes | The terms the session ran under, at least one; see `harnessTerms`. |
 | permittedUses | list of use names | yes | What the seller permits, such as `evaluation`; never `training`. |
 | training | `not-offered`, `priced-add-on`, or `included` | yes | Whether training use is offered. |
-| transcripts | count | yes | The transcript files in the session folder. 0 in a skeleton-only release, whose row then names its record and whose folder holds nothing else. |
+| transcripts | count | yes | The transcript files in the session folder. 0 in a skeleton-only release, whose row then names its record and whose folder holds nothing else. A pack says 0 on every row or on none. |
 | models | object of counts | yes | Model name to the number of turns it ran. |
 | turns | count | yes | The user turns in the session. |
 | skeleton | file name | no | The record's file name in the session folder. |
