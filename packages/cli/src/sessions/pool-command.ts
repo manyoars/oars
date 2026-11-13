@@ -1117,6 +1117,17 @@ export const poolFetch = async (deps: RunDeps, options: { server?: string | unde
 };
 
 const JOIN = 'pool-join';
+/** The join's invite step: `POST /v1/invites/redeem`. An account that joined on an invite already is a run repeated, which is not an error; any other refusal ends the run with the pool's own words. */
+const redeemInvite = async (deps: RunDeps, storeDir: string, server: string, code: string): Promise<object> => {
+  const { token } = await signedIn(deps, storeDir, server, JOIN);
+  const credential = new Masker();
+  credential.add(token);
+  const reply = await ask(deps, JOIN, server, '/v1/invites/redeem', { body: { code }, token, show: credential });
+  if (reply.status === 200) return { redeemed: true };
+  if (reply.status === 409 && isObject(reply.body) && textIn(reply.body, 'error') === 'already_vouched') return { skipped: true, reason: 'already_vouched' };
+  throw refusal(JOIN, reply);
+};
+
 const JOIN_AGAIN = 'Run oars pool join again to continue from here.';
 
 /**
@@ -1126,7 +1137,7 @@ const JOIN_AGAIN = 'Run oars pool join again to continue from here.';
  */
 export const poolJoin = async (
   deps: RunDeps,
-  options: { server?: string | undefined; provider?: string | undefined; verbose?: boolean; acceptCovenant?: string | undefined; inEuEeaUk?: string | undefined; harness?: string | undefined; harnessVersion: string; json?: boolean },
+  options: { server?: string | undefined; provider?: string | undefined; verbose?: boolean; acceptCovenant?: string | undefined; inEuEeaUk?: string | undefined; harness?: string | undefined; harnessVersion: string; invite?: string | undefined; json?: boolean },
 ): Promise<Outcome> => {
   const { storeDir } = runtimeOf(deps);
   const server = poolServer(deps.env, JOIN, options.server);
@@ -1154,6 +1165,11 @@ export const poolJoin = async (
     } else {
       say(`Already signed in to ${server} as ${held.account}.`);
     }
+    let vouched: object = { skipped: true };
+    if (options.invite !== undefined) {
+      say('Using your invite code.');
+      vouched = await redeemInvite(deps, storeDir, server, options.invite);
+    }
     let prepared: object = { skipped: true };
     if ((await unsent()).length > 0) {
       say('Your outbox already holds a prepared batch; not preparing it again.');
@@ -1174,13 +1190,45 @@ export const poolJoin = async (
     say(`Fetching the bundle for ${options.harness ?? 'your most used harness'} ${options.harnessVersion}.`);
     const fetched = show(await poolFetch(deps, { server, harness: options.harness, harnessVersion: options.harnessVersion }));
     return {
-      document: { ok: true, server, login, deposit: prepared, outbox: shown, sends, fetch: fetched.document },
+      document: { ok: true, server, login, invite: vouched, deposit: prepared, outbox: shown, sends, fetch: fetched.document },
       text: `Joined ${server}: ${plural(sends.length, 'batch', 'batches')} sent this run, and the ${options.harnessVersion} bundle is kept.`,
     };
   } catch (error) {
     say(JOIN_AGAIN);
     throw error;
   }
+};
+
+const INVITE = 'pool-invite';
+
+/** The one line an invitee runs. `<version>` stays a placeholder: the harness version is the invitee's own to name. */
+export const joinLineOf = (code: string): string => `oars pool join --invite ${code} --harness-version <version>`;
+
+/**
+ * `oars pool invite`: makes one invite code (`POST /v1/invites`, a founding or standing account, three open at most) and prints it once with the line to hand on and what the vouch earns. The code is the only secret here, so it is the one thing the pool never shows again.
+ */
+export const poolInvite = async (deps: RunDeps, options: { server?: string | undefined }): Promise<Outcome> => {
+  const { storeDir } = runtimeOf(deps);
+  const server = poolServer(deps.env, INVITE, options.server);
+  const { token } = await signedIn(deps, storeDir, server, INVITE);
+  const credential = new Masker();
+  credential.add(token);
+  const reply = await ask(deps, INVITE, server, '/v1/invites', { body: {}, token, show: credential });
+  if (reply.status !== 201) throw refusal(INVITE, reply);
+  const code = isObject(reply.body) ? textIn(reply.body, 'code') : undefined;
+  const left = isObject(reply.body) ? numberIn(reply.body, 'invitesLeft') : undefined;
+  if (code === undefined) throw new CliError('The pool answered an invite with no code.', ExitCode.UNEXPECTED, INVITE);
+  const line = joinLineOf(code);
+  return {
+    document: { ok: true, server, code, join: line, ...(left === undefined ? {} : { invitesLeft: left }) },
+    text: [
+      `Invite code: ${code}`,
+      'This is the only time the code is shown. It works once, for one person.',
+      `Send them this line: ${line}`,
+      'What you get: your vouch is recorded (oars pool invite counts it). What they get: once they have rowed two counting weeks they are listed on the open board without waiting 90 days, unless you and they are the same operator, which earns neither of you anything.',
+      ...(left === undefined ? [] : [`Open codes you can still make: ${String(left)}.`]),
+    ].join('\n'),
+  };
 };
 
 const RAW = 'pool-raw';

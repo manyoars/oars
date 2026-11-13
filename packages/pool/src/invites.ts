@@ -31,14 +31,16 @@ export const makeInvite = async (request: Request, env: Env): Promise<Response> 
   // One conditional insert, so a burst cannot pass a count read before any of its rows land.
   const made = await env.DB.prepare('INSERT INTO invites (code_hash, inviter, created_at) SELECT ?, ?, ? WHERE (SELECT COUNT(*) FROM invites WHERE inviter = ? AND used_by IS NULL) < ?').bind(hashOfInvite(code), account, now, account, OPEN_CODES).run();
   if (made.meta.changes === 0) return refuse(409, 'invite_limit', `An account holds at most ${String(OPEN_CODES)} open invite codes. A used code frees its place.`);
-  return answer(201, { code }, { 'cache-control': 'private, no-store' });
+  const open = count(await env.DB.prepare('SELECT COUNT(*) AS open FROM invites WHERE inviter = ? AND used_by IS NULL').bind(account).first(), 'open');
+  return answer(201, { code, invitesLeft: Math.max(0, OPEN_CODES - open) }, { 'cache-control': 'private, no-store' });
 };
 
 /** The refusal for an invite that cannot be used by this account, or null when it can. */
 const unusable = async (env: Env, id: number, account: string): Promise<Response | null> => {
+  // The account's own edge comes first, so a run repeated after its redemption reads as joined already, not as a code someone else used.
+  if ((await env.DB.prepare('SELECT 1 AS yes FROM vouch_edges WHERE invitee = ?').bind(account).first()) !== null) return refuse(409, 'already_vouched', 'This account joined on an invite already.');
   const held = await env.DB.prepare('SELECT used_by FROM invites WHERE id = ?').bind(id).first();
   if (fieldOf(held, 'used_by') !== null) return refuse(409, 'invite_used', 'That invite code has been used.');
-  if ((await env.DB.prepare('SELECT 1 AS yes FROM vouch_edges WHERE invitee = ?').bind(account).first()) !== null) return refuse(409, 'already_vouched', 'This account joined on an invite already.');
   return null;
 };
 
