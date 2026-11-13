@@ -1,7 +1,9 @@
 name: ci
 
 on:
+  # Pushes to task/* and claude/* branches start nothing: the orchestration gate dispatches this workflow on the branch it checks.
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
     inputs:
