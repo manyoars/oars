@@ -222,6 +222,7 @@ export const fitFold = (floors: FitFloors = FIT_FLOORS, keep: (call: ToolObserva
   return { add, finish };
 };
 
+/** `fitFold` over the whole store at once. `keep` narrows the calls tallied, not what follows them. */
 export const fitReads = (store: Store, floors: FitFloors = FIT_FLOORS, keep: (call: ToolObservation) => boolean = () => true): RecallRead[] => {
   const fold = fitFold(floors, keep);
   fold.add(store);

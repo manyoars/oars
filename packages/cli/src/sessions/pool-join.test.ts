@@ -524,7 +524,6 @@ describe('oars pool join, the first deposit in one command', () => {
       atTerminal(s, 'yes', SCREEN.phrase);
       expect(await s.cli(...joinArgs)).toBe(ExitCode.AUTH);
       expect(err(s)).toContain('--in-eu-eea-uk no');
-      expect(err(s)).toContain('cannot take deposits from the EU yet');
     });
 
     it('does not suggest --in-eu-eea-uk no to someone who already answered no and was refused on the request origin', async () => {
@@ -536,6 +535,7 @@ describe('oars pool join, the first deposit in one command', () => {
       atTerminal(s, 'no', SCREEN.phrase);
       expect(await s.cli(...joinArgs)).toBe(ExitCode.AUTH);
       expect(err(s)).not.toContain('--in-eu-eea-uk no');
+      expect(err(s)).toContain('cannot take deposits from the EU yet');
     });
 
     it('stops on an answer that is not yes or no, before anything is accepted or sent', async () => {

@@ -271,12 +271,13 @@ const linesOf = (tools: readonly ToolObservation[]): ToolObservation[][] => {
   return [...lines.values()].map((line) => line.sort((a, b) => a.n - b.n));
 };
 
-/** `deriveCells` as a fold: each `add` tallies one run of sessions into the same tallies, and `finish` sorts them. The runs must come in the order the whole store holds its rows, so sums of floats match. */
+/** The tally half of `deriveCells`: `add` one run of sessions, then `finish`. */
 export interface CellFold {
   add: (store: Store) => void;
   finish: () => CellSet;
 }
 
+/** `deriveCells` as a fold: each `add` tallies one run of sessions into the same tallies, and `finish` sorts them. The runs must come in the order the whole store holds its rows, so sums of floats match. */
 export const cellFold = (graph: RecallGraph = NO_RECALLS): CellFold => {
   const tallies = new Map<string, Tally>();
   const motifs = new Map<string, Motif>();

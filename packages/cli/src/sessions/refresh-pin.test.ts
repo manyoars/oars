@@ -4,10 +4,13 @@ import { join, relative } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { emptyUsage } from './extract.js';
 import { error as errorRow, frame as frameOf, prompt as promptRow, session as sessionRow, tool as toolRow } from './pool-fixture.js';
-import { appendRecall, makeRecall, type Recall } from './recall-object.js';
+import { appendRecall, makeRecall, readRecalls, type Recall } from './recall-object.js';
+import { deriveConsequences, recallGraphOf } from './recall-consequence.js';
+import { shellReader } from './projection.js';
+import { vocabulary } from './vocab-load.js';
 import { CAPTURE_VERSION, type ToolObservation } from './schema.js';
 import { poolFiles } from './pool.js';
-import { cellsFold, cellsOf } from './cell-increments.js';
+import { cellsFold, cellsOf, projectedStore } from './cell-increments.js';
 import { fitFold, fitReads } from './recall-reads.js';
 import { finishReversions, foldReversions, newReversionIndex, reversionsOf } from './reversion.js';
 import { derive, deriveFold, loadStore, paths, refresh, runOrder, scanLog } from './store.js';
@@ -175,5 +178,27 @@ describe('each fold over runs equals the whole-store call (foldsplit)', () => {
     for (const key of ['sa', 'sb', 'sc', 'sd', 'v2', 'sc~ag', 'sa~ag']) for (const prompt of [0, 1]) expect(split(key, prompt)).toEqual(together(key, prompt));
     // The pair on P1 and the pair on P2 are each found alone, across runs.
     expect([split('sa', 0), split('sa', 1)]).toEqual(['later-session', 'later-session']);
+  });
+
+  it.each([1, 2])('folds the projected runs under a recall graph, and hands deriveConsequences the split lookup, at run size %i', async (size) => {
+    const staged = stagedLog();
+    await appendRecall(staged.storeDir, recallAt('sa', stamp(1, 0, 500)));
+    await appendRecall(staged.storeDir, recallAt('sa', stamp(1, 2, 500)));
+    const scan = await scanLog(paths(staged.storeDir).observations, undefined, true);
+    const whole = await loadStore(staged.storeDir);
+    const recalls = await readRecalls(staged.storeDir);
+    const read = shellReader(vocabulary());
+    const consequences = deriveConsequences(whole, recalls);
+    const graph = recallGraphOf(whole, consequences);
+    const order = runOrder(scan);
+    const cells = cellsFold(graph);
+    const index = newReversionIndex();
+    for (let at = 0; at < order.length; at += size) {
+      const run = await loadStore(staged.storeDir, undefined, { latest: scan.latest, only: new Set(order.slice(at, at + size)), spans: scan.spans, identity: scan.identity });
+      cells.add(projectedStore(run, read));
+      foldReversions(index, run);
+    }
+    expect(cells.finish()).toEqual(cellsOf(projectedStore(whole, read), graph));
+    expect(deriveConsequences(whole, recalls, finishReversions(index))).toEqual(consequences);
   });
 });

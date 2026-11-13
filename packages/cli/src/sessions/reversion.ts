@@ -89,7 +89,7 @@ export const newReversionIndex = (): ReversionIndex => ({ repos: new Map(), comm
 
 /**
  * Reads every main-line call of one run once: the clean shell calls' commits, revert words (read segments only, since a segment whose result the call's status does not report (`read` false) could have failed behind another command), and
- * restored paths; and every edit that did not fail, with its digests. A subagent's call is not on the main line, so it is not read. Reads the run's own sessions only; runs fold in the whole store's order, and the matching waits for `finishReversions`.
+ * restored paths; and every edit that did not fail, with its digests. A subagent's call is not on the main line, so it is not read. Give it the run's own sessions only: a context parent passed here is folded again in its own run. Runs fold in the whole store's order, and the matching waits for `finishReversions`.
  */
 export const foldReversions = (index: ReversionIndex, store: Store): void => {
   const { repos, commits, reverts, committed, edited, written, restored } = index;
