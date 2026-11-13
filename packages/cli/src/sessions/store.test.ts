@@ -170,6 +170,28 @@ describe('deposit', () => {
     expect(await loadStore(staged.storeDir, undefined, { latest: scan.latest, only: new Set(scan.latest.keys()), spans: scan.spans })).toEqual(await loadStore(staged.storeDir));
   });
 
+  it('reads the same rows when a compaction moves the log between the scan and the chunk load (spancompact)', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options(['proj']));
+    const log = paths(staged.storeDir).observations;
+    // Superseded lines ahead of the live ones, so a compaction moves every offset after them.
+    const rows = readFileSync(log, 'utf8').split('\n').filter((line) => line !== '');
+    writeFileSync(log, `${[...rows.map((line) => line.replace(/"rev":\d+/, '"rev":0')), ...rows].join('\n')}\n`);
+    const scan = await scanLog(log, undefined, true);
+    expect(scan.superseded).toBe(true);
+    const only = new Set(scan.latest.keys());
+    const streamed = await loadStore(staged.storeDir, undefined, { latest: scan.latest, only });
+    const scanned = statSync(log).size;
+    await compactLog(staged.storeDir, 0);
+    expect(statSync(log).size).toBeLessThan(scanned);
+    let read = 0;
+    const seeked = await loadStore(staged.storeDir, undefined, { latest: scan.latest, only, spans: scan.spans, identity: scan.identity, lineRead: () => { read += 1; } });
+    expect(seeked).toEqual(streamed);
+    expect(seeked.sessions).toHaveLength(only.size);
+    // The log is not the one that was scanned, so the load streams it as main does.
+    expect(read).toBeGreaterThanOrEqual(seeked.sessions.length);
+  });
+
   it('ignores a row appended between the scan and the chunk load, and skips a span a rewrite moved (spanappend)', async () => {
     const staged = stage();
     await deposit(staged.runtime, options(['proj']));
