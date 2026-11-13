@@ -6,6 +6,7 @@ import { UNKNOWN, weekStartOf, type Cell } from './cells.js';
 import { utcDay } from './frame.js';
 import { shapeMotif } from './motif.js';
 import { contentHash } from './read.js';
+import { readFoldsOf } from './read-folds.js';
 import { atGrain, body, groupBy, type DeriveFamily, type FamilyInput, type ReadBody } from './read-support.js';
 import { harnessOf, type ErrorObservation } from './schema.js';
 import { signatureRecord } from './store.js';
@@ -54,9 +55,9 @@ export interface RecoveryOutcome {
   dropped: { [reason in RecoveryDrop]: number };
 }
 
-export const recoveryOf = ({ pool, store }: FamilyInput): RecoveryOutcome => {
+export const recoveryOf = ({ pool, store, folds }: FamilyInput): RecoveryOutcome => {
   const sessions = new Map([...store.sessions, ...store.subagents].map((session) => [session.session, session]));
-  const prompts = new Map(store.prompts.map((prompt) => [`${prompt.session}#${String(prompt.index)}`, prompt]));
+  const promptDays = (folds ?? readFoldsOf(store)).promptDays;
   const actionIn = (session: string, tool: string): CanonicalAction => actionOf(ACTION_TABLES[harnessOf(sessions.get(session) ?? {})], tool).action;
   // The failed call is a one-step shape, which has a live day cell. The step after it is a two-step window, which has a week cell only (rule 6), so it is found on the week its day falls in.
   const cellsAt = groupBy(atGrain(pool, 'day'), (cell) => `${cell.motifId}/${cell.day}`);
@@ -64,8 +65,8 @@ export const recoveryOf = ({ pool, store }: FamilyInput): RecoveryOutcome => {
   const cellsOf = groupBy(atGrain(pool, 'day'), (cell) => cell.motifId);
   /** The day a cell files this error's call under: its frame's, which is its prompt's, or its session's for a subagent or a call before the first prompt. An error can run past that midnight. */
   const frameDayOf = (error: ErrorObservation): string => {
-    const prompt = error.agent === undefined ? prompts.get(`${error.session}#${String(error.prompt)}`) : undefined;
-    if (prompt !== undefined) return prompt.frame?.day ?? utcDay(prompt.ts) ?? UNKNOWN;
+    const day = error.agent === undefined ? promptDays.get(`${error.session}#${String(error.prompt)}`) : undefined;
+    if (day !== undefined) return day;
     const session = sessions.get(error.agent ?? error.session);
     return session?.frame?.day ?? utcDay(session?.tsFirst) ?? UNKNOWN;
   };

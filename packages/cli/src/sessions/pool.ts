@@ -5,13 +5,10 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
-import { cellsOf, projectedStore } from './cell-increments.js';
 import { poolOf, serializeCells, UNKNOWN, type Cell, type Pool } from './cells.js';
 import type { Motif } from './motif.js';
 import { LOAD_STATUS_FILE, loadStatusLines } from './load-status.js';
-import { shellReader } from './projection.js';
 import { contentHash, FIRST_ORDER_FAMILIES, frozenRead, makeRead, orderResolver, type FirstOrderFamily, type OrderResolver, type Read, type ReadAsOf } from './read.js';
-import { deriveConsequences, recallGraphOf } from './recall-consequence.js';
 import { readRecalls } from './recall-object.js';
 import { deriveAdoption } from './read-adoption.js';
 import { deriveCallShape } from './read-call-shape.js';
@@ -25,7 +22,8 @@ import { deriveRecovery } from './read-recovery.js';
 import { deriveToolDay } from './read-tool-day.js';
 import type { DeriveRelation } from './read-order.js';
 import type { DeriveFamily, ReadBody } from './read-support.js';
-import { vocabulary } from './vocab-load.js';
+import { poolFoldsOf, type PoolFolds } from './pool-fold.js';
+import type { ReadFolds } from './read-folds.js';
 import { deriveDayMove } from './read-day-move.js';
 import { deriveInteraction } from './read-interaction.js';
 import { deriveLeadLag } from './read-lead-lag.js';
@@ -64,20 +62,20 @@ const made = (bodies: readonly ReadBody[], asOf: ReadAsOf, orderOf: OrderResolve
     .map(({ read }) => read);
 
 /** Every family's order 1 reads of one pool, in family order and then by slice, so a rerun writes the same bytes. */
-export const deriveFirstOrder = (pool: Pool, store: Store): Read[] => {
+export const deriveFirstOrder = (pool: Pool, store: Store, folds?: ReadFolds): Read[] => {
   const asOf = { pool: pool.version, day: pool.lastDay };
   const orderOf = orderResolver([]);
   const byFamily = derivers();
-  return FIRST_ORDER_FAMILIES.flatMap((family) => made(byFamily[family]({ pool, store }), asOf, orderOf));
+  return FIRST_ORDER_FAMILIES.flatMap((family) => made(byFamily[family]({ pool, store, ...(folds === undefined ? {} : { folds }) }), asOf, orderOf));
 };
 
 /** Order 1, then each stage of `relations` over everything before it. */
-export const deriveReads = (pool: Pool, store: Store): Read[] => {
+export const deriveReads = (pool: Pool, store: Store, folds?: ReadFolds): Read[] => {
   const asOf = { pool: pool.version, day: pool.lastDay };
   return relations().reduce<Read[]>((known, stage) => {
     const orderOf = orderResolver(known);
     return [...known, ...stage.flatMap((derive) => made(derive(known), asOf, orderOf))];
-  }, deriveFirstOrder(pool, store));
+  }, deriveFirstOrder(pool, store, folds));
 };
 
 export const serializeReads = (reads: readonly Read[]): string => reads.map((read) => `${JSON.stringify(read)}\n`).join('');
@@ -108,10 +106,12 @@ const storedRows = async <Row>(file: string, isRow: (value: unknown) => value is
 
 const readStored = async (file: string): Promise<Read[] | undefined> => (await storedRows(file, isRead))?.map(frozenRead);
 
-/** The current pool's reads: already written when this pool has been read before, else derived and written once. */
-export const refreshPool = async (storeDir: string, store: Store): Promise<{ pool: Pool; reads: Read[] }> => {
-  const recalls = deriveConsequences(store, await readRecalls(storeDir));
-  const set = cellsOf(projectedStore(store, shellReader(vocabulary())), recallGraphOf(store, recalls));
+/**
+ * The current pool's reads: already written when this pool has been read before, else derived and written once. `store` holds the sessions, subagents, and errors; the rows of every turn are read through
+ * `folds`, which a refresh folds run by run. Without them `store` is taken whole, with its prompts and tools, and folded as one run.
+ */
+export const refreshPool = async (storeDir: string, store: Store, folds?: PoolFolds): Promise<{ pool: Pool; reads: Read[] }> => {
+  const { recalls, cells: set, reads: readFolds } = folds ?? poolFoldsOf(await readRecalls(storeDir), store);
   const pool = poolOf(set, store.errors);
   const files = poolFiles(storeDir);
   await writeAtomic(files.consequences, recalls.flatMap(({ id, n, consequence }) => (consequence === undefined ? [] : [`${JSON.stringify({ id, n, consequence })}\n`])).join(''));
@@ -121,7 +121,7 @@ export const refreshPool = async (storeDir: string, store: Store): Promise<{ poo
   const file = files.reads(pool.version);
   const stored = await readStored(file);
   if (stored !== undefined) return { pool, reads: stored };
-  const reads = deriveReads(pool, store);
+  const reads = deriveReads(pool, store, readFolds);
   await writeAtomic(file, serializeReads(reads));
   return { pool, reads };
 };
@@ -133,9 +133,10 @@ const unbuilt = (error: unknown): void => {
 };
 
 /** The pool a deposit's index step reads. It answers without one (spec 2.7): a pool that cannot be read or written costs only the stored read IDs, whose answers keep their stand-ins, and one line on stderr says so. */
-export const currentPool = async (storeDir: string, store: Store): Promise<{ pool: Pool; reads: Read[] } | undefined> => {
+export const currentPool = async (storeDir: string, store: Store, folds?: PoolFolds | Error): Promise<{ pool: Pool; reads: Read[] } | undefined> => {
   try {
-    return await refreshPool(storeDir, store);
+    if (folds instanceof Error) throw folds;
+    return await refreshPool(storeDir, store, folds);
   } catch (error) {
     unbuilt(error);
     return undefined;

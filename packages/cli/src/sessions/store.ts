@@ -37,6 +37,8 @@ import { foldToolRows, withoutReplays } from './fold.js';
 import { asRepoSize, type RepoSize } from './public-vocabulary.js';
 import { makeRepoIdentity, makeRepoRoot } from './repo-root.js';
 import { mkdirOwnerOnly } from './owner-only.js';
+import type { PoolFold, PoolFolds } from './pool-fold.js';
+import type { ReversionIndex } from './reversion.js';
 import { makeRedactor, type Redactor } from './redact.js';
 import {
   CAPTURE_VERSION,
@@ -84,6 +86,10 @@ export interface SessionsRuntime {
   stderr?: { isTTY?: boolean | undefined } | undefined;
   /** A seam for tests: awaited right after a build's scan of the log and before any session is loaded, so a test can change the log in exactly that window. */
   afterScan?: () => Promise<void>;
+  /** How many sessions (with their subagents) `refresh` loads and folds at a time; absent means `REFRESH_RUN`. */
+  refreshRun?: number;
+  /** A seam for tests and proofs: told once what a refresh folded, after its last run. `reversions` is the size of the matching's index. */
+  refreshed?: (folded: { runs: number; reversions: number }) => void;
 }
 
 interface FileState {
@@ -633,6 +639,110 @@ const tally = (trace: DepositTrace | undefined, extract: Capture, subagent: bool
 
 export const digest = (parts: readonly string[]): string => createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 16);
 
+/** Sessions a refresh loads and folds at a time. Peak memory is the sessions of a run plus what the folds keep (spec 3 option A), so this is the knob between the heap and the number of seeks. */
+const REFRESH_RUN = 100;
+
+interface Folded {
+  /** Sessions, subagents, and errors in the order a whole read holds them; no prompts or tools. */
+  store: Store;
+  /** The pool step's input, or why it could not be folded: the pool is optional to a deposit, so a failure there is reported by `currentPool`, not thrown. */
+  folds: PoolFolds | Error;
+  derive: DeriveFold;
+  counts: { prompts: number; tools: number };
+}
+
+const asError = (error: unknown): Error => (error instanceof Error ? error : new Error(String(error)));
+
+/** The pool fold settled after the last run, or the error that stopped it. */
+const finished = (pool: PoolFold | Error, runtime: SessionsRuntime, runs: number): PoolFolds | Error => {
+  if (pool instanceof Error) return pool;
+  try {
+    const folds = pool.finish();
+    runtime.refreshed?.({ runs, reversions: reversionEntries(pool.index) });
+    return folds;
+  } catch (error) {
+    return asError(error);
+  }
+};
+
+const reversionEntries = (index: ReversionIndex): number => {
+  const lists = [...index.committed.values(), ...index.edited.values(), ...index.written.values()];
+  return index.commits.length + index.reverts.length + index.restored.length + lists.reduce((sum, list) => sum + list.length, 0);
+};
+
+/**
+ * `loadStore` and the folds over the whole store, one run of sessions at a time (t1243): the log is scanned once with spans, then each run of `runOrder` is read by seeking, folded, and let go. A subagent's parent
+ * outside its run is read as context for the agent's errors and folded in its own run only. Sessions and errors are held with their place in the whole read and put back in that order, which is the only order anything
+ * written depends on.
+ */
+const foldRuns = async (runtime: SessionsRuntime): Promise<Folded> => {
+  const scan = await scanLog(paths(runtime.storeDir).observations, undefined, true);
+  await runtime.afterScan?.();
+  const order = runOrder(scan);
+  const size = Math.max(1, Math.floor(runtime.refreshRun ?? REFRESH_RUN));
+  // Loaded here, not at the top: the pool imports every read family, and a lookup hook never reaches this step. A failure to load or fold costs the index its fit reads, as a failure of `currentPool` does.
+  let pool: PoolFold | Error;
+  try {
+    const { poolFold } = await import('./pool-fold.js');
+    const { readRecalls } = await import('./recall-object.js');
+    pool = poolFold(await readRecalls(runtime.storeDir));
+  } catch (error) {
+    pool = asError(error);
+  }
+  const derive = deriveFold();
+  const counts = { prompts: 0, tools: 0 };
+  const start = (session: string): number => scan.spans?.get(session)?.[0] ?? Number.MAX_SAFE_INTEGER;
+  const sessions: { at: number; record: SessionObservation }[] = [];
+  const subagents: { at: number; record: SessionObservation }[] = [];
+  // Version 2 error rows come first in a whole read, then each readable session's in its place, then the agents' last.
+  const errors: { group: number; at: number; record: ErrorObservation }[] = [];
+  let runs = 0;
+  for (let from = 0; from < order.length; from += size) {
+    const own = new Set(order.slice(from, from + size));
+    const wanted = new Set(own);
+    for (const id of own) {
+      const parent = scan.parents.get(id);
+      if (parent !== undefined) wanted.add(parent);
+    }
+    const loaded = await loadStore(runtime.storeDir, undefined, { only: wanted, latest: scan.latest, spans: scan.spans, identity: scan.identity });
+    const run: Store = {
+      sessions: loaded.sessions.filter(({ session }) => own.has(session)),
+      subagents: loaded.subagents.filter(({ session }) => own.has(session)),
+      prompts: loaded.prompts.filter(({ session }) => own.has(session)),
+      tools: loaded.tools.filter(({ session }) => own.has(session)),
+      errors: loaded.errors.filter(({ session, agent }) => own.has(agent ?? session)),
+      newerCaptures: 0,
+    };
+    runs += 1;
+    derive.add(run.prompts);
+    counts.prompts += run.prompts.length;
+    counts.tools += run.tools.length;
+    for (const record of run.sessions) sessions.push({ at: start(record.session), record });
+    for (const record of run.subagents) subagents.push({ at: start(record.session), record });
+    for (const record of run.errors) {
+      const unreadable = !isReadable(scan.cvs.get(record.session) ?? '0');
+      errors.push(record.agent === undefined ? { group: unreadable ? 0 : 1, at: start(record.session), record } : { group: 2, at: start(record.agent), record });
+    }
+    if (!(pool instanceof Error)) {
+      try {
+        pool.add(run);
+      } catch (error) {
+        pool = asError(error);
+      }
+    }
+  }
+  const byPlace = <T extends { at: number }>(list: T[]): T[] => list.sort((a, b) => a.at - b.at);
+  const store: Store = {
+    sessions: byPlace(sessions).map(({ record }) => record),
+    subagents: byPlace(subagents).map(({ record }) => record),
+    errors: errors.sort((a, b) => a.group - b.group || a.at - b.at).map(({ record }) => record),
+    prompts: [],
+    tools: [],
+    newerCaptures: scan.newerCaptures,
+  };
+  return { store, folds: finished(pool, runtime, runs), derive, counts };
+};
+
 /**
  * Rewrites `derived.json` (the derive step), then the hook index (the index step), from the whole store. With a trace, a failure of
  * either is recorded on it instead of thrown, so the caller can log the deposit that already wrote its records, then the failed step
@@ -643,18 +753,20 @@ export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly 
   // The extractor version alone until the store is read: a derive that fails before the high-water mark is known still has a key (spec 4.4).
   let key = digest([EXTRACTOR_VERSION]);
   let store: Store;
+  let folds: PoolFolds | Error;
   try {
-    store = await loadStore(runtime.storeDir);
+    const folded = await foldRuns(runtime);
+    ({ store, folds } = folded);
     // The key is the account's capture high-water mark (the highest rev of each session) and `ev` (spec 4.2); the index shares it.
     const highWater = [...store.sessions, ...store.subagents].map((session) => `${session.session}:${String(session.rev)}`).sort();
     key = digest([EXTRACTOR_VERSION, ...highWater]);
-    const derived = derive(store, at);
+    const derived = folded.derive.finish(store, at);
     await requireHold(held);
     await writeAtomic(paths(runtime.storeDir).derived, JSON.stringify(derived));
     if (trace !== undefined) {
       trace.derive = {
         ms: Math.round(performance.now() - started),
-        in: { session: store.sessions.length, subagent: store.subagents.length, 'user-prompt': store.prompts.length, tool: store.tools.length },
+        in: { session: store.sessions.length, subagent: store.subagents.length, 'user-prompt': folded.counts.prompts, tool: folded.counts.tools },
         out: { signature: derived.signatures.length, summary: derived.summaries.length },
         key,
       };
@@ -667,7 +779,7 @@ export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly 
   // The pool is derived for the index's fit reads only: one that cannot be read or written costs the index those, never the index itself (`currentPool` says so on stderr). Loaded here, not at the top: the pool imports every read family, and a lookup hook never reaches this step. It runs before the clock starts, so the index's `ms` is the index and not the derive (the first pool run takes 12 to 17 s on a store copy).
   // A module that will not load costs the index the same fit reads, with one line on stderr, as `currentPool` does when the pool cannot be built.
   const current = await import('./pool.js').then(
-    async ({ currentPool }) => currentPool(runtime.storeDir, store),
+    async ({ currentPool }) => currentPool(runtime.storeDir, store, folds),
     (error: unknown) => {
       process.stderr.write(`oars: the read pool module could not be loaded, and the index keeps no fit reads: ${error instanceof Error ? error.message : String(error)}
 `);

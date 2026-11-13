@@ -2,12 +2,15 @@
 import { cellIdOf, isEnvironmentCell, type Cell, type Grain, type Pool } from './cells.js';
 import type { Motif } from './motif.js';
 import { METHODS, type Family, type ReadDraft, type ReadInterval, type ReadSlice, type ReadValue } from './read.js';
+import type { ReadFolds } from './read-folds.js';
 import type { Store } from './store.js';
 
 export interface FamilyInput {
   pool: Pool;
-  /** Only recovery reads this: an error's signature is not in a cell. */
+  /** Its sessions, subagents, and errors. Only recovery reads this: an error's signature is not in a cell. A refresh holds no tools or prompts here: the two families that read them take `folds`. */
   store: Store;
+  /** What a refresh folded from the rows of every turn, run by run; absent, the two families that need it fold `store` whole. */
+  folds?: ReadFolds;
 }
 
 /** A read as a family states it; the pool's snapshot is added to all of them in one place. */

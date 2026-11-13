@@ -5,11 +5,12 @@
 import { lastDayOfCell, parseShapeClass, UNKNOWN, type Cell } from './cells.js';
 import { OPEN_GATE, wireKeys } from './pool-wire.js';
 import { CALL_SHAPE_METHOD } from './read.js';
-import { actionOfShape, fitReads, toolShapeId } from './recall-reads.js';
+import { actionOfShape, toolShapeId } from './recall-reads.js';
+import { readFoldsOf } from './read-folds.js';
 import { body, atGrain, rate, wilson, type DeriveFamily } from './read-support.js';
 
-export const deriveCallShape: DeriveFamily = ({ pool, store }) =>
-  fitReads(store).flatMap((read) => {
+export const deriveCallShape: DeriveFamily = ({ pool, store, folds }) =>
+  (folds ?? readFoldsOf(store)).fit.flatMap((read) => {
     const action = actionOfShape(read.tool, read.harnesses);
     // The cell names the keys as the wire sends them (`projectedStore`); a record captured before steps was never projected, so its raw names are the other spelling.
     const names = new Set([wireKeys(read.keys, read.tool, OPEN_GATE).keys.join(','), read.keys.join(',')]);

@@ -70,6 +70,8 @@ const rows = (): unknown[] => [
   call('sc', 0, 'Bash', 20, 0, { segments: [{ run: 'git revert abc1234', read: true }] }), call('sc', 1, 'Task', 20, 0),
   captured('sd'), userPrompt('sd', 0, stamp(30), 5.5),
   call('sd', 0, 'Bash', 30, 0, { segments: [{ run: 'git restore src/y.ts', read: true }], restores: ['src/y.ts'] }),
+  // A version 1 session between them: unreadable like version 2, so it too has its rows ahead of the readable sessions' and is placed by its first line.
+  sessionRow('sx', { cv: '1', repo: 'r' }), promptRow('sx', 0, { wallSec: 0.5, ts: stamp(35) }), errorRow('sx', 'old sig', { next: ['Edit'] }),
   // A version 2 session after the version 3 sessions in the log: its prompts and errors come first in the store.
   sessionRow('v2', { cv: '2', repo: 'r' }), promptRow('v2', 0, { wallSec: 0.25, ts: stamp(40) }), errorRow('v2', 'old sig', { next: ['Read', 'Edit'] }),
   // The superseded copy's newer rev, last in the log.
@@ -98,52 +100,87 @@ const stagedLog = (): ReturnType<typeof stage> => {
   return staged;
 };
 
-const refreshed = async (): Promise<{ reverted: Array<string | null>; files: { [path: string]: string } }> => {
+const PINNED_FILES = {
+  'cells.jsonl': '9d8d8d87aaacc972d60af23e977bbbc04a05832d42f47438b83e570c157a5be5',
+  'consequences.jsonl': 'f8b3180c8e3f07550ef8208813a524e975f2adbb09ef11dc82fce35324fcfc29',
+  'derived.json': 'b21355137904c00e61e6d841467c478733f45229f34c8710b618441a84c0cd46',
+  'hook-index.json': 'f1786daa214f9e50550cee1a7f9956250c7d22508ac50cb9ddccfec3c6d70cff',
+  'load-status.jsonl': '1943b26443d2b7cba53fe6c9b9dab2235da9701b2732c24ec364bc2378b7e374',
+  'motifs.jsonl': 'c26e98dec42688c8d6af7cc2f07c0db6aee2262c8ceab3d14eaadf382e299fec',
+  'reads/b49f5d5dea00b56c.jsonl': 'fbd7037c804e5c2b118c5bfae97b8ee39ddda7c5aefef1e147af3322b438f838',
+};
+
+/** What a run of `refresh` told its seam: how many runs it folded, and the size of the reversion index. Absent when the seam was never called. */
+type Folded = { runs: number; reversions: number };
+
+const refreshed = async (runSize?: number): Promise<{ reverted: Array<string | null>; ns: Array<number | null>; files: { [path: string]: string }; folded: Folded | undefined }> => {
   const staged = stagedLog();
   await appendRecall(staged.storeDir, recallAt('sa', stamp(1, 0, 500)));
   await appendRecall(staged.storeDir, recallAt('sa', stamp(1, 2, 500)));
-  await refresh(staged.runtime, [], PIN_AT);
+  let folded: Folded | undefined;
+  await refresh({ ...staged.runtime, ...(runSize === undefined ? {} : { refreshRun: runSize }), refreshed: (told) => { folded = told; } }, [], PIN_AT);
   const lines = readFileSync(poolFiles(staged.storeDir).consequences, 'utf8').split('\n').filter((line) => line !== '');
   const reverted = lines.map((line): string | null => {
     const parsed: unknown = JSON.parse(line);
     const reversion: unknown = Reflect.get(Reflect.get(Reflect.get(Object(parsed), 'consequence'), 'outcome'), 'reverted');
     return typeof reversion === 'string' ? reversion : null;
   });
-  return { reverted, files: hashes(staged.storeDir) };
+  const ns = lines.map((line): number | null => {
+    const n: unknown = Reflect.get(Object(JSON.parse(line)), 'n');
+    return typeof n === 'number' ? n : null;
+  });
+  return { reverted, ns, files: hashes(staged.storeDir), folded };
 };
 
 describe('refresh writes the same bytes for a store with cross-session joins (refreshpin)', () => {
   it('pins every derived file, and reads each commit-then-revert and edit-then-restore across sessions as later-session', async () => {
-    const { reverted, files } = await refreshed();
+    const { reverted, ns, files } = await refreshed();
     expect(reverted).toEqual(['later-session', 'later-session']);
-    expect(files).toEqual({
-      'cells.jsonl': 'db6d8e03379b13bce7f9d75a10fa403561e38955e08dedd4f263ebd7acaf679b',
-      'consequences.jsonl': 'f8b3180c8e3f07550ef8208813a524e975f2adbb09ef11dc82fce35324fcfc29',
-      'derived.json': 'd02e8b9169c0686fc867b9f9ae97838874b12222facf5c814b9fc60a44ac21e2',
-      'hook-index.json': '2bbcc6b1ebaf42350842663b7bda3ea128e0c3d2e84f14ba2fc10efc1bcef540',
-      'load-status.jsonl': 'c99c8cf3f7fe884931b49275b8788cc953385334cf7d2f939b173a843a72f122',
-      'motifs.jsonl': 'c26e98dec42688c8d6af7cc2f07c0db6aee2262c8ceab3d14eaadf382e299fec',
-      'reads/7794bee7303eaa65.jsonl': '296c2d1136d13e2728f8524b60fe2f9cb5d81270af598deba4d48ab2d7486e21',
-    });
+    // P1 and P2 are rows 0 and 1 by position; each row's own `n` (the call its window opens at: after P1's two calls, after P2's four) says which is which, so a swap of the rows would show here.
+    expect(ns).toEqual([1, 3]);
+    expect(files).toEqual(PINNED_FILES);
+  });
+});
+
+describe('refresh folds the store a run of sessions at a time and writes the pinned bytes at any run size (refreshruns)', () => {
+  // The fixture holds nine sessions and subagents: sx and v2 (unreadable), then sa, sc~ag, sa~ag, sb, sc, sd, and old.
+  it.each([
+    [1, 9],
+    [2, 5],
+    [10_000, 1],
+    [undefined, 1],
+  ])('run size %s folds %s run(s) and matches the pin, cross-session reversions included', async (size, runs) => {
+    const { reverted, ns, files, folded } = await refreshed(size);
+    expect(folded?.runs).toBe(runs);
+    // The index holds the fixture's main-line commits, revert words, restores, and edits, whatever the run size.
+    expect(folded?.reversions).toBeGreaterThan(0);
+    expect(reverted).toEqual(['later-session', 'later-session']);
+    expect(ns).toEqual([1, 3]);
+    expect(files).toEqual(PINNED_FILES);
+  });
+
+  it('reports the same index size at every run size', async () => {
+    const sizes = await Promise.all([1, 2, 10_000].map(async (size) => (await refreshed(size)).folded?.reversions));
+    expect(new Set(sizes).size).toBe(1);
   });
 });
 
 describe('the scan keeps what the run order needs (scanorder)', () => {
-  it('holds each subagent parent and each session cv at its highest rev, and orders version 2 sessions ahead of the rest by first line', async () => {
+  it('holds each subagent parent and each session cv at its highest rev, and orders unreadable sessions ahead of the rest by first line', async () => {
     const staged = stagedLog();
     const scan = await scanLog(paths(staged.storeDir).observations, undefined, true);
     expect(scan.parents).toEqual(new Map([['sc~ag', 'sc'], ['sa~ag', 'sa']]));
-    // `old` was captured at cv 4 and again at cv 35 at a higher rev; `v2` is version 2.
-    expect(scan.cvs).toEqual(new Map([['old', CAPTURE_VERSION], ['sa', CAPTURE_VERSION], ['sc~ag', CAPTURE_VERSION], ['sa~ag', CAPTURE_VERSION], ['sb', CAPTURE_VERSION], ['sc', CAPTURE_VERSION], ['sd', CAPTURE_VERSION], ['v2', '2']]));
-    // `v2` lines follow `sd` lines in the log, and `old` highest rev is the last line; the subagents `sc~ag` and `sa~ag` are ahead of `sb` and `sc`, in the order their lines start.
-    expect(runOrder(scan)).toEqual(['v2', 'sa', 'sc~ag', 'sa~ag', 'sb', 'sc', 'sd', 'old']);
+    // `old` was captured at cv 4 and again at cv 35 at a higher rev; `sx` is version 1 and `v2` version 2, both unreadable.
+    expect(scan.cvs).toEqual(new Map([['old', CAPTURE_VERSION], ['sa', CAPTURE_VERSION], ['sc~ag', CAPTURE_VERSION], ['sa~ag', CAPTURE_VERSION], ['sb', CAPTURE_VERSION], ['sc', CAPTURE_VERSION], ['sd', CAPTURE_VERSION], ['sx', '1'], ['v2', '2']]));
+    // `sx` and `v2` lines follow `sd` lines in the log (`sx` first) and `old` highest rev is the last line; the subagents `sc~ag` and `sa~ag` are ahead of `sb` and `sc`, in the order their lines start.
+    expect(runOrder(scan)).toEqual(['sx', 'v2', 'sa', 'sc~ag', 'sa~ag', 'sb', 'sc', 'sd', 'old']);
   });
 
-  it('keeps a session with an unreadable cv ahead of readable ones, whatever its place in the log', async () => {
+  it('keeps a session with an unreadable cv ahead of readable ones whose lines start earlier', async () => {
     const staged = stagedLog();
     const scan = await scanLog(paths(staged.storeDir).observations, undefined, true);
-    scan.cvs.set('sd', '1');
-    expect(runOrder(scan).slice(0, 2)).toEqual(['sd', 'v2']);
+    expect(scan.cvs.get('sx')).toBe('1');
+    expect(runOrder(scan).indexOf('sx')).toBeLessThan(runOrder(scan).indexOf('sa'));
   });
 
   it('orders nothing for a scan made without spans', async () => {
