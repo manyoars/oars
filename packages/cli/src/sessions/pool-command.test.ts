@@ -4692,10 +4692,19 @@ describe('oars pool outbox, deposit, and deposit --send-all memory (t1199)', () 
   it.skipIf(MEMORY_CHILD === undefined || MEMORY_MODE !== 'refreshbound')('child of the memory proof refreshbound', async () => {
     const scene = setting();
     cpSync(join(String(process.env.OARS_MEMORY_SEED), 'store'), scene.staged.storeDir, { recursive: true });
+    setFlagsFromString('--expose-gc');
+    const collect: unknown = runInNewContext('gc');
+    const readings: string[] = [];
+    // The live heap once collected after each step of `refresh`, the way `memory-refresh` reads it.
+    const sample = (step: string): void => {
+      if (typeof collect === 'function') Reflect.apply(collect, undefined, []);
+      readings.push(`${step}: ${String(Math.round(process.memoryUsage().heapUsed / 1048576))} MB`);
+    };
     let told: { runs: number; reversions: number } | undefined;
-    await refresh({ ...scene.staged.runtime, refreshed: (folded) => { told = folded; } }, [], '2026-01-01T00:00:00.000Z');
+    await refresh({ ...scene.staged.runtime, refreshed: (folded) => { told = folded; }, refreshStep: sample }, [], '2026-01-01T00:00:00.000Z');
+    sample('done');
     expect(told).toBeDefined();
-    finish(told?.runs ?? 0, `${String(told?.runs)} runs, reversion index ${String(told?.reversions)} entries`);
+    finish(told?.runs ?? 0, `${String(told?.runs)} runs, reversion index ${String(told?.reversions)} entries; heap after ${readings.join(', ')}`);
   }, 540_000);
 
   it.skipIf(MEMORY_CHILD === undefined || MEMORY_MODE !== 'refresh')('child of the memory proof refresh', async () => {

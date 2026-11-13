@@ -242,10 +242,6 @@ export const actionOfShape = (tool: string, harnesses: readonly string[]): Canon
  */
 export const PUSH_MIN_LIFT = 2;
 
-/**
- * The reads whose shape fails at `lift` times the share of its whole action or more, where the action's share counts every call of every shape of it, those under the floors too.
- * A tool no table lists is the action `other` (or `mcp.call`), so it is held to that action's share like any other and can enter the index and fire. Compared in integers, so a tie is exact.
- */
 /** The per-action call tally `aboveBaseRate` compares against, as a fold: each `add` tallies one run of sessions, so a refresh never holds every call. */
 export const actionFold = (): { add: (store: Store) => void; finish: () => Map<CanonicalAction, { calls: number; failed: number }> } => {
   const byAction = new Map<CanonicalAction, { calls: number; failed: number }>();
@@ -274,6 +270,10 @@ export const aboveActionRate = (byAction: ReadonlyMap<CanonicalAction, { calls: 
     return base !== undefined && read.calls !== null && read.count * base.calls >= lift * base.failed * read.calls;
   });
 
+/**
+ * The reads whose shape fails at `lift` times the share of its whole action or more, where the action's share counts every call of every shape of it, those under the floors too.
+ * A tool no table lists is the action `other` (or `mcp.call`), so it is held to that action's share like any other and can enter the index and fire. Compared in integers, so a tie is exact.
+ */
 export const aboveBaseRate = (store: Store, reads: readonly RecallRead[], lift: number = PUSH_MIN_LIFT): RecallRead[] => {
   const fold = actionFold();
   fold.add(store);

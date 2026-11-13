@@ -90,6 +90,8 @@ export interface SessionsRuntime {
   refreshRun?: number;
   /** A seam for tests and proofs: told once what a refresh folded, after its last run. `reversions` is the size of the matching's index. */
   refreshed?: (folded: { runs: number; reversions: number }) => void;
+  /** A seam for proofs: told as `refresh` passes the end of its scan, its last run, the pool fold's finish, and the pool step, so a proof can read the heap at each. */
+  refreshStep?: (step: 'scan' | 'runs' | 'finish' | 'pool') => void;
 }
 
 interface FileState {
@@ -658,6 +660,7 @@ const finished = (pool: PoolFold | Error, runtime: SessionsRuntime, runs: number
   if (pool instanceof Error) return pool;
   try {
     const folds = pool.finish();
+    runtime.refreshStep?.('finish');
     runtime.refreshed?.({ runs, reversions: reversionEntries(pool.index) });
     return folds;
   } catch (error) {
@@ -678,6 +681,7 @@ const reversionEntries = (index: ReversionIndex): number => {
 const foldRuns = async (runtime: SessionsRuntime): Promise<Folded> => {
   const scan = await scanLog(paths(runtime.storeDir).observations, undefined, true);
   await runtime.afterScan?.();
+  runtime.refreshStep?.('scan');
   const order = runOrder(scan);
   const size = Math.max(1, Math.floor(runtime.refreshRun ?? REFRESH_RUN));
   // Loaded here, not at the top: the pool imports every read family, and a lookup hook never reaches this step. A failure to load or fold costs the index its fit reads, as a failure of `currentPool` does.
@@ -731,6 +735,7 @@ const foldRuns = async (runtime: SessionsRuntime): Promise<Folded> => {
       }
     }
   }
+  runtime.refreshStep?.('runs');
   const byPlace = <T extends { at: number }>(list: T[]): T[] => list.sort((a, b) => a.at - b.at);
   const store: Store = {
     sessions: byPlace(sessions).map(({ record }) => record),
@@ -786,6 +791,7 @@ export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly 
       return undefined;
     },
   );
+  runtime.refreshStep?.('pool');
   const reads = current?.reads ?? [];
   const indexStarted = performance.now();
   try {

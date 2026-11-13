@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { emptyUsage } from './extract.js';
 import { error as errorRow, frame as frameOf, prompt as promptRow, session as sessionRow, tool as toolRow } from './pool-fixture.js';
-import { appendRecall, makeRecall, readRecalls, type Recall } from './recall-object.js';
+import { appendRecall, makeRecall, readRecalls, recallsPath, type Recall } from './recall-object.js';
 import { deriveConsequences, recallGraphOf } from './recall-consequence.js';
 import { shellReader } from './projection.js';
 import { vocabulary } from './vocab-load.js';
@@ -113,11 +113,13 @@ const PINNED_FILES = {
 /** What a run of `refresh` told its seam: how many runs it folded, and the size of the reversion index. Absent when the seam was never called. */
 type Folded = { runs: number; reversions: number };
 
-const refreshed = async (runSize?: number, replaceLog = false): Promise<{ reverted: Array<string | null>; ns: Array<number | null>; files: { [path: string]: string }; folded: Folded | undefined }> => {
+const refreshed = async (runSize?: number, replaceLog = false): Promise<{ reverted: Array<string | null>; ns: Array<number | null>; files: { [path: string]: string }; folded: Folded | undefined; swapped: boolean; steps: string[] }> => {
   const staged = stagedLog();
   await appendRecall(staged.storeDir, recallAt('sa', stamp(1, 0, 500)));
   await appendRecall(staged.storeDir, recallAt('sa', stamp(1, 2, 500)));
   let folded: Folded | undefined;
+  let swapped = false;
+  const steps: string[] = [];
   // A compaction renames a rewritten log into place between the scan and the runs. The rewrite keeps every live row behind a long line a reader skips, so each span the scan recorded points elsewhere.
   const afterScan = replaceLog
     ? (): Promise<void> => {
@@ -125,10 +127,11 @@ const refreshed = async (runSize?: number, replaceLog = false): Promise<{ revert
         const swap = `${log}.swap`;
         writeFileSync(swap, `${['x'.repeat(200_000), ...readFileSync(log, 'utf8').split('\n').filter((line) => line !== '')].join('\n')}\n`);
         renameSync(swap, log);
+        swapped = true;
         return Promise.resolve();
       }
     : undefined;
-  await refresh({ ...staged.runtime, ...(runSize === undefined ? {} : { refreshRun: runSize }), ...(afterScan === undefined ? {} : { afterScan }), refreshed: (told) => { folded = told; } }, [], PIN_AT);
+  await refresh({ ...staged.runtime, ...(runSize === undefined ? {} : { refreshRun: runSize }), ...(afterScan === undefined ? {} : { afterScan }), refreshed: (told) => { folded = told; }, refreshStep: (step) => { steps.push(step); } }, [], PIN_AT);
   const lines = readFileSync(poolFiles(staged.storeDir).consequences, 'utf8').split('\n').filter((line) => line !== '');
   const reverted = lines.map((line): string | null => {
     const parsed: unknown = JSON.parse(line);
@@ -139,7 +142,7 @@ const refreshed = async (runSize?: number, replaceLog = false): Promise<{ revert
     const n: unknown = Reflect.get(Object(JSON.parse(line)), 'n');
     return typeof n === 'number' ? n : null;
   });
-  return { reverted, ns, files: hashes(staged.storeDir), folded };
+  return { reverted, ns, files: hashes(staged.storeDir), folded, swapped, steps };
 };
 
 describe('refresh writes the same bytes for a store with cross-session joins (refreshpin)', () => {
@@ -160,8 +163,9 @@ describe('refresh folds the store a run of sessions at a time and writes the pin
     [10_000, 1],
     [undefined, 1],
   ])('run size %s folds %s run(s) and matches the pin, cross-session reversions included', async (size, runs) => {
-    const { reverted, ns, files, folded } = await refreshed(size);
+    const { reverted, ns, files, folded, steps } = await refreshed(size);
     expect(folded?.runs).toBe(runs);
+    expect(steps).toEqual(['scan', 'runs', 'finish', 'pool']);
     // The index holds the fixture's main-line commits, revert words, restores, and edits, whatever the run size.
     expect(folded?.reversions).toBeGreaterThan(0);
     expect(reverted).toEqual(['later-session', 'later-session']);
@@ -170,7 +174,8 @@ describe('refresh folds the store a run of sessions at a time and writes the pin
   });
 
   it.each([1, 10_000])('keeps the pinned bytes when the log is replaced after the scan, at run size %i (refreshcompact)', async (size) => {
-    const { reverted, ns, files } = await refreshed(size, true);
+    const { reverted, ns, files, swapped } = await refreshed(size, true);
+    expect(swapped).toBe(true);
     expect(reverted).toEqual(['later-session', 'later-session']);
     expect(ns).toEqual([1, 3]);
     expect(files).toEqual(PINNED_FILES);
@@ -179,6 +184,25 @@ describe('refresh folds the store a run of sessions at a time and writes the pin
   it('reports the same index size at every run size', async () => {
     const sizes = await Promise.all([1, 2, 10_000].map(async (size) => (await refreshed(size)).folded?.reversions));
     expect(new Set(sizes).size).toBe(1);
+  });
+});
+
+describe('refresh when the pool fold fails (refreshpoolfailed)', () => {
+  it('writes one POOL_FAILED line, an index with no fit reads, and derived.json', async () => {
+    const staged = stagedLog();
+    // A recall record that cannot be read (a directory where the file belongs) stops the pool fold, not the refresh.
+    mkdirSync(recallsPath(staged.storeDir));
+    const written = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    try {
+      await refresh(staged.runtime, [], PIN_AT);
+      const failed = written.mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith('oars: the read pool was not built'));
+      expect(failed).toHaveLength(1);
+    } finally {
+      written.mockRestore();
+    }
+    const index: unknown = JSON.parse(readFileSync(join(staged.storeDir, 'hook-index.json'), 'utf8'));
+    expect(Reflect.get(Object(index), 'fit')).toEqual({});
+    expect(readFileSync(join(staged.storeDir, 'derived.json'), 'utf8')).not.toBe('');
   });
 });
 

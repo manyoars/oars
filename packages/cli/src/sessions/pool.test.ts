@@ -176,6 +176,19 @@ describe('currentPool', () => {
   });
 });
 
+describe('currentPool given a failed fold', () => {
+  it('writes one stderr line for the fold error and answers undefined without reading the store', async () => {
+    const written = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    try {
+      expect(await currentPool(storeDir(), one, new Error('x'))).toBeUndefined();
+      expect(written).toHaveBeenCalledTimes(1);
+      expect(String(written.mock.calls[0]?.[0])).toBe('oars: the read pool was not built, and answers keep their stand-ins: x\n');
+    } finally {
+      written.mockRestore();
+    }
+  });
+});
+
 describe('servedPool', () => {
   const later = store({ ...one, tools: [...one.tools, tool('s1', 2, 'Read')] });
   const reads = (dir: string): string[] => readdirSync(join(dir, 'reads')).sort();
