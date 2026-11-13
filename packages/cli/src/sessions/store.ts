@@ -38,6 +38,7 @@ import { asRepoSize, type RepoSize } from './public-vocabulary.js';
 import { makeRepoIdentity, makeRepoRoot } from './repo-root.js';
 import { mkdirOwnerOnly } from './owner-only.js';
 import type { PoolFold, PoolFolds } from './pool-fold.js';
+import type { ReadFolds } from './read-folds.js';
 import type { ReversionIndex } from './reversion.js';
 import { makeRedactor, type Redactor } from './redact.js';
 import {
@@ -650,6 +651,8 @@ interface Folded {
   /** The pool step's input, or why it could not be folded: the pool is optional to a deposit, so a failure there is reported by `currentPool`, not thrown. */
   folds: PoolFolds | Error;
   derive: DeriveFold;
+  /** The index's own read fold: added on every run, so a pool that fails costs the index nothing. */
+  reads: ReadFolds;
   counts: { prompts: number; tools: number };
 }
 
@@ -701,6 +704,8 @@ const foldRuns = async (runtime: SessionsRuntime): Promise<Folded> => {
     pool = asError(error);
   }
   const derive = deriveFold();
+  // Also loaded here: it reaches the read families a lookup hook must not load.
+  const readFolding = (await import('./read-folds.js')).readFold();
   const counts = { prompts: 0, tools: 0 };
   const start = (session: string): number => scan.spans?.get(session)?.[0] ?? Number.MAX_SAFE_INTEGER;
   const sessions: { at: number; record: SessionObservation }[] = [];
@@ -726,6 +731,7 @@ const foldRuns = async (runtime: SessionsRuntime): Promise<Folded> => {
     };
     runs += 1;
     derive.add(run.prompts);
+    readFolding.add(run);
     counts.prompts += run.prompts.length;
     counts.tools += run.tools.length;
     for (const record of run.sessions) sessions.push({ at: start(record.session), record });
@@ -752,7 +758,7 @@ const foldRuns = async (runtime: SessionsRuntime): Promise<Folded> => {
     tools: [],
     newerCaptures: scan.newerCaptures,
   };
-  return { store, folds: finished(pool, runtime, runs), derive, counts };
+  return { store, folds: finished(pool, runtime, runs), derive, reads: readFolding.finish(), counts };
 };
 
 /**
@@ -766,9 +772,10 @@ export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly 
   let key = digest([EXTRACTOR_VERSION]);
   let store: Store;
   let folds: PoolFolds | Error;
+  let readFolds: ReadFolds;
   try {
     const folded = await foldRuns(runtime);
-    ({ store, folds } = folded);
+    ({ store, folds, reads: readFolds } = folded);
     // The key is the account's capture high-water mark (the highest rev of each session) and `ev` (spec 4.2); the index shares it.
     const highWater = [...store.sessions, ...store.subagents].map((session) => `${session.session}:${String(session.rev)}`).sort();
     key = digest([EXTRACTOR_VERSION, ...highWater]);
@@ -804,7 +811,7 @@ export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly 
   try {
     // The next-node reads for each harness and version, derived over the same pool; a deposit that has no pool leaves the index without them.
     const next = current === undefined ? undefined : (await import('./recall-frames.js')).nextByFrame(current.pool, store);
-    const index = buildIndex(store, redactDomains, at, reads, next, folds instanceof Error ? undefined : folds.reads);
+    const index = buildIndex(store, redactDomains, at, reads, next, readFolds);
     await requireHold(held);
     await writeAtomic(indexPath(runtime.storeDir), JSON.stringify(index));
     if (trace !== undefined) {

@@ -9,12 +9,15 @@ import { deriveConsequences, recallGraphOf } from './recall-consequence.js';
 import { shellReader } from './projection.js';
 import { vocabulary } from './vocab-load.js';
 import { CAPTURE_VERSION, type ToolObservation } from './schema.js';
+import type * as PoolFoldNamespace from './pool-fold.js';
 import { poolFiles } from './pool.js';
 import { cellsFold, cellsOf, projectedStore } from './cell-increments.js';
 import { fitFold, fitReads } from './recall-reads.js';
 import { finishReversions, foldReversions, newReversionIndex, reversionsOf } from './reversion.js';
 import { derive, deriveFold, loadStore, paths, refresh, runOrder, scanLog } from './store.js';
 import { cleanup, stage } from './test-support.js';
+
+type PoolFoldModule = typeof PoolFoldNamespace;
 
 afterEach(cleanup);
 
@@ -195,17 +198,20 @@ describe('refresh when the pool fold fails (refreshpoolfailed)', () => {
       captured(String(id)), userPrompt(String(id), 0, stamp(45), 1),
       ...Array.from({ length: 10 }, (_, n) => call(String(id), n, String(name), 45, 0, { keys: ['query'], status: n < Number(failing) ? 'error' : 'ok' })),
     ]);
-    appendFileSync(paths(staged.storeDir).observations, `${more.map((row) => JSON.stringify(row)).join(String.fromCharCode(10))}${String.fromCharCode(10)}`);
+    appendFileSync(paths(staged.storeDir).observations, `${more.map((row) => JSON.stringify(row)).join('\n')}\n`);
     return staged;
   };
   const fitOf = (storeDir: string): unknown => {
     const index: unknown = JSON.parse(readFileSync(join(storeDir, 'hook-index.json'), 'utf8'));
     return Reflect.get(Object(index), 'fit');
   };
+  /** The fit reads without their read IDs, the one thing a failed pool costs them (the IDs come from the pool's reads). */
+  const shapesOf = (storeDir: string): string => JSON.stringify(fitOf(storeDir), (key, value: unknown) => (key === 'readId' ? undefined : value));
 
-  it('writes one POOL_FAILED line, an index with no fit reads, and derived.json', async () => {
+  it('writes one POOL_FAILED line, the same fit reads as a normal refresh, and derived.json', async () => {
     const normal = withFit();
     await refresh(normal.runtime, [], PIN_AT);
+    const normalFit = shapesOf(normal.storeDir);
     expect(fitOf(normal.storeDir)).not.toEqual({});
     const staged = withFit();
     // A recall record that cannot be read (a directory where the file belongs) stops the pool fold, not the refresh.
@@ -218,7 +224,46 @@ describe('refresh when the pool fold fails (refreshpoolfailed)', () => {
     } finally {
       written.mockRestore();
     }
-    expect(fitOf(staged.storeDir)).toEqual({});
+    // A pool that fails costs the index its read IDs only: the fit shapes are folded apart from the pool, as main computes it from the whole store.
+    expect(shapesOf(staged.storeDir)).toEqual(normalFit);
+    expect(readFileSync(join(staged.storeDir, 'derived.json'), 'utf8')).not.toBe('');
+  });
+
+  it('stops the pool after an add that throws on the second run, with one POOL_FAILED line, the fit reads, and derived.json', async () => {
+    const normal = withFit();
+    await refresh(normal.runtime, [], PIN_AT);
+    const staged = withFit();
+    vi.resetModules();
+    vi.doMock('./pool-fold.js', async (original) => {
+      const actual = await original<PoolFoldModule>();
+      return {
+        ...actual,
+        poolFold: (recalls: Parameters<typeof actual.poolFold>[0]) => {
+          const real = actual.poolFold(recalls);
+          let added = 0;
+          return {
+            ...real,
+            add: (run: Parameters<typeof real.add>[0]) => {
+              added += 1;
+              if (added === 2) throw new Error('add');
+              real.add(run);
+            },
+          };
+        },
+      };
+    });
+    const written = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    try {
+      const fresh = await import('./store.js');
+      await fresh.refresh({ ...staged.runtime, refreshRun: 1 }, [], PIN_AT);
+      expect(written.mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith('oars: the read pool was not built'))).toHaveLength(1);
+    } finally {
+      written.mockRestore();
+      vi.doUnmock('./pool-fold.js');
+      vi.resetModules();
+    }
+    expect(fitOf(staged.storeDir)).not.toEqual({});
+    expect(shapesOf(staged.storeDir)).toEqual(shapesOf(normal.storeDir));
     expect(readFileSync(join(staged.storeDir, 'derived.json'), 'utf8')).not.toBe('');
   });
 

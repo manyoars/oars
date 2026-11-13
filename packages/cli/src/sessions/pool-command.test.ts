@@ -4626,7 +4626,7 @@ describe('oars pool deposit --send-all (t1199)', () => {
 const MEMORY_CHILD = process.env.OARS_SEND_ALL_MEMORY_CHILD;
 const MEMORY_MODE = process.env.OARS_MEMORY_MODE;
 const BUILD_HEAP_MB = Number(process.env.OARS_MEMORY_BUILD_HEAP ?? 160);
-const REFRESH_HEAP_MB = Number(process.env.OARS_MEMORY_REFRESH_HEAP ?? 160);
+const REFRESH_HEAP_MB = Number(process.env.OARS_MEMORY_REFRESH_HEAP ?? 256);
 const memoryChild = (mode: 'outbox' | 'build' | 'refresh' | 'refreshbound', heapMb: number, seed = ''): { limitMb: number; peakRssMb: number; count: number; seconds: number; steps: string } => {
   const report = join(tmpdir(), `oars-memory-${mode}-${String(process.pid)}.json`);
   const started = Date.now();
