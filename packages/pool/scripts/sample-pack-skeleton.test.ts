@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { LITERAL, PRIVATE, PUBLIC_PROGRAMS } from '../../cli/src/sessions/public-vocabulary.js';
 import { ERROR_CODES, PROMPT_CLASSES, PROMPT_INTERVENTIONS } from '../../cli/src/sessions/schema.js';
 import { deposit, type SessionsRuntime } from '../../cli/src/sessions/store.js';
+import { namesFilterOf } from './skeleton-only.js';
 import { buildPack, HARNESS_TERMS, main, NO_OBJECTIONS, PERMITTED_USES, type ManifestRow, type PackOptions } from './sample-pack.js';
 import { cardOf, writeCard } from './skeleton-card.js';
 import { validate } from './validate-pack.js';
@@ -20,13 +21,13 @@ afterEach(() => {
 const S = (n: number): string => `${String(n).repeat(8)}-1111-4111-8111-111111111111`;
 const line = (value: object): string => JSON.stringify(value);
 const uuidOf = (session: string, kind: 'a' | 'b', n: number): string => `${session.slice(0, 8)}-${kind}${String(n).padStart(3, '0')}-4222-8222-222222222222`;
-const session = (id: string, cwd: string, day: string, prompt: string, tools = false): string[] => [
+const session = (id: string, cwd: string, day: string, prompt: string, tools: false | string = false): string[] => [
   line({ type: 'user', uuid: uuidOf(id, 'b', 1), parentUuid: null, isSidechain: false, timestamp: `${day}T10:00:01.000Z`, version: '2.1.300', sessionId: id, cwd, message: { role: 'user', content: prompt } }),
   line({ type: 'assistant', uuid: uuidOf(id, 'a', 1), parentUuid: uuidOf(id, 'b', 1), isSidechain: false, timestamp: `${day}T10:00:02.000Z`, version: '2.1.300', sessionId: id, requestId: `req_011C${id.slice(0, 8)}x1`, message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'done' }], usage: { input_tokens: 10, output_tokens: 20 } } }),
-  ...(tools ? toolTurns(id, cwd, day) : []),
+  ...(tools === false ? [] : toolTurns(id, cwd, day, tools)),
 ];
 // A Bash call with free text in its message, an Edit of a file path, and a failed tool result: the keys the skeleton carries for tools.
-const toolTurns = (id: string, cwd: string, day: string): string[] => {
+const toolTurns = (id: string, cwd: string, day: string, edited = 'parse.ts'): string[] => {
   const use = (n: number, name: string, input: object): string =>
     line({ type: 'assistant', uuid: uuidOf(id, 'a', n), parentUuid: uuidOf(id, 'a', n - 1), isSidechain: false, timestamp: `${day}T10:00:0${String(n + 1)}.000Z`, version: '2.1.300', sessionId: id, cwd, requestId: `req_011C${id.slice(0, 8)}x${String(n)}`, message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: `toolu_${id.slice(0, 8)}${String(n)}`, name, input }], usage: { input_tokens: 10, output_tokens: 20 } } });
   const result = (n: number, text: string, failed: boolean): string =>
@@ -34,7 +35,7 @@ const toolTurns = (id: string, cwd: string, day: string): string[] => {
   return [
     use(2, 'Bash', { command: 'git commit -m "rename the secret helper in parse.ts"', run_in_background: true }),
     result(2, 'fatal: not a git repository', true),
-    use(3, 'Edit', { file_path: join(cwd, 'src', 'parse.ts'), old_string: 'a', new_string: 'b' }),
+    use(3, 'Edit', { file_path: join(cwd, 'src', edited), old_string: 'a', new_string: 'b' }),
     result(3, 'ok', false),
   ];
 };
@@ -133,7 +134,7 @@ interface Built {
 }
 
 /** Sessions 1 to 3 are old (June, September, and the 13th of October); 4 is two days old; 5 holds the term. */
-const fixture = async (): Promise<Built> => {
+const fixture = async (edited = 'parse.ts'): Promise<Built> => {
   const root = mkdtempSync(join(tmpdir(), 'oars-skeleton-only-'));
   dirs.push(root);
   const projectsRoot = join(root, 'projects');
@@ -143,7 +144,7 @@ const fixture = async (): Promise<Built> => {
   const days = ['2026-06-01', '2026-09-01', '2026-10-13', '2026-11-11', '2026-06-02'];
   days.forEach((day, n) => {
     mkdirSync(join(projectsRoot, '-work-oars'), { recursive: true });
-    writeFileSync(join(projectsRoot, '-work-oars', `${S(n + 1)}.jsonl`), `${session(S(n + 1), cwd, day, n === 4 ? `please fix ${TERM}` : `task number ${String(n)}`, n === 0).join('\n')}\n`);
+    writeFileSync(join(projectsRoot, '-work-oars', `${S(n + 1)}.jsonl`), `${session(S(n + 1), cwd, day, n === 4 ? `please fix ${TERM}` : `task number ${String(n)}`, n === 0 ? edited : false).join('\n')}\n`);
   });
   const terms = join(root, 'terms.txt');
   writeFileSync(terms, `${TERM}\n`);
@@ -383,5 +384,81 @@ describe('the command', () => {
     const later = Date.parse('2027-03-01T00:00:00Z');
     expect(await main([...common, '--out', join(f.root, 'cli4'), '--skeleton-only'], { runtime: f.runtime, print: () => undefined, now: () => later })).toBe(0);
     expect(JSON.parse(readFileSync(join(f.root, 'cli4', 'pack.json'), 'utf8'))).toMatchObject({ built: new Date(later).toISOString() });
+  });
+});
+
+// t1275: --exclude-names leaves out a session whose skeleton would publish a listed word inside a kept name.
+// The integration word is one the machine's temp path cannot hold (the build prints that path); the boundary cases use `matt`, the brief's own examples.
+const WORD = 'quillon';
+const skeletonWith = (...names: { kind: string; name: string }[]): string => JSON.stringify({ transcripts: [{ tools: [{ names }] }] });
+
+describe('the names filter', () => {
+  const filterFor = async (text: string | undefined): Promise<((skeleton: string) => boolean) | undefined> => {
+    if (text === undefined) return namesFilterOf(join(mkdtempSync(join(tmpdir(), 'oars-names-')), 'absent.txt'));
+    const dir = mkdtempSync(join(tmpdir(), 'oars-names-'));
+    dirs.push(dir);
+    writeFileSync(join(dir, 'words.txt'), text);
+    return namesFilterOf(join(dir, 'words.txt'));
+  };
+
+  it('matches a whole word at a boundary, in any case, and not inside a longer word', async () => {
+    const hit = await filterFor(`# the owner\n\nmatt\n`);
+    expect(hit?.(skeletonWith({ kind: 'file', name: 'matt-notes.md' }))).toBe(true);
+    expect(hit?.(skeletonWith({ kind: 'file', name: 'Matt_plan.txt' }))).toBe(true);
+    expect(hit?.(skeletonWith({ kind: 'file', name: 'MATT' }))).toBe(true);
+    expect(hit?.(skeletonWith({ kind: 'file', name: 'matter.ts' }))).toBe(false);
+    expect(hit?.(skeletonWith({ kind: 'file', name: 'format.ts' }))).toBe(false);
+    expect(hit?.(skeletonWith({ kind: 'file', name: 'matt2.ts' }))).toBe(false);
+  });
+
+  it('reads every kind of name, and lets a comment line list nothing', async () => {
+    const hit = await filterFor(`#${WORD}\n${WORD}\n`);
+    for (const kind of ['file', 'dir', 'branch', 'other']) expect(hit?.(skeletonWith({ kind: 'file', name: 'a.ts' }, { kind, name: `${WORD}-x` })), kind).toBe(true);
+    expect((await filterFor(`#${WORD}\n`))?.(skeletonWith({ kind: 'file', name: `${WORD}.md` }))).toBe(false);
+  });
+
+  it('leaves no session out for an empty or absent file, and no filter without the option', async () => {
+    const named = skeletonWith({ kind: 'file', name: `${WORD}.md` });
+    expect((await filterFor(''))?.(named)).toBe(false);
+    expect((await filterFor('\n\n'))?.(named)).toBe(false);
+    expect((await filterFor(undefined))?.(named)).toBe(false);
+    expect(await namesFilterOf(undefined)).toBeUndefined();
+  });
+
+  it('leaves the matching session out of a built pack, counts it apart, and prints no word anywhere', async () => {
+    const f = await fixture(`${WORD}-notes.md`);
+    const words = join(f.root, 'names.txt');
+    writeFileSync(words, `${WORD}\n`);
+    const opts = f.options({ skeletonOnly: true, excludeNames: words });
+    const counts = await buildPack(f.runtime, opts);
+    expect(counts.namesFiltered).toBe(1);
+    expect(counts.emitted).toBe(2);
+    expect(counts.scanned).toBe(counts.emitted + counts.excluded.term + (counts.fresh ?? 0) + (counts.namesFiltered ?? 0));
+    expect(manifest(opts.out).length).toBe(2);
+    expect(indexRows(f.owners).filter((row) => row.pack === opts.out).map((row) => row.session)).not.toContain(S(1));
+    expect(names(opts.out).filter((file) => file.startsWith('sessions/')).length).toBe(2);
+    // The whole output folder, and the captured output of the command, never hold the word.
+    for (const file of filesUnder(opts.out)) expect(readFileSync(file, 'utf8').toLowerCase(), file).not.toContain(WORD);
+    const printed: string[] = [];
+    const again = f.options({ skeletonOnly: true, excludeNames: words });
+    const code = await main(['--terms', again.terms, '--owners', again.owners, '--index-key', again.indexKey, '--buyer-key', 'open', '--out', again.out, '--min-turns', '1', '--skeleton-only', '--exclude-names', words], { runtime: f.runtime, print: (text: string) => printed.push(text), now: () => NOW });
+    expect(code).toBe(0);
+    expect(printed.join('\n')).toContain('Left out for a listed name in a kept name: 1.');
+    expect(printed.join('\n').toLowerCase()).not.toContain(WORD);
+    const pack = JSON.parse(readFileSync(join(again.out, 'pack.json'), 'utf8')) as { counts: { namesFiltered: number } };
+    expect(pack.counts.namesFiltered).toBe(1);
+    expect((await validate(again.out))?.violations).toEqual([]);
+  });
+
+  it('keeps the session when the file lists no word, and adds no count without the option', async () => {
+    const f = await fixture(`${WORD}-notes.md`);
+    expect(await buildPack(f.runtime, f.options({ skeletonOnly: true }))).toMatchObject({ emitted: 3 });
+    expect((await buildPack(f.runtime, f.options({ skeletonOnly: true }))).namesFiltered).toBeUndefined();
+    expect(await buildPack(f.runtime, f.options({ skeletonOnly: true, excludeNames: join(f.root, 'absent.txt') }))).toMatchObject({ emitted: 3, namesFiltered: 0 });
+  });
+
+  it('is refused with no value', async () => {
+    const printed: string[] = [];
+    expect(await main(['--exclude-names'], { runtime: (await fixture()).runtime, print: (text: string) => printed.push(text), now: () => NOW })).toBe(2);
   });
 });

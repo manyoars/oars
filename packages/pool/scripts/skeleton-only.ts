@@ -48,3 +48,35 @@ export const excludedSessionsOf = async (manifest: string, indexFile: string, Pa
   if (found.size < matchIds.size) throw new PackError(`${String(matchIds.size - found.size)} of the ${String(matchIds.size)} rows in the excluded manifest are not in index.jsonl beside the owners file. Build from the folder that holds that lot's index.`);
   return sessions;
 };
+
+const escaped = (word: string): string => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * The words file of `--exclude-names`: one word per line, blank and `#` lines skipped. A file that is absent or empty lists nothing, and no session is left out for it.
+ * The words stay in this closure: nothing here, and no caller, prints one.
+ */
+export const namesFilterOf = async (file: string | undefined): Promise<((skeleton: string) => boolean) | undefined> => {
+  if (file === undefined) return undefined;
+  const text = await readFile(file, 'utf8').catch((error: unknown) => {
+    if (isAbsent(error)) return '';
+    throw error;
+  });
+  const words = text.split(/\r?\n/).map((row) => row.trim()).filter((row) => row !== '' && !row.startsWith('#'));
+  if (words.length === 0) return () => false;
+  // A word boundary is any character that is not a letter or a digit, so `matt-notes.md` and `Matt_plan.txt` hold `matt`, and `matter.ts` and `format.ts` do not.
+  const listed = new RegExp(`(?<![\\p{L}\\p{N}])(?:${words.map(escaped).join('|')})(?![\\p{L}\\p{N}])`, 'iu');
+  return (skeleton) => {
+    const transcripts = fieldOf(JSON.parse(skeleton), 'transcripts');
+    if (!Array.isArray(transcripts)) return false;
+    return transcripts.some((transcript: unknown) => {
+      const tools = fieldOf(transcript, 'tools');
+      return Array.isArray(tools) && tools.some((tool: unknown) => {
+        const names = fieldOf(tool, 'names');
+        return Array.isArray(names) && names.some((entry: unknown) => {
+          const name = fieldOf(entry, 'name');
+          return typeof name === 'string' && listed.test(name);
+        });
+      });
+    });
+  };
+};
