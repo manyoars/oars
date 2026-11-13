@@ -567,7 +567,7 @@ describe('the stored link of a Raw Copy to its deposit (t1252)', () => {
     const bytes = transcript(2000, 24);
     const hash = await hex(bytes);
     await sendParts(hash, bytes, token);
-    for (const link of ['nope', `${DEPOSIT_ID}`, `${DEPOSIT_ID}.-1`, `${DEPOSIT_ID}.x`, `XYZ.1`]) {
+    for (const link of ['nope', DEPOSIT_ID, `${DEPOSIT_ID}.-1`, `${DEPOSIT_ID}.x`, `XYZ.1`]) {
       const refused = await complete(hash, 1, bytes.length, token, linked(link));
       expect(refused.status, link).toBe(422);
       expect(fieldOf(refused.json, 'error')).toBe('link_invalid');
