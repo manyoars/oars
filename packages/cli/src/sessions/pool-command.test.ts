@@ -1,5 +1,7 @@
+import { spawnSync } from 'node:child_process';
 import { createHash, createHmac, webcrypto } from 'node:crypto';
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { getHeapStatistics } from 'node:v8';
+import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -12,7 +14,7 @@ import { defaultConfigDir } from '../credentials.js';
 import { ExitCode } from '../errors.js';
 import { readSpool } from '../telemetry/spool.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
-import { busyLine, DEFAULT_POOL_URL, networkSender, OFFER_AFTER, OFFER_BEFORE, poolCoverage, poolDeposit, poolRaw, poolRemove, poolServer, RAW_PHRASE, RAW_PROMPT, waitingLine, type Reply, type Sender } from './pool-command.js';
+import { busyLine, DEFAULT_POOL_URL, networkSender, OFFER_AFTER, OFFER_BEFORE, poolCoverage, poolDeposit, poolOutbox, poolRaw, poolRemove, poolServer, RAW_PHRASE, RAW_PROMPT, sleeps, waitingLine, type Reply, type Sender } from './pool-command.js';
 import { localNames } from './redact.js';
 import { batchHash, canonicalBytes, currentStamp, FIELD_ROWS, fieldsOf, heldAcross, outboxFolder, readPulled, readRemoved, writeBatch, writePulled } from './pool-outbox.js';
 import { heldRaw, writeRaw } from './pool-raw.js';
@@ -29,12 +31,13 @@ import { appendRecall, makeRecall, type Recall } from './recall-object.js';
 import { contentHash } from './read.js';
 import { deposit, loadStore, localSalt, paths, updatePoolChoices, type PoolChoices } from './store.js';
 import { spoolEvents } from '../telemetry/read-events.js';
-import { addProject, cleanup, NOW, payloadOf, rolloutLine, settledClock, stage, stageCodex, TEST_FLOOR, type Staged } from './test-support.js';
+import { addProject, cleanup, FIXTURES, NOW, payloadOf, rolloutLine, settledClock, stage, stageCodex, TEST_FLOOR, type Staged } from './test-support.js';
 
 // The session gates must stop a session before the projection runs; the real projection is wrapped so a test can see whether it was called.
 vi.mock('./pool-wire.js', async (importOriginal) => {
   const actual = await importOriginal<typeof PoolWire>();
-  return { ...actual, skeletonOf: vi.fn(actual.skeletonOf) };
+  // The memory proof's child must not keep a record of every call's arguments (a spy holds the whole session and batch it saw, about 33 KB a session), so there it runs the real function.
+  return process.env.OARS_SEND_ALL_MEMORY_CHILD === undefined ? { ...actual, skeletonOf: vi.fn(actual.skeletonOf) } : actual;
 });
 
 useServer();
@@ -4368,4 +4371,291 @@ describe('oars pool login pins keys by key id (S17)', () => {
     }
     expect(existsSync(join(scene.staged.storeDir, 'pool-accounts.json'))).toBe(false);
   });
+});
+
+describe('oars pool deposit --send-all (t1199)', () => {
+  const key = (n: number): string => n.toString(16).padStart(16, '0');
+  /** Writes synthetic batches straight into the current stamp's folder (no store to rebuild), returning their hashes in name order. */
+  const plant = (scene: Scene, from: number, to: number): string[] => {
+    const folder = join(outboxFolder(scene.staged.storeDir, POOL), currentStamp());
+    mkdirSync(folder, { recursive: true });
+    const hashes: string[] = [];
+    for (let n = from; n <= to; n += 1) {
+      const bytes = canonicalBytes({ n, note: 'zorblax-session-content' });
+      const hash = batchHash(bytes);
+      writeFileSync(join(folder, `${key(n)}.${hash}.jsonl`), bytes);
+      hashes.push(hash);
+    }
+    return hashes;
+  };
+  const clean = async (): Promise<Scene> => {
+    const scene = setting();
+    await signIn(scene);
+    return scene;
+  };
+  const show = async (scene: Scene): Promise<void> => {
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    scene.h.out.length = 0;
+  };
+  const sentLogOf = (scene: Scene): string[] => {
+    const file = join(outboxFolder(scene.staged.storeDir, POOL), 'sent.log');
+    return existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter((line) => line !== '').map((line) => line.split(' ')[0] ?? '') : [];
+  };
+  type Options = { server: string; sendAll: true; via?: Sender; pause?: (ms: number) => Promise<void> };
+  const all = (via: Sender | undefined, extra: { pause?: (ms: number) => Promise<void> } = {}): Options => ({ server: POOL, sendAll: true, ...(via === undefined ? {} : { via }), ...extra });
+
+  it('sends each batch that was shown and is unchanged, in order, and skips and counts one never shown and one changed', async () => {
+    const scene = await clean();
+    const [a, c, d] = [...plant(scene, 1, 1), ...plant(scene, 3, 4)];
+    await show(scene);
+    const [b] = plant(scene, 2, 2);
+    const file = join(outboxFolder(scene.staged.storeDir, POOL), currentStamp(), `${key(3)}.${c ?? ''}.jsonl`);
+    writeFileSync(file, `${readFileSync(file, 'utf8').trimEnd()} \n`);
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201) });
+    const outcome = await poolDeposit(scene.h.deps, all(pool.via));
+    const posts = pool.requests.filter((request) => request.method === 'POST').map((request) => batchHash(request.body ?? ''));
+    expect(posts).toEqual([a, d]);
+    expect(posts).not.toContain(b);
+    expect(outcome.document).toMatchObject({ ok: true, sent: 2, skipped: 2, alreadySent: 0, failed: 0, left: 0 });
+    expect(outcome.text).toBe('Done: 2 sent, 2 skipped, 0 already sent, 0 failed, 0 left.');
+    expect(sentLogOf(scene)).toEqual([a, d]);
+  });
+
+  it('keeps the covenant rule of --send: never accepted refuses with nothing sent off a terminal, accepted runs off one', async () => {
+    const scene = await clean();
+    const [first] = plant(scene, 1, 2);
+    await show(scene);
+    const pool = wire({ 'GET /v1/covenant': UNACCEPTED, 'POST /v1/deposits': answer(201) });
+    const refused = poolDeposit(scene.h.deps, all(pool.via));
+    await expect(refused).rejects.toMatchObject({ exitCode: ExitCode.AUTH, problem: { code: 'covenant_not_accepted' } });
+    // It names the one-batch command that shows the screen: the first batch that was shown and is not sent.
+    await expect(refused).rejects.toThrow(`oars pool deposit --send ${first ?? ''}`);
+    expect(pool.requests.map((request) => request.method)).toEqual(['GET']);
+    expect(sentLogOf(scene)).toEqual([]);
+    const open = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201) });
+    expect((await poolDeposit(scene.h.deps, all(open.via))).document).toMatchObject({ sent: 2 });
+  });
+
+  it('refuses a never-accepted --send-all on a terminal too (sendalltty): no screen, no acceptance, only the GET', async () => {
+    const scene = await clean();
+    const [first] = plant(scene, 1, 2);
+    await show(scene);
+    atTerminal(scene, SCREEN.phrase, 'no');
+    const pool = wire({ 'GET /v1/covenant': UNACCEPTED, 'POST /v1/covenant/accept': answer(200), 'POST /v1/deposits': answer(201) });
+    const refused = poolDeposit(scene.h.deps, all(pool.via));
+    await expect(refused).rejects.toMatchObject({ exitCode: ExitCode.AUTH, problem: { code: 'covenant_not_accepted' } });
+    await expect(refused).rejects.toThrow(`oars pool deposit --send ${first ?? ''}`);
+    expect(pool.requests.map((request) => request.method)).toEqual(['GET']);
+    expect(sentLogOf(scene)).toEqual([]);
+  });
+
+  it('names the first shown batch that is unchanged, not one that changed since it was shown', async () => {
+    const scene = await clean();
+    const [first, second] = plant(scene, 1, 2);
+    await show(scene);
+    const file = join(outboxFolder(scene.staged.storeDir, POOL), currentStamp(), `${key(1)}.${first ?? ''}.jsonl`);
+    writeFileSync(file, `${readFileSync(file, 'utf8').trimEnd()} 
+`);
+    const pool = wire({ 'GET /v1/covenant': UNACCEPTED, 'POST /v1/deposits': answer(201) });
+    const refused = poolDeposit(scene.h.deps, all(pool.via));
+    await expect(refused).rejects.toThrow(`oars pool deposit --send ${second ?? ''}`);
+    await expect(refused).rejects.not.toThrow(`oars pool deposit --send ${first ?? ''}`);
+  });
+
+  it('is an error together with --send, and the flags that belong to --send belong to it too', async () => {
+    const scene = await clean();
+    const pool = wire({});
+    await expect(poolDeposit(scene.h.deps, { server: POOL, send: 'a'.repeat(64), sendAll: true, via: pool.via })).rejects.toMatchObject({ exitCode: ExitCode.USAGE });
+    expect(pool.requests).toEqual([]);
+    expect(await scene.cli('pool', 'deposit', '--server', POOL, '--send', 'a'.repeat(64), '--send-all')).toBe(ExitCode.USAGE);
+    await expect(poolDeposit(scene.h.deps, { server: POOL, acceptCovenant: 'v1' })).rejects.toThrow('belongs to --send');
+    await expect(poolDeposit(scene.h.deps, { server: POOL, inEuEeaUk: 'no' })).rejects.toThrow('belongs to --send');
+    // --send-all never accepts: a never-accepted account is refused, so both flags are usage errors that name the one-batch way to accept.
+    await expect(poolDeposit(scene.h.deps, { server: POOL, sendAll: true, acceptCovenant: 'v1', via: pool.via })).rejects.toThrow('oars pool deposit --send <hash>');
+    await expect(poolDeposit(scene.h.deps, { server: POOL, sendAll: true, inEuEeaUk: 'no', via: pool.via })).rejects.toThrow('oars pool deposit --send <hash>');
+    expect(pool.requests).toEqual([]);
+  });
+
+  it('stops at the failed batch with the counts and an error, and a second run sends only what is left, each of five once', async () => {
+    const scene = await clean();
+    const hashes = plant(scene, 1, 5);
+    await show(scene);
+    // Never shown, so a rerun would skip it too: it is not "left".
+    plant(scene, 6, 6);
+    let failing = hashes[2] ?? '';
+    const landed: string[] = [];
+    const via: Sender = (request) => {
+      if (request.method === 'GET') return Promise.resolve(OPEN_COVENANT);
+      const hash = batchHash(request.body ?? '');
+      if (hash === failing) return Promise.resolve(answer(400, { error: 'bad_batch', message: 'The pool refused this batch.' }));
+      landed.push(hash);
+      return Promise.resolve(answer(201));
+    };
+    await expect(poolDeposit(scene.h.deps, all(via))).rejects.toMatchObject({ problem: { status: 400 }, details: { tally: { sent: 2, skipped: 0, alreadySent: 0, failed: 1, left: 2 } } });
+    expect(scene.h.err.join('')).toContain('Stopped: 2 sent, 0 skipped, 0 already sent, 1 failed, 2 left.');
+    expect(landed).toEqual(hashes.slice(0, 2));
+    failing = '';
+    const outcome = await poolDeposit(scene.h.deps, all(via));
+    expect(outcome.document).toMatchObject({ sent: 3, alreadySent: 2, failed: 0, left: 0 });
+    expect(landed).toEqual(hashes);
+    expect(sentLogOf(scene)).toEqual([...hashes]);
+  });
+
+  it('does not count a pulled batch held back for want of exclusion terms as left, since a rerun skips it', async () => {
+    const scene = await clean();
+    const hashes = plant(scene, 1, 3);
+    await show(scene);
+    const outbox = outboxFolder(scene.staged.storeDir, POOL);
+    const held = (await heldAcross(outbox)).batches.find((batch) => batch.hash === hashes[2]);
+    await writePulled(outbox, { [held?.key ?? '']: currentStamp() });
+    scene.h.deps.env.OARS_EXCLUSION_TERMS = join(scene.staged.root, 'no-such-terms.txt');
+    const via: Sender = (request) => {
+      if (request.method === 'GET') return Promise.resolve(OPEN_COVENANT);
+      return Promise.resolve(batchHash(request.body ?? '') === hashes[0] ? answer(400, { error: 'bad_batch', message: 'The pool refused this batch.' }) : answer(201));
+    };
+    await expect(poolDeposit(scene.h.deps, all(via))).rejects.toMatchObject({ details: { tally: { failed: 1, left: 1 } } });
+  });
+
+  it('sends through the default network sender against the local test server, with no injected via', async () => {
+    const scene = await clean();
+    const hashes = plant(scene, 1, 2);
+    await show(scene);
+    on(scene, 'get', '/v1/covenant', () => HttpResponse.json({ version: 'v1', accepted: true }));
+    on(scene, 'post', '/v1/deposits', () => HttpResponse.json({ ok: true }, { status: 201 }));
+    const outcome = await poolDeposit(scene.h.deps, { server: POOL, sendAll: true });
+    expect(outcome.document).toMatchObject({ sent: 2, failed: 0 });
+    expect(scene.seen.filter(({ body }) => body !== '')).toHaveLength(2);
+    expect(sentLogOf(scene)).toEqual(hashes);
+  });
+
+  it('ends a wait between tries when the signal aborts, and waits the whole time when it does not', async () => {
+    const stop = new AbortController();
+    await expect(sleeps(5, stop.signal)).resolves.toBeUndefined();
+    const waiting = sleeps(60_000, stop.signal);
+    stop.abort(new SendInterrupted('signal', 'Interrupted by SIGINT.', 'SIGINT'));
+    await expect(waiting).rejects.toBeInstanceOf(SendInterrupted);
+    await expect(sleeps(60_000, stop.signal)).rejects.toBeInstanceOf(SendInterrupted);
+  });
+
+  it('asks again only after a 429 or a 5xx, at most three tries, waiting the pool\'s retry-after or 1 then 2 seconds', async () => {
+    const scene = await clean();
+    plant(scene, 1, 1);
+    await show(scene);
+    const waits: number[] = [];
+    const pause = (ms: number): Promise<void> => {
+      waits.push(ms);
+      return Promise.resolve();
+    };
+    const slow: Reply = { status: 429, body: { error: 'slow_down', message: 'later' }, headers: new Headers({ 'retry-after': '7' }) };
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': [slow, answer(503, { error: 'down', message: 'down' }), answer(201)] });
+    expect((await poolDeposit(scene.h.deps, all(pool.via, { pause }))).document).toMatchObject({ sent: 1 });
+    expect(pool.requests.filter((request) => request.method === 'POST')).toHaveLength(3);
+    expect(waits).toEqual([7000, 2000]);
+    // Three tries in all, then the failure: the second wait doubles, and the batch stays unsent.
+    forgetSent(scene);
+    waits.length = 0;
+    const down = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(500, { error: 'boom', message: 'no' }) });
+    await expect(poolDeposit(scene.h.deps, all(down.via, { pause }))).rejects.toMatchObject({ problem: { status: 500 } });
+    expect(down.requests.filter((request) => request.method === 'POST')).toHaveLength(3);
+    expect(waits).toEqual([1000, 2000]);
+    // A 4xx is not asked again.
+    const refused = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(422, { error: 'no', message: 'no' }) });
+    await expect(poolDeposit(scene.h.deps, all(refused.via, { pause }))).rejects.toMatchObject({ problem: { status: 422 } });
+    expect(refused.requests.filter((request) => request.method === 'POST')).toHaveLength(1);
+  });
+
+  it('prints one progress line per 100 batches and a final count line, and no session content', async () => {
+    const scene = await clean();
+    plant(scene, 1, 205);
+    await show(scene);
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201) });
+    const outcome = await poolDeposit(scene.h.deps, all(pool.via));
+    const lines = scene.h.err.join('').split('\n').filter((line) => /batches handled/.test(line));
+    expect(lines).toEqual(['100 batches handled: 100 sent, 0 skipped, 0 already sent, 0 failed, 0 left.', '200 batches handled: 200 sent, 0 skipped, 0 already sent, 0 failed, 0 left.']);
+    expect(outcome.text).toBe('Done: 205 sent, 0 skipped, 0 already sent, 0 failed, 0 left.');
+    expect(scene.h.err.join('') + scene.h.out.join('') + outcome.text).not.toContain('zorblax-session-content');
+  });
+});
+
+// The memory proof (t1199 item 4). Opt-in, because it writes hundreds of megabytes and spawns a second vitest over this file; it is not in `npm run test`, `just check`, or CI. Run it with
+//   OARS_MEMORY_PROOF=1 npm test -w packages/cli -- src/sessions/pool-command.test.ts -t memory- --silent=false
+// Two children, each under a V8 heap too small for the history held whole:
+//   outbox: 7,000 batches of 64 KB (448 MB as strings) are shown by `pool outbox` and sent by `--send-all` under --max-old-space-size=192 (V8 adds 192 MB, so the limit is about 384 MB, under the 448 MB the whole outbox held as strings takes);
+//   build: 7,000 captured sessions are built by `pool deposit` under --max-old-space-size=BUILD_HEAP_MB (the old build loaded the whole store and failed there).
+const MEMORY_CHILD = process.env.OARS_SEND_ALL_MEMORY_CHILD;
+const MEMORY_MODE = process.env.OARS_MEMORY_MODE;
+const BUILD_HEAP_MB = Number(process.env.OARS_MEMORY_BUILD_HEAP ?? 160);
+const memoryChild = (mode: 'outbox' | 'build', heapMb: number, seed = ''): { limitMb: number; peakRssMb: number; count: number; seconds: number } => {
+  const report = join(tmpdir(), `oars-memory-${mode}-${String(process.pid)}.json`);
+  const started = Date.now();
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('../../../../node_modules/vitest/vitest.mjs', import.meta.url)), 'run', fileURLToPath(import.meta.url), '-t', `child of the memory proof ${mode}`], {
+    env: { ...process.env, OARS_SEND_ALL_MEMORY_CHILD: report, OARS_MEMORY_MODE: mode, OARS_MEMORY_SEED: seed, NODE_OPTIONS: `--max-old-space-size=${String(heapMb)}` },
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  expect(result.status, `${result.stdout}
+${result.stderr}`).toBe(0);
+  const parsed: unknown = JSON.parse(readFileSync(report, 'utf8'));
+  rmSync(report, { force: true });
+  return { limitMb: Number(at(parsed, 'limitMb')), peakRssMb: Number(at(parsed, 'peakRssMb')), count: Number(at(parsed, 'count')), seconds: Math.round((Date.now() - started) / 1000) };
+};
+const finish = (count: number): void => {
+  writeFileSync(MEMORY_CHILD ?? '', JSON.stringify({ limitMb: Math.round(getHeapStatistics().heap_size_limit / 1048576), peakRssMb: Math.round(process.resourceUsage().maxRSS / 1024), count }));
+};
+
+describe('oars pool outbox, deposit, and deposit --send-all memory (t1199)', () => {
+  it.runIf(process.env.OARS_MEMORY_PROOF === '1' && MEMORY_CHILD === undefined)('memory-outbox: show and send 7,000 batches of 64 KB in a 192 MB heap', () => {
+    const { limitMb, peakRssMb, count, seconds } = memoryChild('outbox', 192);
+    expect(limitMb).toBeLessThan(448);
+    expect(count).toBe(7000);
+    console.info(`memory proof outbox: peak RSS ${String(peakRssMb)} MB under a ${String(limitMb)} MB heap limit in ${String(seconds)} s`);
+  }, 540_000);
+
+  it.runIf(process.env.OARS_MEMORY_PROOF === '1' && MEMORY_CHILD === undefined)('memory-build: build 7,000 sessions with pool deposit in a small heap', async () => {
+    const scene = setting();
+    const template = readFileSync(join(FIXTURES, 'proj', 'errors-a.jsonl'), 'utf8');
+    const first = Date.parse('2026-05-28T20:26:41.000Z');
+    // One session an hour, so a delta window holds a bounded few hundred of them, not the history.
+    for (let n = 1; n <= 7000; n += 1) {
+      const shifted = Date.parse('2025-01-01T00:00:00.000Z') + n * 3_600_000 - first;
+      writeFileSync(join(scene.staged.projectsRoot, 'proj', `m${String(n)}.jsonl`), template.replaceAll('errors-a', `m${String(n)}`).replace(/"timestamp": "([^"]+)"/g, (_all, ts: string) => `"timestamp": "${new Date(Date.parse(ts) + shifted).toISOString()}"`));
+    }
+    await capture(scene);
+    const { limitMb, peakRssMb, count, seconds } = memoryChild('build', BUILD_HEAP_MB, scene.staged.root);
+    expect(count).toBeGreaterThanOrEqual(7000);
+    console.info(`memory proof build: peak RSS ${String(peakRssMb)} MB under a ${String(limitMb)} MB heap limit in ${String(seconds)} s`);
+  }, 540_000);
+
+  it.skipIf(MEMORY_CHILD === undefined || MEMORY_MODE !== 'outbox')('child of the memory proof outbox', async () => {
+    const scene = setting();
+    await signIn(scene);
+    const folder = join(outboxFolder(scene.staged.storeDir, POOL), currentStamp());
+    mkdirSync(folder, { recursive: true });
+    for (let n = 1; n <= 7000; n += 1) {
+      const bytes = canonicalBytes({ n, pad: 'x'.repeat(64 * 1024) });
+      writeFileSync(join(folder, `${n.toString(16).padStart(16, '0')}.${batchHash(bytes)}.jsonl`), bytes);
+    }
+    let chunks = 0;
+    await poolOutbox(scene.h.deps, { server: POOL, print: () => { chunks += 1; } });
+    expect(chunks).toBeGreaterThan(7000);
+    let landed = 0;
+    const via: Sender = (request) => {
+      if (request.method === 'POST') landed += 1;
+      return Promise.resolve(request.method === 'GET' ? OPEN_COVENANT : answer(201));
+    };
+    const outcome = await poolDeposit(scene.h.deps, { server: POOL, sendAll: true, via });
+    expect(outcome.document).toMatchObject({ sent: 7000, failed: 0 });
+    finish(landed);
+  }, 540_000);
+
+  it.skipIf(MEMORY_CHILD === undefined || MEMORY_MODE !== 'build')('child of the memory proof build', async () => {
+    const scene = setting();
+    await signIn(scene);
+    // The store is captured by the parent in a default heap: the capture's own derive pass (`refresh`, store.ts) reads the whole store and is not what is proved here.
+    cpSync(join(String(process.env.OARS_MEMORY_SEED), 'store'), scene.staged.storeDir, { recursive: true });
+    cpSync(join(String(process.env.OARS_MEMORY_SEED), 'projects'), scene.staged.projectsRoot, { recursive: true });
+    const outcome = await poolDeposit(scene.h.deps, { server: POOL });
+    expect(Number(at(outcome.document, 'batched'))).toBeGreaterThanOrEqual(7000);
+    finish(Number(at(outcome.document, 'batched')));
+  }, 540_000);
 });

@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { compactLog, deposit, depositSession, derive, loadStore, paths, readCalls, readRedactDomains, readSkeletons, slugOf, withLock } from './store.js';
+import { compactLog, deposit, scanLog, depositSession, derive, loadStore, namesAny, paths, readCalls, readRedactDomains, readSkeletons, slugOf, withLock } from './store.js';
 import { CAPTURE_VERSION, EXTRACTOR_VERSION } from './schema.js';
 import { addProject, cleanup, NOW, stage } from './test-support.js';
 
@@ -94,6 +94,46 @@ describe('deposit', () => {
     expect(first.observations).toBe(4 + 7 + 18 + 6);
     expect(second).toMatchObject({ sessions: 0, unchanged: 4, observations: 0 });
     expect(statSync(paths(staged.storeDir).observations).size).toBe(size);
+  });
+
+  it('reads only the sessions it is asked for, and the session records alone when it is asked for no content', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options(['proj']));
+    const whole = await loadStore(staged.storeDir);
+    const [named] = whole.sessions;
+    if (named === undefined) throw new Error('no session');
+    const one = await loadStore(staged.storeDir, undefined, { only: new Set([named.session]) });
+    expect(one.sessions.map((session) => session.session)).toEqual([named.session]);
+    expect(one.prompts.every((prompt) => prompt.session === named.session)).toBe(true);
+    expect(one.prompts.length).toBe(whole.prompts.filter((prompt) => prompt.session === named.session).length);
+    const heads = await loadStore(staged.storeDir, undefined, { sessionsOnly: true });
+    expect(heads.sessions).toHaveLength(whole.sessions.length);
+    expect(heads.prompts).toEqual([]);
+    expect(heads.tools).toEqual([]);
+    expect(heads.errors).toEqual([]);
+  });
+
+  it('keeps a line whose session id JSON escaped (jsonescapedid), and drops one that names no wanted session', () => {
+    const odd = 'a"b\\c';
+    const line = JSON.stringify({ kind: 'session', session: odd, rev: 1 });
+    expect(line).toContain(String.raw`"session":"a\"b\\c"`);
+    expect(namesAny(line, new Set([odd]))).toBe(true);
+    expect(namesAny(line, new Set(['other']))).toBe(true);
+    expect(namesAny(JSON.stringify({ kind: 'session', session: 'plain', rev: 1 }), new Set(['other']))).toBe(false);
+    expect(namesAny(JSON.stringify({ kind: 'session', session: 'plain', rev: 1 }), new Set(['plain']))).toBe(true);
+  });
+
+  it('takes the revs of a scan it is given (revscan) and does not scan the log again', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options(['proj']));
+    const whole = await loadStore(staged.storeDir);
+    const { latest } = await scanLog(paths(staged.storeDir).observations);
+    const same = await loadStore(staged.storeDir, undefined, { latest });
+    expect(same.sessions).toEqual(whole.sessions);
+    expect(same.tools).toEqual(whole.tools);
+    // A scan that knows no session keeps no row: proof the log is not scanned again to find the revs.
+    const none = await loadStore(staged.storeDir, undefined, { latest: new Map() });
+    expect(none.sessions).toEqual([]);
   });
 
   it('re-deposits a changed file under a higher rev and a reader keeps only the latest', async () => {
