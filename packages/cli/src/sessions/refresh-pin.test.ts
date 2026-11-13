@@ -40,7 +40,7 @@ const captured = (id: string, over: Partial<ReturnType<typeof sessionRow>> = {})
 
 /**
  * Every row of the log, in log order. `sa` holds the two recalled prompts: P1 (index 0) commits sha abc1234 and P2 (index 1) edits `src/y.ts`, uncommitted. `sc` later runs `git revert abc1234` and `sd`
- * `git restore src/y.ts`, all in one repository, each stamped later. Also: a subagent captured before its parent, errors with tied `next` tools, fractional `wallSec`, a version 2 session whose lines follow
+ * `git restore src/y.ts`, all in one repository, each stamped later. Also: two subagents captured before their parents (one of `sa`, after it), errors with tied `next` tools, fractional `wallSec`, a version 2 session whose lines follow
  * the version 3 sessions', and a superseded copy of a session.
  */
 const rows = (): unknown[] => [
@@ -57,6 +57,9 @@ const rows = (): unknown[] => [
   captured('sc~ag', { parent: 'sc', spawnedBy: 'sc-1', agentType: 'general' }), userPrompt('sc~ag', 0, stamp(21), 1.5),
   call('sc~ag', 0, 'Bash', 21, 0, { status: 'error', side: true, parent: 'sc' }), errorLine('sc~ag', 0, 21, 0, 'npm ERR! missing script: test', 0),
   call('sc~ag', 1, 'Read', 21, 0, { side: true, parent: 'sc' }),
+  // A second subagent, of the earlier session `sa`, whose lines follow the first subagent's: the errors of two subagents append after every main session's.
+  captured('sa~ag', { parent: 'sa', spawnedBy: 'sa-1', agentType: 'general' }), userPrompt('sa~ag', 0, stamp(22), 0.75),
+  call('sa~ag', 0, 'Bash', 22, 0, { status: 'error', side: true, parent: 'sa' }), errorLine('sa~ag', 0, 22, 0, 'npm ERR! missing script: test', 0),
   captured('sb'), userPrompt('sb', 0, stamp(10), 2.5),
   call('sb', 0, 'Bash', 10, 0, { status: 'error' }), errorLine('sb', 0, 10, 0, 'npm ERR! missing script: test', 0),
   call('sb', 1, 'Edit', 10, 0, { target: 'src/w.ts' }), call('sb', 2, 'Read', 10, 0),
@@ -111,13 +114,13 @@ describe('refresh writes the same bytes for a store with cross-session joins (re
     const { reverted, files } = await refreshed();
     expect(reverted).toEqual(['later-session', 'later-session']);
     expect(files).toEqual({
-      'cells.jsonl': '4c0b771f366bd80264ea02b2508030e6c53853cda4814e65a228a95e845c7428',
+      'cells.jsonl': 'db6d8e03379b13bce7f9d75a10fa403561e38955e08dedd4f263ebd7acaf679b',
       'consequences.jsonl': 'f8b3180c8e3f07550ef8208813a524e975f2adbb09ef11dc82fce35324fcfc29',
-      'derived.json': '7ff2fff40d988705f9a3249920176ba805d78a3896654dca4c4cfa51d86f730a',
-      'hook-index.json': 'c12481574eeb02213d818fdec4d72a778fdc5059c047a2b88482ee745f7b0cd0',
+      'derived.json': 'd02e8b9169c0686fc867b9f9ae97838874b12222facf5c814b9fc60a44ac21e2',
+      'hook-index.json': '2bbcc6b1ebaf42350842663b7bda3ea128e0c3d2e84f14ba2fc10efc1bcef540',
       'load-status.jsonl': 'c99c8cf3f7fe884931b49275b8788cc953385334cf7d2f939b173a843a72f122',
       'motifs.jsonl': 'c26e98dec42688c8d6af7cc2f07c0db6aee2262c8ceab3d14eaadf382e299fec',
-      'reads/99960caed91573ea.jsonl': '6b97d91c45c5b29e07fba98d703caaae425938a752af6be63b363d6ebaae1ac2',
+      'reads/7794bee7303eaa65.jsonl': '296c2d1136d13e2728f8524b60fe2f9cb5d81270af598deba4d48ab2d7486e21',
     });
   });
 });
@@ -126,11 +129,11 @@ describe('the scan keeps what the run order needs (scanorder)', () => {
   it('holds each subagent parent and each session cv at its highest rev, and orders version 2 sessions ahead of the rest by first line', async () => {
     const staged = stagedLog();
     const scan = await scanLog(paths(staged.storeDir).observations, undefined, true);
-    expect(scan.parents).toEqual(new Map([['sc~ag', 'sc']]));
+    expect(scan.parents).toEqual(new Map([['sc~ag', 'sc'], ['sa~ag', 'sa']]));
     // `old` was captured at cv 4 and again at cv 35 at a higher rev; `v2` is version 2.
-    expect(scan.cvs).toEqual(new Map([['old', CAPTURE_VERSION], ['sa', CAPTURE_VERSION], ['sc~ag', CAPTURE_VERSION], ['sb', CAPTURE_VERSION], ['sc', CAPTURE_VERSION], ['sd', CAPTURE_VERSION], ['v2', '2']]));
-    // `v2` lines follow `sd` lines in the log, and `old` highest rev is the last line; the subagent `sc~ag` is ahead of `sb` and `sc`.
-    expect(runOrder(scan)).toEqual(['v2', 'sa', 'sc~ag', 'sb', 'sc', 'sd', 'old']);
+    expect(scan.cvs).toEqual(new Map([['old', CAPTURE_VERSION], ['sa', CAPTURE_VERSION], ['sc~ag', CAPTURE_VERSION], ['sa~ag', CAPTURE_VERSION], ['sb', CAPTURE_VERSION], ['sc', CAPTURE_VERSION], ['sd', CAPTURE_VERSION], ['v2', '2']]));
+    // `v2` lines follow `sd` lines in the log, and `old` highest rev is the last line; the subagents `sc~ag` and `sa~ag` are ahead of `sb` and `sc`, in the order their lines start.
+    expect(runOrder(scan)).toEqual(['v2', 'sa', 'sc~ag', 'sa~ag', 'sb', 'sc', 'sd', 'old']);
   });
 
   it('keeps a session with an unreadable cv ahead of readable ones, whatever its place in the log', async () => {
@@ -169,7 +172,7 @@ describe('each fold over runs equals the whole-store call (foldsplit)', () => {
     expect(prompts.finish(whole, PIN_AT)).toEqual(derive(whole, PIN_AT));
     const split = finishReversions(index);
     const together = reversionsOf(whole);
-    for (const key of ['sa', 'sb', 'sc', 'sd', 'v2']) for (const prompt of [0, 1]) expect(split(key, prompt)).toEqual(together(key, prompt));
+    for (const key of ['sa', 'sb', 'sc', 'sd', 'v2', 'sc~ag', 'sa~ag']) for (const prompt of [0, 1]) expect(split(key, prompt)).toEqual(together(key, prompt));
     // The pair on P1 and the pair on P2 are each found alone, across runs.
     expect([split('sa', 0), split('sa', 1)]).toEqual(['later-session', 'later-session']);
   });
