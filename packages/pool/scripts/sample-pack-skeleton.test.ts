@@ -1,0 +1,266 @@
+// The skeleton-only release (distribution page, M2, brief 1): fixture stores built in a temp folder, with an invented exclusion term.
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, relative, sep } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { deposit, type SessionsRuntime } from '../../cli/src/sessions/store.js';
+import { buildPack, HARNESS_TERMS, main, PERMITTED_USES, type ManifestRow, type PackOptions } from './sample-pack.js';
+import { cardOf, writeCard } from './skeleton-card.js';
+import { validate } from './validate-pack.js';
+
+const TERM = 'zorblax';
+const NOW = Date.parse('2026-11-13T00:00:00Z');
+const dirs: string[] = [];
+afterEach(() => {
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+const S = (n: number): string => `${String(n).repeat(8)}-1111-4111-8111-111111111111`;
+const line = (value: object): string => JSON.stringify(value);
+const uuidOf = (session: string, kind: 'a' | 'b', n: number): string => `${session.slice(0, 8)}-${kind}${String(n).padStart(3, '0')}-4222-8222-222222222222`;
+const session = (id: string, cwd: string, day: string, prompt: string): string[] => [
+  line({ type: 'user', uuid: uuidOf(id, 'b', 1), parentUuid: null, isSidechain: false, timestamp: `${day}T10:00:01.000Z`, version: '2.1.300', sessionId: id, cwd, message: { role: 'user', content: prompt } }),
+  line({ type: 'assistant', uuid: uuidOf(id, 'a', 1), parentUuid: uuidOf(id, 'b', 1), isSidechain: false, timestamp: `${day}T10:00:02.000Z`, version: '2.1.300', sessionId: id, requestId: `req_011C${id.slice(0, 8)}x1`, message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'done' }], usage: { input_tokens: 10, output_tokens: 20 } } }),
+];
+
+// The free-text audit: every string in the output is judged by its key. A key this list does not name fails, so a new field cannot carry text in unseen.
+const HEX64 = /^[0-9a-f]{64}$/;
+const HEX16 = /^[0-9a-f]{16}$/;
+const DATE = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z)?$/;
+const VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,40}$/;
+// A redacted name: one word, no whitespace, no path separator, short. `private` is a name too.
+const NAME = /^[^\s/\\]{1,64}$/;
+// A shell template: words that each are a name or a slot, short.
+const TEMPLATE = /^(?:[^\s]{1,40} ?){1,12}$/;
+const TERMS = Object.values(HARNESS_TERMS).flatMap((row) => row.terms);
+const oneOf = (...allowed: readonly string[]) => (value: string): boolean => allowed.includes(value);
+const RULES: { readonly [key: string]: (value: string) => boolean } = {
+  matchId: (v) => HEX64.test(v), id: (v) => HEX64.test(v), merkleRoot: (v) => HEX64.test(v), timingPrint: (v) => HEX64.test(v), repoKey: (v) => HEX16.test(v),
+  day: (v) => DATE.test(v), startedAt: (v) => DATE.test(v), endedAt: (v) => DATE.test(v),
+  harness: oneOf(...Object.keys(HARNESS_TERMS)), permittedUses: oneOf(...PERMITTED_USES), training: oneOf('not-offered', 'priced-add-on'), reasoning: oneOf('kept', 'stripped'),
+  harnessVersions: (v) => VERSION.test(v), harnessVersion: (v) => VERSION.test(v), vocabVersion: (v) => VERSION.test(v), redactionVersion: (v) => VERSION.test(v),
+  skeleton: oneOf('skeleton.json'), sourceLicense: (v) => /^[A-Za-z0-9.+-]{1,40}$/.test(v),
+  repoOwner: (v) => /^[^\n\\/]{1,64}$/.test(v) && !/[@:]/.test(v),
+  // The harness terms are the fixed text of the terms table, not session text.
+  name: (v) => TERMS.some((term) => term.name === v) || NAME.test(v), version: (v) => TERMS.some((term) => term.version === v),
+  model: (v) => NAME.test(v), platform: (v) => NAME.test(v), orgSize: (v) => NAME.test(v), team: (v) => NAME.test(v), repoVisibility: (v) => NAME.test(v),
+  cls: (v) => NAME.test(v), intervention: (v) => NAME.test(v), status: (v) => NAME.test(v), errorCode: (v) => NAME.test(v), targetClass: (v) => NAME.test(v),
+  argClass: (v) => NAME.test(v), changeKind: (v) => NAME.test(v), diffShape: (v) => NAME.test(v), keys: (v) => NAME.test(v), kind: (v) => NAME.test(v), value: (v) => NAME.test(v), format: (v) => NAME.test(v),
+  templates: (v) => TEMPLATE.test(v),
+};
+
+const audit = (value: unknown, where: string, key = ''): string[] => {
+  if (typeof value === 'string') {
+    const rule = RULES[key];
+    return rule?.(value) === true ? [] : [`${where}${key === '' ? '' : `.${key}`}`];
+  }
+  if (Array.isArray(value)) return value.flatMap((item) => audit(item, where, key));
+  if (typeof value === 'object' && value !== null) return Object.entries(value).flatMap(([name, item]) => audit(item, where, name));
+  return [];
+};
+
+interface Built {
+  root: string;
+  runtime: SessionsRuntime;
+  options: (extra?: Partial<PackOptions>) => PackOptions;
+  owners: string;
+}
+
+/** Sessions 1 to 3 are old (June, September, and the 13th of October); 4 is two days old; 5 holds the term. */
+const fixture = async (): Promise<Built> => {
+  const root = mkdtempSync(join(tmpdir(), 'oars-skeleton-only-'));
+  dirs.push(root);
+  const projectsRoot = join(root, 'projects');
+  const cwd = join(root, 'work', 'app');
+  mkdirSync(join(cwd, '.git'), { recursive: true });
+  writeFileSync(join(cwd, '.git', 'config'), `[remote "origin"]\n\turl = https://example.com/acme/app.git\n`);
+  const days = ['2026-06-01', '2026-09-01', '2026-10-13', '2026-11-11', '2026-06-02'];
+  days.forEach((day, n) => {
+    mkdirSync(join(projectsRoot, '-work-oars'), { recursive: true });
+    writeFileSync(join(projectsRoot, '-work-oars', `${S(n + 1)}.jsonl`), `${session(S(n + 1), cwd, day, n === 4 ? `please fix ${TERM}` : `task number ${String(n)}`).join('\n')}\n`);
+  });
+  const terms = join(root, 'terms.txt');
+  writeFileSync(terms, `${TERM}\n`);
+  const owners = join(root, 'owners.json');
+  writeFileSync(owners, JSON.stringify([{ folder: '*-oars*', owner: 'Many Oars Co.', license: 'Apache-2.0' }]));
+  const indexKey = join(root, 'index.key');
+  writeFileSync(indexKey, 'ab'.repeat(32));
+  const runtime: SessionsRuntime = { storeDir: join(root, 'store'), projectsRoot, sources: [], stdin: process.stdin, stdout: { write: () => true } };
+  await deposit(runtime, { allow: [], redactDomains: [], now: () => Date.parse('2026-11-12T00:00:00Z') });
+  let n = 0;
+  const options = (extra: Partial<PackOptions> = {}): PackOptions => ({ terms, owners, indexKey, buyerKey: 'open', out: join(root, `pack${String((n += 1))}`), size: 25, seed: '1', minTurns: 1, now: () => NOW, ...extra });
+  return { root, runtime, options, owners };
+};
+
+const isRow = (value: unknown): value is ManifestRow => typeof value === 'object' && value !== null && 'matchId' in value;
+const manifest = (out: string): ManifestRow[] =>
+  readFileSync(join(out, 'manifest.jsonl'), 'utf8').split('\n').filter((row) => row !== '').map((row): ManifestRow => {
+    const value: unknown = JSON.parse(row);
+    if (!isRow(value)) throw new Error('a manifest row with no matchId');
+    return value;
+  });
+const filesUnder = (dir: string): string[] => readdirSync(dir).flatMap((name) => (statSync(join(dir, name)).isDirectory() ? filesUnder(join(dir, name)) : [join(dir, name)]));
+const names = (out: string): string[] => filesUnder(out).map((file) => relative(out, file).split(sep).join('/'));
+const isIndexRow = (value: unknown): value is { pack: string; session: string; matchId: string } => typeof value === 'object' && value !== null && 'pack' in value && 'session' in value && 'matchId' in value;
+const indexRows = (owners: string): { pack: string; session: string; matchId: string }[] =>
+  readFileSync(join(owners, '..', 'index.jsonl'), 'utf8').split('\n').filter((row) => row !== '').map((row) => {
+    const value: unknown = JSON.parse(row);
+    if (!isIndexRow(value)) throw new Error('an index row with no session');
+    return value;
+  });
+
+describe('a skeleton-only build', () => {
+  it('writes rows, skeletons, the census, pack.json, and the card, and no transcript, and the validator passes', async () => {
+    const f = await fixture();
+    const opts = f.options({ skeletonOnly: true });
+    await buildPack(f.runtime, opts);
+    const rows = manifest(opts.out);
+    expect(rows.length).toBe(3);
+    expect(rows.every((row) => row.transcripts === 0 && row.skeleton === 'skeleton.json')).toBe(true);
+    const files = names(opts.out).sort();
+    expect(files.filter((file) => file.startsWith('sessions/'))).toEqual(rows.map((row) => `sessions/${row.matchId}/skeleton.json`).sort());
+    expect(files.filter((file) => !file.startsWith('sessions/'))).toEqual(['README.md', 'census.json', 'manifest.jsonl', 'pack.json']);
+    const result = await validate(opts.out);
+    expect(result?.violations).toEqual([]);
+    expect(result).toMatchObject({ rows: 3, records: 3, transcripts: 0 });
+  });
+
+  it('fails the validator on any other file in the folder', async () => {
+    const f = await fixture();
+    const opts = f.options({ skeletonOnly: true });
+    await buildPack(f.runtime, opts);
+    const [row] = manifest(opts.out);
+    const folder = join(opts.out, 'sessions', row?.matchId ?? '');
+    for (const stray of [join(folder, 'main.jsonl'), join(folder, 'notes.txt'), join(opts.out, 'notes.txt')]) {
+      writeFileSync(stray, '{}\n');
+      expect((await validate(opts.out))?.violations.length).toBeGreaterThan(0);
+      rmSync(stray);
+      expect((await validate(opts.out))?.violations).toEqual([]);
+    }
+  });
+
+  it('refuses a no-transcript row that names no skeleton', async () => {
+    const f = await fixture();
+    const opts = f.options({ skeletonOnly: true });
+    await buildPack(f.runtime, opts);
+    const rows = manifest(opts.out).map((row) => Object.fromEntries(Object.entries(row).filter(([name]) => name !== 'skeleton')));
+    writeFileSync(join(opts.out, 'manifest.jsonl'), rows.map((row) => `${JSON.stringify(row)}\n`).join(''));
+    expect((await validate(opts.out))?.violations.some((v) => v.field === 'skeleton')).toBe(true);
+  });
+
+  it('leaves out a session that holds an exclusion term, counted by reason', async () => {
+    const f = await fixture();
+    const opts = f.options({ skeletonOnly: true });
+    const counts = await buildPack(f.runtime, opts);
+    expect(counts.excluded.term).toBe(1);
+    expect(indexRows(f.owners).map((row) => row.session)).not.toContain(S(5));
+  });
+
+  it('keeps fresh sessions out with --older-than, 30 days by default in this mode', async () => {
+    const f = await fixture();
+    const byDefault = f.options({ skeletonOnly: true });
+    const counts = await buildPack(f.runtime, byDefault);
+    expect(counts).toMatchObject({ emitted: 3, fresh: 1 });
+    const wider = f.options({ skeletonOnly: true, olderThanDays: 60 });
+    expect(await buildPack(f.runtime, wider)).toMatchObject({ emitted: 2, fresh: 2 });
+    // The line is inclusive: a session that ended exactly N days ago is old enough.
+    const exact = f.options({ skeletonOnly: true, olderThanDays: 2, now: () => Date.parse('2026-11-13T10:00:02.000Z') });
+    expect(await buildPack(f.runtime, exact)).toMatchObject({ emitted: 4, fresh: 0 });
+    expect(JSON.parse(readFileSync(join(wider.out, 'pack.json'), 'utf8'))).toMatchObject({ skeletonOnly: true, olderThanDays: 60 });
+  });
+
+  it('leaves out every session an earlier lot holds, and stops when the lot is not in the index', async () => {
+    const f = await fixture();
+    const lot = f.options({ size: 2, seed: 'lot' });
+    await buildPack(f.runtime, lot);
+    const lotSessions = indexRows(f.owners).filter((row) => row.pack === lot.out).map((row) => row.session);
+    expect(lotSessions.length).toBe(2);
+    const open = f.options({ skeletonOnly: true, excludeManifest: join(lot.out, 'manifest.jsonl'), olderThanDays: 0 });
+    const counts = await buildPack(f.runtime, open);
+    const shared = indexRows(f.owners).filter((row) => row.pack === open.out && lotSessions.includes(row.session));
+    expect(shared).toEqual([]);
+    expect(counts.inExcludedLot).toBe(2);
+    expect(counts.emitted).toBe(2);
+    // The same lot by its folder.
+    const byFolder = f.options({ skeletonOnly: true, excludeManifest: lot.out, olderThanDays: 0 });
+    expect((await buildPack(f.runtime, byFolder)).inExcludedLot).toBe(2);
+    // A manifest whose match ids the index does not hold.
+    const foreign = join(f.root, 'foreign.jsonl');
+    writeFileSync(foreign, `${JSON.stringify({ matchId: 'f'.repeat(64) })}\n`);
+    await expect(buildPack(f.runtime, f.options({ skeletonOnly: true, excludeManifest: foreign }))).rejects.toThrow(/not in index\.jsonl/);
+    await expect(buildPack(f.runtime, f.options({ skeletonOnly: true, excludeManifest: join(f.root, 'absent.jsonl') }))).rejects.toThrow(/Cannot read the --exclude-manifest file/);
+  });
+
+  it('writes only strings from a closed list, a redacted name, or private', async () => {
+    const f = await fixture();
+    const opts = f.options({ skeletonOnly: true });
+    await buildPack(f.runtime, opts);
+    const documents = names(opts.out).filter((name) => name.endsWith('.json') && name !== 'pack.json').map((name): [string, unknown] => [name, JSON.parse(readFileSync(join(opts.out, name), 'utf8'))]);
+    documents.push(['manifest.jsonl', manifest(opts.out)]);
+    const bad = documents.flatMap(([name, document]) => audit(document, name.replace(/[0-9a-f]{64}/, '<id>')));
+    expect(bad).toEqual([]);
+    expect(documents.length).toBeGreaterThan(3);
+  });
+
+  it('the audit fails on free text, an unknown field, and a raw id', () => {
+    expect(audit({ model: 'please rename the helper in parse.ts' }, 'x')).toHaveLength(1);
+    expect(audit({ note: 'private' }, 'x')).toHaveLength(1);
+    expect(audit({ harness: 'someone-elses-harness' }, 'x')).toHaveLength(1);
+    expect(audit({ id: '11111111-1111-4111-8111-111111111111' }, 'x')).toHaveLength(1);
+    expect(audit({ day: 'last tuesday' }, 'x')).toHaveLength(1);
+    expect(audit({ model: 'private', templates: ['git commit -m <text>'], names: [{ name: 'parse.ts' }] }, 'x')).toEqual([]);
+  });
+});
+
+describe('the data card', () => {
+  it('is README.md, made from pack.json and census.json, and a number in it changes with the fixture', async () => {
+    const f = await fixture();
+    const opts = f.options({ skeletonOnly: true });
+    await buildPack(f.runtime, opts);
+    const card = readFileSync(join(opts.out, 'README.md'), 'utf8');
+    expect(card).toContain('3 coding-agent session skeletons');
+    expect(card).toContain('at least 30 days');
+    for (const fact of ['CC BY 4.0', 'agent-traces', 'validate-pack', 'https://manyoars.com/packs', 'transcripts: 0']) expect(card).toContain(fact);
+    expect(card).toMatchSnapshot();
+    const wider = f.options({ skeletonOnly: true, olderThanDays: 60 });
+    await buildPack(f.runtime, wider);
+    const next = readFileSync(join(wider.out, 'README.md'), 'utf8');
+    expect(next).toContain('2 coding-agent session skeletons');
+    expect(next).toContain('at least 60 days');
+    expect(next).not.toEqual(card);
+  });
+
+  it('refuses a census or pack whose numbers are not numbers', () => {
+    expect(() => cardOf({ olderThanDays: 30 }, { sessions: 'x' })).toThrow(/census sessions/);
+    expect(() => cardOf({}, { sessions: 1 })).toThrow(/olderThanDays/);
+    expect(() => cardOf({ olderThanDays: 1 }, { sessions: 1, harness: { a: 'x' } })).toThrow(/census turnBucket|census harness/);
+  });
+
+  it('writeCard reads the two files in a folder', async () => {
+    const f = await fixture();
+    mkdirSync(join(f.root, 'card'));
+    writeFileSync(join(f.root, 'card', 'pack.json'), JSON.stringify({ olderThanDays: 7, built: '2026-11-13T00:00:00Z' }));
+    writeFileSync(join(f.root, 'card', 'census.json'), JSON.stringify({ sessions: 9, harness: { 'claude-code': 9 }, harnessVersion: {}, model: {}, errorCode: {}, recovery: {}, intervention: {}, promptClass: {}, turnBucket: { '20': 9 } }));
+    await writeCard(join(f.root, 'card'));
+    const card = readFileSync(join(f.root, 'card', 'README.md'), 'utf8');
+    expect(card).toContain('9 coding-agent session skeletons');
+    expect(card).toContain('- `claude-code`: 9');
+    expect(card).toContain('(2026-11-13)');
+  });
+});
+
+describe('the command', () => {
+  it('takes --skeleton-only, --older-than, and --exclude-manifest, and refuses a bad age', async () => {
+    const f = await fixture();
+    const printed: string[] = [];
+    const common = ['--terms', join(f.root, 'terms.txt'), '--owners', f.owners, '--index-key', join(f.root, 'index.key'), '--buyer-key', 'open', '--min-turns', '1'];
+    expect(await main([...common, '--out', join(f.root, 'cli1'), '--skeleton-only', '--older-than', '-1'], { runtime: f.runtime, print: (t) => printed.push(t) })).toBe(2);
+    expect(printed.join('\n')).toContain('--older-than takes a number of days');
+    printed.length = 0;
+    expect(await main([...common, '--out', join(f.root, 'cli2'), '--skeleton-only'], { runtime: f.runtime, print: (t) => printed.push(t) })).toBe(0);
+    expect(printed.join('\n')).toContain('Left out as newer than the age limit');
+    printed.length = 0;
+    expect(await main([...common, '--out', join(f.root, 'cli3'), '--skeleton-only', '--exclude-manifest', join(f.root, 'cli2')], { runtime: f.runtime, print: (t) => printed.push(t) })).toBe(0);
+    expect(printed.join('\n')).toContain('held by the excluded lot: 3');
+  });
+});

@@ -103,7 +103,7 @@ const ROW_FIELDS: { readonly [K in keyof Required<DepositManifestRow>]: FieldSpe
   // Training has a field of its own, so a list of uses that names it would state the same right twice.
   permittedUses: required((value) => listOf(shaped(USE_NAME, 'not a use name'))(value) ?? (Array.isArray(value) && value.includes('training') ? 'training is stated in the training field' : undefined)),
   training: required(oneOf(TRAINING)),
-  transcripts: required((value) => count(value) ?? (value === 0 ? 'less than one' : undefined)),
+  transcripts: required(count),
   models: required((value) => (!isFields(value) ? 'not an object' : Object.values(value).every(isCount) ? undefined : 'a count is not a whole number')),
   turns: required(count),
   skeleton: optional(shaped(FILE_NAME, 'not a file name')),
@@ -316,7 +316,10 @@ const checkPack = async (folder: string): Promise<Result> => {
     const others = files.filter((file) => file !== skeleton).sort();
     const lines = others.filter((file) => file.endsWith('.jsonl'));
     for (const file of others) if (!file.endsWith('.jsonl')) found.push({ where: `${session}/${file}`, field: '(file)', rule: 'not a transcript file' });
-    if (!lines.includes(MAIN_FILE)) found.push({ where: `${session}/${MAIN_FILE}`, field: '(file)', rule: 'missing' });
+    // A skeleton-only release states `transcripts: 0`; such a row holds its record and nothing else.
+    const skeletonOnly = value.transcripts === 0;
+    if (!skeletonOnly && !lines.includes(MAIN_FILE)) found.push({ where: `${session}/${MAIN_FILE}`, field: '(file)', rule: 'missing' });
+    if (skeletonOnly && skeleton === undefined) found.push({ where, field: 'skeleton', rule: 'a row with no transcript names its record' });
     if (isCount(value.transcripts) && value.transcripts !== lines.length) found.push({ where, field: 'transcripts', rule: 'not the number of transcript files in the session folder' });
     for (const file of lines) found.push(...(await checkTranscript(join(folder, 'sessions', id, file), `${session}/${file}`)));
     transcripts += lines.length;
@@ -337,7 +340,7 @@ const checkPack = async (folder: string): Promise<Result> => {
     if (!isAbsent(error)) throw error;
   }
   // A file at the pack root other than the manifest and the build's own bookkeeping, or directly under sessions/, is in no row.
-  const BOOKKEEPING = new Set([MANIFEST_FILE, 'pack.json', 'census.json']);
+  const BOOKKEEPING = new Set([MANIFEST_FILE, 'pack.json', 'census.json', 'README.md']);
   const loose = async (path: string, skip: ReadonlySet<string>): Promise<string[]> => {
     try {
       return (await readdir(join(folder, path), { withFileTypes: true })).filter((entry) => entry.isFile() && !skip.has(entry.name)).map((entry) => (path === '' ? entry.name : `${path}/${entry.name}`)).sort();
