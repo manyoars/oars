@@ -1376,7 +1376,7 @@ const rememberCrew = async (deps: RunDeps, storeDir: string, server: string, tok
     credential.add(token);
     const reply = await ask(deps, step, server, '/v1/me', { token, show: credential });
     if (reply.status !== 200 || !isObject(reply.body)) return undefined;
-    const account = Reflect.get(reply.body, 'account');
+    const account: unknown = Reflect.get(reply.body, 'account');
     if (typeof account === 'string') await keepCrewNumber(storeDir, server, account, numberIn(reply.body, 'crewNumber'));
     return numberIn(reply.body, 'vouchesGiven');
   } catch {
