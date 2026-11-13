@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { deposit, type SessionsRuntime } from '../../cli/src/sessions/store.js';
-import { USAGE, deliver, main, recipientsOf, type Delivery } from './deliver.js';
+import { USAGE, accountRecipientsOf, deliver, main, recipientsOf, type Delivery } from './deliver.js';
 import { buildPack, keyIdOf } from './sample-pack.js';
 
 const dirs: string[] = [];
@@ -99,6 +99,13 @@ describe('deliver (plan S5, Art. 15(1)(c) and 19)', () => {
   it('refuses a pack built before an objection that arrived before the build but was recorded after it', async () => {
     const f = fixture();
     writeFileSync(join(f.root, 'objections.jsonl'), `${JSON.stringify({ name: 'Priya Raman', received: '2026-06-09T09:00:00.000Z', scope: 'sale' })}\n`);
+    await expect(deliver(args(f))).rejects.toThrow(/objections changed since the build: rebuild/);
+    expect(() => readFileSync(join(f.root, 'deliveries.jsonl'))).toThrow();
+  });
+
+  it('deliver refuses a pack built before an account line', async () => {
+    const f = fixture();
+    writeFileSync(join(f.root, 'objections.jsonl'), `${JSON.stringify({ account: 'acct_one', right: 'restriction', received: '2026-06-09T09:00:00.000Z', scope: 'sale' })}\n`);
     await expect(deliver(args(f))).rejects.toThrow(/objections changed since the build: rebuild/);
     expect(() => readFileSync(join(f.root, 'deliveries.jsonl'))).toThrow();
   });
@@ -304,6 +311,36 @@ describe('deliver recipients (Art. 15(1)(c) and 19)', () => {
     const printed: string[] = [];
     expect(await main(['recipients', S2, '--owners', f.owners], { print: (text) => printed.push(text) })).toBe(0);
     expect(printed.join('\n')).toContain(`Acme Evals Inc.\tmatch id ${M2}`);
+  });
+});
+
+describe('deliver recipients --account (Art. 15(1)(c))', () => {
+  const indexed = (f: Fixture, accounts: readonly [string | undefined, string | undefined]): void => {
+    writeFileSync(join(f.root, 'index.jsonl'), [[S1, M1, accounts[0]], [S2, M2, accounts[1]]].map(([session, matchId, account]) => `${JSON.stringify({ pack: f.pack, session, project: 'p', matchId, ...(account === undefined ? {} : { account }) })}\n`).join(''));
+  };
+
+  it('deliver recipients --account lists each recipient and match id', async () => {
+    const f = fixture();
+    indexed(f, ['acct_one', 'acct_two']);
+    await deliver(args(f));
+    await deliver(args(f, { recipient: 'Beta Labs Ltd' }));
+    const printed: string[] = [];
+    expect(await main(['recipients', '--account', 'acct_one', '--owners', f.owners], { print: (text) => printed.push(text) })).toBe(0);
+    const lines = printed.join('\n').split('\n');
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain(`Acme Evals Inc.\tmatch id ${M1}`);
+    expect(lines[1]).toContain(`Beta Labs Ltd\tmatch id ${M1}`);
+    expect(printed.join('\n')).not.toContain(M2);
+    expect((await accountRecipientsOf(f.owners, 'acct_one')).map((row) => row.session)).toEqual([S1, S1]);
+  });
+
+  it('says so when nothing was delivered for the account, and wants an id', async () => {
+    const f = fixture();
+    indexed(f, ['acct_one', undefined]);
+    const printed: string[] = [];
+    expect(await main(['recipients', '--account', 'acct_one', '--owners', f.owners], { print: (text) => printed.push(text) })).toBe(0);
+    expect(printed.join('\n')).toMatch(/No recipient holds a session of this account/);
+    expect(await main(['recipients', '--account', '', '--owners', f.owners], { print: (text) => printed.push(text) })).toBe(2);
   });
 });
 

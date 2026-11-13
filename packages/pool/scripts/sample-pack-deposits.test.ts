@@ -304,4 +304,26 @@ describe('sample-pack --deposits (docs/pool-deposit-title.md section 5, brief 2)
     expect(readFileSync(join(p.out, 'pack.json'), 'utf8')).not.toContain('"deposits"');
     expect(readFileSync(join(p.out, 'manifest.jsonl'), 'utf8')).not.toContain('acceptedAt');
   });
+
+  it('an account line leaves out every session of the account', async () => {
+    const p = pull([{ session: SID(1) }, { session: SID(2) }]);
+    writeFileSync(join(p.root, 'objections.jsonl'), `${line({ account: ACCT, right: 'objection', received: '2026-11-01T00:00:00.000Z', scope: 'sale' })}\n`);
+    const counts = await built(p);
+    expect(counts.emitted).toBe(0);
+    expect(counts.objectedAccount).toBe(2);
+    expect(counts.objected).toBe(0);
+    expect(counts.scanned).toBe(2);
+  });
+
+  it('an account line for another account leaves the sessions in, and an account line needs a right', async () => {
+    const p = pull([{ session: SID(1) }]);
+    writeFileSync(join(p.root, 'objections.jsonl'), `${line({ account: 'acct_other', right: 'erasure', received: '2026-11-01T00:00:00.000Z', scope: 'all' })}\n`);
+    const counts = await built(p);
+    expect(counts).toMatchObject({ emitted: 1, objectedAccount: 0 });
+    writeFileSync(join(p.root, 'objections.jsonl'), `${line({ account: ACCT, received: '2026-11-01T00:00:00.000Z', scope: 'sale' })}\n`);
+    rmSync(p.out, { recursive: true, force: true });
+    await expect(built(p)).rejects.toThrow(/needs right to be one of erasure, restriction, objection/);
+    writeFileSync(join(p.root, 'objections.jsonl'), `${line({ account: '', right: 'erasure', received: '2026-11-01T00:00:00.000Z', scope: 'sale' })}\n`);
+    await expect(built(p)).rejects.toThrow(/needs account to be an account id/);
+  });
 });
