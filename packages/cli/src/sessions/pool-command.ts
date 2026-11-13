@@ -16,6 +16,7 @@ import { discardStale, FIELD_ROWS, fieldsOf, heldAcross, lockedAcross, namesHeld
 import { deriveConsequences } from './recall-consequence.js';
 import { readRecalls } from './recall-object.js';
 import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, recommendationsOf, sessionsOf, skeletonOf, unpinnedKid, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
+import { keepCrewNumber } from './crew-mark.js';
 import { carriedDeltasByWindow, heldDeltas, keptDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { rawAllowed, rawStale, sendsOf } from './pool-choices.js';
@@ -1276,7 +1277,19 @@ export const poolFetch = async (deps: RunDeps, options: { server?: string | unde
 };
 
 const JOIN = 'pool-join';
+/** The join's invite step: `POST /v1/invites/redeem`. An account that joined on an invite already is a run repeated, which is not an error; any other refusal ends the run with the pool's own words. */
+const redeemInvite = async (deps: RunDeps, storeDir: string, server: string, code: string): Promise<object> => {
+  const { token } = await signedIn(deps, storeDir, server, JOIN);
+  const credential = new Masker();
+  credential.add(token);
+  const reply = await ask(deps, JOIN, server, '/v1/invites/redeem', { body: { code }, token, show: credential });
+  if (reply.status === 200) return { redeemed: true };
+  if (reply.status === 409 && isObject(reply.body) && textIn(reply.body, 'error') === 'already_vouched') return { skipped: true, reason: 'already_vouched' };
+  throw refusal(JOIN, reply);
+};
+
 const JOIN_AGAIN = 'Run oars pool join again to continue from here.';
+const INVITE_AGAIN = 'The invite code was not accepted, and running the same line again fails the same way. Run oars pool join again without --invite, or with a new code.';
 
 /**
  * `oars pool join`: the five commands of a first deposit in one run, each by the handler the command itself uses: `login`, `deposit`, `outbox --explain`, `deposit --send <hash>` for each batch not yet sent, then `fetch`. It asks and checks
@@ -1285,7 +1298,7 @@ const JOIN_AGAIN = 'Run oars pool join again to continue from here.';
  */
 export const poolJoin = async (
   deps: RunDeps,
-  options: { server?: string | undefined; provider?: string | undefined; verbose?: boolean; acceptCovenant?: string | undefined; inEuEeaUk?: string | undefined; harness?: string | undefined; harnessVersion: string; json?: boolean },
+  options: { server?: string | undefined; provider?: string | undefined; verbose?: boolean; acceptCovenant?: string | undefined; inEuEeaUk?: string | undefined; harness?: string | undefined; harnessVersion: string; invite?: string | undefined; json?: boolean },
 ): Promise<Outcome> => {
   const { storeDir } = runtimeOf(deps);
   const server = poolServer(deps.env, JOIN, options.server);
@@ -1304,6 +1317,7 @@ export const poolJoin = async (
     const sent = await sentLog(outbox);
     return (await heldAcross(outbox)).batches.flatMap(({ hash }) => (sent.has(hash) ? [] : [hash]));
   };
+  const state = { refused: false };
   try {
     const held = await heldSignIn(deps, storeDir, server, LOGIN);
     let login: object = { skipped: true, account: held?.account };
@@ -1312,6 +1326,16 @@ export const poolJoin = async (
       login = show(await poolLogin(deps, { server, provider: options.provider, verbose: options.verbose })).document;
     } else {
       say(`Already signed in to ${server} as ${held.account}.`);
+    }
+    let vouched: object = { skipped: true };
+    if (options.invite !== undefined) {
+      say('Using your invite code.');
+      try {
+        vouched = await redeemInvite(deps, storeDir, server, options.invite);
+      } catch (error) {
+        state.refused = true;
+        throw error;
+      }
     }
     let prepared: object = { skipped: true };
     if ((await unsent()).length > 0) {
@@ -1330,16 +1354,66 @@ export const poolJoin = async (
       say(`Sending ${plural(hashes.length, 'batch', 'batches')} to ${server}.`);
       for (const hash of hashes) sends.push(show(await poolDeposit(deps, { server, send: hash, acceptCovenant: options.acceptCovenant, inEuEeaUk: options.inEuEeaUk })).document);
     }
+    await rememberCrew(deps, storeDir, server, (await signedIn(deps, storeDir, server, JOIN)).token, JOIN);
     say(`Fetching the bundle for ${options.harness ?? 'your most used harness'} ${options.harnessVersion}.`);
     const fetched = show(await poolFetch(deps, { server, harness: options.harness, harnessVersion: options.harnessVersion }));
     return {
-      document: { ok: true, server, login, deposit: prepared, outbox: shown, sends, fetch: fetched.document },
+      document: { ok: true, server, login, invite: vouched, deposit: prepared, outbox: shown, sends, fetch: fetched.document },
       text: `Joined ${server}: ${plural(sends.length, 'batch', 'batches')} sent this run, and the ${options.harnessVersion} bundle is kept.`,
     };
   } catch (error) {
-    say(JOIN_AGAIN);
+    say(state.refused ? INVITE_AGAIN : JOIN_AGAIN);
     throw error;
   }
+};
+
+const INVITE = 'pool-invite';
+
+/** Asks the pool for this account's crew number and keeps it for the card. Best effort: a refusal or a failed call leaves what was held, because nothing the person asked for depends on it. */
+const rememberCrew = async (deps: RunDeps, storeDir: string, server: string, token: string, step: string): Promise<number | undefined> => {
+  try {
+    const credential = new Masker();
+    credential.add(token);
+    const reply = await ask(deps, step, server, '/v1/me', { token, show: credential });
+    if (reply.status !== 200 || !isObject(reply.body)) return undefined;
+    const account: unknown = Reflect.get(reply.body, 'account');
+    if (typeof account === 'string') await keepCrewNumber(storeDir, server, account, numberIn(reply.body, 'crewNumber'));
+    return numberIn(reply.body, 'vouchesGiven');
+  } catch {
+    // The card shows the number when it is known and says nothing when it is not.
+    return undefined;
+  }
+};
+
+/** The one line an invitee runs. `<version>` stays a placeholder: the harness version is the invitee's own to name. */
+export const joinLineOf = (code: string): string => `oars pool join --invite ${code} --harness-version <version>`;
+
+/**
+ * `oars pool invite`: makes one invite code (`POST /v1/invites`, a founding or standing account, three open at most) and prints it once with the line to hand on and what the vouch gives. The code is the only secret here, so it is the one thing the pool never shows again.
+ */
+export const poolInvite = async (deps: RunDeps, options: { server?: string | undefined }): Promise<Outcome> => {
+  const { storeDir } = runtimeOf(deps);
+  const server = poolServer(deps.env, INVITE, options.server);
+  const { token } = await signedIn(deps, storeDir, server, INVITE);
+  const credential = new Masker();
+  credential.add(token);
+  const reply = await ask(deps, INVITE, server, '/v1/invites', { body: {}, token, show: credential });
+  if (reply.status !== 201) throw refusal(INVITE, reply);
+  const code = isObject(reply.body) ? textIn(reply.body, 'code') : undefined;
+  const left = isObject(reply.body) ? numberIn(reply.body, 'invitesLeft') : undefined;
+  if (code === undefined) throw new CliError('The pool answered an invite with no code.', ExitCode.UNEXPECTED, INVITE);
+  const given = await rememberCrew(deps, storeDir, server, token, INVITE);
+  const line = joinLineOf(code);
+  return {
+    document: { ok: true, server, code, join: line, ...(left === undefined ? {} : { invitesLeft: left }), ...(given === undefined ? {} : { vouchesGiven: given }) },
+    text: [
+      `Invite code: ${code}`,
+      'This is the only time the code is shown. It works once, for one person.',
+      `Send them this line: ${line}`,
+      `What you get: your vouch is recorded${given === undefined ? '' : ` (you have vouched for ${String(given)} so far)`}. What they get: once they have rowed two counting weeks, the next founding-crew grant lets them join the open board without waiting 90 days, unless you and they are the same operator, which gives neither of you anything.`,
+      ...(left === undefined ? [] : [`Open codes you can still make: ${String(left)}.`]),
+    ].join('\n'),
+  };
 };
 
 const RAW = 'pool-raw';

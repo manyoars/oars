@@ -59,6 +59,15 @@ const rowsOf = (pages: readonly Page[], section: string): unknown[] => pages.fil
 
 const skeleton = (id: string): string => JSON.stringify({ id, harness: 'claude-code' });
 
+/** The crew number each seeded tag was given. */
+const crews = new Map<string, number>();
+/** The crew number a tag's account holds: one per tag, assigned on first use. */
+const crewOf = (tag: string): number => {
+  const held = crews.get(tag) ?? 41 + crews.size;
+  crews.set(tag, held);
+  return held;
+};
+
 /** Gives an account a row in every table the export reads. */
 const seed = async (account: string, tag: string): Promise<void> => {
   for (const n of [1, 2, 3]) {
@@ -82,6 +91,14 @@ const seed = async (account: string, tag: string): Promise<void> => {
   await db.prepare("INSERT INTO club_consents (account, club, text_sha256, accepted_at) VALUES (?, 'open', ?, 1700000500000)").bind(account, sha256(`consent-${tag}`)).run();
   await db.prepare('INSERT INTO board_standing (account, granted_at, granted_by, reason) VALUES (?, 1700000600000, ?, ?)').bind(account, `operator-${tag}`, `fleet-${tag}`).run();
   await db.prepare("INSERT INTO club_attempts (account, kind, at) VALUES (?, 'guess', 1700000700000)").bind(account).run();
+  // The founding crew (migration 0041): a number, a code the account made and one it used, and the vouch edges on both sides. The other end of an edge is never exported.
+  await db.prepare('UPDATE accounts SET crew_number = ? WHERE id = ?').bind(crewOf(tag), account).run();
+  await db.prepare("INSERT INTO accounts (id) VALUES (?)").bind(`other-${tag}`).run();
+  await db.prepare('INSERT INTO invites (code_hash, inviter, created_at, used_by, used_at) VALUES (?, ?, 1700000010000, ?, 1700000020000)').bind(`hash-made-${tag}`, account, `other-${tag}`).run();
+  await db.prepare('INSERT INTO invites (code_hash, inviter, created_at) VALUES (?, ?, 1700000030000)').bind(`hash-open-${tag}`, account).run();
+  await db.prepare('INSERT INTO invites (code_hash, inviter, created_at, used_by, used_at) VALUES (?, ?, 1700000040000, ?, 1700000050000)').bind(`hash-used-${tag}`, `other-${tag}`, account).run();
+  await db.prepare('INSERT INTO vouch_edges (inviter, invitee, at) VALUES (?, ?, 1700000020000)').bind(account, `other-${tag}`).run();
+  await db.prepare('INSERT INTO vouch_edges (inviter, invitee, at) VALUES (?, ?, 1700000050000)').bind(`other-${tag}`, account).run();
   await db.prepare("INSERT INTO club_hides (club, account, nickname, hidden_at, hidden_by, reason, seated_at) VALUES ('open', ?, ?, 1700000800000, ?, ?, 1700000500000)").bind(account, `nick-${tag}`, `operator-${tag}`, `why-${tag}`).run();
   // A hide recorded before migration 0040 has no seated_at.
   await db.prepare("INSERT INTO club_hides (club, account, nickname, hidden_at, hidden_by, reason) VALUES ('open', ?, ?, 1700000900000, ?, ?)").bind(account, `old-${tag}`, `operator-${tag}`, `old-why-${tag}`).run();
@@ -121,7 +138,7 @@ describe('GET /v1/account/export', () => {
     expect(text).not.toContain(textOf(enrolled.json, 'token'));
     expect(text).not.toContain(sha256(textOf(enrolled.json, 'token')));
 
-    expect(rowsOf(pages, 'account')).toEqual([expect.objectContaining({ id: mine.account, rawConsent: 1_700_000_300_000, rawConsentVersion: 'v2', rawConsentWithdrawnAt: 1_700_000_350_000, rawConsentWithdrawnVersion: 'v1', closedAt: 1_700_000_400_000, access: 'standing' })]);
+    expect(rowsOf(pages, 'account')).toEqual([expect.objectContaining({ id: mine.account, rawConsent: 1_700_000_300_000, rawConsentVersion: 'v2', rawConsentWithdrawnAt: 1_700_000_350_000, rawConsentWithdrawnVersion: 'v1', closedAt: 1_700_000_400_000, access: 'standing', crewNumber: crews.get('mine') })]);
     expect(rowsOf(pages, 'covenant')).toEqual([expect.objectContaining({ version: 'v1', textSha256: acceptanceOf('v1').textSha256, input: acceptanceOf('v1').input, client: acceptanceOf('v1').client, euEeaUk: 'no', requestCountry: 'US' })]);
     expect(rowsOf(pages, 'machines')).toEqual([expect.objectContaining({ id: textOf(fieldOf(enrolled.json, 'machine'), 'id'), label: 'my box', hostClass: 'vps', launcher: 'scheduled', allowRepos: ['acme/api'], state: 'pending', lastDepositDay: '2026-11-05', keyDays: 30 })]);
     expect(rowsOf(pages, 'repoKeys')).toEqual([{ repoKey: 'repo-mine' }]);
@@ -135,6 +152,12 @@ describe('GET /v1/account/export', () => {
     expect(rowsOf(pages, 'clubs')).toEqual([{ club: 'open', nickname: 'nick-mine', joinedAt: 1_700_000_500_000 }]);
     expect(rowsOf(pages, 'clubConsents')).toEqual([{ club: 'open', textSha256: sha256('consent-mine'), acceptedAt: 1_700_000_500_000 }]);
     expect(rowsOf(pages, 'standing')).toEqual([{ grantedAt: 1_700_000_600_000, grantedBy: 'operator-mine', reason: 'fleet-mine' }]);
+    expect(rowsOf(pages, 'invitesMade')).toEqual([{ createdAt: 1_700_000_010_000, used: true, usedAt: 1_700_000_020_000 }, { createdAt: 1_700_000_030_000, used: false, usedAt: null }]);
+    expect(rowsOf(pages, 'inviteUsed')).toEqual([{ createdAt: 1_700_000_040_000, usedAt: 1_700_000_050_000 }]);
+    expect(rowsOf(pages, 'vouchesGiven')).toEqual([{ at: 1_700_000_020_000 }]);
+    expect(rowsOf(pages, 'vouchReceived')).toEqual([{ at: 1_700_000_050_000 }]);
+    expect(JSON.stringify(pages)).not.toContain('hash-made-mine');
+    expect(JSON.stringify(pages)).not.toContain('other-mine');
     expect(rowsOf(pages, 'clubAttempts')).toEqual([{ kind: 'guess', at: 1_700_000_700_000 }]);
     expect(rowsOf(pages, 'clubHides')).toEqual([
       { club: 'open', nickname: 'nick-mine', hiddenAt: 1_700_000_800_000, hiddenBy: 'operator-mine', reason: 'why-mine', seatedAt: 1_700_000_500_000 },

@@ -20,10 +20,12 @@ import { harnessOf, type Harness, type PromptVerify } from '../../cli/src/sessio
 import { loadStore, readRedactDomains, readSkeletons, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { runGit, type Git } from '../../cli/src/sessions/survival.js';
 import { vocabulary } from '../../cli/src/sessions/vocab-load.js';
+import { ageFilterOf, excludedSessionsOf, SKELETON_DEFAULT_DAYS } from './skeleton-only.js';
+import { writeCard } from './skeleton-card.js';
 import { captureDeposits, covenantLicenseOf, depositorOf, hasRepoKey, type DepositBuild, type DepositCounts, type Paired } from './deposit-input.js';
 
 export const USAGE = [
-  'Usage: sample-pack --terms <file> --owners <file> --index-key <file> (--buyer-key-file <path> | --buyer-key <key>) --out <dir> [--size <n>] [--seed <text>] [--min-turns <n>] [--sessions <file>] [--deposits <folder>] [--strip-thinking]',
+  'Usage: sample-pack --terms <file> --owners <file> --index-key <file> (--buyer-key-file <path> | --buyer-key <key>) --out <dir> [--size <n>] [--seed <text>] [--min-turns <n>] [--sessions <file>] [--deposits <folder>] [--strip-thinking] [--skeleton-only] [--older-than <days>] [--exclude-manifest <path>]',
   '  --terms <file>       the exclusion term list (one term per line; a local file, never in a repository)',
   '  --owners <file>      JSON list of {"folder": "<glob over the project folder name>", "owner": "<company>", "license": "<SPDX id>" | null}; first match wins, and a session in a folder no entry names is left out',
   '  --index-key <file>   the matching-index key (64 hex characters or more): a session\'s server key is HMAC-SHA-256 of its id under it. Keep it; a new key gives every session new ids',
@@ -32,10 +34,13 @@ export const USAGE = [
   '  --out <dir>          an empty or new folder outside every git repository',
   '  --deposits <folder>  a folder `pull-deposits` wrote: its Raw Copies are drawn in place of the store\'s sessions, each row naming a depositor and the covenant (--owners still names the folder of the index and the objections)',
   '  --size <n>           sessions to emit (default 25); --seed <text> orders the draw (default 1)',
-  '  objections.jsonl     beside the owners file, optional: a line per objection, naming a session id or a person; each session it names, or whose text names the person, is left out and counted (docs/pool.md)',
+  '  objections.jsonl     beside the owners file, optional: a line per objection, naming a session id, a person, or (for a deposit pack) a pool account with the right invoked; each session it names, or whose text names the person, or that the account deposited, is left out and counted (docs/pool.md)',
   '  --sessions <file>    build the pack from exactly the store session ids in this file (one per line) in place of the seeded draw; every rule still applies, and each listed session left out is printed with the reason (term, noOwner, lead, tooShort, duplicate, secret, notFound, ...). Not with --size or --seed',
   '  --min-turns <n>      a session needs at least this many turns, user plus assistant (default 20); a shorter one is left out and counted',
   '  --strip-thinking     leave the reasoning of the model out of the transcripts: every thinking and redacted_thinking block (text, signature, encrypted data) and every Codex reasoning item; the manifest and pack.json say reasoning: stripped (kept otherwise). The thinking-token count in the skeleton stays',
+  '  --skeleton-only      write no transcript: the manifest rows (transcripts: 0), skeleton.json per session, census.json, pack.json, and a README.md data card made from the last two. Sessions are kept only when older than --older-than days (default 30 here)',
+  '  --older-than <days>  leave out a session whose last line is newer than this many days (a session with no date is left out too); counted as fresh',
+  '  --exclude-manifest <path>  a lot\'s manifest.jsonl (or its pack folder): every session it holds is left out, found through index.jsonl beside the owners file; counted as inExcludedLot',
   'Reads the store under APPDATA (or XDG_CONFIG_HOME) and the transcripts under CLAUDE_CONFIG_DIR or ~/.claude. Builds in <out>.partial and renames it to --out when done,',
   'and appends each session id and its match id to index.jsonl beside the owners file: the operator\'s only map from one to the other.',
 ].join('\n');
@@ -139,8 +144,8 @@ export interface ManifestRow {
 }
 
 /**
- * A row built from a deposit also holds when the cited covenant acceptance was made, as an ISO time (docs/pool-deposit-title.md section 1). It is a type of its own, not an optional field of `ManifestRow`,
- * because `validate-pack.ts` types its field table by `ManifestRow`: brief 3 lists `acceptedAt` there and in `docs/session-record.md`, and moves it into the interface.
+ * A row built from a deposit also holds when the cited covenant acceptance was made, as an ISO time (docs/pool-deposit-title.md section 1). It is a type of its own, not an optional field of `ManifestRow`:
+ * `validate-pack.ts` lists `acceptedAt` in its own field table (optional, and only beside a `depositor:<16 hex>` owner) and `docs/session-record.md` states it, so an operator row, which never holds it, keeps the narrower type.
  */
 export type DepositManifestRow = ManifestRow & { acceptedAt: string };
 
@@ -168,6 +173,14 @@ export interface PackOptions {
   onDrop?: ((session: string, reason: string) => void) | undefined;
   /** A folder `pull-deposits` wrote (`--deposits`): the Raw Copies in it are captured into a throwaway store and drawn in place of the operator's own sessions. Each row names the depositor and the covenant, not an owner. */
   deposits?: string | undefined;
+  /** Write no transcript (`--skeleton-only`): rows say `transcripts: 0`, the pack holds skeletons, the census, `pack.json`, and a data card. `olderThanDays` then defaults to 30. */
+  skeletonOnly?: boolean | undefined;
+  /** Keep only sessions whose last line is older than this many days (`--older-than`). */
+  olderThanDays?: number | undefined;
+  /** A lot's manifest (`--exclude-manifest`): the sessions behind its match ids are left out, found through `index.jsonl`. */
+  excludeManifest?: string | undefined;
+  /** The clock `olderThanDays` reads; a test injects its own. */
+  now?: (() => number) | undefined;
 }
 
 export interface PackCounts {
@@ -194,7 +207,13 @@ export interface PackCounts {
   objected: number;
   /** Dropped because the redacted, masked text still held something shaped like a key (`secretIn`); nothing of the session was written. */
   secret: number;
+  /** Only with an age limit: newer than `--older-than` days, or with no date. */
+  fresh?: number;
+  /** Only with `--exclude-manifest`: a session the named lot holds. */
+  inExcludedLot?: number;
   emitted: number;
+  /** Only for a pack built `--deposits`: dropped because an account line in `objections.jsonl` names the depositor's account (Art. 21(1)); `objected` counts the session and name lines. */
+  objectedAccount?: number;
   /** Only for a pack built `--deposits`: why Raw Copies were left out before the rules above. */
   deposits?: DepositCounts;
 }
@@ -220,9 +239,15 @@ export const OBJECTION_SCOPES = ['sale', 'training', 'all'] as const;
 export interface Objection {
   session?: string;
   name?: string;
+  /** An account line (pool deposits, `docs/pool-rights.md`): every session of that pool account, and nothing else; it carries `right`. */
+  account?: string;
+  right?: (typeof OBJECTION_RIGHTS)[number];
   received: string;
   scope: (typeof OBJECTION_SCOPES)[number];
 }
+
+/** The right an account line records: it is the same exclusion for all three, and the register keeps which was invoked. */
+export const OBJECTION_RIGHTS = ['erasure', 'restriction', 'objection'] as const;
 
 export const OBJECTIONS_FILE = 'objections.jsonl';
 
@@ -259,6 +284,7 @@ export const parseOwners = (text: string): OwnerRule[] => {
   });
 };
 
+const isRight = (value: unknown): value is NonNullable<Objection['right']> => OBJECTION_RIGHTS.some((right) => right === value);
 const isScope = (value: unknown): value is Objection['scope'] => OBJECTION_SCOPES.some((scope) => scope === value);
 
 /** The SHA-256 of `objections.jsonl` as read, or this when the file is absent: pack.json records it, and `deliver` refuses a pack whose recorded value is not the file's now. */
@@ -287,13 +313,17 @@ export const readObjections = async (dir: string): Promise<{ objections: Objecti
       const value: unknown = Reflect.get(fields, name);
       return value;
     };
-    const [session, name, received, scope] = [field('session'), field('name'), field('received'), field('scope')];
+    const [session, name, account, right, received, scope] = [field('session'), field('name'), field('account'), field('right'), field('received'), field('scope')];
     if (session !== undefined && (!isText(session) || session === '')) throw new PackError(`${where} needs session to be a session id.`);
     if (name !== undefined && (!isText(name) || name.trim() === '')) throw new PackError(`${where} needs name to be a person's name.`);
-    if (session === undefined && name === undefined) throw new PackError(`${where} names no session and no person.`);
+    if (account !== undefined && (!isText(account) || account.trim() === '')) throw new PackError(`${where} needs account to be an account id.`);
+    if (account !== undefined && (session !== undefined || name !== undefined)) throw new PackError(`${where} is an account line, so it names no session and no person.`);
+    if (account !== undefined && !isRight(right)) throw new PackError(`${where} needs right to be one of ${OBJECTION_RIGHTS.join(', ')}.`);
+    if (account === undefined && right !== undefined) throw new PackError(`${where} names a right but no account.`);
+    if (session === undefined && name === undefined && account === undefined) throw new PackError(`${where} names no session, no person, and no account.`);
     if (!isText(received) || !received.includes('T') || Number.isNaN(Date.parse(received))) throw new PackError(`${where} needs received to be an ISO date and time, such as 2026-06-05T09:30:00Z.`);
     if (!isScope(scope)) throw new PackError(`${where} needs scope to be one of ${OBJECTION_SCOPES.join(', ')}.`);
-    return { ...(session === undefined ? {} : { session }), ...(name === undefined ? {} : { name }), received, scope };
+    return { ...(session === undefined ? {} : { session }), ...(name === undefined ? {} : { name }), ...(isText(account) && isRight(right) ? { account, right } : {}), received, scope };
   });
   return { objections, hash: createHash('sha256').update(text).digest('hex') };
 };
@@ -1169,6 +1199,9 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
     const paired = input?.verdictOf(record.project, record.session);
     return paired !== undefined && 'paired' in paired && objectedSessions.has(paired.paired.session);
   };
+  // A deposit session's project is its pool account, so an account line is read against that and nothing else; an operator folder is never an account.
+  const objectedAccounts = new Set(objections.flatMap(({ account }) => (account === undefined ? [] : [account])));
+  const isAccountObjected = (record: { project: string }): boolean => input !== undefined && objectedAccounts.has(record.project);
   const objectedNames = objections.flatMap(({ name }) => (name === undefined ? [] : [squashed(name.trim())]));
   const domains = await readRedactDomains(runtime.storeDir);
   const names = localNames();
@@ -1227,8 +1260,11 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
     else if (record.userTurns === 0) options.onDrop?.(id, 'tooShort');
     return record === undefined || record.userTurns === 0 ? [] : [record];
   });
+  // Skeleton-only reads the same transcripts to redact, mask, and scan them, and writes none: a name or key found in text that does not ship still keeps its session out.
+  const olderThan = ageFilterOf(options.olderThanDays ?? (options.skeletonOnly === true ? SKELETON_DEFAULT_DAYS : undefined), options.now ?? Date.now);
+  const excludedLot = options.excludeManifest === undefined ? undefined : await excludedSessionsOf(options.excludeManifest, join(dirname(resolve(options.owners)), 'index.jsonl'), PackError);
   const limit = listed === undefined ? options.size : Infinity;
-  const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, lead: 0, tooShort: 0, noRepo: 0, duplicate: 0, noSkeleton: 0, noPointer: 0, objected: 0, secret: 0, emitted: 0, ...(input === undefined ? {} : { deposits: input.counts }) };
+  const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, lead: 0, tooShort: 0, noRepo: 0, duplicate: 0, noSkeleton: 0, noPointer: 0, objected: 0, secret: 0, ...(olderThan === undefined ? {} : { fresh: 0 }), ...(excludedLot === undefined ? {} : { inExcludedLot: 0 }), emitted: 0, ...(input === undefined ? {} : { objectedAccount: 0, deposits: input.counts }) };
   const turnsOf = (session: { userTurns: number; assistantTurns: number }): number => session.userTurns + session.assistantTurns;
   // The rules up to the repository one, once per session: the duplicate rule asks them only of the members of a group that shares a first prompt, the draw of the sessions it reaches; a singleton the draw never reaches is never gated.
   const earlyBy = new Map<string, Promise<Early>>();
@@ -1249,6 +1285,8 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
     if (terms === undefined) return { left: (c) => { c.noHarnessTerms += 1; } };
     if (await isLead(runtime, record, options.leadPrompts ?? [], owner.leadPrompts ?? [])) return { left: (c) => { c.lead += 1; } };
     if (turnsOf(record) < options.minTurns) return { left: (c) => { c.tooShort += 1; } };
+    if (excludedLot?.has(record.session) === true) return { left: (c) => { c.inExcludedLot = (c.inExcludedLot ?? 0) + 1; } };
+    if (olderThan !== undefined && !olderThan(record.tsLast)) return { left: (c) => { c.fresh = (c.fresh ?? 0) + 1; } };
     // A deposit's repository is the key its skeleton carries: the build machine holds no clone.
     if (paired === undefined ? record.repo === null : !hasRepoKey(paired)) return { left: (c) => { c.noRepo += 1; } };
     return { accepted: { owner, harness, terms, ...(paired === undefined ? {} : { paired }) } };
@@ -1283,6 +1321,10 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
     if (listed !== undefined) pending = { session: record.session, before: tally(counts), emitted: counts.emitted };
     counts.scanned += 1;
     // Before this session's own gate: an objection is honored even for a session the other rules would have left out anyway, and it is the first reason counted.
+    if (isAccountObjected(record)) {
+      counts.objectedAccount = (counts.objectedAccount ?? 0) + 1;
+      continue;
+    }
     if (isObjected(record)) {
       counts.objected += 1;
       continue;
@@ -1296,7 +1338,7 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
     // Read once, on the first session that gets this far. A loser is chosen only among sessions that pass every rule above, so a longer twin that one of them drops never costs the shorter its place; a duplicate's other half may not be drawn at all.
     if (losers === undefined) {
       // An objected session is no member of a group: a longer one that never ships must not cost its shorter replay the place.
-      const everyone = frame.filter((record) => !isObjected(record)).map((record) => ({ session: record.session, project: record.project, turns: turnsOf(record), repo: record.repo, record }));
+      const everyone = frame.filter((record) => !isObjected(record) && !isAccountObjected(record)).map((record) => ({ session: record.session, project: record.project, turns: turnsOf(record), repo: record.repo, record }));
       losers = await duplicatesOf(runtime, everyone, async (member) => 'accepted' in (await earlyOf(member.record)));
     }
     if (losers.has(record.session)) {
@@ -1341,7 +1383,7 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
       counts.secret += 1;
       continue;
     }
-    for (const [at, file] of files.entries()) {
+    for (const [at, file] of options.skeletonOnly === true ? [] : files.entries()) {
       const target = join(partial, 'sessions', matchId, placeOf(file.key, record.session, file.main));
       await mkdir(dirname(target), { recursive: true });
       const body = masked[at] ?? '';
@@ -1351,6 +1393,7 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
     }
     bytes += Buffer.byteLength(skeletonText);
     const skeletonTarget = join(partial, 'sessions', matchId, SKELETON_FILE);
+    await mkdir(dirname(skeletonTarget), { recursive: true });
     await writeFile(skeletonTarget, skeletonText);
     written.push(skeletonTarget);
     // After the files are written, before the next session: an id the masks missed (one a JSON escape hides from the raw bytes shows in the decoded strings) stops the build, and the folder stays for a look.
@@ -1382,7 +1425,7 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
       harnessTerms: [...terms.terms],
       permittedUses: [...PERMITTED_USES],
       training: terms.training,
-      transcripts: files.length,
+      transcripts: options.skeletonOnly === true ? 0 : files.length,
       models: modelsOf(skeleton),
       turns: turnsOf(record),
       skeleton: SKELETON_FILE,
@@ -1414,7 +1457,8 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
   const census = `${JSON.stringify(censusOf(rows, skeletons), null, 2)}\n`;
   bytes += Buffer.byteLength(census);
   await writeFile(join(partial, 'census.json'), census);
-  await writeFile(join(partial, 'pack.json'), `${JSON.stringify({ built: new Date().toISOString(), size: listed === undefined ? options.size : counts.emitted, seed: listed === undefined ? options.seed : null, ...(listed === undefined ? {} : { listed: listed.size }), minTurns: options.minTurns, reasoning, redactionVersion: REDACTION_VERSION, keyId: keyIdOf(options.buyerKey), objections: objectionsHash, counts, bytes, elapsedMs: Date.now() - started }, null, 2)}\n`);
+  await writeFile(join(partial, 'pack.json'), `${JSON.stringify({ built: new Date((options.now ?? Date.now)()).toISOString(), size: listed === undefined ? options.size : counts.emitted, ...(options.skeletonOnly === true ? {} : { seed: listed === undefined ? options.seed : null }), ...(listed === undefined ? {} : { listed: listed.size }), minTurns: options.minTurns, reasoning, ...(options.skeletonOnly === true ? { skeletonOnly: true } : {}), ...(olderThan === undefined ? {} : { olderThanDays: options.olderThanDays ?? SKELETON_DEFAULT_DAYS }), redactionVersion: REDACTION_VERSION, keyId: keyIdOf(options.buyerKey), objections: objectionsHash, counts, bytes, elapsedMs: Date.now() - started }, null, 2)}\n`);
+  if (options.skeletonOnly === true) await writeCard(partial);
   // Outside the pack, beside the owners file, and appended, so it maps every pack built from that folder. Written before the rename, so a pack under `out` always has its rows.
   await appendFile(join(dirname(resolve(options.owners)), 'index.jsonl'), index.map((row) => `${JSON.stringify(row)}\n`).join(''));
   // An empty `out` was allowed above, and a folder is renamed only onto a free name.
@@ -1427,17 +1471,24 @@ export interface Io {
   runtime: SessionsRuntime;
   print: (text: string) => void;
   vocabDir?: URL | undefined;
+  /** The build clock; the wall clock when absent. */
+  now?: (() => number) | undefined;
 }
 
-const VALUED = new Set(['--terms', '--owners', '--index-key', '--buyer-key', '--buyer-key-file', '--out', '--size', '--seed', '--min-turns', '--sessions', '--deposits']);
+const VALUED = new Set(['--terms', '--owners', '--index-key', '--buyer-key', '--buyer-key-file', '--out', '--size', '--seed', '--min-turns', '--sessions', '--deposits', '--older-than', '--exclude-manifest']);
 
 const parseArgs = async (argv: readonly string[]): Promise<(Omit<PackOptions, 'sessions' | 'onDrop'> & { sessionsFile?: string }) | string> => {
   const values = new Map<string, string>();
   let stripThinking = false;
+  let skeletonOnly = false;
   for (let at = 0; at < argv.length; at += 1) {
     const [flag, value] = [argv[at] ?? '', argv[at + 1]];
     if (flag === '--strip-thinking') {
       stripThinking = true;
+      continue;
+    }
+    if (flag === '--skeleton-only') {
+      skeletonOnly = true;
       continue;
     }
     if (!VALUED.has(flag) || value === undefined) return `Unknown or incomplete option: ${flag}`;
@@ -1455,7 +1506,9 @@ const parseArgs = async (argv: readonly string[]): Promise<(Omit<PackOptions, 's
   if (!Number.isInteger(size) || size < 1) return '--size takes a whole number of 1 or more.';
   const minTurns = Number(values.get('--min-turns') ?? '20');
   if (!Number.isInteger(minTurns) || minTurns < 1) return '--min-turns takes a whole number of 1 or more.';
-  return { terms, owners, indexKey, buyerKey, out, size, seed: values.get('--seed') ?? '1', minTurns, ...(stripThinking ? { stripThinking } : {}), ...(sessionsFile === undefined ? {} : { sessionsFile }), ...(values.has('--deposits') ? { deposits: values.get('--deposits') } : {}) };
+  const olderThanDays = values.has('--older-than') ? Number(values.get('--older-than')) : undefined;
+  if (olderThanDays !== undefined && (!Number.isFinite(olderThanDays) || olderThanDays < 0)) return '--older-than takes a number of days, 0 or more.';
+  return { terms, owners, indexKey, buyerKey, out, size, seed: values.get('--seed') ?? '1', minTurns, ...(stripThinking ? { stripThinking } : {}), ...(skeletonOnly ? { skeletonOnly } : {}), ...(olderThanDays === undefined ? {} : { olderThanDays }), ...(values.has('--exclude-manifest') ? { excludeManifest: values.get('--exclude-manifest') } : {}), ...(sessionsFile === undefined ? {} : { sessionsFile }), ...(values.has('--deposits') ? { deposits: values.get('--deposits') } : {}) };
 };
 
 /** The session ids a `--sessions` file lists: one per line, blank lines skipped, each once, in the file's order. */
@@ -1478,14 +1531,16 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
   try {
     const sessions = sessionsFile === undefined ? undefined : await sessionsIn(sessionsFile);
     const dropped: string[] = [];
-    const counts = await buildPack(io.runtime, { ...options, size: sessions?.length ?? options.size, sessions, onDrop: (session, reason) => dropped.push(`Left out of the list: ${session} ${reason}`), vocabDir: io.vocabDir });
+    const counts = await buildPack(io.runtime, { ...options, size: sessions?.length ?? options.size, sessions, onDrop: (session, reason) => dropped.push(`Left out of the list: ${session} ${reason}`), vocabDir: io.vocabDir, now: io.now });
     const { term, noRaw, noTerms, unreadable } = counts.excluded;
     io.print(
       [
         `Wrote ${String(counts.emitted)} sessions to ${options.out} (manifest.jsonl, sessions/<match id>/).`,
         `Scanned ${String(counts.scanned)} of ${String(counts.frame)} in draw order. Excluded: ${String(term)} for a term, ${String(noRaw)} with no raw, ${String(noTerms)} with no term file, ${String(unreadable)} unreadable.`,
         `Left out after the gate: ${String(counts.noOwner)} in a folder no owner entry names, ${String(counts.noHarnessTerms)} from a harness with no terms row, ${String(counts.tooShort)} under ${String(options.minTurns)} turns, ${String(counts.noRepo)} with no repository, ${String(counts.duplicate)} replaying a longer session, ${String(counts.objected)} under an objection, ${String(counts.secret)} holding a secret after redaction.`,
-        ...(counts.deposits === undefined ? [] : [`Left out of the deposits: ${String(counts.deposits.unlinked)} with no deposit row, ${String(counts.deposits.tierNone)} of tier none, ${String(counts.deposits.protectedRegion)} from a protected region, ${String(counts.deposits.noGrant)} with no proved acceptance.`]),
+        ...(counts.fresh === undefined ? [] : [`Left out as newer than the age limit: ${String(counts.fresh)}.`]),
+        ...(counts.inExcludedLot === undefined ? [] : [`Left out as held by the excluded lot: ${String(counts.inExcludedLot)}.`]),
+        ...(counts.deposits === undefined ? [] : [`Left out of the deposits: ${String(counts.deposits.unlinked)} with no deposit row, ${String(counts.deposits.tierNone)} of tier none, ${String(counts.deposits.protectedRegion)} from a protected region, ${String(counts.deposits.noGrant)} with no proved acceptance, ${String(counts.objectedAccount ?? 0)} under an account line.`]),
         ...dropped,
       ].join('\n'),
     );

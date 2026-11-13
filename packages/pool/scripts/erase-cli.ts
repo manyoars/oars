@@ -175,7 +175,10 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
     }
     if (what === 'account' && options.positional.length === 1 && options.account !== undefined && options.id === undefined) {
       if (!options.confirm) return plan(io, `erase every deposit row and raw object of account ${options.account} in ${where}, scrub the label and allow list of its machines, delete its repo keys, deposit hours, and contributor records, and disable its tokens`);
-      io.print(summary(await eraseAccount(store, options.account, io.now())));
+      const erasedAt = io.now();
+      io.print(summary(await eraseAccount(store, options.account, erasedAt)));
+      // The pool cannot reach the operator's folder, so the step that keeps the account out of a pack and tells each recipient rests on this line (docs/pool-rights.md): append it to objections.jsonl.
+      io.print(`Append this line to objections.jsonl beside the owners file, then rebuild any pack not yet delivered (Art. 17, 19, 21(1)): ${JSON.stringify({ account: options.account, right: 'erasure', received: erasedAt.toISOString(), scope: 'all' })}`);
       return 0;
     }
   } catch (error) {

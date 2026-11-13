@@ -146,6 +146,37 @@ describe('licenseStatus', () => {
     expect(report.rows[1]?.deliveries).toHaveLength(1);
   });
 
+  it('license-status reports the match ids of an account line', async () => {
+    const f = fixture();
+    const pack = packOf(f, 'lot-1', [[S1, M1], [S2, M2]]);
+    // The build writes the account of a deposit row into the index; the second session belongs to another account.
+    writeFileSync(join(f.operator, 'index.jsonl'), [[S1, M1, 'acct_one'], [S2, M2, 'acct_two']].map(([session, matchId, account]) => `${JSON.stringify({ pack, session, project: 'acct', matchId, account })}\n`).join(''));
+    await send(f, pack, 'Acme Evals Inc.', 'term-sheet-v1');
+    object(f, [{ account: 'acct_one', right: 'objection', received: '2026-06-13T09:00:00Z', scope: 'sale' }]);
+
+    const report = await licenseStatus(f.operator, KEY_ID, [M1, M2]);
+
+    expect(report.rows.map((row) => [row.matchId, row.state, row.erasure])).toEqual([[M1, 'withdrawn', 'unknown'], [M2, 'delivered', 'none-due']]);
+    expect(report.rows[0]?.withdrawn).toEqual([{ received: '2026-06-13T09:00:00Z', scope: 'sale', basis: 'account' }]);
+    // The account id never reaches the row a buyer is shown.
+    expect(JSON.stringify(report)).not.toContain('acct_');
+    const out: string[] = [];
+    expect(await main(['--account', 'acct_one', '--key-id', KEY_ID, '--operator', f.operator], { print: (line) => out.push(line) })).toBe(0);
+    expect(out.join('\n')).toContain(M1);
+    expect(out.join('\n')).toContain('(account)');
+    expect(out.join('\n')).not.toContain(M2);
+    expect(out.join('\n')).not.toContain('acct_');
+  });
+
+  it('an account asked for with a match id, or one the index does not know, is a usage error or an empty answer', async () => {
+    const f = fixture();
+    packOf(f, 'lot-1', [[S1, M1]]);
+    const out: string[] = [];
+    expect(await main(['--account', 'acct_one', M1, '--key-id', KEY_ID, '--operator', f.operator], { print: (line) => out.push(line) })).toBe(2);
+    expect(await main(['--account', 'acct_none', '--key-id', KEY_ID, '--operator', f.operator], { print: (line) => out.push(line) })).toBe(2);
+    expect(out.join('\n')).toMatch(/index\.jsonl names no session of this account/);
+  });
+
   it('reads a row objected to before any delivery as withdrawn with no erasure due', async () => {
     const f = fixture();
     packOf(f, 'lot-1', [[S1, M1], [S2, M2]]);

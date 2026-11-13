@@ -11,6 +11,7 @@ import { poolServer } from './pool-command.js';
 import { outboxFolder } from './pool-outbox.js';
 import { loadSignIns } from './pool-replica.js';
 import { sentLog } from './pool-sent.js';
+import { crewMarkText, crewNumberOf } from './crew-mark.js';
 import { loadStore } from './store.js';
 import { readSurvival } from './survival.js';
 import type { SessionsDeps } from './command.js';
@@ -30,14 +31,15 @@ const FIRST_MONDAY = -3 * DAY;
 export const depositorLine = async (storeDir: string, env: NodeJS.ProcessEnv, now: number): Promise<string> => {
   try {
     const server = poolServer(env, 'card');
-    const signedIn = (await loadSignIns(storeDir, 'card')).some((entry) => entry.server === server && entry.expiresAt > now);
-    if (!signedIn) return ASHORE;
+    const signedIn = (await loadSignIns(storeDir, 'card')).find((entry) => entry.server === server && entry.expiresAt > now);
+    if (signedIn === undefined) return ASHORE;
     const weeks = new Set<number>();
     for (const at of (await sentLog(outboxFolder(storeDir, server))).values()) {
       const time = Date.parse(at);
       if (!Number.isNaN(time)) weeks.add(Math.floor((time - FIRST_MONDAY) / WEEK));
     }
-    return `weeks rowing (this machine): ${String(weeks.size)}`;
+    const crew = await crewNumberOf(storeDir, server, signedIn.account);
+    return `weeks rowing (this machine): ${String(weeks.size)}${crew === undefined ? '' : ` · ${crewMarkText(crew)}`}`;
   } catch (error) {
     if (error instanceof CliError) return ASHORE;
     throw error;

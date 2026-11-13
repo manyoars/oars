@@ -8,26 +8,28 @@ import { isoWeekOf } from './week.js';
 
 /** A club holds at most this many members. */
 const MEMBER_CAP = 50;
-const HOUR_MS = 60 * 60 * 1000;
+export const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 /** The brakes (migration 0037), per account: this many joins with a code no club holds in a rolling hour, and this many clubs made in a rolling day. */
-const GUESSES_PER_HOUR = 10;
+export const GUESSES_PER_HOUR = 10;
 const CREATES_PER_DAY = 5;
 const WEEK_MS = 7 * DAY_MS;
 /** The reserved club the public board lists: it has no code, and its members join it by the code word `OPEN`. */
 const OPEN_CLUB = 'open';
 
 /** What a person is shown before they join, and the hash the join records. A change to either text is a new hash, so the record says which text was agreed to. */
-const CLUB_TEXT = 'Members of this club will see my nickname, my weeks rowing, my active days, my sessions, and my strokes this week. They will never see my sessions, projects, prompts, or tokens. I can leave at any time and my row leaves view at once.';
-const OPEN_TEXT = 'The open board is public: anyone on the internet can see my nickname with my weeks rowing, active days, sessions, and strokes this week, once my account has 90 days of standing (90 days after its first counting deposit). I can leave at any time and my row leaves the board at once.';
+const CLUB_TEXT = 'Members of this club will see my nickname, my weeks rowing, my active days, my sessions, and my strokes this week. They will never see my sessions, projects, prompts, or tokens. If I hold a founding crew number, it shows beside my nickname. I can leave at any time and my row leaves view at once.';
+const OPEN_TEXT = 'The open board is public: anyone on the internet can see my nickname with my weeks rowing, active days, sessions, and strokes this week, once my account has 90 days of standing (90 days after its first counting deposit). If I hold a founding crew number, it shows beside my nickname. I can leave at any time and my row leaves the board at once.';
 const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex');
 const CLUB_SHA = sha256(CLUB_TEXT);
 const OPEN_SHA = sha256(OPEN_TEXT);
 
 /** Letters and digits without the look-alikes: 32 symbols, so five random bits choose one with no bias. */
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-const codeOf = (): string => [...crypto.getRandomValues(new Uint8Array(6))].map((byte) => CODE_ALPHABET.charAt(byte & 31)).join('');
+export const codeOf = (): string => [...crypto.getRandomValues(new Uint8Array(6))].map((byte) => CODE_ALPHABET.charAt(byte & 31)).join('');
 const hashOfCode = (code: string): string => sha256(`club-code:${code}`);
+/** The hash an invite code is kept under: its own prefix, so a club code and an invite code never collide. */
+export const hashOfInvite = (code: string): string => sha256(`invite-code:${code}`);
 
 /** A nickname or club name: letters and digits first, then those or space, dot, underscore, and hyphen; 24 at most. */
 const NAME = /^[\p{L}\p{N}][\p{L}\p{N} ._-]{0,23}$/u;
@@ -54,16 +56,16 @@ const signedIn = async (request: Request, env: Env): Promise<string | Response> 
 type Kind = 'guess' | 'create';
 
 /** The 429 `rate_limited` for an account that has `limit` attempts of this kind inside the window: `retry_after` (seconds, also the `retry-after` header) is when the limit-th newest one leaves it, which is when the next try is allowed. */
-const slowed = async (env: Env, account: string, kind: Kind, limit: number, window: number, now: number): Promise<Response> => {
+export const slowed = async (env: Env, account: string, kind: Kind, limit: number, window: number, now: number, said?: string): Promise<Response> => {
   const edge = await env.DB.prepare('SELECT at FROM club_attempts WHERE account = ? AND kind = ? AND at > ? ORDER BY at DESC LIMIT 1 OFFSET ?').bind(account, kind, now - window, limit - 1).first();
   // A reservation that was refused means the window was full; the row can only have left it since, so the wait floors at one second.
   const wait = edge === null ? 1 : Math.max(1, Math.ceil((Number(fieldOf(edge, 'at')) + window - now) / 1000));
-  const message = kind === 'guess' ? 'Too many joins with a code no club holds. Joining is paused for this account.' : `An account makes at most ${String(limit)} clubs a day.`;
+  const message = said ?? (kind === 'guess' ? 'Too many joins with a code no club holds. Joining is paused for this account.' : `An account makes at most ${String(limit)} clubs a day.`);
   return answer(429, { error: 'rate_limited', message, retry_after: wait }, { 'retry-after': String(wait) });
 };
 
 /** The statements that drop this account's rows older than a day (no window is longer) and reserve one attempt, only while the window holds fewer than `limit`. The reservation is one conditional insert, so a burst cannot all pass a read that comes before any write; its `changes` is 1 when it holds, 0 when the window was full. */
-const reserve = (env: Env, account: string, kind: Kind, limit: number, window: number, now: number): Bound[] => [
+export const reserve = (env: Env, account: string, kind: Kind, limit: number, window: number, now: number): Bound[] => [
   env.DB.prepare('DELETE FROM club_attempts WHERE account = ? AND at <= ?').bind(account, now - DAY_MS),
   env.DB.prepare('INSERT INTO club_attempts (account, kind, at) SELECT ?, ?, ? WHERE (SELECT COUNT(*) FROM club_attempts WHERE account = ? AND kind = ? AND at > ?) < ?').bind(account, kind, now, account, kind, now - window, limit),
 ];
@@ -75,6 +77,7 @@ export const consentTexts = (): Response => answer(200, { club: { text: CLUB_TEX
 
 interface Entry {
   nickname: string;
+  crew?: number;
   weeks: Set<string>;
   days: number;
   sessions: number;
@@ -101,16 +104,21 @@ const streakOf = (weeks: ReadonlySet<string>, now: number): number => {
 /** The open board's standing rule: a hand grant, the latched `standing` flag, or a first counting deposit at least `STANDING_AFTER_DAYS` old (read directly, so a flag not yet latched does not hide an old account). The second bind is the cutoff. */
 const STANDING_ONLY = ` AND (EXISTS (SELECT 1 FROM board_standing g WHERE g.account = m.account) OR (SELECT access FROM accounts a WHERE a.id = m.account) = 'standing' OR (SELECT MIN(counted_at) FROM deposits d WHERE d.account = m.account AND d.counted_at IS NOT NULL AND d.tier <> 'none') <= ?)`;
 
+/** The crew number as a board row carries it: present only for a founding member, so nothing in a row says how many hold one. */
+const crewOf = (entry: Entry): { crewNumber?: number } => (entry.crew === undefined ? {} : { crewNumber: entry.crew });
+
 /** A club's members as the board shows them: counted members by weeks rowing, active days, then nickname; those with no counting deposit last, "ashore", with no numbers. A closed or restricted account is not listed (its rows stay stored; GDPR Art. 18(1)). */
 const boardOf = async (env: Env, club: string, now: number, standingOnly = false): Promise<object[]> => {
   const { results } = await env.DB.prepare(
-    `SELECT m.nickname AS nickname, w.week AS week, w.sessions AS sessions, w.tool_steps AS steps, w.day_mask AS mask FROM club_members m LEFT JOIN account_weeks w ON w.account = m.account AND w.sessions > 0 WHERE m.club = ? AND NOT EXISTS (SELECT 1 FROM accounts c WHERE c.id = m.account AND (c.closed_at IS NOT NULL OR c.restricted_at IS NOT NULL))${standingOnly ? STANDING_ONLY : ''}`,
-  ).bind(...(standingOnly ? [club, now - STANDING_AFTER_DAYS * DAY_MS] : [club])).all();
+    `SELECT m.nickname AS nickname, (SELECT a.crew_number FROM accounts a WHERE a.id = m.account AND EXISTS (SELECT 1 FROM club_consents c WHERE c.account = m.account AND c.club = m.club AND c.text_sha256 = ?)) AS crew, w.week AS week, w.sessions AS sessions, w.tool_steps AS steps, w.day_mask AS mask FROM club_members m LEFT JOIN account_weeks w ON w.account = m.account AND w.sessions > 0 WHERE m.club = ? AND NOT EXISTS (SELECT 1 FROM accounts c WHERE c.id = m.account AND (c.closed_at IS NOT NULL OR c.restricted_at IS NOT NULL))${standingOnly ? STANDING_ONLY : ''}`,
+  ).bind(...(standingOnly ? [club === OPEN_CLUB ? OPEN_SHA : CLUB_SHA, club, now - STANDING_AFTER_DAYS * DAY_MS] : [club === OPEN_CLUB ? OPEN_SHA : CLUB_SHA, club])).all();
   const entries = new Map<string, Entry>();
   const thisWeek = isoWeekOf(now);
   for (const row of results) {
     const nickname = String(fieldOf(row, 'nickname'));
     const entry = entries.get(nickname) ?? { nickname, weeks: new Set<string>(), days: 0, sessions: 0, strokes: 0 };
+    const crew = fieldOf(row, 'crew');
+    if (typeof crew === 'number') entry.crew = crew;
     const week = fieldOf(row, 'week');
     if (typeof week === 'string') {
       entry.weeks.add(week);
@@ -122,7 +130,7 @@ const boardOf = async (env: Env, club: string, now: number, standingOnly = false
   }
   const ranked = [...entries.values()].map((entry) => ({ entry, streak: streakOf(entry.weeks, now) }));
   ranked.sort((a, b) => Number(a.entry.weeks.size === 0) - Number(b.entry.weeks.size === 0) || b.streak - a.streak || b.entry.days - a.entry.days || (a.entry.nickname < b.entry.nickname ? -1 : 1));
-  return ranked.map(({ entry, streak }, at) => (entry.weeks.size === 0 ? { place: at + 1, nickname: entry.nickname, ashore: true } : { place: at + 1, nickname: entry.nickname, ashore: false, weeksRowing: streak, activeDays: entry.days, sessions: entry.sessions, strokesThisWeek: entry.strokes }));
+  return ranked.map(({ entry, streak }, at) => (entry.weeks.size === 0 ? { place: at + 1, nickname: entry.nickname, ...crewOf(entry), ashore: true } : { place: at + 1, nickname: entry.nickname, ...crewOf(entry), ashore: false, weeksRowing: streak, activeDays: entry.days, sessions: entry.sessions, strokesThisWeek: entry.strokes }));
 };
 
 /** The nickname and consent a create or a join carries, or the refusal naming the field. */
