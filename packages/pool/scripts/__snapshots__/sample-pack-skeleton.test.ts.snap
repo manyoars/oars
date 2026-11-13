@@ -10,7 +10,7 @@ tags:
 
 # Many Oars: open session skeletons
 
-3 coding-agent session skeletons from Many Oars Co., each a record of the session's steps, errors, recoveries, and human interventions. No transcript text is in this release, and every session ended at least 30 days before it was built (2026-11-13).
+3 coding-agent session skeletons, published by Many Oars Co., each a record of the session's steps, errors, recoveries, and human interventions. No transcript text is in this release, and every session ended at least 30 days before it was built (2026-11-13).
 
 - License and rights: https://manyoars.com/packs#rights.
 - Redaction version: 4; model reasoning: kept. Redaction is best effort.
