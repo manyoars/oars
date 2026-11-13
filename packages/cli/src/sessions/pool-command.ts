@@ -1354,6 +1354,7 @@ export const poolJoin = async (
       say(`Sending ${plural(hashes.length, 'batch', 'batches')} to ${server}.`);
       for (const hash of hashes) sends.push(show(await poolDeposit(deps, { server, send: hash, acceptCovenant: options.acceptCovenant, inEuEeaUk: options.inEuEeaUk })).document);
     }
+    await rememberCrew(deps, storeDir, server, (await signedIn(deps, storeDir, server, JOIN)).token, JOIN);
     say(`Fetching the bundle for ${options.harness ?? 'your most used harness'} ${options.harnessVersion}.`);
     const fetched = show(await poolFetch(deps, { server, harness: options.harness, harnessVersion: options.harnessVersion }));
     return {
