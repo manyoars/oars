@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, createHmac, webcrypto } from 'node:crypto';
 import { getHeapStatistics, setFlagsFromString } from 'node:v8';
 import { runInNewContext } from 'node:vm';
-import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -1245,6 +1245,29 @@ ${user('and goes on', stamp(agentHours))}
       scene.h.deps.now = () => END - 60_000 + HOUR;
       const later = await poolDeposit(scene.h.deps, { server: POOL, covenant: 'v1' });
       expect(later.document).toMatchObject({ sessions: 1, batched: 1, notEnded: 0 });
+    });
+
+    it('counts no session uncaptured and withdraws none when another file replaces the log during the build (poolcompact)', async () => {
+      const { scene } = await quiet(7, 7);
+      const log = paths(scene.staged.storeDir).observations;
+      const rows = readFileSync(log, 'utf8').split('\n').filter((line) => line !== '');
+      // A compaction renames a rewritten log into place; here the rewrite keeps every live row but starts with a long line a reader skips, so each offset the scan recorded now points elsewhere.
+      const swap = `${log}.swap`;
+      writeFileSync(swap, `${['x'.repeat(200_000), ...rows].join('\n')}\n`);
+      const now = scene.h.deps.now;
+      let swapped = false;
+      scene.h.deps.now = () => {
+        // The first clock read inside `poolDeposit` is the session gate, after the scan of the log and before any chunk load.
+        if (!swapped && (new Error().stack ?? '').split(String.fromCharCode(10))[2]?.includes('at poolDeposit ') === true) {
+          renameSync(swap, log);
+          swapped = true;
+        }
+        return now();
+      };
+      await deposited(scene);
+      expect(swapped).toBe(true);
+      expect(scene.document()).toMatchObject({ sessions: 1, batched: 1, notEnded: 0, uncaptured: 0 });
+      expect(outboxFiles(scene)).toHaveLength(1);
     });
 
     it('counts a captured subagent that has no root as not built', async () => {

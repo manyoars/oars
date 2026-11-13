@@ -140,19 +140,19 @@ describe('deposit', () => {
     const staged = stage();
     await deposit(staged.runtime, options(['proj']));
     const file = paths(staged.storeDir).observations;
-    const { latest, spans } = await scanLog(file, undefined, true);
+    const { latest, spans, identity } = await scanLog(file, undefined, true);
     const ids = [...latest.keys()];
     expect(ids.length).toBeGreaterThan(1);
     const only = new Set([ids[0] ?? '']);
     let streamed = 0;
     const byStream = await loadStore(staged.storeDir, undefined, { latest, only, lineRead: () => { streamed += 1; } });
     let seeked = 0;
-    const bySeek = await loadStore(staged.storeDir, undefined, { latest, only, spans, lineRead: () => { seeked += 1; } });
+    const bySeek = await loadStore(staged.storeDir, undefined, { latest, only, spans, identity, lineRead: () => { seeked += 1; } });
     expect(bySeek).toEqual(byStream);
     expect(seeked).toBe((spans?.get(ids[0] ?? '') ?? []).length / 2);
     expect(seeked).toBeLessThan(streamed);
     // Everything wanted at once equals the whole read, order included.
-    expect(await loadStore(staged.storeDir, undefined, { latest, only: new Set(ids), spans })).toEqual(await loadStore(staged.storeDir));
+    expect(await loadStore(staged.storeDir, undefined, { latest, only: new Set(ids), spans, identity })).toEqual(await loadStore(staged.storeDir));
   });
 
   it('keeps in the span index only the lines at the highest rev of each session (spanrev)', async () => {
@@ -167,7 +167,7 @@ describe('deposit', () => {
     const lines = readFileSync(log, 'utf8').split('\n').filter((line) => line !== '').length;
     const indexed = [...(scan.spans?.values() ?? [])].reduce((sum, own) => sum + own.length / 2, 0);
     expect(indexed).toBe(lines / 2);
-    expect(await loadStore(staged.storeDir, undefined, { latest: scan.latest, only: new Set(scan.latest.keys()), spans: scan.spans })).toEqual(await loadStore(staged.storeDir));
+    expect(await loadStore(staged.storeDir, undefined, { latest: scan.latest, only: new Set(scan.latest.keys()), spans: scan.spans, identity: scan.identity })).toEqual(await loadStore(staged.storeDir));
   });
 
   it('reads the same rows when a compaction moves the log between the scan and the chunk load (spancompact)', async () => {
@@ -196,17 +196,17 @@ describe('deposit', () => {
     const staged = stage();
     await deposit(staged.runtime, options(['proj']));
     const file = paths(staged.storeDir).observations;
-    const { latest, spans } = await scanLog(file, undefined, true);
+    const { latest, spans, identity } = await scanLog(file, undefined, true);
     const only = new Set(latest.keys());
-    const before = await loadStore(staged.storeDir, undefined, { latest, only, spans });
+    const before = await loadStore(staged.storeDir, undefined, { latest, only, spans, identity });
     const first = [...only][0] ?? '';
     // A live session writing: a newer rev of a scanned session, and a torn half line with no newline.
     const row = readFileSync(file, 'utf8').split('\n').find((line) => line.includes(`"session":"${first}"`)) ?? '';
     appendFileSync(file, `${row.replace(/"rev":\d+/, '"rev":99')}\n{"kind":"sess`);
-    expect(await loadStore(staged.storeDir, undefined, { latest, only, spans })).toEqual(before);
+    expect(await loadStore(staged.storeDir, undefined, { latest, only, spans, identity })).toEqual(before);
     // A log rewritten shorter than the scan: no span is misread as another session's row.
     writeFileSync(file, 'not a row\n');
-    const after = await loadStore(staged.storeDir, undefined, { latest, only, spans });
+    const after = await loadStore(staged.storeDir, undefined, { latest, only, spans, identity });
     expect(after.sessions).toEqual([]);
     expect(after.errors).toEqual([]);
   });
