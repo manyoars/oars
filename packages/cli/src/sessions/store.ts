@@ -1437,10 +1437,28 @@ const internTool = (tool: ToolObservation, intern: (value: string) => string): T
   ...(tool.segments === undefined ? {} : { segments: tool.segments.map((segment) => ({ ...segment, run: intern(segment.run) })) }),
 });
 
+const SESSION_FIELD = /"session":"((?:[^"\\]|\\.)*)"/g;
+
+/** True when the line carries a `"session":"<id>"` field of one of `ids`. The writer emits compact JSON, so the field of the line's own session is always found; a nested match only keeps the line for the parse to decide. */
+export const namesAny = (line: string, ids: ReadonlySet<string>): boolean => {
+  for (const match of line.matchAll(SESSION_FIELD)) {
+    const value = match[1] ?? '';
+    // An id that JSON escaped (a quote or a backslash in it) is not the raw id: keep the line and let the parse decide.
+    if (value.includes('\\') || ids.has(value)) return true;
+  }
+  return false;
+};
+
 /** What a read keeps beyond the default. */
 export type LoadOptions = {
   /** Keep each session's `messageUsage` entries. Nothing in the store reads them yet, and on a large store they are a third more heap, so a read holds them only when asked. */
   messageUsage?: boolean;
+  /** Read only these sessions' rows (main and subagent ids): a build that handles a chunk at a time holds that chunk, not the history. */
+  only?: ReadonlySet<string>;
+  /** Keep the session records alone, with no prompt, tool, or error rows: enough to gate and place a session without holding its content. */
+  sessionsOnly?: boolean;
+  /** The revs of an earlier `scanLog`: the read skips its own first pass. A build that reads chunk after chunk scans once; a row written after that scan is not seen, like a session that began after the build did. */
+  latest?: ReadonlyMap<string, number>;
 };
 
 const withoutMessageUsage = (session: SessionObservation): SessionObservation => {
@@ -1472,11 +1490,15 @@ export const loadStore = async (storeDir: string, afterFirstPass?: () => Promise
   };
   const held = await openLog(file);
   try {
-    const { latest } = await scanLog(file, held);
+    const latest = options.latest ?? (await scanLog(file, held)).latest;
     await afterFirstPass?.();
     for await (const line of logLines(file, held)) {
+      // A read of a few sessions skips the JSON parse of every other line: the cheap check can only keep a line, never drop one that names a wanted session.
+      if (options.only !== undefined && !namesAny(line, options.only)) continue;
       const observation = observationOf(line);
       if (observation === undefined || observation.rev !== latest.get(observation.session)) continue;
+      if (options.only !== undefined && !options.only.has(observation.session)) continue;
+      if (options.sessionsOnly === true && observation.kind !== 'session') continue;
       if (observation.kind === 'session') of(observation.session).session = options.messageUsage === true ? observation : withoutMessageUsage(observation);
       else if (observation.kind === 'user-prompt') of(observation.session).prompts.push(observation);
       else if (observation.kind === 'tool') of(observation.session).tools.push(internTool(observation, intern));
@@ -1500,11 +1522,11 @@ export const loadStore = async (storeDir: string, afterFirstPass?: () => Promise
     store.tools.push(...tools);
     if (session.parent !== null) {
       store.subagents.push(session);
-      if (isReadable(session.cv)) agents.push({ session, prompts, tools, errorLines, parent: session.parent });
+      if (isReadable(session.cv) && options.sessionsOnly !== true) agents.push({ session, prompts, tools, errorLines, parent: session.parent });
       continue;
     }
     store.sessions.push(session);
-    if (!isReadable(session.cv)) continue;
+    if (!isReadable(session.cv) || options.sessionsOnly === true) continue;
     const derived = deriveSession({ session, prompts, tools, errorLines }, redact);
     store.prompts.push(...derived.prompts);
     store.errors.push(...derived.errors);

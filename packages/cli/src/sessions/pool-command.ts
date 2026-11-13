@@ -13,16 +13,16 @@ import { makeCoverage, readCoverageSetting, writeCoverageSetting } from './cover
 import { checkSession, exclusionPaths, lastWritten, loadTerms, transcriptFilesOf, type Reason } from './exclusion.js';
 import { localNames, makeRedactor, REDACTION_VERSION, redactTranscript } from './redact.js';
 import { recordSend, recordWire, newTally, tallyBatch } from '../telemetry/wire.js';
-import { discardStale, FIELD_ROWS, wasShown, fieldsOf, heldAcross, lockedAcross, rescanPulled, machineKeys, markShown, noteMachineKey, outboxFolder, partsOf, pulledAt, readPulled, readRemoved, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, writePulled, writeRemoved, type LockRefusal } from './pool-outbox.js';
+import { discardStale, FIELD_ROWS, fieldsOf, heldAcross, lockedAcross, namesHeldAcross, shownHashes, wasShown, rescanPulled, machineKeys, markShown, noteMachineKey, outboxFolder, partsOf, pulledAt, readPulled, readRemoved, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, writePulled, writeRemoved, type LockRefusal } from './pool-outbox.js';
 import { deriveConsequences } from './recall-consequence.js';
 import { readRecalls } from './recall-object.js';
 import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, recommendationsOf, sessionsOf, skeletonOf, unpinnedKid, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
-import { carriedDeltas, heldDeltas, keptDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
+import { carriedDeltasByWindow, heldDeltas, keptDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { rawAllowed, rawStale, sendsOf } from './pool-choices.js';
 import { heldRaw, rawParts, removeRawExcept, writeRaw } from './pool-raw.js';
 import { SendInterrupted, SendLockBusy, watchInterrupt, withSendLock, type BusyDetail, type LockFs, type LockTimes, type Waiting } from './pool-send-lock.js';
-import { markSent, retirePulled, sentLog } from './pool-sent.js';
+import { markSent, retirePulled, sentHashes, sentLog } from './pool-sent.js';
 import { shellReader } from './projection.js';
 import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
 import { contentHash, FIRST_ORDER_FAMILIES } from './read.js';
@@ -31,7 +31,7 @@ import { CAPTURE_VERSION, harnessOf as sessionHarness, type Harness } from './sc
 import { machineIdOf } from './machine-ids.js';
 import { machineOf, type MachineConfig } from './machine.js';
 import { scanCache } from './machine-scan-cache.js';
-import { loadStore, localSalt, readRedactDomains, readSkeletons, readState, updatePoolChoices, type SessionsRuntime } from './store.js';
+import { loadStore, paths, scanLog, localSalt, readRedactDomains, readSkeletons, readState, updatePoolChoices, type SessionsRuntime, type Store } from './store.js';
 import { runGit, type Git } from './survival.js';
 import { vocabulary } from './vocab-load.js';
 import { mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
@@ -164,6 +164,9 @@ const TRY_AGAIN = 'Run the same command to try again.';
 const RETRY = `${NOT_MARKED} ${TRY_AGAIN}`;
 /** Said after a stop or a stall once the request carrying the batch had gone out: the pool may hold it even though nothing here saw the answer. */
 const MAY_HAVE_RECEIVED = 'The pool may already have received it.';
+
+/** How many sessions a build reads and writes at once: the most whose prompts and tools are in memory together. */
+const BUILD_CHUNK = 100;
 
 /** What `deposit` says after it writes the outbox: the covenant (the person's consent, docs/covenant 2.1) already lets the background sender send what is queued, with or without this command. A machine's batches are never sent by it. */
 const SENT_LATER = 'Nothing was sent yet. Once the covenant is accepted, oars sends what is queued automatically, in the background.';
@@ -454,7 +457,7 @@ const readerOf = (deps: RunDeps, signal?: AbortSignal): Lines => {
 };
 
 /** A send stops here when the server is closed or wants a covenant accepted, before the batch is read for the last time. */
-const openCovenant = async (deps: RunDeps, server: string, token: string, accept: string | undefined, region: Region | undefined, via: Sender, signal?: AbortSignal, shared?: Lines): Promise<boolean> => {
+const openCovenant = async (deps: RunDeps, server: string, token: string, accept: string | undefined, region: Region | undefined, via: Sender, signal?: AbortSignal, offTerminal: () => Promise<string> = () => Promise.resolve('run this command from one'), refuseAtTerminal = false, shared?: Lines): Promise<boolean> => {
   const reply = await ask(deps, DEPOSIT, server, '/v1/covenant', { token }, via);
   if (reply.status !== 200 || !isObject(reply.body)) throw refusal(DEPOSIT, reply);
   const version = textIn(reply.body, 'version');
@@ -470,8 +473,9 @@ const openCovenant = async (deps: RunDeps, server: string, token: string, accept
   const screen = screenIn(reply.body);
   if (screen === undefined) throw notAccepted(`The pool has no text for covenant ${version} yet, so there is nothing to show and nothing can be accepted. Nothing was accepted.`);
   // Assent is a person typing the phrase the screen states. A flag or a script on stdin is not one, so off a terminal nothing is asked and nothing is accepted.
-  if (!isTerminal(deps)) {
-    throw notAccepted(`Covenant ${version} is not accepted for this account. Accepting it takes a person at a terminal who reads it and types its phrase: run this command from one. Nothing was accepted.`);
+  // A bulk send never shows the screen: a person reads and accepts through the one-batch command, so a terminal is refused the same way.
+  if (refuseAtTerminal || !isTerminal(deps)) {
+    throw notAccepted(`Covenant ${version} is not accepted for this account. Accepting it takes a person at a terminal who reads it and types its phrase: ${await offTerminal()}. Nothing was accepted.`);
   }
   deps.io.stderr(`${OFFER_BEFORE.join('\n')}\n`);
   deps.io.stderr(`\n${screen.text}\n\n> `);
@@ -680,6 +684,128 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
   }
 };
 
+/** What `--send-all` does with the pool's busy answers: a 429 or a 5xx is asked again, up to `SEND_ATTEMPTS` in all, after the wait the pool names in `retry-after` (seconds, at most 30) or else 1 second, then 2. Any other answer, and a request that never got one, goes up unchanged. A batch or a part sent again is harmless, so the retry covers every request alike. */
+export type Pause = (ms: number, signal?: AbortSignal) => Promise<void>;
+const reasonOf = (signal: AbortSignal | undefined): Error => (signal?.reason instanceof Error ? signal.reason : new Error('Interrupted.'));
+export const sleeps: Pause = (ms, signal) =>
+  new Promise((resolve, reject) => {
+    // Ctrl-C during a wait ends it with the interrupt, instead of being ignored until the wait is over.
+    if (signal?.aborted === true) {
+      reject(reasonOf(signal));
+      return;
+    }
+    const abort = (): void => {
+      clearTimeout(timer);
+      reject(reasonOf(signal));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', abort, { once: true });
+  });
+const retrying = (via: Sender, pause: Pause, signal: AbortSignal): Sender => async (request) => {
+  for (let attempt = 1; ; attempt += 1) {
+    const reply = await via(request);
+    if ((reply.status !== 429 && reply.status < 500) || attempt >= SEND_ATTEMPTS) return reply;
+    const named = Number(reply.headers.get('retry-after'));
+    await pause(Number.isFinite(named) && named > 0 ? Math.min(named, 30) * 1000 : 1000 * 2 ** (attempt - 1), signal);
+  }
+};
+
+/** Batches between two progress lines of `--send-all`. */
+const PROGRESS_EVERY = 100;
+
+/**
+ * `deposit --send-all`: the lock and the covenant of `--send`, once, then every batch of the outbox in name order, one file read at a time. A batch whose hash `sent.log` holds is not sent again, which is what makes a rerun send only what is left (the log is
+ * written after each batch, so a run that stops loses at most the one in flight, and the pool reads a batch sent again as the same deposit). A batch that `oars pool outbox` never printed, that changed on disk, or that a pulled-batch rule holds back is skipped and counted.
+ * The first batch that fails ends the run: the counts print, and the error goes up with its own exit code. Only counts and hashes print, never a session's content.
+ */
+const sendAll = async (deps: RunDeps, options: { outbox: string; server: string; token: string; acceptCovenant: string | undefined; region: Region | undefined; via: Sender | undefined; lock: SendLock | undefined; pause: Pause | undefined }): Promise<Outcome> => {
+  const { outbox, server, token } = options;
+  const refuse = (code: string, title: string): CliError => new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code, title, status: 409 });
+  const interrupt = watchInterrupt();
+  const net = options.via ?? networkSender(deps, DEPOSIT, { stallMs: SEND_STALL_MS, signal: interrupt.signal });
+  const via = retrying(net, options.pause ?? sleeps, interrupt.signal);
+  try {
+    return await withSendLock(outbox, async () => {
+      const scan = await rescanPulled(outbox, await currentTerms(deps));
+      const done = await sentHashes(outbox);
+      const shown = await shownHashes(outbox);
+      // The one-batch command that shows the screen: the first batch that was shown and is not sent.
+      const oneBatch = async (): Promise<string> => {
+        for await (const named of namesHeldAcross(outbox)) {
+          if (shown.has(named.hash) && !done.has(named.hash) && !(named.pulled && !scan.open) && (await unchangedBytes(named.file, named.hash)) !== undefined) return `run oars pool deposit --send ${named.hash} at a terminal to read it and accept`;
+        }
+        return 'run oars pool deposit --send <hash> at a terminal to read it and accept';
+      };
+      await openCovenant(deps, server, token, options.acceptCovenant, options.region, via, interrupt.signal, oneBatch, true);
+      const tally = { sent: 0, skipped: 0, alreadySent: 0, failed: 0, left: 0 };
+      const handled = new Set<string>();
+      const line = (): string => `${String(tally.sent)} sent, ${String(tally.skipped)} skipped, ${String(tally.alreadySent)} already sent, ${String(tally.failed)} failed, ${String(tally.left)} left`;
+      let ended: { error: unknown } | undefined;
+      try {
+        for await (const named of namesHeldAcross(outbox)) {
+          handled.add(named.hash);
+          if (done.has(named.hash)) {
+            tally.alreadySent += 1;
+          } else {
+            // Read now, hashed again, and sent: the one batch in memory. A file that no longer hashes to its name is the "changed" case.
+            const bytes = shown.has(named.hash) && !(named.pulled && !scan.open) ? await unchangedBytes(named.file, named.hash) : undefined;
+            if (bytes === undefined) {
+              tally.skipped += 1;
+            } else {
+              try {
+                await postBatch(deps, { server, token, bytes, hash: named.hash, via });
+              } catch (error) {
+                tally.failed = 1;
+                throw error;
+              }
+              await markSent(outbox, named.hash, deps.now());
+              tally.sent += 1;
+            }
+          }
+          const count = tally.sent + tally.skipped + tally.alreadySent;
+          if (count % PROGRESS_EVERY === 0) deps.io.stderr(`${String(count)} batches handled: ${line()}.
+`);
+        }
+      } catch (error) {
+        ended = { error };
+      }
+      // A pulled batch whose hash is in `sent.log` is done, however the run ended; an error of the loop wins over one of the retiring.
+      try {
+        await retirePulled(outbox, DEPOSIT);
+      } catch (error) {
+        if (ended === undefined) throw error;
+      }
+      if (ended !== undefined) {
+        // Shown, not sent, not reached: counted by name alone, without reading a file. A batch a rerun would skip (never shown) is not left.
+        for await (const named of namesHeldAcross(outbox)) {
+          if (!handled.has(named.hash) && !done.has(named.hash) && shown.has(named.hash) && !(named.pulled && !scan.open)) tally.left += 1;
+        }
+        deps.io.stderr(`Stopped: ${line()}. Run the same command again to send what is left.
+`);
+        // The counts reach the --json failure document too, not only stderr.
+        if (ended.error instanceof CliError) throw new CliError(ended.error.message, ended.error.exitCode, ended.error.step, ended.error.problem, { ...ended.error.details, tally });
+        throw ended.error;
+      }
+      return { document: { ok: true, server, ...tally }, text: `Done: ${line()}.` };
+    }, options.lock?.times, options.lock?.fs, {
+      onWait: (waiting) => {
+        deps.io.stderr(`${waitingLine(waiting)}
+`);
+      },
+      signal: interrupt.signal,
+    });
+  } catch (error) {
+    if (error instanceof SendLockBusy) throw refuse('send_locked', busyLine(error.detail));
+    if (error instanceof SendInterrupted) throw stopped(DEPOSIT, error, false);
+    throw error;
+  } finally {
+    interrupt.stop();
+  }
+};
+
 /**
  * How long the pool gets to answer one request of a send (an interactive `--send` and the background sender) before the send ends. It is a deadline for the whole request, the upload and the answer together,
  * not an idle timeout: a batch is one session's skeleton, whose largest fixture is 887 KB (docs/pool.md), which a link of 240 kbit/s or better uploads inside 30 seconds. A slower link fails each try with the stall
@@ -792,24 +918,29 @@ export const machineKeyOf = (machine: MachineConfig, session: string): string =>
  */
 export const poolDeposit = async (
   deps: RunDeps,
-  options: { server?: string | undefined; acceptCovenant?: string | undefined; inEuEeaUk?: string | undefined; send?: string | undefined; via?: Sender | undefined; git?: Git | undefined; session?: string | undefined; covenant?: string | undefined; lock?: SendLock | undefined },
+  options: { server?: string | undefined; acceptCovenant?: string | undefined; inEuEeaUk?: string | undefined; send?: string | undefined; sendAll?: boolean | undefined; pause?: Pause | undefined; via?: Sender | undefined; git?: Git | undefined; session?: string | undefined; covenant?: string | undefined; lock?: SendLock | undefined },
 ): Promise<Outcome> => {
   const runtime = runtimeOf(deps);
   const server = poolServer(deps.env, DEPOSIT, options.server);
   // A machine (`OARS_HOST_CLASS`, see machine.ts) builds at every Stop and sends nothing from here, so it signs nobody in: the account part of its batch key is its own name, and the holding route's `id` replaces it.
   const machine = machineOf(deps.env);
-  if (machine !== undefined && options.send !== undefined) throw usage('A machine builds batches into its outbox and sends none: --send is for a signed-in person.', DEPOSIT);
+  if (options.send !== undefined && options.sendAll === true) throw usage('--send and --send-all together: --send sends the one batch whose hash you name, and --send-all sends every batch that oars pool outbox printed. Use one. Nothing was sent.', DEPOSIT);
+  if (machine !== undefined && (options.send !== undefined || options.sendAll === true)) throw usage('A machine builds batches into its outbox and sends none: --send and --send-all are for a signed-in person.', DEPOSIT);
   const { account, token } = machine === undefined ? await signedIn(deps, runtime.storeDir, server, DEPOSIT) : { account: machineAccount(machine), token: '' };
   // A client past `registry_max_age` builds no batch (spec Section 1.3): its sessions wait in `A` and nothing is lost. This comes before anything is written or sent.
   const expired = vocabularyExpired(deps);
   if (expired !== undefined) throw expired;
   // Accepting the covenant is a step of sending a batch: alone it would exit 0 as though something had been sent under it.
+  const accepting = 'accept with oars pool deposit --send <hash>, which shows the covenant screen';
+  if (options.sendAll === true && options.acceptCovenant !== undefined) throw usage(`--accept-covenant belongs to --send: --send-all never accepts a covenant, so ${accepting}. Nothing was accepted.`, DEPOSIT);
+  if (options.sendAll === true && options.inEuEeaUk !== undefined) throw usage(`${REGION_FLAG} belongs to --send: --send-all never accepts a covenant, so ${accepting}. Nothing was accepted.`, DEPOSIT);
   if (options.send === undefined && options.acceptCovenant !== undefined) throw usage('--accept-covenant belongs to --send: it names the covenant version expected when a person accepts before a send. Nothing was accepted.', DEPOSIT);
   if (options.send === undefined && options.inEuEeaUk !== undefined) throw usage(`${REGION_FLAG} belongs to --send: it answers the question asked when a person accepts before a send. Nothing was accepted.`, DEPOSIT);
   const region = options.inEuEeaUk === undefined ? undefined : regionOf(options.inEuEeaUk);
   if (options.inEuEeaUk !== undefined && region === undefined) throw usage(`${REGION_FLAG} takes yes or no, not "${options.inEuEeaUk}". Nothing was accepted.`, DEPOSIT);
   const outbox = outboxFolder(runtime.storeDir, server);
   await mkdirOwnerOnly(outbox);
+  if (options.sendAll === true) return sendAll(deps, { outbox, server, token, acceptCovenant: options.acceptCovenant, region, via: options.via, lock: options.lock, pause: options.pause });
   if (options.send !== undefined) return sendBatch(deps, { outbox, server, token, hash: options.send, acceptCovenant: options.acceptCovenant, region, via: options.via, lock: options.lock });
   const { terms } = exclusionPaths(runtime.projectsRoot, deps.env);
   const saved = await readState(runtime.storeDir);
@@ -834,6 +965,7 @@ export const poolDeposit = async (
   const refusedFields = new Set<string>();
   const roots = new Map<string, TranscriptRoot>((await readSkeletons(runtime.storeDir, undefined, true)).skeletons.map(({ session, merkleRoot, leaves }) => [session, { merkleRoot, leaves }]));
   // The sessions that pass both gates and have ended, in the order the store holds them: the windows of a delta are counted over these alone, and the batch of each is built after, once its deltas are known.
+  // Only the session records are held for the gates; a session's prompts and tools are read again when its window or its batch needs them (BUILD_CHUNK at a time), so the history is never in memory at once.
   const ready: { records: SessionRecords; key: string }[] = [];
   // A session that fails a gate loses its earlier batch at once, so a later throw in this pass cannot leave one in the outbox.
   const withdraw = async (key: string): Promise<void> => {
@@ -842,7 +974,21 @@ export const poolDeposit = async (
   };
   // The sessions a Stop does not name that still pass the read-only gates: they only fill the windows of a delta, and are never counted, withdrawn, or built.
   const history: SessionRecords[] = [];
-  const localStore = await loadStore(runtime.storeDir);
+  // One scan of the log for the whole build: the head read and every chunk read take its revs, so a deposit reads the log's revs once, not once per chunk.
+  const { latest } = await scanLog(paths(runtime.storeDir).observations);
+  const localStore = await loadStore(runtime.storeDir, undefined, { sessionsOnly: true, latest });
+  const childrenOf = new Map<string, string[]>();
+  for (const agent of localStore.subagents) {
+    const parent = agent.parent ?? '';
+    const list = childrenOf.get(parent) ?? [];
+    list.push(agent.session);
+    childrenOf.set(parent, list);
+  }
+  // The full records of some sessions (and their subagents), read from the log with nothing else.
+  const readRecords = async (ids: ReadonlySet<string>): Promise<{ store: Store; records: Map<string, SessionRecords> }> => {
+    const store = await loadStore(runtime.storeDir, undefined, { latest, only: new Set([...ids].flatMap((id) => [id, ...(childrenOf.get(id) ?? [])])) });
+    return { store, records: new Map(sessionsOf(store, roots).map((records) => [records.main.session, records])) };
+  };
   // A damaged list stops the pass before anything is built: it must never read as "nothing was removed".
   const removedList = await readRemoved(outbox, DEPOSIT);
   const removedKeys = new Set(Object.keys(removedList));
@@ -902,49 +1048,55 @@ export const poolDeposit = async (
   // A delta is built from the sessions that passed, carried by the batch of the session that filled its after window, and marked sent only once that batch is written: a deposit that stops first builds it again.
   // A cloud machine has no history of its own to compare a window against (every VM starts clean), so it carries none.
   const placed = machine?.hostClass === 'cloud' ? [] : [...ready.map(({ records }) => records), ...history].flatMap((records) => placedOf(records) ?? []);
-  const carried = carriedDeltas(account, placed, await sentDeltas(outbox));
+  const carried = await carriedDeltasByWindow(account, placed, await sentDeltas(outbox), async (ids) => (await readRecords(ids)).records, new Set(ready.map(({ records }) => records.main.session)));
   // The coverage bands (t871): the operator's two settings, read here, and the team band counted from the local git log. Nothing is looked up, and anything unread goes as unknown.
   const coverageOf = makeCoverage(runtime, await readCoverageSetting(runtime.storeDir), options.git ?? runGit);
   // The recommendations each session was shown or held back from, read from the local rows with their windows, so a shown row stays shown at the pool and a session with none sends none (the pool reads that as unknown).
-  const recalls = deriveConsequences(localStore, await readRecalls(runtime.storeDir));
-  for (const { records, key } of ready) {
-    const delta = carried.get(records.main.session);
-    // A machine builds the open session at every Stop and SessionEnd, so the one it names keeps what its own earlier batch carried and takes only what is new; any other deposit builds a session once.
-    const entries = machine !== undefined && options.session !== undefined ? keptDeltas(await heldDeltas(outbox, key), delta?.entries ?? []) : delta?.entries;
-    const skeleton = skeletonOf(records, key, shellReader(vocabulary()), contentHash, entries, gate, await coverageOf(records.main), recommendationsOf(recalls, records.main.session));
-    if (skeleton === null) {
-      counts.uncaptured += 1;
-      await withdraw(key);
-      continue;
-    }
-    const parsed = parseSkeleton(skeleton);
-    // The server reads a value outside its lists as `other` and keeps a field it does not know, so the parser no longer refuses either: the emitter is the privacy control, and a batch this client built holds neither.
-    const refusedAt = parsed.ok ? parsed.extensions[0]?.at : parsed.field;
-    if (!parsed.ok || refusedAt !== undefined) {
-      counts.refused += 1;
-      refusedFields.add(refusedAt ?? '');
-      await withdraw(key);
-      continue;
-    }
-    // Noted before the batch is written: a person's sweep that runs between the two lines would delete a batch it cannot yet tell is a machine's.
-    if (machine !== undefined) await noteMachineKey(outbox, key);
-    builtBytes += (await writeBatch(outbox, key, parsed.skeleton)).bytes;
-    // The raw copy comes only after both gates and only with a yes to the raw prompt and a folder not at skeleton only: each transcript of the session, redacted here, before it is queued.
-    if (rawAllowed(saved.pool, records.main.project, covenant)) {
-      let place = 0;
-      for (const file of await transcriptFilesOf(runtime, records.main.project, records.main.session)) {
-        const redacted = redactTranscript(await readFile(file.path, 'utf8'), saved.redactDomains, names, injectedKey);
-        counts.raw.bytes += (await writeRaw(outbox, key, place, redacted.text)).bytes;
-        counts.raw.copies += 1;
-        counts.raw.masked += redacted.masked;
-        place += 1;
+  const recorded = await readRecalls(runtime.storeDir);
+  for (let from = 0; from < ready.length; from += BUILD_CHUNK) {
+    const chunk = ready.slice(from, from + BUILD_CHUNK);
+    const { store: chunkStore, records: full } = await readRecords(new Set(chunk.map(({ records }) => records.main.session)));
+    const recalls = deriveConsequences(chunkStore, recorded);
+    for (const { records: head, key } of chunk) {
+      const records = full.get(head.main.session);
+      const delta = carried.get(head.main.session);
+      // A machine builds the open session at every Stop and SessionEnd, so the one it names keeps what its own earlier batch carried and takes only what is new; any other deposit builds a session once.
+      const entries = machine !== undefined && options.session !== undefined ? keptDeltas(await heldDeltas(outbox, key), delta?.entries ?? []) : delta?.entries;
+      const skeleton = records === undefined ? null : skeletonOf(records, key, shellReader(vocabulary()), contentHash, entries, gate, await coverageOf(head.main), recommendationsOf(recalls, head.main.session));
+      if (skeleton === null) {
+        counts.uncaptured += 1;
+        await withdraw(key);
+        continue;
       }
-      rawKept.add(key);
+      const parsed = parseSkeleton(skeleton);
+      // The server reads a value outside its lists as `other` and keeps a field it does not know, so the parser no longer refuses either: the emitter is the privacy control, and a batch this client built holds neither.
+      const refusedAt = parsed.ok ? parsed.extensions[0]?.at : parsed.field;
+      if (!parsed.ok || refusedAt !== undefined) {
+        counts.refused += 1;
+        refusedFields.add(refusedAt ?? '');
+        await withdraw(key);
+        continue;
+      }
+      // Noted before the batch is written: a person's sweep that runs between the two lines would delete a batch it cannot yet tell is a machine's.
+      if (machine !== undefined) await noteMachineKey(outbox, key);
+      builtBytes += (await writeBatch(outbox, key, parsed.skeleton)).bytes;
+      // The raw copy comes only after both gates and only with a yes to the raw prompt and a folder not at skeleton only: each transcript of the session, redacted here, before it is queued.
+      if (rawAllowed(saved.pool, head.main.project, covenant)) {
+        let place = 0;
+        for (const file of await transcriptFilesOf(runtime, head.main.project, head.main.session)) {
+          const redacted = redactTranscript(await readFile(file.path, 'utf8'), saved.redactDomains, names, injectedKey);
+          counts.raw.bytes += (await writeRaw(outbox, key, place, redacted.text)).bytes;
+          counts.raw.copies += 1;
+          counts.raw.masked += redacted.masked;
+          place += 1;
+        }
+        rawKept.add(key);
+      }
+      tallyBatch(wireTally, parsed.skeleton);
+      await markDeltasSent(outbox, delta?.marks ?? []);
+      built.add(key);
+      counts.batched += 1;
     }
-    tallyBatch(wireTally, parsed.skeleton);
-    await markDeltasSent(outbox, delta?.marks ?? []);
-    built.add(key);
-    counts.batched += 1;
   }
   // The batch of a session or account this store no longer holds goes too. A machine builds one session at a time and nothing here has the others in hand, so it sweeps nothing: nothing is withdrawn but what a gate refused.
   if (machine === undefined) {
@@ -997,7 +1149,6 @@ export const poolOutbox = async (deps: RunDeps, options: { server?: string | und
   const server = poolServer(deps.env, OUTBOX, options.server);
   const { token } = await signedIn(deps, runtime.storeDir, server, OUTBOX);
   const outbox = outboxFolder(runtime.storeDir, server);
-  const { batches, edited } = await heldAcross(outbox);
   const masker = new Masker();
   masker.add(token);
   const sent = await sentLog(outbox);
@@ -1009,7 +1160,15 @@ export const poolOutbox = async (deps: RunDeps, options: { server?: string | und
     print?.(`${state.wrote ? '\n\n' : ''}${block}`);
     state.wrote = true;
   };
-  for (const batch of batches) {
+  // One batch is read at a time: the outbox of a 6,500-session history is gigabytes, far past what one array of them holds.
+  let edited = 0;
+  for await (const named of namesHeldAcross(outbox)) {
+    const bytes = await unchangedBytes(named.file, named.hash);
+    if (bytes === undefined) {
+      edited += 1;
+      continue;
+    }
+    const batch = { hash: named.hash, bytes };
     const fields = options.explain === true ? explained(batch.bytes) : undefined;
     // A batch past one request prints every part's request, in the order they are sent.
     const request = callsOf(token, batch.bytes, batch.hash).map((call) => printed(outgoing(deps, server, POOL_DEPOSITS, call), masker)).join('\n');
@@ -1311,7 +1470,7 @@ export const poolJoin = async (
     if (hashes.length === 0) {
       record('covenant', nothingPrepared ? 'none' : 'skipped');
     } else {
-      record('covenant', (await openCovenant(deps, server, token, options.acceptCovenant, region, via, interrupt.signal, reader)) ? 'done' : 'skipped');
+      record('covenant', (await openCovenant(deps, server, token, options.acceptCovenant, region, via, interrupt.signal, undefined, false, reader)) ? 'done' : 'skipped');
     }
 
     begin('send');

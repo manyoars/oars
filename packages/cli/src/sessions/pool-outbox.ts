@@ -272,23 +272,37 @@ export interface Held {
  * under any other stamp it is only a batch `pulled.json` lists there, since anything else in that folder is stale and is never printed or sent.
  */
 export const heldBatches = async (outbox: string, stamp: string = currentStamp()): Promise<{ batches: Held[]; edited: number }> => {
+  const batches: Held[] = [];
+  let edited = 0;
+  for await (const named of namesHeld(outbox, stamp)) {
+    const bytes = await unchangedBytes(named.file, named.hash);
+    if (bytes === undefined) edited += 1;
+    else batches.push({ ...named, bytes });
+  }
+  return { batches, edited };
+};
+
+/** A batch file of the outbox, found by its name alone: nothing of it is read yet, so a run over thousands of them holds one at a time. */
+export type HeldName = Omit<Held, 'bytes'>;
+
+/** The batch files filed under this stamp, by name, in name order (the same ones `heldBatches` reads, whether or not they still hash to their names). */
+export async function* namesHeld(outbox: string, stamp: string = currentStamp()): AsyncGenerator<HeldName> {
   const folder = join(outbox, stamp);
   const listed = await pulledAt(outbox, stamp);
   const here = stamp === currentStamp();
-  const batches: Held[] = [];
-  let edited = 0;
   for (const name of await namesIn(folder)) {
     const found = BATCH_FILE.exec(name);
     if (found === null) continue;
     const [, key = '', hash = ''] = found;
     if (!here && !listed.has(key)) continue;
-    const file = join(folder, name);
-    const bytes = await unchangedBytes(file, hash);
-    if (bytes === undefined) edited += 1;
-    else batches.push({ key, stamp, pulled: listed.has(key), hash, file, bytes });
+    yield { key, stamp, pulled: listed.has(key), hash, file: join(folder, name) };
   }
-  return { batches, edited };
-};
+}
+
+/** `namesHeld` over every stamp a send reads, the current one first. */
+export async function* namesHeldAcross(outbox: string): AsyncGenerator<HeldName> {
+  for (const stamp of await sendStamps(outbox)) yield* namesHeld(outbox, stamp);
+}
 
 /** The stamps a send reads: the current one, then every other stamp `pulled.json` lists. A listed name that is not a stamp folder is not a path this reads. */
 export const sendStamps = async (outbox: string): Promise<string[]> => {
@@ -347,6 +361,16 @@ const shownFile = (outbox: string): string => join(outbox, 'shown.log');
 export const markShown = async (outbox: string, hash: string, at: number): Promise<void> => {
   await mkdirOwnerOnly(outbox);
   await appendOwnerOnly(shownFile(outbox), `${hash} ${new Date(at).toISOString()}\n`);
+};
+
+/** Every hash `shown.log` holds, read once: a run over thousands of batches must not read the file for each. */
+export const shownHashes = async (outbox: string): Promise<Set<string>> => {
+  try {
+    return new Set((await readFile(shownFile(outbox), 'utf8')).split('\n').map((line) => line.split(' ')[0] ?? '').filter((hash) => hash !== ''));
+  } catch (error) {
+    if (isMissing(error)) return new Set();
+    throw error;
+  }
 };
 
 export const wasShown = async (outbox: string, hash: string): Promise<boolean> => {
