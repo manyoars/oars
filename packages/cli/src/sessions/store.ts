@@ -651,7 +651,7 @@ interface Folded {
   /** The pool step's input, or why it could not be folded: the pool is optional to a deposit, so a failure there is reported by `currentPool`, not thrown. */
   folds: PoolFolds | Error;
   derive: DeriveFold;
-  /** The index's own read fold: added on every run, so a pool that fails costs the index nothing. */
+  /** The index's own read fold: added on every run, so a pool that fails costs the index only its fit reads' read IDs (the shapes come from the always-on read fold). */
   reads: ReadFolds;
   counts: { prompts: number; tools: number };
 }
@@ -694,7 +694,7 @@ const foldRuns = async (runtime: SessionsRuntime): Promise<Folded> => {
   runtime.refreshStep?.('scan');
   const order = runOrder(scan);
   const size = Math.max(1, Math.floor(runtime.refreshRun ?? REFRESH_RUN));
-  // Loaded here, not at the top: the pool imports every read family, and a lookup hook never reaches this step. A failure to load or fold costs the index its fit reads, as a failure of `currentPool` does.
+  // Loaded here, not at the top: the pool imports every read family, and a lookup hook never reaches this step. A failure to load or fold costs the index only its fit reads' read IDs (the shapes come from the always-on read fold), as a failure of `currentPool` does.
   let pool: PoolFold | Error;
   try {
     const { poolFold } = await import('./pool-fold.js');
