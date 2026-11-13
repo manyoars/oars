@@ -11,7 +11,7 @@ import { SKELETON_FORMAT, type SessionSkeleton } from '../../cli/src/sessions/po
 import { deposit, loadStore, paths, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { runGit } from '../../cli/src/sessions/survival.js';
 import { rolloutLine, stageCodex } from '../../cli/src/sessions/test-support.js';
-import { buildPack, decodedStrings, HARNESS_TERMS, keyIdOf, main, matchIdOf, ownerOf, parseOwners, secretIn, serverKeyOf, skeletonUnder, USAGE, type Census, type ManifestRow, type PackCounts, type PackOptions, type Tally } from './sample-pack.js';
+import { buildPack, decodedStrings, DEFAULT_HEAP_MB, HARNESS_TERMS, heapMbOf, heapRelaunch, keyIdOf, main, matchIdOf, ownerOf, parseOwners, secretIn, serverKeyOf, skeletonUnder, USAGE, type Census, type ManifestRow, type PackCounts, type PackOptions, type Tally } from './sample-pack.js';
 import { MANIFEST_OBJECTS, validate } from './validate-pack.js';
 
 // Every session the exclusion check was asked about, in call order: the frame-first rule is proved by who was never asked.
@@ -1780,6 +1780,109 @@ describe('a pack refuses to finish with a raw id left in it (t1135 item 4)', () 
     await stored(f);
     expect((await buildPack(f.runtime, options(f))).emitted).toBe(1);
     expect(existsSync(`${f.out}.partial`)).toBe(false);
+  });
+});
+
+describe('--dry-run (t1271)', () => {
+  const args = (f: Fixture, ...extra: string[]): string[] => ['--terms', f.terms, '--owners', f.owners, '--index-key', f.indexKey, '--buyer-key', 'sample', '--out', f.out, '--min-turns', '1', ...extra];
+  // Every file and folder under the fixture, so "writes nothing" is a comparison with what was there before.
+  const listing = (root: string): string[] => readdirSync(root, { recursive: true, encoding: 'utf8' }).sort();
+  const packOf = (out: string): unknown => JSON.parse(readFileSync(join(out, 'pack.json'), 'utf8'));
+  const bytesOf = (out: string): number => {
+    const pack = packOf(out);
+    return typeof pack === 'object' && pack !== null && 'bytes' in pack && typeof pack.bytes === 'number' ? pack.bytes : Number.NaN;
+  };
+
+  it('prints the session count and the size the pack would have, and writes no pack, partial, or index row', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done')]);
+    f.write('-work-oars', S(2), [user(S(2), 1, 'run the build'), assistant(S(2), 1, 'green')]);
+    await stored(f);
+    const before = listing(f.root);
+    const printed: string[] = [];
+    expect(await main(args(f, '--dry-run'), { runtime: f.runtime, print: (text) => printed.push(text) })).toBe(0);
+    expect(listing(f.root)).toEqual(before);
+    expect(existsSync(f.out)).toBe(false);
+    expect(existsSync(`${f.out}.partial`)).toBe(false);
+    expect(existsSync(join(f.root, 'index.jsonl'))).toBe(false);
+    // The estimate is the byte count a real run on the same inputs records in pack.json.
+    expect(await main(args(f), { runtime: f.runtime, print: () => undefined })).toBe(0);
+    const bytes = bytesOf(f.out);
+    expect(bytes).toBeGreaterThan(0);
+    expect(printed.join('\n')).toContain(`Dry run: would write 2 sessions to ${f.out}, about ${String(bytes)} bytes (${(bytes / 1048576).toFixed(1)} MB). Nothing was written.`);
+  });
+
+  it('still refuses an output folder that is not empty, since the real run would', async () => {
+    const f = fixture();
+    mkdirSync(f.out);
+    writeFileSync(join(f.out, 'old.txt'), 'x');
+    const printed: string[] = [];
+    expect(await main(args(f, '--dry-run'), { runtime: f.runtime, print: (text) => printed.push(text) })).toBe(2);
+    expect(printed.join('\n')).toMatch(/not empty/);
+  });
+
+  it('leaves a real run without the flag as it was: no byte count in the printout or in the counts', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    const printed: string[] = [];
+    expect(await main(args(f), { runtime: f.runtime, print: (text) => printed.push(text) })).toBe(0);
+    expect(printed.join('\n')).toContain(`Wrote 1 sessions to ${f.out}`);
+    expect(printed.join('\n')).not.toContain('Dry run');
+    expect(packOf(f.out)).toMatchObject({ counts: { emitted: 1 } });
+    expect(packOf(f.out)).not.toHaveProperty('counts.bytes');
+  });
+});
+
+describe('--max-heap-mb (t1271)', () => {
+  const required = (f: Fixture): string[] => ['--terms', f.terms, '--owners', f.owners, '--index-key', f.indexKey, '--buyer-key', 'sample', '--out', f.out];
+  const script = fileURLToPath(new URL('sample-pack.mjs', import.meta.url));
+
+  it('asks for 8192 MB without the flag, and for the value with it; a value that is not a whole number of 1 or more is NaN', () => {
+    expect(DEFAULT_HEAP_MB).toBe(8192);
+    expect(heapMbOf(['--size', '5'])).toBe(8192);
+    expect(heapMbOf(['--max-heap-mb', '12000', '--dry-run'])).toBe(12000);
+    for (const bad of ['0', '-1', '1.5', 'many', '']) expect(heapMbOf(['--max-heap-mb', bad]), bad).toBeNaN();
+    expect(heapMbOf(['--max-heap-mb'])).toBeNaN();
+  });
+
+  it('plans one relaunch under the wanted heap when the process has less, and none when it has enough, the value is bad, or this already is the relaunch', () => {
+    expect(heapRelaunch([], 4144, false)).toEqual(['--max-old-space-size=8192']);
+    expect(heapRelaunch(['--max-heap-mb', '2048'], 1024, false)).toEqual(['--max-old-space-size=2048']);
+    expect(heapRelaunch([], 8200, false)).toBeUndefined();
+    expect(heapRelaunch(['--max-heap-mb', '2048'], 4144, false)).toBeUndefined();
+    expect(heapRelaunch(['--max-heap-mb', 'many'], 100, false)).toBeUndefined();
+    expect(heapRelaunch([], 100, true)).toBeUndefined();
+  });
+
+  it('accepts the flag and refuses a bad value with the usage, before anything is written', async () => {
+    const f = fixture();
+    f.write('-work-oars', S(1), [user(S(1), 1, 'add a test'), assistant(S(1), 1, 'done')]);
+    await stored(f);
+    const printed: string[] = [];
+    expect(await main([...required(f), '--min-turns', '1', '--max-heap-mb', '2048', '--dry-run'], { runtime: f.runtime, print: (text) => printed.push(text) })).toBe(0);
+    expect(printed.join('\n')).toContain('Dry run: would write 1 sessions');
+    const refused: string[] = [];
+    expect(await main([...required(f), '--max-heap-mb', '0'], { runtime: f.runtime, print: (text) => refused.push(text) })).toBe(2);
+    expect(refused.join('\n')).toContain('--max-heap-mb takes a whole number of 1 or more');
+    expect(USAGE).toMatch(/--max-heap-mb <mb>/);
+    expect(USAGE).toMatch(/--dry-run/);
+    expect(existsSync(f.out)).toBe(false);
+  });
+
+  it('runs the command again under the wanted heap when started with less, passes its exit code and output through, and says so on stderr only', () => {
+    // 256 MB is below the 512 asked for; the second run has no usage to print, so it says what is missing and exits 2.
+    const run = spawnSync(process.execPath, ['--max-old-space-size=256', script, '--max-heap-mb', '512'], { encoding: 'utf8' });
+    expect(run.stderr).toMatch(/^sample-pack: this process allows \d+ MB of heap; running again with --max-old-space-size=512/m);
+    expect(run.stdout).toContain('Missing a required option.');
+    expect(run.status).toBe(2);
+  });
+
+  it('does not run again when the heap is enough, and a default run prints nothing extra', () => {
+    const run = spawnSync(process.execPath, ['--max-old-space-size=256', script, '--max-heap-mb', '64'], { encoding: 'utf8' });
+    expect(run.stderr).not.toContain('running again');
+    expect(run.stdout).toContain('Missing a required option.');
+    expect(run.status).toBe(2);
   });
 });
 

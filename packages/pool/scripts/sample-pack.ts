@@ -25,7 +25,7 @@ import { writeCard } from './skeleton-card.js';
 import { captureDeposits, covenantLicenseOf, depositorOf, hasRepoKey, type DepositBuild, type DepositCounts, type Paired } from './deposit-input.js';
 
 export const USAGE = [
-  'Usage: sample-pack --terms <file> --owners <file> --index-key <file> (--buyer-key-file <path> | --buyer-key <key>) --out <dir> [--size <n>] [--seed <text>] [--min-turns <n>] [--sessions <file>] [--deposits <folder>] [--strip-thinking] [--skeleton-only] [--older-than <days>] [--exclude-manifest <path>]',
+  'Usage: sample-pack --terms <file> --owners <file> --index-key <file> (--buyer-key-file <path> | --buyer-key <key>) --out <dir> [--size <n>] [--seed <text>] [--min-turns <n>] [--sessions <file>] [--deposits <folder>] [--strip-thinking] [--skeleton-only] [--older-than <days>] [--exclude-manifest <path>] [--dry-run] [--max-heap-mb <mb>]',
   '  --terms <file>       the exclusion term list (one term per line; a local file, never in a repository)',
   '  --owners <file>      JSON list of {"folder": "<glob over the project folder name>", "owner": "<company>", "license": "<SPDX id>" | null}; first match wins, and a session in a folder no entry names is left out',
   '  --index-key <file>   the matching-index key (64 hex characters or more): a session\'s server key is HMAC-SHA-256 of its id under it. Keep it; a new key gives every session new ids',
@@ -40,6 +40,8 @@ export const USAGE = [
   '  --strip-thinking     leave the reasoning of the model out of the transcripts: every thinking and redacted_thinking block (text, signature, encrypted data) and every Codex reasoning item; the manifest and pack.json say reasoning: stripped (kept otherwise). The thinking-token count in the skeleton stays',
   '  --skeleton-only      write no transcript: the manifest rows (transcripts: 0), skeleton.json per session, census.json, pack.json, and a README.md data card made from the last two. Sessions are kept only when older than --older-than days (default 30 here)',
   '  --older-than <days>  leave out a session whose last line is newer than this many days (a session with no date is left out too); counted as fresh',
+  '  --dry-run            run every rule and print the session count and the size the pack would have, and write nothing: no pack, no .partial folder, no index.jsonl row (a --deposits run still captures into a temporary folder and removes it)',
+  '  --max-heap-mb <mb>   the V8 heap a run needs (default 8192, what a full open-skeleton build needed). The bundled command (npm run sample-pack) runs itself again under --max-old-space-size=<mb> when started with less, and says so on stderr',
   '  --exclude-manifest <path>  a lot\'s manifest.jsonl (or its pack folder): every session it holds is left out, found through index.jsonl beside the owners file; counted as inExcludedLot',
   'Reads the store under APPDATA (or XDG_CONFIG_HOME) and the transcripts under CLAUDE_CONFIG_DIR or ~/.claude. Builds in <out>.partial and renames it to --out when done,',
   'and appends each session id and its match id to index.jsonl beside the owners file: the operator\'s only map from one to the other.',
@@ -181,6 +183,8 @@ export interface PackOptions {
   excludeManifest?: string | undefined;
   /** The clock `olderThanDays` reads; a test injects its own. */
   now?: (() => number) | undefined;
+  /** Apply every rule and count what a real run would write, and write nothing (`--dry-run`): the counts then carry `bytes`. */
+  dryRun?: boolean | undefined;
 }
 
 export interface PackCounts {
@@ -216,6 +220,8 @@ export interface PackCounts {
   objectedAccount?: number;
   /** Only for a pack built `--deposits`: why Raw Copies were left out before the rules above. */
   deposits?: DepositCounts;
+  /** Only for a `--dry-run`: the bytes a real run records as `bytes` in `pack.json` (the final pass over the whole pack can still change a few). */
+  bytes?: number;
 }
 
 /** A line of the operator's `index.jsonl`: which pack a session went to, and under which match id. It never goes into a pack. */
@@ -1304,7 +1310,15 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
   // The files written so far, and the raw ids behind every mask the emitted sessions carry (to the key each stood under): what the pass over the whole pack needs.
   const written: string[] = [];
   const packIds = new Map<string, string>();
-  await mkdir(partial, { recursive: true });
+  const dry = options.dryRun === true;
+  // A dry run counts what a real run would write and writes none of it, so `written` (read back by the pass over the whole pack) stays empty.
+  const put = async (target: string, body: string): Promise<void> => {
+    if (dry) return;
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, body);
+    written.push(target);
+  };
+  if (!dry) await mkdir(partial, { recursive: true });
   // A listed session that is not emitted is told of with the count that rose while it was handled.
   let pending: { session: string; before: Map<string, number>; emitted: number } | undefined;
   const settle = (): void => {
@@ -1384,18 +1398,12 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
       continue;
     }
     for (const [at, file] of options.skeletonOnly === true ? [] : files.entries()) {
-      const target = join(partial, 'sessions', matchId, placeOf(file.key, record.session, file.main));
-      await mkdir(dirname(target), { recursive: true });
       const body = masked[at] ?? '';
       bytes += Buffer.byteLength(body);
-      await writeFile(target, body);
-      written.push(target);
+      await put(join(partial, 'sessions', matchId, placeOf(file.key, record.session, file.main)), body);
     }
     bytes += Buffer.byteLength(skeletonText);
-    const skeletonTarget = join(partial, 'sessions', matchId, SKELETON_FILE);
-    await mkdir(dirname(skeletonTarget), { recursive: true });
-    await writeFile(skeletonTarget, skeletonText);
-    written.push(skeletonTarget);
+    await put(join(partial, 'sessions', matchId, SKELETON_FILE), skeletonText);
     // After the files are written, before the next session: an id the masks missed (one a JSON escape hides from the raw bytes shows in the decoded strings) stops the build, and the folder stays for a look.
     const left = new Map<string, number>();
     for (const body of [...masked, skeletonText]) for (const [key, count] of masker.scan([body, ...decodedStrings(body)].join('\n'))) left.set(key, (left.get(key) ?? 0) + count);
@@ -1453,9 +1461,10 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
   }
   const manifest = rows.map((row) => `${JSON.stringify(row)}\n`).join('');
   bytes += Buffer.byteLength(manifest);
-  await writeFile(join(partial, 'manifest.jsonl'), manifest);
   const census = `${JSON.stringify(censusOf(rows, skeletons), null, 2)}\n`;
   bytes += Buffer.byteLength(census);
+  if (dry) return { ...counts, bytes };
+  await writeFile(join(partial, 'manifest.jsonl'), manifest);
   await writeFile(join(partial, 'census.json'), census);
   await writeFile(join(partial, 'pack.json'), `${JSON.stringify({ built: new Date((options.now ?? Date.now)()).toISOString(), size: listed === undefined ? options.size : counts.emitted, ...(options.skeletonOnly === true ? {} : { seed: listed === undefined ? options.seed : null }), ...(listed === undefined ? {} : { listed: listed.size }), minTurns: options.minTurns, reasoning, ...(options.skeletonOnly === true ? { skeletonOnly: true } : {}), ...(olderThan === undefined ? {} : { olderThanDays: options.olderThanDays ?? SKELETON_DEFAULT_DAYS }), redactionVersion: REDACTION_VERSION, keyId: keyIdOf(options.buyerKey), objections: objectionsHash, counts, bytes, elapsedMs: Date.now() - started }, null, 2)}\n`);
   if (options.skeletonOnly === true) await writeCard(partial);
@@ -1475,12 +1484,33 @@ export interface Io {
   now?: (() => number) | undefined;
 }
 
-const VALUED = new Set(['--terms', '--owners', '--index-key', '--buyer-key', '--buyer-key-file', '--out', '--size', '--seed', '--min-turns', '--sessions', '--deposits', '--older-than', '--exclude-manifest']);
+/** The heap a run asks for when `--max-heap-mb` is not given: what a full open-skeleton build needed (t1259, t1269). */
+export const DEFAULT_HEAP_MB = 8192;
+
+/** The megabytes of heap `--max-heap-mb` asks for: its value, `DEFAULT_HEAP_MB` without the flag, and NaN for a value that is not a whole number of 1 or more (`parseArgs` refuses that). */
+export const heapMbOf = (argv: readonly string[]): number => {
+  const at = argv.indexOf('--max-heap-mb');
+  if (at < 0) return DEFAULT_HEAP_MB;
+  const value = Number(argv[at + 1]);
+  return Number.isInteger(value) && value >= 1 ? value : Number.NaN;
+};
+
+/**
+ * The node argument that runs this command again under the heap it asks for, or undefined when no second run is wanted: the heap (`heap_size_limit` in megabytes) is already enough,
+ * the value is bad (the run itself refuses it), or this already is the second run. A second run, not a refusal, because a refusal would turn a default run on a default heap into an error.
+ */
+export const heapRelaunch = (argv: readonly string[], limitMb: number, relaunched: boolean): string[] | undefined => {
+  const wanted = heapMbOf(argv);
+  return relaunched || Number.isNaN(wanted) || limitMb >= wanted ? undefined : [`--max-old-space-size=${String(wanted)}`];
+};
+
+const VALUED = new Set(['--terms', '--owners', '--index-key', '--buyer-key', '--buyer-key-file', '--out', '--size', '--seed', '--min-turns', '--sessions', '--deposits', '--older-than', '--exclude-manifest', '--max-heap-mb']);
 
 const parseArgs = async (argv: readonly string[]): Promise<(Omit<PackOptions, 'sessions' | 'onDrop'> & { sessionsFile?: string }) | string> => {
   const values = new Map<string, string>();
   let stripThinking = false;
   let skeletonOnly = false;
+  let dryRun = false;
   for (let at = 0; at < argv.length; at += 1) {
     const [flag, value] = [argv[at] ?? '', argv[at + 1]];
     if (flag === '--strip-thinking') {
@@ -1489,6 +1519,10 @@ const parseArgs = async (argv: readonly string[]): Promise<(Omit<PackOptions, 's
     }
     if (flag === '--skeleton-only') {
       skeletonOnly = true;
+      continue;
+    }
+    if (flag === '--dry-run') {
+      dryRun = true;
       continue;
     }
     if (!VALUED.has(flag) || value === undefined) return `Unknown or incomplete option: ${flag}`;
@@ -1508,7 +1542,8 @@ const parseArgs = async (argv: readonly string[]): Promise<(Omit<PackOptions, 's
   if (!Number.isInteger(minTurns) || minTurns < 1) return '--min-turns takes a whole number of 1 or more.';
   const olderThanDays = values.has('--older-than') ? Number(values.get('--older-than')) : undefined;
   if (olderThanDays !== undefined && (!Number.isFinite(olderThanDays) || olderThanDays < 0)) return '--older-than takes a number of days, 0 or more.';
-  return { terms, owners, indexKey, buyerKey, out, size, seed: values.get('--seed') ?? '1', minTurns, ...(stripThinking ? { stripThinking } : {}), ...(skeletonOnly ? { skeletonOnly } : {}), ...(olderThanDays === undefined ? {} : { olderThanDays }), ...(values.has('--exclude-manifest') ? { excludeManifest: values.get('--exclude-manifest') } : {}), ...(sessionsFile === undefined ? {} : { sessionsFile }), ...(values.has('--deposits') ? { deposits: values.get('--deposits') } : {}) };
+  if (values.has('--max-heap-mb') && Number.isNaN(heapMbOf(argv))) return '--max-heap-mb takes a whole number of 1 or more (megabytes).';
+  return { terms, owners, indexKey, buyerKey, out, size, seed: values.get('--seed') ?? '1', minTurns, ...(stripThinking ? { stripThinking } : {}), ...(skeletonOnly ? { skeletonOnly } : {}), ...(dryRun ? { dryRun } : {}), ...(olderThanDays === undefined ? {} : { olderThanDays }), ...(values.has('--exclude-manifest') ? { excludeManifest: values.get('--exclude-manifest') } : {}), ...(sessionsFile === undefined ? {} : { sessionsFile }), ...(values.has('--deposits') ? { deposits: values.get('--deposits') } : {}) };
 };
 
 /** The session ids a `--sessions` file lists: one per line, blank lines skipped, each once, in the file's order. */
@@ -1535,7 +1570,9 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
     const { term, noRaw, noTerms, unreadable } = counts.excluded;
     io.print(
       [
-        `Wrote ${String(counts.emitted)} sessions to ${options.out} (manifest.jsonl, sessions/<match id>/).`,
+        counts.bytes === undefined
+          ? `Wrote ${String(counts.emitted)} sessions to ${options.out} (manifest.jsonl, sessions/<match id>/).`
+          : `Dry run: would write ${String(counts.emitted)} sessions to ${options.out}, about ${String(counts.bytes)} bytes (${(counts.bytes / 1048576).toFixed(1)} MB). Nothing was written.`,
         `Scanned ${String(counts.scanned)} of ${String(counts.frame)} in draw order. Excluded: ${String(term)} for a term, ${String(noRaw)} with no raw, ${String(noTerms)} with no term file, ${String(unreadable)} unreadable.`,
         `Left out after the gate: ${String(counts.noOwner)} in a folder no owner entry names, ${String(counts.noHarnessTerms)} from a harness with no terms row, ${String(counts.tooShort)} under ${String(options.minTurns)} turns, ${String(counts.noRepo)} with no repository, ${String(counts.duplicate)} replaying a longer session, ${String(counts.objected)} under an objection, ${String(counts.secret)} holding a secret after redaction.`,
         ...(counts.fresh === undefined ? [] : [`Left out as newer than the age limit: ${String(counts.fresh)}.`]),
