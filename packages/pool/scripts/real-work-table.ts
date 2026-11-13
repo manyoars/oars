@@ -19,8 +19,9 @@ export const SPEC_VERSION = 'real-work-table/1';
 export const LABEL = 'one fleet';
 /** A row under this many sessions is left out; `--min-sessions` changes it. */
 export const DEFAULT_MIN_SESSIONS = 5;
-/** The harness names, as the store records them (`Harness`); the type check below keeps this list whole. */
+/** The harness names, as the store records them (`Harness`); `everyHarnessListed` below fails the compile when a `Harness` is left off it. */
 export const HARNESS_NAMES = ['claude-code', 'cursor', 'codex', 'copilot', 'gemini', 'grok', 'opencode', 'pi', 'vscode-copilot', 'otel'] as const satisfies readonly Harness[];
+export const everyHarnessListed: [Exclude<Harness, (typeof HARNESS_NAMES)[number]>] extends [never] ? true : never = true;
 const OTHER = 'other';
 const UNKNOWN = 'unknown';
 
@@ -120,8 +121,9 @@ const bucketName = (version: string | null | undefined): string => {
 const recoveryOf = (calls: readonly Followed[], at: number): { recoveredIn: number | null; edited: boolean } => {
   const whole = recoveryCallsOf(calls, at);
   if (whole === null || !whole.editFollowed) return { recoveredIn: null, edited: false };
-  for (let end = at + 2; end <= calls.length; end += 1) {
-    const window = recoveryCallsOf(calls.slice(0, end), at);
+  // Shortest window first; the whole list is the last case and is the `whole` already read.
+  for (let end = at + 2; end < calls.length; end += 1) {
+    const window = recoveryCallsOf(calls.slice(at, end), 0);
     if (window?.editFollowed === true) return { recoveredIn: window.next.length, edited: true };
   }
   return { recoveredIn: whole.next.length, edited: true };
@@ -195,7 +197,9 @@ export const tableOf = async (runtime: SessionsRuntime, options: TableOptions): 
   const transcripts = new Map<string, ToolObservation[]>();
   for (const call of store.tools) {
     if (!counted.has(call.parent)) continue;
-    transcripts.set(call.session, [...(transcripts.get(call.session) ?? []), call]);
+    const held = transcripts.get(call.session) ?? [];
+    held.push(call);
+    transcripts.set(call.session, held);
   }
   for (const calls of transcripts.values()) {
     calls.sort((a, b) => a.n - b.n);

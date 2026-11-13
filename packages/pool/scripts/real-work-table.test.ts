@@ -230,10 +230,11 @@ describe('real-work table', () => {
 
   it('divides interventions by the prompts with a known intervention and states that n', async () => {
     const f = fixture();
-    f.add(older(1));
+    // The plain follow-up reads as `none`, so only the undo counts: a rule that counted every known prompt would give 1.
+    f.add({ ...older(1), prompts: [{ text: 'fix the parser', calls: [read(), read()] }, { text: 'now add a test', calls: [read(), edit()] }, { text: 'revert that', calls: [read()] }, { text: 'thanks', calls: [read()] }] });
     await f.stored();
     const cell = (await build(f)).rows.find((row) => row.kind === 'cell');
-    expect(cell).toMatchObject({ prompts: 2, promptsKnown: 1, interventions: 1, interventionsPerPrompt: 1 });
+    expect(cell).toMatchObject({ promptsKnown: 3, interventions: 1, interventionsPerPrompt: 0.3333 });
   });
 
   it('carries the build date, the store session count, the label, and the spec version in the header', async () => {
