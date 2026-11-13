@@ -72,6 +72,21 @@ The pool's nightly rollup keeps one cell for it per install, day, and covenant v
 {"v":1,"id":"3f2b8c1e-5d4a-4b7e-9c10-2a6f8e1d7b43","at":"2026-11-06T14:05:10.250Z","type":"covenant-shown","cli":"0.4.0","os":"linux","data":{"version":"2026-11-10"}}
 ```
 
+### `join-step`
+
+One per step of `oars pool join` in one run, so the pool can see where first runs stop. It holds a closed step and what the step did, and nothing else.
+
+| Field | What it holds |
+|---|---|
+| `step` | One of `signin`, `region`, `terms`, `batch`, `outbox`, `covenant`, or `send`. Anything else is dropped. |
+| `state` | `done` (the step ran), `skipped` (it already stood, or did not apply to this run), `stopped` (it ended the run), or `none` (the covenant and send steps of a run with no session ready to deposit: nothing to act on, and not counted as reached). Anything else is dropped. |
+
+The event carries no answer, term, path, version, hash, or account: not the region answer, not a word of the term file, and nothing joins it to a deposit. The pool's nightly rollup keeps one cell for it per install, day, step, and state (`join-step.<step>.<state>`, one count per event), which `queries/join-funnel.sql` reads beside `queries/covenant-funnel.sql`. `oars telemetry report` does not show the cell and the fleet read does not serve it.
+
+```json
+{"v":1,"id":"3f2b8c1e-5d4a-4b7e-9c10-2a6f8e1d7b43","at":"2026-11-13T14:05:10.250Z","type":"join-step","cli":"0.5.5","os":"linux","data":{"step":"covenant","state":"stopped"}}
+```
+
 ### `hook`
 
 One per fire of a hook: the bare `oars gate hook` (recorded by its own process, written after its answer is printed), and the five hooks `hook-bin.js` runs. A hook's stdout and exit code are the same with telemetry on, off, or unwritable.

@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { createHash, createHmac, webcrypto } from 'node:crypto';
+import { getEventListeners } from 'node:events';
 import { getHeapStatistics, setFlagsFromString } from 'node:v8';
 import { runInNewContext } from 'node:vm';
 import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
@@ -15,7 +16,7 @@ import { defaultConfigDir } from '../credentials.js';
 import { ExitCode } from '../errors.js';
 import { readSpool } from '../telemetry/spool.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
-import { busyLine, DEFAULT_POOL_URL, networkSender, OFFER_AFTER, OFFER_BEFORE, poolCoverage, poolDeposit, poolOutbox, poolRaw, poolRemove, poolServer, RAW_PHRASE, RAW_PROMPT, sleeps, waitingLine, type Reply, type Sender } from './pool-command.js';
+import { busyLine, DEFAULT_POOL_URL, networkSender, OFFER_AFTER, OFFER_BEFORE, poolCoverage, poolDeposit, poolLogin, poolOutbox, poolRaw, poolRemove, poolServer, RAW_PHRASE, RAW_PROMPT, sleeps, waitingLine, type Reply, type Sender } from './pool-command.js';
 import { localNames } from './redact.js';
 import { batchHash, canonicalBytes, currentStamp, FIELD_ROWS, fieldsOf, heldAcross, outboxFolder, readPulled, readRemoved, writeBatch, writePulled } from './pool-outbox.js';
 import { heldRaw, writeRaw } from './pool-raw.js';
@@ -409,6 +410,22 @@ describe('oars pool login', () => {
     expect(await counted.cli('pool', 'login', '--provider', 'github', '--server', POOL, '--json')).toBe(ExitCode.AUTH);
     expect(counted.document()).toMatchObject({ problem: { code: 'EXPIRED_TOKEN' } });
     expect(counted.h.sleeps).toEqual([4000, 4000]);
+  });
+
+  it('leaves at most one abort listener on the signal however many polls wait, so a long sign-in prints no listener warning', async () => {
+    const scene = setting();
+    poolAt(scene, { start: { interval: 1, expiresIn: 1000 }, polls: [...Array.from({ length: 20 }, () => state('pending')), authorized()] });
+    const stop = new AbortController();
+    const seen: number[] = [];
+    const sleep = scene.h.deps.sleep;
+    scene.h.deps.sleep = async (ms) => {
+      seen.push(getEventListeners(stop.signal, 'abort').length);
+      await sleep(ms);
+    };
+    await poolLogin(scene.h.deps, { server: POOL, provider: 'github', signal: stop.signal });
+    expect(seen.length).toBeGreaterThanOrEqual(15);
+    expect(Math.max(...seen)).toBeLessThanOrEqual(1);
+    expect(getEventListeners(stop.signal, 'abort')).toHaveLength(0);
   });
 
   it.each([

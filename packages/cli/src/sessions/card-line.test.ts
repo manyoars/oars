@@ -34,7 +34,8 @@ const SATURDAY = Date.parse('2026-11-07T12:00:00Z');
 const SUNDAY = Date.parse('2026-11-08T12:00:00Z');
 const THURSDAY = Date.parse('2026-11-05T23:59:59Z');
 const NEXT_FRIDAY = Date.parse('2026-11-13T12:00:00Z');
-const LINE = 'Your week: 3 sessions, 13 strokes. `oars card --text` for the table.\n';
+// The fixture holds no pool sign-in, so the line is the ashore one: it names the command that takes a person to a first deposit.
+const LINE = 'Your week: 3 sessions, 13 strokes. `oars card --text` for the table. Ashore: `oars pool join` takes you to your first deposit.\n';
 const SHOWN_ID = '00000000-0000-4000-8000-000000000001';
 
 let dir: string;
@@ -68,14 +69,14 @@ afterEach(() => {
 
 const ask = (over: Partial<Parameters<typeof cardLine>[0]> = {}): Promise<CardLineArm> => {
   loads.shift = (over.now ?? FRIDAY) - FRIDAY;
-  return cardLine({ storeDir: join(dir, 'store'), telemetryDir: telemetry, now: FRIDAY, tty: true, argv: ['sessions', 'books'], path: ['sessions', 'books'], flags: [], stderr: (text) => said.push(text), ...over });
+  return cardLine({ storeDir: join(dir, 'store'), telemetryDir: telemetry, now: FRIDAY, tty: true, argv: ['sessions', 'books'], path: ['sessions', 'books'], flags: [], stderr: (text) => said.push(text), env: {}, ...over });
 };
 
 describe('when the line shows', () => {
   it('prints the exact text on the card fixture, once, on a Friday', async () => {
     expect(await ask()).toBe('shown');
     expect(said).toEqual([LINE]);
-    expect(LINE).toBe(cardLineText(3, 13));
+    expect(LINE).toBe(cardLineText(3, 13, true));
     expect(JSON.parse(readFileSync(join(dir, 'store', 'card-line.json'), 'utf8'))).toEqual({ week: '2026-W45', arm: 'shown' });
   });
 
@@ -83,6 +84,16 @@ describe('when the line shows', () => {
     expect(cardLineText(1, 1)).toBe('Your week: 1 session, 1 stroke. `oars card --text` for the table.\n');
     expect(cardLineText(0, 2)).toBe('Your week: 0 sessions, 2 strokes. `oars card --text` for the table.\n');
     expect(LINE).not.toMatch(/install|star|http|\.com/i);
+  });
+
+  it('names oars pool join on the ashore line and leaves it off for a signed-in person', async () => {
+    expect(cardLineText(3, 13, true)).toBe('Your week: 3 sessions, 13 strokes. `oars card --text` for the table. Ashore: `oars pool join` takes you to your first deposit.\n');
+    expect(cardLineText(3, 13, false)).toBe(cardLineText(3, 13));
+    expect(cardLineText(3, 13)).not.toContain('join');
+    mkdirSync(join(dir, 'store'), { recursive: true });
+    writeFileSync(join(dir, 'store', 'pool-accounts.json'), JSON.stringify([{ server: 'https://pool.manyoars.com', account: 'acct_one', token: 't', expiresAt: FRIDAY + 86_400_000, signingKeys: { k1: { kty: 'OKP', crv: 'Ed25519', x: 'a' } } }]));
+    expect(await ask()).toBe('shown');
+    expect(said).toEqual([cardLineText(3, 13)]);
   });
 
   it('shows once per ISO week, on Saturday or Sunday too, and again the next week', async () => {

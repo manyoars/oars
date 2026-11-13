@@ -2,7 +2,7 @@
 // A measure is one observation in a cell: a latency in milliseconds, or a yes/no that rates are made from. The cell is (metric, dimension, value): `hook.pre-tool.latency` at harness
 // `claude-code`, version `2.1.5`. The reader is tolerant on purpose: the pool reads batches kept whole from any client, so a value that does not fit is skipped, never trusted.
 import { isHarness } from '../sessions/pool-wire.js';
-import { CI_WORDS, SURFACE_WORDS } from './words.js';
+import { CI_WORDS, JOIN_STATES, JOIN_STEPS, SURFACE_WORDS } from './words.js';
 
 /** A latency in a cell, or a yes (1) or no (0) that a rate is made from. */
 export type Kind = 'latency' | 'rate';
@@ -119,8 +119,22 @@ export const covenantShownMeasures = (event: unknown): Measure[] => {
   return [rate(`covenant-shown.${version}`, 'cli', valueOf(fieldOf(event, 'cli')), true)];
 };
 
+/**
+ * The cell of a `join-step` event: one yes under the oars version, in a metric named for the step and what it did (`join-step.send.done`), so the pool's rollup holds, for each install and day, which steps of the join it reached.
+ * Like the first-run and covenant-shown cells it is for the operator's query (`queries/join-funnel.sql`), so `measuresOf` leaves it out and the fleet read skips it. A word off the closed lists reads as `other`.
+ */
+export const joinStepMeasures = (event: unknown): Measure[] => {
+  if (fieldOf(event, 'type') !== 'join-step') return [];
+  const data = fieldOf(event, 'data');
+  const step = fieldOf(data, 'step');
+  const state = fieldOf(data, 'state');
+  const stepWord = typeof step === 'string' && JOIN_STEPS.some((word) => word === step) ? step : 'other';
+  const stateWord = typeof state === 'string' && JOIN_STATES.some((word) => word === state) ? state : 'other';
+  return [rate(`join-step.${stepWord}.${stateWord}`, 'cli', valueOf(fieldOf(event, 'cli')), true)];
+};
+
 /** The metrics the rollup records for the operator's queries and the fleet read never serves: a cell of one event or one count per install measures nothing across installs. */
-const RECORD_ONLY_PREFIXES: readonly string[] = ['first-run.', 'covenant-shown.'];
+const RECORD_ONLY_PREFIXES: readonly string[] = ['first-run.', 'covenant-shown.', 'join-step.'];
 export const isRecordOnlyMetric = (metric: string): boolean => RECORD_ONLY_PREFIXES.some((prefix) => metric.startsWith(prefix));
 
 /** What one event measures; an event of a type nothing measures, or that is not an object, measures nothing. */

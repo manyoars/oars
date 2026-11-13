@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { defaultConfigDir } from '../credentials.js';
+import { spoolEvents } from '../telemetry/read-events.js';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
@@ -58,13 +60,15 @@ interface Routes {
   /** The answers to successive bundle fetches; the last stands. */
   bundles?: (() => Promise<Response>)[];
   covenant?: Response;
+  /** False leaves the exclusion term file out, so the person has none. */
+  terms?: boolean;
 }
 
 /** A fake pool with the device flow answered at once, the covenant already accepted, and every route recording its request. */
 const scene = async (routes: Routes = {}): Promise<Scene> => {
   const staged = stage();
   const termsFile = join(staged.root, 'terms.txt');
-  writeFileSync(termsFile, 'zorblax\n');
+  if (routes.terms !== false) writeFileSync(termsFile, 'zorblax\n');
   const h = harness({ OARS_EXCLUSION_TERMS: termsFile });
   h.deps.sessions = staged.runtime;
   h.deps.now = settledClock;
@@ -145,7 +149,7 @@ describe('oars pool join', () => {
     // The fixture store holds several sessions, so several batches: each is sent the way `deposit --send <hash>` sends one (the covenant read, then the post).
     const batches = outboxFiles(s).length;
     expect(batches).toBeGreaterThan(1);
-    expect(s.calls).toEqual(['POST /v1/login/start', 'POST /v1/login/poll', ...Array.from({ length: batches }, () => ['GET /v1/covenant', 'POST /v1/deposits']).flat(), `GET /bundle/claude-code/${VERSION}/${VOCAB_VERSION}`]);
+    expect(s.calls).toEqual(['POST /v1/login/start', 'POST /v1/login/poll', 'GET /v1/covenant', ...Array.from({ length: batches }, () => ['GET /v1/covenant', 'POST /v1/deposits']).flat(), `GET /bundle/claude-code/${VERSION}/${VOCAB_VERSION}`]);
     // One plain line per step, in order, each before the work of its step.
     const lines = err(s).split('\n');
     const at = (text: string): number => lines.findIndex((line) => line.includes(text));
@@ -359,15 +363,433 @@ describe('oars pool join', () => {
     it('oars pool --help lists join in a short sentence', async () => {
       const s = await scene();
       expect(await s.cli('pool', '--help')).toBe(ExitCode.OK);
-      expect(out(s).replace(/\s+/g, ' ')).toContain('join [options] run login, deposit, outbox --explain, deposit --send, and fetch in one command');
+      expect(out(s).replace(/\s+/g, ' ')).toContain('join [options] your first deposit in one command');
     });
 
     it('oars pool join --help describes it in one or two short sentences and takes the flags the five commands take', async () => {
       const s = await scene();
       expect(await s.cli('pool', 'join', '--help')).toBe(ExitCode.OK);
       const help = out(s);
-      expect(help).toContain('run login, deposit, outbox --explain, deposit --send, and fetch in one command');
-      for (const option of ['--provider', '--harness-version', '--harness', '--accept-covenant', '--in-eu-eea-uk', '--verbose', '--server']) expect(help).toContain(option);
+      expect(help).toContain('your first deposit in one command');
+      for (const option of ['--provider', '--plan', '--harness-version', '--harness', '--accept-covenant', '--in-eu-eea-uk', '--verbose', '--server']) expect(help).toContain(option);
+    });
+  });
+});
+
+/** Makes the run a terminal and types each line into it. */
+const atTerminal = (s: Scene, ...lines: string[]): void => {
+  Object.assign(s.staged.stdin, { isTTY: true });
+  Object.assign(s.staged.runtime, { stderr: { isTTY: true } });
+  for (const line of lines) s.staged.stdin.write(`${line}\n`);
+};
+
+const termsPath = (s: Scene): string => s.h.deps.env.OARS_EXCLUSION_TERMS ?? '';
+
+/** Telemetry into a folder under the scene's own root; the events it kept for a type. */
+const watching = (s: Scene): ((type: string) => { data: { [field: string]: unknown } }[]) => {
+  s.h.deps.env.APPDATA = s.staged.root;
+  expect(defaultConfigDir(s.h.deps.env, 'win32', 'C:\\unused-home')).toBe(s.staged.root);
+  const dir = join(s.staged.root, 'oars', 'telemetry');
+  s.h.deps.telemetry = { dir, platform: 'linux' };
+  return (type) => spoolEvents(dir, type);
+};
+
+const SCREEN_TEXT = 'FIXTURE COVENANT v1\n\nTo accept, type: I AGREE';
+const SCREEN = { text: SCREEN_TEXT, link: 'https://pool.test/c', phrase: 'I AGREE', sha256: 'a'.repeat(64) };
+
+/** A pool whose covenant is open for acceptance until a typed acceptance arrives; it records each acceptance body. */
+const unaccepted = (): { covenant: () => Response; bodies: object[] } => {
+  const state: { accepted: boolean; bodies: object[] } = { accepted: false, bodies: [] };
+  server.use(
+    http.post(`${POOL}/v1/covenant/accept`, async ({ request }) => {
+      const body: unknown = await request.json();
+      if (typeof body === 'object' && body !== null) state.bodies.push(body);
+      state.accepted = true;
+      return HttpResponse.json({ ok: true, version: 'v1' });
+    }),
+  );
+  return { covenant: () => HttpResponse.json({ version: 'v1', accepted: state.accepted, screen: SCREEN }), bodies: state.bodies };
+};
+
+const STEPS = ['signin', 'region', 'terms', 'batch', 'outbox', 'covenant', 'send', 'raw'];
+const STATES = ['done', 'pending'];
+
+const record = (value: unknown): { [key: string]: unknown } => {
+  if (typeof value !== 'object' || value === null) throw new Error('not an object');
+  return Object.fromEntries(Object.entries(value));
+};
+const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+/** The steps of a plan document, each as its record. */
+const stepsOf = (s: Scene): { [key: string]: unknown }[] => list(record(JSON.parse(out(s))).steps).map(record);
+
+/** The shape of the plan document, checked key by key: nothing else may appear in it. */
+const planShape = (s: Scene, flagged = false): void => {
+  const doc = record(JSON.parse(out(s)));
+  expect(Object.keys(doc).sort()).toEqual(['ok', 'plan', 'server', 'steps']);
+  expect(doc.ok).toBe(true);
+  expect(doc.plan).toBe(true);
+  expect(typeof doc.server).toBe('string');
+  const steps = stepsOf(s);
+  expect(steps.map((step) => step.step)).toEqual(STEPS);
+  for (const step of steps) {
+    expect(Object.keys(step).sort()).toEqual(['needs_person', 'state', 'step']);
+    expect(STATES).toContain(step.state);
+    expect(typeof step.needs_person).toBe('boolean');
+  }
+  // The covenant phrase and the raw prompt are always a person's; region and terms are too while pending and no flag or file answers them.
+  for (const step of steps) {
+    const always = step.step === 'covenant' || step.step === 'raw';
+    const answerable = (step.step === 'region' || step.step === 'terms') && step.state === 'pending';
+    expect(step.needs_person).toBe(always || (answerable && !(step.step === 'region' && flagged)));
+  }
+};
+
+describe('oars pool join, the first deposit in one command', () => {
+  const KILL = new Error('killed');
+
+  describe('the term file', () => {
+    it('is scaffolded and asked for, never filled in: a run with no terms stops after sign-in, names the file, and sends nothing', async () => {
+      const s = await scene({ terms: false });
+      await capture(s);
+      expect(existsSync(termsPath(s))).toBe(false);
+      expect(await s.cli(...joinArgs)).not.toBe(ExitCode.OK);
+      expect(existsSync(termsPath(s))).toBe(true);
+      expect(readFileSync(termsPath(s), 'utf8')).toBe('');
+      expect(err(s)).toContain(termsPath(s));
+      expect(err(s)).toContain(AGAIN);
+      expect(count(s, 'POST /v1/deposits')).toBe(0);
+      expect(outboxFiles(s)).toEqual([]);
+      // Edited, the next run signs in nothing again and goes on.
+      writeFileSync(termsPath(s), 'zorblax\n');
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.OK);
+      expect(count(s, 'POST /v1/login/start')).toBe(1);
+      expect(count(s, 'POST /v1/deposits')).toBe(outboxFiles(s).length);
+    });
+
+    it('at a terminal waits for the person to save the file, then goes on in the same run', async () => {
+      const s = await scene({ terms: false });
+      await capture(s);
+      atTerminal(s, '');
+      const write = s.h.deps.io.stderr;
+      s.h.deps.io.stderr = (text) => {
+        write(text);
+        if (text.includes('Press Enter')) writeFileSync(termsPath(s), 'zorblax\n');
+      };
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.OK);
+      expect(count(s, 'POST /v1/deposits')).toBe(outboxFiles(s).length);
+    });
+
+    it('at a terminal stops when the file is still empty after Enter', async () => {
+      const s = await scene({ terms: false });
+      await capture(s);
+      atTerminal(s, '');
+      expect(await s.cli(...joinArgs)).not.toBe(ExitCode.OK);
+      expect(err(s)).toContain('still holds no term');
+      expect(count(s, 'POST /v1/deposits')).toBe(0);
+    });
+  });
+
+  describe('the region question', () => {
+    it('is asked plainly at its own step, before the covenant screen, and its answer goes with the acceptance', async () => {
+      const open = unaccepted();
+      const s = await scene();
+      server.use(http.get(`${POOL}/v1/covenant`, ({ request }) => {
+        s.calls.push(`${request.method} ${new URL(request.url).pathname}`);
+        return open.covenant();
+      }));
+      await capture(s);
+      atTerminal(s, 'no', SCREEN.phrase);
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.OK);
+      const text = err(s);
+      expect(text.split('Are you in the EU, the EEA, or the UK?')).toHaveLength(2);
+      expect(text.indexOf('Are you in the EU, the EEA, or the UK?')).toBeLessThan(text.indexOf('FIXTURE COVENANT v1'));
+      expect(open.bodies).toEqual([expect.objectContaining({ version: 'v1', input: 'typed', euEeaUk: 'no' })]);
+      expect(count(s, 'POST /v1/deposits')).toBe(outboxFiles(s).length);
+    });
+
+    it('is not asked of an account that has accepted, and not asked when the flag answers it', async () => {
+      const s = await scene();
+      await capture(s);
+      atTerminal(s);
+      expect(await s.cli(...joinArgs, '--in-eu-eea-uk', 'no')).toBe(ExitCode.OK);
+      expect(err(s)).not.toContain('Are you in the EU');
+    });
+
+    it('names --in-eu-eea-uk no as the way to correct a wrong yes when the pool refuses the region', async () => {
+      const open = unaccepted();
+      const s = await scene();
+      server.use(http.get(`${POOL}/v1/covenant`, () => open.covenant()));
+      server.use(http.post(`${POOL}/v1/covenant/accept`, () => HttpResponse.json({ error: 'region_closed', message: 'Many Oars cannot take deposits from the EU yet.' }, { status: 403 })));
+      await capture(s);
+      atTerminal(s, 'yes', SCREEN.phrase);
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.AUTH);
+      expect(err(s)).toContain('--in-eu-eea-uk no');
+    });
+
+    it('stops on an answer that is not yes or no, before anything is accepted or sent', async () => {
+      const open = unaccepted();
+      const s = await scene({ covenant: open.covenant() });
+      await capture(s);
+      atTerminal(s, 'maybe');
+      expect(await s.cli(...joinArgs)).not.toBe(ExitCode.OK);
+      expect(open.bodies).toEqual([]);
+      expect(count(s, 'POST /v1/deposits')).toBe(0);
+    });
+  });
+
+  describe('acceptance is a person at a terminal', () => {
+    it('refuses off a terminal, with or without --accept-covenant, and exits nonzero with nothing accepted or sent', async () => {
+      for (const extra of [[], ['--accept-covenant', 'v1']]) {
+        const open = unaccepted();
+        const s = await scene({ covenant: open.covenant() });
+        await capture(s);
+        // The flag only names a version, and off a terminal it is refused as a usage error before the screen: either way nonzero, with nothing accepted.
+        expect(await s.cli(...joinArgs, ...extra)).toBe(extra.length === 0 ? ExitCode.AUTH : ExitCode.USAGE);
+        expect(open.bodies).toEqual([]);
+        expect(count(s, 'POST /v1/deposits')).toBe(0);
+      }
+    });
+
+    it('takes the typed phrase at a terminal and nothing else', async () => {
+      const open = unaccepted();
+      const s = await scene();
+      server.use(http.get(`${POOL}/v1/covenant`, () => open.covenant()));
+      await capture(s);
+      atTerminal(s, 'no', 'yes please');
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.AUTH);
+      expect(open.bodies).toEqual([]);
+      expect(count(s, 'POST /v1/deposits')).toBe(0);
+    });
+  });
+
+  describe('a run killed after a step starts the next one at the first step not done', () => {
+    for (const [after, before, ran] of [
+      ['signin', 'Preparing your deposit', { login: 1 }],
+      ['batch', 'Showing what will be sent', { login: 1 }],
+      ['outbox', 'batches to https://pool.test', { login: 1 }],
+    ] as const) {
+      it(`after ${after}`, async () => {
+        const s = await scene();
+        await capture(s);
+        const write = s.h.deps.io.stderr;
+        s.h.deps.io.stderr = (text) => {
+          if (text.includes(before)) throw KILL;
+          write(text);
+        };
+        expect(await s.cli(...joinArgs)).toBe(ExitCode.UNEXPECTED);
+        expect(err(s)).toContain('killed');
+        s.h.deps.io.stderr = write;
+        s.h.out.length = 0;
+        s.h.err.length = 0;
+        expect(await s.cli(...joinArgs)).toBe(ExitCode.OK);
+        expect(count(s, 'POST /v1/login/start')).toBe(ran.login);
+        expect(count(s, 'POST /v1/deposits')).toBe(outboxFiles(s).length);
+        if (after !== 'signin') expect(err(s)).toContain('Already signed in');
+        if (after === 'batch' || after === 'outbox') expect(err(s)).toContain('already holds a prepared batch');
+        // The batches are sent once each across both runs.
+        const sent = sentLogs(s).trim().split('\n');
+        expect(new Set(sent.map((line) => line.split(' ')[0])).size).toBe(sent.length);
+      });
+    }
+  });
+
+  describe('a run killed after region, terms, or the covenant resumes at the next step', () => {
+    const killAt = (s: Scene, text: string): (() => void) => {
+      const write = s.h.deps.io.stderr;
+      s.h.deps.io.stderr = (line) => {
+        if (line.includes(text)) throw KILL;
+        write(line);
+      };
+      return () => {
+        s.h.deps.io.stderr = write;
+        s.h.out.length = 0;
+        s.h.err.length = 0;
+      };
+    };
+
+    it('after region: the answer is kept, the next run does not ask it again, and --plan reads it as done', async () => {
+      const open = unaccepted();
+      const s = await scene({ terms: false });
+      server.use(http.get(`${POOL}/v1/covenant`, () => open.covenant()));
+      await capture(s);
+      atTerminal(s, 'no');
+      const restore = killAt(s, 'Your exclusion terms go in');
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.UNEXPECTED);
+      restore();
+      writeFileSync(termsPath(s), 'zorblax\n');
+      expect(await s.cli('pool', 'join', '--plan', '--json', '--server', POOL)).toBe(ExitCode.OK);
+      expect(stepsOf(s).find((step) => step.step === 'region')).toMatchObject({ state: 'done', needs_person: false });
+      s.h.out.length = 0;
+      atTerminal(s, SCREEN.phrase);
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.OK);
+      expect(err(s)).not.toContain('Are you in the EU');
+      expect(open.bodies).toEqual([expect.objectContaining({ euEeaUk: 'no' })]);
+    });
+
+    it('after terms: the next run skips region and terms and starts at the batch', async () => {
+      const open = unaccepted();
+      const s = await scene({ terms: false });
+      server.use(http.get(`${POOL}/v1/covenant`, () => open.covenant()));
+      const events = watching(s);
+      await capture(s);
+      atTerminal(s, 'no', '');
+      const write = s.h.deps.io.stderr;
+      s.h.deps.io.stderr = (text) => {
+        if (text.includes('Press Enter')) writeFileSync(termsPath(s), 'zorblax\n');
+        if (text.includes('Preparing your deposit')) throw KILL;
+        write(text);
+      };
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.UNEXPECTED);
+      s.h.deps.io.stderr = write;
+      const before = events('join-step').length;
+      atTerminal(s, 'not the phrase');
+      expect(await s.cli(...joinArgs)).not.toBe(ExitCode.OK);
+      expect(events('join-step').map((event) => `${String(event.data.step)}:${String(event.data.state)}`).slice(before, before + 4)).toEqual(['signin:skipped', 'region:skipped', 'terms:skipped', 'batch:done']);
+    });
+
+    it('after the covenant: the next run does not ask or accept again and sends', async () => {
+      const open = unaccepted();
+      const s = await scene();
+      server.use(http.get(`${POOL}/v1/covenant`, () => open.covenant()));
+      await capture(s);
+      atTerminal(s, 'no', SCREEN.phrase);
+      const restore = killAt(s, 'Accepted. Sending your batch now.');
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.UNEXPECTED);
+      expect(open.bodies).toHaveLength(1);
+      restore();
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.OK);
+      expect(open.bodies).toHaveLength(1);
+      expect(err(s)).not.toContain('FIXTURE COVENANT');
+      expect(err(s)).not.toContain('Are you in the EU');
+      expect(count(s, 'POST /v1/deposits')).toBe(outboxFiles(s).length);
+    });
+  });
+
+  describe('Ctrl-C ends the join at whatever step it is in', () => {
+    it('during the sign-in poll ends the run with exit 130 and sends nothing', async () => {
+      const s = await scene();
+      await capture(s);
+      let polls = 0;
+      server.use(http.post(`${POOL}/v1/login/poll`, () => {
+        polls += 1;
+        process.emit('SIGINT');
+        return HttpResponse.json({ status: 'pending' });
+      }));
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.INTERRUPTED);
+      expect(polls).toBe(1);
+      expect(count(s, 'POST /v1/deposits')).toBe(0);
+      expect(err(s)).toContain(AGAIN);
+    });
+  });
+
+  describe('without --harness-version', () => {
+    it('fetches nothing: no bundle request, no fetch line, and no fetch key in the document', async () => {
+      const s = await scene();
+      await capture(s);
+      const args = joinArgs.filter((arg, at) => arg !== '--harness-version' && joinArgs[at - 1] !== '--harness-version');
+      expect(await s.cli(...args, '--json')).toBe(ExitCode.OK);
+      expect(s.calls.some((call) => call.startsWith('GET /bundle/'))).toBe(false);
+      expect(err(s)).not.toContain('Fetching the bundle');
+      expect(Object.keys(record(JSON.parse(out(s)))).sort()).toEqual(['deposit', 'invite', 'login', 'ok', 'outbox', 'sends', 'server']);
+    });
+  });
+
+  describe('--plan --json, the steps a person answers', () => {
+    it('marks region and terms needs_person while pending, and not once a flag or the file answers them', async () => {
+      const open = unaccepted();
+      const s = await scene({ terms: false });
+      server.use(http.get(`${POOL}/v1/covenant`, () => open.covenant()));
+      await capture(s);
+      expect(await s.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
+      s.h.out.length = 0;
+      expect(await s.cli('pool', 'join', '--plan', '--json', '--server', POOL)).toBe(ExitCode.OK);
+      planShape(s);
+      expect(stepsOf(s).filter((step) => step.needs_person).map((step) => step.step)).toEqual(['region', 'terms', 'covenant', 'raw']);
+      s.h.out.length = 0;
+      writeFileSync(termsPath(s), 'zorblax\n');
+      expect(await s.cli('pool', 'join', '--plan', '--json', '--in-eu-eea-uk', 'no', '--server', POOL)).toBe(ExitCode.OK);
+      planShape(s, true);
+      expect(stepsOf(s).filter((step) => step.needs_person).map((step) => step.step)).toEqual(['covenant', 'raw']);
+    });
+  });
+
+  describe('the join-step event, when there is nothing to deposit', () => {
+    it('records covenant and send as none (not skipped) when no session is ready', async () => {
+      const s = await scene();
+      const events = watching(s);
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.OK);
+      expect(events('join-step').map((event) => `${String(event.data.step)}:${String(event.data.state)}`).slice(-2)).toEqual(['covenant:none', 'send:none']);
+    });
+  });
+
+  describe('--plan --json', () => {
+    it('makes no request and writes nothing for a person who has done nothing, and matches the shape', async () => {
+      const s = await scene({ terms: false });
+      await capture(s);
+      expect(await s.cli('pool', 'join', '--plan', '--json', '--server', POOL)).toBe(ExitCode.OK);
+      planShape(s);
+      expect(stepsOf(s).every((step) => step.state === 'pending')).toBe(true);
+      expect(s.calls).toEqual([]);
+      expect(existsSync(termsPath(s))).toBe(false);
+      expect(outboxFiles(s)).toEqual([]);
+    });
+
+    it('shows each step done after a full join, with the raw question still the person\'s', async () => {
+      const s = await scene();
+      await capture(s);
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.OK);
+      s.h.out.length = 0;
+      s.calls.length = 0;
+      expect(await s.cli('pool', 'join', '--plan', '--json', '--server', POOL)).toBe(ExitCode.OK);
+      planShape(s);
+      expect(stepsOf(s).map((step) => `${String(step.step)}:${String(step.state)}`)).toEqual(['signin:done', 'region:done', 'terms:done', 'batch:done', 'outbox:done', 'covenant:done', 'send:done', 'raw:pending']);
+      // The only request is the read of the covenant, which a plan needs to know whether it is accepted.
+      expect(s.calls).toEqual(['GET /v1/covenant']);
+    });
+
+    it('leaves the covenant and the steps after it pending while the covenant is unaccepted', async () => {
+      const open = unaccepted();
+      const s = await scene({ covenant: open.covenant() });
+      await capture(s);
+      expect(await s.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
+      s.h.out.length = 0;
+      expect(await s.cli('pool', 'join', '--plan', '--json', '--server', POOL)).toBe(ExitCode.OK);
+      expect(stepsOf(s).filter((step) => step.state === 'pending').map((step) => step.step)).toEqual(['region', 'batch', 'outbox', 'covenant', 'send', 'raw']);
+    });
+  });
+
+  describe('the join-step event', () => {
+    it('carries only the closed step and state words, one per step run, and "skipped" for a step a second run finds done', async () => {
+      const s = await scene();
+      const events = watching(s);
+      await capture(s);
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.OK);
+      const first = events('join-step').map((event) => event.data);
+      for (const data of first) expect(Object.keys(data).sort()).toEqual(['state', 'step']);
+      expect(first).toEqual([
+        { step: 'signin', state: 'done' },
+        { step: 'region', state: 'skipped' },
+        { step: 'terms', state: 'skipped' },
+        { step: 'batch', state: 'done' },
+        { step: 'outbox', state: 'done' },
+        { step: 'covenant', state: 'skipped' },
+        { step: 'send', state: 'done' },
+      ]);
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.OK);
+      const second = events('join-step').map((event) => event.data).slice(first.length);
+      expect(second.map((data) => `${String(data.step)}:${String(data.state)}`)).toEqual(['signin:skipped', 'region:skipped', 'terms:skipped', 'batch:done', 'outbox:done', 'covenant:skipped', 'send:skipped']);
+    });
+
+    it('records the step that stopped the run as stopped', async () => {
+      const s = await scene({ terms: false });
+      const events = watching(s);
+      await capture(s);
+      await s.cli(...joinArgs);
+      expect(events('join-step').map((event) => event.data)).toEqual([
+        { step: 'signin', state: 'done' },
+        { step: 'region', state: 'skipped' },
+        { step: 'terms', state: 'stopped' },
+      ]);
     });
   });
 
@@ -398,6 +820,14 @@ describe('oars pool join', () => {
       expect(count(s, 'POST /v1/deposits')).toBe(0);
       expect(err(s)).toContain('without --invite, or with a new code');
       expect(err(s)).not.toContain(AGAIN);
+    });
+
+    it('records no stopped event for a step already recorded done or skipped: a refused invite after sign-in ends the log at sign-in', async () => {
+      const s = await scene();
+      const events = watching(s);
+      server.use(http.post(`${POOL}/v1/invites/redeem`, () => HttpResponse.json({ error: 'invite_used', message: 'That invite code has been used.' }, { status: 409 })));
+      expect(await s.cli(...joinArgs, '--invite', 'ABCD2345')).not.toBe(ExitCode.OK);
+      expect(events('join-step').map((event) => event.data)).toEqual([{ step: 'signin', state: 'done' }]);
     });
 
     it('keeps the crew number /v1/me states, for the card', async () => {

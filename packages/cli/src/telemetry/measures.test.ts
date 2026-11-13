@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { cellKey, covenantShownMeasures, firstRunMeasures, isRecordOnlyMetric, measuresOf } from './measures.js';
+import { cellKey, covenantShownMeasures, firstRunMeasures, isRecordOnlyMetric, joinStepMeasures, measuresOf } from './measures.js';
 
 const hook = (data: object): unknown => ({ type: 'hook', data: { name: 'pre-tool', latencyMs: 10, outcome: 'hit', ...data } });
 
@@ -67,6 +67,28 @@ describe('the covenant-shown cell', () => {
     expect(isRecordOnlyMetric('covenant-shown.2026-11-10')).toBe(true);
     expect(isRecordOnlyMetric('first-run.npx')).toBe(true);
     for (const metric of ['hook.pre-tool.hit', 'command.pool.failure', 'store.readFailure', 'covenant-shown', 'first-run']) expect(isRecordOnlyMetric(metric), metric).toBe(false);
+  });
+});
+
+describe('the join-step cell', () => {
+  const step = (data: object, cli = '0.4.0'): unknown => ({ type: 'join-step', cli, data });
+
+  it('is one yes under the oars version, in a metric named for the step and what it did', () => {
+    expect(joinStepMeasures(step({ step: 'send', state: 'done' }))).toEqual([{ metric: 'join-step.send.done', dimension: 'cli', value: '0.4.0', kind: 'rate', x: 1 }]);
+    expect(joinStepMeasures(step({ step: 'covenant', state: 'none' }))[0]?.metric).toBe('join-step.covenant.none');
+    expect(joinStepMeasures(step({ step: 'covenant', state: 'stopped' }, '0.5.1'))).toEqual([{ metric: 'join-step.covenant.stopped', dimension: 'cli', value: '0.5.1', kind: 'rate', x: 1 }]);
+  });
+
+  it('reads a word off the closed lists as other and still counts it', () => {
+    expect(joinStepMeasures(step({ step: 'acme/secret', state: 'done' }))[0]?.metric).toBe('join-step.other.done');
+    expect(joinStepMeasures(step({ step: 'send' }))[0]?.metric).toBe('join-step.send.other');
+  });
+
+  it('is measured by nothing else, is left out of the own report, and is record-only', () => {
+    expect(joinStepMeasures(hook({}))).toEqual([]);
+    expect(joinStepMeasures('join-step')).toEqual([]);
+    expect(measuresOf(step({ step: 'send', state: 'done' }))).toEqual([]);
+    expect(isRecordOnlyMetric('join-step.send.done')).toBe(true);
   });
 });
 

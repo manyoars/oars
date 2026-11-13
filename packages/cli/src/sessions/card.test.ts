@@ -54,7 +54,7 @@ describe('cardOf: the counts', () => {
   });
 
   it('prints a share under the books floor as too few and a share at it as a percent', () => {
-    const text = cardText(week(), 'ashore: run oars pool login');
+    const text = cardText(week(), 'ashore: run oars pool join');
     expect(text).toContain('verified after edit  75% (30 of 40 edits)');
     expect(text).toContain('moved on             too few (2 of 4 crabs)');
     expect(text).toContain('survived             too few (1 of 1 settled)');
@@ -104,7 +104,7 @@ describe('cardOf: the counts', () => {
 describe('what the card never carries', () => {
   const outputs = (): string[] => {
     const card = week();
-    return [JSON.stringify(card), cardText(card, 'ashore: run oars pool login'), tweetLink(card), decodeURIComponent(tweetLink(card))];
+    return [JSON.stringify(card), cardText(card, 'ashore: run oars pool join'), tweetLink(card), decodeURIComponent(tweetLink(card))];
   };
 
   it.each(Object.entries(PLANTED))('finds no %s in the card, the text table, or the link', (_kind, planted) => {
