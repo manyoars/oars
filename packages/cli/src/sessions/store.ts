@@ -1388,6 +1388,15 @@ interface LogScan {
   newerCaptures: number;
   /** Set when asked for: each session's record lines at its highest rev as flat `[start, length, ...]` byte pairs (the newline included). Only lines this scan saw are in it, so a row appended after the scan is never read through it. */
   spans?: Map<string, number[]>;
+  /** With `spans`: the file the scan read (device, inode, and size from `stat` on the handle it read), so a load uses the spans only on that same file. */
+  identity?: LogIdentity;
+}
+
+/** Which file a scan read: a compaction renames a new file into place, which changes the inode; an append only grows the size. */
+interface LogIdentity {
+  dev: bigint;
+  ino: bigint;
+  size: bigint;
 }
 
 /** The log's lines with the byte range each takes (its newline included), read as bytes so an offset is a file position. The same split as `logLines`: on 0x0a alone. */
@@ -1415,10 +1424,21 @@ const logSpans = async function* (file: string, held?: FileHandle): AsyncGenerat
 };
 
 export const scanLog = async (file: string, held?: FileHandle, withSpans = false): Promise<LogScan> => {
+  // Spans are byte offsets into one file: read it through a handle, and stat that handle, so the identity is the file the offsets belong to.
+  const own = withSpans && held === undefined ? await openLog(file) : undefined;
+  try {
+    return await scanHandle(file, held ?? own, withSpans);
+  } finally {
+    await own?.close();
+  }
+};
+
+const scanHandle = async (file: string, held: FileHandle | undefined, withSpans: boolean): Promise<LogScan> => {
   const latest = new Map<string, number>();
   const cvAt = new Map<string, { rev: number; cv: string }>();
   // Every rev's lines are noted as `[start, length, rev, ...]` triples, then thinned to the highest rev once it is known.
   const seen = withSpans ? new Map<string, number[]>() : undefined;
+  const info = withSpans && held !== undefined ? await held.stat({ bigint: true }) : undefined;
   let superseded = false;
   for await (const { line, start, length } of withSpans ? logSpans(file, held) : plainLines(file, held)) {
     const observation = observationOf(line);
@@ -1444,7 +1464,7 @@ export const scanLog = async (file: string, held?: FileHandle, withSpans = false
     for (let n = 0; n < triples.length; n += 3) if (triples[n + 2] === latest.get(session)) kept.push(triples[n] ?? 0, triples[n + 1] ?? 0);
     spans.set(session, kept);
   }
-  return { latest, superseded, newerCaptures, spans };
+  return info === undefined ? { latest, superseded, newerCaptures, spans } : { latest, superseded, newerCaptures, spans, identity: { dev: info.dev, ino: info.ino, size: info.size } };
 };
 
 const plainLines = async function* (file: string, held?: FileHandle): AsyncGenerator<{ line: string; start: number; length: number }> {
@@ -1502,10 +1522,18 @@ export type LoadOptions = {
   sessionsOnly?: boolean;
   /** The revs of an earlier `scanLog`: the read skips its own first pass. A build that reads chunk after chunk scans once; a row written after that scan is not seen, like a session that began after the build did. */
   latest?: ReadonlyMap<string, number>;
-  /** With `only`: the byte spans of an earlier `scanLog(file, held, true)`. The read seeks to the lines of the wanted sessions instead of streaming the whole log; a span that no longer holds a line of its session at its rev (a compaction moved the log, a read came up short) is skipped, never misread. */
+  /** With `only`: the byte spans of an earlier `scanLog(file, held, true)`. The read seeks to the lines of the wanted sessions instead of streaming the whole log; a log that is no longer the scanned file is streamed instead, and a torn or short line is skipped, never misread. */
   spans?: ReadonlyMap<string, readonly number[]>;
+  /** With `spans`: the scan's `identity`. The spans are used only when the log opened for this read is that file, grown or not; any other file (a compaction renamed one into place) is streamed, as without spans. */
+  identity?: LogIdentity;
   /** A seam: called once for every log line the read looks at. */
   lineRead?: () => void;
+};
+
+/** True when `held` is the file `identity` describes and has not shrunk: only an append can have happened since. */
+const sameFile = async (held: FileHandle, identity: LogIdentity): Promise<boolean> => {
+  const now = await held.stat({ bigint: true });
+  return now.dev === identity.dev && now.ino === identity.ino && now.size >= identity.size;
 };
 
 /** The wanted sessions' lines, in file order, read by seeking: adjacent spans are one read. */
@@ -1562,8 +1590,9 @@ export const loadStore = async (storeDir: string, afterFirstPass?: () => Promise
   try {
     const latest = options.latest ?? (await scanLog(file, held)).latest;
     await afterFirstPass?.();
-    const { only, spans } = options;
-    for await (const line of held !== undefined && only !== undefined && spans !== undefined ? spanLines(held, spans, only) : logLines(file, held)) {
+    const { only, spans, identity } = options;
+    const seek = held !== undefined && only !== undefined && spans !== undefined && identity !== undefined && (await sameFile(held, identity));
+    for await (const line of seek ? spanLines(held, spans, only) : logLines(file, held)) {
       options.lineRead?.();
       // A read of a few sessions skips the JSON parse of every other line: the cheap check can only keep a line, never drop one that names a wanted session.
       if (options.only !== undefined && !namesAny(line, options.only)) continue;

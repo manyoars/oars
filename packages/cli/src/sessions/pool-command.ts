@@ -950,7 +950,7 @@ export const poolDeposit = async (
   // The sessions a Stop does not name that still pass the read-only gates: they only fill the windows of a delta, and are never counted, withdrawn, or built.
   const history: SessionRecords[] = [];
   // One scan of the log for the whole build: the head read and every chunk read take its revs, so a deposit reads the log's revs once, not once per chunk.
-  const { latest, spans } = await scanLog(paths(runtime.storeDir).observations, undefined, true);
+  const { latest, spans, identity } = await scanLog(paths(runtime.storeDir).observations, undefined, true);
   const localStore = await loadStore(runtime.storeDir, undefined, { sessionsOnly: true, latest });
   const childrenOf = new Map<string, string[]>();
   for (const agent of localStore.subagents) {
@@ -961,7 +961,7 @@ export const poolDeposit = async (
   }
   // The full records of some sessions (and their subagents), read from the log with nothing else.
   const readRecords = async (ids: ReadonlySet<string>): Promise<{ store: Store; records: Map<string, SessionRecords> }> => {
-    const store = await loadStore(runtime.storeDir, undefined, { latest, spans, only: new Set([...ids].flatMap((id) => [id, ...(childrenOf.get(id) ?? [])])) });
+    const store = await loadStore(runtime.storeDir, undefined, { latest, spans, identity, only: new Set([...ids].flatMap((id) => [id, ...(childrenOf.get(id) ?? [])])) });
     return { store, records: new Map(sessionsOf(store, roots).map((records) => [records.main.session, records])) };
   };
   // A damaged list stops the pass before anything is built: it must never read as "nothing was removed".
