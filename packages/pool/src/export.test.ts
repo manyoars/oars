@@ -60,6 +60,8 @@ const rowsOf = (pages: readonly Page[], section: string): unknown[] => pages.fil
 const skeleton = (id: string): string => JSON.stringify({ id, harness: 'claude-code' });
 
 let crewSeen = 40;
+/** The crew number each seeded tag was given. */
+const crews = new Map<string, number>();
 
 /** Gives an account a row in every table the export reads. */
 const seed = async (account: string, tag: string): Promise<void> => {
@@ -85,7 +87,7 @@ const seed = async (account: string, tag: string): Promise<void> => {
   await db.prepare('INSERT INTO board_standing (account, granted_at, granted_by, reason) VALUES (?, 1700000600000, ?, ?)').bind(account, `operator-${tag}`, `fleet-${tag}`).run();
   await db.prepare("INSERT INTO club_attempts (account, kind, at) VALUES (?, 'guess', 1700000700000)").bind(account).run();
   // The founding crew (migration 0041): a number, a code the account made and one it used, and the vouch edges on both sides. The other end of an edge is never exported.
-  await db.prepare('UPDATE accounts SET crew_number = ? WHERE id = ?').bind((crewSeen += 1), account).run();
+  await db.prepare('UPDATE accounts SET crew_number = ? WHERE id = ?').bind(crews.set(tag, (crewSeen += 1)).get(tag), account).run();
   await db.prepare("INSERT INTO accounts (id) VALUES (?)").bind(`other-${tag}`).run();
   await db.prepare('INSERT INTO invites (code_hash, inviter, created_at, used_by, used_at) VALUES (?, ?, 1700000010000, ?, 1700000020000)').bind(`hash-made-${tag}`, account, `other-${tag}`).run();
   await db.prepare('INSERT INTO invites (code_hash, inviter, created_at) VALUES (?, ?, 1700000030000)').bind(`hash-open-${tag}`, account).run();
@@ -131,7 +133,7 @@ describe('GET /v1/account/export', () => {
     expect(text).not.toContain(textOf(enrolled.json, 'token'));
     expect(text).not.toContain(sha256(textOf(enrolled.json, 'token')));
 
-    expect(rowsOf(pages, 'account')).toEqual([expect.objectContaining({ id: mine.account, rawConsent: 1_700_000_300_000, rawConsentVersion: 'v2', rawConsentWithdrawnAt: 1_700_000_350_000, rawConsentWithdrawnVersion: 'v1', closedAt: 1_700_000_400_000, access: 'standing', crewNumber: expect.any(Number) })]);
+    expect(rowsOf(pages, 'account')).toEqual([expect.objectContaining({ id: mine.account, rawConsent: 1_700_000_300_000, rawConsentVersion: 'v2', rawConsentWithdrawnAt: 1_700_000_350_000, rawConsentWithdrawnVersion: 'v1', closedAt: 1_700_000_400_000, access: 'standing', crewNumber: crews.get('mine') })]);
     expect(rowsOf(pages, 'covenant')).toEqual([expect.objectContaining({ version: 'v1', textSha256: acceptanceOf('v1').textSha256, input: acceptanceOf('v1').input, client: acceptanceOf('v1').client, euEeaUk: 'no', requestCountry: 'US' })]);
     expect(rowsOf(pages, 'machines')).toEqual([expect.objectContaining({ id: textOf(fieldOf(enrolled.json, 'machine'), 'id'), label: 'my box', hostClass: 'vps', launcher: 'scheduled', allowRepos: ['acme/api'], state: 'pending', lastDepositDay: '2026-11-05', keyDays: 30 })]);
     expect(rowsOf(pages, 'repoKeys')).toEqual([{ repoKey: 'repo-mine' }]);

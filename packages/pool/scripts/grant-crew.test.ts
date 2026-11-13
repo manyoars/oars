@@ -61,6 +61,7 @@ const vouch = async (inviter: string, invitee: string): Promise<void> => {
 const crewOf = async (id: string): Promise<unknown> => fieldOf(await db.prepare('SELECT crew_number FROM accounts WHERE id = ?').bind(id).first(), 'crew_number');
 const standingOf = async (id: string): Promise<readonly unknown[]> => (await db.prepare('SELECT granted_by, reason FROM board_standing WHERE account = ?').bind(id).all()).results;
 const DAY = 86_400_000;
+const NO_FILES: ObjectFiles = { temp: () => Promise.resolve('x'), read: () => ({ [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true, value: undefined }) }) }), write: () => Promise.resolve(), remove: () => Promise.resolve() };
 
 describe('planCrew', () => {
   it('numbers the first counting accounts in the order they first counted, and skips accounts that never counted, are closed, or are restricted', async () => {
@@ -163,7 +164,7 @@ describe('main', () => {
   const ioOf = (): { io: Io; printed: string[]; calls: string[] } => {
     const printed: string[] = [];
     const calls: string[] = [];
-    const io: Io = { print: (text) => printed.push(text), wrangler: (args) => { calls.push(args.join(' ')); return Promise.resolve('[]'); }, files: {} as ObjectFiles, now: () => NOW };
+    const io: Io = { print: (text) => printed.push(text), wrangler: (args) => { calls.push(args.join(' ')); return Promise.resolve('[]'); }, files: NO_FILES, now: () => NOW };
     return { io, printed, calls };
   };
 
@@ -177,7 +178,7 @@ describe('main', () => {
 
   it('is a dry run without --confirm: it says what it would grant and writes nothing', async () => {
     const { io, printed } = ioOf();
-    expect(await main(['--by', 'operator-x'], { ...io, store: storeOf() } as Io)).toBe(0);
+    expect(await main(['--by', 'operator-x'], { ...io, store: storeOf() })).toBe(0);
     const said = printed.join('\n');
     expect(said).toContain('Nothing was changed: run again with --confirm.');
     expect(JSON.parse(said.split('\n')[0] ?? '{}')).toMatchObject({ dryRun: true, founding: [], vouched: [] });
@@ -186,7 +187,7 @@ describe('main', () => {
   it('writes with --confirm and prints the counts', async () => {
     const first = await counting(1 * DAY);
     const { io, printed } = ioOf();
-    expect(await main(['--by', 'operator-x', '--confirm'], { ...io, store: storeOf() } as Io)).toBe(0);
+    expect(await main(['--by', 'operator-x', '--confirm'], { ...io, store: storeOf() })).toBe(0);
     expect(JSON.parse(printed.join('\n'))).toEqual({ founding: 1, vouched: 0 });
     expect(await crewOf(first)).toBe(1);
   });
@@ -203,7 +204,7 @@ describe('main', () => {
   it('prints the failure and exits 1 when the store fails', async () => {
     const { io, printed } = ioOf();
     const broken = { rows: () => Promise.reject(new Error('no store')), run: () => Promise.resolve(0) };
-    expect(await main(['--by', 'operator-x'], { ...io, store: broken } as Io)).toBe(1);
+    expect(await main(['--by', 'operator-x'], { ...io, store: broken })).toBe(1);
     expect(printed.join('')).toContain('no store');
   });
 });

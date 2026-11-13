@@ -128,6 +128,12 @@ const sentLogs = (s: Scene): string => {
 };
 const count = (s: Scene, call: string): number => s.calls.filter((made) => made === call).length;
 
+/** The `invite` field of the join's JSON document. */
+const inviteOf = (printed: string): unknown => {
+  const document: unknown = JSON.parse(printed);
+  return typeof document === 'object' && document !== null ? Reflect.get(document, 'invite') : undefined;
+};
+
 const AGAIN = 'Run oars pool join again to continue from here.';
 
 describe('oars pool join', () => {
@@ -372,7 +378,7 @@ describe('oars pool join', () => {
       expect(await s.cli(...joinArgs, '--invite', 'ABCD2345', '--json')).toBe(ExitCode.OK);
       expect(seen).toEqual([{ auth: 'Bearer a-pool-token', body: { code: 'ABCD2345' } }]);
       expect(s.calls.indexOf('POST /v1/invites/redeem')).toBeGreaterThan(s.calls.indexOf('POST /v1/login/poll'));
-      expect(JSON.parse(out(s)).invite).toEqual({ redeemed: true });
+      expect(inviteOf(out(s))).toEqual({ redeemed: true });
       expect(out(s) + err(s)).not.toContain('a-pool-token');
     });
 
@@ -380,7 +386,7 @@ describe('oars pool join', () => {
       const s = await scene();
       server.use(http.post(`${POOL}/v1/invites/redeem`, () => HttpResponse.json({ error: 'already_vouched', message: 'This account joined on an invite already.' }, { status: 409 })));
       expect(await s.cli(...joinArgs, '--invite', 'ABCD2345', '--json')).toBe(ExitCode.OK);
-      expect(JSON.parse(out(s)).invite).toEqual({ skipped: true, reason: 'already_vouched' });
+      expect(inviteOf(out(s))).toEqual({ skipped: true, reason: 'already_vouched' });
     });
 
     it('stops with the pool\'s own words when the code is refused, and says to run join again', async () => {
