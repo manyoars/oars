@@ -20,12 +20,12 @@ import { harnessOf, type Harness, type PromptVerify } from '../../cli/src/sessio
 import { loadStore, readRedactDomains, readSkeletons, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { runGit, type Git } from '../../cli/src/sessions/survival.js';
 import { vocabulary } from '../../cli/src/sessions/vocab-load.js';
-import { ageFilterOf, excludedSessionsOf, SKELETON_DEFAULT_DAYS } from './skeleton-only.js';
+import { ageFilterOf, excludedSessionsOf, namesFilterOf, SKELETON_DEFAULT_DAYS } from './skeleton-only.js';
 import { writeCard } from './skeleton-card.js';
 import { captureDeposits, covenantLicenseOf, depositorOf, hasRepoKey, type DepositBuild, type DepositCounts, type Paired } from './deposit-input.js';
 
 export const USAGE = [
-  'Usage: sample-pack --terms <file> --owners <file> --index-key <file> (--buyer-key-file <path> | --buyer-key <key>) --out <dir> [--size <n>] [--seed <text>] [--min-turns <n>] [--sessions <file>] [--deposits <folder>] [--strip-thinking] [--skeleton-only] [--older-than <days>] [--exclude-manifest <path>]',
+  'Usage: sample-pack --terms <file> --owners <file> --index-key <file> (--buyer-key-file <path> | --buyer-key <key>) --out <dir> [--size <n>] [--seed <text>] [--min-turns <n>] [--sessions <file>] [--deposits <folder>] [--strip-thinking] [--skeleton-only] [--older-than <days>] [--exclude-manifest <path>] [--exclude-names <file>]',
   '  --terms <file>       the exclusion term list (one term per line; a local file, never in a repository)',
   '  --owners <file>      JSON list of {"folder": "<glob over the project folder name>", "owner": "<company>", "license": "<SPDX id>" | null}; first match wins, and a session in a folder no entry names is left out',
   '  --index-key <file>   the matching-index key (64 hex characters or more): a session\'s server key is HMAC-SHA-256 of its id under it. Keep it; a new key gives every session new ids',
@@ -41,6 +41,7 @@ export const USAGE = [
   '  --skeleton-only      write no transcript: the manifest rows (transcripts: 0), skeleton.json per session, census.json, pack.json, and a README.md data card made from the last two. Sessions are kept only when older than --older-than days (default 30 here)',
   '  --older-than <days>  leave out a session whose last line is newer than this many days (a session with no date is left out too); counted as fresh',
   '  --exclude-manifest <path>  a lot\'s manifest.jsonl (or its pack folder): every session it holds is left out, found through index.jsonl beside the owners file; counted as inExcludedLot',
+  '  --exclude-names <file>  a local file of words, one per line (blank and # lines skipped): a session whose skeleton holds a kept name (any kind) with a listed word as a whole word, ignoring case, is left out and counted as namesFiltered. A word boundary is any character that is not a letter or a digit. The words are never printed or written',
   'Reads the store under APPDATA (or XDG_CONFIG_HOME) and the transcripts under CLAUDE_CONFIG_DIR or ~/.claude. Builds in <out>.partial and renames it to --out when done,',
   'and appends each session id and its match id to index.jsonl beside the owners file: the operator\'s only map from one to the other.',
 ].join('\n');
@@ -179,6 +180,8 @@ export interface PackOptions {
   olderThanDays?: number | undefined;
   /** A lot's manifest (`--exclude-manifest`): the sessions behind its match ids are left out, found through `index.jsonl`. */
   excludeManifest?: string | undefined;
+  /** A local words file (`--exclude-names`): a session whose skeleton names hold a listed whole word is left out. */
+  excludeNames?: string | undefined;
   /** The clock `olderThanDays` reads; a test injects its own. */
   now?: (() => number) | undefined;
 }
@@ -211,6 +214,8 @@ export interface PackCounts {
   fresh?: number;
   /** Only with `--exclude-manifest`: a session the named lot holds. */
   inExcludedLot?: number;
+  /** Only with `--exclude-names`: a session whose skeleton, as written, holds a listed word as a whole word in a kept name. The count only; the words are never recorded. */
+  namesFiltered?: number;
   emitted: number;
   /** Only for a pack built `--deposits`: dropped because an account line in `objections.jsonl` names the depositor's account (Art. 21(1)); `objected` counts the session and name lines. */
   objectedAccount?: number;
@@ -1263,8 +1268,9 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
   // Skeleton-only reads the same transcripts to redact, mask, and scan them, and writes none: a name or key found in text that does not ship still keeps its session out.
   const olderThan = ageFilterOf(options.olderThanDays ?? (options.skeletonOnly === true ? SKELETON_DEFAULT_DAYS : undefined), options.now ?? Date.now);
   const excludedLot = options.excludeManifest === undefined ? undefined : await excludedSessionsOf(options.excludeManifest, join(dirname(resolve(options.owners)), 'index.jsonl'), PackError);
+  const namesFilter = await namesFilterOf(options.excludeNames);
   const limit = listed === undefined ? options.size : Infinity;
-  const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, lead: 0, tooShort: 0, noRepo: 0, duplicate: 0, noSkeleton: 0, noPointer: 0, objected: 0, secret: 0, ...(olderThan === undefined ? {} : { fresh: 0 }), ...(excludedLot === undefined ? {} : { inExcludedLot: 0 }), emitted: 0, ...(input === undefined ? {} : { objectedAccount: 0, deposits: input.counts }) };
+  const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, lead: 0, tooShort: 0, noRepo: 0, duplicate: 0, noSkeleton: 0, noPointer: 0, objected: 0, secret: 0, ...(olderThan === undefined ? {} : { fresh: 0 }), ...(excludedLot === undefined ? {} : { inExcludedLot: 0 }), ...(namesFilter === undefined ? {} : { namesFiltered: 0 }), emitted: 0, ...(input === undefined ? {} : { objectedAccount: 0, deposits: input.counts }) };
   const turnsOf = (session: { userTurns: number; assistantTurns: number }): number => session.userTurns + session.assistantTurns;
   // The rules up to the repository one, once per session: the duplicate rule asks them only of the members of a group that shares a first prompt, the draw of the sessions it reaches; a singleton the draw never reaches is never gated.
   const earlyBy = new Map<string, Promise<Early>>();
@@ -1383,6 +1389,11 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
       counts.secret += 1;
       continue;
     }
+    // The skeleton as it would be written, after redaction and masking: a listed word in a kept name keeps the session out, and only the count is kept.
+    if (namesFilter?.(skeletonText) === true) {
+      counts.namesFiltered = (counts.namesFiltered ?? 0) + 1;
+      continue;
+    }
     for (const [at, file] of options.skeletonOnly === true ? [] : files.entries()) {
       const target = join(partial, 'sessions', matchId, placeOf(file.key, record.session, file.main));
       await mkdir(dirname(target), { recursive: true });
@@ -1475,7 +1486,7 @@ export interface Io {
   now?: (() => number) | undefined;
 }
 
-const VALUED = new Set(['--terms', '--owners', '--index-key', '--buyer-key', '--buyer-key-file', '--out', '--size', '--seed', '--min-turns', '--sessions', '--deposits', '--older-than', '--exclude-manifest']);
+const VALUED = new Set(['--terms', '--owners', '--index-key', '--buyer-key', '--buyer-key-file', '--out', '--size', '--seed', '--min-turns', '--sessions', '--deposits', '--older-than', '--exclude-manifest', '--exclude-names']);
 
 const parseArgs = async (argv: readonly string[]): Promise<(Omit<PackOptions, 'sessions' | 'onDrop'> & { sessionsFile?: string }) | string> => {
   const values = new Map<string, string>();
@@ -1508,7 +1519,7 @@ const parseArgs = async (argv: readonly string[]): Promise<(Omit<PackOptions, 's
   if (!Number.isInteger(minTurns) || minTurns < 1) return '--min-turns takes a whole number of 1 or more.';
   const olderThanDays = values.has('--older-than') ? Number(values.get('--older-than')) : undefined;
   if (olderThanDays !== undefined && (!Number.isFinite(olderThanDays) || olderThanDays < 0)) return '--older-than takes a number of days, 0 or more.';
-  return { terms, owners, indexKey, buyerKey, out, size, seed: values.get('--seed') ?? '1', minTurns, ...(stripThinking ? { stripThinking } : {}), ...(skeletonOnly ? { skeletonOnly } : {}), ...(olderThanDays === undefined ? {} : { olderThanDays }), ...(values.has('--exclude-manifest') ? { excludeManifest: values.get('--exclude-manifest') } : {}), ...(sessionsFile === undefined ? {} : { sessionsFile }), ...(values.has('--deposits') ? { deposits: values.get('--deposits') } : {}) };
+  return { terms, owners, indexKey, buyerKey, out, size, seed: values.get('--seed') ?? '1', minTurns, ...(stripThinking ? { stripThinking } : {}), ...(skeletonOnly ? { skeletonOnly } : {}), ...(olderThanDays === undefined ? {} : { olderThanDays }), ...(values.has('--exclude-manifest') ? { excludeManifest: values.get('--exclude-manifest') } : {}), ...(values.has('--exclude-names') ? { excludeNames: values.get('--exclude-names') } : {}), ...(sessionsFile === undefined ? {} : { sessionsFile }), ...(values.has('--deposits') ? { deposits: values.get('--deposits') } : {}) };
 };
 
 /** The session ids a `--sessions` file lists: one per line, blank lines skipped, each once, in the file's order. */
@@ -1540,6 +1551,7 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
         `Left out after the gate: ${String(counts.noOwner)} in a folder no owner entry names, ${String(counts.noHarnessTerms)} from a harness with no terms row, ${String(counts.tooShort)} under ${String(options.minTurns)} turns, ${String(counts.noRepo)} with no repository, ${String(counts.duplicate)} replaying a longer session, ${String(counts.objected)} under an objection, ${String(counts.secret)} holding a secret after redaction.`,
         ...(counts.fresh === undefined ? [] : [`Left out as newer than the age limit: ${String(counts.fresh)}.`]),
         ...(counts.inExcludedLot === undefined ? [] : [`Left out as held by the excluded lot: ${String(counts.inExcludedLot)}.`]),
+        ...(counts.namesFiltered === undefined ? [] : [`Left out for a listed name in a kept name: ${String(counts.namesFiltered)}.`]),
         ...(counts.deposits === undefined ? [] : [`Left out of the deposits: ${String(counts.deposits.unlinked)} with no deposit row, ${String(counts.deposits.tierNone)} of tier none, ${String(counts.deposits.protectedRegion)} from a protected region, ${String(counts.deposits.noGrant)} with no proved acceptance, ${String(counts.objectedAccount ?? 0)} under an account line.`]),
         ...dropped,
       ].join('\n'),
