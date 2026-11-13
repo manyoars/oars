@@ -246,6 +246,19 @@ describe('the open board', () => {
     expect(text.text).toContain('Oarsman');
   });
 
+  it('points an ashore row on oars board to oars pool join', async () => {
+    await db.prepare("DELETE FROM club_members WHERE club = 'open'").run();
+    const rower = await person();
+    rower.types('yes');
+    expect(await rower.cli('club', 'join', 'open', '--nickname', 'Docked')).toBe(ExitCode.OK);
+    const account = String(fieldOf(await db.prepare("SELECT account FROM club_members WHERE club = 'open' AND nickname = 'Docked'").first(), 'account'));
+    await db.prepare("UPDATE accounts SET access = 'standing' WHERE id = ?").bind(account).run();
+    const reader = await person(false);
+    const text = await reader.words('board');
+    expect(text.text).toMatch(/Docked\D+ashore/);
+    expect(text.text).toContain('ashore: run oars pool join to start rowing.');
+  });
+
   it('prints the crew number beside a founding nickname, a column only while a row carries one, and no count', async () => {
     await db.prepare("DELETE FROM club_members WHERE club = 'open'").run();
     const rower = await person();

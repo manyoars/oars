@@ -36,10 +36,14 @@ describe('oars pool join against the local pool', () => {
     h.deps.now = settledClock;
     // The term file does not exist before the run: the terms step makes it, and the person saves a term when it says "Press Enter".
     const write = h.deps.io.stderr;
+    let madeByJoin = false;
     h.deps.io.stderr = (text) => {
       write(text);
-      if (text.includes('Press Enter')) writeFileSync(terms, `${TERM}
+      if (text.includes('Press Enter')) {
+        madeByJoin = existsSync(terms);
+        writeFileSync(terms, `${TERM}
 `);
+      }
     };
     h.deps.sleep = async () => {
       const issued = /USER-(\d+)/.exec(h.err.join(''))?.[1];
@@ -56,7 +60,7 @@ describe('oars pool join against the local pool', () => {
 
     expect(await run(['--json', 'pool', 'join', '--provider', 'github', '--harness-version', '2.1.314'], h.deps)).toBe(ExitCode.OK);
     expect(h.err.join('')).toContain('Press Enter');
-    expect(existsSync(terms)).toBe(true);
+    expect(madeByJoin).toBe(true);
     const account = await db.prepare('SELECT id, access FROM accounts ORDER BY rowid DESC LIMIT 1').first();
     const id = textOf(account, 'id');
     expect(fieldOf(account, 'access')).toBe('pending');

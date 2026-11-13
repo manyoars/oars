@@ -512,7 +512,13 @@ const openCovenant = async (deps: RunDeps, server: string, token: string, accept
   if (answered === undefined) throw notAccepted('Answer yes or no: are you in the EU, the EEA, or the UK? Nothing was accepted.');
   const body = { version, textSha256: createHash('sha256').update(screen.text).digest('hex'), input: 'typed', client: `oars/${deps.version}`, euEeaUk: answered };
   const accepted = await ask(deps, DEPOSIT, server, '/v1/covenant/accept', { token, body }, via);
-  if (accepted.status !== 200) throw refusal(DEPOSIT, accepted);
+  if (accepted.status !== 200) {
+    const refused = refusal(DEPOSIT, accepted);
+    // A join keeps the answer to the region question for its reruns, so a mistyped yes would be refused again every time: name the way to correct it.
+    if (shared === undefined || refused.problem?.code !== 'region_closed') throw refused;
+    const title = `${refused.message} If you answered yes by mistake, run oars pool join --in-eu-eea-uk no to correct it.`;
+    throw new CliError(title, refused.exitCode, DEPOSIT, { code: 'region_closed', title, status: 403 });
+  }
   deps.io.stderr(`${OFFER_AFTER.join('\n')}\n`);
   // A yes to the raw prompt belongs to the covenant it was given under, and a covenant can change what that prompt covers: accepting another version asks the raw question again.
   const reset = { done: false };
