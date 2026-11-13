@@ -1,0 +1,19 @@
+{
+  "spec": "real-work-note/1",
+  "label": "one fleet",
+  "builtOn": "2026-11-13",
+  "harness": "claude-code",
+  "from": {
+    "versionBucket": "2.1.30x",
+    "sessions": 6,
+    "calls": 60
+  },
+  "to": {
+    "versionBucket": "2.1.32x",
+    "sessions": 6,
+    "calls": 60
+  },
+  "minSessions": 5,
+  "result": "no change",
+  "moves": []
+}

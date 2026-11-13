@@ -1,0 +1,48 @@
+{
+  "spec": "real-work-note/1",
+  "label": "one fleet",
+  "builtOn": "2026-11-13",
+  "harness": "claude-code",
+  "from": {
+    "versionBucket": "2.1.30x",
+    "sessions": 12,
+    "calls": 120
+  },
+  "to": {
+    "versionBucket": "2.1.32x",
+    "sessions": 12,
+    "calls": 120
+  },
+  "minSessions": 5,
+  "result": "moves",
+  "moves": [
+    {
+      "measure": "failureRate",
+      "kind": "model",
+      "name": "claude-opus-5-5",
+      "unit": "calls",
+      "from": {
+        "value": 0,
+        "n": 60
+      },
+      "to": {
+        "value": 0.5,
+        "n": 60
+      }
+    },
+    {
+      "measure": "failureRate",
+      "kind": "tool",
+      "name": "Bash",
+      "unit": "calls",
+      "from": {
+        "value": 0.05,
+        "n": 120
+      },
+      "to": {
+        "value": 0.3,
+        "n": 120
+      }
+    }
+  ]
+}

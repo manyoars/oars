@@ -15,6 +15,7 @@
     "pull-deposits": "node scripts/pull-deposits.mjs",
     "sample-pack": "node scripts/sample-pack.mjs",
     "real-work-table": "node scripts/real-work-table.mjs",
+    "real-work-note": "node scripts/real-work-note.mjs",
     "deliver": "node scripts/deliver.mjs",
     "license-status": "node scripts/license-status.mjs",
     "notices": "node scripts/notices.mjs",
