@@ -396,13 +396,13 @@ describe('the deltas a deposit carries', () => {
     expect(byWindow.size).toBe(1);
     // before (5) and the first five after: never the sixth.
     expect(asked).toEqual([10]);
-    // A session whose rows vanished between the two reads is a gap, not a throw.
     // A window whose filler is not being built is not read at all.
     const unread: number[] = [];
     const skipped = await carriedDeltasByWindow('acct', sessions, new Set(), (ids) => { unread.push(ids.size); return load(ids); }, new Set(['not-a-filler']));
     expect(skipped.size).toBe(0);
     expect(unread).toEqual([]);
     expect([...(await carriedDeltasByWindow('acct', sessions, new Set(), load, new Set(['a4']))).keys()]).toEqual(['a4']);
+    // A session whose rows vanished between the two reads is a gap, not a throw.
     const gap = await carriedDeltasByWindow('acct', sessions, new Set(), () => Promise.resolve(new Map()));
     expect(gap.size).toBe(0);
   });

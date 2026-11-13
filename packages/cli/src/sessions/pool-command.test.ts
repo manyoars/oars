@@ -4501,6 +4501,21 @@ describe('oars pool deposit --send-all (t1199)', () => {
     expect(sentLogOf(scene)).toEqual([...hashes]);
   });
 
+  it('does not count a pulled batch held back for want of exclusion terms as left, since a rerun skips it', async () => {
+    const scene = await clean();
+    const hashes = plant(scene, 1, 3);
+    await show(scene);
+    const outbox = outboxFolder(scene.staged.storeDir, POOL);
+    const held = (await heldAcross(outbox)).batches.find((batch) => batch.hash === hashes[2]);
+    await writePulled(outbox, { [held?.key ?? '']: currentStamp() });
+    scene.h.deps.env.OARS_EXCLUSION_TERMS = join(scene.staged.root, 'no-such-terms.txt');
+    const via: Sender = (request) => {
+      if (request.method === 'GET') return Promise.resolve(OPEN_COVENANT);
+      return Promise.resolve(batchHash(request.body ?? '') === hashes[0] ? answer(400, { error: 'bad_batch', message: 'The pool refused this batch.' }) : answer(201));
+    };
+    await expect(poolDeposit(scene.h.deps, all(via))).rejects.toMatchObject({ details: { tally: { failed: 1, left: 1 } } });
+  });
+
   it('sends through the default network sender against the local test server, with no injected via', async () => {
     const scene = await clean();
     const hashes = plant(scene, 1, 2);
@@ -4563,7 +4578,7 @@ describe('oars pool deposit --send-all (t1199)', () => {
 });
 
 // The memory proof (t1199 item 4). Opt-in, because it writes hundreds of megabytes and spawns a second vitest over this file; it is not in `npm run test`, `just check`, or CI. Run it with
-//   OARS_MEMORY_PROOF=1 just -f $ORCH_ROOT/justfile build oars exec -w packages/cli -- vitest run src/sessions/pool-command.test.ts -t memory- --silent=false
+//   OARS_MEMORY_PROOF=1 npm test -w packages/cli -- src/sessions/pool-command.test.ts -t memory- --silent=false
 // Two children, each under a V8 heap too small for the history held whole:
 //   outbox: 7,000 batches of 64 KB (448 MB as strings) are shown by `pool outbox` and sent by `--send-all` under --max-old-space-size=192 (V8 adds 192 MB, so the limit is about 384 MB, under the 448 MB the whole outbox held as strings takes);
 //   build: 7,000 captured sessions are built by `pool deposit` under --max-old-space-size=BUILD_HEAP_MB (the old build loaded the whole store and failed there).

@@ -755,7 +755,7 @@ const sendAll = async (deps: RunDeps, options: { outbox: string; server: string;
       if (ended !== undefined) {
         // Shown, not sent, not reached: counted by name alone, without reading a file. A batch a rerun would skip (never shown) is not left.
         for await (const named of namesHeldAcross(outbox)) {
-          if (!handled.has(named.hash) && !done.has(named.hash) && shown.has(named.hash)) tally.left += 1;
+          if (!handled.has(named.hash) && !done.has(named.hash) && shown.has(named.hash) && !(named.pulled && !scan.open)) tally.left += 1;
         }
         deps.io.stderr(`Stopped: ${line()}. Run the same command again to send what is left.
 `);
