@@ -57,7 +57,7 @@ describe('check-owner-name', () => {
   });
 
   it('catches the handle and the mailbox domain listed in the denylist, each on its own line', () => {
-    const list = join(root, '..', `check-owner-name-list-${process.pid}.txt`);
+    const list = join(root, '..', `check-owner-name-list-${String(process.pid)}.txt`);
     writeFileSync(list, 'zz-handle\nzz-domain.example\n');
     try {
       track('b.txt', 'see zz-handle\nwrite to ops@ZZ-Domain.example\nclean\n');
