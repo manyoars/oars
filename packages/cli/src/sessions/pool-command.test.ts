@@ -4675,7 +4675,9 @@ describe('oars pool outbox, deposit, and deposit --send-all memory (t1199)', () 
     sample('start');
     const store = await loadStore(scene.staged.storeDir);
     sample('loadStore');
-    derive(store, '2026-01-01T00:00:00.000Z');
+    // `refresh` keeps `derived` live and serializes it before the index steps, so the reading does too.
+    const derived = derive(store, '2026-01-01T00:00:00.000Z');
+    const derivedBytes = JSON.stringify(derived).length;
     sample('derive');
     const { currentPool } = await import('./pool.js');
     const current = await currentPool(scene.staged.storeDir, store);
@@ -4684,8 +4686,11 @@ describe('oars pool outbox, deposit, and deposit --send-all memory (t1199)', () 
     const next = current === undefined ? undefined : nextByFrame(current.pool, store);
     sample('nextByFrame');
     const { buildIndex } = await import('./hook-index.js');
-    buildIndex(store, [], '2026-01-01T00:00:00.000Z', current?.reads ?? [], next);
+    const index = buildIndex(store, [], '2026-01-01T00:00:00.000Z', current?.reads ?? [], next);
+    const indexBytes = JSON.stringify(index).length;
     sample('buildIndex');
+    // Read after the last sample so `derived` and `index` stay live through every reading, as in `refresh`.
+    readings.push(`serialized ${String(derivedBytes + indexBytes)} bytes over ${String(derived.signatures.length)} signatures and ${String(Object.keys(index.signatures).length)} indexed`);
     finish(store.sessions.length, readings.join(' | '));
   }, 540_000);
 
