@@ -655,17 +655,24 @@ interface Folded {
 
 const asError = (error: unknown): Error => (error instanceof Error ? error : new Error(String(error)));
 
+/** The one place a pool fold's failure is caught: its result, or the error, so a step of the pool never stops a deposit. */
+const attempt = <T>(step: () => T): T | Error => {
+  try {
+    return step();
+  } catch (error) {
+    return asError(error);
+  }
+};
+
 /** The pool fold settled after the last run, or the error that stopped it. */
 const finished = (pool: PoolFold | Error, runtime: SessionsRuntime, runs: number): PoolFolds | Error => {
   if (pool instanceof Error) return pool;
-  try {
+  return attempt(() => {
     const folds = pool.finish();
     runtime.refreshStep?.('finish');
     runtime.refreshed?.({ runs, reversions: reversionEntries(pool.index) });
     return folds;
-  } catch (error) {
-    return asError(error);
-  }
+  });
 };
 
 const reversionEntries = (index: ReversionIndex): number => {
@@ -728,11 +735,11 @@ const foldRuns = async (runtime: SessionsRuntime): Promise<Folded> => {
       errors.push(record.agent === undefined ? { group: unreadable ? 0 : 1, at: start(record.session), record } : { group: 2, at: start(record.agent), record });
     }
     if (!(pool instanceof Error)) {
-      try {
-        pool.add(run);
-      } catch (error) {
-        pool = asError(error);
-      }
+      const open = pool;
+      const failed = attempt(() => {
+        open.add(run);
+      });
+      if (failed instanceof Error) pool = failed;
     }
   }
   runtime.refreshStep?.('runs');

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { emptyUsage } from './extract.js';
@@ -188,8 +188,26 @@ describe('refresh folds the store a run of sessions at a time and writes the pin
 });
 
 describe('refresh when the pool fold fails (refreshpoolfailed)', () => {
-  it('writes one POOL_FAILED line, an index with no fit reads, and derived.json', async () => {
+  /** Three sessions that fail one shape six calls in ten and four that call another tool cleanly: a shape over `PUSH_FLOORS` (twenty calls, half failed), so a normal refresh writes a fit read. Staged here, not in the pinned log. */
+  const withFit = (): ReturnType<typeof stage> => {
     const staged = stagedLog();
+    const more = [...['m1', 'm2', 'm3'].map((id) => [id, 'Monitor', 6]), ...['q1', 'q2', 'q3', 'q4'].map((id) => [id, 'Quiet', 0])].flatMap(([id, name, failing]) => [
+      captured(String(id)), userPrompt(String(id), 0, stamp(45), 1),
+      ...Array.from({ length: 10 }, (_, n) => call(String(id), n, String(name), 45, 0, { keys: ['query'], status: n < Number(failing) ? 'error' : 'ok' })),
+    ]);
+    appendFileSync(paths(staged.storeDir).observations, `${more.map((row) => JSON.stringify(row)).join(String.fromCharCode(10))}${String.fromCharCode(10)}`);
+    return staged;
+  };
+  const fitOf = (storeDir: string): unknown => {
+    const index: unknown = JSON.parse(readFileSync(join(storeDir, 'hook-index.json'), 'utf8'));
+    return Reflect.get(Object(index), 'fit');
+  };
+
+  it('writes one POOL_FAILED line, an index with no fit reads, and derived.json', async () => {
+    const normal = withFit();
+    await refresh(normal.runtime, [], PIN_AT);
+    expect(fitOf(normal.storeDir)).not.toEqual({});
+    const staged = withFit();
     // A recall record that cannot be read (a directory where the file belongs) stops the pool fold, not the refresh.
     mkdirSync(recallsPath(staged.storeDir));
     const written = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
@@ -200,8 +218,19 @@ describe('refresh when the pool fold fails (refreshpoolfailed)', () => {
     } finally {
       written.mockRestore();
     }
-    const index: unknown = JSON.parse(readFileSync(join(staged.storeDir, 'hook-index.json'), 'utf8'));
-    expect(Reflect.get(Object(index), 'fit')).toEqual({});
+    expect(fitOf(staged.storeDir)).toEqual({});
+    expect(readFileSync(join(staged.storeDir, 'derived.json'), 'utf8')).not.toBe('');
+  });
+
+  it('reports a step of the pool fold that throws after the runs, and still writes the files', async () => {
+    const staged = stagedLog();
+    const written = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    try {
+      await refresh({ ...staged.runtime, refreshed: () => { throw new Error('seam'); } }, [], PIN_AT);
+      expect(written.mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith('oars: the read pool was not built'))).toHaveLength(1);
+    } finally {
+      written.mockRestore();
+    }
     expect(readFileSync(join(staged.storeDir, 'derived.json'), 'utf8')).not.toBe('');
   });
 });
