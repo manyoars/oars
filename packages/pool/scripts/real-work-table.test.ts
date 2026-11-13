@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { TOOL_INPUT_KEYS } from '../../cli/src/sessions/public-vocabulary.js';
 import { PROMPT_CLASSES } from '../../cli/src/sessions/schema.js';
 import { deposit, type SessionsRuntime } from '../../cli/src/sessions/store.js';
-import { HARNESS_NAMES, main, MODEL_PREFIXES, SPEC_VERSION, tableOf, type Table } from './real-work-table.js';
+import { HARNESS_NAMES, main, SPEC_VERSION, tableOf, type Table } from './real-work-table.js';
 
 const TERM = 'zorblax';
 const dirs: string[] = [];
@@ -37,6 +37,7 @@ interface Spec {
 
 const bash = (ok: boolean): Call => ({ tool: 'Bash', input: { command: 'npm test' }, ok });
 const edit = (): Call => ({ tool: 'Edit', input: { file_path: 'src/a.ts', old_string: 'a', new_string: 'b' }, ok: true });
+const failedEdit = (): Call => ({ ...edit(), ok: false });
 const read = (): Call => ({ tool: 'Read', input: { file_path: 'src/a.ts' }, ok: true });
 
 // A transcript the way the harness writes it: a user line per prompt, then an assistant line and a result line per call.
@@ -94,7 +95,7 @@ const fixture = (): Fixture => {
 
 const OPTIONS = (f: Fixture, extra: { minSessions?: number } = {}) => ({ terms: f.terms, owners: f.owners, minSessions: extra.minSessions ?? 1, date: '2026-11-13' });
 
-// A session of the main model on the older harness bucket with one failure that an edit recovers, one that nothing recovers.
+// A session of the main model on the older harness bucket with one failure that an edit recovers, one that nothing recovers; the second prompt asks for an undo, so the first is a known intervention and the last prompt is unknown.
 const older = (n: number, project = '-work-oars'): Spec => ({
   id: id(n),
   project,
@@ -102,7 +103,7 @@ const older = (n: number, project = '-work-oars'): Spec => ({
   model: 'claude-opus-5-5',
   prompts: [
     { text: 'fix the parser', calls: [read(), bash(false), edit(), bash(true)] },
-    { text: 'run it again', calls: [bash(false), read(), read(), read(), read(), read(), read()] },
+    { text: 'revert that', calls: [bash(false), read(), read(), read(), read(), read(), read()] },
   ],
 });
 const newer = (n: number): Spec => ({ id: id(n), project: '-work-oars', version: '2.1.320', model: 'claude-sonnet-5-5', prompts: [{ text: 'fix the parser', calls: [read(), bash(true), edit()] }] });
@@ -168,8 +169,8 @@ describe('real-work table', () => {
     const allowed = new Set<string>([
       ...HARNESS_NAMES, ...PROMPT_CLASSES, ...TOOL_INPUT_KEYS.keys(), 'other', 'unknown', '2.1.30x', '2.1.32x', 'claude-opus-5-5', 'claude-sonnet-5-5', 'one fleet', SPEC_VERSION, '2026-11-13', 'cell', 'tool',
     ]);
-    const keys = new Set(['spec', 'label', 'builtOn', 'sessions', 'counted', 'excluded', 'minSessions', 'leftOut', 'header', 'rows', 'kind', 'model', 'harness', 'versionBucket', 'tool', 'calls', 'failures', 'failureRate', 'recovered', 'callsToRecover', 'editFollowedShare', 'prompts', 'interventions', 'interventionsPerPrompt', 'tokensPerPrompt', 'class', 'cell',
-      'term', 'noRaw', 'noTerms', 'unreadable', 'noOwner', 'excludedByReason']);
+    const keys = new Set(['spec', 'label', 'builtOn', 'sessions', 'counted', 'excluded', 'minSessions', 'leftOut', 'header', 'rows', 'kind', 'model', 'harness', 'versionBucket', 'tool', 'calls', 'failures', 'failureRate', 'recovered', 'callsToRecover', 'editFollowedShare', 'prompts', 'promptsKnown', 'interventions', 'interventionsPerPrompt', 'tokensPerPrompt', 'class',
+      'term', 'noRaw', 'noTerms', 'unreadable', 'noOwner']);
     const strings: string[] = [];
     const walk = (value: unknown, path: string): void => {
       if (typeof value === 'string') strings.push(`${path}=${value}`);
@@ -191,7 +192,48 @@ describe('real-work table', () => {
     expect(text).not.toContain('acme_secret');
     expect(table.rows.some((row) => row.kind === 'cell' && row.model === 'other')).toBe(true);
     expect(table.rows.some((row) => row.kind === 'tool' && row.tool === 'other')).toBe(true);
-    expect(MODEL_PREFIXES.length).toBeGreaterThan(0);
+  });
+
+  it('names a model only when the closed grammar does, so a private build is other', async () => {
+    const f = fixture();
+    const privateNames = ['claude-acme-internal-ft', 'gpt-acmecorp-secret', 'o3private'];
+    privateNames.forEach((model, at) => {
+      f.add({ ...newer(at + 1), model });
+    });
+    await f.stored();
+    const table = await build(f);
+    const text = JSON.stringify(table);
+    for (const name of privateNames) expect(text).not.toContain(name);
+    expect(table.rows.filter((row) => row.kind === 'cell').map((row) => row.kind === 'cell' && row.model)).toEqual(['other']);
+  });
+
+  it('counts a recovery only as a later edit that did not fail, in the same prompt', async () => {
+    const failedThenFailedEdit = fixture();
+    failedThenFailedEdit.add({ ...newer(1), prompts: [{ text: 'fix it', calls: [bash(false), failedEdit()] }] });
+    await failedThenFailedEdit.stored();
+    const next = fixture();
+    next.add({ ...newer(1), prompts: [{ text: 'fix it', calls: [bash(false)] }, { text: 'go on', calls: [edit()] }] });
+    await next.stored();
+    const clean = fixture();
+    clean.add({ ...newer(1), prompts: [{ text: 'fix it', calls: [bash(false), read(), edit()] }] });
+    await clean.stored();
+    for (const [f, failures] of [[failedThenFailedEdit, 2], [next, 1]] as const) {
+      for (const row of (await build(f)).rows) {
+        if (row.kind === 'tool' && row.tool !== 'Bash') continue;
+        expect(row, `${row.kind}`).toMatchObject({ failures: row.kind === 'cell' ? failures : 1, recovered: 0, callsToRecover: null, editFollowedShare: 0 });
+      }
+    }
+    // A clean read in between does not count, the edit behind it does, two calls away.
+    const rows = (await build(clean)).rows.filter((row) => row.kind === 'cell' || row.tool === 'Bash');
+    for (const row of rows) expect(row).toMatchObject({ failures: 1, recovered: 1, callsToRecover: 2, editFollowedShare: 1 });
+  });
+
+  it('divides interventions by the prompts with a known intervention and states that n', async () => {
+    const f = fixture();
+    f.add(older(1));
+    await f.stored();
+    const cell = (await build(f)).rows.find((row) => row.kind === 'cell');
+    expect(cell).toMatchObject({ prompts: 2, promptsKnown: 1, interventions: 1, interventionsPerPrompt: 1 });
   });
 
   it('carries the build date, the store session count, the label, and the spec version in the header', async () => {

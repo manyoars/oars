@@ -5,8 +5,10 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { harnessBucket } from '../../cli/src/sessions/cells.js';
+import { stepsOfCall } from '../../cli/src/sessions/motif.js';
+import { recoveryCallsOf, type Followed } from '../../cli/src/sessions/recovery-calls.js';
 import { checkSession } from '../../cli/src/sessions/exclusion.js';
-import { TOOL_INPUT_KEYS } from '../../cli/src/sessions/public-vocabulary.js';
+import { LITERAL, publicModel, TOOL_INPUT_KEYS } from '../../cli/src/sessions/public-vocabulary.js';
 import { harnessOf, PROMPT_CLASSES, type Harness, type PromptObservation, type ToolObservation } from '../../cli/src/sessions/schema.js';
 import { loadStore, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { insideRepository, ownerOf, PackError, parseOwners } from './sample-pack.js';
@@ -19,11 +21,6 @@ export const LABEL = 'one fleet';
 export const DEFAULT_MIN_SESSIONS = 5;
 /** The harness names, as the store records them (`Harness`); the type check below keeps this list whole. */
 export const HARNESS_NAMES = ['claude-code', 'cursor', 'codex', 'copilot', 'gemini', 'grok', 'opencode', 'pi', 'vscode-copilot', 'otel'] as const satisfies readonly Harness[];
-/** A model id is public when it starts with one of these and holds only name characters; a self-hosted or private name is `other`. */
-export const MODEL_PREFIXES = ['claude-', 'gpt-', 'o1', 'o3', 'o4', 'gemini-', 'grok-', 'codex-'] as const;
-/** The calls after a failed one that count toward its recovery: the window of the store's own `editFollowed` (`ErrorObservation`). */
-const RECOVERY_WINDOW = 6;
-const EDITS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit']);
 const OTHER = 'other';
 const UNKNOWN = 'unknown';
 
@@ -59,6 +56,8 @@ export interface CellRow {
   callsToRecover: number | null;
   editFollowedShare: number | null;
   prompts: number;
+  /** Prompts whose intervention the records can say (not `unknown`, not absent): the n of `interventionsPerPrompt`. */
+  promptsKnown: number;
   interventions: number;
   interventionsPerPrompt: number | null;
   tokensPerPrompt: { class: string; prompts: number; tokensPerPrompt: number }[];
@@ -105,26 +104,27 @@ const harnessName = (harness: Harness): string => (HARNESS_NAMES.includes(harnes
 const toolName = (tool: string): string => (TOOL_INPUT_KEYS.has(tool) ? tool : OTHER);
 const modelName = (model: string | undefined): string => {
   if (model === undefined || model === '') return UNKNOWN;
-  return /^[a-z0-9][a-z0-9._-]{0,63}$/.test(model) && MODEL_PREFIXES.some((prefix) => model.startsWith(prefix)) ? model : OTHER;
+  // The closed grammar of the wire (`publicModel`): a name it does not pass through unchanged is private or unknown.
+  return model !== LITERAL && publicModel(model) === model ? model : OTHER;
 };
-/** `harnessBucket` gives a patch by tens (`2.1.3x`), a version with no patch as itself, and `unknown` for none; anything else is `other`. */
+/** `harnessBucket` gives a patch by tens (`2.1.3x`) and `unknown` for none; a version with no patch, and any other unmatched form, is `other`. */
 const bucketName = (version: string | null | undefined): string => {
   const bucket = harnessBucket(version ?? null);
   return /^\d+\.\d+\.\d+x$/.test(bucket) || bucket === UNKNOWN ? bucket : OTHER;
 };
 
-/** What a failed call leads to: its calls to the next edit or clean call within the window (null when neither came), and whether an edit came. */
-const recoveryOf = (calls: readonly ToolObservation[], at: number): { recoveredIn: number | null; edited: boolean } => {
-  let recoveredIn: number | null = null;
-  let edited = false;
-  for (let step = 1; step <= RECOVERY_WINDOW; step += 1) {
-    const next = calls[at + step];
-    if (next === undefined) break;
-    const edit = EDITS.has(next.tool);
-    edited ||= edit;
-    if (recoveredIn === null && (edit || next.status === 'ok')) recoveredIn = step;
+/**
+ * What a failed call leads to, from the pool's own `recoveryCallsOf`: the window is its next calls of the same prompt and run, and an edit counts only when its own result did not fail.
+ * Calls to recover is the size of the shortest window in which such an edit appears (null when none does).
+ */
+const recoveryOf = (calls: readonly Followed[], at: number): { recoveredIn: number | null; edited: boolean } => {
+  const whole = recoveryCallsOf(calls, at);
+  if (whole === null || !whole.editFollowed) return { recoveredIn: null, edited: false };
+  for (let end = at + 2; end <= calls.length; end += 1) {
+    const window = recoveryCallsOf(calls.slice(0, end), at);
+    if (window?.editFollowed === true) return { recoveredIn: window.next.length, edited: true };
   }
-  return { recoveredIn, edited };
+  return { recoveredIn: whole.next.length, edited: true };
 };
 
 interface Tally {
@@ -135,11 +135,12 @@ interface Tally {
   recovered: number;
   edited: number;
   prompts: number;
+  promptsKnown: number;
   interventions: number;
   tokens: Map<string, { prompts: number; tokens: number }>;
 }
 
-const newTally = (): Tally => ({ sessions: new Set(), calls: 0, failures: 0, recoverySteps: 0, recovered: 0, edited: 0, prompts: 0, interventions: 0, tokens: new Map() });
+const newTally = (): Tally => ({ sessions: new Set(), calls: 0, failures: 0, recoverySteps: 0, recovered: 0, edited: 0, prompts: 0, promptsKnown: 0, interventions: 0, tokens: new Map() });
 
 const tokensOf = (prompt: PromptObservation): number => prompt.usage.input + prompt.usage.cacheWrite + prompt.usage.cacheRead + prompt.usage.output;
 
@@ -198,12 +199,14 @@ export const tableOf = async (runtime: SessionsRuntime, options: TableOptions): 
   }
   for (const calls of transcripts.values()) {
     calls.sort((a, b) => a.n - b.n);
+    // A call is read by its first step's action, as the pool's cells read it.
+    const followed = calls.map((call) => ({ side: call.side, prompt: call.prompt, status: call.status, steps: stepsOfCall(call, counted.get(call.parent) ?? 'claude-code') }));
     calls.forEach((call, at) => {
       const harness = counted.get(call.parent) ?? 'claude-code';
       const model = modelName(call.model ?? promptModel.get(`${call.parent}#${String(call.prompt ?? -1)}`) ?? modelOf.get(call.parent));
       const bucket = bucketName(call.harnessVersion ?? versionOf.get(call.parent));
       const failed = call.status === 'error';
-      const recovery = failed ? recoveryOf(calls, at) : undefined;
+      const recovery = failed ? recoveryOf(followed, at) : undefined;
       for (const tally of [cellOf(model, harnessName(harness), bucket), toolOf(toolName(call.tool))]) {
         tally.sessions.add(call.parent);
         tally.calls += 1;
@@ -226,7 +229,10 @@ export const tableOf = async (runtime: SessionsRuntime, options: TableOptions): 
     const tally = cellOf(model, harnessName(harness), bucket);
     tally.sessions.add(prompt.session);
     tally.prompts += 1;
-    if (prompt.intervention !== undefined && prompt.intervention !== 'none' && prompt.intervention !== 'unknown') tally.interventions += 1;
+    if (prompt.intervention !== undefined && prompt.intervention !== 'unknown') {
+      tally.promptsKnown += 1;
+      if (prompt.intervention !== 'none') tally.interventions += 1;
+    }
     const cls = PROMPT_CLASSES.includes(prompt.cls) ? prompt.cls : OTHER;
     const held = tally.tokens.get(cls) ?? { prompts: 0, tokens: 0 };
     held.prompts += 1;
@@ -256,8 +262,9 @@ const finish = (
       calls: tally.calls,
       ...callRates(tally),
       prompts: tally.prompts,
+      promptsKnown: tally.promptsKnown,
       interventions: tally.interventions,
-      interventionsPerPrompt: share(tally.interventions, tally.prompts),
+      interventionsPerPrompt: share(tally.interventions, tally.promptsKnown),
       tokensPerPrompt: [...tally.tokens.entries()].sort((a, b) => compare(a[0], b[0])).map(([cls, held]) => ({ class: cls, prompts: held.prompts, tokensPerPrompt: Math.round(held.tokens / held.prompts) })),
     })),
     ...[...tools.entries()].map(([tool, tally]): ToolRow => ({ kind: 'tool', tool, sessions: tally.sessions.size, calls: tally.calls, ...callRates(tally) })),
