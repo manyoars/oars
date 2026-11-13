@@ -1,6 +1,6 @@
 // The real-work table (t1231, brief L1 of the one-fleet leaderboard): how real sessions went, per model, harness, and harness version bucket, and per tool, each row with its n.
 // It reads an operator's sessions store, runs the exclusion gate (A38) and the owner filter before any count, and writes one `table.json` that must sit outside every repository.
-// It reports counts and rates with n: no ranking score, no pass or fail label (Matt, 11-04). The store's derived records (`loadStore`) and the pool's version bucketing (`harnessBucket`, as `bundleOf` keys a harness's bundle) are reused, not copied.
+// It reports counts and rates with n: no ranking score, no pass or fail label. The store's derived records (`loadStore`) and the pool's version bucketing (`harnessBucket`, as `bundleOf` keys a harness's bundle) are reused, not copied.
 //   npm run real-work-table -w packages/pool -- <store folder> --terms <file> --owners <file> --out <dir> [--projects <folder>] [--min-sessions <n>] [--date <YYYY-MM-DD>]
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
