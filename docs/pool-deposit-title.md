@@ -100,8 +100,8 @@ where it prints `unknown` today (`packages/pool/scripts/license-status.ts:239`, 
 - The one operator read path is `erase export --account <id> --out <folder> --raw` (`packages/pool/scripts/erase-cli.ts:152`,
   `scripts/export-account.ts:32`) over `EraseStore` (`scripts/erase.ts:17`). It is the Art. 15 and 20 copy of one account. It
   lists no accounts, omits `restricted_at`, and a change to its shape moves its version (`docs/pool.md:528`). It is not reused.
-- A Raw Copy has no stored link to its deposit row: `raw_objects` holds account, hash, size, two versions, and a time
-  (`migrations/0011_raw_tier.sql:3`). The link can be recomputed. `deposits.id` is the skeleton `id`
+- A Raw Copy stored before brief 6 has no stored link to its deposit row: `raw_objects` held account, hash, size, two versions, and a time
+  (`migrations/0011_raw_tier.sql:3`); brief 6 (`0042_raw_link.sql`) adds `deposit` and `place`, and the builder reads them first. For an older copy the link can be recomputed. `deposits.id` is the skeleton `id`
   (`packages/cli/src/sessions/pool-wire.ts:853`), which the client sets to `contentHash([account, session])`
   (`pool-command.ts:754`, `:807`; `read.ts:20`). Two assumptions are not shown here: that capture reads a redacted
   transcript, and that a captured line keeps the harness `sessionId` (`sample-pack.ts:583,721` only say it is rewritten on resume).
@@ -192,12 +192,12 @@ Six briefs, in order, each at most 5 Items and 2 packages. Each writes the named
 | 3 | Spec and checks (pool, docs) | `docs/session-record.md:50`, `:61`; `validate-pack.ts:89-90`; `license-status.ts:239`; `docs/pool.md:458`, `:549` | `validate-pack accepts a row with acceptedAt`; `validate-pack refuses an acceptedAt that is not a time`; `license-status prints the covenant of a deposit row` |
 | 4 | Rights by account (pool, docs). **First sellable pack holding a third-party deposit under Call 1 (a)** | `sample-pack.ts:204-207`, `:252`, `:1136-1139`; `deliver.ts:11`, `:137`, `:184`; `license-status.ts:187-189`; `erase-cli.ts:146`, `:176`; `docs/pool-rights.md:70`, `:144`, `:152`; `docs/pool.md:430` | `an account line leaves out every session of the account`; `deliver refuses a pack built before an account line`; `deliver recipients --account lists each recipient and match id`; `license-status reports the match ids of an account line`; `erase account prints the register line` |
 | 5 | Mask handles at deposit (cli). **Only under Call 1 (b)**; skip it under (a) | `pool-command.ts:829` passes the handles of the project's remote to `redactTranscript`; `redact.ts:265-273` `handleRule`; `redact.ts:308` `REDACTION_VERSION` moves; `pool-raw.ts:17`; `src/raw.ts:199` | `a deposit masks the owner handle of the project remote`; `REDACTION_VERSION moves and the stamp changes`; `a Raw Copy under an older stamp is left out of a pack` (pool, one test) |
-| 6 | Stored link (cli, pool) | Migration `0041` (next free at `a91fe1e2`; check again): `raw_objects.deposit`, `raw_objects.place`, and under Call 4 (b) `deposits.covenant_version`; `pool-command.ts:574`, `:580`; `src/raw.ts:184`, `:199`; `src/worker.ts:126-134` | `complete stores the session key and place`; `a repeat complete fills an empty link`; `a client that sends no header still stores`; `the builder uses the stored link before the recomputed one` |
+| 6 | Stored link (cli, pool). **Landed as migration `0042`** (`0041` is `0041_invites.sql`) | `raw_objects.deposit` and `raw_objects.place`, both nullable; Call 4 is (a), so no `deposits.covenant_version`; `pool-command.ts` `postRaw` and `pool-nightly.ts` (the `oars-raw-link` header); `src/raw.ts` `complete` and `linkOf`; `scripts/pull-deposits.ts` (`links.jsonl`); `scripts/deposit-input.ts` `verdictOf` | `complete stores the session key and place`; `a repeat complete fills an empty link`; `a client that sends no header still stores`; `the builder uses the stored link before the recomputed one` |
 
 Brief 3 gives a pack that builds and validates. It is not sellable before brief 4: until then the objection of an account
 cannot be checked before the hand-over (Art. 21(1)). Under Call 1 (a), brief 4 is the first sellable pack. Under (b), which is
 recommended, brief 5 comes next and no older Raw Copy is packable, so the first sellable pack follows brief 5 plus a fresh
-deposit from a third party. Briefs 1 to 5 need no migration (brief 6 adds `0041`). The count of deposits eligible today is
+deposit from a third party. Briefs 1 to 5 need no migration (brief 6 adds `0042`). The count of deposits eligible today is
 the query below, kept as `packages/pool/queries/deposit-eligible.sql` by brief 1. The lead or the owner runs it the way
 `queries/covenant-funnel.sql:2` shows. It is an upper bound: SQL cannot compare `text_sha256` with the held screen, a session
 can hold several Raw Copies, and pairing and the build rules come after.
