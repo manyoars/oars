@@ -63,6 +63,8 @@ It only reads, so it takes no `--confirm`. It writes the same `account-export-NN
 
 **Record kept:** the dates, which right, how the account was confirmed, and the date answered. The export itself is not kept by the operator: it never passes through you.
 
+Limit: **founding crew rows (migration 0041; Art. 15 and 20).** The copy holds the account's crew number (in its `account` section), the invite codes it made (the time made, whether used, and when), the invite it used (times), and the vouches it gave and received (the time of each). It leaves out two things: a code's hash, which is credential material (Art. 32), and the other end of a vouch edge, another person's pseudonym (Art. 15(4)). `oars pool export` and the operator's copy both write these sections, because one page builder serves both.
+
 Limit: **no provider sign-in.** If the requester has no provider sign-in at all, nothing they can bring proves the account is theirs, so there is no export to give. Tell them so, in writing (Art. 11(2), 12(2)).
 
 Limit: **recipients.** None to name today. Nothing is sold, and no path hands deposits to anyone ([`flags.md`](flags.md)). Cloudflare runs the pool as processor; name it as that category. A bundle is built from `cells` and `strata` and carries no account's personal data, so the accounts that fetch it receive none of the requester's data and are not their recipients (Art. 15(1)(c)).
@@ -105,6 +107,8 @@ A deposit row is the record of what the client sent, so it is accurate as that r
 **Copies.** The erasure is complete at the latest copy, three months after the run (the Analytics Engine retention). D1 Time Travel keeps point-in-time copies for 30 days at most (7 days on Workers Free), and a restore inside that window brings the erased rows back, so rerun step 4 after any restore. R2 objects are single copies: no versioning or replication is set.
 
 Gap: **unconfirmed copies.** Whether the account's dashboard holds any R2 setting beyond those in the repository, and Cloudflare's own backups of R2 or D1 beyond Time Travel, are not confirmed. Say so to the requester until someone checks.
+
+Row: **founding crew (Art. 17).** The run clears the account's crew number, deletes every invite code it made or used, and deletes every vouch edge it is on at either end. A code it used is deleted, not reopened: a deleted code reads as unknown. The number it held becomes free for the next grant. The `board_standing` row the crew grant wrote goes with the other standing rows. Another member's own rows stay: only the edge between them goes.
 
 Limit: **bundles and client copies.** Not recalled, and need not be: a bundle is built from `cells` and `strata` and carries no account's personal data, so its fetchers received none of the requester's data, and the generation move makes every client fetch the new one, which is the reasonable step (Art. 17(2), Art. 19).
 
