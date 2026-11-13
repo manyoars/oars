@@ -1,6 +1,6 @@
 # Pool deposits as pack supply: title from the covenant
 
-Design page. It changes no code. Anchors are as of oars `a91fe1e2`. Ruling (Matt, 2026-11-12): a covenant acceptance is title
+Design page. It changes no code. Anchors are as of oars `a91fe1e2`. Ruling (2026-11-12): a covenant acceptance is title
 enough for a pack row; a depositor does not declare repositories. Fact owed: counsel has not confirmed that the grant is title
 enough for sale. This page records that and does not reopen it.
 
@@ -142,7 +142,7 @@ redaction passes no handles (`pool-command.ts:829`). So an owner's handle can su
 
 ## 3. The operator's own sessions
 
-- **The path.** Matt's account deposits like any other, with the same raw yes (`pool-command.ts:826`) and his own proved
+- **The path.** The owner's account deposits like any other, with the same raw yes (`pool-command.ts:826`) and his own proved
   acceptance. His sessions come back from `pull-deposits` as `depositor:<hex>` rows. Nothing marks the operator's account.
 - **Match ids do not move.** A deposit-sourced session takes its match id as a store session does, from the buyer key, the
   index key, and the harness session id (`sample-pack.ts:1167`). So one session has one match id per buyer on either path.
@@ -198,7 +198,7 @@ Brief 3 gives a pack that builds and validates. It is not sellable before brief 
 cannot be checked before the hand-over (Art. 21(1)). Under Call 1 (a), brief 4 is the first sellable pack. Under (b), which is
 recommended, brief 5 comes next and no older Raw Copy is packable, so the first sellable pack follows brief 5 plus a fresh
 deposit from a third party. Briefs 1 to 5 need no migration (brief 6 adds `0041`). The count of deposits eligible today is
-the query below, kept as `packages/pool/queries/deposit-eligible.sql` by brief 1. The lead or Matt runs it the way
+the query below, kept as `packages/pool/queries/deposit-eligible.sql` by brief 1. The lead or the owner runs it the way
 `queries/covenant-funnel.sql:2` shows. It is an upper bound: SQL cannot compare `text_sha256` with the held screen, a session
 can hold several Raw Copies, and pairing and the build rules come after.
 
@@ -208,13 +208,13 @@ SELECT (SELECT COUNT(*) FROM ok) AS accounts, (SELECT COUNT(*) FROM raw_objects 
   (SELECT COUNT(*) FROM deposits d JOIN ok ON ok.id = d.account WHERE d.erased_on IS NULL AND d.tier <> 'none') AS deposits;
 ```
 
-## 6. Calls for Matt
+## 6. Calls for the owner
 
 | Call | Options | Recommendation | Best honest case against it |
 |---|---|---|---|
 | 1. Owner handles in Raw Copies (section 2 gap) | (a) Pack them as redacted today. (b) Mask handles at deposit from now on (brief 5, cli: `pool-command.ts:829`, `redact.ts:273`, a new `REDACTION_VERSION`) and leave out older copies | (b) | (a) gives more data now, a handle is often public, and the depositor promised the rights (Section 8(b), `2.1:249-251`). But a handle undoes the `depositor:` pseudonym for that row |
 | 2. Where rights lines live | (a) Account lines in `objections.jsonl`, with `erase` printing the line. (b) A pool `objections` table, which `docs/pool.md:430` says ships with the first pool lot, carried by the pull | (a) | (b) is one authority, the operator cannot forget the line, and it survives the loss of the operator machine. It costs a migration, a command, and a pull change before the first sale |
-| 3. Future lots from Matt | (a) Keep both paths: the owners file for rows that name him, deposits for the rest. (b) Deposits only | (a) | (b) is one code path and proves the depositor path on the operator data. It gives up the owner name, the repository license, and the pointer on his rows |
+| 3. Future lots from the owner | (a) Keep both paths: the owners file for rows that name him, deposits for the rest. (b) Deposits only | (a) | (b) is one code path and proves the depositor path on the operator data. It gives up the owner name, the repository license, and the pointer on his rows |
 | 4. Proof per deposit | (a) Cite the acceptance in force at `counted_at`, else the newest (section 1); no new column. (b) Also record `covenant_version` on each new deposit at ingest (brief 6) | (a) | (b) is exact for a batch that arrived as tier `none` and counted later, and needs no join to the history. But `counted_at` plus the acceptance history already answers the question, and Section 14.2 covers the rest |
 
 Fact owed, not reopened: counsel has not confirmed that the covenant grant is title enough for sale (top of this page).

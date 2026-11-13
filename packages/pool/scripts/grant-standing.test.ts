@@ -31,8 +31,8 @@ const rowsOf = async (account: string): Promise<readonly unknown[]> => (await db
 describe('grantStanding', () => {
   it('writes one row with who, when, and why, and holds on a second grant', async () => {
     const account = await accountId(9101);
-    expect(await grantStanding(storeOf(), { account, by: ' matt ', reason: ' the fleet ' }, NOW)).toBe('granted');
-    expect(await rowsOf(account)).toEqual([{ granted_at: NOW.getTime(), granted_by: 'matt', reason: 'the fleet' }]);
+    expect(await grantStanding(storeOf(), { account, by: ' owner ', reason: ' the fleet ' }, NOW)).toBe('granted');
+    expect(await rowsOf(account)).toEqual([{ granted_at: NOW.getTime(), granted_by: 'owner', reason: 'the fleet' }]);
     expect(await grantStanding(storeOf(), { account, by: 'other', reason: 'again' }, NOW)).toBe('held');
     expect(await rowsOf(account)).toHaveLength(1);
   });
@@ -74,7 +74,7 @@ const fake = (rows: unknown[]): Fake => {
 };
 
 describe('the grant-standing command', () => {
-  const full = ['--account', 'acct_1', '--by', 'matt', '--reason', 'the fleet'];
+  const full = ['--account', 'acct_1', '--by', 'owner', '--reason', 'the fleet'];
 
   it('says what it would do without --confirm, and writes nothing', async () => {
     const { io, calls, printed } = fake([{ found: 1 }]);

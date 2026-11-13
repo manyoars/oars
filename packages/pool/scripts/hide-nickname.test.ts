@@ -43,22 +43,22 @@ const membersOf = async (club: string): Promise<readonly unknown[]> => (await db
 describe('hideNickname', () => {
   it('removes the member row, records who, when, and why, and leaves the others', async () => {
     const { club, guest } = await seated(1, 'Rude Name');
-    expect(await hideNickname(storeOf(), { club, nickname: 'rude name', by: ' matt ', reason: ' abuse report ' }, NOW)).toBe('hidden');
+    expect(await hideNickname(storeOf(), { club, nickname: 'rude name', by: ' owner ', reason: ' abuse report ' }, NOW)).toBe('hidden');
     expect(await membersOf(club)).toEqual(['owner']);
     const record = (await db.prepare('SELECT club, account, nickname, hidden_at, hidden_by, reason FROM club_hides WHERE club = ?').bind(club).all()).results;
-    expect(record).toEqual([{ club, account: guest.account, nickname: 'Rude Name', hidden_at: NOW.getTime(), hidden_by: 'matt', reason: 'abuse report' }]);
+    expect(record).toEqual([{ club, account: guest.account, nickname: 'Rude Name', hidden_at: NOW.getTime(), hidden_by: 'owner', reason: 'abuse report' }]);
   });
 
   it('answers absent for a nickname nobody holds, and records nothing', async () => {
     const { club } = await seated(2, 'Fine Name');
-    expect(await hideNickname(storeOf(), { club, nickname: 'nobody', by: 'matt', reason: 'x' }, NOW)).toBe('absent');
+    expect(await hideNickname(storeOf(), { club, nickname: 'nobody', by: 'owner', reason: 'x' }, NOW)).toBe('absent');
     expect(await membersOf(club)).toEqual(['Fine Name', 'owner']);
     expect((await db.prepare('SELECT 1 AS n FROM club_hides WHERE club = ?').bind(club).all()).results).toEqual([]);
   });
 
   it('does not bar the account from joining the same club again', async () => {
     const { club, code, guest } = await seated(3, 'Rude Name');
-    await hideNickname(storeOf(), { club, nickname: 'Rude Name', by: 'matt', reason: 'abuse' }, NOW);
+    await hideNickname(storeOf(), { club, nickname: 'Rude Name', by: 'owner', reason: 'abuse' }, NOW);
     expect((await pool.post('/v1/clubs/join', { code, nickname: 'Kind Name', consent: await clubConsent() }, guest.token)).status).toBe(200);
   });
 
@@ -66,15 +66,15 @@ describe('hideNickname', () => {
     const { club, code, guest } = await seated(4, 'Rude Name');
     const later = new Date();
     const failing: Pick<EraseStore, 'rows' | 'run'> = { rows: storeOf().rows, run: async (sql, binds) => (sql.startsWith('DELETE') ? Promise.reject(new Error('wrangler failed')) : storeOf().run(sql, binds)) };
-    await expect(hideNickname(failing, { club, nickname: 'Rude Name', by: 'matt', reason: 'abuse' }, later)).rejects.toThrow('wrangler failed');
+    await expect(hideNickname(failing, { club, nickname: 'Rude Name', by: 'owner', reason: 'abuse' }, later)).rejects.toThrow('wrangler failed');
     expect(await membersOf(club)).toEqual(['Rude Name', 'owner']);
-    expect(await hideNickname(storeOf(), { club, nickname: 'Rude Name', by: 'matt', reason: 'abuse' }, later)).toBe('hidden');
+    expect(await hideNickname(storeOf(), { club, nickname: 'Rude Name', by: 'owner', reason: 'abuse' }, later)).toBe('hidden');
     expect(await membersOf(club)).toEqual(['owner']);
     expect(await db.prepare('SELECT COUNT(*) AS n FROM club_hides WHERE club = ?').bind(club).first('n')).toBe(1);
     // Time passes: the first hide is now older than the seating the member is about to take again.
     await db.prepare('UPDATE club_hides SET hidden_at = hidden_at - 10000 WHERE club = ?').bind(club).run();
     expect((await pool.post('/v1/clubs/join', { code, nickname: 'Rude Name', consent: await clubConsent() }, guest.token)).status).toBe(200);
-    expect(await hideNickname(storeOf(), { club, nickname: 'Rude Name', by: 'matt', reason: 'again' }, new Date())).toBe('hidden');
+    expect(await hideNickname(storeOf(), { club, nickname: 'Rude Name', by: 'owner', reason: 'again' }, new Date())).toBe('hidden');
     expect(await db.prepare('SELECT COUNT(*) AS n FROM club_hides WHERE club = ?').bind(club).first('n')).toBe(2);
   });
 
@@ -83,12 +83,12 @@ describe('hideNickname', () => {
     const hours = 3_600_000;
     const failing: Pick<EraseStore, 'rows' | 'run'> = { rows: storeOf().rows, run: async (sql, binds) => (sql.startsWith('DELETE') ? Promise.reject(new Error('wrangler failed')) : storeOf().run(sql, binds)) };
     // The first run's clock is hours behind the Worker's, so its hidden_at is before the member's joined_at.
-    await expect(hideNickname(failing, { club, nickname: 'Skewed Name', by: 'matt', reason: 'abuse' }, new Date(Date.now() - 5 * hours))).rejects.toThrow('wrangler failed');
-    expect(await hideNickname(storeOf(), { club, nickname: 'Skewed Name', by: 'matt', reason: 'abuse' }, new Date(Date.now() + 5 * hours))).toBe('hidden');
+    await expect(hideNickname(failing, { club, nickname: 'Skewed Name', by: 'owner', reason: 'abuse' }, new Date(Date.now() - 5 * hours))).rejects.toThrow('wrangler failed');
+    expect(await hideNickname(storeOf(), { club, nickname: 'Skewed Name', by: 'owner', reason: 'abuse' }, new Date(Date.now() + 5 * hours))).toBe('hidden');
     expect(await db.prepare('SELECT COUNT(*) AS n FROM club_hides WHERE club = ?').bind(club).first('n')).toBe(1);
     // The rejoin is a new seating; the earlier hide's hidden_at is hours ahead of it, which must not count as "after".
     expect((await pool.post('/v1/clubs/join', { code, nickname: 'Skewed Name', consent: await clubConsent() }, guest.token)).status).toBe(200);
-    expect(await hideNickname(storeOf(), { club, nickname: 'Skewed Name', by: 'matt', reason: 'again' }, new Date(Date.now() + 5 * hours))).toBe('hidden');
+    expect(await hideNickname(storeOf(), { club, nickname: 'Skewed Name', by: 'owner', reason: 'again' }, new Date(Date.now() + 5 * hours))).toBe('hidden');
     expect(await db.prepare('SELECT COUNT(*) AS n FROM club_hides WHERE club = ?').bind(club).first('n')).toBe(2);
   });
 
@@ -129,7 +129,7 @@ const fake = (rows: unknown[]): Fake => {
 };
 
 describe('the hide-nickname command', () => {
-  const full = ['--club', 'club_1', '--nickname', 'Rude Name', '--by', 'matt', '--reason', 'abuse'];
+  const full = ['--club', 'club_1', '--nickname', 'Rude Name', '--by', 'owner', '--reason', 'abuse'];
 
   it('says what it would do without --confirm, and writes nothing', async () => {
     const { io, calls, printed } = fake([{ account: 'acct_1', nickname: 'Rude Name' }]);

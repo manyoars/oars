@@ -1,4 +1,4 @@
-// oars' own raw archive (Matt 2026-11-01, retention point 4c): every deposited transcript is hard-linked under `<store>/raw/`, so the
+// oars' own raw archive (owner ruling 2026-11-01, retention point 4c): every deposited transcript is hard-linked under `<store>/raw/`, so the
 // raw behind the log outlives the harness's cleanup without a second copy on disk while both exist. Across volumes, where a hard link
 // cannot reach, it is copied. Local only: nothing here is ever shared.
 import { copyFile, link, mkdir, rm, stat } from 'node:fs/promises';
