@@ -49,13 +49,11 @@ Reflect.deleteProperty(BRANCH_BATCH, 'claimed');
 const RECORD: MachineRecord = { machine: MACHINE, hostClass: 'cloud', launcher: 'orchestrated', allowRepos: [REPO] };
 
 const stubGitHousekeepingOff = (): void => {
-  vi.stubEnv('GIT_CONFIG_COUNT', '3');
+  vi.stubEnv('GIT_CONFIG_COUNT', '2');
   vi.stubEnv('GIT_CONFIG_KEY_0', 'gc.auto');
   vi.stubEnv('GIT_CONFIG_VALUE_0', '0');
   vi.stubEnv('GIT_CONFIG_KEY_1', 'maintenance.auto');
   vi.stubEnv('GIT_CONFIG_VALUE_1', 'false');
-  vi.stubEnv('GIT_CONFIG_KEY_2', 'receive.autogc');
-  vi.stubEnv('GIT_CONFIG_VALUE_2', 'false');
 };
 
 // An empty bare repository is made once and copied, which starts no git process: `git init` is one for every repository a case holds in.
@@ -63,6 +61,8 @@ let bareTemplate = '';
 beforeAll(() => {
   bareTemplate = mkdtempSync(join(tmpdir(), 'oars-machine-pull-bare-template-'));
   execFileSync('git', ['-C', bareTemplate, 'init', '--bare', '-q']);
+  // The receiving side of a push starts `gc --auto` itself, and git drops the environment's config when it enters another repository, so this one is set in the repository.
+  execFileSync('git', ['-C', bareTemplate, 'config', 'receive.autogc', 'false']);
 }, SLOW);
 afterAll(() => {
   rmSync(bareTemplate, { recursive: true, force: true });
@@ -83,7 +83,7 @@ const scene = async (machines: readonly MachineRecord[] = [RECORD], terms = `${T
   const staged = stage();
   const termsFile = join(staged.root, 'terms.txt');
   writeFileSync(termsFile, terms);
-  // A fetch or a push starts a `gc --auto` or `maintenance run --auto` child of its own, which no case is about: auto gc, maintenance, and the receiving side's auto gc are off for every git a case starts (`afterEach` restores the environment).
+  // A fetch or a push starts a `gc --auto` or `maintenance run --auto` child of its own, which no case is about: auto gc and maintenance are off for every git a case starts (`afterEach` restores the environment).
   stubGitHousekeepingOff();
   const h = harness({ OARS_EXCLUSION_TERMS: termsFile });
   h.deps.sessions = staged.runtime;
