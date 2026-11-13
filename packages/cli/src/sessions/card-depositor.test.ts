@@ -83,6 +83,15 @@ describe('depositorLine', () => {
     expect(await crewNumberOf(dir, SERVER)).toBeUndefined();
   });
 
+  it('shows no crew mark for a number kept for another account than the one signed in now', async () => {
+    signIn(CARD_NOW + 1000);
+    sent();
+    await keepCrewNumber(dir, SERVER, 'acct_two', 12);
+    expect(await depositorLine(dir, {}, CARD_NOW)).toBe('weeks rowing (this machine): 2');
+    await keepCrewNumber(dir, SERVER, 'acct_one', 12);
+    expect(await depositorLine(dir, {}, CARD_NOW)).toBe('weeks rowing (this machine): 2 · founding crew #12');
+  });
+
   it('does not swallow an error that is not the command\'s own', async () => {
     mkdirSync(signInsFile(dir));
     await expect(depositorLine(dir, {}, CARD_NOW)).rejects.toThrow();
