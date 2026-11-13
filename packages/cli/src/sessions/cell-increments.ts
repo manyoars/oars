@@ -87,11 +87,7 @@ const marginalSteps = (step: StepObservation): StepObservation[] => {
 /** The tools of a store as one-step calls, one per flag and per pull: read at window length 1, each is one marginal cell. */
 const marginalStore = (store: Store): Store => ({ ...store, tools: store.tools.flatMap((tool) => (tool.steps ?? []).flatMap(marginalSteps).map((marginal) => ({ ...tool, steps: [marginal] }))) });
 
-/**
- * Rule 5: exact tokens and durations never reach `index`. A cell counts a bucketed value as the bucket's lowest value, so a derivation reads only what a deposit carries, and a
- * summed window is a sum of those. A value already at a bucket's floor stays there, which is why a skeleton's store and a local store of the same session derive the same cells.
- * Rules 1 and 2: a window names a shell step by its program and subcommand alone, and each flag and each pull of it adds a one-step cell of its own.
- */
+/** What `cellsOf` does to a store, as calls: `add` one run at a time, then `finish` once. */
 export interface CellsFold {
   add: (store: Store) => void;
   finish: () => CellSet;
@@ -119,6 +115,11 @@ export const cellsFold = (graph: RecallGraph = NO_RECALLS): CellsFold => {
   return { add, finish };
 };
 
+/**
+ * Rule 5: exact tokens and durations never reach `index`. A cell counts a bucketed value as the bucket's lowest value, so a derivation reads only what a deposit carries, and a
+ * summed window is a sum of those. A value already at a bucket's floor stays there, which is why a skeleton's store and a local store of the same session derive the same cells.
+ * Rules 1 and 2: a window names a shell step by its program and subcommand alone, and each flag and each pull of it adds a one-step cell of its own.
+ */
 export const cellsOf = (store: Store, graph: RecallGraph = NO_RECALLS): CellSet => {
   const fold = cellsFold(graph);
   fold.add(store);

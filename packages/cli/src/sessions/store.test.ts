@@ -204,10 +204,10 @@ describe('deposit', () => {
     const row = readFileSync(file, 'utf8').split('\n').find((line) => line.includes(`"session":"${first}"`)) ?? '';
     appendFileSync(file, `${row.replace(/"rev":\d+/, '"rev":99')}\n{"kind":"sess`);
     expect(await loadStore(staged.storeDir, undefined, { latest, only, spans, identity })).toEqual(before);
-    // A same-rev copy past the scanned end: a reader that took bytes beyond the end would read it as a second line.
+    // A whole same-rev line past the scanned end, after the torn half line is ended: a reader that took bytes beyond the end would read it as a second line.
     let reads = 0;
     const baseline = await loadStore(staged.storeDir, undefined, { latest, only, spans, identity, lineRead: () => { reads += 1; } });
-    appendFileSync(file, `${row}\n`);
+    appendFileSync(file, `\n${row}\n`);
     let readsAfter = 0;
     expect(await loadStore(staged.storeDir, undefined, { latest, only, spans, identity, lineRead: () => { readsAfter += 1; } })).toEqual(baseline);
     expect(readsAfter).toBe(reads);

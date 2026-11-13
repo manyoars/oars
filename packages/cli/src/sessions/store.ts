@@ -1487,6 +1487,7 @@ const scanHandle = async (file: string, held: FileHandle | undefined, withSpans:
  * the session's first line at its highest rev starts in the log, subagents and mains alike. Needs a scan made with spans. A run is a contiguous slice of this list.
  */
 export const runOrder = (scan: LogScan): string[] => {
+  // Every key of `spans` holds at least one pair, so the fallback is never taken; it only satisfies the indexed read's type.
   const start = (session: string): number => scan.spans?.get(session)?.[0] ?? Number.MAX_SAFE_INTEGER;
   const sessions = [...(scan.spans?.keys() ?? [])];
   const unreadable = (session: string): boolean => !isReadable(scan.cvs.get(session) ?? '0');
@@ -1911,7 +1912,6 @@ export const readSkeletons = async (storeDir: string, only?: string, lean = fals
   return { skeletons, unreadable };
 };
 
-/** The derived records, a pure function of the store. */
 /** `derive`'s prompt sums, folded run by run: the prompts of each run in turn give the same sums, in the same key order, as the prompts of the whole store. */
 export interface DeriveFold {
   add: (prompts: readonly PromptObservation[]) => void;
@@ -1967,6 +1967,7 @@ export const deriveFold = (): DeriveFold => {
   };
 };
 
+/** The derived records, a pure function of the store. */
 export const derive = (store: Store, at: string): DerivedRecords => {
   const fold = deriveFold();
   fold.add(store.prompts);
