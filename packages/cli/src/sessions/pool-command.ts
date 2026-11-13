@@ -1158,7 +1158,7 @@ export const poolJoin = async (
     const sent = await sentLog(outbox);
     return (await heldAcross(outbox)).batches.flatMap(({ hash }) => (sent.has(hash) ? [] : [hash]));
   };
-  let refused = false;
+  const state = { refused: false };
   try {
     const held = await heldSignIn(deps, storeDir, server, LOGIN);
     let login: object = { skipped: true, account: held?.account };
@@ -1174,7 +1174,7 @@ export const poolJoin = async (
       try {
         vouched = await redeemInvite(deps, storeDir, server, options.invite);
       } catch (error) {
-        refused = true;
+        state.refused = true;
         throw error;
       }
     }
@@ -1203,7 +1203,7 @@ export const poolJoin = async (
       text: `Joined ${server}: ${plural(sends.length, 'batch', 'batches')} sent this run, and the ${options.harnessVersion} bundle is kept.`,
     };
   } catch (error) {
-    say(refused ? INVITE_AGAIN : JOIN_AGAIN);
+    say(state.refused ? INVITE_AGAIN : JOIN_AGAIN);
     throw error;
   }
 };
@@ -1250,7 +1250,7 @@ export const poolInvite = async (deps: RunDeps, options: { server?: string | und
       `Invite code: ${code}`,
       'This is the only time the code is shown. It works once, for one person.',
       `Send them this line: ${line}`,
-      `What you get: your vouch is recorded${given === undefined ? '' : ` (you have vouched for ${String(given)} so far)`}. What they get: once they have rowed two counting weeks they are listed on the open board without waiting 90 days, unless you and they are the same operator, which gives neither of you anything.',
+      `What you get: your vouch is recorded${given === undefined ? '' : ` (you have vouched for ${String(given)} so far)`}. What they get: once they have rowed two counting weeks they are listed on the open board without waiting 90 days, unless you and they are the same operator, which gives neither of you anything.`,
       ...(left === undefined ? [] : [`Open codes you can still make: ${String(left)}.`]),
     ].join('\n'),
   };

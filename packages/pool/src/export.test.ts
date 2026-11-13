@@ -59,9 +59,14 @@ const rowsOf = (pages: readonly Page[], section: string): unknown[] => pages.fil
 
 const skeleton = (id: string): string => JSON.stringify({ id, harness: 'claude-code' });
 
-let crewSeen = 40;
 /** The crew number each seeded tag was given. */
 const crews = new Map<string, number>();
+/** The crew number a tag's account holds: one per tag, assigned on first use. */
+const crewOf = (tag: string): number => {
+  const held = crews.get(tag) ?? 41 + crews.size;
+  crews.set(tag, held);
+  return held;
+};
 
 /** Gives an account a row in every table the export reads. */
 const seed = async (account: string, tag: string): Promise<void> => {
@@ -87,7 +92,7 @@ const seed = async (account: string, tag: string): Promise<void> => {
   await db.prepare('INSERT INTO board_standing (account, granted_at, granted_by, reason) VALUES (?, 1700000600000, ?, ?)').bind(account, `operator-${tag}`, `fleet-${tag}`).run();
   await db.prepare("INSERT INTO club_attempts (account, kind, at) VALUES (?, 'guess', 1700000700000)").bind(account).run();
   // The founding crew (migration 0041): a number, a code the account made and one it used, and the vouch edges on both sides. The other end of an edge is never exported.
-  await db.prepare('UPDATE accounts SET crew_number = ? WHERE id = ?').bind(crews.set(tag, (crewSeen += 1)).get(tag), account).run();
+  await db.prepare('UPDATE accounts SET crew_number = ? WHERE id = ?').bind(crewOf(tag), account).run();
   await db.prepare("INSERT INTO accounts (id) VALUES (?)").bind(`other-${tag}`).run();
   await db.prepare('INSERT INTO invites (code_hash, inviter, created_at, used_by, used_at) VALUES (?, ?, 1700000010000, ?, 1700000020000)').bind(`hash-made-${tag}`, account, `other-${tag}`).run();
   await db.prepare('INSERT INTO invites (code_hash, inviter, created_at) VALUES (?, ?, 1700000030000)').bind(`hash-open-${tag}`, account).run();
