@@ -349,7 +349,7 @@ export const markShown = async (outbox: string, hash: string, at: number): Promi
   await appendOwnerOnly(shownFile(outbox), `${hash} ${new Date(at).toISOString()}\n`);
 };
 
-const wasShown = async (outbox: string, hash: string): Promise<boolean> => {
+export const wasShown = async (outbox: string, hash: string): Promise<boolean> => {
   try {
     return (await readFile(shownFile(outbox), 'utf8')).split('\n').some((line) => line.split(' ')[0] === hash);
   } catch (error) {

@@ -8,3 +8,10 @@ export type CiWord = (typeof CI_WORDS)[number];
 /** How this copy of oars arrived, from the folder it runs in and the package manager that started it (`surfaceWord` in `fields.ts`); the path itself never reaches the spool. A folder it cannot place is `unknown`. */
 export const SURFACE_WORDS = ['npm-global', 'npx', 'claude-plugin', 'codex-plugin', 'gemini-extension', 'unknown'] as const;
 export type SurfaceWord = (typeof SURFACE_WORDS)[number];
+
+/** The steps of `oars pool join`, as the `join-step` event and the join plan name them. A name outside this list never reaches the spool. */
+export const JOIN_STEPS = ['signin', 'region', 'terms', 'batch', 'outbox', 'covenant', 'send'] as const;
+export type JoinStep = (typeof JOIN_STEPS)[number];
+/** What a step did in one run: finished now, found already done and skipped, or stopped the run. */
+export const JOIN_STATES = ['done', 'skipped', 'stopped'] as const;
+export type JoinState = (typeof JOIN_STATES)[number];

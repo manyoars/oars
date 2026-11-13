@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { isHook } from '../telemetry/observe.js';
 import type { CardLineArm } from '../telemetry/schema.js';
 import { cardOf } from './card.js';
+import { ASHORE, depositorLine } from './card-command.js';
 import { mkdirOwnerOnly, writeOwnerOnly } from './owner-only.js';
 import { loadStore } from './store.js';
 import { readSurvival } from './survival.js';
@@ -33,9 +34,12 @@ export const fridayOrLater = (now: number): boolean => {
   return day === 0 || day >= FRIDAY;
 };
 
-/** The week's text. Singular at one; nothing else (no install, star, or link words). */
-export const cardLineText = (sessions: number, strokes: number): string =>
-  `Your week: ${String(sessions)} ${sessions === 1 ? 'session' : 'sessions'}, ${String(strokes)} ${strokes === 1 ? 'stroke' : 'strokes'}. \`oars card --text\` for the table.\n`;
+/** The line a person with no pool sign-in also reads: the one command that takes them from nothing to a first deposit. */
+export const ASHORE_LINE = 'Ashore: `oars pool join` takes you to your first deposit.';
+
+/** The week's text. Singular at one; ashore, the join line follows. Nothing else (no install, star, or link words). */
+export const cardLineText = (sessions: number, strokes: number, ashore = false): string =>
+  `Your week: ${String(sessions)} ${sessions === 1 ? 'session' : 'sessions'}, ${String(strokes)} ${strokes === 1 ? 'stroke' : 'strokes'}. \`oars card --text\` for the table.${ashore ? ` ${ASHORE_LINE}` : ''}\n`;
 
 const readTrimmed = async (file: string): Promise<string | undefined> => {
   try {
@@ -73,6 +77,8 @@ export interface CardLineInput {
   path: readonly string[];
   flags: readonly string[];
   stderr: (text: string) => void;
+  /** The run's environment, for the pool address the sign-in is looked up under; absent reads the process's. */
+  env?: NodeJS.ProcessEnv | undefined;
 }
 
 /** A hook, the MCP server, a recall, `sessions try`, `--json`, or `oars card` itself: the line never goes there. */
@@ -114,7 +120,7 @@ export const cardLine = async (input: CardLineInput): Promise<CardLineArm> => {
     const held = isHeld(await holdbackId(input.storeDir, input.telemetryDir));
     const arm: CardLineArm = held ? 'held' : 'shown';
     await mark(input.storeDir, week, arm);
-    if (!held) input.stderr(cardLineText(card.sessions, card.strokes));
+    if (!held) input.stderr(cardLineText(card.sessions, card.strokes, (await depositorLine(input.storeDir, input.env ?? process.env, input.now)) === ASHORE));
     return arm;
   } catch {
     return 'not_due';

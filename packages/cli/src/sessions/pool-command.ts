@@ -6,13 +6,14 @@ import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import type { Outcome, RunDeps } from '../cli.js';
 import { emitOf } from '../telemetry/emit.js';
+import { JOIN_STEPS, type JoinState, type JoinStep } from '../telemetry/words.js';
 import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../errors.js';
 import { compileAllow } from './allow.js';
 import { makeCoverage, readCoverageSetting, writeCoverageSetting } from './coverage.js';
 import { checkSession, exclusionPaths, lastWritten, loadTerms, transcriptFilesOf, type Reason } from './exclusion.js';
 import { localNames, makeRedactor, REDACTION_VERSION, redactTranscript } from './redact.js';
 import { recordSend, recordWire, newTally, tallyBatch } from '../telemetry/wire.js';
-import { discardStale, FIELD_ROWS, fieldsOf, heldAcross, lockedAcross, rescanPulled, machineKeys, markShown, noteMachineKey, outboxFolder, partsOf, pulledAt, readPulled, readRemoved, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, writePulled, writeRemoved, type LockRefusal } from './pool-outbox.js';
+import { discardStale, FIELD_ROWS, wasShown, fieldsOf, heldAcross, lockedAcross, rescanPulled, machineKeys, markShown, noteMachineKey, outboxFolder, partsOf, pulledAt, readPulled, readRemoved, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, writePulled, writeRemoved, type LockRefusal } from './pool-outbox.js';
 import { deriveConsequences } from './recall-consequence.js';
 import { readRecalls } from './recall-object.js';
 import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, recommendationsOf, sessionsOf, skeletonOf, unpinnedKid, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
@@ -421,8 +422,29 @@ export const OFFER_BEFORE: readonly string[] = [
 ];
 export const OFFER_AFTER: readonly string[] = ['Accepted. Sending your batch now.', 'Run oars pool fetch --help for your first pool download.'];
 
+/** The lines a person types, read from one reader for as long as a command asks them, so a line typed ahead (or piped) is not lost to a second reader opened after the first closed. A stop signal ends a read that is waiting. */
+interface Lines {
+  next: () => Promise<string | undefined>;
+  close: () => void;
+}
+
+const readerOf = (deps: RunDeps, signal?: AbortSignal): Lines => {
+  const lines = createInterface({ input: runtimeOf(deps).stdin, terminal: false, ...(signal === undefined ? {} : { signal }) });
+  const iterator = lines[Symbol.asyncIterator]();
+  return {
+    next: async () => {
+      const next = await iterator.next();
+      if (signal?.aborted === true) throw signal.reason;
+      return next.done === true ? undefined : next.value;
+    },
+    close: () => {
+      lines.close();
+    },
+  };
+};
+
 /** A send stops here when the server is closed or wants a covenant accepted, before the batch is read for the last time. */
-const openCovenant = async (deps: RunDeps, server: string, token: string, accept: string | undefined, region: Region | undefined, via: Sender, signal?: AbortSignal): Promise<void> => {
+const openCovenant = async (deps: RunDeps, server: string, token: string, accept: string | undefined, region: Region | undefined, via: Sender, signal?: AbortSignal, shared?: Lines): Promise<boolean> => {
   const reply = await ask(deps, DEPOSIT, server, '/v1/covenant', { token }, via);
   if (reply.status !== 200 || !isObject(reply.body)) throw refusal(DEPOSIT, reply);
   const version = textIn(reply.body, 'version');
@@ -433,7 +455,7 @@ const openCovenant = async (deps: RunDeps, server: string, token: string, accept
   // A flag is refused whatever the account's state: off a terminal it would be a script saying yes, and a version other than the pool's names a text this pool does not hold.
   if (accept !== undefined && !isTerminal(deps)) throw usage('--accept-covenant does not accept for you: acceptance is a person typing the phrase at a terminal, and this is not one. Nothing was accepted.', DEPOSIT);
   if (accept !== undefined && accept !== version) throw usage(`--accept-covenant names covenant ${accept}, but the covenant of this pool is ${version}. Nothing was accepted.`, DEPOSIT);
-  if (Reflect.get(reply.body, 'accepted') === true) return;
+  if (Reflect.get(reply.body, 'accepted') === true) return false;
   const notAccepted = (title: string): CliError => new CliError(title, ExitCode.AUTH, DEPOSIT, { code: 'covenant_not_accepted', title, status: 403 });
   const screen = screenIn(reply.body);
   if (screen === undefined) throw notAccepted(`The pool has no text for covenant ${version} yet, so there is nothing to show and nothing can be accepted. Nothing was accepted.`);
@@ -444,25 +466,18 @@ const openCovenant = async (deps: RunDeps, server: string, token: string, accept
   deps.io.stderr(`${OFFER_BEFORE.join('\n')}\n`);
   deps.io.stderr(`\n${screen.text}\n\n> `);
   emitOf(deps)('covenant-shown', { version });
-  // One reader for both lines: a second one opened after the first closed would lose a line the first had already taken from a pipe.
-  // A stop signal (Ctrl-C, a closed terminal) closes the reader, so a read that is waiting for the person ends with the signal's reason instead of holding the process open.
-  const lines = createInterface({ input: runtimeOf(deps).stdin, terminal: false, ...(signal === undefined ? {} : { signal }) });
-  const iterator = lines[Symbol.asyncIterator]();
-  const nextLine = async (): Promise<string | undefined> => {
-    const next = await iterator.next();
-    if (signal?.aborted === true) throw signal.reason;
-    return next.done === true ? undefined : next.value;
-  };
+  // One reader for both lines: a second one opened after the first closed would lose a line the first had already taken from a pipe. A join passes its own, which also served the questions before this one.
+  const lines = shared ?? readerOf(deps, signal);
   let answered: Region | undefined = region;
   try {
-    const typed = await nextLine();
+    const typed = await lines.next();
     if (typed?.trim() !== screen.phrase) throw notAccepted(`${typed === undefined ? 'No phrase was typed' : 'That was not the phrase'}. To accept covenant ${version}, type exactly: ${screen.phrase}. Nothing was accepted.`);
     if (region === undefined) {
       deps.io.stderr(`${REGION_QUESTION} > `);
-      answered = regionOf(await nextLine());
+      answered = regionOf(await lines.next());
     }
   } finally {
-    lines.close();
+    if (shared === undefined) lines.close();
   }
   if (answered === undefined) throw notAccepted('Answer yes or no: are you in the EU, the EEA, or the UK? Nothing was accepted.');
   const body = { version, textSha256: createHash('sha256').update(screen.text).digest('hex'), input: 'typed', client: `oars/${deps.version}`, euEeaUk: answered };
@@ -478,6 +493,7 @@ const openCovenant = async (deps: RunDeps, server: string, token: string, accept
     reset.done = true;
   });
   if (reset.done) deps.io.stderr('Your earlier yes to the raw prompt was given under another covenant, so it no longer applies. Run oars pool raw to read the prompt and answer again.\n');
+  return true;
 };
 
 /** What the pool shows before a person accepts: the covenant's text as displayed, its full-text link, and the phrase the text asks to be typed. */
@@ -1119,17 +1135,65 @@ export const poolFetch = async (deps: RunDeps, options: { server?: string | unde
 const JOIN = 'pool-join';
 const JOIN_AGAIN = 'Run oars pool join again to continue from here.';
 
+/** The steps `--plan` lists: the seven the join runs, in order, then the raw question, which `oars pool raw` asks and the join never does. */
+const PLAN_STEPS: readonly string[] = [...JOIN_STEPS, 'raw'];
+
+/** The two steps only a person can do: typing the covenant phrase, and answering the raw prompt. Nothing here, no flag and no variable, does either for them. */
+const PERSON_STEPS: readonly string[] = ['covenant', 'raw'];
+
+/** Whether the pool reports the covenant accepted for this sign-in. A pool that cannot be asked, or refuses, reads as not accepted: a plan states what it can see. */
+const covenantAccepted = async (deps: RunDeps, server: string, token: string): Promise<boolean> => {
+  try {
+    const reply = await ask(deps, JOIN, server, '/v1/covenant', { token });
+    return reply.status === 200 && isObject(reply.body) && Reflect.get(reply.body, 'accepted') === true;
+  } catch {
+    return false;
+  }
+};
+
+/** Whether this batch has been printed by `outbox` or sent: the proof `--send` asks for. */
+const batchSeen = async (outbox: string, hash: string, sent: Map<string, string>): Promise<boolean> => sent.has(hash) || (await wasShown(outbox, hash));
+
 /**
- * `oars pool join`: the five commands of a first deposit in one run, each by the handler the command itself uses: `login`, `deposit`, `outbox --explain`, `deposit --send <hash>` for each batch not yet sent, then `fetch`. It asks and checks
- * nothing they do not, and a step that stops ends the run with that step's own error. Run again it skips what stands: a held sign-in, a prepared batch not yet sent, a batch in `sent.log`.
- * Each step's text prints as it finishes, so the explanation is on screen before the send asks anything: on stdout, or with `json` on stderr, so stdout holds the one document.
+ * `oars pool join --plan`: each step of the join and whether it stands, from the sign-in, the term file, the outbox, and (when signed in) one read of the covenant. It signs in to nothing, writes nothing, and sends nothing.
+ * `needs_person` marks the steps a person does: the typed covenant phrase and the raw prompt.
+ */
+const joinPlan = async (deps: RunDeps, server: string): Promise<Outcome> => {
+  const { storeDir } = runtimeOf(deps);
+  const outbox = outboxFolder(storeDir, server);
+  const held = await heldSignIn(deps, storeDir, server, JOIN);
+  const accepted = held !== undefined && (await covenantAccepted(deps, server, held.token));
+  const { batches } = await heldAcross(outbox);
+  const sent = await sentLog(outbox);
+  const seen = await Promise.all(batches.map(({ hash }) => batchSeen(outbox, hash, sent)));
+  const standing: { [step: string]: boolean } = {
+    signin: held !== undefined,
+    region: accepted,
+    terms: (await currentTerms(deps)).length > 0,
+    batch: batches.length > 0,
+    outbox: batches.length > 0 && seen.every(Boolean),
+    covenant: accepted,
+    send: batches.length > 0 && batches.every(({ hash }) => sent.has(hash)),
+    raw: (await readState(storeDir)).pool.rawConsent === 'granted',
+  };
+  const steps = PLAN_STEPS.map((step) => ({ step, state: standing[step] === true ? 'done' : 'pending', needs_person: PERSON_STEPS.includes(step) }));
+  return { document: { ok: true, plan: true, server, steps }, text: steps.map(({ step, state, needs_person: person }) => `${step}: ${state}${person ? ' (a person does this)' : ''}`).join('\n') };
+};
+
+/**
+ * `oars pool join`: the first deposit in one run, each step by the handler its own command uses: sign-in (`login`), the region question, the exclusion term file (scaffolded empty, never filled in), the batch (`deposit`), what it holds (`outbox
+ * --explain`), the covenant (the screen and typed phrase `deposit --send` shows), and the send (`deposit --send <hash>` for each batch not yet sent), then `fetch` when a harness version is named. A step that stops ends the run with its own
+ * error. Run again, each step that stands is skipped: a held sign-in, terms in the file, a prepared batch, an accepted covenant, a batch in `sent.log`. Acceptance is the person's own: this never types the phrase, and off a terminal it stops.
+ * Each step's text prints as it finishes, so the explanation is on screen before the send asks anything: on stdout, or with `json` on stderr, so stdout holds the one document. One `join-step` event per step says which of the closed steps ran and
+ * what it did (done, skipped, or stopped), and nothing else.
  */
 export const poolJoin = async (
   deps: RunDeps,
-  options: { server?: string | undefined; provider?: string | undefined; verbose?: boolean; acceptCovenant?: string | undefined; inEuEeaUk?: string | undefined; harness?: string | undefined; harnessVersion: string; json?: boolean },
+  options: { server?: string | undefined; provider?: string | undefined; verbose?: boolean; acceptCovenant?: string | undefined; inEuEeaUk?: string | undefined; harness?: string | undefined; harnessVersion?: string | undefined; json?: boolean; plan?: boolean },
 ): Promise<Outcome> => {
-  const { storeDir } = runtimeOf(deps);
+  const { storeDir, projectsRoot } = runtimeOf(deps);
   const server = poolServer(deps.env, JOIN, options.server);
+  if (options.plan === true) return joinPlan(deps, server);
   const say = (line: string): void => {
     deps.io.stderr(`${line}
 `);
@@ -1145,41 +1209,116 @@ export const poolJoin = async (
     const sent = await sentLog(outbox);
     return (await heldAcross(outbox)).batches.flatMap(({ hash }) => (sent.has(hash) ? [] : [hash]));
   };
+  const emit = emitOf(deps);
+  const record = (step: JoinStep, state: JoinState): void => {
+    emit('join-step', { step, state });
+  };
+  let current: JoinStep = 'signin';
+  let fetching = false;
+  const interrupt = watchInterrupt();
+  let reader: Lines | undefined;
+  const lines = (): Lines => (reader ??= readerOf(deps, interrupt.signal));
   try {
     const held = await heldSignIn(deps, storeDir, server, LOGIN);
     let login: object = { skipped: true, account: held?.account };
     if (held === undefined) {
       say(`Signing in to ${server}.`);
       login = show(await poolLogin(deps, { server, provider: options.provider, verbose: options.verbose })).document;
+      record('signin', 'done');
     } else {
       say(`Already signed in to ${server} as ${held.account}.`);
+      record('signin', 'skipped');
     }
+    const { token } = await signedIn(deps, storeDir, server, JOIN);
+    const via = networkSender(deps, DEPOSIT, { stallMs: SEND_STALL_MS, signal: interrupt.signal });
+
+    // The region question: asked plainly, once, of a person at a terminal whose covenant is not yet accepted, and sent with the acceptance. A flag answers it; off a terminal the covenant step is what stops.
+    current = 'region';
+    let region = regionOf(options.inEuEeaUk);
+    if (options.inEuEeaUk !== undefined && region === undefined) throw usage(`${REGION_FLAG} takes yes or no, not "${options.inEuEeaUk}". Nothing was accepted.`, JOIN);
+    if (region === undefined && isTerminal(deps) && !(await covenantAccepted(deps, server, token))) {
+      say('Before the covenant screen, one question that goes with your acceptance.');
+      deps.io.stderr(`${REGION_QUESTION} > `);
+      region = regionOf(await lines().next());
+      if (region === undefined) throw usage('Answer yes or no: are you in the EU, the EEA, or the UK? Nothing was accepted.', JOIN);
+      record('region', 'done');
+    } else {
+      record('region', 'skipped');
+    }
+
+    // The term file: the person's own list of names to keep out. Without a term every session stays out of the outbox, so an empty file stops the run here, with the file made for them to edit.
+    current = 'terms';
+    if ((await currentTerms(deps)).length === 0) {
+      const file = exclusionPaths(projectsRoot, deps.env).terms;
+      await mkdir(dirname(file), { recursive: true });
+      await writeFile(file, '', { flag: 'a' });
+      say(`Your exclusion terms go in ${file}, one per line: a client, a project, or a person whose name must never leave your machine. Every session that mentions one stays out of the outbox. oars adds none for you.`);
+      if (isTerminal(deps)) {
+        say('Press Enter when you have saved the file.');
+        await lines().next();
+      }
+      if ((await currentTerms(deps)).length === 0) {
+        const title = `The exclusion term file ${file} still holds no term, so every session would stay out of the outbox. Add one term per line, save it, and run this again.`;
+        throw new CliError(title, ExitCode.INVALID, JOIN, { code: 'terms_missing', title });
+      }
+      record('terms', 'done');
+    } else {
+      record('terms', 'skipped');
+    }
+
+    current = 'batch';
     let prepared: object = { skipped: true };
     if ((await unsent()).length > 0) {
       say('Your outbox already holds a prepared batch; not preparing it again.');
+      record('batch', 'skipped');
     } else {
       say('Preparing your deposit in the outbox.');
       prepared = show(await poolDeposit(deps, { server })).document;
+      record('batch', 'done');
     }
+
+    current = 'outbox';
     say('Showing what will be sent, field by field.');
     const shown = show(await poolOutbox(deps, { server, explain: true, print: screen })).document;
+    record('outbox', 'done');
     const hashes = await unsent();
+
+    // The covenant, read from the pool and, if not accepted, shown for a person to type the phrase: before the first send, so its own step ends before the sends begin.
+    current = 'covenant';
+    if (hashes.length === 0) {
+      record('covenant', 'skipped');
+    } else {
+      record('covenant', (await openCovenant(deps, server, token, options.acceptCovenant, region, via, interrupt.signal, reader)) ? 'done' : 'skipped');
+    }
+
+    current = 'send';
     const sends: object[] = [];
     if (hashes.length === 0) {
       say((await heldAcross(outbox)).batches.length === 0 ? 'No session is ready to deposit yet; sending nothing.' : 'Everything prepared is already sent; sending nothing.');
+      record('send', 'skipped');
     } else {
       say(`Sending ${plural(hashes.length, 'batch', 'batches')} to ${server}.`);
-      for (const hash of hashes) sends.push(show(await poolDeposit(deps, { server, send: hash, acceptCovenant: options.acceptCovenant, inEuEeaUk: options.inEuEeaUk })).document);
+      for (const hash of hashes) sends.push(show(await poolDeposit(deps, { server, send: hash, acceptCovenant: options.acceptCovenant, inEuEeaUk: region })).document);
+      record('send', 'done');
     }
-    say(`Fetching the bundle for ${options.harness ?? 'your most used harness'} ${options.harnessVersion}.`);
-    const fetched = show(await poolFetch(deps, { server, harness: options.harness, harnessVersion: options.harnessVersion }));
+    let fetched: Outcome | undefined;
+    if (options.harnessVersion !== undefined) {
+      fetching = true;
+      say(`Fetching the bundle for ${options.harness ?? 'your most used harness'} ${options.harnessVersion}.`);
+      fetched = show(await poolFetch(deps, { server, harness: options.harness, harnessVersion: options.harnessVersion }));
+    }
     return {
-      document: { ok: true, server, login, deposit: prepared, outbox: shown, sends, fetch: fetched.document },
-      text: `Joined ${server}: ${plural(sends.length, 'batch', 'batches')} sent this run, and the ${options.harnessVersion} bundle is kept.`,
+      document: { ok: true, server, login, deposit: prepared, outbox: shown, sends, ...(fetched === undefined ? {} : { fetch: fetched.document }) },
+      text: `Joined ${server}: ${plural(sends.length, 'batch', 'batches')} sent this run${options.harnessVersion === undefined ? '' : `, and the ${options.harnessVersion} bundle is kept`}.`,
     };
   } catch (error) {
+    // A step that threw is the one that stopped; the fetch after the sends is not one of the seven.
+    if (!fetching) record(current, 'stopped');
     say(JOIN_AGAIN);
     throw error;
+  } finally {
+    interrupt.stop();
+    reader?.close();
   }
 };
 

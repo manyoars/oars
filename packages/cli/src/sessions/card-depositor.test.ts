@@ -19,7 +19,7 @@ const { signInsFile } = await import('./pool-replica.js');
 
 const SERVER = 'https://pool.manyoars.com';
 const KEYS = { k1: { kty: 'OKP', crv: 'Ed25519', x: 'a-pinned-key' } };
-const ASHORE = 'ashore: run oars pool login';
+const ASHORE = 'ashore: run oars pool join';
 let dir: string;
 
 beforeEach(() => {
@@ -77,7 +77,7 @@ describe('depositorLine', () => {
 describe('sessionsCard depositor row', () => {
   const deps = (): SessionsDeps => ({ sessions: { storeDir: dir, projectsRoot: join(dir, 'projects'), stdin: process.stdin, stdout: { write: () => true } }, install: undefined, now: () => CARD_NOW });
 
-  it('signed out, the table reads ashore: run oars pool login', async () => {
+  it('signed out, the table reads ashore: run oars pool join', async () => {
     const outcome = await sessionsCard(deps(), { period: 'week', text: true }, {});
     expect(outcome.text).toContain(`depositor            ${ASHORE}`);
     expect(outcome.text).not.toContain('weeks rowing');

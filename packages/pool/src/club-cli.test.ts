@@ -147,6 +147,8 @@ describe('oars club join, show, and leave', () => {
     const shown = await guest.words('club', 'show', club.id);
     expect(shown.text).toMatch(/skipper\D+2\D+4\D+4\D+10/);
     expect(shown.text).toMatch(/bow\D+ashore/);
+    // The ashore line names the one command that ends it.
+    expect(shown.text).toContain('ashore: run oars pool join to start rowing.');
     expect(shown.text.indexOf('skipper')).toBeLessThan(shown.text.indexOf('bow'));
     expect(await guest.cli('club', 'leave', club.id)).toBe(ExitCode.OK);
     expect(guest.last()).toMatchObject({ ok: true, id: club.id, left: true });

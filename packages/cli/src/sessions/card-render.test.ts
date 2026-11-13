@@ -5,7 +5,7 @@ import { CARD_NOW, cardStore, cardSurvival, PLANTED } from './card-fixture.js';
 import { GLYPHS, lit } from './card-font.js';
 import { cardPng, cardSvg, encodePng, rasterize } from './card-render.js';
 
-const ASHORE = 'ashore: run oars pool login';
+const ASHORE = 'ashore: run oars pool join';
 const svg = (): string => cardSvg(cardOf(cardStore(), cardSurvival(), 'week', CARD_NOW), ASHORE);
 
 /** Width, height, and the RGB bytes of a PNG this module wrote (8-bit RGB, filter 0), decoded from its bytes alone. */

@@ -4,6 +4,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 
 ## Unreleased
 
+- `oars pool join` is now the whole first deposit in one command: sign-in, the region question, an exclusion term file made for you to edit, the batch, what it holds, the covenant screen with the phrase you type yourself, and the first send. A second run continues at the first step not done, `--harness-version` is optional (given, it fetches after the send), and `--plan --json` lists each step, its state, and `needs_person` for the covenant phrase and the raw prompt, changing nothing. Each step leaves a `join-step` telemetry event of closed words (docs/telemetry.md). `oars card`, `oars club show`, `oars board`, and the Friday line now point the ashore to `oars pool join`.
 - The weekly `harness-readers` workflow now fails when a harness's latest npm release is past the version its fixture was modeled on (`versions.json`, default a different minor), and a local `shape.mjs` tool lists the field names a real session file has that a fixture lacks, with no values. The Claude Code and Codex fixtures are refreshed to 2.1.322 and 0.167.0, including a Codex code-mode cell.
 
 ## 0.5.4 (2026-11-12)

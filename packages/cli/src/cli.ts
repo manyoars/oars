@@ -586,18 +586,19 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
 
   pool
     .command('join')
-    .description('run login, deposit, outbox --explain, deposit --send, and fetch in one command. Run it again after a stop to continue from there')
+    .description('your first deposit in one command: sign in, answer the region question, name the terms to keep out, see the batch, type the covenant phrase yourself, and send. Run it again after a stop to continue at the first step not done')
+    .option('--plan', 'print each step and whether it stands (needs_person marks the covenant phrase and the raw prompt, which only a person does), and do nothing else: no sign-in, no file, no send')
     .option('--provider <name>', 'github or google, for the sign-in step (not needed once signed in)')
     .option('--verbose', 'print each sign-in request, headers and body, to stderr before it is sent (a credential shows as its size)')
     .option('--accept-covenant <version>', 'name the covenant version you expect, as deposit --send takes it: on a terminal the screen is shown and you type its phrase yourself, and off a terminal this is refused')
     .option('--in-eu-eea-uk <yes|no>', 'answer "Are you in the EU, the EEA, or the UK?" when you accept, as deposit --send takes it')
     .option('--harness <name>', 'the harness whose bundle to fetch (default: the one your local store holds the most sessions of, claude-code when none leads)')
-    .requiredOption('--harness-version <version>', 'the public harness version whose bundle to fetch, as fetch takes it')
+    .option('--harness-version <version>', 'with this, fetch the public bundle for that harness version after the send, as fetch takes it; without it nothing is fetched')
     .option(serverOption, serverHelp)
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       const json = flag(options, 'json');
-      emit(deps, json, await poolJoin(deps, { server: text(options, 'server'), provider: text(options, 'provider'), verbose: flag(options, 'verbose'), acceptCovenant: text(options, 'acceptCovenant'), inEuEeaUk: text(options, 'inEuEeaUk'), harness: text(options, 'harness'), harnessVersion: text(options, 'harnessVersion') ?? '', json }));
+      emit(deps, json, await poolJoin(deps, { server: text(options, 'server'), provider: text(options, 'provider'), verbose: flag(options, 'verbose'), acceptCovenant: text(options, 'acceptCovenant'), inEuEeaUk: text(options, 'inEuEeaUk'), harness: text(options, 'harness'), harnessVersion: text(options, 'harnessVersion'), json, plan: flag(options, 'plan') }));
     });
 
   pool
@@ -873,7 +874,7 @@ const isSessionsTry = (observed: Observed): boolean => observed.path.join(' ') =
 const weeklyLine = (argv: string[], deps: RunDeps, observed: Observed): Promise<CardLineArm> =>
   deps.sessions === undefined
     ? Promise.resolve('not_due')
-    : cardLine({ storeDir: deps.sessions.storeDir, telemetryDir: deps.telemetry?.dir, now: deps.now(), tty: deps.sessions.stderr?.isTTY === true, argv, path: observed.path, flags: observed.flags, stderr: deps.io.stderr });
+    : cardLine({ storeDir: deps.sessions.storeDir, telemetryDir: deps.telemetry?.dir, now: deps.now(), tty: deps.sessions.stderr?.isTTY === true, argv, path: observed.path, flags: observed.flags, stderr: deps.io.stderr, env: deps.env });
 
 /** Runs one invocation (`argv` without the node and script entries) and returns the exit code. Telemetry records it afterward and cannot change it. */
 export const run = async (argv: string[], deps: RunDeps): Promise<ExitCode> => {
