@@ -1,5 +1,5 @@
 // `oars pool join` (t1228): the real CLI over a real socket to the pool under workerd, from an empty store to a counting deposit. Only the sign-in provider is stubbed, the terminal is a fake that types the covenant phrase, and every session is an invented fixture.
-import { writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { run } from '../../cli/src/cli.js';
@@ -31,11 +31,10 @@ describe('oars pool join against the local pool', () => {
   it('takes an empty store to a counting deposit: the typed phrase is the only acceptance, and the fetch cap is lifted', async () => {
     const staged = stage();
     const terms = join(staged.root, 'terms.txt');
-    writeFileSync(terms, `${TERM}\n`);
     const h = harness({ OARS_EXCLUSION_TERMS: terms, OARS_POOL_URL: await pool.url() });
     h.deps.sessions = staged.runtime;
     h.deps.now = settledClock;
-    // The term file does not exist yet: the terms step makes it, and the person saves a term when it says "Press Enter".
+    // The term file does not exist before the run: the terms step makes it, and the person saves a term when it says "Press Enter".
     const write = h.deps.io.stderr;
     h.deps.io.stderr = (text) => {
       write(text);
@@ -52,9 +51,12 @@ describe('oars pool join against the local pool', () => {
     // The fake terminal types the region answer, Enter for the term file, then the phrase the covenant screen states. Nothing else can accept.
     Object.assign(staged.stdin, { isTTY: true });
     Object.assign(staged.runtime, { stderr: { isTTY: true } });
-    staged.stdin.write(`no\n${TEST_PHRASE}\n`);
+    expect(existsSync(terms)).toBe(false);
+    staged.stdin.write(`no\n\n${TEST_PHRASE}\n`);
 
     expect(await run(['--json', 'pool', 'join', '--provider', 'github', '--harness-version', '2.1.314'], h.deps)).toBe(ExitCode.OK);
+    expect(h.err.join('')).toContain('Press Enter');
+    expect(existsSync(terms)).toBe(true);
     const account = await db.prepare('SELECT id, access FROM accounts ORDER BY rowid DESC LIMIT 1').first();
     const id = textOf(account, 'id');
     expect(fieldOf(account, 'access')).toBe('pending');

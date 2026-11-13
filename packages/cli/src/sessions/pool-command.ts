@@ -281,13 +281,20 @@ ${proofLines(account, provedAt)}`;
   return new CliError(refused.message, refused.exitCode, LOGIN, { ...refused.problem, detail }, { account, provedAt });
 };
 
-/** A promise that rejects with the signal's reason once it aborts, so a wait can be raced against it. */
-const abortion = (signal: AbortSignal): Promise<never> =>
-  new Promise((_resolve, reject) => {
+/** A promise that rejects with the signal's reason once it aborts, so a wait can be raced against it, and the `dispose` that removes its listener once the wait has settled. */
+const abortion = (signal: AbortSignal): { promise: Promise<never>; dispose: () => void } => {
+  let dispose = (): void => undefined;
+  const promise = new Promise<never>((_resolve, reject) => {
     const why = (): Error => (signal.reason instanceof Error ? signal.reason : new Error('aborted'));
+    const onAbort = (): void => { reject(why()); };
     if (signal.aborted) reject(why());
-    else signal.addEventListener('abort', () => { reject(why()); }, { once: true });
+    else {
+      signal.addEventListener('abort', onAbort, { once: true });
+      dispose = () => { signal.removeEventListener('abort', onAbort); };
+    }
   });
+  return { promise, dispose };
+};
 
 /** Polls the pool until the person approves, and returns the pool's answer with the credential. Time is counted in the waits asked for, so a machine that slept through the code still gets one poll that says it expired. */
 const awaitCredential = async (deps: RunDeps, server: string, started: Started, show: Masker | undefined, signal?: AbortSignal): Promise<Reply> => {
@@ -297,7 +304,15 @@ const awaitCredential = async (deps: RunDeps, server: string, started: Started, 
   for (let waited = 0; waited < started.expiresMs;) {
     // A failed poll (a network error or a 5xx) is the provider or the network having a bad minute, not the person's answer: wait longer each time, up to the cap, and ask again until the code's own expiry.
     const wait = Math.min(intervalMs * 2 ** failures, Math.max(intervalMs, MAX_BACKOFF_MS));
-    await (signal === undefined ? deps.sleep(wait) : Promise.race([deps.sleep(wait), abortion(signal)]));
+    if (signal === undefined) await deps.sleep(wait);
+    else {
+      const aborted = abortion(signal);
+      try {
+        await Promise.race([deps.sleep(wait), aborted.promise]);
+      } finally {
+        aborted.dispose();
+      }
+    }
     // A sleep that finished first still ends the poll once the signal has fired.
     signal?.throwIfAborted();
     waited += wait;
