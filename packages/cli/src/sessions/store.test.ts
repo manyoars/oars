@@ -155,6 +155,21 @@ describe('deposit', () => {
     expect(await loadStore(staged.storeDir, undefined, { latest, only: new Set(ids), spans })).toEqual(await loadStore(staged.storeDir));
   });
 
+  it('keeps in the span index only the lines at the highest rev of each session (spanrev)', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options(['proj']));
+    const log = paths(staged.storeDir).observations;
+    const rows = readFileSync(log, 'utf8').split('\n').filter((line) => line !== '');
+    // Every row once more at a lower rev, ahead of the live ones: two revs per session, as an uncompacted log holds.
+    writeFileSync(log, `${[...rows.map((line) => line.replace(/"rev":\d+/, '"rev":0')), ...rows].join('\n')}\n`);
+    const scan = await scanLog(log, undefined, true);
+    expect(scan.superseded).toBe(true);
+    const lines = readFileSync(log, 'utf8').split('\n').filter((line) => line !== '').length;
+    const indexed = [...(scan.spans?.values() ?? [])].reduce((sum, own) => sum + own.length / 2, 0);
+    expect(indexed).toBe(lines / 2);
+    expect(await loadStore(staged.storeDir, undefined, { latest: scan.latest, only: new Set(scan.latest.keys()), spans: scan.spans })).toEqual(await loadStore(staged.storeDir));
+  });
+
   it('ignores a row appended between the scan and the chunk load, and skips a span a rewrite moved (spanappend)', async () => {
     const staged = stage();
     await deposit(staged.runtime, options(['proj']));

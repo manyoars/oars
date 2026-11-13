@@ -1386,7 +1386,7 @@ interface LogScan {
   superseded: boolean;
   /** Sessions whose newest capture record was written by a newer oars, counted as `loadStore` counts them. */
   newerCaptures: number;
-  /** Set when asked for: each session's record lines as flat `[start, length, ...]` byte pairs (the newline included), over every rev. Only lines this scan saw are in it, so a row appended after the scan is never read through it. */
+  /** Set when asked for: each session's record lines at its highest rev as flat `[start, length, ...]` byte pairs (the newline included). Only lines this scan saw are in it, so a row appended after the scan is never read through it. */
   spans?: Map<string, number[]>;
 }
 
@@ -1417,25 +1417,34 @@ const logSpans = async function* (file: string, held?: FileHandle): AsyncGenerat
 export const scanLog = async (file: string, held?: FileHandle, withSpans = false): Promise<LogScan> => {
   const latest = new Map<string, number>();
   const cvAt = new Map<string, { rev: number; cv: string }>();
-  const spans = withSpans ? new Map<string, number[]>() : undefined;
+  // Every rev's lines are noted as `[start, length, rev, ...]` triples, then thinned to the highest rev once it is known.
+  const seen = withSpans ? new Map<string, number[]>() : undefined;
   let superseded = false;
   for await (const { line, start, length } of withSpans ? logSpans(file, held) : plainLines(file, held)) {
     const observation = observationOf(line);
     if (observation === undefined) continue;
-    if (spans !== undefined) {
-      const own = spans.get(observation.session) ?? [];
-      own.push(start, length);
-      spans.set(observation.session, own);
+    if (seen !== undefined) {
+      const own = seen.get(observation.session) ?? [];
+      own.push(start, length, observation.rev);
+      seen.set(observation.session, own);
     }
-    const seen = latest.get(observation.session);
-    superseded ||= seen !== undefined && seen !== observation.rev;
-    latest.set(observation.session, Math.max(seen ?? 0, observation.rev));
+    const before = latest.get(observation.session);
+    superseded ||= before !== undefined && before !== observation.rev;
+    latest.set(observation.session, Math.max(before ?? 0, observation.rev));
     // The last session record at the highest rev is the one `loadStore` reads.
     if (observation.kind === 'session' && observation.rev >= (cvAt.get(observation.session)?.rev ?? 0)) cvAt.set(observation.session, { rev: observation.rev, cv: observation.cv });
   }
   let newerCaptures = 0;
   for (const [session, held] of cvAt) if (held.rev === latest.get(session) && Number(held.cv) > Number(CAPTURE_VERSION)) newerCaptures += 1;
-  return spans === undefined ? { latest, superseded, newerCaptures } : { latest, superseded, newerCaptures, spans };
+  if (seen === undefined) return { latest, superseded, newerCaptures };
+  // A superseded line is never read by a chunk load, so the index keeps only each session's lines at its highest rev.
+  const spans = new Map<string, number[]>();
+  for (const [session, triples] of seen) {
+    const kept: number[] = [];
+    for (let n = 0; n < triples.length; n += 3) if (triples[n + 2] === latest.get(session)) kept.push(triples[n] ?? 0, triples[n + 1] ?? 0);
+    spans.set(session, kept);
+  }
+  return { latest, superseded, newerCaptures, spans };
 };
 
 const plainLines = async function* (file: string, held?: FileHandle): AsyncGenerator<{ line: string; start: number; length: number }> {
