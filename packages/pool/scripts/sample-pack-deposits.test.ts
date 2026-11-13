@@ -313,6 +313,12 @@ describe('sample-pack --deposits (docs/pool-deposit-title.md section 5, brief 2)
     expect(counts.objectedAccount).toBe(2);
     expect(counts.objected).toBe(0);
     expect(counts.scanned).toBe(2);
+    expect(fieldOf(JSON.parse(readFileSync(join(p.out, 'pack.json'), 'utf8')), 'counts')).toMatchObject({ objectedAccount: 2 });
+    const printed: string[] = [];
+    rmSync(p.out, { recursive: true, force: true });
+    const code = await main(['--terms', p.terms, '--owners', p.owners, '--index-key', p.indexKey, '--buyer-key', 'sample', '--out', p.out, '--min-turns', '1', '--deposits', p.folder], { runtime: p.runtime, print: (text) => printed.push(text) });
+    expect(code).toBe(0);
+    expect(printed.join(' ')).toContain('2 under an account line');
   });
 
   it('an account line for another account leaves the sessions in, and an account line needs a right', async () => {
