@@ -75,6 +75,7 @@ describe('the join-step cell', () => {
 
   it('is one yes under the oars version, in a metric named for the step and what it did', () => {
     expect(joinStepMeasures(step({ step: 'send', state: 'done' }))).toEqual([{ metric: 'join-step.send.done', dimension: 'cli', value: '0.4.0', kind: 'rate', x: 1 }]);
+    expect(joinStepMeasures(step({ step: 'covenant', state: 'none' }))[0]?.metric).toBe('join-step.covenant.none');
     expect(joinStepMeasures(step({ step: 'covenant', state: 'stopped' }, '0.5.1'))).toEqual([{ metric: 'join-step.covenant.stopped', dimension: 'cli', value: '0.5.1', kind: 'rate', x: 1 }]);
   });
 

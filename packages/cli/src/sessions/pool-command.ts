@@ -277,15 +277,24 @@ ${proofLines(account, provedAt)}`;
   return new CliError(refused.message, refused.exitCode, LOGIN, { ...refused.problem, detail }, { account, provedAt });
 };
 
+/** A promise that rejects with the signal's reason once it aborts, so a wait can be raced against it. */
+const abortion = (signal: AbortSignal): Promise<never> =>
+  new Promise((_resolve, reject) => {
+    if (signal.aborted) reject(signal.reason);
+    else signal.addEventListener('abort', () => { reject(signal.reason); }, { once: true });
+  });
+
 /** Polls the pool until the person approves, and returns the pool's answer with the credential. Time is counted in the waits asked for, so a machine that slept through the code still gets one poll that says it expired. */
-const awaitCredential = async (deps: RunDeps, server: string, started: Started, show: Masker | undefined): Promise<Reply> => {
+const awaitCredential = async (deps: RunDeps, server: string, started: Started, show: Masker | undefined, signal?: AbortSignal): Promise<Reply> => {
   let { intervalMs } = started;
   let failures = 0;
   let lastFailure: CliError | undefined;
   for (let waited = 0; waited < started.expiresMs;) {
     // A failed poll (a network error or a 5xx) is the provider or the network having a bad minute, not the person's answer: wait longer each time, up to the cap, and ask again until the code's own expiry.
     const wait = Math.min(intervalMs * 2 ** failures, Math.max(intervalMs, MAX_BACKOFF_MS));
-    await deps.sleep(wait);
+    await (signal === undefined ? deps.sleep(wait) : Promise.race([deps.sleep(wait), abortion(signal)]));
+    // A sleep that finished first still ends the poll once the signal has fired.
+    signal?.throwIfAborted();
     waited += wait;
     // `ask` rejects only with the unreachable failure of `send`.
     const [settled] = await Promise.allSettled([ask(deps, LOGIN, server, '/v1/login/poll', { body: { handle: started.handle }, show })]);
@@ -322,7 +331,7 @@ const awaitCredential = async (deps: RunDeps, server: string, started: Started, 
  * `oars pool login` (spec Section 1.4): the pool runs the provider's device flow and this client only shows the code and polls the pool, so no provider token, device code, client ID, or secret is ever here. With `--verbose`, every request, which goes to the pool alone,
  * prints before it is sent, with the login handle and the credential masked as `<credential: n bytes>`; without it, a failure's cause is the first line printed.
  */
-export const poolLogin = async (deps: RunDeps, options: { server?: string | undefined; provider?: string | undefined; verbose?: boolean }): Promise<Outcome> => {
+export const poolLogin = async (deps: RunDeps, options: { server?: string | undefined; provider?: string | undefined; verbose?: boolean; signal?: AbortSignal }): Promise<Outcome> => {
   const { storeDir } = runtimeOf(deps);
   const server = poolServer(deps.env, LOGIN, options.server);
   const { provider } = options;
@@ -339,7 +348,7 @@ export const poolLogin = async (deps: RunDeps, options: { server?: string | unde
   await deps.openBrowser(started.verificationUrl).catch(() => {
     deps.io.stderr('Could not open a browser; open the link above yourself.\n');
   });
-  const reply = await awaitCredential(deps, server, started, show);
+  const reply = await awaitCredential(deps, server, started, show, options.signal);
   const signIn = signInOf(isObject(reply.body) ? { ...reply.body, server } : undefined);
   if (signIn === undefined) throw new CliError('The pool answered a sign-in with no account, token, or signing key.', ExitCode.UNEXPECTED, LOGIN);
   const known = saved.find((entry) => entry.server === server);
@@ -1136,9 +1145,9 @@ const JOIN = 'pool-join';
 const JOIN_AGAIN = 'Run oars pool join again to continue from here.';
 
 /** The steps `--plan` lists: the seven the join runs, in order, then the raw question, which `oars pool raw` asks and the join never does. */
-const PLAN_STEPS: readonly string[] = [...JOIN_STEPS, 'raw'];
+const PLAN_STEPS = [...JOIN_STEPS, 'raw'] as const;
 
-/** The two steps only a person can do: typing the covenant phrase, and answering the raw prompt. Nothing here, no flag and no variable, does either for them. */
+/** The two steps only a person can do: typing the covenant phrase, and answering the raw prompt. Nothing here, no flag and no variable, does either for them. Region and terms are a person's too until a flag or the term file answers them. */
 const PERSON_STEPS: readonly string[] = ['covenant', 'raw'];
 
 /** Whether the pool reports the covenant accepted for this sign-in. A pool that cannot be asked, or refuses, reads as not accepted: a plan states what it can see. */
@@ -1158,7 +1167,7 @@ const batchSeen = async (outbox: string, hash: string, sent: Map<string, string>
  * `oars pool join --plan`: each step of the join and whether it stands, from the sign-in, the term file, the outbox, and (when signed in) one read of the covenant. It signs in to nothing, writes nothing, and sends nothing.
  * `needs_person` marks the steps a person does: the typed covenant phrase and the raw prompt.
  */
-const joinPlan = async (deps: RunDeps, server: string): Promise<Outcome> => {
+const joinPlan = async (deps: RunDeps, server: string, flagged: boolean): Promise<Outcome> => {
   const { storeDir } = runtimeOf(deps);
   const outbox = outboxFolder(storeDir, server);
   const held = await heldSignIn(deps, storeDir, server, JOIN);
@@ -1166,17 +1175,18 @@ const joinPlan = async (deps: RunDeps, server: string): Promise<Outcome> => {
   const { batches } = await heldAcross(outbox);
   const sent = await sentLog(outbox);
   const seen = await Promise.all(batches.map(({ hash }) => batchSeen(outbox, hash, sent)));
-  const standing: { [step: string]: boolean } = {
+  const state = await readState(storeDir);
+  const standing: { [step in (typeof PLAN_STEPS)[number]]: boolean } = {
     signin: held !== undefined,
-    region: accepted,
+    region: accepted || state.pool.euEeaUk !== null,
     terms: (await currentTerms(deps)).length > 0,
     batch: batches.length > 0,
     outbox: batches.length > 0 && seen.every(Boolean),
     covenant: accepted,
     send: batches.length > 0 && batches.every(({ hash }) => sent.has(hash)),
-    raw: (await readState(storeDir)).pool.rawConsent === 'granted',
+    raw: state.pool.rawConsent === 'granted',
   };
-  const steps = PLAN_STEPS.map((step) => ({ step, state: standing[step] === true ? 'done' : 'pending', needs_person: PERSON_STEPS.includes(step) }));
+  const steps = PLAN_STEPS.map((step) => ({ step, state: standing[step] ? 'done' : 'pending', needs_person: PERSON_STEPS.includes(step) || (!standing[step] && (step === 'terms' || (step === 'region' && !flagged))) }));
   return { document: { ok: true, plan: true, server, steps }, text: steps.map(({ step, state, needs_person: person }) => `${step}: ${state}${person ? ' (a person does this)' : ''}`).join('\n') };
 };
 
@@ -1193,7 +1203,7 @@ export const poolJoin = async (
 ): Promise<Outcome> => {
   const { storeDir, projectsRoot } = runtimeOf(deps);
   const server = poolServer(deps.env, JOIN, options.server);
-  if (options.plan === true) return joinPlan(deps, server);
+  if (options.plan === true) return joinPlan(deps, server, options.inEuEeaUk !== undefined);
   const say = (line: string): void => {
     deps.io.stderr(`${line}
 `);
@@ -1215,7 +1225,12 @@ export const poolJoin = async (
   };
   let current: JoinStep = 'signin';
   let fetching = false;
+  // Ctrl-C reaches every step: the sign-in poll and the line reads take the signal, and each step begins by checking it.
   const interrupt = watchInterrupt();
+  const begin = (step: JoinStep): void => {
+    current = step;
+    interrupt.signal.throwIfAborted();
+  };
   let reader: Lines | undefined;
   const lines = (): Lines => (reader ??= readerOf(deps, interrupt.signal));
   try {
@@ -1223,7 +1238,7 @@ export const poolJoin = async (
     let login: object = { skipped: true, account: held?.account };
     if (held === undefined) {
       say(`Signing in to ${server}.`);
-      login = show(await poolLogin(deps, { server, provider: options.provider, verbose: options.verbose })).document;
+      login = show(await poolLogin(deps, { server, provider: options.provider, verbose: options.verbose, signal: interrupt.signal })).document;
       record('signin', 'done');
     } else {
       say(`Already signed in to ${server} as ${held.account}.`);
@@ -1233,21 +1248,27 @@ export const poolJoin = async (
     const via = networkSender(deps, DEPOSIT, { stallMs: SEND_STALL_MS, signal: interrupt.signal });
 
     // The region question: asked plainly, once, of a person at a terminal whose covenant is not yet accepted, and sent with the acceptance. A flag answers it; off a terminal the covenant step is what stops.
-    current = 'region';
+    begin('region');
     let region = regionOf(options.inEuEeaUk);
     if (options.inEuEeaUk !== undefined && region === undefined) throw usage(`${REGION_FLAG} takes yes or no, not "${options.inEuEeaUk}". Nothing was accepted.`, JOIN);
+    // An answer given on an earlier run stands: the person is not asked twice, whatever stopped the run after the question.
+    if (region === undefined) region = (await readState(storeDir)).pool.euEeaUk ?? undefined;
     if (region === undefined && isTerminal(deps) && !(await covenantAccepted(deps, server, token))) {
       say('Before the covenant screen, one question that goes with your acceptance.');
       deps.io.stderr(`${REGION_QUESTION} > `);
       region = regionOf(await lines().next());
       if (region === undefined) throw usage('Answer yes or no: are you in the EU, the EEA, or the UK? Nothing was accepted.', JOIN);
+      const answer = region;
+      await updatePoolChoices(storeDir, (choices) => {
+        choices.euEeaUk = answer;
+      });
       record('region', 'done');
     } else {
       record('region', 'skipped');
     }
 
     // The term file: the person's own list of names to keep out. Without a term every session stays out of the outbox, so an empty file stops the run here, with the file made for them to edit.
-    current = 'terms';
+    begin('terms');
     if ((await currentTerms(deps)).length === 0) {
       const file = exclusionPaths(projectsRoot, deps.env).terms;
       await mkdir(dirname(file), { recursive: true });
@@ -1266,7 +1287,7 @@ export const poolJoin = async (
       record('terms', 'skipped');
     }
 
-    current = 'batch';
+    begin('batch');
     let prepared: object = { skipped: true };
     if ((await unsent()).length > 0) {
       say('Your outbox already holds a prepared batch; not preparing it again.');
@@ -1277,25 +1298,26 @@ export const poolJoin = async (
       record('batch', 'done');
     }
 
-    current = 'outbox';
+    begin('outbox');
     say('Showing what will be sent, field by field.');
     const shown = show(await poolOutbox(deps, { server, explain: true, print: screen })).document;
     record('outbox', 'done');
     const hashes = await unsent();
 
     // The covenant, read from the pool and, if not accepted, shown for a person to type the phrase: before the first send, so its own step ends before the sends begin.
-    current = 'covenant';
+    begin('covenant');
+    const nothingPrepared = (await heldAcross(outbox)).batches.length === 0;
     if (hashes.length === 0) {
-      record('covenant', 'skipped');
+      record('covenant', nothingPrepared ? 'none' : 'skipped');
     } else {
       record('covenant', (await openCovenant(deps, server, token, options.acceptCovenant, region, via, interrupt.signal, reader)) ? 'done' : 'skipped');
     }
 
-    current = 'send';
+    begin('send');
     const sends: object[] = [];
     if (hashes.length === 0) {
-      say((await heldAcross(outbox)).batches.length === 0 ? 'No session is ready to deposit yet; sending nothing.' : 'Everything prepared is already sent; sending nothing.');
-      record('send', 'skipped');
+      say(nothingPrepared ? 'No session is ready to deposit yet; sending nothing.' : 'Everything prepared is already sent; sending nothing.');
+      record('send', nothingPrepared ? 'none' : 'skipped');
     } else {
       say(`Sending ${plural(hashes.length, 'batch', 'batches')} to ${server}.`);
       for (const hash of hashes) sends.push(show(await poolDeposit(deps, { server, send: hash, acceptCovenant: options.acceptCovenant, inEuEeaUk: region })).document);
@@ -1315,6 +1337,8 @@ export const poolJoin = async (
     // A step that threw is the one that stopped; the fetch after the sends is not one of the seven.
     if (!fetching) record(current, 'stopped');
     say(JOIN_AGAIN);
+    // A signal ended the run (the readline read throws its own abort error, the poll and the steps throw the reason): exit as deposit does, 130 for Ctrl-C.
+    if (interrupt.signal.aborted && interrupt.signal.reason instanceof SendInterrupted) throw stopped(JOIN, interrupt.signal.reason, false);
     throw error;
   } finally {
     interrupt.stop();

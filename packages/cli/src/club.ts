@@ -123,9 +123,10 @@ const rowsOf = (body: unknown): Row[] => {
   return rows;
 };
 
-/** The board as lines, in the pool's order: a member with no counting week is "ashore" and has no numbers. */
+/** What the club shows a member with no counting week, and where to go from it. */
 export const ASHORE_CLUB_LINE = 'ashore: run oars pool join to start rowing.';
 
+/** The board as lines, in the pool's order: a member with no counting week is "ashore" and has no numbers. */
 const tableOf = (rows: readonly Row[]): string => {
   const head = ['#', 'nickname', 'weeks rowing', 'active days', 'sessions', 'strokes this week'];
   const body = rows.map((row) => [String(row.place), row.nickname, ...(row.ashore ? ['ashore', '', '', ''] : [String(row.weeksRowing), String(row.activeDays), String(row.sessions), String(row.strokesThisWeek)])]);

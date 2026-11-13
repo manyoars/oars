@@ -7,7 +7,7 @@
 -- One row for each step, in the order the join runs them: signin, region, terms, batch, outbox, covenant, send.
 -- version     the covenant version read, and start_day the UTC day the pool first served it (`covenant_served`).
 -- installs    distinct install ids whose first `join-step` event reached the pool on or after start_day. The same number on every row: the cohort.
--- reached     of those, installs with a step event of `done` or `skipped` for this step (a resumed run skips what stands, so a step finished on an earlier run counts as reached).
+-- reached     of those, installs with a step event of `done` or `skipped` for this step (a resumed run skips what stands, so a step finished on an earlier run counts as reached). `none` (covenant and send of a run with no session ready to deposit) is neither: nothing was done, and it never counts as reached.
 -- stopped     of those, installs with a `stopped` event for this step and none of `done` or `skipped`: where the run ended and has not yet been resumed past.
 --
 -- The count reads the nightly rollup (`telemetry_install_days`), so an event is counted from the night after it arrived and not before. An install with telemetry off sends nothing and is not counted. An install that is reinstalled with a new install id counts again.

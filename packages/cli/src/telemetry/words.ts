@@ -12,6 +12,6 @@ export type SurfaceWord = (typeof SURFACE_WORDS)[number];
 /** The steps of `oars pool join`, as the `join-step` event and the join plan name them. A name outside this list never reaches the spool. */
 export const JOIN_STEPS = ['signin', 'region', 'terms', 'batch', 'outbox', 'covenant', 'send'] as const;
 export type JoinStep = (typeof JOIN_STEPS)[number];
-/** What a step did in one run: finished now, found already done and skipped, or stopped the run. */
-export const JOIN_STATES = ['done', 'skipped', 'stopped'] as const;
+/** What a step did in one run: finished now, found already done and skipped, stopped the run, or had nothing to act on (no session ready to deposit; never counted as reached). */
+export const JOIN_STATES = ['done', 'skipped', 'stopped', 'none'] as const;
 export type JoinState = (typeof JOIN_STATES)[number];

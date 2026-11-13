@@ -79,7 +79,7 @@ One per step of `oars pool join` in one run, so the pool can see where first run
 | Field | What it holds |
 |---|---|
 | `step` | One of `signin`, `region`, `terms`, `batch`, `outbox`, `covenant`, or `send`. Anything else is dropped. |
-| `state` | `done` (the step ran), `skipped` (it already stood, or did not apply to this run), or `stopped` (it ended the run). Anything else is dropped. |
+| `state` | `done` (the step ran), `skipped` (it already stood, or did not apply to this run), `stopped` (it ended the run), or `none` (the covenant and send steps of a run with no session ready to deposit: nothing to act on, and not counted as reached). Anything else is dropped. |
 
 The event carries no answer, term, path, version, hash, or account: not the region answer, not a word of the term file, and nothing joins it to a deposit. The pool's nightly rollup keeps one cell for it per install, day, step, and state (`join-step.<step>.<state>`, one count per event), which `queries/join-funnel.sql` reads beside `queries/covenant-funnel.sql`. `oars telemetry report` does not show the cell and the fleet read does not serve it.
 

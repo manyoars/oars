@@ -66,6 +66,7 @@ describe('the closed schema', () => {
 
   it('holds a join step to the closed step and state words, and drops anything else with its name', () => {
     expect(sanitize('join-step', { step: 'send', state: 'done' })).toEqual({ data: { step: 'send', state: 'done' }, dropped: 0 });
+    expect(sanitize('join-step', { step: 'send', state: 'none' })).toEqual({ data: { step: 'send', state: 'none' }, dropped: 0 });
     expect(sanitize('join-step', { step: 'acme-billing', state: 'maybe', path: HOME_PATH, term: 'zorblax' })).toEqual({ data: {}, dropped: 4 });
   });
 

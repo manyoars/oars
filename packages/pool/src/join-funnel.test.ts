@@ -37,6 +37,8 @@ describe('queries/join-funnel.sql', () => {
     await day(db, '2026-11-12', 'resumed', [cell('signin', 'skipped'), cell('covenant', 'done'), cell('send', 'done')]);
     // Stopped at the terms and never resumed.
     await day(db, '2026-11-12', 'stuck', [cell('signin', 'done'), cell('region', 'done'), cell('terms', 'stopped')]);
+    // No session was ready: covenant and send are `none`, which is not reached (it must not read as a counting deposit).
+    await day(db, '2026-11-12', 'nothing', [cell('signin', 'done'), cell('region', 'skipped'), cell('terms', 'done'), cell('batch', 'done'), cell('outbox', 'done'), cell('covenant', 'none'), cell('send', 'none')]);
     // Before the start of v2: in v1's window only. An event of another kind, and an empty day, count nothing.
     await day(db, '2026-11-09', 'early', [cell('signin', 'done')]);
     await day(db, '2026-11-12', 'other', [{ metric: 'first-run.npx', dimension: 'cli', value: '0.4.0', kind: 'rate', n: 1, hits: 0, buckets: [] }]);
@@ -57,17 +59,17 @@ describe('queries/join-funnel.sql', () => {
 
   it('counts, for each step in the order of the join, the installs that reached it and the installs that stopped there', async () => {
     expect(await run(db, forVersion('v2'))).toEqual([
-      { version: 'v2', start_day: '2026-11-10', step: 'signin', installs: 3, reached: 3, stopped: 0 },
-      { version: 'v2', start_day: '2026-11-10', step: 'region', installs: 3, reached: 3, stopped: 0 },
-      { version: 'v2', start_day: '2026-11-10', step: 'terms', installs: 3, reached: 2, stopped: 1 },
-      { version: 'v2', start_day: '2026-11-10', step: 'batch', installs: 3, reached: 2, stopped: 0 },
-      { version: 'v2', start_day: '2026-11-10', step: 'outbox', installs: 3, reached: 2, stopped: 0 },
-      { version: 'v2', start_day: '2026-11-10', step: 'covenant', installs: 3, reached: 2, stopped: 0 },
-      { version: 'v2', start_day: '2026-11-10', step: 'send', installs: 3, reached: 2, stopped: 0 },
+      { version: 'v2', start_day: '2026-11-10', step: 'signin', installs: 4, reached: 4, stopped: 0 },
+      { version: 'v2', start_day: '2026-11-10', step: 'region', installs: 4, reached: 4, stopped: 0 },
+      { version: 'v2', start_day: '2026-11-10', step: 'terms', installs: 4, reached: 3, stopped: 1 },
+      { version: 'v2', start_day: '2026-11-10', step: 'batch', installs: 4, reached: 3, stopped: 0 },
+      { version: 'v2', start_day: '2026-11-10', step: 'outbox', installs: 4, reached: 3, stopped: 0 },
+      { version: 'v2', start_day: '2026-11-10', step: 'covenant', installs: 4, reached: 2, stopped: 0 },
+      { version: 'v2', start_day: '2026-11-10', step: 'send', installs: 4, reached: 2, stopped: 0 },
     ]);
   });
 
   it('reads an earlier start day as a wider window: v1 was served before every event, so the early install counts too', async () => {
-    expect(await run(db, forVersion('v1'))).toMatchObject([{ step: 'signin', installs: 4, reached: 4 }, {}, {}, {}, {}, {}, { step: 'send', installs: 4, reached: 2 }]);
+    expect(await run(db, forVersion('v1'))).toMatchObject([{ step: 'signin', installs: 5, reached: 5 }, {}, {}, {}, {}, {}, { step: 'send', installs: 5, reached: 2 }]);
   });
 });

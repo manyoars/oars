@@ -416,7 +416,7 @@ const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
 const stepsOf = (s: Scene): { [key: string]: unknown }[] => list(record(JSON.parse(out(s))).steps).map(record);
 
 /** The shape of the plan document, checked key by key: nothing else may appear in it. */
-const planShape = (s: Scene): void => {
+const planShape = (s: Scene, flagged = false): void => {
   const doc = record(JSON.parse(out(s)));
   expect(Object.keys(doc).sort()).toEqual(['ok', 'plan', 'server', 'steps']);
   expect(doc.ok).toBe(true);
@@ -429,7 +429,12 @@ const planShape = (s: Scene): void => {
     expect(STATES).toContain(step.state);
     expect(typeof step.needs_person).toBe('boolean');
   }
-  expect(steps.filter((step) => step.needs_person).map((step) => step.step)).toEqual(['covenant', 'raw']);
+  // The covenant phrase and the raw prompt are always a person's; region and terms are too while pending and no flag or file answers them.
+  for (const step of steps) {
+    const always = step.step === 'covenant' || step.step === 'raw';
+    const answerable = (step.step === 'region' || step.step === 'terms') && step.state === 'pending';
+    expect(step.needs_person).toBe(always || (answerable && !(step.step === 'region' && flagged)));
+  }
 };
 
 describe('oars pool join, the first deposit in one command', () => {
@@ -568,6 +573,135 @@ describe('oars pool join, the first deposit in one command', () => {
         expect(new Set(sent.map((line) => line.split(' ')[0])).size).toBe(sent.length);
       });
     }
+  });
+
+  describe('a run killed after region, terms, or the covenant resumes at the next step', () => {
+    const killAt = (s: Scene, text: string): (() => void) => {
+      const write = s.h.deps.io.stderr;
+      s.h.deps.io.stderr = (line) => {
+        if (line.includes(text)) throw KILL;
+        write(line);
+      };
+      return () => {
+        s.h.deps.io.stderr = write;
+        s.h.out.length = 0;
+        s.h.err.length = 0;
+      };
+    };
+
+    it('after region: the answer is kept, the next run does not ask it again, and --plan reads it as done', async () => {
+      const open = unaccepted();
+      const s = await scene({ terms: false });
+      server.use(http.get(`${POOL}/v1/covenant`, () => open.covenant()));
+      await capture(s);
+      atTerminal(s, 'no');
+      const restore = killAt(s, 'Your exclusion terms go in');
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.UNEXPECTED);
+      restore();
+      writeFileSync(termsPath(s), 'zorblax\n');
+      expect(await s.cli('pool', 'join', '--plan', '--json', '--server', POOL)).toBe(ExitCode.OK);
+      expect(stepsOf(s).find((step) => step.step === 'region')).toMatchObject({ state: 'done', needs_person: false });
+      s.h.out.length = 0;
+      atTerminal(s, SCREEN.phrase);
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.OK);
+      expect(err(s)).not.toContain('Are you in the EU');
+      expect(open.bodies).toEqual([expect.objectContaining({ euEeaUk: 'no' })]);
+    });
+
+    it('after terms: the next run skips region and terms and starts at the batch', async () => {
+      const open = unaccepted();
+      const s = await scene({ terms: false });
+      server.use(http.get(`${POOL}/v1/covenant`, () => open.covenant()));
+      const events = watching(s);
+      await capture(s);
+      atTerminal(s, 'no', '');
+      const write = s.h.deps.io.stderr;
+      s.h.deps.io.stderr = (text) => {
+        if (text.includes('Press Enter')) writeFileSync(termsPath(s), 'zorblax\n');
+        if (text.includes('Preparing your deposit')) throw KILL;
+        write(text);
+      };
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.UNEXPECTED);
+      s.h.deps.io.stderr = write;
+      const before = events('join-step').length;
+      atTerminal(s, 'not the phrase');
+      expect(await s.cli(...joinArgs)).not.toBe(ExitCode.OK);
+      expect(events('join-step').map((event) => `${String(event.data.step)}:${String(event.data.state)}`).slice(before, before + 4)).toEqual(['signin:skipped', 'region:skipped', 'terms:skipped', 'batch:done']);
+    });
+
+    it('after the covenant: the next run does not ask or accept again and sends', async () => {
+      const open = unaccepted();
+      const s = await scene();
+      server.use(http.get(`${POOL}/v1/covenant`, () => open.covenant()));
+      await capture(s);
+      atTerminal(s, 'no', SCREEN.phrase);
+      const restore = killAt(s, 'Accepted. Sending your batch now.');
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.UNEXPECTED);
+      expect(open.bodies).toHaveLength(1);
+      restore();
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.OK);
+      expect(open.bodies).toHaveLength(1);
+      expect(err(s)).not.toContain('FIXTURE COVENANT');
+      expect(err(s)).not.toContain('Are you in the EU');
+      expect(count(s, 'POST /v1/deposits')).toBe(outboxFiles(s).length);
+    });
+  });
+
+  describe('Ctrl-C ends the join at whatever step it is in', () => {
+    it('during the sign-in poll ends the run with exit 130 and sends nothing', async () => {
+      const s = await scene();
+      await capture(s);
+      let polls = 0;
+      server.use(http.post(`${POOL}/v1/login/poll`, () => {
+        polls += 1;
+        process.emit('SIGINT');
+        return HttpResponse.json({ status: 'pending' });
+      }));
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.INTERRUPTED);
+      expect(polls).toBe(1);
+      expect(count(s, 'POST /v1/deposits')).toBe(0);
+      expect(err(s)).toContain(AGAIN);
+    });
+  });
+
+  describe('without --harness-version', () => {
+    it('fetches nothing: no bundle request, no fetch line, and no fetch key in the document', async () => {
+      const s = await scene();
+      await capture(s);
+      const args = joinArgs.filter((arg, at) => arg !== '--harness-version' && joinArgs[at - 1] !== '--harness-version');
+      expect(await s.cli(...args, '--json')).toBe(ExitCode.OK);
+      expect(s.calls.some((call) => call.startsWith('GET /bundle/'))).toBe(false);
+      expect(err(s)).not.toContain('Fetching the bundle');
+      expect(Object.keys(record(JSON.parse(out(s)))).sort()).toEqual(['deposit', 'login', 'ok', 'outbox', 'sends', 'server']);
+    });
+  });
+
+  describe('--plan --json, the steps a person answers', () => {
+    it('marks region and terms needs_person while pending, and not once a flag or the file answers them', async () => {
+      const open = unaccepted();
+      const s = await scene({ terms: false });
+      server.use(http.get(`${POOL}/v1/covenant`, () => open.covenant()));
+      await capture(s);
+      expect(await s.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
+      s.h.out.length = 0;
+      expect(await s.cli('pool', 'join', '--plan', '--json', '--server', POOL)).toBe(ExitCode.OK);
+      planShape(s);
+      expect(stepsOf(s).filter((step) => step.needs_person).map((step) => step.step)).toEqual(['region', 'terms', 'covenant', 'raw']);
+      s.h.out.length = 0;
+      writeFileSync(termsPath(s), 'zorblax\n');
+      expect(await s.cli('pool', 'join', '--plan', '--json', '--in-eu-eea-uk', 'no', '--server', POOL)).toBe(ExitCode.OK);
+      planShape(s, true);
+      expect(stepsOf(s).filter((step) => step.needs_person).map((step) => step.step)).toEqual(['covenant', 'raw']);
+    });
+  });
+
+  describe('the join-step event, when there is nothing to deposit', () => {
+    it('records covenant and send as none (not skipped) when no session is ready', async () => {
+      const s = await scene();
+      const events = watching(s);
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.OK);
+      expect(events('join-step').map((event) => `${String(event.data.step)}:${String(event.data.state)}`).slice(-2)).toEqual(['covenant:none', 'send:none']);
+    });
   });
 
   describe('--plan --json', () => {
