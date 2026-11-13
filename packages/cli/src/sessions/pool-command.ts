@@ -515,7 +515,7 @@ const openCovenant = async (deps: RunDeps, server: string, token: string, accept
   if (accepted.status !== 200) {
     const refused = refusal(DEPOSIT, accepted);
     // A join keeps the answer to the region question for its reruns, so a mistyped yes would be refused again every time: name the way to correct it.
-    if (shared === undefined || refused.problem?.code !== 'region_closed') throw refused;
+    if (shared === undefined || refused.problem.code !== 'region_closed') throw refused;
     const title = `${refused.message} If you answered yes by mistake, run oars pool join --in-eu-eea-uk no to correct it.`;
     throw new CliError(title, refused.exitCode, DEPOSIT, { code: 'region_closed', title, status: 403 });
   }
