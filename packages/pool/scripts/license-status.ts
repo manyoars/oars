@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { DELIVERIES_FILE, deliveriesOf, fieldOf, indexOf, lotOf } from './deliver.js';
 import { noticeOf, noticesOf, type Notice } from './notices.js';
 import { idsIn, MATCH_ID, sound } from './operator-files.js';
+import { DEPOSITOR_OWNER } from './validate-pack.js';
 import { bareOf, decodedStrings, isAbsent, isText, PackError, readObjections, squashed, type HarnessTerms, type Objection } from './sample-pack.js';
 
 export const USAGE = [
@@ -17,7 +18,7 @@ export const USAGE = [
   '  --operator <dir>   the folder the owners file sits in, with index.jsonl, deliveries.jsonl, objections.jsonl, and notices.jsonl',
   '  --json             one JSON document in place of the table',
   'It prints one row per match id: built, delivered, withdrawn (an objection in objections.jsonl covers it), or unknown (the register holds no such id under this key).',
-  'A value reads unknown when no operator file records it: the covenant version always, and the erasure at a recipient for a delivered row that was withdrawn, until `notices` records a notice (notice-sent) or its confirmation (confirmed). It reads files only and writes nothing.',
+  'A value reads unknown when no operator file records it: the covenant version of an operator row (the manifest row of a deposit pack states it), and the erasure at a recipient for a delivered row that was withdrawn, until `notices` records a notice (notice-sent) or its confirmation (confirmed). It reads files only and writes nothing.',
 ].join('\n');
 
 export const UNKNOWN = 'unknown';
@@ -71,8 +72,8 @@ export interface LicenseStatus {
   withdrawn: Withdrawal[] | Unknown;
   /** The least advanced erasure among the row's deliveries (`unknown` before `notice-sent` before `confirmed`; `none-due` when nothing is owed or the row was never delivered), and `unknown` for an unknown row. Each delivery carries its own, with the date. */
   erasure: ErasureState;
-  /** No operator file records a covenant version. */
-  covenant: Unknown;
+  /** The covenant version (and `acceptedAt`) the manifest row of a deposit pack states, or `unknown` for an operator row. */
+  covenant: string;
 }
 
 export interface StatusReport {
@@ -136,6 +137,18 @@ const termsOf = (row: unknown): Pick<LotStatus, 'harnessTerms' | 'permittedUses'
     permittedUses: !Array.isArray(uses) ? UNKNOWN : uses.filter(isText),
     training: isText(training) ? training : UNKNOWN,
   };
+};
+
+/** The covenant a deposit row was accepted under, from the manifest row alone (no pool call): the version named in `sourceLicense`, and `acceptedAt` when the row has it. An operator row names none. */
+const covenantOf = (row: unknown): string => {
+  // Only a deposit row (a depositor: owner) has a covenant; an operator row's license string is not one.
+  const owner = fieldOf(row, 'repoOwner');
+  if (!isText(owner) || !DEPOSITOR_OWNER.test(owner)) return UNKNOWN;
+  const license = fieldOf(row, 'sourceLicense');
+  const version = isText(license) ? /^manyoars-covenant (\S+) sha256:/.exec(license)?.[1] : undefined;
+  if (version === undefined) return UNKNOWN;
+  const accepted = fieldOf(row, 'acceptedAt');
+  return isText(accepted) ? `${version}, accepted ${accepted}` : version;
 };
 
 /** The text of a row's delivered files in each folder still on the machine, squashed as an objection's name is, or nothing when no folder is left to read. */
@@ -202,6 +215,7 @@ export const licenseStatus = async (operator: string, keyId: string, matchIds: r
     const keys = new Set(sent.map((row) => row.keyId));
     const lots: LotStatus[] = [];
     const folders: { folder: string; lot: string }[] = [];
+    let covenant: string = UNKNOWN;
     // The index is appended per build, so a lot's newest line names the folder it was last built into.
     for (const [lot, pack] of new Map(entries.map((entry) => [lotOf(entry.pack), entry.pack]))) {
       const found = await packAt(pack);
@@ -212,6 +226,7 @@ export const licenseStatus = async (operator: string, keyId: string, matchIds: r
       }
       if (isText(found.keyId)) keys.add(found.keyId);
       folders.push({ folder: join(pack, 'sessions', matchId), lot });
+      if (covenant === UNKNOWN) covenant = covenantOf(row);
       lots.push({ lot, built: isText(found.built) ? found.built : UNKNOWN, listed: true, ...termsOf(row) });
     }
     const held = entries.length > 0 || sent.length > 0;
@@ -236,7 +251,7 @@ export const licenseStatus = async (operator: string, keyId: string, matchIds: r
       deliveries: delivered,
       withdrawn,
       erasure: delivered.length === 0 ? 'none-due' : leastOf(delivered.map(({ erasure }) => erasure.state)),
-      covenant: UNKNOWN,
+      covenant,
     });
   }
   return { keyId, rows, underAnotherKey };

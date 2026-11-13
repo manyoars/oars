@@ -600,7 +600,8 @@ describe('the repository pointer and the outcome (plan S4)', { timeout: 30_000 }
     await stored(f);
     await buildPack(f.runtime, options(f));
     const [row] = manifest(f.out);
-    expect(Object.keys(row ?? {}).sort()).toEqual(Object.keys(MANIFEST_OBJECTS.row ?? {}).sort());
+    // acceptedAt is on a deposit row only; an operator row holds every other field of the spec.
+    expect(Object.keys(row ?? {}).sort()).toEqual(Object.keys(MANIFEST_OBJECTS.row ?? {}).filter((name) => name !== 'acceptedAt').sort());
     const result = await validate(f.out);
     expect(result?.violations).toEqual([]);
     expect(result).toMatchObject({ rows: 1, records: 1 });

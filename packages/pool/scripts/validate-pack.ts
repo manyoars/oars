@@ -6,7 +6,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { parseSkeleton } from '../../cli/src/sessions/pool-wire.js';
-import type { HarnessTerms, ManifestRow, Outcome, OutcomeCommit, RepositoryPointer } from './sample-pack.js';
+import type { DepositManifestRow, HarnessTerms, Outcome, OutcomeCommit, RepositoryPointer } from './sample-pack.js';
 
 /** The version of the spec page this validator checks against; the page states the same string. */
 export const SPEC_VERSION = '1';
@@ -41,6 +41,10 @@ const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 // The harness id shapes the pack writer masks wherever they stand (`HARNESS_PREFIXED` in sample-pack.ts), and the one form a mask has: the prefix and 24 lowercase hex characters.
 const PREFIXED_ID = /(?<![A-Za-z0-9])(?:srvtoolu|toolu|msg|req)_(?=[A-Za-z_-]*[0-9])[A-Za-z0-9][A-Za-z0-9_-]{14,}[A-Za-z0-9]/g;
 const MASKED_ID = /^[a-z]+_[0-9a-f]{24}(?![0-9A-Za-z])/;
+/** A deposit row's owner: the keyed pseudonym of the depositor (16 hex), never an account id. */
+export const DEPOSITOR_OWNER = /^depositor:[0-9a-f]{16}$/;
+/** The covenant a deposit row cites: `manyoars-covenant <version> sha256:<hex>`. */
+const DEPOSIT_LICENSE = /^manyoars-covenant \S+ sha256:[0-9a-f]+$/;
 const HARNESS_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const USE_NAME = /^[a-z][a-z0-9-]{0,63}$/;
 const FILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -65,8 +69,15 @@ const text: Check = (value) => (!isText(value) ? 'not a string' : value === '' ?
 const textOrNull: Check = (value) => (value === null ? undefined : text(value));
 const count: Check = (value) => (isCount(value) ? undefined : 'not a whole number');
 const instantOrNull: Check = (value) => (value === null ? undefined : !isText(value) ? 'not a string or null' : Number.isNaN(Date.parse(value)) ? 'not a date and time' : undefined);
+// Date.parse rolls an impossible day (02-30) into the next month, so the time must survive a round trip.
+const isCalendarTime = (value: string): boolean => {
+  const parsed = new Date(value);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value;
+};
+const real: Check = (value) => (isText(value) && !isCalendarTime(value) ? 'not a date and time' : undefined);
 const oneOf = (list: readonly string[]): Check => (value) => (isText(value) && list.includes(value) ? undefined : 'not one of the listed values');
 const shaped = (shape: RegExp, rule: string): Check => (value) => (!isText(value) ? 'not a string' : shape.test(value) ? undefined : rule);
+const isoTime = shaped(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/, 'not an ISO 8601 time');
 const listOf = (item: Check): Check => (value) => (!Array.isArray(value) ? 'not a list' : value.map(item).find((rule) => rule !== undefined));
 
 const required = (check: Check): FieldSpec => ({ required: true, check });
@@ -82,7 +93,7 @@ const TERMS_FIELDS: { readonly [K in keyof Required<HarnessTerms>]: FieldSpec } 
 const POINTER_FIELDS: { readonly [K in keyof Required<RepositoryPointer>]: FieldSpec } = { remote: required(text), commit: required(textOrNull) };
 const COMMIT_FIELDS: { readonly [K in keyof Required<OutcomeCommit>]: FieldSpec } = { sha: required(text), landed: required((value) => (value === null || typeof value === 'boolean' ? undefined : 'not true, false, or null')) };
 const OUTCOME_FIELDS: { readonly [K in keyof Required<Outcome>]: FieldSpec } = { verify: required((value) => (value === null ? undefined : oneOf(VERIFY)(value))), commits: required(objects) };
-const ROW_FIELDS: { readonly [K in keyof Required<ManifestRow>]: FieldSpec } = {
+const ROW_FIELDS: { readonly [K in keyof Required<DepositManifestRow>]: FieldSpec } = {
   matchId: required(shaped(MATCH_ID, 'not a match id')),
   harness: required(shaped(HARNESS_NAME, 'not a harness name')),
   harnessVersions: required(listOf(text)),
@@ -100,6 +111,8 @@ const ROW_FIELDS: { readonly [K in keyof Required<ManifestRow>]: FieldSpec } = {
   outcome: optional(object),
   // Optional: a pack built before the field existed holds the reasoning and says nothing.
   reasoning: optional(oneOf(['kept', 'stripped'])),
+  // Optional: a deposit row has it (checkRow ties it to a depositor owner value); an operator row does not.
+  acceptedAt: optional((value) => isoTime(value) ?? real(value)),
   redactionVersion: required(text),
   startedAt: required(instantOrNull),
   endedAt: required(instantOrNull),
@@ -162,7 +175,15 @@ export const checkRow = (value: unknown, where: string): Violation[] => {
   if (!isFields(value)) return [{ where, field: '(row)', rule: 'not a JSON object' }];
   // A match id of the wrong shape is reported once, by its own rule, not again as a raw id.
   const raw = rawIdsIn(value).filter((field) => field !== 'matchId');
-  return [...checkObject('row', value, '', where), ...raw.map((field) => ({ where, field, rule: RAW_ID }))];
+  const found = checkObject('row', value, '', where);
+  // acceptedAt is the proof of a depositor's grant; a row owned by anyone else has no such grant to date.
+  const depositor = isText(value.repoOwner) && DEPOSITOR_OWNER.test(value.repoOwner);
+  // ...and a depositor row with none cites no acceptance, so it never validates.
+  if (depositor && !Object.hasOwn(value, 'acceptedAt')) found.push({ where, field: 'acceptedAt', rule: 'missing' });
+  // ...and so does one whose license string cites no covenant: the grant it names must be there to read.
+  if (depositor && !(isText(value.sourceLicense) && DEPOSIT_LICENSE.test(value.sourceLicense))) found.push({ where, field: 'sourceLicense', rule: 'not a covenant on a depositor row' });
+  if (Object.hasOwn(value, 'acceptedAt') && !depositor) found.push({ where, field: 'acceptedAt', rule: 'only a row with a depositor: owner value has it' });
+  return [...found, ...raw.map((field) => ({ where, field, rule: RAW_ID }))];
 };
 
 // The record parser is the pool's own, and the pool's id is 16 hex characters where a pack's is the match id: the id is checked here and the parser is handed a stand-in.
@@ -315,6 +336,25 @@ const checkPack = async (folder: string): Promise<Result> => {
   } catch (error) {
     if (!isAbsent(error)) throw error;
   }
+  // A file at the pack root other than the manifest and the build's own bookkeeping, or directly under sessions/, is in no row.
+  const BOOKKEEPING = new Set([MANIFEST_FILE, 'pack.json', 'census.json']);
+  const loose = async (path: string, skip: ReadonlySet<string>): Promise<string[]> => {
+    try {
+      return (await readdir(join(folder, path), { withFileTypes: true })).filter((entry) => entry.isFile() && !skip.has(entry.name)).map((entry) => (path === '' ? entry.name : `${path}/${entry.name}`)).sort();
+    } catch (error) {
+      if (!isAbsent(error)) throw error;
+      return [];
+    }
+  };
+  // A directory at the root other than sessions/ is in no row either.
+  let rootFolders: string[] = [];
+  try {
+    rootFolders = (await readdir(folder, { withFileTypes: true })).filter((entry) => entry.isDirectory() && entry.name !== 'sessions').map((entry) => entry.name).sort();
+  } catch (error) {
+    if (!isAbsent(error)) throw error;
+  }
+  for (const file of [...(await loose('', BOOKKEEPING)), ...(await loose('sessions', new Set()))]) found.push({ where: file, field: '(file)', rule: 'no manifest row names it' });
+  for (const name of rootFolders) found.push({ where: name, field: '(folder)', rule: 'no manifest row names it' });
   for (const name of folders) if (!named.has(name)) found.push({ where: `sessions/${name}`, field: '(folder)', rule: 'no manifest row names it' });
   return { violations: found, rows: rows.length, records, transcripts };
 };

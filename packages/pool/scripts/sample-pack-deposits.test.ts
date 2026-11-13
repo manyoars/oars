@@ -258,12 +258,12 @@ describe('sample-pack --deposits (docs/pool-deposit-title.md section 5, brief 2)
     expect(counts.emitted).toBe(1);
   });
 
-  it('keeps the must-not list: the only finding on a deposit pack is acceptedAt, which brief 3 lists', async () => {
+  it('a deposit pack passes validate-pack, acceptedAt included', async () => {
     const p = pull([{ session: SID(1) }]);
     await built(p);
     const result = await validate(p.out);
-    expect(result?.violations.filter((found) => !found.field.endsWith('acceptedAt'))).toEqual([]);
-    expect(result?.violations.some((found) => found.field.endsWith('acceptedAt'))).toBe(true);
+    expect(result?.violations).toEqual([]);
+    expect(result).toMatchObject({ rows: 1, records: 1 });
   });
 
   it('writes nothing into the pulled folder', async () => {

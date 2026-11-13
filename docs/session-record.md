@@ -17,6 +17,7 @@ manifest.jsonl                    one JSON object per line, one row per session
 sessions/<matchId>/main.jsonl     the main transcript, the harness's own lines
 sessions/<matchId>/<file>.jsonl   one file per subagent transcript
 sessions/<matchId>/skeleton.json  the record, when the row names one
+pack.json, census.json            build bookkeeping the spec does not check
 ```
 
 A session folder is named by its row's `matchId`, and a folder no row names does not conform. A row's `transcripts` is the number of transcript files in its folder (the record is not one). A transcript keeps each harness's own line format; this spec checks its ids only.
@@ -32,6 +33,9 @@ A session folder is named by its row's `matchId`, and a folder no row names does
 
 - A raw id: a UUID, or a harness's tool, message, or request id (`toolu_`, `srvtoolu_`, `msg_`, `req_`) left unmasked, in a manifest row, a record, or a transcript line. A transcript line's `sessionId` is the match id.
 - A field this page does not list, in a row or a record.
+- A file the manifest does not list: a pack root holds `manifest.jsonl` (plus the build's `pack.json` and `census.json`, which the spec does not check), nothing sits directly under `sessions/`, and, under `sessions/<matchId>/`, only the transcripts and the record its row names.
+- An `acceptedAt` on a row whose `repoOwner` is not a `depositor:<16 hex>` value: the field belongs to rows built from a pool deposit. The reverse holds too: a row with a `depositor:<16 hex>` owner and no `acceptedAt` cites no acceptance and does not conform.
+- A row with a `depositor:<16 hex>` owner whose `sourceLicense` is not a `manyoars-covenant <version> sha256:<hex>` string: it cites no covenant.
 - A `<field>Literal` field beside an `other`.
 - A digest of the text of an edit (`digests` on a tool call): a plain hash of text that was not masked.
 - A row with an empty `harnessTerms`, or `training` among `permittedUses` (`training` has its own field).
@@ -47,7 +51,7 @@ One JSON object per line. Types: `text` is a non-empty string; `count` is a whol
 | matchId | match id | yes | The session's id for this buyer: a keyed hash, never the harness's session id. |
 | harness | name | yes | Which harness wrote the session, lowercase, such as `claude-code` or `codex`. |
 | harnessVersions | list of text | yes | The harness versions seen in the session. |
-| repoOwner | text | yes | The owner of the repositories the session worked in. |
+| repoOwner | text | yes | The owner of the repositories the session worked in. On a row built from a pool deposit it is `depositor:<16 hex>`: a keyed pseudonym of the depositor, one value per buyer key, never an account id. |
 | sourceLicense | text or null | yes | The license of the source the session worked on, or null when unknown. |
 | harnessTerms | list of objects | yes | The terms the session ran under, at least one; see `harnessTerms`. |
 | permittedUses | list of use names | yes | What the seller permits, such as `evaluation`; never `training`. |
@@ -59,6 +63,7 @@ One JSON object per line. Types: `text` is a non-empty string; `count` is a whol
 | pointer | object or null | no | The repository the session worked in, for an owner who opted in; see `pointer`. |
 | outcome | object | no | What happened to the work, for an owner who opted in; see `outcome`. |
 | reasoning | `kept` or `stripped` | no | Whether the transcripts hold the model's reasoning blocks (`kept`) or the seller left them out (`stripped`). A row without it comes from a pack built before the field, and holds them. |
+| acceptedAt | time | no | Present only on a row built from a pool deposit: when the depositor accepted the covenant cited in `sourceLicense`, as an ISO 8601 time with milliseconds (`2026-07-01T00:00:00.000Z`). A row without it is an operator row. A row with it has a `repoOwner` of the form `depositor:<16 hex>`, and a row with that owner must have it. |
 | redactionVersion | text | yes | The version of the redaction the transcripts went through. |
 | startedAt | time or null | yes | When the session began. |
 | endedAt | time or null | yes | When the session ended. |

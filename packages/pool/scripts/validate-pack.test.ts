@@ -203,6 +203,64 @@ describe('a pack', () => {
     expect(printed.out).toEqual(['manifest.jsonl:1 redactionVersion: missing']);
   });
 
+  const DEPOSIT = { repoOwner: 'depositor:0123456789abcdef', sourceLicense: `manyoars-covenant 2.1 sha256:${'ab'.repeat(32)}`, acceptedAt: '2026-07-01T00:00:00.000Z' };
+
+  it('validate-pack accepts a row with acceptedAt', async () => {
+    expect(found((await validate(pack({ row: { ...row(), ...DEPOSIT } })))?.violations)).toEqual([]);
+  });
+
+  it('validate-pack refuses an acceptedAt that is not a time', async () => {
+    for (const bad of ['yesterday-planted', '2026-07-01', '1', '2026-13-01T00:00:00.000Z', '2026-02-30T00:00:00.000Z', null, 5]) {
+      const printed = await lines(pack({ row: { ...row(), ...DEPOSIT, acceptedAt: bad } }));
+      expect(printed.code).toBe(1);
+      expect(printed.out).toHaveLength(1);
+      expect(printed.out[0]).toMatch(/^manifest\.jsonl:1 acceptedAt: not (a string|a date and time|an ISO 8601 time)/);
+      expect(printed.out.join('\n')).not.toContain('planted');
+    }
+    // ISO-shaped but not a real time: only the Date.parse guard refuses it.
+    expect((await lines(pack({ row: { ...row(), ...DEPOSIT, acceptedAt: '2026-13-01T00:00:00.000Z' } }))).out).toEqual(['manifest.jsonl:1 acceptedAt: not a date and time']);
+  });
+
+  it('validate-pack refuses acceptedAt on a row whose owner is not a depositor value', async () => {
+    for (const owner of ['Acme', 'depositor:xyz', 'depositor:0123456789abcdef0']) {
+      const printed = await lines(pack({ row: { ...row(), ...DEPOSIT, repoOwner: owner } }));
+      expect(printed.code).toBe(1);
+      expect(printed.out).toEqual(['manifest.jsonl:1 acceptedAt: only a row with a depositor: owner value has it']);
+    }
+  });
+
+  it('validate-pack refuses a depositor row with no acceptedAt', async () => {
+    const printed = await lines(pack({ row: { ...row(), repoOwner: DEPOSIT.repoOwner, sourceLicense: DEPOSIT.sourceLicense } }));
+    expect(printed.code).toBe(1);
+    expect(printed.out).toEqual(['manifest.jsonl:1 acceptedAt: missing']);
+  });
+
+  it('validate-pack refuses a depositor row whose sourceLicense is not a covenant', async () => {
+    for (const license of ['MIT', null]) {
+      const printed = await lines(pack({ row: { ...row(), ...DEPOSIT, sourceLicense: license } }));
+      expect(printed.code).toBe(1);
+      expect(printed.out).toEqual(['manifest.jsonl:1 sourceLicense: not a covenant on a depositor row']);
+    }
+  });
+
+  it('refuses a stray file at the pack root and one directly under sessions/', async () => {
+    const folder = pack();
+    writeFileSync(join(folder, 'stray.txt'), 'x');
+    writeFileSync(join(folder, 'sessions', 'loose.jsonl'), 'x');
+    writeFileSync(join(folder, 'pack.json'), '{}');
+    writeFileSync(join(folder, 'census.json'), '{}');
+    mkdirSync(join(folder, 'notes'));
+    writeFileSync(join(folder, 'notes', 'x.txt'), 'x');
+    const printed = await lines(folder);
+    expect(printed.code).toBe(1);
+    expect(printed.out).toEqual(['stray.txt (file): no manifest row names it', 'sessions/loose.jsonl (file): no manifest row names it', 'notes (folder): no manifest row names it']);
+  });
+
+  it('an operator row has no acceptedAt and still conforms', async () => {
+    expect(Object.hasOwn(row(), 'acceptedAt')).toBe(false);
+    expect(found((await validate(pack()))?.violations)).toEqual([]);
+  });
+
   it('reports a field the spec does not list', async () => {
     const printed = await lines(pack({ row: { ...row(), extra: 1 } }));
     expect(printed.out).toEqual(['manifest.jsonl:1 extra: unknown field']);
