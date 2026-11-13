@@ -425,7 +425,7 @@ export const OFFER_BEFORE: readonly string[] = [
 export const OFFER_AFTER: readonly string[] = ['Accepted. Sending your batch now.', 'Run oars pool fetch --help for your first pool download.'];
 
 /** A send stops here when the server is closed or wants a covenant accepted, before the batch is read for the last time. */
-const openCovenant = async (deps: RunDeps, server: string, token: string, accept: string | undefined, region: Region | undefined, via: Sender, signal?: AbortSignal): Promise<void> => {
+const openCovenant = async (deps: RunDeps, server: string, token: string, accept: string | undefined, region: Region | undefined, via: Sender, signal?: AbortSignal, offTerminal: () => Promise<string> = () => Promise.resolve('run this command from one')): Promise<void> => {
   const reply = await ask(deps, DEPOSIT, server, '/v1/covenant', { token }, via);
   if (reply.status !== 200 || !isObject(reply.body)) throw refusal(DEPOSIT, reply);
   const version = textIn(reply.body, 'version');
@@ -442,7 +442,7 @@ const openCovenant = async (deps: RunDeps, server: string, token: string, accept
   if (screen === undefined) throw notAccepted(`The pool has no text for covenant ${version} yet, so there is nothing to show and nothing can be accepted. Nothing was accepted.`);
   // Assent is a person typing the phrase the screen states. A flag or a script on stdin is not one, so off a terminal nothing is asked and nothing is accepted.
   if (!isTerminal(deps)) {
-    throw notAccepted(`Covenant ${version} is not accepted for this account. Accepting it takes a person at a terminal who reads it and types its phrase: run this command from one. Nothing was accepted.`);
+    throw notAccepted(`Covenant ${version} is not accepted for this account. Accepting it takes a person at a terminal who reads it and types its phrase: ${await offTerminal()}. Nothing was accepted.`);
   }
   deps.io.stderr(`${OFFER_BEFORE.join('\n')}\n`);
   deps.io.stderr(`\n${screen.text}\n\n> `);
@@ -658,14 +658,30 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
 };
 
 /** What `--send-all` does with the pool's busy answers: a 429 or a 5xx is asked again, up to `SEND_ATTEMPTS` in all, after the wait the pool names in `retry-after` (seconds, at most 30) or else 1 second, then 2. Any other answer, and a request that never got one, goes up unchanged. A batch or a part sent again is harmless, so the retry covers every request alike. */
-export type Pause = (ms: number) => Promise<void>;
-const sleeps: Pause = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
-const retrying = (via: Sender, pause: Pause): Sender => async (request) => {
+export type Pause = (ms: number, signal?: AbortSignal) => Promise<void>;
+export const sleeps: Pause = (ms, signal) =>
+  new Promise((resolve, reject) => {
+    // Ctrl-C during a wait ends it with the interrupt, instead of being ignored until the wait is over.
+    if (signal?.aborted === true) {
+      reject(signal.reason);
+      return;
+    }
+    const abort = (): void => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', abort, { once: true });
+  });
+const retrying = (via: Sender, pause: Pause, signal: AbortSignal): Sender => async (request) => {
   for (let attempt = 1; ; attempt += 1) {
     const reply = await via(request);
     if ((reply.status !== 429 && reply.status < 500) || attempt >= SEND_ATTEMPTS) return reply;
     const named = Number(reply.headers.get('retry-after'));
-    await pause(Number.isFinite(named) && named > 0 ? Math.min(named, 30) * 1000 : 1000 * 2 ** (attempt - 1));
+    await pause(Number.isFinite(named) && named > 0 ? Math.min(named, 30) * 1000 : 1000 * 2 ** (attempt - 1), signal);
   }
 };
 
@@ -682,13 +698,20 @@ const sendAll = async (deps: RunDeps, options: { outbox: string; server: string;
   const refuse = (code: string, title: string): CliError => new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code, title, status: 409 });
   const interrupt = watchInterrupt();
   const net = options.via ?? networkSender(deps, DEPOSIT, { stallMs: SEND_STALL_MS, signal: interrupt.signal });
-  const via = retrying(net, options.pause ?? sleeps);
+  const via = retrying(net, options.pause ?? sleeps, interrupt.signal);
   try {
     return await withSendLock(outbox, async () => {
       const scan = await rescanPulled(outbox, await currentTerms(deps));
-      await openCovenant(deps, server, token, options.acceptCovenant, options.region, via, interrupt.signal);
       const done = await sentHashes(outbox);
       const shown = await shownHashes(outbox);
+      // The one-batch command that shows the screen: the first batch that was shown and is not sent.
+      const oneBatch = async (): Promise<string> => {
+        for await (const named of namesHeldAcross(outbox)) {
+          if (shown.has(named.hash) && !done.has(named.hash)) return `run oars pool deposit --send ${named.hash} at a terminal to read it and accept`;
+        }
+        return 'run oars pool deposit --send <hash> at a terminal to read it and accept';
+      };
+      await openCovenant(deps, server, token, options.acceptCovenant, options.region, via, interrupt.signal, oneBatch);
       const tally = { sent: 0, skipped: 0, alreadySent: 0, failed: 0, left: 0 };
       const handled = new Set<string>();
       const line = (): string => `${String(tally.sent)} sent, ${String(tally.skipped)} skipped, ${String(tally.alreadySent)} already sent, ${String(tally.failed)} failed, ${String(tally.left)} left`;
@@ -728,12 +751,14 @@ const sendAll = async (deps: RunDeps, options: { outbox: string; server: string;
         if (ended === undefined) throw error;
       }
       if (ended !== undefined) {
-        // Not sent, not reached: counted by name alone, without reading a file.
+        // Shown, not sent, not reached: counted by name alone, without reading a file. A batch a rerun would skip (never shown) is not left.
         for await (const named of namesHeldAcross(outbox)) {
-          if (!handled.has(named.hash) && !done.has(named.hash)) tally.left += 1;
+          if (!handled.has(named.hash) && !done.has(named.hash) && shown.has(named.hash)) tally.left += 1;
         }
         deps.io.stderr(`Stopped: ${line()}. Run the same command again to send what is left.
 `);
+        // The counts reach the --json failure document too, not only stderr.
+        if (ended.error instanceof CliError) throw new CliError(ended.error.message, ended.error.exitCode, ended.error.step, ended.error.problem, { ...ended.error.details, tally });
         throw ended.error;
       }
       return { document: { ok: true, server, ...tally }, text: `Done: ${line()}.` };

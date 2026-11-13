@@ -96,6 +96,23 @@ describe('deposit', () => {
     expect(statSync(paths(staged.storeDir).observations).size).toBe(size);
   });
 
+  it('reads only the sessions it is asked for, and the session records alone when it is asked for no content', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options(['proj']));
+    const whole = await loadStore(staged.storeDir);
+    const [named] = whole.sessions;
+    if (named === undefined) throw new Error('no session');
+    const one = await loadStore(staged.storeDir, undefined, { only: new Set([named.session]) });
+    expect(one.sessions.map((session) => session.session)).toEqual([named.session]);
+    expect(one.prompts.every((prompt) => prompt.session === named.session)).toBe(true);
+    expect(one.prompts.length).toBe(whole.prompts.filter((prompt) => prompt.session === named.session).length);
+    const heads = await loadStore(staged.storeDir, undefined, { sessionsOnly: true });
+    expect(heads.sessions).toHaveLength(whole.sessions.length);
+    expect(heads.prompts).toEqual([]);
+    expect(heads.tools).toEqual([]);
+    expect(heads.errors).toEqual([]);
+  });
+
   it('re-deposits a changed file under a higher rev and a reader keeps only the latest', async () => {
     const staged = stage();
     await deposit(staged.runtime, options(['proj']));

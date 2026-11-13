@@ -14,7 +14,7 @@ import { defaultConfigDir } from '../credentials.js';
 import { ExitCode } from '../errors.js';
 import { readSpool } from '../telemetry/spool.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
-import { busyLine, DEFAULT_POOL_URL, networkSender, OFFER_AFTER, OFFER_BEFORE, poolCoverage, poolDeposit, poolOutbox, poolRaw, poolRemove, poolServer, RAW_PHRASE, RAW_PROMPT, waitingLine, type Reply, type Sender } from './pool-command.js';
+import { busyLine, DEFAULT_POOL_URL, networkSender, OFFER_AFTER, OFFER_BEFORE, poolCoverage, poolDeposit, poolOutbox, poolRaw, poolRemove, poolServer, RAW_PHRASE, RAW_PROMPT, sleeps, waitingLine, type Reply, type Sender } from './pool-command.js';
 import { localNames } from './redact.js';
 import { batchHash, canonicalBytes, currentStamp, FIELD_ROWS, fieldsOf, heldAcross, outboxFolder, readPulled, readRemoved, writeBatch, writePulled } from './pool-outbox.js';
 import { heldRaw, writeRaw } from './pool-raw.js';
@@ -4423,10 +4423,13 @@ describe('oars pool deposit --send-all (t1199)', () => {
 
   it('keeps the covenant rule of --send: never accepted refuses with nothing sent off a terminal, accepted runs off one', async () => {
     const scene = await clean();
-    plant(scene, 1, 2);
+    const [first] = plant(scene, 1, 2);
     await show(scene);
     const pool = wire({ 'GET /v1/covenant': UNACCEPTED, 'POST /v1/deposits': answer(201) });
-    await expect(poolDeposit(scene.h.deps, all(pool.via))).rejects.toMatchObject({ exitCode: ExitCode.AUTH, problem: { code: 'covenant_not_accepted' } });
+    const refused = poolDeposit(scene.h.deps, all(pool.via));
+    await expect(refused).rejects.toMatchObject({ exitCode: ExitCode.AUTH, problem: { code: 'covenant_not_accepted' } });
+    // It names the one-batch command that shows the screen: the first batch that was shown and is not sent.
+    await expect(refused).rejects.toThrow(`oars pool deposit --send ${first ?? ''}`);
     expect(pool.requests.map((request) => request.method)).toEqual(['GET']);
     expect(sentLogOf(scene)).toEqual([]);
     const open = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201) });
@@ -4447,6 +4450,8 @@ describe('oars pool deposit --send-all (t1199)', () => {
     const scene = await clean();
     const hashes = plant(scene, 1, 5);
     await show(scene);
+    // Never shown, so a rerun would skip it too: it is not "left".
+    plant(scene, 6, 6);
     let failing = hashes[2] ?? '';
     const landed: string[] = [];
     const via: Sender = (request) => {
@@ -4456,14 +4461,35 @@ describe('oars pool deposit --send-all (t1199)', () => {
       landed.push(hash);
       return Promise.resolve(answer(201));
     };
-    await expect(poolDeposit(scene.h.deps, all(via))).rejects.toMatchObject({ problem: { status: 400 } });
+    await expect(poolDeposit(scene.h.deps, all(via))).rejects.toMatchObject({ problem: { status: 400 }, details: { tally: { sent: 2, skipped: 0, alreadySent: 0, failed: 1, left: 2 } } });
     expect(scene.h.err.join('')).toContain('Stopped: 2 sent, 0 skipped, 0 already sent, 1 failed, 2 left.');
     expect(landed).toEqual(hashes.slice(0, 2));
     failing = '';
     const outcome = await poolDeposit(scene.h.deps, all(via));
     expect(outcome.document).toMatchObject({ sent: 3, alreadySent: 2, failed: 0, left: 0 });
     expect(landed).toEqual(hashes);
+    expect(sentLogOf(scene)).toEqual([...hashes]);
+  });
+
+  it('sends through the default network sender against the local test server, with no injected via', async () => {
+    const scene = await clean();
+    const hashes = plant(scene, 1, 2);
+    await show(scene);
+    on(scene, 'get', '/v1/covenant', () => HttpResponse.json({ version: 'v1', accepted: true }));
+    on(scene, 'post', '/v1/deposits', () => HttpResponse.json({ ok: true }, { status: 201 }));
+    const outcome = await poolDeposit(scene.h.deps, { server: POOL, sendAll: true });
+    expect(outcome.document).toMatchObject({ sent: 2, failed: 0 });
+    expect(scene.seen.filter(({ body }) => body !== '')).toHaveLength(2);
     expect(sentLogOf(scene)).toEqual(hashes);
+  });
+
+  it('ends a wait between tries when the signal aborts, and waits the whole time when it does not', async () => {
+    const stop = new AbortController();
+    await expect(sleeps(5, stop.signal)).resolves.toBeUndefined();
+    const waiting = sleeps(60_000, stop.signal);
+    stop.abort(new SendInterrupted('signal', 'Interrupted by SIGINT.', 'SIGINT'));
+    await expect(waiting).rejects.toBeInstanceOf(SendInterrupted);
+    await expect(sleeps(60_000, stop.signal)).rejects.toBeInstanceOf(SendInterrupted);
   });
 
   it('asks again only after a 429 or a 5xx, at most three tries, waiting the pool\'s retry-after or 1 then 2 seconds', async () => {

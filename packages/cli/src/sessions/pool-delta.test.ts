@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { carriedDeltas, DELTA_DAYS, DELTA_MIN_SESSIONS, deltaMark, deltasOf, heldDeltas, keptDeltas, markDeltasSent, placedOf, sentDeltas, windowsOf, type Gated } from './pool-delta.js';
+import { carriedDeltas, carriedDeltasByWindow, DELTA_DAYS, DELTA_MIN_SESSIONS, deltaMark, deltasOf, heldDeltas, keptDeltas, markDeltasSent, placedOf, sentDeltas, windowsOf, type Gated } from './pool-delta.js';
 import { largeSkeleton, prompt, session, sessionsFrom, store, tool } from './pool-fixture.js';
 import { writeBatch } from './pool-outbox.js';
 import type { DeltaEntry, SessionRecords } from './pool-wire.js';
@@ -376,6 +376,24 @@ describe('the deltas a deposit carries', () => {
     const [entry] = carried.get('a4')?.entries ?? [];
     if (entry === undefined) throw new Error('no entry');
     expect(carried.get('a4')?.marks).toEqual([deltaMark('acct', entry, Math.floor((START + DELTA_DAYS * DAY) / (DELTA_DAYS * DAY)))]);
+  });
+
+  it('carries the same deltas one window at a time, loading only the sessions each window needs', async () => {
+    const sessions = [...before(), ...after(6)];
+    const held = new Map(sessions.map(({ id, records }) => [id, records]));
+    const asked: number[] = [];
+    const load = (ids: ReadonlySet<string>): Promise<ReadonlyMap<string, SessionRecords>> => {
+      asked.push(ids.size);
+      return Promise.resolve(new Map([...ids].flatMap((id) => (held.has(id) ? [[id, held.get(id) as SessionRecords] as const] : []))));
+    };
+    const byWindow = await carriedDeltasByWindow('acct', sessions, new Set(), load);
+    expect(byWindow).toEqual(carriedDeltas('acct', sessions, new Set()));
+    expect(byWindow.size).toBe(1);
+    // before (5) and the first five after: never the sixth.
+    expect(asked).toEqual([10]);
+    // A session whose rows vanished between the two reads is a gap, not a throw.
+    const gap = await carriedDeltasByWindow('acct', sessions, new Set(), () => Promise.resolve(new Map()));
+    expect(gap.size).toBe(0);
   });
 
   it('builds nothing while the before window holds 4 sessions', () => {
