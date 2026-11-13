@@ -6,7 +6,7 @@ import { ExitCode } from '../errors.js';
 import { FIELD_ROWS } from '../sessions/pool-outbox.js';
 import { OTHER, HARNESSES } from '../sessions/pool-wire.js';
 import { LITERAL, publicModel, publicVersion } from '../sessions/public-vocabulary.js';
-import { CI_WORDS, SURFACE_WORDS } from './words.js';
+import { CI_WORDS, JOIN_STATES, JOIN_STEPS, SURFACE_WORDS } from './words.js';
 
 /** Bumped when an event type or field changes meaning; every spooled event carries it. */
 export const SCHEMA_VERSION = 1;
@@ -194,6 +194,8 @@ const EVENTS: ReadonlyMap<string, FieldRules> = new Map([
   ['first-run', rules({ ci: oneOf(CI_WORDS), surface: oneOf(SURFACE_WORDS) })],
   // The CLI told the operator which covenant to read and accept: the version and nothing else.
   ['covenant-shown', rules({ version: covenantVersion })],
+  // One step of `oars pool join` in one run: which of the closed steps and what it did, and nothing else (docs/telemetry.md).
+  ['join-step', rules({ step: oneOf(JOIN_STEPS), state: oneOf(JOIN_STATES) })],
 ]);
 
 export const EVENT_TYPES: readonly string[] = [...EVENTS.keys()];

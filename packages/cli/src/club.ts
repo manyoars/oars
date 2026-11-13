@@ -126,6 +126,9 @@ const rowsOf = (body: unknown): Row[] => {
   return rows;
 };
 
+/** What the club shows a member with no counting week, and where to go from it. */
+export const ASHORE_CLUB_LINE = 'ashore: run oars pool join to start rowing.';
+
 /** The board as lines, in the pool's order: a member with no counting week is "ashore" and has no numbers. */
 const tableOf = (rows: readonly Row[]): string => {
   // The crew column appears only when a row carries a number, and it holds that row's own mark: nothing here counts the crew.
@@ -133,7 +136,8 @@ const tableOf = (rows: readonly Row[]): string => {
   const head = ['#', 'nickname', ...(crewed ? ['crew'] : []), 'weeks rowing', 'active days', 'sessions', 'strokes this week'];
   const body = rows.map((row) => [String(row.place), row.nickname, ...(crewed ? [row.crewNumber === undefined ? '' : crewMarkText(row.crewNumber)] : []), ...(row.ashore ? ['ashore', '', '', ''] : [String(row.weeksRowing), String(row.activeDays), String(row.sessions), String(row.strokesThisWeek)])]);
   const widths = head.map((title, at) => Math.max(title.length, ...body.map((line) => (line[at] ?? '').length)));
-  return [head, ...body].map((line) => line.map((cell, at) => cell.padEnd(widths[at] ?? 0)).join('  ').trimEnd()).join('\n');
+  const table = [head, ...body].map((line) => line.map((cell, at) => cell.padEnd(widths[at] ?? 0)).join('  ').trimEnd()).join('\n');
+  return rows.some((row) => row.ashore) ? `${table}\n${ASHORE_CLUB_LINE}` : table;
 };
 
 /** `oars club show <club>`: the board, to its members only. */

@@ -1,6 +1,6 @@
 // The operator's founding-crew grant (t1229): a dry run changes nothing, --confirm numbers the first 100 counting accounts and grants board standing, a vouched account is granted after its second counting week, a vouch inside one cluster earns nothing, and a closed or restricted account earns nothing. Fixture rows only.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { fieldOf, startPool, stubUser, type TestDb, type TestPool } from '../src/test-pool.js';
+import { fieldOf, startPool, type TestDb, type TestPool } from '../src/test-pool.js';
 import type { EraseStore } from './erase.js';
 import type { ObjectFiles } from './erase-wrangler.js';
 import { CREW_CAP, main, planCrew, USAGE, writeCrew, type Io } from './grant-crew.js';
@@ -25,33 +25,51 @@ const storeOf = (): Pick<EraseStore, 'rows' | 'run'> => ({
   run: async (sql, binds) => Number(fieldOf(fieldOf(await db.prepare(sql).bind(...binds).run(), 'meta'), 'changes')),
 });
 
-/** A clean slate: no crew, no standing, no deposits, no edges, so each test owns its fixtures. */
-beforeEach(async () => {
-  for (const table of ['vouch_edges', 'invites', 'board_standing', 'account_weeks', 'account_repo_keys', 'deposit_hours']) await db.prepare(`DELETE FROM ${table}`).run();
-  // Deposits are a ledger and never deleted: an earlier test's rows stop counting instead.
-  await db.prepare('UPDATE deposits SET counted_at = NULL').run();
-  await db.prepare("DELETE FROM accounts WHERE id LIKE 'held-%'").run();
-  await db.prepare('UPDATE accounts SET crew_number = NULL, closed_at = NULL, restricted_at = NULL').run();
-});
+let running: Promise<unknown> = Promise.resolve();
+/** `it` that remembers its body's promise, so the next test's `beforeEach` can wait for a body that outlived its timeout. */
+const crewIt = (name: string, body: () => Promise<void>): void => {
+  it(name, () => (running = body()));
+};
 
+/** A clean slate in one batch, so a loaded machine pays one round trip and a test cut short cannot leave a half-cleaned store: no crew, no standing, no deposits, no edges, so each test owns its fixtures. */
+beforeEach(async () => {
+  // A body that vitest gave up on (a timeout) keeps running; wait for it to settle so its late writes cannot land in this test's rows. The 60 s hook bound only covers waiting out that leftover.
+  await running.catch(() => undefined);
+  await db.batch([
+    ...['vouch_edges', 'invites', 'board_standing', 'account_weeks', 'account_repo_keys', 'deposit_hours'].map((table) => db.prepare(`DELETE FROM ${table}`)),
+    // Deposits are a ledger and never deleted: an earlier test's rows stop counting instead.
+    db.prepare('UPDATE deposits SET counted_at = NULL'),
+    db.prepare("DELETE FROM accounts WHERE id LIKE 'held-%'"),
+    db.prepare('UPDATE accounts SET crew_number = NULL, closed_at = NULL, restricted_at = NULL'),
+  ]);
+}, 60_000);
+
+/** A bare account row. The sign-in flow is three HTTP calls to the Worker and not what planCrew reads: it reads the row, so the fixture writes the row. */
 const account = async (): Promise<string> => {
   seen += 1;
-  return (await pool.signIn('github', stubUser(String(seen)), { fresh: true })).account;
+  const id = `acct-${String(seen)}`;
+  await db.prepare('INSERT INTO accounts (id, first_seen) VALUES (?, ?)').bind(id, 0).run();
+  return id;
 };
 
 /** An account whose first counting deposit was at `countedAt`. Its signals differ from every other account's unless the test says otherwise: a distinct repo key set, an hour no other account uses, and a creation time far from the others. */
 const counting = async (countedAt: number, options: { weeks?: number; repoKeys?: readonly string[]; created?: number } = {}): Promise<string> => {
   const id = await account();
-  await db.prepare("INSERT INTO deposits (account, id, skeleton, tier, counted_at, extensions, deltas) VALUES (?, ?, '{}', 'skeleton', ?, '[]', '[]')").bind(id, `s-${id}`, countedAt).run();
-  await db.prepare('UPDATE accounts SET provider_created = ? WHERE id = ?').bind(options.created ?? countedAt - 400 * 86_400_000 - seen * 3 * 86_400_000, id).run();
-  for (const key of options.repoKeys ?? [`${id}-a`, `${id}-b`, `${id}-c`]) await db.prepare('INSERT INTO account_repo_keys (account, repo_key) VALUES (?, ?)').bind(id, key).run();
-  for (let n = 0; n < (options.weeks ?? 0); n += 1) await db.prepare("INSERT INTO account_weeks (account, week, sessions, tool_steps, failed_steps, day_mask, harnesses) VALUES (?, ?, 2, 5, 0, 1, '[]')").bind(id, `2026-W0${String(n + 1)}`).run();
+  // One batch per account: the signals are about ten statements, and one round trip each is what ran past the timeout on a loaded runner.
+  const statements = [
+    db.prepare("INSERT INTO deposits (account, id, skeleton, tier, counted_at, extensions, deltas) VALUES (?, ?, '{}', 'skeleton', ?, '[]', '[]')").bind(id, `s-${id}`, countedAt),
+    db.prepare('UPDATE accounts SET provider_created = ? WHERE id = ?').bind(options.created ?? countedAt - 400 * 86_400_000 - seen * 3 * 86_400_000, id),
+    ...(options.repoKeys ?? [`${id}-a`, `${id}-b`, `${id}-c`]).map((key) => db.prepare('INSERT INTO account_repo_keys (account, repo_key) VALUES (?, ?)').bind(id, key)),
+    ...Array.from({ length: options.weeks ?? 0 }, (_, n) => db.prepare("INSERT INTO account_weeks (account, week, sessions, tool_steps, failed_steps, day_mask, harnesses) VALUES (?, ?, 2, 5, 0, 1, '[]')").bind(id, `2026-W0${String(n + 1)}`)),
+  ];
+  await db.batch(statements);
   return id;
 };
 
 /** All 100 numbers held by filler accounts, so a counting account earns standing only by a vouch. */
 const fillCrew = async (): Promise<void> => {
-  for (let crew = 1; crew <= CREW_CAP; crew += 1) await db.prepare('INSERT OR REPLACE INTO accounts (id, crew_number) VALUES (?, ?)').bind(`held-${String(crew)}`, crew).run();
+  // One batch, not 100 round trips: this was the bulk of every vouch test's time.
+  await db.batch(Array.from({ length: CREW_CAP }, (_, n) => db.prepare('INSERT OR REPLACE INTO accounts (id, crew_number) VALUES (?, ?)').bind(`held-${String(n + 1)}`, n + 1)));
 };
 
 const vouch = async (inviter: string, invitee: string, at = 1): Promise<void> => {
@@ -64,7 +82,7 @@ const DAY = 86_400_000;
 const NO_FILES: ObjectFiles = { temp: () => Promise.resolve('x'), read: () => ({ [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true, value: undefined }) }) }), write: () => Promise.resolve(), remove: () => Promise.resolve() };
 
 describe('planCrew', () => {
-  it('numbers the first counting accounts in the order they first counted, and skips accounts that never counted, are closed, or are restricted', async () => {
+  crewIt('numbers the first counting accounts in the order they first counted, and skips accounts that never counted, are closed, or are restricted', async () => {
     const second = await counting(2 * DAY);
     const first = await counting(1 * DAY);
     const closed = await counting(0);
@@ -77,21 +95,19 @@ describe('planCrew', () => {
     expect(plan.founding.map((row) => row.account)).not.toContain(idle);
   });
 
-  it('stops at 100 across what is already numbered, keeps existing numbers, and fills a freed number first', async () => {
+  crewIt('stops at 100 across what is already numbered, keeps existing numbers, and fills a freed number first', async () => {
     const ids: string[] = [];
     for (let n = 0; n < 4; n += 1) ids.push(await counting((n + 1) * DAY));
     // Ninety-seven numbered already, with 1 and 50 not among them: the plan has 3 left, and the lowest free numbers go first.
     const held = Array.from({ length: CREW_CAP }, (_, n) => n + 1).filter((n) => n !== 1 && n !== 50 && n !== 99);
     expect(held).toHaveLength(97);
-    for (const [at, crew] of held.entries()) {
-      await db.prepare("INSERT INTO accounts (id, crew_number) VALUES (?, ?)").bind(`held-${String(at)}`, crew).run();
-    }
+    await db.batch(held.map((crew, at) => db.prepare('INSERT INTO accounts (id, crew_number) VALUES (?, ?)').bind(`held-${String(at)}`, crew)));
     const plan = await planCrew(storeOf());
     expect(plan.founding).toEqual([{ account: ids[0], crew: 1 }, { account: ids[1], crew: 50 }, { account: ids[2], crew: 99 }]);
     await db.prepare("DELETE FROM accounts WHERE id LIKE 'held-%'").run();
   });
 
-  it('grants a vouched account after its second counting week, not before', async () => {
+  crewIt('grants a vouched account after its second counting week, not before', async () => {
     await fillCrew();
     const inviter = await counting(1 * DAY, { weeks: 3 });
     const early = await counting(10 * DAY, { weeks: 1 });
@@ -103,7 +119,7 @@ describe('planCrew', () => {
     expect(plan.founding).toEqual([]);
   });
 
-  it('earns nothing for a vouch inside one cluster, by shared repo keys or a shared creation window and hour', async () => {
+  crewIt('earns nothing for a vouch inside one cluster, by shared repo keys or a shared creation window and hour', async () => {
     await fillCrew();
     const shared = ['k1', 'k2', 'k3'];
     const inviter = await counting(1 * DAY, { weeks: 3, repoKeys: shared });
@@ -116,13 +132,13 @@ describe('planCrew', () => {
     expect(plan.skipped).toContainEqual({ account: twin, reason: 'same cluster as its inviter' });
   });
 
-  it('earns nothing for a vouch between accounts created in one window that deposit in the same hours', async () => {
+  crewIt('earns nothing for a vouch between accounts created in one window that deposit in the same hours', async () => {
     await fillCrew();
     const created = Date.UTC(2026, 0, 1);
     const inviter = await counting(1 * DAY, { weeks: 3, created });
     const twin = await counting(10 * DAY, { weeks: 2, created: created + 3_600_000 });
     const other = await counting(11 * DAY, { weeks: 2 });
-    for (const holder of [inviter, twin]) for (let day = 1; day <= 8; day += 1) await db.prepare('INSERT INTO deposit_hours (account, day, hour) VALUES (?, ?, 14)').bind(holder, `2026-02-0${String(day)}`).run();
+    await db.batch([inviter, twin].flatMap((holder) => Array.from({ length: 8 }, (_, n) => db.prepare('INSERT INTO deposit_hours (account, day, hour) VALUES (?, ?, 14)').bind(holder, `2026-02-0${String(n + 1)}`))));
     await vouch(inviter, twin);
     await vouch(inviter, other);
     const plan = await planCrew(storeOf());
@@ -130,7 +146,7 @@ describe('planCrew', () => {
     expect(plan.skipped).toContainEqual({ account: twin, reason: 'same cluster as its inviter' });
   });
 
-  it('counts only the weeks at or after the vouch', async () => {
+  crewIt('counts only the weeks at or after the vouch', async () => {
     await fillCrew();
     const inviter = await counting(1 * DAY, { weeks: 3 });
     const late = await counting(10 * DAY, { weeks: 2 });
@@ -139,7 +155,7 @@ describe('planCrew', () => {
     expect((await planCrew(storeOf())).vouched).toEqual([]);
   });
 
-  it('earns nothing when the invitee is closed or restricted, and not twice when it already holds standing', async () => {
+  crewIt('earns nothing when the invitee is closed or restricted, and not twice when it already holds standing', async () => {
     await fillCrew();
     const inviter = await counting(1 * DAY, { weeks: 3 });
     const closed = await counting(10 * DAY, { weeks: 2 });
@@ -151,7 +167,7 @@ describe('planCrew', () => {
     expect((await planCrew(storeOf())).vouched).toEqual([]);
   });
 
-  it('earns nothing when the inviter is closed or restricted', async () => {
+  crewIt('earns nothing when the inviter is closed or restricted', async () => {
     await fillCrew();
     const inviter = await counting(1 * DAY, { weeks: 3 });
     const invitee = await counting(10 * DAY, { weeks: 2 });
@@ -162,7 +178,7 @@ describe('planCrew', () => {
 });
 
 describe('writeCrew', () => {
-  it('writes the number and the standing, once, and says what it did', async () => {
+  crewIt('writes the number and the standing, once, and says what it did', async () => {
     const first = await counting(1 * DAY);
     const plan = await planCrew(storeOf());
     const written = await writeCrew(storeOf(), plan, { by: 'operator-x' }, NOW);
@@ -172,7 +188,7 @@ describe('writeCrew', () => {
     expect(await writeCrew(storeOf(), plan, { by: 'operator-x' }, NOW)).toEqual({ founding: 0, vouched: 0 });
   });
 
-  it('writes standing for a vouched account with the vouch as the reason', async () => {
+  crewIt('writes standing for a vouched account with the vouch as the reason', async () => {
     await fillCrew();
     const inviter = await counting(1 * DAY, { weeks: 3 });
     const invitee = await counting(10 * DAY, { weeks: 2 });
@@ -191,7 +207,7 @@ describe('main', () => {
     return { io, printed, calls };
   };
 
-  it('prints the usage and exits 2 for a missing or unknown argument', async () => {
+  crewIt('prints the usage and exits 2 for a missing or unknown argument', async () => {
     const { io, printed } = ioOf();
     expect(await main([], io)).toBe(2);
     expect(printed.join('')).toContain(USAGE);
@@ -199,7 +215,7 @@ describe('main', () => {
     expect(await main(['--nope'], io)).toBe(2);
   });
 
-  it('is a dry run without --confirm: it says what it would grant and writes nothing', async () => {
+  crewIt('is a dry run without --confirm: it says what it would grant and writes nothing', async () => {
     await fillCrew();
     await db.prepare("DELETE FROM accounts WHERE id = 'held-100'").run();
     const first = await counting(1 * DAY);
@@ -218,7 +234,7 @@ describe('main', () => {
     }
   });
 
-  it('writes with --confirm and prints the counts', async () => {
+  crewIt('writes with --confirm and prints the counts', async () => {
     const first = await counting(1 * DAY);
     const { io, printed } = ioOf();
     expect(await main(['--by', 'operator-x', '--confirm'], { ...io, store: storeOf() })).toBe(0);
@@ -226,7 +242,7 @@ describe('main', () => {
     expect(await crewOf(first)).toBe(1);
   });
 
-  it('reads through wrangler when no store is passed, against local state with --local, and writes nothing without --confirm', async () => {
+  crewIt('reads through wrangler when no store is passed, against local state with --local, and writes nothing without --confirm', async () => {
     const { io, calls, printed } = ioOf();
     const wrangler: Io['wrangler'] = (args) => { calls.push(args.join(' ')); return Promise.resolve(JSON.stringify([{ results: [], success: true, meta: { changes: 0 } }])); };
     expect(await main(['--by', 'operator-x', '--local'], { ...io, wrangler })).toBe(0);
@@ -235,7 +251,7 @@ describe('main', () => {
     expect(printed.join('\n')).toContain('"dryRun":true');
   });
 
-  it('prints the failure and exits 1 when the store fails', async () => {
+  crewIt('prints the failure and exits 1 when the store fails', async () => {
     const { io, printed } = ioOf();
     const broken = { rows: () => Promise.reject(new Error('no store')), run: () => Promise.resolve(0) };
     expect(await main(['--by', 'operator-x'], { ...io, store: broken })).toBe(1);

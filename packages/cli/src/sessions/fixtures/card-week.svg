@@ -27,7 +27,7 @@
 <text x="48" y="572" font-family="monospace" font-size="20" fill="#8fa6ba">cost</text>
 <text x="308" y="572" font-family="monospace" font-size="20" fill="#e8eef4">$1.75 (2 of 3 sessions recorded one)</text>
 <text x="48" y="608" font-family="monospace" font-size="20" fill="#8fa6ba">depositor</text>
-<text x="308" y="608" font-family="monospace" font-size="20" fill="#e8eef4">ashore: run oars pool login</text>
+<text x="308" y="608" font-family="monospace" font-size="20" fill="#e8eef4">ashore: run oars pool join</text>
 <rect x="48" y="654" width="1104" height="1" fill="#8fa6ba"/>
 <text x="48" y="694" font-family="monospace" font-size="20" fill="#f2b134">manyoars.com</text>
 <text x="876" y="694" font-family="monospace" font-size="20" fill="#f2b134">npx @manyoars/oars card</text>

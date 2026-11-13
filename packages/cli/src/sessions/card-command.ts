@@ -16,7 +16,7 @@ import { loadStore } from './store.js';
 import { readSurvival } from './survival.js';
 import type { SessionsDeps } from './command.js';
 
-export const ASHORE = 'ashore: run oars pool login';
+export const ASHORE = 'ashore: run oars pool join';
 
 const DAY = 86_400_000;
 const WEEK = 7 * DAY;
@@ -24,7 +24,7 @@ const WEEK = 7 * DAY;
 const FIRST_MONDAY = -3 * DAY;
 
 /**
- * The depositor row. Signed out it points at `oars pool login`; signed in it counts the weeks (Monday-start, UTC) in which this machine's sent record holds a deposit,
+ * The depositor row. Signed out it points at `oars pool join`, the one command from nothing to a first deposit; signed in it counts the weeks (Monday-start, UTC) in which this machine's sent record holds a deposit,
  * labeled as this machine's because the record is local. It reads two local files and makes no network call; a sign-in file or pool address that cannot be read is
  * signed out, since a share card must not fail on it.
  */

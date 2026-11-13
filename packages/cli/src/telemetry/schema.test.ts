@@ -44,7 +44,7 @@ const spoolOf = (feed: (record: (type: string, fields: object) => void) => void)
 
 describe('the closed schema', () => {
   it('knows each event type, one line per type', () => {
-    expect(EVENT_TYPES).toEqual(['command', 'hook', 'recall', 'deposit', 'fetch', 'store-health', 'run-cost', 'crash', 'wire', 'wire-send', 'first-run', 'covenant-shown']);
+    expect(EVENT_TYPES).toEqual(['command', 'hook', 'recall', 'deposit', 'fetch', 'store-health', 'run-cost', 'crash', 'wire', 'wire-send', 'first-run', 'covenant-shown', 'join-step']);
   });
 
   it('names every harness the pool serves, and every read family a recall serves', () => {
@@ -62,6 +62,12 @@ describe('the closed schema', () => {
     expect(versionWord('1.0-acme')).toBe('other');
     expect(modelWord('claude-opus-4-5')).toBe('claude-opus-4-5');
     expect(sanitize('hook', { model: modelWord('acme-private-7') })).toEqual({ data: { model: 'other' }, dropped: 0 });
+  });
+
+  it('holds a join step to the closed step and state words, and drops anything else with its name', () => {
+    expect(sanitize('join-step', { step: 'send', state: 'done' })).toEqual({ data: { step: 'send', state: 'done' }, dropped: 0 });
+    expect(sanitize('join-step', { step: 'send', state: 'none' })).toEqual({ data: { step: 'send', state: 'none' }, dropped: 0 });
+    expect(sanitize('join-step', { step: 'acme-billing', state: 'maybe', path: HOME_PATH, term: 'zorblax' })).toEqual({ data: {}, dropped: 4 });
   });
 
   it('carries the harness on a hook fire from the closed list, and an old fire without one still parses', () => {
