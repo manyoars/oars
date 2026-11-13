@@ -9,6 +9,7 @@ import { bareOf, decodedStrings, insideRepository, isAbsent, isText, keyIdOf, Pa
 export const USAGE = [
   'Usage: deliver --pack <dir> --recipient <name> --license <id> (--buyer-key-file <path> | --buyer-key <key>) --owners <file>',
   '       deliver recipients <session id or person\'s name> --owners <file>',
+  '       deliver recipients --account <pool account id> --owners <file>',
   '  --pack <dir>         a pack built by sample-pack, outside every git repository',
   '  --recipient <name>   the buyer\'s legal name as on the term sheet',
   '  --license <id>       the term sheet\'s version, so the rights the recipient holds are the ones it signed',
@@ -16,7 +17,7 @@ export const USAGE = [
   BUYER_KEY_FILE_USAGE,
   '  --owners <file>      the owners file; deliveries.jsonl, index.jsonl, and objections.jsonl sit beside it',
   'deliver appends one row per session to deliveries.jsonl, when you send the pack: it sends nothing itself, and it refuses a pack built under other objections than objections.jsonl holds now (rebuild, then deliver).',
-  'recipients prints each recipient of a session, or of every session whose text names the person, with the match id that recipient holds it under (Art. 15(1)(c), 19).',
+  'recipients prints each recipient of a session, or of every session whose text names the person, with the match id that recipient holds it under (Art. 15(1)(c), 19). With --account it prints each recipient of every session that pool account deposited, as index.jsonl records them.',
 ].join('\n');
 
 export const DELIVERIES_FILE = 'deliveries.jsonl';
@@ -70,12 +71,15 @@ export interface IndexEntry {
   pack: string;
   session: string;
   matchId: string;
+  /** Only for a row built from a deposit: the pool account. */
+  account?: string;
 }
 
 export const indexOf = async (dir: string): Promise<IndexEntry[]> =>
   (await linesOf(join(dir, 'index.jsonl'))).flatMap((row): IndexEntry[] => {
     const [pack, session, matchId] = ['pack', 'session', 'matchId'].map((name) => fieldOf(row, name));
-    return isText(pack) && isText(session) && isText(matchId) ? [{ pack, session, matchId }] : [];
+    const account = fieldOf(row, 'account');
+    return isText(pack) && isText(session) && isText(matchId) ? [{ pack, session, matchId, ...(isText(account) ? { account } : {}) }] : [];
   });
 
 /** A lot's name is its pack folder's name: what `deliveries.jsonl` records, and what `license-status` reads the index by. */
@@ -162,12 +166,19 @@ export const recipientsOf = async (owners: string, query: string): Promise<Deliv
   return deliveries.filter(({ session }) => named.has(session));
 };
 
+/** The deliveries of every session the index records for a pool account (an account line's reach): the pack was built from its deposits, so no pack text is read. */
+export const accountRecipientsOf = async (owners: string, account: string): Promise<Delivery[]> => {
+  const dir = dirname(resolve(owners));
+  const sessions = new Set((await indexOf(dir)).filter((entry) => entry.account === account).map(({ session }) => session));
+  return (await deliveriesOf(dir)).filter(({ session }) => sessions.has(session));
+};
+
 export interface Io {
   print: (text: string) => void;
   now?: (() => Date) | undefined;
 }
 
-const VALUED = new Set(['--pack', '--recipient', '--license', '--buyer-key', '--buyer-key-file', '--owners']);
+const VALUED = new Set(['--account', '--pack', '--recipient', '--license', '--buyer-key', '--buyer-key-file', '--owners']);
 
 const flagsOf = (argv: readonly string[]): Map<string, string> | string => {
   const values = new Map<string, string>();
@@ -182,8 +193,9 @@ const flagsOf = (argv: readonly string[]): Map<string, string> | string => {
 /** 0 when the rows were written or the question answered, 2 on a usage error or a refusal (nothing written). */
 export const main = async (argv: readonly string[], io: Io): Promise<number> => {
   const asking = argv[0] === 'recipients';
-  const query = asking ? argv[1] : undefined;
-  const flags = flagsOf(asking ? argv.slice(2) : argv);
+  const byAccount = asking && argv[1] === '--account';
+  const query = asking && !byAccount ? argv[1] : undefined;
+  const flags = flagsOf(asking && !byAccount ? argv.slice(2) : asking ? argv.slice(1) : argv);
   const owners = typeof flags === 'string' ? undefined : flags.get('--owners');
   const [pack, recipient, license, buyerKey, buyerKeyFile] = typeof flags === 'string' ? [] : ['--pack', '--recipient', '--license', '--buyer-key', '--buyer-key-file'].map((flag) => flags.get(flag));
   const usage = (reason: string): number => {
@@ -193,10 +205,18 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
   if (typeof flags === 'string') return usage(flags);
   if (owners === undefined) return usage('Missing --owners.');
   try {
+    const printRows = (found: Delivery[], none: string): void => {
+      io.print(found.length === 0 ? none : found.map((row) => [row.recipient, `match id ${row.matchId}`, `lot ${row.lot}`, `delivered ${row.deliveredAt}`, `license ${row.license}`, `session ${row.session}`].join('\t')).join('\n'));
+    };
+    if (byAccount) {
+      const account = typeof flags === 'string' ? undefined : flags.get('--account');
+      if (account === undefined || account.trim() === '') return usage('Missing the pool account id.');
+      printRows(await accountRecipientsOf(owners, account.trim()), 'No recipient holds a session of this account: nothing in deliveries.jsonl names one of its sessions.');
+      return 0;
+    }
     if (asking) {
       if (query === undefined || query.trim() === '') return usage('Missing the session id or the person\'s name.');
-      const found = await recipientsOf(owners, query);
-      io.print(found.length === 0 ? 'No recipient holds this session: nothing in deliveries.jsonl names it.' : found.map((row) => [row.recipient, `match id ${row.matchId}`, `lot ${row.lot}`, `delivered ${row.deliveredAt}`, `license ${row.license}`, `session ${row.session}`].join('\t')).join('\n'));
+      printRows(await recipientsOf(owners, query), 'No recipient holds this session: nothing in deliveries.jsonl names it.');
       return 0;
     }
     const resolved = await resolveBuyerKey(buyerKey, buyerKeyFile);

@@ -67,9 +67,9 @@ Limit: **founding crew rows (migration 0041; Art. 15 and 20).** The copy holds t
 
 Limit: **no provider sign-in.** If the requester has no provider sign-in at all, nothing they can bring proves the account is theirs, so there is no export to give. Tell them so, in writing (Art. 11(2), 12(2)).
 
-Limit: **recipients.** None to name today. Nothing is sold, and no path hands deposits to anyone ([`flags.md`](flags.md)). Cloudflare runs the pool as processor; name it as that category. A bundle is built from `cells` and `strata` and carries no account's personal data, so the accounts that fetch it receive none of the requester's data and are not their recipients (Art. 15(1)(c)).
+Limit: **recipients.** A pack built `--deposits` hands deposits to its recipients, named by `deliver recipients --account <id> --owners <file>` (see "lot 1 recipients" below). Cloudflare runs the pool as processor; name it as that category. A bundle is built from `cells` and `strata` and carries no account's personal data, so the accounts that fetch it receive none of the requester's data and are not their recipients (Art. 15(1)(c)).
 
-Limit: **lot 1 recipients (Art. 15(1)(c)).** A lot-1 sample pack hands over the operator's own sessions, not pool deposits, so the pool holds no record of it and a requester who is a pool account does not find it there. Its register is `deliveries.jsonl` beside the owners file: `npm run deliver -w packages/pool -- recipients <session id or the person's name> --owners <file>` prints each recipient by name with the match id it holds. Redaction reduces the personal data in a pack but does not remove it, so a person a session names is a data subject of that lot; name every recipient printed, not a category. The search reads only the packs `index.jsonl` lists that are still on the machine, so say so when a pack has been deleted since.
+Limit: **lot 1 recipients (Art. 15(1)(c)).** A lot-1 sample pack hands over the operator's own sessions, and a pack built `--deposits` hands over third-party deposits; the pool holds no record of either, so a requester who is a pool account does not find it there. The register is `deliveries.jsonl` beside the owners file: `npm run deliver -w packages/pool -- recipients <session id or the person's name> --owners <file>` prints each recipient by name with the match id it holds, and `recipients --account <pool account id> --owners <file>` does the same for every session `index.jsonl` records for that account (a deposit pack's index lines carry it). Redaction reduces the personal data in a pack but does not remove it, so a person a session names is a data subject of that lot; name every recipient printed, not a category. The search reads only the packs `index.jsonl` lists that are still on the machine, so say so when a pack has been deleted since.
 
 ## Art. 16, rectification
 
@@ -96,7 +96,7 @@ A deposit row is the record of what the client sent, so it is accurate as that r
 4. Read the line it prints. If it names the right account, run it:
    `npm run erase -w packages/pool -- account --account <id> --confirm`
    It prints `{"rowsErased":n,"objectsErased":n}`.
-5. The same run rewrites the telemetry batches kept within the 90-day retention that name the account. If the run stops partway, run step 4 again: it is safe to repeat and finishes the rest.
+5. The same run rewrites the telemetry batches kept within the 90-day retention that name the account. If the run stops partway, run step 4 again: it is safe to repeat and finishes the rest. Only the finishing run prints the `objections.jsonl` account line to append, so do not stop after a partial run.
 6. One deposit only, or one raw object only, if that is all they asked for:
    `npm run erase -w packages/pool -- row --account <id> --id <session>`, and `npm run erase -w packages/pool -- raw <r2-key>`. Each is a dry run until `--confirm`. Both are for narrower cases; the usual answer is `account`.
 
@@ -114,7 +114,7 @@ Limit: **bundles and client copies.** Not recalled, and need not be: a bundle is
 
 Limit: **the person's own machine.** The local store is theirs and is never sent, so Many Oars Co. does not hold it (Art. 4(7)). Tell them to delete `<store>/raw/`, `<store>/state.json`, `<store>/pool-crew.json` (the crew number), and the outbox, naming the store path `oars` prints.
 
-Limit: **Art. 19, telling recipients.** No one to tell: a bundle carries no account's personal data, so its fetchers are not the requester's recipients (Art. 19). When a path hands deposits to anyone, its register names them (C6).
+Limit: **Art. 19, telling recipients.** The recipients of a `--deposits` pack are told: list them with `deliver recipients --account <id> --owners <file>` and record each notice (`notices.jsonl`). A bundle carries no account's personal data, so its fetchers are not the requester's recipients (Art. 19).
 
 Limit: **lot 1, telling recipients (Art. 19).** Run `deliver recipients` for the session or the person's name: each recipient printed holds the data under the printed match id, never the session id, so quote that match id when you ask them to erase or correct it. `deliver` sends nothing, so telling a recipient is a message you send yourself. A session with no row was never handed over, so there is no one to tell.
 
@@ -126,7 +126,8 @@ Limit: **lot 1, telling recipients (Art. 19).** Run `deliver recipients` for the
 1. Confirm the account (see "Who is asking").
 2. Dry run: `npm run erase -w packages/pool -- restrict --account <id>`. Read the line it prints, then add `--confirm`. The command sets `accounts.restricted_at`, writes one `erasure_audit` row (kind `restrict`), and revokes and deletes nothing. A rerun changes nothing. Restrict on request on any Art. 18(1) ground, and while you weigh an objection (18(1)(d)).
 3. Tell them what stops and what stays (below).
-4. Before you lift it (`restrict --account <id> --lift --confirm`), tell the requester (Art. 18(3)). Lifting restores the account whole: no credential was revoked.
+4. While it is set, append an account line with `"right": "restriction"` to `objections.jsonl`, so no later `--deposits` pack holds the account (Art. 18(2)). `erase restrict` prints no line.
+5. Before you lift it (`restrict --account <id> --lift --confirm`), tell the requester (Art. 18(3)). Lifting restores the account whole: no credential was revoked. Remove the account line and rebuild any pack not yet delivered: the line is part of the objections hash, so a pack built with it is refused after the removal.
 
 What stops while it is set: later deposits and raw parts are refused (403 `account_restricted`, a machine key's too), enrolling a new machine is refused the same way (new processing, Art. 18(1)), and its batches roll into no telemetry row. Its rows also leave every club board and the open board (`GET /v1/board`) while it is set, as a closed account's do, and creating or joining a club is refused the same way (publishing counts under a nickname is processing, not storage, Art. 18(1)); leaving a club still works, and a lift shows the rows again. The operator's restrict run recounts every cell and stratum the account contributes to at once, and a lift recounts them with it counted again. The account stops counting toward a cell's holder count at once, so a cell only it holds (or that falls under its floor without it) stops serving; a shared cell still above its floor keeps its totals (sessions, outcomes, tokens, and duration), which include the account's earlier increments, because a cell above the floor relates to no identifiable person (Art. 4(1), Recital 26), so Art. 18(1) does not reach it, and no recompute is built. Telemetry batches carry no account, so the telemetry route cannot refuse them. What stays: the data stored, the account's own export (Art. 15), an erasure if they ask (Art. 17), the withdrawal sweep, and the retention sweeps, because each is the person's own request or a deletion, which Art. 18(2) does not stop.
 
@@ -145,7 +146,7 @@ Covenant 6.6(a): you must stop the processing unless you show compelling grounds
 
 **Steps:**
 1. Confirm the account.
-2. While you weigh the grounds, restrict the account (`erase restrict`, Art. 18(1)(d); see above). If you accept: erase the account (`erase account`, Art. 17 above), whose unlink of the kept rows covenant 6.6(c) allows in place of deletion; close the account too if they want no more arriving (below). Closing deletes their credentials; erasing removes their contributor records.
+2. While you weigh the grounds, restrict the account (`erase restrict`, Art. 18(1)(d); see above). If a pack built from the account's deposits may exist, append an account line to `objections.jsonl` with `"right": "objection"` (Art. 21(1); below) so no later build or delivery holds the account. If you accept: erase the account (`erase account`, Art. 17 above), whose unlink of the kept rows covenant 6.6(c) allows in place of deletion; close the account too if they want no more arriving (below). Closing deletes their credentials; erasing removes their contributor records.
 3. For telemetry only: they run `oars telemetry off`, or set `OARS_TELEMETRY=0`.
 4. If you do not accept, tell them the grounds within the month, with the complaint right.
 
@@ -153,7 +154,7 @@ Covenant 6.6(a): you must stop the processing unless you show compelling grounds
 
 **Record kept:** the decision and the grounds, with dates.
 
-Nothing is sold and no path hands deposits to anyone, so an objection to sale or training has nothing to exclude from yet. Record it in the register, scope included; the first sale path loads those records.
+Record the objection in the register, scope included, as an account line in `objections.jsonl` beside the owners file: `{"account": "<id>", "right": "objection", "received": "<ISO time>", "scope": "sale"}` (Art. 21(1)). The next `sample-pack --deposits` build leaves out every session of the account, `deliver` refuses a pack built before the line, and `deliver recipients --account` names who already holds a session of it.
 
 Lot 1 (the first sale) has a register today. Add the objection to `objections.jsonl` beside the owners file, one JSON line (`{"name": "<the person>"}` or `{"session": "<id>"}`, `"received"` as an ISO date and time, `"scope"` as `sale`, `training`, or `all`). The next `sample-pack` build leaves out each session it names and each whose text holds the name, and `deliver` refuses a pack built under a different `objections.jsonl` than the one beside the owners file now (Art. 21(1)); both are in [`pool.md`](pool.md), "The sample pack".
 
@@ -213,7 +214,7 @@ A close erases nothing. If they also want their data deleted, that is a separate
 `npx wrangler d1 execute oars-pool --remote --command "UPDATE accounts SET closed_at = NULL WHERE id = '<account id>' AND closed_at IS NOT NULL"`
 Tokens and machine keys stay revoked, so the person signs in and enrolls their machines again. Note it in the request register.
 
-**Requests after closing.** The proof from `oars pool login --provider github --json` (or `google`) confirms the requester. Then run `erase account` (Art. 17), `erase export` (Art. 15 and 20), or `erase withdraw` (Art. 7(3)); each works on a closed account.
+**Requests after closing.** The proof from `oars pool login --provider github --json` (or `google`) confirms the requester. Then run `erase account` (Art. 17; it prints the `objections.jsonl` account line to append, so no later pack holds the account and `deliver recipients --account` names who must be told under Art. 19), `erase export` (Art. 15 and 20), or `erase withdraw` (Art. 7(3)); each works on a closed account.
 
 ## A third party named in a deposit
 

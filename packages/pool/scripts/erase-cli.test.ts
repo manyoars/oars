@@ -357,11 +357,24 @@ describe('main', () => {
     const { io, calls, printed } = fake({ answer: (sql) => (sql.includes('AS held') ? [{ held: 2 }] : []) });
     const listed: string[] = [];
     expect(await main(['account', '--account', ACCOUNT, '--confirm'], { ...io, list: (prefix) => { listed.push(prefix); return Promise.resolve([]); } })).toBe(0);
-    expect(printed).toHaveLength(1);
+    expect(printed).toHaveLength(2);
     expect(printed[0]).toMatch(/^\{"rowsErased":\d+,"objectsErased":\d+\}$/);
     expect(calls.flat().some((arg) => arg.startsWith('UPDATE pool_generation'))).toBe(true);
     // The batch step lists the 91 days within retention.
     expect(listed).toHaveLength(91);
+  });
+
+  it('erase account prints the register line', async () => {
+    const { io, printed } = fake({ answer: (sql) => (sql.includes('AS held') ? [{ held: 0 }] : []) });
+    expect(await main(['account', '--account', ACCOUNT, '--confirm'], { ...io, list: () => Promise.resolve([]) })).toBe(0);
+    const [, text = ''] = /objections\.jsonl[^:]*: (\{.*\})$/.exec(printed[1] ?? '') ?? [];
+    expect(JSON.parse(text)).toEqual({ account: ACCOUNT, right: 'erasure', received: NOW.toISOString(), scope: 'all' });
+  });
+
+  it('prints no register line for a dry run', async () => {
+    const { io, printed } = fake();
+    expect(await main(['account', '--account', ACCOUNT], io)).toBe(0);
+    expect(printed.join(' ')).not.toContain('objections.jsonl');
   });
 
   it('says what to export when the account erasure has no R2 token to list the telemetry bucket with, after every other step', async () => {
