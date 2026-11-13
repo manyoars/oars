@@ -156,6 +156,22 @@ describe('the nightly pool send', () => {
     expect(pool.requests.find((request) => request.url.pathname.endsWith('/complete'))?.body).toMatch(/"bytes":\d+/);
   });
 
+  it('states the stored link of each Raw Copy on its completion: the session key and the place, from the file name (t1252)', async () => {
+    const here = await scene('granted');
+    const pool = wire(OK_RAW);
+    await nightlyPoolSend(here.deps, pool.via);
+    const completes = pool.requests.filter((request) => request.url.pathname.endsWith('/complete'));
+    expect(completes.length).toBeGreaterThan(0);
+    const named = outboxFiles(here.staged, '.redacted');
+    for (const complete of completes) {
+      const hash = /\/v1\/raw\/([0-9a-f]{64})\/complete$/.exec(complete.url.pathname)?.[1] ?? '';
+      const file = named.find((name) => name.includes(hash)) ?? '';
+      const found = /([0-9a-f]{16})\.(\d+)\.[0-9a-f]{64}\.redacted$/.exec(file);
+      expect(found, file).not.toBeNull();
+      expect(header(complete, 'oars-raw-link')).toBe(`${found?.[1] ?? ''}.${found?.[2] ?? ''}`);
+    }
+  });
+
   it('sends skeletons only, and no raw part, after a no or no answer to the raw prompt', async () => {
     for (const consent of ['declined', null] as const) {
       const here = await scene(consent);
