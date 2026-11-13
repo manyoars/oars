@@ -905,8 +905,11 @@ export const poolDeposit = async (
   const expired = vocabularyExpired(deps);
   if (expired !== undefined) throw expired;
   // Accepting the covenant is a step of sending a batch: alone it would exit 0 as though something had been sent under it.
-  if (options.send === undefined && options.sendAll !== true && options.acceptCovenant !== undefined) throw usage('--accept-covenant belongs to --send and --send-all: it names the covenant version expected when a person accepts before a send. Nothing was accepted.', DEPOSIT);
-  if (options.send === undefined && options.sendAll !== true && options.inEuEeaUk !== undefined) throw usage(`${REGION_FLAG} belongs to --send and --send-all: it answers the question asked when a person accepts before a send. Nothing was accepted.`, DEPOSIT);
+  const accepting = 'accept with oars pool deposit --send <hash>, which shows the covenant screen';
+  if (options.sendAll === true && options.acceptCovenant !== undefined) throw usage(`--accept-covenant belongs to --send: --send-all never accepts a covenant, so ${accepting}. Nothing was accepted.`, DEPOSIT);
+  if (options.sendAll === true && options.inEuEeaUk !== undefined) throw usage(`${REGION_FLAG} belongs to --send: --send-all never accepts a covenant, so ${accepting}. Nothing was accepted.`, DEPOSIT);
+  if (options.send === undefined && options.acceptCovenant !== undefined) throw usage('--accept-covenant belongs to --send: it names the covenant version expected when a person accepts before a send. Nothing was accepted.', DEPOSIT);
+  if (options.send === undefined && options.inEuEeaUk !== undefined) throw usage(`${REGION_FLAG} belongs to --send: it answers the question asked when a person accepts before a send. Nothing was accepted.`, DEPOSIT);
   const region = options.inEuEeaUk === undefined ? undefined : regionOf(options.inEuEeaUk);
   if (options.inEuEeaUk !== undefined && region === undefined) throw usage(`${REGION_FLAG} takes yes or no, not "${options.inEuEeaUk}". Nothing was accepted.`, DEPOSIT);
   const outbox = outboxFolder(runtime.storeDir, server);

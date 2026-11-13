@@ -1504,7 +1504,7 @@ describe('oars pool deposit --send', () => {
   it('refuses --accept-covenant without --send, as a usage error, and sends nothing', async () => {
     const scene = await batched();
     expect(await scene.cli('pool', 'deposit', '--server', POOL, '--accept-covenant', 'v1', '--json')).toBe(ExitCode.USAGE);
-    expect(JSON.stringify(scene.document())).toContain('--accept-covenant belongs to --send and --send-all: it names the covenant version expected when a person accepts before a send. Nothing was accepted.');
+    expect(JSON.stringify(scene.document())).toContain('--accept-covenant belongs to --send: it names the covenant version expected when a person accepts before a send. Nothing was accepted.');
     expect(scene.seen).toEqual([]);
   });
 
@@ -4468,8 +4468,12 @@ describe('oars pool deposit --send-all (t1199)', () => {
     await expect(poolDeposit(scene.h.deps, { server: POOL, send: 'a'.repeat(64), sendAll: true, via: pool.via })).rejects.toMatchObject({ exitCode: ExitCode.USAGE });
     expect(pool.requests).toEqual([]);
     expect(await scene.cli('pool', 'deposit', '--server', POOL, '--send', 'a'.repeat(64), '--send-all')).toBe(ExitCode.USAGE);
-    await expect(poolDeposit(scene.h.deps, { server: POOL, acceptCovenant: 'v1' })).rejects.toThrow('belongs to --send and --send-all');
-    await expect(poolDeposit(scene.h.deps, { server: POOL, inEuEeaUk: 'no' })).rejects.toThrow('belongs to --send and --send-all');
+    await expect(poolDeposit(scene.h.deps, { server: POOL, acceptCovenant: 'v1' })).rejects.toThrow('belongs to --send');
+    await expect(poolDeposit(scene.h.deps, { server: POOL, inEuEeaUk: 'no' })).rejects.toThrow('belongs to --send');
+    // --send-all never accepts: a never-accepted account is refused, so both flags are usage errors that name the one-batch way to accept.
+    await expect(poolDeposit(scene.h.deps, { server: POOL, sendAll: true, acceptCovenant: 'v1', via: pool.via })).rejects.toThrow('oars pool deposit --send <hash>');
+    await expect(poolDeposit(scene.h.deps, { server: POOL, sendAll: true, inEuEeaUk: 'no', via: pool.via })).rejects.toThrow('oars pool deposit --send <hash>');
+    expect(pool.requests).toEqual([]);
   });
 
   it('stops at the failed batch with the counts and an error, and a second run sends only what is left, each of five once', async () => {
