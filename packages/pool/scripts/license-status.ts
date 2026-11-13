@@ -12,8 +12,10 @@ import { bareOf, decodedStrings, isAbsent, isText, PackError, readObjections, sq
 export const USAGE = [
   'Usage: license-status <match id> --key-id <id> --operator <dir> [--json]',
   '       license-status --ids <file> --key-id <id> --operator <dir> [--json]',
+  '       license-status --account <pool account id> --key-id <id> --operator <dir> [--json]',
   '  <match id>         the 64 hex characters a recipient holds a session under',
   '  --ids <file>       a file of match ids, one per line',
+  '  --account <id>     every match id index.jsonl records for that pool account (a deposit pack), so an account line\'s reach can be read',
   '  --key-id <id>      the id of the buyer key the match ids belong to (keyId in pack.json: 16 hex characters), never the key',
   '  --operator <dir>   the folder the owners file sits in, with index.jsonl, deliveries.jsonl, objections.jsonl, and notices.jsonl',
   '  --json             one JSON document in place of the table',
@@ -54,11 +56,11 @@ export interface DeliveryStatus {
   erasure: DeliveryErasure;
 }
 
-/** An objection that covers the row: by its session, or by a person's name found in its delivered text. The name itself is never carried. */
+/** An objection that covers the row: by its session, by a person's name found in its delivered text, or by the pool account the index records for it. The name and the account id are never carried. */
 export interface Withdrawal {
   received: string;
   scope: Objection['scope'];
-  basis: 'session' | 'name';
+  basis: 'session' | 'name' | 'account';
 }
 
 export interface LicenseStatus {
@@ -239,6 +241,9 @@ export const licenseStatus = async (operator: string, keyId: string, matchIds: r
     // An objection names a store id or the bare id its transcript carries (a Codex session), as the build reads it.
     const sessions = [...new Set([...entries, ...sent].map(({ session }) => session))];
     const covering: Withdrawal[] = objections.filter(({ session }) => session !== undefined && sessions.some((own) => own === session || bareOf(own) === session)).map(({ received, scope }): Withdrawal => ({ received, scope, basis: 'session' }));
+    // An account line reaches every session the index records for that account: a deposit row's index line is the only place the pool account is kept.
+    const accounts = new Set(entries.flatMap(({ account }) => (account === undefined ? [] : [account])));
+    covering.push(...objections.filter(({ account }) => account !== undefined && accounts.has(account)).map(({ received, scope }): Withdrawal => ({ received, scope, basis: 'account' })));
     const texts = names.length === 0 ? [] : await textsOf(folders);
     for (const { wanted, objection } of names) if (texts?.some((text) => text.includes(wanted)) === true) covering.push({ received: objection.received, scope: objection.scope, basis: 'name' });
     const withdrawn = covering.length === 0 && texts === undefined ? UNKNOWN : covering;
@@ -274,6 +279,9 @@ const cellsOf = (row: LicenseStatus): string[] => [
   row.covenant,
 ];
 
+/** The match ids index.jsonl records for a pool account, in the order the index lists them. */
+const accountMatchIds = async (operator: string, account: string): Promise<string[]> => [...new Set((await sound('index.jsonl', indexOf(resolve(operator)))).filter((entry) => entry.account === account).map(({ matchId }) => matchId))];
+
 /** The rows as a table, columns padded to their widest cell, then one line of counts. */
 export const tableOf = (report: StatusReport): string => {
   const lines = [HEADER, ...report.rows.map(cellsOf)];
@@ -287,7 +295,7 @@ export interface Io {
   print: (text: string) => void;
 }
 
-const VALUED = new Set(['--ids', '--key-id', '--operator']);
+const VALUED = new Set(['--account', '--ids', '--key-id', '--operator']);
 const KEY_ID = /^[0-9a-f]{16}$/;
 
 interface Asked {
@@ -323,13 +331,15 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
   const asked = askedOf(argv);
   if (typeof asked === 'string') return usage(asked);
   const [ids, keyId, operator] = ['--ids', '--key-id', '--operator'].map((flag) => asked.values.get(flag));
-  if ((asked.matchId === undefined) === (ids === undefined)) return usage('Give a match id, or a file of them with --ids.');
+  const account = asked.values.get('--account');
+  if (account !== undefined ? asked.matchId !== undefined || ids !== undefined : (asked.matchId === undefined) === (ids === undefined)) return usage('Give a match id, or a file of them with --ids, or one pool account with --account.');
   if (keyId === undefined) return usage('Missing --key-id.');
   if (operator === undefined) return usage('Missing --operator.');
   if (!KEY_ID.test(keyId)) return usage('--key-id takes the key\'s id, the 16 hex characters pack.json holds as keyId, never the key.');
   if (asked.matchId !== undefined && !MATCH_ID.test(asked.matchId)) return usage('A match id is 64 hex characters.');
   try {
-    const matchIds = asked.matchId !== undefined ? [asked.matchId] : await idsIn(ids ?? '');
+    const matchIds = account !== undefined ? await accountMatchIds(operator, account) : asked.matchId !== undefined ? [asked.matchId] : await idsIn(ids ?? '');
+    if (account !== undefined && matchIds.length === 0) throw new PackError('index.jsonl names no session of this account: check the account id.');
     const report = await licenseStatus(operator, keyId, matchIds.map((matchId) => matchId.toLowerCase()));
     io.print(asked.json ? JSON.stringify(report, null, 2) : tableOf(report));
     return 0;

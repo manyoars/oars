@@ -34,7 +34,7 @@ export const USAGE = [
   '  --out <dir>          an empty or new folder outside every git repository',
   '  --deposits <folder>  a folder `pull-deposits` wrote: its Raw Copies are drawn in place of the store\'s sessions, each row naming a depositor and the covenant (--owners still names the folder of the index and the objections)',
   '  --size <n>           sessions to emit (default 25); --seed <text> orders the draw (default 1)',
-  '  objections.jsonl     beside the owners file, optional: a line per objection, naming a session id or a person; each session it names, or whose text names the person, is left out and counted (docs/pool.md)',
+  '  objections.jsonl     beside the owners file, optional: a line per objection, naming a session id, a person, or (for a deposit pack) a pool account with the right invoked; each session it names, or whose text names the person, or that the account deposited, is left out and counted (docs/pool.md)',
   '  --sessions <file>    build the pack from exactly the store session ids in this file (one per line) in place of the seeded draw; every rule still applies, and each listed session left out is printed with the reason (term, noOwner, lead, tooShort, duplicate, secret, notFound, ...). Not with --size or --seed',
   '  --min-turns <n>      a session needs at least this many turns, user plus assistant (default 20); a shorter one is left out and counted',
   '  --strip-thinking     leave the reasoning of the model out of the transcripts: every thinking and redacted_thinking block (text, signature, encrypted data) and every Codex reasoning item; the manifest and pack.json say reasoning: stripped (kept otherwise). The thinking-token count in the skeleton stays',
@@ -144,8 +144,8 @@ export interface ManifestRow {
 }
 
 /**
- * A row built from a deposit also holds when the cited covenant acceptance was made, as an ISO time (docs/pool-deposit-title.md section 1). It is a type of its own, not an optional field of `ManifestRow`,
- * because `validate-pack.ts` types its field table by `ManifestRow`: brief 3 lists `acceptedAt` there and in `docs/session-record.md`, and moves it into the interface.
+ * A row built from a deposit also holds when the cited covenant acceptance was made, as an ISO time (docs/pool-deposit-title.md section 1). It is a type of its own, not an optional field of `ManifestRow`:
+ * `validate-pack.ts` lists `acceptedAt` in its own field table (optional, and only beside a `depositor:<16 hex>` owner) and `docs/session-record.md` states it, so an operator row, which never holds it, keeps the narrower type.
  */
 export type DepositManifestRow = ManifestRow & { acceptedAt: string };
 
@@ -212,6 +212,8 @@ export interface PackCounts {
   /** Only with `--exclude-manifest`: a session the named lot holds. */
   inExcludedLot?: number;
   emitted: number;
+  /** Only for a pack built `--deposits`: dropped because an account line in `objections.jsonl` names the depositor's account (Art. 21(1)); `objected` counts the session and name lines. */
+  objectedAccount?: number;
   /** Only for a pack built `--deposits`: why Raw Copies were left out before the rules above. */
   deposits?: DepositCounts;
 }
@@ -237,9 +239,15 @@ export const OBJECTION_SCOPES = ['sale', 'training', 'all'] as const;
 export interface Objection {
   session?: string;
   name?: string;
+  /** An account line (pool deposits, `docs/pool-rights.md`): every session of that pool account, and nothing else; it carries `right`. */
+  account?: string;
+  right?: (typeof OBJECTION_RIGHTS)[number];
   received: string;
   scope: (typeof OBJECTION_SCOPES)[number];
 }
+
+/** The right an account line records: it is the same exclusion for all three, and the register keeps which was invoked. */
+export const OBJECTION_RIGHTS = ['erasure', 'restriction', 'objection'] as const;
 
 export const OBJECTIONS_FILE = 'objections.jsonl';
 
@@ -276,6 +284,7 @@ export const parseOwners = (text: string): OwnerRule[] => {
   });
 };
 
+const isRight = (value: unknown): value is NonNullable<Objection['right']> => OBJECTION_RIGHTS.some((right) => right === value);
 const isScope = (value: unknown): value is Objection['scope'] => OBJECTION_SCOPES.some((scope) => scope === value);
 
 /** The SHA-256 of `objections.jsonl` as read, or this when the file is absent: pack.json records it, and `deliver` refuses a pack whose recorded value is not the file's now. */
@@ -304,13 +313,17 @@ export const readObjections = async (dir: string): Promise<{ objections: Objecti
       const value: unknown = Reflect.get(fields, name);
       return value;
     };
-    const [session, name, received, scope] = [field('session'), field('name'), field('received'), field('scope')];
+    const [session, name, account, right, received, scope] = [field('session'), field('name'), field('account'), field('right'), field('received'), field('scope')];
     if (session !== undefined && (!isText(session) || session === '')) throw new PackError(`${where} needs session to be a session id.`);
     if (name !== undefined && (!isText(name) || name.trim() === '')) throw new PackError(`${where} needs name to be a person's name.`);
-    if (session === undefined && name === undefined) throw new PackError(`${where} names no session and no person.`);
+    if (account !== undefined && (!isText(account) || account.trim() === '')) throw new PackError(`${where} needs account to be an account id.`);
+    if (account !== undefined && (session !== undefined || name !== undefined)) throw new PackError(`${where} is an account line, so it names no session and no person.`);
+    if (account !== undefined && !isRight(right)) throw new PackError(`${where} needs right to be one of ${OBJECTION_RIGHTS.join(', ')}.`);
+    if (account === undefined && right !== undefined) throw new PackError(`${where} names a right but no account.`);
+    if (session === undefined && name === undefined && account === undefined) throw new PackError(`${where} names no session, no person, and no account.`);
     if (!isText(received) || !received.includes('T') || Number.isNaN(Date.parse(received))) throw new PackError(`${where} needs received to be an ISO date and time, such as 2026-06-05T09:30:00Z.`);
     if (!isScope(scope)) throw new PackError(`${where} needs scope to be one of ${OBJECTION_SCOPES.join(', ')}.`);
-    return { ...(session === undefined ? {} : { session }), ...(name === undefined ? {} : { name }), received, scope };
+    return { ...(session === undefined ? {} : { session }), ...(name === undefined ? {} : { name }), ...(isText(account) && isRight(right) ? { account, right } : {}), received, scope };
   });
   return { objections, hash: createHash('sha256').update(text).digest('hex') };
 };
@@ -1186,6 +1199,9 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
     const paired = input?.verdictOf(record.project, record.session);
     return paired !== undefined && 'paired' in paired && objectedSessions.has(paired.paired.session);
   };
+  // A deposit session's project is its pool account, so an account line is read against that and nothing else; an operator folder is never an account.
+  const objectedAccounts = new Set(objections.flatMap(({ account }) => (account === undefined ? [] : [account])));
+  const isAccountObjected = (record: { project: string }): boolean => input !== undefined && objectedAccounts.has(record.project);
   const objectedNames = objections.flatMap(({ name }) => (name === undefined ? [] : [squashed(name.trim())]));
   const domains = await readRedactDomains(runtime.storeDir);
   const names = localNames();
@@ -1248,7 +1264,7 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
   const olderThan = ageFilterOf(options.olderThanDays ?? (options.skeletonOnly === true ? SKELETON_DEFAULT_DAYS : undefined), options.now ?? Date.now);
   const excludedLot = options.excludeManifest === undefined ? undefined : await excludedSessionsOf(options.excludeManifest, join(dirname(resolve(options.owners)), 'index.jsonl'), PackError);
   const limit = listed === undefined ? options.size : Infinity;
-  const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, lead: 0, tooShort: 0, noRepo: 0, duplicate: 0, noSkeleton: 0, noPointer: 0, objected: 0, secret: 0, ...(olderThan === undefined ? {} : { fresh: 0 }), ...(excludedLot === undefined ? {} : { inExcludedLot: 0 }), emitted: 0, ...(input === undefined ? {} : { deposits: input.counts }) };
+  const counts: PackCounts = { frame: frame.length, scanned: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, noOwner: 0, noHarnessTerms: 0, lead: 0, tooShort: 0, noRepo: 0, duplicate: 0, noSkeleton: 0, noPointer: 0, objected: 0, secret: 0, ...(olderThan === undefined ? {} : { fresh: 0 }), ...(excludedLot === undefined ? {} : { inExcludedLot: 0 }), emitted: 0, ...(input === undefined ? {} : { objectedAccount: 0, deposits: input.counts }) };
   const turnsOf = (session: { userTurns: number; assistantTurns: number }): number => session.userTurns + session.assistantTurns;
   // The rules up to the repository one, once per session: the duplicate rule asks them only of the members of a group that shares a first prompt, the draw of the sessions it reaches; a singleton the draw never reaches is never gated.
   const earlyBy = new Map<string, Promise<Early>>();
@@ -1305,6 +1321,10 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
     if (listed !== undefined) pending = { session: record.session, before: tally(counts), emitted: counts.emitted };
     counts.scanned += 1;
     // Before this session's own gate: an objection is honored even for a session the other rules would have left out anyway, and it is the first reason counted.
+    if (isAccountObjected(record)) {
+      counts.objectedAccount = (counts.objectedAccount ?? 0) + 1;
+      continue;
+    }
     if (isObjected(record)) {
       counts.objected += 1;
       continue;
@@ -1318,7 +1338,7 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
     // Read once, on the first session that gets this far. A loser is chosen only among sessions that pass every rule above, so a longer twin that one of them drops never costs the shorter its place; a duplicate's other half may not be drawn at all.
     if (losers === undefined) {
       // An objected session is no member of a group: a longer one that never ships must not cost its shorter replay the place.
-      const everyone = frame.filter((record) => !isObjected(record)).map((record) => ({ session: record.session, project: record.project, turns: turnsOf(record), repo: record.repo, record }));
+      const everyone = frame.filter((record) => !isObjected(record) && !isAccountObjected(record)).map((record) => ({ session: record.session, project: record.project, turns: turnsOf(record), repo: record.repo, record }));
       losers = await duplicatesOf(runtime, everyone, async (member) => 'accepted' in (await earlyOf(member.record)));
     }
     if (losers.has(record.session)) {
@@ -1520,7 +1540,7 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
         `Left out after the gate: ${String(counts.noOwner)} in a folder no owner entry names, ${String(counts.noHarnessTerms)} from a harness with no terms row, ${String(counts.tooShort)} under ${String(options.minTurns)} turns, ${String(counts.noRepo)} with no repository, ${String(counts.duplicate)} replaying a longer session, ${String(counts.objected)} under an objection, ${String(counts.secret)} holding a secret after redaction.`,
         ...(counts.fresh === undefined ? [] : [`Left out as newer than the age limit: ${String(counts.fresh)}.`]),
         ...(counts.inExcludedLot === undefined ? [] : [`Left out as held by the excluded lot: ${String(counts.inExcludedLot)}.`]),
-        ...(counts.deposits === undefined ? [] : [`Left out of the deposits: ${String(counts.deposits.unlinked)} with no deposit row, ${String(counts.deposits.tierNone)} of tier none, ${String(counts.deposits.protectedRegion)} from a protected region, ${String(counts.deposits.noGrant)} with no proved acceptance.`]),
+        ...(counts.deposits === undefined ? [] : [`Left out of the deposits: ${String(counts.deposits.unlinked)} with no deposit row, ${String(counts.deposits.tierNone)} of tier none, ${String(counts.deposits.protectedRegion)} from a protected region, ${String(counts.deposits.noGrant)} with no proved acceptance, ${String(counts.objectedAccount ?? 0)} under an account line.`]),
         ...dropped,
       ].join('\n'),
     );

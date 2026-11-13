@@ -16,6 +16,7 @@ vi.mock('./survival.js', () => ({ readSurvival: () => Promise.resolve(cardSurviv
 const { depositorLine, sessionsCard } = await import('./card-command.js');
 const { outboxFolder } = await import('./pool-outbox.js');
 const { signInsFile } = await import('./pool-replica.js');
+const { crewNumberOf, keepCrewNumber } = await import('./crew-mark.js');
 
 const SERVER = 'https://pool.manyoars.com';
 const KEYS = { k1: { kty: 'OKP', crv: 'Ed25519', x: 'a-pinned-key' } };
@@ -66,6 +67,29 @@ describe('depositorLine', () => {
     writeFileSync(signInsFile(dir), 'not json');
     expect(await depositorLine(dir, {}, CARD_NOW)).toBe(ASHORE);
     expect(await depositorLine(dir, { OARS_POOL_URL: 'not a url' }, CARD_NOW)).toBe(ASHORE);
+  });
+
+  it('adds the founding crew mark when this machine learned a number for this pool, and drops it for another pool or a file that is not ours', async () => {
+    signIn(CARD_NOW + 1000);
+    sent();
+    await keepCrewNumber(dir, SERVER, 'acct_one', 12);
+    expect(await depositorLine(dir, {}, CARD_NOW)).toBe('weeks rowing (this machine): 2 · founding crew #12');
+    await keepCrewNumber(dir, 'https://pool.example.com', 'acct_one', 12);
+    expect(await depositorLine(dir, {}, CARD_NOW)).toBe('weeks rowing (this machine): 2');
+    await keepCrewNumber(dir, SERVER, 'acct_one', undefined);
+    expect(await depositorLine(dir, {}, CARD_NOW)).toBe('weeks rowing (this machine): 2');
+    writeFileSync(join(dir, 'pool-crew.json'), 'not json');
+    expect(await depositorLine(dir, {}, CARD_NOW)).toBe('weeks rowing (this machine): 2');
+    expect(await crewNumberOf(dir, SERVER, 'acct_one')).toBeUndefined();
+  });
+
+  it('shows no crew mark for a number kept for another account than the one signed in now', async () => {
+    signIn(CARD_NOW + 1000);
+    sent();
+    await keepCrewNumber(dir, SERVER, 'acct_two', 12);
+    expect(await depositorLine(dir, {}, CARD_NOW)).toBe('weeks rowing (this machine): 2');
+    await keepCrewNumber(dir, SERVER, 'acct_one', 12);
+    expect(await depositorLine(dir, {}, CARD_NOW)).toBe('weeks rowing (this machine): 2 · founding crew #12');
   });
 
   it('does not swallow an error that is not the command\'s own', async () => {
