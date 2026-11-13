@@ -686,6 +686,19 @@ The published covenant is held in two places that a test keeps equal. `docs/cove
 
 What it cannot tell. An install is the first telemetry event an install id sends, so a user who runs with telemetry off is not counted, and CI runs are not separated from other installs. Installs and accounts are not joined: they are two counts from one start time, and the rollup's `account` column stays empty. Day grain: an install first seen on `start_day` counts even if it was seen earlier that day. "Shown the covenant" is not recorded. Retention: nothing deletes or rolls up `telemetry_install_days` rows except the nightly re-roll of one day, which replaces that day's rows (the sweeps drop R2 batches past 90 days and three other tables, never these rows), so an install's earliest day is not lost to retention. The count is still wrong in two cases: a day cut by the 800-batch budget keeps only the installs in the batches read, and a day the cron missed is never rolled up (the cron reaches only the last two days; `rollupDay` by hand fills one while R2 still holds it), so an install seen only on that day shows up on its next active day. A hand `rollupDay` on a day past the 90-day sweep lists no batches and still replaces that day's rows with nothing, so it must not be run for such a day. No retention was changed. An erasure leaves an account's acceptance rows in place, because they hold only the pool's own account id, the version, the time, the hash of the text shown, the input method, the client version, the answer to the region question, and the request's country, and are the record of consent.
 
+## The real-work table
+
+`real-work-table` builds the data of the one-fleet leaderboard: per model, harness, and harness version bucket, and per tool, how real sessions went, each row with its n.
+
+```
+npm run real-work-table -w packages/pool -- <store folder> --terms <file> --owners <file> --out <dir> [--projects <folder>] [--min-sessions <n>] [--date <YYYY-MM-DD>]
+```
+
+- It reads the sessions store (never written) and runs the exclusion gate (A38) and the `sample-pack` owner filter before any count. `table.json` opens with a header: the build date, the store's session count, the label `one fleet`, the spec version, and the sessions left out by reason (`term`, `noRaw`, `noTerms`, `unreadable`, `noOwner`).
+- A row holds its n as `sessions` and `calls`, plus `failures` and `failureRate`; `recovered` and `callsToRecover` (the failed call's distance to the next edit or clean call, within the six calls the store's own `editFollowed` uses); `editFollowedShare`; and, on a model, harness, and bucket row, `prompts`, `interventionsPerPrompt` (a prompt's `intervention` other than `none` or `unknown`), and `tokensPerPrompt` by prompt class. It reports counts and rates, no ranking score and no pass or fail label.
+- A row under `--min-sessions` (default 5) is left out and counted in the header. Names come from closed lists: harness names, version buckets, public tool names, model ids with a public prefix, and prompt classes; anything else is `other`.
+- `--out` is refused inside a git repository. The run over the real store is the operator's own step; tests use fixtures only.
+
 ## Tests
 
 `packages/pool` runs the bundled handler and its D1 store under the Workers runtime through Miniflare, in-process, with a stub sign-in provider behind the Worker's outbound fetch (its device, token, and profile routes), so it needs no Docker, account, or network. `full-run.test.ts` drives the real CLI commands against it over a local socket.
