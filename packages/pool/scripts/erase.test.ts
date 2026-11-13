@@ -423,6 +423,30 @@ describe('erasing one account removes its own rows and its link to the shared to
     expect(await count('SELECT COUNT(*) AS held FROM club_members WHERE nickname = ?', `nick-${account}`)).toBe(0);
   });
 
+  it('deletes its crew number, the codes it made or used, and every vouch edge it is on, and leaves the rows of an account it vouched for or was vouched by', async () => {
+    const { account } = await member();
+    const friend = await member();
+    const bystander = await member();
+    const db = await pool.db();
+    await db.prepare('UPDATE accounts SET crew_number = 61 WHERE id = ?').bind(account).run();
+    await db.prepare('UPDATE accounts SET crew_number = 62 WHERE id = ?').bind(bystander.account).run();
+    await db.prepare('INSERT INTO invites (code_hash, inviter, created_at, used_by, used_at) VALUES (?, ?, 1, ?, 2)').bind(`erase-made-${account}`, account, friend.account).run();
+    await db.prepare('INSERT INTO invites (code_hash, inviter, created_at) VALUES (?, ?, 1)').bind(`erase-open-${account}`, account).run();
+    await db.prepare('INSERT INTO invites (code_hash, inviter, created_at, used_by, used_at) VALUES (?, ?, 1, ?, 2)').bind(`erase-used-${account}`, friend.account, account).run();
+    await db.prepare('INSERT INTO invites (code_hash, inviter, created_at) VALUES (?, ?, 1)').bind(`erase-keep-${bystander.account}`, bystander.account).run();
+    await db.prepare('INSERT INTO vouch_edges (inviter, invitee, at) VALUES (?, ?, 2)').bind(account, friend.account).run();
+    await db.prepare('INSERT INTO vouch_edges (inviter, invitee, at) VALUES (?, ?, 2)').bind(friend.account, account).run();
+    await db.prepare('INSERT INTO vouch_edges (inviter, invitee, at) VALUES (?, ?, 2)').bind(bystander.account, friend.account).run().catch(() => undefined);
+
+    await eraseAccount(await store(), account, NOW);
+
+    expect(await count('SELECT COUNT(*) AS held FROM accounts WHERE id = ? AND crew_number IS NOT NULL', account)).toBe(0);
+    expect(await count('SELECT COUNT(*) AS held FROM invites WHERE inviter = ? OR used_by = ?', account, account)).toBe(0);
+    expect(await count('SELECT COUNT(*) AS held FROM vouch_edges WHERE inviter = ? OR invitee = ?', account, account)).toBe(0);
+    expect(await count('SELECT COUNT(*) AS held FROM accounts WHERE id = ? AND crew_number = 62', bystander.account)).toBe(1);
+    expect(await count('SELECT COUNT(*) AS held FROM invites WHERE inviter = ?', bystander.account)).toBe(1);
+  });
+
   it('deletes its repo keys and deposit hours, clears its telemetry account, and leaves the other account\'s rows', async () => {
     const { token, account } = await member();
     const other = await member();

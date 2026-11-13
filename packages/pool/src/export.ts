@@ -57,13 +57,13 @@ const json = (row: unknown, name: string): unknown => {
 const SECTIONS: readonly Section[] = [
   {
     name: 'account',
-    select: 'id, covenant, raw_consent, access, source, first_seen, provider_created, fetch_week, fetches, raw_consent_version, raw_consent_withdrawn_at, raw_consent_withdrawn_version, closed_at',
+    select: 'id, covenant, raw_consent, access, source, first_seen, provider_created, fetch_week, fetches, raw_consent_version, raw_consent_withdrawn_at, raw_consent_withdrawn_version, closed_at, crew_number',
     table: 'accounts',
     owner: 'id',
     order: ['id'],
     keyed: ['id'],
     page: SMALL_PAGE,
-    view: (row) => ({ id: text(row, 'id'), covenant: text(row, 'covenant'), rawConsent: count(row, 'raw_consent'), access: text(row, 'access'), source: text(row, 'source'), firstSeen: count(row, 'first_seen'), providerCreated: count(row, 'provider_created'), fetchWeek: text(row, 'fetch_week'), fetches: count(row, 'fetches'), rawConsentVersion: text(row, 'raw_consent_version'), rawConsentWithdrawnAt: count(row, 'raw_consent_withdrawn_at'), rawConsentWithdrawnVersion: text(row, 'raw_consent_withdrawn_version'), closedAt: count(row, 'closed_at') }),
+    view: (row) => ({ id: text(row, 'id'), covenant: text(row, 'covenant'), rawConsent: count(row, 'raw_consent'), access: text(row, 'access'), source: text(row, 'source'), firstSeen: count(row, 'first_seen'), providerCreated: count(row, 'provider_created'), fetchWeek: text(row, 'fetch_week'), fetches: count(row, 'fetches'), rawConsentVersion: text(row, 'raw_consent_version'), rawConsentWithdrawnAt: count(row, 'raw_consent_withdrawn_at'), rawConsentWithdrawnVersion: text(row, 'raw_consent_withdrawn_version'), closedAt: count(row, 'closed_at'), crewNumber: count(row, 'crew_number') }),
   },
   // When a sign-in ends and nothing else: the hash that is the credential's only stored form is not selected.
   { name: 'tokens', select: 'rowid AS n, expires_at', table: 'tokens', owner: 'account', order: ['rowid'], keyed: ['n'], page: SMALL_PAGE, view: (row) => ({ expiresAt: count(row, 'expires_at') }) },
@@ -143,6 +143,11 @@ const SECTIONS: readonly Section[] = [
   { name: 'clubs', select: 'club, nickname, joined_at', table: 'club_members', owner: 'account', order: ['club'], keyed: ['club'], page: SMALL_PAGE, view: (row) => ({ club: text(row, 'club'), nickname: text(row, 'nickname'), joinedAt: count(row, 'joined_at') }) },
   { name: 'clubConsents', select: 'id, club, text_sha256, accepted_at', table: 'club_consents', owner: 'account', order: ['id'], keyed: ['id'], page: SMALL_PAGE, view: (row) => ({ club: text(row, 'club'), textSha256: text(row, 'text_sha256'), acceptedAt: count(row, 'accepted_at') }) },
   { name: 'standing', select: 'granted_at, granted_by, reason', table: 'board_standing', owner: 'account', order: ['granted_at'], keyed: ['granted_at'], page: SMALL_PAGE, view: (row) => ({ grantedAt: count(row, 'granted_at'), grantedBy: text(row, 'granted_by'), reason: text(row, 'reason') }) },
+  // The founding crew (migration 0041). The code's hash is credential material and the other end of an edge is another person's pseudonym: neither is exported, only the account's own times and whether a code it made was used.
+  { name: 'invitesMade', select: 'id, created_at, used_by IS NOT NULL AS used, used_at', table: 'invites', owner: 'inviter', order: ['id'], keyed: ['id'], page: SMALL_PAGE, view: (row) => ({ createdAt: count(row, 'created_at'), used: count(row, 'used') === 1, usedAt: count(row, 'used_at') }) },
+  { name: 'inviteUsed', select: 'id, created_at, used_at', table: 'invites', owner: 'used_by', order: ['id'], keyed: ['id'], page: SMALL_PAGE, view: (row) => ({ createdAt: count(row, 'created_at'), usedAt: count(row, 'used_at') }) },
+  { name: 'vouchesGiven', select: 'id, at', table: 'vouch_edges', owner: 'inviter', order: ['id'], keyed: ['id'], page: SMALL_PAGE, view: (row) => ({ at: count(row, 'at') }) },
+  { name: 'vouchReceived', select: 'id, at', table: 'vouch_edges', owner: 'invitee', order: ['id'], keyed: ['id'], page: SMALL_PAGE, view: (row) => ({ at: count(row, 'at') }) },
   { name: 'clubAttempts', select: 'id, kind, at', table: 'club_attempts', owner: 'account', order: ['id'], keyed: ['id'], page: SMALL_PAGE, view: (row) => ({ kind: text(row, 'kind'), at: count(row, 'at') }) },
   { name: 'clubHides', select: 'id, club, nickname, hidden_at, hidden_by, reason, seated_at', table: 'club_hides', owner: 'account', order: ['id'], keyed: ['id'], page: SMALL_PAGE, view: (row) => ({ club: text(row, 'club'), nickname: text(row, 'nickname'), hiddenAt: count(row, 'hidden_at'), hiddenBy: text(row, 'hidden_by'), reason: text(row, 'reason'), seatedAt: count(row, 'seated_at') }) },
   // A deposit as it now reads: an erased one holds the marker the erasure left, and `tombstone` is the day it was erased.
