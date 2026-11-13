@@ -11,6 +11,7 @@ import { poolServer } from './pool-command.js';
 import { outboxFolder } from './pool-outbox.js';
 import { loadSignIns } from './pool-replica.js';
 import { sentLog } from './pool-sent.js';
+import { crewMarkText, crewNumberOf } from './crew-mark.js';
 import { loadStore } from './store.js';
 import { readSurvival } from './survival.js';
 import type { SessionsDeps } from './command.js';
@@ -37,7 +38,8 @@ export const depositorLine = async (storeDir: string, env: NodeJS.ProcessEnv, no
       const time = Date.parse(at);
       if (!Number.isNaN(time)) weeks.add(Math.floor((time - FIRST_MONDAY) / WEEK));
     }
-    return `weeks rowing (this machine): ${String(weeks.size)}`;
+    const crew = await crewNumberOf(storeDir, server);
+    return `weeks rowing (this machine): ${String(weeks.size)}${crew === undefined ? '' : ` · ${crewMarkText(crew)}`}`;
   } catch (error) {
     if (error instanceof CliError) return ASHORE;
     throw error;

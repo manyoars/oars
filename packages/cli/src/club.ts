@@ -2,6 +2,7 @@
 import { createHash } from 'node:crypto';
 import type { Outcome, RunDeps } from './cli.js';
 import { CliError, exitCodeForProblem, ExitCode } from './errors.js';
+import { crewMarkText } from './sessions/crew-mark.js';
 import { ask, isTerminal, lineFrom, poolServer, runtimeOf, type Reply } from './sessions/pool-command.js';
 import { isObject, loadSignIns, numberIn, textIn } from './sessions/pool-replica.js';
 
@@ -107,6 +108,8 @@ interface Row {
   place: number;
   nickname: string;
   ashore: boolean;
+  /** The founding crew number the pool put beside this nickname, when it did. */
+  crewNumber?: number | undefined;
   weeksRowing: number;
   activeDays: number;
   sessions: number;
@@ -118,15 +121,17 @@ const rowsOf = (body: unknown): Row[] => {
   const rows: Row[] = [];
   for (const member of Array.isArray(members) ? members : []) {
     if (!isObject(member)) continue;
-    rows.push({ place: numberIn(member, 'place') ?? rows.length + 1, nickname: textIn(member, 'nickname') ?? '', ashore: Reflect.get(member, 'ashore') === true, weeksRowing: numberIn(member, 'weeksRowing') ?? 0, activeDays: numberIn(member, 'activeDays') ?? 0, sessions: numberIn(member, 'sessions') ?? 0, strokesThisWeek: numberIn(member, 'strokesThisWeek') ?? 0 });
+    rows.push({ place: numberIn(member, 'place') ?? rows.length + 1, nickname: textIn(member, 'nickname') ?? '', ashore: Reflect.get(member, 'ashore') === true, crewNumber: numberIn(member, 'crewNumber'), weeksRowing: numberIn(member, 'weeksRowing') ?? 0, activeDays: numberIn(member, 'activeDays') ?? 0, sessions: numberIn(member, 'sessions') ?? 0, strokesThisWeek: numberIn(member, 'strokesThisWeek') ?? 0 });
   }
   return rows;
 };
 
 /** The board as lines, in the pool's order: a member with no counting week is "ashore" and has no numbers. */
 const tableOf = (rows: readonly Row[]): string => {
-  const head = ['#', 'nickname', 'weeks rowing', 'active days', 'sessions', 'strokes this week'];
-  const body = rows.map((row) => [String(row.place), row.nickname, ...(row.ashore ? ['ashore', '', '', ''] : [String(row.weeksRowing), String(row.activeDays), String(row.sessions), String(row.strokesThisWeek)])]);
+  // The crew column appears only when a row carries a number, and it holds that row's own mark: nothing here counts the crew.
+  const crewed = rows.some((row) => row.crewNumber !== undefined);
+  const head = ['#', 'nickname', ...(crewed ? ['crew'] : []), 'weeks rowing', 'active days', 'sessions', 'strokes this week'];
+  const body = rows.map((row) => [String(row.place), row.nickname, ...(crewed ? [row.crewNumber === undefined ? '' : crewMarkText(row.crewNumber)] : []), ...(row.ashore ? ['ashore', '', '', ''] : [String(row.weeksRowing), String(row.activeDays), String(row.sessions), String(row.strokesThisWeek)])]);
   const widths = head.map((title, at) => Math.max(title.length, ...body.map((line) => (line[at] ?? '').length)));
   return [head, ...body].map((line) => line.map((cell, at) => cell.padEnd(widths[at] ?? 0)).join('  ').trimEnd()).join('\n');
 };

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, server, useServer } from '../test-support.js';
+import { crewNumberOf } from './crew-mark.js';
 import { joinLineOf } from './pool-command.js';
 import { signInsFile } from './pool-replica.js';
 import { cleanup, settledClock, stage } from './test-support.js';
@@ -22,10 +23,27 @@ const scene = (expiresAt = Date.parse('2099-01-01T00:00:00Z')) => {
   h.deps.now = settledClock;
   mkdirSync(staged.storeDir, { recursive: true });
   writeFileSync(signInsFile(staged.storeDir), JSON.stringify([{ server: POOL, account: 'acct_one', token: TOKEN, expiresAt, signingKeys: { k1: { kty: 'OKP', crv: 'Ed25519', x: 'a-pinned-key' } } }]));
-  return { h, cli: (...args: string[]): Promise<ExitCode> => run(args, h.deps) };
+  return { h, storeDir: staged.storeDir, cli: (...args: string[]): Promise<ExitCode> => run(args, h.deps) };
 };
 
 describe('oars pool invite', () => {
+  it('keeps the crew number the pool states, for the card', async () => {
+    const s = scene();
+    server.use(
+      http.post(`${POOL}/v1/invites`, () => HttpResponse.json({ code: 'ABCD2345', invitesLeft: 2 }, { status: 201 })),
+      http.get(`${POOL}/v1/me`, ({ request }) => (request.headers.get('authorization') === `Bearer ${TOKEN}` ? HttpResponse.json({ crewNumber: 12 }) : new HttpResponse(null, { status: 401 }))),
+    );
+    expect(await s.cli('pool', 'invite', '--server', POOL)).toBe(ExitCode.OK);
+    expect(await crewNumberOf(s.storeDir, POOL)).toBe(12);
+  });
+
+  it('prints the invite all the same when the crew number cannot be read', async () => {
+    const s = scene();
+    server.use(http.post(`${POOL}/v1/invites`, () => HttpResponse.json({ code: 'ABCD2345', invitesLeft: 2 }, { status: 201 })), http.get(`${POOL}/v1/me`, () => new HttpResponse(null, { status: 500 })));
+    expect(await s.cli('pool', 'invite', '--server', POOL)).toBe(ExitCode.OK);
+    expect(await crewNumberOf(s.storeDir, POOL)).toBeUndefined();
+  });
+
   it('prints the code once, the line to hand on, and what the vouch earns, without the token', async () => {
     const s = scene();
     const seen: Array<string | null> = [];

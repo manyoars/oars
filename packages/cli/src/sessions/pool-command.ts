@@ -17,6 +17,7 @@ import { deriveConsequences } from './recall-consequence.js';
 import { readRecalls } from './recall-object.js';
 import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, recommendationsOf, sessionsOf, skeletonOf, unpinnedKid, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
 import { carriedDeltas, heldDeltas, keptDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
+import { keepCrewNumber } from './crew-mark.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { rawAllowed, rawStale, sendsOf } from './pool-choices.js';
 import { heldRaw, rawParts, removeRawExcept, writeRaw } from './pool-raw.js';
@@ -1187,6 +1188,7 @@ export const poolJoin = async (
       say(`Sending ${plural(hashes.length, 'batch', 'batches')} to ${server}.`);
       for (const hash of hashes) sends.push(show(await poolDeposit(deps, { server, send: hash, acceptCovenant: options.acceptCovenant, inEuEeaUk: options.inEuEeaUk })).document);
     }
+    await rememberCrew(deps, storeDir, server, (await signedIn(deps, storeDir, server, JOIN)).token);
     say(`Fetching the bundle for ${options.harness ?? 'your most used harness'} ${options.harnessVersion}.`);
     const fetched = show(await poolFetch(deps, { server, harness: options.harness, harnessVersion: options.harnessVersion }));
     return {
@@ -1200,6 +1202,18 @@ export const poolJoin = async (
 };
 
 const INVITE = 'pool-invite';
+
+/** Asks the pool for this account's crew number and keeps it for the card. Best effort: a refusal or a failed call leaves what was held, because nothing the person asked for depends on it. */
+const rememberCrew = async (deps: RunDeps, storeDir: string, server: string, token: string): Promise<void> => {
+  try {
+    const credential = new Masker();
+    credential.add(token);
+    const reply = await ask(deps, INVITE, server, '/v1/me', { token, show: credential });
+    if (reply.status === 200 && isObject(reply.body)) await keepCrewNumber(storeDir, server, numberIn(reply.body, 'crewNumber'));
+  } catch {
+    // The card shows the number when it is known and says nothing when it is not.
+  }
+};
 
 /** The one line an invitee runs. `<version>` stays a placeholder: the harness version is the invitee's own to name. */
 export const joinLineOf = (code: string): string => `oars pool join --invite ${code} --harness-version <version>`;
@@ -1218,6 +1232,7 @@ export const poolInvite = async (deps: RunDeps, options: { server?: string | und
   const code = isObject(reply.body) ? textIn(reply.body, 'code') : undefined;
   const left = isObject(reply.body) ? numberIn(reply.body, 'invitesLeft') : undefined;
   if (code === undefined) throw new CliError('The pool answered an invite with no code.', ExitCode.UNEXPECTED, INVITE);
+  await rememberCrew(deps, storeDir, server, token);
   const line = joinLineOf(code);
   return {
     document: { ok: true, server, code, join: line, ...(left === undefined ? {} : { invitesLeft: left }) },
