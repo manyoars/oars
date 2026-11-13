@@ -247,9 +247,11 @@ const carriedIn = (account: string, index: number, before: readonly SessionRecor
  * The same deltas as `carriedDeltas`, one window at a time: `sessions` are placed from their session records alone, and `load` reads the full records of the ids one window needs (all of the window before, the first `DELTA_MIN_SESSIONS` after).
  * What is held at once is one window's records, never the history.
  */
-export const carriedDeltasByWindow = async (account: string, sessions: readonly Gated[], sent: ReadonlySet<string>, load: (ids: ReadonlySet<string>) => Promise<ReadonlyMap<string, SessionRecords>>): Promise<Map<string, Carried>> => {
+export const carriedDeltasByWindow = async (account: string, sessions: readonly Gated[], sent: ReadonlySet<string>, load: (ids: ReadonlySet<string>) => Promise<ReadonlyMap<string, SessionRecords>>, fillers?: ReadonlySet<string>): Promise<Map<string, Carried>> => {
   const carried = new Map<string, Carried>();
   for (const { index, before, after, filler } of windowsOf(sessions)) {
+    // Only the batch of the session that fills a window carries its delta, so a window whose filler is not being built is not read.
+    if (fillers !== undefined && !fillers.has(filler.id)) continue;
     const needed = [...before, ...after.slice(0, DELTA_MIN_SESSIONS)];
     const records = await load(new Set(needed.map(({ id }) => id)));
     const found = carriedIn(

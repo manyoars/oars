@@ -164,10 +164,10 @@ const RETRY = `${NOT_MARKED} ${TRY_AGAIN}`;
 /** Said after a stop or a stall once the request carrying the batch had gone out: the pool may hold it even though nothing here saw the answer. */
 const MAY_HAVE_RECEIVED = 'The pool may already have received it.';
 
-/** What `deposit` says after it writes the outbox: the covenant (the person's consent, docs/covenant 2.1) already lets the background sender send what is queued, with or without this command. A machine's batches are never sent by it. */
 /** How many sessions a build reads and writes at once: the most whose prompts and tools are in memory together. */
 const BUILD_CHUNK = 100;
 
+/** What `deposit` says after it writes the outbox: the covenant (the person's consent, docs/covenant 2.1) already lets the background sender send what is queued, with or without this command. A machine's batches are never sent by it. */
 const SENT_LATER = 'Nothing was sent yet. Once the covenant is accepted, oars sends what is queued automatically, in the background.';
 
 /**
@@ -708,7 +708,7 @@ const sendAll = async (deps: RunDeps, options: { outbox: string; server: string;
       // The one-batch command that shows the screen: the first batch that was shown and is not sent.
       const oneBatch = async (): Promise<string> => {
         for await (const named of namesHeldAcross(outbox)) {
-          if (shown.has(named.hash) && !done.has(named.hash)) return `run oars pool deposit --send ${named.hash} at a terminal to read it and accept`;
+          if (shown.has(named.hash) && !done.has(named.hash) && !(named.pulled && !scan.open) && (await unchangedBytes(named.file, named.hash)) !== undefined) return `run oars pool deposit --send ${named.hash} at a terminal to read it and accept`;
         }
         return 'run oars pool deposit --send <hash> at a terminal to read it and accept';
       };
@@ -1011,7 +1011,7 @@ export const poolDeposit = async (
   // A delta is built from the sessions that passed, carried by the batch of the session that filled its after window, and marked sent only once that batch is written: a deposit that stops first builds it again.
   // A cloud machine has no history of its own to compare a window against (every VM starts clean), so it carries none.
   const placed = machine?.hostClass === 'cloud' ? [] : [...ready.map(({ records }) => records), ...history].flatMap((records) => placedOf(records) ?? []);
-  const carried = await carriedDeltasByWindow(account, placed, await sentDeltas(outbox), async (ids) => (await readRecords(ids)).records);
+  const carried = await carriedDeltasByWindow(account, placed, await sentDeltas(outbox), async (ids) => (await readRecords(ids)).records, new Set(ready.map(({ records }) => records.main.session)));
   // The coverage bands (t871): the operator's two settings, read here, and the team band counted from the local git log. Nothing is looked up, and anything unread goes as unknown.
   const coverageOf = makeCoverage(runtime, await readCoverageSetting(runtime.storeDir), options.git ?? runGit);
   // The recommendations each session was shown or held back from, read from the local rows with their windows, so a shown row stays shown at the pool and a session with none sends none (the pool reads that as unknown).
