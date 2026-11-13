@@ -23,7 +23,7 @@ const git = (/** @type {string[]} */ args) => {
   return r.stdout;
 };
 
-const loadTerms = (/** @type {string} */ name, /** @type {string} */ path) => {
+export const loadTerms = (/** @type {string} */ name, /** @type {string} */ path) => {
   if (!existsSync(path)) {
     process.stderr.write(`check-private-names: ${name} not found, skipping that list\n`);
     return [];

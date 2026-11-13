@@ -12,6 +12,7 @@ const script = fileURLToPath(new URL('./check-owner-name.mjs', import.meta.url))
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 // Built from parts so this test does not match the check it tests.
 const NAME = 'Mat' + 't';
+const LONG_NAME = 'Mat' + 'thew';
 
 let root = '';
 
@@ -19,7 +20,9 @@ const git = (...args: string[]) => {
   const r = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
   if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
 };
-const check = (target = root) => spawnSync('node', [script, target], { encoding: 'utf8' });
+// The handle and domain live in a local denylist, never in this tree; the test feeds neutral placeholders through the same variable.
+const check = (target = root, denylist = join(tmpdir(), 'check-owner-name-absent-denylist.txt')) =>
+  spawnSync('node', [script, target], { encoding: 'utf8', env: { ...process.env, OARS_PUBLIC_DENYLIST: denylist } });
 const track = (file: string, text: string) => {
   writeFileSync(join(root, file), text);
   git('add', file);
@@ -48,9 +51,31 @@ describe('check-owner-name', () => {
     expect(r.stderr).not.toContain(NAME.toUpperCase());
   });
 
-  it('catches the handle and the mailbox domain', () => {
-    track('b.txt', 'see mrd' + '5591\nswitchyard' + 'software.com\n');
-    expect(check().stderr).toContain('b.txt:1');
+  it('catches the longer given-name form', () => {
+    track('c.txt', `x
+${LONG_NAME} said so
+`);
+    expect(check().stderr).toContain('c.txt:2');
+  });
+
+  it('catches the handle and the mailbox domain listed in the denylist, each on its own line', () => {
+    const list = join(root, '..', `check-owner-name-list-${process.pid}.txt`);
+    writeFileSync(list, 'zz-handle
+zz-domain.example
+');
+    try {
+      track('b.txt', 'see zz-handle
+write to ops@ZZ-Domain.example
+clean
+');
+      const r = check(root, list);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain('b.txt:1');
+      expect(r.stderr).toContain('b.txt:2');
+      expect(r.stderr).not.toContain('b.txt:3');
+    } finally {
+      rmSync(list, { force: true });
+    }
   });
 
   it('ignores an untracked file and a longer word', () => {
