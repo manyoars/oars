@@ -203,7 +203,7 @@ describe('a pack', () => {
     expect(printed.out).toEqual(['manifest.jsonl:1 redactionVersion: missing']);
   });
 
-  const DEPOSIT = { repoOwner: 'depositor:0123456789abcdef', sourceLicense: 'manyoars-covenant 2.1 sha256:abc', acceptedAt: '2026-07-01T00:00:00.000Z' };
+  const DEPOSIT = { repoOwner: 'depositor:0123456789abcdef', sourceLicense: `manyoars-covenant 2.1 sha256:${'ab'.repeat(32)}`, acceptedAt: '2026-07-01T00:00:00.000Z' };
 
   it('validate-pack accepts a row with acceptedAt', async () => {
     expect(found((await validate(pack({ row: { ...row(), ...DEPOSIT } })))?.violations)).toEqual([]);
@@ -233,6 +233,25 @@ describe('a pack', () => {
     const printed = await lines(pack({ row: { ...row(), repoOwner: DEPOSIT.repoOwner, sourceLicense: DEPOSIT.sourceLicense } }));
     expect(printed.code).toBe(1);
     expect(printed.out).toEqual(['manifest.jsonl:1 acceptedAt: missing']);
+  });
+
+  it('validate-pack refuses a depositor row whose sourceLicense is not a covenant', async () => {
+    for (const license of ['MIT', null]) {
+      const printed = await lines(pack({ row: { ...row(), ...DEPOSIT, sourceLicense: license } }));
+      expect(printed.code).toBe(1);
+      expect(printed.out).toEqual(['manifest.jsonl:1 sourceLicense: not a covenant on a depositor row']);
+    }
+  });
+
+  it('refuses a stray file at the pack root and one directly under sessions/', async () => {
+    const folder = pack();
+    writeFileSync(join(folder, 'stray.txt'), 'x');
+    writeFileSync(join(folder, 'sessions', 'loose.jsonl'), 'x');
+    writeFileSync(join(folder, 'pack.json'), '{}');
+    writeFileSync(join(folder, 'census.json'), '{}');
+    const printed = await lines(folder);
+    expect(printed.code).toBe(1);
+    expect(printed.out).toEqual(['stray.txt (file): no manifest row names it', 'sessions/loose.jsonl (file): no manifest row names it']);
   });
 
   it('an operator row has no acceptedAt and still conforms', async () => {

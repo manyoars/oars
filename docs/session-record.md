@@ -17,6 +17,7 @@ manifest.jsonl                    one JSON object per line, one row per session
 sessions/<matchId>/main.jsonl     the main transcript, the harness's own lines
 sessions/<matchId>/<file>.jsonl   one file per subagent transcript
 sessions/<matchId>/skeleton.json  the record, when the row names one
+pack.json, census.json            build bookkeeping the spec does not check
 ```
 
 A session folder is named by its row's `matchId`, and a folder no row names does not conform. A row's `transcripts` is the number of transcript files in its folder (the record is not one). A transcript keeps each harness's own line format; this spec checks its ids only.
@@ -32,8 +33,9 @@ A session folder is named by its row's `matchId`, and a folder no row names does
 
 - A raw id: a UUID, or a harness's tool, message, or request id (`toolu_`, `srvtoolu_`, `msg_`, `req_`) left unmasked, in a manifest row, a record, or a transcript line. A transcript line's `sessionId` is the match id.
 - A field this page does not list, in a row or a record.
-- A file the manifest does not list: a pack holds `pack.json`, `manifest.jsonl`, `census.json`, and, under `sessions/<matchId>/`, only the transcripts and the record its row names.
+- A file the manifest does not list: a pack root holds `manifest.jsonl` (plus the build's `pack.json` and `census.json`, which the spec does not check), nothing sits directly under `sessions/`, and, under `sessions/<matchId>/`, only the transcripts and the record its row names.
 - An `acceptedAt` on a row whose `repoOwner` is not a `depositor:<16 hex>` value: the field belongs to rows built from a pool deposit. The reverse holds too: a row with a `depositor:<16 hex>` owner and no `acceptedAt` cites no acceptance and does not conform.
+- A row with a `depositor:<16 hex>` owner whose `sourceLicense` is not a `manyoars-covenant <version> sha256:<hex>` string: it cites no covenant.
 - A `<field>Literal` field beside an `other`.
 - A digest of the text of an edit (`digests` on a tool call): a plain hash of text that was not masked.
 - A row with an empty `harnessTerms`, or `training` among `permittedUses` (`training` has its own field).

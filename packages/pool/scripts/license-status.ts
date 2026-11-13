@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { DELIVERIES_FILE, deliveriesOf, fieldOf, indexOf, lotOf } from './deliver.js';
 import { noticeOf, noticesOf, type Notice } from './notices.js';
 import { idsIn, MATCH_ID, sound } from './operator-files.js';
+import { DEPOSITOR_OWNER } from './validate-pack.js';
 import { bareOf, decodedStrings, isAbsent, isText, PackError, readObjections, squashed, type HarnessTerms, type Objection } from './sample-pack.js';
 
 export const USAGE = [
@@ -142,7 +143,7 @@ const termsOf = (row: unknown): Pick<LotStatus, 'harnessTerms' | 'permittedUses'
 const covenantOf = (row: unknown): string => {
   // Only a deposit row (a depositor: owner) has a covenant; an operator row's license string is not one.
   const owner = fieldOf(row, 'repoOwner');
-  if (!isText(owner) || !/^depositor:[0-9a-f]{16}$/.test(owner)) return UNKNOWN;
+  if (!isText(owner) || !DEPOSITOR_OWNER.test(owner)) return UNKNOWN;
   const license = fieldOf(row, 'sourceLicense');
   const version = isText(license) ? /^manyoars-covenant (\S+) sha256:/.exec(license)?.[1] : undefined;
   if (version === undefined) return UNKNOWN;

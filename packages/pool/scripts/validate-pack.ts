@@ -42,7 +42,9 @@ const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 const PREFIXED_ID = /(?<![A-Za-z0-9])(?:srvtoolu|toolu|msg|req)_(?=[A-Za-z_-]*[0-9])[A-Za-z0-9][A-Za-z0-9_-]{14,}[A-Za-z0-9]/g;
 const MASKED_ID = /^[a-z]+_[0-9a-f]{24}(?![0-9A-Za-z])/;
 /** A deposit row's owner: the keyed pseudonym of the depositor (16 hex), never an account id. */
-const DEPOSITOR_OWNER = /^depositor:[0-9a-f]{16}$/;
+export const DEPOSITOR_OWNER = /^depositor:[0-9a-f]{16}$/;
+/** The covenant a deposit row cites: `manyoars-covenant <version> sha256:<hex>`. */
+const DEPOSIT_LICENSE = /^manyoars-covenant \S+ sha256:[0-9a-f]+$/;
 const HARNESS_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const USE_NAME = /^[a-z][a-z0-9-]{0,63}$/;
 const FILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -173,6 +175,8 @@ export const checkRow = (value: unknown, where: string): Violation[] => {
   const depositor = isText(value.repoOwner) && DEPOSITOR_OWNER.test(value.repoOwner);
   // ...and a depositor row with none cites no acceptance, so it never validates.
   if (depositor && !Object.hasOwn(value, 'acceptedAt')) found.push({ where, field: 'acceptedAt', rule: 'missing' });
+  // ...and so does one whose license string cites no covenant: the grant it names must be there to read.
+  if (depositor && !(isText(value.sourceLicense) && DEPOSIT_LICENSE.test(value.sourceLicense))) found.push({ where, field: 'sourceLicense', rule: 'not a covenant on a depositor row' });
   if (Object.hasOwn(value, 'acceptedAt') && !depositor) found.push({ where, field: 'acceptedAt', rule: 'only a row with a depositor: owner value has it' });
   return [...found, ...raw.map((field) => ({ where, field, rule: RAW_ID }))];
 };
@@ -327,6 +331,17 @@ const checkPack = async (folder: string): Promise<Result> => {
   } catch (error) {
     if (!isAbsent(error)) throw error;
   }
+  // A file at the pack root other than the manifest and the build's own bookkeeping, or directly under sessions/, is in no row.
+  const BOOKKEEPING = new Set([MANIFEST_FILE, 'pack.json', 'census.json']);
+  const loose = async (path: string, skip: ReadonlySet<string>): Promise<string[]> => {
+    try {
+      return (await readdir(join(folder, path), { withFileTypes: true })).filter((entry) => entry.isFile() && !skip.has(entry.name)).map((entry) => (path === '' ? entry.name : `${path}/${entry.name}`)).sort();
+    } catch (error) {
+      if (!isAbsent(error)) throw error;
+      return [];
+    }
+  };
+  for (const file of [...(await loose('', BOOKKEEPING)), ...(await loose('sessions', new Set()))]) found.push({ where: file, field: '(file)', rule: 'no manifest row names it' });
   for (const name of folders) if (!named.has(name)) found.push({ where: `sessions/${name}`, field: '(folder)', rule: 'no manifest row names it' });
   return { violations: found, rows: rows.length, records, transcripts };
 };
