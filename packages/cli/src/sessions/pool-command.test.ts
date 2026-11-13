@@ -31,7 +31,7 @@ import { hookRowOf } from './codex-hook.js';
 import { parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey, type SkeletonFrame } from './pool-wire.js';
 import { appendRecall, makeRecall, type Recall } from './recall-object.js';
 import { contentHash } from './read.js';
-import { deposit, derive, loadStore, localSalt, paths, updatePoolChoices, type PoolChoices } from './store.js';
+import { deposit, derive, loadStore, localSalt, paths, refresh, updatePoolChoices, type PoolChoices } from './store.js';
 import { spoolEvents } from '../telemetry/read-events.js';
 import { addProject, cleanup, FIXTURES, NOW, payloadOf, rolloutLine, settledClock, stage, stageCodex, TEST_FLOOR, type Staged } from './test-support.js';
 
@@ -4626,7 +4626,8 @@ describe('oars pool deposit --send-all (t1199)', () => {
 const MEMORY_CHILD = process.env.OARS_SEND_ALL_MEMORY_CHILD;
 const MEMORY_MODE = process.env.OARS_MEMORY_MODE;
 const BUILD_HEAP_MB = Number(process.env.OARS_MEMORY_BUILD_HEAP ?? 160);
-const memoryChild = (mode: 'outbox' | 'build' | 'refresh', heapMb: number, seed = ''): { limitMb: number; peakRssMb: number; count: number; seconds: number; steps: string } => {
+const REFRESH_HEAP_MB = Number(process.env.OARS_MEMORY_REFRESH_HEAP ?? 160);
+const memoryChild = (mode: 'outbox' | 'build' | 'refresh' | 'refreshbound', heapMb: number, seed = ''): { limitMb: number; peakRssMb: number; count: number; seconds: number; steps: string } => {
   const report = join(tmpdir(), `oars-memory-${mode}-${String(process.pid)}.json`);
   const started = Date.now();
   const result = spawnSync(process.execPath, [fileURLToPath(new URL('../../../../node_modules/vitest/vitest.mjs', import.meta.url)), 'run', fileURLToPath(import.meta.url), '-t', `child of the memory proof ${mode}`], {
@@ -4677,6 +4678,23 @@ describe('oars pool outbox, deposit, and deposit --send-all memory (t1199)', () 
     const scene = await seedSevenThousand();
     const { peakRssMb, steps, seconds } = memoryChild('refresh', 8192, scene.staged.root);
     console.info(`memory proof refresh: peak RSS ${String(peakRssMb)} MB in ${String(seconds)} s; ${steps}`);
+  }, 540_000);
+
+  // t1243 item 1: `refresh` itself, folded a run of sessions at a time, in a heap too small for the store held whole. Records the time, the peak RSS, and the size of the reversion index; asserts only that it completes.
+  it.runIf(process.env.OARS_MEMORY_PROOF === '1' && MEMORY_CHILD === undefined)('memory-refreshbound: refresh over 7,000 sessions in a small heap', async () => {
+    const scene = await seedSevenThousand();
+    const { limitMb, peakRssMb, count, seconds, steps } = memoryChild('refreshbound', REFRESH_HEAP_MB, scene.staged.root);
+    expect(count).toBeGreaterThanOrEqual(70);
+    console.info(`memory proof refreshbound: peak RSS ${String(peakRssMb)} MB under a ${String(limitMb)} MB heap limit in ${String(seconds)} s; ${steps}`);
+  }, 540_000);
+
+  it.skipIf(MEMORY_CHILD === undefined || MEMORY_MODE !== 'refreshbound')('child of the memory proof refreshbound', async () => {
+    const scene = setting();
+    cpSync(join(String(process.env.OARS_MEMORY_SEED), 'store'), scene.staged.storeDir, { recursive: true });
+    let told: { runs: number; reversions: number } | undefined;
+    await refresh({ ...scene.staged.runtime, refreshed: (folded) => { told = folded; } }, [], '2026-01-01T00:00:00.000Z');
+    expect(told).toBeDefined();
+    finish(told?.runs ?? 0, `${String(told?.runs)} runs, reversion index ${String(told?.reversions)} entries`);
   }, 540_000);
 
   it.skipIf(MEMORY_CHILD === undefined || MEMORY_MODE !== 'refresh')('child of the memory proof refresh', async () => {

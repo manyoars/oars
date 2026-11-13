@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { emptyUsage } from './extract.js';
@@ -113,12 +113,22 @@ const PINNED_FILES = {
 /** What a run of `refresh` told its seam: how many runs it folded, and the size of the reversion index. Absent when the seam was never called. */
 type Folded = { runs: number; reversions: number };
 
-const refreshed = async (runSize?: number): Promise<{ reverted: Array<string | null>; ns: Array<number | null>; files: { [path: string]: string }; folded: Folded | undefined }> => {
+const refreshed = async (runSize?: number, replaceLog = false): Promise<{ reverted: Array<string | null>; ns: Array<number | null>; files: { [path: string]: string }; folded: Folded | undefined }> => {
   const staged = stagedLog();
   await appendRecall(staged.storeDir, recallAt('sa', stamp(1, 0, 500)));
   await appendRecall(staged.storeDir, recallAt('sa', stamp(1, 2, 500)));
   let folded: Folded | undefined;
-  await refresh({ ...staged.runtime, ...(runSize === undefined ? {} : { refreshRun: runSize }), refreshed: (told) => { folded = told; } }, [], PIN_AT);
+  // A compaction renames a rewritten log into place between the scan and the runs. The rewrite keeps every live row behind a long line a reader skips, so each span the scan recorded points elsewhere.
+  const afterScan = replaceLog
+    ? (): Promise<void> => {
+        const log = paths(staged.storeDir).observations;
+        const swap = `${log}.swap`;
+        writeFileSync(swap, `${['x'.repeat(200_000), ...readFileSync(log, 'utf8').split('\n').filter((line) => line !== '')].join('\n')}\n`);
+        renameSync(swap, log);
+        return Promise.resolve();
+      }
+    : undefined;
+  await refresh({ ...staged.runtime, ...(runSize === undefined ? {} : { refreshRun: runSize }), ...(afterScan === undefined ? {} : { afterScan }), refreshed: (told) => { folded = told; } }, [], PIN_AT);
   const lines = readFileSync(poolFiles(staged.storeDir).consequences, 'utf8').split('\n').filter((line) => line !== '');
   const reverted = lines.map((line): string | null => {
     const parsed: unknown = JSON.parse(line);
@@ -154,6 +164,13 @@ describe('refresh folds the store a run of sessions at a time and writes the pin
     expect(folded?.runs).toBe(runs);
     // The index holds the fixture's main-line commits, revert words, restores, and edits, whatever the run size.
     expect(folded?.reversions).toBeGreaterThan(0);
+    expect(reverted).toEqual(['later-session', 'later-session']);
+    expect(ns).toEqual([1, 3]);
+    expect(files).toEqual(PINNED_FILES);
+  });
+
+  it.each([1, 10_000])('keeps the pinned bytes when the log is replaced after the scan, at run size %i (refreshcompact)', async (size) => {
+    const { reverted, ns, files } = await refreshed(size, true);
     expect(reverted).toEqual(['later-session', 'later-session']);
     expect(ns).toEqual([1, 3]);
     expect(files).toEqual(PINNED_FILES);

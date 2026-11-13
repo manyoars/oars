@@ -246,23 +246,38 @@ export const PUSH_MIN_LIFT = 2;
  * The reads whose shape fails at `lift` times the share of its whole action or more, where the action's share counts every call of every shape of it, those under the floors too.
  * A tool no table lists is the action `other` (or `mcp.call`), so it is held to that action's share like any other and can enter the index and fire. Compared in integers, so a tie is exact.
  */
-export const aboveBaseRate = (store: Store, reads: readonly RecallRead[], lift: number = PUSH_MIN_LIFT): RecallRead[] => {
-  const harnesses = harnessesOf(store);
+/** The per-action call tally `aboveBaseRate` compares against, as a fold: each `add` tallies one run of sessions, so a refresh never holds every call. */
+export const actionFold = (): { add: (store: Store) => void; finish: () => Map<CanonicalAction, { calls: number; failed: number }> } => {
   const byAction = new Map<CanonicalAction, { calls: number; failed: number }>();
-  for (const calls of callsBySession(store).values()) {
-    for (const call of calls) {
-      const action = actionOfShape(call.tool, [harnesses.get(call.session) ?? harnessOf({})]);
-      const tally = byAction.get(action) ?? { calls: 0, failed: 0 };
-      byAction.set(action, tally);
-      tally.calls += 1;
-      if (call.status === 'error') tally.failed += 1;
-    }
-  }
-  return reads.filter((read) => {
+  return {
+    add: (store) => {
+      const harnesses = harnessesOf(store);
+      for (const calls of callsBySession(store).values()) {
+        for (const call of calls) {
+          const action = actionOfShape(call.tool, [harnesses.get(call.session) ?? harnessOf({})]);
+          const tally = byAction.get(action) ?? { calls: 0, failed: 0 };
+          byAction.set(action, tally);
+          tally.calls += 1;
+          if (call.status === 'error') tally.failed += 1;
+        }
+      }
+    },
+    finish: () => byAction,
+  };
+};
+
+/** `aboveBaseRate` over a finished action tally. */
+export const aboveActionRate = (byAction: ReadonlyMap<CanonicalAction, { calls: number; failed: number }>, reads: readonly RecallRead[], lift: number = PUSH_MIN_LIFT): RecallRead[] =>
+  reads.filter((read) => {
     const base = byAction.get(actionOfShape(read.tool, read.harnesses));
     // A fit read always counts its calls (`calls` is null only for entity reads), and its own calls are in the tally, so `base` is there; the fallbacks keep the types honest.
     return base !== undefined && read.calls !== null && read.count * base.calls >= lift * base.failed * read.calls;
   });
+
+export const aboveBaseRate = (store: Store, reads: readonly RecallRead[], lift: number = PUSH_MIN_LIFT): RecallRead[] => {
+  const fold = actionFold();
+  fold.add(store);
+  return aboveActionRate(fold.finish(), reads, lift);
 };
 
 /** The snapshot a store answers from: its latest deposit. A deposit time compares with a recall's `at`, which is what "older than the recall" needs. */

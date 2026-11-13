@@ -791,7 +791,7 @@ export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly 
   try {
     // The next-node reads for each harness and version, derived over the same pool; a deposit that has no pool leaves the index without them.
     const next = current === undefined ? undefined : (await import('./recall-frames.js')).nextByFrame(current.pool, store);
-    const index = buildIndex(store, redactDomains, at, reads, next);
+    const index = buildIndex(store, redactDomains, at, reads, next, folds instanceof Error ? undefined : folds.reads);
     await requireHold(held);
     await writeAtomic(indexPath(runtime.storeDir), JSON.stringify(index));
     if (trace !== undefined) {

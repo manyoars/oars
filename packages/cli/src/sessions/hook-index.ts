@@ -7,6 +7,7 @@ import type { Read } from './read.js';
 import { resolveReads } from './recall-pool.js';
 import type { Position, RecoveryEdges } from './recall-next.js';
 import type { NextByFrame } from './recall-frames.js';
+import type { ReadFolds } from './read-folds.js';
 import { aboveBaseRate, fitReads, PUSH_FLOORS, toolShapeId, type RecallRead } from './recall-reads.js';
 import type { SessionObservation } from './schema.js';
 import { expandHome } from './allow.js';
@@ -81,7 +82,7 @@ const repositoryOf = (projects: readonly string[]): ((project: string) => string
   };
 };
 
-export const buildIndex = (store: Store, redactDomains: readonly string[], at: string, reads: readonly Read[] = [], next?: NextByFrame): HookIndex => {
+export const buildIndex = (store: Store, redactDomains: readonly string[], at: string, reads: readonly Read[] = [], next?: NextByFrame, folds?: ReadFolds): HookIndex => {
   const projectOf = new Map(store.sessions.map((session) => [session.session, session.project]));
   // The latest 300 of each repository, not of the whole store: another repository's deposits must not move this one's ranking.
   const family = repositoryOf([...new Set(store.sessions.map((session) => session.project))]);
@@ -138,7 +139,7 @@ export const buildIndex = (store: Store, redactDomains: readonly string[], at: s
     redactDomains: [...redactDomains],
     projects,
     signatures,
-    fit: Object.fromEntries(resolveReads(aboveBaseRate(store, fitReads(store, PUSH_FLOORS)), reads).map((read) => [toolShapeId(read.tool, read.keys), read])),
+    fit: Object.fromEntries(resolveReads(folds?.push ?? aboveBaseRate(store, fitReads(store, PUSH_FLOORS)), reads).map((read) => [toolShapeId(read.tool, read.keys), read])),
     ...(next === undefined ? {} : { recoveryByFrame: next.recovery, positionsByFrame: next.positions }),
   };
 };
