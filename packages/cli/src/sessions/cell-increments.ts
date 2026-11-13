@@ -3,7 +3,7 @@
 // one `cellsOf`, so a session gives the same cells at the pool and on the machine. This file reads no file system: the pool's Worker bundles it.
 
 import { ARG_CLASSES, CHANGE_KINDS, type ArgFeature, type ArgValue } from './call-shape.js';
-import { bucketFields, deriveCells, ENVIRONMENT_BUCKET, EXPOSURE_CODES, exposureOfCell, isEnvironmentCell, type CellSet, type ExposureGraph, type Exposure, type Grain, type HeldStep } from './cells.js';
+import { bucketFields, cellFold, ENVIRONMENT_BUCKET, EXPOSURE_CODES, exposureOfCell, isEnvironmentCell, type CellSet, type ExposureGraph, type Exposure, type Grain, type HeldStep } from './cells.js';
 import type { Motif } from './motif.js';
 import { bucketOf, floorOf, OTHER, OPEN_GATE, projectedSteps, wireChange, wireFeatures, wireKeys, wireValues, type SkeletonArgFeature, type SkeletonArgValue, type SessionSkeleton, type ShellReader, type SkeletonFrame, type SkeletonPrompt, type SkeletonTool, type SkeletonTranscript } from './pool-wire.js';
 import { NO_RECALLS, type RecallGraph } from './recall-consequence.js';
@@ -92,16 +92,37 @@ const marginalStore = (store: Store): Store => ({ ...store, tools: store.tools.f
  * summed window is a sum of those. A value already at a bucket's floor stays there, which is why a skeleton's store and a local store of the same session derive the same cells.
  * Rules 1 and 2: a window names a shell step by its program and subcommand alone, and each flag and each pull of it adds a one-step cell of its own.
  */
+export interface CellsFold {
+  add: (store: Store) => void;
+  finish: () => CellSet;
+}
+
+/** `cellsOf` as a fold: each `add` floors one run and tallies it, whole and marginal, and `finish` merges the two. Runs come in the whole store's row order. */
+export const cellsFold = (graph: RecallGraph = NO_RECALLS): CellsFold => {
+  const whole = cellFold(graph);
+  const marginal = cellFold(graph);
+  const add = (store: Store): void => {
+    const floored = flooredStore(store);
+    whole.add({ ...floored, tools: floored.tools.map((tool) => (tool.steps === undefined ? tool : { ...tool, steps: tool.steps.map(withoutLists) })) });
+    // Only the one-step named motifs of the marginal pass that hold a shell identity (a recall step the graph places there has none, and `whole` already counts it) are kept at the finish: its prompts, its shape motifs, and its longer windows repeat or splice what `whole` holds.
+    marginal.add(marginalStore(floored));
+  };
+  const finish = (): CellSet => {
+    const wholeSet = whole.finish();
+    const marginalSet = marginal.finish();
+    const named = new Set(marginalSet.motifs.filter(({ level, steps }) => level === 'named' && steps.length === 1 && steps[0]?.identity !== null).map(({ motifId }) => motifId));
+    const motifs = new Map([...wholeSet.motifs, ...marginalSet.motifs.filter(({ motifId }) => named.has(motifId))].map((motif) => [motif.motifId, motif]));
+    const order = (x: string, y: string): number => (x < y ? -1 : x > y ? 1 : 0);
+    const cells = [...wholeSet.cells, ...marginalSet.cells.filter(({ motifId }) => named.has(motifId))].sort((x, y) => order(x.motifId, y.motifId) || order(x.frameBucket, y.frameBucket) || order(x.grain, y.grain) || order(x.day, y.day) || EXPOSURE_CODES[exposureOfCell(x)] - EXPOSURE_CODES[exposureOfCell(y)]);
+    return { cells, motifs: [...motifs.values()].sort((x, y) => order(x.motifId, y.motifId)) };
+  };
+  return { add, finish };
+};
+
 export const cellsOf = (store: Store, graph: RecallGraph = NO_RECALLS): CellSet => {
-  const floored = flooredStore(store);
-  const whole = deriveCells({ ...floored, tools: floored.tools.map((tool) => (tool.steps === undefined ? tool : { ...tool, steps: tool.steps.map(withoutLists) })) }, graph);
-  // Only the one-step named motifs of the marginal pass that hold a shell identity (a recall step the graph places there has none, and `whole` already counts it): its prompts, its shape motifs, and its longer windows repeat or splice what `whole` holds.
-  const marginal = deriveCells(marginalStore(floored), graph);
-  const named = new Set(marginal.motifs.filter(({ level, steps }) => level === 'named' && steps.length === 1 && steps[0]?.identity !== null).map(({ motifId }) => motifId));
-  const motifs = new Map([...whole.motifs, ...marginal.motifs.filter(({ motifId }) => named.has(motifId))].map((motif) => [motif.motifId, motif]));
-  const order = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
-  const cells = [...whole.cells, ...marginal.cells.filter(({ motifId }) => named.has(motifId))].sort((a, b) => order(a.motifId, b.motifId) || order(a.frameBucket, b.frameBucket) || order(a.grain, b.grain) || order(a.day, b.day) || EXPOSURE_CODES[exposureOfCell(a)] - EXPOSURE_CODES[exposureOfCell(b)]);
-  return { cells, motifs: [...motifs.values()].sort((a, b) => order(a.motifId, b.motifId)) };
+  const fold = cellsFold(graph);
+  fold.add(store);
+  return fold.finish();
 };
 
 /**

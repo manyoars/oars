@@ -1912,46 +1912,65 @@ export const readSkeletons = async (storeDir: string, only?: string, lean = fals
 };
 
 /** The derived records, a pure function of the store. */
-export const derive = (store: Store, at: string): DerivedRecords => {
-  const bySig = new Map<string, ErrorObservation[]>();
-  for (const error of store.errors) bySig.set(error.sig, [...(bySig.get(error.sig) ?? []), error]);
-  const signatures: SignatureRecord[] = [...bySig.entries()].map(([sig, list]) => signatureRecord(sig, list));
-  signatures.sort((a, b) => b.sessions - a.sessions || b.count - a.count || a.sig.localeCompare(b.sig));
+/** `derive`'s prompt sums, folded run by run: the prompts of each run in turn give the same sums, in the same key order, as the prompts of the whole store. */
+export interface DeriveFold {
+  add: (prompts: readonly PromptObservation[]) => void;
+  /** The error and session parts, which need every error and session record at once, then the whole record. */
+  finish: (store: Pick<Store, 'sessions' | 'errors'>, at: string) => DerivedRecords;
+}
+
+export const deriveFold = (): DeriveFold => {
   const bigrams: { [bigram: string]: number } = {};
   const recovery: { [pair: string]: number } = {};
   const classes: { [cls: string]: { prompts: number; exploreToAct: number } } = {};
   const ratio = new Map<string, { explore: number; act: number }>();
-  for (const prompt of store.prompts) {
-    for (const [pair, count] of Object.entries(prompt.bigrams)) bigrams[pair] = (bigrams[pair] ?? 0) + count;
-    if (prompt.recovery.length > 0) {
-      const pair = prompt.recovery.slice(0, 2).join('>');
-      recovery[pair] = (recovery[pair] ?? 0) + 1;
-    }
-    const entry = ratio.get(prompt.cls) ?? { explore: 0, act: 0 };
-    entry.explore += prompt.explore;
-    entry.act += prompt.act;
-    ratio.set(prompt.cls, entry);
-    classes[prompt.cls] = { prompts: (classes[prompt.cls]?.prompts ?? 0) + 1, exploreToAct: 0 };
-  }
-  for (const [cls, entry] of ratio) {
-    const row = classes[cls];
-    if (row !== undefined) row.exploreToAct = Math.round((entry.explore / Math.max(entry.act, 1)) * 100) / 100;
-  }
   const promptCount = new Map<string, number>();
-  for (const prompt of store.prompts) promptCount.set(prompt.session, (promptCount.get(prompt.session) ?? 0) + 1);
-  const errorCount = new Map<string, number>();
-  for (const error of store.errors) errorCount.set(error.session, (errorCount.get(error.session) ?? 0) + 1);
-  const summaries: SessionSummary[] = store.sessions.map((session) => ({
-    session: session.session,
-    project: session.project,
-    prompts: promptCount.get(session.session) ?? 0,
-    errors: errorCount.get(session.session) ?? 0,
-    tools: Object.values(session.tools).reduce((sum, count) => sum + count, 0),
-    tsFirst: session.tsFirst,
-    tsLast: session.tsLast,
-    tldrs: session.tldrs.length,
-  }));
-  return { v: EXTRACTOR_VERSION, at, sessions: store.sessions.length, signatures, bigrams, recovery, classes, summaries };
+  return {
+    add: (prompts) => {
+      for (const prompt of prompts) {
+        for (const [pair, count] of Object.entries(prompt.bigrams)) bigrams[pair] = (bigrams[pair] ?? 0) + count;
+        if (prompt.recovery.length > 0) {
+          const pair = prompt.recovery.slice(0, 2).join('>');
+          recovery[pair] = (recovery[pair] ?? 0) + 1;
+        }
+        const entry = ratio.get(prompt.cls) ?? { explore: 0, act: 0 };
+        entry.explore += prompt.explore;
+        entry.act += prompt.act;
+        ratio.set(prompt.cls, entry);
+        classes[prompt.cls] = { prompts: (classes[prompt.cls]?.prompts ?? 0) + 1, exploreToAct: 0 };
+        promptCount.set(prompt.session, (promptCount.get(prompt.session) ?? 0) + 1);
+      }
+    },
+    finish: (store, at) => {
+      const bySig = new Map<string, ErrorObservation[]>();
+      for (const error of store.errors) bySig.set(error.sig, [...(bySig.get(error.sig) ?? []), error]);
+      const signatures: SignatureRecord[] = [...bySig.entries()].map(([sig, list]) => signatureRecord(sig, list));
+      signatures.sort((a, b) => b.sessions - a.sessions || b.count - a.count || a.sig.localeCompare(b.sig));
+      for (const [cls, entry] of ratio) {
+        const row = classes[cls];
+        if (row !== undefined) row.exploreToAct = Math.round((entry.explore / Math.max(entry.act, 1)) * 100) / 100;
+      }
+      const errorCount = new Map<string, number>();
+      for (const error of store.errors) errorCount.set(error.session, (errorCount.get(error.session) ?? 0) + 1);
+      const summaries: SessionSummary[] = store.sessions.map((session) => ({
+        session: session.session,
+        project: session.project,
+        prompts: promptCount.get(session.session) ?? 0,
+        errors: errorCount.get(session.session) ?? 0,
+        tools: Object.values(session.tools).reduce((sum, count) => sum + count, 0),
+        tsFirst: session.tsFirst,
+        tsLast: session.tsLast,
+        tldrs: session.tldrs.length,
+      }));
+      return { v: EXTRACTOR_VERSION, at, sessions: store.sessions.length, signatures, bigrams, recovery, classes, summaries };
+    },
+  };
+};
+
+export const derive = (store: Store, at: string): DerivedRecords => {
+  const fold = deriveFold();
+  fold.add(store.prompts);
+  return fold.finish(store, at);
 };
 
 export const signatureRecord = (sig: string, list: readonly ErrorObservation[]): SignatureRecord => {

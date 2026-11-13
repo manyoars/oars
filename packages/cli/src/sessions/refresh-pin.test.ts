@@ -7,7 +7,10 @@ import { error as errorRow, frame as frameOf, prompt as promptRow, session as se
 import { appendRecall, makeRecall, type Recall } from './recall-object.js';
 import { CAPTURE_VERSION, type ToolObservation } from './schema.js';
 import { poolFiles } from './pool.js';
-import { paths, refresh, runOrder, scanLog } from './store.js';
+import { cellsFold, cellsOf } from './cell-increments.js';
+import { fitFold, fitReads } from './recall-reads.js';
+import { finishReversions, foldReversions, newReversionIndex, reversionsOf } from './reversion.js';
+import { derive, deriveFold, loadStore, paths, refresh, runOrder, scanLog } from './store.js';
 import { cleanup, stage } from './test-support.js';
 
 afterEach(cleanup);
@@ -140,5 +143,34 @@ describe('the scan keeps what the run order needs (scanorder)', () => {
   it('orders nothing for a scan made without spans', async () => {
     const staged = stagedLog();
     expect(runOrder(await scanLog(paths(staged.storeDir).observations))).toEqual([]);
+  });
+});
+
+describe('each fold over runs equals the whole-store call (foldsplit)', () => {
+  it.each([1, 2])('at run size %i, with the commit and its revert, and the edit and its restore, in different runs', async (size) => {
+    const staged = stagedLog();
+    const file = paths(staged.storeDir).observations;
+    const scan = await scanLog(file, undefined, true);
+    const whole = await loadStore(staged.storeDir);
+    const order = runOrder(scan);
+    const cells = cellsFold();
+    const fit = fitFold({ minFailedSessions: 1, minFailedShare: 0, minCalls: 1 });
+    const prompts = deriveFold();
+    const index = newReversionIndex();
+    for (let at = 0; at < order.length; at += size) {
+      const run = await loadStore(staged.storeDir, undefined, { latest: scan.latest, only: new Set(order.slice(at, at + size)), spans: scan.spans, identity: scan.identity });
+      cells.add(run);
+      fit.add(run);
+      prompts.add(run.prompts);
+      foldReversions(index, run);
+    }
+    expect(cells.finish()).toEqual(cellsOf(whole));
+    expect(fit.finish()).toEqual(fitReads(whole, { minFailedSessions: 1, minFailedShare: 0, minCalls: 1 }));
+    expect(prompts.finish(whole, PIN_AT)).toEqual(derive(whole, PIN_AT));
+    const split = finishReversions(index);
+    const together = reversionsOf(whole);
+    for (const key of ['sa', 'sb', 'sc', 'sd', 'v2']) for (const prompt of [0, 1]) expect(split(key, prompt)).toEqual(together(key, prompt));
+    // The pair on P1 and the pair on P2 are each found alone, across runs.
+    expect([split('sa', 0), split('sa', 1)]).toEqual(['later-session', 'later-session']);
   });
 });

@@ -79,11 +79,10 @@ const consequenceOf = (recall: Recall, session: string, line: readonly ToolObser
 };
 
 /** Fills `n` and `consequence`. A recall with no session, or from a session this store does not hold, has nothing to read and comes back as it was. */
-export const deriveConsequences = (store: Store, recalls: readonly Recall[]): Recall[] => {
+export const deriveConsequences = (store: Store, recalls: readonly Recall[], reverted: ReturnType<typeof reversionsOf> = reversionsOf(store)): Recall[] => {
   const lines = mainLines(store);
   const prompts = new Map(store.prompts.map((prompt) => [promptKey(prompt.session, prompt.index), prompt]));
   const sessions = new Map(store.sessions.map((session) => [session.session, session]));
-  const reverted = reversionsOf(store);
   return recalls.map((recall) => {
     const session = recall.sid === null ? undefined : sessions.get(recall.sid);
     if (session === undefined) return recall;

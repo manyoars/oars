@@ -271,7 +271,13 @@ const linesOf = (tools: readonly ToolObservation[]): ToolObservation[][] => {
   return [...lines.values()].map((line) => line.sort((a, b) => a.n - b.n));
 };
 
-export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): CellSet => {
+/** `deriveCells` as a fold: each `add` tallies one run of sessions into the same tallies, and `finish` sorts them. The runs must come in the order the whole store holds its rows, so sums of floats match. */
+export interface CellFold {
+  add: (store: Store) => void;
+  finish: () => CellSet;
+}
+
+export const cellFold = (graph: RecallGraph = NO_RECALLS): CellFold => {
   const tallies = new Map<string, Tally>();
   const motifs = new Map<string, Motif>();
   const tallyAt = (motif: Motif, frameBucket: string, grain: Grain, day: string, exposure: Exposure): Tally => {
@@ -292,119 +298,130 @@ export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): Cell
     return isPlainCall(motif) ? [...tallies, tallyAt(motif, environmentBucketOf(frame), 'week', weekStartOf(day), exposure)] : tallies;
   };
 
-  const sessions = new Map<string, SessionObservation>([...store.sessions, ...store.subagents].map((session) => [session.session, session]));
-  const prompts = new Map(store.prompts.map((prompt) => [`${prompt.session}#${String(prompt.index)}`, prompt]));
+  const add = (store: Store): void => {
+    const sessions = new Map<string, SessionObservation>([...store.sessions, ...store.subagents].map((session) => [session.session, session]));
+    const prompts = new Map(store.prompts.map((prompt) => [`${prompt.session}#${String(prompt.index)}`, prompt]));
 
-  for (const line of linesOf(store.tools)) {
-    const [first] = line;
-    const session = first === undefined ? undefined : sessions.get(first.session);
-    if (first === undefined || session === undefined) continue;
-    const harness = harnessOf(session);
-    const version = first.harnessVersion ?? session.env.harness;
-    const prompt = prompts.get(`${first.session}#${String(first.prompt)}`);
-    const frame =
-      prompt === undefined
-        ? (session.frame ?? oldFrame({ harness, version, model: mostUsedModel(session.models), effort: null, ts: first.ts ?? session.tsFirst, platform: session.env.os }))
-        : framedPrompt(prompt, harness, version, first.ts, session.env.os);
-    const placed = line.flatMap((tool) => graph.place(tool, stepsOfCall(tool, harness)));
-    const steps = placed.map(({ step }) => step);
-    for (const { motif, start } of motifsOf(steps)) {
-      const window = steps.slice(start, start + motif.steps.length);
-      const status = window.at(-1)?.status;
-      const covered = placed.slice(start, start + motif.steps.length);
-      for (const tally of talliesOf(motif, frame, exposureOf(covered.some(({ exposed }) => exposed), covered.some((step) => 'held' in step && step.held)))) {
-        tally.sessions.add(first.parent);
-        if (status === 'ok') tally.ok += 1;
-        if (status === 'error') tally.failed += 1;
-        for (const step of window) {
-          // A step with no recorded cost has no tokens to count, so it joins neither the sum nor the coverage (its duration is still counted).
-          if (step.tokens !== null) {
-            tally.tokens += step.tokens;
-            tally.recorded.add(first.parent);
-            tally.recordedUnits += 1;
-          }
-          tally.durationMs += step.durationMs;
-        }
-      }
-    }
-    // What followed each failed call that has a code (t868): a week cell per (code, failed action, next action).
-    // A call is read by its first step's action, as a skeleton's is; a record captured before steps has the action its native name maps to.
-    const calls = line.map((call) => ({ side: call.side, prompt: call.prompt, status: call.status, steps: stepsOfCall(call, harness) }));
-    for (const [at, tool] of line.entries()) {
-      const followed = recoveryCallsOf(calls, at);
-      if (followed === null || tool.errorCode === undefined) continue;
-      const code = ERROR_CODES.has(tool.errorCode) ? tool.errorCode : 'other';
-      const motif = classMotif(recoveryClass(code, calls[at]?.steps[0]?.action ?? 'other', followed.next[0] ?? NO_NEXT));
-      motifs.set(motif.motifId, motif);
-      const tally = tallyAt(motif, versionBucketOf(frame), 'week', weekStartOf(frame.day ?? UNKNOWN), 'unknown');
-      tally.sessions.add(first.parent);
-      tally.failed += 1;
-    }
-    // Each call's shape, by its first step's action: a week cell per facet it holds, counted by the call's own status.
-    for (const [at, tool] of line.entries()) {
-      const action = calls[at]?.steps[0]?.action ?? 'other';
-      for (const [facet, value] of shapeFacetsOf(tool)) {
-        const motif = classMotif(shapeClass(action, facet, value));
-        motifs.set(motif.motifId, motif);
-        const tally = tallyAt(motif, versionBucketOf(frame), 'week', weekStartOf(frame.day ?? UNKNOWN), 'unknown');
-        tally.sessions.add(first.parent);
-        if (tool.status === 'ok') tally.ok += 1;
-        if (tool.status === 'error') tally.failed += 1;
-      }
-    }
-    // The failed calls by their `errorCode` (t868). Rule 6: a day cell exists for a known day only.
-    const failedDay = frame.day ?? UNKNOWN;
-    for (const tool of failedDay === UNKNOWN ? [] : line) {
-      if (tool.status !== 'error' || tool.errorCode === undefined) continue;
-      const code = ERROR_CODES.has(tool.errorCode) ? tool.errorCode : 'other';
-      for (const counted of stepsOfCall(tool, harness)) {
-        if (counted.status !== 'error') continue;
-        // The call's name at both levels: its action alone, and a named call (a flag or a pull would be a second dimension, so those steps are named by program and subcommand alone upstream).
-        for (const { motif: named } of motifsOf([counted])) {
-          if (named.level === 'named' && counted.identity === null) continue;
-          const name = motifName(named);
-          for (const [prefix, bucket] of [[ERROR_CLASS, `${frame.harness}/${NO_AXES}/${frame.model ?? UNKNOWN}`], [ERROR_VERSION_CLASS, versionBucketOf(frame)]] as const) {
-            const motif = classMotif(`${prefix}${code}/${name}`);
-            motifs.set(motif.motifId, motif);
-            const tally = tallyAt(motif, bucket, 'day', failedDay, 'unknown');
-            tally.sessions.add(first.parent);
-            tally.failed += 1;
-            if (counted.tokens !== null) {
-              tally.tokens += counted.tokens;
+    for (const line of linesOf(store.tools)) {
+      const [first] = line;
+      const session = first === undefined ? undefined : sessions.get(first.session);
+      if (first === undefined || session === undefined) continue;
+      const harness = harnessOf(session);
+      const version = first.harnessVersion ?? session.env.harness;
+      const prompt = prompts.get(`${first.session}#${String(first.prompt)}`);
+      const frame =
+        prompt === undefined
+          ? (session.frame ?? oldFrame({ harness, version, model: mostUsedModel(session.models), effort: null, ts: first.ts ?? session.tsFirst, platform: session.env.os }))
+          : framedPrompt(prompt, harness, version, first.ts, session.env.os);
+      const placed = line.flatMap((tool) => graph.place(tool, stepsOfCall(tool, harness)));
+      const steps = placed.map(({ step }) => step);
+      for (const { motif, start } of motifsOf(steps)) {
+        const window = steps.slice(start, start + motif.steps.length);
+        const status = window.at(-1)?.status;
+        const covered = placed.slice(start, start + motif.steps.length);
+        for (const tally of talliesOf(motif, frame, exposureOf(covered.some(({ exposed }) => exposed), covered.some((step) => 'held' in step && step.held)))) {
+          tally.sessions.add(first.parent);
+          if (status === 'ok') tally.ok += 1;
+          if (status === 'error') tally.failed += 1;
+          for (const step of window) {
+            // A step with no recorded cost has no tokens to count, so it joins neither the sum nor the coverage (its duration is still counted).
+            if (step.tokens !== null) {
+              tally.tokens += step.tokens;
               tally.recorded.add(first.parent);
               tally.recordedUnits += 1;
             }
-            tally.durationMs += counted.durationMs;
+            tally.durationMs += step.durationMs;
+          }
+        }
+      }
+      // What followed each failed call that has a code (t868): a week cell per (code, failed action, next action).
+      // A call is read by its first step's action, as a skeleton's is; a record captured before steps has the action its native name maps to.
+      const calls = line.map((call) => ({ side: call.side, prompt: call.prompt, status: call.status, steps: stepsOfCall(call, harness) }));
+      for (const [at, tool] of line.entries()) {
+        const followed = recoveryCallsOf(calls, at);
+        if (followed === null || tool.errorCode === undefined) continue;
+        const code = ERROR_CODES.has(tool.errorCode) ? tool.errorCode : 'other';
+        const motif = classMotif(recoveryClass(code, calls[at]?.steps[0]?.action ?? 'other', followed.next[0] ?? NO_NEXT));
+        motifs.set(motif.motifId, motif);
+        const tally = tallyAt(motif, versionBucketOf(frame), 'week', weekStartOf(frame.day ?? UNKNOWN), 'unknown');
+        tally.sessions.add(first.parent);
+        tally.failed += 1;
+      }
+      // Each call's shape, by its first step's action: a week cell per facet it holds, counted by the call's own status.
+      for (const [at, tool] of line.entries()) {
+        const action = calls[at]?.steps[0]?.action ?? 'other';
+        for (const [facet, value] of shapeFacetsOf(tool)) {
+          const motif = classMotif(shapeClass(action, facet, value));
+          motifs.set(motif.motifId, motif);
+          const tally = tallyAt(motif, versionBucketOf(frame), 'week', weekStartOf(frame.day ?? UNKNOWN), 'unknown');
+          tally.sessions.add(first.parent);
+          if (tool.status === 'ok') tally.ok += 1;
+          if (tool.status === 'error') tally.failed += 1;
+        }
+      }
+      // The failed calls by their `errorCode` (t868). Rule 6: a day cell exists for a known day only.
+      const failedDay = frame.day ?? UNKNOWN;
+      for (const tool of failedDay === UNKNOWN ? [] : line) {
+        if (tool.status !== 'error' || tool.errorCode === undefined) continue;
+        const code = ERROR_CODES.has(tool.errorCode) ? tool.errorCode : 'other';
+        for (const counted of stepsOfCall(tool, harness)) {
+          if (counted.status !== 'error') continue;
+          // The call's name at both levels: its action alone, and a named call (a flag or a pull would be a second dimension, so those steps are named by program and subcommand alone upstream).
+          for (const { motif: named } of motifsOf([counted])) {
+            if (named.level === 'named' && counted.identity === null) continue;
+            const name = motifName(named);
+            for (const [prefix, bucket] of [[ERROR_CLASS, `${frame.harness}/${NO_AXES}/${frame.model ?? UNKNOWN}`], [ERROR_VERSION_CLASS, versionBucketOf(frame)]] as const) {
+              const motif = classMotif(`${prefix}${code}/${name}`);
+              motifs.set(motif.motifId, motif);
+              const tally = tallyAt(motif, bucket, 'day', failedDay, 'unknown');
+              tally.sessions.add(first.parent);
+              tally.failed += 1;
+              if (counted.tokens !== null) {
+                tally.tokens += counted.tokens;
+                tally.recorded.add(first.parent);
+                tally.recordedUnits += 1;
+              }
+              tally.durationMs += counted.durationMs;
+            }
           }
         }
       }
     }
-  }
 
-  for (const prompt of store.prompts) {
-    const session = sessions.get(prompt.session);
-    const frame = framedPrompt(prompt, harnessOf(session ?? {}), session?.env.harness ?? null, null, session?.env.os ?? UNKNOWN);
-    const exposure = exposureOf(graph.exposedPrompt(prompt.session, prompt.index), statesExposure(graph) && graph.heldPrompt(prompt.session, prompt.index));
-    const effort = frame.effort === null ? [] : talliesOf(classMotif(effortClass(frame.effort, prompt.usage.thinking)), frame, exposure, NO_AXES);
-    for (const tally of [...talliesOf(classMotif(prompt.cls), frame, exposure), ...effort]) {
-      tally.sessions.add(prompt.session);
-      if (prompt.errors > 0) tally.failed += 1;
-      else tally.ok += 1;
-      // A prompt that recorded no input has no whole usage to count, and a category it never recorded is a placeholder zero, so neither enters the sum.
-      if (observesUsage(prompt, 'input')) {
-        tally.recorded.add(prompt.session);
-        tally.recordedUnits += 1;
-        for (const field of TOKEN_FIELDS) if (observesUsage(prompt, field)) tally.tokens += prompt.usage[field];
+    for (const prompt of store.prompts) {
+      const session = sessions.get(prompt.session);
+      const frame = framedPrompt(prompt, harnessOf(session ?? {}), session?.env.harness ?? null, null, session?.env.os ?? UNKNOWN);
+      const exposure = exposureOf(graph.exposedPrompt(prompt.session, prompt.index), statesExposure(graph) && graph.heldPrompt(prompt.session, prompt.index));
+      const effort = frame.effort === null ? [] : talliesOf(classMotif(effortClass(frame.effort, prompt.usage.thinking)), frame, exposure, NO_AXES);
+      for (const tally of [...talliesOf(classMotif(prompt.cls), frame, exposure), ...effort]) {
+        tally.sessions.add(prompt.session);
+        if (prompt.errors > 0) tally.failed += 1;
+        else tally.ok += 1;
+        // A prompt that recorded no input has no whole usage to count, and a category it never recorded is a placeholder zero, so neither enters the sum.
+        if (observesUsage(prompt, 'input')) {
+          tally.recorded.add(prompt.session);
+          tally.recordedUnits += 1;
+          for (const field of TOKEN_FIELDS) if (observesUsage(prompt, field)) tally.tokens += prompt.usage[field];
+        }
+        tally.durationMs += (prompt.wallSec ?? 0) * 1000;
       }
-      tally.durationMs += (prompt.wallSec ?? 0) * 1000;
     }
-  }
+  };
 
-  const stated = statesExposure(graph);
-  const cells = [...tallies.values()]
-    .sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.grain, b.grain) || compare(a.day, b.day) || EXPOSURE_CODES[a.exposure] - EXPOSURE_CODES[b.exposure])
-    .map((tally): Cell => ({ motifId: tally.motifId, frameBucket: tally.frameBucket, grain: tally.grain, day: tally.day, sessions: tally.sessions.size, clusters: ONE_OPERATOR, ok: tally.ok, failed: tally.failed, tokens: tally.recorded.size === 0 ? null : tally.tokens, tokenSessions: tally.recorded.size, tokenPrompts: tally.recordedUnits, durationMs: tally.durationMs, exposed: tally.exposure === 'shown', ...(stated ? { exposure: tally.exposure } : {}) }));
-  return { cells, motifs: [...motifs.values()].sort((a, b) => compare(a.motifId, b.motifId)) };
+  const finish = (): CellSet => {
+    const stated = statesExposure(graph);
+    const cells = [...tallies.values()]
+      .sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.grain, b.grain) || compare(a.day, b.day) || EXPOSURE_CODES[a.exposure] - EXPOSURE_CODES[b.exposure])
+      .map((tally): Cell => ({ motifId: tally.motifId, frameBucket: tally.frameBucket, grain: tally.grain, day: tally.day, sessions: tally.sessions.size, clusters: ONE_OPERATOR, ok: tally.ok, failed: tally.failed, tokens: tally.recorded.size === 0 ? null : tally.tokens, tokenSessions: tally.recorded.size, tokenPrompts: tally.recordedUnits, durationMs: tally.durationMs, exposed: tally.exposure === 'shown', ...(stated ? { exposure: tally.exposure } : {}) }));
+    return { cells, motifs: [...motifs.values()].sort((a, b) => compare(a.motifId, b.motifId)) };
+  };
+  return { add, finish };
+};
+
+export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): CellSet => {
+  const fold = cellFold(graph);
+  fold.add(store);
+  return fold.finish();
 };
 
 export const serializeCells = (cells: readonly Cell[]): string => cells.map((cell) => `${JSON.stringify(cell)}\n`).join('');

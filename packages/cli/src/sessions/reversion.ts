@@ -74,18 +74,26 @@ const keptBy = (committed: ReadonlyMap<string, readonly Commit[]>, edit: Place, 
   return before.some((commit) => commit.n > edit.n) || (committed.get(restore.session) ?? []).some((commit) => commit.n <= restore.n && !(commit.ts !== null && edit.ts !== null && commit.ts < edit.ts));
 };
 
+/** What the calls of the runs folded so far hold: every main-line call's commits, revert words, restored paths, and edit digests, and each session's repository. */
+export interface ReversionIndex {
+  repos: Map<string, string | null>;
+  commits: Placed[];
+  reverts: Placed[];
+  committed: Map<string, Commit[]>;
+  edited: Map<string, Place[]>;
+  written: Map<string, Written[]>;
+  restored: Array<Place & { target: string }>;
+}
+
+export const newReversionIndex = (): ReversionIndex => ({ repos: new Map(), commits: [], reverts: [], committed: new Map(), edited: new Map(), written: new Map(), restored: [] });
+
 /**
- * Reads every main-line call once: the clean shell calls' commits, revert words (read segments only, since a segment whose result the call's status does not report (`read` false) could have failed behind another command), and
- * restored paths; and every edit that did not fail, with its digests. A subagent's call is not on the main line, so it is not read. Returns the nearest reversion of a prompt's work, or null for none found.
+ * Reads every main-line call of one run once: the clean shell calls' commits, revert words (read segments only, since a segment whose result the call's status does not report (`read` false) could have failed behind another command), and
+ * restored paths; and every edit that did not fail, with its digests. A subagent's call is not on the main line, so it is not read. Reads the run's own sessions only; runs fold in the whole store's order, and the matching waits for `finishReversions`.
  */
-export const reversionsOf = (store: Store): ((session: string, index: number | null) => Reversion | null) => {
-  const repos = new Map(store.sessions.map((session) => [session.session, session.repo]));
-  const commits: Placed[] = [];
-  const reverts: Placed[] = [];
-  const committed = new Map<string, Commit[]>();
-  const edited = new Map<string, Place[]>();
-  const written = new Map<string, Written[]>();
-  const restored: Array<Place & { target: string }> = [];
+export const foldReversions = (index: ReversionIndex, store: Store): void => {
+  const { repos, commits, reverts, committed, edited, written, restored } = index;
+  for (const session of store.sessions) repos.set(session.session, session.repo);
   for (const tool of store.tools) {
     if (tool.side || tool.prompt === null) continue;
     const at = { session: tool.session, n: tool.n, k: 0, ts: tool.ts, prompt: tool.prompt };
@@ -99,6 +107,11 @@ export const reversionsOf = (store: Store): ((session: string, index: number | n
     for (const target of tool.restores ?? []) restored.push({ ...at, target });
     for (const segment of tool.segments ?? []) if (segment.read) for (const word of revertWords(segment.run)) reverts.push({ ...at, sha: word });
   }
+};
+
+/** Matches the folded calls once. Returns the nearest reversion of a prompt's work, or null for none found. */
+export const finishReversions = (index: ReversionIndex): ((session: string, index: number | null) => Reversion | null) => {
+  const { repos, commits, reverts, committed, edited, written, restored } = index;
   const found = new Map<string, Reversion>();
   const note = (earlier: Place, later: Place): void => {
     const where = whereOf(earlier, later, repos);
@@ -125,4 +138,11 @@ export const reversionsOf = (store: Store): ((session: string, index: number | n
     for (const edit of edited.get(restore.target) ?? []) if (!keptBy(committed, edit, restore)) note(edit, restore);
   }
   return (session, index) => found.get(`${session}#${String(index)}`) ?? null;
+};
+
+/** Every main-line call of the store matched at once: the fold of one run, then the finish. */
+export const reversionsOf = (store: Store): ((session: string, index: number | null) => Reversion | null) => {
+  const index = newReversionIndex();
+  foldReversions(index, store);
+  return finishReversions(index);
 };

@@ -163,49 +163,69 @@ interface ShapeTally {
   models: Set<string>;
 }
 
-/** `keep` narrows which calls are tallied, not what can come next: the call after a kept one is what followed it, wherever the slice ends. */
-export const fitReads = (store: Store, floors: FitFloors = FIT_FLOORS, keep: (call: ToolObservation) => boolean = () => true): RecallRead[] => {
-  const models = modelsByPrompt(store);
-  const harnesses = harnessesOf(store);
+export interface FitFold {
+  add: (store: Store) => void;
+  finish: () => RecallRead[];
+}
+
+/**
+ * `fitReads` as a fold: each `add` tallies one run of sessions into the same shapes, and `finish` applies the floors. Runs come in the whole store's row order, so the tie order of `followed` matches.
+ * `keep` narrows which calls are tallied, not what can come next: the call after a kept one is what followed it, wherever the slice ends.
+ */
+export const fitFold = (floors: FitFloors = FIT_FLOORS, keep: (call: ToolObservation) => boolean = () => true): FitFold => {
+  const harnesses = new Map<string, Harness>();
   const shapes = new Map<string, ShapeTally>();
-  for (const calls of callsBySession(store).values()) {
-    for (const [position, call] of calls.entries()) {
-      if (!keep(call)) continue;
-      const id = toolShapeId(call.tool, call.keys);
-      const shape: ShapeTally = shapes.get(id) ?? { tool: call.tool, keys: [...call.keys].sort(), calls: 0, failed: 0, sessions: new Set(), following: new Map(), days: [], versions: new Set(), models: new Set() };
-      shapes.set(id, shape);
-      shape.calls += 1;
-      if (call.status !== 'error') continue;
-      shape.failed += 1;
-      shape.sessions.add(call.session);
-      shape.days.push(utcDay(call.ts));
-      if (call.harnessVersion !== null) shape.versions.add(call.harnessVersion);
-      const model = models.get(`${call.session}#${String(call.prompt)}`);
-      if (model !== undefined) shape.models.add(model);
-      const next = calls[position + 1];
-      if (next !== undefined) bump(shape.following, next.tool);
+  const add = (store: Store): void => {
+    const models = modelsByPrompt(store);
+    for (const [session, harness] of harnessesOf(store)) harnesses.set(session, harness);
+    for (const calls of callsBySession(store).values()) {
+      for (const [position, call] of calls.entries()) {
+        if (!keep(call)) continue;
+        const id = toolShapeId(call.tool, call.keys);
+        const shape: ShapeTally = shapes.get(id) ?? { tool: call.tool, keys: [...call.keys].sort(), calls: 0, failed: 0, sessions: new Set(), following: new Map(), days: [], versions: new Set(), models: new Set() };
+        shapes.set(id, shape);
+        shape.calls += 1;
+        if (call.status !== 'error') continue;
+        shape.failed += 1;
+        shape.sessions.add(call.session);
+        shape.days.push(utcDay(call.ts));
+        if (call.harnessVersion !== null) shape.versions.add(call.harnessVersion);
+        const model = models.get(`${call.session}#${String(call.prompt)}`);
+        if (model !== undefined) shape.models.add(model);
+        const next = calls[position + 1];
+        if (next !== undefined) bump(shape.following, next.tool);
+      }
     }
-  }
-  const reads: RecallRead[] = [];
-  for (const [readId, shape] of shapes) {
-    if (shape.sessions.size < floors.minFailedSessions || shape.calls < floors.minCalls || shape.failed / shape.calls < floors.minFailedShare) continue;
-    reads.push({
-      readId,
-      family: 'fit',
-      tool: shape.tool,
-      keys: shape.keys,
-      n: shape.sessions.size,
-      count: shape.failed,
-      calls: shape.calls,
-      clusters: 1,
-      ...dayRange(shape.days),
-      harnesses: harnessNames(shape.sessions, harnesses),
-      harnessVersions: [...shape.versions].sort(),
-      models: [...shape.models].sort(),
-      followed: top(shape.following),
-    });
-  }
-  return reads.sort((a, b) => b.count - a.count || a.readId.localeCompare(b.readId));
+  };
+  const finish = (): RecallRead[] => {
+    const reads: RecallRead[] = [];
+    for (const [readId, shape] of shapes) {
+      if (shape.sessions.size < floors.minFailedSessions || shape.calls < floors.minCalls || shape.failed / shape.calls < floors.minFailedShare) continue;
+      reads.push({
+        readId,
+        family: 'fit',
+        tool: shape.tool,
+        keys: shape.keys,
+        n: shape.sessions.size,
+        count: shape.failed,
+        calls: shape.calls,
+        clusters: 1,
+        ...dayRange(shape.days),
+        harnesses: harnessNames(shape.sessions, harnesses),
+        harnessVersions: [...shape.versions].sort(),
+        models: [...shape.models].sort(),
+        followed: top(shape.following),
+      });
+    }
+    return reads.sort((x, y) => y.count - x.count || x.readId.localeCompare(y.readId));
+  };
+  return { add, finish };
+};
+
+export const fitReads = (store: Store, floors: FitFloors = FIT_FLOORS, keep: (call: ToolObservation) => boolean = () => true): RecallRead[] => {
+  const fold = fitFold(floors, keep);
+  fold.add(store);
+  return fold.finish();
 };
 
 /** The action of a tool under the first of its harnesses whose table lists it, else under the first harness (the default one when a read names none). */
