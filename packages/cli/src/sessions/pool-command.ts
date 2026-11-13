@@ -280,8 +280,9 @@ ${proofLines(account, provedAt)}`;
 /** A promise that rejects with the signal's reason once it aborts, so a wait can be raced against it. */
 const abortion = (signal: AbortSignal): Promise<never> =>
   new Promise((_resolve, reject) => {
-    if (signal.aborted) reject(signal.reason);
-    else signal.addEventListener('abort', () => { reject(signal.reason); }, { once: true });
+    const why = (): Error => (signal.reason instanceof Error ? signal.reason : new Error('aborted'));
+    if (signal.aborted) reject(why());
+    else signal.addEventListener('abort', () => { reject(why()); }, { once: true });
   });
 
 /** Polls the pool until the person approves, and returns the pool's answer with the credential. Time is counted in the waits asked for, so a machine that slept through the code still gets one poll that says it expired. */

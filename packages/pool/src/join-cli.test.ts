@@ -8,7 +8,7 @@ import { deposit } from '../../cli/src/sessions/store.js';
 import { cleanup, NOW, settledClock, stage } from '../../cli/src/sessions/test-support.js';
 import { harness } from '../../cli/src/test-support.js';
 import { TEST_PHRASE } from './test-covenant-texts.js';
-import { startPool, stubUser, type TestDb, type TestPool } from './test-pool.js';
+import { fieldOf, startPool, stubUser, textOf, type TestDb, type TestPool } from './test-pool.js';
 
 // An invented term: a session holding it would never leave, and a missing file would exclude everything.
 const TERM = 'zorblax';
@@ -48,10 +48,11 @@ describe('oars pool join against the local pool', () => {
     staged.stdin.write(`no\n${TEST_PHRASE}\n`);
 
     expect(await run(['--json', 'pool', 'join', '--provider', 'github', '--harness-version', '2.1.314'], h.deps)).toBe(ExitCode.OK);
-    const account = await db.prepare('SELECT id, access FROM accounts ORDER BY rowid DESC LIMIT 1').first<{ id: string; access: string | null }>();
-    expect(account?.access).toBe('pending');
-    expect(await db.prepare('SELECT COUNT(*) AS count FROM deposits WHERE account = ? AND counted_at IS NOT NULL').bind(account?.id ?? '').first('count')).toBeGreaterThan(0);
-    expect(await db.prepare("SELECT COUNT(*) AS count FROM covenant_acceptances WHERE account = ? AND input = 'typed' AND client LIKE 'oars/%'").bind(account?.id ?? '').first('count')).toBe(1);
+    const account = await db.prepare('SELECT id, access FROM accounts ORDER BY rowid DESC LIMIT 1').first();
+    const id = textOf(account, 'id');
+    expect(fieldOf(account, 'access')).toBe('pending');
+    expect(await db.prepare('SELECT COUNT(*) AS count FROM deposits WHERE account = ? AND counted_at IS NOT NULL').bind(id).first('count')).toBeGreaterThan(0);
+    expect(await db.prepare("SELECT COUNT(*) AS count FROM covenant_acceptances WHERE account = ? AND input = 'typed' AND client LIKE 'oars/%'").bind(id).first('count')).toBe(1);
 
     // A second fetch in the same ISO week would be refused 429 `fetch_cap` without access: the deposit counted.
     h.out.length = 0;
