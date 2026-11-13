@@ -60,7 +60,7 @@ const ACCEPTANCES = 'SELECT version, text_sha256, accepted_at FROM covenant_acce
 
 const DEPOSITS = `SELECT id, tier, counted_at, request_country, skeleton FROM deposits WHERE account = ? AND erased_on IS NULL AND id > ? ORDER BY id LIMIT ${String(PAGE)}`;
 
-const RAW_COPIES = 'SELECT sha256 FROM raw_objects WHERE account = ? AND erased_on IS NULL ORDER BY sha256';
+const RAW_COPIES = 'SELECT sha256, deposit, place FROM raw_objects WHERE account = ? AND erased_on IS NULL ORDER BY sha256';
 
 /** Every row of a query that ends in `id > ?`, a page at a time in `id` order, after the leading binds; the cursor is read from the last row and bound, never written into the statement. */
 const paged = async function* (store: ReadOnlyStore, sql: string, leading: readonly string[]): AsyncGenerator<unknown, void> {
@@ -123,6 +123,7 @@ export const pullDeposits = async (store: ReadOnlyStore, folder: ExportFolder): 
       depositsFile += line({ id: textOf(deposit, 'id'), tier: textOf(deposit, 'tier'), counted_at: numberOrNull(deposit, 'counted_at'), request_country: textOrNull(deposit, 'request_country'), skeleton: textOf(deposit, 'skeleton') });
     }
     await folder.write(`${account}/deposits.jsonl`, depositsFile);
+    let linksFile = '';
     for (const copy of await store.rows(RAW_COPIES, [account])) {
       const hash = textOf(copy, 'sha256');
       if (!SHA256.test(hash)) {
@@ -145,12 +146,18 @@ export const pullDeposits = async (store: ReadOnlyStore, folder: ExportFolder): 
           }
         })(),
       );
-      if (digest.digest('hex') === hash) pulled.rawCopies += 1;
-      else {
+      if (digest.digest('hex') === hash) {
+        pulled.rawCopies += 1;
+        // The link the client stored when the upload completed (migration 0042); a copy from before it has none, and the build recomputes.
+        const deposit = textOrNull(copy, 'deposit');
+        const place = numberOrNull(copy, 'place');
+        if (deposit !== null && place !== null) linksFile += line({ sha256: hash, deposit, place });
+      } else {
         await folder.remove(name);
         pulled.failed.push(`${hash} of ${account} does not hash to its name`);
       }
     }
+    if (linksFile !== '') await folder.write(`${account}/links.jsonl`, linksFile);
   }
   await folder.write('accounts.jsonl', accountsFile);
   return pulled;
@@ -166,7 +173,7 @@ export const insideRepository = async (path: string): Promise<boolean> => {
 
 export const USAGE = [
   'Usage: pull-deposits --out <folder> [--local]',
-  '  Copies the eligible third-party deposits out of the pool into a new, empty folder outside every repository: accounts.jsonl, and per account deposits.jsonl and projects/deposit/<sha256>.jsonl.',
+  '  Copies the eligible third-party deposits out of the pool into a new, empty folder outside every repository: accounts.jsonl, and per account deposits.jsonl, links.jsonl (the stored link of each Raw Copy that has one), and projects/deposit/<sha256>.jsonl.',
   "  It reads the pool and changes nothing. --local reads the local wrangler state instead of the account's.",
 ].join('\n');
 

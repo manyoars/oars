@@ -57,6 +57,7 @@ describe('the nightly cron erases the raw copies of an account that withdrew', (
     const first = await store(mine.token, 'first of my transcripts');
     const second = await store(mine.token, 'second of my transcripts');
     const kept = await store(theirs.token, 'a transcript of someone who did not withdraw');
+    await (await pool.db()).prepare('UPDATE raw_objects SET deposit = ?, place = 1 WHERE account = ? AND sha256 = ?').bind('a1b2c3d4e5f60718', mine.account, first).run();
     expect((await withdraw(mine.token)).status).toBe(200);
     // Withdrawing alone leaves the held objects to the sweep.
     expect(await keysOf(`raw/${mine.account}/`)).toHaveLength(2);
@@ -68,6 +69,8 @@ describe('the nightly cron erases the raw copies of an account that withdrew', (
     expect(await all('SELECT sha256, bytes, erased_on FROM raw_objects WHERE account = ? ORDER BY sha256', mine.account)).toEqual(
       [first, second].sort().map((hash) => ({ sha256: hash, bytes: hash === first ? 'first of my transcripts'.length : 'second of my transcripts'.length, erased_on: '2026-11-10' })),
     );
+    // The link to the deposit goes with the object (Art. 17(1)(b)).
+    expect(await count('SELECT COUNT(*) AS held FROM raw_objects WHERE account = ? AND (deposit IS NOT NULL OR place IS NOT NULL)', mine.account)).toBe(0);
     expect(await all('SELECT erased_on FROM raw_objects WHERE account = ?', theirs.account)).toEqual([{ erased_on: null }]);
     const digests = await Promise.all([first, second].map((hash) => rawDigest(`raw/${mine.account}/${hash}`)));
     expect(await count("SELECT COUNT(*) AS held FROM erasure_tombstones WHERE kind = 'raw-object' AND reason = 'consent-withdrawn' AND digest IN (?, ?)", ...digests)).toBe(2);

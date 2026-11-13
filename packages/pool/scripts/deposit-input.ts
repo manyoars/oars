@@ -27,11 +27,13 @@ export interface DepositAccount {
   deposits: DepositRow[];
   /** Raw Copy hashes, the file names under `<account>/projects/deposit/`. */
   copies: string[];
+  /** The stored link of a Raw Copy to its deposit (`raw_objects.deposit`), by Raw Copy hash. A copy stored before the column, or by a client that sent no link, has none. */
+  links: Map<string, string>;
 }
 
 /** Why a Raw Copy of a deposit was left out, counted by name; absent from `PackCounts` unless the pack was built from deposits. */
 export interface DepositCounts {
-  /** Pairs with no deposit row of its account: the recomputed id found none (brief 6 stores the link, and this count ends). */
+  /** Pairs with no deposit row of its account: its stored link names none, or it has no stored link and the recomputed id found none. */
   unlinked: number;
   /** The paired deposit arrived as tier `none`: its batch failed the challenge or root check. */
   tierNone: number;
@@ -70,7 +72,7 @@ const acceptanceOf = (row: unknown): DepositAcceptance => {
   return { version: textAt(row, 'version'), text_sha256: textAt(row, 'text_sha256'), accepted_at: at };
 };
 
-/** Reads what `pull-deposits` wrote: `accounts.jsonl`, then per account `deposits.jsonl` and the names under `projects/deposit/`. */
+/** Reads what `pull-deposits` wrote: `accounts.jsonl`, then per account `deposits.jsonl`, `links.jsonl` (the stored Raw Copy links, when the pull wrote any), and the names under `projects/deposit/`. */
 export const readDepositInput = async (folder: string): Promise<DepositAccount[]> => {
   const accounts: DepositAccount[] = [];
   for (const row of rowsOf(await readFile(join(folder, 'accounts.jsonl'), 'utf8'))) {
@@ -80,8 +82,10 @@ export const readDepositInput = async (folder: string): Promise<DepositAccount[]
       const counted = fieldOf(found, 'counted_at');
       return { id: textAt(found, 'id'), tier: textAt(found, 'tier'), countedAt: typeof counted === 'number' ? counted : null, country: textOrNull(found, 'request_country'), skeleton: textAt(found, 'skeleton') };
     });
+    // `links.jsonl` is absent from a pull made before the stored link, and then every copy is paired by the recomputed id.
+    const links = new Map(rowsOf(await readFile(join(folder, account, 'links.jsonl'), 'utf8').catch(() => '')).map((found): [string, string] => [textAt(found, 'sha256'), textAt(found, 'deposit')]));
     const copies = await readdir(join(folder, account, 'projects', 'deposit')).catch((): string[] => []);
-    accounts.push({ account, acceptances: Array.isArray(acceptances) ? acceptances.map(acceptanceOf) : [], deposits, copies: copies.filter((name) => name.endsWith('.jsonl')).map((name) => name.slice(0, -'.jsonl'.length)).sort() });
+    accounts.push({ account, acceptances: Array.isArray(acceptances) ? acceptances.map(acceptanceOf) : [], deposits, copies: copies.filter((name) => name.endsWith('.jsonl')).map((name) => name.slice(0, -'.jsonl'.length)).sort(), links });
   }
   return accounts;
 };
@@ -161,7 +165,10 @@ export const captureDeposits = async (runtime: SessionsRuntime, folder: string, 
   const verdictOf = (project: string, session: string): DepositVerdict => {
     const found = byAccount.get(project);
     const harness = sessionOf.get(`${project}/${session}`);
-    const row = found === undefined || harness === undefined ? undefined : found.deposits.find((candidate) => candidate.id === contentHash([project, harness]));
+    // The stored link first: it is the client's own key for the session, exact for a machine's session too. A copy with none (older rows) is paired by the recomputed id.
+    const stored = found?.links.get(session);
+    const wanted = stored ?? (harness === undefined ? undefined : contentHash([project, harness]));
+    const row = found === undefined || wanted === undefined ? undefined : found.deposits.find((candidate) => candidate.id === wanted);
     if (found === undefined || row === undefined) return { left: 'unlinked' };
     if (row.tier === 'none') return { left: 'tierNone' };
     if (row.country !== null && PROTECTED_REGIONS.has(row.country)) return { left: 'protectedRegion' };

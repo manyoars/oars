@@ -111,7 +111,7 @@ export const night = async (deps: RunDeps, net: Sender, tally: NightlyPool): Pro
     if (choices.rawConsent === 'granted' && !rawStale(choices, version)) {
       for (const copy of (await heldRaw(outbox)).copies) {
         if (done.has(copy.hash) || copy.bytes === 0) continue;
-        await postRaw(deps, { server, token, hash: copy.hash, body: copy.body, bytes: copy.bytes, consent: version, via: net });
+        await postRaw(deps, { server, token, hash: copy.hash, body: copy.body, bytes: copy.bytes, consent: version, link: { key: copy.key, place: copy.place }, via: net });
         await markSent(outbox, copy.hash, deps.now());
         tally.raw += 1;
       }

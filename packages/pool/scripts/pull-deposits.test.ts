@@ -57,7 +57,7 @@ interface Seed {
   /** Acceptances by version; `hash` and `input` default to a proved one. */
   acceptances?: { version: string; at: number; hash?: string | null; input?: string | null }[];
   deposits?: { id: string; tier?: string; countedAt?: number | null; erasedOn?: string | null }[];
-  raw?: { text: string; erasedOn?: string | null; stored?: boolean }[];
+  raw?: { text: string; erasedOn?: string | null; stored?: boolean; link?: { deposit: string; place: number } }[];
 }
 
 /** A signed-in account with the seeded rows, written straight into the local pool. */
@@ -75,7 +75,7 @@ const seeded = async (seed: Seed = {}): Promise<string> => {
     await db.prepare("INSERT INTO deposits (account, id, skeleton, tier, counted_at, erased_on, request_country, deltas) VALUES (?, ?, ?, ?, ?, ?, 'US', '[]')").bind(account, found.id, `{"id":"${found.id}"}`, found.tier ?? 'skeleton', found.countedAt === undefined ? 2000 : found.countedAt, found.erasedOn ?? null).run();
   }
   for (const found of seed.raw ?? []) {
-    await db.prepare("INSERT INTO raw_objects (account, sha256, bytes, capture_version, redaction_version, stored_at, erased_on) VALUES (?, ?, ?, 'cap-1', '1', 1, ?)").bind(account, sha(found.text), found.text.length, found.erasedOn ?? null).run();
+    await db.prepare("INSERT INTO raw_objects (account, sha256, bytes, capture_version, redaction_version, stored_at, erased_on, deposit, place) VALUES (?, ?, ?, 'cap-1', '1', 1, ?, ?, ?)").bind(account, sha(found.text), found.text.length, found.erasedOn ?? null, found.link?.deposit ?? null, found.link?.place ?? null).run();
     if (found.stored !== false) await (await pool.rawBucket()).put(objectKey(account, sha(found.text)), found.text);
   }
   return account;
@@ -110,6 +110,16 @@ describe('pull-deposits', () => {
       { id: 'd2', tier: 'none', counted_at: null, request_country: 'US', skeleton: '{"id":"d2"}' },
     ]);
     expect(files.get(`${account}/projects/deposit/${sha('{"line":1}\n')}.jsonl`)).toBe('{"line":1}\n');
+  });
+
+  it('writes the stored link of each Raw Copy that has one to links.jsonl, and none for an older row (t1252)', async () => {
+    const linked = await seeded({ deposits: [{ id: 'd1' }], raw: [{ text: 'linked copy', link: { deposit: 'd1', place: 0 } }, { text: 'older copy' }] });
+    const older = await seeded({ raw: [{ text: 'only older copy' }] });
+    const { folder, files } = memory();
+    await pullDeposits(await store(), folder);
+    expect(jsonl(files.get(`${linked}/links.jsonl`))).toEqual([{ sha256: sha('linked copy'), deposit: 'd1', place: 0 }]);
+    // No link on any copy of an account, no file: the build then pairs by the recomputed id.
+    expect(files.has(`${older}/links.jsonl`)).toBe(false);
   });
 
   it('leaves out an acceptance with no text hash', async () => {

@@ -631,11 +631,11 @@ export const postBatch = async (deps: RunDeps, options: { server: string; token:
 };
 
 /**
- * One redacted raw copy to the pool: its parts by PUT, then the completion, which the pool checks against the SHA-256 in the path. Every request states the redaction and capture versions and that the person said yes to the raw prompt;
+ * One redacted raw copy to the pool: its parts by PUT, then the completion, which the pool checks against the SHA-256 in the path and which states the copy's link to its deposit (`oars-raw-link`: the session key and the place, t1252). Every request states the redaction and capture versions and that the person said yes to the raw prompt;
  * the caller sends only for a person who did. A part sent again replaces itself, and one for an object that stands writes nothing, so a copy that failed halfway is sent again whole.
  */
-export const postRaw = async (deps: RunDeps, options: { server: string; token: string; hash: string; body: string; bytes: number; consent: string; via: Sender }): Promise<void> => {
-  const { server, token, hash, body, bytes, consent, via } = options;
+export const postRaw = async (deps: RunDeps, options: { server: string; token: string; hash: string; body: string; bytes: number; consent: string; link: { key: string; place: number }; via: Sender }): Promise<void> => {
+  const { server, token, hash, body, bytes, consent, link, via } = options;
   // The yes names the covenant version it answered: the pool takes it only for the version in force.
   const extra: Array<[string, string]> = [['oars-redaction-version', REDACTION_VERSION], ['oars-capture-version', CAPTURE_VERSION], ['oars-raw-consent', 'granted'], ['oars-raw-consent-version', consent]];
   const parts = rawParts(body);
@@ -643,7 +643,7 @@ export const postRaw = async (deps: RunDeps, options: { server: string; token: s
     const reply = await ask(deps, DEPOSIT, server, `/v1/raw/${hash}/parts/${String(at + 1)}`, { token, bytes: piece, method: 'PUT', type: 'application/x-ndjson', extra }, via);
     if (reply.status !== 200) throw refusal(DEPOSIT, reply);
   }
-  const done = await ask(deps, DEPOSIT, server, `/v1/raw/${hash}/complete`, { token, body: { parts: parts.length, bytes }, extra }, via);
+  const done = await ask(deps, DEPOSIT, server, `/v1/raw/${hash}/complete`, { token, body: { parts: parts.length, bytes }, extra: [...extra, ['oars-raw-link', `${link.key}.${String(link.place)}`]] }, via);
   if (done.status !== 200 && done.status !== 201) throw refusal(DEPOSIT, done);
 };
 
