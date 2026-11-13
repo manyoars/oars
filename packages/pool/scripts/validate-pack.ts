@@ -69,7 +69,12 @@ const text: Check = (value) => (!isText(value) ? 'not a string' : value === '' ?
 const textOrNull: Check = (value) => (value === null ? undefined : text(value));
 const count: Check = (value) => (isCount(value) ? undefined : 'not a whole number');
 const instantOrNull: Check = (value) => (value === null ? undefined : !isText(value) ? 'not a string or null' : Number.isNaN(Date.parse(value)) ? 'not a date and time' : undefined);
-const real: Check = (value) => (isText(value) && Number.isNaN(Date.parse(value)) ? 'not a date and time' : undefined);
+// Date.parse rolls an impossible day (02-30) into the next month, so the time must survive a round trip.
+const isCalendarTime = (value: string): boolean => {
+  const parsed = new Date(value);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value;
+};
+const real: Check = (value) => (isText(value) && !isCalendarTime(value) ? 'not a date and time' : undefined);
 const oneOf = (list: readonly string[]): Check => (value) => (isText(value) && list.includes(value) ? undefined : 'not one of the listed values');
 const shaped = (shape: RegExp, rule: string): Check => (value) => (!isText(value) ? 'not a string' : shape.test(value) ? undefined : rule);
 const isoTime = shaped(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/, 'not an ISO 8601 time');
@@ -341,7 +346,15 @@ const checkPack = async (folder: string): Promise<Result> => {
       return [];
     }
   };
+  // A directory at the root other than sessions/ is in no row either.
+  let rootFolders: string[] = [];
+  try {
+    rootFolders = (await readdir(folder, { withFileTypes: true })).filter((entry) => entry.isDirectory() && entry.name !== 'sessions').map((entry) => entry.name).sort();
+  } catch (error) {
+    if (!isAbsent(error)) throw error;
+  }
   for (const file of [...(await loose('', BOOKKEEPING)), ...(await loose('sessions', new Set()))]) found.push({ where: file, field: '(file)', rule: 'no manifest row names it' });
+  for (const name of rootFolders) found.push({ where: name, field: '(folder)', rule: 'no manifest row names it' });
   for (const name of folders) if (!named.has(name)) found.push({ where: `sessions/${name}`, field: '(folder)', rule: 'no manifest row names it' });
   return { violations: found, rows: rows.length, records, transcripts };
 };

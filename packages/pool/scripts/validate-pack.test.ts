@@ -210,7 +210,7 @@ describe('a pack', () => {
   });
 
   it('validate-pack refuses an acceptedAt that is not a time', async () => {
-    for (const bad of ['yesterday-planted', '2026-07-01', '1', '2026-13-01T00:00:00.000Z', null, 5]) {
+    for (const bad of ['yesterday-planted', '2026-07-01', '1', '2026-13-01T00:00:00.000Z', '2026-02-30T00:00:00.000Z', null, 5]) {
       const printed = await lines(pack({ row: { ...row(), ...DEPOSIT, acceptedAt: bad } }));
       expect(printed.code).toBe(1);
       expect(printed.out).toHaveLength(1);
@@ -249,9 +249,11 @@ describe('a pack', () => {
     writeFileSync(join(folder, 'sessions', 'loose.jsonl'), 'x');
     writeFileSync(join(folder, 'pack.json'), '{}');
     writeFileSync(join(folder, 'census.json'), '{}');
+    mkdirSync(join(folder, 'notes'));
+    writeFileSync(join(folder, 'notes', 'x.txt'), 'x');
     const printed = await lines(folder);
     expect(printed.code).toBe(1);
-    expect(printed.out).toEqual(['stray.txt (file): no manifest row names it', 'sessions/loose.jsonl (file): no manifest row names it']);
+    expect(printed.out).toEqual(['stray.txt (file): no manifest row names it', 'sessions/loose.jsonl (file): no manifest row names it', 'notes (folder): no manifest row names it']);
   });
 
   it('an operator row has no acceptedAt and still conforms', async () => {
