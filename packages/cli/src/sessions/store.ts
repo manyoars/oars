@@ -1435,11 +1435,15 @@ const internTool = (tool: ToolObservation, intern: (value: string) => string): T
   ...(tool.segments === undefined ? {} : { segments: tool.segments.map((segment) => ({ ...segment, run: intern(segment.run) })) }),
 });
 
-const SESSION_FIELD = /"session":"([^"\\]*)"/g;
+const SESSION_FIELD = /"session":"((?:[^"\\]|\\.)*)"/g;
 
 /** True when the line carries a `"session":"<id>"` field of one of `ids`. The writer emits compact JSON, so the field of the line's own session is always found; a nested match only keeps the line for the parse to decide. */
-const namesAny = (line: string, ids: ReadonlySet<string>): boolean => {
-  for (const match of line.matchAll(SESSION_FIELD)) if (ids.has(match[1] ?? '')) return true;
+export const namesAny = (line: string, ids: ReadonlySet<string>): boolean => {
+  for (const match of line.matchAll(SESSION_FIELD)) {
+    const value = match[1] ?? '';
+    // An id that JSON escaped (a quote or a backslash in it) is not the raw id: keep the line and let the parse decide.
+    if (value.includes('\\') || ids.has(value)) return true;
+  }
   return false;
 };
 

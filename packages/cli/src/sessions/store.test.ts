@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { compactLog, deposit, scanLog, depositSession, derive, loadStore, paths, readCalls, readRedactDomains, readSkeletons, slugOf, withLock } from './store.js';
+import { compactLog, deposit, scanLog, depositSession, derive, loadStore, namesAny, paths, readCalls, readRedactDomains, readSkeletons, slugOf, withLock } from './store.js';
 import { CAPTURE_VERSION, EXTRACTOR_VERSION } from './schema.js';
 import { addProject, cleanup, NOW, stage } from './test-support.js';
 
@@ -113,7 +113,17 @@ describe('deposit', () => {
     expect(heads.errors).toEqual([]);
   });
 
-  it('takes the revs of a scan it is given and does not scan the log again', async () => {
+  it('keeps a line whose session id JSON escaped (jsonescapedid), and drops one that names no wanted session', () => {
+    const odd = 'a"b\\c';
+    const line = JSON.stringify({ kind: 'session', session: odd, rev: 1 });
+    expect(line).toContain(String.raw`"session":"a\"b\\c"`);
+    expect(namesAny(line, new Set([odd]))).toBe(true);
+    expect(namesAny(line, new Set(['other']))).toBe(true);
+    expect(namesAny(JSON.stringify({ kind: 'session', session: 'plain', rev: 1 }), new Set(['other']))).toBe(false);
+    expect(namesAny(JSON.stringify({ kind: 'session', session: 'plain', rev: 1 }), new Set(['plain']))).toBe(true);
+  });
+
+  it('takes the revs of a scan it is given (revscan) and does not scan the log again', async () => {
     const staged = stage();
     await deposit(staged.runtime, options(['proj']));
     const whole = await loadStore(staged.storeDir);

@@ -425,7 +425,7 @@ export const OFFER_BEFORE: readonly string[] = [
 export const OFFER_AFTER: readonly string[] = ['Accepted. Sending your batch now.', 'Run oars pool fetch --help for your first pool download.'];
 
 /** A send stops here when the server is closed or wants a covenant accepted, before the batch is read for the last time. */
-const openCovenant = async (deps: RunDeps, server: string, token: string, accept: string | undefined, region: Region | undefined, via: Sender, signal?: AbortSignal, offTerminal: () => Promise<string> = () => Promise.resolve('run this command from one')): Promise<void> => {
+const openCovenant = async (deps: RunDeps, server: string, token: string, accept: string | undefined, region: Region | undefined, via: Sender, signal?: AbortSignal, offTerminal: () => Promise<string> = () => Promise.resolve('run this command from one'), refuseAtTerminal = false): Promise<void> => {
   const reply = await ask(deps, DEPOSIT, server, '/v1/covenant', { token }, via);
   if (reply.status !== 200 || !isObject(reply.body)) throw refusal(DEPOSIT, reply);
   const version = textIn(reply.body, 'version');
@@ -441,7 +441,8 @@ const openCovenant = async (deps: RunDeps, server: string, token: string, accept
   const screen = screenIn(reply.body);
   if (screen === undefined) throw notAccepted(`The pool has no text for covenant ${version} yet, so there is nothing to show and nothing can be accepted. Nothing was accepted.`);
   // Assent is a person typing the phrase the screen states. A flag or a script on stdin is not one, so off a terminal nothing is asked and nothing is accepted.
-  if (!isTerminal(deps)) {
+  // A bulk send never shows the screen: a person reads and accepts through the one-batch command, so a terminal is refused the same way.
+  if (refuseAtTerminal || !isTerminal(deps)) {
     throw notAccepted(`Covenant ${version} is not accepted for this account. Accepting it takes a person at a terminal who reads it and types its phrase: ${await offTerminal()}. Nothing was accepted.`);
   }
   deps.io.stderr(`${OFFER_BEFORE.join('\n')}\n`);
@@ -712,7 +713,7 @@ const sendAll = async (deps: RunDeps, options: { outbox: string; server: string;
         }
         return 'run oars pool deposit --send <hash> at a terminal to read it and accept';
       };
-      await openCovenant(deps, server, token, options.acceptCovenant, options.region, via, interrupt.signal, oneBatch);
+      await openCovenant(deps, server, token, options.acceptCovenant, options.region, via, interrupt.signal, oneBatch, true);
       const tally = { sent: 0, skipped: 0, alreadySent: 0, failed: 0, left: 0 };
       const handled = new Set<string>();
       const line = (): string => `${String(tally.sent)} sent, ${String(tally.skipped)} skipped, ${String(tally.alreadySent)} already sent, ${String(tally.failed)} failed, ${String(tally.left)} left`;
@@ -948,7 +949,12 @@ export const poolDeposit = async (
   const { latest } = await scanLog(paths(runtime.storeDir).observations);
   const localStore = await loadStore(runtime.storeDir, undefined, { sessionsOnly: true, latest });
   const childrenOf = new Map<string, string[]>();
-  for (const agent of localStore.subagents) childrenOf.set(agent.parent ?? '', [...(childrenOf.get(agent.parent ?? '') ?? []), agent.session]);
+  for (const agent of localStore.subagents) {
+    const parent = agent.parent ?? '';
+    const list = childrenOf.get(parent) ?? [];
+    list.push(agent.session);
+    childrenOf.set(parent, list);
+  }
   // The full records of some sessions (and their subagents), read from the log with nothing else.
   const readRecords = async (ids: ReadonlySet<string>): Promise<{ store: Store; records: Map<string, SessionRecords> }> => {
     const store = await loadStore(runtime.storeDir, undefined, { latest, only: new Set([...ids].flatMap((id) => [id, ...(childrenOf.get(id) ?? [])])) });

@@ -4436,6 +4436,19 @@ describe('oars pool deposit --send-all (t1199)', () => {
     expect((await poolDeposit(scene.h.deps, all(open.via))).document).toMatchObject({ sent: 2 });
   });
 
+  it('refuses a never-accepted --send-all on a terminal too (sendalltty): no screen, no acceptance, only the GET', async () => {
+    const scene = await clean();
+    const [first] = plant(scene, 1, 2);
+    await show(scene);
+    atTerminal(scene, SCREEN.phrase, 'no');
+    const pool = wire({ 'GET /v1/covenant': UNACCEPTED, 'POST /v1/covenant/accept': answer(200), 'POST /v1/deposits': answer(201) });
+    const refused = poolDeposit(scene.h.deps, all(pool.via));
+    await expect(refused).rejects.toMatchObject({ exitCode: ExitCode.AUTH, problem: { code: 'covenant_not_accepted' } });
+    await expect(refused).rejects.toThrow(`oars pool deposit --send ${first ?? ''}`);
+    expect(pool.requests.map((request) => request.method)).toEqual(['GET']);
+    expect(sentLogOf(scene)).toEqual([]);
+  });
+
   it('names the first shown batch that is unchanged, not one that changed since it was shown', async () => {
     const scene = await clean();
     const [first, second] = plant(scene, 1, 2);
@@ -4546,7 +4559,7 @@ describe('oars pool deposit --send-all (t1199)', () => {
 });
 
 // The memory proof (t1199 item 4). Opt-in, because it writes hundreds of megabytes and spawns a second vitest over this file; it is not in `npm run test`, `just check`, or CI. Run it with
-//   OARS_MEMORY_PROOF=1 just -f $ORCH_ROOT/justfile build oars exec -w packages/cli vitest run src/sessions/pool-command.test.ts -t memory
+//   OARS_MEMORY_PROOF=1 just -f $ORCH_ROOT/justfile build oars exec -w packages/cli -- vitest run src/sessions/pool-command.test.ts -t memory- --silent=false
 // Two children, each under a V8 heap too small for the history held whole:
 //   outbox: 7,000 batches of 64 KB (448 MB as strings) are shown by `pool outbox` and sent by `--send-all` under --max-old-space-size=192 (V8 adds 192 MB, so the limit is about 384 MB, under the 448 MB the whole outbox held as strings takes);
 //   build: 7,000 captured sessions are built by `pool deposit` under --max-old-space-size=BUILD_HEAP_MB (the old build loaded the whole store and failed there).
