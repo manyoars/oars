@@ -52,22 +52,15 @@ describe('check-owner-name', () => {
   });
 
   it('catches the longer given-name form', () => {
-    track('c.txt', `x
-${LONG_NAME} said so
-`);
+    track('c.txt', `x\n${LONG_NAME} said so\n`);
     expect(check().stderr).toContain('c.txt:2');
   });
 
   it('catches the handle and the mailbox domain listed in the denylist, each on its own line', () => {
     const list = join(root, '..', `check-owner-name-list-${process.pid}.txt`);
-    writeFileSync(list, 'zz-handle
-zz-domain.example
-');
+    writeFileSync(list, 'zz-handle\nzz-domain.example\n');
     try {
-      track('b.txt', 'see zz-handle
-write to ops@ZZ-Domain.example
-clean
-');
+      track('b.txt', 'see zz-handle\nwrite to ops@ZZ-Domain.example\nclean\n');
       const r = check(root, list);
       expect(r.status).toBe(1);
       expect(r.stderr).toContain('b.txt:1');
