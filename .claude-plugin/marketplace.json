@@ -6,7 +6,7 @@
     {
       "name": "oars",
       "source": "./",
-      "version": "0.5.4",
+      "version": "0.5.5",
       "description": "Recall from your own past coding agent sessions, kept on your machine: the oars hooks and its recall MCP server."
     }
   ]
