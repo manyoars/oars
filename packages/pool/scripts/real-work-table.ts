@@ -246,7 +246,6 @@ export const tableOf = async (runtime: SessionsRuntime, options: TableOptions): 
   return finish(options, minSessions, main.length, counted.size, excluded, cells, tools);
 };
 
-
 const finish = (
   options: TableOptions,
   minSessions: number,
