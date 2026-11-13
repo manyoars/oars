@@ -22,7 +22,7 @@ import { githubVisibility, poolEnroll, poolMachineRevoke, poolMachines } from '.
 import { runNetGit } from './sessions/machine-hold.js';
 import { holdPull } from './sessions/machine-pull.js';
 import { runGit } from './sessions/survival.js';
-import { poolCoverage, poolDeposit, poolExport, poolFetch, poolJoin, poolLogin, poolLogout, poolOutbox, poolProve, poolRaw, poolRemove } from './sessions/pool-command.js';
+import { poolCoverage, poolDeposit, poolExport, poolFetch, poolInvite, poolJoin, poolLogin, poolLogout, poolOutbox, poolProve, poolRaw, poolRemove } from './sessions/pool-command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 import { telemetryOff, telemetryOn, telemetryReport, telemetryShow, telemetryStatus } from './telemetry/command.js';
@@ -587,18 +587,19 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
   pool
     .command('join')
     .description('your first deposit in one command: sign in, answer the region question, name the terms to keep out, see the batch, type the covenant phrase yourself, and send. Run it again after a stop to continue at the first step not done')
-    .option('--plan', 'print each step and whether it stands (needs_person marks the covenant phrase and the raw prompt, which only a person does), and do nothing else: no sign-in, no file, no send')
+    .option('--plan', 'print each step and whether it stands (needs_person marks the covenant phrase and the raw prompt, and the region question and term file while nothing answers them), and do nothing else: no sign-in, no file, no send')
     .option('--provider <name>', 'github or google, for the sign-in step (not needed once signed in)')
     .option('--verbose', 'print each sign-in request, headers and body, to stderr before it is sent (a credential shows as its size)')
     .option('--accept-covenant <version>', 'name the covenant version you expect, as deposit --send takes it: on a terminal the screen is shown and you type its phrase yourself, and off a terminal this is refused')
     .option('--in-eu-eea-uk <yes|no>', 'answer "Are you in the EU, the EEA, or the UK?" when you accept, as deposit --send takes it')
     .option('--harness <name>', 'the harness whose bundle to fetch (default: the one your local store holds the most sessions of, claude-code when none leads)')
+    .option('--invite <code>', 'an invite code a founding or standing member gave you (oars pool invite makes one): used once, right after sign-in, and a run repeated after it skips it')
     .option('--harness-version <version>', 'with this, fetch the public bundle for that harness version after the send, as fetch takes it; without it nothing is fetched')
     .option(serverOption, serverHelp)
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       const json = flag(options, 'json');
-      emit(deps, json, await poolJoin(deps, { server: text(options, 'server'), provider: text(options, 'provider'), verbose: flag(options, 'verbose'), acceptCovenant: text(options, 'acceptCovenant'), inEuEeaUk: text(options, 'inEuEeaUk'), harness: text(options, 'harness'), harnessVersion: text(options, 'harnessVersion'), json, plan: flag(options, 'plan') }));
+      emit(deps, json, await poolJoin(deps, { server: text(options, 'server'), provider: text(options, 'provider'), verbose: flag(options, 'verbose'), acceptCovenant: text(options, 'acceptCovenant'), inEuEeaUk: text(options, 'inEuEeaUk'), harness: text(options, 'harness'), harnessVersion: text(options, 'harnessVersion'), invite: text(options, 'invite'), json, plan: flag(options, 'plan') }));
     });
 
   pool
@@ -721,6 +722,15 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .action(async (hash: string, _options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       emit(deps, flag(options, 'json'), await poolRemove(deps, hash, { server: text(options, 'server'), restore: flag(options, 'restore') }));
+    });
+
+  pool
+    .command('invite')
+    .description('make one invite code to vouch for a person and print it once with the line they run to join (oars pool join --invite): a founding or standing account holds three open codes at most; needs oars pool login')
+    .option(serverOption, serverHelp)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await poolInvite(deps, { server: text(options, 'server') }));
     });
 
   pool

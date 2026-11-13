@@ -17,6 +17,7 @@ import { discardStale, FIELD_ROWS, fieldsOf, heldAcross, lockedAcross, namesHeld
 import { deriveConsequences } from './recall-consequence.js';
 import { readRecalls } from './recall-object.js';
 import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, recommendationsOf, sessionsOf, skeletonOf, unpinnedKid, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
+import { keepCrewNumber } from './crew-mark.js';
 import { carriedDeltasByWindow, heldDeltas, keptDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { rawAllowed, rawStale, sendsOf } from './pool-choices.js';
@@ -1302,7 +1303,19 @@ export const poolFetch = async (deps: RunDeps, options: { server?: string | unde
 };
 
 const JOIN = 'pool-join';
+/** The join's invite step: `POST /v1/invites/redeem`. An account that joined on an invite already is a run repeated, which is not an error; any other refusal ends the run with the pool's own words. */
+const redeemInvite = async (deps: RunDeps, storeDir: string, server: string, code: string): Promise<object> => {
+  const { token } = await signedIn(deps, storeDir, server, JOIN);
+  const credential = new Masker();
+  credential.add(token);
+  const reply = await ask(deps, JOIN, server, '/v1/invites/redeem', { body: { code }, token, show: credential });
+  if (reply.status === 200) return { redeemed: true };
+  if (reply.status === 409 && isObject(reply.body) && textIn(reply.body, 'error') === 'already_vouched') return { skipped: true, reason: 'already_vouched' };
+  throw refusal(JOIN, reply);
+};
+
 const JOIN_AGAIN = 'Run oars pool join again to continue from here.';
+const INVITE_AGAIN = 'The invite code was not accepted, and running the same line again fails the same way. Run oars pool join again without --invite, or with a new code.';
 
 /** The steps `--plan` lists: the seven the join runs, in order, then the raw question, which `oars pool raw` asks and the join never does. */
 const PLAN_STEPS = [...JOIN_STEPS, 'raw'] as const;
@@ -1325,7 +1338,7 @@ const batchSeen = async (outbox: string, hash: string, sent: Map<string, string>
 
 /**
  * `oars pool join --plan`: each step of the join and whether it stands, from the sign-in, the term file, the outbox, and (when signed in) one read of the covenant. It signs in to nothing, writes nothing, and sends nothing.
- * `needs_person` marks the steps a person does: the typed covenant phrase and the raw prompt.
+ * `needs_person` marks the steps a person does: the typed covenant phrase and the raw prompt, and region and terms while no flag or file answers them.
  */
 const joinPlan = async (deps: RunDeps, server: string, flagged: boolean): Promise<Outcome> => {
   const { storeDir } = runtimeOf(deps);
@@ -1359,7 +1372,7 @@ const joinPlan = async (deps: RunDeps, server: string, flagged: boolean): Promis
  */
 export const poolJoin = async (
   deps: RunDeps,
-  options: { server?: string | undefined; provider?: string | undefined; verbose?: boolean; acceptCovenant?: string | undefined; inEuEeaUk?: string | undefined; harness?: string | undefined; harnessVersion?: string | undefined; json?: boolean; plan?: boolean },
+  options: { server?: string | undefined; provider?: string | undefined; verbose?: boolean; acceptCovenant?: string | undefined; inEuEeaUk?: string | undefined; harness?: string | undefined; harnessVersion?: string | undefined; invite?: string | undefined; json?: boolean; plan?: boolean },
 ): Promise<Outcome> => {
   const { storeDir, projectsRoot } = runtimeOf(deps);
   const server = poolServer(deps.env, JOIN, options.server);
@@ -1380,9 +1393,12 @@ export const poolJoin = async (
     return (await heldAcross(outbox)).batches.flatMap(({ hash }) => (sent.has(hash) ? [] : [hash]));
   };
   const emit = emitOf(deps);
+  let settled: JoinStep | undefined;
   const record = (step: JoinStep, state: JoinState): void => {
+    settled = step;
     emit('join-step', { step, state });
   };
+  const state = { refused: false };
   let current: JoinStep = 'signin';
   let fetching = false;
   // Ctrl-C reaches every step: the sign-in poll and the line reads take the signal, and each step begins by checking it.
@@ -1406,6 +1422,17 @@ export const poolJoin = async (
     }
     const { token } = await signedIn(deps, storeDir, server, JOIN);
     const via = networkSender(deps, DEPOSIT, { stallMs: SEND_STALL_MS, signal: interrupt.signal });
+
+    let vouched: object = { skipped: true };
+    if (options.invite !== undefined) {
+      say('Using your invite code.');
+      try {
+        vouched = await redeemInvite(deps, storeDir, server, options.invite);
+      } catch (error) {
+        state.refused = true;
+        throw error;
+      }
+    }
 
     // The region question: asked plainly, once, of a person at a terminal whose covenant is not yet accepted, and sent with the acceptance. A flag answers it; off a terminal the covenant step is what stops.
     begin('region');
@@ -1483,6 +1510,7 @@ export const poolJoin = async (
       for (const hash of hashes) sends.push(show(await poolDeposit(deps, { server, send: hash, acceptCovenant: options.acceptCovenant, inEuEeaUk: region })).document);
       record('send', 'done');
     }
+    await rememberCrew(deps, storeDir, server, token, JOIN);
     let fetched: Outcome | undefined;
     if (options.harnessVersion !== undefined) {
       fetching = true;
@@ -1490,13 +1518,14 @@ export const poolJoin = async (
       fetched = show(await poolFetch(deps, { server, harness: options.harness, harnessVersion: options.harnessVersion }));
     }
     return {
-      document: { ok: true, server, login, deposit: prepared, outbox: shown, sends, ...(fetched === undefined ? {} : { fetch: fetched.document }) },
+      document: { ok: true, server, login, invite: vouched, deposit: prepared, outbox: shown, sends, ...(fetched === undefined ? {} : { fetch: fetched.document }) },
       text: `Joined ${server}: ${plural(sends.length, 'batch', 'batches')} sent this run${options.harnessVersion === undefined ? '' : `, and the ${options.harnessVersion} bundle is kept`}.`,
     };
   } catch (error) {
     // A step that threw is the one that stopped; the fetch after the sends is not one of the seven.
-    if (!fetching) record(current, 'stopped');
-    say(JOIN_AGAIN);
+    // A step already recorded done or skipped is not stopped as well: the failure came after it, in the code between steps.
+    if (!fetching && settled !== current) record(current, 'stopped');
+    say(state.refused ? INVITE_AGAIN : JOIN_AGAIN);
     // A signal ended the run (the readline read throws its own abort error, the poll and the steps throw the reason): exit as deposit does, 130 for Ctrl-C.
     if (interrupt.signal.aborted && interrupt.signal.reason instanceof SendInterrupted) throw stopped(JOIN, interrupt.signal.reason, false);
     throw error;
@@ -1504,6 +1533,55 @@ export const poolJoin = async (
     interrupt.stop();
     reader?.close();
   }
+};
+
+const INVITE = 'pool-invite';
+
+/** Asks the pool for this account's crew number and keeps it for the card. Best effort: a refusal or a failed call leaves what was held, because nothing the person asked for depends on it. */
+const rememberCrew = async (deps: RunDeps, storeDir: string, server: string, token: string, step: string): Promise<number | undefined> => {
+  try {
+    const credential = new Masker();
+    credential.add(token);
+    const reply = await ask(deps, step, server, '/v1/me', { token, show: credential });
+    if (reply.status !== 200 || !isObject(reply.body)) return undefined;
+    const account: unknown = Reflect.get(reply.body, 'account');
+    if (typeof account === 'string') await keepCrewNumber(storeDir, server, account, numberIn(reply.body, 'crewNumber'));
+    return numberIn(reply.body, 'vouchesGiven');
+  } catch {
+    // The card shows the number when it is known and says nothing when it is not.
+    return undefined;
+  }
+};
+
+/** The one line an invitee runs. `<version>` stays a placeholder: the harness version is the invitee's own to name. */
+export const joinLineOf = (code: string): string => `oars pool join --invite ${code} --harness-version <version>`;
+
+/**
+ * `oars pool invite`: makes one invite code (`POST /v1/invites`, a founding or standing account, three open at most) and prints it once with the line to hand on and what the vouch gives. The code is the only secret here, so it is the one thing the pool never shows again.
+ */
+export const poolInvite = async (deps: RunDeps, options: { server?: string | undefined }): Promise<Outcome> => {
+  const { storeDir } = runtimeOf(deps);
+  const server = poolServer(deps.env, INVITE, options.server);
+  const { token } = await signedIn(deps, storeDir, server, INVITE);
+  const credential = new Masker();
+  credential.add(token);
+  const reply = await ask(deps, INVITE, server, '/v1/invites', { body: {}, token, show: credential });
+  if (reply.status !== 201) throw refusal(INVITE, reply);
+  const code = isObject(reply.body) ? textIn(reply.body, 'code') : undefined;
+  const left = isObject(reply.body) ? numberIn(reply.body, 'invitesLeft') : undefined;
+  if (code === undefined) throw new CliError('The pool answered an invite with no code.', ExitCode.UNEXPECTED, INVITE);
+  const given = await rememberCrew(deps, storeDir, server, token, INVITE);
+  const line = joinLineOf(code);
+  return {
+    document: { ok: true, server, code, join: line, ...(left === undefined ? {} : { invitesLeft: left }), ...(given === undefined ? {} : { vouchesGiven: given }) },
+    text: [
+      `Invite code: ${code}`,
+      'This is the only time the code is shown. It works once, for one person.',
+      `Send them this line: ${line}`,
+      `What you get: your vouch is recorded${given === undefined ? '' : ` (you have vouched for ${String(given)} so far)`}. What they get: once they have rowed two counting weeks, the next founding-crew grant lets them join the open board without waiting 90 days, unless you and they are the same operator, which gives neither of you anything.`,
+      ...(left === undefined ? [] : [`Open codes you can still make: ${String(left)}.`]),
+    ].join('\n'),
+  };
 };
 
 const RAW = 'pool-raw';

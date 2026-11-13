@@ -246,6 +246,22 @@ describe('the open board', () => {
     expect(text.text).toContain('Oarsman');
   });
 
+  it('prints the crew number beside a founding nickname, a column only while a row carries one, and no count', async () => {
+    await db.prepare("DELETE FROM club_members WHERE club = 'open'").run();
+    const rower = await person();
+    rower.types('yes');
+    expect(await rower.cli('club', 'join', 'open', '--nickname', 'Founder')).toBe(ExitCode.OK);
+    const account = String(fieldOf(await db.prepare("SELECT account FROM club_members WHERE club = 'open' AND nickname = 'Founder'").first(), 'account'));
+    await db.prepare("UPDATE accounts SET access = 'standing', crew_number = 4 WHERE id = ?").bind(account).run();
+    const reader = await person(false);
+    const text = await reader.words('board');
+    expect(text.text).toContain('crew');
+    expect(text.text).toMatch(/Founder\s+founding crew #4/);
+    expect(text.text).not.toMatch(/\bof 100\b|\bseats\b|\bleft\b/);
+    await db.prepare('UPDATE accounts SET crew_number = NULL WHERE id = ?').bind(account).run();
+    expect((await reader.words('board')).text).not.toContain('crew');
+  });
+
   it('prints an empty open board as a plain sentence', async () => {
     await db.prepare("DELETE FROM club_members WHERE club = 'open'").run();
     const reader = await person(false);

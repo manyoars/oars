@@ -35,6 +35,13 @@ describe('oars pool join against the local pool', () => {
     const h = harness({ OARS_EXCLUSION_TERMS: terms, OARS_POOL_URL: await pool.url() });
     h.deps.sessions = staged.runtime;
     h.deps.now = settledClock;
+    // The term file does not exist yet: the terms step makes it, and the person saves a term when it says "Press Enter".
+    const write = h.deps.io.stderr;
+    h.deps.io.stderr = (text) => {
+      write(text);
+      if (text.includes('Press Enter')) writeFileSync(terms, `${TERM}
+`);
+    };
     h.deps.sleep = async () => {
       const issued = /USER-(\d+)/.exec(h.err.join(''))?.[1];
       if (issued !== undefined) pool.stub.approve(`device-${issued}`, stubUser('7001'));
@@ -42,7 +49,7 @@ describe('oars pool join against the local pool', () => {
     };
     // The store holds sessions (invented) and nothing else: no sign-in, no outbox, no answer to the region question.
     await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
-    // The fake terminal types the region answer, then the phrase the covenant screen states. Nothing else can accept.
+    // The fake terminal types the region answer, Enter for the term file, then the phrase the covenant screen states. Nothing else can accept.
     Object.assign(staged.stdin, { isTTY: true });
     Object.assign(staged.runtime, { stderr: { isTTY: true } });
     staged.stdin.write(`no\n${TEST_PHRASE}\n`);

@@ -9,6 +9,7 @@ import { spoolEvents } from '../telemetry/read-events.js';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
+import { crewNumberOf } from './crew-mark.js';
 import { FIELD_ROWS } from './pool-outbox.js';
 import { VOCAB_VERSION, type PinnedKey } from './pool-wire.js';
 import { deposit } from './store.js';
@@ -131,6 +132,12 @@ const sentLogs = (s: Scene): string => {
     .join('');
 };
 const count = (s: Scene, call: string): number => s.calls.filter((made) => made === call).length;
+
+/** The `invite` field of the join's JSON document. */
+const inviteOf = (printed: string): unknown => {
+  const document: unknown = JSON.parse(printed);
+  return typeof document === 'object' && document !== null ? Reflect.get(document, 'invite') : undefined;
+};
 
 const AGAIN = 'Run oars pool join again to continue from here.';
 
@@ -672,7 +679,7 @@ describe('oars pool join, the first deposit in one command', () => {
       expect(await s.cli(...args, '--json')).toBe(ExitCode.OK);
       expect(s.calls.some((call) => call.startsWith('GET /bundle/'))).toBe(false);
       expect(err(s)).not.toContain('Fetching the bundle');
-      expect(Object.keys(record(JSON.parse(out(s)))).sort()).toEqual(['deposit', 'login', 'ok', 'outbox', 'sends', 'server']);
+      expect(Object.keys(record(JSON.parse(out(s)))).sort()).toEqual(['deposit', 'invite', 'login', 'ok', 'outbox', 'sends', 'server']);
     });
   });
 
@@ -772,6 +779,70 @@ describe('oars pool join, the first deposit in one command', () => {
         { step: 'region', state: 'skipped' },
         { step: 'terms', state: 'stopped' },
       ]);
+    });
+  });
+
+  describe('--invite', () => {
+    it('redeems the code once after sign-in, with the token, before anything is prepared, and reports it', async () => {
+      const s = await scene();
+      const seen: Array<{ auth: string | null; body: unknown }> = [];
+      server.use(http.post(`${POOL}/v1/invites/redeem`, async ({ request }) => { s.calls.push('POST /v1/invites/redeem'); seen.push({ auth: request.headers.get('authorization'), body: await request.json() }); return HttpResponse.json({ ok: true }); }));
+      expect(await s.cli(...joinArgs, '--invite', 'ABCD2345', '--json')).toBe(ExitCode.OK);
+      expect(seen).toEqual([{ auth: 'Bearer a-pool-token', body: { code: 'ABCD2345' } }]);
+      expect(s.calls.indexOf('POST /v1/invites/redeem')).toBeGreaterThan(s.calls.indexOf('POST /v1/login/poll'));
+      expect(inviteOf(out(s))).toEqual({ redeemed: true });
+      expect(out(s) + err(s)).not.toContain('a-pool-token');
+    });
+
+    it('treats an account that joined on an invite already as a run repeated and carries on', async () => {
+      const s = await scene();
+      server.use(http.post(`${POOL}/v1/invites/redeem`, () => HttpResponse.json({ error: 'already_vouched', message: 'This account joined on an invite already.' }, { status: 409 })));
+      expect(await s.cli(...joinArgs, '--invite', 'ABCD2345', '--json')).toBe(ExitCode.OK);
+      expect(inviteOf(out(s))).toEqual({ skipped: true, reason: 'already_vouched' });
+    });
+
+    it('stops with the pool\'s own words when the code is refused, and says to rerun without it or with a new code', async () => {
+      const s = await scene();
+      server.use(http.post(`${POOL}/v1/invites/redeem`, () => HttpResponse.json({ error: 'invite_used', message: 'That invite code has been used.' }, { status: 409 })));
+      expect(await s.cli(...joinArgs, '--invite', 'ABCD2345')).not.toBe(ExitCode.OK);
+      expect(err(s)).toContain('That invite code has been used.');
+      expect(count(s, 'POST /v1/deposits')).toBe(0);
+      expect(err(s)).toContain('without --invite, or with a new code');
+      expect(err(s)).not.toContain(AGAIN);
+    });
+
+    it('records no stopped event for a step already recorded done or skipped: a refused invite after sign-in ends the log at sign-in', async () => {
+      const s = await scene();
+      const events = watching(s);
+      server.use(http.post(`${POOL}/v1/invites/redeem`, () => HttpResponse.json({ error: 'invite_used', message: 'That invite code has been used.' }, { status: 409 })));
+      expect(await s.cli(...joinArgs, '--invite', 'ABCD2345')).not.toBe(ExitCode.OK);
+      expect(events('join-step').map((event) => event.data)).toEqual([{ step: 'signin', state: 'done' }]);
+    });
+
+    it('keeps the crew number /v1/me states, for the card', async () => {
+      const s = await scene();
+      server.use(http.get(`${POOL}/v1/me`, () => HttpResponse.json({ account: 'acct_one', crewNumber: 7 })));
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.OK);
+      expect(await crewNumberOf(s.staged.storeDir, POOL, 'acct_one')).toBe(7);
+    });
+
+    it('joins all the same when /v1/me fails, and keeps no crew number', async () => {
+      const s = await scene();
+      server.use(http.get(`${POOL}/v1/me`, () => new HttpResponse(null, { status: 500 })));
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.OK);
+      expect(await crewNumberOf(s.staged.storeDir, POOL, 'acct_one')).toBeUndefined();
+    });
+
+    it('asks the pool nothing about invites without --invite', async () => {
+      const s = await scene();
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.OK);
+      expect(s.calls.filter((call) => call.includes('invites'))).toEqual([]);
+    });
+
+    it('lists --invite in the help', async () => {
+      const s = await scene();
+      expect(await s.cli('pool', 'join', '--help')).toBe(ExitCode.OK);
+      expect(out(s)).toContain('--invite');
     });
   });
 });
