@@ -192,7 +192,7 @@ describe('deposit', () => {
     expect(read).toBeGreaterThanOrEqual(seeked.sessions.length);
   });
 
-  it('ignores a row appended between the scan and the chunk load, and skips a span a rewrite moved (spanappend)', async () => {
+  it('ignores a row appended past the scanned end, even at the scanned rev, and falls back when a rewrite shortened the log (spanappend)', async () => {
     const staged = stage();
     await deposit(staged.runtime, options(['proj']));
     const file = paths(staged.storeDir).observations;
@@ -204,7 +204,14 @@ describe('deposit', () => {
     const row = readFileSync(file, 'utf8').split('\n').find((line) => line.includes(`"session":"${first}"`)) ?? '';
     appendFileSync(file, `${row.replace(/"rev":\d+/, '"rev":99')}\n{"kind":"sess`);
     expect(await loadStore(staged.storeDir, undefined, { latest, only, spans, identity })).toEqual(before);
-    // A log rewritten shorter than the scan: no span is misread as another session's row.
+    // A same-rev copy past the scanned end: a reader that took bytes beyond the end would read it as a second line.
+    let reads = 0;
+    const baseline = await loadStore(staged.storeDir, undefined, { latest, only, spans, identity, lineRead: () => { reads += 1; } });
+    appendFileSync(file, `${row}\n`);
+    let readsAfter = 0;
+    expect(await loadStore(staged.storeDir, undefined, { latest, only, spans, identity, lineRead: () => { readsAfter += 1; } })).toEqual(baseline);
+    expect(readsAfter).toBe(reads);
+    // The truncation fallback: a log rewritten shorter than the scan, so no span is misread as another session's row.
     writeFileSync(file, 'not a row\n');
     const after = await loadStore(staged.storeDir, undefined, { latest, only, spans, identity });
     expect(after.sessions).toEqual([]);
