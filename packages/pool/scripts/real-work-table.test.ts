@@ -204,7 +204,7 @@ describe('real-work table', () => {
     const table = await build(f);
     const text = JSON.stringify(table);
     for (const name of privateNames) expect(text).not.toContain(name);
-    expect(table.rows.filter((row) => row.kind === 'cell').map((row) => row.kind === 'cell' && row.model)).toEqual(['other']);
+    expect(table.rows.flatMap((row) => (row.kind === 'cell' ? [row.model] : []))).toEqual(['other']);
   });
 
   it('counts a recovery only as a later edit that did not fail, in the same prompt', async () => {
@@ -220,7 +220,7 @@ describe('real-work table', () => {
     for (const [f, failures] of [[failedThenFailedEdit, 2], [next, 1]] as const) {
       for (const row of (await build(f)).rows) {
         if (row.kind === 'tool' && row.tool !== 'Bash') continue;
-        expect(row, `${row.kind}`).toMatchObject({ failures: row.kind === 'cell' ? failures : 1, recovered: 0, callsToRecover: null, editFollowedShare: 0 });
+        expect(row, row.kind).toMatchObject({ failures: row.kind === 'cell' ? failures : 1, recovered: 0, callsToRecover: null, editFollowedShare: 0 });
       }
     }
     // A clean read in between does not count, the edit behind it does, two calls away.
