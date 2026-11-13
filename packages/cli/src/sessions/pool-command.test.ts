@@ -36,7 +36,8 @@ import { addProject, cleanup, FIXTURES, NOW, payloadOf, rolloutLine, settledCloc
 // The session gates must stop a session before the projection runs; the real projection is wrapped so a test can see whether it was called.
 vi.mock('./pool-wire.js', async (importOriginal) => {
   const actual = await importOriginal<typeof PoolWire>();
-  return { ...actual, skeletonOf: vi.fn(actual.skeletonOf) };
+  // The memory proof's child must not keep a record of every call's arguments (a spy holds the whole session and batch it saw, about 33 KB a session), so there it runs the real function.
+  return process.env.OARS_SEND_ALL_MEMORY_CHILD === undefined ? { ...actual, skeletonOf: vi.fn(actual.skeletonOf) } : actual;
 });
 
 useServer();
@@ -4512,7 +4513,7 @@ describe('oars pool deposit --send-all (t1199)', () => {
 //   build: 7,000 captured sessions are built by `pool deposit` under --max-old-space-size=BUILD_HEAP_MB (the old build loaded the whole store and failed there).
 const MEMORY_CHILD = process.env.OARS_SEND_ALL_MEMORY_CHILD;
 const MEMORY_MODE = process.env.OARS_MEMORY_MODE;
-const BUILD_HEAP_MB = Number(process.env.OARS_MEMORY_BUILD_HEAP ?? 400);
+const BUILD_HEAP_MB = Number(process.env.OARS_MEMORY_BUILD_HEAP ?? 160);
 const memoryChild = (mode: 'outbox' | 'build', heapMb: number, seed = ''): { limitMb: number; peakRssMb: number; count: number } => {
   const report = join(tmpdir(), `oars-memory-${mode}-${String(process.pid)}.json`);
   const result = spawnSync(process.execPath, [fileURLToPath(new URL('../../../../node_modules/vitest/vitest.mjs', import.meta.url)), 'run', fileURLToPath(import.meta.url), '-t', `child of the memory proof ${mode}`], {
