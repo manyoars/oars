@@ -96,6 +96,10 @@ interface Part {
   /** The deposit row; false leaves the Raw Copy with none. */
   row?: boolean;
   skeleton?: string;
+  /** The deposit row's id when it is not the recomputed one. */
+  rowId?: string;
+  /** The stored link of the Raw Copy (`raw_objects.deposit`), as `pull-deposits` writes it to `links.jsonl`. */
+  link?: string;
 }
 
 /** A transcript for one harness session, redacted as the depositor's machine does before it is queued. */
@@ -127,12 +131,16 @@ const pull = (parts: readonly Part[], acceptances: readonly DepositAcceptance[] 
   writeFileSync(join(folder, 'accounts.jsonl'), `${line({ account: ACCT, acceptances })}\n`);
   const rows = parts
     .filter((part) => part.row !== false)
-    .map((part) => line({ id: contentHash([ACCT, part.session]), tier: part.tier ?? 'skeleton', counted_at: part.countedAt === undefined ? Date.parse('2026-08-01T00:00:00Z') : part.countedAt, request_country: part.country === undefined ? 'US' : part.country, skeleton: part.skeleton ?? KEYED_SKELETON }));
+    .map((part) => line({ id: part.rowId ?? contentHash([ACCT, part.session]), tier: part.tier ?? 'skeleton', counted_at: part.countedAt === undefined ? Date.parse('2026-08-01T00:00:00Z') : part.countedAt, request_country: part.country === undefined ? 'US' : part.country, skeleton: part.skeleton ?? KEYED_SKELETON }));
   writeFileSync(join(folder, ACCT, 'deposits.jsonl'), rows.map((row) => `${row}\n`).join(''));
+  const links: string[] = [];
   for (const part of parts) {
     const text = part.text ?? copyOf(part.session);
     writeFileSync(join(folder, ACCT, 'projects', 'deposit', `${sha256(text)}.jsonl`), text);
+    if (part.link !== undefined) links.push(line({ sha256: sha256(text), deposit: part.link, place: 0 }));
   }
+  if (links.length > 0) writeFileSync(join(folder, ACCT, 'links.jsonl'), links.map((row) => `${row}
+`).join(''));
   mkdirSync(join(root, 'opprojects'));
   const terms = join(root, 'terms.txt');
   writeFileSync(terms, 'zorblax\n');
@@ -204,6 +212,22 @@ describe('sample-pack --deposits (docs/pool-deposit-title.md section 5, brief 2)
     const counts = await built(p);
     expect(counts.emitted).toBe(1);
     expect(counts.deposits).toEqual({ unlinked: 1, tierNone: 0, protectedRegion: 0, noGrant: 0 });
+  });
+
+  it('the builder uses the stored link before the recomputed one', async () => {
+    // A row the recomputed id cannot find (a machine's session under a salt) is found by the stored link.
+    const stored = pull([{ session: SID(1), rowId: 'ffffffffffffffff', link: 'ffffffffffffffff' }]);
+    const found = await built(stored);
+    expect(found.emitted).toBe(1);
+    expect(found.deposits).toEqual({ unlinked: 0, tierNone: 0, protectedRegion: 0, noGrant: 0 });
+    // The stored link wins over a recomputed id that finds another row: the copy of SID(2) takes the verdict of SID(3)'s row.
+    const wins = pull([{ session: SID(2), link: contentHash([ACCT, SID(3)]) }, { session: SID(3), tier: 'none' }]);
+    const counts = await built(wins);
+    expect(counts.emitted).toBe(0);
+    expect(counts.deposits).toEqual({ unlinked: 0, tierNone: 2, protectedRegion: 0, noGrant: 0 });
+    // A stored link that names no pulled row (an erased deposit) is left out as unlinked: it is not recomputed.
+    const gone = pull([{ session: SID(4), link: 'eeeeeeeeeeeeeeee' }]);
+    expect((await built(gone)).deposits).toEqual({ unlinked: 1, tierNone: 0, protectedRegion: 0, noGrant: 0 });
   });
 
   it('tier none and a protected country are left out', async () => {

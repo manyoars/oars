@@ -117,13 +117,13 @@ const SECTIONS: readonly Section[] = [
   // The ledger names each raw object the account deposited. A row whose object was erased stays, marked with the day it was erased.
   {
     name: 'rawLedger',
-    select: 'sha256, bytes, capture_version, redaction_version, stored_at, erased_on',
+    select: 'sha256, bytes, capture_version, redaction_version, stored_at, deposit, place, erased_on',
     table: 'raw_objects',
     owner: 'account',
     order: ['sha256'],
     keyed: ['sha256'],
     page: SMALL_PAGE,
-    view: (row, account) => ({ key: objectKey(account, text(row, 'sha256') ?? ''), sha256: text(row, 'sha256'), bytes: count(row, 'bytes'), captureVersion: text(row, 'capture_version'), redactionVersion: text(row, 'redaction_version'), storedAt: count(row, 'stored_at'), tombstone: text(row, 'erased_on') }),
+    view: (row, account) => ({ key: objectKey(account, text(row, 'sha256') ?? ''), sha256: text(row, 'sha256'), bytes: count(row, 'bytes'), captureVersion: text(row, 'capture_version'), redactionVersion: text(row, 'redaction_version'), storedAt: count(row, 'stored_at'), deposit: text(row, 'deposit'), place: count(row, 'place'), tombstone: text(row, 'erased_on') }),
   },
   // Parts of a batch the pool staged and has not yet assembled or swept: the account's own content until then, so it is here with its body.
   { name: 'depositParts', select: 'batch, part, count, staged_at, deposit, body', table: 'deposit_parts', owner: 'account', order: ['batch', 'part'], keyed: ['batch', 'part'], page: DEPOSIT_PAGE, view: (row) => ({ batch: text(row, 'batch'), part: count(row, 'part'), count: count(row, 'count'), stagedAt: count(row, 'staged_at'), deposit: text(row, 'deposit'), body: text(row, 'body') }) },

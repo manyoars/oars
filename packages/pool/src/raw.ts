@@ -21,6 +21,9 @@ export const MAX_STAGED_RAW_PARTS = 1000;
 const VERSION = /^[A-Za-z0-9._-]{1,64}$/;
 const REDACTION_HEADER = 'oars-redaction-version';
 const CAPTURE_HEADER = 'oars-capture-version';
+const LINK_HEADER = 'oars-raw-link';
+/** `<deposit>.<place>`: the session key (16 hex, the skeleton id) and the place among the session's transcripts (0 is the main one). */
+const LINK = /^([0-9a-f]{16})\.(0|[1-9]\d{0,5})$/;
 const CONSENT_HEADER = 'oars-raw-consent';
 const CONSENT_VERSION_HEADER = 'oars-raw-consent-version';
 
@@ -181,13 +184,28 @@ const assemble = async (bucket: RawBucket, account: string, hash: string, parts:
   return undefined;
 };
 
-/** `POST /v1/raw/:sha256/complete`, `{parts, bytes}`: joins parts 1 to `parts`, checks the byte count and the SHA-256, writes the object and then the ledger row. Sent again for an object that stands, it answers 200. */
+/** The link the client states, undefined when it states none; a malformed one is refused, so a bad client learns at once and no row holds a value the builder cannot read. */
+const linkOf = (request: Request): { deposit: string; place: number } | Response | undefined => {
+  const stated = request.headers.get(LINK_HEADER);
+  if (stated === null) return undefined;
+  const found = LINK.exec(stated);
+  if (found === null) return refuse(422, 'link_invalid', `${LINK_HEADER} is the 16-hex session key, a dot, and the place among the session's transcripts.`, LINK_HEADER);
+  return { deposit: found[1] ?? '', place: Number(found[2]) };
+};
+
+/** `POST /v1/raw/:sha256/complete`, `{parts, bytes}`: joins parts 1 to `parts`, checks the byte count and the SHA-256, writes the object and then the ledger row, with the stored link to its deposit when `oars-raw-link` states one. Sent again for an object that stands, it answers 200. */
 const complete = async (request: Request, env: Env, hash: string): Promise<Response> => {
   const admitted = await admit(request, env);
   if (admitted instanceof Response) return admitted;
   const { account, redaction, capture, bucket } = admitted;
   if (await erased(env, account, hash)) return erasedRefusal();
-  if (await stored(env, account, hash)) return answer(200, { ok: true, stored: true });
+  const link = linkOf(request);
+  if (link instanceof Response) return link;
+  if (await stored(env, account, hash)) {
+    // A repeat fills a link that is empty and never overwrites one that is set: a client from before the link, or a lost first answer, is repaired by its next send.
+    if (link !== undefined) await env.DB.prepare('UPDATE raw_objects SET deposit = ?, place = ? WHERE account = ? AND sha256 = ? AND deposit IS NULL').bind(link.deposit, link.place, account, hash).run();
+    return answer(200, { ok: true, stored: true });
+  }
   const body = await bodyOf(request);
   const parts = wholeField(body, 'parts', 999_999);
   if (parts === undefined) return refuse(400, 'missing_field', 'Name the number of parts, a whole number from 1.', 'parts');
@@ -196,8 +214,8 @@ const complete = async (request: Request, env: Env, hash: string): Promise<Respo
   const refused = await assemble(bucket, account, hash, parts, bytes);
   if (refused !== undefined) return refused;
   // The row is the ledger's: never replaced, never deleted (migration 0011). Two completions at once write one row.
-  await env.DB.prepare('INSERT INTO raw_objects (account, sha256, bytes, capture_version, redaction_version, stored_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (account, sha256) DO NOTHING')
-    .bind(account, hash, bytes, capture, redaction, Date.now())
+  await env.DB.prepare('INSERT INTO raw_objects (account, sha256, bytes, capture_version, redaction_version, stored_at, deposit, place) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (account, sha256) DO NOTHING')
+    .bind(account, hash, bytes, capture, redaction, Date.now(), link?.deposit ?? null, link?.place ?? null)
     .run();
   await bucket.delete(Array.from({ length: parts }, (_, at) => stagingKey(account, hash, at + 1)));
   return answer(201, { ok: true, stored: true });
@@ -262,7 +280,7 @@ export const sweepWithdrawnRaw = async (env: Env, now: number, calls: number): P
     const digests = await Promise.all(keys.map((key) => rawDigest(key)));
     await env.DB.batch(digests.map((digest) => env.DB.prepare("INSERT OR IGNORE INTO erasure_tombstones (kind, digest, reason, erased_on) VALUES ('raw-object', ?, 'consent-withdrawn', ?)").bind(digest, day)));
     await bucket.delete(keys);
-    await env.DB.batch(held.map((one) => env.DB.prepare('UPDATE raw_objects SET erased_on = ? WHERE account = ? AND sha256 = ? AND erased_on IS NULL').bind(day, one.account, one.sha256)));
+    await env.DB.batch(held.map((one) => env.DB.prepare('UPDATE raw_objects SET erased_on = ?, deposit = NULL, place = NULL WHERE account = ? AND sha256 = ? AND erased_on IS NULL').bind(day, one.account, one.sha256)));
     erased += held.length;
     if (held.length < SWEEP_PAGE) break;
   }

@@ -210,7 +210,7 @@ const dropObject = async (store: EraseStore, account: string, sha256: string, re
   const key = `raw/${account}/${sha256}`;
   await tombstone(store, 'raw-object', await rawDigest(key), reason, now);
   await store.deleteObject(key);
-  return store.run('UPDATE raw_objects SET erased_on = ? WHERE account = ? AND sha256 = ? AND erased_on IS NULL', [dayOf(now), account, sha256]);
+  return store.run('UPDATE raw_objects SET erased_on = ?, deposit = NULL, place = NULL WHERE account = ? AND sha256 = ? AND erased_on IS NULL', [dayOf(now), account, sha256]);
 };
 
 /**
@@ -477,6 +477,8 @@ const randomRowid = (): number => {
 const unlink = async (store: EraseStore, account: string): Promise<void> => {
   await store.run('UPDATE accounts SET provider_created = NULL WHERE id = ? AND provider_created IS NOT NULL', [account]);
   await store.run('UPDATE raw_objects SET stored_at = stored_at - stored_at % ? WHERE account = ? AND stored_at % ? <> 0', [DAY_MS, account, DAY_MS]);
+  // The stored link to a deposit is a session key, which would join the row to its deposit.
+  await store.run('UPDATE raw_objects SET deposit = NULL, place = NULL WHERE account = ? AND deposit IS NOT NULL', [account]);
   const machines = new Set([...(await store.rows('SELECT id AS machine FROM machines WHERE account = ?', [account])), ...(await store.rows('SELECT DISTINCT machine FROM deposits WHERE account = ? AND machine IS NOT NULL', [account]))].map((row) => textOf(row, 'machine')));
   const deposits = (await store.rows('SELECT id FROM deposits WHERE account = ?', [account])).map((row) => textOf(row, 'id'));
   if (machines.size === 0 && deposits.length === 0) return;

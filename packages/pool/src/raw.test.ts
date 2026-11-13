@@ -523,7 +523,56 @@ describe('a ledger row, never the bytes', () => {
     }
     // The ledger table has no column that could hold a body.
     const columns = (await db.prepare("SELECT name FROM pragma_table_info('raw_objects')").all()).results.map((row) => textOf(row, 'name'));
-    expect(columns.sort()).toEqual(['account', 'bytes', 'capture_version', 'erased_on', 'redaction_version', 'sha256', 'stored_at']);
+    expect(columns.sort()).toEqual(['account', 'bytes', 'capture_version', 'deposit', 'erased_on', 'place', 'redaction_version', 'sha256', 'stored_at']);
+  });
+});
+
+const DEPOSIT_ID = 'a1b2c3d4e5f60718';
+const linked = (link: string): { [name: string]: string } => ({ ...grant, 'oars-raw-link': link });
+
+describe('the stored link of a Raw Copy to its deposit (t1252)', () => {
+  it('complete stores the session key and place', async () => {
+    const { token, account } = await member();
+    const bytes = transcript(2000, 21);
+    const hash = await hex(bytes);
+    await sendParts(hash, bytes, token);
+    expect((await complete(hash, 1, bytes.length, token, linked(`${DEPOSIT_ID}.2`))).status).toBe(201);
+    expect((await rowsOf(account))[0]).toMatchObject({ deposit: DEPOSIT_ID, place: 2 });
+  });
+
+  it('a repeat complete fills an empty link and never overwrites one that is set', async () => {
+    const { token, account } = await member();
+    const bytes = transcript(2000, 22);
+    const hash = await hex(bytes);
+    await sendParts(hash, bytes, token);
+    expect((await complete(hash, 1, bytes.length, token)).status).toBe(201);
+    expect((await rowsOf(account))[0]).toMatchObject({ deposit: null, place: null });
+    expect((await complete(hash, 1, bytes.length, token, linked(`${DEPOSIT_ID}.0`))).status).toBe(200);
+    expect((await rowsOf(account))[0]).toMatchObject({ deposit: DEPOSIT_ID, place: 0 });
+    expect((await complete(hash, 1, bytes.length, token, linked('ffffffffffffffff.7'))).status).toBe(200);
+    expect((await rowsOf(account))[0]).toMatchObject({ deposit: DEPOSIT_ID, place: 0 });
+  });
+
+  it('a client that sends no header still stores', async () => {
+    const { token, account } = await member();
+    const bytes = transcript(2000, 23);
+    const hash = await hex(bytes);
+    await sendParts(hash, bytes, token);
+    expect((await complete(hash, 1, bytes.length, token)).status).toBe(201);
+    expect((await rowsOf(account))[0]).toMatchObject({ deposit: null, place: null });
+  });
+
+  it('refuses a link that is not a key and a place, and stores nothing', async () => {
+    const { token, account } = await member();
+    const bytes = transcript(2000, 24);
+    const hash = await hex(bytes);
+    await sendParts(hash, bytes, token);
+    for (const link of ['nope', DEPOSIT_ID, `${DEPOSIT_ID}.-1`, `${DEPOSIT_ID}.x`, `XYZ.1`]) {
+      const refused = await complete(hash, 1, bytes.length, token, linked(link));
+      expect(refused.status, link).toBe(422);
+      expect(fieldOf(refused.json, 'error')).toBe('link_invalid');
+    }
+    expect(await rowsOf(account)).toEqual([]);
   });
 });
 

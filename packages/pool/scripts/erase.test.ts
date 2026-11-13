@@ -96,6 +96,8 @@ describe('erasing a raw object', () => {
     expect([first.part, first.complete]).toEqual([200, 201]);
     expect(await rawKeys(account)).toEqual([`raw/${account}/${first.hash}`]);
 
+    // The stored link to the deposit is a session key: erasing the object clears it (Art. 17), keeping the hash, size, and day.
+    await (await pool.db()).prepare('UPDATE raw_objects SET deposit = ?, place = 0 WHERE account = ? AND sha256 = ?').bind('a1b2c3d4e5f60718', account, first.hash).run();
     const erased = await eraseRawObject(await store(), `raw/${account}/${first.hash}`, NOW);
     expect(erased).toEqual({ rows: 0, objects: 1 });
     expect(await rawKeys(account)).toEqual([]);
@@ -106,7 +108,7 @@ describe('erasing a raw object', () => {
     expect(await rawKeys(account)).toEqual([]);
 
     // The ledger row stays (a hash and a byte count) and says it was erased; nothing says what the object held.
-    expect(await all('SELECT erased_on FROM raw_objects WHERE account = ? AND sha256 = ?', account, first.hash)).toEqual([{ erased_on: '2026-11-08' }]);
+    expect(await all('SELECT erased_on, deposit, place FROM raw_objects WHERE account = ? AND sha256 = ?', account, first.hash)).toEqual([{ erased_on: '2026-11-08', deposit: null, place: null }]);
     expect(await all("SELECT kind, reason, erased_on FROM erasure_tombstones WHERE kind = 'raw-object'")).toContainEqual({ kind: 'raw-object', reason: 'raw', erased_on: '2026-11-08' });
     expect(await all("SELECT kind, reason, erased_on, rows_erased, objects_erased, account FROM erasure_audit WHERE kind = 'raw-object'")).toContainEqual({ kind: 'raw-object', reason: 'raw', erased_on: '2026-11-08', rows_erased: 0, objects_erased: 1, account });
     expect(await dump()).not.toContain(FAKE_KEY);
@@ -700,11 +702,13 @@ describe('unlinking the rows an erasure keeps (t1065, covenant 6.6(d))', () => {
     expect(placed[0]).toBeLessThan(placed[1] ?? 0);
     expect(placed[1]).toBeLessThan(placed[2] ?? 0);
     expect(await count('SELECT COUNT(*) AS held FROM raw_objects WHERE account = ? AND stored_at % ? <> 0', second.account, DAY)).toBe(1);
+    await (await pool.db()).prepare('UPDATE raw_objects SET deposit = ?, place = 0 WHERE account = ?').bind('a1b2c3d4e5f60718', second.account).run();
     const erasedId = await erase(second.account);
     expect(await rowidOf(erasedId)).toBeLessThan(0);
     expect(await rowidOf(first.account)).toBe(placed[0]);
     expect(await rowidOf(third.account)).toBe(placed[2]);
     expect(await count('SELECT COUNT(*) AS held FROM raw_objects WHERE account = ? AND stored_at % ? <> 0', second.account, DAY)).toBe(0);
+    expect(await count('SELECT COUNT(*) AS held FROM raw_objects WHERE account = ? AND (deposit IS NOT NULL OR place IS NOT NULL)', second.account)).toBe(0);
     expect(await count('SELECT COUNT(*) AS held FROM raw_objects WHERE account = ?', second.account)).toBe(1);
   }, 90_000);
 
