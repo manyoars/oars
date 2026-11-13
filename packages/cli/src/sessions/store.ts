@@ -1383,13 +1383,17 @@ interface Captured {
 }
 
 /** What one pass over the log keeps: a number or two per session, never the records. */
-interface LogScan {
+export interface LogScan {
   /** Each session's highest rev, over every kind of record. */
   latest: Map<string, number>;
   /** True when some session has a record below its highest rev, which a compaction would drop. */
   superseded: boolean;
   /** Sessions whose newest capture record was written by a newer oars, counted as `loadStore` counts them. */
   newerCaptures: number;
+  /** Each subagent's parent, from its session record at its highest rev (a main session has none). */
+  parents: Map<string, string>;
+  /** Each session's `cv` at its highest rev. */
+  cvs: Map<string, string>;
   /** Set when asked for: each session's record lines at its highest rev as flat `[start, length, ...]` byte pairs (the newline included). Only lines this scan saw are in it, so a row appended after the scan is never read through it. */
   spans?: Map<string, number[]>;
   /** With `spans`: the file the scan read (device, inode, and size from `stat` on the handle it read), so a load uses the spans only on that same file. */
@@ -1439,7 +1443,7 @@ export const scanLog = async (file: string, held?: FileHandle, withSpans = false
 
 const scanHandle = async (file: string, held: FileHandle | undefined, withSpans: boolean): Promise<LogScan> => {
   const latest = new Map<string, number>();
-  const cvAt = new Map<string, { rev: number; cv: string }>();
+  const cvAt = new Map<string, { rev: number; cv: string; parent: string | null }>();
   // Every rev's lines are noted as `[start, length, rev, ...]` triples, then thinned to the highest rev once it is known.
   const seen = withSpans ? new Map<string, number[]>() : undefined;
   const info = withSpans && held !== undefined ? await held.stat({ bigint: true }) : undefined;
@@ -1456,11 +1460,18 @@ const scanHandle = async (file: string, held: FileHandle | undefined, withSpans:
     superseded ||= before !== undefined && before !== observation.rev;
     latest.set(observation.session, Math.max(before ?? 0, observation.rev));
     // The last session record at the highest rev is the one `loadStore` reads.
-    if (observation.kind === 'session' && observation.rev >= (cvAt.get(observation.session)?.rev ?? 0)) cvAt.set(observation.session, { rev: observation.rev, cv: observation.cv });
+    if (observation.kind === 'session' && observation.rev >= (cvAt.get(observation.session)?.rev ?? 0)) cvAt.set(observation.session, { rev: observation.rev, cv: observation.cv, parent: observation.parent });
   }
   let newerCaptures = 0;
-  for (const [session, held] of cvAt) if (held.rev === latest.get(session) && Number(held.cv) > Number(CAPTURE_VERSION)) newerCaptures += 1;
-  if (seen === undefined) return { latest, superseded, newerCaptures };
+  const parents = new Map<string, string>();
+  const cvs = new Map<string, string>();
+  for (const [session, held] of cvAt) {
+    if (held.rev !== latest.get(session)) continue;
+    cvs.set(session, held.cv);
+    if (held.parent !== null) parents.set(session, held.parent);
+    if (Number(held.cv) > Number(CAPTURE_VERSION)) newerCaptures += 1;
+  }
+  if (seen === undefined) return { latest, superseded, newerCaptures, parents, cvs };
   // A superseded line is never read by a chunk load, so the index keeps only each session's lines at its highest rev.
   const spans = new Map<string, number[]>();
   for (const [session, triples] of seen) {
@@ -1468,7 +1479,18 @@ const scanHandle = async (file: string, held: FileHandle | undefined, withSpans:
     for (let n = 0; n < triples.length; n += 3) if (triples[n + 2] === latest.get(session)) kept.push(triples[n] ?? 0, triples[n + 1] ?? 0);
     spans.set(session, kept);
   }
-  return info === undefined ? { latest, superseded, newerCaptures, spans } : { latest, superseded, newerCaptures, spans, identity: { dev: info.dev, ino: info.ino, size: info.size } };
+  return info === undefined ? { latest, superseded, newerCaptures, parents, cvs, spans } : { latest, superseded, newerCaptures, parents, cvs, spans, identity: { dev: info.dev, ino: info.ino, size: info.size } };
+};
+
+/**
+ * The order `loadStore` visits sessions in, as one list: the sessions whose capture version cannot be read (version 2, whose prompts and errors the log holds as rows) first, then the rest, each group by where
+ * the session's first line at its highest rev starts in the log, subagents and mains alike. Needs a scan made with spans. A run is a contiguous slice of this list.
+ */
+export const runOrder = (scan: LogScan): string[] => {
+  const start = (session: string): number => scan.spans?.get(session)?.[0] ?? Number.MAX_SAFE_INTEGER;
+  const sessions = [...(scan.spans?.keys() ?? [])];
+  const unreadable = (session: string): boolean => !isReadable(scan.cvs.get(session) ?? '0');
+  return sessions.sort((a, b) => Number(unreadable(b)) - Number(unreadable(a)) || start(a) - start(b));
 };
 
 const plainLines = async function* (file: string, held?: FileHandle): AsyncGenerator<{ line: string; start: number; length: number }> {

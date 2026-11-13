@@ -7,7 +7,7 @@ import { error as errorRow, frame as frameOf, prompt as promptRow, session as se
 import { appendRecall, makeRecall, type Recall } from './recall-object.js';
 import { CAPTURE_VERSION, type ToolObservation } from './schema.js';
 import { poolFiles } from './pool.js';
-import { paths, refresh } from './store.js';
+import { paths, refresh, runOrder, scanLog } from './store.js';
 import { cleanup, stage } from './test-support.js';
 
 afterEach(cleanup);
@@ -41,7 +41,7 @@ const captured = (id: string, over: Partial<ReturnType<typeof sessionRow>> = {})
  * the version 3 sessions', and a superseded copy of a session.
  */
 const rows = (): unknown[] => [
-  captured('old', { rev: 1 }), userPrompt('old', 0, stamp(2), 3.5),
+  captured('old', { rev: 1, cv: '4' }), userPrompt('old', 0, stamp(2), 3.5),
   captured('sa'), userPrompt('sa', 0, stamp(1), 12.345), userPrompt('sa', 1, stamp(1, 2), 7.125),
   call('sa', 0, 'Read', 1, 0),
   call('sa', 1, 'Bash', 1, 0, { segments: [{ run: 'git commit', read: true }], commits: ['abc1234'] }),
@@ -82,10 +82,15 @@ const hashes = (storeDir: string): { [path: string]: string } => {
 };
 
 /** The store refreshed once: the pool's consequence rows (P1 and P2 are rows 0 and 1) and every written file's hash. */
-const refreshed = async (): Promise<{ reverted: Array<string | null>; files: { [path: string]: string } }> => {
+const stagedLog = (): ReturnType<typeof stage> => {
   const staged = stage();
   mkdirSync(staged.storeDir, { recursive: true });
   writeFileSync(paths(staged.storeDir).observations, `${rows().map((row) => JSON.stringify(row)).join('\n')}\n`);
+  return staged;
+};
+
+const refreshed = async (): Promise<{ reverted: Array<string | null>; files: { [path: string]: string } }> => {
+  const staged = stagedLog();
   await appendRecall(staged.storeDir, recallAt('sa', stamp(1, 0, 500)));
   await appendRecall(staged.storeDir, recallAt('sa', stamp(1, 2, 500)));
   await refresh(staged.runtime, [], PIN_AT);
@@ -111,5 +116,29 @@ describe('refresh writes the same bytes for a store with cross-session joins (re
       'motifs.jsonl': 'c26e98dec42688c8d6af7cc2f07c0db6aee2262c8ceab3d14eaadf382e299fec',
       'reads/99960caed91573ea.jsonl': '6b97d91c45c5b29e07fba98d703caaae425938a752af6be63b363d6ebaae1ac2',
     });
+  });
+});
+
+describe('the scan keeps what the run order needs (scanorder)', () => {
+  it('holds each subagent parent and each session cv at its highest rev, and orders version 2 sessions ahead of the rest by first line', async () => {
+    const staged = stagedLog();
+    const scan = await scanLog(paths(staged.storeDir).observations, undefined, true);
+    expect(scan.parents).toEqual(new Map([['sc~ag', 'sc']]));
+    // `old` was captured at cv 4 and again at cv 35 at a higher rev; `v2` is version 2.
+    expect(scan.cvs).toEqual(new Map([['old', CAPTURE_VERSION], ['sa', CAPTURE_VERSION], ['sc~ag', CAPTURE_VERSION], ['sb', CAPTURE_VERSION], ['sc', CAPTURE_VERSION], ['sd', CAPTURE_VERSION], ['v2', '2']]));
+    // `v2` lines follow `sd` lines in the log, and `old` highest rev is the last line; the subagent `sc~ag` is ahead of `sb` and `sc`.
+    expect(runOrder(scan)).toEqual(['v2', 'sa', 'sc~ag', 'sb', 'sc', 'sd', 'old']);
+  });
+
+  it('keeps a session with an unreadable cv ahead of readable ones, whatever its place in the log', async () => {
+    const staged = stagedLog();
+    const scan = await scanLog(paths(staged.storeDir).observations, undefined, true);
+    scan.cvs.set('sd', '1');
+    expect(runOrder(scan).slice(0, 2)).toEqual(['sd', 'v2']);
+  });
+
+  it('orders nothing for a scan made without spans', async () => {
+    const staged = stagedLog();
+    expect(runOrder(await scanLog(paths(staged.storeDir).observations))).toEqual([]);
   });
 });
