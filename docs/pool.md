@@ -703,6 +703,19 @@ npm run real-work-table -w packages/pool -- <store folder> --terms <file> --owne
 - A row under `--min-sessions` (default 5) is left out and counted in the header. Names come from closed lists: harness names, version buckets, public tool names, model ids the closed `publicModel` grammar passes, and prompt classes; anything else is `other`.
 - `--out` is refused inside a git repository. The run over the real store is the operator's own step; tests use fixtures only.
 
+### The release note
+
+`real-work-note` compares two harness version buckets of one harness and writes one dated file: the three largest moves with their n, or `"result": "no change"` when every difference is inside noise.
+
+```
+npm run real-work-note -w packages/pool -- <store folder> --terms <file> --owners <file> --out <dir> --harness <name> --from <bucket> --to <bucket> [--projects <folder>] [--min-sessions <n>] [--date <YYYY-MM-DD>]
+```
+
+- It counts with the table's own code (the same sessions, gates, tallies, and row builders, read for two buckets), so a number in a note is the number in that bucket's `table.json` row. The exclusion gate and the owner filter run before any count, `--out` is refused inside a git repository, and every name in the file comes from the table's closed lists.
+- The file is `note-<date>-<harness>-<from>-to-<to>.json`. It holds `spec` (`real-work-note/1`), `label` (`one fleet`), `builtOn`, `harness`, `from` and `to` (each `versionBucket`, `sessions`, and `calls`), `minSessions`, `result` (`moves` or `no change`), and `moves`, at most three, largest first. A move holds `measure` (`failureRate`, `callsToRecover`, `editFollowedShare`, `interventionsPerPrompt`, or `tokensPerPrompt`), `kind` (`model` or `tool`), `name`, `class` (the prompt class, on `tokensPerPrompt` only), `unit` (what the n counts: `calls`, `failures`, `recoveries`, or `prompts`), and `from` and `to`, each a `value` with its `n`. The note is data: it holds no sentence, score, ranking word, or verdict word, and no size for a move. The page that publishes it writes the words.
+- A move is a difference that clears the noise rule, and only then: both rows have at least `--min-sessions` sessions (default 5), the measure's n on both sides is at least that many and never under 2, and the two 95 percent intervals do not overlap (touching counts as overlapping). A rate (`failureRate`, `editFollowedShare`, `interventionsPerPrompt`) uses the Wilson score interval, which stays inside 0 and 1 and is not zero-width at none or all. A mean (`callsToRecover`, `tokensPerPrompt`) uses the mean plus or minus 1.96 standard errors, from the sample variance; that is a normal approximation and rough for skewed token counts. A row named `other` or `unknown` holds many models and is not compared. Moves are ordered by the gap between the two values over the square root of the two intervals' half-widths, each squared and added, then by measure, kind, name, and class, so a second run writes the same bytes.
+- A bucket with no sessions after the gates, or fewer than `--min-sessions`, ends the run with one plain error and no file.
+
 ## Tests
 
 `packages/pool` runs the bundled handler and its D1 store under the Workers runtime through Miniflare, in-process, with a stub sign-in provider behind the Worker's outbound fetch (its device, token, and profile routes), so it needs no Docker, account, or network. `full-run.test.ts` drives the real CLI commands against it over a local socket.
