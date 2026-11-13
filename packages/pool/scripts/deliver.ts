@@ -205,7 +205,9 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
   if (typeof flags === 'string') return usage(flags);
   if (owners === undefined) return usage('Missing --owners.');
   try {
-    const printRows = (found: Delivery[], none: string): void => io.print(found.length === 0 ? none : found.map((row) => [row.recipient, `match id ${row.matchId}`, `lot ${row.lot}`, `delivered ${row.deliveredAt}`, `license ${row.license}`, `session ${row.session}`].join('\t')).join('\n'));
+    const printRows = (found: Delivery[], none: string): void => {
+      io.print(found.length === 0 ? none : found.map((row) => [row.recipient, `match id ${row.matchId}`, `lot ${row.lot}`, `delivered ${row.deliveredAt}`, `license ${row.license}`, `session ${row.session}`].join('\t')).join('\n'));
+    };
     if (byAccount) {
       const account = typeof flags === 'string' ? undefined : flags.get('--account');
       if (account === undefined || account.trim() === '') return usage('Missing the pool account id.');

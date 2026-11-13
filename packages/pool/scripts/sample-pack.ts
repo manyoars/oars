@@ -139,8 +139,8 @@ export interface ManifestRow {
 }
 
 /**
- * A row built from a deposit also holds when the cited covenant acceptance was made, as an ISO time (docs/pool-deposit-title.md section 1). It is a type of its own, not an optional field of `ManifestRow`,
- * because `validate-pack.ts` types its field table by `ManifestRow`: brief 3 lists `acceptedAt` there and in `docs/session-record.md`, and moves it into the interface.
+ * A row built from a deposit also holds when the cited covenant acceptance was made, as an ISO time (docs/pool-deposit-title.md section 1). It is a type of its own, not an optional field of `ManifestRow`:
+ * `validate-pack.ts` lists `acceptedAt` in its own field table (optional, and only beside a `depositor:<16 hex>` owner) and `docs/session-record.md` states it, so an operator row, which never holds it, keeps the narrower type.
  */
 export type DepositManifestRow = ManifestRow & { acceptedAt: string };
 

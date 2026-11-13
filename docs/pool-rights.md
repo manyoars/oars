@@ -67,7 +67,7 @@ Limit: **no provider sign-in.** If the requester has no provider sign-in at all,
 
 Limit: **recipients.** None to name today. Nothing is sold, and no path hands deposits to anyone ([`flags.md`](flags.md)). Cloudflare runs the pool as processor; name it as that category. A bundle is built from `cells` and `strata` and carries no account's personal data, so the accounts that fetch it receive none of the requester's data and are not their recipients (Art. 15(1)(c)).
 
-Limit: **lot 1 recipients (Art. 15(1)(c)).** A lot-1 sample pack hands over the operator's own sessions, not pool deposits, so the pool holds no record of it and a requester who is a pool account does not find it there. Its register is `deliveries.jsonl` beside the owners file: `npm run deliver -w packages/pool -- recipients <session id or the person's name> --owners <file>` prints each recipient by name with the match id it holds. Redaction reduces the personal data in a pack but does not remove it, so a person a session names is a data subject of that lot; name every recipient printed, not a category. The search reads only the packs `index.jsonl` lists that are still on the machine, so say so when a pack has been deleted since.
+Limit: **lot 1 recipients (Art. 15(1)(c)).** A lot-1 sample pack hands over the operator's own sessions, and a pack built `--deposits` hands over third-party deposits; the pool holds no record of either, so a requester who is a pool account does not find it there. The register is `deliveries.jsonl` beside the owners file: `npm run deliver -w packages/pool -- recipients <session id or the person's name> --owners <file>` prints each recipient by name with the match id it holds, and `recipients --account <pool account id> --owners <file>` does the same for every session `index.jsonl` records for that account (a deposit pack's index lines carry it). Redaction reduces the personal data in a pack but does not remove it, so a person a session names is a data subject of that lot; name every recipient printed, not a category. The search reads only the packs `index.jsonl` lists that are still on the machine, so say so when a pack has been deleted since.
 
 ## Art. 16, rectification
 
@@ -141,7 +141,7 @@ Covenant 6.6(a): you must stop the processing unless you show compelling grounds
 
 **Steps:**
 1. Confirm the account.
-2. While you weigh the grounds, restrict the account (`erase restrict`, Art. 18(1)(d); see above). If you accept: erase the account (`erase account`, Art. 17 above), whose unlink of the kept rows covenant 6.6(c) allows in place of deletion; close the account too if they want no more arriving (below). Closing deletes their credentials; erasing removes their contributor records.
+2. While you weigh the grounds, restrict the account (`erase restrict`, Art. 18(1)(d); see above). If a pack built from the account's deposits may exist, append an account line to `objections.jsonl` with `"right": "objection"` (Art. 21(1); below) so no later build or delivery holds the account. If you accept: erase the account (`erase account`, Art. 17 above), whose unlink of the kept rows covenant 6.6(c) allows in place of deletion; close the account too if they want no more arriving (below). Closing deletes their credentials; erasing removes their contributor records.
 3. For telemetry only: they run `oars telemetry off`, or set `OARS_TELEMETRY=0`.
 4. If you do not accept, tell them the grounds within the month, with the complaint right.
 
@@ -149,7 +149,7 @@ Covenant 6.6(a): you must stop the processing unless you show compelling grounds
 
 **Record kept:** the decision and the grounds, with dates.
 
-Nothing is sold and no path hands deposits to anyone, so an objection to sale or training has nothing to exclude from yet. Record it in the register, scope included; the first sale path loads those records.
+Record the objection in the register, scope included, as an account line in `objections.jsonl` beside the owners file: `{"account": "<id>", "right": "objection", "received": "<ISO time>", "scope": "sale"}` (Art. 21(1)). The next `sample-pack --deposits` build leaves out every session of the account, `deliver` refuses a pack built before the line, and `deliver recipients --account` names who already holds a session of it.
 
 Lot 1 (the first sale) has a register today. Add the objection to `objections.jsonl` beside the owners file, one JSON line (`{"name": "<the person>"}` or `{"session": "<id>"}`, `"received"` as an ISO date and time, `"scope"` as `sale`, `training`, or `all`). The next `sample-pack` build leaves out each session it names and each whose text holds the name, and `deliver` refuses a pack built under a different `objections.jsonl` than the one beside the owners file now (Art. 21(1)); both are in [`pool.md`](pool.md), "The sample pack".
 
@@ -209,7 +209,7 @@ A close erases nothing. If they also want their data deleted, that is a separate
 `npx wrangler d1 execute oars-pool --remote --command "UPDATE accounts SET closed_at = NULL WHERE id = '<account id>' AND closed_at IS NOT NULL"`
 Tokens and machine keys stay revoked, so the person signs in and enrolls their machines again. Note it in the request register.
 
-**Requests after closing.** The proof from `oars pool login --provider github --json` (or `google`) confirms the requester. Then run `erase account` (Art. 17), `erase export` (Art. 15 and 20), or `erase withdraw` (Art. 7(3)); each works on a closed account.
+**Requests after closing.** The proof from `oars pool login --provider github --json` (or `google`) confirms the requester. Then run `erase account` (Art. 17; it prints the `objections.jsonl` account line to append, so no later pack holds the account and `deliver recipients --account` names who must be told under Art. 19), `erase export` (Art. 15 and 20), or `erase withdraw` (Art. 7(3)); each works on a closed account.
 
 ## A third party named in a deposit
 
