@@ -1,14 +1,16 @@
 // The hold commit of a machine's batch (`machine-hold.ts`): the terms digest, and the commit made with git plumbing in a real repository in a temp folder. Nothing reads the network or the store.
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { holdBatch, holdBranch, holdCommit, runNetGit, termsDigest, type HoldDeps, type HoldInput } from './machine-hold.js';
 import { runGit, type Git } from './survival.js';
 
-// Each case runs a dozen git processes, which a Windows runner starts slowly.
-const SLOW = 60_000;
+// Process creation is the cost on a Windows runner: a loaded one took up to 3 s for one git process (a spawn timed under eight concurrent spawners: median 1.2 s, max 2.9 s). A case's bound is its git
+// processes (the test's own commands and the product's) times that; the slowest case, a push refused three times with a fetch between, starts fewer than 20.
+const PROCESS_BOUND_MS = 3_000;
+const SLOW = 20 * PROCESS_BOUND_MS;
 
 const made: string[] = [];
 afterEach(() => {
@@ -17,10 +19,29 @@ afterEach(() => {
 
 const git = (cwd: string, ...args: string[]): string => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
 
+// A repository with work costs 11 git processes to build and a bare one 1, and a push or a fetch starts a `gc --auto` or `maintenance run --auto` child on top of its own processes. Each is built once and copied
+// per case, and `gc.auto` and `maintenance.auto` are off for every git a case starts, so a case starts only the processes it is about.
+let work = '';
+let bareTemplate = '';
+beforeAll(() => {
+  vi.stubEnv('GIT_CONFIG_COUNT', '2');
+  vi.stubEnv('GIT_CONFIG_KEY_0', 'gc.auto');
+  vi.stubEnv('GIT_CONFIG_VALUE_0', '0');
+  vi.stubEnv('GIT_CONFIG_KEY_1', 'maintenance.auto');
+  vi.stubEnv('GIT_CONFIG_VALUE_1', 'false');
+  work = buildRepoWithWork();
+  bareTemplate = mkdtempSync(join(tmpdir(), 'oars-machine-hold-bare-template-'));
+  git(bareTemplate, 'init', '-q', '--bare');
+}, 20 * PROCESS_BOUND_MS);
+afterAll(() => {
+  vi.unstubAllEnvs();
+  rmSync(work, { recursive: true, force: true });
+  rmSync(bareTemplate, { recursive: true, force: true });
+});
+
 /** A repository in a temp folder with one commit, `origin` named as a cloud session shows it, one staged change, and one unstaged edit. */
-const repoWithWork = (): string => {
-  const folder = mkdtempSync(join(tmpdir(), 'oars-machine-hold-'));
-  made.push(folder);
+const buildRepoWithWork = (): string => {
+  const folder = mkdtempSync(join(tmpdir(), 'oars-machine-hold-template-'));
   git(folder, 'init', '-q');
   git(folder, 'config', 'core.autocrlf', 'false');
   git(folder, 'remote', 'add', 'origin', 'https://github.com/owner/name');
@@ -31,6 +52,15 @@ const repoWithWork = (): string => {
   writeFileSync(join(folder, 'a.txt'), 'one staged\n');
   git(folder, 'add', 'a.txt');
   writeFileSync(join(folder, 'b.txt'), 'two unstaged\n');
+  return folder;
+};
+
+/** A copy of the repository with work. The copied index holds the old files' stat data, so one refresh makes it as git would have written it, before a case reads its bytes. */
+const repoWithWork = (): string => {
+  const folder = mkdtempSync(join(tmpdir(), 'oars-machine-hold-'));
+  made.push(folder);
+  cpSync(work, folder, { recursive: true });
+  git(folder, 'update-index', '-q', '--refresh');
   return folder;
 };
 
@@ -134,7 +164,7 @@ const asCloud = (git: Git): Git => (root, args, stdin) => (args[0] === 'remote' 
 const vmWithRemote = (): { bare: string; repo: string } => {
   const bare = mkdtempSync(join(tmpdir(), 'oars-machine-hold-bare-'));
   made.push(bare);
-  git(bare, 'init', '-q', '--bare');
+  cpSync(bareTemplate, bare, { recursive: true });
   const repo = repoWithWork();
   git(repo, 'remote', 'set-url', 'origin', bare);
   return { bare, repo };
