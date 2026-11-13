@@ -1376,7 +1376,8 @@ const rememberCrew = async (deps: RunDeps, storeDir: string, server: string, tok
     credential.add(token);
     const reply = await ask(deps, step, server, '/v1/me', { token, show: credential });
     if (reply.status !== 200 || !isObject(reply.body)) return undefined;
-    await keepCrewNumber(storeDir, server, numberIn(reply.body, 'crewNumber'));
+    const account = Reflect.get(reply.body, 'account');
+    if (typeof account === 'string') await keepCrewNumber(storeDir, server, account, numberIn(reply.body, 'crewNumber'));
     return numberIn(reply.body, 'vouchesGiven');
   } catch {
     // The card shows the number when it is known and says nothing when it is not.
@@ -1409,7 +1410,7 @@ export const poolInvite = async (deps: RunDeps, options: { server?: string | und
       `Invite code: ${code}`,
       'This is the only time the code is shown. It works once, for one person.',
       `Send them this line: ${line}`,
-      `What you get: your vouch is recorded${given === undefined ? '' : ` (you have vouched for ${String(given)} so far)`}. What they get: once they have rowed two counting weeks they are listed on the open board without waiting 90 days, unless you and they are the same operator, which gives neither of you anything.`,
+      `What you get: your vouch is recorded${given === undefined ? '' : ` (you have vouched for ${String(given)} so far)`}. What they get: once they have rowed two counting weeks, the next founding-crew grant lets them join the open board without waiting 90 days, unless you and they are the same operator, which gives neither of you anything.`,
       ...(left === undefined ? [] : [`Open codes you can still make: ${String(left)}.`]),
     ].join('\n'),
   };

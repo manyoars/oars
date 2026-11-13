@@ -402,16 +402,16 @@ describe('oars pool join', () => {
 
     it('keeps the crew number /v1/me states, for the card', async () => {
       const s = await scene();
-      server.use(http.get(`${POOL}/v1/me`, () => HttpResponse.json({ crewNumber: 7 })));
+      server.use(http.get(`${POOL}/v1/me`, () => HttpResponse.json({ account: 'acct_one', crewNumber: 7 })));
       expect(await s.cli(...joinArgs)).toBe(ExitCode.OK);
-      expect(await crewNumberOf(s.staged.storeDir, POOL)).toBe(7);
+      expect(await crewNumberOf(s.staged.storeDir, POOL, 'acct_one')).toBe(7);
     });
 
     it('joins all the same when /v1/me fails, and keeps no crew number', async () => {
       const s = await scene();
       server.use(http.get(`${POOL}/v1/me`, () => new HttpResponse(null, { status: 500 })));
       expect(await s.cli(...joinArgs)).toBe(ExitCode.OK);
-      expect(await crewNumberOf(s.staged.storeDir, POOL)).toBeUndefined();
+      expect(await crewNumberOf(s.staged.storeDir, POOL, 'acct_one')).toBeUndefined();
     });
 
     it('asks the pool nothing about invites without --invite', async () => {

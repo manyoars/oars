@@ -5,20 +5,20 @@ import { isObject, numberIn } from './pool-replica.js';
 
 const fileOf = (storeDir: string): string => join(storeDir, 'pool-crew.json');
 
-/** The crew number held for `server`, or undefined: no file, another pool, a file that is not ours, or an account that is not in the crew. */
-export const crewNumberOf = async (storeDir: string, server: string): Promise<number | undefined> => {
+/** The crew number held for `account` on `server`, or undefined: no file, another pool or account, a file that is not ours, or an account that is not in the crew. */
+export const crewNumberOf = async (storeDir: string, server: string, account: string): Promise<number | undefined> => {
   try {
     const held: unknown = JSON.parse(await readFile(fileOf(storeDir), 'utf8'));
-    return isObject(held) && Reflect.get(held, 'server') === server ? numberIn(held, 'crewNumber') : undefined;
+    return isObject(held) && Reflect.get(held, 'server') === server && Reflect.get(held, 'account') === account ? numberIn(held, 'crewNumber') : undefined;
   } catch {
     return undefined;
   }
 };
 
 /** Keeps what the pool said, replacing the earlier answer: the number, or none when the account holds none. */
-export const keepCrewNumber = async (storeDir: string, server: string, crewNumber: number | undefined): Promise<void> => {
+export const keepCrewNumber = async (storeDir: string, server: string, account: string, crewNumber: number | undefined): Promise<void> => {
   await mkdir(storeDir, { recursive: true });
-  await writeFile(fileOf(storeDir), JSON.stringify({ server, ...(crewNumber === undefined ? {} : { crewNumber }) }));
+  await writeFile(fileOf(storeDir), JSON.stringify({ server, account, ...(crewNumber === undefined ? {} : { crewNumber }) }));
 };
 
 /** The card's words for a crew number. */

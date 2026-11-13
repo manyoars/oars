@@ -72,15 +72,15 @@ describe('depositorLine', () => {
   it('adds the founding crew mark when this machine learned a number for this pool, and drops it for another pool or a file that is not ours', async () => {
     signIn(CARD_NOW + 1000);
     sent();
-    await keepCrewNumber(dir, SERVER, 12);
+    await keepCrewNumber(dir, SERVER, 'acct_one', 12);
     expect(await depositorLine(dir, {}, CARD_NOW)).toBe('weeks rowing (this machine): 2 · founding crew #12');
-    await keepCrewNumber(dir, 'https://pool.example.com', 12);
+    await keepCrewNumber(dir, 'https://pool.example.com', 'acct_one', 12);
     expect(await depositorLine(dir, {}, CARD_NOW)).toBe('weeks rowing (this machine): 2');
-    await keepCrewNumber(dir, SERVER, undefined);
+    await keepCrewNumber(dir, SERVER, 'acct_one', undefined);
     expect(await depositorLine(dir, {}, CARD_NOW)).toBe('weeks rowing (this machine): 2');
     writeFileSync(join(dir, 'pool-crew.json'), 'not json');
     expect(await depositorLine(dir, {}, CARD_NOW)).toBe('weeks rowing (this machine): 2');
-    expect(await crewNumberOf(dir, SERVER)).toBeUndefined();
+    expect(await crewNumberOf(dir, SERVER, 'acct_one')).toBeUndefined();
   });
 
   it('shows no crew mark for a number kept for another account than the one signed in now', async () => {

@@ -112,7 +112,7 @@ Row: **founding crew (Art. 17).** The run clears the account's crew number, dele
 
 Limit: **bundles and client copies.** Not recalled, and need not be: a bundle is built from `cells` and `strata` and carries no account's personal data, so its fetchers received none of the requester's data, and the generation move makes every client fetch the new one, which is the reasonable step (Art. 17(2), Art. 19).
 
-Limit: **the person's own machine.** The local store is theirs and is never sent, so Many Oars Co. does not hold it (Art. 4(7)). Tell them to delete `<store>/raw/`, `<store>/state.json`, and the outbox, naming the store path `oars` prints.
+Limit: **the person's own machine.** The local store is theirs and is never sent, so Many Oars Co. does not hold it (Art. 4(7)). Tell them to delete `<store>/raw/`, `<store>/state.json`, `<store>/pool-crew.json` (the crew number), and the outbox, naming the store path `oars` prints.
 
 Limit: **Art. 19, telling recipients.** No one to tell: a bundle carries no account's personal data, so its fetchers are not the requester's recipients (Art. 19). When a path hands deposits to anyone, its register names them (C6).
 

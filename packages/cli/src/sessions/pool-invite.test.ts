@@ -31,17 +31,17 @@ describe('oars pool invite', () => {
     const s = scene();
     server.use(
       http.post(`${POOL}/v1/invites`, () => HttpResponse.json({ code: 'ABCD2345', invitesLeft: 2 }, { status: 201 })),
-      http.get(`${POOL}/v1/me`, ({ request }) => (request.headers.get('authorization') === `Bearer ${TOKEN}` ? HttpResponse.json({ crewNumber: 12 }) : new HttpResponse(null, { status: 401 }))),
+      http.get(`${POOL}/v1/me`, ({ request }) => (request.headers.get('authorization') === `Bearer ${TOKEN}` ? HttpResponse.json({ account: 'acct_one', crewNumber: 12 }) : new HttpResponse(null, { status: 401 }))),
     );
     expect(await s.cli('pool', 'invite', '--server', POOL)).toBe(ExitCode.OK);
-    expect(await crewNumberOf(s.storeDir, POOL)).toBe(12);
+    expect(await crewNumberOf(s.storeDir, POOL, 'acct_one')).toBe(12);
   });
 
   it('prints the invite all the same when the crew number cannot be read', async () => {
     const s = scene();
     server.use(http.post(`${POOL}/v1/invites`, () => HttpResponse.json({ code: 'ABCD2345', invitesLeft: 2 }, { status: 201 })), http.get(`${POOL}/v1/me`, () => new HttpResponse(null, { status: 500 })));
     expect(await s.cli('pool', 'invite', '--server', POOL)).toBe(ExitCode.OK);
-    expect(await crewNumberOf(s.storeDir, POOL)).toBeUndefined();
+    expect(await crewNumberOf(s.storeDir, POOL, 'acct_one')).toBeUndefined();
   });
 
   it('prints the code once, the line to hand on, and what the vouch earns, without the token', async () => {
@@ -49,7 +49,7 @@ describe('oars pool invite', () => {
     const seen: Array<string | null> = [];
     server.use(
       http.post(`${POOL}/v1/invites`, ({ request }) => { seen.push(request.headers.get('authorization')); return HttpResponse.json({ code: 'ABCD2345', invitesLeft: 2 }, { status: 201 }); }),
-      http.get(`${POOL}/v1/me`, () => HttpResponse.json({ crewNumber: 12, vouchesGiven: 4 })),
+      http.get(`${POOL}/v1/me`, () => HttpResponse.json({ account: 'acct_one', crewNumber: 12, vouchesGiven: 4 })),
     );
     expect(await s.cli('pool', 'invite', '--server', POOL)).toBe(ExitCode.OK);
     expect(seen).toEqual([`Bearer ${TOKEN}`]);
