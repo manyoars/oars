@@ -15,8 +15,10 @@ beforeAll(async () => {
 }, 60_000);
 
 afterAll(async () => {
+  // A last test that timed out keeps running: let it settle before the pool goes, so it cannot write against a disposed pool.
+  await running.catch(() => undefined);
   await pool.dispose();
-});
+}, 60_000);
 
 const NOW = new Date('2026-11-10T12:00:00Z');
 

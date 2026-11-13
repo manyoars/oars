@@ -263,4 +263,17 @@ describe('real-work table', () => {
     expect(written).toMatchObject({ header: { builtOn: '2026-11-13' } });
     expect(await main(['--terms', f.terms], io)).toBe(2);
   });
+
+  it('reads the positional store folder and the --date flag through main', async () => {
+    const f = fixture();
+    f.add(older(1));
+    f.add(newer(2));
+    await f.stored();
+    const printed: string[] = [];
+    // The runtime's own store is somewhere else, so only the positional folder can supply the sessions.
+    const io = { runtime: { ...f.runtime, storeDir: join(f.root, 'elsewhere') }, print: (text: string) => printed.push(text), now: () => Date.parse('2026-11-13T12:00:00Z') };
+    expect(await main([f.runtime.storeDir, '--date', '2026-01-02', '--terms', f.terms, '--owners', f.owners, '--out', f.out, '--min-sessions', '1'], io)).toBe(0);
+    const written: unknown = JSON.parse(readFileSync(join(f.out, 'table.json'), 'utf8'));
+    expect(written).toMatchObject({ header: { builtOn: '2026-01-02', sessions: 2 } });
+  });
 });

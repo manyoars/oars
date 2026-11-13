@@ -527,6 +527,17 @@ describe('oars pool join, the first deposit in one command', () => {
       expect(err(s)).toContain('cannot take deposits from the EU yet');
     });
 
+    it('does not suggest --in-eu-eea-uk no to someone who already answered no and was refused on the request origin', async () => {
+      const open = unaccepted();
+      const s = await scene();
+      server.use(http.get(`${POOL}/v1/covenant`, () => open.covenant()));
+      server.use(http.post(`${POOL}/v1/covenant/accept`, () => HttpResponse.json({ error: 'region_closed', message: 'Many Oars cannot take deposits from the EU yet.' }, { status: 403 })));
+      await capture(s);
+      atTerminal(s, 'no', SCREEN.phrase);
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.AUTH);
+      expect(err(s)).not.toContain('--in-eu-eea-uk no');
+    });
+
     it('stops on an answer that is not yes or no, before anything is accepted or sent', async () => {
       const open = unaccepted();
       const s = await scene({ covenant: open.covenant() });
