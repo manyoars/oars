@@ -4,6 +4,7 @@ import { batchCounts, batchTier } from './access.js';
 import { fetchBundle, harnessRequired } from './bundle.js';
 import { consentTexts, createClub, joinClub, leaveClub, viewBoard, viewClub } from './clubs.js';
 import { exportPage, exportRaw } from './export.js';
+import { makeInvite, redeemInvite, viewMe } from './invites.js';
 import { countryOf, covenantAccept, covenantNotAccepted, covenantStatus, depositsClosed, hasAccepted } from './covenant.js';
 import { answer, bound, brake, notConfigured, refuse, type Env } from './http.js';
 import { receivePart } from './parts.js';
@@ -184,6 +185,10 @@ export const ROUTES: readonly Route[] = [
   { method: 'GET', path: '/v1/account/export/raw/:hash', machine: false, handle: (request, env, [hash]) => exportRaw(request, env, decoded(hash ?? '')) },
   // The account proves it controls itself (the operator confirms a requester against the stored time). Token-only: a machine key never proves a person.
   { method: 'POST', path: '/v1/account/proof', machine: false, handle: proveControl },
+  // Founding crew (invites.ts): account-only, so a machine key is refused.
+  { method: 'GET', path: '/v1/me', machine: false, handle: viewMe },
+  { method: 'POST', path: '/v1/invites', machine: false, handle: makeInvite },
+  { method: 'POST', path: '/v1/invites/redeem', machine: false, handle: redeemInvite },
   // Boards (clubs.ts): account-only, so a machine key is refused. The consent route comes before `:id` so that it is not read as a club.
   { method: 'GET', path: '/v1/board', machine: false, handle: (_request, env) => viewBoard(env) },
   { method: 'GET', path: '/v1/clubs/consent', machine: false, handle: () => consentTexts() },
