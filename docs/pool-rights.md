@@ -108,7 +108,7 @@ A deposit row is the record of what the client sent, so it is accurate as that r
 
 Gap: **unconfirmed copies.** Whether the account's dashboard holds any R2 setting beyond those in the repository, and Cloudflare's own backups of R2 or D1 beyond Time Travel, are not confirmed. Say so to the requester until someone checks.
 
-Row: **founding crew (Art. 17).** The run clears the account's crew number, deletes every invite code it made or used, and deletes every vouch edge it is on at either end. A code it used is deleted, not reopened: a deleted code reads as unknown. The number it held becomes free for the next grant. The `board_standing` row the crew grant wrote goes with the other standing rows. Another member's own rows stay: only the edge between them goes.
+Row: **founding crew (Art. 17).** The run clears the account's crew number, deletes every invite code it made or used, and deletes every vouch edge it is on at either end. A code it used is deleted, not reopened: a deleted code reads as unknown. The number it held becomes free for the next grant. The `board_standing` row the crew grant wrote goes with the other standing rows. Another member's account and other rows stay, but the code that member made and this account used is deleted with it, so it leaves that member's `invitesMade` export; the edge between them goes too.
 
 Limit: **bundles and client copies.** Not recalled, and need not be: a bundle is built from `cells` and `strata` and carries no account's personal data, so its fetchers received none of the requester's data, and the generation move makes every client fetch the new one, which is the reasonable step (Art. 17(2), Art. 19).
 

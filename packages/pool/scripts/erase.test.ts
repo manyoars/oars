@@ -427,6 +427,7 @@ describe('erasing one account removes its own rows and its link to the shared to
     const { account } = await member();
     const friend = await member();
     const bystander = await member();
+    const fourth = await member();
     const db = await pool.db();
     await db.prepare('UPDATE accounts SET crew_number = 61 WHERE id = ?').bind(account).run();
     await db.prepare('UPDATE accounts SET crew_number = 62 WHERE id = ?').bind(bystander.account).run();
@@ -436,7 +437,7 @@ describe('erasing one account removes its own rows and its link to the shared to
     await db.prepare('INSERT INTO invites (code_hash, inviter, created_at) VALUES (?, ?, 1)').bind(`erase-keep-${bystander.account}`, bystander.account).run();
     await db.prepare('INSERT INTO vouch_edges (inviter, invitee, at) VALUES (?, ?, 2)').bind(account, friend.account).run();
     await db.prepare('INSERT INTO vouch_edges (inviter, invitee, at) VALUES (?, ?, 2)').bind(friend.account, account).run();
-    await db.prepare('INSERT INTO vouch_edges (inviter, invitee, at) VALUES (?, ?, 2)').bind(bystander.account, friend.account).run().catch(() => undefined);
+    await db.prepare('INSERT INTO vouch_edges (inviter, invitee, at) VALUES (?, ?, 2)').bind(bystander.account, fourth.account).run();
 
     await eraseAccount(await store(), account, NOW);
 
@@ -445,6 +446,8 @@ describe('erasing one account removes its own rows and its link to the shared to
     expect(await count('SELECT COUNT(*) AS held FROM vouch_edges WHERE inviter = ? OR invitee = ?', account, account)).toBe(0);
     expect(await count('SELECT COUNT(*) AS held FROM accounts WHERE id = ? AND crew_number = 62', bystander.account)).toBe(1);
     expect(await count('SELECT COUNT(*) AS held FROM invites WHERE inviter = ?', bystander.account)).toBe(1);
+    expect(await count('SELECT COUNT(*) AS held FROM vouch_edges WHERE inviter = ? AND invitee = ?', bystander.account, fourth.account)).toBe(1);
+    expect(await count('SELECT COUNT(*) AS held FROM accounts WHERE id = ?', friend.account)).toBe(1);
   });
 
   it('deletes its repo keys and deposit hours, clears its telemetry account, and leaves the other account\'s rows', async () => {

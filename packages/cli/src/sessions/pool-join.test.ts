@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
+import { crewNumberOf } from './crew-mark.js';
 import { FIELD_ROWS } from './pool-outbox.js';
 import { VOCAB_VERSION, type PinnedKey } from './pool-wire.js';
 import { deposit } from './store.js';
@@ -389,13 +390,28 @@ describe('oars pool join', () => {
       expect(inviteOf(out(s))).toEqual({ skipped: true, reason: 'already_vouched' });
     });
 
-    it('stops with the pool\'s own words when the code is refused, and says to run join again', async () => {
+    it('stops with the pool\'s own words when the code is refused, and says to rerun without it or with a new code', async () => {
       const s = await scene();
       server.use(http.post(`${POOL}/v1/invites/redeem`, () => HttpResponse.json({ error: 'invite_used', message: 'That invite code has been used.' }, { status: 409 })));
       expect(await s.cli(...joinArgs, '--invite', 'ABCD2345')).not.toBe(ExitCode.OK);
       expect(err(s)).toContain('That invite code has been used.');
       expect(count(s, 'POST /v1/deposits')).toBe(0);
-      expect(err(s)).toContain(AGAIN);
+      expect(err(s)).toContain('without --invite, or with a new code');
+      expect(err(s)).not.toContain(AGAIN);
+    });
+
+    it('keeps the crew number /v1/me states, for the card', async () => {
+      const s = await scene();
+      server.use(http.get(`${POOL}/v1/me`, () => HttpResponse.json({ crewNumber: 7 })));
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.OK);
+      expect(await crewNumberOf(s.staged.storeDir, POOL)).toBe(7);
+    });
+
+    it('joins all the same when /v1/me fails, and keeps no crew number', async () => {
+      const s = await scene();
+      server.use(http.get(`${POOL}/v1/me`, () => new HttpResponse(null, { status: 500 })));
+      expect(await s.cli(...joinArgs)).toBe(ExitCode.OK);
+      expect(await crewNumberOf(s.staged.storeDir, POOL)).toBeUndefined();
     });
 
     it('asks the pool nothing about invites without --invite', async () => {

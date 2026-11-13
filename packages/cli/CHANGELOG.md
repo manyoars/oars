@@ -4,7 +4,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 
 ## Unreleased
 
-- `oars pool invite` makes one vouch code (a founding or standing account, three open at most) and prints it once with the join line; `oars pool join --invite <code>` redeems it after sign-in; `oars board` and `oars club show` print a founding member's crew number beside the nickname, and the share card's depositor line adds `founding crew #N` once `invite` or `join` has learned it;
+- `oars pool invite` makes one vouch code (a founding or standing account, three open at most) and prints it once with the join line; `oars pool join --invite <code>` redeems it after sign-in; `oars board` and `oars club show` print a founding member's crew number beside the nickname, and the share card's depositor line adds `founding crew #N` once `invite` or `join` has learned it.
 - The weekly `harness-readers` workflow now fails when a harness's latest npm release is past the version its fixture was modeled on (`versions.json`, default a different minor), and a local `shape.mjs` tool lists the field names a real session file has that a fixture lacks, with no values. The Claude Code and Codex fixtures are refreshed to 2.1.322 and 0.167.0, including a Codex code-mode cell.
 
 ## 0.5.4 (2026-11-12)

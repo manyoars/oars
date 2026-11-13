@@ -54,8 +54,8 @@ const fillCrew = async (): Promise<void> => {
   for (let crew = 1; crew <= CREW_CAP; crew += 1) await db.prepare('INSERT OR REPLACE INTO accounts (id, crew_number) VALUES (?, ?)').bind(`held-${String(crew)}`, crew).run();
 };
 
-const vouch = async (inviter: string, invitee: string): Promise<void> => {
-  await db.prepare('INSERT INTO vouch_edges (inviter, invitee, at) VALUES (?, ?, ?)').bind(inviter, invitee, 1).run();
+const vouch = async (inviter: string, invitee: string, at = 1): Promise<void> => {
+  await db.prepare('INSERT INTO vouch_edges (inviter, invitee, at) VALUES (?, ?, ?)').bind(inviter, invitee, at).run();
 };
 
 const crewOf = async (id: string): Promise<unknown> => fieldOf(await db.prepare('SELECT crew_number FROM accounts WHERE id = ?').bind(id).first(), 'crew_number');
@@ -114,6 +114,29 @@ describe('planCrew', () => {
     const plan = await planCrew(storeOf());
     expect(plan.vouched).toEqual([{ account: other, inviter }]);
     expect(plan.skipped).toContainEqual({ account: twin, reason: 'same cluster as its inviter' });
+  });
+
+  it('earns nothing for a vouch between accounts created in one window that deposit in the same hours', async () => {
+    await fillCrew();
+    const created = Date.UTC(2026, 0, 1);
+    const inviter = await counting(1 * DAY, { weeks: 3, created });
+    const twin = await counting(10 * DAY, { weeks: 2, created: created + 3_600_000 });
+    const other = await counting(11 * DAY, { weeks: 2 });
+    for (const holder of [inviter, twin]) for (let day = 1; day <= 8; day += 1) await db.prepare('INSERT INTO deposit_hours (account, day, hour) VALUES (?, ?, 14)').bind(holder, `2026-02-0${String(day)}`).run();
+    await vouch(inviter, twin);
+    await vouch(inviter, other);
+    const plan = await planCrew(storeOf());
+    expect(plan.vouched).toEqual([{ account: other, inviter }]);
+    expect(plan.skipped).toContainEqual({ account: twin, reason: 'same cluster as its inviter' });
+  });
+
+  it('counts only the weeks at or after the vouch', async () => {
+    await fillCrew();
+    const inviter = await counting(1 * DAY, { weeks: 3 });
+    const late = await counting(10 * DAY, { weeks: 2 });
+    // The vouch is dated in 2027, after both of the account's 2026 weeks.
+    await vouch(inviter, late, Date.UTC(2027, 0, 5));
+    expect((await planCrew(storeOf())).vouched).toEqual([]);
   });
 
   it('earns nothing when the invitee is closed or restricted, and not twice when it already holds standing', async () => {
@@ -177,11 +200,22 @@ describe('main', () => {
   });
 
   it('is a dry run without --confirm: it says what it would grant and writes nothing', async () => {
+    await fillCrew();
+    await db.prepare("DELETE FROM accounts WHERE id = 'held-100'").run();
+    const first = await counting(1 * DAY);
+    const inviter = await counting(2 * DAY, { weeks: 3 });
+    const invitee = await counting(3 * DAY, { weeks: 2 });
+    await vouch(inviter, invitee);
     const { io, printed } = ioOf();
     expect(await main(['--by', 'operator-x'], { ...io, store: storeOf() })).toBe(0);
     const said = printed.join('\n');
     expect(said).toContain('Nothing was changed: run again with --confirm.');
-    expect(JSON.parse(said.split('\n')[0] ?? '{}')).toMatchObject({ dryRun: true, founding: [], vouched: [] });
+    // The plan is not empty: one founding number is free (the first to count takes it), and the vouched account would be granted.
+    expect(JSON.parse(said.split('\n')[0] ?? '{}')).toMatchObject({ dryRun: true, founding: [{ account: first, crew: 100 }], vouched: [{ account: invitee, inviter }] });
+    for (const id of [first, inviter, invitee]) {
+      expect(await crewOf(id)).toBeNull();
+      expect(await standingOf(id)).toEqual([]);
+    }
   });
 
   it('writes with --confirm and prints the counts', async () => {

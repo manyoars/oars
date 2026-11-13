@@ -1,4 +1,5 @@
 // `npm run grant-crew -w packages/pool -- --by <who> [--confirm] [--local]`: the operator's founding-crew grant (docs/pool.md, "Founding crew"). It numbers the first 100 counting accounts (crew 1 to 100) and grants board standing to them, and grants board standing to a vouched account once it has two counting weeks. A vouch inside one cluster earns nothing, and a closed or restricted account earns nothing. No route writes a crew number or `board_standing`; this command is the only writer, and it changes nothing until `--confirm` is given.
+import { isoWeekOf } from '../src/week.js';
 import { clusterHolders, type Holder } from '../src/clusters.js';
 import { wranglerStore, type ObjectFiles, type Wrangler } from './erase-wrangler.js';
 import type { EraseStore } from './erase.js';
@@ -62,14 +63,17 @@ export const planCrew = async (store: Store): Promise<Plan> => {
   const founding = candidates.map((row, at) => ({ account: text(row, 'account'), crew: free[at] ?? 0 }));
   const ids = new Set(founding.map((row) => row.account));
   const edges = await store.rows(
-    `SELECT e.inviter AS inviter, e.invitee AS invitee FROM vouch_edges e JOIN accounts a ON a.id = e.invitee JOIN accounts i ON i.id = e.inviter WHERE ${OPEN} AND i.closed_at IS NULL AND i.restricted_at IS NULL AND NOT EXISTS (SELECT 1 FROM board_standing g WHERE g.account = e.invitee) AND (SELECT COUNT(*) FROM account_weeks w WHERE w.account = e.invitee AND w.sessions > 0) >= ? ORDER BY e.id`,
-    [VOUCHED_WEEKS],
+    `SELECT e.inviter AS inviter, e.invitee AS invitee, e.at AS at FROM vouch_edges e JOIN accounts a ON a.id = e.invitee JOIN accounts i ON i.id = e.inviter WHERE ${OPEN} AND i.closed_at IS NULL AND i.restricted_at IS NULL AND NOT EXISTS (SELECT 1 FROM board_standing g WHERE g.account = e.invitee) ORDER BY e.id`,
+    [],
   );
   const vouched: Plan['vouched'] = [];
   const skipped: Plan['skipped'] = [];
   for (const edge of edges) {
     const [account, inviter] = [text(edge, 'invitee'), text(edge, 'inviter')];
     if (ids.has(account)) continue;
+    // Only weeks at or after the vouch count, so an established account cannot redeem a code late and be granted at once.
+    const weeks = await store.rows('SELECT COUNT(*) AS weeks FROM account_weeks WHERE account = ? AND sessions > 0 AND week >= ?', [account, isoWeekOf(whole(edge, 'at') ?? 0)]);
+    if ((whole(weeks[0], 'weeks') ?? 0) < VOUCHED_WEEKS) continue;
     if (await sameCluster(store, inviter, account)) skipped.push({ account, reason: 'same cluster as its inviter' });
     else vouched.push({ account, inviter });
   }

@@ -47,7 +47,10 @@ describe('oars pool invite', () => {
   it('prints the code once, the line to hand on, and what the vouch earns, without the token', async () => {
     const s = scene();
     const seen: Array<string | null> = [];
-    server.use(http.post(`${POOL}/v1/invites`, ({ request }) => { seen.push(request.headers.get('authorization')); return HttpResponse.json({ code: 'ABCD2345', invitesLeft: 2 }, { status: 201 }); }));
+    server.use(
+      http.post(`${POOL}/v1/invites`, ({ request }) => { seen.push(request.headers.get('authorization')); return HttpResponse.json({ code: 'ABCD2345', invitesLeft: 2 }, { status: 201 }); }),
+      http.get(`${POOL}/v1/me`, () => HttpResponse.json({ crewNumber: 12, vouchesGiven: 4 })),
+    );
     expect(await s.cli('pool', 'invite', '--server', POOL)).toBe(ExitCode.OK);
     expect(seen).toEqual([`Bearer ${TOKEN}`]);
     const printed = s.h.out.join('');
@@ -55,6 +58,7 @@ describe('oars pool invite', () => {
     expect(printed).toContain(joinLineOf('ABCD2345'));
     expect(printed).toContain('only time the code is shown');
     expect(printed).toContain('two counting weeks');
+    expect(printed).toContain('you have vouched for 4 so far');
     expect(printed).toContain('Open codes you can still make: 2.');
     expect(printed).not.toContain(TOKEN);
   });

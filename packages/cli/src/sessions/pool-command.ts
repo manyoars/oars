@@ -1130,6 +1130,7 @@ const redeemInvite = async (deps: RunDeps, storeDir: string, server: string, cod
 };
 
 const JOIN_AGAIN = 'Run oars pool join again to continue from here.';
+const INVITE_AGAIN = 'The invite code was not accepted, and running the same line again fails the same way. Run oars pool join again without --invite, or with a new code.';
 
 /**
  * `oars pool join`: the five commands of a first deposit in one run, each by the handler the command itself uses: `login`, `deposit`, `outbox --explain`, `deposit --send <hash>` for each batch not yet sent, then `fetch`. It asks and checks
@@ -1157,6 +1158,7 @@ export const poolJoin = async (
     const sent = await sentLog(outbox);
     return (await heldAcross(outbox)).batches.flatMap(({ hash }) => (sent.has(hash) ? [] : [hash]));
   };
+  let refused = false;
   try {
     const held = await heldSignIn(deps, storeDir, server, LOGIN);
     let login: object = { skipped: true, account: held?.account };
@@ -1169,7 +1171,12 @@ export const poolJoin = async (
     let vouched: object = { skipped: true };
     if (options.invite !== undefined) {
       say('Using your invite code.');
-      vouched = await redeemInvite(deps, storeDir, server, options.invite);
+      try {
+        vouched = await redeemInvite(deps, storeDir, server, options.invite);
+      } catch (error) {
+        refused = true;
+        throw error;
+      }
     }
     let prepared: object = { skipped: true };
     if ((await unsent()).length > 0) {
@@ -1188,7 +1195,7 @@ export const poolJoin = async (
       say(`Sending ${plural(hashes.length, 'batch', 'batches')} to ${server}.`);
       for (const hash of hashes) sends.push(show(await poolDeposit(deps, { server, send: hash, acceptCovenant: options.acceptCovenant, inEuEeaUk: options.inEuEeaUk })).document);
     }
-    await rememberCrew(deps, storeDir, server, (await signedIn(deps, storeDir, server, JOIN)).token);
+    await rememberCrew(deps, storeDir, server, (await signedIn(deps, storeDir, server, JOIN)).token, JOIN);
     say(`Fetching the bundle for ${options.harness ?? 'your most used harness'} ${options.harnessVersion}.`);
     const fetched = show(await poolFetch(deps, { server, harness: options.harness, harnessVersion: options.harnessVersion }));
     return {
@@ -1196,7 +1203,7 @@ export const poolJoin = async (
       text: `Joined ${server}: ${plural(sends.length, 'batch', 'batches')} sent this run, and the ${options.harnessVersion} bundle is kept.`,
     };
   } catch (error) {
-    say(JOIN_AGAIN);
+    say(refused ? INVITE_AGAIN : JOIN_AGAIN);
     throw error;
   }
 };
@@ -1204,14 +1211,17 @@ export const poolJoin = async (
 const INVITE = 'pool-invite';
 
 /** Asks the pool for this account's crew number and keeps it for the card. Best effort: a refusal or a failed call leaves what was held, because nothing the person asked for depends on it. */
-const rememberCrew = async (deps: RunDeps, storeDir: string, server: string, token: string): Promise<void> => {
+const rememberCrew = async (deps: RunDeps, storeDir: string, server: string, token: string, step: string): Promise<number | undefined> => {
   try {
     const credential = new Masker();
     credential.add(token);
-    const reply = await ask(deps, INVITE, server, '/v1/me', { token, show: credential });
-    if (reply.status === 200 && isObject(reply.body)) await keepCrewNumber(storeDir, server, numberIn(reply.body, 'crewNumber'));
+    const reply = await ask(deps, step, server, '/v1/me', { token, show: credential });
+    if (reply.status !== 200 || !isObject(reply.body)) return undefined;
+    await keepCrewNumber(storeDir, server, numberIn(reply.body, 'crewNumber'));
+    return numberIn(reply.body, 'vouchesGiven');
   } catch {
     // The card shows the number when it is known and says nothing when it is not.
+    return undefined;
   }
 };
 
@@ -1232,15 +1242,15 @@ export const poolInvite = async (deps: RunDeps, options: { server?: string | und
   const code = isObject(reply.body) ? textIn(reply.body, 'code') : undefined;
   const left = isObject(reply.body) ? numberIn(reply.body, 'invitesLeft') : undefined;
   if (code === undefined) throw new CliError('The pool answered an invite with no code.', ExitCode.UNEXPECTED, INVITE);
-  await rememberCrew(deps, storeDir, server, token);
+  const given = await rememberCrew(deps, storeDir, server, token, INVITE);
   const line = joinLineOf(code);
   return {
-    document: { ok: true, server, code, join: line, ...(left === undefined ? {} : { invitesLeft: left }) },
+    document: { ok: true, server, code, join: line, ...(left === undefined ? {} : { invitesLeft: left }), ...(given === undefined ? {} : { vouchesGiven: given }) },
     text: [
       `Invite code: ${code}`,
       'This is the only time the code is shown. It works once, for one person.',
       `Send them this line: ${line}`,
-      'What you get: your vouch is recorded (oars pool invite counts it). What they get: once they have rowed two counting weeks they are listed on the open board without waiting 90 days, unless you and they are the same operator, which gives neither of you anything.',
+      `What you get: your vouch is recorded${given === undefined ? '' : ` (you have vouched for ${String(given)} so far)`}. What they get: once they have rowed two counting weeks they are listed on the open board without waiting 90 days, unless you and they are the same operator, which gives neither of you anything.',
       ...(left === undefined ? [] : [`Open codes you can still make: ${String(left)}.`]),
     ].join('\n'),
   };
