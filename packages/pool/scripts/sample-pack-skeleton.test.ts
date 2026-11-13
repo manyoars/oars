@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, wr
 import { tmpdir } from 'node:os';
 import { join, relative, sep } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { LITERAL, PRIVATE, PUBLIC_PROGRAMS } from '../../cli/src/sessions/public-vocabulary.js';
 import { deposit, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { buildPack, HARNESS_TERMS, main, PERMITTED_USES, type ManifestRow, type PackOptions } from './sample-pack.js';
 import { cardOf, writeCard } from './skeleton-card.js';
@@ -18,10 +19,24 @@ afterEach(() => {
 const S = (n: number): string => `${String(n).repeat(8)}-1111-4111-8111-111111111111`;
 const line = (value: object): string => JSON.stringify(value);
 const uuidOf = (session: string, kind: 'a' | 'b', n: number): string => `${session.slice(0, 8)}-${kind}${String(n).padStart(3, '0')}-4222-8222-222222222222`;
-const session = (id: string, cwd: string, day: string, prompt: string): string[] => [
+const session = (id: string, cwd: string, day: string, prompt: string, tools = false): string[] => [
   line({ type: 'user', uuid: uuidOf(id, 'b', 1), parentUuid: null, isSidechain: false, timestamp: `${day}T10:00:01.000Z`, version: '2.1.300', sessionId: id, cwd, message: { role: 'user', content: prompt } }),
   line({ type: 'assistant', uuid: uuidOf(id, 'a', 1), parentUuid: uuidOf(id, 'b', 1), isSidechain: false, timestamp: `${day}T10:00:02.000Z`, version: '2.1.300', sessionId: id, requestId: `req_011C${id.slice(0, 8)}x1`, message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'done' }], usage: { input_tokens: 10, output_tokens: 20 } } }),
+  ...(tools ? toolTurns(id, cwd, day) : []),
 ];
+// A Bash call with free text in its message, an Edit of a file path, and a failed tool result: the keys the skeleton carries for tools.
+const toolTurns = (id: string, cwd: string, day: string): string[] => {
+  const use = (n: number, name: string, input: object): string =>
+    line({ type: 'assistant', uuid: uuidOf(id, 'a', n), parentUuid: uuidOf(id, 'a', n - 1), isSidechain: false, timestamp: `${day}T10:00:0${String(n + 1)}.000Z`, version: '2.1.300', sessionId: id, cwd, requestId: `req_011C${id.slice(0, 8)}x${String(n)}`, message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: `toolu_${id.slice(0, 8)}${String(n)}`, name, input }], usage: { input_tokens: 10, output_tokens: 20 } } });
+  const result = (n: number, text: string, failed: boolean): string =>
+    line({ type: 'user', uuid: uuidOf(id, 'b', n), parentUuid: uuidOf(id, 'a', n), isSidechain: false, timestamp: `${day}T10:00:0${String(n + 1)}.500Z`, version: '2.1.300', sessionId: id, cwd, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `toolu_${id.slice(0, 8)}${String(n)}`, content: text, is_error: failed }] } });
+  return [
+    use(2, 'Bash', { command: 'git commit -m "rename the secret helper in parse.ts"', run_in_background: true }),
+    result(2, 'fatal: not a git repository', true),
+    use(3, 'Edit', { file_path: join(cwd, 'src', 'parse.ts'), old_string: 'a', new_string: 'b' }),
+    result(3, 'ok', false),
+  ];
+};
 
 // The free-text audit: every string in the output is judged by its key. A key this list does not name fails, so a new field cannot carry text in unseen.
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -30,8 +45,15 @@ const DATE = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z)?$/;
 const VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,40}$/;
 // A redacted name: one word, no whitespace, no path separator, short. `private` is a name too.
 const NAME = /^[^\s/\\]{1,64}$/;
-// A shell template: words that each are a name or a slot, short.
-const TEMPLATE = /^(?:[^\s]{1,40} ?){1,12}$/;
+// A shell template: the first word is a program from the gated list (or the unread and path stand-ins), and every other word is a slot, a flag, or a name.
+const SLOT = /^<[a-z]{1,12}>$/;
+const FLAG = /^--?[A-Za-z0-9][\w-]{0,40}$/;
+const TEMPLATE = (value: string): boolean => {
+  const [program = '', ...rest] = value.split(' ');
+  return (PUBLIC_PROGRAMS.has(program) || [LITERAL, PRIVATE, '<path>'].includes(program)) && rest.length <= 12 && rest.every((word) => SLOT.test(word) || FLAG.test(word) || NAME.test(word));
+};
+// The owners the fixture's owners file names: a closed list for the build.
+const OWNERS = ['Many Oars Co.'];
 const TERMS = Object.values(HARNESS_TERMS).flatMap((row) => row.terms);
 const oneOf = (...allowed: readonly string[]) => (value: string): boolean => allowed.includes(value);
 const RULES: { readonly [key: string]: (value: string) => boolean } = {
@@ -40,13 +62,18 @@ const RULES: { readonly [key: string]: (value: string) => boolean } = {
   harness: oneOf(...Object.keys(HARNESS_TERMS)), permittedUses: oneOf(...PERMITTED_USES), training: oneOf('not-offered', 'priced-add-on'), reasoning: oneOf('kept', 'stripped'),
   harnessVersions: (v) => VERSION.test(v), harnessVersion: (v) => VERSION.test(v), vocabVersion: (v) => VERSION.test(v), redactionVersion: (v) => VERSION.test(v),
   skeleton: oneOf('skeleton.json'), sourceLicense: (v) => /^[A-Za-z0-9.+-]{1,40}$/.test(v),
-  repoOwner: (v) => /^[^\n\\/]{1,64}$/.test(v) && !/[@:]/.test(v),
+  repoOwner: oneOf(...OWNERS),
   // The harness terms are the fixed text of the terms table, not session text.
   name: (v) => TERMS.some((term) => term.name === v) || NAME.test(v), version: (v) => TERMS.some((term) => term.version === v),
   model: (v) => NAME.test(v), platform: (v) => NAME.test(v), orgSize: (v) => NAME.test(v), team: (v) => NAME.test(v), repoVisibility: (v) => NAME.test(v),
   cls: (v) => NAME.test(v), intervention: (v) => NAME.test(v), status: (v) => NAME.test(v), errorCode: (v) => NAME.test(v), targetClass: (v) => NAME.test(v),
   argClass: (v) => NAME.test(v), changeKind: (v) => NAME.test(v), diffShape: (v) => NAME.test(v), keys: (v) => NAME.test(v), kind: (v) => NAME.test(v), value: (v) => NAME.test(v), format: (v) => NAME.test(v),
-  templates: (v) => TEMPLATE.test(v),
+  templates: TEMPLATE,
+  // pack.json: the build's own bookkeeping. `seed` has no rule, so a free-text --seed written there fails.
+  built: (v) => DATE.test(v), keyId: (v) => HEX16.test(v), objections: (v) => HEX64.test(v),
+  // Skeleton fields the first fixture did not reach: each is a name or a size, and the program is from the gated list.
+  shell: (v) => NAME.test(v), language: (v) => NAME.test(v), languages: (v) => NAME.test(v), languageShare: (v) => NAME.test(v), next: (v) => NAME.test(v), action: (v) => NAME.test(v), native: (v) => NAME.test(v),
+  program: (v) => PUBLIC_PROGRAMS.has(v) || [LITERAL, PRIVATE].includes(v), sub: (v) => NAME.test(v), flags: (v) => FLAG.test(v), key: (v) => NAME.test(v), valueSize: (v) => /^[0-9a-z+-]{1,12}$/.test(v), pathDepth: (v) => /^\d{1,3}\+?$/.test(v), extension: (v) => NAME.test(v), dirKind: (v) => NAME.test(v),
 };
 
 const audit = (value: unknown, where: string, key = ''): string[] => {
@@ -77,7 +104,7 @@ const fixture = async (): Promise<Built> => {
   const days = ['2026-06-01', '2026-09-01', '2026-10-13', '2026-11-11', '2026-06-02'];
   days.forEach((day, n) => {
     mkdirSync(join(projectsRoot, '-work-oars'), { recursive: true });
-    writeFileSync(join(projectsRoot, '-work-oars', `${S(n + 1)}.jsonl`), `${session(S(n + 1), cwd, day, n === 4 ? `please fix ${TERM}` : `task number ${String(n)}`).join('\n')}\n`);
+    writeFileSync(join(projectsRoot, '-work-oars', `${S(n + 1)}.jsonl`), `${session(S(n + 1), cwd, day, n === 4 ? `please fix ${TERM}` : `task number ${String(n)}`, n === 0).join('\n')}\n`);
   });
   const terms = join(root, 'terms.txt');
   writeFileSync(terms, `${TERM}\n`);
@@ -148,6 +175,24 @@ describe('a skeleton-only build', () => {
     expect((await validate(opts.out))?.violations.some((v) => v.field === 'skeleton')).toBe(true);
   });
 
+  it('allows README.md at the root only when every row says 0, and refuses a pack that mixes the two kinds of row', async () => {
+    const f = await fixture();
+    const full = f.options();
+    await buildPack(f.runtime, full);
+    expect((await validate(full.out))?.violations).toEqual([]);
+    writeFileSync(join(full.out, 'README.md'), 'a card
+');
+    expect((await validate(full.out))?.violations.some((v) => v.where === 'README.md')).toBe(true);
+    rmSync(join(full.out, 'README.md'));
+    // One row rewritten to say 0, its transcripts removed: the pack now mixes the two kinds.
+    const rows = manifest(full.out);
+    const [first] = rows;
+    for (const file of readdirSync(join(full.out, 'sessions', first?.matchId ?? ''))) if (file.endsWith('.jsonl')) rmSync(join(full.out, 'sessions', first?.matchId ?? '', file));
+    writeFileSync(join(full.out, 'manifest.jsonl'), rows.map((row, at) => `${JSON.stringify(at === 0 ? { ...row, transcripts: 0 } : row)}
+`).join(''));
+    expect((await validate(full.out))?.violations.some((v) => v.field === 'transcripts' && /mixes/.test(v.rule))).toBe(true);
+  });
+
   it('leaves out a session that holds an exclusion term, counted by reason', async () => {
     const f = await fixture();
     const opts = f.options({ skeletonOnly: true });
@@ -191,21 +236,40 @@ describe('a skeleton-only build', () => {
     await expect(buildPack(f.runtime, f.options({ skeletonOnly: true, excludeManifest: join(f.root, 'absent.jsonl') }))).rejects.toThrow(/Cannot read the --exclude-manifest file/);
   });
 
-  it('writes only strings from a closed list, a redacted name, or private', async () => {
+  it('writes only strings from a closed list, a redacted name, or private, in every json file and the manifest', async () => {
     const f = await fixture();
-    const opts = f.options({ skeletonOnly: true });
+    const opts = f.options({ skeletonOnly: true, seed: 'fix the login bug for acme' });
     await buildPack(f.runtime, opts);
-    const documents = names(opts.out).filter((name) => name.endsWith('.json') && name !== 'pack.json').map((name): [string, unknown] => [name, JSON.parse(readFileSync(join(opts.out, name), 'utf8'))]);
+    const documents = names(opts.out).filter((name) => name.endsWith('.json')).map((name): [string, unknown] => [name, JSON.parse(readFileSync(join(opts.out, name), 'utf8'))]);
     documents.push(['manifest.jsonl', manifest(opts.out)]);
     const bad = documents.flatMap(([name, document]) => audit(document, name.replace(/[0-9a-f]{64}/, '<id>')));
     expect(bad).toEqual([]);
-    expect(documents.length).toBeGreaterThan(3);
+    expect(documents.map(([name]) => name)).toContain('pack.json');
+    // The fixture reaches the tool keys: the audited skeletons carry them, so their rules ran on real output.
+    const text = JSON.stringify(documents);
+    for (const key of ['names', 'templates', 'keys', 'argValues', 'errorCode', 'recovery', 'recoveryCalls']) expect(text, key).toContain(`"${key}"`);
+    expect(text).toContain('git commit -m <text>');
+    // A free-text --seed does not reach pack.json.
+    expect(JSON.parse(readFileSync(join(opts.out, 'pack.json'), 'utf8'))).not.toHaveProperty('seed');
+    expect(text).not.toContain('login bug');
+  });
+
+  it('stamps built from the build clock, not the wall clock', async () => {
+    const f = await fixture();
+    const opts = f.options({ skeletonOnly: true });
+    await buildPack(f.runtime, opts);
+    expect(JSON.parse(readFileSync(join(opts.out, 'pack.json'), 'utf8'))).toMatchObject({ built: new Date(NOW).toISOString() });
+    expect(readFileSync(join(opts.out, 'README.md'), 'utf8')).toContain('(2026-11-13)');
   });
 
   it('the audit fails on free text, an unknown field, and a raw id', () => {
     expect(audit({ model: 'please rename the helper in parse.ts' }, 'x')).toHaveLength(1);
     expect(audit({ note: 'private' }, 'x')).toHaveLength(1);
     expect(audit({ harness: 'someone-elses-harness' }, 'x')).toHaveLength(1);
+    expect(audit({ seed: 'fix the login bug' }, 'x')).toHaveLength(1);
+    expect(audit({ repoOwner: 'Someone Else Inc.' }, 'x')).toHaveLength(1);
+    expect(audit({ templates: ['please fix the bug now'] }, 'x')).toHaveLength(1);
+    expect(audit({ templates: ['git commit -m <text>', 'pytest <path> -k <ident>'] }, 'x')).toEqual([]);
     expect(audit({ id: '11111111-1111-4111-8111-111111111111' }, 'x')).toHaveLength(1);
     expect(audit({ day: 'last tuesday' }, 'x')).toHaveLength(1);
     expect(audit({ model: 'private', templates: ['git commit -m <text>'], names: [{ name: 'parse.ts' }] }, 'x')).toEqual([]);
@@ -220,7 +284,7 @@ describe('the data card', () => {
     const card = readFileSync(join(opts.out, 'README.md'), 'utf8');
     expect(card).toContain('3 coding-agent session skeletons');
     expect(card).toContain('at least 30 days');
-    for (const fact of ['CC BY 4.0', 'agent-traces', 'validate-pack', 'https://manyoars.com/packs', 'transcripts: 0']) expect(card).toContain(fact);
+    for (const fact of ['license: other', 'license_link: https://manyoars.com/packs#rights', 'agent-traces', 'validate-pack', 'https://manyoars.com/packs', 'transcripts: 0']) expect(card).toContain(fact);
     expect(card).toMatchSnapshot();
     const wider = f.options({ skeletonOnly: true, olderThanDays: 60 });
     await buildPack(f.runtime, wider);
