@@ -384,7 +384,12 @@ describe('the deltas a deposit carries', () => {
     const asked: number[] = [];
     const load = (ids: ReadonlySet<string>): Promise<ReadonlyMap<string, SessionRecords>> => {
       asked.push(ids.size);
-      return Promise.resolve(new Map([...ids].flatMap((id) => (held.has(id) ? [[id, held.get(id) as SessionRecords] as const] : []))));
+      const found = new Map<string, SessionRecords>();
+      for (const id of ids) {
+        const records = held.get(id);
+        if (records !== undefined) found.set(id, records);
+      }
+      return Promise.resolve(found);
     };
     const byWindow = await carriedDeltasByWindow('acct', sessions, new Set(), load);
     expect(byWindow).toEqual(carriedDeltas('acct', sessions, new Set()));

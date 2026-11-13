@@ -659,16 +659,17 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
 
 /** What `--send-all` does with the pool's busy answers: a 429 or a 5xx is asked again, up to `SEND_ATTEMPTS` in all, after the wait the pool names in `retry-after` (seconds, at most 30) or else 1 second, then 2. Any other answer, and a request that never got one, goes up unchanged. A batch or a part sent again is harmless, so the retry covers every request alike. */
 export type Pause = (ms: number, signal?: AbortSignal) => Promise<void>;
+const reasonOf = (signal: AbortSignal | undefined): Error => (signal?.reason instanceof Error ? signal.reason : new Error('Interrupted.'));
 export const sleeps: Pause = (ms, signal) =>
   new Promise((resolve, reject) => {
     // Ctrl-C during a wait ends it with the interrupt, instead of being ignored until the wait is over.
     if (signal?.aborted === true) {
-      reject(signal.reason);
+      reject(reasonOf(signal));
       return;
     }
     const abort = (): void => {
       clearTimeout(timer);
-      reject(signal?.reason);
+      reject(reasonOf(signal));
     };
     const timer = setTimeout(() => {
       signal?.removeEventListener('abort', abort);
