@@ -79,7 +79,7 @@ const seed = async (account: string, tag: string): Promise<void> => {
   // One deposit carries the provenance migration 0025 stamps: the machine that sent it, its class and launcher, and what the batch claimed; and the country its request came from (migration 0035).
   await db.prepare("UPDATE deposits SET machine = ?, host_class = 'vps', launcher = 'scheduled', claimed_host_class = 'cloud', claimed_launcher = 'cron', request_country = 'DE' WHERE account = ? AND id = ?").bind(`machine-${tag}`, account, `${tag}-s1`).run();
   await db.prepare("INSERT INTO deposits (account, id, skeleton, tier, extensions, deltas, erased_on) VALUES (?, ?, ?, 'skeleton', '[]', '[]', '2026-11-01')").bind(account, `${tag}-gone`, '{"erased":"lawful-request"}').run();
-  await db.prepare('INSERT INTO raw_objects (account, sha256, bytes, capture_version, redaction_version, stored_at) VALUES (?, ?, 11, ?, ?, ?)').bind(account, sha256(`${tag}-held`), 'cap-1', 'red-1', 1_700_000_100_000).run();
+  await db.prepare('INSERT INTO raw_objects (account, sha256, bytes, capture_version, redaction_version, stored_at, deposit, place) VALUES (?, ?, 11, ?, ?, ?, ?, ?)').bind(account, sha256(`${tag}-held`), 'cap-1', 'red-1', 1_700_000_100_000, 'a1b2c3d4e5f60718', 0).run();
   await db.prepare('INSERT INTO raw_objects (account, sha256, bytes, capture_version, redaction_version, stored_at, erased_on) VALUES (?, ?, 7, ?, ?, ?, ?)').bind(account, sha256(`${tag}-erased`), 'cap-1', 'red-1', 1_700_000_200_000, '2026-11-02').run();
   await db.prepare('INSERT INTO account_repo_keys (account, repo_key) VALUES (?, ?)').bind(account, `repo-${tag}`).run();
   await db.prepare('INSERT INTO deposit_hours (account, day, hour) VALUES (?, ?, ?)').bind(account, '2026-11-01', 9).run();
@@ -167,8 +167,8 @@ describe('GET /v1/account/export', () => {
     // The ledger lists the held object and the tombstoned one, each by the key it is stored under.
     expect(rowsOf(pages, 'rawLedger')).toEqual(
       expect.arrayContaining([
-        { key: `raw/${mine.account}/${sha256('mine-held')}`, sha256: sha256('mine-held'), bytes: 11, captureVersion: 'cap-1', redactionVersion: 'red-1', storedAt: 1_700_000_100_000, tombstone: null },
-        { key: `raw/${mine.account}/${sha256('mine-erased')}`, sha256: sha256('mine-erased'), bytes: 7, captureVersion: 'cap-1', redactionVersion: 'red-1', storedAt: 1_700_000_200_000, tombstone: '2026-11-02' },
+        { key: `raw/${mine.account}/${sha256('mine-held')}`, sha256: sha256('mine-held'), bytes: 11, captureVersion: 'cap-1', redactionVersion: 'red-1', storedAt: 1_700_000_100_000, deposit: 'a1b2c3d4e5f60718', place: 0, tombstone: null },
+        { key: `raw/${mine.account}/${sha256('mine-erased')}`, sha256: sha256('mine-erased'), bytes: 7, captureVersion: 'cap-1', redactionVersion: 'red-1', storedAt: 1_700_000_200_000, deposit: null, place: null, tombstone: '2026-11-02' },
       ]),
     );
     expect(rowsOf(pages, 'rawLedger')).toHaveLength(2);
