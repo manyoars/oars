@@ -1,11 +1,11 @@
 // The first sale's sample pack (P98 (10) to (12)): fixture stores, built in a temp folder, with an invented term and invented instruction text.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type * as Exclusion from '../../cli/src/sessions/exclusion.js';
 import { SKELETON_FORMAT, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { deposit, loadStore, paths, type SessionsRuntime } from '../../cli/src/sessions/store.js';
@@ -413,8 +413,12 @@ describe('the skeleton and the manifest fields it adds (plan S3)', () => {
   });
 });
 
-// Each of these runs several real git processes, and a Windows runner spends seconds on them.
-describe('the repository pointer and the outcome (plan S4)', { timeout: 30_000 }, () => {
+// Each of these runs real git processes, and a Windows runner spends seconds on each: process creation is the cost, so the bound below counts processes.
+// A test starts at most POINTER_PROCESSES (the product's reads plus the test's own commands, counted from a git trace) and a process took at most 3 s in the
+// worst measured loaded run (a spawn timed under eight concurrent spawners: median 1.2 s, max 2.9 s): 20 x 3 s, so 60 s. The template below takes 15.
+const POINTER_PROCESSES = 20;
+const PROCESS_BOUND_MS = 3_000;
+describe('the repository pointer and the outcome (plan S4)', { timeout: POINTER_PROCESSES * PROCESS_BOUND_MS }, () => {
   const REMOTE = 'https://example.com/acme/app.git';
   const OPTED_IN = [{ folder: '*-oars*', owner: 'Many Oars Co.', license: 'Apache-2.0', pointer: true }];
 
@@ -436,7 +440,7 @@ describe('the repository pointer and the outcome (plan S4)', { timeout: 30_000 }
   }
 
   // `main` is checked out and is the remote's default branch; `feature` holds one more, newer commit. A session on `feature` that read HEAD would get the wrong one.
-  const makeRepo = (repo: string): Shas => {
+  const buildRepo = (repo: string): Shas => {
     mkdirSync(repo, { recursive: true });
     git(repo, ['init', '-q', '-b', 'main']);
     git(repo, ['remote', 'add', 'origin', REMOTE]);
@@ -448,6 +452,23 @@ describe('the repository pointer and the outcome (plan S4)', { timeout: 30_000 }
     git(repo, ['update-ref', 'refs/remotes/origin/main', onMain]);
     git(repo, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);
     return { base, onMain, onFeature };
+  };
+
+  // Every test starts from the same repository, and building it costs 15 git processes: it is built once and each test copies the folder, which starts none.
+  // The commit dates, names, and messages are fixed, so the shas do not depend on where the repository sits.
+  let template = '';
+  let templateShas: Shas = { base: '', onMain: '', onFeature: '' };
+  beforeAll(() => {
+    template = mkdtempSync(join(tmpdir(), 'oars-pointer-template-'));
+    templateShas = buildRepo(template);
+  }, 15 * PROCESS_BOUND_MS);
+  afterAll(() => {
+    rmSync(template, { recursive: true, force: true });
+  });
+
+  const makeRepo = (repo: string): Shas => {
+    cpSync(template, repo, { recursive: true });
+    return templateShas;
   };
 
   const pointerOf = (row: ManifestRow | undefined): unknown => (row === undefined ? undefined : Reflect.get(row, 'pointer'));
