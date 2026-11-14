@@ -10,6 +10,7 @@ import { deposit, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { namesFilterOf } from './skeleton-only.js';
 import { buildPack, HARNESS_TERMS, main, NO_OBJECTIONS, PERMITTED_USES, type ManifestRow, type PackOptions } from './sample-pack.js';
 import { cardOf, writeCard } from './skeleton-card.js';
+import { TRACE_RULE, traceOf } from './skeleton-trace.js';
 import { validate } from './validate-pack.js';
 
 const TERM = 'zorblax';
@@ -104,6 +105,14 @@ const CARD_TABLES: { readonly [title: string]: string } = {
   'Sessions per harness': 'harness', 'Sessions per harness version': 'harnessVersion', 'Prompts per model': 'model', 'Failed calls per error code': 'errorCode',
   'Failed calls by what followed': 'recovery', 'Prompts per human intervention': 'intervention', 'Sessions per turn bucket (lowest turn count of the bucket)': 'turnBucket',
 };
+// PACKS_FIT on the marketing site's packs page, copied here so a drift in the card fails.
+const FIT_ROWS = [
+  ['Building tasks or evals from real sessions', 'Yes. The sessions are raw inputs you turn into tasks.'],
+  ["Studying how a coding agent's tool calls fail", 'Yes. You get the structure and sequence of the steps and errors. No label says a later edit fixed anything.'],
+  ['Training a model', 'Not offered.'],
+  ['A ready-made scored benchmark', 'Not included. A session has no score and no pass or fail label.'],
+] as const;
+const escapeRe = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const CARD_LINES: readonly RegExp[] = [
   /^$/, /^---$/, /^license: other$/, /^license_link: https:\/\/manyoars\.com\/packs#rights$/, /^tags:$/, /^ {2}- agent-traces$/, /^# Many Oars: open session skeletons$/, /^## What is counted$/,
   /^\d+ coding-agent session skeletons, published by Many Oars Co\., each a record of the session's steps, errors, recoveries, and human interventions\. No transcript text is in this release, and every session ended at least \d+ days before it was built( \(\d{4}-\d{2}-\d{2}\))?\.$/,
@@ -112,6 +121,20 @@ const CARD_LINES: readonly RegExp[] = [
   /^- Layout: `manifest\.jsonl` \(one row per session, `transcripts: 0`\), `sessions\/<match id>\/skeleton\.json`, `census\.json` \(counts only\), and `pack\.json` \(how it was built\)\.$/,
   /^- Check it: `npm run validate-pack -w packages\/pool -- <this folder>` in the Many Oars repository \(spec: `docs\/session-record\.md`\)\. It needs no key, account, or network\.$/,
   /^- Fresher sessions, whole transcripts, and rights for use: https:\/\/manyoars\.com\/packs\.$/,
+  /^## Is a pack right for you\?$/, /^What a pack is for, and what it is not\.$/, /^\| Use \| Answer \|$/, /^\|---\|---\|$/,
+  ...FIT_ROWS.map(([use, answer]) => new RegExp(`^\\| ${escapeRe(use)} \\| ${escapeRe(answer)} \\|$`)),
+  /^## Try the free sample first$/,
+  /^The free transcript sample comes before any payment\. Ask for it at https:\/\/manyoars\.com\/packs, or write to support@manyoars\.com with the subject "Session pack sample"\. Tell us what you are evaluating\. A person answers\.$/,
+  /^A sample of our first lot goes to anyone who asks, with no form and no name\.$/,
+  /^## A worked trace$/,
+  new RegExp(`^This trace is built from one session in this pack, picked by a fixed rule: ${escapeRe(TRACE_RULE)}\\. It is generated from that session's record, not written by hand\\. It shows structure\\. It does not show that the session worked, or that it fits your task\\.$`),
+  /^- Session: `sessions\/[0-9a-f]{64}\/skeleton\.json`\.$/,
+  /^- Prompt: `transcripts\[0\]\.prompts\[\d+\]`\. Class (`[a-z-]+`|unresolved), (\d+ failed calls?|failed calls unresolved), intervention (`[a-z-]+`|unresolved)\. The prompt words are not in this pack\.$/,
+  /^- Prompt: unresolved\. The call names no prompt\. The prompt words are not in this pack\.$/,
+  /^- Tool steps: (`transcripts\[0\]\.tools\[\d+\]` is (`[a-z.]+`|unresolved), (`[a-z]+`|unresolved)\.( |$))+$/,
+  /^- Observed result: `transcripts\[0\]\.tools\[\d+\]` ended (`[a-z]+`|unresolved)( with error code (`[\w-]+`|unresolved))?\.( The next calls were (none|(`[a-z.]+`|unresolved)(, (`[a-z.]+`|unresolved))*); (a file write followed|no file write followed)\.)?$/,
+  /^- Candidate task: (from `transcripts\[0\]\.prompts\[\d+\]` and `transcripts\[0\]\.tools\[\d+\]` to `transcripts\[0\]\.tools\[\d+\]`|from `transcripts\[0\]\.tools\[\d+\]` to `transcripts\[0\]\.tools\[\d+\]`|at `transcripts\[0\]\.tools\[\d+\]`), build a task that checks how an agent recovers\. You would write the repository state and the grader\.$/,
+  /^- Unresolved: the repository and commit, the expected answer, the grader or replay command, and the prompt text\. This pack holds none of them\.$/,
 ];
 const auditCard = (text: string): string[] => {
   let table = '';
@@ -348,6 +371,118 @@ describe('the data card', () => {
     expect(auditCard(good.replace('Prompts per model', 'Prompts about acme'))).not.toEqual([]);
   });
 
+  it('shows the fit table: each row holds its own answer, and no answer sits in another row', async () => {
+    const f = await fixture();
+    const opts = f.options({ skeletonOnly: true });
+    await buildPack(f.runtime, opts);
+    const rows = readFileSync(join(opts.out, 'README.md'), 'utf8').split('\n').filter((row) => row.startsWith('| '));
+    expect(rows).toHaveLength(FIT_ROWS.length + 1);
+    FIT_ROWS.forEach(([use, answer], at) => {
+      expect(rows[at + 1]).toBe(`| ${use} | ${answer} |`);
+      for (const other of rows.filter((_row, index) => index !== at + 1)) expect(other).not.toContain(answer);
+    });
+  });
+
+  it('puts the free sample before any payment, ahead of the counts', async () => {
+    const f = await fixture();
+    const opts = f.options({ skeletonOnly: true });
+    await buildPack(f.runtime, opts);
+    const card = readFileSync(join(opts.out, 'README.md'), 'utf8');
+    expect(card).toContain('The free transcript sample comes before any payment.');
+    expect(card).toContain('https://manyoars.com/packs');
+    expect(card).toContain('support@manyoars.com');
+    expect(card.indexOf('## Try the free sample first')).toBeGreaterThan(-1);
+    expect(card.indexOf('## Try the free sample first')).toBeLessThan(card.indexOf('## What is counted'));
+  });
+
+  it('builds the worked trace from a kept session of the pack, and every pointer lands on a real field', async () => {
+    const f = await fixture();
+    const opts = f.options({ skeletonOnly: true });
+    await buildPack(f.runtime, opts);
+    const card = readFileSync(join(opts.out, 'README.md'), 'utf8');
+    const ids = manifest(opts.out).map((row) => row.matchId);
+    const picked = /^- Session: `sessions\/([0-9a-f]{64})\/skeleton\.json`\.$/m.exec(card)?.[1] ?? '';
+    expect(ids).toContain(picked);
+    interface Record {
+      transcripts: { prompts: { cls: string }[]; tools: { status: string; errorCode: string | null }[] }[];
+    }
+    const isRecord = (value: unknown): value is Record => typeof value === 'object' && value !== null && 'transcripts' in value;
+    const read = (id: string): Record => {
+      const value: unknown = JSON.parse(readFileSync(join(opts.out, 'sessions', id, 'skeleton.json'), 'utf8'));
+      if (!isRecord(value)) throw new Error('a skeleton with no transcripts');
+      return value;
+    };
+    const failedOf = (id: string): number => read(id).transcripts[0]?.tools.filter((tool) => tool.status === 'error').length ?? 0;
+    // The rule: most failed calls, then the lowest id. Only session 1 holds tool calls in the fixture.
+    expect(failedOf(picked)).toBe(Math.max(...ids.map(failedOf)));
+    expect(failedOf(picked)).toBeGreaterThan(0);
+    const [main] = read(picked).transcripts;
+    const at = Number(/Observed result: `transcripts\[0\]\.tools\[(\d+)\]` ended `error`/.exec(card)?.[1]);
+    expect(main?.tools[at]?.status).toBe('error');
+    expect(card).toContain(`with error code \`${main?.tools[at]?.errorCode ?? ''}\``);
+    const promptAt = Number(/Prompt: `transcripts\[0\]\.prompts\[(\d+)\]`/.exec(card)?.[1]);
+    expect(card).toContain(`Class \`${main?.prompts[promptAt]?.cls ?? ''}\``);
+    expect(card).toContain('The prompt words are not in this pack.');
+    // The candidate line names the prompt and the tool entries it runs between, and each is a real field.
+    const candidate = /^- Candidate task: from `transcripts\[0\]\.prompts\[(\d+)\]` and `transcripts\[0\]\.tools\[(\d+)\]` to `transcripts\[0\]\.tools\[(\d+)\]`,/m.exec(card);
+    expect(candidate).not.toBeNull();
+    expect(Number(candidate?.[1])).toBe(promptAt);
+    expect(main?.prompts[Number(candidate?.[1])]).toBeDefined();
+    expect(main?.tools[Number(candidate?.[2])]).toBeDefined();
+    expect(Number(candidate?.[3])).toBe(at);
+    expect(Number(candidate?.[2])).toBeLessThanOrEqual(at);
+    expect(card).not.toMatch(/verified|proven|works for you/);
+    // The same build again gives the same card: the rule has no clock or random in it.
+    const again = f.options({ skeletonOnly: true });
+    await buildPack(f.runtime, again);
+    expect(readFileSync(join(again.out, 'README.md'), 'utf8')).toBe(card);
+  });
+
+  it('masks the trace like the rest of the pack: a kept file name, the raw session id, and the working folder never reach it', async () => {
+    const f = await fixture('secret-helper.ts');
+    const opts = f.options({ skeletonOnly: true });
+    await buildPack(f.runtime, opts);
+    const card = readFileSync(join(opts.out, 'README.md'), 'utf8');
+    const held = manifest(opts.out).filter((row) => readFileSync(join(opts.out, 'sessions', row.matchId, 'skeleton.json'), 'utf8').includes('secret-helper.ts'));
+    expect(held.length).toBeGreaterThan(0);
+    expect(card).toContain('## A worked trace');
+    for (const raw of ['secret-helper', 'secret', 'parse.ts', S(1), '11111111', 'acme', join(f.root, 'work'), '/work/app']) expect(card, raw).not.toContain(raw);
+    expect(auditCard(card)).toEqual([]);
+  });
+
+  it('prints only closed-list values: a name where a class, action, or code belongs reads unresolved', () => {
+    const skeleton = { transcripts: [{ prompts: [{ cls: 'robin-notes', errors: 'x', intervention: 'robin' }], tools: [{ prompt: 0, status: 'robin', errorCode: 'robin', steps: [{ action: 'robin-plan' }], recoveryCalls: { next: ['robin', 'file.edit'], editFollowed: false } }] }] };
+    const text = traceOf([{ matchId: 'a'.repeat(64), skeleton }]).join('\n');
+    expect(text.toLowerCase()).not.toContain('robin');
+    expect(text).toContain('Class unresolved, failed calls unresolved, intervention unresolved.');
+    expect(text).toContain('is unresolved, unresolved.');
+    expect(text).toContain('ended unresolved with error code unresolved.');
+    expect(text).toContain('The next calls were unresolved, `file.edit`; no file write followed.');
+    expect(auditCard(text)).not.toContain('README.md:3 line');
+  });
+
+  it('picks the session with the most failed calls, then the lowest match id, and none for a bad id or a session with no calls', () => {
+    const call = (status: string): object => ({ prompt: null, status, steps: [{ action: 'shell.exec' }] });
+    const skeleton = (...statuses: string[]): object => ({ transcripts: [{ prompts: [], tools: statuses.map(call) }] });
+    const [low, high] = ['1'.repeat(64), '2'.repeat(64)] as const;
+    const pick = (inputs: { matchId: string; skeleton: unknown }[]): string => /sessions\/([0-9a-f]+)\//.exec(traceOf(inputs).join('\n'))?.[1] ?? 'none';
+    expect(pick([{ matchId: high, skeleton: skeleton('ok', 'error') }, { matchId: low, skeleton: skeleton('ok') }])).toBe(high);
+    expect(pick([{ matchId: high, skeleton: skeleton('error') }, { matchId: low, skeleton: skeleton('error') }])).toBe(low);
+    expect(pick([{ matchId: low, skeleton: skeleton() }, { matchId: 'not an id', skeleton: skeleton('error') }])).toBe('none');
+    const quiet = traceOf([{ matchId: low, skeleton: skeleton('ok') }]).join('\n');
+    expect(quiet).toContain('- Prompt: unresolved. The call names no prompt.');
+    expect(quiet).toContain('ended `ok`.');
+    expect(quiet).not.toContain('error code');
+    const counted = (errors: number): string => traceOf([{ matchId: low, skeleton: { transcripts: [{ prompts: [{ cls: 'mixed', errors, intervention: 'none' }], tools: [{ prompt: 0, status: 'error', steps: [] }] }] } }]).join('\n');
+    expect(counted(1)).toContain('1 failed call,');
+    expect(counted(2)).toContain('2 failed calls,');
+    const lone = traceOf([{ matchId: low, skeleton: skeleton('ok') }]).join('\n');
+    expect(lone).toContain('- Candidate task: at `transcripts[0].tools[0]`, build a task');
+    const spread = { transcripts: [{ prompts: [], tools: [{ prompt: null, status: 'ok' }, { prompt: null, status: 'error' }] }] };
+    expect(traceOf([{ matchId: low, skeleton: spread }]).join('\n')).toContain('- Candidate task: from `transcripts[0].tools[0]` to `transcripts[0].tools[1]`, build a task');
+    expect(traceOf([])).toEqual([]);
+  });
+
   it('refuses a census or pack whose numbers are not numbers', () => {
     expect(() => cardOf({ olderThanDays: 30 }, { sessions: 'x' })).toThrow(/census sessions/);
     expect(() => cardOf({}, { sessions: 1 })).toThrow(/olderThanDays/);
@@ -364,6 +499,19 @@ describe('the data card', () => {
     expect(card).toContain('9 coding-agent session skeletons');
     expect(card).toContain('- `claude-code`: 9');
     expect(card).toContain('(2026-11-13)');
+  });
+
+  it('writeCard skips a manifest id that is not a match id, so a hand-edited row cannot steer a read', async () => {
+    const f = await fixture();
+    const folder = join(f.root, 'card2');
+    mkdirSync(folder);
+    writeFileSync(join(folder, 'pack.json'), JSON.stringify({ olderThanDays: 7, built: '2026-11-13T00:00:00Z' }));
+    writeFileSync(join(folder, 'census.json'), JSON.stringify({ sessions: 1, harness: {}, harnessVersion: {}, model: {}, errorCode: {}, recovery: {}, intervention: {}, promptClass: {}, turnBucket: {} }));
+    writeFileSync(join(folder, 'manifest.jsonl'), `${JSON.stringify({ matchId: '../../outside' })}
+${JSON.stringify({ matchId: 'ab' })}
+`);
+    await writeCard(folder);
+    expect(readFileSync(join(folder, 'README.md'), 'utf8')).not.toContain('## A worked trace');
   });
 });
 
@@ -465,7 +613,13 @@ describe('the names filter', () => {
     const f = await fixture(`${S(1)}.jsonl`);
     const words = join(f.root, 'names.txt');
     writeFileSync(words, '8111\n');
-    expect(await buildPack(f.runtime, f.options({ skeletonOnly: true, excludeNames: words }))).toMatchObject({ emitted: 3, namesFiltered: 0 });
+    const opts = f.options({ skeletonOnly: true, excludeNames: words });
+    expect(await buildPack(f.runtime, opts)).toMatchObject({ emitted: 3, namesFiltered: 0 });
+    // The kept skeletons hold the file name, with its `.jsonl` ending and without the raw id's fragment.
+    const kept = manifest(opts.out).flatMap((row) => readFileSync(join(opts.out, 'sessions', row.matchId, 'skeleton.json'), 'utf8').match(/"name": "[^"]*"/g) ?? []);
+    const jsonl = kept.filter((entry) => entry.endsWith('.jsonl"'));
+    expect(jsonl.length).toBeGreaterThan(0);
+    for (const entry of jsonl) expect(entry).not.toContain('8111');
   });
 
   it('is refused with no value', async () => {

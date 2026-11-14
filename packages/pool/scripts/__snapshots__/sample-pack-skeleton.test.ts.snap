@@ -18,6 +18,34 @@ tags:
 - Check it: \`npm run validate-pack -w packages/pool -- <this folder>\` in the Many Oars repository (spec: \`docs/session-record.md\`). It needs no key, account, or network.
 - Fresher sessions, whole transcripts, and rights for use: https://manyoars.com/packs.
 
+## Is a pack right for you?
+
+What a pack is for, and what it is not.
+
+| Use | Answer |
+|---|---|
+| Building tasks or evals from real sessions | Yes. The sessions are raw inputs you turn into tasks. |
+| Studying how a coding agent's tool calls fail | Yes. You get the structure and sequence of the steps and errors. No label says a later edit fixed anything. |
+| Training a model | Not offered. |
+| A ready-made scored benchmark | Not included. A session has no score and no pass or fail label. |
+
+## Try the free sample first
+
+The free transcript sample comes before any payment. Ask for it at https://manyoars.com/packs, or write to support@manyoars.com with the subject "Session pack sample". Tell us what you are evaluating. A person answers.
+
+A sample of our first lot goes to anyone who asks, with no form and no name.
+
+## A worked trace
+
+This trace is built from one session in this pack, picked by a fixed rule: the kept session with the most failed calls, then the lowest match id. It is generated from that session's record, not written by hand. It shows structure. It does not show that the session worked, or that it fits your task.
+
+- Session: \`sessions/f7a8f8f5f37820caed204282a10c4db4fe8524798aad06057b48636724156fba/skeleton.json\`.
+- Prompt: \`transcripts[0].prompts[0]\`. Class \`edit-only\`, 1 failed call, intervention \`unknown\`. The prompt words are not in this pack.
+- Tool steps: \`transcripts[0].tools[0]\` is \`shell.exec\`, \`error\`.
+- Observed result: \`transcripts[0].tools[0]\` ended \`error\` with error code \`other\`. The next calls were \`file.edit\`; a file write followed.
+- Candidate task: from \`transcripts[0].prompts[0]\` and \`transcripts[0].tools[0]\` to \`transcripts[0].tools[0]\`, build a task that checks how an agent recovers. You would write the repository state and the grader.
+- Unresolved: the repository and commit, the expected answer, the grader or replay command, and the prompt text. This pack holds none of them.
+
 ## What is counted
 
 **Sessions per harness**

@@ -14,6 +14,7 @@
     "erase": "node scripts/erase.mjs",
     "pull-deposits": "node scripts/pull-deposits.mjs",
     "sample-pack": "node scripts/sample-pack.mjs",
+    "failure-index": "node scripts/failure-index.mjs",
     "real-work-table": "node scripts/real-work-table.mjs",
     "real-work-note": "node scripts/real-work-note.mjs",
     "deliver": "node scripts/deliver.mjs",
