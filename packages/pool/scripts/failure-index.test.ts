@@ -86,11 +86,16 @@ const SESSION_C: Call[] = [{ action: 'file.read' }, { action: 'file.edit' }];
 /** A transcript that holds each call and its result, in the skeleton's order, then an assistant reply; `blank` empties the result text of those calls. */
 const transcriptText = (calls: readonly Call[], blank: readonly number[] = []): string => {
   const lines: string[] = [];
-  calls.forEach(({ action, error }, at) => {
+  calls.forEach(({ action, error, prompt }, at) => {
+    // A new prompt opens with a user text line, and the reply to the one before it comes first.
+    if (at > 0 && prompt !== undefined && prompt !== calls[at - 1]?.prompt) {
+      lines.push(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'made-up reply 0' }] } }));
+      lines.push(JSON.stringify({ type: 'user', message: { content: 'made-up prompt' } }));
+    }
     lines.push(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: `toolu_${String(at)}`, name: NATIVE[action], input: { n: at } }] } }));
     lines.push(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: `toolu_${String(at)}`, is_error: error !== undefined, content: blank.includes(at) ? '' : [{ type: 'text', text: 'made-up result' }] }] } }));
   });
-  lines.push(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'made-up reply' }] } }));
+  lines.push(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'made-up reply 1' }] } }));
   lines.push('{"type":"summary"}');
   return `${lines.join('\n')}\n`;
 };
@@ -255,6 +260,21 @@ describe('the command', () => {
     expect(bad.code).toBe(2);
     expect(bad.printed.join('\n')).toMatch(/manifest\.jsonl:1 lacks a match id/);
     expect(bad.printed.join('\n')).not.toMatch(/secret-value/);
+    // A line that is not JSON is named by file and line number, and its content is never printed.
+    const garbled = packOf([{ id: A, transcripts: [SESSION_A], text: `${transcriptText(SESSION_A).split('\n')[0] ?? ''}\nmade-up garbled text {\n` }]);
+    const garbledRun = await run([garbled, '--out', out, '--text-sample', '5', '--seed', 's']);
+    expect(garbledRun.code).toBe(2);
+    expect(garbledRun.printed.join('\n')).toMatch(/main\.jsonl:2 is not valid JSON/);
+    expect(garbledRun.printed.join('\n')).not.toContain('garbled');
+    writeFileSync(join(pack, 'manifest.jsonl'), 'made-up garbled manifest {\n');
+    const garbledManifest = await run([pack, '--out', out]);
+    expect(garbledManifest.printed.join('\n')).toMatch(/manifest\.jsonl:1 is not valid JSON/);
+    expect(garbledManifest.printed.join('\n')).not.toContain('garbled');
+    const garbledSkeleton = packOf([{ id: A, transcripts: [SESSION_C] }]);
+    writeFileSync(join(garbledSkeleton, 'sessions', A, 'skeleton.json'), 'made-up garbled skeleton {');
+    const skeletonRun = await run([garbledSkeleton, '--out', out]);
+    expect(skeletonRun.printed.join('\n')).toMatch(/skeleton\.json is not valid JSON/);
+    expect(skeletonRun.printed.join('\n')).not.toContain('garbled');
     const broken = packOf([{ id: A, transcripts: [SESSION_C] }]);
     writeFileSync(join(broken, 'sessions', A, 'skeleton.json'), '{"format":1}');
     expect((await run([broken, '--out', out])).printed.join('\n')).toMatch(/is not a skeleton the pool reads/);
@@ -298,6 +318,9 @@ describe('the text check', () => {
     const last = await episodeOf({ id: A, transcripts: [SESSION_A] }, 1);
     const noReply = transcriptText(SESSION_A).split('\n').filter((line) => !line.includes('made-up reply') && !line.includes('"toolu_6"')).join('\n');
     expect(checkEpisode(last.episode, toolsIn(last.session).slice(0, 6), transcriptOf(noReply))).toMatchObject({ class: 'partly', reason: 'no reply after the error' });
+    // A reply that only the next prompt has is not this episode's reply.
+    const laterOnly = transcriptText(SESSION_A).split('\n').filter((line) => !line.includes('made-up reply 0')).join('\n');
+    expect(checkEpisode(last.episode, toolsIn(last.session), transcriptOf(laterOnly))).toMatchObject({ class: 'partly', reason: 'no reply after the error' });
   });
 
   it('leaves a subagent transcript unresolved and skips a line that is not a message', async () => {

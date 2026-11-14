@@ -181,17 +181,26 @@ const readText = async (file: string, what: string): Promise<string> => {
   }
 };
 
+/** Parses one JSON text; a failure names `where` and never the text, which can hold transcript words. */
+const jsonOf = (source: string, where: string): unknown => {
+  try {
+    return JSON.parse(source);
+  } catch {
+    throw new PackError(`${where} is not valid JSON.`);
+  }
+};
+
 /** The pack's sessions in match id order, each skeleton read by the pool's own reader; a row or a skeleton it cannot read stops the run, naming the file and never a value. */
 export const readPack = async (pack: string): Promise<PackSession[]> => {
   const manifest = join(pack, 'manifest.jsonl');
   const rows = (await readText(manifest, 'manifest')).split('\n').filter((line) => line.trim() !== '');
   const sessions: PackSession[] = [];
   for (const [index, line] of rows.entries()) {
-    const row: unknown = JSON.parse(line);
     const where = `${manifest}:${String(index + 1)}`;
+    const row = jsonOf(line, where);
     if (!isFields(row) || typeof row.matchId !== 'string' || !/^[0-9a-f]{64}$/.test(row.matchId) || typeof row.skeleton !== 'string' || typeof row.transcripts !== 'number') throw new PackError(`${where} lacks a match id, a skeleton, or a transcript count.`);
     const file = join(pack, 'sessions', row.matchId, row.skeleton);
-    const value: unknown = JSON.parse(await readText(file, 'skeleton'));
+    const value = jsonOf(await readText(file, 'skeleton'), file);
     const parsed = parseSkeleton(isFields(value) ? { ...value, id: STAND_IN_ID } : value);
     if (!parsed.ok) throw new PackError(`${file} is not a skeleton the pool reads (${parsed.field}: ${parsed.reason}).`);
     sessions.push({ matchId: row.matchId, transcriptFiles: row.transcripts, skeleton: parsed.skeleton });
@@ -236,6 +245,8 @@ export interface Transcript {
   uses: Use[];
   results: Map<number, Result>;
   assistantLines: number[];
+  /** The lines where a user turn starts: a user line with text of its own, not a tool result. */
+  promptLines: number[];
 }
 
 const textLengthOf = (content: unknown): number => {
@@ -246,15 +257,20 @@ const textLengthOf = (content: unknown): number => {
   return total;
 };
 
+/** A user turn starts with a string, or with a text block; a tool result alone is the harness answering the assistant. */
+const startsPrompt = (content: unknown): boolean => typeof content === 'string' || (Array.isArray(content) && content.some((block) => isFields(block) && block.type === 'text'));
+
 /** Reads a Claude Code transcript: call k is the k-th distinct `tool_use` id of the assistant lines, the order the skeleton's `tools` holds. */
-export const transcriptOf = (text: string): Transcript => {
+export const transcriptOf = (text: string, file = 'transcript'): Transcript => {
   const positions = new Map<string, number>();
   const uses: Use[] = [];
   const results = new Map<number, Result>();
   const assistantLines: number[] = [];
+  const promptLines: number[] = [];
   text.split('\n').forEach((source, line) => {
     if (source.trim() === '') return;
-    const value: unknown = JSON.parse(source);
+    const value = jsonOf(source, `${file}:${String(line + 1)}`);
+    if (isFields(value) && value.type === 'user' && isFields(value.message) && startsPrompt(value.message.content)) promptLines.push(line);
     if (!isFields(value) || !isFields(value.message) || !Array.isArray(value.message.content)) return;
     if (value.type === 'assistant') assistantLines.push(line);
     for (const block of value.message.content) {
@@ -267,7 +283,7 @@ export const transcriptOf = (text: string): Transcript => {
       if (position !== undefined && !results.has(position)) results.set(position, { isError: block.is_error === true, textLength: textLengthOf(block.content), line });
     }
   });
-  return { uses, results, assistantLines };
+  return { uses, results, assistantLines, promptLines };
 };
 
 /** One episode against its transcript's text. `tools` is the transcript's skeleton calls, so a call is found by position and its name checked against the skeleton's. */
@@ -286,7 +302,9 @@ export const checkEpisode = (episode: Episode, tools: readonly SkeletonTool[], t
   const following = followingOf(tools, pointer.calls[pointer.calls.length - 1] ?? 0).slice(0, episode.continuation.length);
   if (following.length === 0) {
     const after = results[results.length - 1]?.line ?? 0;
-    return text.assistantLines.some((line) => line > after) ? verdict('supports', 'no call followed, reply present') : verdict('partly', 'no reply after the error');
+    // The reply is the assistant's next lines before the next prompt; a later prompt's reply is another episode's.
+    const next = text.promptLines.find((line) => line > after) ?? Infinity;
+    return text.assistantLines.some((line) => line > after && line < next) ? verdict('supports', 'no call followed, reply present') : verdict('partly', 'no reply after the error');
   }
   if (!following.every((position) => named(position) && (text.uses[position]?.inputLength ?? 0) > 2)) return verdict('partly', 'continuation call missing or empty');
   return verdict('supports', 'error and continuation present');
@@ -309,7 +327,7 @@ export const yieldOf = async (pack: string, sessions: readonly PackSession[], ep
   for (const session of sessions) {
     const own = episodes.filter((episode) => episode.session === session.matchId);
     if (!drawn.has(session.matchId) || own.length === 0) continue;
-    const text = session.transcriptFiles > 0 ? transcriptOf(await readText(join(pack, 'sessions', session.matchId, 'main.jsonl'), 'transcript')) : undefined;
+    const text = session.transcriptFiles > 0 ? transcriptOf(await readText(join(pack, 'sessions', session.matchId, 'main.jsonl'), 'transcript'), join(pack, 'sessions', session.matchId, 'main.jsonl')) : undefined;
     const tools = session.skeleton.transcripts[0]?.tools ?? [];
     for (const episode of own) checks.push(checkEpisode(episode, tools, text));
   }
