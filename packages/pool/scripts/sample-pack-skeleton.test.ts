@@ -133,7 +133,7 @@ const CARD_LINES: readonly RegExp[] = [
   /^- Prompt: unresolved\. The call names no prompt\. The prompt words are not in this pack\.$/,
   /^- Tool steps: (`transcripts\[0\]\.tools\[\d+\]` is (`[a-z.]+`|unresolved), (`[a-z]+`|unresolved)\.( |$))+$/,
   /^- Observed result: `transcripts\[0\]\.tools\[\d+\]` ended (`[a-z]+`|unresolved)( with error code (`[\w-]+`|unresolved))?\.( The next calls were (none|(`[a-z.]+`|unresolved)(, (`[a-z.]+`|unresolved))*); (a file write followed|no file write followed)\.)?$/,
-  /^- Candidate task: (from `transcripts\[0\]\.prompts\[\d+\]` and `transcripts\[0\]\.tools\[\d+\]` to `transcripts\[0\]\.tools\[\d+\]`|from `transcripts\[0\]\.tools\[\d+\]` to `transcripts\[0\]\.tools\[\d+\]`|at `transcripts\[0\]\.tools\[\d+\]`), build a task that checks how an agent recovers\. You would write the repository state and the grader\.$/,
+  /^- Candidate task: (from `transcripts\[0\]\.prompts\[\d+\]` and `transcripts\[0\]\.tools\[\d+\]` to `transcripts\[0\]\.tools\[\d+\]`|from `transcripts\[0\]\.prompts\[\d+\]` at `transcripts\[0\]\.tools\[\d+\]`|from `transcripts\[0\]\.tools\[\d+\]` to `transcripts\[0\]\.tools\[\d+\]`|at `transcripts\[0\]\.tools\[\d+\]`), build a task (that checks how an agent recovers|from these steps)\. You would write the repository state and the grader\.$/,
   /^- Unresolved: the repository and commit, the expected answer, the grader or replay command, and the prompt text\. This pack holds none of them\.$/,
 ];
 const auditCard = (text: string): string[] => {
@@ -424,13 +424,16 @@ describe('the data card', () => {
     expect(card).toContain(`Class \`${main?.prompts[promptAt]?.cls ?? ''}\``);
     expect(card).toContain('The prompt words are not in this pack.');
     // The candidate line names the prompt and the tool entries it runs between, and each is a real field.
-    const candidate = /^- Candidate task: from `transcripts\[0\]\.prompts\[(\d+)\]` and `transcripts\[0\]\.tools\[(\d+)\]` to `transcripts\[0\]\.tools\[(\d+)\]`,/m.exec(card);
+    const candidate = /^- Candidate task: from `transcripts\[0\]\.prompts\[(\d+)\]`(?: and `transcripts\[0\]\.tools\[(\d+)\]` to| at) `transcripts\[0\]\.tools\[(\d+)\]`,/m.exec(card);
     expect(candidate).not.toBeNull();
     expect(Number(candidate?.[1])).toBe(promptAt);
     expect(main?.prompts[Number(candidate?.[1])]).toBeDefined();
-    expect(main?.tools[Number(candidate?.[2])]).toBeDefined();
+    // The first-call form names one tool entry, so the start is the end.
+    const start = Number(candidate?.[2] ?? candidate?.[3]);
+    expect(main?.tools[start]).toBeDefined();
     expect(Number(candidate?.[3])).toBe(at);
-    expect(Number(candidate?.[2])).toBeLessThanOrEqual(at);
+    expect(start).toBeLessThanOrEqual(at);
+    expect(card).not.toMatch(/tools\[(\d+)\]` to `transcripts\[0\]\.tools\[\1\]`/);
     expect(card).not.toMatch(/verified|proven|works for you/);
     // The same build again gives the same card: the rule has no clock or random in it.
     const again = f.options({ skeletonOnly: true });
@@ -477,9 +480,13 @@ describe('the data card', () => {
     expect(counted(1)).toContain('1 failed call,');
     expect(counted(2)).toContain('2 failed calls,');
     const lone = traceOf([{ matchId: low, skeleton: skeleton('ok') }]).join('\n');
-    expect(lone).toContain('- Candidate task: at `transcripts[0].tools[0]`, build a task');
+    expect(lone).toContain('- Candidate task: at `transcripts[0].tools[0]`, build a task from these steps.');
+    expect(lone).not.toContain('checks how an agent recovers');
+    const firstCall = (status: string): string => traceOf([{ matchId: low, skeleton: { transcripts: [{ prompts: [{ cls: 'mixed', errors: 1, intervention: 'none' }], tools: [{ prompt: 0, status, steps: [] }] }] } }]).join('\n');
+    expect(firstCall('error')).toContain('- Candidate task: from `transcripts[0].prompts[0]` at `transcripts[0].tools[0]`, build a task that checks how an agent recovers.');
+    expect(firstCall('ok')).toContain('- Candidate task: from `transcripts[0].prompts[0]` at `transcripts[0].tools[0]`, build a task from these steps.');
     const spread = { transcripts: [{ prompts: [], tools: [{ prompt: null, status: 'ok' }, { prompt: null, status: 'error' }] }] };
-    expect(traceOf([{ matchId: low, skeleton: spread }]).join('\n')).toContain('- Candidate task: from `transcripts[0].tools[0]` to `transcripts[0].tools[1]`, build a task');
+    expect(traceOf([{ matchId: low, skeleton: spread }]).join('\n')).toContain('- Candidate task: from `transcripts[0].tools[0]` to `transcripts[0].tools[1]`, build a task that checks how an agent recovers.');
     expect(traceOf([])).toEqual([]);
   });
 
@@ -616,10 +623,22 @@ describe('the names filter', () => {
     const opts = f.options({ skeletonOnly: true, excludeNames: words });
     expect(await buildPack(f.runtime, opts)).toMatchObject({ emitted: 3, namesFiltered: 0 });
     // The kept skeletons hold the file name, with its `.jsonl` ending and without the raw id's fragment.
-    const kept = manifest(opts.out).flatMap((row) => readFileSync(join(opts.out, 'sessions', row.matchId, 'skeleton.json'), 'utf8').match(/"name": "[^"]*"/g) ?? []);
-    const jsonl = kept.filter((entry) => entry.endsWith('.jsonl"'));
-    expect(jsonl.length).toBeGreaterThan(0);
-    for (const entry of jsonl) expect(entry).not.toContain('8111');
+    const names = manifest(opts.out).flatMap((row) => {
+      const skeleton: unknown = JSON.parse(readFileSync(join(opts.out, 'sessions', row.matchId, 'skeleton.json'), 'utf8'));
+      const found: string[] = [];
+      const walk = (value: unknown): void => {
+        if (Array.isArray(value)) value.forEach(walk);
+        else if (typeof value === 'object' && value !== null) {
+          const name: unknown = Object.getOwnPropertyDescriptor(value, 'name')?.value;
+          if (typeof name === 'string') found.push(name);
+          Object.values(value).forEach(walk);
+        }
+      };
+      walk(skeleton);
+      return found;
+    });
+    expect(names.some((name) => name.endsWith('.jsonl'))).toBe(true);
+    for (const name of names) expect(name).not.toContain('8111');
   });
 
   it('is refused with no value', async () => {
