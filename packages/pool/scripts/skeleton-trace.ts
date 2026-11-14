@@ -44,6 +44,10 @@ export const traceOf = (inputs: readonly TraceInput[]): string[] => {
   const recovery = field(tool, 'recoveryCalls');
   const next = list(field(recovery, 'next')).map((action) => oneOf(action, CANONICAL_ACTIONS));
   const errors = field(prompt, 'errors');
+  const ref = (index: number): string => `\`transcripts[0].tools[${String(index)}]\``;
+  const first = Math.min(at, ...same);
+  const run = first === at ? `at ${ref(at)}` : `from ${ref(first)} to ${ref(at)}`;
+  const span = typeof promptAt === 'number' ? `from \`transcripts[0].prompts[${String(promptAt)}]\` and ${ref(first)} to ${ref(at)}` : run;
   return [
     '## A worked trace',
     '',
@@ -55,7 +59,7 @@ export const traceOf = (inputs: readonly TraceInput[]): string[] => {
       : '- Prompt: unresolved. The call names no prompt. The prompt words are not in this pack.',
     `- Tool steps: ${steps}`,
     `- Observed result: \`transcripts[0].tools[${String(at)}]\` ended ${oneOf(field(tool, 'status'), STATUSES)}${code === null || code === undefined ? '' : ` with error code ${oneOf(code, ERROR_CODES)}`}.${recovery === null || recovery === undefined ? '' : ` The next calls were ${next.length === 0 ? 'none' : next.join(', ')}; ${field(recovery, 'editFollowed') === true ? 'a file write followed' : 'no file write followed'}.`}`,
-    '- Candidate task: use the prompt class and the steps up to this result to build a task that checks how an agent recovers. You would write the repository state and the grader.',
+    `- Candidate task: ${span}, build a task that checks how an agent recovers. You would write the repository state and the grader.`,
     '- Unresolved: the repository and commit, the expected answer, the grader or replay command, and the prompt text. This pack holds none of them.',
     '',
   ];

@@ -133,7 +133,7 @@ const CARD_LINES: readonly RegExp[] = [
   /^- Prompt: unresolved\. The call names no prompt\. The prompt words are not in this pack\.$/,
   /^- Tool steps: (`transcripts\[0\]\.tools\[\d+\]` is (`[a-z.]+`|unresolved), (`[a-z]+`|unresolved)\.( |$))+$/,
   /^- Observed result: `transcripts\[0\]\.tools\[\d+\]` ended (`[a-z]+`|unresolved)( with error code (`[\w-]+`|unresolved))?\.( The next calls were (none|(`[a-z.]+`|unresolved)(, (`[a-z.]+`|unresolved))*); (a file write followed|no file write followed)\.)?$/,
-  /^- Candidate task: use the prompt class and the steps up to this result to build a task that checks how an agent recovers\. You would write the repository state and the grader\.$/,
+  /^- Candidate task: (from `transcripts\[0\]\.prompts\[\d+\]` and `transcripts\[0\]\.tools\[\d+\]` to `transcripts\[0\]\.tools\[\d+\]`|from `transcripts\[0\]\.tools\[\d+\]` to `transcripts\[0\]\.tools\[\d+\]`|at `transcripts\[0\]\.tools\[\d+\]`), build a task that checks how an agent recovers\. You would write the repository state and the grader\.$/,
   /^- Unresolved: the repository and commit, the expected answer, the grader or replay command, and the prompt text\. This pack holds none of them\.$/,
 ];
 const auditCard = (text: string): string[] => {
@@ -423,6 +423,14 @@ describe('the data card', () => {
     const promptAt = Number(/Prompt: `transcripts\[0\]\.prompts\[(\d+)\]`/.exec(card)?.[1]);
     expect(card).toContain(`Class \`${main?.prompts[promptAt]?.cls ?? ''}\``);
     expect(card).toContain('The prompt words are not in this pack.');
+    // The candidate line names the prompt and the tool entries it runs between, and each is a real field.
+    const candidate = /^- Candidate task: from `transcripts\[0\]\.prompts\[(\d+)\]` and `transcripts\[0\]\.tools\[(\d+)\]` to `transcripts\[0\]\.tools\[(\d+)\]`,/m.exec(card);
+    expect(candidate).not.toBeNull();
+    expect(Number(candidate?.[1])).toBe(promptAt);
+    expect(main?.prompts[Number(candidate?.[1])]).toBeDefined();
+    expect(main?.tools[Number(candidate?.[2])]).toBeDefined();
+    expect(Number(candidate?.[3])).toBe(at);
+    expect(Number(candidate?.[2])).toBeLessThanOrEqual(at);
     expect(card).not.toMatch(/verified|proven|works for you/);
     // The same build again gives the same card: the rule has no clock or random in it.
     const again = f.options({ skeletonOnly: true });
@@ -435,6 +443,8 @@ describe('the data card', () => {
     const opts = f.options({ skeletonOnly: true });
     await buildPack(f.runtime, opts);
     const card = readFileSync(join(opts.out, 'README.md'), 'utf8');
+    const held = manifest(opts.out).filter((row) => readFileSync(join(opts.out, 'sessions', row.matchId, 'skeleton.json'), 'utf8').includes('secret-helper.ts'));
+    expect(held.length).toBeGreaterThan(0);
     expect(card).toContain('## A worked trace');
     for (const raw of ['secret-helper', 'secret', 'parse.ts', S(1), '11111111', 'acme', join(f.root, 'work'), '/work/app']) expect(card, raw).not.toContain(raw);
     expect(auditCard(card)).toEqual([]);
@@ -466,6 +476,10 @@ describe('the data card', () => {
     const counted = (errors: number): string => traceOf([{ matchId: low, skeleton: { transcripts: [{ prompts: [{ cls: 'mixed', errors, intervention: 'none' }], tools: [{ prompt: 0, status: 'error', steps: [] }] }] } }]).join('\n');
     expect(counted(1)).toContain('1 failed call,');
     expect(counted(2)).toContain('2 failed calls,');
+    const lone = traceOf([{ matchId: low, skeleton: skeleton('ok') }]).join('\n');
+    expect(lone).toContain('- Candidate task: at `transcripts[0].tools[0]`, build a task');
+    const spread = { transcripts: [{ prompts: [], tools: [{ prompt: null, status: 'ok' }, { prompt: null, status: 'error' }] }] };
+    expect(traceOf([{ matchId: low, skeleton: spread }]).join('\n')).toContain('- Candidate task: from `transcripts[0].tools[0]` to `transcripts[0].tools[1]`, build a task');
     expect(traceOf([])).toEqual([]);
   });
 
@@ -485,6 +499,19 @@ describe('the data card', () => {
     expect(card).toContain('9 coding-agent session skeletons');
     expect(card).toContain('- `claude-code`: 9');
     expect(card).toContain('(2026-11-13)');
+  });
+
+  it('writeCard skips a manifest id that is not a match id, so a hand-edited row cannot steer a read', async () => {
+    const f = await fixture();
+    const folder = join(f.root, 'card2');
+    mkdirSync(folder);
+    writeFileSync(join(folder, 'pack.json'), JSON.stringify({ olderThanDays: 7, built: '2026-11-13T00:00:00Z' }));
+    writeFileSync(join(folder, 'census.json'), JSON.stringify({ sessions: 1, harness: {}, harnessVersion: {}, model: {}, errorCode: {}, recovery: {}, intervention: {}, promptClass: {}, turnBucket: {} }));
+    writeFileSync(join(folder, 'manifest.jsonl'), `${JSON.stringify({ matchId: '../../outside' })}
+${JSON.stringify({ matchId: 'ab' })}
+`);
+    await writeCard(folder);
+    expect(readFileSync(join(folder, 'README.md'), 'utf8')).not.toContain('## A worked trace');
   });
 });
 
