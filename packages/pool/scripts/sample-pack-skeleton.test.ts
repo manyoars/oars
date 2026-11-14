@@ -626,15 +626,19 @@ describe('the names filter', () => {
     const names = manifest(opts.out).flatMap((row) => {
       const skeleton: unknown = JSON.parse(readFileSync(join(opts.out, 'sessions', row.matchId, 'skeleton.json'), 'utf8'));
       const found: string[] = [];
-      const walk = (value: unknown): void => {
-        if (Array.isArray(value)) value.forEach(walk);
-        else if (typeof value === 'object' && value !== null) {
-          const name: unknown = Object.getOwnPropertyDescriptor(value, 'name')?.value;
-          if (typeof name === 'string') found.push(name);
-          Object.values(value).forEach(walk);
-        }
+      // Only the file entries (`transcripts[].tools[].names[]`): a `name` key elsewhere in the skeleton is not one.
+      const listOf = (value: unknown, key: string): unknown[] => {
+        const list: unknown = typeof value === 'object' && value !== null ? Object.getOwnPropertyDescriptor(value, key)?.value : undefined;
+        return Array.isArray(list) ? list : [];
       };
-      walk(skeleton);
+      for (const transcript of listOf(skeleton, 'transcripts')) {
+        for (const tool of listOf(transcript, 'tools')) {
+          for (const entry of listOf(tool, 'names')) {
+            const name: unknown = typeof entry === 'object' && entry !== null ? Object.getOwnPropertyDescriptor(entry, 'name')?.value : undefined;
+            if (typeof name === 'string') found.push(name);
+          }
+        }
+      }
       return found;
     });
     expect(names.some((name) => name.endsWith('.jsonl'))).toBe(true);
