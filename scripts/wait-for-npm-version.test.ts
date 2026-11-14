@@ -1,3 +1,5 @@
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { waitForNpmVersion } from './wait-for-npm-version.mjs';
 
@@ -47,5 +49,25 @@ describe('waitForNpmVersion', () => {
 
   it('fails when every poll is a server error', async () => {
     await expect(waitForNpmVersion(options(() => reply(500)))).rejects.toThrow('after 10 minutes');
+  });
+});
+
+// The script as the workflow runs it. Both cases stop at the argument check, before any request, so neither touches the network.
+describe('wait-for-npm-version.mjs as a script', () => {
+  const script = fileURLToPath(new URL('./wait-for-npm-version.mjs', import.meta.url));
+  const USAGE = 'usage: node scripts/wait-for-npm-version.mjs <package> <version>';
+
+  it('prints the usage line and exits non-zero with no arguments', () => {
+    const result = spawnSync(process.execPath, [script], { encoding: 'utf8' });
+    expect(result.stderr.trim()).toBe(USAGE);
+    expect(result.stdout).toBe('');
+    expect(result.status).toBe(2);
+  });
+
+  it('prints the usage line and exits non-zero when the version is missing', () => {
+    const result = spawnSync(process.execPath, [script, '@manyoars/oars'], { encoding: 'utf8' });
+    expect(result.stderr.trim()).toBe(USAGE);
+    expect(result.stdout).toBe('');
+    expect(result.status).toBe(2);
   });
 });

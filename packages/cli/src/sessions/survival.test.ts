@@ -3,9 +3,9 @@ import { execFileSync, spawn } from 'node:child_process';
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { deposit, loadStore } from './store.js';
-import { addProject, cleanup, removeHeld, stage, type Staged } from './test-support.js';
+import { addProject, cleanup, removeHeld, stage, stubGitHousekeepingOff, type Staged } from './test-support.js';
 import { readSurvival, recordSurvival, survivalFile, SURVIVAL_DAYS, type Git } from './survival.js';
 import { slugOf } from './allow.js';
 import { run } from '../cli.js';
@@ -15,9 +15,9 @@ import { readHookCalls } from './hook-calls.js';
 import { runHook } from './hooks.js';
 
 // Process creation is the cost on a Windows runner: a loaded one took up to 3 s for one git process (a spawn timed under eight concurrent spawners: median 1.2 s, max 2.9 s), and the 30 s default
-// covers 10 of them. Five tests start more, counted from a git trace: 24 (a partial clone whose protocol the clone allows), 23 (a partial clone, and the change of state across three reads), 19 (a revert across a merge),
-// and 16 (a chain of reverts). Their bound is the most of those, 24 x 3 s.
-const GIT_HEAVY = 24 * 3_000;
+// covers 10 of them. A test that starts more is cut to fewer spawns, never given a wider bound: auto gc and maintenance are off (each commit started a `maintenance run --auto` child), a repository a
+// test only copies is built once, and a test about the file's own logic reads a scripted `Git`. A fixture built once in a `beforeAll` is bound by its own process count times this.
+const PROCESS_BOUND_MS = 3_000;
 const NOW = Date.parse('2026-06-30T00:00:00Z');
 const OLD = '2026-06-01T00:00:00.000Z';
 const dirs: string[] = [];
@@ -28,8 +28,10 @@ beforeAll(() => {
   delete process.env.GIT_DIR;
   delete process.env.GIT_WORK_TREE;
   delete process.env.GIT_INDEX_FILE;
+  stubGitHousekeepingOff();
 });
 afterAll(() => {
+  vi.unstubAllEnvs();
   if (saved.dir !== undefined) process.env.GIT_DIR = saved.dir;
   if (saved.tree !== undefined) process.env.GIT_WORK_TREE = saved.tree;
   if (saved.index !== undefined) process.env.GIT_INDEX_FILE = saved.index;
@@ -43,10 +45,10 @@ afterEach(() => {
 const IDENTITY = ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false'];
 const gitIn = (dir: string, ...args: string[]): string => execFileSync('git', ['-C', dir, ...IDENTITY, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 
-// `core.abbrev=8` makes the commit's own summary line (`[main 1a2b3c4d] add x`) carry the eight-character sha, so no `rev-parse` process is spawned to read it back.
-const commitSha = (dir: string, ...args: string[]): string => {
-  const made = gitIn(dir, '-c', 'core.abbrev=8', 'commit', ...args);
-  const sha = /^\[[^\]]+ ([0-9a-f]{8})\]/.exec(made)?.[1];
+// `core.abbrev` makes the commit's own summary line (`[main 1a2b3c4d] add x`) carry the sha, eight characters or all forty, so no `rev-parse` process is spawned to read it back.
+const commitSha = (dir: string, abbrev: number, ...args: string[]): string => {
+  const made = gitIn(dir, '-c', `core.abbrev=${String(abbrev)}`, 'commit', ...args);
+  const sha = new RegExp(`^\\[[^\\]]+ ([0-9a-f]{${String(abbrev)}})\\]`).exec(made)?.[1];
   if (sha === undefined) throw new Error(`no sha in the commit summary: ${made}`);
   return sha;
 };
@@ -54,21 +56,30 @@ const commitSha = (dir: string, ...args: string[]): string => {
 const commitIn = (dir: string, name: string): string => {
   writeFileSync(join(dir, name), name);
   gitIn(dir, 'add', name);
-  return commitSha(dir, '-m', `add ${name}`);
+  return commitSha(dir, 8, '-m', `add ${name}`);
 };
 
 /** A commit with no file change, in one git process where `commitIn` spends two: for a test that only needs a distinct, reachable sha. */
-const emptyCommitIn = (dir: string, name: string): string => commitSha(dir, '--allow-empty', '-m', `add ${name}`);
+const emptyCommitIn = (dir: string, name: string): string => commitSha(dir, 8, '--allow-empty', '-m', `add ${name}`);
+
+/** The files every test's repository already tracks, so a commit that changes one is one git process (`commit -a`) where `commitIn` spends two, and `git revert` has a change to undo. */
+const TRACKED = ['undone', 'redone', 'other'];
+const editIn = (dir: string, name: string): string => {
+  writeFileSync(join(dir, name), `${name} edited`);
+  return commitSha(dir, 8, '-a', '-m', `edit ${name}`);
+};
 
 // Every test starts from the same one-commit repository, and building it costs three git processes (init, add, commit). Spawn count is the suspected cost under
-// load, so it is paid once and each test copies the folder, which spawns nothing.
+// load, so it is paid once and each test copies the folder, which spawns nothing. The commit also tracks the files `editIn` changes.
 let template = '';
 let sharedDir = '';
 let sharedSha = '';
 beforeAll(() => {
   template = mkdtempSync(join(tmpdir(), 'oars-survival-template-'));
   gitIn(template, 'init', '-q', '-b', 'main');
-  commitIn(template, 'first');
+  for (const name of ['first', ...TRACKED]) writeFileSync(join(template, name), name);
+  gitIn(template, 'add', '--all');
+  commitSha(template, 8, '-m', 'add first');
   // One published repository for the tests that only read after setup: the code under test never writes (`GIT_OPTIONAL_LOCKS=0`), so they share it, and
   // a test that moves a ref or needs a second distinct repository keeps `makeRepo`.
   sharedDir = mkdtempSync(join(tmpdir(), 'oars-survival-shared-'));
@@ -79,6 +90,29 @@ beforeAll(() => {
 afterAll(() => {
   removeHeld(template);
   removeHeld(sharedDir);
+});
+
+// A partial clone of a repository whose `side` branch holds a commit the clone lacks costs a source, a branch, a commit, and a clone with its own children: 12 git processes. Only a full sha can reach
+// the commit, since git resolves a short one from local objects alone. It is built once, and the two tests that need one copy the folder, which spawns nothing: the clone's remote is the source
+// folder, which stays until the file ends.
+const PARTIAL_FIXTURE_PROCESSES = 12;
+let partialSource = '';
+let partialClone = '';
+let partialSha = '';
+beforeAll(() => {
+  partialSource = mkdtempSync(join(tmpdir(), 'oars-survival-partial-source-'));
+  cpSync(template, partialSource, { recursive: true });
+  gitIn(partialSource, 'config', 'uploadpack.allowFilter', 'true');
+  gitIn(partialSource, 'config', 'uploadpack.allowAnySHA1InWant', 'true');
+  gitIn(partialSource, 'checkout', '-q', '-b', 'side');
+  partialSha = commitSha(partialSource, 40, '--allow-empty', '-m', 'add side');
+  gitIn(partialSource, 'checkout', '-q', 'main');
+  partialClone = mkdtempSync(join(tmpdir(), 'oars-survival-partial-clone-'));
+  execFileSync('git', ['clone', '-q', '--filter=blob:none', '--single-branch', '--branch', 'main', `file://${partialSource.replace(/\\/g, '/')}`, partialClone], { stdio: 'ignore' });
+}, PARTIAL_FIXTURE_PROCESSES * PROCESS_BOUND_MS);
+afterAll(() => {
+  removeHeld(partialClone);
+  removeHeld(partialSource);
 });
 
 /** A repository whose `origin/main` is the checked-out `main`, moved by `publish`. */
@@ -100,22 +134,25 @@ const pointOriginHead = (dir: string, branch = 'main'): void => {
 };
 
 /**
- * Git answering as a repository whose default branch holds every sha, for a test of which commits are due: that choice is made before git is asked, so a real
- * repository adds only spawns, and under load those are what a test runs out of time on.
+ * Git answering as a repository whose default branch holds every sha while `reached()` is true, for a test of which commits are due: that choice is made before git is asked, so a real
+ * repository adds only spawns, and under load those are what a test runs out of time on. While `reached()` is false the shas are commits the repository has but the default branch does not reach.
  */
-const holdsAll = (...shas: string[]): Git => {
+const holdsWhile = (reached: () => boolean, ...shas: string[]): Git => {
   const full = (sha: string): string => sha.padEnd(40, '0');
   const answer = (args: readonly string[]): string => {
     switch (args[0]) {
       case 'rev-parse': return 'false';
       case 'symbolic-ref': return 'refs/remotes/origin/main';
-      case 'rev-list': return shas.map(full).join(String.fromCharCode(10));
+      case 'rev-list': return reached() ? shas.map(full).join(String.fromCharCode(10)) : '';
       case 'log': return '';
       default: return shas.map((sha) => `${full(sha)} commit`).join(String.fromCharCode(10));
     }
   };
   return (_root, args) => Promise.resolve(answer(args));
 };
+
+/** The default branch holds every sha. */
+const holdsAll = (...shas: string[]): Git => holdsWhile(() => true, ...shas);
 
 /** `ts: null` leaves the timestamp off the assistant and result lines, as a transcript line the harness did not date. */
 type Commit = { sha: string; ts?: string | null };
@@ -198,37 +235,35 @@ describe('recordSurvival', () => {
   });
 
   it('reads a commit a later commit reverts as reverted, and one whose revert was itself reverted as survived', async () => {
+    // No `publish`: the default branch is the local `main` (as in the fallback test below), and which branch is the default is not what this reads.
     const repo = makeRepo();
-    const undone = commitIn(repo, 'undone');
-    const redone = commitIn(repo, 'redone');
-    gitIn(repo, 'revert', '--no-edit', 'HEAD~1');
-    gitIn(repo, 'revert', '--no-edit', 'HEAD~1');
+    const undone = editIn(repo, 'undone');
+    const redone = editIn(repo, 'redone');
+    // One git process reverts both, in the order named; the third undoes the second revert, so `redone` survives.
+    gitIn(repo, 'revert', '--no-edit', undone, redone);
     gitIn(repo, 'revert', '--no-edit', 'HEAD');
-    publish(repo);
     const { s, project } = await staged(repo, [{ sha: undone }, { sha: redone }]);
     await recordSurvival(s.runtime, [project], () => NOW);
     expect(Object.fromEntries(await readSurvival(s.storeDir))).toEqual({ [undone]: 'reverted', [redone]: 'survived' });
-  }, GIT_HEAVY);
+  });
 
   it('reads a revert of a revert as undoing it even when clock skew dates the undoing commit older, across a merge', async () => {
     const repo = makeRepo();
     const dated = (date: string, ...args: string[]): void => {
       execFileSync('git', ['-C', repo, ...IDENTITY, ...args], { stdio: 'ignore', env: { ...process.env, GIT_COMMITTER_DATE: date } });
     };
-    const undone = commitIn(repo, 'undone');
+    const undone = editIn(repo, 'undone');
     dated('2026-01-03T00:00:00Z', 'revert', '--no-edit', 'HEAD');
     gitIn(repo, 'checkout', '-q', '-b', 'redo');
     dated('2026-01-01T00:00:00Z', 'revert', '--no-edit', 'HEAD');
     gitIn(repo, 'checkout', '-q', 'main');
-    writeFileSync(join(repo, 'other'), 'other');
-    gitIn(repo, 'add', 'other');
-    dated('2026-01-04T00:00:00Z', 'commit', '-q', '-m', 'add other');
+    writeFileSync(join(repo, 'other'), 'other edited');
+    dated('2026-01-04T00:00:00Z', 'commit', '-q', '-a', '-m', 'edit other');
     dated('2026-01-05T00:00:00Z', 'merge', '-q', '--no-ff', '--no-edit', 'redo');
-    publish(repo);
     const { s, project } = await staged(repo, [{ sha: undone }]);
     await recordSurvival(s.runtime, [project], () => NOW);
     expect(Object.fromEntries(await readSurvival(s.storeDir))).toEqual({ [undone]: 'survived' });
-  }, GIT_HEAVY);
+  });
 
   it('reads a commit left on a branch the default branch never took as unreachable', async () => {
     const repo = makeRepo();
@@ -272,19 +307,12 @@ describe('recordSurvival', () => {
     expect(await recordSurvival(s.runtime, [project], () => NOW)).toEqual({ survived: 0, reverted: 0, unreachable: 0, unknown: 1 });
   });
 
-  /** A partial clone of a repository whose `side` branch holds a commit the clone lacks. Only a full sha can reach it: git resolves a short one from local objects alone. */
+  /** A copy of the partial clone built once above: a clone that lacks a commit only its remote holds, and that commit's full sha. */
   const partialCloneLacking = (): { clone: string; sha: string } => {
-    const source = makeRepo();
-    gitIn(source, 'config', 'uploadpack.allowFilter', 'true');
-    gitIn(source, 'config', 'uploadpack.allowAnySHA1InWant', 'true');
-    gitIn(source, 'checkout', '-q', '-b', 'side');
-    commitIn(source, 'side');
-    const sha = gitIn(source, 'rev-parse', 'HEAD');
-    gitIn(source, 'checkout', '-q', 'main');
     const clone = mkdtempSync(join(tmpdir(), 'oars-survival-'));
     dirs.push(clone);
-    execFileSync('git', ['clone', '-q', '--filter=blob:none', '--single-branch', '--branch', 'main', `file://${source.replace(/\\/g, '/')}`, clone], { stdio: 'ignore' });
-    return { clone, sha };
+    cpSync(partialClone, clone, { recursive: true });
+    return { clone, sha: partialSha };
   };
 
   const objectsOf = (clone: string): string[] => readdirSync(join(clone, '.git', 'objects'), { recursive: true, encoding: 'utf8' }).sort();
@@ -295,7 +323,7 @@ describe('recordSurvival', () => {
     const before = objectsOf(clone);
     expect(await recordSurvival(s.runtime, [project], () => NOW)).toEqual({ survived: 0, reverted: 0, unreachable: 0, unknown: 1 });
     expect(objectsOf(clone)).toEqual(before);
-  }, GIT_HEAVY);
+  });
 
   it('fetches nothing even where the clone allows its own protocol: a per-protocol key beats `protocol.allow`, so only the environment holds', async () => {
     const { clone, sha } = partialCloneLacking();
@@ -304,7 +332,7 @@ describe('recordSurvival', () => {
     const before = objectsOf(clone);
     expect(await recordSurvival(s.runtime, [project], () => NOW)).toEqual({ survived: 0, reverted: 0, unreachable: 0, unknown: 1 });
     expect(objectsOf(clone)).toEqual(before);
-  }, GIT_HEAVY);
+  });
 
   it('reads an absent repository as unknown', async () => {
     const parent = mkdtempSync(join(tmpdir(), 'oars-survival-'));
@@ -358,22 +386,22 @@ describe('recordSurvival', () => {
   });
 
   it('appends only on a change of state, so the latest observation wins and the file stays small', async () => {
-    const repo = makeRepo();
-    const sha = commitIn(repo, 'later');
-    const first = await staged(repo, [{ sha }]);
-    gitIn(repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD~1');
-    const { s, project } = first;
-    await recordSurvival(s.runtime, [project], () => NOW);
-    await recordSurvival(s.runtime, [project], () => NOW + 86_400_000);
+    // The append is the store's logic, not git's answer, so a scripted `Git` drives the three reads: the states themselves are read from real git in the tests above.
+    const sha = 'a1b2c3d4';
+    let reached = false;
+    const git = holdsWhile(() => reached, sha);
+    const { s, project } = await staged(shared().repo, [{ sha }]);
+    await recordSurvival(s.runtime, [project], () => NOW, git);
+    await recordSurvival(s.runtime, [project], () => NOW + 86_400_000, git);
     expect(lines(s)).toEqual([{ sha, state: 'unreachable', day: '2026-06-30' }]);
-    publish(repo);
-    await recordSurvival(s.runtime, [project], () => NOW + 2 * 86_400_000);
+    reached = true;
+    await recordSurvival(s.runtime, [project], () => NOW + 2 * 86_400_000, git);
     expect(lines(s)).toEqual([
       { sha, state: 'unreachable', day: '2026-06-30' },
       { sha, state: 'survived', day: '2026-07-02' },
     ]);
     expect((await readSurvival(s.storeDir)).get(sha)).toBe('survived');
-  }, GIT_HEAVY);
+  });
 
   it('keeps a known state when a later read fails, so a passing git failure does not undo an observation', async () => {
     const { repo, sha } = shared();

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { holdBatch, holdBranch, holdCommit, runNetGit, termsDigest, type HoldDeps, type HoldInput } from './machine-hold.js';
 import { runGit, type Git } from './survival.js';
+import { stubGitHousekeepingOff } from './test-support.js';
 
 // Process creation is the cost on a Windows runner: a loaded one took up to 3 s for one git process (a spawn timed under eight concurrent spawners: median 1.2 s, max 2.9 s). A case's bound is its git
 // processes (the test's own commands and the product's, counted from a git trace) times that. The most any case starts is 47 (a push refused once for a branch another VM moved, with two checkouts and a fetch); 50 x 3 s keeps a margin of three.
@@ -25,11 +26,7 @@ const git = (cwd: string, ...args: string[]): string => execFileSync('git', ['-C
 let work = '';
 let bareTemplate = '';
 beforeAll(() => {
-  vi.stubEnv('GIT_CONFIG_COUNT', '2');
-  vi.stubEnv('GIT_CONFIG_KEY_0', 'gc.auto');
-  vi.stubEnv('GIT_CONFIG_VALUE_0', '0');
-  vi.stubEnv('GIT_CONFIG_KEY_1', 'maintenance.auto');
-  vi.stubEnv('GIT_CONFIG_VALUE_1', 'false');
+  stubGitHousekeepingOff();
   work = buildRepoWithWork();
   bareTemplate = mkdtempSync(join(tmpdir(), 'oars-machine-hold-bare-template-'));
   git(bareTemplate, 'init', '-q', '--bare');

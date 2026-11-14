@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, relative, sep } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { LITERAL, PRIVATE, PUBLIC_PROGRAMS } from '../../cli/src/sessions/public-vocabulary.js';
+import { NAME_KINDS } from '../../cli/src/sessions/call-shape.js';
 import { ERROR_CODES, PROMPT_CLASSES, PROMPT_INTERVENTIONS } from '../../cli/src/sessions/schema.js';
 import { deposit, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { namesFilterOf } from './skeleton-only.js';
@@ -413,7 +414,7 @@ describe('the names filter', () => {
 
   it('reads every kind of name, and lets a comment line list nothing', async () => {
     const hit = await filterFor(`#${WORD}\n${WORD}\n`);
-    for (const kind of ['file', 'dir', 'branch', 'other']) expect(hit?.(skeletonWith({ kind: 'file', name: 'a.ts' }, { kind, name: `${WORD}-x` })), kind).toBe(true);
+    for (const kind of NAME_KINDS) expect(hit?.(skeletonWith({ kind: 'file', name: 'a.ts' }, { kind, name: `${WORD}-x` })), kind).toBe(true);
     expect((await filterFor(`#${WORD}\n`))?.(skeletonWith({ kind: 'file', name: `${WORD}.md` }))).toBe(false);
   });
 
@@ -457,6 +458,14 @@ describe('the names filter', () => {
     expect(await buildPack(f.runtime, f.options({ skeletonOnly: true }))).toMatchObject({ emitted: 3 });
     expect((await buildPack(f.runtime, f.options({ skeletonOnly: true }))).namesFiltered).toBeUndefined();
     expect(await buildPack(f.runtime, f.options({ skeletonOnly: true, excludeNames: join(f.root, 'absent.txt') }))).toMatchObject({ emitted: 3, namesFiltered: 0 });
+  });
+
+  it('reads the skeleton after masking: a fragment only the raw session id holds matches nothing', async () => {
+    // The raw id is masked before the skeleton is written, so a word taken from inside it is gone by the time the check runs.
+    const f = await fixture(`${S(1)}.jsonl`);
+    const words = join(f.root, 'names.txt');
+    writeFileSync(words, '8111\n');
+    expect(await buildPack(f.runtime, f.options({ skeletonOnly: true, excludeNames: words }))).toMatchObject({ emitted: 3, namesFiltered: 0 });
   });
 
   it('is refused with no value', async () => {

@@ -1,4 +1,4 @@
-// The real-work release note (docs/pool.md, "The real-work release note"). The command is TypeScript that imports the CLI's own store reader and exclusion gate, so it is bundled with esbuild into memory and run from there:
+// The real-work release note (docs/pool.md, "The release note"). The command is TypeScript that imports the CLI's own store reader and exclusion gate, so it is bundled with esbuild into memory and run from there:
 //   npm run real-work-note -w packages/pool -- <store folder> --terms <file> --owners <file> --out <dir> --harness <name> --from <bucket> --to <bucket>
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';

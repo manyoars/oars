@@ -143,7 +143,7 @@ const KEYED = /"repoKey":"[0-9a-f]{16}"/;
 export const hasRepoKey = (paired: Paired): boolean => KEYED.test(paired.row.skeleton);
 
 /**
- * Captures every Raw Copy of the folder into a throwaway store under `scratch`, each account's as its own project, with the CLI's own capture, and pairs each with its deposit row by the recomputed id.
+ * Captures every Raw Copy of the folder into a throwaway store under `scratch`, each account's as its own project, with the CLI's own capture, and pairs each with its deposit row by its stored link (`links.jsonl`), and by the recomputed id only when it has none.
  * The operator's redact domains ride along, so the second redaction pass over the pack sees the same set.
  */
 export const captureDeposits = async (runtime: SessionsRuntime, folder: string, scratch: string, redactDomains: readonly string[], now: () => number): Promise<DepositBuild> => {

@@ -19,7 +19,7 @@ import { ExitCode } from '../errors.js';
 import { DEFAULT_POOL_URL } from './pool-command.js';
 import { localSalt } from './store.js';
 import { runGit, type Git } from './survival.js';
-import { cleanup, stage, type Staged } from './test-support.js';
+import { cleanup, stage, stubGitHousekeepingOff, type Staged } from './test-support.js';
 
 // Process creation is the cost on a Windows runner: a loaded one took up to 3 s for one git process (a spawn timed under eight concurrent spawners: median 1.2 s, max 2.9 s). A case's bound is its git
 // processes (the test's own commands and the product's, counted from a git trace) times that. The most any case starts is 50 (two pulls over two repositories), so 50 x 3 s.
@@ -48,14 +48,6 @@ Reflect.deleteProperty(BRANCH_BATCH, 'claimed');
 
 const RECORD: MachineRecord = { machine: MACHINE, hostClass: 'cloud', launcher: 'orchestrated', allowRepos: [REPO] };
 
-const stubGitHousekeepingOff = (): void => {
-  vi.stubEnv('GIT_CONFIG_COUNT', '2');
-  vi.stubEnv('GIT_CONFIG_KEY_0', 'gc.auto');
-  vi.stubEnv('GIT_CONFIG_VALUE_0', '0');
-  vi.stubEnv('GIT_CONFIG_KEY_1', 'maintenance.auto');
-  vi.stubEnv('GIT_CONFIG_VALUE_1', 'false');
-};
-
 // An empty bare repository is made once and copied, which starts no git process: `git init` is one for every repository a case holds in.
 let bareTemplate = '';
 beforeAll(() => {
@@ -63,7 +55,7 @@ beforeAll(() => {
   execFileSync('git', ['-C', bareTemplate, 'init', '--bare', '-q']);
   // The receiving side of a push starts `gc --auto` itself, and git drops the environment's config when it enters another repository, so this one is set in the repository.
   execFileSync('git', ['-C', bareTemplate, 'config', 'receive.autogc', 'false']);
-}, SLOW);
+}, 2 * PROCESS_BOUND_MS);
 afterAll(() => {
   rmSync(bareTemplate, { recursive: true, force: true });
 });

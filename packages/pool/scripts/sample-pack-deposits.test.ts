@@ -139,8 +139,7 @@ const pull = (parts: readonly Part[], acceptances: readonly DepositAcceptance[] 
     writeFileSync(join(folder, ACCT, 'projects', 'deposit', `${sha256(text)}.jsonl`), text);
     if (part.link !== undefined) links.push(line({ sha256: sha256(text), deposit: part.link, place: 0 }));
   }
-  if (links.length > 0) writeFileSync(join(folder, ACCT, 'links.jsonl'), links.map((row) => `${row}
-`).join(''));
+  if (links.length > 0) writeFileSync(join(folder, ACCT, 'links.jsonl'), links.map((row) => `${row}\n`).join(''));
   mkdirSync(join(root, 'opprojects'));
   const terms = join(root, 'terms.txt');
   writeFileSync(terms, 'zorblax\n');

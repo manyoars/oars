@@ -58,6 +58,19 @@ export const cleanup = (): void => {
   for (const dir of dirs.splice(0)) removeHeld(dir);
 };
 
+/**
+ * Auto gc and maintenance off for every git the test starts, through the environment: a commit, merge, fetch, or push starts a `gc --auto` or `maintenance run --auto` child of its own,
+ * and under load each child is one more process that can run out the test's time. The caller restores the environment with `vi.unstubAllEnvs()`. A push's receiving side drops the
+ * environment's config on entering another repository, so a bare repository a test pushes into takes `receive.autogc=false` in its own config.
+ */
+export const stubGitHousekeepingOff = (): void => {
+  vi.stubEnv('GIT_CONFIG_COUNT', '2');
+  vi.stubEnv('GIT_CONFIG_KEY_0', 'gc.auto');
+  vi.stubEnv('GIT_CONFIG_VALUE_0', '0');
+  vi.stubEnv('GIT_CONFIG_KEY_1', 'maintenance.auto');
+  vi.stubEnv('GIT_CONFIG_VALUE_1', 'false');
+};
+
 export interface Staged {
   root: string;
   projectsRoot: string;
