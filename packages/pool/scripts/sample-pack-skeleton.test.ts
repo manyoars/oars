@@ -448,6 +448,7 @@ describe('the names filter', () => {
     expect(printed.join('\n')).toContain('Left out for a listed name in a kept name: 1.');
     expect(printed.join('\n').toLowerCase()).not.toContain(WORD);
     expect(JSON.parse(readFileSync(join(again.out, 'pack.json'), 'utf8'))).toMatchObject({ counts: { namesFiltered: 1 } });
+    for (const file of filesUnder(again.out)) expect(readFileSync(file, 'utf8').toLowerCase(), file).not.toContain(WORD);
     expect((await validate(again.out))?.violations).toEqual([]);
   });
 
@@ -461,7 +462,6 @@ describe('the names filter', () => {
   it('is refused with no value', async () => {
     const printed: string[] = [];
     expect(await main(['--exclude-names'], { runtime: (await fixture()).runtime, print: (text: string) => printed.push(text), now: () => NOW })).toBe(2);
-    expect(printed.join('
-')).toContain('--exclude-names');
+    expect(printed.join('\n')).toContain('--exclude-names');
   });
 });
