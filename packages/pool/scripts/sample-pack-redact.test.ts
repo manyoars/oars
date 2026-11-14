@@ -131,6 +131,41 @@ describe('Item 2: the account the repositories live under', () => {
     expect(text).toContain('/<owner>/tool');
   });
 
+  // t1295: lot 1 carried the handle in tool inputs where it was not behind a path separator: a bare `owner/name`, one after a space, a backtick, a parenthesis, or a quote, and one cut by an ellipsis.
+  it('masks the account wherever it stands as a word, in tool inputs and any other string', async () => {
+    const f = fixture();
+    f.write(S(1), [
+      user(f, S(1), 1, 'clone it'),
+      assistant(S(1), 1, [
+        { type: 'tool_use', id: 'toolu_01AAAAAAAAAAAAAAAAAAAAAA', name: 'Bash', input: { command: 'gh repo view acme-dev/app && echo `acme-dev/app` (acme-dev/app) "acme-dev/app"', remote: 'acme-dev/app', note: 'acme-dev/…', shell: 'sudo -u acme-dev ls' } },
+        { type: 'text', text: 'acme-dev is the owner' },
+      ]),
+    ]);
+    expect((await run(f)).emitted).toBe(1);
+    const text = packText(f.out);
+    expect(text).not.toContain('acme-dev');
+    expect(text).toContain('"remote":"<owner>/app"');
+    expect(text).toContain('<owner>/app && echo `<owner>/app` (<owner>/app) \\"<owner>/app\\"');
+  });
+
+  it('stops the build when a session of another account quotes an account the pack masked, in a tool input', async () => {
+    const f = fixture();
+    const other = join(f.root, 'work', 'lib');
+    mkdirSync(join(other, '.git'), { recursive: true });
+    writeFileSync(join(other, '.git', 'config'), '[remote "origin"]\n\turl = https://github.com/other-co/lib.git\n');
+    f.write(S(1), [user(f, S(1), 1, 'one'), assistant(S(1), 1, [{ type: 'text', text: 'ok' }])]);
+    const second = user(f, S(2), 1, 'two').replace(JSON.stringify(f.cwd), JSON.stringify(other));
+    f.write(S(2), [second, assistant(S(2), 1, [{ type: 'tool_use', id: 'toolu_01BBBBBBBBBBBBBBBBBBBBBB', name: 'Bash', input: { command: 'git clone acme-dev/app' } }])], '-work-oars2');
+    await expect(run(f)).rejects.toThrow(/An owner handle is left in the pack/);
+  });
+
+  it('keeps a word that only holds the account inside a longer one', async () => {
+    const f = fixture();
+    f.write(S(1), [user(f, S(1), 1, 'see notacme-devs and acme-devs.example'), assistant(S(1), 1, [{ type: 'text', text: 'ok' }])]);
+    expect((await run(f)).emitted).toBe(1);
+    expect(packText(f.out)).toContain('notacme-devs and acme-devs.example');
+  });
+
   it('refuses an owners entry whose handles are not a list of names', () => {
     expect(() => parseOwners(JSON.stringify([{ folder: '*', owner: 'x', license: null, handles: 'lamp-co' }]))).toThrow(/handles/);
     expect(() => parseOwners(JSON.stringify([{ folder: '*', owner: 'x', license: null, handles: [''] }]))).toThrow(/handles/);
