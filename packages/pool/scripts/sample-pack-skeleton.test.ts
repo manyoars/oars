@@ -388,7 +388,7 @@ describe('the command', () => {
 });
 
 // t1275: --exclude-names leaves out a session whose skeleton would publish a listed word inside a kept name.
-// The integration word is one the machine's temp path cannot hold (the build prints that path); the boundary cases use `matt`, the brief's own examples.
+// The integration word is one the machine's temp path cannot hold (the build prints that path); the boundary cases use `robin`, the cases the spec names.
 const WORD = 'quillon';
 const skeletonWith = (...names: { kind: string; name: string }[]): string => JSON.stringify({ transcripts: [{ tools: [{ names }] }] });
 
@@ -402,13 +402,13 @@ describe('the names filter', () => {
   };
 
   it('matches a whole word at a boundary, in any case, and not inside a longer word', async () => {
-    const hit = await filterFor(`# the owner\n\nmatt\n`);
-    expect(hit?.(skeletonWith({ kind: 'file', name: 'matt-notes.md' }))).toBe(true);
-    expect(hit?.(skeletonWith({ kind: 'file', name: 'Matt_plan.txt' }))).toBe(true);
-    expect(hit?.(skeletonWith({ kind: 'file', name: 'MATT' }))).toBe(true);
-    expect(hit?.(skeletonWith({ kind: 'file', name: 'matter.ts' }))).toBe(false);
-    expect(hit?.(skeletonWith({ kind: 'file', name: 'format.ts' }))).toBe(false);
-    expect(hit?.(skeletonWith({ kind: 'file', name: 'matt2.ts' }))).toBe(false);
+    const hit = await filterFor(`# the owner\n\nrobin\n`);
+    expect(hit?.(skeletonWith({ kind: 'file', name: 'robin-notes.md' }))).toBe(true);
+    expect(hit?.(skeletonWith({ kind: 'file', name: 'Robin_plan.txt' }))).toBe(true);
+    expect(hit?.(skeletonWith({ kind: 'file', name: 'ROBIN' }))).toBe(true);
+    expect(hit?.(skeletonWith({ kind: 'file', name: 'robinson.ts' }))).toBe(false);
+    expect(hit?.(skeletonWith({ kind: 'file', name: 'chrobin.ts' }))).toBe(false);
+    expect(hit?.(skeletonWith({ kind: 'file', name: 'robin2.ts' }))).toBe(false);
   });
 
   it('reads every kind of name, and lets a comment line list nothing', async () => {
@@ -445,8 +445,7 @@ describe('the names filter', () => {
     expect(code).toBe(0);
     expect(printed.join('\n')).toContain('Left out for a listed name in a kept name: 1.');
     expect(printed.join('\n').toLowerCase()).not.toContain(WORD);
-    const pack = JSON.parse(readFileSync(join(again.out, 'pack.json'), 'utf8')) as { counts: { namesFiltered: number } };
-    expect(pack.counts.namesFiltered).toBe(1);
+    expect(JSON.parse(readFileSync(join(again.out, 'pack.json'), 'utf8'))).toMatchObject({ counts: { namesFiltered: 1 } });
     expect((await validate(again.out))?.violations).toEqual([]);
   });
 

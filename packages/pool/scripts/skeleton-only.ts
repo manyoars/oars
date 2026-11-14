@@ -63,7 +63,7 @@ export const namesFilterOf = async (file: string | undefined): Promise<((skeleto
   });
   const words = text.split(/\r?\n/).map((row) => row.trim()).filter((row) => row !== '' && !row.startsWith('#'));
   if (words.length === 0) return () => false;
-  // A word boundary is any character that is not a letter or a digit, so `matt-notes.md` and `Matt_plan.txt` hold `matt`, and `matter.ts` and `format.ts` do not.
+  // A word boundary is any character that is not a letter or a digit, so `robin-notes.md` and `Robin_plan.txt` hold `robin`, and `robinson.ts` and `chrobin.ts` do not.
   const listed = new RegExp(`(?<![\\p{L}\\p{N}])(?:${words.map(escaped).join('|')})(?![\\p{L}\\p{N}])`, 'iu');
   return (skeleton) => {
     const transcripts = fieldOf(JSON.parse(skeleton), 'transcripts');
