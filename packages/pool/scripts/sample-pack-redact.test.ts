@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { redactTranscript } from '../../cli/src/sessions/redact.js';
 import { deposit, type SessionsRuntime } from '../../cli/src/sessions/store.js';
+import { validate } from './validate-pack.js';
 import { buildPack, parseOwners, type OwnerRule, type PackCounts, type PackOptions } from './sample-pack.js';
 
 const dirs: string[] = [];
@@ -175,6 +176,22 @@ describe('Item 2: the account the repositories live under', () => {
     const text = packText(f.out);
     expect(text).not.toContain('acme-dev');
     expect(text).toContain(`x${String.fromCharCode(92)}n<owner>/app`);
+  });
+
+  it('masks an account inside a program name as a name the record spec accepts, and the pack validates', async () => {
+    const f = fixture();
+    const other = join(f.root, 'work', 'lib');
+    mkdirSync(join(other, '.git'), { recursive: true });
+    writeFileSync(join(other, '.git', 'config'), `[remote "origin"]${String.fromCharCode(10, 9)}url = https://github.com/other-co/lib.git${String.fromCharCode(10)}`);
+    f.write(S(1), [user(f, S(1), 1, 'one'), assistant(S(1), 1, [{ type: 'tool_use', id: 'toolu_01DDDDDDDDDDDDDDDDDDDDDD', name: 'Bash', input: { command: 't123-other-co-do-thing --now' } }])]);
+    const second = user(f, S(2), 1, 'two').replace(JSON.stringify(f.cwd), JSON.stringify(other));
+    f.write(S(2), [second, assistant(S(2), 1, [{ type: 'text', text: 'ok' }])], '-work-oars2');
+    expect((await run(f, { skeletonOnly: true })).emitted).toBe(2);
+    const skeletons = readdirSync(join(f.out, 'sessions'), { recursive: true, withFileTypes: true }).filter((entry) => entry.name === 'skeleton.json');
+    const text = skeletons.map((entry) => readFileSync(join(entry.parentPath, entry.name), 'utf8')).join(String.fromCharCode(10));
+    expect(text).not.toContain('other-co');
+    expect(text).toContain('t123-owner-do-thing');
+    expect((await validate(f.out))?.violations).toEqual([]);
   });
 
   it('stops the build when an account is left only in a decoded string', async () => {
