@@ -394,9 +394,9 @@ const skeletonWith = (...names: { kind: string; name: string }[]): string => JSO
 
 describe('the names filter', () => {
   const filterFor = async (text: string | undefined): Promise<((skeleton: string) => boolean) | undefined> => {
-    if (text === undefined) return namesFilterOf(join(mkdtempSync(join(tmpdir(), 'oars-names-')), 'absent.txt'));
     const dir = mkdtempSync(join(tmpdir(), 'oars-names-'));
     dirs.push(dir);
+    if (text === undefined) return namesFilterOf(join(dir, 'absent.txt'));
     writeFileSync(join(dir, 'words.txt'), text);
     return namesFilterOf(join(dir, 'words.txt'));
   };
@@ -433,7 +433,9 @@ describe('the names filter', () => {
     const counts = await buildPack(f.runtime, opts);
     expect(counts.namesFiltered).toBe(1);
     expect(counts.emitted).toBe(2);
-    expect(counts.scanned).toBe(counts.emitted + counts.excluded.term + (counts.fresh ?? 0) + (counts.namesFiltered ?? 0));
+    // Every numeric reason, so a new one that breaks the sum shows here.
+    const reasons = [...Object.entries(counts).filter(([key]) => !['frame', 'scanned', 'emitted'].includes(key)), ...Object.entries(counts.excluded)].reduce((sum, [, value]) => sum + (typeof value === 'number' ? value : 0), 0);
+    expect(counts.scanned).toBe(counts.emitted + reasons);
     expect(manifest(opts.out).length).toBe(2);
     expect(indexRows(f.owners).filter((row) => row.pack === opts.out).map((row) => row.session)).not.toContain(S(1));
     expect(names(opts.out).filter((file) => file.startsWith('sessions/')).length).toBe(2);
@@ -459,5 +461,7 @@ describe('the names filter', () => {
   it('is refused with no value', async () => {
     const printed: string[] = [];
     expect(await main(['--exclude-names'], { runtime: (await fixture()).runtime, print: (text: string) => printed.push(text), now: () => NOW })).toBe(2);
+    expect(printed.join('
+')).toContain('--exclude-names');
   });
 });
