@@ -2,7 +2,7 @@
 // It states no price and no lot 1 count; /packs holds prices and rights.
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { traceOf, type TraceInput } from './skeleton-trace.js';
+import { MATCH_ID, traceOf, type TraceInput } from './skeleton-trace.js';
 
 export const LOTS_PAGE = 'https://manyoars.com/packs';
 // The license is the owner's to choose before an upload; until then the card states the rights page, as the lots page does. One constant, so a ruling changes one line.
@@ -96,7 +96,7 @@ const keptOf = async (folder: string): Promise<TraceInput[]> => {
     if (isAbsent(error)) return '';
     throw error;
   });
-  const ids = text.split(/\r?\n/).filter((row) => row.trim() !== '').map((row): unknown => field(JSON.parse(row), 'matchId')).filter((id): id is string => typeof id === 'string' && /^[0-9a-f]{64}$/.test(id));
+  const ids = text.split(/\r?\n/).filter((row) => row.trim() !== '').map((row): unknown => field(JSON.parse(row), 'matchId')).filter((id): id is string => typeof id === 'string' && MATCH_ID.test(id));
   return Promise.all(ids.map(async (matchId): Promise<TraceInput> => ({ matchId, skeleton: JSON.parse(await readFile(join(folder, 'sessions', matchId, 'skeleton.json'), 'utf8')) })));
 };
 
