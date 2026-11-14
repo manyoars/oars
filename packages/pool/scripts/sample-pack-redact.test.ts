@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { redactTranscript } from '../../cli/src/sessions/redact.js';
 import { deposit, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { buildPack, parseOwners, type OwnerRule, type PackCounts, type PackOptions } from './sample-pack.js';
 
@@ -148,15 +149,37 @@ describe('Item 2: the account the repositories live under', () => {
     expect(text).toContain('<owner>/app && echo `<owner>/app` (<owner>/app) \\"<owner>/app\\"');
   });
 
-  it('stops the build when a session of another account quotes an account the pack masked, in a tool input', async () => {
+  it('masks an account in a session whose own repository has another origin, in a tool input', async () => {
     const f = fixture();
     const other = join(f.root, 'work', 'lib');
     mkdirSync(join(other, '.git'), { recursive: true });
-    writeFileSync(join(other, '.git', 'config'), '[remote "origin"]\n\turl = https://github.com/other-co/lib.git\n');
+    writeFileSync(join(other, '.git', 'config'), `[remote "origin"]${String.fromCharCode(10, 9)}url = https://github.com/other-co/lib.git${String.fromCharCode(10)}`);
     f.write(S(1), [user(f, S(1), 1, 'one'), assistant(S(1), 1, [{ type: 'text', text: 'ok' }])]);
     const second = user(f, S(2), 1, 'two').replace(JSON.stringify(f.cwd), JSON.stringify(other));
     f.write(S(2), [second, assistant(S(2), 1, [{ type: 'tool_use', id: 'toolu_01BBBBBBBBBBBBBBBBBBBBBB', name: 'Bash', input: { command: 'git clone acme-dev/app' } }])], '-work-oars2');
+    expect((await run(f)).emitted).toBe(2);
+    const text = packText(f.out);
+    expect(text).not.toContain('acme-dev');
+    expect(text).toContain('git clone <owner>/app');
+  });
+
+  it('stops the build when an account is left only in a decoded string', async () => {
+    const f = fixture();
+    const other = join(f.root, 'work', 'lib');
+    mkdirSync(join(other, '.git'), { recursive: true });
+    writeFileSync(join(other, '.git', 'config'), `[remote "origin"]${String.fromCharCode(10, 9)}url = https://github.com/other-co/lib.git${String.fromCharCode(10)}`);
+    f.write(S(1), [user(f, S(1), 1, 'one'), assistant(S(1), 1, [{ type: 'text', text: 'ok' }])]);
+    const second = user(f, S(2), 1, 'two').replace(JSON.stringify(f.cwd), JSON.stringify(other));
+    const call = assistant(S(2), 1, [{ type: 'tool_use', id: 'call_1', name: 'Bash', input: { command: 'git clone acmeXXdev/app' } }]).replace('XX', `${String.fromCharCode(92)}u002d`);
+    f.write(S(2), [second, call], '-work-oars2');
     await expect(run(f)).rejects.toThrow(/An owner handle is left in the pack/);
+  });
+
+  it('never matches a handle inside a placeholder', () => {
+    const line = JSON.stringify({ type: 'user', message: { role: 'user', content: 'see <owner>/x and owner/app' } });
+    const { text } = redactTranscript(line, [], [], 'key', { handles: ['owner'] });
+    expect(text).toContain('<owner>/x and <owner>/app');
+    expect(text).not.toContain('<<');
   });
 
   it('keeps a word that only holds the account inside a longer one', async () => {
