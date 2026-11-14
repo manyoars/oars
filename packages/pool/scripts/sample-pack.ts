@@ -6,7 +6,7 @@ import { createReadStream, existsSync } from 'node:fs';
 import { appendFile, mkdir, mkdtemp, readdir, readFile, rename, rm, rmdir, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { createInterface } from 'node:readline';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { BUYER_KEY_FILE_USAGE, resolveBuyerKey } from '../src/buyer-key.js';
 import { defaultConfigDir } from '../../cli/src/credentials.js';
 import { checkSession, loadTerms, transcriptFilesOf, type Reason } from '../../cli/src/sessions/exclusion.js';
@@ -15,7 +15,7 @@ import { LEADING_TAG, LOCAL_COMMAND_TAGS } from '../../cli/src/sessions/extract.
 import { bucketOf, floorOf, sessionsOf, skeletonOf, type SessionSkeleton, type SkeletonTool, type TranscriptRoot, type WireGate } from '../../cli/src/sessions/pool-wire.js';
 import { shellReader } from '../../cli/src/sessions/projection.js';
 import { contentHash } from '../../cli/src/sessions/read.js';
-import { localNames, makeRedactor, redactTranscript, REDACTION_VERSION } from '../../cli/src/sessions/redact.js';
+import { handleRule, localNames, makeRedactor, redactTranscript, REDACTION_VERSION } from '../../cli/src/sessions/redact.js';
 import { harnessOf, type Harness, type PromptVerify } from '../../cli/src/sessions/schema.js';
 import { loadStore, readRedactDomains, readSkeletons, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { runGit, type Git } from '../../cli/src/sessions/survival.js';
@@ -1316,6 +1316,8 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
   // The files written so far, and the raw ids behind every mask the emitted sessions carry (to the key each stood under): what the pass over the whole pack needs.
   const written: string[] = [];
   const packIds = new Map<string, string>();
+  // The accounts every emitted session masked as `<owner>`: the pass over the whole pack fails the build when one is still in a written file (t1295).
+  const packHandles = new Set<string>();
   const dry = options.dryRun === true;
   // A dry run counts what a real run would write and writes none of it, so `written` (read back by the pass over the whole pack) stays empty.
   const put = async (target: string, body: string): Promise<void> => {
@@ -1385,6 +1387,7 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
     const raws = options.stripThinking === true ? unstripped.map(stripReasoning) : unstripped;
     // The accounts this session's repositories live under: the owners entry's, and what the remote of each working folder names.
     const handles = [...(owner.handles ?? []), ...accountsOf(new Set(raws.flatMap((raw) => [...cwdsOf(raw)])))];
+    for (const handle of handles) packHandles.add(handle);
     // Keyed opaque ids, then `msg_` and `req_` ids, go through the keyed mask first: redaction's entropy rule would turn a real one (mixed case, high entropy) into `<secret>` and cut the link between its lines. `toolu_` ids reach the redactor's `toolId` hook.
     const early = premasked(raws, sessionIds, indexKey, options.buyerKey);
     const texts = early.texts.map((raw) => redactTranscript(raw.replace(VENDOR_ID, (id) => maskOf(indexKey, options.buyerKey, id)), domains, names, injectedKey, { handles, toolId: (id) => maskOf(indexKey, options.buyerKey, id), fetchedHosts: true }).text);
@@ -1460,6 +1463,7 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
   settle();
   // Every file again, now that every emitted session's ids are known: an id one session masked under a key is masked wherever another session quotes it, and a raw one that is left stops the build.
   const finisher = packMaskerOf(packIds, sessionIds, indexKey, options.buyerKey);
+  const handleLeft = handleRule([...packHandles]);
   for (const target of written) {
     const before = await readFile(target, 'utf8');
     const body = finisher.mask(before);
@@ -1467,7 +1471,9 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
       await writeFile(target, body);
       bytes += Buffer.byteLength(body) - Buffer.byteLength(before);
     }
-    const left = finisher.scan([body, ...decodedStrings(body)].join('\n'));
+    const searched = [body, ...decodedStrings(body)].join('\n');
+    if (handleLeft !== undefined && searched.search(handleLeft) >= 0) throw new PackError(`An owner handle is left in the pack (in ${basename(target)}). The unfinished pack stays at ${partial}; delete it after a look, fix the masks, then run again.`);
+    const left = finisher.scan(searched);
     if (left.size > 0) throw new PackError(`A raw id is left in the pack (${[...left].map(([key, count]) => `${key}: ${String(count)}`).join(', ')}). The unfinished pack stays at ${partial}; delete it after a look, fix the masks, then run again.`);
   }
   const manifest = rows.map((row) => `${JSON.stringify(row)}\n`).join('');

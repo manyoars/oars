@@ -261,10 +261,12 @@ const fetchedBy = (lines: readonly JsonObject[]): Map<string, Set<string>> => {
   return byId;
 };
 
-// A handle is a whole path segment (`/acme/app`, `\acme\app`, `git@host:acme/app.git`) or a hyphen-bounded word of an encoded project folder (`-repos-acme-app`).
-const handleRule = (handles: readonly string[]): RegExp | undefined => {
+// A handle is masked as a whole word: not inside a longer alphanumeric run, but after anything else. The rule once demanded a path separator before it, which left a bare `acme/app` (a remote field, a string that
+// starts with it), one after a space, a backtick, a parenthesis or a quote, and one cut by an ellipsis in the clear in tool inputs (t1295).
+/** The rule masking each handle as a whole word; exported for the pack-wide check, which reads the finished files with the same rule. */
+export const handleRule = (handles: readonly string[]): RegExp | undefined => {
   const usable = [...new Set(handles.filter((handle) => handle.length >= MIN_NAME))].sort((a, b) => b.length - a.length);
-  return usable.length === 0 ? undefined : new RegExp(String.raw`(?<=[\\/:-])(?:${usable.map(escapeRegExp).join('|')})(?=[\\/.-]|["'\s]|$)`, 'gi');
+  return usable.length === 0 ? undefined : new RegExp(String.raw`(?<![A-Za-z0-9])(?:${usable.map(escapeRegExp).join('|')})(?![A-Za-z0-9])`, 'gi');
 };
 
 /** A whole transcript body redacted for upload, and how many values were masked (placeholders added, a count and nothing else). `names` are the local usernames to mask wherever they stand as a whole word. */
