@@ -43,7 +43,7 @@ This trace is built from one session in this pack, picked by a fixed rule: the k
 - Prompt: \`transcripts[0].prompts[0]\`. Class \`edit-only\`, 1 failed call, intervention \`unknown\`. The prompt words are not in this pack.
 - Tool steps: \`transcripts[0].tools[0]\` is \`shell.exec\`, \`error\`.
 - Observed result: \`transcripts[0].tools[0]\` ended \`error\` with error code \`other\`. The next calls were \`file.edit\`; a file write followed.
-- Candidate task: use the prompt class and the steps up to this result to build a task that checks how an agent recovers. You would write the repository state and the grader.
+- Candidate task: from \`transcripts[0].prompts[0]\` and \`transcripts[0].tools[0]\` to \`transcripts[0].tools[0]\`, build a task that checks how an agent recovers. You would write the repository state and the grader.
 - Unresolved: the repository and commit, the expected answer, the grader or replay command, and the prompt text. This pack holds none of them.
 
 ## What is counted

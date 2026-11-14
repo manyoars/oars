@@ -96,7 +96,7 @@ const keptOf = async (folder: string): Promise<TraceInput[]> => {
     if (isAbsent(error)) return '';
     throw error;
   });
-  const ids = text.split(/\r?\n/).filter((row) => row.trim() !== '').map((row): unknown => field(JSON.parse(row), 'matchId')).filter((id): id is string => typeof id === 'string');
+  const ids = text.split(/\r?\n/).filter((row) => row.trim() !== '').map((row): unknown => field(JSON.parse(row), 'matchId')).filter((id): id is string => typeof id === 'string' && /^[0-9a-f]{64}$/.test(id));
   return Promise.all(ids.map(async (matchId): Promise<TraceInput> => ({ matchId, skeleton: JSON.parse(await readFile(join(folder, 'sessions', matchId, 'skeleton.json'), 'utf8')) })));
 };
 
