@@ -1878,7 +1878,7 @@ describe('--max-heap-mb (t1271)', () => {
     expect(run.status).toBe(2);
   });
 
-  it('does not run again when the heap is enough, and a default run prints nothing extra', () => {
+  it('does not run again when the heap is enough, and a run with --max-heap-mb 64 prints nothing extra', () => {
     const run = spawnSync(process.execPath, ['--max-old-space-size=256', script, '--max-heap-mb', '64'], { encoding: 'utf8' });
     expect(run.stderr).not.toContain('running again');
     expect(run.stdout).toContain('Missing a required option.');
