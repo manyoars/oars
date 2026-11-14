@@ -1466,7 +1466,9 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
   const handleLeft = handleRule([...packHandles]);
   for (const target of written) {
     const before = await readFile(target, 'utf8');
-    const body = finisher.mask(before);
+    // An account another session's repository lives under is masked here too, in the clear: the per-session list never held it.
+    const masked = finisher.mask(before);
+    const body = handleLeft === undefined ? masked : masked.replace(handleLeft, '<owner>');
     if (body !== before) {
       await writeFile(target, body);
       bytes += Buffer.byteLength(body) - Buffer.byteLength(before);

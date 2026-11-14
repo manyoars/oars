@@ -266,7 +266,7 @@ const fetchedBy = (lines: readonly JsonObject[]): Map<string, Set<string>> => {
 /** The rule masking each handle as a whole word; exported for the pack-wide check, which reads the finished files with the same rule. */
 export const handleRule = (handles: readonly string[]): RegExp | undefined => {
   const usable = [...new Set(handles.filter((handle) => handle.length >= MIN_NAME))].sort((a, b) => b.length - a.length);
-  return usable.length === 0 ? undefined : new RegExp(String.raw`(?<![A-Za-z0-9])(?:${usable.map(escapeRegExp).join('|')})(?![A-Za-z0-9])`, 'gi');
+  return usable.length === 0 ? undefined : new RegExp(String.raw`(?<![A-Za-z0-9<])(?:${usable.map(escapeRegExp).join('|')})(?![A-Za-z0-9>])`, 'gi');
 };
 
 /** A whole transcript body redacted for upload, and how many values were masked (placeholders added, a count and nothing else). `names` are the local usernames to mask wherever they stand as a whole word. */
