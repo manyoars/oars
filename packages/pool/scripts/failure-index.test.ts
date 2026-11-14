@@ -268,11 +268,13 @@ describe('the command', () => {
     expect(garbledRun.printed.join('\n')).not.toContain('made-up');
     writeFileSync(join(pack, 'manifest.jsonl'), 'made-up garbled manifest {\n');
     const garbledManifest = await run([pack, '--out', out]);
+    expect(garbledManifest.code).toBe(2);
     expect(garbledManifest.printed.join('\n')).toMatch(/manifest\.jsonl:1 is not valid JSON/);
     expect(garbledManifest.printed.join('\n')).not.toContain('made-up');
     const garbledSkeleton = packOf([{ id: A, transcripts: [SESSION_C] }]);
     writeFileSync(join(garbledSkeleton, 'sessions', A, 'skeleton.json'), 'made-up garbled skeleton {');
     const skeletonRun = await run([garbledSkeleton, '--out', out]);
+    expect(skeletonRun.code).toBe(2);
     expect(skeletonRun.printed.join('\n')).toMatch(/skeleton\.json is not valid JSON/);
     expect(skeletonRun.printed.join('\n')).not.toContain('made-up');
     const broken = packOf([{ id: A, transcripts: [SESSION_C] }]);
