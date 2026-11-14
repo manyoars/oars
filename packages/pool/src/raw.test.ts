@@ -506,6 +506,19 @@ describe('a ledger row, never the bytes', () => {
     expect(Number(fieldOf(row, 'stored_at'))).toBeGreaterThanOrEqual(before);
   });
 
+  it('keeps each deposit under the redaction version it was stamped with: a 4 stays 4 beside a 5 (t1303)', async () => {
+    const { token, account } = await member();
+    const [older, newer] = [transcript(300, 11), transcript(300, 12)];
+    const [olderHash, newerHash] = [await hex(older), await hex(newer)];
+    for (const [hash, bytes, version] of [[olderHash, older, '4'], [newerHash, newer, '5']] as const) {
+      const stamped = { ...grant, 'oars-redaction-version': version };
+      await sendParts(hash, bytes, token, stamped);
+      expect((await complete(hash, 1, bytes.length, token, stamped)).status).toBe(201);
+    }
+    const stamps = (await rowsOf(account)).map((row): [unknown, unknown] => [fieldOf(row, 'sha256'), fieldOf(row, 'redaction_version')]);
+    expect(stamps.sort()).toEqual([[olderHash, '4'], [newerHash, '5']].sort());
+  });
+
   it('puts no raw body in D1: no table, in any column, holds the transcript', async () => {
     const { token } = await member();
     const marker = 'RAW-MARKER-the-user-said-this-secret-sentence';

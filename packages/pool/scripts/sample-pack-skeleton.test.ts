@@ -363,7 +363,7 @@ describe('the data card', () => {
   });
 
   it('the card audit fails on a line the template lacks and on a census name that is free text', () => {
-    const good = cardOf({ olderThanDays: 30, built: '2026-11-13T00:00:00Z', redactionVersion: '4', reasoning: 'kept' }, { sessions: 1, harness: { 'claude-code': 1 }, harnessVersion: {}, model: { 'claude-opus-5-5': 1 }, errorCode: {}, recovery: { 'edit followed': 1 }, intervention: {}, promptClass: {}, turnBucket: { '2': 1 } });
+    const good = cardOf({ olderThanDays: 30, built: '2026-11-13T00:00:00Z', redactionVersion: '5', reasoning: 'kept' }, { sessions: 1, harness: { 'claude-code': 1 }, harnessVersion: {}, model: { 'claude-opus-5-5': 1 }, errorCode: {}, recovery: { 'edit followed': 1 }, intervention: {}, promptClass: {}, turnBucket: { '2': 1 } });
     expect(auditCard(good)).toEqual([]);
     expect(auditCard(good.replace('`claude-opus-5-5`', '`fix the login bug`'))).toHaveLength(1);
     expect(auditCard(good.replace('`edit followed`', '`the secret plan`'))).toHaveLength(1);

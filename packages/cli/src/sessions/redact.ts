@@ -309,4 +309,4 @@ export const redactTranscript = (body: string, domains: readonly string[] = [], 
 };
 
 /** The version of the rules above, stated to the pool with every raw part; a change to any rule of `redactTranscript` raises it. */
-export const REDACTION_VERSION = '4';
+export const REDACTION_VERSION = '5';
