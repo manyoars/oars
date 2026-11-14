@@ -40,7 +40,7 @@ export const USAGE = [
   '  --strip-thinking     leave the reasoning of the model out of the transcripts: every thinking and redacted_thinking block (text, signature, encrypted data) and every Codex reasoning item; the manifest and pack.json say reasoning: stripped (kept otherwise). The thinking-token count in the skeleton stays',
   '  --skeleton-only      write no transcript: the manifest rows (transcripts: 0), skeleton.json per session, census.json, pack.json, and a README.md data card made from the last two. Sessions are kept only when older than --older-than days (default 30 here)',
   '  --older-than <days>  leave out a session whose last line is newer than this many days (a session with no date is left out too); counted as fresh',
-  '  --dry-run            run every rule and print the session count and the size the pack would have, and write nothing: no pack, no .partial folder, no index.jsonl row (a --deposits run still captures into a temporary folder and removes it)',
+  '  --dry-run            run every selection rule and print the session count and the size the pack would have, and write nothing (it returns before the pack-wide re-mask and raw-id check, so a real run can still stop where a dry run does not): no pack, no .partial folder, no index.jsonl row (a --deposits run still captures into a temporary folder and removes it)',
   '  --max-heap-mb <mb>   the V8 heap a run needs (default 8192, what a full open-skeleton build needed). The bundled command (npm run sample-pack) runs itself again under --max-old-space-size=<mb> when started with less, and says so on stderr',
   '  --exclude-manifest <path>  a lot\'s manifest.jsonl (or its pack folder): every session it holds is left out, found through index.jsonl beside the owners file; counted as inExcludedLot',
   '  --exclude-names <file>  a local file of words, one per line (blank and # lines skipped): a session whose skeleton holds a kept name (any kind) with a listed word as a whole word, ignoring case, is left out and counted as namesFiltered. A word boundary is any character that is not a letter or a digit. The words are never printed or written',
@@ -225,7 +225,7 @@ export interface PackCounts {
   objectedAccount?: number;
   /** Only for a pack built `--deposits`: why Raw Copies were left out before the rules above. */
   deposits?: DepositCounts;
-  /** Only for a `--dry-run`: the bytes a real run records as `bytes` in `pack.json` (the final pass over the whole pack can still change a few). */
+  /** Only for a `--dry-run`: the bytes a real run records as `bytes` in `pack.json` (the pack-wide re-mask and raw-id check run only in a real run, and can still change a few bytes or stop it). */
   bytes?: number;
 }
 
