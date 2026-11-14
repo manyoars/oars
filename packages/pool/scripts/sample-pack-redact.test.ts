@@ -163,6 +163,20 @@ describe('Item 2: the account the repositories live under', () => {
     expect(text).toContain('git clone <owner>/app');
   });
 
+  it('masks an account at the start of a line of a tool input, after a JSON escape, in a session of another origin', async () => {
+    const f = fixture();
+    const other = join(f.root, 'work', 'lib');
+    mkdirSync(join(other, '.git'), { recursive: true });
+    writeFileSync(join(other, '.git', 'config'), `[remote "origin"]${String.fromCharCode(10, 9)}url = https://github.com/other-co/lib.git${String.fromCharCode(10)}`);
+    f.write(S(1), [user(f, S(1), 1, 'one'), assistant(S(1), 1, [{ type: 'text', text: 'ok' }])]);
+    const second = user(f, S(2), 1, 'two').replace(JSON.stringify(f.cwd), JSON.stringify(other));
+    f.write(S(2), [second, assistant(S(2), 1, [{ type: 'tool_use', id: 'toolu_01CCCCCCCCCCCCCCCCCCCCCC', name: 'Bash', input: { command: 'x\nacme-dev/app\r\tacme-dev/app' } }])], '-work-oars2');
+    expect((await run(f)).emitted).toBe(2);
+    const text = packText(f.out);
+    expect(text).not.toContain('acme-dev');
+    expect(text).toContain(`x${String.fromCharCode(92)}n<owner>/app`);
+  });
+
   it('stops the build when an account is left only in a decoded string', async () => {
     const f = fixture();
     const other = join(f.root, 'work', 'lib');

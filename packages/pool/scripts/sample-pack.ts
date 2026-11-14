@@ -1463,7 +1463,7 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
   settle();
   // Every file again, now that every emitted session's ids are known: an id one session masked under a key is masked wherever another session quotes it, and a raw one that is left stops the build.
   const finisher = packMaskerOf(packIds, sessionIds, indexKey, options.buyerKey);
-  const handleLeft = handleRule([...packHandles]);
+  const handleLeft = handleRule([...packHandles], true);
   for (const target of written) {
     const before = await readFile(target, 'utf8');
     // An account another session's repository lives under is masked here too, in the clear: the per-session list never held it.
