@@ -121,7 +121,7 @@ const row = (matchId = MATCH): { [key: string]: unknown } => ({
   models: { 'claude-opus-5-5': 2 },
   turns: 2,
   skeleton: 'skeleton.json',
-  redactionVersion: '4',
+  redactionVersion: '5',
   startedAt: '2026-06-01T10:00:00.000Z',
   endedAt: '2026-06-01T10:05:00.000Z',
 });
@@ -189,6 +189,11 @@ describe('a pack', () => {
     const printed = await lines(pack());
     expect(printed.code).toBe(0);
     expect(printed.out).toEqual([`Conforms to the session record spec, version ${SPEC_VERSION}: 1 manifest row, 1 record, 1 transcript.`]);
+  });
+
+  it('still conforms when the row was built at redaction version 4 (t1303)', async () => {
+    const older = { ...row(), redactionVersion: '4' };
+    expect(found((await validate(pack({ row: older })))?.violations)).toEqual([]);
   });
 
   it('conforms with no record, when the row names none', async () => {

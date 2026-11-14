@@ -187,8 +187,7 @@ describe('Item 2: the account the repositories live under', () => {
     const second = user(f, S(2), 1, 'two').replace(JSON.stringify(f.cwd), JSON.stringify(other));
     f.write(S(2), [second, assistant(S(2), 1, [{ type: 'text', text: 'ok' }])], '-work-oars2');
     expect((await run(f, { skeletonOnly: true })).emitted).toBe(2);
-    const skeletons = readdirSync(join(f.out, 'sessions'), { recursive: true, withFileTypes: true }).filter((entry) => entry.name === 'skeleton.json');
-    const text = skeletons.map((entry) => readFileSync(join(entry.parentPath, entry.name), 'utf8')).join(String.fromCharCode(10));
+    const text = packText(f.out);
     expect(text).not.toContain('other-co');
     expect(text).toContain('t123-owner-do-thing');
     expect((await validate(f.out))?.violations).toEqual([]);
@@ -297,7 +296,7 @@ describe('Item 4: orchestration lead sessions are not drawn', () => {
     const counts = await run(f);
     expect(counts).toMatchObject({ lead: 2, emitted: 3 });
     const pack: unknown = JSON.parse(readFileSync(join(f.out, 'pack.json'), 'utf8'));
-    expect(pack).toMatchObject({ counts: { lead: 2 }, redactionVersion: '4' });
+    expect(pack).toMatchObject({ counts: { lead: 2 }, redactionVersion: '5' });
     expect(packText(f.out)).not.toContain('leading');
   });
 

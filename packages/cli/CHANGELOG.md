@@ -4,6 +4,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 
 ## Unreleased
 
+- `REDACTION_VERSION` is 5: every pack, manifest row, upload, and deposit made from now on is stamped 5, so output made with the handle rule in tool inputs and the plain `owner` mask reads apart from version 4 output. Nothing stored is rewritten and version 4 rows and packs still read; a raw copy queued under version 4 is not sent and is made again at 5.
 - The `release-mcp` workflow waits (every 15 seconds, up to 10 minutes) until npm serves the tagged `@manyoars/oars` version before listing it on the MCP registry, and fails with one line naming the package, version, and time waited if it never does.
 
 ## 0.5.5 (2026-11-13)
