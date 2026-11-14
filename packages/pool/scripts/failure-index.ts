@@ -9,6 +9,7 @@ import { RECOVERY_CALLS } from '../../cli/src/sessions/recovery-calls.js';
 import { EXIT_CLASSES, HTTP_STATUSES } from '../../cli/src/sessions/schema.js';
 import { parseArgs, refuseInsideRepository, writeJson } from './real-work-table.js';
 import { PackError } from './sample-pack.js';
+import { MATCH_ID } from './skeleton-trace.js';
 
 export const USAGE = [
   'Usage: npm run failure-index -w packages/pool -- <pack folder> --out <dir> [--text-sample <n> --seed <text>]',
@@ -198,7 +199,7 @@ export const readPack = async (pack: string): Promise<PackSession[]> => {
   for (const [index, line] of rows.entries()) {
     const where = `${manifest}:${String(index + 1)}`;
     const row = jsonOf(line, where);
-    if (!isFields(row) || typeof row.matchId !== 'string' || !/^[0-9a-f]{64}$/.test(row.matchId) || typeof row.skeleton !== 'string' || typeof row.transcripts !== 'number') throw new PackError(`${where} lacks a match id, a skeleton, or a transcript count.`);
+    if (!isFields(row) || typeof row.matchId !== 'string' || !MATCH_ID.test(row.matchId) || typeof row.skeleton !== 'string' || typeof row.transcripts !== 'number') throw new PackError(`${where} lacks a match id, a skeleton, or a transcript count.`);
     const file = join(pack, 'sessions', row.matchId, row.skeleton);
     const value = jsonOf(await readText(file, 'skeleton'), file);
     const parsed = parseSkeleton(isFields(value) ? { ...value, id: STAND_IN_ID } : value);
@@ -257,8 +258,8 @@ const textLengthOf = (content: unknown): number => {
   return total;
 };
 
-/** A user turn starts with a string, or with a text block; a tool result alone is the harness answering the assistant. */
-const startsPrompt = (content: unknown): boolean => typeof content === 'string' || (Array.isArray(content) && content.some((block) => isFields(block) && block.type === 'text'));
+/** A user turn starts with a string, or with a text block; a tool result, even with hook text beside it, is the harness answering the assistant. */
+const startsPrompt = (content: unknown): boolean => typeof content === 'string' || (Array.isArray(content) && content.some((block) => isFields(block) && block.type === 'text') && !content.some((block) => isFields(block) && block.type === 'tool_result'));
 
 /** Reads a Claude Code transcript: call k is the k-th distinct `tool_use` id of the assistant lines, the order the skeleton's `tools` holds. */
 export const transcriptOf = (text: string, file = 'transcript'): Transcript => {
@@ -327,7 +328,8 @@ export const yieldOf = async (pack: string, sessions: readonly PackSession[], ep
   for (const session of sessions) {
     const own = episodes.filter((episode) => episode.session === session.matchId);
     if (!drawn.has(session.matchId) || own.length === 0) continue;
-    const text = session.transcriptFiles > 0 ? transcriptOf(await readText(join(pack, 'sessions', session.matchId, 'main.jsonl'), 'transcript'), join(pack, 'sessions', session.matchId, 'main.jsonl')) : undefined;
+    const file = join(pack, 'sessions', session.matchId, 'main.jsonl');
+    const text = session.transcriptFiles > 0 ? transcriptOf(await readText(file, 'transcript'), file) : undefined;
     const tools = session.skeleton.transcripts[0]?.tools ?? [];
     for (const episode of own) checks.push(checkEpisode(episode, tools, text));
   }

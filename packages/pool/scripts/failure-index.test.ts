@@ -265,16 +265,16 @@ describe('the command', () => {
     const garbledRun = await run([garbled, '--out', out, '--text-sample', '5', '--seed', 's']);
     expect(garbledRun.code).toBe(2);
     expect(garbledRun.printed.join('\n')).toMatch(/main\.jsonl:2 is not valid JSON/);
-    expect(garbledRun.printed.join('\n')).not.toContain('garbled');
+    expect(garbledRun.printed.join('\n')).not.toContain('made-up');
     writeFileSync(join(pack, 'manifest.jsonl'), 'made-up garbled manifest {\n');
     const garbledManifest = await run([pack, '--out', out]);
     expect(garbledManifest.printed.join('\n')).toMatch(/manifest\.jsonl:1 is not valid JSON/);
-    expect(garbledManifest.printed.join('\n')).not.toContain('garbled');
+    expect(garbledManifest.printed.join('\n')).not.toContain('made-up');
     const garbledSkeleton = packOf([{ id: A, transcripts: [SESSION_C] }]);
     writeFileSync(join(garbledSkeleton, 'sessions', A, 'skeleton.json'), 'made-up garbled skeleton {');
     const skeletonRun = await run([garbledSkeleton, '--out', out]);
     expect(skeletonRun.printed.join('\n')).toMatch(/skeleton\.json is not valid JSON/);
-    expect(skeletonRun.printed.join('\n')).not.toContain('garbled');
+    expect(skeletonRun.printed.join('\n')).not.toContain('made-up');
     const broken = packOf([{ id: A, transcripts: [SESSION_C] }]);
     writeFileSync(join(broken, 'sessions', A, 'skeleton.json'), '{"format":1}');
     expect((await run([broken, '--out', out])).printed.join('\n')).toMatch(/is not a skeleton the pool reads/);
@@ -321,6 +321,11 @@ describe('the text check', () => {
     // A reply that only the next prompt has is not this episode's reply.
     const laterOnly = transcriptText(SESSION_A).split('\n').filter((line) => !line.includes('made-up reply 0')).join('\n');
     expect(checkEpisode(last.episode, toolsIn(last.session), transcriptOf(laterOnly))).toMatchObject({ class: 'partly', reason: 'no reply after the error' });
+    // Hook text beside a tool result does not make that line a new prompt, so the reply after it still counts.
+    const shortText = transcriptText(SESSION_A.slice(0, 6));
+    const hooked = shortText.split('\n').flatMap((line) => (line.includes('made-up reply 1') ? [JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_0', content: 'made-up' }, { type: 'text', text: 'made-up hook' }] } }), line] : [line])).join('\n');
+    expect(hooked).toContain('made-up hook');
+    expect(checkEpisode(last.episode, toolsIn(last.session).slice(0, 6), transcriptOf(hooked)).class).toBe('supports');
   });
 
   it('leaves a subagent transcript unresolved and skips a line that is not a message', async () => {
