@@ -13,48 +13,52 @@ const run = (...args: string[]) => spawnSync(process.execPath, [script, ...args]
 
 const TABLES = [
   'Pack: fixture (built 2026-01-01T00:00:00.000Z, key fixture)',
-  'Sessions read: 3 of 4 manifest rows. Skipped: 5.',
+  'Sessions read: 3 of 5 manifest rows. Skipped: 7.',
   '  skipped: manifest.jsonl line 3: not valid JSON',
   '  skipped: manifest.jsonl line 4: harness version is not text',
+  '  skipped: manifest.jsonl line 6: not a manifest row',
   '  skipped: sessions/ccc/skeleton.json: tool 1 of transcript 0 is not an object',
   '  skipped: sessions/ccc/skeleton.json: transcript 1 has no tools list',
   '  skipped: sessions/ddd/skeleton.json: not valid JSON',
+  '  skipped: sessions/eee/skeleton.json: no transcripts list',
   '',
   'Failed calls per error code',
   '  1      2',
-  '  other  1',
-  '  total  3',
+  '  other  2',
+  '  total  4',
   '',
   'Failed calls by what followed',
   '  edit followed     1',
   '  no edit followed  2',
-  '  not recorded      0',
+  '  not recorded      1',
   '',
   'Sessions per harness version',
   '  2.1.1  2',
   '  2.1.2  2',
-  '  2.1.3  1',
+  '  2.1.3  2',
   '',
 ];
 
 const EXPECTED = {
   pack: { name: 'fixture', built: '2026-01-01T00:00:00.000Z', keyId: 'fixture' },
-  manifestRows: 4,
+  manifestRows: 5,
   sessionsRead: 3,
   skipped: [
     { file: 'manifest.jsonl', line: 3, reason: 'not valid JSON' },
     { file: 'manifest.jsonl', line: 4, reason: 'harness version is not text' },
+    { file: 'manifest.jsonl', line: 6, reason: 'not a manifest row' },
     { file: 'sessions/ccc/skeleton.json', reason: 'tool 1 of transcript 0 is not an object' },
     { file: 'sessions/ccc/skeleton.json', reason: 'transcript 1 has no tools list' },
     { file: 'sessions/ddd/skeleton.json', reason: 'not valid JSON' },
+    { file: 'sessions/eee/skeleton.json', reason: 'no transcripts list' },
   ],
-  failedCallsPerErrorCode: { '1': 2, other: 1 },
-  failedCallsByWhatFollowed: { 'edit followed': 1, 'no edit followed': 2, 'not recorded': 0 },
-  sessionsPerHarnessVersion: { '2.1.1': 2, '2.1.2': 2, '2.1.3': 1 },
+  failedCallsPerErrorCode: { '1': 2, other: 2 },
+  failedCallsByWhatFollowed: { 'edit followed': 1, 'no edit followed': 2, 'not recorded': 1 },
+  sessionsPerHarnessVersion: { '2.1.1': 2, '2.1.2': 2, '2.1.3': 2 },
 };
 
 describe('open-pack-counts recipe', () => {
-  it('prints the failed-call table and the version table for the fixture pack, with the zero row and both skips', () => {
+  it('prints the failed-call table and the version table for the fixture pack, with the zero row and every skip', () => {
     const r = run(fixture);
     expect(r.status).toBe(0);
     expect(r.stdout.split('\n')).toEqual([...TABLES, '']);
@@ -70,11 +74,10 @@ describe('open-pack-counts recipe', () => {
     expect(countPack(fixture, undefined)).toEqual(EXPECTED);
   });
 
-
   it('answers a changed question with --by model: the same failed calls split by the model of the prompt', () => {
     const r = run(fixture, '--by', 'model');
     expect(r.status).toBe(0);
-    expect(r.stdout).toContain('Failed calls per model\n  model-a  2\n  model-b  1\n  total    3\n');
+    expect(r.stdout).toContain('Failed calls per model\n  model-a  2\n  model-b  1\n  unknown  1\n  total    4\n');
     expect(r.stdout).not.toBe(run(fixture).stdout);
   });
 
@@ -82,10 +85,10 @@ describe('open-pack-counts recipe', () => {
     const r = run(fixture, '--by', 'class');
     expect(r.status).toBe(0);
     expect(r.stdout).toContain(
-      ['Failed calls per prompt class', '  edit-verify  2', '  research     1', '  total        3', ''].join('\n'),
+      ['Failed calls per prompt class', '  edit-verify  2', '  research     1', '  unknown      1', '  total        4', ''].join('\n'),
     );
     expect(JSON.parse(run(fixture, '--json', '--by', 'model').stdout)).toMatchObject({
-      failedCallsPerModel: { 'model-a': 2, 'model-b': 1 },
+      failedCallsPerModel: { 'model-a': 2, 'model-b': 1, unknown: 1 },
     });
   });
 
