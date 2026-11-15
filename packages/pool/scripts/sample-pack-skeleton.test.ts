@@ -123,6 +123,7 @@ const CARD_LINES: readonly RegExp[] = [
   /^- Fresher sessions, whole transcripts, and rights for use: https:\/\/manyoars\.com\/packs\.$/,
   /^## Is a pack right for you\?$/, /^What a pack is for, and what it is not\.$/, /^\| Use \| Answer \|$/, /^\|---\|---\|$/,
   ...FIT_ROWS.map(([use, answer]) => new RegExp(`^\\| ${escapeRe(use)} \\| ${escapeRe(answer)} \\|$`)),
+  /^Prompts with no recorded model are left out of this table: d+. The intervention table below does not leave them out.$/,
   /^## Try the free sample first$/,
   /^The free transcript sample comes before any payment\. Ask for it at https:\/\/manyoars\.com\/packs, or write to support@manyoars\.com with the subject "Session pack sample"\. Tell us what you are evaluating\. A person answers\.$/,
   /^A sample of our first lot goes to anyone who asks, with no form and no name\.$/,

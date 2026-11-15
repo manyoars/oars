@@ -46,3 +46,17 @@ describe('the card defines unknown where the intervention table starts', () => {
     expect(bare).not.toContain('in this pack:');
   });
 });
+
+describe('the card says why the model table totals less than the intervention table', () => {
+  it('prints the count of prompts with no recorded model, right under the model table title', () => {
+    const rows = lines(cardOf(PACK, CENSUS, KEPT));
+    const at = rows.indexOf('**Prompts per model**');
+    expect(rows[at + 2]).toBe('Prompts with no recorded model are left out of this table: 2. The intervention table below does not leave them out.');
+  });
+
+  it('prints nothing when every prompt names a model, or when there is no kept session to count', () => {
+    const named: TraceInput[] = [{ matchId: MATCH(1), skeleton: { transcripts: [{ prompts: [prompt('none', 'claude-opus-5-5')] }] } }];
+    expect(cardOf(PACK, CENSUS, named)).not.toContain('no recorded model');
+    expect(cardOf(PACK, CENSUS)).not.toContain('no recorded model');
+  });
+});
