@@ -5,7 +5,7 @@ One script. It reads the files of an open skeleton pack and prints three small t
 ## Get the pack
 
 The pack is a folder. This recipe was checked against the pack with release ID `open-skeleton-2026-11-14-card` (built 2026-11-14T12:02:36.240Z, key `d55a57e14949f104`, redaction version 4). The pack is offered on https://manyoars.com/packs, the page the pack's own README names. <!-- wording: owner read pending -->
-The pack's own README states the rights it is offered under: https://manyoars.com/packs#rights. This recipe does not grant or change those rights.
+The pack's own README states the rights it is offered under: https://manyoars.com/packs#rights. This recipe does not grant or change those rights. <!-- wording: owner read pending -->
 
 ## Run it
 
@@ -41,7 +41,8 @@ adds this table:
 Failed calls per model
   model-a  2
   model-b  1
-  total    3
+  unknown  2
+  total    5
 ```
 
 To ask something else, edit the `by` branch in `countPack` in `open-pack-counts.mjs` (the lines that pick `frame.model` or `cls`). The fields it can read are in `docs/session-record.md`.

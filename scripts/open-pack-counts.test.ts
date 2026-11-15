@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { cpSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { countPack } from '../recipes/open-pack-counts/open-pack-counts.mjs';
@@ -13,24 +13,25 @@ const run = (...args: string[]) => spawnSync(process.execPath, [script, ...args]
 
 const TABLES = [
   'Pack: fixture (built 2026-01-01T00:00:00.000Z, key fixture)',
-  'Sessions read: 3 of 5 manifest rows. Skipped: 7.',
+  'Sessions read: 3 of 5 manifest rows. Skipped: 8.',
   '  skipped: manifest.jsonl line 3: not valid JSON',
   '  skipped: manifest.jsonl line 4: harness version is not text',
   '  skipped: manifest.jsonl line 6: not a manifest row',
   '  skipped: sessions/ccc/skeleton.json: tool 1 of transcript 0 is not an object',
+  '  skipped: sessions/ccc/skeleton.json: tool 2 of transcript 0 has an error code that is not text',
   '  skipped: sessions/ccc/skeleton.json: transcript 1 has no tools list',
   '  skipped: sessions/ddd/skeleton.json: not valid JSON',
   '  skipped: sessions/eee/skeleton.json: no transcripts list',
   '',
   'Failed calls per error code',
   '  1      2',
-  '  other  2',
-  '  total  4',
+  '  other  3',
+  '  total  5',
   '',
   'Failed calls by what followed',
   '  edit followed     1',
   '  no edit followed  2',
-  '  not recorded      1',
+  '  not recorded      2',
   '',
   'Sessions per harness version',
   '  2.1.1  2',
@@ -48,12 +49,13 @@ const EXPECTED = {
     { file: 'manifest.jsonl', line: 4, reason: 'harness version is not text' },
     { file: 'manifest.jsonl', line: 6, reason: 'not a manifest row' },
     { file: 'sessions/ccc/skeleton.json', reason: 'tool 1 of transcript 0 is not an object' },
+    { file: 'sessions/ccc/skeleton.json', reason: 'tool 2 of transcript 0 has an error code that is not text' },
     { file: 'sessions/ccc/skeleton.json', reason: 'transcript 1 has no tools list' },
     { file: 'sessions/ddd/skeleton.json', reason: 'not valid JSON' },
     { file: 'sessions/eee/skeleton.json', reason: 'no transcripts list' },
   ],
-  failedCallsPerErrorCode: { '1': 2, other: 2 },
-  failedCallsByWhatFollowed: { 'edit followed': 1, 'no edit followed': 2, 'not recorded': 1 },
+  failedCallsPerErrorCode: { '1': 2, other: 3 },
+  failedCallsByWhatFollowed: { 'edit followed': 1, 'no edit followed': 2, 'not recorded': 2 },
   sessionsPerHarnessVersion: { '2.1.1': 2, '2.1.2': 2, '2.1.3': 2 },
 };
 
@@ -77,7 +79,7 @@ describe('open-pack-counts recipe', () => {
   it('answers a changed question with --by model: the same failed calls split by the model of the prompt', () => {
     const r = run(fixture, '--by', 'model');
     expect(r.status).toBe(0);
-    expect(r.stdout).toContain('Failed calls per model\n  model-a  2\n  model-b  1\n  unknown  1\n  total    4\n');
+    expect(r.stdout).toContain('Failed calls per model\n  model-a  2\n  model-b  1\n  unknown  2\n  total    5\n');
     expect(r.stdout).not.toBe(run(fixture).stdout);
   });
 
@@ -85,10 +87,10 @@ describe('open-pack-counts recipe', () => {
     const r = run(fixture, '--by', 'class');
     expect(r.status).toBe(0);
     expect(r.stdout).toContain(
-      ['Failed calls per prompt class', '  edit-verify  2', '  research     1', '  unknown      1', '  total        4', ''].join('\n'),
+      ['Failed calls per prompt class', '  edit-verify  2', '  research     1', '  unknown      2', '  total        5', ''].join('\n'),
     );
     expect(JSON.parse(run(fixture, '--json', '--by', 'model').stdout)).toMatchObject({
-      failedCallsPerModel: { 'model-a': 2, 'model-b': 1, unknown: 1 },
+      failedCallsPerModel: { 'model-a': 2, 'model-b': 1, unknown: 2 },
     });
   });
 
@@ -101,6 +103,19 @@ describe('open-pack-counts recipe', () => {
       expect(r.status).toBe(1);
       expect(r.stderr).toContain(join(dir, 'sessions', 'bbb', 'skeleton.json'));
       expect(r.stdout).toBe('');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to unknown build date and key when the pack has no pack.json', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'open-pack-counts-'));
+    try {
+      cpSync(fixture, dir, { recursive: true });
+      rmSync(join(dir, 'pack.json'));
+      const r = run(dir);
+      expect(r.status).toBe(0);
+      expect(r.stdout.split('\n')[0]).toBe(`Pack: ${basename(dir)} (built unknown, key unknown)`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
