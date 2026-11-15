@@ -36,7 +36,7 @@ const count = (value: unknown, what: string): number => {
 const field = (value: unknown, key: string): unknown => (typeof value === 'object' && value !== null ? Object.getOwnPropertyDescriptor(value, key)?.value : undefined);
 
 const table = (title: string, tally: Counted, about: readonly string[] = []): string[] =>
-  Object.keys(tally).length === 0 ? [] : ['', `**${title}**`, '', ...about.flatMap((sentence) => [sentence, '']), ...Object.entries(tally).map(([name, n]) => `- \`${name}\`: ${String(n)}`)];
+  Object.keys(tally).length === 0 && about.length === 0 ? [] : ['', `**${title}**`, '', ...about.flatMap((sentence) => [sentence, '']), ...Object.entries(tally).map(([name, n]) => `- \`${name}\`: ${String(n)}`)];
 
 export const SESSIONS_STORE_DOC = 'https://github.com/manyoars/oars/blob/main/docs/sessions-store.md';
 
@@ -58,14 +58,16 @@ const unknownOf = (kept: readonly TraceInput[]): { all: number; last: number } =
   return tally;
 };
 
-/** How many prompts of the kept sessions record no model: the prompts the model table leaves out, as `modelsOf` in sample-pack.ts skips them. */
-const unnamedOf = (kept: readonly TraceInput[]): number =>
-  kept.flatMap(({ skeleton }) => list(field(skeleton, 'transcripts')).flatMap((transcript) => list(field(transcript, 'prompts')))).filter((prompt) => field(field(prompt, 'frame'), 'model') === null).length;
+/** The prompts of the kept sessions that record no model: the ones the model table leaves out, as `modelsOf` in sample-pack.ts skips them. */
+const unnamedOf = (kept: readonly TraceInput[]): unknown[] =>
+  kept.flatMap(({ skeleton }) => list(field(skeleton, 'transcripts')).flatMap((transcript) => list(field(transcript, 'prompts')))).filter((prompt) => field(field(prompt, 'frame'), 'model') === null);
 
-/** The sentence under the model table when some prompt records no model, so its total and the intervention table's reconcile. */
+/** The sentence under the model table when some prompt records no model, so its total and the intervention table's reconcile. The second sentence is printed only when the intervention table does count every such prompt: `censusOf` leaves a prompt with no `intervention` out of it. */
 const unnamedNote = (kept: readonly TraceInput[]): string[] => {
   const unnamed = unnamedOf(kept);
-  return unnamed === 0 ? [] : [`Prompts with no recorded model are left out of this table: ${String(unnamed)}. The intervention table below does not leave them out.`];
+  if (unnamed.length === 0) return [];
+  const allRead = unnamed.every((prompt) => field(prompt, 'intervention') !== undefined);
+  return [`Prompts with no recorded model are left out of this table: ${String(unnamed.length)}.${allRead ? ' The intervention table below does not leave them out.' : ''}`];
 };
 
 /** What `unknown` means, said where the intervention table starts, with the pack's own count when the kept sessions can give it. */

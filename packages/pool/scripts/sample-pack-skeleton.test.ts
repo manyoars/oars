@@ -10,7 +10,7 @@ import { deposit, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { namesFilterOf } from './skeleton-only.js';
 import { buildPack, HARNESS_TERMS, main, NO_OBJECTIONS, PERMITTED_USES, type ManifestRow, type PackOptions } from './sample-pack.js';
 import { cardOf, writeCard } from './skeleton-card.js';
-import { TRACE_RULE, traceOf } from './skeleton-trace.js';
+import { TRACE_RULE, traceOf, type TraceInput } from './skeleton-trace.js';
 import { validate } from './validate-pack.js';
 
 const TERM = 'zorblax';
@@ -123,7 +123,7 @@ const CARD_LINES: readonly RegExp[] = [
   /^- Fresher sessions, whole transcripts, and rights for use: https:\/\/manyoars\.com\/packs\.$/,
   /^## Is a pack right for you\?$/, /^What a pack is for, and what it is not\.$/, /^\| Use \| Answer \|$/, /^\|---\|---\|$/,
   ...FIT_ROWS.map(([use, answer]) => new RegExp(`^\\| ${escapeRe(use)} \\| ${escapeRe(answer)} \\|$`)),
-  /^Prompts with no recorded model are left out of this table: d+. The intervention table below does not leave them out.$/,
+  /^Prompts with no recorded model are left out of this table: \d+\.( The intervention table below does not leave them out\.)?$/,
   /^## Try the free sample first$/,
   /^The free transcript sample comes before any payment\. Ask for it at https:\/\/manyoars\.com\/packs, or write to support@manyoars\.com with the subject "Session pack sample"\. Tell us what you are evaluating\. A person answers\.$/,
   /^A sample of our first lot goes to anyone who asks, with no form and no name\.$/,
@@ -371,6 +371,18 @@ describe('the data card', () => {
     expect(auditCard(good.replace('`edit followed`', '`the secret plan`'))).toHaveLength(1);
     expect(auditCard(`${good}\nPlease fix the login bug for acme.`)).toHaveLength(1);
     expect(auditCard(good.replace('Prompts per model', 'Prompts about acme'))).not.toEqual([]);
+  });
+
+  it('the card audit accepts the no-model sentence the generator prints, both shapes', () => {
+    const pack = { olderThanDays: 30, built: '2026-11-13T00:00:00Z', redactionVersion: '5', reasoning: 'kept' };
+    const census = { sessions: 1, harness: { 'claude-code': 1 }, harnessVersion: {}, model: { 'claude-opus-5-5': 1 }, errorCode: {}, recovery: { 'edit followed': 1 }, intervention: { none: 2 }, promptClass: {}, turnBucket: { '2': 1 } };
+    const kept = (prompts: object[]): TraceInput[] => [{ matchId: 'a'.repeat(64), skeleton: { transcripts: [{ prompts, tools: [] }] } }];
+    const withModel = kept([{ intervention: 'none', frame: { model: 'claude-opus-5-5' } }, { intervention: 'none', frame: { model: null } }]);
+    expect(cardOf(pack, census, withModel)).toContain('left out of this table: 1. The intervention table below does not leave them out.');
+    expect(auditCard(cardOf(pack, census, withModel))).toEqual([]);
+    const noReading = kept([{ frame: { model: null } }]);
+    expect(cardOf(pack, census, noReading)).not.toContain('does not leave them out');
+    expect(auditCard(cardOf(pack, census, noReading))).toEqual([]);
   });
 
   it('shows the fit table: each row holds its own answer, and no answer sits in another row', async () => {
