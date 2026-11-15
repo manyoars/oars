@@ -167,10 +167,9 @@ describe('oars club join, show, and leave', () => {
     guest.types('yes');
     expect(await guest.cli('club', 'join', 'ZZZZZZ', '--nickname', 'bow')).toBe(ExitCode.INVALID);
     expect(problemOf(guest.last()).code).toBe('not_found');
-    for (let n = 0; n < 49; n += 1) {
-      await db.prepare('INSERT INTO accounts (id) VALUES (?)').bind(`filler-${String(n)}-${String(seen)}`).run();
-      await db.prepare('INSERT INTO club_members (club, account, nickname, joined_at) VALUES (?, ?, ?, ?)').bind(club.id, `filler-${String(n)}-${String(seen)}`, `f${String(n)}`, Date.now()).run();
-    }
+    // One batch, not 98 round trips to the database: each round trip costs more the busier the machine is.
+    const fillers = Array.from({ length: 49 }, (_, n) => [db.prepare('INSERT INTO accounts (id) VALUES (?)').bind(`filler-${String(n)}-${String(seen)}`), db.prepare('INSERT INTO club_members (club, account, nickname, joined_at) VALUES (?, ?, ?, ?)').bind(club.id, `filler-${String(n)}-${String(seen)}`, `f${String(n)}`, Date.now())]).flat();
+    await db.batch(fillers);
     guest.types('yes');
     expect(await guest.cli('club', 'join', club.code, '--nickname', 'bow')).toBe(ExitCode.CONFLICT);
     expect(problemOf(guest.last())).toMatchObject({ code: 'club_full' });
