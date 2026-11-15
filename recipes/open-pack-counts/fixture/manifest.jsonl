@@ -3,3 +3,5 @@
 this line is not json
 {"matchId":"ccc","harnessVersions":["2.1.2",5],"skeleton":"skeleton.json"}
 {"matchId":"ddd","harnessVersions":["2.1.3"],"skeleton":"skeleton.json"}
+{"harnessVersions":["2.1.1"]}
+{"matchId":"eee","harnessVersions":["2.1.3"],"skeleton":"skeleton.json"}
