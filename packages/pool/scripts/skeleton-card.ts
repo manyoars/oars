@@ -35,7 +35,38 @@ const count = (value: unknown, what: string): number => {
 };
 const field = (value: unknown, key: string): unknown => (typeof value === 'object' && value !== null ? Object.getOwnPropertyDescriptor(value, key)?.value : undefined);
 
-const table = (title: string, tally: Counted): string[] => (Object.keys(tally).length === 0 ? [] : ['', `**${title}**`, '', ...Object.entries(tally).map(([name, n]) => `- \`${name}\`: ${String(n)}`)]);
+const table = (title: string, tally: Counted, about: readonly string[] = []): string[] =>
+  Object.keys(tally).length === 0 ? [] : ['', `**${title}**`, '', ...about.flatMap((sentence) => [sentence, '']), ...Object.entries(tally).map(([name, n]) => `- \`${name}\`: ${String(n)}`)];
+
+export const SESSIONS_STORE_DOC = 'https://github.com/manyoars/oars/blob/main/docs/sessions-store.md';
+
+const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+
+/** How many `unknown` prompts the kept sessions hold, and how many of those are the last prompt of their transcript. */
+const unknownOf = (kept: readonly TraceInput[]): { all: number; last: number } => {
+  const tally = { all: 0, last: 0 };
+  for (const { skeleton } of kept) {
+    for (const transcript of list(field(skeleton, 'transcripts'))) {
+      const prompts = list(field(transcript, 'prompts'));
+      prompts.forEach((prompt, at) => {
+        if (field(prompt, 'intervention') !== 'unknown') return;
+        tally.all += 1;
+        if (at === prompts.length - 1) tally.last += 1;
+      });
+    }
+  }
+  return tally;
+};
+
+/** What `unknown` means, said where the intervention table starts, with the pack's own count when the kept sessions can give it. */
+const unknownNote = (kept: readonly TraceInput[]): string => {
+  const { all, last } = unknownOf(kept);
+  return [
+    '`unknown` means the pack cannot say what the next human prompt did to the work. It has three causes: the prompt is the last one of its transcript, so no prompt follows it; the prompt is the record of an interrupt; or the next prompt ran a shell command that was recorded without the detail needed to tell whether it undid work. It is not a judgment of the work.',
+    ...(all === 0 ? [] : [`Last prompts among the \`unknown\` ones in this pack: ${String(last)} of ${String(all)}.`]),
+    `The full definition is in ${SESSIONS_STORE_DOC}.`,
+  ].join(' ');
+};
 
 /** The card's text from the two files' parsed contents, and the kept sessions the worked trace reads (none: no trace). */
 export const cardOf = (pack: unknown, census: unknown, kept: readonly TraceInput[] = []): string => {
@@ -82,7 +113,7 @@ export const cardOf = (pack: unknown, census: unknown, kept: readonly TraceInput
     ...table('Prompts per model', counted(field(census, 'model'), 'census model')),
     ...table('Failed calls per error code', counted(field(census, 'errorCode'), 'census errorCode')),
     ...table('Failed calls by what followed', counted(field(census, 'recovery'), 'census recovery')),
-    ...table('Prompts per human intervention', counted(field(census, 'intervention'), 'census intervention')),
+    ...table('Prompts per human intervention', counted(field(census, 'intervention'), 'census intervention'), [unknownNote(kept)]),
     ...table('Sessions per turn bucket (lowest turn count of the bucket)', turns),
     '',
   ].join('\n');
