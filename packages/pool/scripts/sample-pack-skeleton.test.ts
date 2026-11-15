@@ -483,12 +483,12 @@ describe('the data card', () => {
     expect(counted(2)).toContain('2 failed calls,');
     const lone = traceOf([{ matchId: low, skeleton: skeleton('ok') }]).join('\n');
     expect(lone).toContain('- Candidate task: at `transcripts[0].tools[0]`, build a task from these steps.');
-    expect(lone).not.toContain('checks how an agent recovers');
+    expect(lone).not.toContain('checks what the agent does after the failed call');
     const firstCall = (status: string): string => traceOf([{ matchId: low, skeleton: { transcripts: [{ prompts: [{ cls: 'mixed', errors: 1, intervention: 'none' }], tools: [{ prompt: 0, status, steps: [] }] }] } }]).join('\n');
-    expect(firstCall('error')).toContain('- Candidate task: from `transcripts[0].prompts[0]` at `transcripts[0].tools[0]`, build a task that checks how an agent recovers.');
+    expect(firstCall('error')).toContain('- Candidate task: from `transcripts[0].prompts[0]` at `transcripts[0].tools[0]`, build a task that checks what the agent does after the failed call.');
     expect(firstCall('ok')).toContain('- Candidate task: from `transcripts[0].prompts[0]` at `transcripts[0].tools[0]`, build a task from these steps.');
     const spread = { transcripts: [{ prompts: [], tools: [{ prompt: null, status: 'ok' }, { prompt: null, status: 'error' }] }] };
-    expect(traceOf([{ matchId: low, skeleton: spread }]).join('\n')).toContain('- Candidate task: from `transcripts[0].tools[0]` to `transcripts[0].tools[1]`, build a task that checks how an agent recovers.');
+    expect(traceOf([{ matchId: low, skeleton: spread }]).join('\n')).toContain('- Candidate task: from `transcripts[0].tools[0]` to `transcripts[0].tools[1]`, build a task that checks what the agent does after the failed call.');
     expect(traceOf([])).toEqual([]);
   });
 
