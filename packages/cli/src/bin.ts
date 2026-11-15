@@ -9,4 +9,7 @@ exitIfTooOld(process.versions.node, (text) => process.stderr.write(text), (code)
 // Only the bare command: with an argument (`--help`) the full CLI answers, so its description shows.
 const hook = process.argv.length === 4 && process.argv[2] === 'gate' && process.argv[3] === 'hook';
 
-await (hook ? import('./gate/hook-main.js') : import('./main.js'));
+// `oars statusline` and `oars statusline --color` likewise: a terminal status line runs it after every assistant message, so it does not load the CLI either.
+const statusline = process.argv[2] === 'statusline' && (process.argv.length === 3 || (process.argv.length === 4 && process.argv[3] === '--color'));
+
+await (hook ? import('./gate/hook-main.js') : statusline ? import('./statusline-main.js') : import('./main.js'));

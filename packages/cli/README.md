@@ -91,6 +91,41 @@ Nothing is uploaded and nothing is sent anywhere: the command makes no network c
 
 `oars card --week --text` (both flags together, with no `--month`, `--year`, or `--out`) prints a different, shorter thing: a receipt of your last seven local days, at most twelve lines of plain text, none over 80 columns with no color. It shows the window's dates, sessions and active days, the harnesses, and two outcome counts only where the store can back them: failed tool calls (counted once per call, so a replayed result is not counted twice), and passing runs, the share of edited prompts with a runner recorded whose last build or test runner passed (only prompts whose verify is passed, failed, or masked are in the count; verify none and na are left out). Codex sessions are left out of both outcome counts, because the Codex reader loses shell outcomes on Codex 0.166 and later, and the receipt says so (a week of only Codex sessions prints `outcomes       Codex sessions not counted`). It carries no path, repository, prompt text, tool or model name, cost, rank, or account row, and an empty week prints a one-line empty receipt and exits 0. Nothing is uploaded; you copy the text yourself.
 
+### statusline
+
+<!-- wording: owner read pending -->
+
+```
+oars statusline            # one line: oars 7d: 12 sessions, 4 active days
+oars statusline --color    # the same line with the identifier in bold
+```
+
+`oars statusline` prints one short line of your own last seven local days, for a terminal status line. It reads the local session store only, ignores stdin, makes no network call, sends no telemetry event, and writes nothing. It never edits your settings: you paste the snippet yourself. If the store cannot be read, it prints the identifier alone and exits 0.
+
+To show it in Claude Code, add this to `~/.claude/settings.json` (see the [Claude Code status line docs](https://code.claude.com/docs/en/statusline)):
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "oars statusline"
+  }
+}
+```
+
+Sample output:
+
+```
+oars 7d: 12 sessions, 4 active days
+```
+
+- `oars` is the identifier.
+- `7d` means the window is your last seven local days, today included.
+- `12 sessions` is the sessions with a prompt in that window.
+- `4 active days` is the distinct local dates with a prompt in that window.
+
+The line has no path, repository, prompt text, model or tool name, or cost. These are the same counts, with the same rules, as `oars card --week --text`; its definitions are the ones to read.
+
 ### sessions
 
 `oars sessions` keeps a local, deterministic memory of your own coding-agent sessions. The session commands make no model call and no network call, except `gold arms`, which sends redacted text through your own Claude subscription. oars also records telemetry events (a command's path, its flag names, how long it took, its exit code, and its error class, with a random install id, the oars version, the OS, and the time; never session content, prompts, paths, URLs, or argument values), which oars sends in batches to the pool server in `OARS_POOL_URL`, else to the Many Oars pool (live) ([what telemetry records and how to turn it off](https://github.com/manyoars/oars/blob/main/docs/telemetry.md)).
