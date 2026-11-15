@@ -1468,7 +1468,7 @@ const packFrom = async (runtime: SessionsRuntime, options: PackOptions, input: D
     const before = await readFile(target, 'utf8');
     // An account another session's repository lives under is masked here too, in the clear: the per-session list never held it.
     const masked = finisher.mask(before);
-    // A skeleton holds only closed values and names, and the record spec holds a name to a shape that has no `<`: its mask is plain `owner` (`t123-owner-do-thing`). Session text keeps `<owner>`.
+    // A skeleton holds closed values, names, and command templates, none of them session text, and the record spec holds a name to a shape that has no `<`: its mask is plain `owner` (`t123-owner-do-thing`). Session text keeps `<owner>`.
     const body = handleLeft === undefined ? masked : masked.replace(handleLeft, basename(target) === SKELETON_FILE ? 'owner' : '<owner>');
     if (body !== before) {
       await writeFile(target, body);
