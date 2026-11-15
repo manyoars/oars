@@ -1,2 +1,2 @@
 {"format":7,"id":"ccc","transcripts":[{"prompts":[{"cls":"edit-only","frame":{"model":"model-a"}}],"tools":[
-{"prompt":0,"status":"ok","errorCode":null,"steps":[]}]}]}
+{"prompt":0,"status":"ok","errorCode":null,"steps":[]},7]},"not a transcript"]}

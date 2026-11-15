@@ -54,8 +54,23 @@ const parse = (text) => {
 };
 
 /**
+ * @typedef {{
+ *   pack: { name: string; built: string | null; keyId: string | null };
+ *   manifestRows: number;
+ *   sessionsRead: number;
+ *   skipped: Array<{ file: string; line?: number; reason: string }>;
+ *   failedCallsPerErrorCode: Record<string, number>;
+ *   failedCallsByWhatFollowed: Record<string, number>;
+ *   sessionsPerHarnessVersion: Record<string, number>;
+ *   failedCallsPerModel?: Record<string, number>;
+ *   failedCallsPerPromptClass?: Record<string, number>;
+ * }} PackCounts
+ */
+
+/**
  * @param {string} folder the pack folder
  * @param {string | undefined} by split the failed calls by `model` or `class` too
+ * @returns {PackCounts}
  */
 export const countPack = (folder, by) => {
   const manifest = readRequired(join(folder, 'manifest.jsonl'));
@@ -87,7 +102,10 @@ export const countPack = (folder, by) => {
     }
     manifestRows += 1;
     ids.push(row.matchId);
-    for (const version of new Set(row.harnessVersions)) if (typeof version === 'string') add(versions, version);
+    for (const version of new Set(row.harnessVersions)) {
+      if (typeof version === 'string') add(versions, version);
+      else skipped.push({ file: 'manifest.jsonl', line: index + 1, reason: 'harness version is not text' });
+    }
   });
   let sessionsRead = 0;
   for (const id of ids) {
@@ -97,11 +115,19 @@ export const countPack = (folder, by) => {
       continue;
     }
     sessionsRead += 1;
-    for (const transcript of skeleton.transcripts) {
-      if (!isObject(transcript) || !Array.isArray(transcript.tools)) continue;
+    const file = `sessions/${id}/skeleton.json`;
+    for (const [t, transcript] of skeleton.transcripts.entries()) {
+      if (!isObject(transcript) || !Array.isArray(transcript.tools)) {
+        skipped.push({ file, reason: `transcript ${t} has no tools list` });
+        continue;
+      }
       const prompts = Array.isArray(transcript.prompts) ? transcript.prompts : [];
-      for (const tool of transcript.tools) {
-        if (!isObject(tool) || typeof tool.errorCode !== 'string') continue;
+      for (const [n, tool] of transcript.tools.entries()) {
+        if (!isObject(tool)) {
+          skipped.push({ file, reason: `tool ${n} of transcript ${t} is not an object` });
+          continue;
+        }
+        if (typeof tool.errorCode !== 'string') continue;
         add(codes, tool.errorCode);
         const recovery = tool.recoveryCalls;
         if (!isObject(recovery) || typeof recovery.editFollowed !== 'boolean') add(followed, 'not recorded');
@@ -140,7 +166,7 @@ const table = (title, counts, total) => {
   return [title, ...rows.map(([name, n]) => `  ${(name ?? '').padEnd(width)}  ${n}`), ''];
 };
 
-/** @param {ReturnType<typeof countPack>} result */
+/** @param {PackCounts} result */
 const text = (result) => {
   const { pack } = result;
   const lines = [
@@ -152,8 +178,8 @@ const text = (result) => {
     ...table('Failed calls by what followed', result.failedCallsByWhatFollowed, false),
     ...table('Sessions per harness version', result.sessionsPerHarnessVersion, false),
   ];
-  if ('failedCallsPerModel' in result) lines.push(...table('Failed calls per model', result.failedCallsPerModel, true));
-  if ('failedCallsPerPromptClass' in result) lines.push(...table('Failed calls per prompt class', result.failedCallsPerPromptClass, true));
+  if (result.failedCallsPerModel) lines.push(...table('Failed calls per model', result.failedCallsPerModel, true));
+  if (result.failedCallsPerPromptClass) lines.push(...table('Failed calls per prompt class', result.failedCallsPerPromptClass, true));
   return lines.join('\n');
 };
 
