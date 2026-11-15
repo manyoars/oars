@@ -100,8 +100,15 @@ export const countPack = (folder, by) => {
       skipped.push({ file: 'manifest.jsonl', line: index + 1, reason: row === undefined ? 'not valid JSON' : 'not a manifest row' });
       return;
     }
+    const id = row.matchId;
+    // The id builds a path under sessions/, so an id that could leave that folder is never used.
+    const reason = ids.includes(id) ? 'matchId already seen' : /[/\\]/.test(id) || id === '.' || id === '..' ? 'matchId is not a plain folder name' : undefined;
+    if (reason !== undefined) {
+      skipped.push({ file: 'manifest.jsonl', line: index + 1, reason });
+      return;
+    }
     manifestRows += 1;
-    ids.push(row.matchId);
+    ids.push(id);
     for (const version of new Set(row.harnessVersions)) {
       if (typeof version === 'string') add(versions, version);
       else skipped.push({ file: 'manifest.jsonl', line: index + 1, reason: 'harness version is not text' });
