@@ -6,6 +6,7 @@ import type { Outcome } from '../cli.js';
 import { CliError, ExitCode } from '../errors.js';
 import { cardOf, cardText, tweetLink, type CardPeriod } from './card.js';
 import { cardPng, cardSvg } from './card-render.js';
+import { weekOf, weekText } from './card-week.js';
 import { emptyBooks } from './empty-state.js';
 import { poolServer } from './pool-command.js';
 import { outboxFolder } from './pool-outbox.js';
@@ -53,6 +54,10 @@ export interface CardOptions {
   out?: string | undefined;
   /** Leave the cost row out of the picture, the table, and the JSON. */
   noCost?: boolean | undefined;
+  /** `--week` given with `--text`: print the short local-days receipt instead of the table. */
+  receipt?: boolean | undefined;
+  /** The oars version the receipt's footer names. */
+  version?: string | undefined;
 }
 
 /** The two paths a card is saved to: `--out` names the base, the default is one per period in the working directory. */
@@ -64,8 +69,12 @@ export const cardPaths = (period: CardPeriod, out: string | undefined): { svg: s
 
 export const sessionsCard = async (deps: SessionsDeps, options: CardOptions, env: NodeJS.ProcessEnv): Promise<Outcome> => {
   if (deps.sessions === undefined) throw new CliError('The session store is not configured in this run.', ExitCode.UNEXPECTED, 'unexpected');
-  const paths = cardPaths(options.period, options.out);
   const store = await loadStore(deps.sessions.storeDir);
+  if (options.receipt === true) {
+    const week = weekOf(store, deps.now());
+    return { document: { ok: true, week }, text: weekText(week, options.version ?? '') };
+  }
+  const paths = cardPaths(options.period, options.out);
   const card = cardOf(store, await readSurvival(deps.sessions.storeDir), options.period, deps.now(), options.noCost !== true);
   const link = tweetLink(card);
   if (card.sessions === 0) {

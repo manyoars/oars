@@ -80,6 +80,7 @@ Revokes the stored login and deletes it.
 oars card --text                 # your week as a table, sized for a screenshot
 oars card --month                # the last 30 days as a picture: oars-card-month.png and .svg in this folder
 oars card --year --out me.png    # the last 365 days, saved as me.png and me.svg
+oars card --week --text         # a short plain-text receipt of your last 7 local days, to paste
 ```
 
 `oars card` makes a share-ready card of your own week (the default, the last 7 days), month, or year across every harness, read from the local session store only. It shows your sessions and active days, the harnesses and models you used, tokens by model, tool calls, failed calls and how many were followed by a different next step, how often an edit was verified, commits and how many survived, and cost only where the harness recorded one. A count under the same floor `oars sessions books` uses prints `too few`. The depositor row reads `ashore: run oars pool join` until you sign in; signed in, it reads the number of weeks in which this machine sent a deposit, from the local sent record, and says it is this machine's.
@@ -87,6 +88,8 @@ oars card --year --out me.png    # the last 365 days, saved as me.png and me.svg
 Once a week, the first command you run in a terminal on or after Friday prints one line to stderr, `Your week: N sessions, M strokes. \`oars card --text\` for the table.`, never with `--json`, from a hook, from the MCP server, from a recall, from `oars sessions try`, or from `oars card` itself, and only when the week has a session. About one install in ten never sees it; `card-line.json` in the session store folder records the week and whether it was `shown`, `held`, or `not_due`, and `card-line-id` holds the id the holdback hashes, copied once from the telemetry install id when there is one, else random, so the arm never changes.
 
 Nothing is uploaded and nothing is sent anywhere: the command makes no network call and prints one prefilled `x.com` link whose text is the card's own numbers, for you to post if you choose. The card carries no folder name, path, prompt or response text, repository name, or long-tail tool or model name, and posting it unlocks nothing. The picture is a byte-stable SVG and a PNG drawn from it with a built-in font; `--text` prints the table and writes nothing. `--no-cost` leaves the cost row out of the picture, the table, and `--json`.
+
+`oars card --week --text` (both flags together) prints a different, shorter thing: a receipt of your last seven local days, at most six lines of plain text with no color. It shows the window's dates, sessions and active days, the harnesses, and two outcome counts only where the store can back them: tool calls whose first result was an error, and edited prompts whose last build or test runner passed. Codex sessions are left out of both outcome counts, because the Codex reader loses shell outcomes on Codex 0.166 and later, and the receipt says so. It carries no path, repository, prompt text, tool or model name, cost, rank, or account row, and an empty week prints a one-line empty receipt and exits 0. Nothing is uploaded; you copy the text yourself.
 
 ### sessions
 

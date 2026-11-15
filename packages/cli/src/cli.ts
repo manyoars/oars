@@ -228,7 +228,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
   program
     .command('card')
     .description('a share-ready card of your own week, month, or year across every harness, read from your local store only: nothing is uploaded and no folder, path, prompt text, or private name is printed')
-    .option('--week', 'the last 7 days (the default)')
+    .option('--week', 'the last 7 days (the default); with --text, a short plain-text receipt of your last 7 local days: sessions, active days, harnesses, and the failed-call and passing-run counts the store can back')
     .option('--month', 'the last 30 days')
     .option('--year', 'the last 365 days')
     .option('--text', 'print the card as a table instead of saving a picture')
@@ -237,7 +237,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       const period: CardPeriod = flag(options, 'year') ? 'year' : flag(options, 'month') ? 'month' : 'week';
-      emit(deps, flag(options, 'json'), await sessionsCard(sessionDeps(deps), { period, text: flag(options, 'text'), out: text(options, 'out'), noCost: options.cost === false }, deps.env));
+      emit(deps, flag(options, 'json'), await sessionsCard(sessionDeps(deps), { period, text: flag(options, 'text'), out: text(options, 'out'), noCost: options.cost === false, receipt: flag(options, 'week') && flag(options, 'text'), version: deps.version }, deps.env));
     });
 
   const sessions = program.command('sessions').description("deposit and recall your own coding-agent session logs, locally; try it on made-up sessions: oars sessions try (these commands make no model call and no network call, except `gold arms`, which asks your own Claude subscription; telemetry is separate: oars telemetry)");
