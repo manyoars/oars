@@ -27,6 +27,7 @@ import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 import { telemetryOff, telemetryOn, telemetryReport, telemetryShow, telemetryStatus } from './telemetry/command.js';
 import { cardLine } from './sessions/card-line.js';
+import { statuslineLine } from './sessions/statusline.js';
 import type { CardLineArm } from './telemetry/schema.js';
 import { recordCrash } from './telemetry/crash.js';
 import { emitOf } from './telemetry/emit.js';
@@ -238,6 +239,17 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
       const options: OptionValues = command.optsWithGlobals();
       const period: CardPeriod = flag(options, 'year') ? 'year' : flag(options, 'month') ? 'month' : 'week';
       emit(deps, flag(options, 'json'), await sessionsCard(sessionDeps(deps), { period, text: flag(options, 'text'), out: text(options, 'out'), noCost: options.cost === false, receipt: period === 'week' && flag(options, 'week') && flag(options, 'text'), version: deps.version }, deps.env));
+    });
+
+  program
+    .command('statusline')
+    .description('print one short line of your own last 7 local days (sessions and active days) for a terminal status line, such as the Claude Code statusLine setting; it reads your local store only, ignores stdin, and sends and writes nothing')
+    .option('--color', 'bold the identifier with an ANSI escape (plain ASCII otherwise)')
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      // A status line runs after every assistant message: a run that cannot find its store prints the identifier alone, like one that cannot read it.
+      deps.io.stdout(`${await statuslineLine({ storeDir: deps.sessions?.storeDir ?? '', now: deps.now(), color: flag(options, 'color') })}
+`);
     });
 
   const sessions = program.command('sessions').description("deposit and recall your own coding-agent session logs, locally; try it on made-up sessions: oars sessions try (these commands make no model call and no network call, except `gold arms`, which asks your own Claude subscription; telemetry is separate: oars telemetry)");
@@ -880,6 +892,8 @@ const execute = async (argv: string[], deps: RunDeps, observed: Observed): Promi
 const isHookUninstall = (observed: Observed): boolean => observed.path.join(' ') === 'sessions hook uninstall';
 /** `sessions try` promises no network call and no read of the real store, and the sender does both. */
 const isSessionsTry = (observed: Observed): boolean => observed.path.join(' ') === 'sessions try';
+/** `statusline` runs after every assistant message and promises no telemetry event, no weekly line, and no write: so it skips everything `run` does after the command. */
+const isStatusline = (observed: Observed): boolean => observed.path.join(' ') === 'statusline';
 
 /** The weekly card line (`sessions/card-line.ts`): stderr only, never an error, never a change to the exit code. */
 const weeklyLine = (argv: string[], deps: RunDeps, observed: Observed): Promise<CardLineArm> =>
@@ -892,6 +906,7 @@ export const run = async (argv: string[], deps: RunDeps): Promise<ExitCode> => {
   const observed: Observed = { path: [], flags: [] };
   const startedAt = deps.now();
   const exit = await execute(argv, deps, observed);
+  if (isStatusline(observed)) return exit;
   observed.cardLine = await weeklyLine(argv, deps, observed);
   finishTelemetry(deps, argv, observed, startedAt, exit);
   // Never from a gate hook (it runs before every tool call) or from `hook uninstall`; it cannot change the exit code or what the command printed.
