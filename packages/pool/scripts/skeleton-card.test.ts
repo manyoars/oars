@@ -60,3 +60,18 @@ describe('the card says why the model table totals less than the intervention ta
     expect(cardOf(PACK, CENSUS)).not.toContain('no recorded model');
   });
 });
+
+describe('the card does not call a call that followed a failed call a recovery', () => {
+  const card = cardOf(PACK, CENSUS, KEPT);
+  it('says in the opening line what the record holds, in the table title words', () => {
+    expect(card).toContain("each a record of the session's steps, errors, what followed each failed call, and human interventions.");
+    expect(card).not.toMatch(/recover/i);
+  });
+
+  it('words the worked trace candidate task without recovery', () => {
+    const traced: TraceInput[] = [{ matchId: MATCH(1), skeleton: { transcripts: [{ prompts: [{ intervention: 'none', cls: 'edit-verify', errors: 1, frame: { model: 'a' } }], tools: [{ prompt: 0, status: 'error', errorCode: '1', steps: [{ action: 'shell.exec' }], recoveryCalls: { next: [], editFollowed: false } }] }] } }];
+    const text = cardOf(PACK, CENSUS, traced);
+    expect(text).toContain('build a task that checks what the agent does after the failed call.');
+    expect(text).not.toMatch(/recover/i);
+  });
+});

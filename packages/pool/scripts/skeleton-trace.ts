@@ -59,7 +59,7 @@ export const traceOf = (inputs: readonly TraceInput[]): string[] => {
       : '- Prompt: unresolved. The call names no prompt. The prompt words are not in this pack.',
     `- Tool steps: ${steps}`,
     `- Observed result: \`transcripts[0].tools[${String(at)}]\` ended ${oneOf(field(tool, 'status'), STATUSES)}${code === null || code === undefined ? '' : ` with error code ${oneOf(code, ERROR_CODES)}`}.${recovery === null || recovery === undefined ? '' : ` The next calls were ${next.length === 0 ? 'none' : next.join(', ')}; ${field(recovery, 'editFollowed') === true ? 'a file write followed' : 'no file write followed'}.`}`,
-    `- Candidate task: ${span}, build a task ${field(tool, 'status') === 'error' ? 'that checks how an agent recovers' : 'from these steps'}. You would write the repository state and the grader.`,
+    `- Candidate task: ${span}, build a task ${field(tool, 'status') === 'error' ? 'that checks what the agent does after the failed call' : 'from these steps'}. You would write the repository state and the grader.`,
     '- Unresolved: the repository and commit, the expected answer, the grader or replay command, and the prompt text. This pack holds none of them.',
     '',
   ];
