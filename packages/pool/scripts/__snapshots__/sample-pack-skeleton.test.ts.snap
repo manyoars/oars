@@ -70,6 +70,8 @@ This trace is built from one session in this pack, picked by a fixed rule: the k
 
 **Prompts per human intervention**
 
+\`unknown\` means the pack cannot say what the next human prompt did to the work. It has three causes: the prompt is the last one of its transcript, so no prompt follows it; the prompt is the record of an interrupt; or the next prompt ran a shell command that was recorded without the detail needed to tell whether it undid work. It is not a judgment of the work. Last prompts among the \`unknown\` ones in this pack: 3 of 3. The full definition is in https://github.com/manyoars/oars/blob/main/docs/sessions-store.md.
+
 - \`unknown\`: 3
 
 **Sessions per turn bucket (lowest turn count of the bucket)**

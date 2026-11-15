@@ -126,6 +126,7 @@ const CARD_LINES: readonly RegExp[] = [
   /^## Try the free sample first$/,
   /^The free transcript sample comes before any payment\. Ask for it at https:\/\/manyoars\.com\/packs, or write to support@manyoars\.com with the subject "Session pack sample"\. Tell us what you are evaluating\. A person answers\.$/,
   /^A sample of our first lot goes to anyone who asks, with no form and no name\.$/,
+  /^`unknown` means the pack cannot say what the next human prompt did to the work\. It has three causes: the prompt is the last one of its transcript, so no prompt follows it; the prompt is the record of an interrupt; or the next prompt ran a shell command that was recorded without the detail needed to tell whether it undid work\. It is not a judgment of the work\.( Last prompts among the `unknown` ones in this pack: \d+ of \d+\.)? The full definition is in https:\/\/github\.com\/manyoars\/oars\/blob\/main\/docs\/sessions-store\.md\.$/,
   /^## A worked trace$/,
   new RegExp(`^This trace is built from one session in this pack, picked by a fixed rule: ${escapeRe(TRACE_RULE)}\\. It is generated from that session's record, not written by hand\\. It shows structure\\. It does not show that the session worked, or that it fits your task\\.$`),
   /^- Session: `sessions\/[0-9a-f]{64}\/skeleton\.json`\.$/,
