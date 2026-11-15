@@ -4,7 +4,8 @@ One script. It reads the files of an open skeleton pack and prints three small t
 
 ## Get the pack
 
-The pack is a folder. This recipe was checked against the pack with release ID `open-skeleton-2026-11-14-card` (built 2026-11-14T12:02:36.240Z, key `d55a57e14949f104`, redaction version 4). The pack's own README says where to get it and under what rights: https://manyoars.com/packs#rights. This recipe does not grant or change those rights.
+The pack is a folder. This recipe was checked against the pack with release ID `open-skeleton-2026-11-14-card` (built 2026-11-14T12:02:36.240Z, key `d55a57e14949f104`, redaction version 4). The pack is offered on https://manyoars.com/packs, the page the pack's own README names. <!-- wording: owner read pending -->
+The pack's own README states the rights it is offered under: https://manyoars.com/packs#rights. This recipe does not grant or change those rights.
 
 ## Run it
 
@@ -18,9 +19,9 @@ Add `--json` for the same numbers as JSON. The first line of the output names th
 
 <!-- wording: owner read pending -->
 - **Failed calls per error code.** One count for each tool call in a session that has an `errorCode`, grouped by that code. `total` is the sum.
-- **Failed calls by what followed.** For each of those calls, whether one of the next calls (up to 5) wrote a file. `edit followed` means yes. `no edit followed` means no. `not recorded` means the call has no record of what followed. The pack's own README prints the first two rows.
+- **Failed calls by what followed.** For each of those calls, whether one of the next 5 calls wrote a file without failing. `edit followed` means yes. `no edit followed` means no. `not recorded` means the call has no record of what followed. The pack's own README prints the first two rows.
 - **Sessions per harness version.** For each session row in `manifest.jsonl`, each distinct harness version it lists, counted once.
-- **Sessions read, skipped.** A session row or skeleton file that cannot be read is counted as skipped and named. It is never dropped without a line. The version table comes from `manifest.jsonl` alone, so a skipped skeleton still shows in it.
+- **Sessions read, skipped.** A session row, skeleton file, transcript, tool entry, or harness version that cannot be read is counted as skipped and named. It is never dropped without a line. The version table comes from `manifest.jsonl` alone, so a skipped skeleton still shows in it.
 
 The script exits 1 and prints the path when a file the schema requires is missing: `manifest.jsonl`, or the `sessions/<match id>/skeleton.json` of a row in it. `pack.json` is optional, and only supplies the build date and key in the first line.
 
@@ -43,7 +44,7 @@ Failed calls per model
   total    3
 ```
 
-To ask something else, edit the filter in `countPack` in `open-pack-counts.mjs`. The fields it can read are in `docs/session-record.md`.
+To ask something else, edit the `by` branch in `countPack` in `open-pack-counts.mjs` (the lines that pick `frame.model` or `cls`). The fields it can read are in `docs/session-record.md`.
 
 ## Check the pack
 
