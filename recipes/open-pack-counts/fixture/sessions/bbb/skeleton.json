@@ -1,0 +1,2 @@
+{"format":7,"id":"bbb","transcripts":[{"prompts":[{"cls":"research","frame":{"model":"model-b"}}],"tools":[
+{"prompt":0,"status":"error","errorCode":"1","recoveryCalls":{"next":[],"editFollowed":false},"steps":[]}]}]}
