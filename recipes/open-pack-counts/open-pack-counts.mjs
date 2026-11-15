@@ -127,7 +127,12 @@ export const countPack = (folder, by) => {
           skipped.push({ file, reason: `tool ${n} of transcript ${t} is not an object` });
           continue;
         }
-        if (typeof tool.errorCode !== 'string') continue;
+        if (typeof tool.errorCode !== 'string') {
+          if (tool.errorCode !== null && tool.errorCode !== undefined) {
+            skipped.push({ file, reason: `tool ${n} of transcript ${t} has an error code that is not text` });
+          }
+          continue;
+        }
         add(codes, tool.errorCode);
         const recovery = tool.recoveryCalls;
         if (!isObject(recovery) || typeof recovery.editFollowed !== 'boolean') add(followed, 'not recorded');
