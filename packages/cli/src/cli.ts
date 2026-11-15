@@ -27,7 +27,7 @@ import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 import { telemetryOff, telemetryOn, telemetryReport, telemetryShow, telemetryStatus } from './telemetry/command.js';
 import { cardLine } from './sessions/card-line.js';
-import { statuslineLine } from './sessions/statusline.js';
+import { STATUSLINE_ID, statuslineLine } from './sessions/statusline.js';
 import type { CardLineArm } from './telemetry/schema.js';
 import { recordCrash } from './telemetry/crash.js';
 import { emitOf } from './telemetry/emit.js';
@@ -248,8 +248,8 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       // A status line runs after every assistant message: a run that cannot find its store prints the identifier alone, like one that cannot read it.
-      deps.io.stdout(`${await statuslineLine({ storeDir: deps.sessions?.storeDir ?? '', now: deps.now(), color: flag(options, 'color') })}
-`);
+      const line = deps.sessions === undefined ? STATUSLINE_ID : await statuslineLine({ storeDir: deps.sessions.storeDir, now: deps.now(), color: flag(options, 'color') });
+      deps.io.stdout(`${line}\n`);
     });
 
   const sessions = program.command('sessions').description("deposit and recall your own coding-agent session logs, locally; try it on made-up sessions: oars sessions try (these commands make no model call and no network call, except `gold arms`, which asks your own Claude subscription; telemetry is separate: oars telemetry)");

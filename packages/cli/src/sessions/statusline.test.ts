@@ -79,7 +79,7 @@ describe('statuslineLine', () => {
     const plain = await statuslineLine({ storeDir: 'unused', now: NOW, color: false });
     expect(plain).toMatch(/^[\x20-\x7e]{1,40}$/);
     const colored = await statuslineLine({ storeDir: 'unused', now: NOW, color: true });
-    expect(colored).toBe(`[1m${STATUSLINE_ID}[0m${plain.slice(STATUSLINE_ID.length)}`);
+    expect(colored).toBe(`\u001b[1m${STATUSLINE_ID}\u001b[0m${plain.slice(STATUSLINE_ID.length)}`);
   });
 
   it('leaves out every path, prompt, and repository name', async () => {
@@ -128,6 +128,14 @@ describe('oars statusline', () => {
   it('prints the identifier alone and exits 0 when the store throws', async () => {
     held.fail = true;
     const h = wired();
+    expect(await run(['statusline'], h.deps)).toBe(0);
+    expect(h.out.join('')).toBe(`${STATUSLINE_ID}\n`);
+  });
+
+  it('prints the identifier alone, without reading any store, when there is no store to find', async () => {
+    held.store = weekStore();
+    const h = wired();
+    h.deps.sessions = undefined;
     expect(await run(['statusline'], h.deps)).toBe(0);
     expect(h.out.join('')).toBe(`${STATUSLINE_ID}\n`);
   });
