@@ -59,6 +59,23 @@ describe('the card says why the model table totals less than the intervention ta
     expect(cardOf(PACK, CENSUS, named)).not.toContain('no recorded model');
     expect(cardOf(PACK, CENSUS)).not.toContain('no recorded model');
   });
+
+  it('does not say the intervention table keeps a prompt that has no intervention reading', () => {
+    const unread: TraceInput[] = [{ matchId: MATCH(1), skeleton: { transcripts: [{ prompts: [prompt('none', null), { frame: { model: null } }] }] } }];
+    const rows = lines(cardOf(PACK, CENSUS, unread));
+    const at = rows.indexOf('**Prompts per model**');
+    expect(rows[at + 2]).toBe('Prompts with no recorded model are left out of this table: 2.');
+    expect(rows.join(' ')).not.toContain('does not leave them out');
+  });
+
+  it('keeps the model table title and its note when every prompt names no model', () => {
+    const none: TraceInput[] = [{ matchId: MATCH(1), skeleton: { transcripts: [{ prompts: [prompt('none', null)] }] } }];
+    const rows = lines(cardOf(PACK, { ...CENSUS, model: {} }, none));
+    const at = rows.indexOf('**Prompts per model**');
+    expect(at).toBeGreaterThan(-1);
+    expect(rows[at + 2]).toBe('Prompts with no recorded model are left out of this table: 1. The intervention table below does not leave them out.');
+    expect(lines(cardOf(PACK, { ...CENSUS, model: {} }, [])).indexOf('**Prompts per model**')).toBe(-1);
+  });
 });
 
 describe('the card does not call a call that followed a failed call a recovery', () => {
