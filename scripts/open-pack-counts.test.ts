@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,10 +13,15 @@ const run = (...args: string[]) => spawnSync(process.execPath, [script, ...args]
 
 const TABLES = [
   'Pack: fixture (built 2026-01-01T00:00:00.000Z, key fixture)',
-  'Sessions read: 3 of 5 manifest rows. Skipped: 8.',
+  'Sessions read: 3 of 5 manifest rows. Skipped: 13.',
   '  skipped: manifest.jsonl line 3: not valid JSON',
   '  skipped: manifest.jsonl line 4: harness version is not text',
   '  skipped: manifest.jsonl line 6: not a manifest row',
+  '  skipped: manifest.jsonl line 8: matchId already seen',
+  '  skipped: manifest.jsonl line 9: matchId is not a plain folder name',
+  '  skipped: manifest.jsonl line 10: matchId is not a plain folder name',
+  '  skipped: manifest.jsonl line 11: matchId is not a plain folder name',
+  '  skipped: manifest.jsonl line 12: matchId is not a plain folder name',
   '  skipped: sessions/ccc/skeleton.json: tool 1 of transcript 0 is not an object',
   '  skipped: sessions/ccc/skeleton.json: tool 2 of transcript 0 has an error code that is not text',
   '  skipped: sessions/ccc/skeleton.json: transcript 1 has no tools list',
@@ -48,6 +53,11 @@ const EXPECTED = {
     { file: 'manifest.jsonl', line: 3, reason: 'not valid JSON' },
     { file: 'manifest.jsonl', line: 4, reason: 'harness version is not text' },
     { file: 'manifest.jsonl', line: 6, reason: 'not a manifest row' },
+    { file: 'manifest.jsonl', line: 8, reason: 'matchId already seen' },
+    { file: 'manifest.jsonl', line: 9, reason: 'matchId is not a plain folder name' },
+    { file: 'manifest.jsonl', line: 10, reason: 'matchId is not a plain folder name' },
+    { file: 'manifest.jsonl', line: 11, reason: 'matchId is not a plain folder name' },
+    { file: 'manifest.jsonl', line: 12, reason: 'matchId is not a plain folder name' },
     { file: 'sessions/ccc/skeleton.json', reason: 'tool 1 of transcript 0 is not an object' },
     { file: 'sessions/ccc/skeleton.json', reason: 'tool 2 of transcript 0 has an error code that is not text' },
     { file: 'sessions/ccc/skeleton.json', reason: 'transcript 1 has no tools list' },
@@ -92,6 +102,21 @@ describe('open-pack-counts recipe', () => {
     expect(JSON.parse(run(fixture, '--json', '--by', 'model').stdout)).toMatchObject({
       failedCallsPerModel: { 'model-a': 2, 'model-b': 1, unknown: 2 },
     });
+  });
+
+  it('prints the zero rows when a failed call has an edit after it and the other buckets are empty', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'open-pack-counts-'));
+    try {
+      mkdirSync(join(dir, 'sessions', 'zzz'), { recursive: true });
+      writeFileSync(join(dir, 'manifest.jsonl'), '{"matchId":"zzz","harnessVersions":["2.1.1"]}' + String.fromCharCode(10));
+      const tool = { prompt: 0, status: 'error', errorCode: '1', recoveryCalls: { next: [], editFollowed: true } };
+      writeFileSync(join(dir, 'sessions', 'zzz', 'skeleton.json'), JSON.stringify({ transcripts: [{ tools: [tool] }] }));
+      const block = ['Failed calls by what followed', '  edit followed     1', '  no edit followed  0', '  not recorded      0', ''].join(String.fromCharCode(10));
+      expect(run(dir).stdout).toContain(block);
+      expect(countPack(dir, undefined).failedCallsByWhatFollowed).toEqual({ 'edit followed': 1, 'no edit followed': 0, 'not recorded': 0 });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('exits 1 and names the path when a file the schema requires is missing', () => {
