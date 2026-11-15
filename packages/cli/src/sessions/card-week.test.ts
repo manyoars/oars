@@ -49,8 +49,9 @@ const EXPECTED = [
   'oars week: 2026-11-03 to 2026-11-09 (7 local days)',
   'sessions       3 on 3 active days',
   'harnesses      claude-code 2, codex 1',
-  'failed calls   2 (Codex sessions not counted)',
-  'passing runs   2 of 4 edited prompts (Codex sessions not counted)',
+  'failed calls   2',
+  'passing runs   2 of 4 edited prompts with a runner recorded',
+  '               (Codex sessions not counted)',
   `oars card --week --text  |  oars ${VERSION}`,
 ].join('\n');
 
@@ -77,6 +78,41 @@ describe('weekText', () => {
     expect(text.split('\n').length).toBeLessThanOrEqual(12);
     for (const line of text.split('\n')) expect(line.length).toBeLessThanOrEqual(80);
     expect(text).not.toContain(String.fromCharCode(27));
+  });
+});
+
+const ALL: Harness[] = ['claude-code', 'cursor', 'codex', 'copilot', 'gemini', 'grok', 'opencode', 'pi', 'vscode-copilot', 'otel'];
+
+describe('weekText width and outcome wording', () => {
+  it('keeps every line within 80 columns with all ten harnesses at three-digit counts', () => {
+    const sessions = ALL.flatMap((name, h) => Array.from({ length: 100 + h }, (_, i) => owned(`${name}-${String(i)}`, name)));
+    const prompts = sessions.map((s) => prompt(s.session, 0, { ts: at(5) }));
+    const text = weekText(weekOf(store({ sessions, prompts }), NOW), VERSION);
+    const lines = text.split('\n');
+    expect(lines.length).toBeLessThanOrEqual(12);
+    for (const line of lines) expect(line.length).toBeLessThanOrEqual(80);
+    expect(lines.filter((line) => line.startsWith(' '.repeat(15))).length).toBeGreaterThan(0);
+    for (const name of ALL) expect(text).toContain(name);
+  });
+
+  it('counts a replayed failed result once per session and tool use id', () => {
+    const base = store({
+      sessions: [owned('a', undefined)],
+      prompts: [prompt('a', 0, { ts: at(5), verify: 'none' })],
+      errors: [error('a', 'x', { prompt: 0, toolUseId: 'u1' }), error('a', 'x', { prompt: 0, toolUseId: 'u1' }), error('a', 'y', { prompt: 0, toolUseId: 'u2' }), error('a', 'z', { prompt: 0, toolUseId: null })],
+    });
+    expect(weekOf(base, NOW).failedCalls).toBe(3);
+  });
+
+  it('names the denominator as edited prompts with a runner recorded', () => {
+    expect(weekText(weekOf(weekStore(), NOW), VERSION)).toContain('edited prompts with a runner recorded');
+  });
+
+  it('says so when the week holds only Codex sessions', () => {
+    const only = store({ sessions: [owned('c', 'codex')], prompts: [prompt('c', 0, { ts: at(5), verify: 'passed' })] });
+    const text = weekText(weekOf(only, NOW), VERSION);
+    expect(text).toContain('\noutcomes       Codex sessions not counted\n');
+    expect(text).not.toContain('failed calls');
   });
 });
 
@@ -111,6 +147,24 @@ describe('oars card --week --text through run', () => {
     const h = wired();
     expect(await run(['card', '--week', '--text'], h.deps)).toBe(0);
     expect(h.out.join('')).toContain('no sessions in this window');
+  });
+
+  it('prints what it printed before for --week --month --text and --year --text', async () => {
+    held.store = weekStore();
+    for (const args of [['card', '--week', '--month', '--text'], ['card', '--year', '--text'], ['card', '--week', '--year', '--text']]) {
+      const h = wired();
+      expect(await run(args, h.deps)).toBe(0);
+      expect(h.out.join('')).toContain('oars crew card');
+    }
+  });
+
+  it('rejects --out with the receipt in one line', async () => {
+    held.store = weekStore();
+    const h = wired();
+    expect(await run(['card', '--week', '--text', '--out', 'x.png'], h.deps)).not.toBe(0);
+    const message = h.err.join('').trim();
+    expect(message).toContain('--out');
+    expect(message.split('\n')).toHaveLength(1);
   });
 
   it('leaves `card --text` without --week as the crew card table', async () => {

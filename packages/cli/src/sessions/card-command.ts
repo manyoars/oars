@@ -54,7 +54,7 @@ export interface CardOptions {
   out?: string | undefined;
   /** Leave the cost row out of the picture, the table, and the JSON. */
   noCost?: boolean | undefined;
-  /** `--week` given with `--text`: print the short local-days receipt instead of the table. */
+  /** `--week` alone as the period, given with `--text`: print the short local-days receipt instead of the table. */
   receipt?: boolean | undefined;
   /** The oars version the receipt's footer names. */
   version?: string | undefined;
@@ -69,6 +69,7 @@ export const cardPaths = (period: CardPeriod, out: string | undefined): { svg: s
 
 export const sessionsCard = async (deps: SessionsDeps, options: CardOptions, env: NodeJS.ProcessEnv): Promise<Outcome> => {
   if (deps.sessions === undefined) throw new CliError('The session store is not configured in this run.', ExitCode.UNEXPECTED, 'unexpected');
+  if (options.receipt === true && options.out !== undefined) throw new CliError('--out does not apply to the --week --text receipt: it prints text and saves nothing.', ExitCode.USAGE, 'usage');
   const store = await loadStore(deps.sessions.storeDir);
   if (options.receipt === true) {
     const week = weekOf(store, deps.now());
