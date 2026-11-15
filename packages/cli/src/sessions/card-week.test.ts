@@ -50,7 +50,7 @@ const EXPECTED = [
   'sessions       3 on 3 active days',
   'harnesses      claude-code 2, codex 1',
   'failed calls   2',
-  'passing runs   2 of 4 edited prompts with a runner recorded',
+  'passing runs   2 of 3 edited prompts with a runner recorded',
   '               (Codex sessions not counted)',
   `oars card --week --text  |  oars ${VERSION}`,
 ].join('\n');
@@ -58,6 +58,12 @@ const EXPECTED = [
 describe('weekText', () => {
   it('prints the exact receipt for two harnesses on three days', () => {
     expect(weekText(weekOf(weekStore(), NOW), VERSION)).toBe(EXPECTED);
+  });
+
+  it('leaves an edited prompt with verify none out of the denominator', () => {
+    const only = (verify: 'none' | 'passed'): string => weekText(weekOf(store({ sessions: [owned('a', undefined)], prompts: [prompt('a', 0, { ts: at(3), verify }), prompt('a', 1, { ts: at(4), verify: 'none' })] }), NOW), VERSION);
+    expect(only('passed')).toContain('passing runs   1 of 1 edited prompts');
+    expect(only('none')).not.toContain('passing runs');
   });
 
   it('prints a truthful empty receipt', () => {
@@ -149,13 +155,15 @@ describe('oars card --week --text through run', () => {
     expect(h.out.join('')).toContain('no sessions in this window');
   });
 
-  it('prints what it printed before for --week --month --text and --year --text', async () => {
+  it('prints what it printed before for --week --month --text and --week --year --text, byte for byte', async () => {
     held.store = weekStore();
-    for (const args of [['card', '--week', '--month', '--text'], ['card', '--year', '--text'], ['card', '--week', '--year', '--text']]) {
+    const output = async (args: string[]): Promise<string> => {
       const h = wired();
       expect(await run(args, h.deps)).toBe(0);
-      expect(h.out.join('')).toContain('oars crew card');
-    }
+      return h.out.join('');
+    };
+    expect(await output(['card', '--week', '--month', '--text'])).toBe(await output(['card', '--month', '--text']));
+    expect(await output(['card', '--week', '--year', '--text'])).toBe(await output(['card', '--year', '--text']));
   });
 
   it('rejects --out with the receipt in one line', async () => {
