@@ -115,7 +115,7 @@ const FIT_ROWS = [
 const escapeRe = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const CARD_LINES: readonly RegExp[] = [
   /^$/, /^---$/, /^license: other$/, /^license_link: https:\/\/manyoars\.com\/packs#rights$/, /^tags:$/, /^ {2}- agent-traces$/, /^# Many Oars: open session skeletons$/, /^## What is counted$/,
-  /^\d+ coding-agent session skeletons, published by Many Oars Co\., each a record of the session's steps, errors, recoveries, and human interventions\. No transcript text is in this release, and every session ended at least \d+ days before it was built( \(\d{4}-\d{2}-\d{2}\))?\.$/,
+  /^\d+ coding-agent session skeletons, published by Many Oars Co\., each a record of the session's steps, errors, what followed each failed call, and human interventions\. No transcript text is in this release, and every session ended at least \d+ days before it was built( \(\d{4}-\d{2}-\d{2}\))?\.$/,
   /^- License and rights: https:\/\/manyoars\.com\/packs#rights\.$/,
   /^- Redaction version: [0-9A-Za-z][0-9A-Za-z.+-]{0,40}; model reasoning: (kept|stripped|unknown)\. Redaction is best effort\.$/,
   /^- Layout: `manifest\.jsonl` \(one row per session, `transcripts: 0`\), `sessions\/<match id>\/skeleton\.json`, `census\.json` \(counts only\), and `pack\.json` \(how it was built\)\.$/,
@@ -135,7 +135,7 @@ const CARD_LINES: readonly RegExp[] = [
   /^- Prompt: unresolved\. The call names no prompt\. The prompt words are not in this pack\.$/,
   /^- Tool steps: (`transcripts\[0\]\.tools\[\d+\]` is (`[a-z.]+`|unresolved), (`[a-z]+`|unresolved)\.( |$))+$/,
   /^- Observed result: `transcripts\[0\]\.tools\[\d+\]` ended (`[a-z]+`|unresolved)( with error code (`[\w-]+`|unresolved))?\.( The next calls were (none|(`[a-z.]+`|unresolved)(, (`[a-z.]+`|unresolved))*); (a file write followed|no file write followed)\.)?$/,
-  /^- Candidate task: (from `transcripts\[0\]\.prompts\[\d+\]` and `transcripts\[0\]\.tools\[\d+\]` to `transcripts\[0\]\.tools\[\d+\]`|from `transcripts\[0\]\.prompts\[\d+\]` at `transcripts\[0\]\.tools\[\d+\]`|from `transcripts\[0\]\.tools\[\d+\]` to `transcripts\[0\]\.tools\[\d+\]`|at `transcripts\[0\]\.tools\[\d+\]`), build a task (that checks how an agent recovers|from these steps)\. You would write the repository state and the grader\.$/,
+  /^- Candidate task: (from `transcripts\[0\]\.prompts\[\d+\]` and `transcripts\[0\]\.tools\[\d+\]` to `transcripts\[0\]\.tools\[\d+\]`|from `transcripts\[0\]\.prompts\[\d+\]` at `transcripts\[0\]\.tools\[\d+\]`|from `transcripts\[0\]\.tools\[\d+\]` to `transcripts\[0\]\.tools\[\d+\]`|at `transcripts\[0\]\.tools\[\d+\]`), build a task (that checks what the agent does after the failed call|from these steps)\. You would write the repository state and the grader\.$/,
   /^- Unresolved: the repository and commit, the expected answer, the grader or replay command, and the prompt text\. This pack holds none of them\.$/,
 ];
 const auditCard = (text: string): string[] => {
