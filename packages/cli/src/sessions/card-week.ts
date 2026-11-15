@@ -19,9 +19,9 @@ export interface WeekReceipt {
   harnesses: Array<{ name: Harness; sessions: number }>;
   /** Whether a Codex session is in the window: the Codex reader loses shell outcomes on Codex 0.166 and later, so outcome lines leave those sessions out. */
   codex: boolean;
-  /** Tool calls whose first result was an error, in sessions that are not Codex; null when no such session is in the window. */
+  /** Error results on in-window non-Codex prompts, once per (session, toolUseId) when the id is set, each record when it is null; null when no such prompt is in the window. */
   failedCalls: number | null;
-  /** Of the prompts that edited something (a runner recorded, verify not `na`) in a session that is not Codex, how many ended with a build or test runner that passed; null when none edited. */
+  /** Of the in-window prompts in non-Codex sessions whose verify is `passed`, `failed`, or `masked` (edited, with a runner recorded; `none` and `na` are left out), how many are `passed`; null when there are none. */
   passingRuns: { passed: number; of: number } | null;
 }
 
@@ -48,7 +48,7 @@ export const weekOf = (store: Store, now: number): WeekReceipt => {
     if (error.toolUseId === undefined || error.toolUseId === null) anonymous += 1;
     else failed.add(`${error.session}#${error.toolUseId}`);
   }
-  const edited = prompts.filter((prompt) => !codexIds.has(prompt.session) && prompt.verify !== undefined && prompt.verify !== 'na');
+  const edited = prompts.filter((prompt) => !codexIds.has(prompt.session) && (prompt.verify === 'passed' || prompt.verify === 'failed' || prompt.verify === 'masked'));
   return {
     start: localDate(new Date(opens)),
     end: localDate(today),
