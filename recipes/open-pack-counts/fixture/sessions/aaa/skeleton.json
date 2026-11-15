@@ -1,0 +1,4 @@
+{"format":7,"id":"aaa","transcripts":[{"prompts":[{"cls":"edit-verify","frame":{"model":"model-a"}}],"tools":[
+{"prompt":0,"status":"ok","errorCode":null,"steps":[]},
+{"prompt":0,"status":"error","errorCode":"1","recoveryCalls":{"next":["file.write"],"editFollowed":true},"steps":[]},
+{"prompt":0,"status":"error","errorCode":"other","recoveryCalls":{"next":["shell.exec"],"editFollowed":false},"steps":[]}]}]}
