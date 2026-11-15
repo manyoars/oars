@@ -4,6 +4,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 
 ## Unreleased
 
+- `oars card --week --text` prints a plain-text receipt of your last seven local days (at most six lines, no color): sessions, active days, the harnesses, and, only where recorded fields back them, failed tool calls and edited prompts whose last build or test runner passed, with Codex sessions left out of both. It names no path, repository, prompt, tool, model, or cost, and the footer reads `oars card --week --text` and the version. `oars card --week` and `oars card --text` alone print what they did before. Nothing collected or kept changes.
 - `REDACTION_VERSION` is 5: every pack, manifest row, upload, and deposit made from now on is stamped 5, so output made with the handle rule in tool inputs and the plain `owner` mask reads apart from version 4 output. Nothing stored is rewritten and version 4 rows and packs still read; a raw copy queued under version 4 is not sent and is made again at 5.
 - The `release-mcp` workflow waits (every 15 seconds, up to 10 minutes) until npm serves the tagged `@manyoars/oars` version before listing it on the MCP registry, and fails with one line naming the package, version, and time waited if it never does.
 
