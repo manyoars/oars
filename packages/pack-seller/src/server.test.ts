@@ -109,7 +109,7 @@ const requestDownload = async (base: string): Promise<{ response: Response; abor
 };
 
 describe('the download over a socket', () => {
-  // The transport is what these two tests: the pipeline from the archive to the socket, and a closed client reaching the source.
+  // The transport is what these two test: the pipeline from the archive to the socket, and a closed client reaching the source.
   it('ends the archive with the two zero blocks after the commit', async () => {
     const world = await makeWorld();
     const { sellerServer, base, calls } = await listening(world);
