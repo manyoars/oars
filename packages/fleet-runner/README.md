@@ -14,6 +14,8 @@ This package has no real harness. The only adapter is a scripted fake, so its te
 | `src/runner.ts` | `runOrder`: void detection, in-place reruns, the run cap. |
 | `src/sign.ts` | The sign step and the verify command: `ssh-keygen -Y sign -n manyoars-runbook` and `-Y verify`, refusing a run book whose header status is not `complete`. |
 | `src/stores.ts` | `makeStager` (copies a valid run's transcript out of its temp folder), `buildStores` (one store folder per side and arm through the CLI's `deposit`), `readStores` (`tableOf` over each with `--min-sessions 3`). |
+| `src/deposit-fleet.ts` | `npm run deposit-fleet`: the later deposit step. Verifies a signed, complete run book, waits out the 6-hour idle rule, and runs `oars pool deposit --send-all` once per store with that store's config root in the child's environment. A dry run until `--confirm`. |
+| `FLEET.md` | The one-time owner steps and the order of commands from run to deposit. |
 | `src/runbook.ts` | The run book as JSON Lines with a fixed key order, no transcript text, and no signature. |
 
 Run an order through the fake:
@@ -23,6 +25,8 @@ npm run run-fake -w packages/fleet-runner -- [--order <file>] [--taskset <folder
 ```
 
 With no flags it runs a demo retest, then writes beside the run book: `<order>.stores/<side>-<arm>/` (a sessions store and its projects folder per side and arm, valid runs only) and `<order>.<side>-<arm>.rows.json` (the read, one file per side and arm), `<order>.stores/owners.json` (the owner list the read takes), and, without `--terms`, `<order>.demo-terms.txt` (the invented exclusion list). It prints one line per output file. `--terms` names the exclusion term list the read applies (the demo writes an invented one). Every path is explicit; no code here reads `APPDATA`. Exit code 0 is a complete order, 1 an incomplete or voided one, 2 a bad input. `--change-task-set-at 3` makes run 3 report another task-set version.
+
+The order file names the operator's pool account id as `account`; each valid run's pool session id in the run book is `contentHash([account, harness session id])`, the id `oars pool deposit` gives that account and session. Each store folder is its own config root (`<out>/<order id>.stores/<folder>/oars/sessions`). See `FLEET.md` for the deposit.
 
 Header statuses: `complete` (every cell has its repeats), `incomplete` (the run cap ended the order; `shortCells` lists the cells short), and `voided` (the task set changed mid-order: every run is void with `task-set-changed`, nothing is rerun, and `shortCells` lists every planned cell with 0 valid runs).
 
