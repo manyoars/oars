@@ -4,7 +4,7 @@
 //   Bedrock variables    https://code.claude.com/docs/en/amazon-bedrock.md , https://code.claude.com/docs/en/env-vars.md
 //   transcript location  https://code.claude.com/docs/en/sessions.md#where-transcripts-are-stored
 //   stream-json result   https://code.claude.com/docs/en/agent-sdk/typescript.md (SDKSystemMessage, SDKResultMessage, ModelUsage)
-import { spawn as spawnChild } from 'node:child_process';
+import { spawn as spawnChild, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -125,6 +125,17 @@ export const loadResetPlan = (taskSetDir: string): ResetPlan => {
   return { nodeMajor, commands };
 };
 
+/** Ends a process and everything it started: the harness starts MCP servers of its own, and an orphan would keep drawing credit. */
+const killTree = (pid: number | undefined): void => {
+  if (pid === undefined) return;
+  try {
+    if (process.platform === 'win32') spawnSync('taskkill', ['/T', '/F', '/PID', String(pid)], { windowsHide: true, stdio: 'ignore' });
+    else process.kill(-pid, 'SIGKILL');
+  } catch {
+    // The process already ended.
+  }
+};
+
 export const nodeSpawn: Spawn = (spec) =>
   new Promise((resolve) => {
     let stdout = '';
@@ -137,11 +148,12 @@ export const nodeSpawn: Spawn = (spec) =>
       clearTimeout(timer);
       resolve(outcome);
     };
-    const shell = process.platform === 'win32' && ['.cmd', '.bat'].includes(extname(spec.command).toLowerCase());
-    const child = spawnChild(spec.command, spec.args, { cwd: spec.cwd, env: spec.env, shell, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    // No shell: a `.cmd` wrapper would be the process killed on a timeout while the real program kept running (the constructor refuses one). Off Windows the child leads its own
+    // process group so a timeout can end the whole group.
+    const child = spawnChild(spec.command, spec.args, { cwd: spec.cwd, env: spec.env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGKILL');
+      killTree(child.pid);
     }, spec.timeoutMs);
     child.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk.toString('utf8');
@@ -248,6 +260,7 @@ export const makeClaudeBedrock = (settings: ClaudeBedrockSettings, deps: Depende
   if (key === undefined || key === '') throw new Error('AWS_BEARER_TOKEN_BEDROCK is not set: the fleet runs on a Bedrock API key and never falls back to a personal Claude sign-in');
   if (settings.awsRegion === '') throw new Error('the AWS region setting is empty: Bedrock needs a region');
   if (settings.modelId === '') throw new Error('the model ID setting is empty');
+  if (['.cmd', '.bat'].includes(extname(settings.claudeExecutable).toLowerCase())) throw new Error(`${settings.claudeExecutable} is a batch wrapper: a timeout would kill the wrapper and leave claude running. Use the native claude executable, or node with cli.js through claudeArgs`);
   const reset = loadResetPlan(settings.taskSetDir);
   const nodeMajor = Number.parseInt(deps.nodeVersion ?? process.versions.node, 10);
   if (nodeMajor < reset.nodeMajor) throw new Error(`Node ${String(nodeMajor)} is below the Node ${String(reset.nodeMajor)} the fixture needs (task-set manifest reset.node); no run was started`);
