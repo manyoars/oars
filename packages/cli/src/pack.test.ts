@@ -162,6 +162,7 @@ const NOT_OPEN = 'Accounts are not open yet: `oars login` uses the Many Oars iss
 // Payouts are the one money side that stays private: V22 is lifted for Many Oars (2026-11-12), so offers, purchases, customers, and
 // credits are public text and these terms are what the public text still never says.
 const WITHHELD_TERMS = [/payout/i, /get paid/i, /1099/, /take-home/i, /make-me-money/i, /revenue/i, /\bearn/i];
+const WIRE_NAMES_KEPT = ['PAYOUT_COUNTRY_NOT_SUPPORTED'];
 const withheldIn = (text: string): string[] => WITHHELD_TERMS.filter((term) => term.test(text)).map(String);
 
 describe('the public text states facts only', () => {
@@ -186,14 +187,16 @@ describe('the public text states facts only', () => {
     ['packages/client/README.md', join(root, 'packages/client/README.md')],
     ['packages/client/CHANGELOG.md', join(root, 'packages/client/CHANGELOG.md')],
     ['openapi/public-operations.json', join(root, 'openapi/public-operations.json')],
+    ['openapi/public.json', join(root, 'openapi/public.json')],
+    ['packages/client/src/generated/schema.d.ts', join(root, 'packages/client/src/generated/schema.d.ts')],
   ])('%s names none of the withheld terms', (_name, file) => {
-    expect(withheldIn(readFileSync(file, 'utf8'))).toEqual([]);
+    // The one payout word left in the generated files is an error code, a wire name a client must send and read back.
+    const text = WIRE_NAMES_KEPT.reduce((rest, name) => rest.replaceAll(name, ''), readFileSync(file, 'utf8'));
+    expect(withheldIn(text)).toEqual([]);
   });
 
-  // The platform's own prose in the generated spec says "payout account" in an error table and two descriptions, and one error code carries
-  // the word (PAYOUT_COUNTRY_NOT_SUPPORTED). Those are the platform's wire texts, so the scan is over what a client can call or name: no
-  // path, operation, tag, or schema is a payout one, and the only payout identifier left is that code.
-  const WIRE_NAMES_KEPT = ['PAYOUT_COUNTRY_NOT_SUPPORTED'];
+  // An extra check beside the text scan above: no path, operation, tag, or schema is a payout one, and the only payout identifier left is
+  // the kept error code.
   /** @returns every word of `text` that holds payout, except the kept names */
   const wireNamesIn = (text: string): string[] =>
     WIRE_NAMES_KEPT.reduce((rest, name) => rest.replaceAll(name, ''), text).match(/\w*payout\w*/gi) ?? [];
