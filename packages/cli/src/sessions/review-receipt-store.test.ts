@@ -57,7 +57,7 @@ describe('oars sessions receipt on a real store', () => {
     const h = wired();
     expect(await run(['sessions', 'receipt', 'rcpt-1'], h.deps)).toBe(ExitCode.OK);
     const out = h.out.join('');
-    expect(out).toContain('| `npm run build` | ');
+    expect(out).toContain('| `npm run build` | exit 1 | 2 |');
     expect(out).toContain('| `npx vitest run` | exit 0 | 3 |');
     expect(out).toContain('| `npm test` | ');
     expect(out).toContain('| `just check` | exit 0 | 5 |');
