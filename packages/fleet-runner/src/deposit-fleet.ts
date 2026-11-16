@@ -1,10 +1,11 @@
 // The deposit step (spec section 8), a later command than the run: `npm run deposit-fleet -w packages/fleet-runner -- <run book> --allowed-signers <file> --oars <path> [--identity <id>] [--confirm]`.
-// For each store folder the run wrote, it runs the public `oars pool deposit --send-all` with that store's config root in the child's environment only, so the child reads that store, that sign-in file,
+// For each store folder the run wrote, it runs the public `oars pool deposit` (build), `oars pool outbox` (marks the batches shown), and `oars pool deposit --send-all` with that store's config root in the child's environment only, so the child reads that store, that sign-in file,
 // and that exclusion-terms file, and no other. Without `--confirm` it prints what it would do and runs nothing. It never edits the signed run book: what it did goes to `<order id>.deposit-record.jsonl` beside it.
 import { spawn } from 'node:child_process';
 import { access, appendFile, readFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
 import { SESSION_IDLE_HOURS } from '../../cli/src/sessions/pool-wire.js';
+import { signInsFile } from '../../cli/src/sessions/pool-replica.js';
 import { objectAt, parseJson, stringAt } from './json.js';
 import { verifyRunBook } from './sign.js';
 import { folderOf } from './stores.js';
@@ -16,6 +17,11 @@ interface Store {
   configRoot: string;
   /** The pool row ids the store's valid runs are expected to deposit under, in run order. */
   expected: string[];
+}
+
+interface Step {
+  label: string;
+  args: string[];
 }
 
 interface Parsed {
@@ -63,14 +69,20 @@ const childEnv = (configRoot: string): NodeJS.ProcessEnv => {
   return env;
 };
 
-const signInFile = (store: Store): string => join(store.configRoot, 'oars', 'credentials.json');
+/** The file `oars pool login` writes, as the CLI names it (not the platform login's `credentials.json`). */
+const signInFile = (store: Store): string => signInsFile(join(store.configRoot, 'oars', 'sessions'));
 const termsFile = (store: Store): string => join(store.configRoot, 'claude', 'session-commons', 'exclusion-terms.txt');
+
+const isScript = (oars: string): boolean => ['.js', '.mjs', '.cjs'].includes(extname(oars).toLowerCase());
+
+/** The command line as it runs: a script is run by this node, so the printed line names it. */
+const commandLine = (oars: string, args: string[]): string => `${isScript(oars) ? `${process.execPath} ` : ''}${oars} ${args.join(' ')}`;
 
 /** A `.js` file is run by this node, a `.cmd` or `.bat` through the shell on Windows, anything else directly. */
 const launch = (oars: string, args: string[], env: NodeJS.ProcessEnv): Promise<number> =>
   new Promise((done) => {
     const extension = extname(oars).toLowerCase();
-    const script = extension === '.js' || extension === '.mjs' || extension === '.cjs';
+    const script = isScript(oars);
     const shell = process.platform === 'win32' && (extension === '.cmd' || extension === '.bat');
     const child = spawn(script ? process.execPath : oars, script ? [oars, ...args] : args, { env, stdio: 'inherit', shell });
     child.on('error', () => {
@@ -115,22 +127,36 @@ export const main = async (argv: string[], print: (line: string) => void, clock:
       if (!(await exists(signInFile(store)))) return refuse(`store ${store.name} has no sign-in file: ${signInFile(store)} (run oars pool login with this config root)`);
       if (!(await exists(termsFile(store)))) return refuse(`store ${store.name} has no exclusion-terms file: ${termsFile(store)}`);
     }
-    const args = ['pool', 'deposit', '--send-all'];
+    const steps: Step[] = [
+      { label: 'build', args: ['pool', 'deposit'] },
+      { label: 'show', args: ['pool', 'outbox'] },
+      { label: 'send', args: ['pool', 'deposit', '--send-all'] },
+    ];
     print(`deposit-fleet ${book.orderId}: ${confirm ? 'depositing' : 'dry run (add --confirm to send)'}`);
     if (!confirm) {
       for (const store of book.stores) {
         print(`store ${store.name}: config root ${store.configRoot}`);
         print(`  expects ${String(store.expected.length)} sessions: ${store.expected.join(' ')}`);
-        print(`  command: ${oars} pool deposit --send-all`);
+        for (const [at, step] of steps.entries()) print(`  command ${String(at + 1)} (${step.label}): ${commandLine(oars, step.args)}`);
         print(`  environment: ${CONFIG_VARIABLE}=${store.configRoot} CLAUDE_CONFIG_DIR=${join(store.configRoot, 'claude')}`);
       }
       return 0;
     }
     const failed: string[] = [];
     for (const store of book.stores) {
-      const exitCode = await launch(oars, args, childEnv(store.configRoot));
-      await appendFile(join(dir, `${book.orderId}.deposit-record.jsonl`), `${JSON.stringify({ store: store.name, time: clock().toISOString(), exitCode, expected: store.expected })}\n`);
-      if (exitCode !== 0) failed.push(`${store.name} (exit ${String(exitCode)})`);
+      // Build, then show (which marks each batch shown, the condition of a send), then send; the first non-zero exit ends this store.
+      const exitCodes: number[] = [];
+      for (const step of steps) {
+        const exitCode = await launch(oars, step.args, childEnv(store.configRoot));
+        exitCodes.push(exitCode);
+        if (exitCode !== 0) {
+          print(`store ${store.name}: ${step.label} step failed (exit ${String(exitCode)}), stopped${step.label === 'send' ? '; if the covenant is not accepted, run oars pool deposit --send <hash> at a terminal with this config root' : ''}`);
+          failed.push(`${store.name} (exit ${String(exitCode)})`);
+          break;
+        }
+      }
+      await appendFile(join(dir, `${book.orderId}.deposit-record.jsonl`), `${JSON.stringify({ store: store.name, time: clock().toISOString(), exitCodes, expected: store.expected })}
+`);
     }
     print(`deposited ${String(book.stores.length - failed.length)} of ${String(book.stores.length)} stores${failed.length === 0 ? '' : `; failed: ${failed.join(', ')}`}`);
     return failed.length === 0 ? 0 : 1;

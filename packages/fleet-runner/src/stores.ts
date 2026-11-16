@@ -65,7 +65,7 @@ export interface StoreFolder {
   name: string;
   /**
    * The folder a child `oars` process takes as its config folder (`APPDATA` on Windows, `XDG_CONFIG_HOME` elsewhere): the CLI reads its store at `<root>/oars/sessions`, its sign-in
-   * file at `<root>/oars/credentials.json`, and (with `CLAUDE_CONFIG_DIR` at `<root>/claude`) its exclusion terms at `<root>/claude/session-commons/exclusion-terms.txt`.
+   * file at `<root>/oars/sessions/pool-accounts.json`, and (with `CLAUDE_CONFIG_DIR` at `<root>/claude`) its exclusion terms at `<root>/claude/session-commons/exclusion-terms.txt`.
    */
   configRoot: string;
   storeDir: string;

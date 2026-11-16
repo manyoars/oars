@@ -1,16 +1,20 @@
 import { spawnSync } from 'node:child_process';
+import { readdirSync, readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { signInsFile } from '../../cli/src/sessions/pool-replica.js';
+import { type RunDeps } from '../../cli/src/cli.js';
+import { poolDeposit } from '../../cli/src/sessions/pool-command.js';
 import { main } from './deposit-fleet.js';
 import { CLEAN, makeFake } from './fake-harness.js';
-import { arrayAt, objectAt, parseJson, type JsonObject } from './json.js';
+import { arrayAt, objectAt, parseJson, stringAt, type JsonObject } from './json.js';
 import { parseOrder } from './order.js';
 import { runOrder } from './runner.js';
 import { serializeRunBook, type RunBook } from './runbook.js';
 import { signRunBook } from './sign.js';
-import { buildStores, makeStager, type StoreFolder } from './stores.js';
+import { buildStores, folderOf, makeStager, type StoreFolder } from './stores.js';
 import { FLEET, retestText, taskSet } from './test-fixtures.js';
 
 const IDENTITY = 'run-book@test.invalid';
@@ -18,7 +22,7 @@ const KEY_ENV = process.platform === 'win32' ? 'APPDATA' : 'XDG_CONFIG_HOME';
 
 let root = '';
 let fakeHome = '';
-const saved = { APPDATA: process.env.APPDATA, HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, FAKE_OARS_LOG: process.env.FAKE_OARS_LOG, FAKE_OARS_FAIL: process.env.FAKE_OARS_FAIL };
+const saved = { APPDATA: process.env.APPDATA, HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, FAKE_OARS_LOG: process.env.FAKE_OARS_LOG, FAKE_OARS_FAIL: process.env.FAKE_OARS_FAIL, FAKE_OARS_FAIL_AT: process.env.FAKE_OARS_FAIL_AT };
 
 // The parent's config variables point at an empty temp folder: a deposit that reached for them would write there, and a test sees it. No test runs the real `oars`.
 beforeEach(async () => {
@@ -28,6 +32,7 @@ beforeEach(async () => {
   for (const name of ['APPDATA', 'HOME', 'USERPROFILE', 'XDG_CONFIG_HOME']) process.env[name] = fakeHome;
   process.env.FAKE_OARS_LOG = join(root, 'fake-oars.log');
   Reflect.deleteProperty(process.env, 'FAKE_OARS_FAIL');
+  Reflect.deleteProperty(process.env, 'FAKE_OARS_FAIL_AT');
   console.log(`parent ${KEY_ENV} for this test: ${fakeHome}; temp root: ${root}`);
 });
 
@@ -49,7 +54,11 @@ const FAKE_OARS = `import { appendFileSync } from 'node:fs';
 const env = process.env;
 appendFileSync(env.FAKE_OARS_LOG, JSON.stringify({ args: process.argv.slice(2), appdata: env.APPDATA ?? null, xdg: env.XDG_CONFIG_HOME ?? null, claude: env.CLAUDE_CONFIG_DIR ?? null, terms: env.OARS_EXCLUSION_TERMS ?? null }) + String.fromCharCode(10));
 const where = env.${KEY_ENV} ?? '';
-process.exit(env.FAKE_OARS_FAIL !== undefined && where.includes(env.FAKE_OARS_FAIL) ? 7 : 0);
+const step = process.argv.slice(2);
+const armed = env.FAKE_OARS_FAIL !== undefined || env.FAKE_OARS_FAIL_AT !== undefined;
+const here = env.FAKE_OARS_FAIL === undefined || where.includes(env.FAKE_OARS_FAIL);
+const named = env.FAKE_OARS_FAIL_AT === undefined || step.includes(env.FAKE_OARS_FAIL_AT);
+process.exit(armed && here && named ? 7 : 0);
 `;
 
 interface Scene {
@@ -83,8 +92,8 @@ const scene = async (patch: { runCap?: number; repeats?: number } = {}): Promise
   const allowed = join(root, 'allowed_signers');
   await writeFile(allowed, `${IDENTITY} namespaces="manyoars-runbook" ${type ?? ''} ${material ?? ''}\n`);
   for (const folder of folders) {
-    await mkdir(join(folder.configRoot, 'oars'), { recursive: true });
-    await writeFile(join(folder.configRoot, 'oars', 'credentials.json'), '{}');
+    await mkdir(folder.storeDir, { recursive: true });
+    await writeFile(signInsFile(folder.storeDir), '[]');
     await mkdir(join(folder.configRoot, 'claude', 'session-commons'), { recursive: true });
     await writeFile(join(folder.configRoot, 'claude', 'session-commons', 'exclusion-terms.txt'), 'zorblax\n');
   }
@@ -95,6 +104,9 @@ const scene = async (patch: { runCap?: number; repeats?: number } = {}): Promise
 
 const NEWEST_END = (book: RunBook): number => Math.max(...book.runs.map((run) => Date.parse(run.end)));
 const HOUR = 3_600_000;
+/** A `.mjs` --oars runs under this node, so the printed line says so. */
+const NODE = `${process.execPath} `;
+const STEPS = [['pool', 'deposit'], ['pool', 'outbox'], ['pool', 'deposit', '--send-all']];
 
 const run = async (s: Scene, extra: string[], now: Date): Promise<{ code: number; lines: string[] }> => {
   const lines: string[] = [];
@@ -115,10 +127,12 @@ describe('deposit-fleet', () => {
       const expected = s.book.runs.filter((entry) => entry.void === null && entry.side === folder.name.split('-')[0]).map((entry) => entry.poolSessionId ?? '');
       expect(lines).toContain(`store ${folder.name}: config root ${folder.configRoot}`);
       expect(lines).toContain(`  expects ${String(expected.length)} sessions: ${expected.join(' ')}`);
-      expect(lines).toContain(`  command: ${s.oars} pool deposit --send-all`);
+      expect(lines).toContain(`  command 1 (build): ${NODE}${s.oars} pool deposit`);
+      expect(lines).toContain(`  command 2 (show): ${NODE}${s.oars} pool outbox`);
+      expect(lines).toContain(`  command 3 (send): ${NODE}${s.oars} pool deposit --send-all`);
     }
     expect(lines[0]).toBe('deposit-fleet o-1: dry run (add --confirm to send)');
-    console.log(lines.map((line) => line.replaceAll(root, '<tmp>').replace(/(expects \d+ sessions: \S+ \S+).*/, '$1 ...')).join('\n'));
+    console.log(lines.map((line) => line.replaceAll(root, '<tmp>')).join('\n'));
     expect(await logged()).toEqual([]);
     expect(await readFile(`${s.runBook.replace('.run-book.jsonl', '')}.deposit-record.jsonl`, 'utf8').catch(() => null)).toBeNull();
   });
@@ -130,18 +144,21 @@ describe('deposit-fleet', () => {
     const { code, lines } = await run(s, ['--confirm'], new Date(NEWEST_END(s.book) + 7 * HOUR));
     expect(code).toBe(0);
     const calls = await logged();
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(6);
     for (const [index, folder] of s.folders.entries()) {
-      expect(calls[index]?.args).toEqual(['pool', 'deposit', '--send-all']);
-      expect(process.platform === 'win32' ? calls[index]?.appdata : calls[index]?.xdg).toBe(folder.configRoot);
-      expect(calls[index]?.claude).toBe(join(folder.configRoot, 'claude'));
-      expect(calls[index]?.terms).toBeNull();
+      for (const [step, args] of STEPS.entries()) {
+        const call = calls[index * 3 + step];
+        expect(call?.args).toEqual(args);
+        expect(process.platform === 'win32' ? call?.appdata : call?.xdg).toBe(folder.configRoot);
+        expect(call?.claude).toBe(join(folder.configRoot, 'claude'));
+        expect(call?.terms).toBeNull();
+      }
     }
     expect(process.env[KEY_ENV]).toBe(parent);
     expect(process.env[KEY_ENV]).toBe(fakeHome);
     expect(await readFile(s.runBook, 'utf8')).toBe(before);
     const record = records(await readFile(join(join(s.runBook, '..'), 'o-1.deposit-record.jsonl'), 'utf8'));
-    expect(record.map((entry) => [entry.store, entry.exitCode, arrayAt(entry, 'expected', 'record').length])).toEqual([['before-playwright', 0, 24], ['after-playwright', 0, 24]]);
+    expect(record.map((entry) => [entry.store, entry.exitCodes, arrayAt(entry, 'expected', 'record').length])).toEqual([['before-playwright', [0, 0, 0], 24], ['after-playwright', [0, 0, 0], 24]]);
     expect(record[0]?.time).toBe(new Date(NEWEST_END(s.book) + 7 * HOUR).toISOString());
     expect(lines.at(-1)).toBe('deposited 2 of 2 stores');
   });
@@ -151,10 +168,25 @@ describe('deposit-fleet', () => {
     process.env.FAKE_OARS_FAIL = 'before-playwright';
     const { code, lines } = await run(s, ['--confirm'], new Date(NEWEST_END(s.book) + 7 * HOUR));
     expect(code).toBe(1);
-    expect(await logged()).toHaveLength(2);
+    // The failing store stops at its first command; the other store runs all three.
+    expect((await logged()).map((call) => call.args)).toEqual([STEPS[0], ...STEPS]);
     const record = records(await readFile(join(join(s.runBook, '..'), 'o-1.deposit-record.jsonl'), 'utf8'));
-    expect(record.map((entry) => [entry.store, entry.exitCode])).toEqual([['before-playwright', 7], ['after-playwright', 0]]);
+    expect(record.map((entry) => [entry.store, entry.exitCodes])).toEqual([['before-playwright', [7]], ['after-playwright', [0, 0, 0]]]);
     expect(lines.at(-1)).toBe('deposited 1 of 2 stores; failed: before-playwright (exit 7)');
+  });
+
+  it('stops a store at the first non-zero command, whichever step it is, and names the command to run by hand when the send step fails', async () => {
+    const s = await scene();
+    process.env.FAKE_OARS_FAIL_AT = 'outbox';
+    const outbox = await run(s, ['--confirm'], new Date(NEWEST_END(s.book) + 7 * HOUR));
+    expect(outbox.code).toBe(1);
+    expect((await logged()).map((call) => call.args)).toEqual([STEPS[0], STEPS[1], STEPS[0], STEPS[1]]);
+    await rm(process.env.FAKE_OARS_LOG ?? '');
+    process.env.FAKE_OARS_FAIL_AT = '--send-all';
+    const send = await run(s, ['--confirm'], new Date(NEWEST_END(s.book) + 7 * HOUR));
+    expect(send.code).toBe(1);
+    expect((await logged()).map((call) => call.args)).toEqual([...STEPS, ...STEPS]);
+    expect(send.lines.join(String.fromCharCode(10))).toContain('if the covenant is not accepted, run oars pool deposit --send <hash> at a terminal');
   });
 
   it('refuses a run book with no signature, and one changed after it was signed', async () => {
@@ -191,7 +223,7 @@ describe('deposit-fleet', () => {
   it('refuses a store with no sign-in file or no exclusion-terms file, naming the file', async () => {
     const s = await scene();
     const now = new Date(NEWEST_END(s.book) + 7 * HOUR);
-    const login = join(s.folders[1]?.configRoot ?? '', 'oars', 'credentials.json');
+    const login = signInsFile(s.folders[1]?.storeDir ?? '');
     await rm(login);
     const noLogin = await run(s, ['--confirm'], now);
     expect(noLogin.code).toBe(1);
@@ -211,5 +243,41 @@ describe('deposit-fleet', () => {
     expect(await main([], (line) => lines.push(line), () => new Date())).toBe(2);
     expect(await main(['book.jsonl', '--allowed-signers', 'a'], (line) => lines.push(line), () => new Date())).toBe(2);
     expect(lines.join('\n')).toMatch(/usage: deposit-fleet/);
+  });
+});
+
+describe('the run book row id and the CLI deposit path', () => {
+  it('gives each batch the id the run book recorded: poolDeposit builds under contentHash of the account and the session', async () => {
+    const s = await scene();
+    const [folder] = s.folders;
+    if (folder === undefined) throw new Error('no store folder');
+    const server = 'https://pool.test';
+    const termsFile = join(folder.configRoot, 'claude', 'session-commons', 'exclusion-terms.txt');
+    // A signed-in fake account and an unexpired sign-in file in this store only; the build reads it and sends nothing.
+    const signIn = [{ server, account: 'acct-fleet', token: 'fake-token', expiresAt: Date.UTC(2030, 0, 1), signingKey: { kty: 'OKP', crv: 'Ed25519', x: 'a-pinned-key' } }];
+    await writeFile(signInsFile(folder.storeDir), JSON.stringify(signIn));
+    console.log(`store under test: ${folder.storeDir}`);
+    // The CLI counts a session as ended 6 hours after its file's last write, and the copied files were written just now.
+    const now = Date.now() + 7 * HOUR;
+    const deps: RunDeps = {
+      env: { OARS_POOL_URL: server, OARS_EXCLUSION_TERMS: termsFile },
+      io: { stdout: () => undefined, stderr: () => undefined },
+      store: { read: () => Promise.resolve(undefined), write: () => Promise.resolve(), delete: () => Promise.resolve() },
+      version: '0.0.0',
+      sleep: () => Promise.resolve(),
+      random: () => 0.5,
+      now: () => now,
+      openBrowser: () => Promise.resolve(),
+      sessions: { storeDir: folder.storeDir, projectsRoot: folder.projectsRoot, stdin: process.stdin, stdout: { write: () => true } },
+    };
+    await poolDeposit(deps, { server });
+    const outbox = join(folder.storeDir, 'pool-outbox');
+    const batchIds = readdirSync(outbox, { recursive: true, encoding: 'utf8' })
+      .filter((name) => name.endsWith('.jsonl'))
+      .map((name) => parseJson(readFileSync(join(outbox, name), 'utf8'), name))
+      .map((batch) => stringAt(objectAt(batch, 'batch'), 'id', 'batch'));
+    const expected = s.book.runs.filter((run) => run.void === null && folderOf(run.side, run.arm) === folder.name).map((run) => run.poolSessionId ?? '');
+    expect(expected).toHaveLength(24);
+    expect(batchIds.sort()).toEqual(expected.sort());
   });
 });
