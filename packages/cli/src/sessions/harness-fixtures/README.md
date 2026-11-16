@@ -5,7 +5,7 @@ One made-up session per reader, each with a test beside it (`<reader>.test.ts`).
 | Reader | Fixture | Staged by the test as |
 |--------|---------|-----------------------|
 | Claude Code | `claude-code.jsonl` | the transcript text itself |
-| Codex | `codex.jsonl` | `sessions/YYYY/MM/DD/rollout-*.jsonl` |
+| Codex | `codex.jsonl` (the Paginated rollout the 0.169 CLI writes); `codex-legacy.jsonl` (the pre-0.169 event shape the reader still reads, kept as it was at 0.167.0) | `sessions/YYYY/MM/DD/rollout-*.jsonl` |
 | Copilot CLI | `copilot.jsonl` | `session-state/<id>/events.jsonl` |
 | Gemini CLI | `gemini.jsonl` | `.gemini/tmp/<slug>/chats/session-*.jsonl` |
 | Grok Build | `grok.updates.jsonl`, `grok.summary.json`, `grok.usage.json` | one session folder |
