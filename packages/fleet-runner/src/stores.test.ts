@@ -78,6 +78,12 @@ describe('store folders per side and arm', () => {
     expect(await readdir(fakeHome)).toEqual([]);
   });
 
+  it('throws when a valid run names a pool session that was never staged', async () => {
+    const book = await runOrder({ order: order(), taskSet: taskSet(1), fleet: FLEET, adapter: makeFake(CLEAN), clock: stepClock(), operator: 'Many Oars Co.', stage: makeStager(join(root, 'staging-a')).stage });
+    const valid = book.runs.find((run) => run.void === null);
+    await expect(buildStores(book, makeStager(join(root, 'staging-b')), join(root, 'out'))).rejects.toThrow(`valid run ${valid?.runId ?? ''} has a pool session id but was not staged`);
+  });
+
   it('stores nothing for an order that the task set change voided', async () => {
     const { book, folders } = await chain((request) => (request.sequence === 3 ? { taskSetVersion: 'changed' } : {}), 2);
     expect(book.header.status).toBe('voided');
