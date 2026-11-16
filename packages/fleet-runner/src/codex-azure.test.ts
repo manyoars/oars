@@ -269,6 +269,13 @@ describe('run', () => {
     await none.prepared.dispose();
   });
 
+  it('counts the tokens of a delegate rollout even when the own rollout of the run is missing', async () => {
+    const { prepared, result } = await run('scenario: norollout-subagent' + NL + 'x', 'no-tool');
+    expect(result.transcriptPath).toBeNull();
+    expect(result.tokens).toEqual({ input: 200, cache: 0, output: 20 });
+    await prepared.dispose();
+  });
+
   it('copies the own rollout of the run, not a later one from a spawned agent or a delegate, and reads the version from it', async () => {
     const { prepared, result } = await run('scenario: subagent' + NL + 'x', 'no-tool');
     expect(result.harnessVersion).toBe('0.170.0');
