@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Env, RawBucket } from './http.js';
 import { sweepWithdrawnRaw, SWEEP_PAGE_CALLS, withdrawRawConsent } from './raw.js';
-import { acceptanceOf, fieldOf, startPool, stubUser, type TestPool } from './test-pool.js';
+import { acceptanceOf, fieldOf, startPool, stubUser, type TestDb, type TestPool } from './test-pool.js';
 import { rawDigest } from './tombstones.js';
 import worker from './worker.js';
 
@@ -48,6 +48,10 @@ const say = (token: string): ReturnType<TestPool['send']> => pool.send('/v1/cons
 const keysOf = async (prefix: string): Promise<string[]> => (await (await pool.rawBucket()).list({ prefix })).objects.map((one) => one.key);
 const all = async (sql: string, ...binds: (string | number)[]): Promise<readonly unknown[]> => (await (await pool.db()).prepare(sql).bind(...binds).all()).results;
 const count = async (sql: string, ...binds: (string | number)[]): Promise<number> => Number(fieldOf((await all(sql, ...binds))[0], 'held'));
+/** One held raw_objects row (stored_at 1, never erased) for a batch, so a seed of a hundred rows is one round trip, not a hundred. */
+const heldRow = (db: TestDb, account: string, hash: string, capture: string): ReturnType<TestDb['prepare']> =>
+  db.prepare('INSERT INTO raw_objects (account, sha256, bytes, capture_version, redaction_version, stored_at) VALUES (?, ?, 1, ?, ?, 1)').bind(account, hash, capture, '1');
+
 const night = async (when = TONIGHT): Promise<void> => worker.scheduled({ scheduledTime: when }, await pool.miniflare.getBindings<Env>());
 
 describe('the nightly cron erases the raw copies of an account that withdrew', () => {
@@ -177,7 +181,8 @@ describe('the nightly cron erases the raw copies of an account that withdrew', (
     const { account } = await member();
     const db = await pool.db();
     await db.prepare('UPDATE accounts SET raw_consent_withdrawn_at = 1, raw_consent = NULL, raw_consent_version = NULL WHERE id = ?').bind(account).run();
-    for (let at = 0; at < 105; at += 1) await db.prepare('INSERT INTO raw_objects (account, sha256, bytes, capture_version, redaction_version, stored_at) VALUES (?, ?, 1, ?, ?, 1)').bind(account, String(at).padStart(64, '0'), 'cap', '1').run();
+    // 105 is one page (SWEEP_PAGE, 100) and five over, so the second sweep must take a short page.
+    await db.batch(Array.from({ length: 105 }, (_, at) => heldRow(db, account, String(at).padStart(64, '0'), 'cap')));
     const env = await pool.miniflare.getBindings<Env>();
     expect(await sweepWithdrawnRaw(env, TONIGHT, SWEEP_PAGE_CALLS - 1)).toBe(0);
     expect(await sweepWithdrawnRaw(env, TONIGHT, SWEEP_PAGE_CALLS)).toBe(100);
@@ -193,8 +198,11 @@ describe('the nightly cron erases the raw copies of an account that withdrew', (
     // The newer withdrawal is the account made first (and holds the most objects), so a page with no order would fill with it and leave the older one waiting.
     await db.prepare('UPDATE accounts SET raw_consent_withdrawn_at = 5000, raw_consent = NULL, raw_consent_version = NULL WHERE id = ?').bind(newer.account).run();
     await db.prepare('UPDATE accounts SET raw_consent_withdrawn_at = 1000, raw_consent = NULL, raw_consent_version = NULL WHERE id = ?').bind(older.account).run();
-    for (let at = 0; at < 100; at += 1) await db.prepare('INSERT INTO raw_objects (account, sha256, bytes, capture_version, redaction_version, stored_at) VALUES (?, ?, 1, ?, ?, 1)').bind(newer.account, `d${String(at).padStart(2, '0')}`.padEnd(64, '0'), 'cap-1', '1').run();
-    for (let at = 0; at < 3; at += 1) await db.prepare('INSERT INTO raw_objects (account, sha256, bytes, capture_version, redaction_version, stored_at) VALUES (?, ?, 1, ?, ?, 1)').bind(older.account, `e${String(at).padStart(2, '0')}`.padEnd(64, '0'), 'cap-1', '1').run();
+    // 100 fills a page (SWEEP_PAGE); the older account's 3 are the ones a page with no order would leave waiting.
+    await db.batch([
+      ...Array.from({ length: 100 }, (_, at) => heldRow(db, newer.account, `d${String(at).padStart(2, '0')}`.padEnd(64, '0'), 'cap-1')),
+      ...Array.from({ length: 3 }, (_, at) => heldRow(db, older.account, `e${String(at).padStart(2, '0')}`.padEnd(64, '0'), 'cap-1')),
+    ]);
     const env = await pool.miniflare.getBindings<Env>();
     expect(await sweepWithdrawnRaw(env, TONIGHT, SWEEP_PAGE_CALLS)).toBe(100);
     expect(await count('SELECT COUNT(*) AS held FROM raw_objects WHERE account = ? AND erased_on IS NULL', older.account)).toBe(0);
