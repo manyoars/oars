@@ -1,4 +1,4 @@
-// `npm run run-fake -w packages/fleet-runner -- [--order <file>] [--taskset <folder>] [--fleet <file>] [--out <folder>]`: runs an order end to end through the scripted fake
+// `npm run run-fake -w packages/fleet-runner -- [--order <file>] [--taskset <folder>] [--fleet <file>] [--out <folder>] [--change-task-set-at <run number>]`: runs an order end to end through the scripted fake
 // harness and writes the unsigned run book. With no flags it runs a demo retest (the test manifest of 8 tasks, 3 repeats, every 9th run hitting a rate limit).
 // It opens no network, reads no session store, and spends nothing; a real harness adapter is a later brief.
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
@@ -20,12 +20,13 @@ export const main = async (argv: string[], print: (line: string) => void, clock:
   const orderPath = flag(argv, '--order');
   const tasksetPath = flag(argv, '--taskset');
   const fleetPath = flag(argv, '--fleet');
+  const changeAt = Number(flag(argv, '--change-task-set-at') ?? 0);
   const out = resolve(flag(argv, '--out') ?? (await mkdtemp(join(tmpdir(), 'fleet-run-fake-'))));
   try {
     const fleet = fleetPath === undefined ? FLEET : parseFleet(await readFile(fleetPath, 'utf8'));
     const order = parseOrder(orderPath === undefined ? retestText({ runCap: 60 }) : await readFile(orderPath, 'utf8'), fleet);
     const tasks = tasksetPath === undefined ? taskSet(8) : await loadTaskSet(tasksetPath);
-    const book = await runOrder({ order, taskSet: tasks, fleet, adapter: makeFake((request) => (request.sequence % 9 === 0 ? { exit: 'rate-limit' } : {})), clock, operator: 'Many Oars Co.' });
+    const book = await runOrder({ order, taskSet: tasks, fleet, adapter: makeFake((request) => (request.sequence === changeAt ? { taskSetVersion: 'changed' } : request.sequence % 9 === 0 ? { exit: 'rate-limit' } : {})), clock, operator: 'Many Oars Co.' });
     const path = join(out, `${order.orderId}.run-book.jsonl`);
     await writeFile(path, serializeRunBook(book));
     const voided = book.runs.filter((run) => run.void !== null).length;
