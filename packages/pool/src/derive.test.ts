@@ -51,7 +51,12 @@ describe('the same-target recovery read in a bundle', () => {
   });
 
   it('serves nothing for a cell whose most common recovering step is a retry', () => {
-    expect(sameTarget(bundledOf([week('retry', 5, 6, 5), week('file.read', 5, 3, 2)], ['retry', 'file.read']))).toEqual([]);
+    const topped = bundledOf([week('retry', 5, 6, 5), week('file.read', 5, 3, 2)], ['retry', 'file.read']);
+    expect(sameTarget(topped)).toEqual([]);
+    // The bundle holds nothing for the cell: its same-target cells are left out too.
+    expect(topped.cells.map((cell) => cell.motifId)).toEqual([]);
+    const served = bundledOf([week('file.read', 5, 6, 5), week('retry', 5, 3, 2)], ['file.read', 'retry']);
+    expect(served.cells.map((cell) => cell.motifId).sort()).toEqual([motifOf('file.read').motifId, motifOf('retry').motifId].sort());
   });
 
   it('serves nothing for a cell under the floor, and does not count it in the denominator of the one beside it', () => {

@@ -9,7 +9,7 @@ import { skeletonOf } from './pool-wire.js';
 import { isRetry, nextCallOf, nextStepOf, parseRecoveryTargetClass, RECOVERY_TARGET_CLASS, recoveryTargetClass, RETRY } from './recovery-target.js';
 import { RECOVERY_TARGET_METHOD } from './read.js';
 import { deriveRecoveryEdges } from './read-recovery-edge.js';
-import { deriveRecoveryTarget } from './read-recovery-target.js';
+import { deriveRecoveryTarget, retryToppedOf } from './read-recovery-target.js';
 import type { ToolObservation } from './schema.js';
 
 const framed = frame({ shell: 'bash' });
@@ -148,5 +148,20 @@ describe('the read', () => {
   it('leaves the recovery edge reads as they were', () => {
     const pool = poolOf(cellsFor([failedEdit(0), okRead(1)]).set, []);
     expect(deriveRecoveryEdges({ pool, store: store({}) }).every((one) => one.method === 'next-action-after-failure')).toBe(true);
+  });
+});
+
+describe('the cells left out for a retry', () => {
+  const leftOut = (tools: ToolObservation[]) => retryToppedOf(poolOf(cellsFor(tools).set, [])).length;
+
+  it('are those of a group where a repeat recovered as often as any other step, or was the only one', () => {
+    expect(leftOut([failedEdit(0), okEdit(1), failedEdit(2), okEdit(3), failedEdit(4), okRead(5)])).toBe(2);
+    expect(leftOut([failedEdit(0), okEdit(1), failedEdit(2), okRead(3)])).toBe(2);
+    expect(leftOut([failedEdit(0), okEdit(1)])).toBe(1);
+  });
+
+  it('are none where another step beat the repeat, or nothing recovered', () => {
+    expect(leftOut([failedEdit(0), okEdit(1), failedEdit(2), okRead(3), failedEdit(4), okRead(5)])).toBe(0);
+    expect(leftOut([failedEdit(0), badRead(1)])).toBe(0);
   });
 });
