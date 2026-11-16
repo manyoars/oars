@@ -1,5 +1,6 @@
 // Recovery on the same target (from cells): for a failed call, the next step that most often came back ok on the same target class. One read per (harness bucket, week, code, failed action, target class), from the week cells
 // of `recovery-target.ts`. It states counts, never a fix, and it speaks only when its answer is not a retry: when the most common recovering step repeated the failed call, the cell is left out and the reader stays silent.
+// Its slice names the failed action `failed` and the next step `step`, not `action` and `next`: the pool's edge reader (`recoveryEdgesOf`) folds every recovery read that has `action`, `errorCode`, and `next`, so these keys keep it from counting this read twice.
 // Confounders: the work the failure interrupted, that the next call is one of many a prompt may take, and that `ok` says the next call returned, not that the problem is gone.
 import { parseRecoveryTargetClass, RETRY } from './recovery-target.js';
 import { RECOVERY_TARGET_METHOD } from './read.js';
@@ -23,7 +24,7 @@ export const deriveRecoveryTarget: DeriveFamily = ({ pool }) => {
       body(
         'recovery',
         [cell],
-        { slice: { action: failed, errorCode: code, target, next, week: cell.day }, value: { recovered: cell.ok, followed: cell.failed, of, share: rate(cell.ok, of) }, n: cell.ok, interval: wilson(cell.ok, of) },
+        { slice: { failed, errorCode: code, target, step: next, week: cell.day }, value: { recovered: cell.ok, followed: cell.failed, of, share: rate(cell.ok, of) }, n: cell.ok, interval: wilson(cell.ok, of) },
         RECOVERY_TARGET_METHOD,
       ),
     ];
