@@ -63,7 +63,7 @@ export const archiveNames = async (dir: string): Promise<string[]> => {
   return names;
 };
 
-/** The two zero blocks that end a tar archive; the seller sends them only after the credit is committed, so a failed commit leaves an archive that does not parse. */
+/** The two zero blocks that end a tar archive; the seller sends them only after the credit is committed, so a refused commit leaves an archive without its terminator. */
 export const END_OF_ARCHIVE = Buffer.alloc(BLOCK * 2);
 
 /** The files of `names` under `dir` as ustar entries, chunk by chunk, without the end blocks. */

@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { http, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -9,6 +9,7 @@ import { API, customerRefOf, harness, platform, server, useServer } from './test
 useServer();
 afterEach(cleanWorlds);
 
+const NL = String.fromCharCode(10);
 const RESERVATION = 'rsv_0001';
 const accept = { recipientLegalName: 'Ada Lovelace', licenseVersion: '2026-11' };
 const balanceOf = (creditsAvailable: number) => ({ creditsAvailable, creditsHeld: 0, creditsRemaining: creditsAvailable, customerRef: 'x', livemode: false });
@@ -66,14 +67,19 @@ interface Rig {
   download: (ref: string, body?: object) => Promise<Response>;
 }
 
-const rig = async (options: { credits?: number; commitStatus?: number; failBuild?: boolean } = {}): Promise<Rig> => {
+const rig = async (options: { credits?: number; commitStatus?: number; failBuild?: boolean; crashBuild?: boolean; objectAfterBuild?: boolean } = {}): Promise<Rig> => {
   const world = await makeWorld();
   const builds = { count: 0 };
   const store = await world.open({
-    build: (buildOptions) => {
+    build: async (buildOptions) => {
       builds.count += 1;
       if (options.failBuild === true) throw new PackError('a term named zorblax could not be read at C:/secret/path');
-      return buildPack(world.runtime, buildOptions);
+      if (options.crashBuild === true) throw new Error('disk exploded');
+      const counts = await buildPack(world.runtime, buildOptions);
+      // An objection that lands after the build and before the commit.
+      if (options.objectAfterBuild === true) writeFileSync(world.objections, `${JSON.stringify({ name: 'Priya Raman', received: '2026-06-09T09:00:00.000Z', scope: 'sale' })}
+`);
+      return counts;
     },
   });
   const calls: string[] = [];
@@ -118,6 +124,37 @@ describe('POST /packs/{packId}/download', () => {
     expect(text).toBe('{"error":"The pack could not be built."}');
     expect(r.calls).toEqual(['balance', 'reserve', 'release']);
     expect(readIfPresent(r.world.deliveries)).toBe('');
+  });
+
+  it('releases the reservation and writes no delivery when the build throws an error that is not a pack error', async () => {
+    const r = await rig({ crashBuild: true });
+    const response = await r.download(await r.offer());
+    expect(response.status).toBe(500);
+    expect(await response.text()).toBe('{"error":"The pack could not be built."}');
+    expect(r.calls).toEqual(['balance', 'reserve', 'release']);
+    expect(readIfPresent(r.world.deliveries)).toBe('');
+  });
+
+  it('releases, sends no terminator, and writes no delivery when an objection lands between the build and the commit', async () => {
+    const r = await rig({ objectAfterBuild: true });
+    const response = await r.download(await r.offer());
+    await expect(response.arrayBuffer()).rejects.toThrow();
+    expect(r.calls).toEqual(['balance', 'reserve', 'release']);
+    expect(readIfPresent(r.world.deliveries)).toBe('');
+  });
+
+  it('logs one line naming the pack and not the customer when the delivery record fails after the commit, and still ends the archive', async () => {
+    const r = await rig();
+    const ref = await r.offer();
+    const real = await r.world.store();
+    const failing = { ...real, record: () => Promise.reject(new Error('disk full')) };
+    const { call, lines } = harness(failing);
+    const response = await call('POST', '/packs/alpha/download', { body: { buyerKey: BUYER_KEY }, headers: [['X-Customer-Ref', ref]] });
+    expect(tarNames(Buffer.from(await response.arrayBuffer())).ended).toBe(true);
+    expect(r.calls).toEqual(['balance', 'reserve', 'commit']);
+    const logged = lines.filter((line) => line.includes('alpha') && line.includes('delivery'));
+    expect(logged).toHaveLength(1);
+    expect(lines.join(NL)).not.toContain(ref);
   });
 
   it('releases the reservation and writes no delivery when the stream is cut off', async () => {

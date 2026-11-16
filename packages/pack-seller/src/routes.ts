@@ -99,7 +99,7 @@ const offer = async (deps: RouteDeps, request: Request, caller: string, pack: Pa
 
 /**
  * Step 9: balance, reserve one credit, rebuild when the objections moved, build under the buyer's key, stream, commit, record. The archive's end blocks go out only after the commit and the record,
- * so a failure at any point leaves an archive that does not parse and a released reservation. The buyer key lives in this function's scope for the build and is never logged or stored.
+ * so a failure before the commit leaves an archive without its terminator and a released reservation. The buyer key lives in this function's scope for the build and is never logged or stored.
  */
 const download = async (deps: RouteDeps, request: Request, pack: PackListing): Promise<Response> => {
   const ref = customerRefOf(request);
@@ -116,14 +116,13 @@ const download = async (deps: RouteDeps, request: Request, pack: PackListing): P
   const reserved = await deps.billing.reserve(ref);
   if (!reserved.ok) return refuse(reserved.refusal);
   const reservationId = reserved.value.reservationId;
-  const built = await deps.source.prepare(pack.packId, key);
+  let built: Outcome<string>;
   let names: string[] = [];
-  if (built.ok) {
-    try {
-      names = await archiveNames(built.value);
-    } catch {
-      names = [];
-    }
+  try {
+    built = await deps.source.prepare(pack.packId, key);
+    if (built.ok) names = await archiveNames(built.value);
+  } catch {
+    built = { ok: false, refusal: BUILD_FAILED };
   }
   if (!built.ok || names.length === 0) {
     await deps.billing.release(reservationId);
@@ -134,10 +133,17 @@ const download = async (deps: RouteDeps, request: Request, pack: PackListing): P
     let spent = false;
     try {
       yield* entries(dir, names);
+      // An objection that landed during the stream makes this build stale: release instead of charging for a pack that must not be delivered.
+      if (!(await deps.source.check(dir))) throw new Error('objections changed');
       const committed = await deps.billing.commit(reservationId);
       if (!committed.ok) throw new Error('commit refused');
       spent = true;
-      await deps.source.record(dir, key, held);
+      try {
+        await deps.source.record(dir, key, held);
+      } catch {
+        // The buyer is charged and holds the whole pack; the operator runs `deliver` by hand. The line names the pack, never the customer ref.
+        deps.log(`delivery record failed after commit for pack ${pack.packId}: run deliver by hand`);
+      }
       yield END_OF_ARCHIVE;
     } finally {
       if (!spent) await deps.billing.release(reservationId);

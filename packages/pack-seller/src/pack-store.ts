@@ -136,6 +136,8 @@ const parseListing = (packId: string, value: unknown): Listing => {
 export interface PackSource {
   /** Builds (or reuses a build that is current) under `buyerKey`; the key is held for this call only. A refusal is the seller's own line, never the builder's text. */
   prepare: (packId: string, buyerKey: string) => Promise<Outcome<string>>;
+  /** True while the build in `dir` is still current against the objections; false once an objection has landed since it was built. */
+  check: (dir: string) => Promise<boolean>;
   /** Appends the delivery rows (`deliver`'s record, with the offer's recipient and license). */
   record: (dir: string, buyerKey: string, offer: OfferRecord) => Promise<void>;
 }
@@ -269,6 +271,7 @@ export const openPackStore = async (inputs: PackInputs, options: StoreOptions = 
       inFlight.set(dir, running);
       return running;
     },
+    check: current,
     record: async (dir, buyerKey, offer) => {
       await deliver({ pack: dir, recipient: offer.recipientLegalName, license: offer.licenseVersion, buyerKey, owners: inputs.owners });
     },
