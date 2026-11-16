@@ -52,6 +52,7 @@ export const runPrice = async (env: Readonly<NodeJS.ProcessEnv>, deps: PriceDeps
         lines.push(`Price ${input.priceRef} ${SAYS[answer]}`);
       } catch (error) {
         if (error instanceof PricingError) return { ok: false, lines: [...lines, error.message] };
+        // A network failure, or anything else ensurePrice throws.
         return { ok: false, lines: [...lines, 'The platform could not be reached.'] };
       }
     }
