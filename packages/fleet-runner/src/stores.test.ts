@@ -99,6 +99,17 @@ describe('store folders per side and arm', () => {
     await expect(buildStores(book, makeStager(join(root, 'staging-b')), join(root, 'out'))).rejects.toThrow(`valid run ${valid?.runId ?? ''} has a pool session id but was not staged`);
   });
 
+  it('clears the staging folder when buildStores throws', async () => {
+    const stager = makeStager(join(root, 'staging'));
+    const book = await runOrder({ order: order(), taskSet: taskSet(1), fleet: FLEET, adapter: makeFake(CLEAN), clock: stepClock(), operator: 'Many Oars Co.', stage: stager.stage });
+    expect(existsSync(join(root, 'staging'))).toBe(true);
+    // Forget one staged run: the build throws partway, after the earlier runs were filed.
+    const last = book.runs.filter((run) => run.void === null).at(-1)?.runId ?? '';
+    const forgetful = { ...stager, files: new Map([...stager.files].filter(([runId]) => runId !== last)) };
+    await expect(buildStores(book, forgetful, join(root, 'out'))).rejects.toThrow(/was not staged/);
+    expect(existsSync(join(root, 'staging'))).toBe(false);
+  });
+
   it('stores nothing for an order that the task set change voided', async () => {
     const { book, folders } = await chain((request) => (request.sequence === 3 ? { taskSetVersion: 'changed' } : {}), 2);
     expect(book.header.status).toBe('voided');
@@ -119,7 +130,7 @@ describe('store folders per side and arm', () => {
 });
 
 describe('the real-work-table read over each store folder', () => {
-  it('gives one row file per side and arm whose session counts match the run book, and prints a cell under 3 as thin', async () => {
+  it('gives one row file per side and arm whose session counts match the run book, leaves a cell under 3 out (counted in leftOut), and prints a server row under 3 as thin', async () => {
     // The tool is called in all of the before sessions and in only 2 of the after ones.
     const { book, folders } = await chain((request) => (request.side === 'after' && !(request.repeat === 1 && request.taskId <= 't2') ? { noToolCall: true } : {}), 8);
     await writeFile(join(root, 'terms.txt'), `${TERMS}\n`);
