@@ -1,6 +1,6 @@
 # @manyoars/pack-seller
 
-A small server that sells session packs the way any seller workload sells credits: it keeps a customer per buyer, asks the platform for an offer, and reads the buyer's credits and reservations with the seller's own SDK key. It is not published to npm; it runs from a checkout (or the image built from the Dockerfile).
+A small server that sells session packs the way any seller workload sells credits: it keeps a customer per buyer, asks the platform for an offer, and reads the buyer's credit balance (and, in the download route, reserves and commits credits) with the seller's own SDK key. It is not published to npm; it runs from a checkout (or the image built from the Dockerfile).
 
 The server holds no price. The platform's credit pack carries it, and the offer response repeats the `priceRef` so the buyer pays for what it read. It learns that a purchase went through only by reading the customer's balance: nothing is pushed to it.
 

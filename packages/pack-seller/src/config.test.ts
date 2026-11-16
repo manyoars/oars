@@ -35,7 +35,7 @@ describe('loadConfig', () => {
   });
 
   it.each([ENV_API_URL, ENV_SDK_KEY, ENV_PORT])('names %s when it is missing', (name) => {
-    const env: Record<string, string | undefined> = { ...ok, [name]: undefined };
+    const env: NodeJS.ProcessEnv = { ...ok, [name]: undefined };
     expect(() => loadConfig(env)).toThrow(new ConfigError(`${name} is not set.`));
   });
 
