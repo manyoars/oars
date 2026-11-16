@@ -415,7 +415,7 @@ export interface components {
          *     | `PRICE_INACTIVE` | 400 | The price is deactivated; activate it or use another price. |
          *     | `PRICE_AMOUNT_IMMUTABLE` | 409 | A charge or subscription already references the price; create a new one. |
          *     | `CUSTOMER_REGION_NOT_SUPPORTED` | 400 | Only US customers (the 50 states and DC) can be charged; the customer is elsewhere. |
-         *     | `ACCOUNT_NOT_READY` | 409 | The developer's payout account cannot take live charges yet; a human finishes onboarding at actionUrl. |
+         *     | `ACCOUNT_NOT_READY` | 409 | The developer's account cannot take live charges yet; a human finishes onboarding at actionUrl. |
          *     | `SELLER_IDENTITY_INCOMPLETE` | 409 | The agent's seller identity lacks a display name, support email or refund-policy URL; set them before going live. |
          *     | `STRIPE_TERMS_URL_NOT_SET` | 409 | The agent has a terms URL but the developer's Stripe account has none in its public business details; actionUrl is where to set it. |
          *     | `SELLER_IDENTITY_CONFLICT` | 409 | The agent went live, or its terms URL changed, while this seller-identity write was in flight, so its new terms URL needs the Stripe terms check first; send the same request again. |
@@ -426,8 +426,8 @@ export interface components {
          *     | `CHARGE_NOT_REFUNDABLE` | 409 | The charge cannot be refunded through the API: not posted yet, flagged, disputed, failed or fully refunded. |
          *     | `TEST_MODE_ONLY` | 409 | The operation runs only in TEST mode (test charges). |
          *     | `RATE_LIMITED` | 429 | Too many requests for this agent or key; retry after the Retry-After seconds. |
-         *     | `PAYOUT_COUNTRY_NOT_SUPPORTED` | 400 | Payout accounts are US-only at launch; the developer's country is elsewhere. |
-         *     | `HUMAN_SESSION_REQUIRED` | 403 | A signed-in person must make this change; an API key or a connected agent tool cannot (payout account). |
+         *     | `PAYOUT_COUNTRY_NOT_SUPPORTED` | 400 | Accounts are US-only at launch; the developer's country is elsewhere. |
+         *     | `HUMAN_SESSION_REQUIRED` | 403 | A signed-in person must make this change; an API key or a connected agent tool cannot (account). |
          *     | `TOPUP_AMOUNT_INVALID` | 400 | A compute top-up is a whole-cent USD amount within the minimum and maximum. |
          *     | `TOPUP_NOT_FOUND` | 404 | No compute top-up with this id for the caller. |
          *     | `FEE_POLICY_INVALID` | 400 | The fee-policy version breaks a policy rule (admin API). |
@@ -445,8 +445,8 @@ export interface components {
          *     | `OFFER_INVALID` | 410 | The purchase offer is unknown, expired, already used, or issued in the other mode; ask the seller for a new one. |
          *     | `PURCHASING_NOT_ENABLED` | 409 | The buying agent has no approved purchasing cap in the offer's mode; its developer approves one first. |
          *     | `PURCHASING_METHOD_REQUIRED` | 409 | The buying agent's developer has no saved purchasing card in the offer's mode; a person saves one at actionUrl. |
-         *     | `SELLER_UNAVAILABLE` | 409 | The offer's seller is not active, or its payout account cannot take charges in the offer's mode; ask the seller for a new offer later. |
-         *     | `PURCHASE_SELF_DEALING` | 409 | The buyer and the seller belong to the same developer or the same payout account; an agent cannot buy from itself or its own developer. |
+         *     | `SELLER_UNAVAILABLE` | 409 | The offer's seller is not active, or its account cannot take charges in the offer's mode; ask the seller for a new offer later. |
+         *     | `PURCHASE_SELF_DEALING` | 409 | The buyer and the seller belong to the same developer or the same account; an agent cannot buy from itself or its own developer. |
          *     | `PURCHASE_CAP_REACHED` | 409 | The purchase would take the buying agent past its monthly purchasing cap in the offer's mode; remainingUsd is what is left this month (UTC). |
          * @enum {string}
          */

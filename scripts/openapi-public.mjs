@@ -42,6 +42,9 @@ const WITHHELD_PROPERTIES = new Set(['paymentId', 'monthlyReservedCostUsd']);
 const TEXT_REWRITES = [
   { phrase: ' (actionUrl: add compute credit)', plain: '' },
   { phrase: ' (Stripe onboarding, a credit-pack checkout)', plain: '' },
+  // The platform's error table says "payout account" for the seller's account; the public text names it an account.
+  { phrase: 'payout account', plain: 'account' },
+  { phrase: 'Payout accounts', plain: 'Accounts' },
   { phrase: "after a credit-driven stop once the creator's compute credit is replenished", plain: 'after a stop at a usage limit once the limit clears' },
   // The dash in this phrase is the platform's own character, kept so the phrase matches.
   {

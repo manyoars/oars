@@ -434,6 +434,22 @@ describe('openapi-public.mjs', () => {
       expect(JSON.stringify(out)).not.toContain('topped up');
     });
 
+    it('rewrites the platform "payout account" phrases without the word payout', () => {
+      const orderPath = source.paths['/orders/{orderId}'];
+      const withPayoutText = {
+        ...source,
+        paths: {
+          ...source.paths,
+          '/orders/{orderId}': { ...orderPath, get: { ...orderPath.get, description: 'The payout account is ready. Payout accounts are US-only.' } },
+        },
+      };
+
+      const result = run(['getOrder'], withPayoutText);
+
+      expect(result.status).toBe(0);
+      expect(at(readOut(), 'paths', '/orders/{orderId}', 'get', 'description')).toBe('The account is ready. Accounts are US-only.');
+    });
+
     it('rewrites the Role description without an em dash or the platform security class', () => {
       const orderPath = source.paths['/orders/{orderId}'];
       const withRole = {
