@@ -47,8 +47,6 @@ export interface ClaudeBedrockSettings {
   /** A local path or a git URL of the fixture repository. */
   fixtureSource: string;
   fixtureTag: string;
-  /** The commit the order says the tag is; a tag that resolves elsewhere is the `fixture-tag-changed` void. */
-  fixtureCommit: string;
   /** The task-set folder: `manifest.json`, and per task `tasks/<id>/prompt.md` and `tasks/<id>/check.mjs`. */
   taskSetDir: string;
   /** The fleet manifest version this adapter was built for; reported as the manifest the run saw. */
@@ -344,7 +342,8 @@ export const makeClaudeBedrock = (settings: ClaudeBedrockSettings, deps: Depende
         fixtureCommit: commit,
         installedPins,
         taskSetVersion: taskSet.version,
-        fixtureTag: commit === settings.fixtureCommit ? request.expected.fixtureTag : `${settings.fixtureTag}@${commit}`,
+        // The task-set manifest is the one source of the commit; a tag that resolves elsewhere is reported as `<tag>@<commit>`, the `fixture-tag-changed` void.
+        fixtureTag: commit === taskSet.fixtureCommit ? settings.fixtureTag : `${settings.fixtureTag}@${commit}`,
         manifestVersion: settings.fleetManifestVersion,
         dispose,
       };
