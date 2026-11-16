@@ -87,6 +87,8 @@ describe('first-run-read: one passing and one failing recording per question', (
     expect(answer((await read({})).lines, '(b)')).toMatch(/^no .*\[browser\]/);
     expect(answer((await read({ output: 'output.b-fail.jsonl' })).lines, '(b)')).toMatch(/^yes .*\[fixture-db\].*\[deploy\]/);
     expect(answer(inline('{"type":"system","subtype":"init","mcp_servers":[{"name":"db","source":"project"}],"skills":[]}'), '(b)')).toMatch(/^yes .*\[db \(project\)\]/);
+    const spaced = readFirstRun({ transcript: '', output: '{"type":"system","subtype":"init","mcp_servers":[{"name":"my db","source":"project"}],"skills":[]}', runBook: '', modelId: 'm', allowServers: ['my db'], allowSkills: [] });
+    expect(answer(spaced, '(b)')).toMatch(/^no /);
     expect(answer(inline('{"type":"system","subtype":"init","model":"m"}'), '(b)')).toMatch(/^cannot tell .*lacks mcp_servers/);
     expect(answer(inline('{"type":"system","subtype":"init","mcp_servers":[]}'), '(b)')).toMatch(/^cannot tell .*lacks skills/);
   });
@@ -110,6 +112,8 @@ describe('first-run-read: one passing and one failing recording per question', (
     const message = '{"type":"system","subtype":"permission_denied","tool_name":"Edit"}\n{"type":"result","subtype":"success","permission_denials":[]}';
     expect(answer(inline(message), '(d)')).toMatch(/^no .*1 permission_denied/);
     expect(answer(inline('{"type":"result","subtype":"error_max_turns","permission_denials":[]}'), '(d)')).toMatch(/^no .*error_max_turns/);
+    expect(answer((await read({ output: 'output.c-pass.jsonl' })).lines, '(d)')).toMatch(/^no .*is_error/);
+    expect(answer((await read({ output: 'output.c-pass.jsonl' })).lines, '(d)')).toMatch(/api_error_status/);
   });
 
   it('(e): yes when the init model is the ID passed, no when it differs, cannot tell with no init', async () => {
