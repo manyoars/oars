@@ -1602,8 +1602,12 @@ export const targetOf = (
   return { target: target === '' ? null : redact(target), base: null };
 };
 
-/** The class of what a {@link targetOf} result aimed at, which capture stores and the failure hook looks a same-target read up by. `none` for a call with no path target. */
-export const classOfAimed = (aimed: { base: TargetBase | null; key?: string }): TargetClass => targetClassOf(aimed.key, aimed.base);
+/** The class of the path a call aimed at (see {@link targetOf}), which capture stores and the failure hook looks a same-target read up by. `none` for a call with no path target. */
+export const classOfCall = (tool: string, input: Obj, cwd: string | undefined, root: string | null): TargetClass => {
+  // The class reads the path key and base only, so the salt and the redactor change nothing here.
+  const aimed = targetOf(tool, input, cwd, '', (text) => text, root);
+  return targetClassOf(aimed.key, aimed.base);
+};
 
 /** The `n` capture gives each call of a transcript, by tool-use id, the first copy of a repeated id winning; a subagent's steps name their parent by it without capturing the parent again. */
 export const callPositions = (text: string): Map<string, number> => {
@@ -2021,7 +2025,7 @@ export const captureSession = (input: ExtractInput): Capture => {
           targetBase: aimed.base,
           keys: Object.keys(toolInput).sort(),
           // The class reads the key the target is hashed on (relative to the repository or the cwd), never the absolute path: the folders above a repository say nothing about the file.
-          targetClass: classOfAimed(aimed),
+          targetClass: classOfCall(name, toolInput, lineCwd, lineRoot),
           argClass: argClassOf(toolInput),
           argFeatures,
           ...(argValues.length === 0 ? {} : { argValues }),

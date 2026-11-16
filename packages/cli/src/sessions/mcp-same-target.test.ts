@@ -54,7 +54,7 @@ const ASK = { error: 'Exit code 1\nnothing seen before', path: 'src/a.ts' };
 describe('oars_recall same-target read', () => {
   it('serves the read when error, path, and failed are all given', async () => {
     const made = await staged([same('file.search')]);
-    expect(await textOf(made, { ...ASK, failed: 'file.edit' })).toContain('oars recall, counts from earlier sessions: after a failed file.edit (1) on a source target, file.search came back ok 6 of 8 times it followed\n  read read:same (recovery)');
+    expect(await textOf(made, { ...ASK, failed: 'file.edit' })).toBe('oars recall, counts from earlier sessions: after a failed file.edit (1) on a source target, file.search came back ok 6 of 8 times it followed\n  read read:same (recovery)');
   });
 
   it('records the served read id and its evidence in the answer and the recall row', async () => {
@@ -82,6 +82,18 @@ describe('oars_recall same-target read', () => {
     expect(field(answer, 'tokens')).toBe(Math.ceil(reply.length / 4));
   });
 
+  it('emits the recall event with the recovery family when a missed pull serves a same-target read', async () => {
+    const made = await staged([same('file.search')]);
+    const events: { type: string; fields: unknown }[] = [];
+    await handleMessage(made.runtime, now, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: TOOL_NAME, arguments: { ...ASK, failed: 'file.edit' } } }, (type, fields) => {
+      events.push({ type, fields });
+    });
+    expect(events.map((event) => event.type)).toEqual(['recall']);
+    expect(field(events[0]?.fields, 'kind')).toBe('hit');
+    expect(field(events[0]?.fields, 'reads')).toBe(1);
+    expect(field(events[0]?.fields, 'families')).toEqual(['recovery']);
+  });
+
   it('words a step equal to the failed action as the same action on another kind of target', async () => {
     const made = await staged([same('file.edit')]);
     expect(await textOf(made, { ...ASK, failed: 'file.edit' })).toContain('the same action on another kind of target came back ok 6 of 8 times it followed');
@@ -99,5 +111,6 @@ describe('oars_recall same-target read', () => {
     expect(await textOf(withRead, { ...ASK, failed: 'file.write' })).toBe(plain);
     expect(await textOf(withRead, { error: ASK.error, failed: 'file.edit' })).toBe(await textOf(without, { error: ASK.error }));
     expect(await textOf(withRead, { path: 'src/a.ts', failed: 'file.edit' })).toBe(await textOf(without, { path: 'src/a.ts' }));
+    expect(await textOf(withRead, { ...ASK, path: '', failed: 'file.edit' })).toBe(await textOf(without, { ...ASK, path: '' }));
   });
 });
