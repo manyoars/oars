@@ -75,9 +75,12 @@ describe('the same-target recovery read in a bundle', () => {
 
   it('is not folded into the recovery edges the failure hook reads', () => {
     const edge = classMotif(recoveryClass('429', 'file.edit', 'file.read'));
-    const edgeCell: Cell = { ...cellOf(`${prefix}opus`, '2026-10-12', edge.motifId), grain: 'week', clusters: 5, sessions: 5, failed: 6 };
-    const withEdge = (cells: Cell[]) => bundleOf('claude-code', '2.1.314', { cells, environment: [], motifs: [edge, motifOf('file.read')], strata: [] }, DEFAULT_FLOORS);
-    const both = withEdge([edgeCell, week('file.read', 5, 6, 5)]);
+    const edgeCell: Cell = { ...cellOf(`${prefix}opus`, '2026-10-12', edge.motifId), grain: 'week', clusters: 11, sessions: 11, failed: 13 };
+    // A second target beside the edge is the part held back (one always is, for the calls with no target), so the source read is served.
+    const doc = classMotif(recoveryTargetClass('429', 'file.edit', 'doc', 'file.read'));
+    const docCell: Cell = { ...cellOf(`${prefix}opus`, '2026-10-12', doc.motifId), grain: 'week', clusters: 5, sessions: 5, failed: 6, ok: 5 };
+    const withEdge = (cells: Cell[]) => bundleOf('claude-code', '2.1.314', { cells, environment: [], motifs: [edge, doc, motifOf('file.read')], strata: [] }, DEFAULT_FLOORS);
+    const both = withEdge([edgeCell, docCell, week('file.read', 6, 6, 5)]);
     expect(sameTarget(both)).toHaveLength(1);
     // A read id hashes its pool, which differs with the extra cells, so the edges are compared by what they count.
     const counted = (reads: Read[]) => Object.values(recoveryEdgesOf(reads)).map((edges) => edges.map(({ next, followed, of, clusters }) => [next, followed, of, clusters]));

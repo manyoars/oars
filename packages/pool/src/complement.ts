@@ -273,8 +273,9 @@ const withholdLocally = (families: readonly Family[], byTotal: ReadonlyMap<strin
       // In a guarded family a part withheld on a lower floor does not hide the sub-floor part.
       const hides = (part: Cell): boolean => !guarded || standingOf(part) >= bar;
       const unserved = parts.filter((part) => !served(part) || withheld.has(part));
-      const thin = parts.some((part) => !served(part)) && !parts.some((part) => withheld.has(part) && hides(part));
-      if (!thin && unserved.length !== 1) continue;
+      // A remainder is one more unserved part with no floor, so beside a served whole a family with one needs a part withheld whatever its parts' floors, or the whole less the parts gives the remainder exactly.
+      const thin = (remainder !== null || parts.some((part) => !served(part))) && !parts.some((part) => withheld.has(part) && hides(part));
+      if (!thin && (unserved.length !== 1 || remainder !== null)) continue;
       const [next] = parts.filter((part) => served(part) && !withheld.has(part) && hides(part)).sort(smallest);
       if (next !== undefined) {
         add(next);
