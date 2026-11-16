@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { makeFake, type Fault, type Script } from './fake-harness.js';
 import type { RunRequest } from './harness.js';
@@ -60,9 +63,21 @@ describe('void detection (spec section 9)', () => {
   });
 
   it('hashes the transcript and tolerates a missing one', async () => {
-    const book = await runOrder(options(firstAttempt({ noTranscript: true, exit: 'crash' })));
+    // The expected hash comes from the bytes on disk at check time, before the folder is disposed, so it does not depend on the runner.
+    const inner = makeFake(firstAttempt({ noTranscript: true, exit: 'crash' }));
+    const onDisk = new Map<string, Buffer>();
+    const adapter = {
+      ...inner,
+      check: async (folder: Parameters<typeof inner.check>[0], request: RunRequest) => {
+        onDisk.set(request.runId, await readFile(join(folder.dir, 'transcript.jsonl')));
+        return inner.check(folder, request);
+      },
+    };
+    const book = await runOrder({ ...options(CLEAN_SCRIPT), adapter });
     expect(book.runs[0]?.transcriptSha256).toBeNull();
-    expect(book.runs[1]?.transcriptSha256).toMatch(/^[0-9a-f]{64}$/);
+    const second = book.runs[1];
+    expect(onDisk.get(second?.runId ?? '')).toBeDefined();
+    expect(second?.transcriptSha256).toBe(createHash('sha256').update(onDisk.get(second?.runId ?? '') ?? '').digest('hex'));
   });
 
   it('cleans every temp folder, valid or void', async () => {
