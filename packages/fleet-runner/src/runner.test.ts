@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { makeFake, type Fault, type Script } from './fake-harness.js';
 import type { RunRequest } from './harness.js';
+import { contentHash } from '../../cli/src/sessions/read.js';
 import { parseOrder } from './order.js';
 import { runOrder, type RunnerOptions } from './runner.js';
 import { serializeRunBook } from './runbook.js';
@@ -202,5 +204,23 @@ describe('review lows of t1354', () => {
     const book = await runOrder(options((request) => (request.sequence === 2 ? { taskSetVersion: 'changed' } : {})));
     expect(book.header.status).toBe('voided');
     expect(book.runs.every((run) => run.void === 'task-set-changed' && run.check === null)).toBe(true);
+  });
+
+  it('keys each valid run pool session id by the operator account and records the account in the header', async () => {
+    // Before: the id was the harness session id the stage step returned. Now it is the account form the CLI's deposit gives the same account and session.
+    const staged = (runId: string): string => `harness-session-${runId}`;
+    const book = await runOrder({ ...options(CLEAN_SCRIPT), stage: (request) => Promise.resolve(staged(request.runId)) });
+    expect(book.header.account).toBe('acct-fleet');
+    const valid = book.runs.filter((run) => run.void === null);
+    expect(valid).toHaveLength(2);
+    for (const run of valid) expect(run.poolSessionId).toBe(contentHash(['acct-fleet', staged(run.runId)]));
+    expect(serializeRunBook(book).split(String.fromCharCode(10))[0]).toContain('"account":"acct-fleet"');
+  });
+
+  it('gives the same id as the CLI deposit path (pool-command.ts keys a batch by contentHash of the account and the session)', () => {
+    // The deposit path is `contentHash([account, records.main.session])`; pool-command.test.ts pins it with contentHash(['acct_one', sid(14)]). This pins that the CLI still says so.
+    const source = readFileSync(new URL('../../cli/src/sessions/pool-command.ts', import.meta.url), 'utf8');
+    expect(source).toContain('contentHash([account, records.main.session])');
+    expect(contentHash(['acct_one', 'sid'])).toMatch(/^[0-9a-f]{16}$/);
   });
 });
