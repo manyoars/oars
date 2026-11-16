@@ -13,7 +13,7 @@ import { deriveRecoveryTarget } from './read-recovery-target.js';
 import type { ToolObservation } from './schema.js';
 
 const framed = frame({ shell: 'bash' });
-const call = (n: number, native: string, action: 'file.edit' | 'file.read', over: Partial<ToolObservation> = {}) =>
+const call = (n: number, native: string, action: 'file.edit' | 'file.read' | 'shell.exec', over: Partial<ToolObservation> = {}) =>
   tool('s1', n, native, { targetClass: 'source', steps: [step(n, 0, action, { native, ...(over.status === 'error' ? { status: 'error' } : {}) })], ...over });
 const failedEdit = (n: number) => call(n, 'Edit', 'file.edit', { status: 'error', errorCode: '429' });
 const okEdit = (n: number) => call(n, 'Edit', 'file.edit');
@@ -130,6 +130,15 @@ describe('the read', () => {
   it('is present when a retry is not the most common step', () => {
     const reads = readOf([failedEdit(0), okEdit(1), failedEdit(2), okRead(3), failedEdit(4), okRead(5)]);
     expect(reads.map((one) => [one.slice.step, one.n])).toEqual([['file.read', 2]]);
+  });
+
+  it.each([['file.read', okRead], ['shell.exec', (n: number) => call(n, 'Bash', 'shell.exec')]])('is absent when %s ties a retry on ok, whatever sorts first', (_name, other) => {
+    expect(readOf([failedEdit(0), okEdit(1), failedEdit(2), other(3)])).toEqual([]);
+  });
+
+  it('breaks a tie between two other steps by name', () => {
+    const reads = readOf([failedEdit(0), call(1, 'Bash', 'shell.exec'), failedEdit(2), okRead(3)]);
+    expect(reads.map((one) => one.slice.step)).toEqual(['file.read']);
   });
 
   it('is absent when nothing came back ok', () => {
