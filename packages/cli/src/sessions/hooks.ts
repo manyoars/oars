@@ -9,7 +9,7 @@ import { frameWords, HOOK_HARNESS, recallFields } from '../telemetry/fields.js';
 import { cursorRoot } from './cursor.js';
 import { SOURCES, sourceLabel } from './sources.js';
 import { ACTION_TABLES, actionOf } from './actions.js';
-import { classOfAimed, errorCodeOf, signatureOf, targetOf } from './extract.js';
+import { classOfCall, errorCodeOf, signatureOf } from './extract.js';
 import { makeRepoRoot } from './repo-root.js';
 import { recordCandidates } from './candidates.js';
 import { appendHookCall } from './hook-calls.js';
@@ -141,12 +141,12 @@ const failureText = (input: Input): string | undefined => {
   return response !== undefined && /^Exit code \d+/.test(response) ? response : undefined;
 };
 
-/** The class of the path the failed call aimed at, by the rule capture stores it under (`classOfAimed`); `none` for a call with no path, which no same-target read is keyed on. */
+/** The class of the path the failed call aimed at, by the rule capture stores it under (`classOfCall`); `none` for a call with no path, which no same-target read is keyed on. */
 const targetClassOfCall = (input: Input): string => {
   const toolInput = isRecord(input.tool_input) ? input.tool_input : {};
   const cwd = str(input.cwd);
   const root = cwd === undefined || cwd === '' ? null : makeRepoRoot()(cwd);
-  return classOfAimed(targetOf(str(input.tool_name) ?? '', toolInput, cwd, '', (text) => text, root));
+  return classOfCall(str(input.tool_name) ?? '', toolInput, cwd, root);
 };
 
 /**
