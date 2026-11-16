@@ -7,9 +7,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { signInsFile } from '../../cli/src/sessions/pool-replica.js';
 import { type RunDeps } from '../../cli/src/cli.js';
 import { poolDeposit } from '../../cli/src/sessions/pool-command.js';
-import { main } from './deposit-fleet.js';
+import { FLEET_FILE, main } from './deposit-fleet.js';
 import { CLEAN, makeFake } from './fake-harness.js';
 import { arrayAt, objectAt, parseJson, stringAt, type JsonObject } from './json.js';
+import { parseFleet } from './manifest.js';
 import { parseOrder } from './order.js';
 import { runOrder } from './runner.js';
 import { serializeRunBook, type RunBook } from './runbook.js';
@@ -269,6 +270,21 @@ describe('the fleet manifest', () => {
   it('reads the fleet manifest file in the package when --fleet is absent', async () => {
     const s = await scene();
     expect((await run(s, [], new Date(NEWEST_END(s.book) + 7 * HOUR))).code).toBe(0);
+  });
+
+  it('the default file is the package manifest, and it parses', async () => {
+    expect(FLEET_FILE.endsWith('fleet-manifest.json')).toBe(true);
+    expect(parseFleet(await readFile(FLEET_FILE, 'utf8')).version).toBe('fleet-1');
+  });
+
+  it('with no --fleet the default file decides, and a run book from another version is refused', async () => {
+    const s = await scene();
+    const other = await withFleet(JSON.stringify({ version: 'fleet-2', harnesses: [] }));
+    const lines: string[] = [];
+    const now = new Date(NEWEST_END(s.book) + 7 * HOUR);
+    const code = await main([s.runBook, '--allowed-signers', s.allowed, '--identity', IDENTITY, '--oars', s.oars], (line) => lines.push(line), () => now, other);
+    expect(code).toBe(1);
+    expect(lines.join(' ')).toContain('the fleet manifest is fleet-2');
   });
 
   it('--fleet names another file, and a run book from another manifest version is refused', async () => {
