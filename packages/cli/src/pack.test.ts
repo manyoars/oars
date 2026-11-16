@@ -159,8 +159,8 @@ const DENY_LIST = [
 
 const NOT_OPEN = 'Accounts are not open yet: `oars login` uses the Many Oars issuer by default, and until Many Oars sign-in at `login.manyoars.com` is deployed it exits 2 with an error that names `login.manyoars.com`.';
 
-// Payouts are the one money side that stays private: V22 is lifted for Many Oars (2026-11-12), so offers, purchases, customers, and
-// credits are public text and these terms are what the public text still never says.
+// Payouts are the one money side that stays private; offers, purchases, customers, and
+// credits are public text (2026-11-12) and these terms are what the public text still never says.
 const WITHHELD_TERMS = [/payout/i, /get paid/i, /1099/, /take-home/i, /make-me-money/i, /revenue/i, /\bearn/i];
 const WIRE_NAMES_KEPT = ['PAYOUT_COUNTRY_NOT_SUPPORTED'];
 const withheldIn = (text: string): string[] => WITHHELD_TERMS.filter((term) => term.test(text)).map(String);

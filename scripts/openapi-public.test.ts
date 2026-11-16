@@ -247,7 +247,7 @@ describe('openapi-public.mjs', () => {
       expect(JSON.stringify(out)).not.toMatch(/payout|TemplatePage/i);
     });
 
-    // V22 is lifted for Many Oars: the buyer's offer, purchase, customer, and credit operations are public; only payouts stay private.
+    // Payouts are the one money side that stays private; offers, purchases, customers, and credits are public text (2026-11-12).
     it('keeps the offer, purchase, customer, and credit operations and still drops payouts', () => {
       const view = (name: string) => ({ type: 'object', properties: { id: { type: 'string' } }, title: name });
       const op = (tag: string, operationId: string, schema: string) => ({
