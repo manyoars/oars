@@ -20,10 +20,18 @@ const sshKeygen = (args: string[], input: Buffer | null): Promise<Ran> =>
     const child = spawn('ssh-keygen', args, { stdio: ['pipe', 'pipe', 'pipe'] });
     const out: Buffer[] = [];
     const err: Buffer[] = [];
-    child.stdout.on('data', (chunk: Buffer) => out.push(chunk));
-    child.stderr.on('data', (chunk: Buffer) => err.push(chunk));
-    child.on('error', (error) => reject(new Error(`ssh-keygen could not be run (is OpenSSH installed and on PATH?): ${error.message}`)));
-    child.on('close', (code) => resolve({ status: code ?? 1, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8') }));
+    child.stdout.on('data', (chunk: Buffer) => {
+      out.push(chunk);
+    });
+    child.stderr.on('data', (chunk: Buffer) => {
+      err.push(chunk);
+    });
+    child.on('error', (error) => {
+      reject(new Error(`ssh-keygen could not be run (is OpenSSH installed and on PATH?): ${error.message}`));
+    });
+    child.on('close', (code) => {
+      resolve({ status: code ?? 1, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8') });
+    });
     // An early exit closes stdin on us; the exit status is what reports it.
     child.stdin.on('error', () => undefined);
     child.stdin.end(input ?? undefined);

@@ -50,7 +50,9 @@ describe('signing a run book', () => {
       const signature = await signRunBook(book, key);
       expect(signature).toBe(`${book}.sig`);
       expect(await readFile(signature, 'utf8')).toMatch(/^-----BEGIN SSH SIGNATURE-----/);
-      expect(await verifyRunBook(book, allowed, IDENTITY)).toEqual({ ok: true, message: expect.stringContaining('Good') });
+      const verified = await verifyRunBook(book, allowed, IDENTITY);
+      expect(verified.ok).toBe(true);
+      expect(verified.message).toContain('Good');
       const bytes = await readFile(book);
       bytes[bytes.length - 3] = bytes[bytes.length - 3] === 0x30 ? 0x31 : 0x30;
       await writeFile(book, bytes);
