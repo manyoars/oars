@@ -69,7 +69,18 @@ else if (scenario === 'rate') failed('exceeded retry limit, last status: 429 Too
 else if (scenario === 'network') failed('error sending request: getaddrinfo ENOTFOUND example.openai.azure.com');
 else if (scenario === 'server') failed('unexpected status 500 Internal Server Error');
 else {
-  if (scenario !== 'norollout') {
+  if (scenario === 'norollout-subagent') {
+    // The run's own rollout is missing, but a delegate's is there: its tokens were still spent.
+    const day = join(home, 'sessions', '2026', '11', '16');
+    mkdirSync(day, { recursive: true });
+    const review = '019a0000-0000-7000-8000-000000000003';
+    const rows = [
+      { type: 'session_meta', payload: { id: review, source: { subagent: 'review' }, cli_version: '7.7.7' } },
+      { type: 'event_msg', payload: { type: 'token_count', info: { last_token_usage: { input_tokens: 200, cached_input_tokens: 0, output_tokens: 20 } } } },
+    ];
+    writeFileSync(join(day, `rollout-2026-11-16T10-06-00-${review}.jsonl`), rows.map((row) => JSON.stringify(row)).join(String.fromCharCode(10)) + String.fromCharCode(10));
+  }
+  if (scenario !== 'norollout' && scenario !== 'norollout-subagent') {
     const day = join(home, 'sessions', '2026', '11', '16');
     mkdirSync(day, { recursive: true });
     const rows = [

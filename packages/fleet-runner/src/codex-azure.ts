@@ -261,21 +261,20 @@ export const makeCodexAzure = (settings: CodexAzureSettings, deps: Dependencies)
     const kind = classify(outcome, parseEvents(outcome.stdout));
     const { own: rollout, others } = await findRollouts(folder.configDir);
     const facts = rollout === null ? null : parseRollout(await readFile(rollout, 'utf8'));
-    // Like the Claude adapter's, the tokens cover the whole tree: the spawned agents' rollouts add theirs.
-    if (facts !== null) {
-      for (const other of others) {
-        const spent = parseRollout(await readFile(other, 'utf8')).tokens;
-        facts.tokens.input += spent.input;
-        facts.tokens.cache += spent.cache;
-        facts.tokens.output += spent.output;
-      }
+    // Like the Claude adapter's, the tokens cover the whole tree: the spawned agents' rollouts add theirs, whether or not the run's own rollout exists.
+    const tokens = facts?.tokens ?? { input: 0, cache: 0, output: 0 };
+    for (const other of others) {
+      const spent = parseRollout(await readFile(other, 'utf8')).tokens;
+      tokens.input += spent.input;
+      tokens.cache += spent.cache;
+      tokens.output += spent.output;
     }
     return {
       exit: { kind, code: outcome.timedOut ? -1 : (outcome.exitCode ?? -1) },
       transcriptPath: rollout === null ? null : await steps.copyTranscript(rollout, request.runId),
       harnessVersion: facts?.version ?? 'unknown',
       modelId: facts?.model ?? 'unknown',
-      tokens: facts?.tokens ?? { input: 0, cache: 0, output: 0 },
+      tokens,
       poolSessionId: null,
     };
   };
