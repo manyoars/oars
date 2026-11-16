@@ -52,3 +52,30 @@ describe('the recovery edge cell beside its same-target cells', () => {
     expect(bundle.cells.map((cell) => cell.motifId)).not.toContain(source.motifId);
   });
 });
+
+// The calls with no target class are in no part, so the parts never sum to the edge: a lone unserved part is not the edge's count, and the edge stays served whatever its parts are.
+describe('the recovery edge cell, which its same-target cells never complete', () => {
+  const retryEdge = classMotif(recoveryClass('429', 'file.edit', 'file.edit'));
+  const retry = classMotif(recoveryTargetClass('429', 'file.edit', 'source', 'retry'));
+  const thinRetry = classMotif(recoveryTargetClass('429', 'file.edit', 'doc', 'retry'));
+
+  it.each([
+    ['an edge with no part', [['edge', edge, 6]], ['edge']],
+    ['an edge beside one served part', [['edge', edge, 6], ['source', source, 5]], ['edge', 'source']],
+    ['an edge beside its one part under the floor', [['edge', edge, 8], ['source', source, 4]], ['edge']],
+    ['an edge beside two parts under the floor', [['edge', edge, 8], ['source', source, 4], ['doc', doc, 4]], ['edge']],
+    ['an edge beside its one retry part, held under the floor', [['edge', retryEdge, 8], ['retry', thinRetry, 4]], ['edge']],
+    ['an edge under the floor', [['edge', edge, 4]], []],
+    ['an edge under the floor beside one served part', [['edge', edge, 4], ['source', source, 5]], ['source']],
+    ['an edge under the floor beside one part under it', [['edge', edge, 4], ['source', source, 4]], []],
+    ['an edge under the floor beside a served part and one under it', [['edge', edge, 4], ['source', source, 5], ['doc', doc, 4]], ['source']],
+    ['an edge under the floor beside a served retry part that is the only step', [['edge', retryEdge, 4], ['retry', retry, 5]], []],
+  ] as const)('serves %s as the floor alone would', (_, entries, served) => {
+    expect(servedOf(entries)).toEqual(served);
+  });
+
+  it('serves a retry part beside its edge when another step strictly beats it, and leaves the group out on a tie', () => {
+    expect(servedOf([['edge', retryEdge, 8], ['retry', retry, 5, 1], ['other', source, 6, 6]])).toEqual(['edge', 'other', 'retry']);
+    expect(servedOf([['edge', retryEdge, 8], ['retry', retry, 5, 5], ['other', source, 5, 5]])).toEqual(['edge']);
+  });
+});
