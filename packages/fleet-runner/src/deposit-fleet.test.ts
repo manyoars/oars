@@ -52,7 +52,7 @@ const stepClock = (): (() => Date) => {
 /** A stand-in for `oars` that records its arguments and the variables that matter, and exits 7 when FAKE_OARS_FAIL names a part of its config root. */
 const FAKE_OARS = `import { appendFileSync } from 'node:fs';
 const env = process.env;
-appendFileSync(env.FAKE_OARS_LOG, JSON.stringify({ args: process.argv.slice(2), appdata: env.APPDATA ?? null, xdg: env.XDG_CONFIG_HOME ?? null, claude: env.CLAUDE_CONFIG_DIR ?? null, terms: env.OARS_EXCLUSION_TERMS ?? null }) + String.fromCharCode(10));
+appendFileSync(env.FAKE_OARS_LOG, JSON.stringify({ args: process.argv.slice(2), appdata: env.APPDATA ?? null, xdg: env.XDG_CONFIG_HOME ?? null, claude: env.CLAUDE_CONFIG_DIR ?? null, terms: env.OARS_EXCLUSION_TERMS ?? null, hostClass: env.OARS_HOST_CLASS ?? null }) + String.fromCharCode(10));
 const where = env.${KEY_ENV} ?? '';
 const step = process.argv.slice(2);
 const armed = env.FAKE_OARS_FAIL !== undefined || env.FAKE_OARS_FAIL_AT !== undefined;
@@ -105,7 +105,8 @@ const scene = async (patch: { runCap?: number; repeats?: number } = {}): Promise
 const NEWEST_END = (book: RunBook): number => Math.max(...book.runs.map((run) => Date.parse(run.end)));
 const HOUR = 3_600_000;
 /** A `.mjs` --oars runs under this node, so the printed line says so. */
-const NODE = `${process.execPath} `;
+const SHELL_QUOTED = (part: string): string => (part.includes(' ') ? `"${part}"` : part);
+const NODE = `${SHELL_QUOTED(process.execPath)} `;
 const STEPS = [['pool', 'deposit'], ['pool', 'outbox'], ['pool', 'deposit', '--send-all']];
 
 const run = async (s: Scene, extra: string[], now: Date): Promise<{ code: number; lines: string[] }> => {
@@ -127,9 +128,9 @@ describe('deposit-fleet', () => {
       const expected = s.book.runs.filter((entry) => entry.void === null && entry.side === folder.name.split('-')[0]).map((entry) => entry.poolSessionId ?? '');
       expect(lines).toContain(`store ${folder.name}: config root ${folder.configRoot}`);
       expect(lines).toContain(`  expects ${String(expected.length)} sessions: ${expected.join(' ')}`);
-      expect(lines).toContain(`  command 1 (build): ${NODE}${s.oars} pool deposit`);
-      expect(lines).toContain(`  command 2 (show): ${NODE}${s.oars} pool outbox`);
-      expect(lines).toContain(`  command 3 (send): ${NODE}${s.oars} pool deposit --send-all`);
+      expect(lines).toContain(`  command 1 (build): ${NODE}${SHELL_QUOTED(s.oars)} pool deposit`);
+      expect(lines).toContain(`  command 2 (show): ${NODE}${SHELL_QUOTED(s.oars)} pool outbox`);
+      expect(lines).toContain(`  command 3 (send): ${NODE}${SHELL_QUOTED(s.oars)} pool deposit --send-all`);
     }
     expect(lines[0]).toBe('deposit-fleet o-1: dry run (add --confirm to send)');
     console.log(lines.map((line) => line.replaceAll(root, '<tmp>')).join('\n'));
@@ -141,7 +142,9 @@ describe('deposit-fleet', () => {
     const s = await scene();
     const before = await readFile(s.runBook, 'utf8');
     const parent = process.env[KEY_ENV];
+    process.env.OARS_HOST_CLASS = 'machine';
     const { code, lines } = await run(s, ['--confirm'], new Date(NEWEST_END(s.book) + 7 * HOUR));
+    Reflect.deleteProperty(process.env, 'OARS_HOST_CLASS');
     expect(code).toBe(0);
     const calls = await logged();
     expect(calls).toHaveLength(6);
@@ -152,6 +155,7 @@ describe('deposit-fleet', () => {
         expect(process.platform === 'win32' ? call?.appdata : call?.xdg).toBe(folder.configRoot);
         expect(call?.claude).toBe(join(folder.configRoot, 'claude'));
         expect(call?.terms).toBeNull();
+        expect(call?.hostClass).toBeNull();
       }
     }
     expect(process.env[KEY_ENV]).toBe(parent);
