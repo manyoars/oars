@@ -8,6 +8,7 @@ describe('planOrder', () => {
     const plan = planOrder(parseOrder(retestText(), FLEET), taskSet(8));
     expect(plan.runs).toHaveLength(48);
     expect(plan.cells).toHaveLength(16);
+    expect(plan.runs.map((run) => run.side)).toEqual(Array.from({ length: 24 }, () => ['before', 'after']).flat());
   });
 
   it('alternates sides task by task: before then after, repeat by repeat', () => {
