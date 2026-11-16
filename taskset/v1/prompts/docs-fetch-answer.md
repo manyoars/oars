@@ -1,0 +1,1 @@
+In the version of the Markdown library this app uses, does a single line break inside a paragraph become a `<br>` on the page? The library has an option that controls it. Write two lines to `answers/markdown-option.txt`: the option's name and its default value as `name=value`, for example `foo=true`, and the library version that first had the option as `since=<version>`.

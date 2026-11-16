@@ -1,0 +1,1 @@
+`requestsCsv` in `src/export.ts` is one long function that validates, queries, formats, and totals. Split it into smaller functions so that no function in the file is longer than 20 lines, without changing what the export returns.

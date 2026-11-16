@@ -1,0 +1,1 @@
+How many requests made by members of the Facilities team in January, February, and March 2026 were approved or delivered? Answer from the app's database (`npm run db` builds it from the seed). Write the number, digits only, to `answers/facilities-q1.txt`.
