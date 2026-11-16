@@ -1,0 +1,1 @@
+Requests need a priority. Add a `priority` column to the `requests` table with a new migration in `migrations/`: text, not null, one of `low`, `normal`, or `high`, and defaulting to `normal`, so every existing request reads `normal`. Leave `seed.sql` and the existing migration as they are.

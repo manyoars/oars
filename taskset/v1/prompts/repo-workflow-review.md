@@ -1,0 +1,1 @@
+The working tree holds an uncommitted change that adds a search over request notes, `GET /api/requests/search?q=`. Review it. Write your findings to `answers/review.md`: for each problem, where it is as `path:line` (for example `src/foo.ts:12`) and what is wrong with it. Do not change the code.
