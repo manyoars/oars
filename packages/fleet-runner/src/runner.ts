@@ -2,6 +2,7 @@
 // until every cell has its repeats or the order's run cap is hit. A void run is recorded with its reason and counts against the cap; it is never counted as a repeat.
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { contentHash } from '../../cli/src/sessions/read.js';
 import type { CheckResult, Expected, HarnessAdapter, Prepared, RunRequest, RunResult, ToolPin } from './harness.js';
 import type { FleetManifest, TaskSetManifest } from './manifest.js';
 import { NO_TOOL, type Order } from './order.js';
@@ -74,6 +75,8 @@ const sha256OfFile = async (path: string | null): Promise<string | null> => {
 
 export const runOrder = async (options: RunnerOptions): Promise<RunBook> => {
   const { order, taskSet, fleet, adapter, clock } = options;
+  // The row id the pool gives a deposited session under this account: the same `contentHash` call the CLI's deposit makes (`pool-command.ts`, `contentHash([account, records.main.session])`).
+  const poolIdOf = (session: string | null): string | null => (session === null ? null : contentHash([order.account, session]));
   const harness = fleet.harnesses.find((candidate) => candidate.name === order.harness);
   if (harness === undefined) throw new Error(`harness ${order.harness} is not in manifest ${fleet.version}`);
   const plan = planOrder(order, taskSet);
@@ -154,7 +157,7 @@ export const runOrder = async (options: RunnerOptions): Promise<RunBook> => {
           cacheTokens: result?.tokens.cache ?? 0,
           outputTokens: result?.tokens.output ?? 0,
           transcriptSha256,
-          poolSessionId: reason === null ? (sessionId ?? result?.poolSessionId ?? null) : null,
+          poolSessionId: reason === null ? poolIdOf(sessionId ?? result?.poolSessionId ?? null) : null,
           void: reason,
         });
         if (reason === 'task-set-changed') return 'task-set-changed';
@@ -196,6 +199,7 @@ export const runOrder = async (options: RunnerOptions): Promise<RunBook> => {
       arms: order.arms,
       sides: order.sides,
       operator: options.operator,
+      account: order.account,
       repeats: order.repeats,
       runCap: order.runCap,
       startDate,

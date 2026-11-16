@@ -20,6 +20,8 @@ export interface OrderShape {
   manifestVersion: string;
   harness: string;
   modelId: string;
+  /** The operator's pool account id: the run book's pool session ids are keyed by it. */
+  account: string;
   tools: { name: string; kind: string; pin?: string }[];
   arms: string[];
   sides: { name: string; pin?: string; taskSetVersion?: string }[];
@@ -34,6 +36,7 @@ export const retestShape = (): OrderShape => ({
   manifestVersion: 'fleet-1',
   harness: 'claude-code-bedrock',
   modelId: 'sonnet-pinned-1',
+  account: 'acct-fleet',
   tools: [{ name: 'playwright', kind: 'server' }],
   arms: ['playwright'],
   sides: [
@@ -51,6 +54,7 @@ export const comparisonShape = (): OrderShape => ({
   manifestVersion: 'fleet-1',
   harness: 'claude-code-bedrock',
   modelId: 'sonnet-pinned-1',
+  account: 'acct-fleet',
   tools: [
     { name: 'playwright', kind: 'server', pin: 'npm:1.0.0' },
     { name: 'sqlite', kind: 'server', pin: 'git:deadbeef' },

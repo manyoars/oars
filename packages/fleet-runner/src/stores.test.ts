@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { contentHash } from '../../cli/src/sessions/read.js';
 import { loadStore } from '../../cli/src/sessions/store.js';
 import { CLEAN, makeFake, type Script } from './fake-harness.js';
 import { parseJson } from './json.js';
@@ -65,7 +66,8 @@ describe('store folders per side and arm', () => {
       const stored = (await loadStore(folder.storeDir)).sessions.map((session) => session.session).sort();
       const wanted = book.runs.filter((run) => run.void === null && folderOf(run.side, run.arm) === folder.name).map((run) => run.poolSessionId ?? '');
       expect(wanted).toHaveLength(24);
-      expect(stored).toEqual([...wanted].sort());
+      // The run book names the pool row ids; the store holds the harness sessions those ids are the account form of.
+      expect(stored.map((session) => contentHash(['acct-fleet', session])).sort()).toEqual([...wanted].sort());
       console.log(`store folder ${folder.name}: ${folder.storeDir} (${String(stored.length)} sessions)`);
     }
     expect(book.runs.filter((run) => run.void !== null).every((run) => run.poolSessionId === null)).toBe(true);
