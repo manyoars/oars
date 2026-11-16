@@ -159,33 +159,9 @@ const DENY_LIST = [
 
 const NOT_OPEN = 'Accounts are not open yet: `oars login` uses the Many Oars issuer by default, and until Many Oars sign-in at `login.manyoars.com` is deployed it exits 2 with an error that names `login.manyoars.com`.';
 
-const WITHHELD_TERMS = [
-  /\bprices?\b/i,
-  /pricing/i,
-  /\bfees?\b/i,
-  /get paid/i,
-  /billing/i,
-  /\bcharg(?:e|es|ed|ing)\b/i,
-  /stripe/i,
-  /test-charge/i,
-  /purchas/i,
-  /payout/i,
-  /payment/i,
-  /revenue/i,
-  /1099/,
-  /take-home/i,
-  /make-me-money/i,
-  /paid[- ]agent/i,
-  /paid-api/i,
-  /per-task-agent/i,
-  /buyer/i,
-  /\bsell/i,
-  /\bearn/i,
-  /\bmoney/i,
-  /pay per/i,
-  /\bcredits?\b/i,
-  /\bUSD\b/,
-];
+// Payouts are the one money side that stays private: V22 is lifted for Many Oars (2026-11-12), so offers, purchases, customers, and
+// credits are public text and these terms are what the public text still never says.
+const WITHHELD_TERMS = [/payout/i, /get paid/i, /1099/, /take-home/i, /make-me-money/i, /revenue/i, /\bearn/i];
 const withheldIn = (text: string): string[] => WITHHELD_TERMS.filter((term) => term.test(text)).map(String);
 
 describe('the public text states facts only', () => {
@@ -209,36 +185,44 @@ describe('the public text states facts only', () => {
     ['packages/cli/CHANGELOG.md', join(cliFolder, 'CHANGELOG.md')],
     ['packages/client/README.md', join(root, 'packages/client/README.md')],
     ['packages/client/CHANGELOG.md', join(root, 'packages/client/CHANGELOG.md')],
-    // The generated surface: the public spec, the operations it lists, and the types made from it. A code or field name such as
-    // COMPUTE_CREDIT_EXHAUSTED or autoRestartOnCredit is a wire name the platform owns and has no word boundary, so it does not match.
-    ['openapi/public.json', join(root, 'openapi/public.json')],
     ['openapi/public-operations.json', join(root, 'openapi/public-operations.json')],
-    ['packages/client/src/generated/schema.d.ts', join(root, 'packages/client/src/generated/schema.d.ts')],
   ])('%s names none of the withheld terms', (_name, file) => {
     expect(withheldIn(readFileSync(file, 'utf8'))).toEqual([]);
   });
 
-  // The word-boundary terms above cannot see a camelCase wire name (createCharge, ChargeView, listAgentPrices, priceCents) or a
-  // reworded error text, so the generated files get a plain substring scan too. The allow-list is every remaining hit, named: a
-  // workload restart setting and a compute-limit code the platform owns. A new hit fails until someone looks at it.
-  const WIRE_NAMES_KEPT = ['autoRestartOnCredit', 'COMPUTE_CREDIT_EXHAUSTED'];
-  /** @returns every word of `text` that holds price, charge, credit, or usd, except the kept names */
+  // The platform's own prose in the generated spec says "payout account" in an error table and two descriptions, and one error code carries
+  // the word (PAYOUT_COUNTRY_NOT_SUPPORTED). Those are the platform's wire texts, so the scan is over what a client can call or name: no
+  // path, operation, tag, or schema is a payout one, and the only payout identifier left is that code.
+  const WIRE_NAMES_KEPT = ['PAYOUT_COUNTRY_NOT_SUPPORTED'];
+  /** @returns every word of `text` that holds payout, except the kept names */
   const wireNamesIn = (text: string): string[] =>
-    WIRE_NAMES_KEPT.reduce((rest, name) => rest.replaceAll(name, ''), text).match(/\w*(?:price|charge|credit|usd)\w*/gi) ?? [];
-  it.each([
-    ['openapi/public.json', join(root, 'openapi/public.json')],
-    ['openapi/public-operations.json', join(root, 'openapi/public-operations.json')],
-    ['packages/client/src/generated/schema.d.ts', join(root, 'packages/client/src/generated/schema.d.ts')],
-  ])('%s has no price, charge, credit, or usd name beyond the kept wire names', (_name, file) => {
-    expect(wireNamesIn(readFileSync(file, 'utf8'))).toEqual([]);
+    WIRE_NAMES_KEPT.reduce((rest, name) => rest.replaceAll(name, ''), text).match(/\w*payout\w*/gi) ?? [];
+  /** @returns the names a client can call or name in a public spec: paths, operation ids, tags, and component schemas */
+  const surfaceNames = (text: string): string[] => {
+    const spec: unknown = JSON.parse(text);
+    const keysAt = (...path: string[]): string[] => {
+      const node = path.reduce<unknown>((at, key) => (typeof at === 'object' && at !== null ? Reflect.get(at, key) : undefined), spec);
+      return typeof node === 'object' && node !== null ? Object.keys(node) : [];
+    };
+    // An operation id and a tag name are string values, so a pattern over the text reads them without a cast.
+    const valued = [...text.matchAll(/"(?:operationId|name)":\s*"([^"]*)"/g), ...text.matchAll(/"tags":\s*\[([^\]]*)\]/g)].map((match) => match[1] ?? '');
+    return [...keysAt('paths'), ...keysAt('components', 'schemas'), ...valued];
+  };
+  it('openapi/public.json has no payout path, operation, tag, or schema', () => {
+    expect(surfaceNames(readFileSync(join(root, 'openapi/public.json'), 'utf8')).filter((name) => /payout/i.test(name))).toEqual([]);
+  });
+  it('packages/client/src/generated/schema.d.ts has no payout name in its code beyond the kept wire names', () => {
+    const code = readFileSync(join(root, 'packages/client/src/generated/schema.d.ts'), 'utf8')
+      .split(/\r?\n/)
+      .filter((line) => !/^\s*(?:\/\*\*|\*)/.test(line))
+      .join(' ');
+    expect(wireNamesIn(code)).toEqual([]);
   });
 
-  it('the wire-name scan sees a camelCase USD name and a reworded name, and skips only the kept ones', () => {
-    expect(wireNamesIn('"fooCostUsd": { "type": "string" }')).toEqual(['fooCostUsd']);
-    expect(wireNamesIn('"listAgentPrices", "ChargeView", "autoRestartOnCredit", "COMPUTE_CREDIT_EXHAUSTED"')).toEqual([
-      'listAgentPrices',
-      'ChargeView',
-    ]);
+  it('a payout term is refused in public text, and the wire-name scan sees a payout name and skips only the kept one', () => {
+    expect(withheldIn('Get paid with a payout each month')).toEqual(['/payout/i', '/get paid/i']);
+    expect(withheldIn('Buy credits from an offer at a price')).toEqual([]);
+    expect(wireNamesIn('"getPayoutAccount", "PAYOUT_COUNTRY_NOT_SUPPORTED"')).toEqual(['getPayoutAccount']);
   });
 
   it('the package description names none of the withheld terms', () => {

@@ -1,11 +1,24 @@
 [
   "UserManagement_create",
   "UserManagement_list",
+  "balance",
+  "commit",
+  "consume",
+  "createAgentPurchase",
+  "createOffer",
   "deployWorkload",
   "exchange",
+  "getAgentPurchase",
+  "getOffer",
   "getWorkload",
   "patchWorkloadConfig",
+  "recoverAgentPurchaseCredits",
+  "redeemBuyerRecovery",
   "registerWorkload",
+  "release",
+  "requestBuyerRecovery",
+  "reserve",
   "revokeApiKey",
-  "rotate"
+  "rotate",
+  "upsertBillingCustomer"
 ]
