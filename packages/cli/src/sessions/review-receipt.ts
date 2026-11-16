@@ -126,7 +126,8 @@ export const reviewReceiptOf = (store: Store, session: SessionObservation, home:
       const checked = templates.length === call.segments?.length && FORMAT_CHECK_TEMPLATE.test(templates[index] ?? '');
       // The template that lines up with this segment, else any template of the call, decides whether a secret flag was on the line.
       const secret = (templates.length === call.segments?.length ? [templates[index] ?? ''] : templates).some((template) => SECRET_TEMPLATE.test(template));
-      const run = scrub(secret ? programOf(segment.run) : segment.run, home);
+      const scrubbed = scrub(segment.run, home);
+      const run = secret ? programOf(scrubbed) : scrubbed;
       // The ellipsis of a cut command is not part of the command that runs.
       const family = familyOf(run.replace(/…$/, ''), checked);
       if (family === undefined) {
