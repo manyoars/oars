@@ -902,8 +902,8 @@ const execute = async (argv: string[], deps: RunDeps, observed: Observed): Promi
 
 /** `sessions hook uninstall` is the first step of removing the store, so it must not start a sweep that would recreate what the person is about to delete. */
 const isHookUninstall = (observed: Observed): boolean => observed.path.join(' ') === 'sessions hook uninstall';
-/** `sessions try` promises no network call and no read of the real store, and the sender does both. `sessions receipt` promises no network call either, so it skips the sender too. */
-const isSessionsTry = (observed: Observed): boolean => ['sessions try', 'sessions receipt'].includes(observed.path.join(' '));
+/** `sessions try` promises no network call and no read of the real store, and the sender does both; `sessions receipt` promises no network call either. Both skip the sender. */
+const skipsSender = (observed: Observed): boolean => ['sessions try', 'sessions receipt'].includes(observed.path.join(' '));
 /** `statusline` runs after every assistant message and promises no telemetry event, no weekly line, and no write: so it skips everything `run` does after the command. */
 const isStatusline = (observed: Observed): boolean => observed.path.join(' ') === 'statusline';
 
@@ -922,6 +922,6 @@ export const run = async (argv: string[], deps: RunDeps): Promise<ExitCode> => {
   observed.cardLine = await weeklyLine(argv, deps, observed);
   finishTelemetry(deps, argv, observed, startedAt, exit);
   // Never from a gate hook (it runs before every tool call) or from `hook uninstall`; it cannot change the exit code or what the command printed.
-  if (deps.catchUp !== undefined && !isHook(argv, observed) && !isHookUninstall(observed) && !isSessionsTry(observed)) await Promise.resolve().then(deps.catchUp).catch(() => undefined);
+  if (deps.catchUp !== undefined && !isHook(argv, observed) && !isHookUninstall(observed) && !skipsSender(observed)) await Promise.resolve().then(deps.catchUp).catch(() => undefined);
   return exit;
 };
