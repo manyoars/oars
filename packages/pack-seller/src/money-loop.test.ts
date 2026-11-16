@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createOarsClient, purchases } from '@manyoars/oars-client';
 import { main as validatePack } from '../../pool/scripts/validate-pack.js';
 import { ENV_WORKLOAD_ID, runPrice } from './price.js';
+import { MANIFEST_NAME } from './tar.js';
 import { API, customerRefOf, harness, server, untar, useServer } from './test-support.js';
 import { BUYER_KEY, cleanWorlds, envOf, makeWorld, type World } from './test-world.js';
 
@@ -162,7 +163,7 @@ describe('the test-mode money loop', () => {
     expect(platform.state.credits).toBe(2);
 
     const result = await validated(world, 'first', archive);
-    expect(result.names).toContain('manifest.jsonl');
+    expect(result.names).toContain(MANIFEST_NAME);
     expect(result.printed).toMatch(/^Conforms to the session record spec/);
     expect(result.code).toBe(0);
   });
@@ -173,12 +174,13 @@ describe('the test-mode money loop', () => {
     const offered = await offer();
     const response = await download(offered.ref);
     expect(response.status).toBe(402);
+    expect(await response.json()).toEqual({ error: 'No credits are available.' });
     expect(platform.state.calls).not.toContain('reserve');
     expect(platform.state.held).toBe(0);
   });
 
   it('refuses the download after the credits are spent down to zero with 402, and holds nothing', async () => {
-    const { world, platform, price, offer, download } = await setup();
+    const { world, platform, price, offer, download, balance } = await setup();
     await price();
     const offered = await offer();
     platform.settle();
@@ -190,6 +192,8 @@ describe('the test-mode money loop', () => {
     }
     const refused = await download(offered.ref);
     expect(refused.status).toBe(402);
+    expect(await refused.json()).toEqual({ error: 'No credits are available.' });
+    expect(await (await balance(offered.ref)).json()).toMatchObject({ creditsAvailable: 0 });
     expect(platform.state).toMatchObject({ credits: 0, held: 0 });
     expect(platform.state.calls.filter((call) => call === 'commit')).toHaveLength(3);
   });
@@ -204,8 +208,8 @@ describe('a refused commit', () => {
     const bytes = await received(await download(offered.ref));
     const result = await validated(world, 'refused', bytes);
     expect(result.code).toBe(1);
-    expect(result.printed).toContain('manifest.jsonl');
-    expect(result.names).not.toContain('manifest.jsonl');
+    expect(result.printed).toContain(MANIFEST_NAME);
+    expect(result.names).not.toContain(MANIFEST_NAME);
     expect(platform.state.calls.slice(-4)).toEqual(['balance', 'reserve', 'commit', 'release']);
     expect(platform.state).toMatchObject({ credits: 3, held: 0 });
   });

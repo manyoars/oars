@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { defaultConfigDir } from '../../cli/src/credentials.js';
 import { priceDeps } from './price-deps.js';
 
 const API_URL = 'https://api.example.test';
@@ -25,7 +26,7 @@ const loggedIn = async (accessToken: string) => {
 describe('priceDeps', () => {
   it('reads the stored login under APPDATA', async () => {
     const { appdata, file } = await loggedIn('stored-access-token');
-    expect(file.startsWith(appdata)).toBe(true);
+    expect(join(defaultConfigDir({ APPDATA: appdata }, 'win32', join(appdata, 'home')), 'oars', 'credentials.json')).toBe(file);
     expect(await priceDeps({ APPDATA: appdata }, 'win32', join(appdata, 'home')).token(API_URL)).toBe('stored-access-token');
   });
 
