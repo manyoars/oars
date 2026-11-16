@@ -7,7 +7,7 @@
 import { copyFile, mkdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { deposit, loadStore, type SessionsRuntime } from '../../cli/src/sessions/store.js';
-import { tableOf, writeJson, type Table } from '../../pool/scripts/real-work-table.js';
+import { refuseInsideRepository, tableOf, writeJson, type Table } from '../../pool/scripts/real-work-table.js';
 import type { RunRequest } from './harness.js';
 import type { RunBook } from './runbook.js';
 
@@ -77,6 +77,7 @@ const NOW = Date.parse('2026-11-16T00:00:00Z');
  * The staging folder is deleted when it is done.
  */
 export const buildStores = async (book: RunBook, stager: Stager, out: string): Promise<StoreFolder[]> => {
+  refuseInsideRepository(out, 'stores');
   const base = join(out, `${book.header.orderId}.stores`);
   const folders = new Map<string, StoreFolder>();
   for (const run of book.runs) {
@@ -119,6 +120,7 @@ export interface RowFile {
 
 /** Runs the `real-work-table` read over each store folder with `--min-sessions 3` and saves `<order id>.<folder>.rows.json` beside the run book. */
 export const readStores = async (folders: StoreFolder[], options: ReadOptions): Promise<RowFile[]> => {
+  refuseInsideRepository(options.out, 'rows');
   const base = join(options.out, `${options.orderId}.stores`);
   const owners = await writeJson(base, 'owners.json', [{ folder: '*-oars*', owner: 'Many Oars Co.', license: 'Apache-2.0' }]);
   const files: RowFile[] = [];

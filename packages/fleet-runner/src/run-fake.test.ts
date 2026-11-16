@@ -1,6 +1,8 @@
+import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { objectAt, parseJson } from './json.js';
 import { main } from './run-fake.js';
@@ -80,5 +82,14 @@ describe('run-fake', () => {
     const lines: string[] = [];
     expect(await main(['--change-task-set-at', 'soon'], (line) => lines.push(line), fixedClock())).toBe(2);
     expect(lines).toEqual(['run-fake: --change-task-set-at needs a run number, got "soon"']);
+  });
+
+  it('refuses an --out inside a git repository with exit 2 and writes nothing', async () => {
+    const inside = join(dirname(fileURLToPath(import.meta.url)), '..', '.guard-out');
+    const lines: string[] = [];
+    expect(await main(['--out', inside], (line) => lines.push(line), fixedClock())).toBe(2);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^run-fake: The output folder is inside a git repository/);
+    expect(existsSync(inside)).toBe(false);
   });
 });

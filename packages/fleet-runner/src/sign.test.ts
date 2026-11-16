@@ -1,7 +1,9 @@
 import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { RunBook } from './runbook.js';
 import { serializeRunBook } from './runbook.js';
@@ -107,6 +109,15 @@ describe('signing a run book', () => {
       expect(lines.at(-1)).toMatch(/^usage: /);
       expect(await main(['sign', book, key], (line) => lines.push(line))).toBe(2);
       expect(lines.at(-1)).toMatch(/^sign: run book status is incomplete/);
+    });
+  });
+
+  it('refuses to write a signature inside a git repository', async () => {
+    await withDir(async (dir) => {
+      const { key } = makeKey(dir);
+      const inside = join(dirname(fileURLToPath(import.meta.url)), '..', '.guard-out', 'o-1.run-book.jsonl');
+      await expect(signRunBook(inside, key)).rejects.toThrow(/inside a git repository/);
+      expect(existsSync(`${inside}.sig`)).toBe(false);
     });
   });
 });
