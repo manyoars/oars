@@ -1,7 +1,6 @@
 // `oars sessions receipt <session-id>`: a Markdown receipt of the verification commands (tests, builds, linters, type and format checks) one session ran and the result each
-// showed, from the local store only. The store keeps no raw command and no output: a shell call holds its command templates (program, subcommand, flags, every other word a
-// slot) and a status, so nothing here can carry a prompt, a path, or a secret. `scrub` still runs over every command as a second gate. A person pastes the receipt into a
-// review by hand; nothing is sent and nothing maps the session to a pull request.
+// showed, from the local store only. The store keeps no raw command and no output: a shell call holds `segments[].run` (the program plus its plain words, flag values included, redacted at capture), its `templates`, and a status.
+// Flag values stay in `run` as plain words, so `scrub` and the secret-flag rule are the gate that matters, not the store. A person pastes the receipt into a review by hand; nothing is sent and nothing maps the session to a pull request.
 import { mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
@@ -37,6 +36,8 @@ export const familyOf = (run: string, checked = true): string | undefined => {
 };
 
 const COMMAND_CHARS = 120;
+// Capture keeps a flag's value in `run` as a plain word. A template shows a known flag by name and any other flag as `<flag>`, so a secret flag name or a hidden one means the value must not print.
+const SECRET_TEMPLATE = /(?:^|\s)(?:--?(?:token|password|passwd|secret|api-?key|auth|authorization|credentials?)\b|-p)(?:[\s=]|$)|<flag>/i;
 const SECRET_FLAG = /\s+(?:--?(?:token|password|passwd|secret|api-?key|auth|authorization|credentials?)\b|-p\s)[\s\S]*$/i;
 const ASSIGNMENT = /\s+[A-Za-z_][A-Za-z0-9_]*=[\s\S]*$/;
 const LEADING_ASSIGNMENTS = /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/;
@@ -106,6 +107,9 @@ export const resolveSession = (store: Store, ref: string): SessionObservation | 
   return ref.length > 0 && starts.length === 1 ? starts[0] : undefined;
 };
 
+/** Only the part of a command a family pattern names (`pytest` of `pytest hunter2 tests`), for a command whose flag values may be secret. */
+const programOf = (run: string): string => VERIFICATION_FAMILIES.map((entry) => entry.pattern.exec(run)?.[0].trim()).find((match) => match !== undefined) ?? run.split(' ')[0] ?? '';
+
 /** A call's commands: its segments, else (a call captured before segments) its templates as words, readable only when the call holds one command. */
 const segmentsOf = (call: ToolObservation): ShellSegment[] => call.segments ?? (call.templates ?? []).map((run, _index, all) => ({ run, read: all.length === 1 }));
 
@@ -120,7 +124,9 @@ export const reviewReceiptOf = (store: Store, session: SessionObservation, home:
     for (const [index, segment] of segmentsOf(call).entries()) {
       // A template lines up with a segment only when the call keeps one of each.
       const checked = templates.length === call.segments?.length && FORMAT_CHECK_TEMPLATE.test(templates[index] ?? '');
-      const run = scrub(segment.run, home);
+      // The template that lines up with this segment, else any template of the call, decides whether a secret flag was on the line.
+      const secret = (templates.length === call.segments?.length ? [templates[index] ?? ''] : templates).some((template) => SECRET_TEMPLATE.test(template));
+      const run = scrub(secret ? programOf(segment.run) : segment.run, home);
       // The ellipsis of a cut command is not part of the command that runs.
       const family = familyOf(run.replace(/…$/, ''), checked);
       if (family === undefined) {

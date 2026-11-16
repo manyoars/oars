@@ -191,7 +191,7 @@ describe('reviewReceiptOf', () => {
     const risky = call('p', 0, [`API_KEY=sk-live-123 pytest ${HOME}\\secret-repo\\tests --token sk-live-456`, 'npm test\necho PRIVATE-SECOND-LINE', `vitest ${HOME}/work/app`]);
     const text = reviewReceiptText(reviewReceiptOf(store({ sessions: [session('p')], tools: [risky] }), session('p'), HOME), VERSION);
     for (const leaked of ['alice', 'secret-repo', 'sk-live', 'API_KEY', 'PRIVATE-SECOND-LINE']) expect(text).not.toContain(leaked);
-    expect(text).toContain('| `pytest <path>` |');
+    expect(text).toContain('| `pytest` |');
     expect(text).toContain('| `npm test…` |');
     expect(text).toContain('| `vitest <path>` |');
   });
@@ -226,6 +226,19 @@ describe('what capture really stores', () => {
     const { store: s, id } = captured('npm test && git push', 'git status && ls', 'ls');
     const found = resolveSession(s, id);
     expect(found === undefined ? null : reviewReceiptOf(s, found, HOME)).toMatchObject({ rows: [{ command: 'npm test' }], other: 4 });
+  });
+});
+
+describe('a secret flag on the real path', () => {
+  it('prints only the matched program, because capture keeps a flag value as a plain word', () => {
+    const [pytest, vitest] = [listed('pytest --password hunter2 tests'), listed('npx vitest run --token abc123')];
+    expect(pytest).toEqual(['pytest']);
+    expect(vitest).toEqual(['npx vitest']);
+    expect([...pytest, ...vitest].join(' ')).not.toMatch(/hunter2|abc123/);
+  });
+  it('treats a flag whose name capture hides (<flag>) as possibly secret, and keeps a command with no flag', () => {
+    expect(listed('pytest --maxfail=2 tests')).toEqual(['pytest']);
+    expect(listed('pytest tests')).toEqual(['pytest tests']);
   });
 });
 
