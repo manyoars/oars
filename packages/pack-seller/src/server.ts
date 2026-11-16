@@ -3,7 +3,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { createOarsClient } from '@manyoars/oars-client';
 import { createBilling } from './billing.js';
-import { ConfigError, loadConfig, type Config } from './config.js';
+import { ConfigError, ENV_HOST, ENV_PORT, loadConfig, type Config } from './config.js';
 import {
   OFFER_RATE_LIMIT,
   OFFER_RATE_WINDOW_MS,
@@ -114,14 +114,17 @@ export const start = async (env: Readonly<NodeJS.ProcessEnv>, options: StartOpti
     throw error;
   }
   const server = createSellerServer({ log: options.log, now: options.now, config, store });
-  // A taken port or an unusable host rejects here instead of crashing the process with an unhandled error event.
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
+  // A taken port or an unusable host rejects here instead of crashing the process with an unhandled error event. The system's message can name the address, so the line names the variables instead.
+  const listening = await new Promise<boolean>((resolve) => {
+    server.once('error', () => {
+      resolve(false);
+    });
     server.listen(config.port, config.host, () => {
-      server.off('error', reject);
-      resolve();
+      server.removeAllListeners('error');
+      resolve(true);
     });
   });
+  if (!listening) return { ok: false, line: `The pack seller could not listen: check ${ENV_PORT} and ${ENV_HOST}.` };
   const address = server.address();
   return { ok: true, server, port: typeof address === 'object' && address !== null ? address.port : config.port };
 };

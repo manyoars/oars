@@ -63,13 +63,21 @@ describe('start', () => {
     expect(await start({ ...ok })).toEqual({ ok: false, line: `${ENV_PACKS_DIR} is not set.` });
   });
 
-  it('rejects when the port is taken, so bin.ts can print its one line', async () => {
+  it('returns one line naming the file and pack for a malformed listing.json, and starts nothing', async () => {
+    const { inputs } = await makeWorld();
+    writeFileSync(join(inputs.packsDir, 'alpha', 'listing.json'), '{ not json');
+    const packs = { [ENV_PACKS_DIR]: inputs.packsDir, [ENV_TERMS_FILE]: inputs.terms, [ENV_OWNERS_FILE]: inputs.owners, [ENV_INDEX_KEY_FILE]: inputs.indexKey, [ENV_STORE_DIR]: inputs.storeDir, [ENV_PROJECTS_DIR]: inputs.projectsDir };
+    expect(await start({ ...ok, ...packs, [ENV_PORT]: '0' }, { log: () => undefined })).toEqual({ ok: false, line: 'listing.json of pack alpha is not valid JSON.' });
+  });
+
+  it('returns the listen line when the port is taken, so bin.ts prints one line', async () => {
+    // A taken port is what this tests.
     const { inputs } = await makeWorld();
     const packs = { [ENV_PACKS_DIR]: inputs.packsDir, [ENV_TERMS_FILE]: inputs.terms, [ENV_OWNERS_FILE]: inputs.owners, [ENV_INDEX_KEY_FILE]: inputs.indexKey, [ENV_STORE_DIR]: inputs.storeDir, [ENV_PROJECTS_DIR]: inputs.projectsDir };
     const first = await start({ ...ok, ...packs, [ENV_PORT]: '0' }, { log: () => undefined });
     if (!first.ok) throw new Error(first.line);
     try {
-      await expect(start({ ...ok, ...packs, [ENV_PORT]: String(first.port) }, { log: () => undefined })).rejects.toThrow(/EADDRINUSE/);
+      expect(await start({ ...ok, ...packs, [ENV_PORT]: String(first.port) }, { log: () => undefined })).toEqual({ ok: false, line: `The pack seller could not listen: check ${ENV_PORT} and ${ENV_HOST}.` });
     } finally {
       first.server.close();
     }
