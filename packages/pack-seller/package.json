@@ -1,0 +1,27 @@
+{
+  "name": "@manyoars/pack-seller",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The Many Oars pack seller: a small server that sells session packs over the platform's billing customers, offers, credits, and reservations",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "oars-pack-seller": "./dist/bin.js"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "start": "node dist/bin.js"
+  },
+  "dependencies": {
+    "@manyoars/oars-client": "^0.1.3"
+  },
+  "devDependencies": {
+    "msw": "^3.0.3",
+    "typescript": "~5.9.3"
+  }
+}
