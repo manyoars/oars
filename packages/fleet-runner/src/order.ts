@@ -28,6 +28,8 @@ export interface Order {
   manifestVersion: string;
   harness: string;
   modelId: string;
+  /** The operator's pool account id: each valid run's pool session id is `contentHash([account, harness session])`, the id the CLI's deposit gives that account and session. */
+  account: string;
   tools: ToolSpec[];
   /** `no-tool` or a tool's name. */
   arms: string[];
@@ -103,5 +105,5 @@ export const parseOrder = (text: string, fleet: FleetManifest): Order => {
     }
   }
 
-  return { orderId: stringAt(root, 'orderId', 'order'), line, taskSetVersion, manifestVersion, harness, modelId, tools, arms, sides, repeats: positiveInt(root, 'repeats', DEFAULT_REPEATS), runCap: positiveInt(root, 'runCap', undefined) };
+  return { orderId: stringAt(root, 'orderId', 'order'), line, taskSetVersion, manifestVersion, harness, modelId, account: stringAt(root, 'account', 'order'), tools, arms, sides, repeats: positiveInt(root, 'repeats', DEFAULT_REPEATS), runCap: positiveInt(root, 'runCap', undefined) };
 };

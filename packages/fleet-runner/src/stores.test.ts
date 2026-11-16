@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { defaultConfigDir } from '../../cli/src/credentials.js';
+import { contentHash } from '../../cli/src/sessions/read.js';
 import { loadStore } from '../../cli/src/sessions/store.js';
 import { CLEAN, makeFake, type Script } from './fake-harness.js';
 import { parseJson } from './json.js';
@@ -65,11 +67,24 @@ describe('store folders per side and arm', () => {
       const stored = (await loadStore(folder.storeDir)).sessions.map((session) => session.session).sort();
       const wanted = book.runs.filter((run) => run.void === null && folderOf(run.side, run.arm) === folder.name).map((run) => run.poolSessionId ?? '');
       expect(wanted).toHaveLength(24);
-      expect(stored).toEqual([...wanted].sort());
+      // The run book names the pool row ids; the store holds the harness sessions those ids are the account form of.
+      expect(stored.map((session) => contentHash(['acct-fleet', session])).sort()).toEqual([...wanted].sort());
       console.log(`store folder ${folder.name}: ${folder.storeDir} (${String(stored.length)} sessions)`);
     }
     expect(book.runs.filter((run) => run.void !== null).every((run) => run.poolSessionId === null)).toBe(true);
     expect(await readdir(join(root, 'staging')).catch(() => [])).toEqual([]);
+  });
+
+  it('seats each store at <config root>/oars/sessions, where the CLI looks when APPDATA or XDG_CONFIG_HOME names the root', async () => {
+    const { folders } = await chain(CLEAN, 2);
+    for (const folder of folders) {
+      expect(folder.storeDir).toBe(join(folder.configRoot, 'oars', 'sessions'));
+      // The CLI's own rule for the config folder (`main.ts` joins `oars/sessions` onto it): this platform's variable, absolute, gives this root.
+      const env = process.platform === 'win32' ? { APPDATA: folder.configRoot } : { XDG_CONFIG_HOME: folder.configRoot };
+      expect(join(defaultConfigDir(env, process.platform, fakeHome), 'oars', 'sessions')).toBe(folder.storeDir);
+      console.log(`config root ${folder.name}: ${folder.configRoot}`);
+    }
+    expect(new Set(folders.map((folder) => folder.configRoot)).size).toBe(folders.length);
   });
 
   it('reads no real store: the fake home that APPDATA names stays empty', async () => {
@@ -82,6 +97,17 @@ describe('store folders per side and arm', () => {
     const book = await runOrder({ order: order(), taskSet: taskSet(1), fleet: FLEET, adapter: makeFake(CLEAN), clock: stepClock(), operator: 'Many Oars Co.', stage: makeStager(join(root, 'staging-a')).stage });
     const valid = book.runs.find((run) => run.void === null);
     await expect(buildStores(book, makeStager(join(root, 'staging-b')), join(root, 'out'))).rejects.toThrow(`valid run ${valid?.runId ?? ''} has a pool session id but was not staged`);
+  });
+
+  it('clears the staging folder when buildStores throws', async () => {
+    const stager = makeStager(join(root, 'staging'));
+    const book = await runOrder({ order: order(), taskSet: taskSet(1), fleet: FLEET, adapter: makeFake(CLEAN), clock: stepClock(), operator: 'Many Oars Co.', stage: stager.stage });
+    expect(existsSync(join(root, 'staging'))).toBe(true);
+    // Forget one staged run: the build throws partway, after the earlier runs were filed.
+    const last = book.runs.filter((run) => run.void === null).at(-1)?.runId ?? '';
+    const forgetful = { ...stager, files: new Map([...stager.files].filter(([runId]) => runId !== last)) };
+    await expect(buildStores(book, forgetful, join(root, 'out'))).rejects.toThrow(/was not staged/);
+    expect(existsSync(join(root, 'staging'))).toBe(false);
   });
 
   it('stores nothing for an order that the task set change voided', async () => {
@@ -104,7 +130,7 @@ describe('store folders per side and arm', () => {
 });
 
 describe('the real-work-table read over each store folder', () => {
-  it('gives one row file per side and arm whose session counts match the run book, and prints a cell under 3 as thin', async () => {
+  it('gives one row file per side and arm whose session counts match the run book, leaves a cell under 3 out (counted in leftOut), and prints a server row under 3 as thin', async () => {
     // The tool is called in all of the before sessions and in only 2 of the after ones.
     const { book, folders } = await chain((request) => (request.side === 'after' && !(request.repeat === 1 && request.taskId <= 't2') ? { noToolCall: true } : {}), 8);
     await writeFile(join(root, 'terms.txt'), `${TERMS}\n`);
