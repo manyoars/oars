@@ -7,7 +7,6 @@
 // `inputTokens`, `outputTokens`, `cacheReadInputTokens`, and `cacheCreationInputTokens`. A `permission_denied` system message may also appear in the stream (headless.md, "permission_denials").
 import { readFile } from 'node:fs/promises';
 import { isObject, type JsonObject, parseJson } from './json.js';
-import type { RunRecord } from './runbook.js';
 
 type Answer = 'yes' | 'no' | 'cannot tell';
 
@@ -24,7 +23,7 @@ const jsonLines = (text: string): { at: number; value: unknown }[] =>
   text.split('\n').flatMap((line, index) => {
     if (line.trim() === '') return [];
     try {
-      return [{ at: index + 1, value: parseJson(line, 'line') as unknown }];
+      return [{ at: index + 1, value: parseJson(line, 'line') }];
     } catch {
       return [];
     }
@@ -133,11 +132,11 @@ export const readFirstRun = (inputs: Inputs): string[] => {
   return lines;
 };
 
-const runOf = (inputs: Inputs): RunRecord | null => {
+const runOf = (inputs: Inputs): { cacheTokens: number } | null => {
   const runs = objects(inputs.runBook).filter(({ event }) => typeof event['runId'] === 'string' && (inputs.runId === undefined || event['runId'] === inputs.runId));
   const only = runs.length === 1 ? runs[0] : undefined;
   const tokens = only === undefined ? null : only.event['cacheTokens'];
-  return only === undefined || typeof tokens !== 'number' ? null : (only.event as unknown as RunRecord);
+  return only === undefined || typeof tokens !== 'number' ? null : { cacheTokens: tokens };
 };
 
 export const main = async (argv: string[], print: (line: string) => void): Promise<number> => {

@@ -53,13 +53,13 @@ The first real run is a credit draw on the approved Bedrock credits. It also ans
    `npm run preflight -w packages/fleet-runner -- --taskset ../../taskset/v1 --fleet <fleet manifest file> --fixture-source <fixture repository path or URL>`
 
    Add `--run-book <file> --allowed-signers <file>` to also verify a signed run book. A first run has none yet.
-2. **OWNER** Tell Matt that the next step is a credit draw (K5), and wait for his yes. Do not go on without it.
+2. **OWNER** Tell the owner that the next step is a credit draw (K5), and wait for their yes. Do not go on without it.
 3. Run exactly one task, once. Keep the transcript copy, the run book, and what `claude` printed on stdout (the stream-json text) for that run.
 4. Run the first-run read over those files. It prints one line per question: `yes`, `no`, or `cannot tell`, and the evidence it read. It only prints. It never decides a void and never edits a record.
 
    `npm run first-run-read -w packages/fleet-runner -- --transcript <transcript copy> --output <stdout file> --run-book <run book> --model-id <Bedrock model ID> --allow-server <name>`
 
    Repeat `--allow-server` and `--allow-skill` for each one the run was allowed. `--marker <text>` adds a piece of the key's value to the scrub search; it is never printed.
-5. Stop. Report its lines to Matt before any second run.
+5. Stop. Report its lines to the owner before any second run.
 
 The adapter does not yet save the stdout of `claude`. Until it does, step 3 needs that text captured by hand, or the read cannot answer questions (a) to (f).
