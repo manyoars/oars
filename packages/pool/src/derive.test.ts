@@ -85,5 +85,9 @@ describe('the same-target recovery read in a bundle', () => {
     expect(sameTarget(bundle)).toEqual([]);
     expect(bundle.reads.map((entry) => entry.method)).not.toContain(RECOVERY_TARGET_METHOD.name);
     expect(bundle.reads.filter((entry) => entry.family === 'recovery')).toHaveLength(1);
+    // Byte identity of what the edge derive says: the same read, key for key, as before the same-target read existed.
+    const [only] = bundle.reads.filter((entry) => entry.family === 'recovery');
+    expect(JSON.stringify([only?.method, only?.slice, only?.value, only?.n, only?.clusters])).toBe(JSON.stringify(['next-action-after-failure', { action: 'shell.exec', errorCode: '429', next: 'file.read', week: '2026-10-12' }, { followed: 5, of: 5, share: 1 }, 5, 5]));
+    expect(bundle.cells.map((one) => one.motifId)).toEqual([edge.motifId]);
   });
 });

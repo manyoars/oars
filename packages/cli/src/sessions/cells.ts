@@ -461,6 +461,7 @@ const errorRowsRead = (errors: readonly ErrorObservation[]): string[] =>
 export const poolOf = (set: CellSet, errors: readonly ErrorObservation[]): Pool => ({
   cells: set.cells,
   motifs: new Map(set.motifs.map((motif) => [motif.motifId, motif])),
+  // `RECOVERY_TARGET_METHOD` is not hashed: that read is made at the pool only (`read.ts`).
   version: contentHash([EXTRACTOR_VERSION, METHODS, CALL_SHAPE_METHOD, RECOVERY_EDGE_METHOD, set.cells.map(cellIdOf), errorRowsRead(errors)]),
   lastDay: set.cells.reduce<string | null>((last, cell) => (cell.day !== UNKNOWN && (last === null || cell.day > last) ? cell.day : last), null),
 });
