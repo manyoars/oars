@@ -77,8 +77,7 @@ const rig = async (options: { credits?: number; commitStatus?: number; failBuild
       if (options.crashBuild === true) throw new Error('disk exploded');
       const counts = await buildPack(world.runtime, buildOptions);
       // An objection that lands after the build and before the commit.
-      if (options.objectAfterBuild === true) writeFileSync(world.objections, `${JSON.stringify({ name: 'Priya Raman', received: '2026-06-09T09:00:00.000Z', scope: 'sale' })}
-`);
+      if (options.objectAfterBuild === true) writeFileSync(world.objections, `${JSON.stringify({ name: 'Priya Raman', received: '2026-06-09T09:00:00.000Z', scope: 'sale' })}${NL}`);
       return counts;
     },
   });
@@ -190,9 +189,7 @@ describe('POST /packs/{packId}/download', () => {
     const r = await rig();
     const ref = await r.offer();
     await (await r.download(ref)).arrayBuffer();
-    await import('node:fs').then(({ writeFileSync }) => {
-      writeFileSync(r.world.objections, `${JSON.stringify({ name: 'Priya Raman', received: '2026-06-09T09:00:00.000Z', scope: 'sale' })}\n`);
-    });
+    writeFileSync(r.world.objections, `${JSON.stringify({ name: 'Priya Raman', received: '2026-06-09T09:00:00.000Z', scope: 'sale' })}${NL}`);
     await (await r.download(ref)).arrayBuffer();
     expect(r.builds.count).toBe(2);
   });
