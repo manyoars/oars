@@ -49,7 +49,7 @@ const keysOf = async (prefix: string): Promise<string[]> => (await (await pool.r
 const all = async (sql: string, ...binds: (string | number)[]): Promise<readonly unknown[]> => (await (await pool.db()).prepare(sql).bind(...binds).all()).results;
 const count = async (sql: string, ...binds: (string | number)[]): Promise<number> => Number(fieldOf((await all(sql, ...binds))[0], 'held'));
 /** One held raw_objects row (stored_at 1, never erased) for a batch, so a seed of a hundred rows is one round trip, not a hundred. */
-const heldRow = (db: TestDb, account: string, hash: string, capture: string): ReturnType<TestDb['prepare']> =>
+const heldRow = (db: TestDb, account: string, hash: string, capture: string): Parameters<TestDb['batch']>[0][number] =>
   db.prepare('INSERT INTO raw_objects (account, sha256, bytes, capture_version, redaction_version, stored_at) VALUES (?, ?, 1, ?, ?, 1)').bind(account, hash, capture, '1');
 
 const night = async (when = TONIGHT): Promise<void> => worker.scheduled({ scheduledTime: when }, await pool.miniflare.getBindings<Env>());
