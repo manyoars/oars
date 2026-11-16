@@ -50,7 +50,9 @@ The first real run is a credit draw on the approved Bedrock credits. It also ans
 
 1. Run the preflight. It makes no model call and spends nothing. It checks `claude` and its pinned version, Node, git, npm, the task-set folder, the fixture tag, `AWS_REGION`, and that `AWS_BEARER_TOKEN_BEDROCK` is set (never its value). Fix every line that is not `ok`.
 
-   `npm run preflight -w packages/fleet-runner -- --taskset ../../taskset/v1 --fleet <fleet manifest file> --fixture-source <fixture repository path or URL>`
+   `npm run preflight -w packages/fleet-runner -- --taskset ../../taskset/v1 --fixture-source <fixture repository path or URL>`
+
+   It reads `fleet-manifest.json` in this package. `--fleet <file>` names another one.
 
    Add `--run-book <file> --allowed-signers <file>` to also verify a signed run book. A first run has none yet.
 2. **OWNER** Tell the owner that the next step is a credit draw (K5), and wait for their yes. Do not go on without it.

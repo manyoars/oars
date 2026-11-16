@@ -1,4 +1,4 @@
-// `npm run preflight -w packages/fleet-runner -- --taskset <folder> --fleet <file> --fixture-source <path or URL> [--claude <exe>] [--git <exe>] [--npm <exe>] [--run-book <file> --allowed-signers <file>]`:
+// `npm run preflight -w packages/fleet-runner -- --taskset <folder> [--fleet <file>] --fixture-source <path or URL> [--claude <exe>] [--git <exe>] [--npm <exe>] [--run-book <file> --allowed-signers <file>]`:
 // tells the operator whether this machine is ready for a real Claude Code on Bedrock run. It makes no model call and spends nothing. The only real executables it starts are `claude --version`,
 // `git --version`, `npm --version`, and `git ls-remote` (the one network call); it never starts `claude` with a prompt. The key is checked for presence only: its value is never read into a
 // line, and every printed line is passed through a redaction that removes the value if it ever appeared (a stderr from a tool, say).
@@ -15,6 +15,8 @@ export interface PreflightDeps {
   env: EnvMap;
   spawn?: Spawn;
   nodeVersion?: string;
+  /** The package's fleet manifest, used when `--fleet` is absent. The script passes it because a bundle's `import.meta.url` does not point into the package. */
+  defaultFleet?: string;
 }
 
 type Verdict = 'ok' | 'missing' | 'wrong';
@@ -37,11 +39,11 @@ const onPath = (exe: string, env: EnvMap): string | null => {
   return null;
 };
 
-const USAGE = 'usage: preflight --taskset <folder> --fleet <file> --fixture-source <path or URL> [--claude <exe>] [--git <exe>] [--npm <exe>] [--run-book <file> --allowed-signers <file>]';
+const USAGE = 'usage: preflight --taskset <folder> [--fleet <file>] --fixture-source <path or URL> [--claude <exe>] [--git <exe>] [--npm <exe>] [--run-book <file> --allowed-signers <file>]';
 
 export const main = async (argv: string[], print: (line: string) => void, deps: PreflightDeps = { env: process.env }): Promise<number> => {
   const taskSetArg = flag(argv, '--taskset');
-  const fleetArg = flag(argv, '--fleet');
+  const fleetArg = flag(argv, '--fleet') ?? deps.defaultFleet;
   const source = flag(argv, '--fixture-source');
   const runBook = flag(argv, '--run-book');
   const allowed = flag(argv, '--allowed-signers');
