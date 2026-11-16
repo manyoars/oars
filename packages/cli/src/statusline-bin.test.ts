@@ -16,8 +16,12 @@ afterEach(() => {
   for (const folder of made.splice(0)) rmSync(folder, { recursive: true, force: true, maxRetries: 4, retryDelay: 200 });
 });
 
-const DAY_MS = 86_400_000;
-// A home whose store holds two sessions, one a day ago and one two days ago: two sessions on two active days in any time zone.
+// Local noon of the day `back` days ago: a 23- or 25-hour day at a clock change cannot fold two of these onto one date.
+const noonAgo = (back: number): string => {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate() - back, 12).toISOString();
+};
+// A home whose store holds two sessions, one yesterday and one two days ago: two sessions on two active days in any time zone.
 const seededHome = (): string => {
   const home = mkdtempSync(join(tmpdir(), 'oars-statusline-bin-'));
   made.push(home);
@@ -26,8 +30,8 @@ const seededHome = (): string => {
   const rows = [
     session('a'),
     session('b'),
-    prompt('a', 0, { ts: new Date(Date.now() - DAY_MS).toISOString() }),
-    prompt('b', 0, { ts: new Date(Date.now() - 2 * DAY_MS).toISOString() }),
+    prompt('a', 0, { ts: noonAgo(1) }),
+    prompt('b', 0, { ts: noonAgo(2) }),
   ];
   writeFileSync(join(store, 'observations.jsonl'), rows.map((row) => JSON.stringify(row)).join('\n') + '\n');
   return home;
@@ -69,6 +73,17 @@ describe.skipIf(!existsSync(bin))('the built oars statusline', () => {
       expect(listing(home)).toEqual(before);
     });
   }
+
+  it('prints the zero line and creates no oars folder when there is no store at all', () => {
+    const home = mkdtempSync(join(tmpdir(), 'oars-statusline-bin-'));
+    made.push(home);
+    const result = spawnBin(home, ['statusline'], undefined);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(`${STATUSLINE_ID} 7d: 0 sessions, 0 active days
+`);
+    expect(result.stderr).toBe('');
+    expect(listing(home)).toEqual([]);
+  });
 
   it('hands `statusline --help` to the full CLI, which prints the commander help', () => {
     const home = seededHome();

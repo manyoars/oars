@@ -108,12 +108,22 @@ describe('open-pack-counts recipe', () => {
     const dir = mkdtempSync(join(tmpdir(), 'open-pack-counts-'));
     try {
       mkdirSync(join(dir, 'sessions', 'zzz'), { recursive: true });
-      writeFileSync(join(dir, 'manifest.jsonl'), '{"matchId":"zzz","harnessVersions":["2.1.1"]}' + String.fromCharCode(10));
+      writeFileSync(join(dir, 'manifest.jsonl'), '{"matchId":"zzz","harnessVersions":["2.1.1"]}' + '\n');
       const tool = { prompt: 0, status: 'error', errorCode: '1', recoveryCalls: { next: [], editFollowed: true } };
       writeFileSync(join(dir, 'sessions', 'zzz', 'skeleton.json'), JSON.stringify({ transcripts: [{ tools: [tool] }] }));
-      const block = ['Failed calls by what followed', '  edit followed     1', '  no edit followed  0', '  not recorded      0', ''].join(String.fromCharCode(10));
+      const block = ['Failed calls by what followed', '  edit followed     1', '  no edit followed  0', '  not recorded      0', ''].join('\n');
       expect(run(dir).stdout).toContain(block);
       expect(countPack(dir, undefined).failedCallsByWhatFollowed).toEqual({ 'edit followed': 1, 'no edit followed': 0, 'not recorded': 0 });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('skips a manifest row whose matchId is empty', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'open-pack-counts-'));
+    try {
+      writeFileSync(join(dir, 'manifest.jsonl'), '{"matchId":"","harnessVersions":["2.1.1"]}\n');
+      expect(countPack(dir, undefined).skipped).toEqual([{ file: 'manifest.jsonl', line: 1, reason: 'matchId is not a plain folder name' }]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
