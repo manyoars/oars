@@ -203,7 +203,7 @@ describe('what capture really stores', () => {
     expect(listed('npx vitest run src/a.test.ts')).toEqual(['npx vitest run']);
     expect(listed('just check')).toEqual(['just check']);
     expect(listed('python -m pytest -k foo')).toEqual(['python pytest foo']);
-    expect(listed('cargo fmt -- --check')).toEqual(['cargo fmt --check']);
+    expect(listed('cargo fmt --check')).toEqual(['cargo fmt --check']);
     expect(listed('npm run lint')).toEqual(['npm run lint']);
     expect(listed('tsc --noEmit')).toEqual(['tsc']);
     expect(listed('npm run test:unit', 'go test ./...', 'cargo test --all', 'pnpm exec vitest', 'uv run pytest', 'ruff check .', 'prettier --check src', 'ruff format --check .')).toEqual([
@@ -239,6 +239,22 @@ describe('a secret flag on the real path', () => {
   it('treats a flag whose name capture hides (<flag>) as possibly secret, and keeps a command with no flag', () => {
     expect(listed('pytest --maxfail=2 tests')).toEqual(['pytest']);
     expect(listed('pytest tests')).toEqual(['pytest tests']);
+  });
+});
+
+describe('a formatter row', () => {
+  const rows = (template: string, run: string): string[] => {
+    const s = store({ sessions: [session('f')], tools: [call('f', 0, [run], { templates: [template] })] });
+    const found = resolveSession(s, 'f');
+    return found === undefined ? [] : reviewReceiptOf(s, found, HOME).rows.map((row) => row.command);
+  };
+  it('appends the check flag its template shows, never a fixed one', () => {
+    expect(rows('prettier --list-different <ident>', 'prettier src')).toEqual(['prettier src --list-different']);
+    expect(rows('prettier --check <ident>', 'prettier src')).toEqual(['prettier src --check']);
+  });
+  it('does not list cargo fmt on a guess about what follows --', () => {
+    expect(rows('cargo fmt -- <text>', 'cargo fmt')).toEqual([]);
+    expect(listed('cargo fmt -- --check')).toEqual([]);
   });
 });
 
