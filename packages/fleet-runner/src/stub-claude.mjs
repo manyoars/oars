@@ -1,7 +1,7 @@
 // A stand-in for the `claude` executable, for the Bedrock adapter's tests only. The first line of the prompt on stdin names the scenario; the stub writes what a real
 // run would (a stream-json stdout, a transcript under the config folder) and records what it was started with in <config>/stub-seen.json. It never opens the network.
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const argv = process.argv.slice(2);
@@ -18,7 +18,12 @@ const childEnv = { ...process.env };
 if (process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB === '1') delete childEnv.AWS_BEARER_TOKEN_BEDROCK;
 const childSaw = execFileSync(process.execPath, ['-e', 'process.stdout.write(JSON.stringify(Object.keys(process.env).sort()))'], { env: childEnv, encoding: 'utf8' });
 writeFileSync(join(config, 'stub-child-seen.json'), childSaw);
-const line = (/** @type {object} */ value) => process.stdout.write(`${JSON.stringify(value)}\n`);
+// Every stdout line is also kept in <config>/stub-stdout.txt, so a test can compare what the adapter saved with what the child wrote.
+const line = (/** @type {object} */ value) => {
+  const text = `${JSON.stringify(value)}\n`;
+  appendFileSync(join(config, 'stub-stdout.txt'), text);
+  process.stdout.write(text);
+};
 const model = scenario === 'model' ? 'other-model-id' : valueOf('--model');
 line({ type: 'system', subtype: 'init', session_id: sessionId, claude_code_version: scenario === 'version' ? '9.9.9' : '2.1.30', model });
 if (scenario === 'tree') {
@@ -30,6 +35,10 @@ if (scenario === 'tree') {
   });
   writeFileSync(join(config, 'grandchild.pid'), String(grandchild.pid));
   setTimeout(() => undefined, 60000);
+} else if (scenario === 'echokey') {
+  // A harness that prints the key's value into its output; the saved copy must not hold it.
+  line({ type: 'assistant', text: `key is ${process.env.AWS_BEARER_TOKEN_BEDROCK ?? ''}` });
+  process.exit(0);
 } else if (scenario === 'hang') setTimeout(() => undefined, 60000);
 else if (scenario === 'crash') process.exit(139);
 else {

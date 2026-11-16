@@ -257,6 +257,7 @@ export const makeCodexAzure = (settings: CodexAzureSettings, deps: Dependencies)
     };
     const outcome = await spawn({ command: settings.codexExecutable, args, cwd: folder.runFolder, env, stdin: prompt, timeoutMs: settings.timeLimitMs });
     assertStarted(outcome, settings.codexExecutable);
+    await steps.saveStdout(outcome.stdout, request.runId, [key]);
     const kind = classify(outcome, parseEvents(outcome.stdout));
     const { own: rollout, others } = await findRollouts(folder.configDir);
     const facts = rollout === null ? null : parseRollout(await readFile(rollout, 'utf8'));
