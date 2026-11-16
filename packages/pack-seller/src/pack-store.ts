@@ -33,15 +33,6 @@ export interface PackInputs {
   projectsDir: string;
 }
 
-const VARIABLES = [
-  ['packsDir', ENV_PACKS_DIR],
-  ['terms', ENV_TERMS_FILE],
-  ['owners', ENV_OWNERS_FILE],
-  ['indexKey', ENV_INDEX_KEY_FILE],
-  ['storeDir', ENV_STORE_DIR],
-  ['projectsDir', ENV_PROJECTS_DIR],
-] as const;
-
 /** Reads the six paths; a missing one, or one inside a git repository, is a `ConfigError` of one line that names the variable. */
 export const loadPackInputs = (env: Readonly<NodeJS.ProcessEnv>): PackInputs => {
   const read = (name: string): string => {
@@ -52,8 +43,14 @@ export const loadPackInputs = (env: Readonly<NodeJS.ProcessEnv>): PackInputs => 
     return path;
   };
   // The owners file's folder also holds deliveries.jsonl, offers.jsonl, and index.jsonl; `insideRepository` walks up through that folder from the file itself.
-  const [packsDir, terms, owners, indexKey, storeDir, projectsDir] = VARIABLES.map(([, name]) => read(name));
-  return { packsDir: packsDir ?? '', terms: terms ?? '', owners: owners ?? '', indexKey: indexKey ?? '', storeDir: storeDir ?? '', projectsDir: projectsDir ?? '' };
+  return {
+    packsDir: read(ENV_PACKS_DIR),
+    terms: read(ENV_TERMS_FILE),
+    owners: read(ENV_OWNERS_FILE),
+    indexKey: read(ENV_INDEX_KEY_FILE),
+    storeDir: read(ENV_STORE_DIR),
+    projectsDir: read(ENV_PROJECTS_DIR),
+  };
 };
 
 /** The four terms fields of one manifest row, which the pack page shows before any offer. The row's match id is keyed to the operator's own key, so it is not shown. */
@@ -66,7 +63,7 @@ export interface RowTerms {
 
 /** What the pack page shows: the listing, `pack.json` (without the operator's key id and objections hash), the census, the data card, and each row's terms. */
 export interface PackPage extends PackListing {
-  pack: object;
+  pack: PackSummary;
   census: unknown;
   /** The README data card, when the preview was built `skeletonOnly`; otherwise null. */
   card: string | null;
@@ -97,8 +94,11 @@ const readText = async (file: string): Promise<string | undefined> => {
   }
 };
 
-const summaryOf = (record: unknown): object => {
-  const shown: { [name: string]: unknown } = {};
+/** `pack.json` as the page shows it: every field but the operator's key id and objections hash. */
+export type PackSummary = Partial<Record<string, unknown>>;
+
+const summaryOf = (record: unknown): PackSummary => {
+  const shown: PackSummary = {};
   if (typeof record === 'object' && record !== null) {
     for (const [name, value] of Object.entries(record)) if (name !== 'keyId' && name !== 'objections') shown[name] = value;
   }

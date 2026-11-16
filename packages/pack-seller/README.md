@@ -25,7 +25,7 @@ npm start -w packages/pack-seller
 | `OARS_SELLER_PACKS_DIR` | The folder holding one subfolder per pack (`listing.json` and the built `preview/`); per-buyer builds go under `builds/`. Required. |
 | `OARS_SELLER_TERMS_FILE`, `OARS_SELLER_OWNERS_FILE`, `OARS_SELLER_INDEX_KEY_FILE` | The term list, owners file, and index key the per-buyer build reads. Required. |
 | `OARS_SELLER_STORE_DIR`, `OARS_SELLER_PROJECTS_DIR` | The copy of the session store and the transcripts the build reads. Required. |
-| `OARS_SELLER_PRICE_USD` | The amount of a pack's `CREDIT_PACK` price, read when the price is created (`src/pricing.ts`). It is never a default in code. |
+| `OARS_SELLER_PRICE_USD` | The amount of a pack's `CREDIT_PACK` price, read by the price command, not yet built (`src/pricing.ts` holds the functions). It is never a default in code. |
 
 Every path above is local to the operator's machine, and a path inside a git repository is refused at start with a line naming the variable. The offer record (`offers.jsonl`) is kept beside `deliveries.jsonl`, next to the owners file.
 
