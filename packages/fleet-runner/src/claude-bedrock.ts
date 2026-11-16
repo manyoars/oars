@@ -4,253 +4,27 @@
 //   Bedrock variables    https://code.claude.com/docs/en/amazon-bedrock.md , https://code.claude.com/docs/en/env-vars.md
 //   transcript location  https://code.claude.com/docs/en/sessions.md#where-transcripts-are-stored
 //   stream-json result   https://code.claude.com/docs/en/agent-sdk/typescript.md (SDKSystemMessage, SDKResultMessage, ModelUsage)
-import { spawn as spawnChild, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join, extname } from 'node:path';
-import type { CheckResult, ExitKind, HarnessAdapter, Prepared, RunRequest, RunResult, TokenCounts, ToolPin } from './harness.js';
-import { readFileSync } from 'node:fs';
-import { arrayAt, isObject, type JsonObject, objectAt, parseJson, stringAt, optionalStringAt } from './json.js';
-import { loadTaskSet } from './manifest.js';
+import { readFile, writeFile } from 'node:fs/promises';
+import { extname, join } from 'node:path';
+import type { CheckResult, ExitKind, HarnessAdapter, Prepared, RunRequest, RunResult, TokenCounts } from './harness.js';
+import { assertStarted, copySkill, loadCheckedResetPlan, makeFolders, makeSteps, nodeSpawn, pick, START_NAMES, toolFor, type Dependencies, type Layout, type PreparedFolder, type SharedSettings, type SpawnOutcome } from './harness-shared.js';
+import { isObject } from './json.js';
 
-/** An environment handed to a child: every value is set. */
-export interface ChildEnv {
-  [name: string]: string;
-}
+// The shared types stay importable from here, where the adapter's callers and tests have always found them.
+export { loadResetPlan, makeNodeSpawn, nodeSpawn } from './harness-shared.js';
+export type { ChildEnv, CommandSpec, Dependencies, EnvMap, HostProcess, ResetPlan, ServerTool, SkillTool, Spawn, SpawnOutcome, SpawnSpec, StartTimer, ToolUnderTest } from './harness-shared.js';
 
-/** The caller's environment, where a name may be unset. */
-export type EnvMap = Partial<ChildEnv>;
-
-export interface CommandSpec {
-  command: string;
-  args: string[];
-}
-
-/** An npm-installed MCP server: `package` is installed at the pin into the config folder, and `node <entry> <args>` starts it. */
-export interface ServerTool {
-  kind: 'server';
-  name: string;
-  package: string;
-  /** The script to run, relative to the package folder. */
-  entry: string;
-  args: string[];
-}
-
-/** A skill held in a git repository (`subdir` inside it), checked out at the pinned commit and copied to `<config>/skills/<name>`. */
-export interface SkillTool {
-  kind: 'skill';
-  name: string;
-  repo: string;
-  subdir: string;
-}
-
-export type ToolUnderTest = ServerTool | SkillTool;
-
-export interface ClaudeBedrockSettings {
-  /** A local path or a git URL of the fixture repository. */
-  fixtureSource: string;
-  fixtureTag: string;
-  /** The task-set folder: `manifest.json`, `prompts/<id>.md`, `checks/<id>.mjs`, and the `setup/` scripts the manifest names (the repository's `taskset/v1/`). */
-  taskSetDir: string;
-  /** The fleet manifest version this adapter was built for; reported as the manifest the run saw. */
-  fleetManifestVersion: string;
+export interface ClaudeBedrockSettings extends SharedSettings {
   claudeExecutable: string;
   /** Arguments placed before Claude Code's own (empty for the real executable). */
   claudeArgs: string[];
   awsRegion: string;
   modelId: string;
-  /** The tool the arm named `tool.name` installs; any other arm is the no-tool arm. */
-  tool: ToolUnderTest | null;
-  /** The limit on the harness call alone. */
-  timeLimitMs: number;
-  /** The limit on each reset, setup, install, and check step, so a slow clone or build is never mistaken for a slow harness. */
-  setupTimeLimitMs: number;
-  /** Where each run's transcript is copied, outside the temp folder, as `<runId>.jsonl`. */
-  transcriptOutDir: string;
-  gitExecutable: string;
-  npmExecutable: string;
   allowedTools: string[];
-  /** Names copied from the caller's environment into the git and npm steps only (for example a credential helper's variable), never into `claude`. */
-  setupEnvNames: string[];
 }
 
-export interface SpawnSpec {
-  command: string;
-  args: string[];
-  cwd: string;
-  /** The child's whole environment; nothing else is inherited. */
-  env: ChildEnv;
-  stdin: string | null;
-  timeoutMs: number;
-}
-
-export interface SpawnOutcome {
-  exitCode: number | null;
-  signal: string | null;
-  stdout: string;
-  stderr: string;
-  timedOut: boolean;
-  /** `ENOENT`, `ENOSPC`, and the like, when the process could not start. */
-  errorCode: string | null;
-}
-
-export type Spawn = (spec: SpawnSpec) => Promise<SpawnOutcome>;
-
-export interface Dependencies {
-  /** The caller's environment: where the Bedrock key and the names a child needs to start are read from. Nothing else reads `process.env`. */
-  env: EnvMap;
-  spawn?: Spawn;
-  /** The Node version running the runner; defaults to this process's. A version below the manifest's is refused at construction. */
-  nodeVersion?: string;
-  /** Called with each temp folder as it is made (tests use it to prove the folder is gone after a failed prepare). */
-  onTempFolder?: (dir: string) => void;
-}
-
-export interface ClaudePrepared extends Prepared {
-  runFolder: string;
-  configDir: string;
-  fixtureCommit: string;
-}
-
-/** What a fresh run folder needs, read from the task-set manifest: `reset` is `{ "node": ">=24.0.0", "install": "npm ci ...", "buildDb": "node scripts/build-db.ts" }`, and a task may name a `setup` script. */
-export interface ResetPlan {
-  nodeMajor: number;
-  commands: CommandSpec[];
-  /** Task id to its setup script, relative to the task-set folder; a task without one is absent. */
-  setups: ReadonlyMap<string, string>;
-  /** Every task id the manifest lists. */
-  taskIds: ReadonlySet<string>;
-}
-
-const commandLine = (reset: JsonObject, name: 'install' | 'buildDb'): CommandSpec => {
-  const text = stringAt(reset, name, 'taskset.reset').trim();
-  if (text === '') throw new Error(`taskset.reset.${name} must be a command line`);
-  const [command = '', ...args] = text.split(/\s+/);
-  return { command, args };
-};
-
-export const loadResetPlan = (taskSetDir: string): ResetPlan => {
-  const root = objectAt(parseJson(readFileSync(join(taskSetDir, 'manifest.json'), 'utf8'), 'task-set manifest'), 'task-set manifest');
-  const reset = objectAt(root['reset'], 'taskset.reset');
-  const floor = /^>=\s*(\d+)/.exec(stringAt(reset, 'node', 'taskset.reset'));
-  if (floor === null) throw new Error('taskset.reset.node must be a ">=" floor such as ">=24.0.0"');
-  const setups = new Map<string, string>();
-  const taskIds = new Set<string>();
-  for (const [index, entry] of arrayAt(root, 'tasks', 'taskset').entries()) {
-    const at = `taskset.tasks[${String(index)}]`;
-    const task = objectAt(entry, at);
-    const id = stringAt(task, 'id', at);
-    taskIds.add(id);
-    const setup = optionalStringAt(task, 'setup', at);
-    if (setup !== undefined) setups.set(id, setup);
-  }
-  return { nodeMajor: Number.parseInt(floor[1] ?? '', 10), commands: [commandLine(reset, 'install'), commandLine(reset, 'buildDb')], setups, taskIds };
-};
-
-/** Ends a process and everything it started: the harness starts MCP servers of its own, and an orphan would keep drawing credit. */
-const killTree = (pid: number | undefined): void => {
-  if (pid === undefined) return;
-  try {
-    if (process.platform === 'win32') spawnSync('taskkill', ['/T', '/F', '/PID', String(pid)], { windowsHide: true, stdio: 'ignore' });
-    else process.kill(-pid, 'SIGKILL');
-  } catch {
-    // The process already ended.
-  }
-};
-
-/** Starts the harness time limit; calls `fire` after `ms` and returns a function that cancels it. Injected so a test fires it at a chosen moment, not on the wall clock. */
-export type StartTimer = (ms: number, fire: () => void) => () => void;
-
-const wallClockTimer: StartTimer = (ms, fire) => {
-  const handle = setTimeout(fire, ms);
-  return () => {
-    clearTimeout(handle);
-  };
-};
-
-/** The part of `process` the runner's exit handlers use; a test passes an emitter of its own. */
-export interface HostProcess {
-  readonly pid: number;
-  once(event: 'SIGINT' | 'SIGTERM' | 'exit', listener: () => void): unknown;
-  kill(pid: number, signal: 'SIGINT' | 'SIGTERM'): unknown;
-}
-
-export const makeNodeSpawn = (startTimer: StartTimer, host: HostProcess = process): Spawn => {
-  // Children off Windows lead their own process group, so a Ctrl-C or SIGTERM that ends the runner would not reach them: end each one here, or it keeps drawing credit.
-  const live = new Set<number>();
-  let handlersInstalled = false;
-  const killLive = (): void => {
-    for (const pid of live) killTree(pid);
-    live.clear();
-  };
-  const installHandlers = (): void => {
-    if (handlersInstalled) return;
-    handlersInstalled = true;
-    host.once('exit', killLive);
-    for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-      host.once(signal, () => {
-        killLive();
-        host.kill(host.pid, signal);
-      });
-    }
-  };
-  return (spec) =>
-    new Promise((resolve) => {
-      let stdout = '';
-      let stderr = '';
-      let timedOut = false;
-      let settled = false;
-      let cancelTimer: () => void = () => undefined;
-      const finish = (outcome: SpawnOutcome): void => {
-        if (settled) return;
-        settled = true;
-        cancelTimer();
-        resolve(outcome);
-      };
-      installHandlers();
-      // No shell: a `.cmd` wrapper would be the process killed on a timeout while the real program kept running (the constructor refuses one). Off Windows the child leads its own
-      // process group so a timeout can end the whole group.
-      const child = spawnChild(spec.command, spec.args, { cwd: spec.cwd, env: spec.env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
-      if (child.pid !== undefined) live.add(child.pid);
-      cancelTimer = startTimer(spec.timeoutMs, () => {
-        timedOut = true;
-        killTree(child.pid);
-      });
-      child.stdout.on('data', (chunk: Buffer) => {
-        stdout += chunk.toString('utf8');
-      });
-      child.stderr.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString('utf8');
-      });
-      child.on('error', (error: NodeJS.ErrnoException) => {
-        finish({ exitCode: null, signal: null, stdout, stderr, timedOut, errorCode: error.code ?? 'UNKNOWN' });
-      });
-      child.on('close', (exitCode, signal) => {
-        if (child.pid !== undefined) live.delete(child.pid);
-        finish({ exitCode, signal, stdout, stderr, timedOut, errorCode: null });
-      });
-      child.stdin.on('error', () => undefined);
-      child.stdin.end(spec.stdin ?? '');
-    });
-};
-
-export const nodeSpawn: Spawn = makeNodeSpawn(wallClockTimer);
-
-// What a process needs to start. HOME and the application-data folders are not here: they point into the run's own temp folder.
-const START_NAMES = ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'windir', 'ComSpec', 'TEMP', 'TMP', 'TMPDIR'];
-
-const pick = (env: EnvMap, names: readonly string[]): ChildEnv => {
-  const out: ChildEnv = {};
-  for (const name of names) {
-    const value = env[name];
-    if (value !== undefined && value !== '') out[name] = value;
-  }
-  return out;
-};
-
-// A commit prefix of fewer than 7 hex characters names too many commits to prove a pin, so it never matches.
-const hasPrefix = (actual: string, wanted: string): boolean => /^[0-9a-f]{7,40}$/.test(wanted) && actual.startsWith(wanted);
+export type ClaudePrepared = PreparedFolder;
 
 const AUTH_TEXT = /\b(401|403)\b|invalid (api key|token|security token)|not authorized|security token.*(invalid|expired)|unrecognizedclient/i;
 const NETWORK_TEXT = /ENOTFOUND|ECONNREFUSED|EAI_AGAIN|ETIMEDOUT|ENETUNREACH/;
@@ -312,11 +86,6 @@ const classify = (outcome: SpawnOutcome, facts: StreamFacts): ExitKind => {
   return 'crash';
 };
 
-const pinParts = (pin: string): { scheme: string; value: string } => {
-  const at = pin.indexOf(':');
-  return at < 0 ? { scheme: '', value: pin } : { scheme: pin.slice(0, at), value: pin.slice(at + 1) };
-};
-
 /** The adapter, with `prepare` typed to return the richer folder so a caller can read its commit and paths. */
 export interface ClaudeBedrockAdapter extends Omit<HarnessAdapter, 'prepare'> {
   prepare: (request: RunRequest) => Promise<ClaudePrepared>;
@@ -328,128 +97,38 @@ export const makeClaudeBedrock = (settings: ClaudeBedrockSettings, deps: Depende
   if (settings.awsRegion === '') throw new Error('the AWS region setting is empty: Bedrock needs a region');
   if (settings.modelId === '') throw new Error('the model ID setting is empty');
   if (['.cmd', '.bat'].includes(extname(settings.claudeExecutable).toLowerCase())) throw new Error(`${settings.claudeExecutable} is a batch wrapper: a timeout would kill the wrapper and leave claude running. Use the native claude executable, or node with cli.js through claudeArgs`);
-  const reset = loadResetPlan(settings.taskSetDir);
-  const nodeMajor = Number.parseInt(deps.nodeVersion ?? process.versions.node, 10);
-  if (nodeMajor < reset.nodeMajor) throw new Error(`Node ${String(nodeMajor)} is below the Node ${String(reset.nodeMajor)} the fixture needs (task-set manifest reset.node); no run was started`);
+  const reset = loadCheckedResetPlan(settings, deps.nodeVersion);
   const spawn = deps.spawn ?? nodeSpawn;
-  const folders = new WeakMap<Prepared, ClaudePrepared>();
-  const folderOf = (prepared: Prepared): ClaudePrepared => {
-    const folder = folders.get(prepared);
-    if (folder === undefined) throw new Error('this folder was not prepared by this adapter');
-    return folder;
-  };
+  const steps = makeSteps(settings, deps, spawn);
+  const { remember, folderOf } = makeFolders();
 
-  // The environment of a git, npm, or database step: the start names, the folder's own home, and the operator's named extras.
-  const setupEnv = (root: string): ChildEnv => ({ ...pick(deps.env, START_NAMES), ...pick(deps.env, settings.setupEnvNames), HOME: join(root, 'home'), USERPROFILE: join(root, 'home'), GIT_TERMINAL_PROMPT: '0' });
-
-  const step = async (what: string, spec: SpawnSpec): Promise<string> => {
-    const outcome = await spawn(spec);
-    if (outcome.errorCode !== null) throw new Error(`${what}: could not start ${spec.command} (${outcome.errorCode})`);
-    if (outcome.timedOut) throw new Error(`${what} timed out after ${String(spec.timeoutMs)} ms`);
-    if (outcome.exitCode !== 0) throw new Error(`${what} failed (exit ${String(outcome.exitCode)}): ${outcome.stderr.trim().slice(0, 300)}`);
-    return outcome.stdout.trim();
-  };
-
-  const readVersion = async (tool: ToolUnderTest, root: string, configDir: string): Promise<string> => {
-    if (tool.kind === 'server') {
-      const text = await readFile(join(configDir, 'tool', 'node_modules', ...tool.package.split('/'), 'package.json'), 'utf8');
-      const manifest = parseJson(text, `${tool.package} package.json`);
-      return `npm:${isObject(manifest) ? optionalStringAt(manifest, 'version', tool.package) ?? 'unknown' : 'unknown'}`;
-    }
-    return `git:${await step('read skill commit', { command: settings.gitExecutable, args: ['rev-parse', 'HEAD'], cwd: join(root, 'tool-src'), env: setupEnv(root), stdin: null, timeoutMs: settings.setupTimeLimitMs })}`;
-  };
-
-  /** The installed pin in the order's own form: a commit prefix the order gave stays that prefix when the checked-out commit starts with it. */
-  const installedPin = (tool: ToolUnderTest, found: string, wanted: string | undefined): string => {
-    if (tool.kind === 'skill' && wanted !== undefined && hasPrefix(pinParts(found).value, pinParts(wanted).value)) return wanted;
-    return found;
-  };
-
-  const install = async (tool: ToolUnderTest, wanted: string, root: string, configDir: string): Promise<void> => {
-    const env = setupEnv(root);
-    const timeoutMs = settings.setupTimeLimitMs;
-    const value = pinParts(wanted).value;
-    if (tool.kind === 'server') {
-      const prefix = join(configDir, 'tool');
-      await mkdir(prefix, { recursive: true });
-      await step('install server', { command: settings.npmExecutable, args: ['install', '--prefix', prefix, '--no-audit', '--no-fund', '--ignore-scripts', `${tool.package}@${value}`], cwd: root, env, stdin: null, timeoutMs });
-      const entry = join(prefix, 'node_modules', ...tool.package.split('/'), tool.entry);
-      const mcp = { mcpServers: { [tool.name]: { command: 'node', args: [entry, ...tool.args] } } };
-      await writeFile(join(configDir, 'mcp.json'), JSON.stringify(mcp));
-      return;
-    }
-    const source = join(root, 'tool-src');
-    await step('clone skill', { command: settings.gitExecutable, args: ['clone', '--quiet', tool.repo, source], cwd: root, env, stdin: null, timeoutMs });
-    await step('check out skill', { command: settings.gitExecutable, args: ['checkout', '--quiet', '--detach', value], cwd: source, env, stdin: null, timeoutMs });
-    await cp(join(source, tool.subdir), join(configDir, 'skills', tool.name), { recursive: true, filter: (path) => !/[\\/]\.git([\\/]|$)/.test(path) });
+  // A server is given to Claude Code through `mcp.json` and a skill is copied to `<config>/skills/<name>`.
+  const layout: Layout = {
+    tempPrefix: 'fleet-claude-',
+    configName: 'config',
+    wire: async (installing, root, configDir) => {
+      if (installing === null) return;
+      const { tool, wanted } = installing;
+      if (tool.kind === 'server') {
+        const entry = await steps.installServer(tool, wanted, root, configDir);
+        await writeFile(join(configDir, 'mcp.json'), JSON.stringify({ mcpServers: { [tool.name]: { command: 'node', args: [entry, ...tool.args] } } }));
+        return;
+      }
+      await copySkill(await steps.checkoutSkill(tool, wanted, root), join(configDir, 'skills', tool.name));
+    },
   };
 
   const prepare = async (request: RunRequest): Promise<ClaudePrepared> => {
-    if (!reset.taskIds.has(request.taskId)) throw new Error(`task ${request.taskId} is not in the task-set manifest`);
-    const root = await mkdtemp(join(tmpdir(), 'fleet-claude-'));
-    deps.onTempFolder?.(root);
-    const dispose = async (): Promise<void> => {
-      await rm(root, { recursive: true, force: true });
-    };
-    try {
-      const runFolder = join(root, 'repo');
-      const configDir = join(root, 'config');
-      await mkdir(configDir, { recursive: true });
-      await mkdir(join(root, 'home'), { recursive: true });
-      const env = setupEnv(root);
-      const timeoutMs = settings.setupTimeLimitMs;
-      await step('clone fixture', { command: settings.gitExecutable, args: ['clone', '--quiet', settings.fixtureSource, runFolder], cwd: root, env, stdin: null, timeoutMs });
-      await step('check out fixture tag', { command: settings.gitExecutable, args: ['checkout', '--quiet', '--detach', settings.fixtureTag], cwd: runFolder, env, stdin: null, timeoutMs });
-      const commit = await step('read fixture commit', { command: settings.gitExecutable, args: ['rev-parse', 'HEAD'], cwd: runFolder, env, stdin: null, timeoutMs });
-      for (const command of reset.commands) {
-        const program = command.command === 'npm' ? settings.npmExecutable : command.command === 'node' ? process.execPath : command.command;
-        await step(`reset command "${command.command} ${command.args.join(' ')}"`, { command: program, args: command.args, cwd: runFolder, env, stdin: null, timeoutMs });
-      }
-      // A task's own setup (spec: an optional Node script, the run folder as its first argument) runs after the reset and before the harness; a failure is the machine's, not the task's.
-      const setupPath = reset.setups.get(request.taskId);
-      if (setupPath !== undefined) {
-        const setupScript = join(settings.taskSetDir, setupPath);
-        await step(`setup script ${request.taskId}`, { command: process.execPath, args: [setupScript, runFolder], cwd: runFolder, env, stdin: null, timeoutMs });
-      }
-      const tool = settings.tool !== null && settings.tool.name === request.arm ? settings.tool : null;
-      const wanted = request.expected.toolPins.find((pin) => pin.name === request.arm)?.pin;
-      const installedPins: ToolPin[] = [];
-      if (tool !== null) {
-        if (wanted === undefined) throw new Error(`arm ${request.arm} has no pin to install`);
-        await install(tool, wanted, root, configDir);
-        installedPins.push({ name: tool.name, pin: installedPin(tool, await readVersion(tool, root, configDir), wanted) });
-      }
-      const taskSet = await loadTaskSet(settings.taskSetDir);
-      const made: ClaudePrepared = {
-        dir: root,
-        runFolder,
-        configDir,
-        fixtureCommit: commit,
-        installedPins,
-        taskSetVersion: taskSet.version,
-        // The task-set manifest is the one source of the commit; a tag that resolves elsewhere is reported as `<tag>@<commit>`, the `fixture-tag-changed` void.
-        fixtureTag: commit === taskSet.fixtureCommit ? settings.fixtureTag : `${settings.fixtureTag}@${commit}`,
-        manifestVersion: settings.fleetManifestVersion,
-        dispose,
-      };
-      folders.set(made, made);
-      return made;
-    } catch (error) {
-      await dispose();
-      throw error;
-    }
+    const made = await steps.prepareRun(request, layout, reset);
+    remember(made);
+    return made;
   };
 
   const run = async (prepared: Prepared, request: RunRequest): Promise<RunResult> => {
     const folder = folderOf(prepared);
-    const skipped: RunResult = { exit: { kind: 'ok', code: 0 }, transcriptPath: null, harnessVersion: request.expected.harnessVersion, modelId: request.expected.modelId, tokens: { input: 0, cache: 0, output: 0 }, poolSessionId: null };
-    // The pin is read from disk again here, so a change since `prepare` is seen; a mismatch leaves the harness unstarted and the runner voids the run.
-    const tool = settings.tool !== null && settings.tool.name === request.arm ? settings.tool : null;
-    if (tool !== null) {
-      const wanted = request.expected.toolPins.find((pin) => pin.name === request.arm)?.pin;
-      folder.installedPins = [{ name: tool.name, pin: installedPin(tool, await readVersion(tool, folder.dir, folder.configDir), wanted) }];
-      if (folder.installedPins.some((pin) => pin.pin !== wanted)) return skipped;
-    }
+    const skipped = await steps.recheckPins(folder, request);
+    if (skipped !== null) return skipped;
+    const tool = toolFor(settings, request.arm);
     const prompt = await readFile(join(settings.taskSetDir, 'prompts', `${request.taskId}.md`), 'utf8');
     const sessionId = randomUUID();
     const allowed = [...settings.allowedTools, ...(tool?.kind === 'server' ? [`mcp__${tool.name}`] : [])];
@@ -485,12 +164,10 @@ export const makeClaudeBedrock = (settings: ClaudeBedrockSettings, deps: Depende
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     };
     const outcome = await spawn({ command: settings.claudeExecutable, args, cwd: folder.runFolder, env, stdin: prompt, timeoutMs: settings.timeLimitMs });
-    if (outcome.errorCode !== null && outcome.errorCode !== 'ENOSPC') throw new Error(`could not start ${settings.claudeExecutable} (${outcome.errorCode})`);
+    assertStarted(outcome, settings.claudeExecutable);
     const facts = parseStream(outcome.stdout);
     const kind = classify(outcome, facts);
-    const source = join(folder.configDir, 'projects', 'work', `${sessionId}.jsonl`);
-    const target = join(settings.transcriptOutDir, `${request.runId}.jsonl`);
-    const transcriptPath = await mkdir(settings.transcriptOutDir, { recursive: true }).then(() => cp(source, target)).then(() => target, () => null);
+    const transcriptPath = await steps.copyTranscript(join(folder.configDir, 'projects', 'work', `${sessionId}.jsonl`), request.runId);
     return {
       exit: { kind, code: outcome.timedOut ? -1 : (outcome.exitCode ?? -1) },
       transcriptPath,
@@ -501,18 +178,7 @@ export const makeClaudeBedrock = (settings: ClaudeBedrockSettings, deps: Depende
     };
   };
 
-  const check = async (prepared: Prepared, request: RunRequest): Promise<CheckResult> => {
-    const folder = folderOf(prepared);
-    const script = join(settings.taskSetDir, 'checks', `${request.taskId}.mjs`);
-    try {
-      await readFile(script);
-    } catch {
-      throw new Error(`check script ${script} cannot be read`);
-    }
-    const outcome = await spawn({ command: process.execPath, args: [script, folder.runFolder], cwd: folder.runFolder, env: pick(deps.env, START_NAMES), stdin: null, timeoutMs: settings.setupTimeLimitMs });
-    if (outcome.errorCode !== null || outcome.timedOut) throw new Error(`check script ${script} could not run (${outcome.errorCode ?? 'timed out'})`);
-    return outcome.exitCode === 0 ? 'pass' : 'fail';
-  };
+  const check = (prepared: Prepared, request: RunRequest): Promise<CheckResult> => steps.runCheck(folderOf(prepared), request);
 
   return { prepare, run, check };
 };

@@ -212,6 +212,7 @@ export const PUBLIC_FLAGS: ReadonlySet<string> = words(`
 export const PUBLIC_MCP_SERVERS: ReadonlySet<string> = words(`
   claude-in-chrome playwright puppeteer github gitlab filesystem fetch memory sequential-thinking context7 sentry
   linear notion slack postgres sqlite stripe cloudflare supabase vercel figma atlassian exa tavily brave-search oars oars-sessions
+  chrome-devtools claude_ai_Gmail claude_ai_Google_Calendar
 `);
 
 /**
@@ -222,6 +223,10 @@ export const PUBLIC_MCP_TOOLS: ReadonlyMap<string, ReadonlySet<string>> = new Ma
   Object.entries({
     'claude-in-chrome':
       'browser_batch computer file_upload find form_input get_page_text gif_creator javascript_tool list_connected_browsers navigate read_console_messages read_network_requests read_page resize_window select_browser shortcuts_execute shortcuts_list switch_browser tabs_close_mcp tabs_context_mcp tabs_create_mcp upload_image',
+    // Tool names from the server's own docs/tool-reference.md (ChromeDevTools/chrome-devtools-mcp). The claude_ai_Gmail and claude_ai_Google_Calendar
+    // connectors have no row: their tools have no public listing to cite, so they read as the literal.
+    'chrome-devtools':
+      'click drag fill fill_form handle_dialog hover press_key type_text upload_file click_at close_page list_pages navigate_page new_page select_page wait_for emulate resize_page performance_analyze_insight performance_start_trace performance_stop_trace get_network_request list_network_requests evaluate_script get_console_message get_css_styles lighthouse_audit list_console_messages screencast_start screencast_stop set_logpoints take_screenshot take_snapshot take_heapsnapshot analyze_heapsnapshot_contexts close_heapsnapshot compare_heapsnapshots get_heapsnapshot_class_nodes get_heapsnapshot_details get_heapsnapshot_dominators get_heapsnapshot_duplicate_strings get_heapsnapshot_edges get_heapsnapshot_object_details get_heapsnapshot_retainers get_heapsnapshot_retaining_paths get_heapsnapshot_summary query_heapsnapshot_objects mock_network remove_network_mock install_extension list_extensions reload_extension trigger_extension_action uninstall_extension execute_3p_developer_tool list_3p_developer_tools execute_webmcp_tool list_webmcp_tools get_os_app_state install_pwa launch_pwa uninstall_pwa configure_webauthn',
     playwright:
       'browser_click browser_close browser_console_messages browser_drag browser_evaluate browser_file_upload browser_fill_form browser_handle_dialog browser_hover browser_install browser_navigate browser_navigate_back browser_network_requests browser_press_key browser_resize browser_select_option browser_snapshot browser_tabs browser_take_screenshot browser_type browser_wait_for',
     puppeteer: 'puppeteer_click puppeteer_evaluate puppeteer_fill puppeteer_hover puppeteer_navigate puppeteer_screenshot puppeteer_select',
@@ -240,10 +245,15 @@ export const PUBLIC_MCP_TOOLS: ReadonlyMap<string, ReadonlySet<string>> = new Ma
   }).map(([server, tools]) => [server, words(tools)]),
 );
 
-/** Skills published for anyone to install. */
+/** Skills published for anyone to install: Anthropic's example skills, Claude Code's bundled skills (commands reference), and the `superpowers` plugin (obra/superpowers) and `frontend-design` plugin skills as `plugin:skill`. Exact names only. */
 export const PUBLIC_SKILLS: ReadonlySet<string> = words(`
   pdf docx xlsx pptx skill-creator frontend-design webapp-testing mcp-builder canvas-design algorithmic-art theme-factory brand-guidelines internal-comms slack-gif-creator web-artifacts-builder
   commit review code-review compact init schedule loop simplify security-review debug
+  claude-in-chrome update-config artifact-capabilities artifact-diagramming batch claude-api dataviz design design-sync doctor fewer-permission-prompts run run-skill-generator slides verify workflow-authoring
+  frontend-design:frontend-design
+  superpowers:brainstorming superpowers:diagnosing-superpowers superpowers:dispatching-parallel-agents superpowers:executing-plans superpowers:finishing-a-development-branch
+  superpowers:receiving-code-review superpowers:requesting-code-review superpowers:subagent-driven-development superpowers:systematic-debugging
+  superpowers:test-driven-development superpowers:using-git-worktrees superpowers:using-superpowers superpowers:verification-before-completion superpowers:writing-plans superpowers:writing-skills
 `);
 
 /** Packages a public registry serves and many projects use. No registry is asked at capture, so anything else reads as the literal, including a real public package missing here. */
@@ -267,7 +277,7 @@ export const isPublicMcpTool = (server: string, tool: string): boolean => PUBLIC
  * The version of every pinned snapshot and curated list below, as one number. Change a snapshot file or any curated list in vocab-pin.test.ts's
  * `curatedDigest`, and bump it: that test fails otherwise.
  */
-export const VOCAB_VERSION = '1';
+export const VOCAB_VERSION = '2';
 /** The day the snapshots were taken. It must equal `snapshotDate` in vocab/manifest.json, which the loader checks. */
 export const VOCAB_SNAPSHOT_DATE = '2026-11-04';
 /** How old a snapshot may be before `deposit` builds no batch (spec Section 7, `registry_max_age`). */
