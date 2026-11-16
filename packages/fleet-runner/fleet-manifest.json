@@ -1,0 +1,12 @@
+{
+  "version": "fleet-1",
+  "harnesses": [
+    {
+      "name": "claude-code-bedrock",
+      "version": "2.1.30",
+      "provider": "bedrock",
+      "region": "us-east-1",
+      "modelIds": ["sonnet-pinned-1"]
+    }
+  ]
+}

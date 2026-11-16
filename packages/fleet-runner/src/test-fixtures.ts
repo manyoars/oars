@@ -1,10 +1,9 @@
 // Shared test data: an 8-task manifest shaped like an order's slice of v1 (six category tasks and the two controls), a fleet manifest, and orders.
-import type { FleetManifest, TaskSetManifest } from './manifest.js';
+import { readFileSync } from 'node:fs';
+import { type FleetManifest, parseFleet, type TaskSetManifest } from './manifest.js';
 
-export const FLEET: FleetManifest = {
-  version: 'fleet-1',
-  harnesses: [{ name: 'claude-code-bedrock', version: '2.1.30', provider: 'bedrock', region: 'us-east-1', modelIds: ['sonnet-pinned-1'] }],
-};
+// The fleet manifest is the file in the package, so a test and the deposit command read one definition.
+export const FLEET: FleetManifest = parseFleet(readFileSync(new URL('../fleet-manifest.json', import.meta.url), 'utf8'));
 
 export const taskSet = (count = 8): TaskSetManifest => ({
   version: 'v1',

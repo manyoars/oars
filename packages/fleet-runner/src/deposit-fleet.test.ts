@@ -259,6 +259,46 @@ describe('deposit-fleet', () => {
   });
 });
 
+describe('the fleet manifest', () => {
+  const withFleet = async (text: string): Promise<string> => {
+    const file = join(root, 'fleet.json');
+    await writeFile(file, text);
+    return file;
+  };
+
+  it('reads the fleet manifest file in the package when --fleet is absent', async () => {
+    const s = await scene();
+    expect((await run(s, [], new Date(NEWEST_END(s.book) + 7 * HOUR))).code).toBe(0);
+  });
+
+  it('--fleet names another file, and a run book from another manifest version is refused', async () => {
+    const s = await scene();
+    const other = await withFleet(JSON.stringify({ version: 'fleet-2', harnesses: [] }));
+    const { code, lines } = await run(s, ['--fleet', other], new Date(NEWEST_END(s.book) + 7 * HOUR));
+    expect(code).toBe(1);
+    expect(lines.join('\n')).toContain('run book names manifest fleet-1 but the fleet manifest is fleet-2');
+    const same = await withFleet(JSON.stringify({ version: 'fleet-1', harnesses: [] }));
+    expect((await run(s, ['--fleet', same], new Date(NEWEST_END(s.book) + 7 * HOUR))).code).toBe(0);
+  });
+
+  it('a malformed fleet manifest is exit 2 with the file and the reason', async () => {
+    const s = await scene();
+    const bad = await withFleet('{"version": "fleet-1"}');
+    const { code, lines } = await run(s, ['--fleet', bad], new Date(NEWEST_END(s.book) + 7 * HOUR));
+    expect(code).toBe(2);
+    expect(lines.join('\n')).toMatch(/^deposit-fleet: fleet manifest .*fleet\.json: .*harnesses/);
+    expect(await logged()).toEqual([]);
+  });
+
+  it('a fleet manifest that is not JSON, or cannot be read, is exit 2', async () => {
+    const s = await scene();
+    expect((await run(s, ['--fleet', await withFleet('not json')], new Date(NEWEST_END(s.book) + 7 * HOUR))).code).toBe(2);
+    const missing = await run(s, ['--fleet', join(root, 'nope.json')], new Date(NEWEST_END(s.book) + 7 * HOUR));
+    expect(missing.code).toBe(2);
+    expect(missing.lines.join('\n')).toContain('nope.json');
+  });
+});
+
 describe('the run book row id and the CLI deposit path', () => {
   it('gives each batch the id the run book recorded: poolDeposit builds under contentHash of the account and the session', async () => {
     const s = await scene();
