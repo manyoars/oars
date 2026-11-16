@@ -79,6 +79,15 @@ const jsonLines = (text: string): unknown[] =>
     .filter((line) => line.trim() !== '')
     .map((line): unknown => JSON.parse(line));
 
+/** Parses one of a pack's JSON files; a file that is not JSON is a `ConfigError` naming the file and the pack, never a bare `SyntaxError`. */
+const parseJson = (text: string, file: string, packId: string): unknown => {
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new ConfigError(`${file} of pack ${packId} is not valid JSON.`);
+  }
+};
+
 const readText = async (file: string): Promise<string | undefined> => {
   try {
     return await readFile(file, 'utf8');
@@ -169,7 +178,7 @@ const loadPages = async (inputs: PackInputs): Promise<{ pages: Map<string, PackP
     const packId = entry.name;
     const listingText = await readText(join(inputs.packsDir, packId, LISTING_FILE));
     if (listingText === undefined) continue;
-    const listing = parseListing(packId, JSON.parse(listingText));
+    const listing = parseListing(packId, parseJson(listingText, LISTING_FILE, packId));
     let priceRef: string;
     try {
       priceRef = priceInputFor({ packId, title: listing.title }, '1').priceRef;
@@ -189,7 +198,7 @@ const loadPages = async (inputs: PackInputs): Promise<{ pages: Map<string, PackP
       }),
     );
     listings.set(packId, listing);
-    pages.set(packId, { packId, priceRef, title: listing.title, pack: summaryOf(JSON.parse(packText)), census: JSON.parse(censusText), card: card ?? null, terms });
+    pages.set(packId, { packId, priceRef, title: listing.title, pack: summaryOf(parseJson(packText, 'pack.json', packId)), census: parseJson(censusText, 'census.json', packId), card: card ?? null, terms });
   }
   return { pages, listings };
 };
