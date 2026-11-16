@@ -1,3 +1,5 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { http, HttpResponse } from 'msw';
 import { setupServer } from 'msw/node';
 import { afterAll, afterEach, beforeAll } from 'vitest';
@@ -70,4 +72,27 @@ export const customerRefOf = async (response: Response): Promise<string> => {
   const ref: unknown = typeof body === 'object' && body !== null ? Reflect.get(body, 'customerRef') : undefined;
   if (typeof ref !== 'string') throw new Error('The response carries no customerRef.');
   return ref;
+};
+
+const TAR_BLOCK = 512;
+const tarText = (bytes: Buffer, at: number, length: number): string => bytes.toString('utf8', at, at + length).replace(/\0.*$/s, '');
+
+/** What a buyer's tar reader does: writes each whole entry under `dir` and stops at the end blocks or the end of the bytes, whichever comes first. Returns the entry names. */
+export const untar = (bytes: Buffer, dir: string): string[] => {
+  const names: string[] = [];
+  let at = 0;
+  while (at + TAR_BLOCK <= bytes.length && bytes.subarray(at, at + TAR_BLOCK).some((byte) => byte !== 0)) {
+    const prefix = tarText(bytes, at + 345, 155);
+    const base = tarText(bytes, at, 100);
+    const name = prefix === '' ? base : `${prefix}/${base}`;
+    const size = parseInt(tarText(bytes, at + 124, 12), 8);
+    const body = bytes.subarray(at + TAR_BLOCK, at + TAR_BLOCK + size);
+    if (body.length < size) break;
+    const target = join(dir, name);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, body);
+    names.push(name);
+    at += TAR_BLOCK + Math.ceil(size / TAR_BLOCK) * TAR_BLOCK;
+  }
+  return names;
 };

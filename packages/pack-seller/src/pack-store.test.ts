@@ -14,18 +14,9 @@ import {
   loadPackInputs,
   OFFERS_FILE,
 } from './pack-store.js';
-import { cleanWorlds, makeWorld } from './test-world.js';
+import { cleanWorlds, envOf, makeWorld } from './test-world.js';
 
 afterEach(cleanWorlds);
-
-const envOf = (inputs: { packsDir: string; terms: string; owners: string; indexKey: string; storeDir: string; projectsDir: string }): NodeJS.ProcessEnv => ({
-  [ENV_PACKS_DIR]: inputs.packsDir,
-  [ENV_TERMS_FILE]: inputs.terms,
-  [ENV_OWNERS_FILE]: inputs.owners,
-  [ENV_INDEX_KEY_FILE]: inputs.indexKey,
-  [ENV_STORE_DIR]: inputs.storeDir,
-  [ENV_PROJECTS_DIR]: inputs.projectsDir,
-});
 
 describe('loadPackInputs', () => {
   it('reads the six operator-local paths, resolved', async () => {
@@ -82,17 +73,20 @@ describe('the pack store catalog', () => {
     expect(JSON.stringify(page)).not.toContain('objections');
   });
 
-  it('shows only the named pack.json fields: an extra field, the key id, and the objections hash stay off the page', async () => {
+  it('shows only the named pack.json fields: an extra field, the real key id, and the real objections hash stay off the page', async () => {
     const world = await makeWorld();
     const file = join(world.inputs.packsDir, 'alpha', 'preview', 'pack.json');
-    const written = (await world.store()).catalog.find('alpha')?.pack;
-    writeFileSync(file, JSON.stringify({ ...written, leaked: 'hunter2', keyId: 'k-1', objections: 'h-1' }));
+    const real: unknown = JSON.parse(readFileSync(file, 'utf8'));
+    const keyId: unknown = typeof real === 'object' && real !== null ? Reflect.get(real, 'keyId') : undefined;
+    const objections: unknown = typeof real === 'object' && real !== null ? Reflect.get(real, 'objections') : undefined;
+    if (typeof keyId !== 'string' || typeof objections !== 'string') throw new Error('The built pack.json has no keyId and objections.');
+    expect(keyId).not.toBe('');
+    expect(objections).not.toBe('');
+    writeFileSync(file, JSON.stringify({ ...(typeof real === 'object' ? real : {}), leaked: 'hunter2' }));
     const page = (await world.store()).catalog.find('alpha');
     expect(page?.pack).toMatchObject({ size: 5, minTurns: 1 });
-    expect(JSON.stringify(page)).not.toContain('leaked');
-    expect(JSON.stringify(page)).not.toContain('hunter2');
-    expect(JSON.stringify(page)).not.toContain('keyId');
-    expect(JSON.stringify(page)).not.toContain('objections');
+    const shown = JSON.stringify(page);
+    for (const hidden of ['leaked', 'hunter2', keyId, objections]) expect(shown).not.toContain(hidden);
   });
 
   it('refuses a manifest.jsonl row that is not JSON, naming the file and the pack', async () => {
