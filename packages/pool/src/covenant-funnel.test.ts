@@ -44,15 +44,17 @@ describe('queries/covenant-funnel.sql', () => {
     await installsOn(db, '2026-11-10', 1, 100);
     await installsOn(db, '2026-11-11', 101, 150);
     await installsOn(db, '2026-11-12', 251, 62);
-    const accounts = ['stopped', 'day27', 'day28', 'tiered', 'older', 'seeded'];
+    const accounts = ['stopped', 'day27', 'day28', 'tiered', 'older', 'seeded', 'fleet'];
     for (const id of accounts) await db.prepare('INSERT INTO accounts (id) VALUES (?)').bind(id).run();
     await db.prepare("UPDATE accounts SET source = 'input' WHERE id = 'seeded'").run();
+    await db.prepare("UPDATE accounts SET source = 'operator-fleet' WHERE id = 'fleet'").run();
     await accept(db, 'stopped', 'v2', START + DAY);
     await accept(db, 'day27', 'v2', START + 2 * DAY);
     await accept(db, 'day28', 'v2', START + 3 * DAY);
     await accept(db, 'tiered', 'v2', START + 4 * DAY);
     await accept(db, 'older', 'v1', START - 20 * DAY);
     await accept(db, 'seeded', 'v2', START + DAY);
+    await accept(db, 'fleet', 'v2', START + DAY);
     await deposit(db, 'stopped', 'd1', START + 2 * DAY);
     await deposit(db, 'day27', 'd1', START + 2 * DAY + 27 * DAY);
     await deposit(db, 'day28', 'd1', START + 3 * DAY + 28 * DAY);
@@ -60,6 +62,7 @@ describe('queries/covenant-funnel.sql', () => {
     await deposit(db, 'tiered', 'd2', null);
     await deposit(db, 'older', 'd1', START + 40 * DAY);
     await deposit(db, 'seeded', 'd1', START + DAY + 30 * DAY);
+    await deposit(db, 'fleet', 'd1', START + DAY + 28 * DAY);
   }, 60_000);
 
   afterAll(async () => {
