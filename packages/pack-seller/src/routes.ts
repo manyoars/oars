@@ -98,8 +98,8 @@ const offer = async (deps: RouteDeps, request: Request, caller: string, pack: Pa
 };
 
 /**
- * Step 9: balance, reserve one credit, rebuild when the objections moved, build under the buyer's key, stream, commit, record. The archive's end blocks go out only after the commit and the record,
- * so a failure before the commit leaves an archive without its terminator and a released reservation. The buyer key lives in this function's scope for the build and is never logged or stored.
+ * Step 9: balance, reserve one credit, rebuild when the objections moved, build under the buyer's key, stream, commit, record. The last entry and the archive's end blocks go out only after the commit and the record,
+ * so a failure before the commit leaves an archive that validate-pack rejects and a released reservation. The buyer key lives in this function's scope for the build and is never logged or stored.
  */
 const download = async (deps: RouteDeps, request: Request, pack: PackListing): Promise<Response> => {
   const ref = customerRefOf(request);
@@ -132,7 +132,8 @@ const download = async (deps: RouteDeps, request: Request, pack: PackListing): P
   async function* archive(): AsyncGenerator<Uint8Array> {
     let spent = false;
     try {
-      yield* entries(dir, names);
+      // The last entry (the manifest) is held back until the credit is spent, so a buyer cannot hold a complete pack that validate-pack accepts without paying for it.
+      yield* entries(dir, names.slice(0, -1));
       // An objection that landed during the stream makes this build stale: release instead of charging for a pack that must not be delivered.
       if (!(await deps.source.check(dir))) throw new Error('objections changed');
       const committed = await deps.billing.commit(reservationId);
@@ -144,6 +145,7 @@ const download = async (deps: RouteDeps, request: Request, pack: PackListing): P
         // The buyer is charged and holds the whole pack; the operator runs `deliver` by hand. The line names the pack, never the customer ref.
         deps.log(`delivery record failed after commit for pack ${pack.packId}: run deliver by hand`);
       }
+      yield* entries(dir, names.slice(-1));
       yield END_OF_ARCHIVE;
     } finally {
       if (!spent) await deps.billing.release(reservationId);
