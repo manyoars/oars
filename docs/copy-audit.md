@@ -44,7 +44,7 @@ rather than read row by row.
 | C30 | `docs/flags.md:12` | the pool commands reach `https://pool.manyoars.com` | as C1 | false (implies a live service) |
 | C31 | `docs/flags.md:28` | outbox before send, no automatic send: a batch is sent only by the hash `outbox` printed | `pool-nightly.ts:61` sends with `requireShown: false`: the nightly sends without a print | false |
 | C32 | `docs/flags.md:30` | the fetch cap is how a deposit buys access | `pool/src/bundle.ts:77-79`: an account with access has no cap; "A deposit that counts lifts the cap"; no money changes hands | false wording (no buying exists) |
-| C33 | `docs/flags.md:32` | nothing in this repository charges, buys, or sells | no payment, price, or checkout code in `packages/` (grep: none) | true |
+| C33 | `docs/flags.md:32` | nothing in this repository charges, buys, or sells | no payment, price, or checkout code in `packages/` (grep: none) | true when written; superseded 2026-11-15: `purchases.*` and `oars purchasing offer\|buy\|get` now buy, see `docs/flags.md` Money row |
 | C34 | `docs/telemetry.md:9` | the spool folder never holds more than 2 MiB | `spool.ts:9`, `:62`: each spool file stays under 1 MiB, but the folder also holds `install-id`, `settings.json`, and `last-send` | false (the cap is on the two spool files) |
 | C35 | `docs/telemetry.md:15` | with none set, the events go to the Many Oars pool | as C4 | false (pool not deployed) |
 | C36 | `docs/telemetry.md:18` | batches of at most 250, a 10 second timeout, no redirects followed; the server stores no IP address or user agent | `send.ts:18`, `:21`, `:73`; `pool/src/telemetry.ts:118` keeps `{received, account?, batch}` only | true |
