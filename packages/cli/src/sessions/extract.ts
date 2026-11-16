@@ -7,7 +7,7 @@ import { posix } from 'node:path';
 import { ACTION_TABLES, actionOf, shellOf, type ActionTable, type CanonicalAction } from './actions.js';
 import { exploreCount, strataOf } from './strata.js';
 import { closedFrame, frameIdOf, repoFilesFromIndex, repoSizeOf, stackOf, utcDay } from './frame.js';
-import { argClassOf, argFeaturesOf, argNamesOf, argValuesOf, changeKindOf, diffShapeOf, targetClassOf, templatesOf, variableOf, type CommandWords, type ComparedCall } from './call-shape.js';
+import { argClassOf, argFeaturesOf, argNamesOf, argValuesOf, changeKindOf, diffShapeOf, targetClassOf, templatesOf, variableOf, type CommandWords, type ComparedCall, type TargetClass } from './call-shape.js';
 import { CLOSED_ARG_VALUES, LITERAL, type RepoSize } from './public-vocabulary.js';
 import { linkSteps } from './graph.js';
 import { callIdentity, shellIdentity, UNREAD_SHELL, type WordOfCommand } from './identity.js';
@@ -1602,6 +1602,9 @@ export const targetOf = (
   return { target: target === '' ? null : redact(target), base: null };
 };
 
+/** The class of what a {@link targetOf} result aimed at, which capture stores and the failure hook looks a same-target read up by. `none` for a call with no path target. */
+export const classOfAimed = (aimed: { base: TargetBase | null; key?: string }): TargetClass => targetClassOf(aimed.key, aimed.base);
+
 /** The `n` capture gives each call of a transcript, by tool-use id, the first copy of a repeated id winning; a subagent's steps name their parent by it without capturing the parent again. */
 export const callPositions = (text: string): Map<string, number> => {
   const positions = new Map<string, number>();
@@ -2018,7 +2021,7 @@ export const captureSession = (input: ExtractInput): Capture => {
           targetBase: aimed.base,
           keys: Object.keys(toolInput).sort(),
           // The class reads the key the target is hashed on (relative to the repository or the cwd), never the absolute path: the folders above a repository say nothing about the file.
-          targetClass: targetClassOf(aimed.key, aimed.base),
+          targetClass: classOfAimed(aimed),
           argClass: argClassOf(toolInput),
           argFeatures,
           ...(argValues.length === 0 ? {} : { argValues }),

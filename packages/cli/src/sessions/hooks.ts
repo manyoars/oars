@@ -9,12 +9,13 @@ import { frameWords, HOOK_HARNESS, recallFields } from '../telemetry/fields.js';
 import { cursorRoot } from './cursor.js';
 import { SOURCES, sourceLabel } from './sources.js';
 import { ACTION_TABLES, actionOf } from './actions.js';
-import { errorCodeOf, signatureOf } from './extract.js';
+import { classOfAimed, errorCodeOf, signatureOf, targetOf } from './extract.js';
+import { makeRepoRoot } from './repo-root.js';
 import { recordCandidates } from './candidates.js';
 import { appendHookCall } from './hook-calls.js';
 import { contextBlock, readIndex, type HookIndex } from './hook-index.js';
 import type { Recall } from './recall-object.js';
-import { bundleNext, frameKeyOf, lastTable, mergePositions, positionsRecall, recoveryDecision, recoveryRecall, signatureRecall, isSignatureRetry, type Asker, type NextInput, type NextReads } from './recall-next.js';
+import { bundleNext, frameKeyOf, lastTable, mergePositions, positionsRecall, recoveryDecision, recoveryRecall, sameTargetServed, signatureRecall, isSignatureRetry, type Asker, type NextInput, type NextReads } from './recall-next.js';
 import { pushRecall, tailOf } from './recall-push.js';
 import { statedAt, statedOf } from './transcript-tail.js';
 import { toolShapeId } from './recall-reads.js';
@@ -140,6 +141,14 @@ const failureText = (input: Input): string | undefined => {
   return response !== undefined && /^Exit code \d+/.test(response) ? response : undefined;
 };
 
+/** The class of the path the failed call aimed at, by the rule capture stores it under (`classOfAimed`); `none` for a call with no path, which no same-target read is keyed on. */
+const targetClassOfCall = (input: Input): string => {
+  const toolInput = isRecord(input.tool_input) ? input.tool_input : {};
+  const cwd = str(input.cwd);
+  const root = cwd === undefined || cwd === '' ? null : makeRepoRoot()(cwd);
+  return classOfAimed(targetOf(str(input.tool_name) ?? '', toolInput, cwd, '', (text) => text, root));
+};
+
 /**
  * The recovery edge (Item 2): what followed a failure of this action and error class, from the kept bundle for the session's setup and then the local pool, held to A33's
  * holdback like every next-node read. A same-step retry or a local edge under the floor says nothing, signature line included; the signature line answers only a failure no cell covers.
@@ -156,8 +165,11 @@ const postTool = async (runtime: SessionsRuntime, input: Input, now: () => numbe
   const code = errorCodeOf(text);
   const decision = recoveryDecision(bundle, index === undefined ? undefined : { recovery: index.recoveryByFrame?.[frameKeyOf(prepared.asker)] ?? {}, poolVersion: index.at }, action, code);
   const event = str(input.hook_event_name) ?? 'PostToolUseFailure';
-  if (decision.kind === 'serve') {
-    const recall = await recoveryRecall(prepared.next, prepared.asker, action, code, decision);
+  const target = targetClassOfCall(input);
+  const same = target === 'none' ? undefined : sameTargetServed(bundle?.reads, code, action, target);
+  if (decision.kind === 'serve' || same !== undefined) {
+    // The same-target line goes after the edge line in one row; with no edge it stands alone, and then it also stands in for the signature line.
+    const recall = await recoveryRecall(prepared.next, prepared.asker, action, code, decision.kind === 'serve' ? decision : { edges: [], poolVersion: bundle?.poolVersion ?? '' }, same);
     return recall.arm === 'shown' ? { output: additional(event, recall.answer.rendered), hit: true, queried: true, recall } : { hit: true, queried: true, recall };
   }
   // A same-step retry, a local cell too thin to serve, and a cell whose top is that nothing followed all end the lookup: a cell that exists but says nothing is not a reason to fall back to a signature count.
