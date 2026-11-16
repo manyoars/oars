@@ -25,11 +25,12 @@ const PUBLIC_DESCRIPTION = 'The Many Oars API: register, read, configure, and de
 
 // The platform's spec also carries operations the public one withholds. public-operations.json selects
 // operations, but this is the backstop that a regeneration cannot get past: a listed operation is dropped when its path
-// is under /billing, one of its tags starts with "Billing", or it reaches a component whose name is a withheld name. The
+// or one of its tags names a payout, or it reaches a component whose name does. Payouts are the one money side that stays
+// private; offers, purchases, customers, and credits are public (V22 is lifted for Many Oars, 2026-11-12). The
 // components only that operation reached go with it, because the closure below starts from the operations that are kept.
-const WITHHELD_PATH = /^\/billing(?:\/|$)/;
-const WITHHELD_TAG = /^billing/i;
-const WITHHELD_COMPONENT = /billing|price|purchas|charge|credit|payout|payment/i;
+const WITHHELD_PATH = /payout/i;
+const WITHHELD_TAG = /payout/i;
+const WITHHELD_COMPONENT = /payout/i;
 // Kept operations still carry a 402 response and a few texts the public spec withholds; the status and the texts are the
 // platform's, so the public spec drops the one and rewrites the others here. Each phrase is the platform's exact wording:
 // wording that changes there stops matching, and the deny-list test over the generated files names what to add.
