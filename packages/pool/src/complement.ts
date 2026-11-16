@@ -26,6 +26,8 @@ interface Family {
   /** Where the family has no whole cell, the count its parts sum to that no cell holds (an action's calls, the calls that send a key, or a count of its own), shared by the families that sum to it: an unknown of the rank check (`determinedOf`). */
   total: string | null;
   parts: Cell[];
+  /** Where the rule's parts leave some of the whole's count in no cell (`FamilyRule.remainder`), that remainder as an unknown of the rank check, so the parts never sum to the whole; otherwise `null`. */
+  remainder: string | null;
   /** The families that count the same total (`Placement.echoes`), once all are built. */
   echoes: Family[];
 }
@@ -51,6 +53,9 @@ const callsTotal = (action: string, key: string, cell: Pick<Cell, 'frameBucket' 
   JSON.stringify([key === '' ? ACTION_CALLS : 'key-calls', action, key, cell.frameBucket, cell.grain, cell.day, exposureOfCell(cell)]);
 
 const ACTION_CALLS = 'action-calls';
+
+/** The tag of a family's remainder (`Family.remainder`), so no total can make the same term and it is never an action's calls. */
+const REMAINDER = 'remainder';
 
 /** Whether a total (`callsTotal`) is an action's calls. */
 const isActionCalls = (total: string): boolean => total.startsWith(`["${ACTION_CALLS}"`);
@@ -96,7 +101,14 @@ const smallest = (a: Cell, b: Cell): number => clustersOf(a) - clustersOf(b) || 
  * emitter, so a relation this table leaves out shows there as a leak. A rule names the
  * families a cell belongs to and whether it is the whole of one (a cell holding the family's total) or a part of it; a family with no whole cell has a total the reader still has from another read.
  */
-const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, motif: Motif | undefined) => Placement[] }[] = [
+/** A rule that places cells in families. `remainder` marks a rule whose parts do not partition the whole: some of the whole's count is in no cell, so no set of parts equals it. */
+interface FamilyRule {
+  name: string;
+  remainder?: true;
+  placements: (cell: Cell, motif: Motif | undefined) => Placement[];
+}
+
+const FAMILY_RULES: readonly FamilyRule[] = [
   // The class cells of one facet partition (`FACET_PARTITIONS`) split one count, named there for each facet; the total is not a cell of the family.
   {
     name: 'facet',
@@ -181,9 +193,11 @@ const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, motif: Mot
     },
   },
   // A recovery edge cell (`recovery:<code>/<failed>><next>`) counts the failed calls a next call followed; the same-target cells (`recoverytarget:<code>/<failed>/<target>><step>`) split those calls by the failed call's target
-  // class, a `retry` step being the failed action again. So the edge is the whole of the same-target cells with that code, failed action, and next step. The calls with no target are no cell, and are the part's unknown remainder.
+  // class, a `retry` step being the failed action again. So the edge is the whole of the same-target cells with that code, failed action, and next step. The calls with no target are no cell, and are the parts' unknown remainder:
+  // the parts never sum to the edge, so a thin part never withholds the edge, and the edge read a client already gets stays served beside the new, thinner cells.
   {
     name: 'recovery-target',
+    remainder: true,
     placements: (cell, motif) => {
       const edge = motif === undefined || motif.cls === null ? null : parseRecoveryClass(motif.cls);
       const part = motif === undefined || motif.cls === null ? null : parseRecoveryTargetClass(motif.cls);
@@ -215,7 +229,7 @@ const familiesOf = (held: readonly Cell[], motifs: readonly Motif[]): Family[] =
   for (const cell of held) {
     for (const { rule, families } of byRule) {
       for (const { family, role, total, echoes } of rule.placements(cell, levels.get(cell.motifId))) {
-        const made = families.get(family) ?? { rule: rule.name, whole: null, total: total ?? null, parts: [], echoes: [] };
+        const made = families.get(family) ?? { rule: rule.name, whole: null, total: total ?? null, parts: [], remainder: rule.remainder === true ? JSON.stringify([REMAINDER, family]) : null, echoes: [] };
         families.set(family, made);
         byKey.set(family, made);
         if (role === 'whole') made.whole = cell;
@@ -234,7 +248,7 @@ const familiesOf = (held: readonly Cell[], motifs: readonly Motif[]): Family[] =
  * withheld, its smallest served one, in two cases: it holds a sub-floor part and none of its parts is withheld yet, or exactly one of its parts is unserved, sub-floor or withheld by another family. A withheld part is at or
  * above the floor but still hides a count another family protects, so a family that leaves it as the one unserved part would give it back by subtraction, and the sub-floor cell it shields with it. The whole of a family
  * stays when it has one. A cell can be a part of one family and the whole of another, so the rule repeats until it adds nothing. Where a lone unserved part has no served part beside it, the whole is withheld instead:
- * it is that part's count. A family with neither a whole nor a total states no count to subtract from, so it is left alone.
+ * it is that part's count, except in a family whose parts leave a remainder in no cell (`FamilyRule.remainder`), where it is not. A family with neither a whole nor a total states no count to subtract from, so it is left alone.
  *
  * A sub-floor part held to a higher floor than the lowest of its family (a long-tail name under a clear shape, which carries no identity; a long-tail model beside a listed one in an action's one-step shape cells) is not
  * hidden by withholding a part that is served only on that lower floor: a part that hides it, withheld already or withheld now, must itself be at or above that bar on the accounts that have stood (`Floorplan.standingOf`),
@@ -251,7 +265,7 @@ const withholdLocally = (families: readonly Family[], byTotal: ReadonlyMap<strin
   for (let changed = true; changed; ) {
     changed = false;
     for (const family of families) {
-      const { whole, total, parts, echoes } = family;
+      const { whole, total, parts, remainder, echoes } = family;
       if (whole === null && total === null) continue;
       if (whole !== null && (!served(whole) || withheld.has(whole))) continue;
       const bar = Math.max(0, ...parts.filter((part) => !served(part)).map(floorOf));
@@ -276,7 +290,8 @@ const withholdLocally = (families: readonly Family[], byTotal: ReadonlyMap<strin
         }
         continue;
       }
-      if (unserved.length !== 1) continue;
+      // A family with a remainder is never completed by its parts, so a lone unserved part is not the whole's count.
+      if (unserved.length !== 1 || remainder !== null) continue;
       // With no served part left to join it, a lone unserved part equals its whole, so the whole goes too; and it equals the total that the families echoing it count, so each of those gives up its smallest served part.
       for (const gone of [whole, ...echoes.map((echo) => echo.parts.filter((part) => served(part) && !withheld.has(part)).sort(smallest)[0])]) {
         if (gone === null || gone === undefined || withheld.has(gone)) continue;
@@ -355,13 +370,15 @@ const determinedOf = (equations: readonly Row[], known: (term: Term) => boolean,
   return new Map([...pivots].flatMap(([column, row]): [Cell, Row][] => (typeof column !== 'string' && [...row.keys()].every((term) => term === column || known(term)) ? [[column, row]] : [])));
 };
 
-/** One equation per family: its whole, or its total where it has none, less its parts. A whole with no part held (a shape cell, which has no day cells) states nothing. Grouped into the sets that share no term. */
+/** One equation per family: its whole, or its total where it has none, less its parts and its remainder. A whole with no part held (a shape cell, which has no day cells) states nothing. Grouped into the sets that share no term. */
 const systemsOf = (families: readonly Family[]): Row[][] => {
-  const equations = families.flatMap(({ whole, total, parts }): Row[] => {
+  const equations = families.flatMap(({ whole, total, parts, remainder }): Row[] => {
     const head = whole ?? total;
     if (head === null || parts.length === 0) return [];
     const row: Row = new Map([[head, 1n]]);
     for (const part of parts) row.set(part, (row.get(part) ?? 0n) - 1n);
+    // The remainder is a term of this equation alone and never known, so the equation joins its cells into one system but determines none of them.
+    if (remainder !== null) row.set(remainder, -1n);
     return [row];
   });
   // Union-find over the terms, so each elimination runs over one connected set of cells.
