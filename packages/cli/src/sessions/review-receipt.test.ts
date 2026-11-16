@@ -5,8 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { run } from '../cli.js';
 import { harness } from '../test-support.js';
 import { session, store, tool } from './pool-fixture.js';
+import { captureSession } from './extract.js';
+import { makeRedactor } from './redact.js';
 import { familyOf, recentSessions, resolveSession, reviewReceiptOf, reviewReceiptText, scrub, VERIFICATION_FAMILIES } from './review-receipt.js';
-import type { ToolObservation } from './schema.js';
+import { HARNESS_ERROR_CLASSES, type ToolObservation } from './schema.js';
 import type * as StoreModule from './store.js';
 import type { Store } from './store.js';
 
@@ -16,8 +18,23 @@ vi.mock('./store.js', async (original) => ({ ...(await original<typeof StoreModu
 const VERSION = '9.9.9';
 const HOME = 'C:\\Users\\alice';
 
-const call = (id: string, n: number, templates: string[], over: Partial<ToolObservation> = {}): ToolObservation =>
-  tool(id, n, 'Bash', { templates, segments: templates.map((word) => ({ run: word, read: true })), ...over });
+/** A shell call of the given commands, each as the plain words capture stores in `segments[].run` (no flags, no paths). */
+const call = (id: string, n: number, runs: string[], over: Partial<ToolObservation> = {}): ToolObservation =>
+  tool(id, n, 'Bash', { templates: runs, segments: runs.map((word) => ({ run: word, read: true })), ...over });
+
+const redact = makeRedactor();
+const rawLine = (type: string, content: unknown): string => JSON.stringify({ type, timestamp: '2026-06-10T00:00:00.000Z', cwd: '/w', message: { role: type, model: 'm', content } });
+/** The calls capture stores for raw Bash lines, so a family is proven on what the real writer produces and not on a hand-built shape. */
+const captured = (...commands: string[]): { store: Store; id: string } => {
+  const text = [rawLine('user', 'go'), ...commands.map((command, index) => rawLine('assistant', [{ type: 'tool_use', id: `c${String(index)}`, name: 'Bash', input: { command } }]))].join('\n');
+  const held = captureSession({ text, session: 'cap', project: 'p', rev: 1, at: '', bytes: 0, redact, harness: 'claude-code' });
+  return { store: store({ sessions: [held.session], tools: held.tools }), id: 'cap' };
+};
+const listed = (...commands: string[]): string[] => {
+  const { store: s, id } = captured(...commands);
+  const found = resolveSession(s, id);
+  return found === undefined ? [] : reviewReceiptOf(s, found, HOME).rows.map((row) => row.command);
+};
 
 /** One Claude Code session: a test that passed, a build that failed with exit 1, a hidden type check, a call with no result, a signal, and two other commands. */
 const fixture = (): Store =>
@@ -29,45 +46,48 @@ const fixture = (): Store =>
     ],
     tools: [
       call('s1', 0, ['git status']),
-      call('s1', 1, ['npx vitest run <path>']),
+      call('s1', 1, ['npx vitest run']),
       call('s1', 2, ['npm run build'], { status: 'error', errorCode: '1' }),
-      call('s1', 3, ['tsc --noEmit', 'echo <text>'], { segments: [{ run: 'tsc', read: false }, { run: 'echo', read: true }] }),
-      call('s1', 4, ['eslint <path>'], { status: 'none' }),
+      call('s1', 3, ['tsc', 'echo'], { segments: [{ run: 'tsc', read: false }, { run: 'echo', read: true }] }),
+      call('s1', 4, ['eslint'], { status: 'none' }),
       call('s1', 5, ['ls']),
-      call('s1', 6, ['pytest -k <ident>'], { status: 'error', errorCode: 'signal' }),
+      call('s1', 6, ['pytest'], { status: 'error', errorCode: 'signal' }),
       call('s2', 0, ['ls']),
       call('s3', 0, ['cargo test'], { status: 'ok' }),
     ],
   });
 
 describe('verification families', () => {
+  // Each is the `run` capture stores: the program and its plain words, no flags.
   const cases: Array<[string, string]> = [
     ['npm test', 'test'],
     ['npm run test:unit', 'test'],
-    ['npx vitest run <path>', 'test'],
-    ['jest --ci', 'test'],
-    ['python -m pytest -k <ident>', 'test'],
-    ['go test <path>', 'test'],
+    ['npx vitest run', 'test'],
+    ['jest', 'test'],
+    ['python pytest', 'test'],
+    ['go test', 'test'],
     ['cargo test', 'test'],
-    ['mvn verify', 'test'],
+    ['mvn core verify', 'test'],
     ['gradle test', 'test'],
     ['just check', 'test'],
     ['npm run build', 'build'],
     ['cargo build', 'build'],
-    ['eslint <path>', 'lint'],
-    ['ruff check <path>', 'lint'],
+    ['eslint', 'lint'],
+    ['ruff check', 'lint'],
     ['npm run lint', 'lint'],
-    ['tsc --noEmit', 'type check'],
-    ['npx mypy <path>', 'type check'],
-    ['prettier --check <path>', 'format check'],
-    ['cargo fmt -- --check', 'format check'],
+    ['tsc', 'type check'],
+    ['npx mypy', 'type check'],
+    ['prettier src', 'format check'],
+    ['cargo fmt', 'format check'],
   ];
   it.each(cases)('lists %s as a %s command', (command, family) => {
     expect(familyOf(command)).toBe(family);
   });
   it('has a case above for every family and leaves other commands out', () => {
     expect(new Set(cases.map((entry) => entry[1]))).toEqual(new Set(VERIFICATION_FAMILIES.map((entry) => entry.family)));
-    for (const other of ['git status', 'ls', 'npm install', 'echo test', 'prettier --write <path>', 'cat testing.txt']) expect(familyOf(other)).toBeUndefined();
+    expect(familyOf('prettier src', false)).toBeUndefined();
+    expect(familyOf('ruff format .')).toBe('format check');
+    for (const other of ['git status', 'ls', 'npm install', 'echo test', 'cat testing.txt']) expect(familyOf(other)).toBeUndefined();
   });
 });
 
@@ -88,6 +108,11 @@ describe('scrub', () => {
     expect(scrub('npm test\necho SECRET-SECOND-LINE', HOME)).toBe('npm test…');
     expect(scrub(`npm ${'x'.repeat(200)}`, HOME)).toHaveLength(121);
   });
+  it('cuts only a path that starts a word, so a relative path and a URL keep their slashes', () => {
+    expect(scrub('vitest src/a.ts', HOME)).toBe('vitest src/a.ts');
+    expect(scrub('curl https://x.example/y', HOME)).toBe('curl https://x.example/y');
+    expect(scrub('vitest /abs/a.ts ./rel', HOME)).toBe('vitest <path> ./rel');
+  });
   it('leaves a one-character home alone', () => {
     expect(scrub('npm test', '/')).toBe('npm test');
   });
@@ -104,13 +129,13 @@ describe('reviewReceiptOf', () => {
   it('lists verification commands in order with the observed result and counts the rest', () => {
     const r = receipt('s1');
     expect(r.rows).toEqual([
-      { order: 2, family: 'test', command: 'npx vitest run <path>', result: 'exit 0' },
+      { order: 2, family: 'test', command: 'npx vitest run', result: 'exit 0' },
       { order: 3, family: 'build', command: 'npm run build', result: 'exit 1' },
-      { order: 4, family: 'type check', command: 'tsc --noEmit', result: 'not recorded' },
-      { order: 5, family: 'lint', command: 'eslint <path>', result: 'not recorded' },
-      { order: 7, family: 'test', command: 'pytest -k <ident>', result: 'failed' },
+      { order: 4, family: 'type check', command: 'tsc', result: 'not recorded' },
+      { order: 5, family: 'lint', command: 'eslint', result: 'not recorded' },
+      { order: 7, family: 'test', command: 'pytest', result: 'failed' },
     ]);
-    expect(r).toMatchObject({ date: '2026-11-10', harness: 'claude-code', model: 'claude-opus-x', calls: 7, other: 2 });
+    expect(r).toMatchObject({ date: '2026-11-10', harness: 'claude-code', model: 'claude-opus-x', calls: 7, other: 3 });
   });
 
   it('prints a Codex call as not recorded, never as passed', () => {
@@ -138,13 +163,13 @@ describe('reviewReceiptOf', () => {
         '',
         '| Command | Result | Call # |',
         '| --- | --- | --- |',
-        '| `npx vitest run <path>` | exit 0 | 2 |',
+        '| `npx vitest run` | exit 0 | 2 |',
         '| `npm run build` | exit 1 | 3 |',
-        '| `tsc --noEmit` | not recorded | 4 |',
-        '| `eslint <path>` | not recorded | 5 |',
-        '| `pytest -k <ident>` | failed | 7 |',
+        '| `tsc` | not recorded | 4 |',
+        '| `eslint` | not recorded | 5 |',
+        '| `pytest` | failed | 7 |',
         '',
-        '5 verification commands (1 exit 0, 1 exit 1, 1 failed, 2 not recorded); 2 other commands not shown.',
+        '5 verification commands (1 exit 0, 1 exit 1, 1 failed, 2 not recorded); 3 other commands not shown.',
         '',
         '---',
         "What this is: commands the session ran and the results it observed on the author's machine. It is not proof the change is correct, and it maps to no pull request. Made locally by oars: `oars sessions receipt`  |  oars 9.9.9",
@@ -172,6 +197,54 @@ describe('reviewReceiptOf', () => {
   });
 });
 
+describe('what capture really stores', () => {
+  it('lists each family from raw Bash lines through captureSession', () => {
+    expect(listed('npm run build')).toEqual(['npm run build']);
+    expect(listed('npx vitest run src/a.test.ts')).toEqual(['npx vitest run']);
+    expect(listed('just check')).toEqual(['just check']);
+    expect(listed('python -m pytest -k foo')).toEqual(['python pytest foo']);
+    expect(listed('cargo fmt -- --check')).toEqual(['cargo fmt --check']);
+    expect(listed('npm run lint')).toEqual(['npm run lint']);
+    expect(listed('tsc --noEmit')).toEqual(['tsc']);
+    expect(listed('npm run test:unit', 'go test ./...', 'cargo test --all', 'pnpm exec vitest', 'uv run pytest', 'ruff check .', 'prettier --check src', 'ruff format --check .')).toEqual([
+      'npm run test:unit',
+      'go test',
+      'cargo test',
+      'pnpm exec vitest',
+      'uv run pytest',
+      'ruff check .',
+      'prettier src --check',
+      'ruff format . --check',
+    ]);
+  });
+
+  it('does not list a formatter that rewrites files, or a command outside the list', () => {
+    expect(listed('cargo fmt', 'prettier --write src', 'ruff format .', 'git status', 'npm install')).toEqual([]);
+  });
+
+  it('counts commands, not calls, for the unlisted: a mixed call adds one for its other command', () => {
+    const { store: s, id } = captured('npm test && git push', 'git status && ls', 'ls');
+    const found = resolveSession(s, id);
+    expect(found === undefined ? null : reviewReceiptOf(s, found, HOME)).toMatchObject({ rows: [{ command: 'npm test' }], other: 4 });
+  });
+});
+
+describe('a call the harness refused', () => {
+  it.each(HARNESS_ERROR_CLASSES)('prints %s as not recorded, never failed', (code) => {
+    const s = store({ sessions: [session('h')], tools: [call('h', 0, ['npm test'], { status: 'error', errorCode: code })] });
+    expect(reviewReceiptOf(s, session('h'), HOME).rows).toEqual([{ order: 1, family: 'test', command: 'npm test', result: 'not recorded' }]);
+  });
+});
+
+describe('a sidechain call', () => {
+  it('is left out of the table, the count of calls, and the order numbers', () => {
+    const s = store({ sessions: [session('c')], tools: [call('c', 0, ['npm run lint'], { side: true }), call('c', 1, ['npm test']), call('c', 2, ['npm run build'])] });
+    const r = reviewReceiptOf(s, session('c'), HOME);
+    expect(r.rows.map((row) => [row.command, row.order])).toEqual([['npm test', 1], ['npm run build', 2]]);
+    expect(r.calls).toBe(2);
+  });
+});
+
 describe('session references', () => {
   it('resolves an exact id or a unique prefix, and skips a superseded session', () => {
     const s = store({ sessions: [session('abc-1'), session('abc-2'), session('xyz-1'), session('old', { supersededBy: 'xyz-1' })] });
@@ -180,6 +253,14 @@ describe('session references', () => {
     expect(resolveSession(s, 'abc')).toBeUndefined();
     expect(resolveSession(s, 'old')).toBeUndefined();
     expect(resolveSession(s, '')).toBeUndefined();
+  });
+  it('orders sessions of one day by their time and prints the date only', () => {
+    const day = store({ sessions: [session('late', { tsFirst: '2026-11-05T18:00:00.000Z' }), session('early', { tsFirst: '2026-11-05T08:00:00.000Z' }), session('aa', { tsFirst: '2026-11-04T23:00:00.000Z' })] });
+    expect(recentSessions(day)).toEqual([
+      { session: 'late', date: '2026-11-05' },
+      { session: 'early', date: '2026-11-05' },
+      { session: 'aa', date: '2026-11-04' },
+    ]);
   });
   it('lists the five most recent sessions by date, newest first', () => {
     const many = store({ sessions: ['a', 'b', 'c', 'd', 'e', 'f'].map((id, index) => session(id, { tsFirst: `2026-11-0${String(index + 1)}T00:00:00.000Z` })).concat(session('z')) });

@@ -8,28 +8,40 @@ import { dirname, resolve } from 'node:path';
 import type { Outcome } from '../cli.js';
 import { CliError, ExitCode } from '../errors.js';
 import type { SessionsDeps } from './command.js';
-import { harnessOf, type SessionObservation, type ToolObservation } from './schema.js';
+import { HARNESS_ERROR_CLASSES, harnessOf, type SessionObservation, type ShellSegment, type ToolObservation } from './schema.js';
 import { loadStore, type Store } from './store.js';
 
-const RUNNER = String.raw`(?:(?:npx|bunx|pnpm\s+exec|pnpm\s+dlx|yarn|python3?\s+-m|uv\s+run|poetry\s+run)\s+)?`;
+// A `segments[].run` is the program and its plain words, so `python -m pytest` is `python pytest` and `npx vitest run <file>` is `npx vitest run`.
+const RUNNER = String.raw`(?:(?:npx|bunx|pnpm\s+exec|pnpm\s+dlx|yarn|python3?|uv\s+run|poetry\s+run)\s+)?`;
 const SCRIPT = String.raw`(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?`;
 
-/** The commands a receipt lists, by family: each pattern is read against one command template from its first word. Anything else is counted, not listed. */
+/**
+ * The commands a receipt lists, by family: each pattern is read against one command's `run` from its first word, so a flag is never in it. A formatter lists only when the
+ * call shows its check flag (`FORMAT_CHECK_TEMPLATE`), because `prettier` and `cargo fmt` also rewrite files. Anything else is counted, not listed.
+ */
 export const VERIFICATION_FAMILIES: ReadonlyArray<{ family: string; pattern: RegExp }> = [
-  { family: 'test', pattern: new RegExp(`^(?:${SCRIPT}test(?::\\S+)?|${RUNNER}(?:vitest|jest|pytest|mocha)|go\\s+test|cargo\\s+(?:test|nextest)|dotnet\\s+test|mvn|gradle|gradlew|just\\s+(?:test|check))(?:\\s|$)`) },
+  { family: 'test', pattern: new RegExp(`^(?:${SCRIPT}test(?::\\S+)?|${RUNNER}(?:vitest|jest|pytest|mocha)|go\\s+test|cargo\\s+(?:test|nextest)|dotnet\\s+test|mvn|mvnw|gradle|gradlew|just\\s+(?:test|check))(?:\\s|$)`) },
   { family: 'build', pattern: new RegExp(`^(?:${SCRIPT}build(?::\\S+)?|go\\s+build|cargo\\s+build|dotnet\\s+build|just\\s+build)(?:\\s|$)`) },
-  { family: 'lint', pattern: new RegExp(`^(?:${SCRIPT}lint(?::\\S+)?|${RUNNER}(?:eslint|ruff(?:\\s+check)?|flake8|golangci-lint)|cargo\\s+clippy)(?:\\s|$)`) },
+  { family: 'lint', pattern: new RegExp(`^(?:${SCRIPT}lint(?::\\S+)?|${RUNNER}(?:eslint|ruff(?!\\s+format)(?:\\s+check)?|flake8|golangci-lint)|cargo\\s+clippy)(?:\\s|$)`) },
   { family: 'type check', pattern: new RegExp(`^(?:${SCRIPT}(?:typecheck|check)|${RUNNER}(?:tsc|mypy|pyright))(?:\\s|$)`) },
-  { family: 'format check', pattern: new RegExp(`^(?:${RUNNER}(?:prettier|ruff\\s+format|black)\\s+[^\\n]*(?:--check|-c|--list-different)|cargo\\s+fmt\\s+[^\\n]*--check|gofmt\\s+-l)(?:\\s|$)`) },
+  { family: 'format check', pattern: new RegExp(`^(?:${RUNNER}(?:prettier|ruff\\s+format|black)|cargo\\s+fmt)(?:\\s|$)`) },
 ];
 
-export const familyOf = (command: string): string | undefined => VERIFICATION_FAMILIES.find((entry) => entry.pattern.test(command))?.family;
+/** The check flag a formatter's template keeps (`prettier --check <ident>`), or the `--` tail of `cargo fmt -- --check`, whose flag capture turns into a slot. */
+export const FORMAT_CHECK_TEMPLATE = /(?:^|\s)(?:--check|--list-different)(?:\s|$)|^cargo fmt -- <text>$/;
+
+/** The family of one command's `run`; a formatter counts only when `checked` (its template shows a check flag). */
+export const familyOf = (run: string, checked = true): string | undefined => {
+  const family = VERIFICATION_FAMILIES.find((entry) => entry.pattern.test(run))?.family;
+  return family === 'format check' && !checked ? undefined : family;
+};
 
 const COMMAND_CHARS = 120;
 const SECRET_FLAG = /\s+(?:--?(?:token|password|passwd|secret|api-?key|auth|authorization|credentials?)\b|-p\s)[\s\S]*$/i;
 const ASSIGNMENT = /\s+[A-Za-z_][A-Za-z0-9_]*=[\s\S]*$/;
 const LEADING_ASSIGNMENTS = /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/;
-const ABSOLUTE_PATH = /(?:[A-Za-z]:[\\/]|~[\\/]|\/(?=[^\s/]))[^\s]*/g;
+// Anchored to a word start, so `src/a.ts` and `https://x` keep their slashes.
+const ABSOLUTE_PATH = /(?<=^|\s)(?:[A-Za-z]:[\\/]|~[\\/]|\/(?=[^\s/]))\S*/g;
 
 const escaped = (text: string): string => text.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
 
@@ -44,6 +56,7 @@ export const scrub = (command: string, home: string = homedir()): string => {
   return lines.length > 1 ? `${text}…` : text;
 };
 
+const HARNESS_ERRORS: ReadonlySet<string> = new Set<string>(HARNESS_ERROR_CLASSES);
 const EXIT_CLASSES_SHOWN: ReadonlySet<string> = new Set(['1', '2', '126', '127']);
 
 export interface ReceiptRow {
@@ -61,16 +74,16 @@ export interface ReviewReceipt {
   model: string | null;
   calls: number;
   rows: ReceiptRow[];
-  /** Shell calls with no listed verification command in them. */
+  /** Commands (not calls) that are not listed: `npm test && git push` adds one. */
   other: number;
 }
 
 /**
  * What the session observed for one command of a call. `not recorded` where the store cannot say: a Codex session (the Codex reader loses shell outcomes on 0.166 and later,
- * and the other versions are not told apart here), a call with no result, or a command a pipe or a later command hides from the call's status. Never `exit 0` from a guess.
+ * and the other versions are not told apart here), a call with no result, a call the harness refused or cut off (its `errorCode` is a harness class, so no exit result exists), or a command a pipe or a later command hides from the call's status. Never `exit 0` from a guess.
  */
 export const resultOf = (call: ToolObservation, index: number, codex: boolean): string => {
-  if (codex || call.status === 'none') return 'not recorded';
+  if (codex || call.status === 'none' || (call.errorCode !== undefined && HARNESS_ERRORS.has(call.errorCode))) return 'not recorded';
   const read = call.segments?.[index]?.read ?? (call.templates?.length === 1);
   if (!read) return 'not recorded';
   if (call.status === 'ok') return 'exit 0';
@@ -91,23 +104,29 @@ export const resolveSession = (store: Store, ref: string): SessionObservation | 
   return ref.length > 0 && starts.length === 1 ? starts[0] : undefined;
 };
 
+/** A call's commands: its segments, else (a call captured before segments) its templates as words, readable only when the call holds one command. */
+const segmentsOf = (call: ToolObservation): ShellSegment[] => call.segments ?? (call.templates ?? []).map((run, _index, all) => ({ run, read: all.length === 1 }));
+
 export const reviewReceiptOf = (store: Store, session: SessionObservation, home: string = homedir()): ReviewReceipt => {
   const codex = harnessOf(session) === 'codex';
-  const calls = store.tools.filter((call) => call.session === session.session).sort((a, b) => a.n - b.n);
+  // Sidechain lines are subagent work: the Scope line says they are not included.
+  const calls = store.tools.filter((call) => call.session === session.session && !call.side).sort((a, b) => a.n - b.n);
   const rows: ReceiptRow[] = [];
   let other = 0;
   for (const [position, call] of calls.entries()) {
     const templates = call.templates ?? [];
-    let listed = false;
-    for (const [index, template] of templates.entries()) {
-      const command = scrub(template, home);
+    for (const [index, segment] of segmentsOf(call).entries()) {
+      // A template lines up with a segment only when the call keeps one of each.
+      const checked = templates.length === call.segments?.length && FORMAT_CHECK_TEMPLATE.test(templates[index] ?? '');
+      const run = scrub(segment.run, home);
       // The ellipsis of a cut command is not part of the command that runs.
-      const family = familyOf(command.replace(/…$/, ''));
-      if (family === undefined) continue;
-      listed = true;
-      rows.push({ order: position + 1, family, command, result: resultOf(call, index, codex) });
+      const family = familyOf(run.replace(/…$/, ''), checked);
+      if (family === undefined) {
+        other += 1;
+        continue;
+      }
+      rows.push({ order: position + 1, family, command: family === 'format check' ? `${run} --check` : run, result: resultOf(call, index, codex) });
     }
-    if (!listed && templates.length > 0) other += 1;
   }
   return { session: session.session, date: session.tsFirst?.slice(0, 10) ?? null, harness: harnessOf(session), model: modelOf(session), calls: calls.length, rows, other };
 };
@@ -138,13 +157,14 @@ export const reviewReceiptText = (receipt: ReviewReceipt, version: string): stri
   ].join('\n').trimEnd();
 };
 
-/** The five most recent sessions, newest first, by id and date: no prompt text. */
+/** The five most recent sessions, newest first by their first timestamp, with the date only: no prompt text. */
 export const recentSessions = (store: Store): Array<{ session: string; date: string }> =>
   main(store)
-    .map((session) => ({ session: session.session, date: session.tsFirst?.slice(0, 10) ?? 'no date' }))
-    // A session with no date sorts after every dated one.
-    .sort((a, b) => Number(a.date === 'no date') - Number(b.date === 'no date') || b.date.localeCompare(a.date) || a.session.localeCompare(b.session))
-    .slice(0, 5);
+    .map((session) => ({ session: session.session, first: session.tsFirst ?? '' }))
+    // A session with no timestamp sorts after every dated one.
+    .sort((a, b) => Number(a.first === '') - Number(b.first === '') || b.first.localeCompare(a.first) || a.session.localeCompare(b.session))
+    .slice(0, 5)
+    .map((entry) => ({ session: entry.session, date: entry.first === '' ? 'no date' : entry.first.slice(0, 10) }));
 
 export const sessionsReviewReceipt = async (deps: SessionsDeps, options: { session: string | undefined; out: string | undefined; version: string }): Promise<Outcome> => {
   if (deps.sessions === undefined) throw new CliError('The session store is not configured in this run.', ExitCode.UNEXPECTED, 'unexpected');
