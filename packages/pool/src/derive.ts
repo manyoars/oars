@@ -12,7 +12,7 @@ import { baselineDaysOf, deriveLive } from '../../cli/src/sessions/read-live.js'
 import { deriveMethod } from '../../cli/src/sessions/read-method.js';
 import { deriveNextStep } from '../../cli/src/sessions/read-next-step.js';
 import { deriveRecoveryEdges } from '../../cli/src/sessions/read-recovery-edge.js';
-import { deriveRecoveryTarget } from '../../cli/src/sessions/read-recovery-target.js';
+import { deriveRecoveryTarget, retryToppedOf } from '../../cli/src/sessions/read-recovery-target.js';
 import { deriveToolDay } from '../../cli/src/sessions/read-tool-day.js';
 import { unitCells, type DeriveFamily, type ReadBody } from '../../cli/src/sessions/read-support.js';
 import type { Harness } from '../../cli/src/sessions/schema.js';
@@ -151,15 +151,17 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
     const floorOfCell = new Map(shipped.map((cell) => [cellIdOf(cell), cellFloor(floors, familyFloor, cellClassOf(cell, motifOf.get(cell.motifId)))]));
     const shippedPool = familyFloor === floors.public ? familyPool : { ...poolOf({ cells: shipped, motifs }, []), version: familyPool.version, lastDay: familyPool.lastDay };
     // A read cites only cells its pool serves, so every input has a floor; the family's own is the fallback a cited non-cell would take.
-    return { family, read: readsOf(shippedPool, derive, (cellId) => floorOfCell.get(cellId) ?? familyFloor) };
+    return { family, read: readsOf(shippedPool, derive, (cellId) => floorOfCell.get(cellId) ?? familyFloor), leftOut: family === 'recovery' ? retryToppedOf(shippedPool).map(cellIdOf) : [] };
   });
   // The cells a family on its own floor cites, beside those the public floor serves.
   const cited = new Set(reads.filter(({ family }) => floorFor(floors, family) !== floors.public).flatMap(({ read }) => read.flatMap(({ inputs }) => inputs)));
   const shown = new Set([...served, ...[...rowOf.values()].filter((row) => cited.has(cellIdOf(row)))]);
   // The row shipped for a cell, by the public floor or by a family's.
+  // The cells of a same-target group whose read is withheld for a retry stay out (`retryToppedOf`), so the bundle holds nothing for it.
+  const leftOut = new Set(reads.flatMap(({ leftOut: ids }) => ids));
   const bundled = held.flatMap((cell) => {
     const row = rowOf.get(cell);
-    return row !== undefined && shown.has(row) ? [row] : [];
+    return row !== undefined && shown.has(row) && !leftOut.has(cellIdOf(row)) ? [row] : [];
   });
   const named = new Set(bundled.map((cell) => cell.motifId));
   return {
