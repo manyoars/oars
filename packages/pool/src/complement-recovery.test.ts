@@ -11,6 +11,9 @@ const FRAME = `${bucketPrefix('claude-code', '2.1.314')}opus`;
 const WEEK = '2026-10-12';
 const weekCell = (motif: Motif, clusters: number): Cell => ({ motifId: motif.motifId, frameBucket: FRAME, grain: 'week', day: WEEK, sessions: clusters, clusters, ok: clusters, failed: clusters, tokens: 0, durationMs: 0, exposed: false });
 
+const bundleFor = (entries: readonly (readonly [string, Motif, number])[]) =>
+  bundleOf('claude-code', '2.1.314', { cells: entries.map(([, motif, clusters]) => weekCell(motif, clusters)), environment: [], motifs: entries.map(([, motif]) => motif), strata: [] }, DEFAULT_FLOORS);
+
 const servedOf = (entries: readonly (readonly [string, Motif, number])[]): string[] => {
   const labels = new Map(entries.map(([label, motif]) => [motif.motifId, label]));
   const bundle = bundleOf('claude-code', '2.1.314', { cells: entries.map(([, motif, clusters]) => weekCell(motif, clusters)), environment: [], motifs: entries.map(([, motif]) => motif), strata: [] }, DEFAULT_FLOORS);
@@ -35,6 +38,16 @@ describe('the recovery edge cell beside its same-target cells', () => {
     const retryEdge = classMotif(recoveryClass('429', 'file.edit', 'file.edit'));
     const retry = classMotif(recoveryTargetClass('429', 'file.edit', 'source', 'retry'));
     const thin = classMotif(recoveryTargetClass('429', 'file.edit', 'doc', 'retry'));
-    expect(servedOf([['edge', retryEdge, 8], ['retry', retry, 5], ['other', source, 5], ['thin', thin, 4]])).toEqual(['edge', 'other']);
+    expect(servedOf([['edge', retryEdge, 8], ['retry', retry, 5], ['other', source, 5], ['thin', thin, 4]])).toEqual(['edge']);
+    // `other` is served by the floor but its group holds the withheld retry, so the bundle leaves it out (below).
+  });
+
+  it('stays silent on a same-target group whose retry part is withheld, and ships none of its cells', () => {
+    const retryEdge = classMotif(recoveryClass('429', 'file.edit', 'file.edit'));
+    const retry = classMotif(recoveryTargetClass('429', 'file.edit', 'source', 'retry'));
+    const thin = classMotif(recoveryTargetClass('429', 'file.edit', 'doc', 'retry'));
+    const bundle = bundleFor([['edge', retryEdge, 8], ['retry', retry, 5], ['other', source, 5], ['thin', thin, 4]]);
+    expect(bundle.reads.filter((read) => read.slice.step !== undefined)).toEqual([]);
+    expect(bundle.cells.map((cell) => cell.motifId)).not.toContain(source.motifId);
   });
 });

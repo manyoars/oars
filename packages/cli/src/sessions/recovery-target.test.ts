@@ -165,3 +165,22 @@ describe('the cells left out for a retry', () => {
     expect(leftOut([failedEdit(0), badRead(1)])).toBe(0);
   });
 });
+
+describe('the cells left out when a repeat is held but not served', () => {
+  const pools = (tools: ToolObservation[]) => {
+    const { set } = cellsFor(tools);
+    const retryIds = new Set(set.motifs.filter(({ cls }) => cls?.endsWith(`>${RETRY}`) === true).map(({ motifId }) => motifId));
+    return { held: poolOf(set, []), served: poolOf({ ...set, cells: set.cells.filter((cell) => !retryIds.has(cell.motifId)) }, []) };
+  };
+
+  it('are the served cells of the group, though the served cells alone have no repeat', () => {
+    const { held, served } = pools([failedEdit(0), okEdit(1), failedEdit(2), okRead(3), failedEdit(4), okRead(5)]);
+    expect(retryToppedOf(served)).toHaveLength(0);
+    expect(retryToppedOf(served, held)).toHaveLength(1);
+  });
+
+  it('are none where the held repeat recovered nothing', () => {
+    const { held, served } = pools([failedEdit(0), failedEdit(1), failedEdit(2), okRead(3)]);
+    expect(retryToppedOf(served, held)).toHaveLength(0);
+  });
+});

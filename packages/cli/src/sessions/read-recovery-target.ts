@@ -16,14 +16,16 @@ interface Edge {
 }
 
 /** The cells of one (harness bucket, week, code, failed action, target class), each next step beside the others. */
-const groupsOf = (pool: Pool): Edge[][] => {
+const keyedGroupsOf = (pool: Pool): Map<string, Edge[]> => {
   const edges = atGrain(pool, 'week').flatMap((cell) => {
     const cls = pool.motifs.get(cell.motifId)?.cls;
     const parts = cls === undefined || cls === null ? null : parseRecoveryTargetClass(cls);
     return parts === null ? [] : [{ cell, ...parts }];
   });
-  return [...groupBy(edges, ({ cell, code, failed, target }) => `${cell.frameBucket}/${cell.day}/${code}/${failed}/${target}`).values()];
+  return groupBy(edges, ({ cell, code, failed, target }) => `${cell.frameBucket}/${cell.day}/${code}/${failed}/${target}`);
 };
+
+const groupsOf = (pool: Pool): Edge[][] => [...keyedGroupsOf(pool).values()];
 
 /** The step to serve, and the recoveries of a retry. The most recoveries among the steps that are not a retry first, the step's name breaking a tie so the same cells give the same read. */
 const verdictOf = (group: readonly Edge[]): { top: Edge | undefined; retried: number } => {
@@ -48,9 +50,15 @@ export const deriveRecoveryTarget: DeriveFamily = ({ pool }) =>
     ];
   });
 
-/** The cells of every group whose read is withheld because a repeat of the failed call recovered as often as the best other step: a bundle leaves them out, so it holds nothing for that cell. A group where nothing recovered is not one. */
-export const retryToppedOf = (pool: Pool): Cell[] =>
-  groupsOf(pool).flatMap((group) => {
+/**
+ * The cells of every group whose read is withheld, so a bundle leaves them out and holds nothing for the group: a repeat of the failed call recovered as often as the best other step (a group where nothing recovered is not one), or
+ * a repeat that recovered is held but not served (`held` is the pool before the floor; its count is used for this verdict and never printed). A withheld repeat may have led or tied, so the group fails closed.
+ */
+export const retryToppedOf = (pool: Pool, held: Pool = pool): Cell[] => {
+  const heldGroups = keyedGroupsOf(held);
+  return [...keyedGroupsOf(pool).entries()].flatMap(([key, group]) => {
     const { top, retried } = verdictOf(group);
-    return retried > 0 && (top === undefined || top.cell.ok <= retried) ? group.map(({ cell }) => cell) : [];
+    const withheld = !group.some(({ next }) => next === RETRY) && (heldGroups.get(key) ?? []).some(({ next, cell }) => next === RETRY && cell.ok > 0);
+    return withheld || (retried > 0 && (top === undefined || top.cell.ok <= retried)) ? group.map(({ cell }) => cell) : [];
   });
+};
