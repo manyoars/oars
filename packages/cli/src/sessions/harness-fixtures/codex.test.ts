@@ -55,7 +55,7 @@ describe('the Codex reader on its fixture', () => {
       userTurns: 1,
       assistantTurns: 5,
       models: { 'gpt-5-codex': 5 },
-      version: '0.167.0',
+      version: '0.169.0',
       // t1202: a Codex 0.166+ code-mode cell. The `exec` cell settles on its own header (`Script completed`, so ok); the command it ran is a separate Bash call from the
       // CommandExecution item and keeps its exit code, so the shell outcome is not lost (t890 has nothing to fix for this shape).
       tools: [['Bash', 'error'], ['Edit', 'ok'], ['Bash', 'ok'], ['Bash', 'error']],
