@@ -26,7 +26,7 @@ const PUBLIC_DESCRIPTION = 'The Many Oars API: register, read, configure, and de
 // The platform's spec also carries operations the public one withholds. public-operations.json selects
 // operations, but this is the backstop that a regeneration cannot get past: a listed operation is dropped when its path
 // or one of its tags names a payout, or it reaches a component whose name does. Payouts are the one money side that stays
-// private; offers, purchases, customers, and credits are public (V22 is lifted for Many Oars, 2026-11-12). The
+// private; offers, purchases, customers, and credits are public (2026-11-12). The
 // components only that operation reached go with it, because the closure below starts from the operations that are kept.
 const WITHHELD_PATH = /payout/i;
 const WITHHELD_TAG = /payout/i;

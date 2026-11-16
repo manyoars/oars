@@ -6,6 +6,7 @@ import { stepKey } from './keys.js';
 import type { Outcome, RunDeps } from '../cli.js';
 
 type Pack = components['schemas']['PurchaseOfferPack'];
+type Purchase = components['schemas']['PurchaseView'];
 
 const OFFER_STEP = 'purchasing-offer';
 const BUY_STEP = 'purchasing-buy';
@@ -46,7 +47,7 @@ const resolveSdkKey = async (deps: RunDeps, step: string, file?: string): Promis
 
 const describePack = (pack: Pack): string => [pack.priceRef, pack.displayName, `${String(pack.credits)} credits`, `$${Number(pack.amountUsd).toFixed(2)}`].join('  ');
 
-const describePurchase = (purchase: { purchaseId: string; status: string; failureCode?: string; credits: number }): string =>
+const describePurchase = (purchase: Purchase): string =>
   `Purchase ${purchase.purchaseId}: ${purchase.status}${purchase.failureCode === undefined ? '' : ` (${purchase.failureCode})`}, ${String(purchase.credits)} credits.`;
 
 /** `GET /billing/offers/{offerId}`: what the seller offers on this offer, before anything is bought. */
