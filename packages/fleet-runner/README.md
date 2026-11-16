@@ -7,7 +7,7 @@ The runner is proved with a scripted fake, and the Claude Code on Bedrock adapte
 | File | What it does |
 | --- | --- |
 | `src/order.ts` | The order file: types and `parseOrder`, which rejects a mixed task-set version, a retest without two pinned sides, a harness the fleet manifest does not name, and repeats under 1. |
-| `fleet-manifest.json` | The fleet manifest (`fleet-1`): the harnesses, their pinned versions, and model IDs. `deposit-fleet` reads it when `--fleet <file>` is absent, and tests load it as `FLEET`. It holds no key and no path. |
+| `fleet-manifest.json` | The fleet manifest (`fleet-1`): the harnesses, their pinned versions, and model IDs. `deposit-fleet` and the preflight read it when `--fleet <file>` is absent, and tests load it as `FLEET`. It holds no key and no path. |
 | `src/manifest.ts` | The fleet manifest (`fleet-1`) and the task-set manifest (`<folder>/manifest.json`). |
 | `src/plan.ts` | `planOrder`: the ordered runs and the cells; a retest alternates sides. |
 | `src/harness.ts` | The adapter interface: `prepare`, `run`, `check`. |
