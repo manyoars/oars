@@ -1,5 +1,6 @@
-// `npm run run-fake -w packages/fleet-runner -- [--order <file>] [--taskset <folder>] [--fleet <file>] [--out <folder>] [--change-task-set-at <run number>]`: runs an order end to end through the scripted fake
-// harness and writes the unsigned run book. With no flags it runs a demo retest (the test manifest of 8 tasks, 3 repeats, every 9th run hitting a rate limit).
+// `npm run run-fake -w packages/fleet-runner -- [--order <file>] [--taskset <folder>] [--fleet <file>] [--out <folder>] [--terms <file>] [--change-task-set-at <run number>]`: runs an order end to end through the scripted fake
+// harness, writes the unsigned run book, files each side and arm's valid runs in its own store folder, runs the `real-work-table` read over each, and saves the rows.
+// With no flags it runs a demo retest (the test manifest of 8 tasks, 3 repeats, every 9th run hitting a rate limit).
 // It opens no network, reads no session store, and spends nothing; a real harness adapter is a later brief.
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -9,6 +10,7 @@ import { loadTaskSet, parseFleet } from './manifest.js';
 import { parseOrder } from './order.js';
 import { runOrder } from './runner.js';
 import { serializeRunBook } from './runbook.js';
+import { buildStores, makeStager, readStores } from './stores.js';
 import { FLEET, retestText, taskSet } from './test-fixtures.js';
 
 const flag = (argv: string[], name: string): string | undefined => {
@@ -31,7 +33,8 @@ export const main = async (argv: string[], print: (line: string) => void, clock:
     const fleet = fleetPath === undefined ? FLEET : parseFleet(await readFile(fleetPath, 'utf8'));
     const order = parseOrder(orderPath === undefined ? retestText({ runCap: 60 }) : await readFile(orderPath, 'utf8'), fleet);
     const tasks = tasksetPath === undefined ? taskSet(8) : await loadTaskSet(tasksetPath);
-    const book = await runOrder({ order, taskSet: tasks, fleet, adapter: makeFake((request) => (request.sequence === changeAt ? { taskSetVersion: 'changed' } : request.sequence % 9 === 0 ? { exit: 'rate-limit' } : {})), clock, operator: 'Many Oars Co.' });
+    const stager = makeStager(join(out, `${order.orderId}.staging`));
+    const book = await runOrder({ order, taskSet: tasks, fleet, adapter: makeFake((request) => (request.sequence === changeAt ? { taskSetVersion: 'changed' } : request.sequence % 9 === 0 ? { exit: 'rate-limit' } : {})), clock, operator: 'Many Oars Co.', stage: stager.stage });
     const path = join(out, `${order.orderId}.run-book.jsonl`);
     await writeFile(path, serializeRunBook(book));
     const voided = book.runs.filter((run) => run.void !== null).length;
@@ -39,6 +42,14 @@ export const main = async (argv: string[], print: (line: string) => void, clock:
     print(`runs: ${String(book.runs.length)} written, ${String(book.runs.length - voided)} valid, ${String(voided)} void (cap ${String(order.runCap)})`);
     for (const cell of book.header.shortCells) print(`short: ${cell.taskId} ${cell.arm} ${cell.side ?? '-'} ${String(cell.have)}/${String(cell.want)}`);
     print(`run book (unsigned): ${path}`);
+    const folders = await buildStores(book, stager, out);
+    for (const folder of folders) print(`store folder ${folder.name}: ${folder.storeDir} (${String(folder.sessionIds.length)} sessions)`);
+    // The demo's exclusion list is invented; an operator passes the real one with --terms.
+    const termsFile = flag(argv, '--terms') ?? join(out, `${order.orderId}.demo-terms.txt`);
+    if (flag(argv, '--terms') === undefined) await writeFile(termsFile, 'zorblax-demo-term\n');
+    for (const rows of await readStores(folders, { out, orderId: order.orderId, terms: termsFile, date: book.header.endDate })) {
+      print(`rows ${rows.folder}: ${rows.file} (${String(rows.table.header.counted)} sessions, min ${String(rows.table.header.minSessions)})`);
+    }
     return book.header.status === 'complete' ? 0 : 1;
   } catch (error) {
     print(`run-fake: ${error instanceof Error ? error.message : 'failed'}`);

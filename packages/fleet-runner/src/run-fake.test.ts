@@ -24,6 +24,26 @@ describe('run-fake', () => {
     }
   });
 
+  it('runs the whole chain and prints one line per output file', async () => {
+    const out = await mkdtemp(join(tmpdir(), 'fleet-out-'));
+    try {
+      const lines: string[] = [];
+      expect(await main(['--out', out], (line) => lines.push(line), fixedClock())).toBe(0);
+      expect(lines.slice(2).map((line) => line.replace(out, '<out>').replaceAll('\\', '/'))).toEqual([
+        'run book (unsigned): <out>/o-1.run-book.jsonl',
+        'store folder before-playwright: <out>/o-1.stores/before-playwright/store (24 sessions)',
+        'store folder after-playwright: <out>/o-1.stores/after-playwright/store (24 sessions)',
+        'rows before-playwright: <out>/o-1.before-playwright.rows.json (24 sessions, min 3)',
+        'rows after-playwright: <out>/o-1.after-playwright.rows.json (24 sessions, min 3)',
+      ]);
+      const book = (await readFile(join(out, 'o-1.run-book.jsonl'), 'utf8')).trimEnd().split('\n').slice(1).map((line) => JSON.parse(line) as { void: string | null; poolSessionId: string | null });
+      expect(book.filter((run) => run.void === null).every((run) => run.poolSessionId !== null)).toBe(true);
+      expect(book.filter((run) => run.void !== null).every((run) => run.poolSessionId === null)).toBe(true);
+    } finally {
+      await rm(out, { recursive: true, force: true });
+    }
+  });
+
   it('prints the voided status and exits 1 when the task set changes mid-order', async () => {
     const out = await mkdtemp(join(tmpdir(), 'fleet-out-'));
     try {
@@ -31,6 +51,7 @@ describe('run-fake', () => {
       expect(await main(['--out', out, '--change-task-set-at', '3'], (line) => lines.push(line), fixedClock())).toBe(1);
       expect(lines[0]).toBe('order o-1 (retest, task set v1): voided');
       expect(lines[1]).toBe('runs: 3 written, 0 valid, 3 void (cap 60)');
+      expect(lines.some((line) => line.startsWith('store folder'))).toBe(false);
     } finally {
       await rm(out, { recursive: true, force: true });
     }
