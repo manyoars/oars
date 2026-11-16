@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -91,5 +91,19 @@ describe('run-fake', () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatch(/^run-fake: The output folder is inside a git repository/);
     expect(existsSync(inside)).toBe(false);
+  });
+
+  it('clears the staging folder when the chain fails between the runs and the store folders', async () => {
+    const out = await mkdtemp(join(tmpdir(), 'fleet-out-'));
+    try {
+      // A folder where the run book belongs makes the write fail after every run is staged and before buildStores.
+      await mkdir(join(out, 'o-1.run-book.jsonl'));
+      const lines: string[] = [];
+      expect(await main(['--out', out], (line) => lines.push(line), fixedClock())).toBe(2);
+      expect(lines.at(-1)).toMatch(/^run-fake: /);
+      expect(existsSync(join(out, 'o-1.staging'))).toBe(false);
+    } finally {
+      await rm(out, { recursive: true, force: true });
+    }
   });
 });

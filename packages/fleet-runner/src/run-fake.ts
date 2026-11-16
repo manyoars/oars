@@ -11,7 +11,7 @@ import { parseOrder } from './order.js';
 import { runOrder } from './runner.js';
 import { serializeRunBook } from './runbook.js';
 import { refuseInsideRepository } from '../../pool/scripts/real-work-table.js';
-import { buildStores, makeStager, readStores } from './stores.js';
+import { buildStores, makeStager, readStores, type Stager } from './stores.js';
 import { FLEET, retestText, taskSet } from './test-fixtures.js';
 
 const flag = (argv: string[], name: string): string | undefined => {
@@ -30,13 +30,14 @@ export const main = async (argv: string[], print: (line: string) => void, clock:
     return 2;
   }
   const out = resolve(flag(argv, '--out') ?? (await mkdtemp(join(tmpdir(), 'fleet-run-fake-'))));
+  let stager: Stager | null = null;
   try {
     // Before anything runs: the run book, signature, stores, staging copies, and rows are published by the page build, never committed.
     refuseInsideRepository(out, 'run book outputs');
     const fleet = fleetPath === undefined ? FLEET : parseFleet(await readFile(fleetPath, 'utf8'));
     const order = parseOrder(orderPath === undefined ? retestText({ runCap: 60 }) : await readFile(orderPath, 'utf8'), fleet);
     const tasks = tasksetPath === undefined ? taskSet(8) : await loadTaskSet(tasksetPath);
-    const stager = makeStager(join(out, `${order.orderId}.staging`));
+    stager = makeStager(join(out, `${order.orderId}.staging`));
     const book = await runOrder({ order, taskSet: tasks, fleet, adapter: makeFake((request) => (request.sequence === changeAt ? { taskSetVersion: 'changed' } : request.sequence % 9 === 0 ? { exit: 'rate-limit' } : {})), clock, operator: 'Many Oars Co.', stage: stager.stage });
     const path = join(out, `${order.orderId}.run-book.jsonl`);
     await writeFile(path, serializeRunBook(book));
@@ -57,5 +58,8 @@ export const main = async (argv: string[], print: (line: string) => void, clock:
   } catch (error) {
     print(`run-fake: ${error instanceof Error ? error.message : 'failed'}`);
     return 2;
+  } finally {
+    // The staging folder holds full transcript copies: it goes on every exit path, not only after buildStores.
+    await stager?.clear();
   }
 };
