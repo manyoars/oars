@@ -1,7 +1,7 @@
 // A stand-in for the `codex` executable, for the Codex adapter's tests only. The first line of the prompt on stdin names the scenario; the stub writes what a real `codex exec --json`
 // run would (JSONL events on stdout, a rollout file under $CODEX_HOME/sessions/YYYY/MM/DD) and records what it was started with in $CODEX_HOME/stub-seen.json. It never opens the network.
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const argv = process.argv.slice(2);
@@ -34,7 +34,12 @@ for (const [name, value] of Object.entries(process.env)) {
 const childSaw = execFileSync(process.execPath, ['-e', 'process.stdout.write(JSON.stringify(Object.keys(process.env).sort()))'], { env: childEnv, encoding: 'utf8' });
 writeFileSync(join(home, 'stub-child-seen.json'), childSaw);
 
-const line = (/** @type {object} */ value) => process.stdout.write(`${JSON.stringify(value)}\n`);
+// Every stdout line is also kept in $CODEX_HOME/stub-stdout.txt, so a test can compare what the adapter saved with what the child wrote.
+const line = (/** @type {object} */ value) => {
+  const text = `${JSON.stringify(value)}\n`;
+  appendFileSync(join(home, 'stub-stdout.txt'), text);
+  process.stdout.write(text);
+};
 const model = scenario === 'model' ? 'other-deployment' : valueOf('--model');
 const threadId = '019a0000-0000-7000-8000-000000000001';
 line({ type: 'thread.started', thread_id: threadId });
@@ -53,6 +58,10 @@ if (scenario === 'tree') {
   });
   writeFileSync(join(home, 'grandchild.pid'), String(grandchild.pid));
   setTimeout(() => undefined, 60000);
+} else if (scenario === 'echokey') {
+  // A harness that prints the key's value into its output; the saved copy must not hold it.
+  line({ type: 'error', message: `key is ${process.env.AZURE_OPENAI_API_KEY ?? ''}` });
+  process.exit(1);
 } else if (scenario === 'hang') setTimeout(() => undefined, 60000);
 else if (scenario === 'crash') process.exit(139);
 else if (scenario === 'auth') failed('unexpected status 401 Unauthorized: Incorrect API key provided');

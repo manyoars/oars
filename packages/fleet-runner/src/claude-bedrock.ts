@@ -165,6 +165,7 @@ export const makeClaudeBedrock = (settings: ClaudeBedrockSettings, deps: Depende
     };
     const outcome = await spawn({ command: settings.claudeExecutable, args, cwd: folder.runFolder, env, stdin: prompt, timeoutMs: settings.timeLimitMs });
     assertStarted(outcome, settings.claudeExecutable);
+    await steps.saveStdout(outcome.stdout, request.runId, [key]);
     const facts = parseStream(outcome.stdout);
     const kind = classify(outcome, facts);
     const transcriptPath = await steps.copyTranscript(join(folder.configDir, 'projects', 'work', `${sessionId}.jsonl`), request.runId);

@@ -1,7 +1,7 @@
 // What the real harness adapters share (Claude Code on Bedrock, Codex CLI on Azure OpenAI): the process spawner and its exit handlers, the task-set reset plan, the fixture clone and reset in a
 // temp folder, the tool install and pin read, the check step, the transcript copy, and the temp-folder cleanup (spec sections 3 and 9). A harness adds only its own command line, environment, and config folder.
 import { spawn as spawnChild, spawnSync } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -313,6 +313,8 @@ export interface Steps {
   checkoutSkill: (tool: SkillTool, wanted: string, root: string) => Promise<string>;
   prepareRun: (request: RunRequest, layout: Layout, reset: ResetPlan) => Promise<PreparedFolder>;
   copyTranscript: (source: string, runId: string) => Promise<string | null>;
+  /** Saves what the harness wrote to stdout as `<runId>.stdout.jsonl` beside the transcript copy, with each secret's value replaced; returns the path. */
+  saveStdout: (stdout: string, runId: string, secrets: readonly string[]) => Promise<string>;
   runCheck: (folder: PreparedFolder, request: RunRequest) => Promise<CheckResult>;
   /** Reads the arm's tool pin from disk again, so a change since `prepare` is seen: returns the unstarted-harness result when it no longer matches the order (the runner voids the run), else null. */
   recheckPins: (folder: PreparedFolder, request: RunRequest) => Promise<RunResult | null>;
@@ -447,6 +449,15 @@ export const makeSteps = (settings: SharedSettings, deps: Dependencies, spawn: S
     return mkdir(settings.transcriptOutDir, { recursive: true }).then(() => cp(source, target)).then(() => target, () => null);
   };
 
+  const saveStdout = async (stdout: string, runId: string, secrets: readonly string[]): Promise<string> => {
+    const target = join(settings.transcriptOutDir, `${runId}.stdout.jsonl`);
+    // The harness's output is the one written file the adapter did not make itself, so a key its own output echoes is replaced here; text with no key in it is written as it came.
+    const clean = secrets.filter((secret) => secret !== '').reduce((text, secret) => text.split(secret).join('[redacted]'), stdout);
+    await mkdir(settings.transcriptOutDir, { recursive: true });
+    await writeFile(target, clean);
+    return target;
+  };
+
   const runCheck = async (folder: PreparedFolder, request: RunRequest): Promise<CheckResult> => {
     const script = join(settings.taskSetDir, 'checks', `${request.taskId}.mjs`);
     try {
@@ -468,5 +479,5 @@ export const makeSteps = (settings: SharedSettings, deps: Dependencies, spawn: S
     return { exit: { kind: 'ok', code: 0 }, transcriptPath: null, harnessVersion: request.expected.harnessVersion, modelId: request.expected.modelId, tokens: { input: 0, cache: 0, output: 0 }, poolSessionId: null };
   };
 
-  return { setupEnv, step, readToolVersion, installedPin, installServer, checkoutSkill, prepareRun, copyTranscript, runCheck, recheckPins };
+  return { setupEnv, step, readToolVersion, installedPin, installServer, checkoutSkill, prepareRun, copyTranscript, saveStdout, runCheck, recheckPins };
 };

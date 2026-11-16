@@ -212,6 +212,30 @@ describe('run', () => {
     await prepared.dispose();
   });
 
+  it('saves the harness stdout beside the rollout copy, byte for byte as the child wrote it', async () => {
+    const { prepared } = await run('scenario: ok\nDo the task.');
+    const saved = readFileSync(join(scratch, 'transcripts', 'o-2-0001.stdout.jsonl'), 'utf8');
+    expect(saved).toBe(readFileSync(join(prepared.configDir, 'stub-stdout.txt'), 'utf8'));
+    expect(saved.split('\n').filter((text) => text !== '')).toHaveLength(3);
+  });
+
+  it.each(['auth', 'rate', 'network', 'server', 'crash'])('saves the harness stdout when the run ends as %s', async (scenario) => {
+    const { prepared } = await run(`scenario: ${scenario}\n`);
+    expect(readFileSync(join(scratch, 'transcripts', 'o-2-0001.stdout.jsonl'), 'utf8')).toBe(readFileSync(join(prepared.configDir, 'stub-stdout.txt'), 'utf8'));
+  });
+
+  it('saves the harness stdout when the run times out', async () => {
+    await run('scenario: hang\n', 'playwright', { timeLimitMs: 1 });
+    expect(existsSync(join(scratch, 'transcripts', 'o-2-0001.stdout.jsonl'))).toBe(true);
+  });
+
+  it('leaves the key value out of the saved stdout', async () => {
+    await run('scenario: echokey\n');
+    const text = readFileSync(join(scratch, 'transcripts', 'o-2-0001.stdout.jsonl'), 'utf8');
+    expect(text).toContain('key is ');
+    expect(text).not.toContain(SECRET);
+  });
+
   it('the Azure key reaches codex but not the shell commands it starts, by the documented shell environment policy', async () => {
     const { prepared } = await run('scenario: ok\nx');
     const child = names(join(prepared.configDir, 'stub-child-seen.json'));

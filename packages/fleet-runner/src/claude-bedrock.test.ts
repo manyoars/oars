@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeClaudeBedrock, makeNodeSpawn, nodeSpawn, type ClaudeBedrockSettings, type HostProcess, type Spawn, type StartTimer, type ToolUnderTest } from './claude-bedrock.js';
 import type { RunRequest } from './harness.js';
+import { readFirstRun } from './first-run-read.js';
 import { isObject } from './json.js';
 import { parseOrder } from './order.js';
 import { comparisonText, FLEET } from './test-fixtures.js';
@@ -333,6 +334,39 @@ describe('run', () => {
     expect(JSON.stringify(s)).not.toContain('someone');
     expect(readFileSync(join(prepared.configDir, 'mcp.json'), 'utf8')).toContain('"--headless"]');
     await prepared.dispose();
+  });
+
+  it('saves the harness stdout beside the transcript copy, byte for byte as the child wrote it', async () => {
+    const { r, prepared } = await run('scenario: ok\nDo the task.');
+    const saved = join(r.settings.transcriptOutDir, 'o-2-0001.stdout.jsonl');
+    expect(readFileSync(saved, 'utf8')).toBe(readFileSync(join(prepared.configDir, 'stub-stdout.txt'), 'utf8'));
+    expect(readFileSync(saved, 'utf8').split('\n').filter((text) => text !== '')).toHaveLength(2);
+  });
+
+  it.each(['auth', 'rate', 'crash'])('saves the harness stdout when the run ends as %s', async (scenario) => {
+    const { r, prepared } = await run(`scenario: ${scenario}\n`);
+    expect(readFileSync(join(r.settings.transcriptOutDir, 'o-2-0001.stdout.jsonl'), 'utf8')).toBe(readFileSync(join(prepared.configDir, 'stub-stdout.txt'), 'utf8'));
+  });
+
+  it('saves the harness stdout when the run times out', async () => {
+    const { r } = await run('scenario: hang\n', { timeLimitMs: 1 });
+    expect(existsSync(join(r.settings.transcriptOutDir, 'o-2-0001.stdout.jsonl'))).toBe(true);
+  });
+
+  it('leaves the key value out of the saved stdout', async () => {
+    const { r } = await run('scenario: echokey\n');
+    const text = readFileSync(join(r.settings.transcriptOutDir, 'o-2-0001.stdout.jsonl'), 'utf8');
+    expect(text).toContain('key is ');
+    expect(text).not.toContain(SECRET);
+  });
+
+  it('the first-run read takes the saved stdout and the transcript copy as the adapter left them and prints seven lines', async () => {
+    const { r, result } = await run('scenario: ok\nDo the task.');
+    const book = join(scratch, 'run-book.jsonl');
+    writeFileSync(book, `${JSON.stringify({ runId: 'o-2-0001', cacheTokens: 4500 })}\n`);
+    const output = readFileSync(join(r.settings.transcriptOutDir, 'o-2-0001.stdout.jsonl'), 'utf8');
+    const lines = readFirstRun({ transcript: readFileSync(result.transcriptPath ?? '', 'utf8'), output, runBook: readFileSync(book, 'utf8'), modelId: MODEL, runId: 'o-2-0001', allowServers: ['playwright'], allowSkills: [] });
+    expect(lines).toHaveLength(7);
   });
 
   it('a crash is a crash', async () => {
