@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { TOOL_INPUT_KEYS } from '../../cli/src/sessions/public-vocabulary.js';
 import { PROMPT_CLASSES } from '../../cli/src/sessions/schema.js';
 import { bash, edit, failedEdit, fixture, id, inSkill, mcp, read, removeFixtures, TERM, type Fixture, type Spec } from './real-work-fixture.js';
-import { HARNESS_NAMES, main, SPEC_VERSION, tableOf, type Table } from './real-work-table.js';
+import { HARNESS_NAMES, main, serverName, SPEC_VERSION, tableOf, type Table } from './real-work-table.js';
 
 afterEach(removeFixtures);
 
@@ -82,8 +82,9 @@ describe('real-work table', () => {
     f.add({ ...newer(2), model: 'my-private-finetune-v2', prompts: [{ text: 'x', calls: [{ tool: 'mcp__acme_secret__lookup', input: { q: 1 }, ok: false }, read()] }] });
     await f.stored();
     const table = await build(f);
+    // Only what this fixture can print: its one private server is other, so no public server or skill name belongs here.
     const allowed = new Set<string>([
-      ...HARNESS_NAMES, ...PROMPT_CLASSES, ...TOOL_INPUT_KEYS.keys(), 'other', 'unknown', '2.1.30x', '2.1.32x', 'claude-opus-5-5', 'claude-sonnet-5-5', 'one fleet', SPEC_VERSION, '2026-11-13', 'cell', 'tool', 'server', 'skill', 'github',
+      ...HARNESS_NAMES, ...PROMPT_CLASSES, ...TOOL_INPUT_KEYS.keys(), 'other', 'unknown', '2.1.30x', '2.1.32x', 'claude-opus-5-5', 'claude-sonnet-5-5', 'one fleet', SPEC_VERSION, '2026-11-13', 'cell', 'tool', 'server', 'skill',
     ]);
     const keys = new Set(['spec', 'label', 'builtOn', 'sessions', 'counted', 'excluded', 'minSessions', 'leftOut', 'header', 'rows', 'kind', 'model', 'harness', 'versionBucket', 'tool', 'calls', 'failures', 'failureRate', 'recovered', 'callsToRecover', 'editFollowedShare', 'prompts', 'promptsKnown', 'interventions', 'interventionsPerPrompt', 'tokensPerPrompt', 'class', 'name', 'thin', 'recoveredRate',
       'term', 'noRaw', 'noTerms', 'unreadable', 'noOwner']);
@@ -218,6 +219,16 @@ describe('real-work table', () => {
       // The newer bucket has one failure, under the n of two a rate needs, so its failure count prints and its recovered rate and median do not.
       expect(rows.find((row) => row.name === 'github' && row.versionBucket === '2.1.32x')).toMatchObject({ failureRate: 0.3333, recoveredRate: null, callsToRecover: null, thin: false });
       expect(rows.every((row) => row.label === 'one fleet')).toBe(true);
+    });
+
+    it('reads the server with each harness own spelling, and a server off the public list as other', () => {
+      expect(serverName('claude-code', 'mcp__github__lookup')).toBe('github');
+      expect(serverName('cursor', 'mcp_github_lookup')).toBe('github');
+      expect(serverName('gemini', 'mcp_github_lookup')).toBe('github');
+      expect(serverName('cursor', 'mcp_acme_lookup')).toBe('other');
+      // The claude-code spelling is no MCP call to cursor, and a plain tool is none anywhere.
+      expect(serverName('cursor', 'mcp__github__lookup')).toBeUndefined();
+      expect(serverName('claude-code', 'Read')).toBeUndefined();
     });
 
     it('takes the median of the calls to recover, not the mean', async () => {

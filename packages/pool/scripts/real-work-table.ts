@@ -4,6 +4,7 @@
 //   npm run real-work-table -w packages/pool -- <store folder> --terms <file> --owners <file> --out <dir> [--projects <folder>] [--min-sessions <n>] [--date <YYYY-MM-DD>]
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { ACTION_TABLES, mcpOf } from '../../cli/src/sessions/actions.js';
 import { harnessBucket } from '../../cli/src/sessions/cells.js';
 import { stepsOfCall } from '../../cli/src/sessions/motif.js';
 import { recoveryCallsOf, type Followed } from '../../cli/src/sessions/recovery-calls.js';
@@ -121,10 +122,9 @@ export const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1
 const rounded = (value: number): number => Math.round(value * 10_000) / 10_000;
 const share = (part: number, whole: number): number | null => (whole === 0 ? null : rounded(part / whole));
 
-/** The server of a stored MCP tool name (`mcp__<server>__<tool>`), by the pattern the harness tables use; a name off the public list is `other`. */
-const MCP_NAME = /^mcp__(?<server>.+?)__(?<tool>.+)$/;
-const serverName = (tool: string): string | undefined => {
-  const server = MCP_NAME.exec(tool)?.groups?.server;
+/** The server of a stored MCP tool name, read by the harness's own spelling (`actions.ts`); a name off the public list is `other`. */
+export const serverName = (harness: Harness, tool: string): string | undefined => {
+  const server = mcpOf(ACTION_TABLES[harness], tool)?.server;
   return server === undefined ? undefined : PUBLIC_MCP_SERVERS.has(server) ? server : OTHER;
 };
 const skillName = (skill: string | undefined): string | undefined => (skill === undefined ? undefined : PUBLIC_SKILLS.has(skill) ? skill : OTHER);
@@ -316,7 +316,7 @@ export const countsOf = async (runtime: SessionsRuntime, options: { terms: strin
       const failed = call.status === 'error';
       const recovery = failed ? recoveryOf(followed, at) : undefined;
       const [harnessLabel, tool] = [harnessName(harness), toolName(call.tool)];
-      const [server, skill] = [serverName(call.tool), skillName(call.skill)];
+      const [server, skill] = [serverName(harness, call.tool), skillName(call.skill)];
       const scoped = [...(server === undefined ? [] : [scopeOf('server', server, harnessLabel, bucket)]), ...(skill === undefined ? [] : [scopeOf('skill', skill, harnessLabel, bucket)])];
       for (const tally of [cellOf(model, harnessLabel, bucket), toolOf(tool), toolCellOf(tool, harnessLabel, bucket), bucketOf(harnessLabel, bucket), ...scoped]) {
         tally.sessions.add(call.parent);
@@ -378,11 +378,11 @@ export const cellRowOf = ({ model, harness, versionBucket, tally }: Cell): CellR
 /** A tool's row (over all buckets in the table, over one bucket in the release note). */
 export const toolRowOf = (tool: string, tally: Tally): ToolRow => ({ kind: 'tool', tool, sessions: tally.sessions.size, calls: tally.calls, ...callRates(tally) });
 
-const median = (values: readonly number[]): number | null => {
+const median = (values: readonly number[]): number => {
   const sorted = [...values].sort((a, b) => a - b);
-  const mid = sorted.length >> 1;
-  if (sorted.length === 0) return null;
-  return sorted.length % 2 === 1 ? (sorted[mid] ?? 0) : rounded(((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2);
+  // The one middle value, or the two around the middle; called only over a stated recovered count, so `values` is never empty.
+  const middle = sorted.slice((sorted.length - 1) >> 1, (sorted.length >> 1) + 1);
+  return rounded(middle.reduce((sum, value) => sum + value, 0) / middle.length);
 };
 
 /**
