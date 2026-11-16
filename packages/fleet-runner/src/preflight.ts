@@ -99,8 +99,8 @@ export const main = async (argv: string[], print: (line: string) => void, deps: 
     }
     const nodeMajor = Number.parseInt(deps.nodeVersion ?? process.versions.node, 10);
     if (plan === null) report('wrong', 'node', 'the task set did not load, so its Node floor is unknown');
-    else if (nodeMajor >= plan.nodeMajor) report('ok', 'node', `${String(nodeMajor)} (floor ${String(plan.nodeMajor)})`);
-    else report('wrong', 'node', `${String(nodeMajor)} is below the task set's floor ${String(plan.nodeMajor)}; install Node ${String(plan.nodeMajor)} or later`);
+    else if (nodeMajor >= plan.nodeFloor.major) report('ok', 'node', `${String(nodeMajor)} (floor ${String(plan.nodeFloor.major)})`);
+    else report('wrong', 'node', `${String(nodeMajor)} is below the task set's floor ${String(plan.nodeFloor.major)}; install Node ${String(plan.nodeFloor.major)} or later`);
 
     // 3. git and npm. npm is a `.cmd` wrapper on Windows, which a spawn without a shell cannot start, so it is looked for on PATH instead of run.
     const ranGit = await tool(git, ['--version']);
