@@ -119,7 +119,7 @@ const loadFleet = async (file: string): Promise<FleetManifest> => {
   try {
     return parseFleet(text);
   } catch (error) {
-    throw new Error(`fleet manifest ${file}: ${error instanceof Error ? error.message : 'is not valid'}`);
+    throw new Error(`fleet manifest ${file}: ${error instanceof Error ? error.message : 'is not valid'}`, { cause: error });
   }
 };
 
