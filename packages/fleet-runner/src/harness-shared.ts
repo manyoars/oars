@@ -132,7 +132,7 @@ export const parseNodeVersion = (text: string): NodeVersion => {
   return { major: numberOr0(match[1]), minor: numberOr0(match[2]), patch: numberOr0(match[3]) };
 };
 
-const showVersion = (version: NodeVersion): string => `${String(version.major)}.${String(version.minor)}.${String(version.patch)}`;
+export const showVersion = (version: NodeVersion): string => `${String(version.major)}.${String(version.minor)}.${String(version.patch)}`;
 
 export const loadResetPlan = (taskSetDir: string): ResetPlan => {
   const root = objectAt(parseJson(readFileSync(join(taskSetDir, 'manifest.json'), 'utf8'), 'task-set manifest'), 'task-set manifest');
@@ -152,13 +152,17 @@ export const loadResetPlan = (taskSetDir: string): ResetPlan => {
   return { nodeFloor: parseNodeVersion(floor[1] ?? ''), fixtureTag: stringAt(root, 'fixtureTag', 'taskset'), commands: [commandLine(reset, 'install'), commandLine(reset, 'buildDb')], setups, taskIds };
 };
 
+/** Whether `running` is under `floor`, major then minor then patch. */
+export const isBelow = (running: NodeVersion, floor: NodeVersion): boolean =>
+  running.major !== floor.major ? running.major < floor.major : running.minor !== floor.minor ? running.minor < floor.minor : running.patch < floor.patch;
+
 /** Reads the reset plan and refuses at construction what no run could satisfy: a Node below the manifest's floor (major, minor, and patch compared), or a tag setting that is not the manifest's. */
 export const loadCheckedResetPlan = (settings: SharedSettings, nodeVersion: string | undefined): ResetPlan => {
   const reset = loadResetPlan(settings.taskSetDir);
   if (settings.fixtureTag !== reset.fixtureTag) throw new Error(`the fixture tag setting "${settings.fixtureTag}" is not the task-set manifest's "${reset.fixtureTag}"; no run was started`);
   const running = parseNodeVersion(nodeVersion ?? process.versions.node);
   const floor = reset.nodeFloor;
-  const below = running.major !== floor.major ? running.major < floor.major : running.minor !== floor.minor ? running.minor < floor.minor : running.patch < floor.patch;
+  const below = isBelow(running, floor);
   if (below) {
     const text = running.major === floor.major ? `Node ${showVersion(running)} is below the Node ${showVersion(floor)}` : `Node ${String(running.major)} is below the Node ${String(floor.major)}`;
     throw new Error(`${text} the fixture needs (task-set manifest reset.node); no run was started`);
