@@ -117,7 +117,7 @@ describe('the adapter over taskset/v1 and a stand-in fixture', () => {
       expect(calls.find((call) => call.command === 'npm-stub')?.args).toEqual(['ci', '--no-audit', '--no-fund']);
       expect(readFileSync(join(prepared.runFolder, 'app.db'), 'utf8')).toBe('built');
       // The setup script named by the manifest ran for the two setup tasks only, with the run folder as its argument.
-      const setupCalls = calls.filter((call) => call.args[0]?.includes(`${join('taskset', 'v1', 'setup')}`) ?? false);
+      const setupCalls = calls.filter((call) => call.args[0]?.includes(join('taskset', 'v1', 'setup')) ?? false);
       expect(setupCalls.map((call) => [basename(call.args[0] ?? ''), call.args[1]])).toEqual(marker === null ? [] : [[`${taskId}.mjs`, prepared.runFolder]]);
       for (const name of ['v1-base', 'v1-review-files']) expect(existsSync(join(prepared.runFolder, '.git', name)), name).toBe(name === marker);
       // The stand-in's commit is not the manifest's, so the adapter reports the tag as moved (the runner voids that); the real fixture matches.
