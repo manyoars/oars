@@ -24,4 +24,4 @@ With no flags it runs a demo retest. Exit code 0 is a complete order, 1 an incom
 
 Header statuses: `complete` (every cell has its repeats), `incomplete` (the run cap ended the order; `shortCells` lists the cells short), and `voided` (the task set changed mid-order: every run is void with `task-set-changed`, nothing is rerun, and `shortCells` lists every planned cell with 0 valid runs).
 
-Void reasons on a run: `harness-failed`, `sign-in-lost`, `machine-failed`, `task-set-changed`, `fixture-tag-changed`, `manifest-changed`, `harness-version-changed`, `model-changed`, `tool-pin-mismatch`. All but `task-set-changed` void one run, which is rerun in place; `task-set-changed` voids the whole order.
+Void reasons on a run: `harness-failed`, `sign-in-lost`, `machine-failed`, `task-set-changed`, `fixture-tag-changed`, `manifest-changed`, `harness-version-changed`, `model-changed`, `tool-pin-mismatch`, `check-script-failed` (the adapter's check threw), `transcript-missing` (a run that is valid so far left no readable transcript). All but `task-set-changed` void one run, which is rerun in place; `task-set-changed` voids the whole order.
