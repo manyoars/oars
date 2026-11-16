@@ -42,7 +42,7 @@ docker run --rm -p 8790:8790 -v /srv/seller:/data \
   oars-pack-seller
 ```
 
-`GET /health` answers `{"status":"ok"}`. Without Docker, run `npm run build` and `npm start -w packages/pack-seller` with the same variables.
+`GET /health` answers `{"status":"ok"}`. The image holds no `git` binary. A download for an owner that is not opted in to outcome pointers builds without it; outcome pointers need git in the image. Without Docker, run `npm run build` and `npm start -w packages/pack-seller` with the same variables.
 
 ## 1. Create the price
 

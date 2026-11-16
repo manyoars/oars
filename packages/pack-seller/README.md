@@ -48,7 +48,7 @@ The image runs as the non-root `node` user, listens on `0.0.0.0`, and holds no k
 
 ## Buy a pack
 
-Each step below is one the tests run (`src/money-loop.test.ts`).
+The tests run each step's call (`src/money-loop.test.ts`; the CLI commands wrap the client's `purchases.buy` and `purchases.get`).
 
 1. Have a buying agent and its SDK key. The buying calls below send that key, not a seller key.
 2. See the offer: `GET /packs` lists the packs and `GET /packs/{packId}` shows one pack's page with its manifest, census, card, and terms. Read it before you buy.
