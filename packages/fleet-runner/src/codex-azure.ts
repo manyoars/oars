@@ -89,6 +89,7 @@ interface RolloutFacts {
 /** What the rollout says: `session_meta.cli_version`, the first `turn_context.model`, and `event_msg token_count` `info.last_token_usage` summed, with Codex's cached and cache-write tokens (counted inside `input_tokens`) moved to `cache`, as the oars reader does. */
 export const parseRollout = (text: string): RolloutFacts => {
   const facts: RolloutFacts = { version: null, model: null, tokens: { input: 0, cache: 0, output: 0 } };
+  let inherited: number | null = null;
   for (const raw of text.split('\n')) {
     let row: unknown;
     try {
@@ -98,8 +99,11 @@ export const parseRollout = (text: string): RolloutFacts => {
     }
     if (!isObject(row) || !isObject(row['payload'])) continue;
     const payload = row['payload'];
+    // A spawned agent's rollout starts with its parent's records, below `subagent_history_start_ordinal` (the oars reader drops them, `packages/cli/src/sessions/codex.ts:555-556`).
+    if (typeof row['ordinal'] === 'number' && inherited !== null && row['ordinal'] < inherited) continue;
     if (row['type'] === 'session_meta' && facts.version === null) {
       facts.version = typeof payload['cli_version'] === 'string' ? payload['cli_version'] : null;
+      inherited = typeof payload['subagent_history_start_ordinal'] === 'number' ? payload['subagent_history_start_ordinal'] : null;
     } else if (row['type'] === 'turn_context' && facts.model === null) {
       facts.model = typeof payload['model'] === 'string' ? payload['model'] : null;
     } else if (row['type'] === 'event_msg' && payload['type'] === 'token_count' && isObject(payload['info']) && isObject(payload['info']['last_token_usage'])) {
@@ -154,13 +158,30 @@ const classify = (outcome: SpawnOutcome, facts: EventFacts): ExitKind => {
   return facts.failure === null ? 'crash' : 'api-error';
 };
 
-/** The rollout of the run: the one under `<codexHome>/sessions` that is no spawned agent's (no `parent_thread_id`); the last by name when several are. Null when Codex wrote none. */
-const findRollout = async (codexHome: string): Promise<string | null> => {
+const NEWLINE = '\n';
+
+interface Rollouts {
+  /** The run's own rollout: the last by name that no spawned agent or delegate wrote. */
+  own: string | null;
+  /** The rollouts of spawned agents and delegates, whose tokens count toward the run. */
+  others: string[];
+}
+
+/** Whether a rollout's first record marks a non-root one, as the oars reader's `parentOf` does (`packages/cli/src/sessions/codex.ts:715-727`): a `parent_thread_id`, or a `source` object holding `subagent` or `internal`. */
+const isNonRoot = (meta: JsonObject): boolean => {
+  if (meta['parent_thread_id'] !== undefined && meta['parent_thread_id'] !== null) return true;
+  const source = meta['source'];
+  return isObject(source) && (Object.hasOwn(source, 'subagent') || Object.hasOwn(source, 'internal'));
+};
+
+/** The rollouts under `<codexHome>/sessions`, split into the run's own and the rest. Null own when Codex wrote none. */
+const findRollouts = async (codexHome: string): Promise<Rollouts> => {
   const names = await readdir(join(codexHome, 'sessions'), { recursive: true, encoding: 'utf8' }).catch(() => []);
   const own: string[] = [];
+  const others: string[] = [];
   for (const name of names.filter((entry) => /(^|[\\/])rollout-[^\\/]+\.jsonl$/.test(entry)).sort()) {
     const path = join(codexHome, 'sessions', name);
-    const first = (await readFile(path, 'utf8')).split('\n')[0] ?? '';
+    const first = (await readFile(path, 'utf8')).split(NEWLINE)[0] ?? '';
     let head: unknown = null;
     try {
       head = JSON.parse(first);
@@ -168,9 +189,9 @@ const findRollout = async (codexHome: string): Promise<string | null> => {
       // A torn first line: the file is taken as the run's own.
     }
     const meta: JsonObject | null = isObject(head) && isObject(head['payload']) ? head['payload'] : null;
-    if (meta === null || meta['parent_thread_id'] === undefined || meta['parent_thread_id'] === null) own.push(path);
+    (meta !== null && isNonRoot(meta) ? others : own).push(path);
   }
-  return own.at(-1) ?? null;
+  return { own: own.at(-1) ?? null, others };
 };
 
 /** The adapter, with `prepare` typed to return the richer folder so a caller can read its commit and paths. */
@@ -237,8 +258,17 @@ export const makeCodexAzure = (settings: CodexAzureSettings, deps: Dependencies)
     const outcome = await spawn({ command: settings.codexExecutable, args, cwd: folder.runFolder, env, stdin: prompt, timeoutMs: settings.timeLimitMs });
     assertStarted(outcome, settings.codexExecutable);
     const kind = classify(outcome, parseEvents(outcome.stdout));
-    const rollout = await findRollout(folder.configDir);
+    const { own: rollout, others } = await findRollouts(folder.configDir);
     const facts = rollout === null ? null : parseRollout(await readFile(rollout, 'utf8'));
+    // Like the Claude adapter's, the tokens cover the whole tree: the spawned agents' rollouts add theirs.
+    if (facts !== null) {
+      for (const other of others) {
+        const spent = parseRollout(await readFile(other, 'utf8')).tokens;
+        facts.tokens.input += spent.input;
+        facts.tokens.cache += spent.cache;
+        facts.tokens.output += spent.output;
+      }
+    }
     return {
       exit: { kind, code: outcome.timedOut ? -1 : (outcome.exitCode ?? -1) },
       transcriptPath: rollout === null ? null : await steps.copyTranscript(rollout, request.runId),
