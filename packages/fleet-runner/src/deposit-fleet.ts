@@ -66,6 +66,8 @@ const childEnv = (configRoot: string): NodeJS.ProcessEnv => {
   const env: NodeJS.ProcessEnv = { ...process.env, [CONFIG_VARIABLE]: configRoot, CLAUDE_CONFIG_DIR: join(configRoot, 'claude') };
   // The exclusion-terms file this store is checked for is the default one under CLAUDE_CONFIG_DIR; a variable that names another would send under different terms.
   Reflect.deleteProperty(env, 'OARS_EXCLUSION_TERMS');
+  // A machine-class parent would make the child build under machine keys, so the row ids would differ from the run book and `--send-all` would be refused.
+  Reflect.deleteProperty(env, 'OARS_HOST_CLASS');
   return env;
 };
 
@@ -75,8 +77,11 @@ const termsFile = (store: Store): string => join(store.configRoot, 'claude', 'se
 
 const isScript = (oars: string): boolean => ['.js', '.mjs', '.cjs'].includes(extname(oars).toLowerCase());
 
+/** A part with a space is quoted so the printed line can be pasted into a shell. */
+const quoteIfSpaced = (part: string): string => (part.includes(' ') ? `"${part}"` : part);
+
 /** The command line as it runs: a script is run by this node, so the printed line names it. */
-const commandLine = (oars: string, args: string[]): string => `${isScript(oars) ? `${process.execPath} ` : ''}${oars} ${args.join(' ')}`;
+const commandLine = (oars: string, args: string[]): string => [...(isScript(oars) ? [process.execPath] : []), oars, ...args].map(quoteIfSpaced).join(' ');
 
 /** A `.js` file is run by this node, a `.cmd` or `.bat` through the shell on Windows, anything else directly. */
 const launch = (oars: string, args: string[], env: NodeJS.ProcessEnv): Promise<number> =>
