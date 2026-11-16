@@ -82,7 +82,8 @@ export const buildStores = async (book: RunBook, stager: Stager, out: string): P
   const folders = new Map<string, StoreFolder>();
   for (const run of book.runs) {
     const staged = stager.files.get(run.runId);
-    if (run.void !== null || run.poolSessionId === null || staged === undefined) continue;
+    if (run.void !== null || run.poolSessionId === null) continue;
+    if (staged === undefined) throw new Error(`valid run ${run.runId} has a pool session id but was not staged`);
     const name = folderOf(run.side, run.arm);
     const folder = folders.get(name) ?? { name, storeDir: join(base, name, 'store'), projectsRoot: join(base, name, 'projects'), sessionIds: [] };
     folders.set(name, folder);
