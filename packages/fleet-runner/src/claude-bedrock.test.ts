@@ -82,6 +82,7 @@ const rig = (patch: Partial<ClaudeBedrockSettings> = {}, prompt = 'scenario: ok\
     modelId: MODEL,
     tool: SERVER,
     timeLimitMs: 20000,
+    setupTimeLimitMs: 60000,
     transcriptOutDir: join(scratch, 'transcripts'),
     gitExecutable: 'git',
     npmExecutable: 'npm-stub',
@@ -222,6 +223,14 @@ describe('prepare', () => {
     expect(existsSync(roots[0] ?? '')).toBe(false);
   });
 
+  it('a setup step past its own limit is an error the runner sees, and the folder is deleted', async () => {
+    const r = rig({ setupTimeLimitMs: 1 });
+    const roots: string[] = [];
+    const adapter = makeClaudeBedrock(r.settings, { env: ENV, onTempFolder: (dir) => roots.push(dir) });
+    await expect(adapter.prepare(request('no-tool', null))).rejects.toThrow(/timed out/);
+    expect(existsSync(roots[0] ?? '')).toBe(false);
+  });
+
   it('deletes the temp folder when a reset command fails', async () => {
     const r = rig();
     writeTask(join(scratch, 'taskset'), 'scenario: ok', { node: '20', commands: ['node scripts/missing.mjs'] }, r.fixtureCommit);
@@ -287,13 +296,13 @@ describe('run', () => {
     expect((await run('scenario: rate\n')).result.exit.kind).toBe('rate-limit');
   });
 
-  it('a run past the time limit is killed and reported as a crash', async () => {
-    const { result } = await run('scenario: hang\n', { timeLimitMs: 1500 });
+  it('a run past the time limit is killed and reported as a crash, while the reset and setup steps keep their own limit', async () => {
+    const { result } = await run('scenario: hang\n', { timeLimitMs: 1 });
     expect(result.exit).toEqual({ kind: 'crash', code: -1 });
   });
 
   it('a timeout ends the harness and the processes it started', async () => {
-    const { prepared, result } = await run('scenario: tree' + String.fromCharCode(10), { timeLimitMs: 3000 });
+    const { prepared, result } = await run('scenario: tree' + String.fromCharCode(10), { timeLimitMs: 2000 });
     expect(result.exit).toEqual({ kind: 'crash', code: -1 });
     const pid = Number(readFileSync(join(prepared.configDir, 'grandchild.pid'), 'utf8'));
     const alive = (): boolean => {
