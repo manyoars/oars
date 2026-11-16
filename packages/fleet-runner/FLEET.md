@@ -48,18 +48,16 @@ Step 1 and step 6 are once. Steps 2 to 4 are done for each order's store folders
 
 The first real run is a credit draw on the approved Bedrock credits. It also answers seven questions that no stub can. Follow these steps in order, and stop where they say stop.
 
-Do not make the paid run until the adapter saves the stdout of `claude` beside the transcript copy (`<runId>.stdout.jsonl`). Without it the read cannot answer questions (a) to (f).
-
 1. Run the preflight. It makes no model call and spends nothing. It checks `claude` and its pinned version, Node, git, npm, the task-set folder, the fixture tag, `AWS_REGION`, and that `AWS_BEARER_TOKEN_BEDROCK` is set (never its value). Fix every line that is not `ok`.
 
    `npm run preflight -w packages/fleet-runner -- --taskset ../../taskset/v1 --fleet <fleet manifest file> --fixture-source <fixture repository path or URL>`
 
    Add `--run-book <file> --allowed-signers <file>` to also verify a signed run book. A first run has none yet.
 2. **OWNER** Tell the owner that the next step is a credit draw (K5), and wait for their yes. Do not go on without it.
-3. Run exactly one task, once. Keep the transcript copy, the run book, and the stdout file of `claude` (`<runId>.stdout.jsonl`, beside the transcript copy) for that run.
+3. Run exactly one task, once. The adapter saves the stdout of `claude` as `<runId>.stdout.jsonl` in `transcriptOutDir`, beside the transcript copy `<runId>.jsonl`, with the key's value replaced by `[redacted]`. It writes the file when the run ends in an API error or a timeout too. Keep the transcript copy, the run book, and `<runId>.stdout.jsonl` for that run.
 4. Run the first-run read over those files. It prints one line per question: `yes`, `no`, or `cannot tell`, and the evidence it read. It only prints. It never decides a void and never edits a record.
 
-   `npm run first-run-read -w packages/fleet-runner -- --transcript <transcript copy> --output <stdout file> --run-book <run book> --model-id <Bedrock model ID> --allow-server <name>`
+   `npm run first-run-read -w packages/fleet-runner -- --transcript <transcript copy> --output <runId>.stdout.jsonl --run-book <run book> --model-id <Bedrock model ID> --allow-server <name>`
 
    Repeat `--allow-server` and `--allow-skill` for each one the run was allowed. To add a piece of the key's value to the scrub search, set it in the `FIRST_RUN_MARKER` environment variable (the `--marker <text>` flag also works, but puts the text in shell history and the process list). It is never printed. A `yes` on question (b) names the extra skills and servers: check that each one comes from the fixture's `.claude/` or `.mcp.json` before taking it as a load, because Claude Code ships some skills itself.
 5. Stop. Report its lines to the owner before any second run.
