@@ -1,0 +1,1 @@
+A recent commit, "Fix request totals for a member's requests", fixed the request totals. Confirm on the app's main page that every request's total is now right, and fix anything that still shows a wrong total.

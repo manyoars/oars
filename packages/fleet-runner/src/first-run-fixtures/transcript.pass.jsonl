@@ -1,0 +1,3 @@
+{"type": "user", "sessionId": "s-1", "message": {"role": "user", "content": [{"type": "text", "text": "fix the typo"}]}}
+{"type": "assistant", "sessionId": "s-1", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "tu-1", "name": "Bash", "input": {"command": "env | sort"}}]}}
+{"type": "user", "sessionId": "s-1", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu-1", "content": "HOME=/work/home\nPATH=/usr/bin\nCLAUDE_CODE_USE_BEDROCK=1"}]}}

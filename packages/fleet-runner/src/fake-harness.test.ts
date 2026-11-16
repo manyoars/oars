@@ -1,6 +1,6 @@
 import { readFile, stat } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
-import { makeFake } from './fake-harness.js';
+import { makeFake, sessionIdOf } from './fake-harness.js';
 import type { RunRequest } from './harness.js';
 import { parseOrder } from './order.js';
 import { FLEET, retestText } from './test-fixtures.js';
@@ -25,7 +25,7 @@ describe('the fake harness', () => {
     expect(prepared.installedPins).toEqual([{ name: 'playwright', pin: 'npm:1.0.0' }]);
     const result = await fake.run(prepared, request('r1'));
     expect(result.exit).toEqual({ kind: 'ok', code: 0 });
-    expect(await readFile(result.transcriptPath ?? '', 'utf8')).toContain('r1');
+    expect(await readFile(result.transcriptPath ?? '', 'utf8')).toContain(sessionIdOf('r1'));
     expect(await fake.check(prepared, request('r1'))).toBe('pass');
     expect(fake.open.size).toBe(1);
     await prepared.dispose();

@@ -1,0 +1,1 @@
+Start the app and, on its main page, use the New request form to submit this request: member `teal-otter`, item `Sticky notes, 3x3, yellow (12 pack)`, quantity 4, note `for the onboarding kits`. Then write the request number the page shows after you submit, digits only, to `answers/new-request.txt`.

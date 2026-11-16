@@ -11,7 +11,9 @@ export type VoidReason =
   | 'harness-version-changed'
   | 'model-changed'
   | 'tool-pin-mismatch'
-  | 'machine-failed';
+  | 'machine-failed'
+  | 'check-script-failed'
+  | 'transcript-missing';
 
 export interface ShortCell {
   taskId: string;
@@ -32,6 +34,8 @@ export interface RunBookHeader {
   arms: string[];
   sides: { name: string; pin: string }[];
   operator: string;
+  /** The operator's pool account id the pool session ids are keyed by; the signature covers it. */
+  account: string;
   repeats: number;
   runCap: number;
   startDate: string;
@@ -55,7 +59,7 @@ export interface RunRecord {
   modelId: string;
   start: string;
   end: string;
-  /** Null for a void run: its check is not read. */
+  /** Null for every void run, including one voided with the whole order: a void run's check is not read, and one read before the order voided is dropped. */
   check: CheckResult | null;
   exitStatus: string;
   exitCode: number;
@@ -63,6 +67,7 @@ export interface RunRecord {
   cacheTokens: number;
   outputTokens: number;
   transcriptSha256: string | null;
+  /** The pool row id of the run's session: `contentHash([account, harness session])`, as the CLI's deposit keys it; null for a void run. */
   poolSessionId: string | null;
   void: VoidReason | null;
 }
@@ -84,6 +89,7 @@ const headerLine = (h: RunBookHeader): RunBookHeader => ({
   arms: h.arms,
   sides: h.sides.map((side) => ({ name: side.name, pin: side.pin })),
   operator: h.operator,
+  account: h.account,
   repeats: h.repeats,
   runCap: h.runCap,
   startDate: h.startDate,

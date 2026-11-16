@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PIPE_MAX, PRIVATE, SEED_TOP } from './public-vocabulary.js';
-import { projectHarnessVersion, projectModel, projectPackage, projectShell, projectTool, shellReader } from './projection.js';
+import { projectHarnessVersion, projectModel, projectPackage, projectShell, projectSkills, projectTool, shellReader } from './projection.js';
 import { step, tool as toolRecord } from './pool-fixture.js';
 import { makeRedactor } from './redact.js';
 import { readVocabulary } from './vocab-load.js';
@@ -98,6 +98,15 @@ describe('tool, model, and harness version', () => {
     expect(projectTool(`mcp__${PLANTED}__merge`)).toBe('mcp:private');
     expect(projectTool(`mcp__claude-in-chrome__${PLANTED}`)).toBe('mcp:private');
     expect(projectTool(PLANTED)).toBe(PRIVATE);
+  });
+
+  it('admits a published plugin skill and the chrome-devtools server by name, and keeps an unlisted plugin skill or connector private', () => {
+    expect(projectSkills(['superpowers:brainstorming', 'update-config', `superpowers:${PLANTED}`])).toEqual({ names: ['superpowers:brainstorming', 'update-config'], privateCount: 1 });
+    expect(projectTool('mcp__chrome-devtools__take_snapshot')).toBe('mcp:chrome-devtools:take_snapshot');
+    expect(projectTool(`mcp__chrome-devtools__${PLANTED}`)).toBe('mcp:private');
+    expect(projectTool(`mcp__claude_ai_${PLANTED}__search`)).toBe('mcp:private');
+    // A connector is listed by name but serves no cited tool, so its tools read private.
+    expect(projectTool('mcp__claude_ai_Gmail__search_threads')).toBe('mcp:private');
   });
 
   it('admits a published model id and a harness release up to the snapshot', () => {

@@ -1,0 +1,39 @@
+{
+  "version": "v1",
+  "fixtureTag": "taskset-v1",
+  "fixtureCommit": "038c12ef29f6237c08f608f089afba2a1b5b12aa",
+  "reset": {
+    "node": ">=24.0.0",
+    "install": "npm ci --no-audit --no-fund",
+    "buildDb": "node scripts/build-db.ts"
+  },
+  "notes": "fixtureCommit is the commit the local tag fixtureTag points at. A task with a setup script runs it after the reset and before the agent, with the run folder as its argument. A check is node checks/<id>.mjs <run folder>: exit 0 pass, exit 1 fail, one line saying why. The runner reads version, fixtureTag, fixtureCommit, reset, and each task's id, category, and setup; it ignores the rest.",
+  "tasks": [
+    { "id": "control-typo-fix", "category": "control", "status": "written" },
+    { "id": "control-input-check", "category": "control", "status": "written" },
+    { "id": "browser-load-page", "category": "browser", "status": "written" },
+    { "id": "browser-fill-form", "category": "browser", "status": "written" },
+    { "id": "browser-broken-link", "category": "browser", "status": "written" },
+    { "id": "browser-console-error", "category": "browser", "status": "written" },
+    { "id": "browser-layout-width", "category": "browser", "status": "written" },
+    { "id": "browser-confirm-fix", "category": "browser", "status": "written" },
+    { "id": "database-count", "category": "database", "status": "written" },
+    { "id": "database-bad-row", "category": "database", "status": "written" },
+    { "id": "database-add-column", "category": "database", "status": "written" },
+    { "id": "database-slow-query", "category": "database", "status": "written" },
+    { "id": "database-report-query", "category": "database", "status": "written" },
+    { "id": "database-broken-fk", "category": "database", "status": "written" },
+    { "id": "docs-fetch-answer", "category": "docs-fetch", "status": "written" },
+    { "id": "docs-fetch-api-change", "category": "docs-fetch", "status": "written" },
+    { "id": "docs-fetch-cite", "category": "docs-fetch", "status": "written" },
+    { "id": "docs-fetch-version-bug", "category": "docs-fetch", "status": "written" },
+    { "id": "docs-fetch-license", "category": "docs-fetch", "status": "written" },
+    { "id": "docs-fetch-changelog", "category": "docs-fetch", "status": "written" },
+    { "id": "repo-workflow-commit", "category": "repo-workflow", "status": "written", "setup": "setup/repo-workflow-commit.mjs" },
+    { "id": "repo-workflow-review", "category": "repo-workflow", "status": "written", "setup": "setup/repo-workflow-review.mjs" },
+    { "id": "repo-workflow-add-test", "category": "repo-workflow", "status": "written" },
+    { "id": "repo-workflow-fix-test", "category": "repo-workflow", "status": "written" },
+    { "id": "repo-workflow-readme", "category": "repo-workflow", "status": "written" },
+    { "id": "repo-workflow-split-function", "category": "repo-workflow", "status": "written" }
+  ]
+}

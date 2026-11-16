@@ -1,10 +1,9 @@
 // Shared test data: an 8-task manifest shaped like an order's slice of v1 (six category tasks and the two controls), a fleet manifest, and orders.
-import type { FleetManifest, TaskSetManifest } from './manifest.js';
+import { readFileSync } from 'node:fs';
+import { type FleetManifest, parseFleet, type TaskSetManifest } from './manifest.js';
 
-export const FLEET: FleetManifest = {
-  version: 'fleet-1',
-  harnesses: [{ name: 'claude-code-bedrock', version: '2.1.30', provider: 'bedrock', region: 'us-east-1', modelIds: ['sonnet-pinned-1'] }],
-};
+// The fleet manifest is the file in the package, so a test and the deposit command read one definition.
+export const FLEET: FleetManifest = parseFleet(readFileSync(new URL('../fleet-manifest.json', import.meta.url), 'utf8'));
 
 export const taskSet = (count = 8): TaskSetManifest => ({
   version: 'v1',
@@ -20,6 +19,8 @@ export interface OrderShape {
   manifestVersion: string;
   harness: string;
   modelId: string;
+  /** The operator's pool account id: the run book's pool session ids are keyed by it. */
+  account: string;
   tools: { name: string; kind: string; pin?: string }[];
   arms: string[];
   sides: { name: string; pin?: string; taskSetVersion?: string }[];
@@ -34,6 +35,7 @@ export const retestShape = (): OrderShape => ({
   manifestVersion: 'fleet-1',
   harness: 'claude-code-bedrock',
   modelId: 'sonnet-pinned-1',
+  account: 'acct-fleet',
   tools: [{ name: 'playwright', kind: 'server' }],
   arms: ['playwright'],
   sides: [
@@ -51,6 +53,7 @@ export const comparisonShape = (): OrderShape => ({
   manifestVersion: 'fleet-1',
   harness: 'claude-code-bedrock',
   modelId: 'sonnet-pinned-1',
+  account: 'acct-fleet',
   tools: [
     { name: 'playwright', kind: 'server', pin: 'npm:1.0.0' },
     { name: 'sqlite', kind: 'server', pin: 'git:deadbeef' },

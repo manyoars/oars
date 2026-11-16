@@ -4,7 +4,8 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default defineConfig(
-  { ignores: ['**/dist/**', '**/node_modules/**', '.claude/**', 'packages/client/src/generated/**'] },
+  // taskset/ is a byte-for-byte copy of the commissioned run's task set (its README); a lint fix there would change a version that is fixed once an order names it.
+  { ignores: ['**/dist/**', '**/node_modules/**', '.claude/**', 'packages/client/src/generated/**', 'taskset/**'] },
   {
     // An eslint-disable comment would defeat the rules below, so inline directives are ignored (and reported as warnings,
     // which `eslint --max-warnings 0` turns into a failure).
