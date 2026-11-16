@@ -1,0 +1,1 @@
+At a window width of 600 pixels the app's main page scrolls sideways, because the New request and Status summary panels do not fit. Fix the layout so the page fits a 600 pixel window, without changing how it looks at 1280 pixels.

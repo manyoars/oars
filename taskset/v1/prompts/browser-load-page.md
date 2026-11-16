@@ -1,0 +1,1 @@
+Start the app and open its main page. Write the page's main heading, exactly as the page shows it, on the first line of `answers/page.txt`, and the number of requests listed in its Recent requests table on the second line.

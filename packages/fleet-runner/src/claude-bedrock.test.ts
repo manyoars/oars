@@ -55,13 +55,16 @@ const makeRepo = (name: string, files: RepoFiles, tag: string | null): { dir: st
 
 const APPEND = (word: string): string => ["import { appendFileSync, writeFileSync } from 'node:fs';", `appendFileSync('order.txt', '${word},');`, ''].join(String.fromCharCode(10));
 
-const RESET = { node: '20', commands: ['node scripts/install.mjs', 'node scripts/build-db.mjs'] };
+const RESET = { node: '>=20.0.0', install: 'node scripts/install.mjs', buildDb: 'node scripts/build-db.mjs' };
 
-const writeTask = (taskSetDir: string, prompt: string, reset: object = RESET, fixtureCommit = 'x'): void => {
-  mkdirSync(join(taskSetDir, 'tasks', 't1'), { recursive: true });
-  writeFileSync(join(taskSetDir, 'manifest.json'), JSON.stringify({ version: 'v1', fixtureTag: 'taskset-v1', fixtureCommit, reset, tasks: [{ id: 't1', category: 'browser' }] }));
-  writeFileSync(join(taskSetDir, 'tasks', 't1', 'prompt.md'), prompt);
-  writeFileSync(join(taskSetDir, 'tasks', 't1', 'check.mjs'), PASS_IF_SEED);
+/** The real task-set layout: `manifest.json`, `prompts/<id>.md`, `checks/<id>.mjs`, and a task's `setup` path (relative to the folder) when it has one. */
+const writeTask = (taskSetDir: string, prompt: string, reset: object = RESET, fixtureCommit = 'x', setup: string | null = null): void => {
+  mkdirSync(join(taskSetDir, 'prompts'), { recursive: true });
+  mkdirSync(join(taskSetDir, 'checks'), { recursive: true });
+  const task = { id: 't1', category: 'browser', status: 'written', ...(setup === null ? {} : { setup }) };
+  writeFileSync(join(taskSetDir, 'manifest.json'), JSON.stringify({ version: 'v1', fixtureTag: 'taskset-v1', fixtureCommit, reset, tasks: [task] }));
+  writeFileSync(join(taskSetDir, 'prompts', 't1.md'), prompt);
+  writeFileSync(join(taskSetDir, 'checks', 't1.mjs'), PASS_IF_SEED);
 };
 
 const SERVER: ToolUnderTest = { kind: 'server', name: 'playwright', package: '@playwright/mcp', entry: 'cli.js', args: ['--headless'] };
@@ -200,14 +203,33 @@ describe('prepare', () => {
 
   it('refuses a Node version below the manifest before any run', () => {
     const r = rig();
-    writeTask(join(scratch, 'taskset'), 'scenario: ok', { node: '24', commands: [] }, r.fixtureCommit);
+    writeTask(join(scratch, 'taskset'), 'scenario: ok', { ...RESET, node: '>=24.0.0' }, r.fixtureCommit);
     expect(() => makeClaudeBedrock(r.settings, { env: ENV, nodeVersion: '22.4.0' })).toThrow(/Node 22 is below the Node 24/);
     expect(() => makeClaudeBedrock(r.settings, { env: ENV, nodeVersion: '24.0.0' })).not.toThrow();
+  });
+
+  it('refuses a manifest whose reset.node is not a ">=" floor, and one missing install or buildDb', () => {
+    const r = rig();
+    writeTask(join(scratch, 'taskset'), 'scenario: ok', { ...RESET, node: '24' }, r.fixtureCommit);
+    expect(() => makeClaudeBedrock(r.settings, { env: ENV })).toThrow(/reset\.node/);
+    writeTask(join(scratch, 'taskset'), 'scenario: ok', { node: '>=24.0.0', install: 'npm ci' }, r.fixtureCommit);
+    expect(() => makeClaudeBedrock(r.settings, { env: ENV })).toThrow(/buildDb/);
+    writeTask(join(scratch, 'taskset'), 'scenario: ok', { ...RESET, install: ' ' }, r.fixtureCommit);
+    expect(() => makeClaudeBedrock(r.settings, { env: ENV })).toThrow(/reset\.install/);
+  });
+
+  it('refuses a task the manifest does not list, before it clones anything', async () => {
+    const r = rig();
+    const roots: string[] = [];
+    const adapter = makeClaudeBedrock(r.settings, { env: ENV, onTempFolder: (dir) => roots.push(dir) });
+    await expect(adapter.prepare({ ...request('no-tool', null), taskId: 'nope' })).rejects.toThrow(/task nope is not in the task-set manifest/);
+    expect(roots).toHaveLength(0);
   });
 
   it('runs a task setup script once, after the reset and before the harness', async () => {
     const r = rig();
     mkdirSync(join(scratch, 'taskset', 'setup'), { recursive: true });
+    writeTask(join(scratch, 'taskset'), 'scenario: ok', RESET, r.fixtureCommit, 'setup/t1.mjs');
     writeFileSync(join(scratch, 'taskset', 'setup', 't1.mjs'), ["import { appendFileSync, existsSync } from 'node:fs';", "import { join } from 'node:path';", "const dir = process.argv[2] ?? '';", "appendFileSync(join(dir, 'order.txt'), `setup(db=${String(existsSync(join(dir, 'app.db')))}),`);", ''].join(String.fromCharCode(10)));
     const adapter = makeClaudeBedrock(r.settings, { env: ENV });
     const req = request('no-tool', null);
@@ -222,6 +244,7 @@ describe('prepare', () => {
   it('a setup script that exits non-zero is an error the runner sees, and the folder is deleted', async () => {
     const r = rig();
     mkdirSync(join(scratch, 'taskset', 'setup'), { recursive: true });
+    writeTask(join(scratch, 'taskset'), 'scenario: ok', RESET, r.fixtureCommit, 'setup/t1.mjs');
     writeFileSync(join(scratch, 'taskset', 'setup', 't1.mjs'), 'process.exit(4);' + String.fromCharCode(10));
     const roots: string[] = [];
     const adapter = makeClaudeBedrock(r.settings, { env: ENV, onTempFolder: (dir) => roots.push(dir) });
@@ -239,7 +262,7 @@ describe('prepare', () => {
 
   it('deletes the temp folder when a reset command fails', async () => {
     const r = rig();
-    writeTask(join(scratch, 'taskset'), 'scenario: ok', { node: '20', commands: ['node scripts/missing.mjs'] }, r.fixtureCommit);
+    writeTask(join(scratch, 'taskset'), 'scenario: ok', { ...RESET, buildDb: 'node scripts/missing.mjs' }, r.fixtureCommit);
     const roots: string[] = [];
     const adapter = makeClaudeBedrock(r.settings, { env: ENV, onTempFolder: (dir) => roots.push(dir) });
     await expect(adapter.prepare(request('no-tool', null))).rejects.toThrow(/reset command/);
@@ -491,7 +514,7 @@ describe('check and cleanup', () => {
 
   it('a check that cannot start is an error, not a fail', async () => {
     const r = rig();
-    rmSync(join(scratch, 'taskset', 'tasks', 't1', 'check.mjs'), { force: true });
+    rmSync(join(scratch, 'taskset', 'checks', 't1.mjs'), { force: true });
     const adapter = makeClaudeBedrock(r.settings, { env: ENV });
     const req = request('no-tool', null);
     const prepared = await adapter.prepare(req);
@@ -505,7 +528,7 @@ describe('check and cleanup', () => {
     const req = request('no-tool', null);
     const prepared = await adapter.prepare(req);
     const result = await adapter.run(prepared, req);
-    rmSync(join(scratch, 'taskset', 'tasks', 't1', 'check.mjs'), { force: true });
+    rmSync(join(scratch, 'taskset', 'checks', 't1.mjs'), { force: true });
     await expect(adapter.check(prepared, req)).rejects.toThrow();
     await prepared.dispose();
     expect(existsSync(prepared.dir)).toBe(false);
