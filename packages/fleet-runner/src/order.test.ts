@@ -27,7 +27,7 @@ describe('parseOrder', () => {
   });
 
   it('defaults repeats to 3', () => {
-    const { repeats: _dropped, ...rest } = retestShape();
+    const rest = { ...retestShape(), repeats: undefined };
     expect(parseOrder(JSON.stringify(rest), FLEET).repeats).toBe(3);
   });
 
