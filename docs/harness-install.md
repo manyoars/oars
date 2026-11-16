@@ -27,7 +27,7 @@ Each reader is pinned by a made-up session fixture and a test (`packages/cli/src
 | Harness | Version the fixture is modeled on | How we know | Date |
 |---------|-----------------------------------|-------------|------|
 | Claude Code | 2.1.322 | stamped | 2026-11-12 |
-| Codex | 0.167.0 | stamped | 2026-11-12 |
+| Codex | 0.169.0 | stamped | 2026-11-16 |
 | Copilot CLI | 1.0.105 | stamped | 2026-11-12 |
 | OpenCode | 2.2.5 | stamped | 2026-11-12 |
 | Gemini CLI | not stamped | source, google-gemini/gemini-cli at 89e9d25d | 2026-11-12 |
