@@ -56,7 +56,7 @@ const filesUnder = async (dir: string, below = ''): Promise<string[]> => {
   return found;
 };
 
-/** The file `validate-pack` requires first; it goes last, so an archive cut before it is rejected. */
+/** The file `validate-pack` checks before anything else; it is sent last, so an archive cut before it is rejected. */
 export const MANIFEST_NAME = 'manifest.jsonl';
 
 /**
