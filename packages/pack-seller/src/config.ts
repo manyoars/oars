@@ -18,7 +18,7 @@ export const ENV_PORT = 'OARS_SELLER_PORT';
 export const ENV_HOST = 'OARS_SELLER_HOST';
 export const DEFAULT_HOST = '127.0.0.1';
 
-type Env = Readonly<Record<string, string | undefined>>;
+type Env = Readonly<NodeJS.ProcessEnv>;
 
 const present = (env: Env, name: string): string | undefined => {
   const value = env[name]?.trim();

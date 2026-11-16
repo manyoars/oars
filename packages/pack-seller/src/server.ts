@@ -73,6 +73,7 @@ export const createSellerServer = (options: SellerOptions): Server => {
     })().catch(() => {
       // A handler never throws on a platform refusal; this is a bug, so answer one line and leave the detail out of the response.
       if (!outgoing.headersSent) outgoing.writeHead(500, { 'Content-Type': 'application/json' }).end('{"error":"Internal error."}');
+      else outgoing.destroy();
     });
   });
 };
@@ -80,7 +81,7 @@ export const createSellerServer = (options: SellerOptions): Server => {
 export type StartResult = { ok: true; server: Server; port: number } | { ok: false; line: string };
 
 /** Reads the environment and starts listening; a bad configuration comes back as one line to print, with nothing started. */
-export const start = async (env: Readonly<Record<string, string | undefined>>, options: Omit<SellerOptions, 'config'> = {}): Promise<StartResult> => {
+export const start = async (env: Readonly<NodeJS.ProcessEnv>, options: Omit<SellerOptions, 'config'> = {}): Promise<StartResult> => {
   let config: Config;
   try {
     config = loadConfig(env);
