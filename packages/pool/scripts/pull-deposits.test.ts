@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { sha256Of } from '../src/covenant.js';
 import { COVENANT_TEXTS, COVENANT_VERSION_2, COVENANT_VERSION_2_1 } from '../src/covenant-texts.js';
 import { objectKey } from '../src/raw.js';
-import { startPool, stubUser, type TestPool } from '../src/test-pool.js';
+import { startPool, stubUser, type TestDb, type TestPool } from '../src/test-pool.js';
 import type { EraseStore } from './erase.js';
 import { storeOf } from './erase-test-store.js';
 import type { ExportFolder } from './export-account.js';
@@ -71,14 +71,30 @@ const seeded = async (seed: Seed = {}): Promise<string> => {
     const input = found.input === undefined ? 'I accept' : found.input;
     await db.prepare('INSERT INTO covenant_acceptances (account, version, accepted_at, text_sha256, input) VALUES (?, ?, ?, ?, ?)').bind(account, found.version, found.at, hash, input).run();
   }
-  for (const found of seed.deposits ?? []) {
-    await db.prepare("INSERT INTO deposits (account, id, skeleton, tier, counted_at, erased_on, request_country, deltas) VALUES (?, ?, ?, ?, ?, ?, 'US', '[]')").bind(account, found.id, `{"id":"${found.id}"}`, found.tier ?? 'skeleton', found.countedAt === undefined ? 2000 : found.countedAt, found.erasedOn ?? null).run();
-  }
+  if ((seed.deposits ?? []).length > 0) await db.batch((seed.deposits ?? []).map((found) => depositRow(db, account, found)));
   for (const found of seed.raw ?? []) {
     await db.prepare("INSERT INTO raw_objects (account, sha256, bytes, capture_version, redaction_version, stored_at, erased_on, deposit, place) VALUES (?, ?, ?, 'cap-1', '1', 1, ?, ?, ?)").bind(account, sha(found.text), found.text.length, found.erasedOn ?? null, found.link?.deposit ?? null, found.link?.place ?? null).run();
     if (found.stored !== false) await (await pool.rawBucket()).put(objectKey(account, sha(found.text)), found.text);
   }
   return account;
+};
+
+type SeedDeposit = NonNullable<Seed['deposits']>[number];
+
+const depositRow = (db: TestDb, account: string, found: SeedDeposit): ReturnType<ReturnType<TestDb['prepare']>['bind']> =>
+  db.prepare("INSERT INTO deposits (account, id, skeleton, tier, counted_at, erased_on, request_country, deltas) VALUES (?, ?, ?, ?, ?, ?, 'US', '[]')").bind(account, found.id, `{"id":"${found.id}"}`, found.tier ?? 'skeleton', found.countedAt === undefined ? 2000 : found.countedAt, found.erasedOn ?? null);
+
+/** Accounts that would be pulled, each with a proved acceptance and one deposit, written straight into the pool in one batch (no sign-in, which is three Worker calls each). */
+const bulkAccounts = async (count: number): Promise<string[]> => {
+  const db = await pool.db();
+  const ids = Array.from({ length: count }, () => `bulk-${String((next += 1))}`);
+  const statements = ids.flatMap((id) => [
+    db.prepare("INSERT INTO accounts (id, source, raw_consent_version) VALUES (?, 'github', 'v1')").bind(id),
+    db.prepare('INSERT INTO covenant_acceptances (account, version, accepted_at, text_sha256, input) VALUES (?, ?, 1000, ?, ?)').bind(id, COVENANT_VERSION_2_1, screenHash(COVENANT_VERSION_2_1), 'I accept'),
+    depositRow(db, id, { id: 'q0' }),
+  ]);
+  await db.batch(statements);
+  return ids;
 };
 
 const jsonl = (text: string | undefined): unknown[] => (text ?? '').split('\n').filter((row) => row !== '').map((row): unknown => JSON.parse(row));
@@ -167,16 +183,17 @@ describe('pull-deposits', () => {
   });
 
   it('reads accounts and deposits a page of 25 at a time, and misses none past the first page', async () => {
-    const account = await seeded({ deposits: Array.from({ length: 27 }, (_, n) => ({ id: `p${String(n).padStart(2, '0')}` })) });
-    // More accounts than one page, so the account read must page too.
-    const others: string[] = [];
-    for (let n = 0; n < 26; n += 1) others.push(await seeded({ deposits: [{ id: `q${String(n)}` }] }));
+    // One more than a page of deposits, so the deposit read must page; every row goes in with one batch, not a round trip each.
+    const ids = Array.from({ length: 26 }, (_, n) => `p${String(n).padStart(2, '0')}`);
+    const account = await seeded({ deposits: ids.map((id) => ({ id })) });
+    // A page of other accounts besides this one, so the account read must page too, whatever the other tests left in the pool.
+    const others = await bulkAccounts(25);
     const real = await store();
     const statements: string[] = [];
     const counting: EraseStore = { ...real, rows: (sql, binds) => (statements.push(sql), real.rows(sql, binds)) };
     const { folder, files } = memory();
     await pullDeposits(counting, folder);
-    expect(jsonl(files.get(`${account}/deposits.jsonl`)).map((row) => fieldOf(row, 'id'))).toEqual(Array.from({ length: 27 }, (_, n) => `p${String(n).padStart(2, '0')}`));
+    expect(jsonl(files.get(`${account}/deposits.jsonl`)).map((row) => fieldOf(row, 'id'))).toEqual(ids);
     expect(pulledAccounts(files)).toEqual(expect.arrayContaining([account, ...others]));
     for (const table of ['accounts', 'deposits']) {
       const reads = statements.filter((sql) => sql.includes(`FROM ${table} `));
