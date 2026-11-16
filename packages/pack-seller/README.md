@@ -20,7 +20,8 @@ npm start -w packages/pack-seller
 | `OARS_SELLER_API_URL` | The platform's base URL. Required. |
 | `OARS_SELLER_SDK_KEY_FILE` | Path to a file holding the seller's SDK key (`aorsk_...`). Wins over `OARS_SELLER_SDK_KEY`. |
 | `OARS_SELLER_SDK_KEY` | The key itself, when no file is given. One of the two is required. |
-| `OARS_SELLER_PORT` | The port to listen on, on 127.0.0.1. Required. |
+| `OARS_SELLER_PORT` | The port to listen on. Required. |
+| `OARS_SELLER_HOST` | The IP address to listen on. Default `127.0.0.1`; the image sets `0.0.0.0`. |
 
 A missing or malformed value prints one line naming the variable and exits 1. The line never holds a value.
 
@@ -32,9 +33,8 @@ A missing or malformed value prints one line naming the variable and exits 1. Th
 | `GET /packs`, `GET /packs/{packId}` | The packs the catalog lists. Until the pack store lands the catalog is empty, so these answer an empty list and 404. |
 | `POST /packs/{packId}/offer` | Body `{recipientLegalName, licenseVersion}`, both required. Creates a customer under a fresh ref, records both against it, asks for an offer, and returns `{offerId, expiresAt, priceRef, customerRef}`. The `customerRef` is shown this once and never logged. Rate limited per caller. |
 | `GET /credits` | The balance for the customer in the `X-Customer-Ref` header. |
-| `POST /credits/reservations` | Holds one credit for 300 seconds for the customer in `X-Customer-Ref`; an `Idempotency-Key` header (a UUID) makes a retry replay. |
-| `POST /credits/reservations/{reservationId}/commit` | Spends the held credit. |
-| `POST /credits/reservations/{reservationId}/release` | Gives it back. |
+
+There are no public reservation routes. Reserve, commit, and release (`billing.reserve`, `billing.commit`, `billing.release` in `src/billing.ts`) are the seam for brief 3's download route, which runs them for the buyer; those paths answer 404.
 
 A refusal from the platform reaches the caller as one of 400, 402, 404, 409, 502, or 503 with a one-line body `{"error":"..."}`; the platform's own text never does.
 

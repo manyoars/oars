@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import type { Billing } from './billing.js';
 import { OFFER_RATE_REFUSAL_STATUS, type RateLimiter } from './rate-limit.js';
 import { BAD_REQUEST, NOT_FOUND, type Outcome, type Refusal } from './refusal.js';
@@ -57,8 +56,6 @@ export const MAX_LICENSE_VERSION_LENGTH = 64;
 export const CUSTOMER_REF_HEADER = 'x-customer-ref';
 
 const CUSTOMER_REF = /^[A-Za-z0-9_-]{16,128}$/;
-const RESERVATION_ID = /^[A-Za-z0-9_-]{1,128}$/;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const respond = (status: number, body: object): Response => Response.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
 const refuse = (refusal: Refusal): Response => respond(refusal.status, { error: refusal.message });
@@ -102,7 +99,7 @@ const customerRefOf = (request: Request): string | undefined => {
 const route = async (deps: RouteDeps, request: Request, caller: string): Promise<Response> => {
   const { pathname } = new URL(request.url);
   const parts = pathname.split('/').filter((part) => part !== '');
-  const [first, second, third, fourth] = parts;
+  const [first, second, third] = parts;
   const method = request.method;
 
   if (method === 'GET' && pathname === '/health') return respond(200, { status: 'ok' });
@@ -117,21 +114,11 @@ const route = async (deps: RouteDeps, request: Request, caller: string): Promise
     return refuse(NOT_FOUND);
   }
 
-  // Step 9: credits and reservations. The seller learns of settlement only by reading the balance (design Fact 3).
+  // Step 9: the balance. Reserve, commit, and release run inside the download route (brief 3), never as public routes. The seller learns of settlement only by reading the balance (design Fact 3).
   if (first === 'credits') {
     if (method === 'GET' && parts.length === 1) {
       const ref = customerRefOf(request);
       return ref === undefined ? refuse(BAD_REQUEST) : answer(await deps.billing.balance(ref));
-    }
-    if (method === 'POST' && second === 'reservations' && parts.length === 2) {
-      const ref = customerRefOf(request);
-      const key = request.headers.get('idempotency-key') ?? randomUUID();
-      if (ref === undefined || !UUID.test(key)) return refuse(BAD_REQUEST);
-      return answer(await deps.billing.reserve(ref, key));
-    }
-    if (method === 'POST' && second === 'reservations' && parts.length === 4 && third !== undefined && RESERVATION_ID.test(third)) {
-      if (fourth === 'commit') return answer(await deps.billing.commit(third));
-      if (fourth === 'release') return answer(await deps.billing.release(third));
     }
   }
   return refuse(NOT_FOUND);

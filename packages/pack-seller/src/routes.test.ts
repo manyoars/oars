@@ -130,7 +130,7 @@ describe('offer rate limit (driven clock)', () => {
   });
 });
 
-describe('credits and reservations (step 9)', () => {
+describe('credits (step 9)', () => {
   it('reads the balance with the customer ref from a header', async () => {
     let key: string | null = null;
     server.use(
@@ -152,38 +152,18 @@ describe('credits and reservations (step 9)', () => {
     expect((await call('GET', '/credits', { headers: [['X-Customer-Ref', 'short']] })).status).toBe(400);
   });
 
-  it('reserves one credit for 300 seconds under the caller idempotency key, and generates one when absent', async () => {
-    const seen: { body: unknown; key: string | null }[] = [];
-    server.use(
-      http.post(`${API}/billing/credits/reservations`, async ({ request }) => {
-        seen.push({ body: await request.json(), key: request.headers.get('Idempotency-Key') });
-        return HttpResponse.json({ credits: 1, expiresAt: 't', replayCount: 0, replayed: false, reservationId: 'rv_1', status: 'HELD' });
-      }),
-    );
+  it('has no public reservation routes: each dropped path answers 404 without a billing call', async () => {
+    let billingCalls = 0;
+    server.use(http.all(`${API}/*`, () => {
+      billingCalls += 1;
+      return HttpResponse.json({});
+    }));
     const { call } = harness();
-    const given = '3f6c1b1e-0d7a-4c55-9d6e-2a1b4c5d6e7f';
-    expect((await call('POST', '/credits/reservations', { headers: [...refHeader, ['Idempotency-Key', given]] })).status).toBe(200);
-    expect((await call('POST', '/credits/reservations', { headers: refHeader })).status).toBe(200);
-    expect(seen[0]).toEqual({ body: { customerRef: REF, credits: 1, ttlSeconds: 300 }, key: given });
-    expect(seen[1]?.key).toMatch(/^[0-9a-f-]{36}$/);
-  });
-
-  it('refuses a reservation without a customer ref or with a key that is not a UUID', async () => {
-    const { call } = harness();
-    expect((await call('POST', '/credits/reservations')).status).toBe(400);
-    expect((await call('POST', '/credits/reservations', { headers: [...refHeader, ['Idempotency-Key', 'nope']] })).status).toBe(400);
-  });
-
-  it('commits and releases a reservation', async () => {
-    server.use(
-      platform('/billing/credits/reservations/rv_1/commit', 200, { committedCredits: 1, creditsRemaining: 2, replayed: false, reservationId: 'rv_1', status: 'COMMITTED' }),
-      platform('/billing/credits/reservations/rv_1/release', 200, { replayed: false, reservationId: 'rv_1', status: 'RELEASED' }),
-    );
-    const { call } = harness();
-    expect(await (await call('POST', '/credits/reservations/rv_1/commit')).json()).toMatchObject({ status: 'COMMITTED' });
-    expect(await (await call('POST', '/credits/reservations/rv_1/release')).json()).toMatchObject({ status: 'RELEASED' });
-    expect((await call('POST', '/credits/reservations/rv_1/other')).status).toBe(404);
+    for (const path of ['/credits/reservations', '/credits/reservations/rv_1/commit', '/credits/reservations/rv_1/release']) {
+      expect((await call('POST', path, { headers: refHeader })).status).toBe(404);
+    }
     expect((await call('GET', '/credits/elsewhere')).status).toBe(404);
+    expect(billingCalls).toBe(0);
   });
 });
 
@@ -221,20 +201,14 @@ describe('platform refusals map to one seller status each', () => {
     expect((await call('POST', '/packs/alpha/offer', { body: accept })).status).toBe(502);
   });
 
-  it('maps a refusal on the offer, balance, reserve, commit, and release calls the same way', async () => {
+  it('maps a refusal on the offer and balance calls the same way', async () => {
     server.use(
       platform('/billing/customers', 201, customer),
       platform('/billing/offers', 409, {}),
       platform(`/billing/credits/${REF}`, 404, {}, 'get'),
-      platform('/billing/credits/reservations', 409, {}),
-      platform('/billing/credits/reservations/rv_1/commit', 410, {}),
-      platform('/billing/credits/reservations/rv_1/release', 429, {}),
     );
     const { call } = harness();
     expect((await call('POST', '/packs/alpha/offer', { body: accept })).status).toBe(409);
     expect((await call('GET', '/credits', { headers: refHeader })).status).toBe(404);
-    expect((await call('POST', '/credits/reservations', { headers: refHeader })).status).toBe(409);
-    expect((await call('POST', '/credits/reservations/rv_1/commit')).status).toBe(404);
-    expect((await call('POST', '/credits/reservations/rv_1/release')).status).toBe(503);
   });
 });

@@ -39,7 +39,7 @@ const readBytes = async (incoming: IncomingMessage): Promise<Buffer | undefined>
 /** The seller's node server; it only adapts `http` to the handler in routes.ts. Call `listen` on it. */
 export const createSellerServer = (options: SellerOptions): Server => {
   const now = options.now ?? Date.now;
-  const client = createOarsClient({ version: SELLER_VERSION, token: options.config.sdkKey, baseUrl: options.config.apiUrl });
+  const client = createOarsClient({ version: SELLER_VERSION, baseUrl: options.config.apiUrl });
   const deps: RouteDeps = {
     billing: createBilling(client, options.config.sdkKey),
     catalog: options.catalog ?? emptyCatalog,
@@ -89,7 +89,7 @@ export const start = async (env: Readonly<Record<string, string | undefined>>, o
     throw error;
   }
   const server = createSellerServer({ ...options, config });
-  await new Promise<void>((resolve) => server.listen(config.port, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => server.listen(config.port, config.host, resolve));
   const address = server.address();
   return { ok: true, server, port: typeof address === 'object' && address !== null ? address.port : config.port };
 };

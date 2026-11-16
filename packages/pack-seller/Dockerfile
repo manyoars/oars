@@ -14,6 +14,7 @@ RUN npm run build -w packages/client && npm run build -w packages/pack-seller \
 
 FROM node:24-slim
 ENV NODE_ENV=production
+ENV OARS_SELLER_HOST=0.0.0.0
 WORKDIR /repo
 COPY --from=build /repo/node_modules node_modules
 COPY --from=build /repo/packages/client/package.json packages/client/package.json

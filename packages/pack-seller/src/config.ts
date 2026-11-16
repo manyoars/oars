@@ -1,9 +1,11 @@
 import { readFileSync } from 'node:fs';
+import { isIP } from 'node:net';
 
 export interface Config {
   apiUrl: string;
   sdkKey: string;
   port: number;
+  host: string;
 }
 
 /** A refused configuration: the message is one line that names the variable and never carries a value. */
@@ -13,6 +15,8 @@ export const ENV_API_URL = 'OARS_SELLER_API_URL';
 export const ENV_SDK_KEY = 'OARS_SELLER_SDK_KEY';
 export const ENV_SDK_KEY_FILE = 'OARS_SELLER_SDK_KEY_FILE';
 export const ENV_PORT = 'OARS_SELLER_PORT';
+export const ENV_HOST = 'OARS_SELLER_HOST';
+export const DEFAULT_HOST = '127.0.0.1';
 
 type Env = Readonly<Record<string, string | undefined>>;
 
@@ -47,5 +51,7 @@ export const loadConfig = (env: Env): Config => {
   const key = sdkKey(env);
   const port = Number(need(env, ENV_PORT));
   if (!Number.isInteger(port) || port < 0 || port > 65_535) throw new ConfigError(`${ENV_PORT} is not a port number.`);
-  return { apiUrl, sdkKey: key, port };
+  const host = present(env, ENV_HOST) ?? DEFAULT_HOST;
+  if (isIP(host) === 0) throw new ConfigError(`${ENV_HOST} is not an IP address.`);
+  return { apiUrl, sdkKey: key, port, host };
 };
