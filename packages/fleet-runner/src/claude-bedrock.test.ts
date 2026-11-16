@@ -1,4 +1,4 @@
-// Proof of the Claude Code on Bedrock adapter against a stub `claude` (scripts/stub-claude.mjs), a tiny git repository made here, and a stub `npm`. No test starts the real
+// Proof of the Claude Code on Bedrock adapter against a stub `claude` (src/stub-claude.mjs), a tiny git repository made here, and a stub `npm`. No test starts the real
 // `claude`, opens a network connection, or reads an AWS credential: the credential is a made-up string handed in through the injected environment.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -13,7 +13,7 @@ import { isObject } from './json.js';
 import { parseOrder } from './order.js';
 import { comparisonText, FLEET } from './test-fixtures.js';
 
-const STUB = join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'stub-claude.mjs');
+const STUB = join(dirname(fileURLToPath(import.meta.url)), 'stub-claude.mjs');
 const SECRET = 'bedrock-key-not-real-0001';
 const MODEL = 'sonnet-pinned-1';
 const git = (cwd: string, ...args: string[]): string => execFileSync('git', ['-c', 'core.autocrlf=false', '-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd, encoding: 'utf8' }).trim();

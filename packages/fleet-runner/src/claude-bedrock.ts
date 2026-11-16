@@ -14,9 +14,13 @@ import { existsSync, readFileSync } from 'node:fs';
 import { arrayAt, isObject, objectAt, parseJson, stringAt, optionalStringAt } from './json.js';
 import { loadTaskSet } from './manifest.js';
 
-export interface EnvMap {
-  [name: string]: string | undefined;
+/** An environment handed to a child: every value is set. */
+export interface ChildEnv {
+  [name: string]: string;
 }
+
+/** The caller's environment, where a name may be unset. */
+export type EnvMap = Partial<ChildEnv>;
 
 export interface CommandSpec {
   command: string;
@@ -76,7 +80,7 @@ export interface SpawnSpec {
   args: string[];
   cwd: string;
   /** The child's whole environment; nothing else is inherited. */
-  env: { [name: string]: string };
+  env: ChildEnv;
   stdin: string | null;
   timeoutMs: number;
 }
@@ -177,8 +181,8 @@ export const nodeSpawn: Spawn = (spec) =>
 // What a process needs to start. HOME and the application-data folders are not here: they point into the run's own temp folder.
 const START_NAMES = ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'windir', 'ComSpec', 'TEMP', 'TMP', 'TMPDIR'];
 
-const pick = (env: EnvMap, names: readonly string[]): { [name: string]: string } => {
-  const out: { [name: string]: string } = {};
+const pick = (env: EnvMap, names: readonly string[]): ChildEnv => {
+  const out: ChildEnv = {};
   for (const name of names) {
     const value = env[name];
     if (value !== undefined && value !== '') out[name] = value;
@@ -277,7 +281,7 @@ export const makeClaudeBedrock = (settings: ClaudeBedrockSettings, deps: Depende
   };
 
   // The environment of a git, npm, or database step: the start names, the folder's own home, and the operator's named extras.
-  const setupEnv = (root: string): { [name: string]: string } => ({ ...pick(deps.env, START_NAMES), ...pick(deps.env, settings.setupEnvNames), HOME: join(root, 'home'), USERPROFILE: join(root, 'home'), GIT_TERMINAL_PROMPT: '0' });
+  const setupEnv = (root: string): ChildEnv => ({ ...pick(deps.env, START_NAMES), ...pick(deps.env, settings.setupEnvNames), HOME: join(root, 'home'), USERPROFILE: join(root, 'home'), GIT_TERMINAL_PROMPT: '0' });
 
   const step = async (what: string, spec: SpawnSpec): Promise<string> => {
     const outcome = await spawn(spec);

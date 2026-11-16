@@ -11,7 +11,7 @@ The runner is proved with a scripted fake, and the Claude Code on Bedrock adapte
 | `src/plan.ts` | `planOrder`: the ordered runs and the cells; a retest alternates sides. |
 | `src/harness.ts` | The adapter interface: `prepare`, `run`, `check`. |
 | `src/fake-harness.ts` | The scripted fake; each void cause can be injected per run. |
-| `src/claude-bedrock.ts` | The real adapter, Claude Code on Bedrock: `makeClaudeBedrock(settings, { env })` with typed `ClaudeBedrockSettings`; refuses to start without `AWS_BEARER_TOKEN_BEDROCK` and a region. `scripts/stub-claude.mjs` stands in for `claude` in its tests. |
+| `src/claude-bedrock.ts` | The real adapter, Claude Code on Bedrock: `makeClaudeBedrock(settings, { env })` with typed `ClaudeBedrockSettings`; refuses to start without `AWS_BEARER_TOKEN_BEDROCK` and a region. `src/stub-claude.mjs` stands in for `claude` in its tests. |
 | `src/runner.ts` | `runOrder`: void detection, in-place reruns, the run cap. |
 | `src/runbook.ts` | The run book as JSON Lines with a fixed key order, no transcript text, and no signature. |
 
