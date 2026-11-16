@@ -25,9 +25,14 @@ npm start -w packages/pack-seller
 | `OARS_SELLER_PACKS_DIR` | The folder holding one subfolder per pack (`listing.json` and the built `preview/`); per-buyer builds go under `builds/`. Required. |
 | `OARS_SELLER_TERMS_FILE`, `OARS_SELLER_OWNERS_FILE`, `OARS_SELLER_INDEX_KEY_FILE` | The term list, owners file, and index key the per-buyer build reads. Required. |
 | `OARS_SELLER_STORE_DIR`, `OARS_SELLER_PROJECTS_DIR` | The copy of the session store and the transcripts the build reads. Required. |
-| `OARS_SELLER_PRICE_USD` | The amount of a pack's `CREDIT_PACK` price, read by the price command, not yet built (`src/pricing.ts` holds the functions). It is never a default in code. |
+| `OARS_SELLER_PRICE_USD` | The amount of a pack's `CREDIT_PACK` price, read by the price command (`src/pricing.ts`). It is never a default in code. |
+| `OARS_SELLER_WORKLOAD_ID` | The seller's workload id (a UUID), read by the price command only. |
 
 Every path above is local to the operator's machine, and a path inside a git repository is refused at start with a line naming the variable. The offer record (`offers.jsonl`) is kept beside `deliveries.jsonl`, next to the owners file.
+
+## Create the price
+
+`npm start -w packages/pack-seller -- price` creates the `CREDIT_PACK` price (`pack-<packId>`, 3 credits, `OARS_SELLER_PRICE_USD`) of every pack in `OARS_SELLER_PACKS_DIR` and prints one line per pack: `Price pack-alpha created.`, or `already exists.` on a second run, which creates nothing. A price that exists with other terms is left unchanged and the command exits 1, because an amount is immutable once charged. Creating a price needs the operator's login, not the SDK key: run `oars login --api-url <url>` first, or set `OARS_API_KEY`. It needs the same variables as the server except `OARS_SELLER_SDK_KEY*` and `OARS_SELLER_PORT`, plus `OARS_SELLER_WORKLOAD_ID`. Every failure is one line with no token in it.
 
 A missing or malformed value prints one line naming the variable and exits 1. The line never holds a value.
 
