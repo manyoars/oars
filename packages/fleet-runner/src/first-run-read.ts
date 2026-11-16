@@ -1,6 +1,7 @@
 // `npm run first-run-read -w packages/fleet-runner -- --transcript <file> --output <file> --run-book <file> --model-id <Bedrock ID> [--run-id <id>] [--marker <text>] [--allow-server <name>]... [--allow-skill <name>]...`
 // Reads the files ONE real run leaves behind (the transcript copy, the captured `claude -p --output-format stream-json` stdout, and the run's line in the run book) and prints one line per question
 // t1359 left open: `yes`, `no`, or `cannot tell`, and the evidence it read. It only prints. It never decides a void, never edits a record, and opens every input read-only; a test proves the inputs are byte-identical after.
+// The marker may also come from the FIRST_RUN_MARKER environment variable, which keeps it out of shell history and the process list.
 // Evidence lines name a line number or a field, never a matched secret: neither the key nor `--marker` is ever printed.
 // Field names (https://code.claude.com/docs/en/agent-sdk/typescript.md, read 2026-11-16, and headless.md): the `system`/`init` event has `model`, `mcp_servers[].name`, `skills`, and `claude_code_version`;
 // the `result` event has `subtype`, `is_error`, `api_error_status` (HTTP status of the API error that ended the turn, absent or null otherwise), `permission_denials[]`, and `modelUsage.<model>` with
@@ -73,7 +74,7 @@ export const readFirstRun = (inputs: Inputs): string[] => {
   const needles = ['AWS_BEARER_TOKEN_BEDROCK', ...(inputs.marker === undefined || inputs.marker === '' ? [] : [inputs.marker])];
   const leaked = results.filter(({ text }) => needles.some((needle) => text.includes(needle)));
   if (leaked.length > 0) lines.push(line('scrub (the key did not reach a tool)', 'no', `tool results on transcript line ${leaked.map(({ at }) => String(at)).join(', ')} show the key's name or marker`));
-  else if (results.length === 0) lines.push(line('scrub (the key did not reach a tool)', 'cannot tell', 'the transcript holds no tool result, so no tool could have shown it'));
+  else if (results.length === 0) lines.push(line('scrub (the key did not reach a tool)', 'cannot tell', 'the transcript holds no tool result to search (or its tool_result shape is not the one read)'));
   else lines.push(line('scrub (the key did not reach a tool)', 'yes', `${String(results.length)} tool results read; none shows the key's name${inputs.marker === undefined ? '' : ' or the marker'}`));
 
   // (a) A sign-in or onboarding prompt in the output.
@@ -139,7 +140,7 @@ const runOf = (inputs: Inputs): { cacheTokens: number } | null => {
   return only === undefined || typeof tokens !== 'number' ? null : { cacheTokens: tokens };
 };
 
-export const main = async (argv: string[], print: (line: string) => void): Promise<number> => {
+export const main = async (argv: string[], print: (line: string) => void, env: NodeJS.ProcessEnv = process.env): Promise<number> => {
   const transcript = flag(argv, '--transcript');
   const output = flag(argv, '--output');
   const runBook = flag(argv, '--run-book');
@@ -158,7 +159,7 @@ export const main = async (argv: string[], print: (line: string) => void): Promi
       allowSkills: flags(argv, '--allow-skill'),
     };
     const runId = flag(argv, '--run-id');
-    const marker = flag(argv, '--marker');
+    const marker = flag(argv, '--marker') ?? env['FIRST_RUN_MARKER'];
     if (runId !== undefined) inputs.runId = runId;
     if (marker !== undefined) inputs.marker = marker;
     print('first-run-read: reads only, decides no void, edits no record');
