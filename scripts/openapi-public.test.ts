@@ -202,16 +202,16 @@ describe('openapi-public.mjs', () => {
       ...source,
       paths: {
         ...source.paths,
-        '/billing/charges': {
+        '/me/payout-account': {
           post: {
-            tags: ['Billing charges'],
-            operationId: 'createCharge',
-            responses: { '200': ok('Charged', '#/components/schemas/ChargeView') },
+            tags: ['Payout account'],
+            operationId: 'provisionPayoutAccount',
+            responses: { '200': ok('Provisioned', '#/components/schemas/PayoutAccountView') },
           },
         },
         // No tag and an inline response: only the path arm can drop it.
-        '/billing/untagged': {
-          get: { operationId: 'untaggedBilling', responses: { '200': { description: 'Untagged' } } },
+        '/payouts/untagged': {
+          get: { operationId: 'untaggedPayout', responses: { '200': { description: 'Untagged' } } },
         },
         '/agents/templates': {
           get: {
@@ -221,38 +221,77 @@ describe('openapi-public.mjs', () => {
           },
         },
         '/orders/{orderId}/tagged': {
-          get: { tags: ['Billing mode'], operationId: 'taggedOnly', responses: { '200': { description: 'Tagged' } } },
+          get: { tags: ['Payout schedules'], operationId: 'taggedOnly', responses: { '200': { description: 'Tagged' } } },
         },
       },
       components: {
         ...source.components,
         schemas: {
           ...source.components.schemas,
-          ChargeView: { type: 'object', properties: { id: { type: 'string' } } },
-          // The real path is transitive: PageAgentTemplateResponse -> AgentTemplateResponse -> TemplateStarterPrice.
-          TemplatePage: { type: 'object', properties: { items: { type: 'array', items: { $ref: '#/components/schemas/TemplateStarterPrice' } } } },
-          TemplateStarterPrice: { type: 'object', properties: { id: { type: 'string' } } },
+          PayoutAccountView: { type: 'object', properties: { id: { type: 'string' } } },
+          // The real path is transitive: a page -> its item -> a payout schedule.
+          TemplatePage: { type: 'object', properties: { items: { type: 'array', items: { $ref: '#/components/schemas/TemplatePayoutSchedule' } } } },
+          TemplatePayoutSchedule: { type: 'object', properties: { id: { type: 'string' } } },
         },
       },
     };
 
-    it('drops a listed operation on a billing path, with a billing tag, or reaching a withheld schema through another schema', () => {
-      const result = run(['getOrder', 'createCharge', 'untaggedBilling', 'listTemplates', 'taggedOnly'], withheldSource);
+    it('drops a listed operation on a payout path, with a payout tag, or reaching a withheld schema through another schema', () => {
+      const result = run(['getOrder', 'provisionPayoutAccount', 'untaggedPayout', 'listTemplates', 'taggedOnly'], withheldSource);
 
       expect(result.status).toBe(0);
       const out = readOut();
       expect(keysAt(out, 'paths')).toEqual(['/orders/{orderId}']);
       expect(keysAt(out, 'components', 'schemas')).toEqual(['Order', 'Line', 'Quantity'].sort());
       expect(at(out, 'tags')).toEqual([{ name: 'Orders', description: 'Order lifecycle' }]);
-      expect(JSON.stringify(out)).not.toMatch(/charge|billing|price|TemplatePage/i);
+      expect(JSON.stringify(out)).not.toMatch(/payout|TemplatePage/i);
+    });
+
+    // V22 is lifted for Many Oars: the buyer's offer, purchase, customer, and credit operations are public; only payouts stay private.
+    it('keeps the offer, purchase, customer, and credit operations and still drops payouts', () => {
+      const view = (name: string) => ({ type: 'object', properties: { id: { type: 'string' } }, title: name });
+      const op = (tag: string, operationId: string, schema: string) => ({
+        tags: [tag],
+        operationId,
+        responses: { '200': ok('Answer', `#/components/schemas/${schema}`) },
+      });
+      const money = {
+        ...source,
+        paths: {
+          '/billing/offers/{offerId}': { get: op('Billing purchase offers', 'getOffer', 'OfferView') },
+          '/billing/purchases': { post: op('Billing purchases', 'createAgentPurchase', 'PurchaseView') },
+          '/billing/customers': { post: op('Billing customers', 'upsertBillingCustomer', 'CustomerView') },
+          '/billing/credits/{customerRef}': { get: op('Billing credits', 'balance', 'CreditBalance') },
+          '/me/payout-account': { get: op('Payout account', 'getPayoutAccount', 'PayoutAccountView') },
+        },
+        components: {
+          ...source.components,
+          schemas: {
+            ...source.components.schemas,
+            OfferView: view('offer'),
+            PurchaseView: view('purchase'),
+            CustomerView: view('customer'),
+            CreditBalance: view('credit'),
+            PayoutAccountView: view('payout'),
+          },
+        },
+      };
+
+      const result = run(['getOffer', 'createAgentPurchase', 'upsertBillingCustomer', 'balance', 'getPayoutAccount'], money);
+
+      expect(result.status).toBe(0);
+      const out = readOut();
+      expect(keysAt(out, 'paths')).toEqual(['/billing/credits/{customerRef}', '/billing/customers', '/billing/offers/{offerId}', '/billing/purchases']);
+      expect(keysAt(out, 'components', 'schemas')).toEqual(['CreditBalance', 'CustomerView', 'OfferView', 'PurchaseView']);
+      expect(JSON.stringify(out)).not.toMatch(/payout/i);
     });
 
     it('still names a listed operation the source lacks when the others are withheld operations', () => {
-      const result = run(['createCharge', 'noSuchOperation'], withheldSource);
+      const result = run(['provisionPayoutAccount', 'noSuchOperation'], withheldSource);
 
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain('noSuchOperation');
-      expect(result.stderr).not.toContain('createCharge');
+      expect(result.stderr).not.toContain('provisionPayoutAccount');
     });
 
     it('drops the 402 response, the payment and USD estimate properties, and rewrites the platform texts', () => {
