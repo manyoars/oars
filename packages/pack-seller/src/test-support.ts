@@ -41,7 +41,7 @@ export const harness = (store?: PackStore) => {
     billing: createBilling(client, SDK_KEY),
     catalog: store?.catalog ?? catalog,
     ledger,
-    source: store ?? { prepare: () => Promise.reject(new Error('This harness has no pack source.')), record: () => Promise.reject(new Error('This harness has no pack source.')) },
+    source: store ?? { prepare: () => Promise.reject(new Error('This harness has no pack source.')), check: () => Promise.reject(new Error('This harness has no pack source.')), record: () => Promise.reject(new Error('This harness has no pack source.')) },
     limiter: createRateLimiter(OFFER_RATE_LIMIT, OFFER_RATE_WINDOW_MS, now),
     log: (line) => lines.push(line),
     now,
