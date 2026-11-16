@@ -8,7 +8,7 @@ import { servedPool } from './pool.js';
 import { recallPool, storeSetup } from './recall-bundle.js';
 import { noEmit, type Emit } from '../telemetry/emit.js';
 import { recallFields } from '../telemetry/fields.js';
-import { appendRecall, type Recall } from './recall-object.js';
+import { appendRecall, CHARS_PER_TOKEN, type Recall } from './recall-object.js';
 import { formsRefusal, pull, pullRefusal, RECALL_FAMILIES, type PullInput } from './recall-reads.js';
 import { evidenceOf, MISS_TEXT } from './recall-render.js';
 import { classOfAimed, errorCodeOf, targetOf } from './extract.js';
@@ -39,7 +39,7 @@ const TOOL = {
       entity: { type: 'string', description: 'A public name: a package, a tool, an MCP server, an action, or a model.' },
       family: { type: 'string', description: `A read family to answer: ${RECALL_FAMILIES.join(', ')}. Only recovery and fit can be narrowed by class or sinceDays; any other family, and the prefix, entity, and text forms, count all time and refuse both. Name one form per call.` },
       text: { type: 'string', description: 'Text to look for in the local record.' },
-      failed: { type: 'string', description: 'The action that failed (for example file.edit). With error and path it adds what most often recovered on that kind of target; a local input, never sent anywhere.' },
+      failed: { type: 'string', description: 'The action that failed (for example file.edit). With error and path it adds the same-target read of the bundle for that kind of target, if it holds one: a step and how many of the times it followed it came back ok; a local input, never sent anywhere.' },
     },
   },
 } as const;
@@ -137,17 +137,32 @@ export const handleMessage = async (runtime: SessionsRuntime, now: () => number,
         await mkdir(runtime.storeDir, { recursive: true });
         await appendFile(paths(runtime.storeDir).calls, `${JSON.stringify(call)}\n`, { mode: 0o600 });
       });
-      // The same-target read is part of what was served, so its id and evidence go in the recorded row beside the pull's.
+      // The same-target read is part of what was served, so the recorded row says what was rendered: its line, id, and evidence beside the pull's.
       const asked = isObj(params.arguments) ? params.arguments : {};
       const served = await sameTargetFor(runtime, store, params.arguments);
       const setup = storeSetup(store);
-      const recall: Recall = served === undefined || setup === undefined ? result.recall : { ...result.recall, answer: { ...result.recall.answer, reads: [...result.recall.answer.reads, served.read.readId] }, evidence: [...result.recall.evidence, evidenceOf(sameTargetEvidence(served.failed, served.read, setup), result.recall.frame)] };
+      const beside = served === undefined ? '' : renderSameTarget(served.failed, errorCodeOf(typeof asked.error === 'string' ? asked.error : ''), served.target, served.read).rendered;
+      const text = [result.recall.answer.rendered, beside].filter((part) => part !== '').join('\n');
+      const recall: Recall =
+        served === undefined || setup === undefined
+          ? result.recall
+          : {
+              ...result.recall,
+              answer: {
+                ...result.recall.answer,
+                kind: 'hit',
+                reads: [...result.recall.answer.reads, served.read.readId],
+                rendered: text,
+                tokens: Math.ceil(text.length / CHARS_PER_TOKEN),
+                bytes: Buffer.byteLength(text),
+                names: [...result.recall.answer.names, served.read.step],
+              },
+              evidence: [...result.recall.evidence, evidenceOf(sameTargetEvidence(served.failed, served.read, setup), result.recall.frame)],
+            };
       await tryLog(() => appendRecall(runtime.storeDir, recall));
       emit('recall', recallFields(recall, result.reads.map((read) => read.family), result.legacy !== undefined));
       // An agent reads this, so it gets the rendered counts and the structured recall, and no signature text.
       const { answer, id: recallId, evidence } = recall;
-      const beside = served === undefined ? '' : renderSameTarget(served.failed, errorCodeOf(typeof asked.error === 'string' ? asked.error : ''), served.target, served.read).rendered;
-      const text = [result.recall.answer.rendered, beside].filter((part) => part !== '').join('\n');
       return reply(id, { content: [{ type: 'text', text: text === '' ? MISS_TEXT : text }], structuredContent: { recallId, kind: answer.kind, reads: answer.reads, evidence } });
     } catch (error) {
       // A store read failure must not end the server mid-session: the agent gets an error for this call and can carry on.

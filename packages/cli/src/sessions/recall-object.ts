@@ -138,7 +138,7 @@ export interface Recall {
 }
 
 /** Characters per token, the rule of thumb: the size is a count for comparing arms, not a bill. */
-const CHARS_PER_TOKEN = 4;
+export const CHARS_PER_TOKEN = 4;
 
 const hash = (parts: readonly unknown[]): string => createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 

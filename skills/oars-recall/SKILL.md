@@ -25,7 +25,7 @@ Name one form per call.
 - `entity`: a public name, such as a package, a tool, an MCP server, an action, or a model.
 - `family`: a read family to answer.
 - `text`: text to look for in the local record.
-- `failed`: the action that failed, such as `file.edit`. With `error` and `path` it adds what most often recovered on that kind of target, when the pool holds a read; a local input.
+- `failed`: the action that failed, such as `file.edit`. With `error` and `path` it adds, when the pool holds one, a step that followed this failure on that kind of target and how many of those times it came back ok; a local input.
 
 ## Reading the answer
 
