@@ -1,0 +1,20 @@
+{
+  "name": "@manyoars/fleet-runner",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The Many Oars fleet runner: runs a commissioned order through a harness adapter, voids and reruns by the run-task-set spec, and writes the unsigned run book",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "run-fake": "node scripts/run-fake.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "typescript": "~5.9.3"
+  }
+}
