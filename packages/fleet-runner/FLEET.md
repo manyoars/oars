@@ -43,3 +43,23 @@ Step 1 and step 6 are once. Steps 2 to 4 are done for each order's store folders
 
 - A void run is in no store and has no row id; it is never sent.
 - The pool row id of a valid run is `contentHash([account, harness session id])`, the same call the `oars` deposit makes. The run book lists it before anything is sent.
+
+## Before the first paid run
+
+The first real run is a credit draw on the approved Bedrock credits. It also answers seven questions that no stub can. Follow these steps in order, and stop where they say stop.
+
+1. Run the preflight. It makes no model call and spends nothing. It checks `claude` and its pinned version, Node, git, npm, the task-set folder, the fixture tag, `AWS_REGION`, and that `AWS_BEARER_TOKEN_BEDROCK` is set (never its value). Fix every line that is not `ok`.
+
+   `npm run preflight -w packages/fleet-runner -- --taskset ../../taskset/v1 --fleet <fleet manifest file> --fixture-source <fixture repository path or URL>`
+
+   Add `--run-book <file> --allowed-signers <file>` to also verify a signed run book. A first run has none yet.
+2. **OWNER** Tell Matt that the next step is a credit draw (K5), and wait for his yes. Do not go on without it.
+3. Run exactly one task, once. Keep the transcript copy, the run book, and what `claude` printed on stdout (the stream-json text) for that run.
+4. Run the first-run read over those files. It prints one line per question: `yes`, `no`, or `cannot tell`, and the evidence it read. It only prints. It never decides a void and never edits a record.
+
+   `npm run first-run-read -w packages/fleet-runner -- --transcript <transcript copy> --output <stdout file> --run-book <run book> --model-id <Bedrock model ID> --allow-server <name>`
+
+   Repeat `--allow-server` and `--allow-skill` for each one the run was allowed. `--marker <text>` adds a piece of the key's value to the scrub search; it is never printed.
+5. Stop. Report its lines to Matt before any second run.
+
+The adapter does not yet save the stdout of `claude`. Until it does, step 3 needs that text captured by hand, or the read cannot answer questions (a) to (f).
