@@ -21,6 +21,7 @@
     "@manyoars/oars-client": "^0.1.3"
   },
   "devDependencies": {
+    "esbuild": "0.28.2",
     "msw": "^3.0.3",
     "typescript": "~5.9.3"
   }

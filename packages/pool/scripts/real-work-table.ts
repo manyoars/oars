@@ -4,11 +4,12 @@
 //   npm run real-work-table -w packages/pool -- <store folder> --terms <file> --owners <file> --out <dir> [--projects <folder>] [--min-sessions <n>] [--date <YYYY-MM-DD>]
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { ACTION_TABLES, mcpOf } from '../../cli/src/sessions/actions.js';
 import { harnessBucket } from '../../cli/src/sessions/cells.js';
 import { stepsOfCall } from '../../cli/src/sessions/motif.js';
 import { recoveryCallsOf, type Followed } from '../../cli/src/sessions/recovery-calls.js';
 import { checkSession } from '../../cli/src/sessions/exclusion.js';
-import { LITERAL, publicModel, TOOL_INPUT_KEYS } from '../../cli/src/sessions/public-vocabulary.js';
+import { LITERAL, PUBLIC_MCP_SERVERS, PUBLIC_SKILLS, publicModel, TOOL_INPUT_KEYS } from '../../cli/src/sessions/public-vocabulary.js';
 import { harnessOf, PROMPT_CLASSES, type Harness, type PromptObservation, type ToolObservation } from '../../cli/src/sessions/schema.js';
 import { loadStore, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { insideRepository, ownerOf, PackError, parseOwners } from './sample-pack.js';
@@ -76,7 +77,27 @@ export interface ToolRow {
   editFollowedShare: number | null;
 }
 
+/** A row of one MCP server or one skill inside a harness and version bucket. Every one is `one fleet`, with its n: `calls` for the failure rate, `failures` for the recovered rate, `recovered` for the median. */
+export interface ScopeRow {
+  kind: 'server' | 'skill';
+  name: string;
+  harness: string;
+  versionBucket: string;
+  label: string;
+  /** True when the row is under the noise rule's minimum: its rates are null, only the counts print. */
+  thin: boolean;
+  sessions: number;
+  calls: number;
+  failures: number;
+  failureRate: number | null;
+  recovered: number;
+  recoveredRate: number | null;
+  /** The median of the calls it took to recover, over the `recovered` failed calls. */
+  callsToRecover: number | null;
+}
+
 export type Row = CellRow | ToolRow;
+export type TableRow = Row | ScopeRow;
 
 export interface Header {
   spec: string;
@@ -94,12 +115,22 @@ export interface Header {
 
 export interface Table {
   header: Header;
-  rows: Row[];
+  rows: TableRow[];
 }
 
 export const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const rounded = (value: number): number => Math.round(value * 10_000) / 10_000;
 const share = (part: number, whole: number): number | null => (whole === 0 ? null : rounded(part / whole));
+
+/** The server of a stored MCP tool name, read by the harness's own spelling (`actions.ts`); a name off the public list is `other`. */
+export const serverName = (harness: Harness, tool: string): string | undefined => {
+  const server = mcpOf(ACTION_TABLES[harness], tool)?.server;
+  return server === undefined ? undefined : PUBLIC_MCP_SERVERS.has(server) ? server : OTHER;
+};
+const skillName = (skill: string | undefined): string | undefined => (skill === undefined ? undefined : PUBLIC_SKILLS.has(skill) ? skill : OTHER);
+
+/** The n a measure needs under the noise rule: the minimum sessions, and never under 2. The release note holds its measures to the same number. */
+export const minNOf = (minSessions: number): number => Math.max(minSessions, 2);
 
 const harnessName = (harness: Harness): string => (HARNESS_NAMES.includes(harness) ? harness : OTHER);
 const toolName = (tool: string): string => (TOOL_INPUT_KEYS.has(tool) ? tool : OTHER);
@@ -135,6 +166,8 @@ export interface Tally {
   calls: number;
   failures: number;
   recoverySteps: number;
+  /** The calls each recovery took, for a median. */
+  recoveries: number[];
   /** The sum of the squares of each recovery's calls. */
   recoverySquares: number;
   recovered: number;
@@ -146,7 +179,7 @@ export interface Tally {
   tokens: Map<string, { prompts: number; tokens: number; squares: number }>;
 }
 
-const newTally = (): Tally => ({ sessions: new Set(), calls: 0, failures: 0, recoverySteps: 0, recoverySquares: 0, recovered: 0, edited: 0, prompts: 0, promptsKnown: 0, interventions: 0, tokens: new Map() });
+const newTally = (): Tally => ({ sessions: new Set(), calls: 0, failures: 0, recoverySteps: 0, recoveries: [], recoverySquares: 0, recovered: 0, edited: 0, prompts: 0, promptsKnown: 0, interventions: 0, tokens: new Map() });
 
 const tokensOf = (prompt: PromptObservation): number => prompt.usage.input + prompt.usage.cacheWrite + prompt.usage.cacheRead + prompt.usage.output;
 
@@ -181,6 +214,15 @@ export interface BucketCell {
   tally: Tally;
 }
 
+/** An MCP server or a skill inside one harness and version bucket. */
+export interface ScopeCell {
+  kind: ScopeRow['kind'];
+  name: string;
+  harness: string;
+  versionBucket: string;
+  tally: Tally;
+}
+
 /** Every count the gates let through, before a minimum n leaves rows out. The table and the release note are both built from it, so neither has a derive path of its own. */
 export interface Counts {
   /** Main sessions in the store, before any gate. */
@@ -191,6 +233,7 @@ export interface Counts {
   tools: ReadonlyMap<string, Tally>;
   toolCells: ReadonlyMap<string, ToolCell>;
   buckets: ReadonlyMap<string, BucketCell>;
+  scopeCells: ReadonlyMap<string, ScopeCell>;
 }
 
 /** The counts over the store `runtime` names: the gates first, then every count from the sessions that passed. */
@@ -220,6 +263,13 @@ export const countsOf = async (runtime: SessionsRuntime, options: { terms: strin
   const tools = new Map<string, Tally>();
   const toolCells = new Map<string, ToolCell>();
   const buckets = new Map<string, BucketCell>();
+  const scopeCells = new Map<string, ScopeCell>();
+  const scopeOf = (kind: ScopeRow['kind'], name: string, harness: string, versionBucket: string): Tally => {
+    const key = JSON.stringify([kind, name, harness, versionBucket]);
+    const known = scopeCells.get(key) ?? { kind, name, harness, versionBucket, tally: newTally() };
+    scopeCells.set(key, known);
+    return known.tally;
+  };
   const cellOf = (model: string, harness: string, versionBucket: string): Tally => {
     const key = JSON.stringify([model, harness, versionBucket]);
     const known = cells.get(key) ?? { model, harness, versionBucket, tally: newTally() };
@@ -266,7 +316,9 @@ export const countsOf = async (runtime: SessionsRuntime, options: { terms: strin
       const failed = call.status === 'error';
       const recovery = failed ? recoveryOf(followed, at) : undefined;
       const [harnessLabel, tool] = [harnessName(harness), toolName(call.tool)];
-      for (const tally of [cellOf(model, harnessLabel, bucket), toolOf(tool), toolCellOf(tool, harnessLabel, bucket), bucketOf(harnessLabel, bucket)]) {
+      const [server, skill] = [serverName(harness, call.tool), skillName(call.skill)];
+      const scoped = [...(server === undefined ? [] : [scopeOf('server', server, harnessLabel, bucket)]), ...(skill === undefined ? [] : [scopeOf('skill', skill, harnessLabel, bucket)])];
+      for (const tally of [cellOf(model, harnessLabel, bucket), toolOf(tool), toolCellOf(tool, harnessLabel, bucket), bucketOf(harnessLabel, bucket), ...scoped]) {
         tally.sessions.add(call.parent);
         tally.calls += 1;
         if (recovery === undefined) continue;
@@ -275,6 +327,7 @@ export const countsOf = async (runtime: SessionsRuntime, options: { terms: strin
         if (recovery.recoveredIn !== null) {
           tally.recovered += 1;
           tally.recoverySteps += recovery.recoveredIn;
+          tally.recoveries.push(recovery.recoveredIn);
           tally.recoverySquares += recovery.recoveredIn ** 2;
         }
       }
@@ -303,7 +356,7 @@ export const countsOf = async (runtime: SessionsRuntime, options: { terms: strin
     held.squares += tokens ** 2;
     tally.tokens.set(cls, held);
   }
-  return { sessions: main.length, counted: counted.size, excluded, cells, tools, toolCells, buckets };
+  return { sessions: main.length, counted: counted.size, excluded, cells, tools, toolCells, buckets, scopeCells };
 };
 
 /** A cell's row, from the one place that reads a tally into a row: the table and the release note both take their values from it. */
@@ -325,15 +378,49 @@ export const cellRowOf = ({ model, harness, versionBucket, tally }: Cell): CellR
 /** A tool's row (over all buckets in the table, over one bucket in the release note). */
 export const toolRowOf = (tool: string, tally: Tally): ToolRow => ({ kind: 'tool', tool, sessions: tally.sessions.size, calls: tally.calls, ...callRates(tally) });
 
+const median = (values: readonly number[]): number => {
+  const sorted = [...values].sort((a, b) => a - b);
+  // The one middle value, or the two around the middle; called only over a stated recovered count, so `values` is never empty.
+  const middle = sorted.slice((sorted.length - 1) >> 1, (sorted.length >> 1) + 1);
+  return rounded(middle.reduce((sum, value) => sum + value, 0) / middle.length);
+};
+
+/**
+ * A server's or skill's row. Under the noise rule it is `thin` and holds its counts only; over it, each rate is stated only when its own n clears the minimum:
+ * calls for the failure rate, failures for the recovered rate, recoveries for the median.
+ */
+export const scopeRowOf = ({ kind, name, harness, versionBucket, tally }: ScopeCell, minSessions: number): ScopeRow => {
+  const minN = minNOf(minSessions);
+  const thin = tally.sessions.size < minSessions;
+  const stated = (n: number): boolean => !thin && n >= minN;
+  return {
+    kind,
+    name,
+    harness,
+    versionBucket,
+    label: LABEL,
+    thin,
+    sessions: tally.sessions.size,
+    calls: tally.calls,
+    failures: tally.failures,
+    failureRate: stated(tally.calls) ? share(tally.failures, tally.calls) : null,
+    recovered: tally.recovered,
+    recoveredRate: stated(tally.failures) ? share(tally.recovered, tally.failures) : null,
+    callsToRecover: stated(tally.recovered) ? median(tally.recoveries) : null,
+  };
+};
+
 /** The table over the store `runtime` names: the counts, then the rows at or above the minimum n. */
 export const tableOf = async (runtime: SessionsRuntime, options: TableOptions): Promise<Table> => {
   const minSessions = options.minSessions ?? DEFAULT_MIN_SESSIONS;
-  const { sessions, counted, excluded, cells, tools } = await countsOf(runtime, options);
+  const { sessions, counted, excluded, cells, tools, scopeCells } = await countsOf(runtime, options);
   const all: Row[] = [...[...cells.values()].map(cellRowOf), ...[...tools.entries()].map(([tool, tally]) => toolRowOf(tool, tally))];
   const kept = all.filter((row) => row.sessions >= minSessions);
   const key = (row: Row): string => (row.kind === 'cell' ? `0/${row.harness}/${row.versionBucket}/${row.model}` : `1/${row.tool}`);
   kept.sort((a, b) => compare(key(a), key(b)));
-  return { header: { spec: SPEC_VERSION, label: LABEL, builtOn: options.date, sessions, counted, excluded, minSessions, leftOut: all.length - kept.length }, rows: kept };
+  // Server and skill rows come last and none is left out: a row under the minimum prints as thin.
+  const scoped = [...scopeCells.values()].map((cell) => scopeRowOf(cell, minSessions)).sort((a, b) => compare(`${a.kind}/${a.name}/${a.harness}/${a.versionBucket}`, `${b.kind}/${b.name}/${b.harness}/${b.versionBucket}`));
+  return { header: { spec: SPEC_VERSION, label: LABEL, builtOn: options.date, sessions, counted, excluded, minSessions, leftOut: all.length - kept.length }, rows: [...kept, ...scoped] };
 };
 
 export interface Io {
