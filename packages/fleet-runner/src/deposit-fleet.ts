@@ -143,7 +143,7 @@ export const main = async (argv: string[], print: (line: string) => void, clock:
         print(`store ${store.name}: config root ${store.configRoot}`);
         print(`  expects ${String(store.expected.length)} sessions: ${store.expected.join(' ')}`);
         for (const [at, step] of steps.entries()) print(`  command ${String(at + 1)} (${step.label}): ${commandLine(oars, step.args)}`);
-        print(`  environment: ${CONFIG_VARIABLE}=${store.configRoot} CLAUDE_CONFIG_DIR=${join(store.configRoot, 'claude')}`);
+        print(`  environment: ${CONFIG_VARIABLE}=${quoteIfSpaced(store.configRoot)} CLAUDE_CONFIG_DIR=${quoteIfSpaced(join(store.configRoot, 'claude'))}`);
       }
       return 0;
     }

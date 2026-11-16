@@ -78,8 +78,8 @@ const makeKey = (dir: string): string => {
 };
 
 /** A complete, signed run book, its two store folders with the owner's one-time files in place, and the fake `oars`. */
-const scene = async (patch: { runCap?: number; repeats?: number } = {}): Promise<Scene> => {
-  const out = join(root, 'out');
+const scene = async (patch: { runCap?: number; repeats?: number; outName?: string } = {}): Promise<Scene> => {
+  const out = join(root, patch.outName ?? 'out');
   const order = parseOrder(retestText({ repeats: patch.repeats ?? 3, runCap: patch.runCap ?? 80 }), FLEET);
   const stager = makeStager(join(root, 'staging'));
   const book = await runOrder({ order, taskSet: taskSet(8), fleet: FLEET, adapter: makeFake(CLEAN), clock: stepClock(), operator: 'Many Oars Co.', stage: stager.stage });
@@ -136,6 +136,15 @@ describe('deposit-fleet', () => {
     console.log(lines.map((line) => line.replaceAll(root, '<tmp>')).join('\n'));
     expect(await logged()).toEqual([]);
     expect(await readFile(`${s.runBook.replace('.run-book.jsonl', '')}.deposit-record.jsonl`, 'utf8').catch(() => null)).toBeNull();
+  });
+
+  it('quotes a config root with a space on the dry run environment line, so the line can be pasted', async () => {
+    const s = await scene({ outName: 'out dir' });
+    const { lines } = await run(s, [], new Date(NEWEST_END(s.book) + 7 * HOUR));
+    for (const folder of s.folders) {
+      expect(folder.configRoot).toContain(' ');
+      expect(lines).toContain(`  environment: ${KEY_ENV}="${folder.configRoot}" CLAUDE_CONFIG_DIR="${join(folder.configRoot, 'claude')}"`);
+    }
   });
 
   it('with --confirm runs oars once per store with its own config root, records each, and leaves the run book and the parent environment as they were', async () => {
