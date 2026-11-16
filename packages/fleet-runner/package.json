@@ -11,7 +11,9 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "run-fake": "node scripts/run-fake.mjs"
+    "run-fake": "node scripts/run-fake.mjs",
+    "sign": "node scripts/signing.mjs sign",
+    "verify-run-book": "node scripts/signing.mjs verify"
   },
   "devDependencies": {
     "esbuild": "0.28.2",
