@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- `real-work-table` also prints one row per MCP server and per skill, by harness and version bucket, each labeled `one fleet`: calls, failures, failure rate, recovered, recovered rate, and the median calls to recover. A row under the minimum sessions prints as `thin` with its counts and no rate; a store with no MCP or skill calls writes the table it did before.
 - Sample packs are stamped redaction version 5.
 - `sample-pack` masks the repository owner's handle as a whole word in every string of a session's text files (a bare `owner/name`, one after a space, quote, or bracket, one at the start of a field such as a remote), not only behind a path separator, masks every account of the pack in every session file of the pack (a session whose own repository has another origin included), and stops the build when a handle it masked is still in a written session file; a pack built before this keeps the handle in tool inputs and is rebuilt (t1295).
 - `sample-pack` masks an account in a `skeleton.json` as plain `owner`, not `<owner>`, so a program or file name that held one passes `validate-pack`'s name rule; session files keep `<owner>`. A skeleton-only pack built before this with such a name is rebuilt (t1299).
