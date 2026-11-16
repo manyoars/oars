@@ -72,6 +72,21 @@ const PINNED: { readonly [version: string]: { readonly files: { readonly [file: 
     },
     curated: 'faf8ee9dd0e9a363dd8ff4cc3b832c84fa746b7eb06c079475b7e0bbe2fe42c1',
   },
+  '2': {
+    files: {
+      'crates.json': '32129283a2a14c492c0eba0f40b1e1686772d6d078f9a20b5aaa6d36670d1750',
+      'go.json': '2b61bd86ff19aa5b44659726bc1f09ef2a20ebdb1bf8337dfac28c9eec6b4ec7',
+      'harness.json': '05196ff492ca4a7327d81494c0f441f92ced5b778e66d2e16ce5a6b13cf6bd39',
+      'homebrew.json': '66c9706a2d10d539e2a71e9419d7a9a7f0086b7b25b354988f7d2bcfa9695e76',
+      'maven.json': '80cd922ac2ee65d9978a2fcf40372a0b3432e1003ba9f1d32fdba36e1059e8fe',
+      'models.json': '51b5d362612dc8a298a887a3a20dd08c2275b91fcf4b6bba8a3545edcb568eb8',
+      'npm.json': '61b931a5f4050d464e8cda0c27b90c5e51f293af973cde4e5b138999aa05c96a',
+      'programs.json': '9d3baae2514586e601a51c230208d8fbf61a2d578d54d697d7614ab63158aaa0',
+      'pypi.json': '4fd0e73a16ec5abcee1c970f7e28cc84af68aaceb0197b8007a8be690878f442',
+      'rubygems.json': '0cfec417beb17efdbd60634fe7e6c9252bebc6be5bab086446431099d939be33',
+    },
+    curated: '293488e7e8be31f4a8a4faf93d30bf8e9840a0c8fc6dc896518f6b3fe561d66a',
+  },
 };
 
 describe('the pinned vocabulary', () => {

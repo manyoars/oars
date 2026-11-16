@@ -208,6 +208,30 @@ describe('prepare', () => {
     expect(() => makeClaudeBedrock(r.settings, { env: ENV, nodeVersion: '24.0.0' })).not.toThrow();
   });
 
+  it('accepts a 7 to 40 hex fixtureCommit as a prefix of the clone head, and reports a shorter, longer, or other one as a moved tag', async () => {
+    const r = rig();
+    for (const [commit, moved] of [[r.fixtureCommit.slice(0, 7), false], [r.fixtureCommit.slice(0, 12), false], [r.fixtureCommit.slice(0, 6), true], ['0000000', true], ['x', true]] as const) {
+      writeTask(join(scratch, 'taskset'), 'scenario: ok', RESET, commit);
+      const prepared = await makeClaudeBedrock(r.settings, { env: ENV }).prepare(request('no-tool', null));
+      expect(prepared.fixtureTag === 'taskset-v1', commit).toBe(!moved);
+      await prepared.dispose();
+    }
+  });
+
+  it('compares the Node floor as major.minor.patch, not only the major', () => {
+    const r = rig();
+    writeTask(join(scratch, 'taskset'), 'scenario: ok', { ...RESET, node: '>=24.3.1' }, r.fixtureCommit);
+    expect(() => makeClaudeBedrock(r.settings, { env: ENV, nodeVersion: '24.0.0' })).toThrow(/Node 24\.0\.0 is below the Node 24\.3\.1/);
+    expect(() => makeClaudeBedrock(r.settings, { env: ENV, nodeVersion: '24.3.0' })).toThrow(/below/);
+    expect(() => makeClaudeBedrock(r.settings, { env: ENV, nodeVersion: '24.3.1' })).not.toThrow();
+    expect(() => makeClaudeBedrock(r.settings, { env: ENV, nodeVersion: '25.0.0' })).not.toThrow();
+  });
+
+  it('refuses at construction a fixtureTag setting that is not the manifest fixtureTag', () => {
+    const r = rig();
+    expect(() => makeClaudeBedrock({ ...r.settings, fixtureTag: 'taskset-v2' }, { env: ENV })).toThrow(/"taskset-v2" is not the task-set manifest's "taskset-v1"/);
+  });
+
   it('refuses a manifest whose reset.node is not a ">=" floor, and one missing install or buildDb', () => {
     const r = rig();
     writeTask(join(scratch, 'taskset'), 'scenario: ok', { ...RESET, node: '24' }, r.fixtureCommit);
