@@ -106,3 +106,15 @@ describe('runPrice', () => {
     scan([...refused.lines, ...down.lines]);
   });
 });
+
+describe('runPrice on an unreadable packs folder', () => {
+  it('prints one fixed line, no stack, when a listing cannot be read', async () => {
+    const settings = await env();
+    // A directory where listing.json should be: readFile fails with EISDIR, not ENOENT.
+    const world = await makeWorld();
+    mkdirSync(join(world.inputs.packsDir, 'broken', 'listing.json'), { recursive: true });
+    const result = await runPrice({ ...settings, OARS_SELLER_PACKS_DIR: world.inputs.packsDir }, deps);
+    expect(result).toEqual({ ok: false, lines: ['The packs folder could not be read.'] });
+    scan(result.lines);
+  });
+});

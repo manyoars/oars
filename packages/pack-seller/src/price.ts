@@ -58,6 +58,7 @@ export const runPrice = async (env: Readonly<NodeJS.ProcessEnv>, deps: PriceDeps
     return { ok, lines };
   } catch (error) {
     if (error instanceof ConfigError || error instanceof PricingError) return refused(error.message);
-    throw error;
+    // Anything else (a packs folder that cannot be read) would print a stack trace; the operator gets one fixed line.
+    return refused('The packs folder could not be read.');
   }
 };

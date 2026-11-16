@@ -30,11 +30,11 @@ npm start -w packages/pack-seller
 
 Every path above is local to the operator's machine, and a path inside a git repository is refused at start with a line naming the variable. The offer record (`offers.jsonl`) is kept beside `deliveries.jsonl`, next to the owners file.
 
+A missing or malformed value prints one line naming the variable and exits 1. The line never holds a value.
+
 ## Create the price
 
 `npm start -w packages/pack-seller -- price` creates the `CREDIT_PACK` price (`pack-<packId>`, 3 credits, `OARS_SELLER_PRICE_USD`) of every pack in `OARS_SELLER_PACKS_DIR` and prints one line per pack: `Price pack-alpha created.`, or `already exists.` on a second run, which creates nothing. A price that exists with other terms is left unchanged and the command exits 1, because an amount is immutable once charged. Creating a price needs the operator's login, not the SDK key: run `oars login --api-url <url>` first, or set `OARS_API_KEY`. It needs the same variables as the server except `OARS_SELLER_SDK_KEY*` and `OARS_SELLER_PORT`, plus `OARS_SELLER_WORKLOAD_ID`. Every failure is one line with no token in it.
-
-A missing or malformed value prints one line naming the variable and exits 1. The line never holds a value.
 
 ## Routes
 
