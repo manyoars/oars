@@ -259,6 +259,23 @@ describe('real-work table', () => {
       expect(JSON.stringify(table)).not.toContain('acme');
     });
 
+    it('reads a plugin skill and a connector server by name once listed, and an unlisted one as other', async () => {
+      const f = fixture();
+      const spec = (n: number, skill: string): Spec => ({ ...newer(n), prompts: [{ text: 'go', calls: [inSkill(skill, bash(false)), inSkill(skill, edit()), mcp(skill === 'superpowers:brainstorming' ? 'chrome-devtools' : 'claude_ai_Private', true), read()] }] });
+      f.add(spec(1, 'superpowers:brainstorming'));
+      f.add(spec(2, 'superpowers:brainstorming'));
+      f.add(spec(3, 'superpowers:acme-private'));
+      f.add(spec(4, 'superpowers:acme-private'));
+      await f.stored();
+      const names = scoped(await build(f, { minSessions: 2 })).map((row) => [row.kind, row.name]);
+      expect(names).toEqual(expect.arrayContaining([['skill', 'superpowers:brainstorming'], ['server', 'chrome-devtools'], ['skill', 'other'], ['server', 'other']]));
+      expect(JSON.stringify(names)).not.toContain('acme');
+      expect(JSON.stringify(names)).not.toContain('claude_ai_Private');
+      expect(serverName('claude-code', 'mcp__claude_ai_Gmail__x')).toBe('claude_ai_Gmail');
+      expect(serverName('claude-code', 'mcp__claude_ai_Google_Calendar__x')).toBe('claude_ai_Google_Calendar');
+      expect(serverName('claude-code', 'mcp__claude_ai_Acme_CRM__x')).toBe('other');
+    });
+
     it('prints a row under the minimum as thin, with its counts and no rate', async () => {
       const f = await withServers();
       const rows = scoped(await build(f, { minSessions: 3 }));
