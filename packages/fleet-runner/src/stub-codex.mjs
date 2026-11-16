@@ -13,8 +13,8 @@ const home = process.env.CODEX_HOME ?? '';
 const config = readFileSync(join(home, 'config.toml'), 'utf8');
 writeFileSync(join(home, 'stub-seen.json'), JSON.stringify({ argv, envNames: Object.keys(process.env).sort(), cwd: process.cwd(), prompt }));
 
-// What the real Codex does with `[shell_environment_policy]` (https://developers.openai.com/codex/config-advanced#shell-environment-policy): `inherit = "core"` keeps a trimmed set, an unset
-// `ignore_default_excludes = false` drops names holding KEY, SECRET, or TOKEN, then each `"PATTERN" = "exclude"` filter drops matches (case-insensitive, `*` and `?`). The stub applies those rules
+// What the real Codex does with `[shell_environment_policy]` (https://developers.openai.com/codex/config-advanced#shell-environment-policy): `inherit = "core"` keeps a trimmed set, `ignore_default_excludes = false`
+// (the default is true, which keeps them) drops names holding KEY, SECRET, or TOKEN, then each `"PATTERN" = "exclude"` filter drops matches (case-insensitive, `*` and `?`). The stub applies those rules
 // to start one child the way Codex starts a shell command, so a test shows the adapter asked for the documented policy, not that Codex honors it.
 const CORE = ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'windir', 'ComSpec', 'TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE'];
 const section = (/** @type {string} */ name) => new RegExp(String.raw`^\[${name.replace('.', String.raw`\.`)}\]\n([^[]*)`, 'm').exec(config)?.[1] ?? '';
@@ -68,8 +68,14 @@ else {
       { type: 'turn_context', payload: { model, cwd: process.cwd(), approval_policy: 'never' } },
       { type: 'event_msg', payload: { type: 'token_count', info: { last_token_usage: { input_tokens: 1000, cached_input_tokens: 400, output_tokens: 100, reasoning_output_tokens: 20 } } } },
       { type: 'event_msg', payload: { type: 'token_count', info: null } },
-      { type: 'event_msg', payload: { type: 'token_count', info: { last_token_usage: { input_tokens: 2000, cached_input_tokens: 1500, output_tokens: 200 } } } },
+      { type: 'event_msg', payload: { type: 'token_count', info: { last_token_usage: { input_tokens: 2000, cached_input_tokens: 1500, cache_write_input_tokens: 100, output_tokens: 200 } } } },
     ];
+    if (scenario === 'subagent') {
+      // A spawned agent's rollout sorts later and names a parent thread; it is no part of the run's own transcript.
+      const child = '019a0000-0000-7000-8000-000000000002';
+      writeFileSync(join(day, `rollout-2026-11-16T10-05-00-${child}.jsonl`), `${JSON.stringify({ type: 'session_meta', payload: { id: child, parent_thread_id: threadId, cli_version: '8.8.8' } })}
+`);
+    }
     writeFileSync(join(day, `rollout-2026-11-16T10-00-00-${threadId}.jsonl`), `${rows.map((row) => JSON.stringify({ timestamp: '2026-11-16T10:00:00Z', ...row })).join('\n')}\n`);
   }
   line({ type: 'turn.completed', usage: { input_tokens: 3000, cached_input_tokens: 1900, output_tokens: 300 } });

@@ -9,22 +9,23 @@
 //   skills (`$HOME/.agents/skills`)   https://developers.openai.com/codex/skills
 //   rollout file `sessions/YYYY/MM/DD/rollout-<timestamp>-<uuid>.jsonl` under `CODEX_HOME`, its `session_meta.cli_version`, `turn_context.model`, and `token_count` events: the oars reader,
 //   `packages/cli/src/sessions/codex.ts` (header comment, and `usageOf` for the token rule), which cites codex-rs at ac558e2.
-// The docs name no Azure example, so the Azure provider is written from the generic provider keys: the endpoint is the operator's `azureEndpoint` and `apiVersion` is added as a query parameter only when set.
+// The Azure provider follows the docs' own example (config-advanced, "Azure provider and per-provider tuning"): `base_url = "https://YOUR_PROJECT_NAME.openai.azure.com/openai"`, `env_key = "AZURE_OPENAI_API_KEY"`,
+// `query_params = { api-version = "2025-04-01-preview" }`, `wire_api = "responses"`. `azureEndpoint` and `apiVersion` are the operator's; the `api-version` query parameter is written only when one is set.
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import type { CheckResult, ExitKind, HarnessAdapter, Prepared, RunRequest, RunResult, TokenCounts } from './harness.js';
-import { copySkill, loadCheckedResetPlan, makeSteps, nodeSpawn, pick, START_NAMES, toolFor, wantedPin, type Dependencies, type Layout, type PreparedFolder, type SharedSettings, type SpawnOutcome } from './harness-shared.js';
+import { assertStarted, copySkill, loadCheckedResetPlan, makeFolders, makeSteps, nodeSpawn, pick, START_NAMES, type Dependencies, type Layout, type PreparedFolder, type SharedSettings, type SpawnOutcome } from './harness-shared.js';
 import { isObject, type JsonObject } from './json.js';
 
 export interface CodexAzureSettings extends SharedSettings {
   codexExecutable: string;
   /** Arguments placed before Codex's own (empty for the real native executable; for an npm install, `[<global node_modules>/@openai/codex/bin/codex.js]` with `node` as the executable). */
   codexArgs: string[];
-  /** The Azure OpenAI base URL, for example `https://<resource>.openai.azure.com/openai/v1`. */
+  /** The Azure OpenAI base URL, in the docs' example's shape `https://<resource>.openai.azure.com/openai` (config-advanced, per-provider tuning). */
   azureEndpoint: string;
   /** The Azure deployment name; Codex sends it as the model. */
   deployment: string;
-  /** Added as the `api-version` query parameter when the endpoint needs one; null for none. */
+  /** Added as the `api-version` query parameter, as the docs' example does (`2025-04-01-preview`); null for none. */
   apiVersion: string | null;
 }
 
@@ -186,12 +187,7 @@ export const makeCodexAzure = (settings: CodexAzureSettings, deps: Dependencies)
   const reset = loadCheckedResetPlan(settings, deps.nodeVersion);
   const spawn = deps.spawn ?? nodeSpawn;
   const steps = makeSteps(settings, deps, spawn);
-  const folders = new WeakMap<Prepared, CodexPrepared>();
-  const folderOf = (prepared: Prepared): CodexPrepared => {
-    const folder = folders.get(prepared);
-    if (folder === undefined) throw new Error('this folder was not prepared by this adapter');
-    return folder;
-  };
+  const { remember, folderOf } = makeFolders();
 
   // A server is given to Codex through the one `[mcp_servers.<name>]` table in `config.toml`; a skill is copied to `$HOME/.agents/skills/<name>`, the user location the docs name, and HOME is the run's own folder.
   const layout: Layout = {
@@ -211,20 +207,14 @@ export const makeCodexAzure = (settings: CodexAzureSettings, deps: Dependencies)
 
   const prepare = async (request: RunRequest): Promise<CodexPrepared> => {
     const made = await steps.prepareRun(request, layout, reset);
-    folders.set(made, made);
+    remember(made);
     return made;
   };
 
   const run = async (prepared: Prepared, request: RunRequest): Promise<RunResult> => {
     const folder = folderOf(prepared);
-    const skipped: RunResult = { exit: { kind: 'ok', code: 0 }, transcriptPath: null, harnessVersion: request.expected.harnessVersion, modelId: request.expected.modelId, tokens: { input: 0, cache: 0, output: 0 }, poolSessionId: null };
-    // The pin is read from disk again here, so a change since `prepare` is seen; a mismatch leaves the harness unstarted and the runner voids the run.
-    const tool = toolFor(settings, request.arm);
-    if (tool !== null) {
-      const wanted = wantedPin(request);
-      folder.installedPins = [{ name: tool.name, pin: steps.installedPin(tool, await steps.readToolVersion(tool, folder.dir, folder.configDir), wanted) }];
-      if (folder.installedPins.some((pin) => pin.pin !== wanted)) return skipped;
-    }
+    const skipped = await steps.recheckPins(folder, request);
+    if (skipped !== null) return skipped;
     const prompt = await readFile(join(settings.taskSetDir, 'prompts', `${request.taskId}.md`), 'utf8');
     const args = [
       ...settings.codexArgs,
@@ -245,7 +235,7 @@ export const makeCodexAzure = (settings: CodexAzureSettings, deps: Dependencies)
       [AZURE_KEY_NAME]: key,
     };
     const outcome = await spawn({ command: settings.codexExecutable, args, cwd: folder.runFolder, env, stdin: prompt, timeoutMs: settings.timeLimitMs });
-    if (outcome.errorCode !== null && outcome.errorCode !== 'ENOSPC') throw new Error(`could not start ${settings.codexExecutable} (${outcome.errorCode})`);
+    assertStarted(outcome, settings.codexExecutable);
     const kind = classify(outcome, parseEvents(outcome.stdout));
     const rollout = await findRollout(folder.configDir);
     const facts = rollout === null ? null : parseRollout(await readFile(rollout, 'utf8'));
