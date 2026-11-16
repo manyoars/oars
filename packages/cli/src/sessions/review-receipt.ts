@@ -11,17 +11,18 @@ import { HARNESS_ERROR_CLASSES, harnessOf, type SessionObservation, type ShellSe
 import { loadStore, type Store } from './store.js';
 
 // A `segments[].run` is the program and its plain words, so `python -m pytest` is `python pytest` and `npx vitest run <file>` is `npx vitest run`.
-const RUNNER = String.raw`(?:(?:npx|bunx|pnpm\s+exec|pnpm\s+dlx|yarn|python3?|uv\s+run|poetry\s+run)\s+)?`;
-const SCRIPT = String.raw`(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?`;
+const RUNNER = String.raw`(?:(?:npx|bunx|pnpm\s+exec|pnpm\s+dlx|yarn|python3?|py|uv\s+run|poetry\s+run)\s+)?`;
+// A workspace form (`npm -w web test`) is stored as `npm web test`; the lookahead keeps `npm install test` out.
+const SCRIPT = String.raw`(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:(?!(?:add|i|install|uninstall|remove|rm|link|view|get|run)\s)\S+\s+)?`;
 
 /**
  * The commands a receipt lists, by family: each pattern is read against one command's `run` from its first word, so a flag is never in it. A formatter lists only when the
  * call shows its check flag (`FORMAT_CHECK_FLAG`), because `prettier` and `cargo fmt` also rewrite files. Anything else is counted, not listed.
  */
 export const VERIFICATION_FAMILIES: ReadonlyArray<{ family: string; pattern: RegExp }> = [
-  { family: 'test', pattern: new RegExp(`^(?:${SCRIPT}test(?::\\S+)?|${RUNNER}(?:vitest|jest|pytest|mocha)|go\\s+test|cargo\\s+(?:test|nextest)|dotnet\\s+test|mvn|mvnw|gradle|gradlew|just\\s+(?:test|check))(?:\\s|$)`) },
-  { family: 'build', pattern: new RegExp(`^(?:${SCRIPT}build(?::\\S+)?|go\\s+build|cargo\\s+build|dotnet\\s+build|just\\s+build)(?:\\s|$)`) },
-  { family: 'lint', pattern: new RegExp(`^(?:${SCRIPT}lint(?::\\S+)?|${RUNNER}(?:eslint|ruff(?!\\s+format)(?:\\s+check)?|flake8|golangci-lint)|cargo\\s+clippy)(?:\\s|$)`) },
+  { family: 'test', pattern: new RegExp(`^(?:${SCRIPT}test(?::\\S+)?|${RUNNER}(?:vitest|jest|pytest|mocha)|go\\s+test|cargo\\s+(?:test|nextest)|dotnet\\s+test|mvn|mvnw|gradle|gradlew|just\\s+(?:test|check)|make\\s+(?:test|check))(?:\\s|$)`) },
+  { family: 'build', pattern: new RegExp(`^(?:${SCRIPT}build(?::\\S+)?|go\\s+build|cargo\\s+build|dotnet\\s+build|just\\s+build|make\\s+build)(?:\\s|$)`) },
+  { family: 'lint', pattern: new RegExp(`^(?:${SCRIPT}lint(?::\\S+)?|${RUNNER}(?:eslint|ruff(?!\\s+format)(?:\\s+check)?|flake8|golangci-lint)|cargo\\s+clippy|(?:just|make)\\s+lint)(?:\\s|$)`) },
   { family: 'type check', pattern: new RegExp(`^(?:${SCRIPT}(?:typecheck|check)|${RUNNER}(?:tsc|mypy|pyright))(?:\\s|$)`) },
   { family: 'format check', pattern: new RegExp(`^(?:${RUNNER}(?:prettier|ruff\\s+format|black)|cargo\\s+fmt)(?:\\s|$)`) },
 ];

@@ -242,6 +242,18 @@ describe('a secret flag on the real path', () => {
   });
 });
 
+describe('the forms isRunner counts', () => {
+  it('lists make test, just lint, py -m pytest, and a workspace script, as capture stores them', () => {
+    expect(listed('make test')).toEqual(['make test']);
+    expect(listed('just lint')).toEqual(['just lint']);
+    expect(listed('py -m pytest')).toEqual(['py pytest']);
+    expect(listed('npm -w web test')).toEqual(['npm web test']);
+  });
+  it('does not list a workspace install or a make target that is not a check', () => {
+    expect(listed('npm -w web install', 'npm install test', 'make clean')).toEqual([]);
+  });
+});
+
 describe('a formatter row', () => {
   const rows = (template: string, run: string): string[] => {
     const s = store({ sessions: [session('f')], tools: [call('f', 0, [run], { templates: [template] })] });
