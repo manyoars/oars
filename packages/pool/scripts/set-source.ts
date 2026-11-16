@@ -90,7 +90,7 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
     if (!confirm) {
       // The dry run reads the account too, so a mistyped id or value shows here.
       checked(change);
-      io.print(`Would set the source of account ${account} in ${where} from ${await sourceBefore(store, account, where)} to ${source} (by ${by}: ${reason}). Nothing was changed: run again with --confirm.`);
+      io.print(`Would set the source of account ${account} in ${where} from ${await sourceBefore(store, account, where)} to ${source} (by ${by.trim()}: ${reason.trim()}). Nothing was changed: run again with --confirm.`);
       return 0;
     }
     const done = await setSource(store, change, where);
