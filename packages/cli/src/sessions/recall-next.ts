@@ -294,8 +294,8 @@ export const recordRead = async (
 const NO_NAMES: string[] = [];
 
 /** The same-target read's evidence, as one read of the row it is served in. */
-const sameTargetEvidence = (failed: string, read: SameTargetRead, setup: Asker): RecallRead =>
-  evidenceRead({ readId: read.readId, family: 'recovery', tool: failed, n: read.recovered, count: read.recovered, calls: read.of, clusters: read.clusters, day: read.day, followed: [[read.step, read.recovered]] }, setup);
+export const sameTargetEvidence = (failed: string, read: SameTargetRead, setup: Asker): RecallRead =>
+  evidenceRead({ readId: read.readId, family: 'recovery', tool: failed, n: read.recovered, count: read.recovered, calls: read.of, clusters: read.clusters, day: read.day, followed: [[read.step, read.followed]] }, setup);
 
 /** What a failure's same-target read adds to a row: its text, its names, and its evidence. */
 export interface SameTargetServed {

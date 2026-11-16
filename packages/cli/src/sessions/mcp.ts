@@ -8,12 +8,12 @@ import { servedPool } from './pool.js';
 import { recallPool, storeSetup } from './recall-bundle.js';
 import { noEmit, type Emit } from '../telemetry/emit.js';
 import { recallFields } from '../telemetry/fields.js';
-import { appendRecall } from './recall-object.js';
+import { appendRecall, type Recall } from './recall-object.js';
 import { formsRefusal, pull, pullRefusal, RECALL_FAMILIES, type PullInput } from './recall-reads.js';
-import { MISS_TEXT } from './recall-render.js';
+import { evidenceOf, MISS_TEXT } from './recall-render.js';
 import { classOfAimed, errorCodeOf, targetOf } from './extract.js';
 import { sessionBundle } from './pool-replica.js';
-import { renderSameTarget, sameTargetServed } from './recall-next.js';
+import { renderSameTarget, sameTargetEvidence, sameTargetServed, type SameTargetServed } from './recall-next.js';
 import { makeRepoRoot } from './repo-root.js';
 import { makeRedactor } from './redact.js';
 import type { RecallCall } from './schema.js';
@@ -89,16 +89,15 @@ const toQuery = (args: unknown): PullInput => {
 };
 
 /**
- * The same-target line for a call that names `error`, `path`, and `failed` (the failed action): what the kept bundle for the store's own setup holds for that code, action, and path class, put after
- * the answer. With any of the three missing, or no read, it is empty and the answer is unchanged. `failed` is a local input of this tool, not a wire field.
+ * The same-target read for a call that names `error`, `path`, and `failed` (the failed action): what the kept bundle for the store's own setup holds for that code, action, and path class.
+ * With any of the three missing, or no read, it is undefined and the answer is unchanged. `failed` is a local input of this tool, not a wire field.
  */
-const sameTargetLine = async (runtime: SessionsRuntime, store: Store, args: unknown): Promise<string> => {
+const sameTargetFor = async (runtime: SessionsRuntime, store: Store, args: unknown): Promise<SameTargetServed | undefined> => {
   const source = isObj(args) ? args : {};
-  if (typeof source.error !== 'string' || typeof source.path !== 'string' || typeof source.failed !== 'string') return '';
+  if (typeof source.error !== 'string' || typeof source.path !== 'string' || typeof source.failed !== 'string') return undefined;
   const target = classOfAimed(targetOf('Read', { file_path: source.path }, process.cwd(), '', (text) => text, makeRepoRoot()(process.cwd())));
   const bundle = await sessionBundle(runtime.storeDir, storeSetup(store));
-  const served = target === 'none' ? undefined : sameTargetServed(bundle?.reads, errorCodeOf(source.error), source.failed, target);
-  return served === undefined ? '' : renderSameTarget(served.failed, errorCodeOf(source.error), target, served.read).rendered;
+  return target === 'none' ? undefined : sameTargetServed(bundle?.reads, errorCodeOf(source.error), source.failed, target);
 };
 
 const reply = (id: unknown, result: object): object => ({ jsonrpc: '2.0', id, result });
@@ -138,12 +137,17 @@ export const handleMessage = async (runtime: SessionsRuntime, now: () => number,
         await mkdir(runtime.storeDir, { recursive: true });
         await appendFile(paths(runtime.storeDir).calls, `${JSON.stringify(call)}\n`, { mode: 0o600 });
       });
-      await tryLog(() => appendRecall(runtime.storeDir, result.recall));
-      emit('recall', recallFields(result.recall, result.reads.map((read) => read.family), result.legacy !== undefined));
+      // The same-target read is part of what was served, so its id and evidence go in the recorded row beside the pull's.
+      const asked = isObj(params.arguments) ? params.arguments : {};
+      const served = await sameTargetFor(runtime, store, params.arguments);
+      const setup = storeSetup(store);
+      const recall: Recall = served === undefined || setup === undefined ? result.recall : { ...result.recall, answer: { ...result.recall.answer, reads: [...result.recall.answer.reads, served.read.readId] }, evidence: [...result.recall.evidence, evidenceOf(sameTargetEvidence(served.failed, served.read, setup), result.recall.frame)] };
+      await tryLog(() => appendRecall(runtime.storeDir, recall));
+      emit('recall', recallFields(recall, result.reads.map((read) => read.family), result.legacy !== undefined));
       // An agent reads this, so it gets the rendered counts and the structured recall, and no signature text.
-      const { answer, id: recallId, evidence } = result.recall;
-      const beside = await sameTargetLine(runtime, store, params.arguments);
-      const text = [answer.rendered, beside].filter((part) => part !== '').join('\n');
+      const { answer, id: recallId, evidence } = recall;
+      const beside = served === undefined ? '' : renderSameTarget(served.failed, errorCodeOf(typeof asked.error === 'string' ? asked.error : ''), served.target, served.read).rendered;
+      const text = [result.recall.answer.rendered, beside].filter((part) => part !== '').join('\n');
       return reply(id, { content: [{ type: 'text', text: text === '' ? MISS_TEXT : text }], structuredContent: { recallId, kind: answer.kind, reads: answer.reads, evidence } });
     } catch (error) {
       // A store read failure must not end the server mid-session: the agent gets an error for this call and can carry on.

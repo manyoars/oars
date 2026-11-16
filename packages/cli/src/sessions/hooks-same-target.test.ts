@@ -55,6 +55,12 @@ describe('PostToolUseFailure same-target read', () => {
     expect(output).toBe('oars recall, counts from earlier sessions: after a failed file.edit (1) on a source target, the same action on another kind of target came back ok 6 of 8 times it followed\n  read read:same (recovery)');
   });
 
+  it('serves the same-target line alone when the edge top is a retry, which silences only the edge line', async () => {
+    const { made, transcript } = await setup([edge('file.edit', 8), same('file.search')]);
+    const output = contextOf(await runHook('post-tool', fail(session(), transcript, { file_path: 'src/a.ts' }), made.runtime, () => NOW));
+    expect(output).toBe('oars recall, counts from earlier sessions: after a failed file.edit (1) on a source target, file.search came back ok 6 of 8 times it followed\n  read read:same (recovery)');
+  });
+
   it('is byte-identical to the edge line when the bundle holds no read for this target class', async () => {
     const { made, transcript } = await setup([edge('file.read', 8), same('file.search', 'test')]);
     const output = contextOf(await runHook('post-tool', fail(session(), transcript, { file_path: 'src/a.ts' }), made.runtime, () => NOW));
