@@ -6,7 +6,8 @@
 // which its one-step shape cells sum to over models, a long-tail model beside a listed one): with no such part, the smallest served part of each other family that counts that total is withheld, and a family with neither a whole nor a total is left alone.
 // The environment cells (`environmentOf`, `stored.ts`) keep their own rule, every part served or the total is not (each part against its own class's floor), and their counterparts are also dropped when a bucket cell is withheld (`bundleOf`).
 import { argFeaturesOf } from '../../cli/src/sessions/call-shape.js';
-import { exposureOfCell, isEnvironmentCell, NO_AXES, parseShapeClass, weekStartOf, type Cell, type ShapeFacet } from '../../cli/src/sessions/cells.js';
+import { exposureOfCell, isEnvironmentCell, NO_AXES, parseRecoveryClass, parseShapeClass, weekStartOf, type Cell, type ShapeFacet } from '../../cli/src/sessions/cells.js';
+import { parseRecoveryTargetClass, RETRY } from '../../cli/src/sessions/recovery-target.js';
 import { targetOf } from '../../cli/src/sessions/extract.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
 import { OPEN_LIST_KEYS } from '../../cli/src/sessions/public-vocabulary.js';
@@ -177,6 +178,18 @@ const FAMILY_RULES: readonly { name: string; placements: (cell: Cell, motif: Mot
       const [harness, version] = cell.frameBucket.split('/');
       const versionCell = { ...cell, frameBucket: [harness, version, NO_AXES].join('/'), exposed: false, exposure: 'unknown' as const };
       return [{ family: JSON.stringify(['action-calls', step.action, versionCell.frameBucket, cell.grain, cell.day]), role: 'part', total: callsTotal(step.action, '', versionCell) }];
+    },
+  },
+  // A recovery edge cell (`recovery:<code>/<failed>><next>`) counts the failed calls a next call followed; the same-target cells (`recoverytarget:<code>/<failed>/<target>><step>`) split those calls by the failed call's target
+  // class, a `retry` step being the failed action again. So the edge is the whole of the same-target cells with that code, failed action, and next step. The calls with no target are no cell, and are the part's unknown remainder.
+  {
+    name: 'recovery-target',
+    placements: (cell, motif) => {
+      const edge = motif === undefined || motif.cls === null ? null : parseRecoveryClass(motif.cls);
+      const part = motif === undefined || motif.cls === null ? null : parseRecoveryTargetClass(motif.cls);
+      const [code, failed, next] = edge !== null ? [edge.code, edge.failed, edge.next] : part !== null ? [part.code, part.failed, part.next === RETRY ? part.failed : part.next] : [];
+      if (code === undefined) return [];
+      return [{ family: JSON.stringify(['recovery-target', code, failed, next, cell.frameBucket, cell.grain, cell.day, exposureOfCell(cell)]), role: edge !== null ? 'whole' : 'part' }];
     },
   },
   // A week cell is the whole of the day cells of its motif, frame, exposure, and week.
