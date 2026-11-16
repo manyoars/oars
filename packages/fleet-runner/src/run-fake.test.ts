@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { objectAt, parseJson } from './json.js';
 import { main } from './run-fake.js';
 import { FLEET, retestText, taskSet } from './test-fixtures.js';
 
@@ -36,8 +37,8 @@ describe('run-fake', () => {
         'rows before-playwright: <out>/o-1.before-playwright.rows.json (24 sessions, min 3)',
         'rows after-playwright: <out>/o-1.after-playwright.rows.json (24 sessions, min 3)',
       ]);
-      const book = (await readFile(join(out, 'o-1.run-book.jsonl'), 'utf8')).trimEnd().split('\n').slice(1).map((line) => JSON.parse(line) as { void: string | null; poolSessionId: string | null });
-      expect(book.filter((run) => run.void === null).every((run) => run.poolSessionId !== null)).toBe(true);
+      const book = (await readFile(join(out, 'o-1.run-book.jsonl'), 'utf8')).trimEnd().split('\n').slice(1).map((line) => objectAt(parseJson(line, 'run line'), 'run line'));
+      expect(book.filter((run) => run.void === null).every((run) => typeof run.poolSessionId === 'string')).toBe(true);
       expect(book.filter((run) => run.void !== null).every((run) => run.poolSessionId === null)).toBe(true);
     } finally {
       await rm(out, { recursive: true, force: true });

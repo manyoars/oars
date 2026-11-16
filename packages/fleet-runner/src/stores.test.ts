@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadStore } from '../../cli/src/sessions/store.js';
 import { CLEAN, makeFake, type Script } from './fake-harness.js';
+import { parseJson } from './json.js';
 import { parseOrder } from './order.js';
 import { runOrder } from './runner.js';
 import { serializeRunBook, type RunBook } from './runbook.js';
@@ -94,11 +95,6 @@ describe('store folders per side and arm', () => {
   });
 });
 
-interface Saved {
-  header: { counted: number; minSessions: number };
-  rows: { kind: string; name?: string; sessions: number; thin?: boolean; failureRate?: number | null }[];
-}
-
 describe('the real-work-table read over each store folder', () => {
   it('gives one row file per side and arm whose session counts match the run book, and prints a cell under 3 as thin', async () => {
     // The tool is called in all of the before sessions and in only 2 of the after ones.
@@ -106,16 +102,15 @@ describe('the real-work-table read over each store folder', () => {
     await writeFile(join(root, 'terms.txt'), `${TERMS}\n`);
     const rows = await readStores(folders, { out: join(root, 'out'), orderId: 'o-1', terms: join(root, 'terms.txt'), date: '2026-11-16' });
     expect(rows.map((row) => row.file.slice(join(root, 'out').length + 1))).toEqual(['o-1.before-playwright.rows.json', 'o-1.after-playwright.rows.json']);
-    const tables: Saved[] = [];
     for (const row of rows) {
-      const table = JSON.parse(await readFile(row.file, 'utf8')) as Saved;
-      tables.push(table);
-      expect(table.header.counted).toBe(book.runs.filter((run) => run.void === null && folderOf(run.side, run.arm) === row.folder).length);
-      expect(table.header.minSessions).toBe(3);
-      console.log(`${row.folder}: ${String(table.header.counted)} sessions; ${table.rows.map((entry) => `${entry.kind}${entry.name === undefined ? '' : ` ${entry.name}`} n=${String(entry.sessions)}${entry.thin === true ? ' thin' : ''}`).join('; ')}`);
+      // The saved file is the table the read returned.
+      expect(parseJson(await readFile(row.file, 'utf8'), 'rows file')).toEqual(parseJson(JSON.stringify(row.table), 'table'));
+      expect(row.table.header.counted).toBe(book.runs.filter((run) => run.void === null && folderOf(run.side, run.arm) === row.folder).length);
+      expect(row.table.header.minSessions).toBe(3);
+      console.log(`${row.folder}: ${String(row.table.header.counted)} sessions; ${row.table.rows.map((entry) => (entry.kind === 'server' || entry.kind === 'skill' ? `${entry.kind} ${entry.name} n=${String(entry.sessions)}${entry.thin ? ' thin' : ''}` : `${entry.kind} n=${String(entry.sessions)}`)).join('; ')}`);
     }
-    const server = (table: Saved | undefined) => table?.rows.find((row) => row.kind === 'server' && row.name === 'playwright');
-    expect(server(tables[0])).toMatchObject({ sessions: 24, thin: false });
-    expect(server(tables[1])).toMatchObject({ sessions: 2, thin: true, failureRate: null });
+    const server = (index: number) => rows[index]?.table.rows.find((row) => row.kind === 'server' && row.name === 'playwright');
+    expect(server(0)).toMatchObject({ sessions: 24, thin: false });
+    expect(server(1)).toMatchObject({ sessions: 2, thin: true, failureRate: null });
   });
 });
