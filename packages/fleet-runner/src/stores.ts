@@ -63,6 +63,11 @@ export const makeStager = (staging: string): Stager => {
 
 export interface StoreFolder {
   name: string;
+  /**
+   * The folder a child `oars` process takes as its config folder (`APPDATA` on Windows, `XDG_CONFIG_HOME` elsewhere): the CLI reads its store at `<root>/oars/sessions`, its sign-in
+   * file at `<root>/oars/credentials.json`, and (with `CLAUDE_CONFIG_DIR` at `<root>/claude`) its exclusion terms at `<root>/claude/session-commons/exclusion-terms.txt`.
+   */
+  configRoot: string;
   storeDir: string;
   projectsRoot: string;
   /** The valid runs' session ids filed here, in run order. */
@@ -85,7 +90,8 @@ export const buildStores = async (book: RunBook, stager: Stager, out: string): P
     if (run.void !== null || run.poolSessionId === null) continue;
     if (staged === undefined) throw new Error(`valid run ${run.runId} has a pool session id but was not staged`);
     const name = folderOf(run.side, run.arm);
-    const folder = folders.get(name) ?? { name, storeDir: join(base, name, 'store'), projectsRoot: join(base, name, 'projects'), sessionIds: [] };
+    const configRoot = join(base, name);
+    const folder = folders.get(name) ?? { name, configRoot, storeDir: join(configRoot, 'oars', 'sessions'), projectsRoot: join(configRoot, 'claude', 'projects'), sessionIds: [] };
     folders.set(name, folder);
     const project = join(folder.projectsRoot, projectOf(book.header.orderId));
     await mkdir(project, { recursive: true });

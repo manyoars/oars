@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { defaultConfigDir } from '../../cli/src/credentials.js';
 import { contentHash } from '../../cli/src/sessions/read.js';
 import { loadStore } from '../../cli/src/sessions/store.js';
 import { CLEAN, makeFake, type Script } from './fake-harness.js';
@@ -72,6 +73,18 @@ describe('store folders per side and arm', () => {
     }
     expect(book.runs.filter((run) => run.void !== null).every((run) => run.poolSessionId === null)).toBe(true);
     expect(await readdir(join(root, 'staging')).catch(() => [])).toEqual([]);
+  });
+
+  it('seats each store at <config root>/oars/sessions, where the CLI looks when APPDATA or XDG_CONFIG_HOME names the root', async () => {
+    const { folders } = await chain(CLEAN, 2);
+    for (const folder of folders) {
+      expect(folder.storeDir).toBe(join(folder.configRoot, 'oars', 'sessions'));
+      // The CLI's own rule for the config folder (`main.ts` joins `oars/sessions` onto it): this platform's variable, absolute, gives this root.
+      const env = process.platform === 'win32' ? { APPDATA: folder.configRoot } : { XDG_CONFIG_HOME: folder.configRoot };
+      expect(join(defaultConfigDir(env, process.platform, fakeHome), 'oars', 'sessions')).toBe(folder.storeDir);
+      console.log(`config root ${folder.name}: ${folder.configRoot}`);
+    }
+    expect(new Set(folders.map((folder) => folder.configRoot)).size).toBe(folders.length);
   });
 
   it('reads no real store: the fake home that APPDATA names stays empty', async () => {
