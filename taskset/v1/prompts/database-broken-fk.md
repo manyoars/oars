@@ -1,0 +1,1 @@
+Building the database (`npm run db`) warns about a foreign key violation. Repair the seed data so the build reports none. The request involved was made by the member with the handle `amber-fox`. Keep every request and every member.

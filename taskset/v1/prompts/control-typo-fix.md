@@ -1,0 +1,1 @@
+Titles that contain numbers get the wrong slug: `slugify('Spring Sale 2026')` in `src/lib/text.ts` returns `spring-sale-0` instead of `spring-sale-2026`. Fix the bug and keep the existing tests passing.
