@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -22,6 +22,10 @@ beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'fleet-preflight-'));
   taskSet = join(root, 'v1');
   cpSync(TASKSET_V1, taskSet, { recursive: true });
+  binDir = join(root, 'bin');
+  mkdirSync(binDir);
+  writeFileSync(join(binDir, 'npm'), '');
+  writeFileSync(join(binDir, 'npm.cmd'), '');
   fleet = join(root, 'fleet.json');
   await writeFile(fleet, JSON.stringify({ version: 'fleet-1', harnesses: [{ name: 'claude-code-bedrock', version: '2.1.30', provider: 'bedrock', region: 'us-east-1', modelIds: ['m'] }] }));
 });
@@ -35,14 +39,12 @@ const outcome = (stdout: string, exitCode: number | null = 0, errorCode: string 
 interface Tools {
   claude: SpawnOutcome;
   git: SpawnOutcome;
-  npm: SpawnOutcome;
   remote: SpawnOutcome;
 }
 
 const GOOD: Tools = {
   claude: outcome('2.1.30 (Claude Code)\n'),
   git: outcome('git version 2.50.0\n'),
-  npm: outcome('11.0.0\n'),
   remote: outcome(`${'a'.repeat(40)}\trefs/tags/taskset-v1\n${COMMIT}\trefs/tags/taskset-v1^{}\n`),
 };
 
@@ -54,18 +56,18 @@ const stubs = (tools: Tools): { spawn: (spec: SpawnSpec) => Promise<SpawnOutcome
     spawn: (spec) => {
       calls.push(spec);
       if (spec.command === 'claude') return Promise.resolve(tools.claude);
-      if (spec.command === 'npm') return Promise.resolve(tools.npm);
       return Promise.resolve(spec.args[0] === 'ls-remote' ? tools.remote : tools.git);
     },
   };
 };
 
-const ENV = { AWS_REGION: 'us-east-1', AWS_BEARER_TOKEN_BEDROCK: MARKER, PATH: '/bin' };
+let binDir = '';
+const env = (): Record<string, string> => ({ AWS_REGION: 'us-east-1', AWS_BEARER_TOKEN_BEDROCK: MARKER, PATH: binDir });
 
-const run = async (tools: Tools, env: Record<string, string> = ENV, extra: string[] = [], nodeVersion = '24.1.0'): Promise<{ code: number; lines: string[]; calls: SpawnSpec[] }> => {
+const run = async (tools: Tools, given?: Record<string, string>, extra: string[] = [], nodeVersion = '24.1.0'): Promise<{ code: number; lines: string[]; calls: SpawnSpec[] }> => {
   const { spawn, calls } = stubs(tools);
   const lines: string[] = [];
-  const code = await main(['--taskset', taskSet, '--fleet', fleet, '--fixture-source', 'https://example.invalid/fixture.git', ...extra], (line) => lines.push(line), { env, spawn, nodeVersion });
+  const code = await main(['--taskset', taskSet, '--fleet', fleet, '--fixture-source', 'https://example.invalid/fixture.git', ...extra], (line) => lines.push(line), { env: given ?? env(), spawn, nodeVersion });
   return { code, lines, calls };
 };
 
@@ -77,7 +79,7 @@ describe('preflight', () => {
     expect(code).toBe(0);
     expect(lines.filter((line) => line.startsWith('ok')).length).toBe(9);
     expect(lines.at(-1)).toBe('preflight: ready');
-    expect(calls.map((call) => `${call.command} ${call.args[0] ?? ''}`)).toEqual(['claude --version', 'git --version', 'npm --version', 'git ls-remote']);
+    expect(calls.map((call) => `${call.command} ${call.args[0] ?? ''}`)).toEqual(['claude --version', 'git --version', 'git ls-remote']);
     expect(calls.every((call) => call.stdin === null)).toBe(true);
     // The children get no Bedrock variable.
     expect(calls.every((call) => !Object.keys(call.env).some((name) => name.startsWith('AWS_')))).toBe(true);
@@ -101,7 +103,7 @@ describe('preflight', () => {
   });
 
   it('says wrong when Node is below the floor', async () => {
-    const { code, lines } = await run(GOOD, ENV, [], '22.4.0');
+    const { code, lines } = await run(GOOD, undefined, [], '22.4.0');
     expect(code).toBe(1);
     expect(lineOf(lines, 'node')).toMatch(/^wrong .*22.*floor 24/);
   });
@@ -109,7 +111,7 @@ describe('preflight', () => {
   it('says missing when git or npm does not start', async () => {
     const noGit = await run({ ...GOOD, git: outcome('', null, 'ENOENT') });
     expect(lineOf(noGit.lines, 'git')).toMatch(/^missing/);
-    const noNpm = await run({ ...GOOD, npm: outcome('', null, 'ENOENT') });
+    const noNpm = await run(GOOD, { AWS_REGION: 'us-east-1', AWS_BEARER_TOKEN_BEDROCK: MARKER, PATH: root });
     expect(noNpm.code).toBe(1);
     expect(lineOf(noNpm.lines, 'npm')).toMatch(/^missing/);
   });
@@ -157,7 +159,7 @@ describe('preflight', () => {
   it('exits 1 with the reason when the fleet manifest or task-set folder cannot be read', async () => {
     const { spawn } = stubs(GOOD);
     const lines: string[] = [];
-    const code = await main(['--taskset', taskSet, '--fleet', join(root, 'absent.json'), '--fixture-source', 'x'], (line) => lines.push(line), { env: ENV, spawn });
+    const code = await main(['--taskset', taskSet, '--fleet', join(root, 'absent.json'), '--fixture-source', 'x'], (line) => lines.push(line), { env: env(), spawn });
     expect(code).toBe(1);
     expect(lines.at(-1)).toMatch(/^preflight: could not finish/);
   });
@@ -171,9 +173,9 @@ describe('preflight', () => {
 
   it('exits 2 with the usage line without the required flags', async () => {
     const lines: string[] = [];
-    expect(await main(['--taskset', taskSet], (line) => lines.push(line), { env: ENV })).toBe(2);
+    expect(await main(['--taskset', taskSet], (line) => lines.push(line), { env: env() })).toBe(2);
     expect(lines[0]).toMatch(/^usage: preflight/);
-    expect(await main(['--taskset', taskSet, '--fleet', fleet, '--fixture-source', 'x', '--run-book', 'b'], (line) => lines.push(line), { env: ENV })).toBe(2);
+    expect(await main(['--taskset', taskSet, '--fleet', fleet, '--fixture-source', 'x', '--run-book', 'b'], (line) => lines.push(line), { env: env() })).toBe(2);
   });
 
   it('verifies a named run book: wrong without a signature, ok with one', async () => {
@@ -186,11 +188,11 @@ describe('preflight', () => {
     const [type, material] = (await readFile(`${key}.pub`, 'utf8')).trim().split(' ');
     const allowed = join(root, 'allowed_signers');
     await writeFile(allowed, `run-book@manyoars.com namespaces="manyoars-runbook" ${type ?? ''} ${material ?? ''}\n`);
-    const unsigned = await run(GOOD, ENV, ['--run-book', book, '--allowed-signers', allowed]);
+    const unsigned = await run(GOOD, undefined, ['--run-book', book, '--allowed-signers', allowed]);
     expect(unsigned.code).toBe(1);
     expect(lineOf(unsigned.lines, 'run book')).toMatch(/^wrong/);
     await signRunBook(book, key);
-    const signed = await run(GOOD, ENV, ['--run-book', book, '--allowed-signers', allowed]);
+    const signed = await run(GOOD, undefined, ['--run-book', book, '--allowed-signers', allowed]);
     expect(signed.code).toBe(0);
     expect(lineOf(signed.lines, 'run book')).toMatch(/^ok .*verifies/);
   });
@@ -205,7 +207,7 @@ describe('preflight and the key', () => {
     // An error that carries the value: a fleet file whose name contains it.
     const lines: string[] = [];
     const { spawn } = stubs(GOOD);
-    await main(['--taskset', taskSet, '--fleet', join(root, `${MARKER}.json`), '--fixture-source', 'x'], (line) => lines.push(line), { env: ENV, spawn });
+    await main(['--taskset', taskSet, '--fleet', join(root, `${MARKER}.json`), '--fixture-source', 'x'], (line) => lines.push(line), { env: env(), spawn });
     everything.push(...lines);
     expect(everything.length).toBeGreaterThan(5);
     expect(everything.join('\n')).not.toContain(MARKER);

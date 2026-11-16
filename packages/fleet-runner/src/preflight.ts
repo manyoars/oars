@@ -5,7 +5,7 @@
 // `claude --version` prints the version number (https://code.claude.com/docs/en/cli-reference.md, the `--version` row); the check reads the first `x.y.z` in the output.
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { delimiter, isAbsolute, join, resolve } from 'node:path';
 import { loadResetPlan, nodeSpawn, type ChildEnv, type EnvMap, type Spawn } from './claude-bedrock.js';
 import { parseFleet, loadTaskSet } from './manifest.js';
 import { verifyRunBook } from './sign.js';
@@ -27,6 +27,13 @@ const SEMVER = /\d+\.\d+\.\d+/;
 const flag = (argv: string[], name: string): string | undefined => {
   const at = argv.indexOf(name);
   return at === -1 ? undefined : argv[at + 1];
+};
+
+const onPath = (exe: string, env: EnvMap): string | null => {
+  const extensions = ['', ...(process.platform === 'win32' ? (env['PATHEXT'] ?? '.EXE;.CMD;.BAT').split(';') : [])];
+  const folders = isAbsolute(exe) ? [''] : (env['PATH'] ?? env['Path'] ?? '').split(delimiter).filter((folder) => folder !== '');
+  for (const folder of folders) for (const extension of extensions) if (existsSync(join(folder, `${exe}${extension}`))) return join(folder, `${exe}${extension}`);
+  return null;
 };
 
 const USAGE = 'usage: preflight --taskset <folder> --fleet <file> --fixture-source <path or URL> [--claude <exe>] [--git <exe>] [--npm <exe>] [--run-book <file> --allowed-signers <file>]';
@@ -87,12 +94,13 @@ export const main = async (argv: string[], print: (line: string) => void, deps: 
     if (nodeMajor >= plan.nodeMajor) report('ok', 'node', `${String(nodeMajor)} (floor ${String(plan.nodeMajor)})`);
     else report('wrong', 'node', `${String(nodeMajor)} is below the task set's floor ${String(plan.nodeMajor)}; install Node ${String(plan.nodeMajor)} or later`);
 
-    // 3. git and npm.
-    for (const [name, exe] of [['git', git], ['npm', npm]] as const) {
-      const ran = await tool(exe, ['--version']);
-      if (ran.started && ran.exitCode === 0) report('ok', name, ran.text.split('\n')[0] ?? '');
-      else report('missing', name, `${exe} did not start; put it on PATH`);
-    }
+    // 3. git and npm. npm is a `.cmd` wrapper on Windows, which a spawn without a shell cannot start, so it is looked for on PATH instead of run.
+    const ranGit = await tool(git, ['--version']);
+    if (ranGit.started && ranGit.exitCode === 0) report('ok', 'git', ranGit.text.split(String.fromCharCode(10))[0] ?? '');
+    else report('missing', 'git', `${git} did not start; put it on PATH`);
+    const npmFound = onPath(npm, deps.env);
+    if (npmFound === null) report('missing', 'npm', `${npm} was not found on PATH; install Node with npm`);
+    else report('ok', 'npm', npmFound);
 
     // 4. The task-set folder: every task has its prompt and check, and its setup file where the manifest names one.
     const absent: string[] = [];
