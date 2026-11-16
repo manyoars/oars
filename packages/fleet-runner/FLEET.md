@@ -48,6 +48,8 @@ Step 1 and step 6 are once. Steps 2 to 4 are done for each order's store folders
 
 The first real run is a credit draw on the approved Bedrock credits. It also answers seven questions that no stub can. Follow these steps in order, and stop where they say stop.
 
+Do not make the paid run until the adapter saves the stdout of `claude` beside the transcript copy (`<runId>.stdout.jsonl`). Without it the read cannot answer questions (a) to (f).
+
 1. Run the preflight. It makes no model call and spends nothing. It checks `claude` and its pinned version, Node, git, npm, the task-set folder, the fixture tag, `AWS_REGION`, and that `AWS_BEARER_TOKEN_BEDROCK` is set (never its value). Fix every line that is not `ok`.
 
    `npm run preflight -w packages/fleet-runner -- --taskset ../../taskset/v1 --fleet <fleet manifest file> --fixture-source <fixture repository path or URL>`
@@ -61,5 +63,3 @@ The first real run is a credit draw on the approved Bedrock credits. It also ans
 
    Repeat `--allow-server` and `--allow-skill` for each one the run was allowed. To add a piece of the key's value to the scrub search, set it in the `FIRST_RUN_MARKER` environment variable (the `--marker <text>` flag also works, but puts the text in shell history and the process list). It is never printed. A `yes` on question (b) names the extra skills and servers: check that each one comes from the fixture's `.claude/` or `.mcp.json` before taking it as a load, because Claude Code ships some skills itself.
 5. Stop. Report its lines to the owner before any second run.
-
-Do not make the paid run until the adapter saves the stdout of `claude` beside the transcript copy (`<runId>.stdout.jsonl`). Without it the read cannot answer questions (a) to (f).

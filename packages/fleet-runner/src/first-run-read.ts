@@ -45,7 +45,8 @@ const toolResults = (value: unknown, found: string[] = []): string[] => {
 const strings = (value: unknown): string[] => (Array.isArray(value) ? value.flatMap((item) => (typeof item === 'string' ? [item] : isObject(item) && typeof item['name'] === 'string' ? [item['name']] : [])) : []);
 
 // Each server as `name` or `name (source)`; `source` is where its definition came from (typescript.md, SDKSystemMessage `mcp_servers[].source`).
-const servers = (value: unknown): string[] => (Array.isArray(value) ? value.flatMap((item) => (isObject(item) && typeof item['name'] === 'string' ? [typeof item['source'] === 'string' ? `${item['name']} (${item['source']})` : item['name']] : [])) : []);
+const servers = (value: unknown, keep: (name: string) => boolean = () => true): string[] =>
+  Array.isArray(value) ? value.flatMap((item) => (isObject(item) && typeof item['name'] === 'string' && keep(item['name']) ? [typeof item['source'] === 'string' ? `${item['name']} (${item['source']})` : item['name']] : [])) : [];
 
 const num = (value: unknown): number | null => (typeof value === 'number' ? value : null);
 
@@ -99,7 +100,7 @@ export const readFirstRun = (inputs: Inputs): string[] => {
   if (init === undefined) lines.push(line("(b) the fixture's own config loaded", 'cannot tell', 'the output has no system init event'));
   else if (init.event['mcp_servers'] === undefined || init.event['skills'] === undefined) lines.push(line("(b) the fixture's own config loaded", 'cannot tell', `init (line ${String(init.at)}) lacks ${init.event['mcp_servers'] === undefined ? 'mcp_servers' : 'skills'}`));
   else {
-    const extraServers = servers(init.event['mcp_servers']).filter((name) => !inputs.allowServers.includes(name.split(' ')[0] ?? ''));
+    const extraServers = servers(init.event['mcp_servers'], (name) => !inputs.allowServers.includes(name));
     const extraSkills = strings(init.event['skills']).filter((name) => !inputs.allowSkills.includes(name));
     if (extraServers.length + extraSkills.length > 0) lines.push(line("(b) the fixture's own config loaded", 'yes', `init (line ${String(init.at)}) lists servers not allowed [${extraServers.join(', ')}] and skills not allowed [${extraSkills.join(', ')}]`));
     else lines.push(line("(b) the fixture's own config loaded", 'no', `init (line ${String(init.at)}) lists only the allowed servers [${strings(init.event['mcp_servers']).join(', ')}] and skills [${strings(init.event['skills']).join(', ')}]`));
@@ -119,6 +120,7 @@ export const readFirstRun = (inputs: Inputs): string[] => {
   const denials = result === undefined ? null : result.event['permission_denials'];
   if (result === undefined || !Array.isArray(denials)) lines.push(line('(d) the task finished with no permission denial', 'cannot tell', 'the output has no result event with a permission_denials list'));
   else if (denials.length > 0 || denied > 0) lines.push(line('(d) the task finished with no permission denial', 'no', `permission_denials holds ${String(denials.length)} (tools: ${denials.map((item) => (isObject(item) ? String(item['tool_name']) : '?')).join(', ')}); ${String(denied)} permission_denied messages`));
+  else if (result.event['subtype'] === 'success' && result.event['is_error'] === true) lines.push(line('(d) the task finished with no permission denial', 'no', `the success result (line ${String(result.at)}) has is_error true (api_error_status ${String(num(result.event['api_error_status']) ?? 'absent')}): an API error ended the turn, so the task did not finish`));
   else lines.push(line('(d) the task finished with no permission denial', result.event['subtype'] === 'success' ? 'yes' : 'no', `result subtype ${String(result.event['subtype'])}, permission_denials empty`));
 
   // (e) The init model ID equals the Bedrock ID passed.

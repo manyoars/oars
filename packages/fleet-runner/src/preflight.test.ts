@@ -128,7 +128,7 @@ describe('preflight', () => {
     expect(lines.some((line) => line.includes('fixture'))).toBe(false);
     expect(calls.some((call) => call.args.includes('ls-remote'))).toBe(false);
     expect(lineOf(lines, 'AWS_REGION')).toMatch(/^ok/);
-    expect(lineOf(lines, 'run book')).toMatch(/^(ok|missing|wrong)/);
+    expect(lineOf(lines, 'run book')).toMatch(/^ok .*none named/);
   });
 
   it('says wrong and names the file when a task lacks its prompt, check, or setup file', async () => {

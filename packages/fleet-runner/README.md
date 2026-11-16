@@ -18,14 +18,19 @@ The runner is proved with a scripted fake, and the Claude Code on Bedrock adapte
 | `src/deposit-fleet.ts` | `npm run deposit-fleet`: the later deposit step. Verifies a signed, complete run book, waits out the 6-hour idle rule, and runs `oars pool deposit`, `oars pool outbox`, and `oars pool deposit --send-all` per store with that store's config root in the child's environment, stopping a store at the first non-zero exit. A dry run until `--confirm`. |
 | `src/preflight.ts` | `npm run preflight`: before the first paid run, checks this machine with no model call and no spend: `claude` and its pinned version, Node, git, npm, the task-set folder, the fixture tag, `AWS_REGION`, and that `AWS_BEARER_TOKEN_BEDROCK` is set (never its value). |
 | `src/first-run-read.ts` | `npm run first-run-read`: reads the files one real run leaves behind and prints `yes`, `no`, or `cannot tell` for the scrub and questions (a) to (f), with the evidence. Only prints; decides no void, edits no record. |
-| `FLEET.md` | The one-time owner steps, the order of commands from run to deposit, and "Before the first paid run" (preflight, the owner's yes, one task, the first-run read). |
+| `FLEET.md` | The one-time owner steps, the order of commands from run to deposit, and "Before the first paid run" (preflight, the owner's yes, one task, and the first-run read). |
 | `src/runbook.ts` | The run book as JSON Lines with a fixed key order, no transcript text, and no signature. |
 
-Run an order through the fake:
+Before the first paid run:
 
 ```
 npm run preflight -w packages/fleet-runner -- --taskset <folder> --fleet <file> --fixture-source <path or URL> [--run-book <file> --allowed-signers <file>]
 npm run first-run-read -w packages/fleet-runner -- --transcript <file> --output <file> --run-book <file> --model-id <Bedrock ID> [--run-id <id>] [--marker <text>] [--allow-server <name>] [--allow-skill <name>]
+```
+
+Run an order through the fake:
+
+```
 npm run run-fake -w packages/fleet-runner -- [--order <file>] [--taskset <folder>] [--fleet <file>] [--out <folder>] [--terms <file>] [--change-task-set-at <run number>]
 ```
 
