@@ -3,6 +3,7 @@
 import { EFFORT_CLASS, ERROR_CLASS, ERROR_VERSION_CLASS, isEnvironmentCell, NO_AXES, parseShapeClass, RECOVERY_CLASS, UNKNOWN, type Cell } from '../../cli/src/sessions/cells.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
 import { PROMPT_CLASSES, type StepIdentity } from '../../cli/src/sessions/schema.js';
+import { RECOVERY_TARGET_CLASS } from '../../cli/src/sessions/recovery-target.js';
 import { classFor, isListed } from './field-classes.js';
 
 export type CellClass = 'clear' | 'thresholded';
@@ -47,7 +48,7 @@ const shapeClear = (motif: Motif): boolean => {
   }
   const shape = parseShapeClass(cls);
   if (shape !== null) return shape.facet !== 'keys' && (!KEYED_FACETS.has(shape.facet) || clearOf('key', shape.value.slice(0, shape.value.lastIndexOf('='))));
-  return cls === '' || cls.startsWith(EFFORT_CLASS) || cls.startsWith(RECOVERY_CLASS) || PROMPT_CLASSES.some((prompt) => prompt === cls);
+  return cls === '' || cls.startsWith(EFFORT_CLASS) || cls.startsWith(RECOVERY_CLASS) || cls.startsWith(RECOVERY_TARGET_CLASS) || PROMPT_CLASSES.some((prompt) => prompt === cls);
 };
 
 /** A cell whose motif is not held is `thresholded`: a class the pool cannot read is the strict one. */

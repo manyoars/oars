@@ -51,6 +51,9 @@ export const METHODS: { readonly [family in Family]: { readonly name: string; re
 /** The recovery family's other method (`read-recovery-edge.ts`): what others did next after a failed call, from cells alone. The pool's version hashes it beside the table. */
 export const RECOVERY_EDGE_METHOD = { name: 'next-action-after-failure', version: '1' } as const;
 
+/** The recovery family's third method (`read-recovery-target.ts`): the next step that most often came back ok on the same target class, left out when it is a retry. */
+export const RECOVERY_TARGET_METHOD = { name: 'same-target-recovery', version: '1' } as const;
+
 /** The fit family's other method (`read-call-shape.ts`). The pool's version hashes it beside the table, for the same reason. */
 export const CALL_SHAPE_METHOD = { name: 'call-shape', version: '2' } as const;
 

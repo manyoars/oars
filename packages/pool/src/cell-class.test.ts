@@ -222,6 +222,7 @@ describe('a class motif the pool cannot read', () => {
     expect(classOf('')).toBe('clear');
     expect(classOf('effort:high/thinking:4')).toBe('clear');
     expect(classOf('recovery:429/file.read>shell.exec')).toBe('clear');
+    expect(classOf('recoverytarget:429/file.edit/source>file.read')).toBe('clear');
     expect(classOf('error:429/shell.exec')).toBe('clear');
   });
 
