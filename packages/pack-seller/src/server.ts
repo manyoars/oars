@@ -1,4 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { createOarsClient } from '@manyoars/oars-client';
 import { createBilling } from './billing.js';
 import { ConfigError, loadConfig, type Config } from './config.js';
@@ -7,19 +9,16 @@ import {
   OFFER_RATE_WINDOW_MS,
   createRateLimiter,
 } from './rate-limit.js';
-import { createHandler, memoryOfferLedger, type OfferLedger, type PackCatalog, type RouteDeps } from './routes.js';
+import { loadPackInputs, openPackStore, type PackStore, type StoreOptions } from './pack-store.js';
+import { createHandler, type RouteDeps } from './routes.js';
 
 export const SELLER_VERSION = '0.0.0';
 /** Longest request body read; an offer request is two short strings. */
 export const MAX_BODY_BYTES = 8_192;
 
-/** Until brief 3's pack store exists the seller lists no packs, so every pack route answers 404. */
-export const emptyCatalog: PackCatalog = { list: () => [], find: () => undefined };
-
 export interface SellerOptions {
   config: Config;
-  catalog?: PackCatalog;
-  ledger?: OfferLedger;
+  store: PackStore;
   log?: (line: string) => void;
   now?: () => number;
 }
@@ -36,14 +35,29 @@ const readBytes = async (incoming: IncomingMessage): Promise<Buffer | undefined>
   return size > MAX_BODY_BYTES ? undefined : Buffer.concat(chunks);
 };
 
+/** The body's chunks; leaving early (a closed client, a failed write) cancels the source, which is what releases a download's reservation. */
+async function* chunksOf(body: ReadableStream<Uint8Array>): AsyncGenerator<Uint8Array> {
+  const reader = body.getReader();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      yield value;
+    }
+  } finally {
+    await reader.cancel();
+  }
+}
+
 /** The seller's node server; it only adapts `http` to the handler in routes.ts. Call `listen` on it. */
 export const createSellerServer = (options: SellerOptions): Server => {
   const now = options.now ?? Date.now;
   const client = createOarsClient({ version: SELLER_VERSION, baseUrl: options.config.apiUrl });
   const deps: RouteDeps = {
     billing: createBilling(client, options.config.sdkKey),
-    catalog: options.catalog ?? emptyCatalog,
-    ledger: options.ledger ?? memoryOfferLedger(),
+    catalog: options.store.catalog,
+    ledger: options.store.ledger,
+    source: options.store,
     limiter: createRateLimiter(OFFER_RATE_LIMIT, OFFER_RATE_WINDOW_MS, now),
     log: options.log ?? ((line) => {
       console.log(line);
@@ -69,7 +83,10 @@ export const createSellerServer = (options: SellerOptions): Server => {
         body: hasBody ? new Uint8Array(body) : undefined,
       });
       const response = await handle(request, incoming.socket.remoteAddress ?? 'unknown');
-      outgoing.writeHead(response.status, Object.fromEntries(response.headers)).end(Buffer.from(await response.arrayBuffer()));
+      outgoing.writeHead(response.status, Object.fromEntries(response.headers));
+      // A download streams: the pipeline ends the response when the archive ends, and a failure or a closed client stops the source, which releases the reservation.
+      if (response.body === null) outgoing.end();
+      else await pipeline(Readable.from(chunksOf(response.body)), outgoing);
     })().catch(() => {
       // A handler never throws on a platform refusal; this is a bug, so answer one line and leave the detail out of the response.
       if (!outgoing.headersSent) outgoing.writeHead(500, { 'Content-Type': 'application/json' }).end('{"error":"Internal error."}');
@@ -80,17 +97,31 @@ export const createSellerServer = (options: SellerOptions): Server => {
 
 export type StartResult = { ok: true; server: Server; port: number } | { ok: false; line: string };
 
+export interface StartOptions extends StoreOptions {
+  log?: (line: string) => void;
+  now?: () => number;
+}
+
 /** Reads the environment and starts listening; a bad configuration comes back as one line to print, with nothing started. */
-export const start = async (env: Readonly<NodeJS.ProcessEnv>, options: Omit<SellerOptions, 'config'> = {}): Promise<StartResult> => {
+export const start = async (env: Readonly<NodeJS.ProcessEnv>, options: StartOptions = {}): Promise<StartResult> => {
   let config: Config;
+  let store: PackStore;
   try {
     config = loadConfig(env);
+    store = await openPackStore(loadPackInputs(env), options);
   } catch (error) {
     if (error instanceof ConfigError) return { ok: false, line: error.message };
     throw error;
   }
-  const server = createSellerServer({ ...options, config });
-  await new Promise<void>((resolve) => server.listen(config.port, config.host, resolve));
+  const server = createSellerServer({ log: options.log, now: options.now, config, store });
+  // A taken port or an unusable host rejects here instead of crashing the process with an unhandled error event.
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(config.port, config.host, () => {
+      server.off('error', reject);
+      resolve();
+    });
+  });
   const address = server.address();
   return { ok: true, server, port: typeof address === 'object' && address !== null ? address.port : config.port };
 };

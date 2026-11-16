@@ -96,6 +96,16 @@ const textOf = async (file: string, what: string): Promise<string> => {
 
 const jsonOf = async (file: string, what: string): Promise<unknown> => JSON.parse(await textOf(file, what));
 
+/**
+ * Art. 21(1): the pack records the hash of the objections it was built under, and an objection recorded since (whatever its `received` says) was never applied to it, so it goes out only after a rebuild.
+ * The refusal when `record` (a pack's pack.json) is stale against the objections beside the owners file in `dir`, and undefined when it is current: the seller rechecks with it before each stream.
+ */
+export const staleObjections = async (record: unknown, dir: string): Promise<string | undefined> => {
+  const recorded = fieldOf(record, 'objections');
+  if (recorded === (await readObjections(dir)).hash) return undefined;
+  return `${recorded === undefined ? 'This pack predates the objections hash in pack.json' : 'The objections changed since the build'}: rebuild the pack, then deliver.`;
+};
+
 /** What `deliver` wrote, and how many (recipient, lot, match id) rows the register already held, which it leaves alone. */
 export interface Delivered {
   rows: Delivery[];
@@ -116,9 +126,8 @@ export const deliver = async (options: DeliverOptions): Promise<Delivered> => {
   const [built, keyId] = [fieldOf(record, 'built'), fieldOf(record, 'keyId')];
   if (!isText(built) || Number.isNaN(Date.parse(built))) throw new PackError('pack.json has no build time.');
   if (keyId !== keyIdOf(options.buyerKey)) throw new PackError('The buyer key is not the one this pack was built under (or the pack predates the key id in pack.json). Rebuild the pack under this key.');
-  // Art. 21(1): the pack records the hash of the objections it was built under, and an objection recorded since (whatever its `received` says) was never applied to it, so it goes out only after a rebuild.
-  const recorded = fieldOf(record, 'objections');
-  if (recorded !== (await readObjections(dir)).hash) throw new PackError(`${recorded === undefined ? 'This pack predates the objections hash in pack.json' : 'The objections changed since the build'}: rebuild the pack, then deliver.`);
+  const stale = await staleObjections(record, dir);
+  if (stale !== undefined) throw new PackError(stale);
   const sessions = new Map((await indexOf(dir)).map(({ matchId, session }) => [matchId, session]));
   const matchIds = (await textOf(join(pack, 'manifest.jsonl'), 'manifest.jsonl')).split(String.fromCharCode(10)).filter((row) => row.trim() !== '').map((row): string => {
     const matchId = fieldOf(JSON.parse(row), 'matchId');
