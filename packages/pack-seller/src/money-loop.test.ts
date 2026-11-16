@@ -18,7 +18,6 @@ const RESERVATION = 'rsv_0001';
 const accept = { recipientLegalName: 'Ada Lovelace', licenseVersion: '2026-11' };
 const stamp = '2099-01-01T00:00:00Z';
 
-/** The platform as msw, keeping the state the loop reads: the price, the purchase until it settles, and the credit balance. Every call is recorded in order. */
 /** A string field of a parsed JSON body; fails the test when it is not one. */
 const textOf = (body: unknown, name: string): string => {
   const value: unknown = typeof body === 'object' && body !== null ? Reflect.get(body, name) : undefined;
@@ -35,6 +34,7 @@ interface Model {
   prices: Set<string>;
 }
 
+/** The platform as msw, keeping the state the loop reads: the price, the purchase until it settles, and the credit balance. Every call is recorded in order. */
 const platformModel = (options: { refuseCommit?: boolean } = {}) => {
   const state: Model = { priceCredits: 0, credits: 0, held: 0, settled: false, calls: [], prices: new Set() };
   server.use(
@@ -208,5 +208,26 @@ describe('a refused commit', () => {
     expect(result.names).not.toContain('manifest.jsonl');
     expect(platform.state.calls.slice(-4)).toEqual(['balance', 'reserve', 'commit', 'release']);
     expect(platform.state).toMatchObject({ credits: 3, held: 0 });
+  });
+});
+
+describe('a stream cut after the commit', () => {
+  it('keeps the credit spent, releases nothing, and lets the buyer download again on the credit left', async () => {
+    const { world, platform, price, offer, download } = await setup();
+    await price();
+    const offered = await offer();
+    platform.settle();
+    const reader = (await download(offered.ref)).body?.getReader();
+    if (reader === undefined) throw new Error('The download has no body.');
+    while (!platform.state.calls.includes('commit')) {
+      if ((await reader.read()).done) throw new Error('The stream ended before the commit.');
+    }
+    await reader.cancel();
+    expect(platform.state.calls).not.toContain('release');
+    expect(platform.state).toMatchObject({ credits: 2, held: 0 });
+    const again = await download(offered.ref);
+    expect(again.status).toBe(200);
+    expect((await validated(world, 'again', Buffer.from(await again.arrayBuffer()))).code).toBe(0);
+    expect(platform.state).toMatchObject({ credits: 1, held: 0 });
   });
 });
