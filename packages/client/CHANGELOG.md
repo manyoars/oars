@@ -2,6 +2,10 @@
 
 All notable changes to `@manyoars/oars-client`. Versions follow semver.
 
+## Unreleased
+
+- `purchases.offer`, `purchases.buy`, and `purchases.get` read an offer's terms, buy one of its packs with the buying agent's SDK key and an `Idempotency-Key`, and read a purchase back. The generated types now carry the offer, purchase, customer, and credit operations.
+
 ## 0.1.3 (2026-11-11)
 
 - The copyright holder in the LICENSE file is now Many Oars Co., which received the project from Switchyard Software Company by written assignment effective 2026-11-11. The license terms and the generated types are unchanged.
