@@ -89,7 +89,7 @@ const bulkAccounts = async (count: number): Promise<string[]> => {
   const db = await pool.db();
   const ids = Array.from({ length: count }, () => `bulk-${String((next += 1))}`);
   const statements = ids.flatMap((id) => [
-    db.prepare("INSERT INTO accounts (id, source, raw_consent_version) VALUES (?, 'github', 'v1')").bind(id),
+    db.prepare("INSERT INTO accounts (id, raw_consent_version) VALUES (?, 'v1')").bind(id),
     db.prepare('INSERT INTO covenant_acceptances (account, version, accepted_at, text_sha256, input) VALUES (?, ?, 1000, ?, ?)').bind(id, COVENANT_VERSION_2_1, screenHash(COVENANT_VERSION_2_1), 'I accept'),
     depositRow(db, id, { id: 'q0' }),
   ]);
