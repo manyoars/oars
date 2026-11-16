@@ -390,7 +390,10 @@ export const makeClaudeBedrock = (settings: ClaudeBedrockSettings, deps: Depende
       AWS_REGION: settings.awsRegion,
       AWS_BEARER_TOKEN_BEDROCK: key,
       ANTHROPIC_MODEL: settings.modelId,
+      // Pinned so background work (which runs on the haiku alias) uses the run's own model and no unpinned model draws credit: env-vars.md and model-config.md#environment-variables.
       ANTHROPIC_DEFAULT_HAIKU_MODEL: settings.modelId,
+      // Strips the Bedrock key from the agent's Bash, hooks, and the tool's stdio MCP server (env-vars.md, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB); Claude Code keeps it for its own API calls.
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1',
       CLAUDE_CONFIG_DIR: folder.configDir,
       CLAUDE_CODE_PROJECT_DIR_NAME: 'work',
       DISABLE_AUTOUPDATER: '1',
