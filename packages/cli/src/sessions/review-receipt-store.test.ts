@@ -59,12 +59,18 @@ describe('oars sessions receipt on a real store', () => {
     const out = h.out.join('');
     expect(out).toContain('| `npm run build` | exit 1 | 2 |');
     expect(out).toContain('| `npx vitest run` | exit 0 | 3 |');
-    expect(out).toContain('| `npm test` | ');
+    expect(out).toContain('| `npm test` | exit 0 | 4 |');
     expect(out).toContain('| `just check` | exit 0 | 5 |');
     // `git status` and `git push` are counted, not listed.
     expect(out).toContain('2 other commands not shown.');
     expect(out).not.toContain('secret-feature');
     expect(out).not.toContain('please check');
+  });
+
+  it('prints the model the store holds on the calls when the session names none', async () => {
+    const h = wired();
+    await run(['sessions', 'receipt', 'rcpt-1'], h.deps);
+    expect(h.out.join('')).toContain('- Model: claude-opus-x');
   });
 
   it('prints no home path or prompt text', async () => {

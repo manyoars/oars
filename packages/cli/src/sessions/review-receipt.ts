@@ -11,9 +11,9 @@ import { HARNESS_ERROR_CLASSES, harnessOf, type SessionObservation, type ShellSe
 import { loadStore, type Store } from './store.js';
 
 // A `segments[].run` is the program and its plain words, so `python -m pytest` is `python pytest` and `npx vitest run <file>` is `npx vitest run`.
-const RUNNER = String.raw`(?:(?:npx|bunx|pnpm\s+exec|pnpm\s+dlx|yarn|python3?|py|uv\s+run|poetry\s+run)\s+)?`;
+const RUNNER = String.raw`(?:(?:npx|bunx|uvx|pipx\s+run|pnpm\s+exec|pnpm\s+dlx|yarn\s+dlx|yarn|bundle\s+exec|python[\d.]*|py|uv\s+run|poetry\s+run)\s+)?`;
 // A workspace form (`npm -w web test`) is stored as `npm web test`; the lookahead keeps `npm install test` out.
-const SCRIPT = String.raw`(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:(?!(?:add|i|install|uninstall|remove|rm|link|view|get|run)\s)\S+\s+)?`;
+const SCRIPT = String.raw`(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:(?!(?:add|i|install|uninstall|remove|rm|link|view|get|run|ci|pack|init|exec|publish)\s)\S+\s+)?`;
 
 /**
  * The commands a receipt lists, by family: each pattern is read against one command's `run` from its first word, so a flag is never in it. A formatter lists only when the
@@ -94,8 +94,16 @@ export const resultOf = (call: ToolObservation, index: number, codex: boolean): 
   return call.errorCode !== undefined && EXIT_CLASSES_SHOWN.has(call.errorCode) ? `exit ${call.errorCode}` : 'failed';
 };
 
-const modelOf = (session: SessionObservation): string | null =>
-  Object.entries(session.models).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] ?? null;
+/** The session's recorded models, else (capture fills `models` from the requested model alone) the model each of its own calls names; the most frequent, ties by name. */
+const modelOf = (session: SessionObservation, calls: readonly ToolObservation[]): string | null => {
+  const counts = Object.entries(session.models);
+  if (counts.length === 0) {
+    const named = new Map<string, number>();
+    for (const call of calls) if (call.model !== undefined) named.set(call.model, (named.get(call.model) ?? 0) + 1);
+    counts.push(...named);
+  }
+  return counts.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] ?? null;
+};
 
 const main = (store: Store): SessionObservation[] => store.sessions.filter((session) => session.supersededBy === undefined);
 
@@ -138,7 +146,7 @@ export const reviewReceiptOf = (store: Store, session: SessionObservation, home:
       rows.push({ order: position + 1, family, command: family === 'format check' && flag !== undefined ? `${run} ${flag}` : run, result: resultOf(call, index, codex) });
     }
   }
-  return { session: session.session, date: session.tsFirst?.slice(0, 10) ?? null, harness: harnessOf(session), model: modelOf(session), calls: calls.length, rows, other };
+  return { session: session.session, date: session.tsFirst?.slice(0, 10) ?? null, harness: harnessOf(session), model: modelOf(session, calls), calls: calls.length, rows, other };
 };
 
 const cell = (text: string): string => text.replaceAll('|', String.raw`\|`).replaceAll('`', "'");

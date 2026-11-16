@@ -254,6 +254,39 @@ describe('the forms isRunner counts', () => {
   });
 });
 
+describe('the model of a session', () => {
+  const modelLine = (models: { [model: string]: number }, tools: ToolObservation[]): string => {
+    const held = session('m1', { models });
+    return reviewReceiptText(reviewReceiptOf(store({ sessions: [held], tools }), held, HOME), VERSION).split(/\r?\n/).find((line) => line.startsWith('- Model')) ?? '';
+  };
+  it("falls back to the most frequent model on the session's own calls, ties by name, sidechain left out", () => {
+    const named = (n: number, model: string, side = false): ToolObservation => call('m1', n, ['ls'], { model, side });
+    expect(modelLine({}, [named(0, 'b-model'), named(1, 'a-model'), named(2, 'b-model')])).toBe('- Model: b-model');
+    expect(modelLine({}, [named(0, 'b-model'), named(1, 'a-model')])).toBe('- Model: a-model');
+    expect(modelLine({}, [named(0, 'a-model'), named(1, 'z-model', true), named(2, 'z-model', true)])).toBe('- Model: a-model');
+  });
+  it('keeps session.models first, and says not recorded when nothing names a model', () => {
+    expect(modelLine({ 'x-model': 1 }, [call('m1', 0, ['ls'], { model: 'y-model' })])).toBe('- Model: x-model');
+    expect(modelLine({}, [call('m1', 0, ['ls'])])).toBe('- Model: not recorded');
+  });
+});
+
+describe('the wrappers isRunner strips and the scripts that are not work', () => {
+  it('lists uvx, pipx run, yarn dlx, bundle exec, and python3.12 runners', () => {
+    expect(listed('uvx pytest')).toEqual(['uvx pytest']);
+    expect(listed('pipx run pytest')).toEqual(['pipx run pytest']);
+    expect(listed('yarn dlx vitest')).toEqual(['yarn dlx vitest']);
+    expect(listed('bundle exec jest')).toEqual(['bundle exec jest']);
+    expect(listed('python3.12 -m pytest')).toEqual(['python3.12 pytest']);
+  });
+  it('does not list ci, pack, init, exec, or publish before build, test, or lint', () => {
+    for (const verb of ['ci', 'pack', 'init', 'exec', 'publish']) expect(listed(`npm ${verb} build`)).toEqual([]);
+  });
+  it('prints an order-sensitive secret command by its program only, with a home path word before the match', () => {
+    expect(listed('cd /home/zed/work && pytest --token abc123 tests')).toEqual(['pytest']);
+  });
+});
+
 describe('a formatter row', () => {
   const rows = (template: string, run: string): string[] => {
     const s = store({ sessions: [session('f')], tools: [call('f', 0, [run], { templates: [template] })] });
