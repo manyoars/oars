@@ -50,10 +50,14 @@ export const main = async (argv: string[], print: (line: string) => void, clock:
     for (const folder of folders) print(`store folder ${folder.name}: ${folder.storeDir} (${String(folder.sessionIds.length)} sessions)`);
     // The demo's exclusion list is invented; an operator passes the real one with --terms.
     const termsFile = flag(argv, '--terms') ?? join(out, `${order.orderId}.demo-terms.txt`);
-    if (flag(argv, '--terms') === undefined) await writeFile(termsFile, 'zorblax-demo-term\n');
+    if (flag(argv, '--terms') === undefined) {
+      await writeFile(termsFile, 'zorblax-demo-term\n');
+      print(`demo exclusion terms: ${termsFile}`);
+    }
     for (const rows of await readStores(folders, { out, orderId: order.orderId, terms: termsFile, date: book.header.endDate })) {
       print(`rows ${rows.folder}: ${rows.file} (${String(rows.table.header.counted)} sessions, min ${String(rows.table.header.minSessions)})`);
     }
+    print(`owners file: ${join(out, `${order.orderId}.stores`, 'owners.json')}`);
     return book.header.status === 'complete' ? 0 : 1;
   } catch (error) {
     print(`run-fake: ${error instanceof Error ? error.message : 'failed'}`);

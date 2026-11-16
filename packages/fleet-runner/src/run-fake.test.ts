@@ -36,8 +36,10 @@ describe('run-fake', () => {
         'run book (unsigned): <out>/o-1.run-book.jsonl',
         'store folder before-playwright: <out>/o-1.stores/before-playwright/store (24 sessions)',
         'store folder after-playwright: <out>/o-1.stores/after-playwright/store (24 sessions)',
+        'demo exclusion terms: <out>/o-1.demo-terms.txt',
         'rows before-playwright: <out>/o-1.before-playwright.rows.json (24 sessions, min 3)',
         'rows after-playwright: <out>/o-1.after-playwright.rows.json (24 sessions, min 3)',
+        'owners file: <out>/o-1.stores/owners.json',
       ]);
       const book = (await readFile(join(out, 'o-1.run-book.jsonl'), 'utf8')).trimEnd().split('\n').slice(1).map((line) => objectAt(parseJson(line, 'run line'), 'run line'));
       expect(book.filter((run) => run.void === null).every((run) => typeof run.poolSessionId === 'string')).toBe(true);

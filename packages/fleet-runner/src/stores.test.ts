@@ -114,6 +114,9 @@ describe('the real-work-table read over each store folder', () => {
     const server = (index: number) => rows[index]?.table.rows.find((row) => row.kind === 'server' && row.name === 'playwright');
     expect(server(0)).toMatchObject({ sessions: 24, thin: false });
     expect(server(1)).toMatchObject({ sessions: 2, thin: true, failureRate: null });
+    // The cell row for the after folder has 2 valid sessions, under the minimum of 3: the read leaves it out and counts it.
+    expect(rows[0]?.table.header.leftOut).toBe(0);
+    expect(rows[1]?.table.header.leftOut).toBe(1);
   });
 
   it('refuses to write the stores or the rows inside a git repository, for a direct caller too', async () => {
