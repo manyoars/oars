@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -77,7 +77,7 @@ describe('signing a run book', () => {
     });
   });
 
-  it('verify fails for a signer the allowed-signers file does not name, and names ssh-keygen when it cannot run', async () => {
+  it('verify fails for a signer the allowed-signers file does not name, and signing names ssh-keygen when the key file is missing', async () => {
     await withDir(async (dir) => {
       const { key } = makeKey(dir);
       const book = join(dir, 'o-1.run-book.jsonl');
@@ -118,6 +118,26 @@ describe('signing a run book', () => {
       const inside = join(dirname(fileURLToPath(import.meta.url)), '..', '.guard-out', 'o-1.run-book.jsonl');
       await expect(signRunBook(inside, key)).rejects.toThrow(/inside a git repository/);
       expect(existsSync(`${inside}.sig`)).toBe(false);
+    });
+  });
+
+  it('names ssh-keygen when it cannot be run', async () => {
+    await withDir(async (dir) => {
+      const { key } = makeKey(dir);
+      const book = join(dir, 'o-1.run-book.jsonl');
+      await writeFile(book, bookOf('complete'));
+      const empty = join(dir, 'empty-path');
+      await mkdir(empty);
+      // Windows spells the variable Path; set whichever spelling the environment has.
+      const names = Object.keys(process.env).filter((name) => name.toLowerCase() === 'path');
+      const saved = names.map((name) => [name, process.env[name]] as const);
+      for (const name of names) process.env[name] = empty;
+      try {
+        await expect(signRunBook(book, key)).rejects.toThrow(/could not be run/);
+        await expect(verifyRunBook(book, key)).rejects.toThrow(/could not be run/);
+      } finally {
+        for (const [name, value] of saved) process.env[name] = value;
+      }
     });
   });
 });
