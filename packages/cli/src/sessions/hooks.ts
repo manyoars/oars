@@ -152,6 +152,7 @@ const targetClassOfCall = (input: Input): string => {
 /**
  * The recovery edge (Item 2): what followed a failure of this action and error class, from the kept bundle for the session's setup and then the local pool, held to A33's
  * holdback like every next-node read. A same-step retry or a local edge under the floor says nothing, signature line included; the signature line answers only a failure no cell covers.
+ * The same-target line follows the edge line or stands alone, under its own retry rule, which the pool applies when it leaves the read out.
  */
 const postTool = async (runtime: SessionsRuntime, input: Input, now: () => number): Promise<Outcome> => {
   const tool = str(input.tool_name);

@@ -33,6 +33,22 @@ const textOf = async (made: Staged, args: object): Promise<string> => {
   return Array.isArray(content) ? String(field(content[0], 'text')) : '';
 };
 
+/** Every recall row the store holds, parsed. */
+const rowsOf = (made: Staged): unknown[] =>
+  readFileSync(recallsPath(made.storeDir), 'utf8')
+    .split('\n')
+    .filter((line) => line !== '')
+    .map((line): unknown => JSON.parse(line));
+
+/** The object without the named keys. */
+const without = (value: unknown, keys: string[]): object => Object.fromEntries(Reflect.ownKeys(typeof value === 'object' && value !== null ? value : {}).map((key): [string | symbol, unknown] => [key, field(value, String(key))]).filter(([key]) => typeof key === 'string' && !keys.includes(key)));
+
+/** The structured reply without its per-call id, and the rows the call appended without their id and time. */
+const shapeOf = async (made: Staged, args: object): Promise<{ structured: object; rows: object[] }> => {
+  const result = field(await handleMessage(made.runtime, now, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: TOOL_NAME, arguments: args } }), 'result');
+  return { structured: without(field(result, 'structuredContent'), ['recallId']), rows: rowsOf(made).map((row) => without(row, ['id', 'at'])) };
+};
+
 const ASK = { error: 'Exit code 1\nnothing seen before', path: 'src/a.ts' };
 
 describe('oars_recall same-target read', () => {
@@ -52,6 +68,20 @@ describe('oars_recall same-target read', () => {
     expect(row).toContain('"n":6');
   });
 
+  it('records what was rendered: a miss pull plus a served read is a hit whose row holds the reply text', async () => {
+    const made = await staged([same('file.search')]);
+    const args = { ...ASK, failed: 'file.edit' };
+    const reply = await textOf(made, args);
+    const rows = rowsOf(made);
+    const answer = field(rows.at(-1), 'answer');
+    expect(field(answer, 'rendered')).toBe(reply);
+    expect(field(answer, 'kind')).toBe('hit');
+    expect(field(answer, 'reads')).toEqual(['read:same']);
+    expect(field(answer, 'names')).toEqual(['file.search']);
+    expect(field(answer, 'bytes')).toBe(Buffer.byteLength(reply));
+    expect(field(answer, 'tokens')).toBe(Math.ceil(reply.length / 4));
+  });
+
   it('words a step equal to the failed action as the same action on another kind of target', async () => {
     const made = await staged([same('file.edit')]);
     expect(await textOf(made, { ...ASK, failed: 'file.edit' })).toContain('the same action on another kind of target came back ok 6 of 8 times it followed');
@@ -61,6 +91,9 @@ describe('oars_recall same-target read', () => {
     const withRead = await staged([same('file.search')]);
     const without = await staged([]);
     const plain = await textOf(without, ASK);
+    const plainShape = await shapeOf(await staged([]), ASK);
+    expect(await shapeOf(await staged([same('file.search')]), ASK)).toEqual(plainShape);
+    expect(await shapeOf(await staged([same('file.search')]), { ...ASK, failed: 'file.write' })).toEqual(plainShape);
     expect(await textOf(withRead, ASK)).toBe(plain);
     expect(await textOf(without, { ...ASK, failed: 'file.edit' })).toBe(plain);
     expect(await textOf(withRead, { ...ASK, failed: 'file.write' })).toBe(plain);
