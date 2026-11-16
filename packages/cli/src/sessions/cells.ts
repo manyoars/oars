@@ -6,6 +6,7 @@ import { classMotif, motifName, motifsOf, stepsOfCall, type CountedStep, type Mo
 import { bucketOf } from './pool-wire.js';
 import { CALL_SHAPE_METHOD, cellRef, contentHash, METHODS, RECOVERY_EDGE_METHOD } from './read.js';
 import { recoveryCallsOf } from './recovery-calls.js';
+import { nextCallOf, nextStepOf, RECOVERY_TARGET_CLASS, recoveryTargetClass } from './recovery-target.js';
 import { NO_RECALLS, type PlacedStep, type RecallGraph } from './recall-consequence.js';
 import { ERROR_CODES, EXTRACTOR_VERSION, harnessOf, observesUsage, type ErrorObservation, type Frame, type Harness, type PromptObservation, type SessionObservation, type ToolObservation } from './schema.js';
 import type { Store } from './store.js';
@@ -141,7 +142,7 @@ export const shapeFacetsOf = (tool: ToolObservation): [ShapeFacet, string][] => 
 ];
 
 /** Whether a class motif names a prompt class, as opposed to one of the side cells (effort, a failed call's code or what followed it, or a call's shape). */
-export const isPromptClass = (cls: string | null): boolean => cls !== null && ![EFFORT_CLASS, ERROR_CLASS, ERROR_VERSION_CLASS, RECOVERY_CLASS, SHAPE_CLASS].some((prefix) => cls.startsWith(prefix));
+export const isPromptClass = (cls: string | null): boolean => cls !== null && ![EFFORT_CLASS, ERROR_CLASS, ERROR_VERSION_CLASS, RECOVERY_CLASS, RECOVERY_TARGET_CLASS, SHAPE_CLASS].some((prefix) => cls.startsWith(prefix));
 
 /** The frame bucket of a cell that joins no axis. */
 export const NO_AXES = '-';
@@ -347,6 +348,23 @@ export const cellFold = (graph: RecallGraph = NO_RECALLS): CellFold => {
         const tally = tallyAt(motif, versionBucketOf(frame), 'week', weekStartOf(frame.day ?? UNKNOWN), 'unknown');
         tally.sessions.add(first.parent);
         tally.failed += 1;
+      }
+      // The same, keyed by the failed call's target class (`recovery-target.ts`): a week cell per (code, failed action, target class, next step), counting the failed calls the step followed (`failed`) and those where that next call
+      // succeeded (`ok`). A call with no target class, or none followed, makes no cell.
+      for (const [at, tool] of line.entries()) {
+        const next = nextCallOf(calls, at);
+        const nextTool = next === null ? undefined : line[calls.indexOf(next)];
+        if (calls[at]?.status !== 'error' || tool.errorCode === undefined || tool.targetClass === undefined || tool.targetClass === 'none' || next === null || nextTool === undefined) continue;
+        const code = ERROR_CODES.has(tool.errorCode) ? tool.errorCode : 'other';
+        const failedAction = calls[at].steps[0]?.action ?? 'other';
+        const nextAction = next.steps[0]?.action ?? 'other';
+        const step = nextStepOf({ action: failedAction, targetClass: tool.targetClass }, { action: nextAction, targetClass: nextTool.targetClass });
+        const motif = classMotif(recoveryTargetClass(code, failedAction, tool.targetClass, step));
+        motifs.set(motif.motifId, motif);
+        const tally = tallyAt(motif, versionBucketOf(frame), 'week', weekStartOf(frame.day ?? UNKNOWN), 'unknown');
+        tally.sessions.add(first.parent);
+        tally.failed += 1;
+        if (next.status === 'ok') tally.ok += 1;
       }
       // Each call's shape, by its first step's action: a week cell per facet it holds, counted by the call's own status.
       for (const [at, tool] of line.entries()) {

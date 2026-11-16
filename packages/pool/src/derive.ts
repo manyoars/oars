@@ -12,6 +12,7 @@ import { baselineDaysOf, deriveLive } from '../../cli/src/sessions/read-live.js'
 import { deriveMethod } from '../../cli/src/sessions/read-method.js';
 import { deriveNextStep } from '../../cli/src/sessions/read-next-step.js';
 import { deriveRecoveryEdges } from '../../cli/src/sessions/read-recovery-edge.js';
+import { deriveRecoveryTarget } from '../../cli/src/sessions/read-recovery-target.js';
 import { deriveToolDay } from '../../cli/src/sessions/read-tool-day.js';
 import { unitCells, type DeriveFamily, type ReadBody } from '../../cli/src/sessions/read-support.js';
 import type { Harness } from '../../cli/src/sessions/schema.js';
@@ -34,7 +35,7 @@ export const SERVED: readonly { name: string; family: FirstOrderFamily; derive: 
   { name: 'method', family: 'method', derive: deriveMethod },
   { name: 'next-step', family: 'next-step', derive: deriveNextStep },
   { name: 'tool-day', family: 'tool-day', derive: deriveToolDay },
-  { name: 'recovery', family: 'recovery', derive: deriveRecoveryEdges },
+  { name: 'recovery', family: 'recovery', derive: (input) => [...deriveRecoveryEdges(input), ...deriveRecoveryTarget(input)] },
 ];
 
 const NO_STORE: Store = { sessions: [], prompts: [], errors: [], subagents: [], tools: [], newerCaptures: 0 };
