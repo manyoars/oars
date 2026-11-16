@@ -17,7 +17,11 @@ This package has no real harness. The only adapter is a scripted fake, so its te
 Run an order through the fake:
 
 ```
-npm run run-fake -w packages/fleet-runner -- [--order <file>] [--taskset <folder>] [--fleet <file>] [--out <folder>]
+npm run run-fake -w packages/fleet-runner -- [--order <file>] [--taskset <folder>] [--fleet <file>] [--out <folder>] [--change-task-set-at <run number>]
 ```
 
-With no flags it runs a demo retest. Exit code 0 is a complete order, 1 an incomplete one (the run cap hit), 2 a bad input.
+With no flags it runs a demo retest. Exit code 0 is a complete order, 1 an incomplete or voided one, 2 a bad input. `--change-task-set-at 3` makes run 3 report another task-set version.
+
+Header statuses: `complete` (every cell has its repeats), `incomplete` (the run cap ended the order; `shortCells` lists the cells short), and `voided` (the task set changed mid-order: every run is void with `task-set-changed`, nothing is rerun, and `shortCells` lists every planned cell with 0 valid runs).
+
+Void reasons on a run: `harness-failed`, `sign-in-lost`, `machine-failed`, `task-set-changed`, `fixture-tag-changed`, `manifest-changed`, `harness-version-changed`, `model-changed`, `tool-pin-mismatch`. All but `task-set-changed` void one run, which is rerun in place; `task-set-changed` voids the whole order.

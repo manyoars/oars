@@ -36,8 +36,8 @@ export interface RunBookHeader {
   runCap: number;
   startDate: string;
   endDate: string;
-  /** `complete` when every cell has its repeats; `incomplete` when the run cap ended the order first. */
-  status: 'complete' | 'incomplete';
+  /** `complete` when every cell has its repeats; `incomplete` when the run cap ended the order first; `voided` when the task set changed mid-order (every run is void, none rerun, and `shortCells` lists every planned cell with 0 valid runs). */
+  status: 'complete' | 'incomplete' | 'voided';
   shortCells: ShortCell[];
 }
 

@@ -24,6 +24,18 @@ describe('run-fake', () => {
     }
   });
 
+  it('prints the voided status and exits 1 when the task set changes mid-order', async () => {
+    const out = await mkdtemp(join(tmpdir(), 'fleet-out-'));
+    try {
+      const lines: string[] = [];
+      expect(await main(['--out', out, '--change-task-set-at', '3'], (line) => lines.push(line), fixedClock())).toBe(1);
+      expect(lines[0]).toBe('order o-1 (retest, task set v1): voided');
+      expect(lines[1]).toBe('runs: 3 written, 0 valid, 3 void (cap 60)');
+    } finally {
+      await rm(out, { recursive: true, force: true });
+    }
+  });
+
   it('reads an order, fleet manifest, and task-set folder, and exits 1 on an incomplete order, 2 on a bad order', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fleet-in-'));
     try {

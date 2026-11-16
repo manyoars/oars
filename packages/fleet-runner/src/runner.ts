@@ -65,11 +65,12 @@ export const runOrder = async (options: RunnerOptions): Promise<RunBook> => {
   if (harness === undefined) throw new Error(`harness ${order.harness} is not in manifest ${fleet.version}`);
   const plan = planOrder(order, taskSet);
   const startDate = clock().toISOString().slice(0, 10);
-  const runs: RunRecord[] = [];
+  let runs: RunRecord[] = [];
   const valid = new Map<string, number>();
   let sequence = 0;
+  let voided = false;
 
-  const attemptSlot = async (planned: PlannedRun): Promise<boolean> => {
+  const attemptSlot = async (planned: PlannedRun): Promise<'valid' | 'cap' | 'task-set-changed'> => {
     for (let attempt = 1; sequence < order.runCap; attempt += 1) {
       sequence += 1;
       const runId = `${order.orderId}-${String(sequence).padStart(4, '0')}`;
@@ -112,16 +113,25 @@ export const runOrder = async (options: RunnerOptions): Promise<RunBook> => {
           poolSessionId: result.poolSessionId,
           void: reason,
         });
-        if (reason === null) return true;
+        if (reason === 'task-set-changed') return 'task-set-changed';
+        if (reason === null) return 'valid';
       } finally {
         await prepared.dispose();
       }
     }
-    return false;
+    return 'cap';
   };
 
   for (const planned of plan.runs) {
-    if (!(await attemptSlot(planned))) break;
+    const outcome = await attemptSlot(planned);
+    if (outcome === 'task-set-changed') {
+      // Spec section 9: a changed task set voids the whole order. Nothing is rerun (a real adapter would change again and burn the cap); a new order on the new version is the buyer's call.
+      runs = runs.map((run) => ({ ...run, void: 'task-set-changed' }));
+      valid.clear();
+      voided = true;
+      break;
+    }
+    if (outcome === 'cap') break;
     const key = cellKey(planned);
     valid.set(key, (valid.get(key) ?? 0) + 1);
   }
@@ -146,7 +156,7 @@ export const runOrder = async (options: RunnerOptions): Promise<RunBook> => {
       runCap: order.runCap,
       startDate,
       endDate: clock().toISOString().slice(0, 10),
-      status: shortCells.length === 0 ? 'complete' : 'incomplete',
+      status: voided ? 'voided' : shortCells.length === 0 ? 'complete' : 'incomplete',
       shortCells,
     },
     runs,

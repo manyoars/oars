@@ -36,7 +36,6 @@ describe('void detection (spec section 9)', () => {
     ['a rejected key', { exit: 'auth-rejected' }, 'sign-in-lost'],
     ['a full disk', { exit: 'disk-full' }, 'machine-failed'],
     ['the network down', { exit: 'network-down' }, 'machine-failed'],
-    ['a different task-set version', { taskSetVersion: 'v2' }, 'task-set-changed'],
     ['a different fixture tag', { fixtureTag: 'taskset-v2' }, 'fixture-tag-changed'],
     ['a different manifest', { manifestVersion: 'fleet-2' }, 'manifest-changed'],
     ['a different harness version', { harnessVersion: '2.1.99' }, 'harness-version-changed'],
@@ -76,6 +75,32 @@ describe('void detection (spec section 9)', () => {
 });
 
 const CLEAN_SCRIPT: Script = () => ({});
+
+describe('a task set that changes during an order (spec section 9)', () => {
+  const changeAtThree: Script = (request) => (request.sequence === 3 ? { taskSetVersion: 'v2' } : {});
+
+  it('stops with no rerun and voids every run already recorded', async () => {
+    const adapter = makeFake(changeAtThree);
+    const book = await runOrder({ ...options(CLEAN_SCRIPT, { tasks: 2 }), adapter });
+    expect(book.runs).toHaveLength(3);
+    expect(adapter.prepared).toHaveLength(3);
+    expect(book.runs.every((run) => run.void === 'task-set-changed')).toBe(true);
+    expect(book.runs.filter((run) => run.void === null)).toHaveLength(0);
+    expect(book.header.status).toBe('voided');
+  });
+
+  it('lists every planned cell with no valid run in shortCells', async () => {
+    const book = await runOrder({ ...options(CLEAN_SCRIPT, { tasks: 2 }), adapter: makeFake(changeAtThree) });
+    expect(book.header.shortCells).toHaveLength(4);
+    expect(book.header.shortCells.every((cell) => cell.have === 0 && cell.want === 1)).toBe(true);
+  });
+
+  it('writes the voided status and the reason on each run line', async () => {
+    const lines = serializeRunBook(await runOrder({ ...options(CLEAN_SCRIPT, { tasks: 2 }), adapter: makeFake(changeAtThree) })).trimEnd().split(String.fromCharCode(10));
+    expect(lines[0]).toContain('"status":"voided"');
+    expect(lines.slice(1).every((line) => line.includes('"void":"task-set-changed"'))).toBe(true);
+  });
+});
 
 describe('the run cap', () => {
   it('ends the order incomplete and lists the cells still short', async () => {
