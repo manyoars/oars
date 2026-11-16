@@ -19,6 +19,8 @@ export interface Call {
   tool: string;
   input: object;
   ok: boolean;
+  /** The skill whose run the call sits in: the line's `attributionSkill`. */
+  skill?: string;
 }
 export interface Prompt {
   text: string;
@@ -35,6 +37,8 @@ export interface Spec {
 export const bash = (ok: boolean): Call => ({ tool: 'Bash', input: { command: 'npm test' }, ok });
 export const edit = (): Call => ({ tool: 'Edit', input: { file_path: 'src/a.ts', old_string: 'a', new_string: 'b' }, ok: true });
 export const failedEdit = (): Call => ({ ...edit(), ok: false });
+export const mcp = (server: string, ok: boolean): Call => ({ tool: `mcp__${server}__lookup`, input: { q: 1 }, ok });
+export const inSkill = (skill: string, call: Call): Call => ({ ...call, skill });
 export const read = (): Call => ({ tool: 'Read', input: { file_path: 'src/a.ts' }, ok: true });
 
 // A transcript the way the harness writes it: a user line per prompt, then an assistant line and a result line per call.
@@ -49,7 +53,7 @@ const transcript = (spec: Spec, cwd: string): string[] => {
     for (const call of prompt.calls) {
       n += 1;
       const tool = `toolu_${spec.id.slice(0, 4)}${String(n)}`;
-      lines.push(line({ type: 'assistant', uuid: `${spec.id.slice(0, 8)}-a${String(n).padStart(3, '0')}-4222-8222-222222222222`, parentUuid: null, isSidechain: false, timestamp: at(), version: spec.version, sessionId: spec.id, requestId: `req_${spec.id.slice(0, 4)}${String(n)}`, message: { role: 'assistant', model: spec.model, content: [{ type: 'tool_use', id: tool, name: call.tool, input: call.input }], usage: { input_tokens: 100, output_tokens: 50 } } }));
+      lines.push(line({ type: 'assistant', uuid: `${spec.id.slice(0, 8)}-a${String(n).padStart(3, '0')}-4222-8222-222222222222`, parentUuid: null, isSidechain: false, timestamp: at(), version: spec.version, sessionId: spec.id, requestId: `req_${spec.id.slice(0, 4)}${String(n)}`, ...(call.skill === undefined ? {} : { attributionSkill: call.skill }), message: { role: 'assistant', model: spec.model, content: [{ type: 'tool_use', id: tool, name: call.tool, input: call.input }], usage: { input_tokens: 100, output_tokens: 50 } } }));
       lines.push(line({ type: 'user', uuid: `${spec.id.slice(0, 8)}-b${String(n).padStart(3, '0')}-4333-8333-333333333333`, parentUuid: null, isSidechain: false, timestamp: at(), version: spec.version, sessionId: spec.id, cwd, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: tool, ...(call.ok ? {} : { is_error: true }), content: call.ok ? 'done' : 'Error: Exit code 1' }] } }));
     }
   }

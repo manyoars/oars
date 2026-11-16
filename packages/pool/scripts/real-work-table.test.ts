@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { TOOL_INPUT_KEYS } from '../../cli/src/sessions/public-vocabulary.js';
 import { PROMPT_CLASSES } from '../../cli/src/sessions/schema.js';
-import { bash, edit, failedEdit, fixture, id, read, removeFixtures, TERM, type Fixture, type Spec } from './real-work-fixture.js';
+import { bash, edit, failedEdit, fixture, id, inSkill, mcp, read, removeFixtures, TERM, type Fixture, type Spec } from './real-work-fixture.js';
 import { HARNESS_NAMES, main, SPEC_VERSION, tableOf, type Table } from './real-work-table.js';
 
 afterEach(removeFixtures);
@@ -83,9 +83,9 @@ describe('real-work table', () => {
     await f.stored();
     const table = await build(f);
     const allowed = new Set<string>([
-      ...HARNESS_NAMES, ...PROMPT_CLASSES, ...TOOL_INPUT_KEYS.keys(), 'other', 'unknown', '2.1.30x', '2.1.32x', 'claude-opus-5-5', 'claude-sonnet-5-5', 'one fleet', SPEC_VERSION, '2026-11-13', 'cell', 'tool',
+      ...HARNESS_NAMES, ...PROMPT_CLASSES, ...TOOL_INPUT_KEYS.keys(), 'other', 'unknown', '2.1.30x', '2.1.32x', 'claude-opus-5-5', 'claude-sonnet-5-5', 'one fleet', SPEC_VERSION, '2026-11-13', 'cell', 'tool', 'server', 'skill', 'github',
     ]);
-    const keys = new Set(['spec', 'label', 'builtOn', 'sessions', 'counted', 'excluded', 'minSessions', 'leftOut', 'header', 'rows', 'kind', 'model', 'harness', 'versionBucket', 'tool', 'calls', 'failures', 'failureRate', 'recovered', 'callsToRecover', 'editFollowedShare', 'prompts', 'promptsKnown', 'interventions', 'interventionsPerPrompt', 'tokensPerPrompt', 'class',
+    const keys = new Set(['spec', 'label', 'builtOn', 'sessions', 'counted', 'excluded', 'minSessions', 'leftOut', 'header', 'rows', 'kind', 'model', 'harness', 'versionBucket', 'tool', 'calls', 'failures', 'failureRate', 'recovered', 'callsToRecover', 'editFollowedShare', 'prompts', 'promptsKnown', 'interventions', 'interventionsPerPrompt', 'tokensPerPrompt', 'class', 'name', 'thin', 'recoveredRate',
       'term', 'noRaw', 'noTerms', 'unreadable', 'noOwner']);
     const strings: string[] = [];
     const walk = (value: unknown, path: string): void => {
@@ -140,7 +140,7 @@ describe('real-work table', () => {
       }
     }
     // A clean read in between does not count, the edit behind it does, two calls away.
-    const rows = (await build(clean)).rows.filter((row) => row.kind === 'cell' || row.tool === 'Bash');
+    const rows = (await build(clean)).rows.filter((row) => row.kind === 'cell' || (row.kind === 'tool' && row.tool === 'Bash'));
     for (const row of rows) expect(row).toMatchObject({ failures: 1, recovered: 1, callsToRecover: 2, editFollowedShare: 1 });
   });
 
@@ -191,5 +191,85 @@ describe('real-work table', () => {
     expect(await main([f.runtime.storeDir, '--date', '2026-01-02', '--terms', f.terms, '--owners', f.owners, '--out', f.out, '--min-sessions', '1'], io)).toBe(0);
     const written: unknown = JSON.parse(readFileSync(join(f.out, 'table.json'), 'utf8'));
     expect(written).toMatchObject({ header: { builtOn: '2026-01-02', sessions: 2 } });
+  });
+
+  describe('server and skill rows', () => {
+    // Two sessions on each of two harness buckets; github fails once in each older session (an edit recovers it, one call on), and once in the newer.
+    const withServers = async (): Promise<Fixture> => {
+      const f = fixture();
+      const old = (n: number): Spec => ({ ...older(n), prompts: [{ text: 'fix the parser', calls: [mcp('github', false), edit(), mcp('github', true)] }, { text: 'again', calls: [mcp('context7', true), read()] }] });
+      f.add(old(1));
+      f.add(old(2));
+      f.add({ ...newer(3), prompts: [{ text: 'fix the parser', calls: [mcp('github', false), read(), edit()] }] });
+      f.add({ ...newer(4), prompts: [{ text: 'fix the parser', calls: [mcp('github', true), mcp('github', true)] }] });
+      await f.stored();
+      return f;
+    };
+    const scoped = (table: Table) => table.rows.flatMap((row) => (row.kind === 'server' || row.kind === 'skill' ? [row] : []));
+
+    it('prints one row per MCP server, harness, and bucket, with the counts and rates, each labeled one fleet', async () => {
+      const rows = scoped(await build(await withServers(), { minSessions: 2 }));
+      expect(rows.map((row) => [row.kind, row.name, row.versionBucket, row.sessions, row.calls, row.failures, row.recovered])).toEqual([
+        ['server', 'context7', '2.1.30x', 2, 2, 0, 0],
+        ['server', 'github', '2.1.30x', 2, 4, 2, 2],
+        ['server', 'github', '2.1.32x', 2, 3, 1, 1],
+      ]);
+      expect(rows.find((row) => row.name === 'github' && row.versionBucket === '2.1.30x')).toMatchObject({ harness: 'claude-code', label: 'one fleet', thin: false, failureRate: 0.5, recoveredRate: 1, callsToRecover: 1 });
+      // The newer bucket has one failure, under the n of two a rate needs, so its failure count prints and its recovered rate and median do not.
+      expect(rows.find((row) => row.name === 'github' && row.versionBucket === '2.1.32x')).toMatchObject({ failureRate: 0.3333, recoveredRate: null, callsToRecover: null, thin: false });
+      expect(rows.every((row) => row.label === 'one fleet')).toBe(true);
+    });
+
+    it('takes the median of the calls to recover, not the mean', async () => {
+      const f = fixture();
+      const one = (n: number, between: number): Spec => ({ ...newer(n), prompts: [{ text: 'fix it', calls: [mcp('github', false), ...Array.from({ length: between }, read), edit()] }] });
+      // Recoveries 1, 2, and 4 calls away: the mean is 2.3333 and the median 2.
+      for (const [n, between] of [[1, 0], [2, 1], [3, 3]] as const) f.add(one(n, between));
+      await f.stored();
+      expect(scoped(await build(f, { minSessions: 2 }))).toMatchObject([{ name: 'github', failures: 3, recovered: 3, callsToRecover: 2, recoveredRate: 1 }]);
+    });
+
+    it('prints per-skill rows from the skill the call ran in, and a skill off the public list as other', async () => {
+      const f = fixture();
+      const spec = (n: number, skill: string): Spec => ({ ...newer(n), prompts: [{ text: 'go', calls: [inSkill(skill, bash(false)), inSkill(skill, edit()), read()] }] });
+      f.add(spec(1, 'commit'));
+      f.add(spec(2, 'commit'));
+      f.add(spec(3, 'pdf'));
+      f.add(spec(4, 'pdf'));
+      f.add(spec(5, 'acme-private-skill'));
+      f.add(spec(6, 'acme-secret-skill'));
+      await f.stored();
+      const table = await build(f, { minSessions: 2 });
+      expect(scoped(table).map((row) => [row.kind, row.name, row.sessions, row.calls, row.failures, row.recovered, row.callsToRecover])).toEqual([
+        ['skill', 'commit', 2, 4, 2, 2, 1],
+        ['skill', 'other', 2, 4, 2, 2, 1],
+        ['skill', 'pdf', 2, 4, 2, 2, 1],
+      ]);
+      expect(JSON.stringify(table)).not.toContain('acme');
+    });
+
+    it('prints a row under the minimum as thin, with its counts and no rate', async () => {
+      const f = await withServers();
+      const rows = scoped(await build(f, { minSessions: 3 }));
+      expect(rows.length).toBeGreaterThan(0);
+      for (const row of rows) expect(row).toMatchObject({ thin: true, failureRate: null, recoveredRate: null, callsToRecover: null, label: 'one fleet' });
+      expect(rows.find((row) => row.name === 'github' && row.versionBucket === '2.1.30x')).toMatchObject({ sessions: 2, calls: 4, failures: 2, recovered: 2 });
+      // A thin row is kept, so the header's count of left-out rows is the existing rows' alone.
+      const wide = await build(f, { minSessions: 1 });
+      expect(scoped(wide).some((row) => row.thin)).toBe(false);
+    });
+
+    it('leaves the existing rows and header as they were when the store holds no MCP or skill call', async () => {
+      const f = fixture();
+      f.add(older(1));
+      f.add(older(2));
+      f.add(newer(3));
+      await f.stored();
+      const table = await build(f);
+      expect(scoped(table)).toEqual([]);
+      expect(table.rows.every((row) => row.kind === 'cell' || row.kind === 'tool')).toBe(true);
+      expect(`${JSON.stringify(table, null, 2)}
+`).toBe(readFileSync(join(import.meta.dirname, 'fixtures', 'real-work-table.expected.json'), 'utf8'));
+    });
   });
 });

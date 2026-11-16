@@ -3,7 +3,7 @@
 // the exclusion terms (A38) and the owner filter. The note is data, not prose: no sentence, no score, and no word that judges a move; the page that publishes it writes the words around it.
 //   npm run real-work-note -w packages/pool -- <store folder> --terms <file> --owners <file> --out <dir> --harness <name> --from <bucket> --to <bucket> [--projects <folder>] [--min-sessions <n>] [--date <YYYY-MM-DD>]
 import type { SessionsRuntime } from '../../cli/src/sessions/store.js';
-import { compare, HARNESS_NAMES, LABEL, OTHER, UNKNOWN, cellRowOf, commonOf, countsOf, DEFAULT_MIN_SESSIONS, parseArgs, refuseInsideRepository, runtimeFor, toolRowOf, writeJson, type Counts, type Io, type Row, type Tally } from './real-work-table.js';
+import { compare, HARNESS_NAMES, LABEL, OTHER, UNKNOWN, cellRowOf, commonOf, countsOf, minNOf, DEFAULT_MIN_SESSIONS, parseArgs, refuseInsideRepository, runtimeFor, toolRowOf, writeJson, type Counts, type Io, type Row, type Tally } from './real-work-table.js';
 import { PackError } from './sample-pack.js';
 
 export { runtimeOf } from './sample-pack.js';
@@ -205,7 +205,7 @@ export const noteOf = async (runtime: SessionsRuntime, options: NoteOptions): Pr
   const counts = await countsOf(runtime, options);
   const from = bucketHeader(counts, options.harness, options.from, minSessions);
   const to = bucketHeader(counts, options.harness, options.to, minSessions);
-  const moves = ranked(candidatesOf(sidesOf(counts, options.harness, options.from, minSessions), sidesOf(counts, options.harness, options.to, minSessions), Math.max(minSessions, 2)));
+  const moves = ranked(candidatesOf(sidesOf(counts, options.harness, options.from, minSessions), sidesOf(counts, options.harness, options.to, minSessions), minNOf(minSessions)));
   return { spec: NOTE_SPEC, label: LABEL, builtOn: options.date, harness: options.harness, from, to, minSessions, result: moves.length === 0 ? 'no change' : 'moves', moves };
 };
 
