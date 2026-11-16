@@ -87,6 +87,8 @@ export const resultOf = (call: ToolObservation, index: number, codex: boolean): 
   const read = call.segments?.[index]?.read ?? (call.templates?.length === 1);
   if (!read) return 'not recorded';
   if (call.status === 'ok') return 'exit 0';
+  // A failed chain (`a && b`) has one status for every command, so which one failed is not stored.
+  if ((call.segments ?? []).filter((segment) => segment.read).length > 1) return 'not recorded';
   return call.errorCode !== undefined && EXIT_CLASSES_SHOWN.has(call.errorCode) ? `exit ${call.errorCode}` : 'failed';
 };
 

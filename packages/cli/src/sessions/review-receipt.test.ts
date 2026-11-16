@@ -229,6 +229,20 @@ describe('what capture really stores', () => {
   });
 });
 
+describe('a chained call that failed', () => {
+  const chained = (over: Partial<ToolObservation>): string[] => {
+    const s = store({ sessions: [session('c')], tools: [call('c', 0, ['npm run build', 'npm test'], over)] });
+    const found = resolveSession(s, 'c');
+    return found === undefined ? [] : reviewReceiptOf(s, found, HOME).rows.map((row) => row.result);
+  };
+  it('prints not recorded for every command of it, because the store cannot say which one failed', () => {
+    expect(chained({ status: 'error', errorCode: '1' })).toEqual(['not recorded', 'not recorded']);
+  });
+  it('prints exit 0 for each when the call passed', () => {
+    expect(chained({ status: 'ok' })).toEqual(['exit 0', 'exit 0']);
+  });
+});
+
 describe('a call the harness refused', () => {
   it.each(HARNESS_ERROR_CLASSES)('prints %s as not recorded, never failed', (code) => {
     const s = store({ sessions: [session('h')], tools: [call('h', 0, ['npm test'], { status: 'error', errorCode: code })] });
