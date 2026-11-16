@@ -197,6 +197,21 @@ describe('preflight', () => {
     expect(lineOf((await run(GOOD)).lines, 'claude')).toMatch(/^wrong /);
   });
 
+  it('prefers --fleet over the default in one call, in both directions', async () => {
+    const good = join(root, 'good-fleet.json');
+    const empty = join(root, 'empty-fleet.json');
+    await writeFile(good, await readFile(fleet, 'utf8'));
+    await writeFile(empty, JSON.stringify({ version: 'fleet-1', harnesses: [] }));
+    const claudeLine = async (flagFile: string, defaultFleet: string): Promise<string> => {
+      const { spawn } = stubs(GOOD);
+      const lines: string[] = [];
+      await main(['--taskset', taskSet, '--fleet', flagFile, '--fixture-source', 'x'], (line) => lines.push(line), { env: env(), spawn, defaultFleet });
+      return lineOf(lines, 'claude');
+    };
+    expect(await claudeLine(good, empty)).toMatch(/^ok /);
+    expect(await claudeLine(empty, good)).toMatch(/^wrong /);
+  });
+
   it('says wrong when the fleet manifest names no claude-code-bedrock harness', async () => {
     await writeFile(fleet, JSON.stringify({ version: 'fleet-1', harnesses: [] }));
     const { code, lines } = await run(GOOD);
