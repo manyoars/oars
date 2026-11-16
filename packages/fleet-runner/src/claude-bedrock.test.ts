@@ -51,9 +51,9 @@ const APPEND = (word: string): string => ["import { appendFileSync, writeFileSyn
 
 const RESET = { node: '20', commands: ['node scripts/install.mjs', 'node scripts/build-db.mjs'] };
 
-const writeTask = (taskSetDir: string, prompt: string, reset: object = RESET): void => {
+const writeTask = (taskSetDir: string, prompt: string, reset: object = RESET, fixtureCommit = 'x'): void => {
   mkdirSync(join(taskSetDir, 'tasks', 't1'), { recursive: true });
-  writeFileSync(join(taskSetDir, 'manifest.json'), JSON.stringify({ version: 'v1', fixtureTag: 'taskset-v1', fixtureCommit: 'x', reset, tasks: [{ id: 't1', category: 'browser' }] }));
+  writeFileSync(join(taskSetDir, 'manifest.json'), JSON.stringify({ version: 'v1', fixtureTag: 'taskset-v1', fixtureCommit, reset, tasks: [{ id: 't1', category: 'browser' }] }));
   writeFileSync(join(taskSetDir, 'tasks', 't1', 'prompt.md'), prompt);
   writeFileSync(join(taskSetDir, 'tasks', 't1', 'check.mjs'), PASS_IF_SEED);
 };
@@ -70,11 +70,10 @@ interface Rig {
 const rig = (patch: Partial<ClaudeBedrockSettings> = {}, prompt = 'scenario: ok\nDo the task.'): Rig => {
   const fixture = makeRepo('fixture', { 'seed.sql': 'create table t(a);', 'README.md': 'hi', 'scripts/install.mjs': APPEND('install'), 'scripts/build-db.mjs': APPEND('build') + "writeFileSync('app.db', 'built');" + String.fromCharCode(10) }, 'taskset-v1');
   const skillRepo = makeRepo('skill', { 'skills/fill/SKILL.md': '---\nname: fill\n---\nFill forms.\n' }, null);
-  writeTask(join(scratch, 'taskset'), prompt);
+  writeTask(join(scratch, 'taskset'), prompt, RESET, fixture.commit);
   const settings: ClaudeBedrockSettings = {
     fixtureSource: fixture.dir,
     fixtureTag: 'taskset-v1',
-    fixtureCommit: fixture.commit,
     taskSetDir: join(scratch, 'taskset'),
     fleetManifestVersion: 'fleet-1',
     claudeExecutable: process.execPath,
@@ -172,10 +171,15 @@ describe('prepare', () => {
   });
 
   it('reports a fixture tag that now resolves to another commit so the runner voids it', async () => {
-    const r = rig({ fixtureCommit: 'f'.repeat(40) });
+    const r = rig();
+    const moved = join(scratch, 'fixture');
+    writeFileSync(join(moved, 'README.md'), 'moved');
+    git(moved, 'commit', '-q', '-am', 'second');
+    git(moved, 'tag', '-f', 'taskset-v1');
     const adapter = makeClaudeBedrock(r.settings, { env: ENV });
     const prepared = await adapter.prepare(request('no-tool', null));
-    expect(prepared.fixtureTag).toBe(`taskset-v1@${r.fixtureCommit}`);
+    expect(prepared.fixtureCommit).not.toBe(r.fixtureCommit);
+    expect(prepared.fixtureTag).toBe(`taskset-v1@${prepared.fixtureCommit}`);
     await prepared.dispose();
   });
 
@@ -189,7 +193,7 @@ describe('prepare', () => {
 
   it('refuses a Node version below the manifest before any run', () => {
     const r = rig();
-    writeTask(join(scratch, 'taskset'), 'scenario: ok', { node: '24', commands: [] });
+    writeTask(join(scratch, 'taskset'), 'scenario: ok', { node: '24', commands: [] }, r.fixtureCommit);
     expect(() => makeClaudeBedrock(r.settings, { env: ENV, nodeVersion: '22.4.0' })).toThrow(/Node 22 is below the Node 24/);
     expect(() => makeClaudeBedrock(r.settings, { env: ENV, nodeVersion: '24.0.0' })).not.toThrow();
   });
@@ -220,7 +224,7 @@ describe('prepare', () => {
 
   it('deletes the temp folder when a reset command fails', async () => {
     const r = rig();
-    writeTask(join(scratch, 'taskset'), 'scenario: ok', { node: '20', commands: ['node scripts/missing.mjs'] });
+    writeTask(join(scratch, 'taskset'), 'scenario: ok', { node: '20', commands: ['node scripts/missing.mjs'] }, r.fixtureCommit);
     const roots: string[] = [];
     const adapter = makeClaudeBedrock(r.settings, { env: ENV, onTempFolder: (dir) => roots.push(dir) });
     await expect(adapter.prepare(request('no-tool', null))).rejects.toThrow(/reset command/);
