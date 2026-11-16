@@ -26,6 +26,12 @@ describe('parseOrder', () => {
     expect(order.arms).toEqual(['no-tool', 'playwright', 'sqlite']);
   });
 
+  it('reads the operator account id and refuses an order without one', () => {
+    expect(parseOrder(retestText(), FLEET).account).toBe('acct-fleet');
+    expect(reject(JSON.stringify({ ...retestShape(), account: undefined }))).toMatch(/order\.account/);
+    expect(reject(retestText({ account: '' }))).toMatch(/order\.account/);
+  });
+
   it('defaults repeats to 3', () => {
     const rest = { ...retestShape(), repeats: undefined };
     expect(parseOrder(JSON.stringify(rest), FLEET).repeats).toBe(3);
