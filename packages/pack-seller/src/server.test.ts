@@ -1,10 +1,13 @@
 import { http, HttpResponse, passthrough } from 'msw';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { ENV_INDEX_KEY_FILE, ENV_OWNERS_FILE, ENV_PACKS_DIR, ENV_PROJECTS_DIR, ENV_STORE_DIR, ENV_TERMS_FILE } from './pack-store.js';
+import { cleanWorlds, makeWorld } from './test-world.js';
 import { ENV_API_URL, ENV_PORT, ENV_SDK_KEY } from './config.js';
 import { createSellerServer, start } from './server.js';
-import { API, catalog, SDK_KEY, server, useServer } from './test-support.js';
+import { API, SDK_KEY, server, useServer } from './test-support.js';
 
 useServer();
+afterEach(cleanWorlds);
 
 const REF = 'c_0123456789abcdef0123456789abcdef';
 
@@ -18,7 +21,13 @@ describe('start', () => {
         return HttpResponse.json({ creditsAvailable: 3, creditsHeld: 0, creditsRemaining: 3, customerRef: REF, livemode: false });
       }),
     );
-    const started = await start({ [ENV_API_URL]: API, [ENV_SDK_KEY]: SDK_KEY, [ENV_PORT]: '0' }, { log: () => undefined });
+    const { inputs } = await makeWorld();
+    const env = {
+      [ENV_API_URL]: API, [ENV_SDK_KEY]: SDK_KEY, [ENV_PORT]: '0',
+      [ENV_PACKS_DIR]: inputs.packsDir, [ENV_TERMS_FILE]: inputs.terms, [ENV_OWNERS_FILE]: inputs.owners,
+      [ENV_INDEX_KEY_FILE]: inputs.indexKey, [ENV_STORE_DIR]: inputs.storeDir, [ENV_PROJECTS_DIR]: inputs.projectsDir,
+    };
+    const started = await start(env, { log: () => undefined });
     if (!started.ok) throw new Error(started.line);
     try {
       const response = await fetch(`http://127.0.0.1:${String(started.port)}/credits`, { headers: { 'X-Customer-Ref': REF } });
@@ -33,8 +42,9 @@ describe('start', () => {
 describe('the 500 path', () => {
   it('answers a fixed one-line body when a handler throws', async () => {
     server.use(http.all('http://127.0.0.1:*/*', () => passthrough()));
-    const throwing = { ...catalog, list: () => { throw new Error('secret detail aorsk_x'); } };
-    const sellerServer = createSellerServer({ config: { apiUrl: API, sdkKey: SDK_KEY, port: 0, host: '127.0.0.1' }, catalog: throwing, log: () => undefined });
+    const real = await (await makeWorld()).store();
+    const throwing = { ...real, catalog: { ...real.catalog, list: () => { throw new Error('secret detail aorsk_x'); } } };
+    const sellerServer = createSellerServer({ config: { apiUrl: API, sdkKey: SDK_KEY, port: 0, host: '127.0.0.1' }, store: throwing, log: () => undefined });
     await new Promise<void>((resolve) => sellerServer.listen(0, '127.0.0.1', resolve));
     try {
       const address = sellerServer.address();

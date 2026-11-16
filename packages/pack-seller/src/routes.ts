@@ -1,8 +1,11 @@
 import type { Billing } from './billing.js';
+import { RESERVE_CREDITS } from './billing.js';
+import type { PackSource } from './pack-store.js';
+import { END_OF_ARCHIVE, archiveNames, entries } from './tar.js';
 import { OFFER_RATE_REFUSAL_STATUS, type RateLimiter } from './rate-limit.js';
-import { BAD_REQUEST, NOT_FOUND, type Outcome, type Refusal } from './refusal.js';
+import { BAD_REQUEST, BUILD_FAILED, NO_CREDITS, NOT_FOUND, type Outcome, type Refusal } from './refusal.js';
 
-/** What the pack page and the offer need of one pack. Brief 3's pack store implements `PackCatalog` and may widen this. */
+/** What the pack list and the offer need of one pack. The pack store's `PackPage` widens it with the manifest terms, census, and card the pack page shows. */
 export interface PackListing {
   packId: string;
   /** `pack-<packId>`, the platform price the buyer pays for (design section b). */
@@ -29,7 +32,7 @@ export interface OfferLedger {
   find: (customerRef: string) => OfferRecord | undefined;
 }
 
-/** Offer records in memory: they last as long as the process. Brief 3 replaces this with the on-disk record beside `deliveries.jsonl`. */
+/** Offer records in memory, for tests of the routes alone; the seller itself keeps them on disk (`fileLedger`, beside `deliveries.jsonl`). */
 export const memoryOfferLedger = (): OfferLedger => {
   const entries = new Map<string, OfferRecord>();
   return {
@@ -44,6 +47,7 @@ export interface RouteDeps {
   billing: Billing;
   catalog: PackCatalog;
   ledger: OfferLedger;
+  source: PackSource;
   limiter: RateLimiter;
   /** One line per request: method, path, status. Never a header, a body, or a customer ref. */
   log: (line: string) => void;
@@ -52,6 +56,8 @@ export interface RouteDeps {
 
 export const MAX_NAME_LENGTH = 200;
 export const MAX_LICENSE_VERSION_LENGTH = 64;
+/** Longest buyer key a download request carries. */
+export const MAX_BUYER_KEY_LENGTH = 512;
 /** The customer ref travels in this header, not in a path, so no access log or proxy keeps it. */
 export const CUSTOMER_REF_HEADER = 'x-customer-ref';
 
@@ -91,6 +97,58 @@ const offer = async (deps: RouteDeps, request: Request, caller: string, pack: Pa
   return respond(200, { offerId: made.value.offerId, expiresAt: made.value.expiresAt, priceRef: pack.priceRef, customerRef: customer.value });
 };
 
+/**
+ * Step 9: balance, reserve one credit, rebuild when the objections moved, build under the buyer's key, stream, commit, record. The archive's end blocks go out only after the commit and the record,
+ * so a failure at any point leaves an archive that does not parse and a released reservation. The buyer key lives in this function's scope for the build and is never logged or stored.
+ */
+const download = async (deps: RouteDeps, request: Request, pack: PackListing): Promise<Response> => {
+  const ref = customerRefOf(request);
+  if (ref === undefined) return refuse(BAD_REQUEST);
+  const body = await readBody(request);
+  const given: unknown = typeof body === 'object' && body !== null ? Reflect.get(body, 'buyerKey') : undefined;
+  if (typeof given !== 'string' || given === '' || given.length > MAX_BUYER_KEY_LENGTH) return respond(400, { error: 'buyerKey is required.' });
+  const key: string = given;
+  const offer = deps.ledger.find(ref);
+  if (offer === undefined || offer.packId !== pack.packId) return refuse(NOT_FOUND);
+  const balance = await deps.billing.balance(ref);
+  if (!balance.ok) return refuse(balance.refusal);
+  if (balance.value.creditsAvailable < RESERVE_CREDITS) return refuse(NO_CREDITS);
+  const reserved = await deps.billing.reserve(ref);
+  if (!reserved.ok) return refuse(reserved.refusal);
+  const reservationId = reserved.value.reservationId;
+  const built = await deps.source.prepare(pack.packId, key);
+  let names: string[] = [];
+  if (built.ok) {
+    try {
+      names = await archiveNames(built.value);
+    } catch {
+      names = [];
+    }
+  }
+  if (!built.ok || names.length === 0) {
+    await deps.billing.release(reservationId);
+    return refuse(built.ok ? BUILD_FAILED : built.refusal);
+  }
+  const [dir, held] = [built.value, offer];
+  async function* archive(): AsyncGenerator<Uint8Array> {
+    let spent = false;
+    try {
+      yield* entries(dir, names);
+      const committed = await deps.billing.commit(reservationId);
+      if (!committed.ok) throw new Error('commit refused');
+      spent = true;
+      await deps.source.record(dir, key, held);
+      yield END_OF_ARCHIVE;
+    } finally {
+      if (!spent) await deps.billing.release(reservationId);
+    }
+  }
+  return new Response(ReadableStream.from(archive()), {
+    status: 200,
+    headers: { 'Content-Type': 'application/x-tar', 'Content-Disposition': `attachment; filename="${pack.packId}.tar"`, 'Cache-Control': 'no-store' },
+  });
+};
+
 const customerRefOf = (request: Request): string | undefined => {
   const ref = request.headers.get(CUSTOMER_REF_HEADER);
   return ref !== null && CUSTOMER_REF.test(ref) ? ref : undefined;
@@ -104,17 +162,18 @@ const route = async (deps: RouteDeps, request: Request, caller: string): Promise
 
   if (method === 'GET' && pathname === '/health') return respond(200, { status: 'ok' });
 
-  // Step 4: the pack page. The catalog supplies the pack's files and terms (brief 3); this serves what it lists.
+  // Step 4: the pack page. The catalog supplies the pack's census, card, and terms; this serves what it lists.
   if (first === 'packs') {
-    if (method === 'GET' && parts.length === 1) return respond(200, { packs: deps.catalog.list() });
+    if (method === 'GET' && parts.length === 1) return respond(200, { packs: deps.catalog.list().map(({ packId, priceRef, title }) => ({ packId, priceRef, title })) });
     const pack = second === undefined ? undefined : deps.catalog.find(second);
     if (pack === undefined) return refuse(NOT_FOUND);
     if (method === 'GET' && parts.length === 2) return respond(200, pack);
     if (method === 'POST' && parts.length === 3 && third === 'offer') return offer(deps, request, caller, pack);
+    if (method === 'POST' && parts.length === 3 && third === 'download') return download(deps, request, pack);
     return refuse(NOT_FOUND);
   }
 
-  // Step 9: the balance. Reserve, commit, and release run inside the download route (brief 3), never as public routes. The seller learns of settlement only by reading the balance (design Fact 3).
+  // Step 9: the balance. Reserve, commit, and release run inside the download route, never as public routes. The seller learns of settlement only by reading the balance (design Fact 3).
   if (first === 'credits') {
     if (method === 'GET' && parts.length === 1) {
       const ref = customerRefOf(request);
