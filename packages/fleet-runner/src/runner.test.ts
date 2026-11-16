@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -215,12 +214,5 @@ describe('review lows of t1354', () => {
     expect(valid).toHaveLength(2);
     for (const run of valid) expect(run.poolSessionId).toBe(contentHash(['acct-fleet', staged(run.runId)]));
     expect(serializeRunBook(book).split(String.fromCharCode(10))[0]).toContain('"account":"acct-fleet"');
-  });
-
-  it('gives the same id as the CLI deposit path (pool-command.ts keys a batch by contentHash of the account and the session)', () => {
-    // The deposit path is `contentHash([account, records.main.session])`; pool-command.test.ts pins it with contentHash(['acct_one', sid(14)]). This pins that the CLI still says so.
-    const source = readFileSync(new URL('../../cli/src/sessions/pool-command.ts', import.meta.url), 'utf8');
-    expect(source).toContain('contentHash([account, records.main.session])');
-    expect(contentHash(['acct_one', 'sid'])).toMatch(/^[0-9a-f]{16}$/);
   });
 });
