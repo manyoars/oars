@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import type { CheckResult, ExitKind, HarnessAdapter, Prepared, RunRequest, RunResult, TokenCounts } from './harness.js';
-import { copySkill, loadCheckedResetPlan, makeSteps, nodeSpawn, pick, START_NAMES, toolFor, wantedPin, type Dependencies, type Layout, type PreparedFolder, type SharedSettings, type SpawnOutcome } from './harness-shared.js';
+import { assertStarted, copySkill, loadCheckedResetPlan, makeFolders, makeSteps, nodeSpawn, pick, START_NAMES, toolFor, type Dependencies, type Layout, type PreparedFolder, type SharedSettings, type SpawnOutcome } from './harness-shared.js';
 import { isObject } from './json.js';
 
 // The shared types stay importable from here, where the adapter's callers and tests have always found them.
@@ -100,12 +100,7 @@ export const makeClaudeBedrock = (settings: ClaudeBedrockSettings, deps: Depende
   const reset = loadCheckedResetPlan(settings, deps.nodeVersion);
   const spawn = deps.spawn ?? nodeSpawn;
   const steps = makeSteps(settings, deps, spawn);
-  const folders = new WeakMap<Prepared, ClaudePrepared>();
-  const folderOf = (prepared: Prepared): ClaudePrepared => {
-    const folder = folders.get(prepared);
-    if (folder === undefined) throw new Error('this folder was not prepared by this adapter');
-    return folder;
-  };
+  const { remember, folderOf } = makeFolders();
 
   // A server is given to Claude Code through `mcp.json` and a skill is copied to `<config>/skills/<name>`.
   const layout: Layout = {
@@ -125,20 +120,15 @@ export const makeClaudeBedrock = (settings: ClaudeBedrockSettings, deps: Depende
 
   const prepare = async (request: RunRequest): Promise<ClaudePrepared> => {
     const made = await steps.prepareRun(request, layout, reset);
-    folders.set(made, made);
+    remember(made);
     return made;
   };
 
   const run = async (prepared: Prepared, request: RunRequest): Promise<RunResult> => {
     const folder = folderOf(prepared);
-    const skipped: RunResult = { exit: { kind: 'ok', code: 0 }, transcriptPath: null, harnessVersion: request.expected.harnessVersion, modelId: request.expected.modelId, tokens: { input: 0, cache: 0, output: 0 }, poolSessionId: null };
-    // The pin is read from disk again here, so a change since `prepare` is seen; a mismatch leaves the harness unstarted and the runner voids the run.
+    const skipped = await steps.recheckPins(folder, request);
+    if (skipped !== null) return skipped;
     const tool = toolFor(settings, request.arm);
-    if (tool !== null) {
-      const wanted = wantedPin(request);
-      folder.installedPins = [{ name: tool.name, pin: steps.installedPin(tool, await steps.readToolVersion(tool, folder.dir, folder.configDir), wanted) }];
-      if (folder.installedPins.some((pin) => pin.pin !== wanted)) return skipped;
-    }
     const prompt = await readFile(join(settings.taskSetDir, 'prompts', `${request.taskId}.md`), 'utf8');
     const sessionId = randomUUID();
     const allowed = [...settings.allowedTools, ...(tool?.kind === 'server' ? [`mcp__${tool.name}`] : [])];
@@ -174,7 +164,7 @@ export const makeClaudeBedrock = (settings: ClaudeBedrockSettings, deps: Depende
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     };
     const outcome = await spawn({ command: settings.claudeExecutable, args, cwd: folder.runFolder, env, stdin: prompt, timeoutMs: settings.timeLimitMs });
-    if (outcome.errorCode !== null && outcome.errorCode !== 'ENOSPC') throw new Error(`could not start ${settings.claudeExecutable} (${outcome.errorCode})`);
+    assertStarted(outcome, settings.claudeExecutable);
     const facts = parseStream(outcome.stdout);
     const kind = classify(outcome, facts);
     const transcriptPath = await steps.copyTranscript(join(folder.configDir, 'projects', 'work', `${sessionId}.jsonl`), request.runId);

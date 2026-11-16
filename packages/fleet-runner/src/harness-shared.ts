@@ -5,7 +5,7 @@ import { cp, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { CheckResult, Prepared, RunRequest, ToolPin } from './harness.js';
+import type { CheckResult, Prepared, RunRequest, RunResult, ToolPin } from './harness.js';
 import { arrayAt, isObject, type JsonObject, objectAt, optionalStringAt, parseJson, stringAt } from './json.js';
 import { loadTaskSet } from './manifest.js';
 
@@ -314,7 +314,34 @@ export interface Steps {
   prepareRun: (request: RunRequest, layout: Layout, reset: ResetPlan) => Promise<PreparedFolder>;
   copyTranscript: (source: string, runId: string) => Promise<string | null>;
   runCheck: (folder: PreparedFolder, request: RunRequest) => Promise<CheckResult>;
+  /** Reads the arm's tool pin from disk again, so a change since `prepare` is seen: returns the unstarted-harness result when it no longer matches the order (the runner voids the run), else null. */
+  recheckPins: (folder: PreparedFolder, request: RunRequest) => Promise<RunResult | null>;
 }
+
+/** The folders one adapter prepared, so `run` and `check` refuse a folder made elsewhere. */
+export interface Folders {
+  remember: (folder: PreparedFolder) => void;
+  folderOf: (prepared: Prepared) => PreparedFolder;
+}
+
+export const makeFolders = (): Folders => {
+  const known = new WeakMap<Prepared, PreparedFolder>();
+  return {
+    remember: (folder) => {
+      known.set(folder, folder);
+    },
+    folderOf: (prepared) => {
+      const folder = known.get(prepared);
+      if (folder === undefined) throw new Error('this folder was not prepared by this adapter');
+      return folder;
+    },
+  };
+};
+
+/** Throws when the harness did not start; a full disk is the one start error the run reports instead. */
+export const assertStarted = (outcome: SpawnOutcome, executable: string): void => {
+  if (outcome.errorCode !== null && outcome.errorCode !== 'ENOSPC') throw new Error(`could not start ${executable} (${outcome.errorCode})`);
+};
 
 /** Copies a skill's folder without its `.git` data. */
 export const copySkill = (from: string, to: string): Promise<void> => cp(from, to, { recursive: true, filter: (path) => !/[\\/]\.git([\\/]|$)/.test(path) });
@@ -432,5 +459,14 @@ export const makeSteps = (settings: SharedSettings, deps: Dependencies, spawn: S
     return outcome.exitCode === 0 ? 'pass' : 'fail';
   };
 
-  return { setupEnv, step, readToolVersion, installedPin, installServer, checkoutSkill, prepareRun, copyTranscript, runCheck };
+  const recheckPins = async (folder: PreparedFolder, request: RunRequest): Promise<RunResult | null> => {
+    const tool = toolFor(settings, request.arm);
+    if (tool === null) return null;
+    const wanted = wantedPin(request);
+    folder.installedPins = [{ name: tool.name, pin: installedPin(tool, await readToolVersion(tool, folder.dir, folder.configDir), wanted) }];
+    if (!folder.installedPins.some((pin) => pin.pin !== wanted)) return null;
+    return { exit: { kind: 'ok', code: 0 }, transcriptPath: null, harnessVersion: request.expected.harnessVersion, modelId: request.expected.modelId, tokens: { input: 0, cache: 0, output: 0 }, poolSessionId: null };
+  };
+
+  return { setupEnv, step, readToolVersion, installedPin, installServer, checkoutSkill, prepareRun, copyTranscript, runCheck, recheckPins };
 };

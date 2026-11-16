@@ -56,9 +56,9 @@ const rig = (patch: Partial<CodexAzureSettings> = {}, prompt = 'scenario: ok\nDo
     fleetManifestVersion: 'fleet-1',
     codexExecutable: process.execPath,
     codexArgs: [STUB],
-    azureEndpoint: 'https://example.openai.azure.com/openai/v1',
+    azureEndpoint: 'https://example.openai.azure.com/openai',
     deployment: DEPLOYMENT,
-    apiVersion: null,
+    apiVersion: '2025-04-01-preview',
     tool: SERVER,
     timeLimitMs: 20000,
     setupTimeLimitMs: 60000,
@@ -148,6 +148,9 @@ describe('prepare', () => {
     const text = readFileSync(join(server.configDir, 'config.toml'), 'utf8');
     expect(text).toContain('model_provider = "azure"');
     expect(text).toContain('env_key = "AZURE_OPENAI_API_KEY"');
+    // The shape of the documented Azure example (config-advanced, per-provider tuning).
+    expect(text).toContain('base_url = "https://example.openai.azure.com/openai"');
+    expect(text).toContain('query_params = { api-version = "2025-04-01-preview" }');
     expect(text.match(/\[mcp_servers\./g)).toHaveLength(1);
     expect(text).not.toMatch(/env_vars|^env =/m);
     // The default KEY/SECRET/TOKEN exclusion already drops the key; the explicit AZURE_ filter is a second guard the stub cannot tell apart, so pin it here.
@@ -168,11 +171,13 @@ describe('prepare', () => {
     git(skill, 'init', '-q');
     git(skill, 'add', '-A');
     git(skill, 'commit', '-q', '-m', 'first');
-    const { settings } = rig({ tool: { kind: 'skill', name: 'fill', repo: skill, subdir: 'skills/fill' }, apiVersion: '2025-04-01-preview' });
+    const { settings } = rig({ tool: { kind: 'skill', name: 'fill', repo: skill, subdir: 'skills/fill' }, apiVersion: null });
     const adapter = makeCodexAzure(settings, { env: ENV });
     const prepared = await adapter.prepare(request('fill', `git:${git(skill, 'rev-parse', 'HEAD').slice(0, 10)}`));
     expect(existsSync(join(prepared.dir, 'home', '.agents', 'skills', 'fill', 'SKILL.md'))).toBe(true);
-    expect(readFileSync(join(prepared.configDir, 'config.toml'), 'utf8')).toContain('query_params = { api-version = "2025-04-01-preview" }');
+    expect(listing(prepared.configDir)).toEqual(['config.toml']);
+    expect(listing(join(prepared.dir, 'home', '.agents', 'skills', 'fill'))).toEqual(['SKILL.md']);
+    expect(readFileSync(join(prepared.configDir, 'config.toml'), 'utf8')).not.toContain('query_params');
     await prepared.dispose();
   });
 });
@@ -191,8 +196,8 @@ describe('run', () => {
     expect(result.exit).toEqual({ kind: 'ok', code: 0 });
     expect(result.harnessVersion).toBe('0.170.0');
     expect(result.modelId).toBe(DEPLOYMENT);
-    // 1000 input of which 400 cached, then 2000 of which 1500 cached: 600 + 500 fresh, 1900 cached, 300 out.
-    expect(result.tokens).toEqual({ input: 1100, cache: 1900, output: 300 });
+    // 1000 input of which 400 cached, then 2000 of which 1500 cached and 100 cache-written: 600 + 400 fresh, 400 + 1600 cache, 300 out.
+    expect(result.tokens).toEqual({ input: 1000, cache: 2000, output: 300 });
     expect(result.transcriptPath).toBe(join(scratch, 'transcripts', 'o-2-0001.jsonl'));
     expect(readFileSync(result.transcriptPath ?? '', 'utf8')).toContain('session_meta');
     const seen: unknown = JSON.parse(readFileSync(join(prepared.configDir, 'stub-seen.json'), 'utf8'));
@@ -238,6 +243,14 @@ describe('run', () => {
     const none = await run('scenario: norollout\n', 'no-tool');
     expect(none.result).toMatchObject({ transcriptPath: null, harnessVersion: 'unknown', modelId: 'unknown' });
     await none.prepared.dispose();
+  });
+
+  it('copies the own rollout of the run, not a later one from a spawned agent, and reads the version from it', async () => {
+    const { result } = await run('scenario: subagent' + NL + 'x', 'no-tool');
+    expect(result.harnessVersion).toBe('0.170.0');
+    const copy = readFileSync(result.transcriptPath ?? '', 'utf8');
+    expect(copy).toContain('"cli_version":"0.170.0"');
+    expect(copy).not.toContain('parent_thread_id');
   });
 
   it('a timeout ends the harness and the processes it started', async () => {
