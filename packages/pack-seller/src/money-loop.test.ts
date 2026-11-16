@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 import { http, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createOarsClient, purchases } from '@manyoars/oars-client';
@@ -119,6 +120,19 @@ const validated = async (world: World, name: string, archive: Buffer) => {
   return { names, code, printed: printed.join('\n') };
 };
 
+/** The bytes a buyer holds when the stream ends or breaks: everything read before the failure. */
+const received = async (response: Response): Promise<Buffer> => {
+  const chunks: Buffer[] = [];
+  try {
+    for await (const chunk of Readable.fromWeb(response.body ?? new ReadableStream<Uint8Array>())) {
+      if (chunk instanceof Uint8Array) chunks.push(Buffer.from(chunk));
+    }
+  } catch {
+    // The stream broke: the buyer keeps what came before.
+  }
+  return Buffer.concat(chunks);
+};
+
 describe('the test-mode money loop', () => {
   it('registers, prices, offers, buys, settles, downloads, and validates the archive that came down', async () => {
     const { world, platform, price, offer, download, balance, buyer } = await setup();
@@ -178,5 +192,21 @@ describe('the test-mode money loop', () => {
     expect(refused.status).toBe(402);
     expect(platform.state).toMatchObject({ credits: 0, held: 0 });
     expect(platform.state.calls.filter((call) => call === 'commit')).toHaveLength(3);
+  });
+});
+
+describe('a refused commit', () => {
+  it('ends the stream with an archive validate-pack rejects, and releases the reservation', async () => {
+    const { world, platform, price, offer, download } = await setup({ refuseCommit: true });
+    await price();
+    const offered = await offer();
+    platform.settle();
+    const bytes = await received(await download(offered.ref));
+    const result = await validated(world, 'refused', bytes);
+    expect(result.code).toBe(1);
+    expect(result.printed).toContain('manifest.jsonl');
+    expect(result.names).not.toContain('manifest.jsonl');
+    expect(platform.state.calls.slice(-4)).toEqual(['balance', 'reserve', 'commit', 'release']);
+    expect(platform.state).toMatchObject({ credits: 3, held: 0 });
   });
 });

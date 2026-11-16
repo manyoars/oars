@@ -56,14 +56,20 @@ const filesUnder = async (dir: string, below = ''): Promise<string[]> => {
   return found;
 };
 
-/** The file list, checked up front so a name the archive cannot hold stops the download before a credit is reserved against a stream. */
+/** The file `validate-pack` requires first; it goes last, so an archive cut before it is rejected. */
+export const MANIFEST_NAME = 'manifest.jsonl';
+
+/**
+ * The file list, checked up front so a name the archive cannot hold stops the download before a credit is reserved against a stream.
+ * The manifest is last: the seller holds the last entry back until the credit is committed.
+ */
 export const archiveNames = async (dir: string): Promise<string[]> => {
-  const names = await filesUnder(dir);
-  for (const name of names) split(name);
-  return names;
+  const found = await filesUnder(dir);
+  for (const name of found) split(name);
+  return [...found.filter((name) => name !== MANIFEST_NAME), ...found.filter((name) => name === MANIFEST_NAME)];
 };
 
-/** The two zero blocks that end a tar archive; the seller sends them only after the credit is committed, so a refused commit leaves an archive without its terminator. */
+/** The two zero blocks that end a tar archive; the seller sends them only after the credit is committed, so a cut stream leaves an archive without its terminator. */
 export const END_OF_ARCHIVE = Buffer.alloc(BLOCK * 2);
 
 /** The files of `names` under `dir` as ustar entries, chunk by chunk, without the end blocks. */
