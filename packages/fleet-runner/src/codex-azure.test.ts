@@ -245,12 +245,20 @@ describe('run', () => {
     await none.prepared.dispose();
   });
 
-  it('copies the own rollout of the run, not a later one from a spawned agent, and reads the version from it', async () => {
-    const { result } = await run('scenario: subagent' + NL + 'x', 'no-tool');
+  it('copies the own rollout of the run, not a later one from a spawned agent or a delegate, and reads the version from it', async () => {
+    const { prepared, result } = await run('scenario: subagent' + NL + 'x', 'no-tool');
     expect(result.harnessVersion).toBe('0.170.0');
     const copy = readFileSync(result.transcriptPath ?? '', 'utf8');
     expect(copy).toContain('"cli_version":"0.170.0"');
     expect(copy).not.toContain('parent_thread_id');
+    expect(copy).not.toContain('"subagent"');
+    await prepared.dispose();
+  });
+
+  it('counts the tokens of the whole tree, skipping the parent prefix a spawned agent copied', async () => {
+    const { prepared, result } = await run('scenario: subagent' + NL + 'x', 'no-tool');
+    expect(result.tokens).toEqual({ input: 1700, cache: 2000, output: 370 });
+    await prepared.dispose();
   });
 
   it('a timeout ends the harness and the processes it started', async () => {

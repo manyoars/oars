@@ -71,10 +71,20 @@ else {
       { type: 'event_msg', payload: { type: 'token_count', info: { last_token_usage: { input_tokens: 2000, cached_input_tokens: 1500, cache_write_input_tokens: 100, output_tokens: 200 } } } },
     ];
     if (scenario === 'subagent') {
-      // A spawned agent's rollout sorts later and names a parent thread; it is no part of the run's own transcript.
+      // Spawned agents' rollouts sort later and are no part of the run's own transcript: one names its parent thread (its first record is the parent's prefix, below the start ordinal, and must not be counted),
+      // another is a delegate such as a review, named only by `source.subagent`. Each holds one token_count row that counts toward the run's tokens.
+      const usage = (/** @type {number} */ input, /** @type {number} */ output) => ({ type: 'event_msg', payload: { type: 'token_count', info: { last_token_usage: { input_tokens: input, cached_input_tokens: 0, output_tokens: output } } } });
+      const asLines = (/** @type {object[]} */ list) => list.map((row) => JSON.stringify(row)).join(String.fromCharCode(10)) + String.fromCharCode(10);
       const child = '019a0000-0000-7000-8000-000000000002';
-      writeFileSync(join(day, `rollout-2026-11-16T10-05-00-${child}.jsonl`), `${JSON.stringify({ type: 'session_meta', payload: { id: child, parent_thread_id: threadId, cli_version: '8.8.8' } })}
-`);
+      const parentRows = [
+        { type: 'session_meta', payload: { id: child, parent_thread_id: threadId, cli_version: '8.8.8', subagent_history_start_ordinal: 2 } },
+        { ordinal: 1, ...usage(5000, 500) },
+        { ordinal: 3, ...usage(500, 50) },
+      ];
+      writeFileSync(join(day, `rollout-2026-11-16T10-05-00-${child}.jsonl`), asLines(parentRows));
+      const review = '019a0000-0000-7000-8000-000000000003';
+      const reviewRows = [{ type: 'session_meta', payload: { id: review, source: { subagent: 'review' }, cli_version: '7.7.7' } }, usage(200, 20)];
+      writeFileSync(join(day, `rollout-2026-11-16T10-06-00-${review}.jsonl`), asLines(reviewRows));
     }
     writeFileSync(join(day, `rollout-2026-11-16T10-00-00-${threadId}.jsonl`), `${rows.map((row) => JSON.stringify({ timestamp: '2026-11-16T10:00:00Z', ...row })).join('\n')}\n`);
   }
