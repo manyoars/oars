@@ -2,7 +2,7 @@
 
 Private (not published). The runner core for a commissioned run: it takes an order file, runs every cell and repeat through a harness adapter, voids and reruns by the run-task-set spec (section 9), writes the run book (section 7), signs a complete one, files each side and arm's valid sessions in its own store folder, and runs the `real-work-table` read over each.
 
-This package has no real harness. The only adapter is a scripted fake, so its tests need no key, no network, and no spend.
+The runner is proved with a scripted fake, and the Claude Code on Bedrock adapter with a stub `claude`, so no test needs a key, a network, or spend. No real run has been made.
 
 | File | What it does |
 | --- | --- |
@@ -11,6 +11,7 @@ This package has no real harness. The only adapter is a scripted fake, so its te
 | `src/plan.ts` | `planOrder`: the ordered runs and the cells; a retest alternates sides. |
 | `src/harness.ts` | The adapter interface: `prepare`, `run`, `check`. |
 | `src/fake-harness.ts` | The scripted fake; each void cause can be injected per run. |
+| `src/claude-bedrock.ts` | The real adapter, Claude Code on Bedrock: `makeClaudeBedrock(settings, { env })` with typed `ClaudeBedrockSettings`; refuses to start without `AWS_BEARER_TOKEN_BEDROCK` and a region. `src/stub-claude.mjs` stands in for `claude` in its tests. |
 | `src/runner.ts` | `runOrder`: void detection, in-place reruns, the run cap. |
 | `src/sign.ts` | The sign step and the verify command: `ssh-keygen -Y sign -n manyoars-runbook` and `-Y verify`, refusing a run book whose header status is not `complete`. |
 | `src/stores.ts` | `makeStager` (copies a valid run's transcript out of its temp folder), `buildStores` (one store folder per side and arm through the CLI's `deposit`), `readStores` (`tableOf` over each with `--min-sessions 3`). |
@@ -41,4 +42,10 @@ npm run verify-run-book -w packages/fleet-runner -- <run book> <allowed-signers 
 
 `sign` writes `<run book>.sig` beside the run book and refuses an `incomplete` or `voided` one. `verify` exits 1 when the run book or signature differs from what the allowed-signers line names. A cell row under 3 sessions is left out of a row file and counted in its header's `leftOut`; a server or skill row under 3 prints thin, with its count and no rates (that is the read's behavior).
 
-What a real adapter must return for the store folders and the read: `RunResult.transcriptPath` is the Claude Code transcript JSONL of the run (a file in the run's temp folder, with a `sessionId` on its lines; Claude Code names the file for it), written whenever the run exits `ok`. A clean run with no readable transcript, or one with no session id, is void (`transcript-missing`) and rerun.
+What a real adapter must return for the store folders and the read: `RunResult.transcriptPath` is the Claude Code transcript JSONL of the run (a readable file (this adapter copies it to `transcriptOutDir`), with a `sessionId` on its lines; Claude Code names the file for it), written whenever the run exits `ok`. A clean run with no readable transcript, or one with no session id, is void (`transcript-missing`) and rerun.
+
+## Claude Code on Bedrock adapter
+
+Layout it expects: `<taskSetDir>/manifest.json` (with a `reset` object: `node` is the Node major the fixture needs, `commands` the ordered reset command lines, run in the clone; a lower Node is refused when the adapter is made), per task an optional `setup/<id>.mjs` (run once after the reset, run folder as its first argument; a non-zero exit is an error the runner records as `machine-failed`), and per task `tasks/<id>/prompt.md` (sent on stdin) and `tasks/<id>/check.mjs` (a Node script, run folder as its first argument, exit 0 is a pass; any other exit is a fail; a check that cannot start throws). A tool pin is `npm:<version>` for a server and `git:<commit prefix>` for a skill; the adapter installs the pin the order's request names, then reads the installed version again before the run.
+
+Command: `claude -p --output-format stream-json --verbose --session-id <uuid> --model <id> --strict-mcp-config --mcp-config <config>/mcp.json --permission-mode acceptEdits --allowedTools <list>`, prompt on stdin, run folder as the working directory. Environment, names only: `PATH`, `PATHEXT`, `SystemRoot`, `windir`, `ComSpec`, `TEMP`, `TMP`, `TMPDIR` (copied), `HOME` and `USERPROFILE` (the run's own folder), `CLAUDE_CODE_USE_BEDROCK`, `AWS_REGION`, `AWS_BEARER_TOKEN_BEDROCK`, `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_PROJECT_DIR_NAME`, `DISABLE_AUTOUPDATER`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` (the key does not reach Bash or the tool's MCP server). Nothing else is passed through.
