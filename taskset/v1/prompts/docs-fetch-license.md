@@ -1,0 +1,1 @@
+The README of the Markdown library this app depends on recommends a library to sanitize the HTML the Markdown library produces. Which npm package is it, and what license does it carry? Write two lines to `answers/marked-license.txt`: `package: <the npm package name>` and `license: <the SPDX expression of that package's license>`.
