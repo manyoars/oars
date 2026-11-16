@@ -26,7 +26,7 @@ The runner is proved with a scripted fake, and the Claude Code on Bedrock adapte
 Before the first paid run:
 
 ```
-npm run preflight -w packages/fleet-runner -- --taskset <folder> --fleet <file> --fixture-source <path or URL> [--run-book <file> --allowed-signers <file>]
+npm run preflight -w packages/fleet-runner -- --taskset <folder> [--fleet <file>] --fixture-source <path or URL> [--run-book <file> --allowed-signers <file>]
 npm run first-run-read -w packages/fleet-runner -- --transcript <file> --output <file> --run-book <file> --model-id <Bedrock ID> [--run-id <id>] [--marker <text>] [--allow-server <name>]... [--allow-skill <name>]...
 ```
 
