@@ -58,7 +58,10 @@ export interface ClaudeBedrockSettings {
   modelId: string;
   /** The tool the arm named `tool.name` installs; any other arm is the no-tool arm. */
   tool: ToolUnderTest | null;
+  /** The limit on the harness call alone. */
   timeLimitMs: number;
+  /** The limit on each reset, setup, install, and check step, so a slow clone or build is never mistaken for a slow harness. */
+  setupTimeLimitMs: number;
   /** Where each run's transcript is copied, outside the temp folder, as `<runId>.jsonl`. */
   transcriptOutDir: string;
   gitExecutable: string;
@@ -278,6 +281,7 @@ export const makeClaudeBedrock = (settings: ClaudeBedrockSettings, deps: Depende
   const step = async (what: string, spec: SpawnSpec): Promise<string> => {
     const outcome = await spawn(spec);
     if (outcome.errorCode !== null) throw new Error(`${what}: could not start ${spec.command} (${outcome.errorCode})`);
+    if (outcome.timedOut) throw new Error(`${what} timed out after ${String(spec.timeoutMs)} ms`);
     if (outcome.exitCode !== 0) throw new Error(`${what} failed (exit ${String(outcome.exitCode)}): ${outcome.stderr.trim().slice(0, 300)}`);
     return outcome.stdout.trim();
   };
@@ -288,7 +292,7 @@ export const makeClaudeBedrock = (settings: ClaudeBedrockSettings, deps: Depende
       const manifest = parseJson(text, `${tool.package} package.json`);
       return `npm:${isObject(manifest) ? optionalStringAt(manifest, 'version', tool.package) ?? 'unknown' : 'unknown'}`;
     }
-    return `git:${await step('read skill commit', { command: settings.gitExecutable, args: ['rev-parse', 'HEAD'], cwd: join(root, 'tool-src'), env: setupEnv(root), stdin: null, timeoutMs: settings.timeLimitMs })}`;
+    return `git:${await step('read skill commit', { command: settings.gitExecutable, args: ['rev-parse', 'HEAD'], cwd: join(root, 'tool-src'), env: setupEnv(root), stdin: null, timeoutMs: settings.setupTimeLimitMs })}`;
   };
 
   /** The installed pin in the order's own form: a commit prefix the order gave stays that prefix when the checked-out commit starts with it. */
@@ -299,7 +303,7 @@ export const makeClaudeBedrock = (settings: ClaudeBedrockSettings, deps: Depende
 
   const install = async (tool: ToolUnderTest, wanted: string, root: string, configDir: string): Promise<void> => {
     const env = setupEnv(root);
-    const timeoutMs = settings.timeLimitMs;
+    const timeoutMs = settings.setupTimeLimitMs;
     const value = pinParts(wanted).value;
     if (tool.kind === 'server') {
       const prefix = join(configDir, 'tool');
@@ -328,7 +332,7 @@ export const makeClaudeBedrock = (settings: ClaudeBedrockSettings, deps: Depende
       await mkdir(configDir, { recursive: true });
       await mkdir(join(root, 'home'), { recursive: true });
       const env = setupEnv(root);
-      const timeoutMs = settings.timeLimitMs;
+      const timeoutMs = settings.setupTimeLimitMs;
       await step('clone fixture', { command: settings.gitExecutable, args: ['clone', '--quiet', settings.fixtureSource, runFolder], cwd: root, env, stdin: null, timeoutMs });
       await step('check out fixture tag', { command: settings.gitExecutable, args: ['checkout', '--quiet', '--detach', settings.fixtureTag], cwd: runFolder, env, stdin: null, timeoutMs });
       const commit = await step('read fixture commit', { command: settings.gitExecutable, args: ['rev-parse', 'HEAD'], cwd: runFolder, env, stdin: null, timeoutMs });
@@ -437,7 +441,7 @@ export const makeClaudeBedrock = (settings: ClaudeBedrockSettings, deps: Depende
     } catch {
       throw new Error(`check script ${script} cannot be read`);
     }
-    const outcome = await spawn({ command: process.execPath, args: [script, folder.runFolder], cwd: folder.runFolder, env: pick(deps.env, START_NAMES), stdin: null, timeoutMs: settings.timeLimitMs });
+    const outcome = await spawn({ command: process.execPath, args: [script, folder.runFolder], cwd: folder.runFolder, env: pick(deps.env, START_NAMES), stdin: null, timeoutMs: settings.setupTimeLimitMs });
     if (outcome.errorCode !== null || outcome.timedOut) throw new Error(`check script ${script} could not run (${outcome.errorCode ?? 'timed out'})`);
     return outcome.exitCode === 0 ? 'pass' : 'fail';
   };
