@@ -3,6 +3,7 @@
 // bundle for the session's setup first and the local pool's reads second, and every shown or held one is a `Recall` row, so the holdback arms are real.
 import { CANONICAL_ACTIONS } from './actions.js';
 import { harnessBucket } from './cells.js';
+import { sameTargetOf, type SameTargetRead } from './same-target-lookup.js';
 import type { Read } from './read.js';
 import { appendRecall, armOf, makeRecall, parseRecalls, recallsPath, type Recall } from './recall-object.js';
 import { frameOfTail, tailOf } from './recall-push.js';
@@ -59,6 +60,8 @@ export interface NextReads {
   poolVersion: string;
   recovery: RecoveryEdges;
   positions: Position[];
+  /** The bundle's reads, for the same-target lookup; absent where a caller built the reads by hand. */
+  reads?: readonly Read[];
 }
 
 const isCount = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;
@@ -175,6 +178,17 @@ export const renderRecovery = (action: string, code: string, edges: readonly Rec
   return { rendered, names: shown.map((edge) => edge.next) };
 };
 
+/**
+ * The same-target read as one line: the step it carries and its counts, nothing more. A step equal to the failed action is the same action on another kind of target, never a retry (a repeat on the same
+ * target class is a `retry` cell, which this read never serves). A step the vocabulary does not close names nothing, so it renders nothing.
+ */
+export const renderSameTarget = (failed: string, code: string, target: string, read: SameTargetRead): { rendered: string; names: string[] } => {
+  if (closedName(read.step) === LITERAL) return { rendered: '', names: [] };
+  const step = read.step === failed ? 'the same action on another kind of target' : read.step;
+  const rendered = `oars recall, counts from earlier sessions: after a failed ${failed} (${code}) on a ${target} target, ${step} came back ok ${String(read.recovered)} of ${count(read.followed, 'time')} it followed\n  read ${read.readId} (recovery)`;
+  return { rendered, names: [read.step] };
+};
+
 /** The positions table, with every position that fits under the cap and nothing when none does. */
 export const renderPositions = (positions: readonly Position[]): { rendered: string; listed: Position[]; names: string[] } => {
   const header = 'oars recall, next steps that earlier sessions split on (counts, not advice):';
@@ -243,7 +257,7 @@ export const frameFor = (input: Pick<NextInput, 'tail' | 'platform' | 'at'>): Fr
 /** The reads of the kept bundle for the asker's harness and version; undefined with no version stated, no bundle, or a bundle that does not verify (never an error). */
 export const bundleNext = async (storeDir: string, asker: Asker): Promise<NextReads | undefined> => {
   const bundle = asker.harnessVersion === null ? undefined : await sessionBundle(storeDir, { harness: asker.harness, harnessVersion: asker.harnessVersion });
-  return bundle === undefined ? undefined : { poolVersion: bundle.asOf.pool, recovery: recoveryEdgesOf(bundle.reads), positions: positionsOf(bundle.reads) };
+  return bundle === undefined ? undefined : { poolVersion: bundle.asOf.pool, recovery: recoveryEdgesOf(bundle.reads), positions: positionsOf(bundle.reads), reads: bundle.reads };
 };
 
 /**
@@ -277,13 +291,39 @@ export const recordRead = async (
   return recall;
 };
 
-/** The recovery read for one failure, as a recall row. */
-export const recoveryRecall = (input: NextInput, setup: Asker, action: string, code: string, decision: Extract<RecoveryDecision, { kind: 'serve' }>): Promise<Recall> => {
+const NO_NAMES: string[] = [];
+
+/** The same-target read's evidence, as one read of the row it is served in. */
+const sameTargetEvidence = (failed: string, read: SameTargetRead, setup: Asker): RecallRead =>
+  evidenceRead({ readId: read.readId, family: 'recovery', tool: failed, n: read.recovered, count: read.recovered, calls: read.of, clusters: read.clusters, day: read.day, followed: [[read.step, read.recovered]] }, setup);
+
+/** What a failure's same-target read adds to a row: its text, its names, and its evidence. */
+export interface SameTargetServed {
+  failed: string;
+  target: string;
+  read: SameTargetRead;
+}
+
+/** The same-target read a bundle's reads hold for a failure, when it can be said in closed names; undefined otherwise, which every surface answers with its output unchanged. */
+export const sameTargetServed = (reads: readonly Read[] | undefined, code: string, failed: string, target: string): SameTargetServed | undefined => {
+  const read = reads === undefined ? undefined : sameTargetOf(reads, code, failed, target);
+  return read === undefined || renderSameTarget(failed, code, target, read).rendered === '' ? undefined : { failed, target, read };
+};
+
+/**
+ * The recovery read for one failure, as a recall row. A same-target read for the same failure is added beside the edge line, after it, in the same row; with none the row is the edge line alone.
+ * `decision` is the edge's decision, or only the pool version when the same-target read stands alone.
+ */
+export const recoveryRecall = (input: NextInput, setup: Asker, action: string, code: string, decision: { edges: readonly RecoveryEdge[]; poolVersion: string }, same?: SameTargetServed): Promise<Recall> => {
   const frame = frameFor(input);
-  const { rendered, names } = renderRecovery(action, code, decision.edges);
+  const edge = decision.edges.length === 0 ? { rendered: '', names: NO_NAMES } : renderRecovery(action, code, decision.edges);
+  const beside = same === undefined ? { rendered: '', names: NO_NAMES } : renderSameTarget(same.failed, code, same.target, same.read);
+  const rendered = [edge.rendered, beside.rendered].filter((part) => part !== '').join('\n');
   const top = decision.edges[0];
-  const read = evidenceRead({ readId: top?.readId ?? '', family: 'recovery', tool: action, n: top?.followed ?? 0, count: top?.followed ?? 0, calls: top?.of ?? null, clusters: top?.clusters ?? 1, day: top?.day ?? null, followed: decision.edges.map((edge): [string, number] => [edge.next, edge.followed]) }, setup);
-  return recordRead(input, frame, { form: 'question', family: 'recovery', prefix: [`${action}/${code}`] }, [`${action}/${code}`], decision.poolVersion, rendered, names, [read]);
+  const reads: RecallRead[] = [];
+  if (top !== undefined) reads.push(evidenceRead({ readId: top.readId, family: 'recovery', tool: action, n: top.followed, count: top.followed, calls: top.of, clusters: top.clusters, day: top.day, followed: decision.edges.map((each): [string, number] => [each.next, each.followed]) }, setup));
+  if (same !== undefined && beside.rendered !== '') reads.push(sameTargetEvidence(same.failed, same.read, setup));
+  return recordRead(input, frame, { form: 'question', family: 'recovery', prefix: [`${action}/${code}`] }, [`${action}/${code}`], decision.poolVersion, rendered, [...edge.names, ...beside.names], reads);
 };
 
 /** The old signature line's recall: the local signature index, held to the same retry rule and floor. */

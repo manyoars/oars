@@ -176,6 +176,6 @@ describe('the MCP recall tool', () => {
     const tools = field(field(await handleMessage(staged.runtime, () => NOW, { jsonrpc: '2.0', id: 1, method: 'tools/list' }), 'result'), 'tools');
     expect(JSON.stringify(tools)).not.toMatch(/receipt/i);
     const properties = Array.isArray(tools) ? field(field(tools[0], 'inputSchema'), 'properties') : undefined;
-    expect(Object.keys(typeof properties === 'object' && properties !== null ? properties : {}).sort()).toEqual(['class', 'entity', 'error', 'family', 'path', 'prefix', 'sinceDays', 'text']);
+    expect(Object.keys(typeof properties === 'object' && properties !== null ? properties : {}).sort()).toEqual(['class', 'entity', 'error', 'failed', 'family', 'path', 'prefix', 'sinceDays', 'text']);
   });
 });

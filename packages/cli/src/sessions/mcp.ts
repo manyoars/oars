@@ -5,16 +5,20 @@
 import { appendFile, mkdir } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { servedPool } from './pool.js';
-import { recallPool } from './recall-bundle.js';
+import { recallPool, storeSetup } from './recall-bundle.js';
 import { noEmit, type Emit } from '../telemetry/emit.js';
 import { recallFields } from '../telemetry/fields.js';
 import { appendRecall } from './recall-object.js';
 import { formsRefusal, pull, pullRefusal, RECALL_FAMILIES, type PullInput } from './recall-reads.js';
 import { MISS_TEXT } from './recall-render.js';
+import { classOfAimed, errorCodeOf, targetOf } from './extract.js';
+import { sessionBundle } from './pool-replica.js';
+import { renderSameTarget, sameTargetServed } from './recall-next.js';
+import { makeRepoRoot } from './repo-root.js';
 import { makeRedactor } from './redact.js';
 import type { RecallCall } from './schema.js';
 import { tryLog } from './steps.js';
-import { loadStore, paths, readRedactDomains, type SessionsRuntime } from './store.js';
+import { loadStore, paths, readRedactDomains, type SessionsRuntime, type Store } from './store.js';
 
 const PROTOCOL = '2025-06-18';
 
@@ -35,6 +39,7 @@ const TOOL = {
       entity: { type: 'string', description: 'A public name: a package, a tool, an MCP server, an action, or a model.' },
       family: { type: 'string', description: `A read family to answer: ${RECALL_FAMILIES.join(', ')}. Only recovery and fit can be narrowed by class or sinceDays; any other family, and the prefix, entity, and text forms, count all time and refuse both. Name one form per call.` },
       text: { type: 'string', description: 'Text to look for in the local record.' },
+      failed: { type: 'string', description: 'The action that failed (for example file.edit). With error and path it adds what most often recovered on that kind of target; a local input, never sent anywhere.' },
     },
   },
 } as const;
@@ -83,6 +88,19 @@ const toQuery = (args: unknown): PullInput => {
   return { ...query, ...narrowing };
 };
 
+/**
+ * The same-target line for a call that names `error`, `path`, and `failed` (the failed action): what the kept bundle for the store's own setup holds for that code, action, and path class, put after
+ * the answer. With any of the three missing, or no read, it is empty and the answer is unchanged. `failed` is a local input of this tool, not a wire field.
+ */
+const sameTargetLine = async (runtime: SessionsRuntime, store: Store, args: unknown): Promise<string> => {
+  const source = isObj(args) ? args : {};
+  if (typeof source.error !== 'string' || typeof source.path !== 'string' || typeof source.failed !== 'string') return '';
+  const target = classOfAimed(targetOf('Read', { file_path: source.path }, process.cwd(), '', (text) => text, makeRepoRoot()(process.cwd())));
+  const bundle = await sessionBundle(runtime.storeDir, storeSetup(store));
+  const served = target === 'none' ? undefined : sameTargetServed(bundle?.reads, errorCodeOf(source.error), source.failed, target);
+  return served === undefined ? '' : renderSameTarget(served.failed, errorCodeOf(source.error), target, served.read).rendered;
+};
+
 const reply = (id: unknown, result: object): object => ({ jsonrpc: '2.0', id, result });
 const failure = (id: unknown, code: number, message: string): object => ({ jsonrpc: '2.0', id, error: { code, message } });
 
@@ -124,7 +142,9 @@ export const handleMessage = async (runtime: SessionsRuntime, now: () => number,
       emit('recall', recallFields(result.recall, result.reads.map((read) => read.family), result.legacy !== undefined));
       // An agent reads this, so it gets the rendered counts and the structured recall, and no signature text.
       const { answer, id: recallId, evidence } = result.recall;
-      return reply(id, { content: [{ type: 'text', text: answer.rendered === '' ? MISS_TEXT : answer.rendered }], structuredContent: { recallId, kind: answer.kind, reads: answer.reads, evidence } });
+      const beside = await sameTargetLine(runtime, store, params.arguments);
+      const text = [answer.rendered, beside].filter((part) => part !== '').join('\n');
+      return reply(id, { content: [{ type: 'text', text: text === '' ? MISS_TEXT : text }], structuredContent: { recallId, kind: answer.kind, reads: answer.reads, evidence } });
     } catch (error) {
       // A store read failure must not end the server mid-session: the agent gets an error for this call and can carry on.
       return failure(id, -32603, `Internal error: ${error instanceof Error ? error.message : String(error)}`);

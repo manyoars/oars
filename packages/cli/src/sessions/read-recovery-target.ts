@@ -52,7 +52,7 @@ export const deriveRecoveryTarget: DeriveFamily = ({ pool }) =>
 
 /**
  * The cells of every group whose read is withheld, so a bundle leaves them out and holds nothing for the group: a repeat of the failed call recovered as often as the best other step (a group where nothing recovered is not one), or
- * a repeat that recovered is held but not served (`held` is the pool before the floor; its count is used for this verdict and never printed). A withheld repeat may have led or tied, so the group fails closed.
+ * a repeat that recovered is held but not served (`held` is the pool before the floor and the complement rule; its count is used for this verdict and never printed). A withheld repeat may have led or tied, so the group fails closed.
  */
 export const retryToppedOf = (pool: Pool, held: Pool = pool): Cell[] => {
   const heldGroups = keyedGroupsOf(held);

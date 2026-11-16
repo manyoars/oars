@@ -354,8 +354,9 @@ export const cellFold = (graph: RecallGraph = NO_RECALLS): CellFold => {
       for (const [at, tool] of line.entries()) {
         if (calls[at]?.status !== 'error' || tool.errorCode === undefined || tool.targetClass === undefined || tool.targetClass === 'none') continue;
         const nextAt = nextIndexOf(calls, at);
-        const next = nextAt === null ? undefined : calls[nextAt];
-        if (nextAt === null || next === undefined) continue;
+        if (nextAt === null) continue;
+        const next = calls[nextAt];
+        if (next === undefined) continue;
         const code = ERROR_CODES.has(tool.errorCode) ? tool.errorCode : 'other';
         const failedAction = calls[at].steps[0]?.action ?? 'other';
         const nextAction = next.steps[0]?.action ?? 'other';
