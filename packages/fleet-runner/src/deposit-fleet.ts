@@ -1,12 +1,14 @@
-// The deposit step (spec section 8), a later command than the run: `npm run deposit-fleet -w packages/fleet-runner -- <run book> --allowed-signers <file> --oars <path> [--identity <id>] [--confirm]`.
+// The deposit step (spec section 8), a later command than the run: `npm run deposit-fleet -w packages/fleet-runner -- <run book> --allowed-signers <file> --oars <path> [--identity <id>] [--fleet <file>] [--confirm]`.
 // For each store folder the run wrote, it runs the public `oars pool deposit` (build), `oars pool outbox` (marks the batches shown), and `oars pool deposit --send-all` with that store's config root in the child's environment only, so the child reads that store, that sign-in file,
 // and that exclusion-terms file, and no other. Without `--confirm` it prints what it would do and runs nothing. It never edits the signed run book: what it did goes to `<order id>.deposit-record.jsonl` beside it.
 import { spawn } from 'node:child_process';
 import { access, appendFile, readFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { SESSION_IDLE_HOURS } from '../../cli/src/sessions/pool-wire.js';
 import { signInsFile } from '../../cli/src/sessions/pool-replica.js';
 import { objectAt, parseJson, stringAt } from './json.js';
+import { type FleetManifest, parseFleet } from './manifest.js';
 import { verifyRunBook } from './sign.js';
 import { folderOf } from './stores.js';
 
@@ -26,6 +28,7 @@ interface Step {
 
 interface Parsed {
   orderId: string;
+  manifestVersion: string;
   status: string;
   newestEnd: number;
   stores: Store[];
@@ -49,7 +52,7 @@ const parseRunBook = (text: string, dir: string): Parsed => {
     stores.set(name, store);
     store.expected.push(id);
   }
-  return { orderId, status: typeof header.status === 'string' ? header.status : 'missing', newestEnd, stores: [...stores.values()] };
+  return { orderId, manifestVersion: stringAt(header, 'manifestVersion', 'run book header'), status: typeof header.status === 'string' ? header.status : 'missing', newestEnd, stores: [...stores.values()] };
 };
 
 const exists = (path: string): Promise<boolean> =>
@@ -103,9 +106,24 @@ const flag = (argv: string[], name: string): string | undefined => {
   return at === -1 ? undefined : argv[at + 1];
 };
 
-const USAGE = 'usage: deposit-fleet <run book> --allowed-signers <file> --oars <path> [--identity <id>] [--confirm]';
+const USAGE = 'usage: deposit-fleet <run book> --allowed-signers <file> --oars <path> [--identity <id>] [--fleet <file>] [--confirm]';
 
-export const main = async (argv: string[], print: (line: string) => void, clock: () => Date = () => new Date()): Promise<number> => {
+/** The fleet manifest in the package. A script that bundles this file passes its own path: `import.meta.url` does not point here once bundled. */
+export const FLEET_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'fleet-manifest.json');
+
+/** Reads and checks the fleet manifest; the error names the file and the reason. */
+const loadFleet = async (file: string): Promise<FleetManifest> => {
+  const text = await readFile(file, 'utf8').catch(() => {
+    throw new Error(`fleet manifest ${file} cannot be read`);
+  });
+  try {
+    return parseFleet(text);
+  } catch (error) {
+    throw new Error(`fleet manifest ${file}: ${error instanceof Error ? error.message : 'is not valid'}`);
+  }
+};
+
+export const main = async (argv: string[], print: (line: string) => void, clock: () => Date = () => new Date(), defaultFleet: string = FLEET_FILE): Promise<number> => {
   const runBook = argv[0];
   const allowed = flag(argv, '--allowed-signers');
   const oars = flag(argv, '--oars');
@@ -115,6 +133,8 @@ export const main = async (argv: string[], print: (line: string) => void, clock:
   }
   const confirm = argv.includes('--confirm');
   try {
+    const fleetFile = resolve(flag(argv, '--fleet') ?? defaultFleet);
+    const fleet = await loadFleet(fleetFile);
     const path = resolve(runBook);
     const dir = dirname(path);
     const book = parseRunBook(await readFile(path, 'utf8'), dir);
@@ -122,6 +142,7 @@ export const main = async (argv: string[], print: (line: string) => void, clock:
       print(`deposit-fleet ${book.orderId}: refused: ${reason}`);
       return 1;
     };
+    if (book.manifestVersion !== fleet.version) return refuse(`run book names manifest ${book.manifestVersion} but the fleet manifest is ${fleet.version}`);
     if (book.status !== 'complete') return refuse(`run book status is ${book.status}, only a complete run book is deposited`);
     const verified = await verifyRunBook(path, allowed, flag(argv, '--identity'));
     if (!verified.ok) return refuse(`run book signature not verified: ${verified.message}`);

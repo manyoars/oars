@@ -9,4 +9,4 @@ const sessions = pathToFileURL(join(here, '..', '..', 'cli', 'src', 'sessions', 
 const bundled = await build({ entryPoints: [join(here, '..', 'src', 'deposit-fleet.ts')], bundle: true, platform: 'node', format: 'esm', write: false, define: { 'import.meta.url': JSON.stringify(sessions) } });
 const code = bundled.outputFiles?.[0]?.text ?? '';
 const { main } = await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`);
-process.exitCode = await main(process.argv.slice(2), (/** @type {string} */ line) => console.log(line));
+process.exitCode = await main(process.argv.slice(2), (/** @type {string} */ line) => console.log(line), () => new Date(), join(here, '..', 'fleet-manifest.json'));
