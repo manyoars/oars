@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "run-fake": "node scripts/run-fake.mjs",
+    "deposit-fleet": "node scripts/deposit-fleet.mjs",
     "sign": "node scripts/signing.mjs sign",
     "verify-run-book": "node scripts/signing.mjs verify"
   },

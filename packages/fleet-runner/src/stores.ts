@@ -63,6 +63,11 @@ export const makeStager = (staging: string): Stager => {
 
 export interface StoreFolder {
   name: string;
+  /**
+   * The folder a child `oars` process takes as its config folder (`APPDATA` on Windows, `XDG_CONFIG_HOME` elsewhere): the CLI reads its store at `<root>/oars/sessions`, its sign-in
+   * file at `<root>/oars/sessions/pool-accounts.json`, and (with `CLAUDE_CONFIG_DIR` at `<root>/claude`) its exclusion terms at `<root>/claude/session-commons/exclusion-terms.txt`.
+   */
+  configRoot: string;
   storeDir: string;
   projectsRoot: string;
   /** The valid runs' session ids filed here, in run order. */
@@ -74,33 +79,38 @@ const NOW = Date.parse('2026-11-16T00:00:00Z');
 /**
  * Files each valid run of `book` in its side and arm's own store folder under `<out>/<order id>.stores/`, in run order, and returns the folders in order of first use.
  * A void run is in none (and holds no pool session id). A session that does not come back out of the store throws: the run book must not name a session the store lacks.
- * The staging folder is deleted when it is done.
+ * The staging folder is deleted on every exit, a throw included.
  */
 export const buildStores = async (book: RunBook, stager: Stager, out: string): Promise<StoreFolder[]> => {
   refuseInsideRepository(out, 'stores');
-  const base = join(out, `${book.header.orderId}.stores`);
-  const folders = new Map<string, StoreFolder>();
-  for (const run of book.runs) {
-    const staged = stager.files.get(run.runId);
-    if (run.void !== null || run.poolSessionId === null) continue;
-    if (staged === undefined) throw new Error(`valid run ${run.runId} has a pool session id but was not staged`);
-    const name = folderOf(run.side, run.arm);
-    const folder = folders.get(name) ?? { name, storeDir: join(base, name, 'store'), projectsRoot: join(base, name, 'projects'), sessionIds: [] };
-    folders.set(name, folder);
-    const project = join(folder.projectsRoot, projectOf(book.header.orderId));
-    await mkdir(project, { recursive: true });
-    await copyFile(staged.path, join(project, `${staged.sessionId}.jsonl`));
-    folder.sessionIds.push(staged.sessionId);
+  // The staging folder holds full transcript copies: it goes on every exit, a throw included.
+  try {
+    const base = join(out, `${book.header.orderId}.stores`);
+    const folders = new Map<string, StoreFolder>();
+    for (const run of book.runs) {
+      const staged = stager.files.get(run.runId);
+      if (run.void !== null || run.poolSessionId === null) continue;
+      if (staged === undefined) throw new Error(`valid run ${run.runId} has a pool session id but was not staged`);
+      const name = folderOf(run.side, run.arm);
+      const configRoot = join(base, name);
+      const folder = folders.get(name) ?? { name, configRoot, storeDir: join(configRoot, 'oars', 'sessions'), projectsRoot: join(configRoot, 'claude', 'projects'), sessionIds: [] };
+      folders.set(name, folder);
+      const project = join(folder.projectsRoot, projectOf(book.header.orderId));
+      await mkdir(project, { recursive: true });
+      await copyFile(staged.path, join(project, `${staged.sessionId}.jsonl`));
+      folder.sessionIds.push(staged.sessionId);
+    }
+    for (const folder of folders.values()) {
+      const runtime: SessionsRuntime = { storeDir: folder.storeDir, projectsRoot: folder.projectsRoot, sources: [], stdin: process.stdin, stdout: { write: () => true } };
+      await deposit(runtime, { allow: [], redactDomains: [], now: () => NOW });
+      const stored = new Set((await loadStore(folder.storeDir)).sessions.map((session) => session.session));
+      const missing = folder.sessionIds.filter((id) => !stored.has(id));
+      if (missing.length > 0) throw new Error(`store folder ${folder.name} lacks ${String(missing.length)} of its ${String(folder.sessionIds.length)} sessions (first: ${missing[0] ?? ''})`);
+    }
+    return [...folders.values()];
+  } finally {
+    await stager.clear();
   }
-  await stager.clear();
-  for (const folder of folders.values()) {
-    const runtime: SessionsRuntime = { storeDir: folder.storeDir, projectsRoot: folder.projectsRoot, sources: [], stdin: process.stdin, stdout: { write: () => true } };
-    await deposit(runtime, { allow: [], redactDomains: [], now: () => NOW });
-    const stored = new Set((await loadStore(folder.storeDir)).sessions.map((session) => session.session));
-    const missing = folder.sessionIds.filter((id) => !stored.has(id));
-    if (missing.length > 0) throw new Error(`store folder ${folder.name} lacks ${String(missing.length)} of its ${String(folder.sessionIds.length)} sessions (first: ${missing[0] ?? ''})`);
-  }
-  return [...folders.values()];
 };
 
 export interface ReadOptions {
