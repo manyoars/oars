@@ -76,6 +76,21 @@ describe('void detection (spec section 9)', () => {
 
 const CLEAN_SCRIPT: Script = () => ({});
 
+describe('an adapter that throws', () => {
+  it.each([
+    ['prepare', 'machine-failed'],
+    ['run', 'harness-failed'],
+  ] as const)('records a throw from %s as a %s void run, reruns the slot, and keeps the run book', async (where, reason) => {
+    const adapter = makeFake(firstAttempt({ throwIn: where }));
+    const book = await runOrder({ ...options(CLEAN_SCRIPT), adapter });
+    expect(book.runs.map((run) => run.void)).toEqual([reason, null, null]);
+    expect(book.runs[0]?.exitStatus).toBe('adapter-threw');
+    expect(book.runs[0]?.transcriptSha256).toBeNull();
+    expect(book.header.status).toBe('complete');
+    expect(adapter.open.size).toBe(0);
+  });
+});
+
 describe('a task set that changes during an order (spec section 9)', () => {
   const changeAtThree: Script = (request) => (request.sequence === 3 ? { taskSetVersion: 'v2' } : {});
 

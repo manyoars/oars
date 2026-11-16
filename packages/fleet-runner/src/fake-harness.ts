@@ -18,6 +18,8 @@ export interface Fault {
   tokens?: TokenCounts;
   /** True: the harness leaves no transcript file. */
   noTranscript?: boolean;
+  /** The adapter call that throws instead of returning, to prove the runner keeps the run book. */
+  throwIn?: 'prepare' | 'run';
 }
 
 export type Script = (request: RunRequest) => Fault;
@@ -42,6 +44,7 @@ export const makeFake = (script: Script = CLEAN): FakeHarness => {
     open,
     prepare: async (request): Promise<Prepared> => {
       const fault = script(request);
+      if (fault.throwIn === 'prepare') throw new Error('fake prepare fault');
       const dir = await mkdtemp(join(tmpdir(), 'fleet-fake-'));
       prepared.push(request.runId);
       open.add(dir);
@@ -59,6 +62,7 @@ export const makeFake = (script: Script = CLEAN): FakeHarness => {
     },
     run: async (folder, request): Promise<RunResult> => {
       const fault = script(request);
+      if (fault.throwIn === 'run') throw new Error('fake run fault');
       const kind = fault.exit ?? 'ok';
       const transcriptPath = fault.noTranscript === true ? null : join(folder.dir, 'transcript.jsonl');
       if (transcriptPath !== null) await writeFile(transcriptPath, `fake transcript of ${request.runId}\n`);

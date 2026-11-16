@@ -84,11 +84,23 @@ export const runOrder = async (options: RunnerOptions): Promise<RunBook> => {
       };
       const request: RunRequest = { runId, sequence, attempt, order, taskId: planned.taskId, category: planned.category, arm: planned.arm, side: planned.side, repeat: planned.repeat, expected };
       const start = clock();
-      const prepared = await adapter.prepare(request);
+      // An adapter that throws must not lose the run book: the throw is a void run (prepare: the machine, run: the harness) and the slot reruns.
+      let prepared: Prepared | null = null;
+      let result: RunResult | null = null;
+      let thrown: VoidReason | null = null;
       try {
-        const result = await adapter.run(prepared, request);
-        const reason = voidReasonOf(expected, prepared, result);
-        const check = reason === null ? await adapter.check(prepared, request) : null;
+        prepared = await adapter.prepare(request);
+      } catch {
+        thrown = 'machine-failed';
+      }
+      try {
+        if (prepared !== null) result = await adapter.run(prepared, request);
+      } catch {
+        thrown = 'harness-failed';
+      }
+      try {
+        const reason = prepared === null || result === null ? thrown : voidReasonOf(expected, prepared, result);
+        const check = reason === null && prepared !== null ? await adapter.check(prepared, request) : null;
         runs.push({
           runId,
           taskId: planned.taskId,
@@ -97,26 +109,26 @@ export const runOrder = async (options: RunnerOptions): Promise<RunBook> => {
           side: planned.side,
           repeat: planned.repeat,
           harness: harness.name,
-          harnessVersion: result.harnessVersion,
+          harnessVersion: result?.harnessVersion ?? harness.version,
           provider: harness.provider,
           region: harness.region,
-          modelId: result.modelId,
+          modelId: result?.modelId ?? order.modelId,
           start: start.toISOString(),
           end: clock().toISOString(),
           check,
-          exitStatus: result.exit.kind,
-          exitCode: result.exit.code,
-          inputTokens: result.tokens.input,
-          cacheTokens: result.tokens.cache,
-          outputTokens: result.tokens.output,
-          transcriptSha256: await sha256OfFile(result.transcriptPath),
-          poolSessionId: result.poolSessionId,
+          exitStatus: result?.exit.kind ?? 'adapter-threw',
+          exitCode: result?.exit.code ?? -1,
+          inputTokens: result?.tokens.input ?? 0,
+          cacheTokens: result?.tokens.cache ?? 0,
+          outputTokens: result?.tokens.output ?? 0,
+          transcriptSha256: await sha256OfFile(result?.transcriptPath ?? null),
+          poolSessionId: result?.poolSessionId ?? null,
           void: reason,
         });
         if (reason === 'task-set-changed') return 'task-set-changed';
         if (reason === null) return 'valid';
       } finally {
-        await prepared.dispose();
+        await prepared?.dispose();
       }
     }
     return 'cap';
