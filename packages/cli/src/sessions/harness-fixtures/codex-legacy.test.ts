@@ -1,0 +1,65 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { afterEach, describe, expect, it } from 'vitest';
+import { captureSession, type Capture } from '../extract.js';
+import { makeRedactor } from '../redact.js';
+import { makeRepoIdentity, makeRepoRoot } from '../repo-root.js';
+import { SOURCES } from '../sources.js';
+import { cleanup, stage, stageCodex } from '../test-support.js';
+import { verifyCaptured, verifySkeleton } from '../verify.js';
+
+afterEach(cleanup);
+
+// Codex, legacy-event shape (t1362): the pre-0.169 session shape, with user_message and agent_message events and function_call records, which the reader still reads (a Legacy-mode rollout and older files); codex.jsonl holds the Paginated shape the 0.169 CLI writes. See harness-fixtures/README.md.
+// A harness release that changes this format turns this one test red.
+const FIXTURE = fileURLToPath(new URL('./codex-legacy.jsonl', import.meta.url));
+
+const capture = (text: string): Capture =>
+  captureSession({
+    text,
+    harness: 'codex',
+    session: 'codex-fixture',
+    project: 'p',
+    rev: 1,
+    at: '2026-06-01T00:00:00Z',
+    bytes: text.length,
+    redact: makeRedactor(),
+    salt: 'salt',
+    sid: 'abcd1234',
+    repoRoot: makeRepoRoot(),
+    repoIdentity: makeRepoIdentity(),
+  });
+
+describe('the Codex reader on its legacy-event fixture', () => {
+  it('parses the fixture into a session record that passes the capture invariants', async () => {
+    const s = stage();
+    const source = SOURCES.find((entry) => entry.name === 'codex');
+    if (source === undefined) throw new Error('no such source');
+    const root = stageCodex(s.root, [{ id: '11111111-1111-4111-8111-111111111111', lines: readFileSync(FIXTURE, 'utf8') }]);
+    const store = await source.open(root);
+    expect(store?.sessions).toHaveLength(1);
+    expect(store?.unreadable).toEqual([]);
+    const [session] = store?.sessions ?? [];
+    const text = session === undefined ? '' : await store?.transcript(session);
+    store?.close();
+    const out = capture(text ?? '');
+    expect([...verifySkeleton(out.skeleton), ...verifyCaptured([out.session], out.tools)].filter((entry) => entry.violations > 0)).toEqual([]);
+    expect({
+      userTurns: out.session.userTurns,
+      assistantTurns: out.session.assistantTurns,
+      models: out.session.models,
+      version: out.session.env.harness,
+      tools: out.tools.map((tool) => [tool.tool, tool.status]),
+      errorLines: out.errorLines.map((entry) => entry.line),
+    }).toEqual({
+      userTurns: 1,
+      assistantTurns: 5,
+      models: { 'gpt-5-codex': 5 },
+      version: '0.167.0',
+      // t1202: a Codex 0.166+ code-mode cell. The `exec` cell settles on its own header (`Script completed`, so ok); the command it ran is a separate Bash call from the
+      // CommandExecution item and keeps its exit code, so the shell outcome is not lost (t890 has nothing to fix for this shape).
+      tools: [['Bash', 'error'], ['Edit', 'ok'], ['Bash', 'ok'], ['Bash', 'error']],
+      errorLines: ['make: *** No rule to make target', 'make: *** No rule to make target all'],
+    });
+  });
+});

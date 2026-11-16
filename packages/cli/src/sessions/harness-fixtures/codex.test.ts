@@ -10,7 +10,8 @@ import { verifyCaptured, verifySkeleton } from '../verify.js';
 
 afterEach(cleanup);
 
-// Codex: a made-up session (no real prompt, path, name, or key) in the shape the reader expects; see harness-fixtures/README.md.
+// Codex: a made-up session (no real prompt, path, name, or key) in the shape the reader expects, record for record the Paginated rollout a Codex 0.169 CLI writes
+// (the record types, and the fields each carries, follow a real 0.169 file; every value is invented); see harness-fixtures/README.md.
 // A harness release that changes this format turns this one test red.
 const FIXTURE = fileURLToPath(new URL('./codex.jsonl', import.meta.url));
 
@@ -58,8 +59,12 @@ describe('the Codex reader on its fixture', () => {
       version: '0.169.0',
       // t1202: a Codex 0.166+ code-mode cell. The `exec` cell settles on its own header (`Script completed`, so ok); the command it ran is a separate Bash call from the
       // CommandExecution item and keeps its exit code, so the shell outcome is not lost (t890 has nothing to fix for this shape).
-      tools: [['Bash', 'error'], ['Edit', 'ok'], ['Bash', 'ok'], ['Bash', 'error']],
-      errorLines: ['make: *** No rule to make target', 'make: *** No rule to make target all'],
+      // t1362: this fixture is the Paginated rollout the 0.169 CLI writes (`history_mode` `paginated`): the prompt and both replies are `item_completed`
+      // UserMessage and AgentMessage items (no `user_message` or `agent_message` event), the code-mode `exec` cell and its two CommandExecution items are the only
+      // calls, and the usage comes from the `token_count` events (the `token_usage_record` lines beside them are not read). The shell call that exits 2 and the
+      // patch edit of the pre-0.169 shape stay pinned in codex-legacy.test.ts.
+      tools: [['Bash', 'ok'], ['Bash', 'error'], ['Bash', 'ok']],
+      errorLines: ['make: *** No rule to make target all'],
     });
   });
 });
