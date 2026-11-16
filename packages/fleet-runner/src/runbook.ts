@@ -65,6 +65,7 @@ export interface RunRecord {
   cacheTokens: number;
   outputTokens: number;
   transcriptSha256: string | null;
+  /** The session id the run's transcript is stored under in its side and arm's store folder; null for a void run. */
   poolSessionId: string | null;
   void: VoidReason | null;
 }

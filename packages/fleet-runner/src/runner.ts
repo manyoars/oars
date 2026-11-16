@@ -16,6 +16,11 @@ export interface RunnerOptions {
   /** Injected so a run book's bytes depend on the script, not the wall clock. */
   clock: () => Date;
   operator: string;
+  /**
+   * Copies a valid run's transcript out of its temp folder (which `dispose` deletes) and returns the session id it will be stored under. A throw voids the run as
+   * `transcript-missing`. Without it the run book's pool session id is whatever the adapter reported, else null.
+   */
+  stage?: (request: RunRequest, transcriptPath: string) => Promise<string>;
 }
 
 const pinsEqual = (found: ToolPin[], wanted: ToolPin[]): boolean => {
@@ -119,6 +124,15 @@ export const runOrder = async (options: RunnerOptions): Promise<RunBook> => {
             reason = 'check-script-failed';
           }
         }
+        let sessionId: string | null = null;
+        const transcriptPath = result?.transcriptPath ?? null;
+        if (reason === null && options.stage !== undefined && transcriptPath !== null) {
+          try {
+            sessionId = await options.stage(request, transcriptPath);
+          } catch {
+            reason = 'transcript-missing';
+          }
+        }
         runs.push({
           runId,
           taskId: planned.taskId,
@@ -140,7 +154,7 @@ export const runOrder = async (options: RunnerOptions): Promise<RunBook> => {
           cacheTokens: result?.tokens.cache ?? 0,
           outputTokens: result?.tokens.output ?? 0,
           transcriptSha256,
-          poolSessionId: result?.poolSessionId ?? null,
+          poolSessionId: reason === null ? (sessionId ?? result?.poolSessionId ?? null) : null,
           void: reason,
         });
         if (reason === 'task-set-changed') return 'task-set-changed';
@@ -156,7 +170,7 @@ export const runOrder = async (options: RunnerOptions): Promise<RunBook> => {
     const outcome = await attemptSlot(planned);
     if (outcome === 'task-set-changed') {
       // Spec section 9: a changed task set voids the whole order. Nothing is rerun (a real adapter would change again and burn the cap); a new order on the new version is the buyer's call.
-      runs = runs.map((run) => ({ ...run, check: null, void: 'task-set-changed' }));
+      runs = runs.map((run) => ({ ...run, check: null, poolSessionId: null, void: 'task-set-changed' }));
       valid.clear();
       voided = true;
       break;
