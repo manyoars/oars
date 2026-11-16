@@ -31,6 +31,7 @@ describe('parseOrder', () => {
     expect(parseOrder(JSON.stringify(rest), FLEET).repeats).toBe(3);
   });
 
+  // The order has one top-level taskSetVersion, and a side's own version must equal it: that single version is what enforces "no mixed versions".
   it('rejects a comparison that mixes task-set versions', () => {
     expect(reject(comparisonText({ sides: [{ name: 'main', pin: 'x', taskSetVersion: 'v2' }] }))).toMatch(/mixes task-set versions/);
   });
