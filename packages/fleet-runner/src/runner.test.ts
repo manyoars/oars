@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { makeFake, type Fault, type Script } from './fake-harness.js';
 import type { RunRequest } from './harness.js';
@@ -61,9 +63,21 @@ describe('void detection (spec section 9)', () => {
   });
 
   it('hashes the transcript and tolerates a missing one', async () => {
-    const book = await runOrder(options(firstAttempt({ noTranscript: true, exit: 'crash' })));
+    // The expected hash comes from the bytes on disk at check time, before the folder is disposed, so it does not depend on the runner.
+    const inner = makeFake(firstAttempt({ noTranscript: true, exit: 'crash' }));
+    const onDisk = new Map<string, Buffer>();
+    const adapter = {
+      ...inner,
+      check: async (folder: Parameters<typeof inner.check>[0], request: RunRequest) => {
+        onDisk.set(request.runId, await readFile(join(folder.dir, 'transcript.jsonl')));
+        return inner.check(folder, request);
+      },
+    };
+    const book = await runOrder({ ...options(CLEAN_SCRIPT), adapter });
     expect(book.runs[0]?.transcriptSha256).toBeNull();
-    expect(book.runs[1]?.transcriptSha256).toBe(createHash('sha256').update(`fake transcript of ${book.runs[1]?.runId ?? ''}\n`).digest('hex'));
+    const second = book.runs[1];
+    expect(onDisk.get(second?.runId ?? '')).toBeDefined();
+    expect(second?.transcriptSha256).toBe(createHash('sha256').update(onDisk.get(second?.runId ?? '') ?? '').digest('hex'));
   });
 
   it('cleans every temp folder, valid or void', async () => {
@@ -156,5 +170,37 @@ describe('the run book bytes', () => {
     const text = serializeRunBook(await runOrder(options(CLEAN_SCRIPT)));
     expect(text).not.toMatch(/signature/i);
     expect(text).not.toContain('fake transcript');
+  });
+});
+
+describe('review lows of t1354', () => {
+  it('records a throw from check as a check-script-failed void run and goes on', async () => {
+    const adapter = makeFake(firstAttempt({ throwIn: 'check' }));
+    const book = await runOrder({ ...options(CLEAN_SCRIPT), adapter });
+    expect(book.runs.map((run) => run.void)).toEqual(['check-script-failed', null, null]);
+    expect(book.runs[0]?.check).toBeNull();
+    expect(book.header.status).toBe('complete');
+    expect(adapter.open.size).toBe(0);
+  });
+
+  it('records a clean run with no transcript as a transcript-missing void run and reruns it', async () => {
+    const book = await runOrder(options(firstAttempt({ noTranscript: true })));
+    expect(book.runs.map((run) => run.void)).toEqual(['transcript-missing', null, null]);
+    expect(book.runs[0]?.transcriptSha256).toBeNull();
+    expect(book.header.status).toBe('complete');
+  });
+
+  it('records a transcript that cannot be read as a transcript-missing void run', async () => {
+    const adapter = makeFake(firstAttempt({}));
+    const run = adapter.run;
+    adapter.run = async (prepared, request) => ({ ...(await run(prepared, request)), transcriptPath: request.sequence === 1 ? `${prepared.dir}/gone.jsonl` : `${prepared.dir}/transcript.jsonl` });
+    const book = await runOrder({ ...options(CLEAN_SCRIPT), adapter });
+    expect(book.runs.map((entry) => entry.void)).toEqual(['transcript-missing', null, null]);
+  });
+
+  it('keeps no check on a run voided with the whole order (a void run has check null)', async () => {
+    const book = await runOrder(options((request) => (request.sequence === 2 ? { taskSetVersion: 'changed' } : {})));
+    expect(book.header.status).toBe('voided');
+    expect(book.runs.every((run) => run.void === 'task-set-changed' && run.check === null)).toBe(true);
   });
 });

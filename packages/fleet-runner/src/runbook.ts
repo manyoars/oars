@@ -11,7 +11,9 @@ export type VoidReason =
   | 'harness-version-changed'
   | 'model-changed'
   | 'tool-pin-mismatch'
-  | 'machine-failed';
+  | 'machine-failed'
+  | 'check-script-failed'
+  | 'transcript-missing';
 
 export interface ShortCell {
   taskId: string;
@@ -55,7 +57,7 @@ export interface RunRecord {
   modelId: string;
   start: string;
   end: string;
-  /** Null for a void run: its check is not read. */
+  /** Null for every void run, including one voided with the whole order: a void run's check is not read, and one read before the order voided is dropped. */
   check: CheckResult | null;
   exitStatus: string;
   exitCode: number;
@@ -63,6 +65,7 @@ export interface RunRecord {
   cacheTokens: number;
   outputTokens: number;
   transcriptSha256: string | null;
+  /** The session id the run's transcript is stored under in its side and arm's store folder; null for a void run. */
   poolSessionId: string | null;
   void: VoidReason | null;
 }

@@ -349,8 +349,15 @@ describe('run', () => {
       const host = new EventEmitter();
       const raised: string[] = [];
       const fakeHost: HostProcess = { pid: 4242, once: (name, listener) => host.once(name, listener), kill: (_pid, signal) => raised.push(signal) };
-      // A timer that never fires: only the handler can end the stub.
-      const adapter = makeClaudeBedrock(r.settings, { env: ENV, spawn: makeNodeSpawn(() => () => undefined, fakeHost) });
+      // The harness call's timer never fires, so only the handler can end the stub; setup steps keep a real limit.
+      const timer: StartTimer = (ms, fire) => {
+        if (ms === r.settings.timeLimitMs) return () => undefined;
+        const handle = setTimeout(fire, ms);
+        return () => {
+          clearTimeout(handle);
+        };
+      };
+      const adapter = makeClaudeBedrock(r.settings, { env: ENV, spawn: makeNodeSpawn(timer, fakeHost) });
       const req = request('no-tool', null);
       const prepared = await adapter.prepare(req);
       const seen = join(prepared.configDir, 'stub-seen.json');
