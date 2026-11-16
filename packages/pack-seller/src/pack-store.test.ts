@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -80,6 +80,25 @@ describe('the pack store catalog', () => {
     const page = (await world.store()).catalog.find('alpha');
     expect(JSON.stringify(page)).not.toContain('keyId');
     expect(JSON.stringify(page)).not.toContain('objections');
+  });
+
+  it('shows only the named pack.json fields: an extra field, the key id, and the objections hash stay off the page', async () => {
+    const world = await makeWorld();
+    const file = join(world.inputs.packsDir, 'alpha', 'preview', 'pack.json');
+    const written = (await world.store()).catalog.find('alpha')?.pack;
+    writeFileSync(file, JSON.stringify({ ...written, leaked: 'hunter2', keyId: 'k-1', objections: 'h-1' }));
+    const page = (await world.store()).catalog.find('alpha');
+    expect(page?.pack).toMatchObject({ size: 5, minTurns: 1 });
+    expect(JSON.stringify(page)).not.toContain('leaked');
+    expect(JSON.stringify(page)).not.toContain('hunter2');
+    expect(JSON.stringify(page)).not.toContain('keyId');
+    expect(JSON.stringify(page)).not.toContain('objections');
+  });
+
+  it('refuses a manifest.jsonl row that is not JSON, naming the file and the pack', async () => {
+    const world = await makeWorld();
+    appendFileSync(join(world.inputs.packsDir, 'alpha', 'preview', 'manifest.jsonl'), '{ not json' + '\n');
+    await expect(world.store()).rejects.toThrow(new ConfigError('manifest.jsonl of pack alpha is not valid JSON.'));
   });
 
   it('answers undefined for a pack it does not hold', async () => {

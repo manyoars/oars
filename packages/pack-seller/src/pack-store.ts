@@ -70,11 +70,9 @@ export interface PackPage extends PackListing {
   terms: RowTerms[];
 }
 
-const jsonLines = (text: string): unknown[] =>
-  text
-    .split('\n')
-    .filter((line) => line.trim() !== '')
-    .map((line): unknown => JSON.parse(line));
+const nonEmptyLines = (text: string): string[] => text.split(String.fromCharCode(10)).filter((line) => line.trim() !== '');
+
+const jsonLines = (text: string): unknown[] => nonEmptyLines(text).map((line): unknown => JSON.parse(line));
 
 /** Parses one of a pack's JSON files; a file that is not JSON is a `ConfigError` naming the file and the pack, never a bare `SyntaxError`. */
 const parseJson = (text: string, file: string, packId: string): unknown => {
@@ -85,6 +83,9 @@ const parseJson = (text: string, file: string, packId: string): unknown => {
   }
 };
 
+/** The rows of a pack's `manifest.jsonl`; a row that is not JSON is a `ConfigError` naming the file and the pack. */
+const manifestRows = (text: string, packId: string): unknown[] => nonEmptyLines(text).map((line): unknown => parseJson(line, 'manifest.jsonl', packId));
+
 const readText = async (file: string): Promise<string | undefined> => {
   try {
     return await readFile(file, 'utf8');
@@ -94,15 +95,39 @@ const readText = async (file: string): Promise<string | undefined> => {
   }
 };
 
-/** `pack.json` as the page shows it: every field but the operator's key id and objections hash. */
-export type PackSummary = Partial<Record<string, unknown>>;
+/** The fields `buildPack` writes to `pack.json` for a reader; the operator's `keyId` and `objections` hash are left out. */
+export interface PackSummary {
+  built?: unknown;
+  size?: unknown;
+  seed?: unknown;
+  listed?: unknown;
+  minTurns?: unknown;
+  reasoning?: unknown;
+  skeletonOnly?: unknown;
+  olderThanDays?: unknown;
+  redactionVersion?: unknown;
+  counts?: unknown;
+  bytes?: unknown;
+  elapsedMs?: unknown;
+}
 
+/** An allowlist: a field `buildPack` adds to `pack.json` later stays off the public page until it is named here. */
 const summaryOf = (record: unknown): PackSummary => {
-  const shown: PackSummary = {};
-  if (typeof record === 'object' && record !== null) {
-    for (const [name, value] of Object.entries(record)) if (name !== 'keyId' && name !== 'objections') shown[name] = value;
-  }
-  return shown;
+  const pick = (name: keyof PackSummary): unknown => fieldOf(record, name);
+  return {
+    built: pick('built'),
+    size: pick('size'),
+    seed: pick('seed'),
+    listed: pick('listed'),
+    minTurns: pick('minTurns'),
+    reasoning: pick('reasoning'),
+    skeletonOnly: pick('skeletonOnly'),
+    olderThanDays: pick('olderThanDays'),
+    redactionVersion: pick('redactionVersion'),
+    counts: pick('counts'),
+    bytes: pick('bytes'),
+    elapsedMs: pick('elapsedMs'),
+  };
 };
 
 /** `<packId>/listing.json`: the title and the build options of one pack. */
@@ -189,7 +214,7 @@ const loadPages = async (inputs: PackInputs): Promise<{ pages: Map<string, PackP
     const preview = join(inputs.packsDir, packId, PREVIEW_DIR);
     const [packText, censusText, manifestText, card] = await Promise.all(['pack.json', 'census.json', 'manifest.jsonl', 'README.md'].map((name) => readText(join(preview, name))));
     if (packText === undefined || censusText === undefined || manifestText === undefined) throw new ConfigError(`Pack ${packId} has no built preview (pack.json, census.json, manifest.jsonl).`);
-    const terms = jsonLines(manifestText).map(
+    const terms = manifestRows(manifestText, packId).map(
       (row): RowTerms => ({
         sourceLicense: fieldOf(row, 'sourceLicense'),
         harnessTerms: fieldOf(row, 'harnessTerms'),
