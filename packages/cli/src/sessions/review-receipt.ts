@@ -16,7 +16,7 @@ const SCRIPT = String.raw`(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?`;
 
 /**
  * The commands a receipt lists, by family: each pattern is read against one command's `run` from its first word, so a flag is never in it. A formatter lists only when the
- * call shows its check flag (`FORMAT_CHECK_TEMPLATE`), because `prettier` and `cargo fmt` also rewrite files. Anything else is counted, not listed.
+ * call shows its check flag (`FORMAT_CHECK_FLAG`), because `prettier` and `cargo fmt` also rewrite files. Anything else is counted, not listed.
  */
 export const VERIFICATION_FAMILIES: ReadonlyArray<{ family: string; pattern: RegExp }> = [
   { family: 'test', pattern: new RegExp(`^(?:${SCRIPT}test(?::\\S+)?|${RUNNER}(?:vitest|jest|pytest|mocha)|go\\s+test|cargo\\s+(?:test|nextest)|dotnet\\s+test|mvn|mvnw|gradle|gradlew|just\\s+(?:test|check))(?:\\s|$)`) },
@@ -26,8 +26,8 @@ export const VERIFICATION_FAMILIES: ReadonlyArray<{ family: string; pattern: Reg
   { family: 'format check', pattern: new RegExp(`^(?:${RUNNER}(?:prettier|ruff\\s+format|black)|cargo\\s+fmt)(?:\\s|$)`) },
 ];
 
-/** The check flag a formatter's template keeps (`prettier --check <ident>`), or the `--` tail of `cargo fmt -- --check`, whose flag capture turns into a slot. */
-export const FORMAT_CHECK_TEMPLATE = /(?:^|\s)(?:--check|--list-different)(?:\s|$)|^cargo fmt -- <text>$/;
+/** The check flag a formatter's template keeps (`prettier --check <ident>`). A flag capture does not know shows as `<flag>`, so it is never seen here. */
+export const FORMAT_CHECK_FLAG = /(?:^|\s)(--check|--list-different)(?:\s|$)/;
 
 /** The family of one command's `run`; a formatter counts only when `checked` (its template shows a check flag). */
 export const familyOf = (run: string, checked = true): string | undefined => {
@@ -123,18 +123,18 @@ export const reviewReceiptOf = (store: Store, session: SessionObservation, home:
     const templates = call.templates ?? [];
     for (const [index, segment] of segmentsOf(call).entries()) {
       // A template lines up with a segment only when the call keeps one of each.
-      const checked = templates.length === call.segments?.length && FORMAT_CHECK_TEMPLATE.test(templates[index] ?? '');
+      const flag = templates.length === call.segments?.length ? FORMAT_CHECK_FLAG.exec(templates[index] ?? '')?.[1] : undefined;
       // The template that lines up with this segment, else any template of the call, decides whether a secret flag was on the line.
       const secret = (templates.length === call.segments?.length ? [templates[index] ?? ''] : templates).some((template) => SECRET_TEMPLATE.test(template));
       const scrubbed = scrub(segment.run, home);
       const run = secret ? programOf(scrubbed) : scrubbed;
       // The ellipsis of a cut command is not part of the command that runs.
-      const family = familyOf(run.replace(/…$/, ''), checked);
+      const family = familyOf(run.replace(/…$/, ''), flag !== undefined);
       if (family === undefined) {
         other += 1;
         continue;
       }
-      rows.push({ order: position + 1, family, command: family === 'format check' ? `${run} --check` : run, result: resultOf(call, index, codex) });
+      rows.push({ order: position + 1, family, command: family === 'format check' && flag !== undefined ? `${run} ${flag}` : run, result: resultOf(call, index, codex) });
     }
   }
   return { session: session.session, date: session.tsFirst?.slice(0, 10) ?? null, harness: harnessOf(session), model: modelOf(session), calls: calls.length, rows, other };
