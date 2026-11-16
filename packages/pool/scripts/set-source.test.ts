@@ -85,6 +85,12 @@ const fake = (rows: unknown[]): Fake => {
 describe('the set-source command', () => {
   const full = ['--account', 'acct_1', '--source', 'operator-fleet', '--by', 'owner', '--reason', 'the fleet'];
 
+  it('trims the name and reason in the dry-run message as the audit line does', async () => {
+    const { io, printed } = fake([{ source: 'user' }]);
+    await main(['--account', 'acct_1', '--source', 'operator-fleet', '--by', ' owner ', '--reason', ' the fleet '], io);
+    expect(printed.join(' ')).toContain('(by owner: the fleet)');
+  });
+
   it('says the before and after value without --confirm, and writes nothing', async () => {
     const { io, calls, printed } = fake([{ source: 'user' }]);
     expect(await main(full, io)).toBe(0);
