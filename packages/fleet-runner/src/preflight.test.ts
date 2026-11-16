@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { SpawnOutcome, SpawnSpec } from './claude-bedrock.js';
+import type { EnvMap, SpawnOutcome, SpawnSpec } from './claude-bedrock.js';
 import { main } from './preflight.js';
 import { serializeRunBook } from './runbook.js';
 import { signRunBook } from './sign.js';
@@ -62,9 +62,9 @@ const stubs = (tools: Tools): { spawn: (spec: SpawnSpec) => Promise<SpawnOutcome
 };
 
 let binDir = '';
-const env = (): Record<string, string> => ({ AWS_REGION: 'us-east-1', AWS_BEARER_TOKEN_BEDROCK: MARKER, PATH: binDir });
+const env = (): EnvMap => ({ AWS_REGION: 'us-east-1', AWS_BEARER_TOKEN_BEDROCK: MARKER, PATH: binDir });
 
-const run = async (tools: Tools, given?: Record<string, string>, extra: string[] = [], nodeVersion = '24.1.0'): Promise<{ code: number; lines: string[]; calls: SpawnSpec[] }> => {
+const run = async (tools: Tools, given?: EnvMap, extra: string[] = [], nodeVersion = '24.1.0'): Promise<{ code: number; lines: string[]; calls: SpawnSpec[] }> => {
   const { spawn, calls } = stubs(tools);
   const lines: string[] = [];
   const code = await main(['--taskset', taskSet, '--fleet', fleet, '--fixture-source', 'https://example.invalid/fixture.git', ...extra], (line) => lines.push(line), { env: given ?? env(), spawn, nodeVersion });
@@ -114,6 +114,21 @@ describe('preflight', () => {
     const noNpm = await run(GOOD, { AWS_REGION: 'us-east-1', AWS_BEARER_TOKEN_BEDROCK: MARKER, PATH: root });
     expect(noNpm.code).toBe(1);
     expect(lineOf(noNpm.lines, 'npm')).toMatch(/^missing/);
+  });
+
+  it('says wrong when git starts but exits non-zero', async () => {
+    expect(lineOf((await run({ ...GOOD, git: outcome('', 3) })).lines, 'git')).toMatch(/^wrong .*exited 3/);
+  });
+
+  it('says wrong with the reason when the task set cannot load, skips only the fixture check, and runs the rest', async () => {
+    rmSync(join(taskSet, 'manifest.json'));
+    const { code, lines, calls } = await run(GOOD);
+    expect(code).toBe(1);
+    expect(lineOf(lines, 'task set')).toMatch(/^wrong .*manifest\.json/);
+    expect(lines.some((line) => line.includes('fixture'))).toBe(false);
+    expect(calls.some((call) => call.args.includes('ls-remote'))).toBe(false);
+    expect(lineOf(lines, 'AWS_REGION')).toMatch(/^ok/);
+    expect(lineOf(lines, 'run book')).toMatch(/^(ok|missing|wrong)/);
   });
 
   it('says wrong and names the file when a task lacks its prompt, check, or setup file', async () => {
