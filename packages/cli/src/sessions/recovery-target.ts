@@ -26,14 +26,14 @@ export interface TargetedCall {
 export const isRetry = (failed: TargetedCall, next: TargetedCall): boolean =>
   failed.targetClass !== undefined && failed.targetClass !== 'none' && failed.action === next.action && failed.targetClass === next.targetClass;
 
-/** The call right after the one at `at` in the same prompt and the same run, or null when none follows. It is the first of `recoveryCallsOf`'s scan. */
-export const nextCallOf = <T extends Followed>(calls: readonly T[], at: number): T | null => {
+/** The index of the call right after the one at `at` in the same prompt and the same run, or null when none follows. It is the first of `recoveryCallsOf`'s scan. */
+export const nextIndexOf = (calls: readonly Followed[], at: number): number | null => {
   const failed = calls[at];
   if (failed === undefined) return null;
   for (let index = at + 1; index < calls.length; index += 1) {
     const call = calls[index];
     if (call === undefined || call.side !== failed.side) continue;
-    return call.prompt === failed.prompt ? call : null;
+    return call.prompt === failed.prompt ? index : null;
   }
   return null;
 };

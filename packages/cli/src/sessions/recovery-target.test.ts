@@ -6,7 +6,7 @@ import { isPromptClass, poolOf, RECOVERY_CLASS } from './cells.js';
 import { motifName } from './motif.js';
 import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from './pool-fixture.js';
 import { skeletonOf } from './pool-wire.js';
-import { isRetry, nextCallOf, nextStepOf, parseRecoveryTargetClass, RECOVERY_TARGET_CLASS, recoveryTargetClass, RETRY } from './recovery-target.js';
+import { isRetry, nextIndexOf, nextStepOf, parseRecoveryTargetClass, RECOVERY_TARGET_CLASS, recoveryTargetClass, RETRY } from './recovery-target.js';
 import { RECOVERY_TARGET_METHOD } from './read.js';
 import { deriveRecoveryEdges } from './read-recovery-edge.js';
 import { deriveRecoveryTarget, retryToppedOf } from './read-recovery-target.js';
@@ -68,10 +68,10 @@ describe('the next call', () => {
     { side: false, prompt: 1, status: 'ok' },
   ] as const;
   it('is the next of the same run, and none when the prompt ended or nothing follows', () => {
-    expect(nextCallOf([calls[0], calls[1], { side: false, prompt: 0, status: 'ok' }, calls[2]], 0)).toEqual({ side: false, prompt: 0, status: 'ok' });
-    expect(nextCallOf(calls, 0)).toBeNull();
-    expect(nextCallOf(calls, 2)).toBeNull();
-    expect(nextCallOf(calls, 9)).toBeNull();
+    expect(nextIndexOf([calls[0], calls[1], { side: false, prompt: 0, status: 'ok' }, calls[2]], 0)).toBe(2);
+    expect(nextIndexOf(calls, 0)).toBeNull();
+    expect(nextIndexOf(calls, 2)).toBeNull();
+    expect(nextIndexOf(calls, 9)).toBeNull();
   });
 });
 

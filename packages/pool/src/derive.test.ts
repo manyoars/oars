@@ -1,5 +1,5 @@
 // What bundleOf holds, pinned on stored cells without a pool: the bucket's own day is the bundle's day, whatever the version-free cells of other versions say, and a read sums served cells only.
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { recoveryClass, type Cell } from '../../cli/src/sessions/cells.js';
 import { classMotif } from '../../cli/src/sessions/motif.js';
 import { RECOVERY_TARGET_METHOD, type Read } from '../../cli/src/sessions/read.js';
@@ -7,7 +7,15 @@ import { recoveryTargetClass } from '../../cli/src/sessions/recovery-target.js';
 import { recoveryEdgesOf } from '../../cli/src/sessions/recall-next.js';
 import { bucketPrefix, bundleOf } from './derive.js';
 import { DEFAULT_FLOORS } from './floors.js';
+import type * as ReadRecoveryTarget from '../../cli/src/sessions/read-recovery-target.js';
 import type { StoredPool } from './stored.js';
+
+// The same-target derive can be switched off for one test, to build the bundle as it was before that read existed.
+const off = vi.hoisted(() => ({ value: false }));
+vi.mock('../../cli/src/sessions/read-recovery-target.js', async (importOriginal) => {
+  const real = await importOriginal<typeof ReadRecoveryTarget>();
+  return { ...real, deriveRecoveryTarget: (...args: Parameters<(typeof ReadRecoveryTarget)['deriveRecoveryTarget']>) => (off.value ? [] : real.deriveRecoveryTarget(...args)), retryToppedOf: (...args: Parameters<(typeof ReadRecoveryTarget)['retryToppedOf']>) => (off.value ? [] : real.retryToppedOf(...args)) };
+});
 
 const cellOf = (frameBucket: string, day: string, motifId: string): Cell => ({ motifId, frameBucket, grain: 'day', day, sessions: 5, clusters: 5, ok: 0, failed: 0, tokens: 0, durationMs: 0, exposed: false });
 
@@ -85,9 +93,11 @@ describe('the same-target recovery read in a bundle', () => {
     expect(sameTarget(bundle)).toEqual([]);
     expect(bundle.reads.map((entry) => entry.method)).not.toContain(RECOVERY_TARGET_METHOD.name);
     expect(bundle.reads.filter((entry) => entry.family === 'recovery')).toHaveLength(1);
-    // Byte identity of what the edge derive says: the same read, key for key, as before the same-target read existed.
-    const [only] = bundle.reads.filter((entry) => entry.family === 'recovery');
-    expect(JSON.stringify([only?.method, only?.slice, only?.value, only?.n, only?.clusters])).toBe(JSON.stringify(['next-action-after-failure', { action: 'shell.exec', errorCode: '429', next: 'file.read', week: '2026-10-12' }, { followed: 5, of: 5, share: 1 }, 5, 5]));
+    // Byte identity: the bundle is the same, byte for byte, as one built with the same-target derive switched off.
+    off.value = true;
+    const without = bundleOf('claude-code', '2.1.314', { cells: [cell], environment: [], motifs: [edge], strata: [] }, DEFAULT_FLOORS);
+    off.value = false;
+    expect(JSON.stringify(bundle)).toBe(JSON.stringify(without));
     expect(bundle.cells.map((one) => one.motifId)).toEqual([edge.motifId]);
   });
 });

@@ -6,7 +6,7 @@ import { classMotif, motifName, motifsOf, stepsOfCall, type CountedStep, type Mo
 import { bucketOf } from './pool-wire.js';
 import { CALL_SHAPE_METHOD, cellRef, contentHash, METHODS, RECOVERY_EDGE_METHOD } from './read.js';
 import { recoveryCallsOf } from './recovery-calls.js';
-import { nextCallOf, nextStepOf, RECOVERY_TARGET_CLASS, recoveryTargetClass } from './recovery-target.js';
+import { nextIndexOf, nextStepOf, RECOVERY_TARGET_CLASS, recoveryTargetClass } from './recovery-target.js';
 import { NO_RECALLS, type PlacedStep, type RecallGraph } from './recall-consequence.js';
 import { ERROR_CODES, EXTRACTOR_VERSION, harnessOf, observesUsage, type ErrorObservation, type Frame, type Harness, type PromptObservation, type SessionObservation, type ToolObservation } from './schema.js';
 import type { Store } from './store.js';
@@ -352,9 +352,11 @@ export const cellFold = (graph: RecallGraph = NO_RECALLS): CellFold => {
       // The same, keyed by the failed call's target class (`recovery-target.ts`): a week cell per (code, failed action, target class, next step), counting the failed calls the step followed (`failed`) and those where that next call
       // succeeded (`ok`). A call with no target class, or none followed, makes no cell.
       for (const [at, tool] of line.entries()) {
-        const next = nextCallOf(calls, at);
-        const nextTool = next === null ? undefined : line[calls.indexOf(next)];
-        if (calls[at]?.status !== 'error' || tool.errorCode === undefined || tool.targetClass === undefined || tool.targetClass === 'none' || next === null || nextTool === undefined) continue;
+        if (calls[at]?.status !== 'error' || tool.errorCode === undefined || tool.targetClass === undefined || tool.targetClass === 'none') continue;
+        const nextAt = nextIndexOf(calls, at);
+        const next = nextAt === null ? undefined : calls[nextAt];
+        const nextTool = nextAt === null ? undefined : line[nextAt];
+        if (next === undefined || nextTool === undefined) continue;
         const code = ERROR_CODES.has(tool.errorCode) ? tool.errorCode : 'other';
         const failedAction = calls[at].steps[0]?.action ?? 'other';
         const nextAction = next.steps[0]?.action ?? 'other';
