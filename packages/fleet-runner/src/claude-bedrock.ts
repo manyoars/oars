@@ -143,40 +143,83 @@ const killTree = (pid: number | undefined): void => {
   }
 };
 
-export const nodeSpawn: Spawn = (spec) =>
-  new Promise((resolve) => {
-    let stdout = '';
-    let stderr = '';
-    let timedOut = false;
-    let settled = false;
-    const finish = (outcome: SpawnOutcome): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(outcome);
-    };
-    // No shell: a `.cmd` wrapper would be the process killed on a timeout while the real program kept running (the constructor refuses one). Off Windows the child leads its own
-    // process group so a timeout can end the whole group.
-    const child = spawnChild(spec.command, spec.args, { cwd: spec.cwd, env: spec.env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
-    const timer = setTimeout(() => {
-      timedOut = true;
-      killTree(child.pid);
-    }, spec.timeoutMs);
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString('utf8');
+/** Starts the harness time limit; calls `fire` after `ms` and returns a function that cancels it. Injected so a test fires it at a chosen moment, not on the wall clock. */
+export type StartTimer = (ms: number, fire: () => void) => () => void;
+
+const wallClockTimer: StartTimer = (ms, fire) => {
+  const handle = setTimeout(fire, ms);
+  return () => {
+    clearTimeout(handle);
+  };
+};
+
+/** The part of `process` the runner's exit handlers use; a test passes an emitter of its own. */
+export interface HostProcess {
+  readonly pid: number;
+  once(event: 'SIGINT' | 'SIGTERM' | 'exit', listener: () => void): unknown;
+  kill(pid: number, signal: 'SIGINT' | 'SIGTERM'): unknown;
+}
+
+export const makeNodeSpawn = (startTimer: StartTimer, host: HostProcess = process): Spawn => {
+  // Children off Windows lead their own process group, so a Ctrl-C or SIGTERM that ends the runner would not reach them: end each one here, or it keeps drawing credit.
+  const live = new Set<number>();
+  let handlersInstalled = false;
+  const killLive = (): void => {
+    for (const pid of live) killTree(pid);
+    live.clear();
+  };
+  const installHandlers = (): void => {
+    if (handlersInstalled) return;
+    handlersInstalled = true;
+    host.once('exit', killLive);
+    for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+      host.once(signal, () => {
+        killLive();
+        host.kill(host.pid, signal);
+      });
+    }
+  };
+  return (spec) =>
+    new Promise((resolve) => {
+      let stdout = '';
+      let stderr = '';
+      let timedOut = false;
+      let settled = false;
+      let cancelTimer: () => void = () => undefined;
+      const finish = (outcome: SpawnOutcome): void => {
+        if (settled) return;
+        settled = true;
+        cancelTimer();
+        resolve(outcome);
+      };
+      installHandlers();
+      // No shell: a `.cmd` wrapper would be the process killed on a timeout while the real program kept running (the constructor refuses one). Off Windows the child leads its own
+      // process group so a timeout can end the whole group.
+      const child = spawnChild(spec.command, spec.args, { cwd: spec.cwd, env: spec.env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
+      if (child.pid !== undefined) live.add(child.pid);
+      cancelTimer = startTimer(spec.timeoutMs, () => {
+        timedOut = true;
+        killTree(child.pid);
+      });
+      child.stdout.on('data', (chunk: Buffer) => {
+        stdout += chunk.toString('utf8');
+      });
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString('utf8');
+      });
+      child.on('error', (error: NodeJS.ErrnoException) => {
+        finish({ exitCode: null, signal: null, stdout, stderr, timedOut, errorCode: error.code ?? 'UNKNOWN' });
+      });
+      child.on('close', (exitCode, signal) => {
+        if (child.pid !== undefined) live.delete(child.pid);
+        finish({ exitCode, signal, stdout, stderr, timedOut, errorCode: null });
+      });
+      child.stdin.on('error', () => undefined);
+      child.stdin.end(spec.stdin ?? '');
     });
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString('utf8');
-    });
-    child.on('error', (error: NodeJS.ErrnoException) => {
-      finish({ exitCode: null, signal: null, stdout, stderr, timedOut, errorCode: error.code ?? 'UNKNOWN' });
-    });
-    child.on('close', (exitCode, signal) => {
-      finish({ exitCode, signal, stdout, stderr, timedOut, errorCode: null });
-    });
-    child.stdin.on('error', () => undefined);
-    child.stdin.end(spec.stdin ?? '');
-  });
+};
+
+export const nodeSpawn: Spawn = makeNodeSpawn(wallClockTimer);
 
 // What a process needs to start. HOME and the application-data folders are not here: they point into the run's own temp folder.
 const START_NAMES = ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'windir', 'ComSpec', 'TEMP', 'TMP', 'TMPDIR'];

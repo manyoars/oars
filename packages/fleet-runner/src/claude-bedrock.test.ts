@@ -1,13 +1,14 @@
 // Proof of the Claude Code on Bedrock adapter against a stub `claude` (src/stub-claude.mjs), a tiny git repository made here, and a stub `npm`. No test starts the real
 // `claude`, opens a network connection, or reads an AWS credential: the credential is a made-up string handed in through the injected environment.
 import { execFileSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { makeClaudeBedrock, nodeSpawn, type ClaudeBedrockSettings, type Spawn, type ToolUnderTest } from './claude-bedrock.js';
+import { makeClaudeBedrock, makeNodeSpawn, nodeSpawn, type ClaudeBedrockSettings, type HostProcess, type Spawn, type StartTimer, type ToolUnderTest } from './claude-bedrock.js';
 import type { RunRequest } from './harness.js';
 import { isObject } from './json.js';
 import { parseOrder } from './order.js';
@@ -33,7 +34,12 @@ afterEach(() => {
   rmSync(scratch, { recursive: true, force: true });
 });
 
-const makeRepo = (name: string, files: { [path: string]: string }, tag: string | null): { dir: string; commit: string } => {
+/** A repository's files: path to text. */
+interface RepoFiles {
+  [path: string]: string;
+}
+
+const makeRepo = (name: string, files: RepoFiles, tag: string | null): { dir: string; commit: string } => {
   const dir = join(scratch, name);
   mkdirSync(dir, { recursive: true });
   git(dir, 'init', '-q');
@@ -94,8 +100,8 @@ const rig = (patch: Partial<ClaudeBedrockSettings> = {}, prompt = 'scenario: ok\
 };
 
 /** Real spawn for everything but the stub `npm`, which writes the package a real install would. `installed` overrides the version it "installs". */
-const withNpmStub = (calls: string[], installed: string | null): Spawn => async (spec) => {
-  if (spec.command !== 'npm-stub') return nodeSpawn(spec);
+const withNpmStub = (calls: string[], installed: string | null, base: Spawn = nodeSpawn): Spawn => async (spec) => {
+  if (spec.command !== 'npm-stub') return base(spec);
   calls.push(spec.args.join(' '));
   const prefix = spec.args[spec.args.indexOf('--prefix') + 1] ?? '';
   const target = spec.args.find((arg) => arg.startsWith('@playwright/mcp@')) ?? '';
@@ -302,9 +308,28 @@ describe('run', () => {
   });
 
   it('a timeout ends the harness and the processes it started', async () => {
-    const { prepared, result } = await run('scenario: tree' + String.fromCharCode(10), { timeLimitMs: 2000 });
+    const HARNESS_LIMIT_MS = 1234;
+    const r = rig({ timeLimitMs: HARNESS_LIMIT_MS }, 'scenario: tree' + String.fromCharCode(10));
+    const req = request('no-tool', null);
+    // Only the harness call gets this timer, and it fires once the grandchild exists, so the kill never races the stub's startup.
+    let pidFile = '';
+    const timer: StartTimer = (ms, fire) => {
+      const state = { cancelled: false };
+      if (ms !== HARNESS_LIMIT_MS) return () => undefined;
+      void (async () => {
+        for (let i = 0; i < 300 && !state.cancelled && !existsSync(pidFile); i += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+        if (!state.cancelled) fire();
+      })();
+      return () => {
+        state.cancelled = true;
+      };
+    };
+    const driven = makeClaudeBedrock(r.settings, { env: ENV, spawn: async (spec) => (spec.timeoutMs === HARNESS_LIMIT_MS ? makeNodeSpawn(timer)(spec) : nodeSpawn(spec)) });
+    const prepared = await driven.prepare(req);
+    pidFile = join(prepared.configDir, 'grandchild.pid');
+    const result = await driven.run(prepared, req);
     expect(result.exit).toEqual({ kind: 'crash', code: -1 });
-    const pid = Number(readFileSync(join(prepared.configDir, 'grandchild.pid'), 'utf8'));
+    const pid = Number(readFileSync(pidFile, 'utf8'));
     const alive = (): boolean => {
       try {
         process.kill(pid, 0);
@@ -316,7 +341,33 @@ describe('run', () => {
     for (let i = 0; i < 50 && alive(); i += 1) await new Promise((resolve) => setTimeout(resolve, 100));
     expect(alive()).toBe(false);
     await prepared.dispose();
-  }, 30000);
+  }, 60000);
+
+  it('a SIGTERM, SIGINT, or exit of the runner ends the harness it started', async () => {
+    const r = rig({}, 'scenario: hang' + String.fromCharCode(10));
+    for (const event of ['SIGTERM', 'SIGINT', 'exit'] as const) {
+      const host = new EventEmitter();
+      const raised: string[] = [];
+      const fakeHost: HostProcess = { pid: 4242, once: (name, listener) => host.once(name, listener), kill: (_pid, signal) => raised.push(signal) };
+      const adapter = makeClaudeBedrock(r.settings, { env: ENV, spawn: makeNodeSpawn((ms, fire) => {
+        const handle = setTimeout(fire, ms);
+        return () => {
+          clearTimeout(handle);
+        };
+      }, fakeHost) });
+      const req = request('no-tool', null);
+      const prepared = await adapter.prepare(req);
+      const seen = join(prepared.configDir, 'stub-seen.json');
+      const running = adapter.run(prepared, req);
+      for (let i = 0; i < 300 && !existsSync(seen); i += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(existsSync(seen)).toBe(true);
+      host.emit(event);
+      // The stub would run for a minute; the signal ends it, which settles the run as a non-clean exit.
+      expect((await running).exit.kind).not.toBe('ok');
+      expect(raised).toEqual(event === 'exit' ? [] : [event]);
+      await prepared.dispose();
+    }
+  }, 120000);
 
   it('refuses a .cmd or .bat executable, which would leave the real claude running after a timeout', () => {
     const r = rig();
