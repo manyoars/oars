@@ -53,4 +53,10 @@ describe('run-fake', () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it('rejects a non-numeric --change-task-set-at with a message and exit 2', async () => {
+    const lines: string[] = [];
+    expect(await main(['--change-task-set-at', 'soon'], (line) => lines.push(line), fixedClock())).toBe(2);
+    expect(lines).toEqual(['run-fake: --change-task-set-at needs a run number, got "soon"']);
+  });
 });

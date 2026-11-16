@@ -158,3 +158,35 @@ describe('the run book bytes', () => {
     expect(text).not.toContain('fake transcript');
   });
 });
+
+describe('review lows of t1354', () => {
+  it('records a throw from check as a check-script-failed void run and goes on', async () => {
+    const adapter = makeFake(firstAttempt({ throwIn: 'check' }));
+    const book = await runOrder({ ...options(CLEAN_SCRIPT), adapter });
+    expect(book.runs.map((run) => run.void)).toEqual(['check-script-failed', null, null]);
+    expect(book.runs[0]?.check).toBeNull();
+    expect(book.header.status).toBe('complete');
+    expect(adapter.open.size).toBe(0);
+  });
+
+  it('records a clean run with no transcript as a transcript-missing void run and reruns it', async () => {
+    const book = await runOrder(options(firstAttempt({ noTranscript: true })));
+    expect(book.runs.map((run) => run.void)).toEqual(['transcript-missing', null, null]);
+    expect(book.runs[0]?.transcriptSha256).toBeNull();
+    expect(book.header.status).toBe('complete');
+  });
+
+  it('records a transcript that cannot be read as a transcript-missing void run', async () => {
+    const adapter = makeFake(firstAttempt({}));
+    const run = adapter.run;
+    adapter.run = async (prepared, request) => ({ ...(await run(prepared, request)), transcriptPath: request.sequence === 1 ? `${prepared.dir}/gone.jsonl` : `${prepared.dir}/transcript.jsonl` });
+    const book = await runOrder({ ...options(CLEAN_SCRIPT), adapter });
+    expect(book.runs.map((entry) => entry.void)).toEqual(['transcript-missing', null, null]);
+  });
+
+  it('keeps no check on a run voided with the whole order (a void run has check null)', async () => {
+    const book = await runOrder(options((request) => (request.sequence === 2 ? { taskSetVersion: 'changed' } : {})));
+    expect(book.header.status).toBe('voided');
+    expect(book.runs.every((run) => run.void === 'task-set-changed' && run.check === null)).toBe(true);
+  });
+});

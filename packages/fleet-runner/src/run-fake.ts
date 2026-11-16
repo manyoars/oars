@@ -20,7 +20,12 @@ export const main = async (argv: string[], print: (line: string) => void, clock:
   const orderPath = flag(argv, '--order');
   const tasksetPath = flag(argv, '--taskset');
   const fleetPath = flag(argv, '--fleet');
-  const changeAt = Number(flag(argv, '--change-task-set-at') ?? 0);
+  const changeText = flag(argv, '--change-task-set-at') ?? '0';
+  const changeAt = Number(changeText);
+  if (!Number.isInteger(changeAt) || changeAt < 0) {
+    print(`run-fake: --change-task-set-at needs a run number, got "${changeText}"`);
+    return 2;
+  }
   const out = resolve(flag(argv, '--out') ?? (await mkdtemp(join(tmpdir(), 'fleet-run-fake-'))));
   try {
     const fleet = fleetPath === undefined ? FLEET : parseFleet(await readFile(fleetPath, 'utf8'));

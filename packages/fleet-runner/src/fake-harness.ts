@@ -19,7 +19,7 @@ export interface Fault {
   /** True: the harness leaves no transcript file. */
   noTranscript?: boolean;
   /** The adapter call that throws instead of returning, to prove the runner keeps the run book. */
-  throwIn?: 'prepare' | 'run';
+  throwIn?: 'prepare' | 'run' | 'check';
 }
 
 export type Script = (request: RunRequest) => Fault;
@@ -75,6 +75,10 @@ export const makeFake = (script: Script = CLEAN): FakeHarness => {
         poolSessionId: null,
       };
     },
-    check: (_folder, request): Promise<CheckResult> => Promise.resolve(script(request).check ?? 'pass'),
+    check: (_folder, request): Promise<CheckResult> => {
+      const fault = script(request);
+      if (fault.throwIn === 'check') return Promise.reject(new Error('fake check fault'));
+      return Promise.resolve(fault.check ?? 'pass');
+    },
   };
 };
