@@ -10,7 +10,8 @@ import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, extname } from 'node:path';
 import type { CheckResult, ExitKind, HarnessAdapter, Prepared, RunRequest, RunResult, TokenCounts, ToolPin } from './harness.js';
-import { isObject, optionalStringAt, parseJson } from './json.js';
+import { existsSync, readFileSync } from 'node:fs';
+import { arrayAt, isObject, objectAt, parseJson, stringAt, optionalStringAt } from './json.js';
 import { loadTaskSet } from './manifest.js';
 
 export interface EnvMap {
@@ -52,7 +53,6 @@ export interface ClaudeBedrockSettings {
   taskSetDir: string;
   /** The fleet manifest version this adapter was built for; reported as the manifest the run saw. */
   fleetManifestVersion: string;
-  databaseRebuild: CommandSpec;
   claudeExecutable: string;
   /** Arguments placed before Claude Code's own (empty for the real executable). */
   claudeArgs: string[];
@@ -96,6 +96,8 @@ export interface Dependencies {
   /** The caller's environment: where the Bedrock key and the names a child needs to start are read from. Nothing else reads `process.env`. */
   env: EnvMap;
   spawn?: Spawn;
+  /** The Node version running the runner; defaults to this process's. A version below the manifest's is refused at construction. */
+  nodeVersion?: string;
   /** Called with each temp folder as it is made (tests use it to prove the folder is gone after a failed prepare). */
   onTempFolder?: (dir: string) => void;
 }
@@ -105,6 +107,25 @@ export interface ClaudePrepared extends Prepared {
   configDir: string;
   fixtureCommit: string;
 }
+
+/** What a fresh run folder needs, read from the task-set manifest's `reset` object: `{ "node": "24", "commands": ["npm ci", "node scripts/build-db.ts"] }`. */
+export interface ResetPlan {
+  nodeMajor: number;
+  commands: CommandSpec[];
+}
+
+export const loadResetPlan = (taskSetDir: string): ResetPlan => {
+  const root = objectAt(parseJson(readFileSync(join(taskSetDir, 'manifest.json'), 'utf8'), 'task-set manifest'), 'task-set manifest');
+  const reset = objectAt(root['reset'], 'taskset.reset');
+  const nodeMajor = Number.parseInt(stringAt(reset, 'node', 'taskset.reset'), 10);
+  if (Number.isNaN(nodeMajor)) throw new Error('taskset.reset.node must start with a major version number');
+  const commands = arrayAt(reset, 'commands', 'taskset.reset').map((entry, index) => {
+    if (typeof entry !== 'string' || entry.trim() === '') throw new Error(`taskset.reset.commands[${String(index)}] must be a command line`);
+    const [command = '', ...args] = entry.trim().split(/\s+/);
+    return { command, args };
+  });
+  return { nodeMajor, commands };
+};
 
 export const nodeSpawn: Spawn = (spec) =>
   new Promise((resolve) => {
@@ -229,6 +250,9 @@ export const makeClaudeBedrock = (settings: ClaudeBedrockSettings, deps: Depende
   if (key === undefined || key === '') throw new Error('AWS_BEARER_TOKEN_BEDROCK is not set: the fleet runs on a Bedrock API key and never falls back to a personal Claude sign-in');
   if (settings.awsRegion === '') throw new Error('the AWS region setting is empty: Bedrock needs a region');
   if (settings.modelId === '') throw new Error('the model ID setting is empty');
+  const reset = loadResetPlan(settings.taskSetDir);
+  const nodeMajor = Number.parseInt(deps.nodeVersion ?? process.versions.node, 10);
+  if (nodeMajor < reset.nodeMajor) throw new Error(`Node ${String(nodeMajor)} is below the Node ${String(reset.nodeMajor)} the fixture needs (task-set manifest reset.node); no run was started`);
   const spawn = deps.spawn ?? nodeSpawn;
   const folders = new WeakMap<Prepared, ClaudePrepared>();
   const folderOf = (prepared: Prepared): ClaudePrepared => {
@@ -297,7 +321,13 @@ export const makeClaudeBedrock = (settings: ClaudeBedrockSettings, deps: Depende
       await step('clone fixture', { command: settings.gitExecutable, args: ['clone', '--quiet', settings.fixtureSource, runFolder], cwd: root, env, stdin: null, timeoutMs });
       await step('check out fixture tag', { command: settings.gitExecutable, args: ['checkout', '--quiet', '--detach', settings.fixtureTag], cwd: runFolder, env, stdin: null, timeoutMs });
       const commit = await step('read fixture commit', { command: settings.gitExecutable, args: ['rev-parse', 'HEAD'], cwd: runFolder, env, stdin: null, timeoutMs });
-      await step('database rebuild', { command: settings.databaseRebuild.command, args: settings.databaseRebuild.args, cwd: runFolder, env, stdin: null, timeoutMs });
+      for (const command of reset.commands) {
+        const program = command.command === 'npm' ? settings.npmExecutable : command.command === 'node' ? process.execPath : command.command;
+        await step(`reset command "${command.command} ${command.args.join(' ')}"`, { command: program, args: command.args, cwd: runFolder, env, stdin: null, timeoutMs });
+      }
+      // A task's own setup (spec: an optional Node script, the run folder as its first argument) runs after the reset and before the harness; a failure is the machine's, not the task's.
+      const setupScript = join(settings.taskSetDir, 'setup', `${request.taskId}.mjs`);
+      if (existsSync(setupScript)) await step(`setup script ${request.taskId}`, { command: process.execPath, args: [setupScript, runFolder], cwd: runFolder, env, stdin: null, timeoutMs });
       const tool = settings.tool !== null && settings.tool.name === request.arm ? settings.tool : null;
       const wanted = request.expected.toolPins.find((pin) => pin.name === request.arm)?.pin;
       const installedPins: ToolPin[] = [];

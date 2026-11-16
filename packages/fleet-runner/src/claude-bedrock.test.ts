@@ -47,9 +47,13 @@ const makeRepo = (name: string, files: { [path: string]: string }, tag: string |
   return { dir, commit: git(dir, 'rev-parse', 'HEAD') };
 };
 
-const writeTask = (taskSetDir: string, prompt: string): void => {
+const APPEND = (word: string): string => ["import { appendFileSync, writeFileSync } from 'node:fs';", `appendFileSync('order.txt', '${word},');`, ''].join(String.fromCharCode(10));
+
+const RESET = { node: '20', commands: ['node scripts/install.mjs', 'node scripts/build-db.mjs'] };
+
+const writeTask = (taskSetDir: string, prompt: string, reset: object = RESET): void => {
   mkdirSync(join(taskSetDir, 'tasks', 't1'), { recursive: true });
-  writeFileSync(join(taskSetDir, 'manifest.json'), JSON.stringify({ version: 'v1', fixtureTag: 'taskset-v1', fixtureCommit: 'x', tasks: [{ id: 't1', category: 'browser' }] }));
+  writeFileSync(join(taskSetDir, 'manifest.json'), JSON.stringify({ version: 'v1', fixtureTag: 'taskset-v1', fixtureCommit: 'x', reset, tasks: [{ id: 't1', category: 'browser' }] }));
   writeFileSync(join(taskSetDir, 'tasks', 't1', 'prompt.md'), prompt);
   writeFileSync(join(taskSetDir, 'tasks', 't1', 'check.mjs'), PASS_IF_SEED);
 };
@@ -64,7 +68,7 @@ interface Rig {
 }
 
 const rig = (patch: Partial<ClaudeBedrockSettings> = {}, prompt = 'scenario: ok\nDo the task.'): Rig => {
-  const fixture = makeRepo('fixture', { 'seed.sql': 'create table t(a);', 'README.md': 'hi' }, 'taskset-v1');
+  const fixture = makeRepo('fixture', { 'seed.sql': 'create table t(a);', 'README.md': 'hi', 'scripts/install.mjs': APPEND('install'), 'scripts/build-db.mjs': APPEND('build') + "writeFileSync('app.db', 'built');" + String.fromCharCode(10) }, 'taskset-v1');
   const skillRepo = makeRepo('skill', { 'skills/fill/SKILL.md': '---\nname: fill\n---\nFill forms.\n' }, null);
   writeTask(join(scratch, 'taskset'), prompt);
   const settings: ClaudeBedrockSettings = {
@@ -73,7 +77,6 @@ const rig = (patch: Partial<ClaudeBedrockSettings> = {}, prompt = 'scenario: ok\
     fixtureCommit: fixture.commit,
     taskSetDir: join(scratch, 'taskset'),
     fleetManifestVersion: 'fleet-1',
-    databaseRebuild: { command: process.execPath, args: ['-e', "require('node:fs').writeFileSync('app.db','built')"] },
     claudeExecutable: process.execPath,
     claudeArgs: [STUB],
     awsRegion: 'us-east-1',
@@ -176,11 +179,51 @@ describe('prepare', () => {
     await prepared.dispose();
   });
 
-  it('deletes the temp folder when the database rebuild fails', async () => {
-    const r = rig({ databaseRebuild: { command: process.execPath, args: ['-e', 'process.exit(5)'] } });
+  it('runs the manifest reset commands in order', async () => {
+    const r = rig();
+    const adapter = makeClaudeBedrock(r.settings, { env: ENV });
+    const prepared = await adapter.prepare(request('no-tool', null));
+    expect(readFileSync(join(prepared.runFolder, 'order.txt'), 'utf8')).toBe('install,build,');
+    await prepared.dispose();
+  });
+
+  it('refuses a Node version below the manifest before any run', () => {
+    const r = rig();
+    writeTask(join(scratch, 'taskset'), 'scenario: ok', { node: '24', commands: [] });
+    expect(() => makeClaudeBedrock(r.settings, { env: ENV, nodeVersion: '22.4.0' })).toThrow(/Node 22 is below the Node 24/);
+    expect(() => makeClaudeBedrock(r.settings, { env: ENV, nodeVersion: '24.0.0' })).not.toThrow();
+  });
+
+  it('runs a task setup script once, after the reset and before the harness', async () => {
+    const r = rig();
+    mkdirSync(join(scratch, 'taskset', 'setup'), { recursive: true });
+    writeFileSync(join(scratch, 'taskset', 'setup', 't1.mjs'), ["import { appendFileSync, existsSync } from 'node:fs';", "import { join } from 'node:path';", "const dir = process.argv[2] ?? '';", "appendFileSync(join(dir, 'order.txt'), `setup(db=${String(existsSync(join(dir, 'app.db')))}),`);", ''].join(String.fromCharCode(10)));
+    const adapter = makeClaudeBedrock(r.settings, { env: ENV });
+    const req = request('no-tool', null);
+    const prepared = await adapter.prepare(req);
+    expect(readFileSync(join(prepared.runFolder, 'order.txt'), 'utf8')).toBe('install,build,setup(db=true),');
+    expect(existsSync(join(prepared.configDir, 'stub-seen.json'))).toBe(false);
+    await adapter.run(prepared, req);
+    expect(readFileSync(join(prepared.runFolder, 'order.txt'), 'utf8')).toBe('install,build,setup(db=true),');
+    await prepared.dispose();
+  });
+
+  it('a setup script that exits non-zero is an error the runner sees, and the folder is deleted', async () => {
+    const r = rig();
+    mkdirSync(join(scratch, 'taskset', 'setup'), { recursive: true });
+    writeFileSync(join(scratch, 'taskset', 'setup', 't1.mjs'), 'process.exit(4);' + String.fromCharCode(10));
     const roots: string[] = [];
     const adapter = makeClaudeBedrock(r.settings, { env: ENV, onTempFolder: (dir) => roots.push(dir) });
-    await expect(adapter.prepare(request('no-tool', null))).rejects.toThrow(/database rebuild/);
+    await expect(adapter.prepare(request('no-tool', null))).rejects.toThrow(/setup script t1 failed/);
+    expect(existsSync(roots[0] ?? '')).toBe(false);
+  });
+
+  it('deletes the temp folder when a reset command fails', async () => {
+    const r = rig();
+    writeTask(join(scratch, 'taskset'), 'scenario: ok', { node: '20', commands: ['node scripts/missing.mjs'] });
+    const roots: string[] = [];
+    const adapter = makeClaudeBedrock(r.settings, { env: ENV, onTempFolder: (dir) => roots.push(dir) });
+    await expect(adapter.prepare(request('no-tool', null))).rejects.toThrow(/reset command/);
     expect(roots).toHaveLength(1);
     expect(existsSync(roots[0] ?? '')).toBe(false);
   });
