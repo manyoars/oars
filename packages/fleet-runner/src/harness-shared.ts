@@ -239,11 +239,14 @@ export const makeNodeSpawn = (startTimer: StartTimer, host: HostProcess = proces
         timedOut = true;
         killTree(child.pid);
       });
-      child.stdout.on('data', (chunk: Buffer) => {
-        stdout += chunk.toString('utf8');
+      // The stream decodes, so a multibyte character split across two chunks is carried over instead of becoming U+FFFD.
+      child.stdout.setEncoding('utf8');
+      child.stderr.setEncoding('utf8');
+      child.stdout.on('data', (chunk: string) => {
+        stdout += chunk;
       });
-      child.stderr.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString('utf8');
+      child.stderr.on('data', (chunk: string) => {
+        stderr += chunk;
       });
       child.on('error', (error: NodeJS.ErrnoException) => {
         finish({ exitCode: null, signal: null, stdout, stderr, timedOut, errorCode: error.code ?? 'UNKNOWN' });

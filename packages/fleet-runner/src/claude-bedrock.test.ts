@@ -593,3 +593,11 @@ describe('check and cleanup', () => {
     expect(existsSync(result.transcriptPath ?? '')).toBe(true);
   });
 });
+
+describe('makeNodeSpawn output', () => {
+  it('keeps a multibyte character that arrives split across two writes', async () => {
+    const script = "const b = Buffer.from('\u20ac'); process.stdout.write(b.subarray(0, 1)); setTimeout(() => process.stdout.write(b.subarray(1)), 150);";
+    const outcome = await nodeSpawn({ command: process.execPath, args: ['-e', script], cwd: tmpdir(), env: {}, stdin: null, timeoutMs: 20000 });
+    expect(outcome.stdout).toBe('\u20ac');
+  });
+});
