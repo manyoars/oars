@@ -1,5 +1,6 @@
 // A stand-in for the `claude` executable, for the Bedrock adapter's tests only. The first line of the prompt on stdin names the scenario; the stub writes what a real
 // run would (a stream-json stdout, a transcript under the config folder) and records what it was started with in <config>/stub-seen.json. It never opens the network.
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -11,6 +12,12 @@ const scenario = prompt.split('\n')[0]?.replace('scenario:', '').trim() ?? 'ok';
 const config = process.env.CLAUDE_CONFIG_DIR ?? '';
 const sessionId = valueOf('--session-id');
 writeFileSync(join(config, 'stub-seen.json'), JSON.stringify({ argv, envNames: Object.keys(process.env).sort(), cwd: process.cwd(), prompt }));
+// What the real Claude Code does with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 (env-vars.md): its Bash, hook, and stdio MCP children get no credential. The stub starts one child
+// the way Claude Code starts its Bash tool and records the names that child sees; the stub applies the documented scrub itself, so this shows the adapter asked for it, not that Claude Code honors it.
+const childEnv = { ...process.env };
+if (process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB === '1') delete childEnv.AWS_BEARER_TOKEN_BEDROCK;
+const childSaw = execFileSync(process.execPath, ['-e', 'process.stdout.write(JSON.stringify(Object.keys(process.env).sort()))'], { env: childEnv, encoding: 'utf8' });
+writeFileSync(join(config, 'stub-child-seen.json'), childSaw);
 const line = (/** @type {object} */ value) => process.stdout.write(`${JSON.stringify(value)}\n`);
 const model = scenario === 'model' ? 'other-model-id' : valueOf('--model');
 line({ type: 'system', subtype: 'init', session_id: sessionId, claude_code_version: scenario === 'version' ? '9.9.9' : '2.1.30', model });

@@ -265,7 +265,9 @@ describe('run', () => {
     expect(s.argv).toEqual(expect.arrayContaining(['-p', '--output-format', 'stream-json', '--verbose', '--strict-mcp-config', '--mcp-config', join(prepared.configDir, 'mcp.json'), '--model', MODEL, '--allowedTools']));
     expect(s.argv.join(' ')).toContain('Bash,Read,Edit,Write,mcp__playwright');
     expect(s.envNames).toEqual(expect.arrayContaining(['CLAUDE_CODE_USE_BEDROCK', 'AWS_REGION', 'ANTHROPIC_MODEL', 'AWS_BEARER_TOKEN_BEDROCK', 'CLAUDE_CONFIG_DIR', 'DISABLE_AUTOUPDATER']));
+    expect(s.envNames).toContain('CLAUDE_CODE_SUBPROCESS_ENV_SCRUB');
     expect(s.envNames).not.toContain('ANTHROPIC_API_KEY');
+    expect(strs(JSON.parse(readFileSync(join(prepared.configDir, 'stub-child-seen.json'), 'utf8')))).not.toContain('AWS_BEARER_TOKEN_BEDROCK');
     expect(JSON.stringify(s)).not.toContain('someone');
     expect(readFileSync(join(prepared.configDir, 'mcp.json'), 'utf8')).toContain('"--headless"]');
     await prepared.dispose();
