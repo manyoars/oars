@@ -59,9 +59,9 @@ export const main = async (argv: string[], print: (line: string) => void, deps: 
   const out = (line: string): void => {
     print(key === '' ? line : line.split(key).join('[key removed]'));
   };
-  let failed = false;
+  const state = { failed: false };
   const report = (verdict: Verdict, what: string, detail: string): void => {
-    if (verdict !== 'ok') failed = true;
+    if (verdict !== 'ok') state.failed = true;
     out(`${verdict.padEnd(7)} ${what}: ${detail}`);
   };
   const tool = async (command: string, args: string[]): Promise<{ text: string; started: boolean; exitCode: number | null }> => {
@@ -143,6 +143,6 @@ export const main = async (argv: string[], print: (line: string) => void, deps: 
     out(`preflight: could not finish: ${error instanceof Error ? error.message : 'failed'}`);
     return 1;
   }
-  out(failed ? 'preflight: not ready; fix each line that is not ok' : 'preflight: ready');
-  return failed ? 1 : 0;
+  out(state.failed ? 'preflight: not ready; fix each line that is not ok' : 'preflight: ready');
+  return state.failed ? 1 : 0;
 };
