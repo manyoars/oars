@@ -42,8 +42,9 @@ describe('queries/proof-sheet.sql', () => {
     pool = await startPool({ COVENANT_VERSION: '' });
     db = await pool.db();
     await db.prepare("INSERT INTO covenant_served (version, first_served_at) VALUES ('v2', ?)").bind(START).run();
-    for (const id of ['acc-a', 'acc-b', 'acc-c', 'acc-seed']) await db.prepare('INSERT INTO accounts (id) VALUES (?)').bind(id).run();
+    for (const id of ['acc-a', 'acc-b', 'acc-c', 'acc-seed', 'acc-fleet']) await db.prepare('INSERT INTO accounts (id) VALUES (?)').bind(id).run();
     await db.prepare("UPDATE accounts SET source = 'input' WHERE id = 'acc-seed'").run();
+    await db.prepare("UPDATE accounts SET source = 'operator-fleet' WHERE id = 'acc-fleet'").run();
     // Installs: veteran predates the start; a1 is seen on two days and counts once; b1 has an account that never accepted; c1 has no account; d1 names an account on one day and none on another.
     await install(db, '2026-11-08', 'veteran', 'acc-a');
     await install(db, '2026-11-10', 'a1', 'acc-a');
@@ -55,6 +56,8 @@ describe('queries/proof-sheet.sql', () => {
     await accept(db, 'acc-a', START + DAY);
     await accept(db, 'acc-c', START + 2 * DAY);
     await accept(db, 'acc-seed', START + DAY);
+    await accept(db, 'acc-fleet', START + DAY);
+    await deposit(db, 'acc-fleet', 'd1', START + DAY + 10 * DAY);
     await deposit(db, 'acc-a', 'd1', START + DAY + 28 * DAY);
     await deposit(db, 'acc-c', 'd1', START + 2 * DAY + 10 * DAY);
     await week(db, 'acc-a', '2026-11-09', 4, ['claude']);
@@ -62,6 +65,7 @@ describe('queries/proof-sheet.sql', () => {
     await week(db, 'acc-c', '2026-11-09', 5, ['codex']);
     await week(db, 'acc-c', '2026-11-16', 1, ['claude', 'codex']);
     await week(db, 'acc-seed', '2026-11-09', 50, ['claude']);
+    await week(db, 'acc-fleet', '2026-11-09', 70, ['claude']);
     await cell(db, 'k1', 5, 5);
     await cell(db, 'k2', 2, 6);
     await cell(db, 'k3', 4, 4);

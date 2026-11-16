@@ -1,0 +1,1 @@
+`pageSize` in `src/lib/pagination.ts` accepts any `limit` value, so a request like `/api/requests?limit=-5` or `?limit=abc` reaches the database. Make `pageSize` throw a `RangeError` unless the limit is a whole number from 1 to `MAX_PAGE_SIZE`, keep the default when no limit is given, and add a test that covers the new check.

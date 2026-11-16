@@ -146,7 +146,7 @@ describe('erasing a row that holds a leaked secret', () => {
       expect((await (await pool.rawBucket()).get(`raw/${account}/${leaked.hash}`).then((object) => object?.text())) ?? '').toContain(FAKE_KEY);
 
       const rows = await count('SELECT COUNT(*) AS held FROM deposits');
-      const bundleBefore = await pool.get('/bundle/claude-code/2.1.314/1', token);
+      const bundleBefore = await pool.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, token);
       expect(bundleBefore.status).toBe(200);
       const before = await aggregates();
       const tier = await all("SELECT tier, counted_at, ingest FROM deposits WHERE id = '00000000000071aa'");
@@ -168,7 +168,7 @@ describe('erasing a row that holds a leaked secret', () => {
 
       // A copy of the database, a signed bundle, and R2 hold the value nowhere.
       expect(await dump()).not.toContain(FAKE_KEY);
-      const bundle = await pool.get('/bundle/claude-code/2.1.314/1', token);
+      const bundle = await pool.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, token);
       expect(bundle.status).toBe(200);
       expect(JSON.stringify(bundle.json)).not.toContain(FAKE_KEY);
       expect(JSON.stringify(bundleBefore.json)).toContain(FAKE_KEY);
@@ -326,7 +326,7 @@ describe('erasing one account under a lawful request', () => {
     const theirs = await putRaw(other.token, new TextEncoder().encode('their transcript'));
     const before = await totals();
     const theirContributors = await all('SELECT kind, key, account, day FROM contributors WHERE account = ? ORDER BY kind, key, day', other.account);
-    const bundleBefore = await pool.get('/bundle/claude-code/2.1.314/1', other.token);
+    const bundleBefore = await pool.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, other.token);
 
     // The links to the totals this fixture's two deposits made: the count below is exact, so a step that stops counting a table fails here.
     const links = await count('SELECT (SELECT COUNT(*) FROM account_repo_keys WHERE account = ?) + (SELECT COUNT(*) FROM deposit_hours WHERE account = ?) + (SELECT COUNT(*) FROM contributors WHERE account = ?) AS held', account, account, account);
@@ -352,7 +352,7 @@ describe('erasing one account under a lawful request', () => {
     expect(await totals()).toBe(before);
     expect(await count('SELECT COUNT(*) AS held FROM contributors WHERE account = ?', account)).toBe(0);
     expect(await all('SELECT kind, key, account, day FROM contributors WHERE account = ? ORDER BY kind, key, day', other.account)).toEqual(theirContributors);
-    expect((await pool.get('/bundle/claude-code/2.1.314/1', other.token)).json).toEqual(bundleBefore.json);
+    expect((await pool.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, other.token)).json).toEqual(bundleBefore.json);
     // The token it held is dead; the person signs in again to the same account, and the erased sessions and the erased object cannot come back.
     expect((await pool.post('/v1/deposits', skeletonWith('00000000000075aa'), token)).status).toBe(401);
     const again = await pool.signIn('github', user);
@@ -516,7 +516,7 @@ describe('erasing one account removes its own rows and its link to the shared to
     const other = await member();
     const before = await all('SELECT hash, expires_at FROM tokens WHERE account = ? ORDER BY rowid', account);
     expect(before).toHaveLength(1);
-    expect((await pool.get('/bundle/claude-code/2.1.314/1', token)).status).not.toBe(401);
+    expect((await pool.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, token)).status).not.toBe(401);
 
     await eraseAccount(await store(), account, NOW);
 
@@ -525,8 +525,8 @@ describe('erasing one account removes its own rows and its link to the shared to
     expect(fieldOf(after[0], 'expires_at')).toBe(fieldOf(before[0], 'expires_at'));
     expect(fieldOf(after[0], 'hash')).not.toBe(fieldOf(before[0], 'hash'));
     expect(String(fieldOf(after[0], 'hash'))).toMatch(/^erased:/);
-    expect((await pool.get('/bundle/claude-code/2.1.314/1', token)).status).toBe(401);
-    expect((await pool.get('/bundle/claude-code/2.1.314/1', other.token)).status).not.toBe(401);
+    expect((await pool.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, token)).status).toBe(401);
+    expect((await pool.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, other.token)).status).not.toBe(401);
     expect(await count('SELECT COUNT(*) AS held FROM tokens WHERE account = ?', other.account)).toBe(1);
   }, 60_000);
 
@@ -855,7 +855,7 @@ describe('closing one account (covenant 6.1 and 7.2(a))', () => {
     expect(await all('SELECT closed_at FROM accounts WHERE id = ?', account)).toEqual([{ closed_at: NOW.getTime() }]);
     expect(await count('SELECT COUNT(*) AS held FROM tokens WHERE account = ?', account)).toBe(0);
     expect(await all('SELECT state FROM machines WHERE account = ?', account)).toEqual([{ state: 'revoked' }]);
-    expect(await pool.get('/bundle/claude-code/2.1.314/1', token)).toMatchObject({ status: 401 });
+    expect(await pool.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, token)).toMatchObject({ status: 401 });
     expect(await pool.post('/v1/machines/activate', {}, textOf(enrolled.json, 'token'))).toMatchObject({ status: 401, json: { error: 'machine_revoked' } });
     expect(await count('SELECT COUNT(*) AS held FROM erasure_audit')).toBe(audits + 1);
     expect(await all("SELECT kind, reason, erased_on, rows_erased, objects_erased, account FROM erasure_audit WHERE kind = 'close' AND account = ?", account)).toEqual([{ kind: 'close', reason: 'account-close', erased_on: '2026-11-08', rows_erased: 3, objects_erased: 0, account }]);

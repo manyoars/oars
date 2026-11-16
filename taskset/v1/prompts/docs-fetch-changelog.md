@@ -1,0 +1,1 @@
+The app's Markdown library was upgraded from 12.0.2 to 18.2.0 in one step (see the git log). From the library's release notes, write one line for each major release from 13 to 18 to `answers/marked-upgrade.md`, in the form `<major>: <the breaking change a user of the library has to handle>`, six lines in all.

@@ -1,0 +1,1 @@
+Loading one member's requests (`GET /api/members/<handle>/requests`) gets slower as the requests table grows, because the lookup reads every request. Fix it so the lookup no longer reads the whole table, without changing what it returns.

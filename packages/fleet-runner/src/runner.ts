@@ -2,7 +2,8 @@
 // until every cell has its repeats or the order's run cap is hit. A void run is recorded with its reason and counts against the cap; it is never counted as a repeat.
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import type { Expected, HarnessAdapter, Prepared, RunRequest, RunResult, ToolPin } from './harness.js';
+import { contentHash } from '../../cli/src/sessions/read.js';
+import type { CheckResult, Expected, HarnessAdapter, Prepared, RunRequest, RunResult, ToolPin } from './harness.js';
 import type { FleetManifest, TaskSetManifest } from './manifest.js';
 import { NO_TOOL, type Order } from './order.js';
 import { cellKey, planOrder, type PlannedRun } from './plan.js';
@@ -16,6 +17,11 @@ export interface RunnerOptions {
   /** Injected so a run book's bytes depend on the script, not the wall clock. */
   clock: () => Date;
   operator: string;
+  /**
+   * Copies a valid run's transcript out of its temp folder (which `dispose` deletes) and returns the session id it will be stored under. A throw voids the run as
+   * `transcript-missing`. Without it the run book's pool session id is whatever the adapter reported, else null.
+   */
+  stage?: (request: RunRequest, transcriptPath: string) => Promise<string>;
 }
 
 const pinsEqual = (found: ToolPin[], wanted: ToolPin[]): boolean => {
@@ -57,10 +63,20 @@ const expectedPins = (order: Order, arm: string, side: string | null): ToolPin[]
   return [{ name: tool.name, pin }];
 };
 
-const sha256OfFile = async (path: string | null): Promise<string | null> => (path === null ? null : createHash('sha256').update(await readFile(path)).digest('hex'));
+/** The transcript's SHA-256, or null when there is no file to hash: a harness that crashed may leave none, and that must not lose the run book. */
+const sha256OfFile = async (path: string | null): Promise<string | null> => {
+  if (path === null) return null;
+  try {
+    return createHash('sha256').update(await readFile(path)).digest('hex');
+  } catch {
+    return null;
+  }
+};
 
 export const runOrder = async (options: RunnerOptions): Promise<RunBook> => {
   const { order, taskSet, fleet, adapter, clock } = options;
+  // The row id the pool gives a deposited session under this account: the same `contentHash` call the CLI's deposit makes (`pool-command.ts`, `contentHash([account, records.main.session])`).
+  const poolIdOf = (session: string | null): string | null => (session === null ? null : contentHash([order.account, session]));
   const harness = fleet.harnesses.find((candidate) => candidate.name === order.harness);
   if (harness === undefined) throw new Error(`harness ${order.harness} is not in manifest ${fleet.version}`);
   const plan = planOrder(order, taskSet);
@@ -99,8 +115,27 @@ export const runOrder = async (options: RunnerOptions): Promise<RunBook> => {
         thrown = 'harness-failed';
       }
       try {
-        const reason = prepared === null || result === null ? thrown : voidReasonOf(expected, prepared, result);
-        const check = reason === null && prepared !== null ? await adapter.check(prepared, request) : null;
+        let reason = prepared === null || result === null ? thrown : voidReasonOf(expected, prepared, result);
+        const transcriptSha256 = await sha256OfFile(result?.transcriptPath ?? null);
+        // A run that is valid so far still needs its transcript (the run book hashes it, and the store folder holds it) and its check.
+        if (reason === null && transcriptSha256 === null) reason = 'transcript-missing';
+        let check: CheckResult | null = null;
+        if (reason === null && prepared !== null) {
+          try {
+            check = await adapter.check(prepared, request);
+          } catch {
+            reason = 'check-script-failed';
+          }
+        }
+        let sessionId: string | null = null;
+        const transcriptPath = result?.transcriptPath ?? null;
+        if (reason === null && options.stage !== undefined && transcriptPath !== null) {
+          try {
+            sessionId = await options.stage(request, transcriptPath);
+          } catch {
+            reason = 'transcript-missing';
+          }
+        }
         runs.push({
           runId,
           taskId: planned.taskId,
@@ -121,8 +156,8 @@ export const runOrder = async (options: RunnerOptions): Promise<RunBook> => {
           inputTokens: result?.tokens.input ?? 0,
           cacheTokens: result?.tokens.cache ?? 0,
           outputTokens: result?.tokens.output ?? 0,
-          transcriptSha256: await sha256OfFile(result?.transcriptPath ?? null),
-          poolSessionId: result?.poolSessionId ?? null,
+          transcriptSha256,
+          poolSessionId: reason === null ? poolIdOf(sessionId ?? result?.poolSessionId ?? null) : null,
           void: reason,
         });
         if (reason === 'task-set-changed') return 'task-set-changed';
@@ -138,7 +173,7 @@ export const runOrder = async (options: RunnerOptions): Promise<RunBook> => {
     const outcome = await attemptSlot(planned);
     if (outcome === 'task-set-changed') {
       // Spec section 9: a changed task set voids the whole order. Nothing is rerun (a real adapter would change again and burn the cap); a new order on the new version is the buyer's call.
-      runs = runs.map((run) => ({ ...run, void: 'task-set-changed' }));
+      runs = runs.map((run) => ({ ...run, check: null, poolSessionId: null, void: 'task-set-changed' }));
       valid.clear();
       voided = true;
       break;
@@ -164,6 +199,7 @@ export const runOrder = async (options: RunnerOptions): Promise<RunBook> => {
       arms: order.arms,
       sides: order.sides,
       operator: options.operator,
+      account: order.account,
       repeats: order.repeats,
       runCap: order.runCap,
       startDate,

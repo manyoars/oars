@@ -1,0 +1,1 @@
+`src/docs.ts` customizes how the Markdown library renders links and inline code. Add a comment above the `new Marked` call that cites the section of the library's documentation that explains how to customize the renderer, with that section's URL (including its # anchor) written in the comment.

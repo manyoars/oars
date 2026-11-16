@@ -83,9 +83,8 @@ const seed = async (bucket: TestBucket, db: TestDb): Promise<Fixture> => {
   await bucket.put(keys.anonA, batchText('2026-11-08', INSTALL_A, undefined, 'anonA'));
   await bucket.put(keys.index, JSON.stringify({ account, batches: [keys.a1, keys.a2, keys.b1] }));
   // The rollup's rows as eraseAccount leaves them: the erased account's rows hold a placeholder, the others their account.
-  for (const [day, install, who] of [['2026-11-08', INSTALL_A, 'erased:1'], ['2026-11-07', INSTALL_A, 'erased:2'], ['2026-11-07', INSTALL_B, 'erased:3'], ['2026-08-11', INSTALL_A, 'erased:4'], ['2026-11-08', INSTALL_C, other], ['2026-11-08', INSTALL_D, ''], ['2026-11-08', INSTALL_A, '']] as const) {
-    await db.prepare("INSERT INTO telemetry_install_days (day, install, account, batches, events, measures) VALUES (?, ?, ?, 1, 2, '[]')").bind(day, install, who).run();
-  }
+  const days = [['2026-11-08', INSTALL_A, 'erased:1'], ['2026-11-07', INSTALL_A, 'erased:2'], ['2026-11-07', INSTALL_B, 'erased:3'], ['2026-08-11', INSTALL_A, 'erased:4'], ['2026-11-08', INSTALL_C, other], ['2026-11-08', INSTALL_D, ''], ['2026-11-08', INSTALL_A, '']] as const;
+  await db.batch(days.map(([day, install, who]) => db.prepare("INSERT INTO telemetry_install_days (day, install, account, batches, events, measures) VALUES (?, ?, ?, 1, 2, '[]')").bind(day, install, who)));
   return { account, other, keys };
 };
 
