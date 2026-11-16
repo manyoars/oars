@@ -120,7 +120,7 @@ const records = (text: string): JsonObject[] => text.split(String.fromCharCode(1
 const logged = async (): Promise<JsonObject[]> => records(await readFile(process.env.FAKE_OARS_LOG ?? '', 'utf8').catch(() => ''));
 
 describe('deposit-fleet', () => {
-  it('is a dry run without --confirm: prints each store, its expected sessions and its command line, and runs nothing', async () => {
+  it('prints each store, its config root, its expected sessions, and its three command lines, and runs nothing', async () => {
     const s = await scene();
     const { code, lines } = await run(s, [], new Date(NEWEST_END(s.book) + 7 * HOUR));
     expect(code).toBe(0);
