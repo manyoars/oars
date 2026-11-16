@@ -369,6 +369,38 @@ describe('the tool pin', () => {
     await prepared.dispose();
   });
 
+  const skillRig = (): Rig => rig({ tool: { kind: 'skill', name: 'fill', repo: join(scratch, 'skill'), subdir: 'skills/fill' } }, 'scenario: ok' + String.fromCharCode(10));
+
+  it('re-reads a commit-pinned skill before the run and does not start the harness when another commit is checked out', async () => {
+    const r = skillRig();
+    const adapter = makeClaudeBedrock(r.settings, { env: ENV });
+    const req = request('fill', `git:${r.skillRepo.commit.slice(0, 10)}`);
+    const prepared = await adapter.prepare(req);
+    expect(prepared.installedPins).toEqual([{ name: 'fill', pin: req.expected.toolPins[0]?.pin }]);
+    writeFileSync(join(r.skillRepo.dir, 'skills', 'fill', 'SKILL.md'), 'changed');
+    git(r.skillRepo.dir, 'commit', '-q', '-am', 'second');
+    const second = git(r.skillRepo.dir, 'rev-parse', 'HEAD');
+    const source = join(prepared.dir, 'tool-src');
+    git(source, 'fetch', '-q', 'origin');
+    git(source, 'checkout', '-q', '-f', '--detach', second);
+    const result = await adapter.run(prepared, req);
+    expect(prepared.installedPins).toEqual([{ name: 'fill', pin: `git:${second}` }]);
+    expect(result.transcriptPath).toBeNull();
+    expect(existsSync(join(prepared.configDir, 'stub-seen.json'))).toBe(false);
+    await prepared.dispose();
+  });
+
+  it('treats a commit pin shorter than 7 hex characters as a mismatch', async () => {
+    const r = skillRig();
+    const adapter = makeClaudeBedrock(r.settings, { env: ENV });
+    const req = request('fill', `git:${r.skillRepo.commit.slice(0, 6)}`);
+    const prepared = await adapter.prepare(req);
+    expect(prepared.installedPins).toEqual([{ name: 'fill', pin: `git:${r.skillRepo.commit}` }]);
+    await adapter.run(prepared, req);
+    expect(existsSync(join(prepared.configDir, 'stub-seen.json'))).toBe(false);
+    await prepared.dispose();
+  });
+
   it('reads the version again before the run and notices a change', async () => {
     const r = rig({}, 'scenario: ok\n');
     const adapter = makeClaudeBedrock(r.settings, { env: ENV, spawn: withNpmStub(r.calls, null) });

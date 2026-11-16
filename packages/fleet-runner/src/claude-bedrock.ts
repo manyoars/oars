@@ -186,7 +186,8 @@ const pick = (env: EnvMap, names: readonly string[]): { [name: string]: string }
   return out;
 };
 
-const hasPrefix = (actual: string, wanted: string): boolean => wanted.length > 0 && actual.startsWith(wanted);
+// A commit prefix of fewer than 7 hex characters names too many commits to prove a pin, so it never matches.
+const hasPrefix = (actual: string, wanted: string): boolean => /^[0-9a-f]{7,40}$/.test(wanted) && actual.startsWith(wanted);
 
 const AUTH_TEXT = /\b(401|403)\b|invalid (api key|token|security token)|not authorized|security token.*(invalid|expired)|unrecognizedclient/i;
 const NETWORK_TEXT = /ENOTFOUND|ECONNREFUSED|EAI_AGAIN|ETIMEDOUT|ENETUNREACH/;
