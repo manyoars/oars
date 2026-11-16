@@ -14,18 +14,9 @@ import {
   loadPackInputs,
   OFFERS_FILE,
 } from './pack-store.js';
-import { cleanWorlds, makeWorld } from './test-world.js';
+import { cleanWorlds, envOf, makeWorld } from './test-world.js';
 
 afterEach(cleanWorlds);
-
-const envOf = (inputs: { packsDir: string; terms: string; owners: string; indexKey: string; storeDir: string; projectsDir: string }): NodeJS.ProcessEnv => ({
-  [ENV_PACKS_DIR]: inputs.packsDir,
-  [ENV_TERMS_FILE]: inputs.terms,
-  [ENV_OWNERS_FILE]: inputs.owners,
-  [ENV_INDEX_KEY_FILE]: inputs.indexKey,
-  [ENV_STORE_DIR]: inputs.storeDir,
-  [ENV_PROJECTS_DIR]: inputs.projectsDir,
-});
 
 describe('loadPackInputs', () => {
   it('reads the six operator-local paths, resolved', async () => {

@@ -3,7 +3,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { deposit, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { buildPack } from '../../pool/scripts/sample-pack.js';
-import { openPackStore, type PackInputs, type PackStore, type StoreOptions } from './pack-store.js';
+import {
+  ENV_INDEX_KEY_FILE,
+  ENV_OWNERS_FILE,
+  ENV_PACKS_DIR,
+  ENV_PROJECTS_DIR,
+  ENV_STORE_DIR,
+  ENV_TERMS_FILE,
+  openPackStore,
+  type PackInputs,
+  type PackStore,
+  type StoreOptions,
+} from './pack-store.js';
 
 /** The key the operator's own preview was built under; a buyer's key is a different one. */
 export const PREVIEW_KEY = 'operator-preview-key';
@@ -80,3 +91,13 @@ export const makeWorld = async (): Promise<World> => {
 };
 
 export const readIfPresent = (file: string): string => (existsSync(file) ? readFileSync(file, 'utf8') : '');
+
+/** The six operator-local variables for a world's inputs. */
+export const envOf = (inputs: PackInputs): NodeJS.ProcessEnv => ({
+  [ENV_PACKS_DIR]: inputs.packsDir,
+  [ENV_TERMS_FILE]: inputs.terms,
+  [ENV_OWNERS_FILE]: inputs.owners,
+  [ENV_INDEX_KEY_FILE]: inputs.indexKey,
+  [ENV_STORE_DIR]: inputs.storeDir,
+  [ENV_PROJECTS_DIR]: inputs.projectsDir,
+});
