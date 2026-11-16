@@ -19,7 +19,7 @@ Each side and arm has its own store folder, and each store folder is its own con
 
 7. **OWNER** After the account exists in the pool, set its source so its sessions feed the cells but drop out of the four counts. Run the dry run first, then the same line with `--confirm`, and keep the printed audit line with the run book:
 
-   `npm run set-source -w packages/pool -- --account <operator-fleet account id> --source operator-fleet --by matt --reason "commissioned-run fleet"`
+   `npm run set-source -w packages/pool -- --account <operator-fleet account id> --source operator-fleet --by owner --reason "commissioned-run fleet"`
 
    The script refuses an account the pool has not seen yet. If it does before the first deposit, run it right after the first deposit.
 
