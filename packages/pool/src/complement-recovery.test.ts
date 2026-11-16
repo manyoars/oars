@@ -1,5 +1,5 @@
-// The same-target recovery cells are parts of the recovery edge cell of the same code, failed action, and next step (a retry is the failed action again). Serving the edge beside all its served parts would show a sub-floor part
-// by subtraction, so a sub-floor part withholds one more served part, as for any whole and its parts.
+// The same-target recovery cells are parts of the recovery edge cell of the same code, failed action, and next step (a retry is the failed action again). A sub-floor part withholds one more served part, as for any whole
+// and its parts; the edge itself is never withheld for its parts, and one served part is always held back beside it (see below).
 import { describe, expect, it } from 'vitest';
 import { recoveryClass, type Cell } from '../../cli/src/sessions/cells.js';
 import { classMotif, type Motif } from '../../cli/src/sessions/motif.js';
@@ -26,8 +26,8 @@ const doc = classMotif(recoveryTargetClass('429', 'file.edit', 'doc', 'file.read
 const config = classMotif(recoveryTargetClass('429', 'file.edit', 'config', 'file.read'));
 
 describe('the recovery edge cell beside its same-target cells', () => {
-  it('serves all when every part clears the floor', () => {
-    expect(servedOf([['edge', edge, 6], ['source', source, 5], ['doc', doc, 5]])).toEqual(['doc', 'edge', 'source']);
+  it('holds back the smallest served part when every part clears the floor', () => {
+    expect(servedOf([['edge', edge, 8], ['source', source, 5], ['doc', doc, 6]])).toEqual(['doc', 'edge']);
   });
 
   it('withholds one more served part when a part is under the floor', () => {
@@ -53,7 +53,8 @@ describe('the recovery edge cell beside its same-target cells', () => {
   });
 });
 
-// The calls with no target class are in no part, so the parts never sum to the edge: a lone unserved part is not the edge's count, and the edge stays served whatever its parts are.
+// The calls with no target class are in no part, so the parts never sum to the edge: a lone unserved part is not the edge's count, and the edge stays served whatever its parts are. Those calls are no cell and have no
+// floor, so they count as one more unserved part: beside a served edge one served part is always held back, or the edge less its parts would give them exactly.
 describe('the recovery edge cell, which its same-target cells never complete', () => {
   const retryEdge = classMotif(recoveryClass('429', 'file.edit', 'file.edit'));
   const retry = classMotif(recoveryTargetClass('429', 'file.edit', 'source', 'retry'));
@@ -61,7 +62,9 @@ describe('the recovery edge cell, which its same-target cells never complete', (
 
   it.each([
     ['an edge with no part', [['edge', edge, 6]], ['edge']],
-    ['an edge beside one served part', [['edge', edge, 6], ['source', source, 5]], ['edge', 'source']],
+    ['an edge beside one served part, held back', [['edge', edge, 6], ['source', source, 5]], ['edge']],
+    ['an edge beside three served parts, the smallest held back', [['edge', edge, 18], ['source', source, 5], ['doc', doc, 6], ['config', config, 7]], ['config', 'doc', 'edge']],
+    ['an edge beside its one served retry part, held back', [['edge', retryEdge, 8], ['retry', retry, 5]], ['edge']],
     ['an edge beside its one part under the floor', [['edge', edge, 8], ['source', source, 4]], ['edge']],
     ['an edge beside two parts under the floor', [['edge', edge, 8], ['source', source, 4], ['doc', doc, 4]], ['edge']],
     ['an edge beside its one retry part, held under the floor', [['edge', retryEdge, 8], ['retry', thinRetry, 4]], ['edge']],
@@ -70,12 +73,14 @@ describe('the recovery edge cell, which its same-target cells never complete', (
     ['an edge under the floor beside one part under it', [['edge', edge, 4], ['source', source, 4]], []],
     ['an edge under the floor beside a served part and one under it', [['edge', edge, 4], ['source', source, 5], ['doc', doc, 4]], ['source']],
     ['an edge under the floor beside a served retry part that is the only step', [['edge', retryEdge, 4], ['retry', retry, 5]], []],
-  ] as const)('serves %s as the floor alone would', (_, entries, served) => {
+  ] as const)('serves %s', (_, entries, served) => {
     expect(servedOf(entries)).toEqual(served);
   });
 
   it('serves a retry part beside its edge when another step strictly beats it, and leaves the group out on a tie', () => {
-    expect(servedOf([['edge', retryEdge, 8], ['retry', retry, 5, 1], ['other', source, 6, 6]])).toEqual(['edge', 'other', 'retry']);
-    expect(servedOf([['edge', retryEdge, 8], ['retry', retry, 5, 5], ['other', source, 5, 5]])).toEqual(['edge']);
+    // The smaller retry part, which never recovered, is the one held back, so it does not silence its group.
+    const docRetry = classMotif(recoveryTargetClass('429', 'file.edit', 'doc', 'retry'));
+    expect(servedOf([['edge', retryEdge, 12], ['retry', retry, 6, 1], ['docRetry', docRetry, 5, 0], ['other', source, 7, 7]])).toEqual(['edge', 'other', 'retry']);
+    expect(servedOf([['edge', retryEdge, 12], ['retry', retry, 6, 6], ['docRetry', docRetry, 5, 0], ['other', source, 6, 6]])).toEqual(['edge']);
   });
 });
