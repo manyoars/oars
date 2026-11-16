@@ -147,7 +147,7 @@ describe('deposit-fleet', () => {
     }
   });
 
-  it('with --confirm runs oars once per store with its own config root, records each, and leaves the run book and the parent environment as they were', async () => {
+  it('with --confirm runs build, outbox, and send per store with its own config root, records each, and leaves the run book and the parent environment as they were', async () => {
     const s = await scene();
     const before = await readFile(s.runBook, 'utf8');
     const parent = process.env[KEY_ENV];

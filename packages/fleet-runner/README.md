@@ -15,7 +15,7 @@ The runner is proved with a scripted fake, and the Claude Code on Bedrock adapte
 | `src/runner.ts` | `runOrder`: void detection, in-place reruns, the run cap. |
 | `src/sign.ts` | The sign step and the verify command: `ssh-keygen -Y sign -n manyoars-runbook` and `-Y verify`, refusing a run book whose header status is not `complete`. |
 | `src/stores.ts` | `makeStager` (copies a valid run's transcript out of its temp folder), `buildStores` (one store folder per side and arm through the CLI's `deposit`), `readStores` (`tableOf` over each with `--min-sessions 3`). |
-| `src/deposit-fleet.ts` | `npm run deposit-fleet`: the later deposit step. Verifies a signed, complete run book, waits out the 6-hour idle rule, and runs `oars pool deposit --send-all` once per store with that store's config root in the child's environment. A dry run until `--confirm`. |
+| `src/deposit-fleet.ts` | `npm run deposit-fleet`: the later deposit step. Verifies a signed, complete run book, waits out the 6-hour idle rule, and runs `oars pool deposit`, `oars pool outbox`, and `oars pool deposit --send-all` per store with that store's config root in the child's environment, stopping a store at the first non-zero exit. A dry run until `--confirm`. |
 | `FLEET.md` | The one-time owner steps and the order of commands from run to deposit. |
 | `src/runbook.ts` | The run book as JSON Lines with a fixed key order, no transcript text, and no signature. |
 
