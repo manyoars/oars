@@ -3,6 +3,8 @@
 // `npm run sign -w packages/fleet-runner -- <run book> <key>` and `npm run verify-run-book -w packages/fleet-runner -- <run book> <allowed-signers> [<identity>]`.
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import { refuseInsideRepository } from '../../pool/scripts/real-work-table.js';
 
 /** The namespace the signature is bound to; verify refuses a signature made under another. */
 export const NAMESPACE = 'manyoars-runbook';
@@ -51,6 +53,7 @@ const requireComplete = (bytes: Buffer): void => {
 
 /** Signs `runBook` with the key at `keyPath`; the detached signature is written beside it as `<run book>.sig`, and that path is returned. */
 export const signRunBook = async (runBook: string, keyPath: string): Promise<string> => {
+  refuseInsideRepository(dirname(resolve(runBook)), 'signature');
   requireComplete(await readFile(runBook));
   const ran = await sshKeygen(['-Y', 'sign', '-n', NAMESPACE, '-f', keyPath, runBook], null);
   if (ran.status !== 0) throw new Error(`ssh-keygen -Y sign failed: ${ran.stderr.trim()}`);

@@ -1,6 +1,8 @@
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadStore } from '../../cli/src/sessions/store.js';
 import { CLEAN, makeFake, type Script } from './fake-harness.js';
@@ -112,5 +114,14 @@ describe('the real-work-table read over each store folder', () => {
     const server = (index: number) => rows[index]?.table.rows.find((row) => row.kind === 'server' && row.name === 'playwright');
     expect(server(0)).toMatchObject({ sessions: 24, thin: false });
     expect(server(1)).toMatchObject({ sessions: 2, thin: true, failureRate: null });
+  });
+
+  it('refuses to write the stores or the rows inside a git repository, for a direct caller too', async () => {
+    const inside = join(dirname(fileURLToPath(import.meta.url)), '..', '.guard-out');
+    const stager = makeStager(join(root, 'staging'));
+    const book = await runOrder({ order: order({ repeats: 1 }), taskSet: taskSet(1), fleet: FLEET, adapter: makeFake(CLEAN), clock: stepClock(), operator: 'Many Oars Co.', stage: stager.stage });
+    await expect(buildStores(book, stager, inside)).rejects.toThrow(/inside a git repository/);
+    await expect(readStores([], { out: inside, orderId: 'o-1', terms: TERMS, date: '2026-11-16' })).rejects.toThrow(/inside a git repository/);
+    expect(existsSync(inside)).toBe(false);
   });
 });

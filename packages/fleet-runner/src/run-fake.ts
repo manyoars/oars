@@ -10,6 +10,7 @@ import { loadTaskSet, parseFleet } from './manifest.js';
 import { parseOrder } from './order.js';
 import { runOrder } from './runner.js';
 import { serializeRunBook } from './runbook.js';
+import { refuseInsideRepository } from '../../pool/scripts/real-work-table.js';
 import { buildStores, makeStager, readStores } from './stores.js';
 import { FLEET, retestText, taskSet } from './test-fixtures.js';
 
@@ -30,6 +31,8 @@ export const main = async (argv: string[], print: (line: string) => void, clock:
   }
   const out = resolve(flag(argv, '--out') ?? (await mkdtemp(join(tmpdir(), 'fleet-run-fake-'))));
   try {
+    // Before anything runs: the run book, signature, stores, staging copies, and rows are published by the page build, never committed.
+    refuseInsideRepository(out, 'run book outputs');
     const fleet = fleetPath === undefined ? FLEET : parseFleet(await readFile(fleetPath, 'utf8'));
     const order = parseOrder(orderPath === undefined ? retestText({ runCap: 60 }) : await readFile(orderPath, 'utf8'), fleet);
     const tasks = tasksetPath === undefined ? taskSet(8) : await loadTaskSet(tasksetPath);
