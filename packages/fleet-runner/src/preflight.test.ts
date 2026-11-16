@@ -108,6 +108,15 @@ describe('preflight', () => {
     expect(lineOf(lines, 'node')).toMatch(/^wrong .*22.*floor 24/);
   });
 
+  it('compares the Node floor as major.minor.patch and prints it whole', async () => {
+    const file = join(taskSet, 'manifest.json');
+    await writeFile(file, (await readFile(file, 'utf8')).replace('>=24.0.0', '>=24.3.0'));
+    const { code, lines } = await run(GOOD, undefined, [], '24.1.0');
+    expect(code).toBe(1);
+    expect(lineOf(lines, 'node')).toMatch(/^wrong .*24\.1\.0.*floor 24\.3\.0/);
+    expect(lineOf((await run(GOOD, undefined, [], '24.3.0')).lines, 'node')).toMatch(/^ok .*24\.3\.0.*floor 24\.3\.0/);
+  });
+
   it('says missing when git or npm does not start', async () => {
     const noGit = await run({ ...GOOD, git: outcome('', null, 'ENOENT') });
     expect(lineOf(noGit.lines, 'git')).toMatch(/^missing/);

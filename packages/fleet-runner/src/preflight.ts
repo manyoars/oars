@@ -7,6 +7,7 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { delimiter, isAbsolute, join, resolve } from 'node:path';
 import { loadResetPlan, nodeSpawn, type ChildEnv, type EnvMap, type ResetPlan, type Spawn } from './claude-bedrock.js';
+import { isBelow, parseNodeVersion, showVersion } from './harness-shared.js';
 import { parseFleet, loadTaskSet } from './manifest.js';
 import { verifyRunBook } from './sign.js';
 
@@ -97,10 +98,10 @@ export const main = async (argv: string[], print: (line: string) => void, deps: 
     } catch (error) {
       loadFailure = error instanceof Error ? error.message : 'could not load';
     }
-    const nodeMajor = Number.parseInt(deps.nodeVersion ?? process.versions.node, 10);
+    const running = parseNodeVersion(deps.nodeVersion ?? process.versions.node);
     if (plan === null) report('wrong', 'node', 'the task set did not load, so its Node floor is unknown');
-    else if (nodeMajor >= plan.nodeFloor.major) report('ok', 'node', `${String(nodeMajor)} (floor ${String(plan.nodeFloor.major)})`);
-    else report('wrong', 'node', `${String(nodeMajor)} is below the task set's floor ${String(plan.nodeFloor.major)}; install Node ${String(plan.nodeFloor.major)} or later`);
+    else if (!isBelow(running, plan.nodeFloor)) report('ok', 'node', `${showVersion(running)} (floor ${showVersion(plan.nodeFloor)})`);
+    else report('wrong', 'node', `${showVersion(running)} is below the task set's floor ${showVersion(plan.nodeFloor)}; install Node ${showVersion(plan.nodeFloor)} or later`);
 
     // 3. git and npm. npm is a `.cmd` wrapper on Windows, which a spawn without a shell cannot start, so it is looked for on PATH instead of run.
     const ranGit = await tool(git, ['--version']);
