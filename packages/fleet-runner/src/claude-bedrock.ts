@@ -10,8 +10,8 @@ import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, extname } from 'node:path';
 import type { CheckResult, ExitKind, HarnessAdapter, Prepared, RunRequest, RunResult, TokenCounts, ToolPin } from './harness.js';
-import { existsSync, readFileSync } from 'node:fs';
-import { arrayAt, isObject, objectAt, parseJson, stringAt, optionalStringAt } from './json.js';
+import { readFileSync } from 'node:fs';
+import { arrayAt, isObject, type JsonObject, objectAt, parseJson, stringAt, optionalStringAt } from './json.js';
 import { loadTaskSet } from './manifest.js';
 
 /** An environment handed to a child: every value is set. */
@@ -51,7 +51,7 @@ export interface ClaudeBedrockSettings {
   /** A local path or a git URL of the fixture repository. */
   fixtureSource: string;
   fixtureTag: string;
-  /** The task-set folder: `manifest.json`, and per task `tasks/<id>/prompt.md` and `tasks/<id>/check.mjs`. */
+  /** The task-set folder: `manifest.json`, `prompts/<id>.md`, `checks/<id>.mjs`, and the `setup/` scripts the manifest names (the repository's `taskset/v1/`). */
   taskSetDir: string;
   /** The fleet manifest version this adapter was built for; reported as the manifest the run saw. */
   fleetManifestVersion: string;
@@ -113,23 +113,39 @@ export interface ClaudePrepared extends Prepared {
   fixtureCommit: string;
 }
 
-/** What a fresh run folder needs, read from the task-set manifest's `reset` object: `{ "node": "24", "commands": ["npm ci", "node scripts/build-db.ts"] }`. */
+/** What a fresh run folder needs, read from the task-set manifest: `reset` is `{ "node": ">=24.0.0", "install": "npm ci ...", "buildDb": "node scripts/build-db.ts" }`, and a task may name a `setup` script. */
 export interface ResetPlan {
   nodeMajor: number;
   commands: CommandSpec[];
+  /** Task id to its setup script, relative to the task-set folder; a task without one is absent. */
+  setups: ReadonlyMap<string, string>;
+  /** Every task id the manifest lists. */
+  taskIds: ReadonlySet<string>;
 }
+
+const commandLine = (reset: JsonObject, name: 'install' | 'buildDb'): CommandSpec => {
+  const text = stringAt(reset, name, 'taskset.reset').trim();
+  if (text === '') throw new Error(`taskset.reset.${name} must be a command line`);
+  const [command = '', ...args] = text.split(/\s+/);
+  return { command, args };
+};
 
 export const loadResetPlan = (taskSetDir: string): ResetPlan => {
   const root = objectAt(parseJson(readFileSync(join(taskSetDir, 'manifest.json'), 'utf8'), 'task-set manifest'), 'task-set manifest');
   const reset = objectAt(root['reset'], 'taskset.reset');
-  const nodeMajor = Number.parseInt(stringAt(reset, 'node', 'taskset.reset'), 10);
-  if (Number.isNaN(nodeMajor)) throw new Error('taskset.reset.node must start with a major version number');
-  const commands = arrayAt(reset, 'commands', 'taskset.reset').map((entry, index) => {
-    if (typeof entry !== 'string' || entry.trim() === '') throw new Error(`taskset.reset.commands[${String(index)}] must be a command line`);
-    const [command = '', ...args] = entry.trim().split(/\s+/);
-    return { command, args };
-  });
-  return { nodeMajor, commands };
+  const floor = /^>=\s*(\d+)/.exec(stringAt(reset, 'node', 'taskset.reset'));
+  if (floor === null) throw new Error('taskset.reset.node must be a ">=" floor such as ">=24.0.0"');
+  const setups = new Map<string, string>();
+  const taskIds = new Set<string>();
+  for (const [index, entry] of arrayAt(root, 'tasks', 'taskset').entries()) {
+    const at = `taskset.tasks[${String(index)}]`;
+    const task = objectAt(entry, at);
+    const id = stringAt(task, 'id', at);
+    taskIds.add(id);
+    const setup = optionalStringAt(task, 'setup', at);
+    if (setup !== undefined) setups.set(id, setup);
+  }
+  return { nodeMajor: Number.parseInt(floor[1] ?? '', 10), commands: [commandLine(reset, 'install'), commandLine(reset, 'buildDb')], setups, taskIds };
 };
 
 /** Ends a process and everything it started: the harness starts MCP servers of its own, and an orphan would keep drawing credit. */
@@ -369,6 +385,7 @@ export const makeClaudeBedrock = (settings: ClaudeBedrockSettings, deps: Depende
   };
 
   const prepare = async (request: RunRequest): Promise<ClaudePrepared> => {
+    if (!reset.taskIds.has(request.taskId)) throw new Error(`task ${request.taskId} is not in the task-set manifest`);
     const root = await mkdtemp(join(tmpdir(), 'fleet-claude-'));
     deps.onTempFolder?.(root);
     const dispose = async (): Promise<void> => {
@@ -389,8 +406,11 @@ export const makeClaudeBedrock = (settings: ClaudeBedrockSettings, deps: Depende
         await step(`reset command "${command.command} ${command.args.join(' ')}"`, { command: program, args: command.args, cwd: runFolder, env, stdin: null, timeoutMs });
       }
       // A task's own setup (spec: an optional Node script, the run folder as its first argument) runs after the reset and before the harness; a failure is the machine's, not the task's.
-      const setupScript = join(settings.taskSetDir, 'setup', `${request.taskId}.mjs`);
-      if (existsSync(setupScript)) await step(`setup script ${request.taskId}`, { command: process.execPath, args: [setupScript, runFolder], cwd: runFolder, env, stdin: null, timeoutMs });
+      const setupPath = reset.setups.get(request.taskId);
+      if (setupPath !== undefined) {
+        const setupScript = join(settings.taskSetDir, setupPath);
+        await step(`setup script ${request.taskId}`, { command: process.execPath, args: [setupScript, runFolder], cwd: runFolder, env, stdin: null, timeoutMs });
+      }
       const tool = settings.tool !== null && settings.tool.name === request.arm ? settings.tool : null;
       const wanted = request.expected.toolPins.find((pin) => pin.name === request.arm)?.pin;
       const installedPins: ToolPin[] = [];
@@ -430,7 +450,7 @@ export const makeClaudeBedrock = (settings: ClaudeBedrockSettings, deps: Depende
       folder.installedPins = [{ name: tool.name, pin: installedPin(tool, await readVersion(tool, folder.dir, folder.configDir), wanted) }];
       if (folder.installedPins.some((pin) => pin.pin !== wanted)) return skipped;
     }
-    const prompt = await readFile(join(settings.taskSetDir, 'tasks', request.taskId, 'prompt.md'), 'utf8');
+    const prompt = await readFile(join(settings.taskSetDir, 'prompts', `${request.taskId}.md`), 'utf8');
     const sessionId = randomUUID();
     const allowed = [...settings.allowedTools, ...(tool?.kind === 'server' ? [`mcp__${tool.name}`] : [])];
     const mcpFile = join(folder.configDir, 'mcp.json');
@@ -483,7 +503,7 @@ export const makeClaudeBedrock = (settings: ClaudeBedrockSettings, deps: Depende
 
   const check = async (prepared: Prepared, request: RunRequest): Promise<CheckResult> => {
     const folder = folderOf(prepared);
-    const script = join(settings.taskSetDir, 'tasks', request.taskId, 'check.mjs');
+    const script = join(settings.taskSetDir, 'checks', `${request.taskId}.mjs`);
     try {
       await readFile(script);
     } catch {
