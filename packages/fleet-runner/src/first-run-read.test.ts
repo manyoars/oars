@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -48,7 +49,23 @@ describe('first-run-read: one passing and one failing recording per question', (
   });
 
   it('scrub: cannot tell when the transcript holds no tool result', async () => {
-    expect(answer((await read({ transcript: 'transcript.none.jsonl' })).lines, 'scrub')).toMatch(/^cannot tell/);
+    expect(answer((await read({ transcript: 'transcript.none.jsonl' })).lines, 'scrub')).toMatch(/^cannot tell .*no tool result to search/);
+  });
+
+  it('scrub: takes the marker from FIRST_RUN_MARKER, and the flag wins', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'first-run-marker-'));
+    const transcript = join(folder, 'transcript.jsonl');
+    writeFileSync(transcript, `${JSON.stringify({ message: { content: [{ type: 'tool_result', content: `x ${MARKER}` }] } })}
+`);
+    const argv = ['--transcript', transcript, '--output', join(DIR, 'output.pass.jsonl'), '--run-book', join(DIR, 'run-book.jsonl'), '--model-id', MODEL];
+    const fromEnv: string[] = [];
+    await main(argv, (line) => fromEnv.push(line), { FIRST_RUN_MARKER: MARKER });
+    expect(answer(fromEnv, 'scrub')).toMatch(/^no /);
+    expect(fromEnv.join('
+')).not.toContain(MARKER);
+    const flagWins: string[] = [];
+    await main([...argv, '--marker', 'other-text'], (line) => flagWins.push(line), { FIRST_RUN_MARKER: MARKER });
+    expect(answer(flagWins, 'scrub')).toMatch(/^yes /);
   });
 
   it('(a): no on a run that reached its result, yes on a sign-in prompt, cannot tell with no result and no prompt', async () => {
@@ -88,6 +105,7 @@ describe('first-run-read: one passing and one failing recording per question', (
     expect(answer((await read({})).lines, '(e)')).toMatch(/^yes /);
     expect(answer((await read({}, [], 'anthropic.other-model')).lines, '(e)')).toContain(`init model is ${MODEL}, passed anthropic.other-model`);
     expect(answer((await read({}, [], 'anthropic.other-model')).lines, '(e)')).toMatch(/^no /);
+    expect(answer((await read({ output: 'output.e-fail.jsonl' })).lines, '(e)')).toMatch(/^no .*anthropic.claude-other-v9:0/);
     expect(answer((await read({ output: 'output.a-fail.jsonl' })).lines, '(e)')).toMatch(/^cannot tell/);
   });
 

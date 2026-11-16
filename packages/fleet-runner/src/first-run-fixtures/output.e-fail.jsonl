@@ -1,0 +1,1 @@
+{"type": "system", "subtype": "init", "session_id": "s-1", "claude_code_version": "2.1.30", "model": "anthropic.claude-other-v9:0", "cwd": "/work", "tools": ["Bash", "Read", "Edit"], "mcp_servers": [{"name": "browser", "status": "connected"}], "skills": [], "plugins": [], "permissionMode": "acceptEdits", "apiKeySource": "none"}
