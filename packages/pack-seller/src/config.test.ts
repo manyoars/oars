@@ -4,9 +4,12 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ConfigError, ENV_API_URL, ENV_HOST, ENV_PORT, ENV_SDK_KEY, ENV_SDK_KEY_FILE, loadConfig } from './config.js';
 import { start } from './server.js';
+import { ENV_INDEX_KEY_FILE, ENV_OWNERS_FILE, ENV_PACKS_DIR, ENV_PROJECTS_DIR, ENV_STORE_DIR, ENV_TERMS_FILE } from './pack-store.js';
+import { cleanWorlds, makeWorld } from './test-world.js';
 
 const dirs: string[] = [];
 afterEach(() => {
+  cleanWorlds();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 const fileWith = (content: string): string => {
@@ -56,8 +59,34 @@ describe('start', () => {
     expect(started).toEqual({ ok: false, line: `${ENV_API_URL} is not set.` });
   });
 
+  it('returns one line naming a pack variable that is missing, and starts nothing', async () => {
+    expect(await start({ ...ok })).toEqual({ ok: false, line: `${ENV_PACKS_DIR} is not set.` });
+  });
+
+  it('returns one line naming the file and pack for a malformed listing.json, and starts nothing', async () => {
+    const { inputs } = await makeWorld();
+    writeFileSync(join(inputs.packsDir, 'alpha', 'listing.json'), '{ not json');
+    const packs = { [ENV_PACKS_DIR]: inputs.packsDir, [ENV_TERMS_FILE]: inputs.terms, [ENV_OWNERS_FILE]: inputs.owners, [ENV_INDEX_KEY_FILE]: inputs.indexKey, [ENV_STORE_DIR]: inputs.storeDir, [ENV_PROJECTS_DIR]: inputs.projectsDir };
+    expect(await start({ ...ok, ...packs, [ENV_PORT]: '0' }, { log: () => undefined })).toEqual({ ok: false, line: 'listing.json of pack alpha is not valid JSON.' });
+  });
+
+  it('returns the listen line when the port is taken, so bin.ts prints one line', async () => {
+    // A taken port is what this tests.
+    const { inputs } = await makeWorld();
+    const packs = { [ENV_PACKS_DIR]: inputs.packsDir, [ENV_TERMS_FILE]: inputs.terms, [ENV_OWNERS_FILE]: inputs.owners, [ENV_INDEX_KEY_FILE]: inputs.indexKey, [ENV_STORE_DIR]: inputs.storeDir, [ENV_PROJECTS_DIR]: inputs.projectsDir };
+    const first = await start({ ...ok, ...packs, [ENV_PORT]: '0' }, { log: () => undefined });
+    if (!first.ok) throw new Error(first.line);
+    try {
+      expect(await start({ ...ok, ...packs, [ENV_PORT]: String(first.port) }, { log: () => undefined })).toEqual({ ok: false, line: `The pack seller could not listen: check ${ENV_PORT} and ${ENV_HOST}.` });
+    } finally {
+      first.server.close();
+    }
+  });
+
   it('listens on the port, answers /health, and closes', async () => {
-    const started = await start({ ...ok, [ENV_PORT]: '0' }, { log: () => undefined });
+    const { inputs } = await makeWorld();
+    const packs = { [ENV_PACKS_DIR]: inputs.packsDir, [ENV_TERMS_FILE]: inputs.terms, [ENV_OWNERS_FILE]: inputs.owners, [ENV_INDEX_KEY_FILE]: inputs.indexKey, [ENV_STORE_DIR]: inputs.storeDir, [ENV_PROJECTS_DIR]: inputs.projectsDir };
+    const started = await start({ ...ok, ...packs, [ENV_PORT]: '0' }, { log: () => undefined });
     if (!started.ok) throw new Error(started.line);
     try {
       const response = await fetch(`http://127.0.0.1:${String(started.port)}/health`);

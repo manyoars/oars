@@ -22,6 +22,12 @@ npm start -w packages/pack-seller
 | `OARS_SELLER_SDK_KEY` | The key itself, when no file is given. One of the two is required. |
 | `OARS_SELLER_PORT` | The port to listen on. Required. |
 | `OARS_SELLER_HOST` | The IP address to listen on. Default `127.0.0.1`; the image sets `0.0.0.0`. |
+| `OARS_SELLER_PACKS_DIR` | The folder holding one subfolder per pack (`listing.json` and the built `preview/`); per-buyer builds go under `builds/`. Required. |
+| `OARS_SELLER_TERMS_FILE`, `OARS_SELLER_OWNERS_FILE`, `OARS_SELLER_INDEX_KEY_FILE` | The term list, owners file, and index key the per-buyer build reads. Required. |
+| `OARS_SELLER_STORE_DIR`, `OARS_SELLER_PROJECTS_DIR` | The copy of the session store and the transcripts the build reads. Required. |
+| `OARS_SELLER_PRICE_USD` | The amount of a pack's `CREDIT_PACK` price, read by the price command, not yet built (`src/pricing.ts` holds the functions). It is never a default in code. |
+
+Every path above is local to the operator's machine, and a path inside a git repository is refused at start with a line naming the variable. The offer record (`offers.jsonl`) is kept beside `deliveries.jsonl`, next to the owners file.
 
 A missing or malformed value prints one line naming the variable and exits 1. The line never holds a value.
 
@@ -30,11 +36,12 @@ A missing or malformed value prints one line naming the variable and exits 1. Th
 | Method and path | What it does |
 |---|---|
 | `GET /health` | `{"status":"ok"}`. |
-| `GET /packs`, `GET /packs/{packId}` | The packs the catalog lists. Until the pack store lands the catalog is empty, so these answer an empty list and 404. |
+| `GET /packs`, `GET /packs/{packId}` | The packs the catalog lists. The page carries the manifest, census, card, and the terms fields. |
 | `POST /packs/{packId}/offer` | Body `{recipientLegalName, licenseVersion}`, both required. Creates a customer under a fresh ref, records both against it, asks for an offer, and returns `{offerId, expiresAt, priceRef, customerRef}`. The `customerRef` is shown this once and never logged. Rate limited per caller. |
+| `POST /packs/{packId}/download` | Header `X-Customer-Ref`, body `{buyerKey}`. Reads the balance (no credit refuses before anything is reserved), reserves one credit, rechecks the objections (a stale pack is rebuilt), builds the pack under the buyer's key, streams it as a tar archive, commits the credit, and appends the delivery record with the recipient and license from the offer. A failed build, a cut stream, a refused commit, or an objection recorded during the stream releases the reservation and writes no delivery. The key is held only for the build and is never logged or stored. |
 | `GET /credits` | The balance for the customer in the `X-Customer-Ref` header. |
 
-There are no public reservation routes. Reserve, commit, and release (`billing.reserve`, `billing.commit`, `billing.release` in `src/billing.ts`) are the seam for brief 3's download route, which runs them for the buyer; those paths answer 404.
+There are no public reservation routes. Reserve, commit, and release (`billing.reserve`, `billing.commit`, `billing.release` in `src/billing.ts`) run only inside the download route.
 
 A refusal from the platform reaches the caller as one of 400, 402, 404, 409, 502, or 503 with a one-line body `{"error":"..."}`; the platform's own text never does.
 

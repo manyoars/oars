@@ -11,6 +11,7 @@ export const NO_CREDITS: Refusal = { status: 402, message: 'No credits are avail
 export const NOT_FOUND: Refusal = { status: 404, message: 'Not found.' };
 export const CONFLICT: Refusal = { status: 409, message: 'The request conflicts with the current state.' };
 export const BUSY: Refusal = { status: 503, message: 'Busy. Try again later.' };
+export const BUILD_FAILED: Refusal = { status: 500, message: 'The pack could not be built.' };
 export const UNAVAILABLE: Refusal = { status: 502, message: 'The seller cannot reach billing right now.' };
 
 /**

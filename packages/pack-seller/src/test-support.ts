@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll } from 'vitest';
 import { createOarsClient } from '@manyoars/oars-client';
 import { createBilling } from './billing.js';
 import { createRateLimiter, OFFER_RATE_LIMIT, OFFER_RATE_WINDOW_MS } from './rate-limit.js';
+import type { PackStore } from './pack-store.js';
 import { createHandler, memoryOfferLedger, type PackCatalog, type PackListing } from './routes.js';
 
 export const API = 'https://api.test';
@@ -30,16 +31,17 @@ export const platform = (path: string, status: number, body: object, method: 'ge
   http[method](`${API}${path}`, () => HttpResponse.json(body, { status }));
 
 /** A seller wired to msw, a driven clock, and a captured log. */
-export const harness = () => {
+export const harness = (store?: PackStore) => {
   let time = 1_000;
   const lines: string[] = [];
-  const ledger = memoryOfferLedger();
+  const ledger = store?.ledger ?? memoryOfferLedger();
   const now = () => time;
   const client = createOarsClient({ version: 'test', baseUrl: API });
   const handle = createHandler({
     billing: createBilling(client, SDK_KEY),
-    catalog,
+    catalog: store?.catalog ?? catalog,
     ledger,
+    source: store ?? { prepare: () => Promise.reject(new Error('This harness has no pack source.')), check: () => Promise.reject(new Error('This harness has no pack source.')), record: () => Promise.reject(new Error('This harness has no pack source.')) },
     limiter: createRateLimiter(OFFER_RATE_LIMIT, OFFER_RATE_WINDOW_MS, now),
     log: (line) => lines.push(line),
     now,

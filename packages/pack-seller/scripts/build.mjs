@@ -1,13 +1,11 @@
-// Builds dist/ with tsc from src/ (tsconfig.build.json). dist/ is emptied first so a deleted source file cannot linger in the image.
-import { spawnSync } from 'node:child_process';
+// Bundles src/bin.ts into dist/bin.js with esbuild. The seller imports the pool's sample-pack and deliver and the CLI's session store by path, which tsc with rootDir src cannot emit,
+// so those sources are bundled in and the npm packages stay external (resolved from node_modules at run time). dist/ is emptied first so a deleted source file cannot linger.
 import { rmSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
 
 /** @param {string} path relative to packages/pack-seller */
 const here = (path) => fileURLToPath(new URL(`../${path}`, import.meta.url));
-const tsc = createRequire(import.meta.url).resolve('typescript/bin/tsc');
 
 rmSync(here('dist'), { recursive: true, force: true });
-const compiled = spawnSync(process.execPath, [tsc, '--project', here('tsconfig.build.json')], { stdio: 'inherit' });
-if (compiled.status !== 0) process.exit(compiled.status ?? 1);
+await build({ entryPoints: [here('src/bin.ts')], outfile: here('dist/bin.js'), bundle: true, platform: 'node', format: 'esm', packages: 'external', target: 'node24' });
