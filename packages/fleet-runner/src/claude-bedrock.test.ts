@@ -292,6 +292,29 @@ describe('run', () => {
     expect(result.exit).toEqual({ kind: 'crash', code: -1 });
   });
 
+  it('a timeout ends the harness and the processes it started', async () => {
+    const { prepared, result } = await run('scenario: tree' + String.fromCharCode(10), { timeLimitMs: 3000 });
+    expect(result.exit).toEqual({ kind: 'crash', code: -1 });
+    const pid = Number(readFileSync(join(prepared.configDir, 'grandchild.pid'), 'utf8'));
+    const alive = (): boolean => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    for (let i = 0; i < 50 && alive(); i += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(alive()).toBe(false);
+    await prepared.dispose();
+  }, 30000);
+
+  it('refuses a .cmd or .bat executable, which would leave the real claude running after a timeout', () => {
+    const r = rig();
+    expect(() => makeClaudeBedrock({ ...r.settings, claudeExecutable: 'claude.CMD' }, { env: ENV })).toThrow(/native claude/);
+    expect(() => makeClaudeBedrock({ ...r.settings, claudeExecutable: 'claude.bat' }, { env: ENV })).toThrow(/native claude/);
+  });
+
   it('reports the version the run saw so a difference voids it', async () => {
     expect((await run('scenario: version' + String.fromCharCode(10))).result.harnessVersion).toBe('9.9.9');
   });

@@ -1,6 +1,6 @@
 // A stand-in for the `claude` executable, for the Bedrock adapter's tests only. The first line of the prompt on stdin names the scenario; the stub writes what a real
 // run would (a stream-json stdout, a transcript under the config folder) and records what it was started with in <config>/stub-seen.json. It never opens the network.
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -21,7 +21,16 @@ writeFileSync(join(config, 'stub-child-seen.json'), childSaw);
 const line = (/** @type {object} */ value) => process.stdout.write(`${JSON.stringify(value)}\n`);
 const model = scenario === 'model' ? 'other-model-id' : valueOf('--model');
 line({ type: 'system', subtype: 'init', session_id: sessionId, claude_code_version: scenario === 'version' ? '9.9.9' : '2.1.30', model });
-if (scenario === 'hang') setTimeout(() => undefined, 60000);
+if (scenario === 'tree') {
+  // The harness starts MCP servers of its own; a timeout must end them too.
+  const grandchild = spawn(process.execPath, ['-e', 'setTimeout(() => undefined, 60000)'], {
+    stdio: 'ignore',
+    // On Windows a plain child can end with its parent through the host's job object, which would hide a missing tree kill; a detached one only a tree kill reaches. Elsewhere it stays in the group.
+    detached: process.platform === 'win32',
+  });
+  writeFileSync(join(config, 'grandchild.pid'), String(grandchild.pid));
+  setTimeout(() => undefined, 60000);
+} else if (scenario === 'hang') setTimeout(() => undefined, 60000);
 else if (scenario === 'crash') process.exit(139);
 else {
   const projects = join(config, 'projects', process.env.CLAUDE_CODE_PROJECT_DIR_NAME ?? 'work');
