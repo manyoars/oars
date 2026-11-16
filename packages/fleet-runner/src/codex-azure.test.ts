@@ -119,6 +119,26 @@ describe('construction', () => {
   });
 });
 
+describe('shared checks through the Codex adapter', () => {
+  it('accepts a 7 to 40 hex fixtureCommit as a prefix of the clone head, and reports a shorter, longer, or other one as a moved tag', async () => {
+    const { settings, commit } = rig();
+    for (const [wanted, moved] of [[commit.slice(0, 7), false], [commit.slice(0, 12), false], [commit.slice(0, 6), true], ['0000000', true]] as const) {
+      writeFileSync(join(scratch, 'taskset', 'manifest.json'), JSON.stringify({ version: 'v1', fixtureTag: 'taskset-v1', fixtureCommit: wanted, reset: RESET, tasks: [{ id: 't1', category: 'browser', status: 'written' }] }));
+      const prepared = await makeCodexAzure({ ...settings, tool: null }, { env: ENV }).prepare(request('no-tool', null));
+      expect(prepared.fixtureTag === 'taskset-v1', wanted).toBe(!moved);
+      await prepared.dispose();
+    }
+  });
+
+  it('compares the Node floor as major.minor.patch, not only the major', () => {
+    const { settings, commit } = rig();
+    writeFileSync(join(scratch, 'taskset', 'manifest.json'), JSON.stringify({ version: 'v1', fixtureTag: 'taskset-v1', fixtureCommit: commit, reset: { ...RESET, node: '>=24.3.1' }, tasks: [{ id: 't1', category: 'browser', status: 'written' }] }));
+    expect(() => makeCodexAzure(settings, { env: ENV, nodeVersion: '24.0.0' })).toThrow(/Node 24\.0\.0 is below the Node 24\.3\.1/);
+    expect(() => makeCodexAzure(settings, { env: ENV, nodeVersion: '24.3.0' })).toThrow(/below/);
+    expect(() => makeCodexAzure(settings, { env: ENV, nodeVersion: '24.3.1' })).not.toThrow();
+  });
+});
+
 describe('prepare', () => {
   it('holds only the provider settings and the one server for the server arm, and only the provider settings for the no-tool arm, with no sign-in file', async () => {
     const { settings } = rig();
@@ -130,6 +150,9 @@ describe('prepare', () => {
     expect(text).toContain('env_key = "AZURE_OPENAI_API_KEY"');
     expect(text.match(/\[mcp_servers\./g)).toHaveLength(1);
     expect(text).not.toMatch(/env_vars|^env =/m);
+    // The default KEY/SECRET/TOKEN exclusion already drops the key; the explicit AZURE_ filter is a second guard the stub cannot tell apart, so pin it here.
+    expect(text).toContain('"AZURE_*" = "exclude"');
+    expect(text).toContain('ignore_default_excludes = false');
     expect(text).not.toContain(SECRET);
     await server.dispose();
     const none = await adapter.prepare(request('no-tool', null));
