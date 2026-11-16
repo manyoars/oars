@@ -92,3 +92,11 @@ describe('the card does not call a call that followed a failed call a recovery',
     expect(text).not.toMatch(/recover/i);
   });
 });
+
+describe('the card prints no intervention block when the census counts no intervention', () => {
+  it('leaves out the title and the `unknown` definition for an empty tally', () => {
+    const card = cardOf(PACK, { ...CENSUS, intervention: {} }, KEPT);
+    expect(card).not.toContain('**Prompts per human intervention**');
+    expect(card).not.toContain('`unknown` means');
+  });
+});

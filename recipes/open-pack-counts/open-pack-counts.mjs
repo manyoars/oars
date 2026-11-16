@@ -102,7 +102,7 @@ export const countPack = (folder, by) => {
     }
     const id = row.matchId;
     // The id builds a path under sessions/, so an id that could leave that folder is never used.
-    const reason = ids.includes(id) ? 'matchId already seen' : /[/\\]/.test(id) || id === '.' || id === '..' ? 'matchId is not a plain folder name' : undefined;
+    const reason = ids.includes(id) ? 'matchId already seen' : /[/\\]/.test(id) || id === '' || id === '.' || id === '..' ? 'matchId is not a plain folder name' : undefined;
     if (reason !== undefined) {
       skipped.push({ file: 'manifest.jsonl', line: index + 1, reason });
       return;

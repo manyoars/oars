@@ -86,6 +86,7 @@ export const cardOf = (pack: unknown, census: unknown, kept: readonly TraceInput
   const redaction = field(pack, 'redactionVersion');
   const reasoning = field(pack, 'reasoning');
   const turns = counted(field(census, 'turnBucket'), 'census turnBucket');
+  const interventions = counted(field(census, 'intervention'), 'census intervention');
   return [
     '---',
     `license: ${CARD_LICENSE.id}`,
@@ -125,7 +126,7 @@ export const cardOf = (pack: unknown, census: unknown, kept: readonly TraceInput
     ...table('Prompts per model', counted(field(census, 'model'), 'census model'), unnamedNote(kept)),
     ...table('Failed calls per error code', counted(field(census, 'errorCode'), 'census errorCode')),
     ...table('Failed calls by what followed', counted(field(census, 'recovery'), 'census recovery')),
-    ...table('Prompts per human intervention', counted(field(census, 'intervention'), 'census intervention'), [unknownNote(kept)]),
+    ...table('Prompts per human intervention', interventions, Object.keys(interventions).length === 0 ? [] : [unknownNote(kept)]),
     ...table('Sessions per turn bucket (lowest turn count of the bucket)', turns),
     '',
   ].join('\n');
