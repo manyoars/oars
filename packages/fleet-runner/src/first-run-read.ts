@@ -44,6 +44,9 @@ const toolResults = (value: unknown, found: string[] = []): string[] => {
 
 const strings = (value: unknown): string[] => (Array.isArray(value) ? value.flatMap((item) => (typeof item === 'string' ? [item] : isObject(item) && typeof item['name'] === 'string' ? [item['name']] : [])) : []);
 
+// Each server as `name` or `name (source)`; `source` is where its definition came from (typescript.md, SDKSystemMessage `mcp_servers[].source`).
+const servers = (value: unknown): string[] => (Array.isArray(value) ? value.flatMap((item) => (isObject(item) && typeof item['name'] === 'string' ? [typeof item['source'] === 'string' ? `${item['name']} (${item['source']})` : item['name']] : [])) : []);
+
 const num = (value: unknown): number | null => (typeof value === 'number' ? value : null);
 
 // What Claude Code prints before a first run is usable: a sign-in or onboarding prompt. Searched only in stream lines that are not JSON and in an error result's text.
@@ -75,13 +78,20 @@ export const readFirstRun = (inputs: Inputs): string[] => {
   const leaked = results.filter(({ text }) => needles.some((needle) => text.includes(needle)));
   if (leaked.length > 0) lines.push(line('scrub (the key did not reach a tool)', 'no', `tool results on transcript line ${leaked.map(({ at }) => String(at)).join(', ')} show the key's name or marker`));
   else if (results.length === 0) lines.push(line('scrub (the key did not reach a tool)', 'cannot tell', 'the transcript holds no tool result to search (or its tool_result shape is not the one read)'));
-  else lines.push(line('scrub (the key did not reach a tool)', 'yes', `${String(results.length)} tool results read; none shows the key's name${inputs.marker === undefined ? '' : ' or the marker'}`));
+  else lines.push(line('scrub (the key did not reach a tool)', 'yes', `${String(results.length)} tool results read; none shows the key's name${inputs.marker === undefined || inputs.marker === '' ? '' : ' or the marker'}`));
 
   // (a) A sign-in or onboarding prompt in the output.
   const prose = inputs.output.split('\n').filter((text) => text.trim() !== '' && jsonLines(text).length === 0);
-  const errorText = events.flatMap(({ event }) => (event['type'] === 'result' && event['is_error'] === true && typeof event['result'] === 'string' ? [event['result']] : []));
-  const prompts = [...prose, ...errorText].filter((text) => ONBOARDING.test(text));
-  if (prompts.length > 0) lines.push(line('(a) an onboarding or sign-in prompt appeared', 'yes', `${String(prompts.length)} output lines match, first: "${(prompts[0] ?? '').slice(0, 80)}"`));
+  // The error arm has no `result` string: it carries `errors: string[]` and, on a known startup refusal, `startup_failure_reason`.
+  const errorText = events.flatMap(({ event }) => {
+    if (event['type'] !== 'result' || event['is_error'] !== true) return [];
+    const reason = typeof event['startup_failure_reason'] === 'string' ? [`startup_failure_reason ${event['startup_failure_reason']}`] : [];
+    const errors = Array.isArray(event['errors']) ? event['errors'].filter((item): item is string => typeof item === 'string') : [];
+    return [...(typeof event['result'] === 'string' ? [event['result']] : []), ...errors, ...reason];
+  });
+  const startup = events.some(({ event }) => event['type'] === 'result' && typeof event['startup_failure_reason'] === 'string');
+  const prompts = [...prose, ...errorText].filter((text) => ONBOARDING.test(text) || text.startsWith('startup_failure_reason '));
+  if (prompts.length > 0 || startup) lines.push(line('(a) an onboarding or sign-in prompt appeared', 'yes', `${String(prompts.length)} output lines match, first: "${(prompts[0] ?? '').slice(0, 80)}"`));
   else if (result === undefined) lines.push(line('(a) an onboarding or sign-in prompt appeared', 'cannot tell', 'the output has no result event, so the run may have stopped before any prompt could show'));
   else lines.push(line('(a) an onboarding or sign-in prompt appeared', 'no', `the run reached its result event (line ${String(result.at)}) and no output line reads like a prompt`));
 
@@ -89,7 +99,7 @@ export const readFirstRun = (inputs: Inputs): string[] => {
   if (init === undefined) lines.push(line("(b) the fixture's own config loaded", 'cannot tell', 'the output has no system init event'));
   else if (init.event['mcp_servers'] === undefined || init.event['skills'] === undefined) lines.push(line("(b) the fixture's own config loaded", 'cannot tell', `init (line ${String(init.at)}) lacks ${init.event['mcp_servers'] === undefined ? 'mcp_servers' : 'skills'}`));
   else {
-    const extraServers = strings(init.event['mcp_servers']).filter((name) => !inputs.allowServers.includes(name));
+    const extraServers = servers(init.event['mcp_servers']).filter((name) => !inputs.allowServers.includes(name.split(' ')[0] ?? ''));
     const extraSkills = strings(init.event['skills']).filter((name) => !inputs.allowSkills.includes(name));
     if (extraServers.length + extraSkills.length > 0) lines.push(line("(b) the fixture's own config loaded", 'yes', `init (line ${String(init.at)}) lists servers not allowed [${extraServers.join(', ')}] and skills not allowed [${extraSkills.join(', ')}]`));
     else lines.push(line("(b) the fixture's own config loaded", 'no', `init (line ${String(init.at)}) lists only the allowed servers [${strings(init.event['mcp_servers']).join(', ')}] and skills [${strings(init.event['skills']).join(', ')}]`));
@@ -97,6 +107,7 @@ export const readFirstRun = (inputs: Inputs): string[] => {
 
   // (c) An API error carries a status in the result event.
   if (result === undefined) lines.push(line('(c) an API error carries a status', 'cannot tell', 'the output has no result event'));
+  else if (result.event['subtype'] !== 'success') lines.push(line('(c) an API error carries a status', 'cannot tell', `the result (line ${String(result.at)}) is subtype ${String(result.event['subtype'])}; api_error_status exists only on the success arm`));
   else if (result.event['is_error'] !== true) lines.push(line('(c) an API error carries a status', 'cannot tell', `the result (line ${String(result.at)}) is not an error, so no API error was seen`));
   else {
     const status = num(result.event['api_error_status']);
