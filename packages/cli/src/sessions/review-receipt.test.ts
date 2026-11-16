@@ -1,0 +1,268 @@
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { run } from '../cli.js';
+import { harness } from '../test-support.js';
+import { session, store, tool } from './pool-fixture.js';
+import { familyOf, recentSessions, resolveSession, reviewReceiptOf, reviewReceiptText, scrub, VERIFICATION_FAMILIES } from './review-receipt.js';
+import type { ToolObservation } from './schema.js';
+import type * as StoreModule from './store.js';
+import type { Store } from './store.js';
+
+const held = vi.hoisted((): { store: Store | undefined } => ({ store: undefined }));
+vi.mock('./store.js', async (original) => ({ ...(await original<typeof StoreModule>()), loadStore: () => Promise.resolve(held.store) }));
+
+const VERSION = '9.9.9';
+const HOME = 'C:\\Users\\alice';
+
+const call = (id: string, n: number, templates: string[], over: Partial<ToolObservation> = {}): ToolObservation =>
+  tool(id, n, 'Bash', { templates, segments: templates.map((word) => ({ run: word, read: true })), ...over });
+
+/** One Claude Code session: a test that passed, a build that failed with exit 1, a hidden type check, a call with no result, a signal, and two other commands. */
+const fixture = (): Store =>
+  store({
+    sessions: [
+      session('s1', { tsFirst: '2026-11-10T09:00:00.000Z', models: { 'claude-opus-x': 5, 'claude-haiku-x': 1 } }),
+      session('s2', { tsFirst: '2026-11-12T09:00:00.000Z' }),
+      session('s3', { harness: 'codex', tsFirst: '2026-11-11T09:00:00.000Z' }),
+    ],
+    tools: [
+      call('s1', 0, ['git status']),
+      call('s1', 1, ['npx vitest run <path>']),
+      call('s1', 2, ['npm run build'], { status: 'error', errorCode: '1' }),
+      call('s1', 3, ['tsc --noEmit', 'echo <text>'], { segments: [{ run: 'tsc', read: false }, { run: 'echo', read: true }] }),
+      call('s1', 4, ['eslint <path>'], { status: 'none' }),
+      call('s1', 5, ['ls']),
+      call('s1', 6, ['pytest -k <ident>'], { status: 'error', errorCode: 'signal' }),
+      call('s2', 0, ['ls']),
+      call('s3', 0, ['cargo test'], { status: 'ok' }),
+    ],
+  });
+
+describe('verification families', () => {
+  const cases: Array<[string, string]> = [
+    ['npm test', 'test'],
+    ['npm run test:unit', 'test'],
+    ['npx vitest run <path>', 'test'],
+    ['jest --ci', 'test'],
+    ['python -m pytest -k <ident>', 'test'],
+    ['go test <path>', 'test'],
+    ['cargo test', 'test'],
+    ['mvn verify', 'test'],
+    ['gradle test', 'test'],
+    ['just check', 'test'],
+    ['npm run build', 'build'],
+    ['cargo build', 'build'],
+    ['eslint <path>', 'lint'],
+    ['ruff check <path>', 'lint'],
+    ['npm run lint', 'lint'],
+    ['tsc --noEmit', 'type check'],
+    ['npx mypy <path>', 'type check'],
+    ['prettier --check <path>', 'format check'],
+    ['cargo fmt -- --check', 'format check'],
+  ];
+  it.each(cases)('lists %s as a %s command', (command, family) => {
+    expect(familyOf(command)).toBe(family);
+  });
+  it('has a case above for every family and leaves other commands out', () => {
+    expect(new Set(cases.map((entry) => entry[1]))).toEqual(new Set(VERIFICATION_FAMILIES.map((entry) => entry.family)));
+    for (const other of ['git status', 'ls', 'npm install', 'echo test', 'prettier --write <path>', 'cat testing.txt']) expect(familyOf(other)).toBeUndefined();
+  });
+});
+
+describe('scrub', () => {
+  it('replaces the home directory and any absolute path with <path>', () => {
+    expect(scrub(`pytest ${HOME}\\work\\app /etc/passwd ~/x C:\\other\\y`, HOME)).toBe('pytest <path> <path> <path> <path>');
+    expect(scrub('pytest C:/Users/alice/work', HOME)).toBe('pytest <path>');
+  });
+  it('drops environment assignments and everything after a secret flag', () => {
+    expect(scrub('API_KEY=abc123 FOO=1 npm test', HOME)).toBe('npm test');
+    expect(scrub('npm test --token sk-live-9 --coverage', HOME)).toBe('npm test');
+    expect(scrub('deploy --password=hunter2 now', HOME)).toBe('deploy');
+    expect(scrub('mysql -p hunter2 run', HOME)).toBe('mysql');
+    expect(scrub('mvn -pl core test', HOME)).toBe('mvn -pl core test');
+    expect(scrub('npm test KEY=sk-abc', HOME)).toBe('npm test');
+  });
+  it('cuts a multi-line command to its first line with an ellipsis, and a long one to a length', () => {
+    expect(scrub('npm test\necho SECRET-SECOND-LINE', HOME)).toBe('npm test…');
+    expect(scrub(`npm ${'x'.repeat(200)}`, HOME)).toHaveLength(121);
+  });
+  it('leaves a one-character home alone', () => {
+    expect(scrub('npm test', '/')).toBe('npm test');
+  });
+});
+
+describe('reviewReceiptOf', () => {
+  const receipt = (id: string): ReturnType<typeof reviewReceiptOf> => {
+    const s = fixture();
+    const found = resolveSession(s, id);
+    if (found === undefined) throw new Error('no session');
+    return reviewReceiptOf(s, found, HOME);
+  };
+
+  it('lists verification commands in order with the observed result and counts the rest', () => {
+    const r = receipt('s1');
+    expect(r.rows).toEqual([
+      { order: 2, family: 'test', command: 'npx vitest run <path>', result: 'exit 0' },
+      { order: 3, family: 'build', command: 'npm run build', result: 'exit 1' },
+      { order: 4, family: 'type check', command: 'tsc --noEmit', result: 'not recorded' },
+      { order: 5, family: 'lint', command: 'eslint <path>', result: 'not recorded' },
+      { order: 7, family: 'test', command: 'pytest -k <ident>', result: 'failed' },
+    ]);
+    expect(r).toMatchObject({ date: '2026-11-10', harness: 'claude-code', model: 'claude-opus-x', calls: 7, other: 2 });
+  });
+
+  it('prints a Codex call as not recorded, never as passed', () => {
+    expect(receipt('s3').rows).toEqual([{ order: 1, family: 'test', command: 'cargo test', result: 'not recorded' }]);
+  });
+
+  it('reads a call with no segments by whether it holds one command', () => {
+    const one = call('s1', 0, ['npm test']);
+    delete one.segments;
+    const two = call('s1', 1, ['npm test', 'npm run build']);
+    delete two.segments;
+    const r = reviewReceiptOf(store({ sessions: [session('s1')], tools: [one, two] }), session('s1'), HOME);
+    expect(r.rows.map((row) => row.result)).toEqual(['exit 0', 'not recorded', 'not recorded']);
+  });
+
+  it('prints the table, the totals, and the footer', () => {
+    expect(reviewReceiptText(receipt('s1'), VERSION)).toBe(
+      [
+        '# Review receipt: verification commands one session ran',
+        '',
+        '- Session date: 2026-11-10',
+        '- Harness: claude-code',
+        '- Model: claude-opus-x',
+        "- Scope: one session's own tool calls (7 in all); commands run in its subagents are not included.",
+        '',
+        '| Command | Result | Call # |',
+        '| --- | --- | --- |',
+        '| `npx vitest run <path>` | exit 0 | 2 |',
+        '| `npm run build` | exit 1 | 3 |',
+        '| `tsc --noEmit` | not recorded | 4 |',
+        '| `eslint <path>` | not recorded | 5 |',
+        '| `pytest -k <ident>` | failed | 7 |',
+        '',
+        '5 verification commands (1 exit 0, 1 exit 1, 1 failed, 2 not recorded); 2 other commands not shown.',
+        '',
+        '---',
+        "What this is: commands the session ran and the results it observed on the author's machine. It is not proof the change is correct, and it maps to no pull request. Made locally by oars: `oars sessions receipt`  |  oars 9.9.9",
+      ].join('\n'),
+    );
+  });
+
+  it('states an empty session in one line and a lone command in the singular', () => {
+    const text = reviewReceiptText(receipt('s2'), VERSION);
+    expect(text).toContain('No verification commands recorded.\n\n0 verification commands; 1 other command not shown.');
+    expect(text).not.toContain('| Command |');
+    const bare = reviewReceiptText({ session: 'x', date: null, harness: 'cursor', model: null, calls: 1, rows: [{ order: 1, family: 'test', command: 'a|b `c`', result: 'exit 0' }], other: 0 }, VERSION);
+    expect(bare).toContain('- Session date: not recorded\n- Harness: cursor\n- Model: not recorded');
+    expect(bare).toContain("| `a\\|b 'c'` | exit 0 | 1 |");
+    expect(bare).toContain('1 verification command (1 exit 0); 0 other commands not shown.');
+  });
+
+  it('prints no home path, secret, or second line from a command', () => {
+    const risky = call('p', 0, [`API_KEY=sk-live-123 pytest ${HOME}\\secret-repo\\tests --token sk-live-456`, 'npm test\necho PRIVATE-SECOND-LINE', `vitest ${HOME}/work/app`]);
+    const text = reviewReceiptText(reviewReceiptOf(store({ sessions: [session('p')], tools: [risky] }), session('p'), HOME), VERSION);
+    for (const leaked of ['alice', 'secret-repo', 'sk-live', 'API_KEY', 'PRIVATE-SECOND-LINE']) expect(text).not.toContain(leaked);
+    expect(text).toContain('| `pytest <path>` |');
+    expect(text).toContain('| `npm test…` |');
+    expect(text).toContain('| `vitest <path>` |');
+  });
+});
+
+describe('session references', () => {
+  it('resolves an exact id or a unique prefix, and skips a superseded session', () => {
+    const s = store({ sessions: [session('abc-1'), session('abc-2'), session('xyz-1'), session('old', { supersededBy: 'xyz-1' })] });
+    expect(resolveSession(s, 'xyz')?.session).toBe('xyz-1');
+    expect(resolveSession(s, 'abc-2')?.session).toBe('abc-2');
+    expect(resolveSession(s, 'abc')).toBeUndefined();
+    expect(resolveSession(s, 'old')).toBeUndefined();
+    expect(resolveSession(s, '')).toBeUndefined();
+  });
+  it('lists the five most recent sessions by date, newest first', () => {
+    const many = store({ sessions: ['a', 'b', 'c', 'd', 'e', 'f'].map((id, index) => session(id, { tsFirst: `2026-11-0${String(index + 1)}T00:00:00.000Z` })).concat(session('z')) });
+    expect(recentSessions(many)).toEqual([
+      { session: 'f', date: '2026-11-06' },
+      { session: 'e', date: '2026-11-05' },
+      { session: 'd', date: '2026-11-04' },
+      { session: 'c', date: '2026-11-03' },
+      { session: 'b', date: '2026-11-02' },
+    ]);
+    expect(recentSessions(store({ sessions: [session('z')] }))).toEqual([{ session: 'z', date: 'no date' }]);
+  });
+});
+
+describe('oars sessions receipt through run', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'oars-review-receipt-'));
+    held.store = fixture();
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const wired = (): ReturnType<typeof harness> => {
+    const h = harness({ APPDATA: dir });
+    h.deps.version = VERSION;
+    h.deps.sessions = { storeDir: join(dir, 'store'), projectsRoot: join(dir, 'projects'), stdin: process.stdin, stdout: { write: () => true } };
+    return h;
+  };
+
+  it('prints the receipt to stdout and exits 0', async () => {
+    const h = wired();
+    expect(await run(['sessions', 'receipt', 's1'], h.deps)).toBe(0);
+    expect(h.out.join('')).toContain('| `npm run build` | exit 1 | 3 |');
+  });
+
+  it('writes the file with --out and prints one line', async () => {
+    const h = wired();
+    const file = join(dir, 'out', 'receipt.md');
+    expect(await run(['sessions', 'receipt', 's1', '--out', file], h.deps)).toBe(0);
+    expect(readFileSync(file, 'utf8')).toContain('# Review receipt');
+    expect(h.out.join('')).toBe(`Wrote ${file}\n`);
+  });
+
+  it('prints usage and the most recent ids with no id', async () => {
+    const h = wired();
+    expect(await run(['sessions', 'receipt'], h.deps)).toBe(0);
+    const out = h.out.join('');
+    expect(out).toContain('Usage: oars sessions receipt <session-id>');
+    expect(out).toContain('  s2  2026-11-12');
+  });
+
+  it('says so when the store has no session', async () => {
+    held.store = store({});
+    const h = wired();
+    expect(await run(['sessions', 'receipt'], h.deps)).toBe(0);
+    expect(h.out.join('')).toContain('No sessions in the local store yet.');
+  });
+
+  it('exits non-zero with one line for an unknown id', async () => {
+    const h = wired();
+    expect(await run(['sessions', 'receipt', 'nope'], h.deps)).not.toBe(0);
+    expect(h.err.join('').trim().split('\n')).toHaveLength(1);
+    expect(h.err.join('')).toContain('No session nope');
+  });
+
+  it('fails when the run has no session store', async () => {
+    const h = wired();
+    h.deps.sessions = undefined;
+    expect(await run(['sessions', 'receipt', 's1'], h.deps)).not.toBe(0);
+  });
+
+  it('starts no sender after the command, so nothing leaves the machine', async () => {
+    const h = wired();
+    const catchUp = vi.fn(() => Promise.resolve());
+    h.deps.catchUp = catchUp;
+    expect(await run(['sessions', 'receipt', 's1'], h.deps)).toBe(0);
+    expect(catchUp).not.toHaveBeenCalled();
+  });
+
+  it('carries the receipt under --json', async () => {
+    const h = wired();
+    expect(await run(['--json', 'sessions', 'receipt', 's1'], h.deps)).toBe(0);
+    expect(JSON.parse(h.out.join(''))).toMatchObject({ ok: true, receipt: { session: 's1', calls: 7 } });
+  });
+});

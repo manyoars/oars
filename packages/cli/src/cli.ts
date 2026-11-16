@@ -17,6 +17,7 @@ import { DEADLINE_MS, gateHook } from './gate/hook.js';
 import { managerReader } from './gate/registry.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
 import { sessionsTry } from './sessions/try.js';
+import { sessionsReviewReceipt } from './sessions/review-receipt.js';
 import { board, clubCreate, clubJoin, clubLeave, clubShow } from './club.js';
 import { githubVisibility, poolEnroll, poolMachineRevoke, poolMachines } from './sessions/machine-enroll.js';
 import { runNetGit } from './sessions/machine-hold.js';
@@ -278,6 +279,17 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
       // The command promises no network call: drop the sender before it runs, so the daily telemetry send that follows every command cannot start one, whether the run returns or throws.
       if (deps.telemetry !== undefined) deps.telemetry = { dir: deps.telemetry.dir, platform: deps.telemetry.platform };
       emit(deps, flag(options, 'json'), await sessionsTry(deps));
+    });
+
+  sessions
+    .command('receipt [session-id]')
+    .description("print a Markdown review receipt for one session: the verification commands (tests, builds, linters, type and format checks) it ran and the result each showed, to paste into a review by hand. With no id it lists your five most recent session ids. It reads your local store only and sends nothing; no prompt text, command output, or path is in it")
+    .option('--out <file>', 'write the receipt to this file instead of printing it')
+    .action(async (id: string | undefined, _options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      // The command promises no network call: drop the sender before it runs, so the daily telemetry send that follows every command cannot start one, whether the run returns or throws.
+      if (deps.telemetry !== undefined) deps.telemetry = { dir: deps.telemetry.dir, platform: deps.telemetry.platform };
+      emit(deps, flag(options, 'json'), await sessionsReviewReceipt(sessionDeps(deps), { session: id, out: text(options, 'out'), version: deps.version }));
     });
 
   sessions
@@ -890,8 +902,8 @@ const execute = async (argv: string[], deps: RunDeps, observed: Observed): Promi
 
 /** `sessions hook uninstall` is the first step of removing the store, so it must not start a sweep that would recreate what the person is about to delete. */
 const isHookUninstall = (observed: Observed): boolean => observed.path.join(' ') === 'sessions hook uninstall';
-/** `sessions try` promises no network call and no read of the real store, and the sender does both. */
-const isSessionsTry = (observed: Observed): boolean => observed.path.join(' ') === 'sessions try';
+/** `sessions try` promises no network call and no read of the real store, and the sender does both. `sessions receipt` promises no network call either, so it skips the sender too. */
+const isSessionsTry = (observed: Observed): boolean => ['sessions try', 'sessions receipt'].includes(observed.path.join(' '));
 /** `statusline` runs after every assistant message and promises no telemetry event, no weekly line, and no write: so it skips everything `run` does after the command. */
 const isStatusline = (observed: Observed): boolean => observed.path.join(' ') === 'statusline';
 
