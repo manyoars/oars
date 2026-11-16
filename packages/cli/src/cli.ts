@@ -4,6 +4,7 @@ import { resolveApiUrl } from './api.js';
 import { keysCreate, keysList, keysRevoke, SCOPED_AUTHORITIES } from './commands/keys.js';
 import { login } from './commands/login.js';
 import { logout } from './commands/logout.js';
+import { purchasingBuy, purchasingGet, purchasingOffer } from './commands/purchasing.js';
 import type { CredentialStore } from './credentials.js';
 import { CliError, ExitCode } from './errors.js';
 import type { BooksBy, RecallQuery } from './sessions/query.js';
@@ -71,6 +72,12 @@ const flag = (options: OptionValues, name: string): boolean => options[name] ===
 const text = (options: OptionValues, name: string): string | undefined => {
   const value: unknown = options[name];
   return typeof value === 'string' ? value : undefined;
+};
+
+/** `--sdk-key-file`, as the one optional field the purchasing options take. */
+const sdkKeyFile = (options: OptionValues): { sdkKeyFile?: string } => {
+  const file = text(options, 'sdkKeyFile');
+  return file === undefined ? {} : { sdkKeyFile: file };
 };
 
 const list = (options: OptionValues, name: string): string[] => {
@@ -251,6 +258,46 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
       // A status line runs after every assistant message: a run that cannot find its store prints the identifier alone, like one that cannot read it.
       const line = deps.sessions === undefined ? STATUSLINE_ID : await statuslineLine({ storeDir: deps.sessions.storeDir, now: deps.now(), color: flag(options, 'color') });
       deps.io.stdout(`${line}\n`);
+    });
+
+  const purchasing = program.command('purchasing').description("read an offer's terms, buy one of its packs, and poll the purchase, as the buying agent (its SDK key: OARS_SDK_KEY, or --sdk-key-file)");
+
+  purchasing
+    .command('offer')
+    .description("print an offer's terms: the seller and each pack")
+    .argument('<offerId>', 'the po_... offer the seller issued')
+    .option('--sdk-key-file <path>', "a file holding the buying agent's SDK key (default: OARS_SDK_KEY)")
+    .action(async (offerId: string, _options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await purchasingOffer(deps, { apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')), offerId, ...sdkKeyFile(options) }));
+    });
+
+  purchasing
+    .command('buy')
+    .description('buy one pack of an offer; rerun a failed command with the same --idempotency-key to get the same purchase')
+    .argument('<offerId>', 'the po_... offer the seller issued')
+    .requiredOption('--pack <priceRef>', "the offer's pack to buy, as `purchasing offer` prints it")
+    .option('--sdk-key-file <path>', "a file holding the buying agent's SDK key (default: OARS_SDK_KEY)")
+    .action(async (offerId: string, _options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      const outcome = await purchasingBuy(deps, {
+        apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')),
+        offerId,
+        priceRef: text(options, 'pack') ?? '',
+        idempotencyKey: text(options, 'idempotencyKey') ?? randomUUID(),
+        ...sdkKeyFile(options),
+      });
+      emit(deps, flag(options, 'json'), outcome);
+    });
+
+  purchasing
+    .command('get')
+    .description('print where a purchase stands; run it again until it leaves PENDING')
+    .argument('<purchaseId>', 'the purchase id `purchasing buy` prints')
+    .option('--sdk-key-file <path>', "a file holding the buying agent's SDK key (default: OARS_SDK_KEY)")
+    .action(async (purchaseId: string, _options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await purchasingGet(deps, { apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')), purchaseId, ...sdkKeyFile(options) }));
     });
 
   const sessions = program.command('sessions').description("deposit and recall your own coding-agent session logs, locally; try it on made-up sessions: oars sessions try (these commands make no model call and no network call, except `gold arms`, which asks your own Claude subscription; telemetry is separate: oars telemetry)");
