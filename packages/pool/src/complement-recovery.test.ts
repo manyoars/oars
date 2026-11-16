@@ -9,14 +9,14 @@ import { DEFAULT_FLOORS } from './floors.js';
 
 const FRAME = `${bucketPrefix('claude-code', '2.1.314')}opus`;
 const WEEK = '2026-10-12';
-const weekCell = (motif: Motif, clusters: number): Cell => ({ motifId: motif.motifId, frameBucket: FRAME, grain: 'week', day: WEEK, sessions: clusters, clusters, ok: clusters, failed: clusters, tokens: 0, durationMs: 0, exposed: false });
+const weekCell = (motif: Motif, clusters: number, ok = clusters): Cell => ({ motifId: motif.motifId, frameBucket: FRAME, grain: 'week', day: WEEK, sessions: clusters, clusters, ok, failed: clusters, tokens: 0, durationMs: 0, exposed: false });
 
 const bundleFor = (entries: readonly (readonly [string, Motif, number])[]) =>
   bundleOf('claude-code', '2.1.314', { cells: entries.map(([, motif, clusters]) => weekCell(motif, clusters)), environment: [], motifs: entries.map(([, motif]) => motif), strata: [] }, DEFAULT_FLOORS);
 
-const servedOf = (entries: readonly (readonly [string, Motif, number])[]): string[] => {
+const servedOf = (entries: readonly (readonly [string, Motif, number, number?])[]): string[] => {
   const labels = new Map(entries.map(([label, motif]) => [motif.motifId, label]));
-  const bundle = bundleOf('claude-code', '2.1.314', { cells: entries.map(([, motif, clusters]) => weekCell(motif, clusters)), environment: [], motifs: entries.map(([, motif]) => motif), strata: [] }, DEFAULT_FLOORS);
+  const bundle = bundleOf('claude-code', '2.1.314', { cells: entries.map(([, motif, clusters, ok]) => weekCell(motif, clusters, ok)), environment: [], motifs: entries.map(([, motif]) => motif), strata: [] }, DEFAULT_FLOORS);
   return bundle.cells.map((cell) => labels.get(cell.motifId) ?? 'unknown').sort();
 };
 
@@ -35,11 +35,12 @@ describe('the recovery edge cell beside its same-target cells', () => {
   });
 
   it('ties a retry part to the edge cell of the failed action', () => {
+    // The thin retry part makes the complement rule withhold the served `retry` part. Then a held retry that recovered keeps the group silent, so no part ships. Without the mapping the retry part is
+    // outside the edge's family, is served, and the group ships `retry` and `other`.
     const retryEdge = classMotif(recoveryClass('429', 'file.edit', 'file.edit'));
     const retry = classMotif(recoveryTargetClass('429', 'file.edit', 'source', 'retry'));
     const thin = classMotif(recoveryTargetClass('429', 'file.edit', 'doc', 'retry'));
-    expect(servedOf([['edge', retryEdge, 8], ['retry', retry, 5], ['other', source, 5], ['thin', thin, 4]])).toEqual(['edge']);
-    // `other` is served by the floor but its group holds the withheld retry, so the bundle leaves it out (below).
+    expect(servedOf([['edge', retryEdge, 8], ['retry', retry, 5, 1], ['other', source, 6, 6], ['thin', thin, 4]])).toEqual(['edge']);
   });
 
   it('stays silent on a same-target group whose retry part is withheld, and ships none of its cells', () => {
