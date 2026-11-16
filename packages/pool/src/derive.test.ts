@@ -2,8 +2,9 @@
 import { describe, expect, it } from 'vitest';
 import { recoveryClass, type Cell } from '../../cli/src/sessions/cells.js';
 import { classMotif } from '../../cli/src/sessions/motif.js';
-import { RECOVERY_TARGET_METHOD } from '../../cli/src/sessions/read.js';
+import { RECOVERY_TARGET_METHOD, type Read } from '../../cli/src/sessions/read.js';
 import { recoveryTargetClass } from '../../cli/src/sessions/recovery-target.js';
+import { recoveryEdgesOf } from '../../cli/src/sessions/recall-next.js';
 import { bucketPrefix, bundleOf } from './derive.js';
 import { DEFAULT_FLOORS } from './floors.js';
 import type { StoredPool } from './stored.js';
@@ -46,7 +47,7 @@ describe('the same-target recovery read in a bundle', () => {
 
   it('serves the most common recovering step when it is not a retry', () => {
     const reads = sameTarget(bundledOf([week('file.read', 5, 6, 5), week('retry', 5, 3, 2)], ['file.read', 'retry']));
-    expect(reads.map(({ slice, value }) => [slice.target, slice.next, value.recovered, value.of])).toEqual([['source', 'file.read', 5, 9]]);
+    expect(reads.map(({ slice, value }) => [slice.target, slice.step, value.recovered, value.of])).toEqual([['source', 'file.read', 5, 9]]);
   });
 
   it('serves nothing for a cell whose most common recovering step is a retry', () => {
@@ -55,8 +56,20 @@ describe('the same-target recovery read in a bundle', () => {
 
   it('serves nothing for a cell under the floor, and does not count it in the denominator of the one beside it', () => {
     const reads = sameTarget(bundledOf([week('file.read', 5, 6, 5), week('file.grep', 4, 3, 3)], ['file.read', 'file.grep']));
-    expect(reads.map(({ slice, value }) => [slice.next, value.of])).toEqual([['file.read', 6]]);
+    expect(reads.map(({ slice, value }) => [slice.step, value.of])).toEqual([['file.read', 6]]);
     expect(sameTarget(bundledOf([week('file.read', 4, 6, 5)], ['file.read']))).toEqual([]);
+  });
+
+  it('is not folded into the recovery edges the failure hook reads', () => {
+    const edge = classMotif(recoveryClass('429', 'file.edit', 'file.read'));
+    const edgeCell: Cell = { ...cellOf(`${prefix}opus`, '2026-10-12', edge.motifId), grain: 'week', clusters: 5, sessions: 5, failed: 6 };
+    const withEdge = (cells: Cell[]) => bundleOf('claude-code', '2.1.314', { cells, environment: [], motifs: [edge, motifOf('file.read')], strata: [] }, DEFAULT_FLOORS);
+    const both = withEdge([edgeCell, week('file.read', 5, 6, 5)]);
+    expect(sameTarget(both)).toHaveLength(1);
+    // A read id hashes its pool, which differs with the extra cells, so the edges are compared by what they count.
+    const counted = (reads: Read[]) => Object.values(recoveryEdgesOf(reads)).map((edges) => edges.map(({ next, followed, of, clusters }) => [next, followed, of, clusters]));
+    expect(counted(both.reads)).toEqual(counted(withEdge([edgeCell]).reads));
+    expect(Object.keys(recoveryEdgesOf(both.reads))).toEqual(['file.edit/429']);
   });
 
   it('leaves the bundle as it was for a store with no same-target cells', () => {

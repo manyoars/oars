@@ -119,7 +119,7 @@ describe('the read', () => {
   it('names the step that most often came back ok, even when it is another tool on the same target', () => {
     const reads = readOf([failedEdit(0), okRead(1), failedEdit(2), okRead(3), failedEdit(4), badRead(5)]);
     expect(reads).toHaveLength(1);
-    expect(reads[0]).toMatchObject({ family: 'recovery', method: RECOVERY_TARGET_METHOD.name, slice: { action: 'file.edit', errorCode: '429', target: 'source', next: 'file.read' }, n: 2, value: { recovered: 2, followed: 3, of: 3 } });
+    expect(reads[0]).toMatchObject({ family: 'recovery', method: RECOVERY_TARGET_METHOD.name, slice: { failed: 'file.edit', errorCode: '429', target: 'source', step: 'file.read' }, n: 2, value: { recovered: 2, followed: 3, of: 3 } });
     expect(reads[0]?.inputs).toHaveLength(1);
   });
 
@@ -129,7 +129,7 @@ describe('the read', () => {
 
   it('is present when a retry is not the most common step', () => {
     const reads = readOf([failedEdit(0), okEdit(1), failedEdit(2), okRead(3), failedEdit(4), okRead(5)]);
-    expect(reads.map((one) => [one.slice.next, one.n])).toEqual([['file.read', 2]]);
+    expect(reads.map((one) => [one.slice.step, one.n])).toEqual([['file.read', 2]]);
   });
 
   it('is absent when nothing came back ok', () => {
