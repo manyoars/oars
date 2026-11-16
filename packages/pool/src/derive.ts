@@ -146,12 +146,15 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
   const shippedOf = (cell: Cell): Cell => rowOf.get(standing.get(cell) ?? cell) ?? cell;
   const reads = SERVED.map(({ family, derive }) => {
     const familyFloor = floorFor(floors, family);
-    const { served: at, pool: familyPool } = poolAt(familyFloor);
+    const { served: at, held: heldAt, pool: familyPool } = poolAt(familyFloor);
     const shipped = at.map(shippedOf);
     const floorOfCell = new Map(shipped.map((cell) => [cellIdOf(cell), cellFloor(floors, familyFloor, cellClassOf(cell, motifOf.get(cell.motifId)))]));
     const shippedPool = familyFloor === floors.public ? familyPool : { ...poolOf({ cells: shipped, motifs }, []), version: familyPool.version, lastDay: familyPool.lastDay };
     // A read cites only cells its pool serves, so every input has a floor; the family's own is the fallback a cited non-cell would take.
-    return { family, read: readsOf(shippedPool, derive, (cellId) => floorOfCell.get(cellId) ?? familyFloor), leftOut: family === 'recovery' ? retryToppedOf(shippedPool).map(cellIdOf) : [] };
+    const silent = new Set(family === 'recovery' ? retryToppedOf(shippedPool, poolOf({ cells: heldAt, motifs }, [])).map(cellIdOf) : []);
+    // A same-target read of a silent group is dropped here: the family's derive sees only the served cells, and a retry it holds back is not among them.
+    const read = readsOf(shippedPool, derive, (cellId) => floorOfCell.get(cellId) ?? familyFloor).filter(({ inputs }) => !inputs.some((id) => silent.has(id)));
+    return { family, read, leftOut: [...silent] };
   });
   // The cells a family on its own floor cites, beside those the public floor serves.
   const cited = new Set(reads.filter(({ family }) => floorFor(floors, family) !== floors.public).flatMap(({ read }) => read.flatMap(({ inputs }) => inputs)));

@@ -355,12 +355,11 @@ export const cellFold = (graph: RecallGraph = NO_RECALLS): CellFold => {
         if (calls[at]?.status !== 'error' || tool.errorCode === undefined || tool.targetClass === undefined || tool.targetClass === 'none') continue;
         const nextAt = nextIndexOf(calls, at);
         const next = nextAt === null ? undefined : calls[nextAt];
-        const nextTool = nextAt === null ? undefined : line[nextAt];
-        if (next === undefined || nextTool === undefined) continue;
+        if (nextAt === null || next === undefined) continue;
         const code = ERROR_CODES.has(tool.errorCode) ? tool.errorCode : 'other';
         const failedAction = calls[at].steps[0]?.action ?? 'other';
         const nextAction = next.steps[0]?.action ?? 'other';
-        const step = nextStepOf({ action: failedAction, targetClass: tool.targetClass }, { action: nextAction, targetClass: nextTool.targetClass });
+        const step = nextStepOf({ action: failedAction, targetClass: tool.targetClass }, { action: nextAction, targetClass: line[nextAt]?.targetClass });
         const motif = classMotif(recoveryTargetClass(code, failedAction, tool.targetClass, step));
         motifs.set(motif.motifId, motif);
         const tally = tallyAt(motif, versionBucketOf(frame), 'week', weekStartOf(frame.day ?? UNKNOWN), 'unknown');
