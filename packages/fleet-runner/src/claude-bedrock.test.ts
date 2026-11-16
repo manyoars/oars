@@ -349,12 +349,8 @@ describe('run', () => {
       const host = new EventEmitter();
       const raised: string[] = [];
       const fakeHost: HostProcess = { pid: 4242, once: (name, listener) => host.once(name, listener), kill: (_pid, signal) => raised.push(signal) };
-      const adapter = makeClaudeBedrock(r.settings, { env: ENV, spawn: makeNodeSpawn((ms, fire) => {
-        const handle = setTimeout(fire, ms);
-        return () => {
-          clearTimeout(handle);
-        };
-      }, fakeHost) });
+      // A timer that never fires: only the handler can end the stub.
+      const adapter = makeClaudeBedrock(r.settings, { env: ENV, spawn: makeNodeSpawn(() => () => undefined, fakeHost) });
       const req = request('no-tool', null);
       const prepared = await adapter.prepare(req);
       const seen = join(prepared.configDir, 'stub-seen.json');
@@ -362,8 +358,17 @@ describe('run', () => {
       for (let i = 0; i < 300 && !existsSync(seen); i += 1) await new Promise((resolve) => setTimeout(resolve, 100));
       expect(existsSync(seen)).toBe(true);
       host.emit(event);
-      // The stub would run for a minute; the signal ends it, which settles the run as a non-clean exit.
-      expect((await running).exit.kind).not.toBe('ok');
+      // The stub would run for a minute; a missing kill fails at the deadline instead of hanging.
+      let deadline: NodeJS.Timeout | undefined;
+      const limit = new Promise<never>((_resolve, reject) => {
+        deadline = setTimeout(() => {
+          reject(new Error('the stub was not ended by ' + event));
+        }, 30000);
+      });
+      const result = await Promise.race([running, limit]).finally(() => {
+        clearTimeout(deadline);
+      });
+      expect(result.exit.kind).not.toBe('ok');
       expect(raised).toEqual(event === 'exit' ? [] : [event]);
       await prepared.dispose();
     }
