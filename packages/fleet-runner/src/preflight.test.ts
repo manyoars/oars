@@ -188,6 +188,15 @@ describe('preflight', () => {
     expect(lines.at(-1)).toMatch(/^preflight: could not finish/);
   });
 
+  it('reads the package fleet manifest when --fleet is absent, and --fleet still wins', async () => {
+    const { spawn } = stubs(GOOD);
+    const lines: string[] = [];
+    await main(['--taskset', taskSet, '--fixture-source', 'x'], (line) => lines.push(line), { env: env(), spawn, defaultFleet: fleet });
+    expect(lineOf(lines, 'claude')).toMatch(/^ok /);
+    await writeFile(fleet, JSON.stringify({ version: 'fleet-1', harnesses: [] }));
+    expect(lineOf((await run(GOOD)).lines, 'claude')).toMatch(/^wrong /);
+  });
+
   it('says wrong when the fleet manifest names no claude-code-bedrock harness', async () => {
     await writeFile(fleet, JSON.stringify({ version: 'fleet-1', harnesses: [] }));
     const { code, lines } = await run(GOOD);
