@@ -11,7 +11,7 @@ import { main, signRunBook, verifyRunBook } from './sign.js';
 
 const bookOf = (status: RunBook['header']['status']): string =>
   serializeRunBook({
-    header: { orderId: 'o-1', line: 'retest', taskSetVersion: 'v1', manifestVersion: 'fleet-1', fixtureTag: 't', fixtureCommit: 'c', tools: [], arms: [], sides: [], operator: 'Many Oars Co.', repeats: 3, runCap: 9, startDate: '2026-11-16', endDate: '2026-11-16', status, shortCells: [] },
+    header: { orderId: 'o-1', line: 'retest', taskSetVersion: 'v1', manifestVersion: 'fleet-1', fixtureTag: 't', fixtureCommit: 'c', tools: [], arms: [], sides: [], operator: 'Many Oars Co.', account: 'acct-fleet', repeats: 3, runCap: 9, startDate: '2026-11-16', endDate: '2026-11-16', status, shortCells: [] },
     runs: [],
   });
 

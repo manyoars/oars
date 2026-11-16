@@ -34,8 +34,8 @@ describe('run-fake', () => {
       expect(await main(['--out', out], (line) => lines.push(line), fixedClock())).toBe(0);
       expect(lines.slice(2).map((line) => line.replace(out, '<out>').replaceAll('\\', '/'))).toEqual([
         'run book (unsigned): <out>/o-1.run-book.jsonl',
-        'store folder before-playwright: <out>/o-1.stores/before-playwright/store (24 sessions)',
-        'store folder after-playwright: <out>/o-1.stores/after-playwright/store (24 sessions)',
+        'store folder before-playwright: <out>/o-1.stores/before-playwright/oars/sessions (24 sessions)',
+        'store folder after-playwright: <out>/o-1.stores/after-playwright/oars/sessions (24 sessions)',
         'demo exclusion terms: <out>/o-1.demo-terms.txt',
         'rows before-playwright: <out>/o-1.before-playwright.rows.json (24 sessions, min 3)',
         'rows after-playwright: <out>/o-1.after-playwright.rows.json (24 sessions, min 3)',
