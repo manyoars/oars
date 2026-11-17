@@ -2,11 +2,11 @@
 // holds) and what the run cost. Counts, bytes, and closed words only; the schema checks them again before anything reaches the spool.
 import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { CAPTURE_VERSION, OLDEST_READABLE_CAPTURE, type StepRow } from '../sessions/schema.js';
+import { CAPTURE_VERSION, OLDEST_READABLE_CAPTURE, type SessionObservation, type StepRow } from '../sessions/schema.js';
 import { readSteps } from '../sessions/steps.js';
-import { frozenSessions, loadStore, paths, readSkeletons, type SessionsRuntime } from '../sessions/store.js';
+import { frozenSessions, loadRuns, paths, readSkeletons, type SessionsRuntime } from '../sessions/store.js';
 import { LITERAL, publicModel, publicVersion } from '../sessions/public-vocabulary.js';
-import { verifyAll, verifyCaptured } from '../sessions/verify.js';
+import { CAPTURE_INVARIANTS, verifyAll, verifyCaptured, type InvariantResult } from '../sessions/verify.js';
 import { emitEvent, recordsEvents, type Emitter } from './emit.js';
 import { spoolEvents } from './read-events.js';
 
@@ -85,14 +85,38 @@ const lastExtractorVersions = (steps: readonly StepRow[]): string[] => {
   return [...latest.values()].map((step) => step.ev);
 };
 
+/** The rows of `verifyCaptured` that compare sessions with each other (the `cv`-behind count and the one majority `sid`): they read every session at once. The others hold per session and per call. */
+const ACROSS_SESSIONS: ReadonlySet<string> = new Set([CAPTURE_INVARIANTS[0], CAPTURE_INVARIANTS[1]]);
+
+/**
+ * The captured store as the snapshot reads it, a run of sessions at a time: the session records (a record each, never a call) and `verifyCaptured` over them and their calls. The calls are the bulk of
+ * the log, so a run's calls answer the rows that hold per call and per session and are let go; the rows across sessions are answered over the session records alone. Equal to `verifyCaptured` over a whole `loadStore`.
+ */
+export const readCaptured = async (runtime: SessionsRuntime): Promise<{ sessions: SessionObservation[]; subagents: SessionObservation[]; capture: InvariantResult[] }> => {
+  const sessions: SessionObservation[] = [];
+  const subagents: SessionObservation[] = [];
+  const perRun: InvariantResult[][] = [];
+  for await (const { store } of loadRuns(runtime)) {
+    sessions.push(...store.sessions);
+    subagents.push(...store.subagents);
+    perRun.push(verifyCaptured([...store.sessions, ...store.subagents], store.tools));
+  }
+  const captured = [...sessions, ...subagents];
+  const frozen = await frozenSessions(runtime, captured.filter((session) => Number(session.cv) >= OLDEST_READABLE_CAPTURE && Number(session.cv) < Number(CAPTURE_VERSION)));
+  const capture = verifyCaptured(captured, [], frozen).map((row, index) => {
+    if (ACROSS_SESSIONS.has(row.name)) return row;
+    return { name: row.name, checked: perRun.reduce((sum, run) => sum + (run[index]?.checked ?? 0), 0), violations: perRun.reduce((sum, run) => sum + (run[index]?.violations ?? 0), 0) };
+  });
+  return { sessions, subagents, capture };
+};
+
 const storeFields = async (runtime: SessionsRuntime): Promise<StoreHealthFields> => {
   const { storeDir } = runtime;
   const { skeletons, unreadable } = await readSkeletons(storeDir, undefined, true);
-  const store = await loadStore(storeDir);
+  const store = await readCaptured(runtime);
   const steps = await readSteps(storeDir);
   const captured = [...store.sessions, ...store.subagents];
-  const frozen = await frozenSessions(runtime, captured.filter((session) => Number(session.cv) >= OLDEST_READABLE_CAPTURE && Number(session.cv) < Number(CAPTURE_VERSION)));
-  const results = [...verifyAll(skeletons, skeletons), ...verifyCaptured(captured, store.tools, frozen)];
+  const results = [...verifyAll(skeletons, skeletons), ...store.capture];
   return {
     sessions: store.sessions.length,
     subagents: store.subagents.length,
