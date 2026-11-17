@@ -2145,7 +2145,12 @@ export const deriveFold = (): DeriveFold => {
     },
     finish: (store, at) => {
       const bySig = new Map<string, ErrorObservation[]>();
-      for (const error of store.errors) bySig.set(error.sig, [...(bySig.get(error.sig) ?? []), error]);
+      // Push into the signature's list: copying it on every error is quadratic in the errors of one signature (37,332 on the generated store, 697M copies, 6.5 s).
+      for (const error of store.errors) {
+        const list = bySig.get(error.sig);
+        if (list === undefined) bySig.set(error.sig, [error]);
+        else list.push(error);
+      }
       const signatures: SignatureRecord[] = [...bySig.entries()].map(([sig, list]) => signatureRecord(sig, list));
       signatures.sort((a, b) => b.sessions - a.sessions || b.count - a.count || a.sig.localeCompare(b.sig));
       for (const [cls, entry] of ratio) {
