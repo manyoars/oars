@@ -55,7 +55,7 @@ The first real run is a credit draw on the approved Bedrock credits. It also ans
    It reads `fleet-manifest.json` in this package. `--fleet <file>` names another one.
 
    Add `--run-book <file> --allowed-signers <file>` to also verify a signed run book. A first run has none yet.
-2. **OWNER** Tell the owner that the next step is a credit draw (K5), and wait for their yes. Do not go on without it.
+2. **OWNER** Tell the owner that the next step is a credit draw, and wait for their yes. Do not go on without it.
 3. Run exactly one task, once. The adapter saves the stdout of `claude` as `<runId>.stdout.jsonl` in `transcriptOutDir`, beside the transcript copy `<runId>.jsonl`, with the key's value replaced by `[redacted]`. It writes the file when the run ends in an API error or a timeout too. Keep the transcript copy, the run book, and `<runId>.stdout.jsonl` for that run.
 4. Run the first-run read over those files. It prints one line per question: `yes`, `no`, or `cannot tell`, and the evidence it read. It only prints. It never decides a void and never edits a record.
 
@@ -74,4 +74,4 @@ The Codex arm of the first draw (two controls, three repeats) runs the `codex-az
 - Node at or above the task set's floor, and git and npm on PATH.
 - The private fixture reachable from this machine.
 - No `/etc/codex/skills` folder on the machine (Codex would load its skills into every run).
-- Tell the owner before the draw (K5) and wait for their yes, as in the Claude steps above.
+- Tell the owner before the draw and wait for their yes, as in the Claude steps above.
