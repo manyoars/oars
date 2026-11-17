@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { compactLog, deposit, scanLog, depositSession, derive, loadRuns, loadStore, logStart, namesAny, paths, readCalls, readRedactDomains, readSkeletonGroups, readSkeletons, runOrder, slugOf, withLock, type StoreRun } from './store.js';
+import { compactLog, deposit, LOAD_RUN, scanLog, depositSession, derive, loadRuns, loadStore, logStart, namesAny, paths, readCalls, readRedactDomains, readSkeletonGroups, readSkeletons, runOrder, slugOf, withLock, type StoreRun } from './store.js';
 import { CAPTURE_VERSION, EXTRACTOR_VERSION } from './schema.js';
 import { addProject, cleanup, NOW, stage } from './test-support.js';
 
@@ -552,5 +552,62 @@ describe('concurrent hook deposits', () => {
     };
     await Promise.all([withLock(staged.storeDir, work), withLock(staged.storeDir, work), withLock(staged.storeDir, work)]);
     expect(most).toBe(1);
+  });
+});
+
+describe('the run size of the readers of the calls', () => {
+  /** The four staged sessions and `LOAD_RUN` more with the first one's calls, so a default read has two runs; a copy of one session's records one rev lower is appended, a superseded line the next compaction drops. */
+  const grown = async () => {
+    const staged = stage();
+    const calls = readFileSync(join(staged.projectsRoot, 'proj', 'errors-a.jsonl'), 'utf8').split('\n').filter((line) => line !== '');
+    for (let n = 0; n < LOAD_RUN; n += 1) addProject(staged, 'proj-more', `more-${String(n).padStart(2, '0')}`, calls);
+    await deposit(staged.runtime, options([]));
+    const log = paths(staged.storeDir).observations;
+    const older = readFileSync(log, 'utf8')
+      .split('\n')
+      .filter((line) => line.includes('"session":"errors-a"'))
+      .map((line) => `${line.replace(/"rev":(\d+)/, (_, rev: string) => `"rev":${String(Number(rev) - 1)}`)}\n`);
+    expect(older.length).toBeGreaterThan(1);
+    appendFileSync(log, older.join(''));
+    return staged;
+  };
+
+  const everyRun = async (storeDir: string, refreshRun?: number): Promise<StoreRun[]> => {
+    const runs: StoreRun[] = [];
+    for await (const run of loadRuns({ storeDir, ...(refreshRun === undefined ? {} : { refreshRun }) })) runs.push(run);
+    return runs;
+  };
+
+  it('hands back no more than LOAD_RUN sessions at a time when the runtime names no run size', async () => {
+    const staged = await grown();
+    const runs = await everyRun(staged.storeDir);
+    expect(runs.length).toBeGreaterThan(1);
+    for (const { store } of runs) expect(store.sessions.length + store.subagents.length).toBeLessThanOrEqual(LOAD_RUN);
+  });
+
+  it('holds what the whole-store read holds, in the order it holds it, on a log with a superseded line and again once it is compacted', async () => {
+    const staged = await grown();
+    const whole = await loadStore(staged.storeDir, undefined, { toolsOnly: true });
+    expect(whole.tools.length).toBeGreaterThan(0);
+    const together = async (refreshRun?: number) => {
+      const runs = await everyRun(staged.storeDir, refreshRun);
+      const at = runs[0]?.at;
+      if (at === undefined) throw new Error('no run');
+      const placed = <T extends { session: string }>(records: T[]): T[] => records.sort((a, b) => at(a.session) - at(b.session));
+      return { runs: runs.length, sessions: placed(runs.flatMap(({ store }) => store.sessions)), subagents: placed(runs.flatMap(({ store }) => store.subagents)), tools: placed(runs.flatMap(({ store }) => store.tools)) };
+    };
+    // 100 is the default the readers had before LOAD_RUN: the old path.
+    for (const phase of ['superseded', 'compacted']) {
+      if (phase === 'compacted') await compactLog(staged.storeDir);
+      expect([phase, (await scanLog(paths(staged.storeDir).observations)).superseded]).toEqual([phase, phase === 'superseded']);
+      const now = await together();
+      const before = await together(100);
+      expect([phase, now.runs]).toEqual([phase, 2]);
+      expect([phase, before.runs]).toEqual([phase, 1]);
+      expect({ ...now, runs: 0 }).toEqual({ ...before, runs: 0 });
+      expect(now.sessions).toEqual(whole.sessions);
+      expect(now.subagents).toEqual(whole.subagents);
+      expect(now.tools).toEqual(whole.tools);
+    }
   });
 });
