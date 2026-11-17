@@ -15,6 +15,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 - The `release-mcp` workflow waits (every 15 seconds, up to 10 minutes) until npm serves the tagged `@manyoars/oars` version before listing it on the MCP registry, and fails with one line naming the package, version, and time waited if it never does.
 - `recipes/open-pack-counts/` is a repository recipe, not part of the package: one offline script that reads an open skeleton pack and prints its failed-call tables and harness-version table, with `--json` and `--by model|class`.
 - The `open-pack-counts` recipe skips a manifest row whose `matchId` is empty as `matchId is not a plain folder name`, instead of stopping on a missing `sessions//skeleton.json` (t1330).
+- The detached nightly reads the session store a run of sessions at a time (the run size `refresh` uses) for its commit-survival and store-health steps, instead of loading the whole store, so on a large store those two steps no longer hold every prompt, error, and tool call in memory at once. Survival keeps only the due calls and one run; store-health keeps the session records and answers the capture checks run by run. `commit-survival.jsonl` and the store-health event are byte-for-byte what they were. Nothing collected or kept changes.
 
 ## 0.5.5 (2026-11-13)
 
