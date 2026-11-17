@@ -15,7 +15,7 @@ import { comparisonText, FLEET } from './test-fixtures.js';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TASKSET = join(HERE, '..', '..', '..', 'taskset', 'v1');
 const STUB = join(HERE, 'stub-claude.mjs');
-const MODEL = 'sonnet-pinned-1';
+const MODEL = 'global.anthropic.claude-sonnet-5-5';
 
 const git = (cwd: string, ...args: string[]): string => execFileSync('git', ['-c', 'core.autocrlf=false', '-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd, encoding: 'utf8' }).trim();
 
@@ -77,7 +77,7 @@ const request = (taskId: string, category: string): RunRequest => ({
   arm: 'no-tool',
   side: null,
   repeat: 1,
-  expected: { taskSetVersion: 'v1', fixtureTag: 'taskset-v1', manifestVersion: 'fleet-1', harnessVersion: '2.1.30', modelId: MODEL, toolPins: [] },
+  expected: { taskSetVersion: 'v1', fixtureTag: 'taskset-v1', manifestVersion: 'fleet-1', harnessVersion: '2.1.326', modelId: MODEL, toolPins: [] },
 });
 
 const settings = (fixture: string): ClaudeBedrockSettings => ({

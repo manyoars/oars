@@ -15,7 +15,7 @@ const request = (runId: string): RunRequest => ({
   arm: 'playwright',
   side: 'before',
   repeat: 1,
-  expected: { taskSetVersion: 'v1', fixtureTag: 'taskset-v1', manifestVersion: 'fleet-1', harnessVersion: '2.1.30', modelId: 'sonnet-pinned-1', toolPins: [{ name: 'playwright', pin: 'npm:1.0.0' }] },
+  expected: { taskSetVersion: 'v1', fixtureTag: 'taskset-v1', manifestVersion: 'fleet-1', harnessVersion: '2.1.326', modelId: 'global.anthropic.claude-sonnet-5-5', toolPins: [{ name: 'playwright', pin: 'npm:1.0.0' }] },
 });
 
 describe('the fake harness', () => {

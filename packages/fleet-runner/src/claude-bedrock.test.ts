@@ -17,7 +17,7 @@ import { comparisonText, FLEET } from './test-fixtures.js';
 
 const STUB = join(dirname(fileURLToPath(import.meta.url)), 'stub-claude.mjs');
 const SECRET = 'bedrock-key-not-real-0001';
-const MODEL = 'sonnet-pinned-1';
+const MODEL = 'global.anthropic.claude-sonnet-5-5';
 const git = (cwd: string, ...args: string[]): string => execFileSync('git', ['-c', 'core.autocrlf=false', '-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd, encoding: 'utf8' }).trim();
 
 const PASS_IF_SEED = [
@@ -127,7 +127,7 @@ const request = (arm: string, pin: string | null, patch: Partial<RunRequest['exp
   arm,
   side: null,
   repeat: 1,
-  expected: { taskSetVersion: 'v1', fixtureTag: 'taskset-v1', manifestVersion: 'fleet-1', harnessVersion: '2.1.30', modelId: MODEL, toolPins: pin === null ? [] : [{ name: arm, pin }], ...patch },
+  expected: { taskSetVersion: 'v1', fixtureTag: 'taskset-v1', manifestVersion: 'fleet-1', harnessVersion: '2.1.326', modelId: MODEL, toolPins: pin === null ? [] : [{ name: arm, pin }], ...patch },
 });
 
 const listing = (dir: string): string[] => (existsSync(dir) ? readdirSync(dir, { recursive: true, encoding: 'utf8' }).map((entry) => entry.split('\\').join('/')).sort() : []);
@@ -316,7 +316,7 @@ describe('run', () => {
   it('a clean run returns the transcript copy, version, model, and tokens, and starts claude as documented with only the named environment', async () => {
     const { r, prepared, result } = await run('scenario: ok\nDo the task.');
     expect(result.exit).toEqual({ kind: 'ok', code: 0 });
-    expect(result.harnessVersion).toBe('2.1.30');
+    expect(result.harnessVersion).toBe('2.1.326');
     expect(result.modelId).toBe(MODEL);
     expect(result.tokens).toEqual({ input: 1200, cache: 4500, output: 300 });
     expect(result.transcriptPath).toBe(join(r.settings.transcriptOutDir, 'o-2-0001.jsonl'));
