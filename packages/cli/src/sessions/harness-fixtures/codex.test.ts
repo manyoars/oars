@@ -52,6 +52,9 @@ describe('the Codex reader on its fixture', () => {
       version: out.session.env.harness,
       tools: out.tools.map((tool) => [tool.tool, tool.status]),
       errorLines: out.errorLines.map((entry) => entry.line),
+      usage: out.session.usage,
+      usageResponses: out.session.usageResponses,
+      offered: out.session.funnel?.offered,
     }).toEqual({
       userTurns: 1,
       assistantTurns: 5,
@@ -61,10 +64,13 @@ describe('the Codex reader on its fixture', () => {
       // CommandExecution item and keeps its exit code, so the shell outcome is not lost (t890 has nothing to fix for this shape).
       // t1362: this fixture is the Paginated rollout the 0.169 CLI writes (`history_mode` `paginated`): the prompt and both replies are `item_completed`
       // UserMessage and AgentMessage items (no `user_message` or `agent_message` event), the code-mode `exec` cell and its two CommandExecution items are the only
-      // calls, and the usage comes from the `token_count` events (the `token_usage_record` lines beside them are not read). The shell call that exits 2 and the
+      // calls, the usage is the sum of the two `token_count` events (the `token_usage_record` lines beside them are not read, so the sum would double if they were), and `offered` is the `additional_tools` record's tool. The shell call that exits 2 and the
       // patch edit of the pre-0.169 shape stay pinned in codex-legacy.test.ts.
       tools: [['Bash', 'ok'], ['Bash', 'error'], ['Bash', 'ok']],
       errorLines: ['make: *** No rule to make target all'],
+      usage: { input: 1800, cacheWrite: 0, cacheRead: 1200, output: 400, thinking: 100 },
+      usageResponses: 2,
+      offered: ['extra_tool'],
     });
   });
 });
