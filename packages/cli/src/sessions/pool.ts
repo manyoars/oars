@@ -2,11 +2,12 @@
 // rewritten from the log and can be dropped at any time. Each pool version's reads go in a file of their own that is written once and never rewritten, so a read cited by
 // its ID stays what it was.
 
-import { createReadStream } from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { mkdir, readdir, rename, stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { CliError, ExitCode } from '../errors.js';
-import { poolOf, serializeCells, UNKNOWN, type Cell, type Pool } from './cells.js';
+import { poolOf, UNKNOWN, type Cell, type Pool } from './cells.js';
 import type { Motif } from './motif.js';
 import { LOAD_STATUS_FILE, loadStatusLines } from './load-status.js';
 import { contentHash, FIRST_ORDER_FAMILIES, frozenRead, makeRead, orderResolver, type FirstOrderFamily, type OrderResolver, type Read, type ReadAsOf } from './read.js';
@@ -128,6 +129,37 @@ const storedRows = async <Row>(file: string, isRow: (value: unknown) => value is
 
 const readStored = async (file: string): Promise<Read[] | undefined> => (await storedRows(file, isRead))?.map(frozenRead);
 
+/** Text is handed to the disk in pieces of about this many characters. */
+const PIECE = 64 * 1024;
+
+/** The lines joined into pieces of at least `PIECE` characters (the last may be shorter), so a file is never one string. */
+const piecesOf = function* (lines: Iterable<string>): Generator<string> {
+  let piece = '';
+  for (const line of lines) {
+    piece += line;
+    if (piece.length >= PIECE) {
+      yield piece;
+      piece = '';
+    }
+  }
+  if (piece !== '') yield piece;
+};
+
+/** What `writeAtomic` does (a private temp file, then a rename, so a reader sees the old file or the new one), for lines written piece by piece with the stream's backpressure honored. */
+const writeLines = async (file: string, lines: Iterable<string>): Promise<void> => {
+  await mkdir(dirname(file), { recursive: true });
+  const temp = `${file}.${String(process.pid)}.tmp`;
+  await pipeline(piecesOf(lines), createWriteStream(temp, { mode: 0o600 }));
+  await rename(temp, file);
+};
+
+const jsonLines = function* (rows: Iterable<unknown>): Generator<string> {
+  for (const row of rows) yield `${JSON.stringify(row)}\n`;
+};
+
+/** `cells.jsonl`: one JSON line a cell, the bytes `serializeCells` makes, written in pieces (the operator's file is 284 MB, and one string of it held about 1,000 MB more than the cells). */
+export const writeCells = (file: string, cells: readonly Cell[]): Promise<void> => writeLines(file, jsonLines(cells));
+
 /**
  * The current pool's reads: already written when this pool has been read before, else derived and written once. `store` holds the sessions, subagents, and errors; the rows of every turn are read through
  * `folds`, which a refresh folds run by run. Without them `store` is taken whole, with its prompts and tools, and folded as one run.
@@ -138,8 +170,8 @@ export const refreshPool = async (storeDir: string, store: Store, folds?: PoolFo
   const files = poolFiles(storeDir);
   await writeAtomic(files.consequences, recalls.flatMap(({ id, n, consequence }) => (consequence === undefined ? [] : [`${JSON.stringify({ id, n, consequence })}\n`])).join(''));
   await writeAtomic(join(storeDir, LOAD_STATUS_FILE), await loadStatusLines(storeDir, store.sessions));
-  await writeAtomic(files.cells, serializeCells(set.cells));
-  await writeAtomic(files.motifs, set.motifs.map((motif) => `${JSON.stringify(motif)}\n`).join(''));
+  await writeCells(files.cells, set.cells);
+  await writeLines(files.motifs, jsonLines(set.motifs));
   const file = files.reads(pool.version);
   const stored = await readStored(file);
   if (stored !== undefined) return { pool, reads: stored };
