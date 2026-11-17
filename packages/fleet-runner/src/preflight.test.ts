@@ -223,8 +223,19 @@ describe('preflight', () => {
     ['a test placeholder model ID', { modelIds: ['sonnet-pinned-1'] }, /claude-code-bedrock model ID sonnet-pinned-1/],
     ['an UNSET- version', { version: 'UNSET-claude-version' }, /claude-code-bedrock version UNSET-claude-version/],
     ['an UNSET- model ID', { modelIds: ['UNSET-bedrock-id'] }, /claude-code-bedrock model ID UNSET-bedrock-id/],
+    ['a codex-azure UNSET- model ID', { codexModelIds: ['UNSET-azure-deployment'] }, /codex-azure model ID UNSET-azure-deployment/],
   ])('refuses a manifest with %s, so a placeholder never reaches a paid run', async (_name, patch, message) => {
-    await writeFile(fleet, JSON.stringify({ version: 'fleet-1', harnesses: [{ name: 'claude-code-bedrock', version: '2.1.326', provider: 'bedrock', region: 'us-east-1', modelIds: ['m'], ...patch }] }));
+    const { codexModelIds, ...claudePatch } = { codexModelIds: ['gpt-6.1-sol'], ...patch };
+    await writeFile(
+      fleet,
+      JSON.stringify({
+        version: 'fleet-1',
+        harnesses: [
+          { name: 'claude-code-bedrock', version: '2.1.326', provider: 'bedrock', region: 'us-east-1', modelIds: ['m'], ...claudePatch },
+          { name: 'codex-azure', version: '0.169.0', provider: 'azure-openai', region: 'global-standard', modelIds: codexModelIds },
+        ],
+      }),
+    );
     const { code, lines } = await run(GOOD);
     expect(code).toBe(1);
     expect(lineOf(lines, 'fleet manifest')).toMatch(/^wrong /);

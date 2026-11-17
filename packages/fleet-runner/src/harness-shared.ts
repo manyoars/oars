@@ -5,6 +5,7 @@ import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Readable } from 'node:stream';
 import type { CheckResult, Prepared, RunRequest, RunResult, ToolPin } from './harness.js';
 import { arrayAt, isObject, type JsonObject, objectAt, optionalStringAt, parseJson, stringAt } from './json.js';
 import { loadTaskSet } from './manifest.js';
@@ -198,6 +199,16 @@ export interface HostProcess {
   kill(pid: number, signal: 'SIGINT' | 'SIGTERM'): unknown;
 }
 
+// The stream decodes, so a multibyte character split across two chunks is carried over instead of becoming U+FFFD. Returns what has arrived so far.
+export const collectUtf8 = (stream: Readable): (() => string) => {
+  let text = '';
+  stream.setEncoding('utf8');
+  stream.on('data', (chunk: string) => {
+    text += chunk;
+  });
+  return () => text;
+};
+
 export const makeNodeSpawn = (startTimer: StartTimer, host: HostProcess = process): Spawn => {
   // Children off Windows lead their own process group, so a Ctrl-C or SIGTERM that ends the runner would not reach them: end each one here, or it keeps drawing credit.
   const live = new Set<number>();
@@ -219,8 +230,6 @@ export const makeNodeSpawn = (startTimer: StartTimer, host: HostProcess = proces
   };
   return (spec) =>
     new Promise((resolve) => {
-      let stdout = '';
-      let stderr = '';
       let timedOut = false;
       let settled = false;
       let cancelTimer: () => void = () => undefined;
@@ -239,21 +248,14 @@ export const makeNodeSpawn = (startTimer: StartTimer, host: HostProcess = proces
         timedOut = true;
         killTree(child.pid);
       });
-      // The stream decodes, so a multibyte character split across two chunks is carried over instead of becoming U+FFFD.
-      child.stdout.setEncoding('utf8');
-      child.stderr.setEncoding('utf8');
-      child.stdout.on('data', (chunk: string) => {
-        stdout += chunk;
-      });
-      child.stderr.on('data', (chunk: string) => {
-        stderr += chunk;
-      });
+      const stdoutText = collectUtf8(child.stdout);
+      const stderrText = collectUtf8(child.stderr);
       child.on('error', (error: NodeJS.ErrnoException) => {
-        finish({ exitCode: null, signal: null, stdout, stderr, timedOut, errorCode: error.code ?? 'UNKNOWN' });
+        finish({ exitCode: null, signal: null, stdout: stdoutText(), stderr: stderrText(), timedOut, errorCode: error.code ?? 'UNKNOWN' });
       });
       child.on('close', (exitCode, signal) => {
         if (child.pid !== undefined) live.delete(child.pid);
-        finish({ exitCode, signal, stdout, stderr, timedOut, errorCode: null });
+        finish({ exitCode, signal, stdout: stdoutText(), stderr: stderrText(), timedOut, errorCode: null });
       });
       child.stdin.on('error', () => undefined);
       child.stdin.end(spec.stdin ?? '');
