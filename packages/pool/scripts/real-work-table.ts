@@ -10,7 +10,7 @@ import { stepsOfCall } from '../../cli/src/sessions/motif.js';
 import { recoveryCallsOf, type Followed } from '../../cli/src/sessions/recovery-calls.js';
 import { checkSession } from '../../cli/src/sessions/exclusion.js';
 import { LITERAL, PUBLIC_MCP_SERVERS, PUBLIC_SKILLS, publicModel, TOOL_INPUT_KEYS } from '../../cli/src/sessions/public-vocabulary.js';
-import { harnessOf, PROMPT_CLASSES, type Harness, type PromptObservation, type ToolObservation } from '../../cli/src/sessions/schema.js';
+import { harnessOf, PROMPT_CLASSES, type Harness, type PromptObservation, type StepIdentity, type ToolObservation } from '../../cli/src/sessions/schema.js';
 import { loadStore, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { insideRepository, ownerOf, PackError, parseOwners } from './sample-pack.js';
 
@@ -77,9 +77,9 @@ export interface ToolRow {
   editFollowedShare: number | null;
 }
 
-/** A row of one MCP server or one skill inside a harness and version bucket. Every one is `one fleet`, with its n: `calls` for the failure rate, `failures` for the recovered rate, `recovered` for the median. */
+/** A row of one MCP server, skill, or package inside a harness and version bucket. Every one is `one fleet`, with its n: `calls` for the failure rate, `failures` for the recovered rate, `recovered` for the median. */
 export interface ScopeRow {
-  kind: 'server' | 'skill';
+  kind: 'server' | 'skill' | 'package';
   name: string;
   harness: string;
   versionBucket: string;
@@ -126,6 +126,40 @@ const share = (part: number, whole: number): number | null => (whole === 0 ? nul
 export const serverName = (harness: Harness, tool: string): string | undefined => {
   const server = mcpOf(ACTION_TABLES[harness], tool)?.server;
   return server === undefined ? undefined : PUBLIC_MCP_SERVERS.has(server) ? server : OTHER;
+};
+/**
+ * Widely used public CLIs a package row may name. A package off this list is `other`: a private package's name identifies private work.
+ * Kept here, not in the wire vocabulary: it names a row of this table only and moves no `VOCAB_VERSION`.
+ */
+export const PUBLIC_PACKAGES: ReadonlySet<string> = new Set([
+  'prettier', 'eslint', 'typescript', 'tsx', 'vitest', 'jest', 'mocha', 'playwright', 'puppeteer', 'vite', 'webpack', 'rollup', 'esbuild', 'turbo', 'nx', 'create-react-app', 'create-vite', 'create-next-app', 'next', 'astro',
+  'wrangler', 'vercel', 'netlify-cli', 'prisma', 'drizzle-kit', 'tailwindcss', 'shadcn', 'serve', 'http-server', 'npm-check-updates', 'rimraf', 'cross-env', 'concurrently', 'nodemon', 'ts-node', 'tsc', 'biome', '@biomejs/biome',
+  '@playwright/test', '@angular/cli', '@vue/cli', '@nestjs/cli', '@anthropic-ai/claude-code', '@modelcontextprotocol/inspector', '@manyoars/oars',
+  'ruff', 'black', 'mypy', 'pytest', 'flake8', 'isort', 'pre-commit', 'poetry', 'httpie', 'cookiecutter', 'tox', 'uv', 'pip-tools', 'yt-dlp', 'markitdown',
+]);
+
+const RUNNER_PROGRAMS: ReadonlySet<string> = new Set(['npx', 'bunx', 'uvx']);
+const INSTALL_SUBS: ReadonlySet<string> = new Set(['install', 'i', 'add', 'update', 'upgrade', 'uninstall', 'remove']);
+
+/** One shell step's program and subcommand, from the closed fields capture keeps; a step of any other kind has neither. */
+const shellOf = (step: { identity: StepIdentity }): { program: string; sub: string | null } | undefined => {
+  const { identity } = step;
+  return identity !== null && 'program' in identity ? { program: identity.program, sub: identity.sub } : undefined;
+};
+
+/**
+ * The public packages one call ran, name only (scope kept, version dropped; the pull's name is the registry spelling without `@version`). A call counts when a shell step is a runner
+ * (`npx`, `bunx`, `uvx`, `pipx run`, or `dlx` of pnpm, yarn, or bun) and no step installs: an install step alone is not use, and in a call that mixes both the pulls cannot be told apart. A name off `PUBLIC_PACKAGES` is `other`.
+ */
+export const packageNames = (call: ToolObservation): string[] => {
+  const shells = (call.steps ?? []).flatMap((step) => {
+    const shell = shellOf(step);
+    return shell === undefined ? [] : [shell];
+  });
+  const runs = shells.some((shell) => RUNNER_PROGRAMS.has(shell.program) || shell.sub === 'dlx' || (shell.program === 'pipx' && shell.sub === 'run'));
+  if (!runs || shells.some((shell) => shell.sub !== null && INSTALL_SUBS.has(shell.sub))) return [];
+  const names = (call.pulls ?? []).filter((pull) => pull.ecosystem === 'npm' || pull.ecosystem === 'pypi').map((pull) => (PUBLIC_PACKAGES.has(pull.name) ? pull.name : OTHER));
+  return [...new Set(names)];
 };
 const skillName = (skill: string | undefined): string | undefined => (skill === undefined ? undefined : PUBLIC_SKILLS.has(skill) ? skill : OTHER);
 
@@ -317,7 +351,11 @@ export const countsOf = async (runtime: SessionsRuntime, options: { terms: strin
       const recovery = failed ? recoveryOf(followed, at) : undefined;
       const [harnessLabel, tool] = [harnessName(harness), toolName(call.tool)];
       const [server, skill] = [serverName(harness, call.tool), skillName(call.skill)];
-      const scoped = [...(server === undefined ? [] : [scopeOf('server', server, harnessLabel, bucket)]), ...(skill === undefined ? [] : [scopeOf('skill', skill, harnessLabel, bucket)])];
+      const scoped = [
+        ...(server === undefined ? [] : [scopeOf('server', server, harnessLabel, bucket)]),
+        ...(skill === undefined ? [] : [scopeOf('skill', skill, harnessLabel, bucket)]),
+        ...packageNames(call).map((name) => scopeOf('package', name, harnessLabel, bucket)),
+      ];
       for (const tally of [cellOf(model, harnessLabel, bucket), toolOf(tool), toolCellOf(tool, harnessLabel, bucket), bucketOf(harnessLabel, bucket), ...scoped]) {
         tally.sessions.add(call.parent);
         tally.calls += 1;
@@ -386,7 +424,7 @@ const median = (values: readonly number[]): number => {
 };
 
 /**
- * A server's or skill's row. Under the noise rule it is `thin` and holds its counts only; over it, each rate is stated only when its own n clears the minimum:
+ * A server's, skill's, or package's row. Under the noise rule it is `thin` and holds its counts only; over it, each rate is stated only when its own n clears the minimum:
  * calls for the failure rate, failures for the recovered rate, recoveries for the median.
  */
 export const scopeRowOf = ({ kind, name, harness, versionBucket, tally }: ScopeCell, minSessions: number): ScopeRow => {
@@ -418,7 +456,7 @@ export const tableOf = async (runtime: SessionsRuntime, options: TableOptions): 
   const kept = all.filter((row) => row.sessions >= minSessions);
   const key = (row: Row): string => (row.kind === 'cell' ? `0/${row.harness}/${row.versionBucket}/${row.model}` : `1/${row.tool}`);
   kept.sort((a, b) => compare(key(a), key(b)));
-  // Server and skill rows come last and none is left out: a row under the minimum prints as thin.
+  // Server, skill, and package rows come last and none is left out: a row under the minimum prints as thin.
   const scoped = [...scopeCells.values()].map((cell) => scopeRowOf(cell, minSessions)).sort((a, b) => compare(`${a.kind}/${a.name}/${a.harness}/${a.versionBucket}`, `${b.kind}/${b.name}/${b.harness}/${b.versionBucket}`));
   return { header: { spec: SPEC_VERSION, label: LABEL, builtOn: options.date, sessions, counted, excluded, minSessions, leftOut: all.length - kept.length }, rows: [...kept, ...scoped] };
 };
