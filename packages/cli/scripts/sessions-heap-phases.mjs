@@ -20,8 +20,6 @@ const store = await dist('store.js');
 const verify = await dist('verify.js');
 const audit = await dist('audit.js');
 const baseline = await dist('baseline.js');
-const pool = await dist('pool.js');
-const index = await dist('hook-index.js');
 
 const runtime = { storeDir, projectsRoot: join(claudeDir, 'projects'), stdin: new PassThrough(), stdout: { write: () => true } };
 /** @param {number} bytes */
@@ -75,28 +73,34 @@ if (shape === 'recapture') {
   // Deposit: the newer-captures check is one pass over the log that keeps a number per session.
   await phase('deposit: scanLog for the newer-captures check', async () => (await store.scanLog(log)).newerCaptures);
   await phase('deposit: compactLog', () => store.compactLog(storeDir));
-  // Deposit: refresh loads the store and keeps it through derive, the pool, and the index.
-  /** @type {Store | undefined} */
-  let loaded;
-  await phase('deposit: refresh loadStore (kept)', async () => {
-    loaded = await store.loadStore(storeDir);
-  });
+  // Deposit: the refresh the nightly runs, `store.refresh`: `foldRuns` (scan, runs), the derive finish, `currentPool` with the folds, then the index. The derive finish has no mark of its own (`store.ts` marks `finish` after the pool fold, `pool` after `currentPool`), so its row is shared with `currentPool`; it is 58 to 77 ms (t1405). It is split at the steps the refresh marks
+  // (`refreshStep`), each row being the heap sampled from the previous mark to this one; the index step and what follows it are the last row. Nothing here takes the whole-store path of `currentPool`.
   const at = new Date().toISOString();
-  /** @type {DerivedRecords | undefined} */
-  let derived;
-  await phase('deposit: refresh derive (store kept)', async () => {
-    derived = store.derive(loaded, at);
-  }, true);
-  await phase('deposit: refresh JSON.stringify(derived)', async () => JSON.stringify(derived).length, true);
-  /** @type {Read[] | undefined} */
-  let reads;
-  await phase('deposit: refresh currentPool (store kept)', async () => {
-    reads = (await pool.currentPool(storeDir, loaded))?.reads ?? [];
-  });
-  await phase('deposit: refresh buildIndex (store kept)', async () => JSON.stringify(index.buildIndex(loaded, [], at, reads)).length, true);
-  loaded = undefined;
-  derived = undefined;
-  reads = undefined;
+  const marks = ['scan', 'runs', 'finish', 'pool'];
+  const before = rows.length;
+  const stepNames = { scan: 'scan the log', runs: 'foldRuns runs', finish: 'pool fold finish', pool: 'derive.finish + currentPool (folds)' };
+  let stepStart = performance.now();
+  let stepPeak = process.memoryUsage().heapUsed;
+  let stepBefore = stepPeak;
+  const sampler = setInterval(() => {
+    stepPeak = Math.max(stepPeak, process.memoryUsage().heapUsed);
+  }, 2);
+  const close = (/** @type {string} */ name) => {
+    const now = process.memoryUsage().heapUsed;
+    rows.push({ name, before: mb(stepBefore), peak: mb(Math.max(stepPeak, now)), kept: mb(now), ms: Math.round(performance.now() - stepStart), sync: false });
+    stepStart = performance.now();
+    stepBefore = now;
+    stepPeak = now;
+  };
+  const stepped = { ...runtime, refreshStep: (/** @type {'scan' | 'runs' | 'finish' | 'pool'} */ step) => close(`deposit: refresh ${stepNames[step]}`) };
+  global.gc?.();
+  stepBefore = process.memoryUsage().heapUsed;
+  stepPeak = stepBefore;
+  stepStart = performance.now();
+  await store.refresh(stepped, [], at);
+  clearInterval(sampler);
+  close('deposit: refresh index (buildIndex, write)');
+  if (rows.length - before !== marks.length + 1) throw new Error(`the refresh marked ${String(rows.length - before - 1)} steps, not ${String(marks.length)}: its rows are not the nightly's`);
 
   // Verify, as `sessionsVerify` runs it: lean skeletons, then the store.
   const every = await phase('verify: readSkeletons lean (kept)', () => store.readSkeletons(storeDir, undefined, true));
