@@ -582,7 +582,9 @@ describe('the store it reads', () => {
     return { s, allow, every: [1, 2, 3, 4, 5, 6, 8, 9].map(sha) };
   };
 
-  it('never reads the whole store at once: every read of the log names the sessions of one run', async () => {
+  // The spy sees the exported `loadStore` only; `loadRuns` calls it inside store.ts, past the mock. So this proves survival makes no whole read of its own, and that it reads through
+  // `loadRuns`; that each such read names the sessions of one run is proven where `loadRuns` is tested (store.test.ts, 'reads the calls of the store a run of sessions at a time').
+  it('never loads the whole store itself (reads through loadRuns)', async () => {
     const { s, allow, every } = await populated();
     const reads = vi.mocked(loadStore);
     reads.mockClear();

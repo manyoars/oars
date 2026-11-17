@@ -110,7 +110,9 @@ describe('store health at the nightly run', () => {
     expect(health?.data.models).toEqual(closedList(seen.flatMap((session) => Object.keys(session.models)), 'model'));
   });
 
-  it('never reads the whole store at once: every read of the log names the sessions of one run', async () => {
+  // The spy sees the exported `loadStore` only; `loadRuns` calls it inside store.ts, past the mock. So this proves the snapshot makes no whole read of its own, and that it reads through
+  // `loadRuns`; that each such read names the sessions of one run is proven where `loadRuns` is tested (store.test.ts, 'reads the calls of the store a run of sessions at a time').
+  it('never loads the whole store itself (reads through loadRuns)', async () => {
     const staged = stage(slugOf(REPO));
     await deposit(staged.runtime, { allow: [REPO], redactDomains: [], now: () => NOW });
     const { dir, telemetry } = emitter();
@@ -188,7 +190,7 @@ describe('store health at the nightly run', () => {
 
     const whole = await loadStore(staged.storeDir);
     const captured = [...whole.sessions, ...whole.subagents];
-    const frozen = await frozenSessions(staged.runtime, captured.filter((session) => Number(session.cv) >= 3 && Number(session.cv) < Number(CAPTURE_VERSION)));
+    const frozen = await frozenSessions(staged.runtime, captured.filter((session) => Number(session.cv) >= OLDEST_READABLE_CAPTURE && Number(session.cv) < Number(CAPTURE_VERSION)));
     const expected = verifyCaptured(captured, whole.tools, frozen);
     expect(expected.every((row) => row.violations > 0)).toBe(true);
     for (const refreshRun of [1, 2, undefined]) {
