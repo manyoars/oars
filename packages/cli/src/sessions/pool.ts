@@ -2,7 +2,8 @@
 // rewritten from the log and can be dropped at any time. Each pool version's reads go in a file of their own that is written once and never rewritten, so a read cited by
 // its ID stays what it was.
 
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { readdir, stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 import { poolOf, serializeCells, UNKNOWN, type Cell, type Pool } from './cells.js';
@@ -92,12 +93,33 @@ const parsedLine = (file: string, line: string): unknown => {
   }
 };
 
-/** A file that is missing, or whose lines are JSON but not all of the kind asked for, is no record of this pool: it is derived and written again. A line that is not JSON is damage, so it stops here and asks the operator to delete the file. */
+/** The lines of a file, one at a time as its chunks arrive: a line that spans two chunks is joined, and a character cut by a chunk boundary is decoded whole. The last line is yielded even when nothing ends it. */
+const linesOf = async function* (file: string): AsyncGenerator<string> {
+  let rest = '';
+  for await (const chunk of createReadStream(file, { encoding: 'utf8' })) {
+    const lines = (rest + String(chunk)).split('\n');
+    rest = lines.pop() ?? '';
+    yield* lines;
+  }
+  yield rest;
+};
+
+/**
+ * A file that is missing, or whose lines are JSON but not all of the kind asked for, is no record of this pool: it is derived and written again. A line that is not JSON is damage, so it stops here and asks the operator to delete that
+ * file. The file is read a line at a time and its rows kept as they are parsed, never as one string of the whole file with its split lines beside them (`cells.jsonl` is 288 MB on the operator's store). After a row of the wrong kind
+ * the rest is still parsed, only so that a line that is not JSON is found wherever it is, and the rows kept so far are let go.
+ */
 const storedRows = async <Row>(file: string, isRow: (value: unknown) => value is Row): Promise<Row[] | undefined> => {
   try {
-    const text = await readFile(file, 'utf8');
-    const parsed = text.split('\n').flatMap((line): unknown[] => (line === '' ? [] : [parsedLine(file, line)]));
-    return parsed.every(isRow) ? parsed : undefined;
+    let rows: Row[] | undefined = [];
+    for await (const line of linesOf(file)) {
+      if (line === '') continue;
+      const parsed = parsedLine(file, line);
+      if (rows === undefined) continue;
+      if (isRow(parsed)) rows.push(parsed);
+      else rows = undefined;
+    }
+    return rows;
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
     throw error;
