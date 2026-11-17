@@ -1,18 +1,18 @@
 // Proof of the Claude Code on Bedrock adapter against a stub `claude` (src/stub-claude.mjs), a tiny git repository made here, and a stub `npm`. No test starts the real
 // `claude`, opens a network connection, or reads an AWS credential: the credential is a made-up string handed in through the injected environment.
-import { PassThrough } from 'node:stream';
-import { collectUtf8 } from './harness-shared.js';
 import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeClaudeBedrock, makeNodeSpawn, nodeSpawn, type ClaudeBedrockSettings, type HostProcess, type Spawn, type StartTimer, type ToolUnderTest } from './claude-bedrock.js';
 import type { RunRequest } from './harness.js';
 import { readFirstRun } from './first-run-read.js';
+import { collectUtf8 } from './harness-shared.js';
 import { isObject } from './json.js';
 import { parseOrder } from './order.js';
 import { comparisonText, FLEET } from './test-fixtures.js';

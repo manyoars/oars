@@ -74,4 +74,4 @@ The Codex arm of the first draw (two controls, three repeats) runs the `codex-az
 - Node at or above the task set's floor, and git and npm on PATH.
 - The private fixture reachable from this machine.
 - No `/etc/codex/skills` folder on the machine (Codex would load its skills into every run).
-- Tell the owner before the draw (K5) and wait for their yes, as in the Claude steps above.
+- Tell the owner before the draw and wait for their yes, as in the Claude steps above.

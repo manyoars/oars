@@ -129,7 +129,7 @@ export const serverName = (harness: Harness, tool: string): string | undefined =
 };
 const RUNNER_PROGRAMS: ReadonlySet<string> = new Set(['npx', 'uvx']);
 
-/** Whether one shell step runs a package: `npx`, `uvx`, `pipx run`, or `dlx` of pnpm, yarn, or bun (`bunx` is not in the closed program list, so its step reads as unread and carries no pulls). Any other step never does, so an install step's pulls are not use, and a python step's pulls never count because python is not a runner. */
+/** Whether one shell step runs a package: `npx`, `uvx`, `pipx run`, or `dlx` of pnpm or yarn (`bunx` is not in the closed program list, so its step reads as unread and carries no pulls). Any other step never does, so an install step's pulls are not use, and a python step's pulls never count because python is not a runner. */
 const runsPackage = (identity: StepIdentity): identity is ShellIdentity =>
   identity !== null && 'program' in identity && (RUNNER_PROGRAMS.has(identity.program) || identity.sub === 'dlx' || (identity.program === 'pipx' && identity.sub === 'run'));
 

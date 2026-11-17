@@ -379,7 +379,7 @@ describe('real-work table', () => {
       const table = await build(f, { minSessions: 2 });
       expect(packages(table).map((row) => [row.name, row.sessions, row.calls, row.failures])).toEqual([['other', 2, 2, 2], ['prettier', 2, 2, 0]]);
       expect(JSON.stringify(table)).not.toContain('acme');
-      expect(PUBLIC_PACKAGES.has('internal-tool')).toBe(false);
+      expect(PUBLIC_PACKAGES.has('@acme/internal-tool')).toBe(false);
     });
 
     it('labels each row one fleet, and prints a row under the minimum as thin with no rate', async () => {
