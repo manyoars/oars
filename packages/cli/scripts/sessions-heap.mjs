@@ -18,9 +18,10 @@
 // APPDATA, XDG_CONFIG_HOME, HOME, USERPROFILE, and CLAUDE_CONFIG_DIR at a fresh folder under the OS temp folder, and refuses to go on
 // when a path the CLI will use is not inside it.
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
 
 const cliRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -257,19 +258,30 @@ const build = (dirs, sessions) => {
  * @param {Dirs} dirs
  */
 const supersede = (dirs) => {
+  /** @param {string} line */
+  const older = (line) => {
+    const record = JSON.parse(line);
+    return `${JSON.stringify({ ...record, rev: record.rev - 1 })}${NL}`;
+  };
   const clean = join(dirs.root, 'clean.jsonl');
   const file = join(dirs.store, 'observations.jsonl');
-  if (arg('superseded', 'on') === 'off') return copyFileSync(clean, file);
-  const log = readFileSync(clean, 'utf8');
-  const older = log
-    .split(NL)
-    .filter((line) => line !== '')
-    .map((line) => {
-      const record = JSON.parse(line);
-      return JSON.stringify({ ...record, rev: record.rev - 1 });
-    })
-    .join(NL);
-  writeFileSync(file, `${log}${older}${NL}`);
+  copyFileSync(clean, file);
+  if (arg('superseded', 'on') === 'off') return;
+  // Streamed in chunks: a 2,000-session log is over V8's longest string, so reading it whole (or joining its older copy) throws `Invalid string length`.
+  const fd = openSync(clean, 'r');
+  try {
+    const chunk = Buffer.alloc(8 << 20);
+    // A decoder, so a character split across two chunks is not cut.
+    const decoder = new StringDecoder('utf8');
+    let rest = '';
+    for (let read = readSync(fd, chunk, 0, chunk.length, null); read > 0; read = readSync(fd, chunk, 0, chunk.length, null)) {
+      const lines = (rest + decoder.write(chunk.subarray(0, read))).split(NL);
+      rest = lines.pop() ?? '';
+      appendFileSync(file, lines.filter((line) => line !== '').map(older).join(''));
+    }
+  } finally {
+    closeSync(fd);
+  }
 };
 
 /**
