@@ -2,10 +2,10 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { TOOL_INPUT_KEYS } from '../../cli/src/sessions/public-vocabulary.js';
+import { PUBLIC_PACKAGES, TOOL_INPUT_KEYS } from '../../cli/src/sessions/public-vocabulary.js';
 import { PROMPT_CLASSES } from '../../cli/src/sessions/schema.js';
 import { bash, type Call, edit, failedEdit, fixture, id, inSkill, mcp, read, removeFixtures, TERM, type Fixture, type Spec } from './real-work-fixture.js';
-import { HARNESS_NAMES, main, PUBLIC_PACKAGES, serverName, SPEC_VERSION, tableOf, type Table } from './real-work-table.js';
+import { HARNESS_NAMES, main, serverName, SPEC_VERSION, tableOf, type Table } from './real-work-table.js';
 
 afterEach(removeFixtures);
 
@@ -94,7 +94,7 @@ describe('real-work table', () => {
     const table = await build(f);
     // Only what this fixture can print: its one private server is other, so no public server or skill name belongs here.
     const allowed = new Set<string>([
-      ...HARNESS_NAMES, ...PROMPT_CLASSES, ...TOOL_INPUT_KEYS.keys(), ...PUBLIC_PACKAGES, 'other', 'unknown', '2.1.30x', '2.1.32x', 'claude-opus-5-5', 'claude-sonnet-5-5', 'one fleet', SPEC_VERSION, '2026-11-13', 'cell', 'tool', 'server', 'package',
+      ...HARNESS_NAMES, ...PROMPT_CLASSES, ...TOOL_INPUT_KEYS.keys(), 'other', 'unknown', '2.1.30x', '2.1.32x', 'claude-opus-5-5', 'claude-sonnet-5-5', 'one fleet', SPEC_VERSION, '2026-11-13', 'cell', 'tool', 'server',
     ]);
     const keys = new Set(['spec', 'label', 'builtOn', 'sessions', 'counted', 'excluded', 'minSessions', 'leftOut', 'header', 'rows', 'kind', 'model', 'harness', 'versionBucket', 'tool', 'calls', 'failures', 'failureRate', 'recovered', 'callsToRecover', 'editFollowedShare', 'prompts', 'promptsKnown', 'interventions', 'interventionsPerPrompt', 'tokensPerPrompt', 'class', 'name', 'thin', 'recoveredRate',
       'term', 'noRaw', 'noTerms', 'unreadable', 'noOwner']);
@@ -327,7 +327,7 @@ describe('real-work table', () => {
       f.add(spec(7, 'npx prettier && npm install eslint'));
       await f.stored();
       const rows = packages(await build(f, { minSessions: 1 }));
-      expect(rows.map((row) => [row.name, row.sessions, row.calls])).toEqual([['@playwright/test', 1, 1], ['black', 1, 1], ['prettier', 1, 1], ['ruff', 1, 1], ['vite', 1, 1]]);
+      expect(rows.map((row) => [row.name, row.sessions, row.calls])).toEqual([['@playwright/test', 1, 1], ['black', 1, 1], ['prettier', 2, 2], ['ruff', 1, 1], ['vite', 1, 1]]);
     });
 
     it('gives a known table with package rows, byte for byte', async () => {
@@ -351,14 +351,24 @@ describe('real-work table', () => {
       expect(defaulted.rows.every((row) => row.kind === 'package' && row.thin)).toBe(true);
     });
 
-    it('counts nothing for an install step, including uv tool install and uv pip install', async () => {
+    it('counts only the runner step of a call: an install step beside it never counts', async () => {
       const f = fixture();
       f.add({ ...newer(1), prompts: prompts(run('uvx ruff && uv pip install black', true)) });
       f.add({ ...newer(2), prompts: prompts(run('uvx ruff && uv tool install mypy', true)) });
+      f.add({ ...newer(3), prompts: prompts(run('npx prettier --write . && git add -A', true)) });
+      f.add({ ...newer(4), prompts: prompts(run('uv pip install black', true), run('uv tool install mypy', true)) });
       await f.stored();
       const rows = packages(await build(f, { minSessions: 1 }));
-      // A call that mixes a runner and an install counts nothing: the pulls carry no step, so they cannot be told apart.
-      expect(rows).toEqual([]);
+      expect(rows.map((row) => [row.name, row.sessions, row.calls])).toEqual([['prettier', 1, 1], ['ruff', 2, 2]]);
+    });
+
+    it('counts a yarn dlx step as a runner, and bunx as none because capture reads it as an unknown program', async () => {
+      const f = fixture();
+      f.add({ ...newer(1), prompts: prompts(run('bunx vite build', true)) });
+      f.add({ ...newer(2), prompts: prompts(run('yarn dlx prettier --check .', true)) });
+      await f.stored();
+      const rows = packages(await build(f, { minSessions: 1 }));
+      expect(rows.map((row) => [row.name, row.sessions, row.calls])).toEqual([['prettier', 1, 1]]);
     });
 
     it('prints a package name only from the public list, and any other as other', async () => {
