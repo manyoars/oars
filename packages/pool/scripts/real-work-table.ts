@@ -140,6 +140,9 @@ export const PUBLIC_PACKAGES: ReadonlySet<string> = new Set([
 
 const RUNNER_PROGRAMS: ReadonlySet<string> = new Set(['npx', 'bunx', 'uvx']);
 const INSTALL_SUBS: ReadonlySet<string> = new Set(['install', 'i', 'add', 'update', 'upgrade', 'uninstall', 'remove']);
+/** Capture keeps the first subcommand word, so `uv tool install` and `uv pip install` show as `tool` or `pip`: installs, whatever follows. `python -m pip install` has no sub (python lists none), so it is not seen here. */
+const INSTALLING = (shell: { program: string; sub: string | null }): boolean =>
+  shell.sub !== null && (INSTALL_SUBS.has(shell.sub) || shell.sub === 'pip' || (shell.program === 'uv' && shell.sub === 'tool'));
 
 /** One shell step's program and subcommand, from the closed fields capture keeps; a step of any other kind has neither. */
 const shellOf = (step: { identity: StepIdentity }): { program: string; sub: string | null } | undefined => {
@@ -157,7 +160,7 @@ export const packageNames = (call: ToolObservation): string[] => {
     return shell === undefined ? [] : [shell];
   });
   const runs = shells.some((shell) => RUNNER_PROGRAMS.has(shell.program) || shell.sub === 'dlx' || (shell.program === 'pipx' && shell.sub === 'run'));
-  if (!runs || shells.some((shell) => shell.sub !== null && INSTALL_SUBS.has(shell.sub))) return [];
+  if (!runs || shells.some(INSTALLING)) return [];
   const names = (call.pulls ?? []).filter((pull) => pull.ecosystem === 'npm' || pull.ecosystem === 'pypi').map((pull) => (PUBLIC_PACKAGES.has(pull.name) ? pull.name : OTHER));
   return [...new Set(names)];
 };

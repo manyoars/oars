@@ -22,12 +22,12 @@
       "harness": "claude-code",
       "versionBucket": "2.1.30x",
       "sessions": 2,
-      "calls": 26,
-      "failures": 6,
-      "failureRate": 0.2308,
+      "calls": 22,
+      "failures": 4,
+      "failureRate": 0.1818,
       "recovered": 2,
       "callsToRecover": 1,
-      "editFollowedShare": 0.3333,
+      "editFollowedShare": 0.5,
       "prompts": 4,
       "promptsKnown": 2,
       "interventions": 2,
@@ -36,7 +36,7 @@
         {
           "class": "edit-verify",
           "prompts": 2,
-          "tokensPerPrompt": 900
+          "tokensPerPrompt": 600
         },
         {
           "class": "mixed",
@@ -73,12 +73,12 @@
       "kind": "tool",
       "tool": "Bash",
       "sessions": 3,
-      "calls": 11,
-      "failures": 6,
-      "failureRate": 0.5455,
+      "calls": 7,
+      "failures": 4,
+      "failureRate": 0.5714,
       "recovered": 2,
       "callsToRecover": 1,
-      "editFollowedShare": 0.3333
+      "editFollowedShare": 0.5
     },
     {
       "kind": "tool",
@@ -101,36 +101,6 @@
       "recovered": 0,
       "callsToRecover": null,
       "editFollowedShare": null
-    },
-    {
-      "kind": "package",
-      "name": "other",
-      "harness": "claude-code",
-      "versionBucket": "2.1.30x",
-      "label": "one fleet",
-      "thin": false,
-      "sessions": 2,
-      "calls": 2,
-      "failures": 2,
-      "failureRate": 1,
-      "recovered": 0,
-      "recoveredRate": 0,
-      "callsToRecover": null
-    },
-    {
-      "kind": "package",
-      "name": "prettier",
-      "harness": "claude-code",
-      "versionBucket": "2.1.30x",
-      "label": "one fleet",
-      "thin": false,
-      "sessions": 2,
-      "calls": 2,
-      "failures": 0,
-      "failureRate": 0,
-      "recovered": 0,
-      "recoveredRate": null,
-      "callsToRecover": null
     }
   ]
 }
