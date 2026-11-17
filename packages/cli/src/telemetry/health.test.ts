@@ -2,7 +2,7 @@
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { slugOf } from '../sessions/allow.js';
 import { runHook } from '../sessions/hooks.js';
 import { readHookCalls } from '../sessions/hook-calls.js';
@@ -10,9 +10,16 @@ import { appendStep } from '../sessions/steps.js';
 import { deposit, loadStore } from '../sessions/store.js';
 import { CAPTURE_VERSION, EXTRACTOR_VERSION } from '../sessions/schema.js';
 import { cleanup, NOW, stage } from '../sessions/test-support.js';
+import type * as StoreModule from '../sessions/store.js';
 import { closedList, recordStoreHealth, type NightlyTelemetry } from './health.js';
 import { spoolEvents, type SpoolEvent } from './read-events.js';
 import { appendLine, readSpool } from './spool.js';
+
+// A spy on the loader, for the test of which reads the snapshot makes: the wrapped function is the real one.
+vi.mock('../sessions/store.js', async (importOriginal) => {
+  const real = await importOriginal<typeof StoreModule>();
+  return { ...real, loadStore: vi.fn(real.loadStore) };
+});
 
 const roots: string[] = [];
 afterEach(() => {
@@ -62,6 +69,17 @@ describe('store health at the nightly run', () => {
     const seen = [...store.sessions, ...store.subagents];
     expect(health?.data.harnessVersions).toEqual(closedList(seen.flatMap((session) => session.versions), 'version'));
     expect(health?.data.models).toEqual(closedList(seen.flatMap((session) => Object.keys(session.models)), 'model'));
+  });
+
+  it('never reads the whole store at once: every read of the log names the sessions of one run', async () => {
+    const staged = stage(slugOf(REPO));
+    await deposit(staged.runtime, { allow: [REPO], redactDomains: [], now: () => NOW });
+    const { dir, telemetry } = emitter();
+    const reads = vi.mocked(loadStore);
+    reads.mockClear();
+    await recordStoreHealth(telemetry, { ...staged.runtime, refreshRun: 1 });
+    expect(events(dir, 'store-health')[0]?.data.readFailed).toBeUndefined();
+    expect(reads.mock.calls.filter(([, , options]) => options?.only === undefined)).toEqual([]);
   });
 
   it('records the versions the store holds, not the ones this build writes', async () => {
