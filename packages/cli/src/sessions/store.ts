@@ -644,7 +644,7 @@ const tally = (trace: DepositTrace | undefined, extract: Capture, subagent: bool
 export const digest = (parts: readonly string[]): string => createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 16);
 
 /** Sessions a refresh loads and folds at a time. Peak memory is the sessions of a run plus what the folds keep (spec 3 option A), so this is the knob between the heap and the number of seeks. */
-const REFRESH_RUN = 100;
+const REFRESH_RUN = 25;
 
 /**
  * Sessions a `loadRuns` read holds at a time when the runtime names no run size: the readers that keep a few fields of each session (the nightly's survival and store-health) hold one run and
