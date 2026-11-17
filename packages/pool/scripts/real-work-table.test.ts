@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { PUBLIC_PACKAGES, TOOL_INPUT_KEYS } from '../../cli/src/sessions/public-vocabulary.js';
-import { PROMPT_CLASSES, type ToolObservation } from '../../cli/src/sessions/schema.js';
+import { PROMPT_CLASSES } from '../../cli/src/sessions/schema.js';
 import { bash, type Call, edit, failedEdit, fixture, id, inSkill, mcp, read, removeFixtures, TERM, type Fixture, type Spec } from './real-work-fixture.js';
 import { HARNESS_NAMES, main, packageNames, serverName, SPEC_VERSION, tableOf, type Table } from './real-work-table.js';
 
@@ -372,8 +372,7 @@ describe('real-work table', () => {
     });
 
     it('counts dlx as a runner for pnpm and yarn only, because bun and npm have no dlx', () => {
-      const dlx = (program: string): ToolObservation =>
-        ({ steps: [{ identity: { program, sub: 'dlx', flags: [], pulls: [{ registry: 'npm', name: 'prettier', version: null }] } }] }) as ToolObservation;
+      const dlx = (program: string) => ({ steps: [{ identity: { program, sub: 'dlx', flags: [], pulls: [{ registry: 'npm' as const, name: 'prettier', version: null }] } }] });
       expect(['pnpm', 'yarn', 'bun', 'npm'].map((program) => packageNames(dlx(program)))).toEqual([['prettier'], ['prettier'], [], []]);
     });
 
