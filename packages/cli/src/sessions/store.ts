@@ -88,7 +88,7 @@ export interface SessionsRuntime {
   stderr?: { isTTY?: boolean | undefined } | undefined;
   /** A seam for tests: awaited right after a build's scan of the log and before any session is loaded, so a test can change the log in exactly that window. */
   afterScan?: () => Promise<void>;
-  /** How many sessions (with their subagents) `refresh` loads and folds at a time; absent means `REFRESH_RUN`. */
+  /** How many sessions (with their subagents) `refresh` (default `REFRESH_RUN`) and `loadRuns` (default `LOAD_RUN`) load at a time; a test seam for both. */
   refreshRun?: number;
   /** A seam for tests and proofs: told once what a refresh folded, after its last run. `reversions` is the size of the matching's index. */
   refreshed?: (folded: { runs: number; reversions: number }) => void;

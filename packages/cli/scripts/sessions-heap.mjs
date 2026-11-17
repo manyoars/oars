@@ -279,6 +279,9 @@ const supersede = (dirs) => {
       rest = lines.pop() ?? '';
       appendFileSync(file, lines.filter((line) => line !== '').map(older).join(''));
     }
+    // The last line has no newline after it when the log does not end in one; its older copy is written too.
+    const last = rest + decoder.end();
+    if (last !== '') appendFileSync(file, older(last));
   } finally {
     closeSync(fd);
   }
