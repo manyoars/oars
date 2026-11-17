@@ -6,6 +6,7 @@
 //   node scripts/sessions-heap.mjs minheap [--sizes 400,800]             # smallest --max-old-space-size at which each command passes
 //   node scripts/sessions-heap.mjs phases [--sessions 800]               # heap kept after each phase, in one process
 //   node scripts/sessions-heap.mjs keep [--sessions 5]                   # builds a store and leaves it, to look at the records
+//   node scripts/sessions-heap.mjs poolwrite [--cells 1190000] [--runs 3] # peak RSS of the pool's cells in a fresh process each: holding them, writing cells.jsonl, and `poolOf` (no store; a generated store has too few cells)
 //
 // Flags every mode takes:
 //   --calls <n>         tool calls per prompt (default 14)
@@ -23,7 +24,7 @@ import { appendFileSync, closeSync, copyFileSync, existsSync, mkdirSync, mkdtemp
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const cliRoot = fileURLToPath(new URL('..', import.meta.url));
 
@@ -356,6 +357,36 @@ const assertWork = (name, verdict) => {
   if (verdict.finished && !verdict.ok) throw new Error(`${name} exited 0 but captured ${String(verdict.got)} (wanted ${String(verdict.want)}): its figures are not that run's`);
 };
 
+/**
+ * A deterministic pool of `count` distinct cells (a day or week of one motif, one frame bucket, one exposure), for the pool's write and `poolOf`: a generated store has about 4,000 cells, and the operator's has 1.19 million
+ * in a 284 MB `cells.jsonl`. Field values vary with the index, so the lines are about as long as a stored cell's and nothing repeats whole.
+ * @param {number} count
+ */
+const syntheticCells = (count) => {
+  const cells = [];
+  for (let at = 0; at < count; at += 1) {
+    const motif = at % 5003;
+    const rest = Math.floor(at / 5003);
+    cells.push({
+      motifId: `${(motif * 2654435761 >>> 0).toString(16).padStart(8, '0')}${(motif * 40503 >>> 0).toString(16).padStart(8, '0')}${motif.toString(16).padStart(8, '0')}`,
+      frameBucket: `claude-code/2.${String(rest % 40)}/claude-sonnet-${String(rest % 7)}`,
+      grain: rest % 2 === 0 ? 'day' : 'week',
+      day: `2026-${String(1 + (rest % 12)).padStart(2, '0')}-${String(1 + (rest % 28)).padStart(2, '0')}`,
+      sessions: 1 + (at % 9),
+      clusters: 1,
+      ok: at % 11,
+      failed: at % 5,
+      tokens: at % 7 === 0 ? null : at * 37,
+      tokenSessions: 1 + (at % 9),
+      tokenPrompts: 3 + (at % 17),
+      durationMs: at * 13,
+      exposed: at % 3 === 0,
+      exposure: ['unknown', 'shown', 'held'][at % 3],
+    });
+  }
+  return cells;
+};
+
 const command = process.argv[2];
 
 if (command === 'check') {
@@ -448,7 +479,52 @@ ${ran.stdout}${ran.stderr.slice(-800)}`);
   } finally {
     rmSync(dirs.root, { recursive: true, force: true });
   }
+} else if (command === 'poolstep') {
+  // One step of `poolwrite`, in this process, so its peak RSS is its own: `hold` builds the cells, `write` writes them as the pool does, `poolof` derives the pool from them.
+  const dist = join(bin, '..', 'sessions');
+  const step = arg('step', 'hold');
+  const file = arg('file', '');
+  const total = Number(arg('cells', '1190000'));
+  const started = performance.now();
+  const cells = syntheticCells(total);
+  if (step === 'write') {
+    const pool = await import(pathToFileURL(join(dist, 'pool.js')).href);
+    if (typeof pool.writeCells === 'function') await pool.writeCells(file, cells);
+    else {
+      const { serializeCells } = await import(pathToFileURL(join(dist, 'cells.js')).href);
+      const { writeAtomic } = await import(pathToFileURL(join(dist, 'store.js')).href);
+      await writeAtomic(file, serializeCells(cells));
+    }
+  } else if (step === 'poolof') {
+    const { poolOf } = await import(pathToFileURL(join(dist, 'cells.js')).href);
+    const pool = poolOf({ cells, motifs: [] }, []);
+    if (pool.cells.length !== total) throw new Error('poolOf changed the cells');
+  } else if (step !== 'hold') throw new Error(`unknown step ${step}`);
+  console.log(JSON.stringify({ step, cells: cells.length, peakMb: Math.round(process.resourceUsage().maxRSS / 1024), seconds: Number(((performance.now() - started) / 1000).toFixed(1)) }));
+} else if (command === 'poolwrite') {
+  const out = scratch('poolwrite');
+  const total = arg('cells', '1190000');
+  const file = join(out.root, 'cells.jsonl');
+  try {
+    console.log('step | peak RSS MB per run | seconds per run | cells.jsonl MB');
+    for (const step of ['hold', 'write', 'poolof']) {
+      const peaks = [];
+      const seconds = [];
+      let size = '';
+      for (let run = 0; run < Number(arg('runs', '3')); run += 1) {
+        const ran = spawnSync(process.execPath, ['--max-old-space-size=8192', fileURLToPath(import.meta.url), 'poolstep', '--step', step, '--cells', total, '--file', file, ...(binArg === -1 ? [] : ['--bin', bin])], { encoding: 'utf8', maxBuffer: 1 << 20 });
+        if (ran.status !== 0) throw new Error(`${step} run ${String(run + 1)} exited ${String(ran.status)}: ${ran.stderr.slice(-400)}`);
+        const row = JSON.parse(ran.stdout.trim().split(NL).pop() ?? '');
+        peaks.push(row.peakMb);
+        seconds.push(row.seconds);
+        if (step === 'write') size = (statSync(file).size / 1048576).toFixed(0);
+      }
+      console.log(`${step} | ${peaks.join(' | ')} | ${seconds.join(' | ')} | ${size}`);
+    }
+  } finally {
+    rmSync(out.root, { recursive: true, force: true });
+  }
 } else {
-  console.error('usage: sessions-heap.mjs check|table|minheap|phases|keep');
+  console.error('usage: sessions-heap.mjs check|table|minheap|phases|keep|poolwrite');
   process.exitCode = 2;
 }
