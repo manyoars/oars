@@ -645,6 +645,13 @@ export const digest = (parts: readonly string[]): string => createHash('sha256')
 /** Sessions a refresh loads and folds at a time. Peak memory is the sessions of a run plus what the folds keep (spec 3 option A), so this is the knob between the heap and the number of seeks. */
 const REFRESH_RUN = 100;
 
+/**
+ * Sessions a `loadRuns` read holds at a time when the runtime names no run size: the readers that keep a few fields of each session (the nightly's survival and store-health) hold one run and
+ * nothing else of the calls, so this is the knob between their peak memory and the number of seeks. On a 2,000-session generated store the peak was 482 MB at 100 sessions, 329 MB at 50, 263 MB at 25,
+ * and 222 MB at 10, for 8.6 s, 8.9 s, 9.1 s, and 10.0 s, so 25 takes most of the cut for the least extra time. `refresh` folds more per run and keeps `REFRESH_RUN`.
+ */
+export const LOAD_RUN = 25;
+
 interface Folded {
   /** Sessions, subagents, and errors in the order a whole read holds them; no prompts or tools. */
   store: Store;
@@ -1816,13 +1823,13 @@ export interface StoreRun {
 }
 
 /**
- * The store one run of sessions at a time, as `refresh` reads it (`foldRuns`): the log is scanned once, then each run of `refreshRun` sessions (default `REFRESH_RUN`) is read by seeking and handed over
+ * The store one run of sessions at a time, as `refresh` reads it (`foldRuns`): the log is scanned once, then each run of `refreshRun` sessions (default `LOAD_RUN`) is read by seeking and handed over
  * before the next is read, so a reader that keeps a few fields of each session holds those and one run, not the log. The calls only (`toolsOnly`): a run has no prompt or error rows. A run is in `runOrder`, which is not
  * the log's order, so a reader that wrote anything order-dependent sorts what it kept by `at`.
  */
 export const loadRuns = async function* (runtime: Pick<SessionsRuntime, 'storeDir' | 'refreshRun'>): AsyncGenerator<StoreRun> {
   const scan = await scanLog(paths(runtime.storeDir).observations, undefined, true);
-  const size = Math.max(1, Math.floor(runtime.refreshRun ?? REFRESH_RUN));
+  const size = Math.max(1, Math.floor(runtime.refreshRun ?? LOAD_RUN));
   const order = runOrder(scan);
   const at = logStart(scan);
   for (let from = 0; from < order.length; from += size) {
