@@ -7,11 +7,12 @@ import { slugOf } from '../sessions/allow.js';
 import { runHook } from '../sessions/hooks.js';
 import { readHookCalls } from '../sessions/hook-calls.js';
 import { appendStep } from '../sessions/steps.js';
-import { deposit, loadStore } from '../sessions/store.js';
+import { deposit, frozenSessions, loadStore } from '../sessions/store.js';
+import { verifyCaptured } from '../sessions/verify.js';
 import { CAPTURE_VERSION, EXTRACTOR_VERSION } from '../sessions/schema.js';
 import { cleanup, NOW, stage } from '../sessions/test-support.js';
 import type * as StoreModule from '../sessions/store.js';
-import { closedList, recordStoreHealth, type NightlyTelemetry } from './health.js';
+import { closedList, readCaptured, recordStoreHealth, type NightlyTelemetry } from './health.js';
 import { spoolEvents, type SpoolEvent } from './read-events.js';
 import { appendLine, readSpool } from './spool.js';
 
@@ -80,6 +81,35 @@ describe('store health at the nightly run', () => {
     await recordStoreHealth(telemetry, { ...staged.runtime, refreshRun: 1 });
     expect(events(dir, 'store-health')[0]?.data.readFailed).toBeUndefined();
     expect(reads.mock.calls.filter(([, , options]) => options?.only === undefined)).toEqual([]);
+  });
+
+  it('answers every capture row as a whole-store read does, with a violation in each, over runs of one session', async () => {
+    const staged = stage(slugOf(REPO));
+    await deposit(staged.runtime, { allow: [REPO], redactDomains: [], now: () => NOW });
+    // Break each row of `verifyCaptured` once: a session behind the current capture version, a second `sid`, a file hash no call explains, and a call whose `targetBase` does not fit its target.
+    const log = join(staged.storeDir, 'observations.jsonl');
+    const rows = readFileSync(log, 'utf8').split('\n').filter((line) => line !== '').map((line): { [key: string]: unknown } => JSON.parse(line));
+    const sessionRows = rows.filter((row) => row.kind === 'session' && row.parent === null);
+    const [behind, other, hashed] = sessionRows;
+    const call = rows.find((row) => row.kind === 'tool' && row.targetBase === null && row.cv === CAPTURE_VERSION);
+    if (behind === undefined || other === undefined || hashed === undefined || call === undefined) throw new Error('the fixture holds too few rows');
+    behind.cv = String(Number(CAPTURE_VERSION) - 1);
+    other.sid = 'another-salt';
+    hashed.fileHashes = ['0123456789abcdef'];
+    call.targetBase = 'cwd';
+    writeFileSync(log, `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`);
+
+    const whole = await loadStore(staged.storeDir);
+    const captured = [...whole.sessions, ...whole.subagents];
+    const frozen = await frozenSessions(staged.runtime, captured.filter((session) => Number(session.cv) >= 3 && Number(session.cv) < Number(CAPTURE_VERSION)));
+    const expected = verifyCaptured(captured, whole.tools, frozen);
+    expect(expected.every((row) => row.violations > 0)).toBe(true);
+    for (const refreshRun of [1, 2, undefined]) {
+      const read = await readCaptured({ ...staged.runtime, ...(refreshRun === undefined ? {} : { refreshRun }) });
+      expect(read.capture).toEqual(expected);
+      expect(read.sessions).toHaveLength(whole.sessions.length);
+      expect(read.subagents).toHaveLength(whole.subagents.length);
+    }
   });
 
   it('records the versions the store holds, not the ones this build writes', async () => {
