@@ -41,6 +41,7 @@ import type { PoolFold, PoolFolds } from './pool-fold.js';
 import type { ReadFolds } from './read-folds.js';
 import type { ReversionIndex } from './reversion.js';
 import { makeRedactor, type Redactor } from './redact.js';
+import { mainSessionOf } from './verify.js';
 import {
   CAPTURE_VERSION,
   EXTRACTOR_VERSION,
@@ -2105,7 +2106,7 @@ export const readSkeletonGroups = async function* (storeDir: string, lean = fals
   const folder = paths(storeDir).skeletons;
   const groups = new Map<string, string[]>();
   for (const name of await skeletonNames(folder)) {
-    const main = name.slice(0, -'.json'.length).split('~')[0] ?? name;
+    const main = mainSessionOf(name.slice(0, -'.json'.length));
     const held = groups.get(main);
     if (held === undefined) groups.set(main, [name]);
     else held.push(name);
