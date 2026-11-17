@@ -707,7 +707,7 @@ const foldRuns = async (runtime: SessionsRuntime): Promise<Folded> => {
   // Also loaded here: it reaches the read families a lookup hook must not load.
   const readFolding = (await import('./read-folds.js')).readFold();
   const counts = { prompts: 0, tools: 0 };
-  const start = (session: string): number => scan.spans?.get(session)?.[0] ?? Number.MAX_SAFE_INTEGER;
+  const start = logStart(scan);
   const sessions: { at: number; record: SessionObservation }[] = [];
   const subagents: { at: number; record: SessionObservation }[] = [];
   // Version 2 error rows come first in a whole read, then each readable session's in its place, then the agents' last.
@@ -1615,12 +1615,20 @@ const scanHandle = async (file: string, held: FileHandle | undefined, withSpans:
 };
 
 /**
+ * The byte offset where a session's first line at its highest rev starts in the log, from a scan made with spans: the place `runOrder`, `foldRuns`, and `loadRuns` put the session by.
+ * Every key of `spans` holds at least one pair, so the fallback (a session the scan holds none for sorts last) is never taken; it only satisfies the indexed read's type.
+ */
+export const logStart =
+  (scan: LogScan) =>
+  (session: string): number =>
+    scan.spans?.get(session)?.[0] ?? Number.MAX_SAFE_INTEGER;
+
+/**
  * The order `loadStore` visits sessions in, as one list: the sessions whose capture version cannot be read (version 2, whose prompts and errors the log holds as rows) first, then the rest, each group by where
  * the session's first line at its highest rev starts in the log, subagents and mains alike. Needs a scan made with spans. A run is a contiguous slice of this list.
  */
 export const runOrder = (scan: LogScan): string[] => {
-  // Every key of `spans` holds at least one pair, so the fallback is never taken; it only satisfies the indexed read's type.
-  const start = (session: string): number => scan.spans?.get(session)?.[0] ?? Number.MAX_SAFE_INTEGER;
+  const start = logStart(scan);
   const sessions = [...(scan.spans?.keys() ?? [])];
   const unreadable = (session: string): boolean => !isReadable(scan.cvs.get(session) ?? '0');
   return sessions.sort((a, b) => Number(unreadable(b)) - Number(unreadable(a)) || start(a) - start(b));
@@ -1816,7 +1824,7 @@ export const loadRuns = async function* (runtime: Pick<SessionsRuntime, 'storeDi
   const scan = await scanLog(paths(runtime.storeDir).observations, undefined, true);
   const size = Math.max(1, Math.floor(runtime.refreshRun ?? REFRESH_RUN));
   const order = runOrder(scan);
-  const at = (session: string): number => scan.spans?.get(session)?.[0] ?? Number.MAX_SAFE_INTEGER;
+  const at = logStart(scan);
   for (let from = 0; from < order.length; from += size) {
     const only = new Set(order.slice(from, from + size));
     yield { store: await loadStore(runtime.storeDir, undefined, { only, latest: scan.latest, spans: scan.spans, identity: scan.identity, toolsOnly: true }), at };

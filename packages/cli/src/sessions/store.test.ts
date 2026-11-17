@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { compactLog, deposit, scanLog, depositSession, derive, loadRuns, loadStore, namesAny, paths, readCalls, readRedactDomains, readSkeletonGroups, readSkeletons, slugOf, withLock, type StoreRun } from './store.js';
+import { compactLog, deposit, scanLog, depositSession, derive, loadRuns, loadStore, logStart, namesAny, paths, readCalls, readRedactDomains, readSkeletonGroups, readSkeletons, runOrder, slugOf, withLock, type StoreRun } from './store.js';
 import { CAPTURE_VERSION, EXTRACTOR_VERSION } from './schema.js';
 import { addProject, cleanup, NOW, stage } from './test-support.js';
 
@@ -141,6 +141,19 @@ describe('deposit', () => {
     expect(whole.tools.length).toBeGreaterThan(0);
     expect(placed(runs.flatMap(({ store }) => store.tools))).toEqual(whole.tools);
     expect(placed(one.flatMap(({ store }) => store.tools))).toEqual(whole.tools);
+  });
+
+  it('places a session where its first line at its highest rev starts in the log, and one the log does not hold last', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options(['proj']));
+    const scan = await scanLog(paths(staged.storeDir).observations, undefined, true);
+    const start = logStart(scan);
+    const sessions = [...(scan.spans?.keys() ?? [])];
+    expect(sessions.length).toBeGreaterThan(0);
+    for (const session of sessions) expect(start(session)).toBe(scan.spans?.get(session)?.[0]);
+    expect(start('no such session')).toBe(Number.MAX_SAFE_INTEGER);
+    // The order a whole read visits sessions in is this place (version 2 sessions aside, which this store holds none of).
+    expect(runOrder(scan)).toEqual([...sessions].sort((a, b) => start(a) - start(b)));
   });
 
   it('reads no run of a store with no log', async () => {
