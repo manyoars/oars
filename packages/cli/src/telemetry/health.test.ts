@@ -4,14 +4,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { slugOf } from '../sessions/allow.js';
+import { extractSession } from '../sessions/derive.js';
 import { runHook } from '../sessions/hooks.js';
 import { readHookCalls } from '../sessions/hook-calls.js';
+import { makeRedactor } from '../sessions/redact.js';
 import { appendStep } from '../sessions/steps.js';
-import { deposit, frozenSessions, loadStore } from '../sessions/store.js';
-import { verifyCaptured } from '../sessions/verify.js';
-import { CAPTURE_VERSION, EXTRACTOR_VERSION } from '../sessions/schema.js';
+import { deposit, frozenSessions, loadStore, readSkeletons } from '../sessions/store.js';
+import { verifyAll, verifyCaptured } from '../sessions/verify.js';
+import { CAPTURE_VERSION, EXTRACTOR_VERSION, OLDEST_READABLE_CAPTURE } from '../sessions/schema.js';
 import { cleanup, NOW, stage } from '../sessions/test-support.js';
 import type * as StoreModule from '../sessions/store.js';
+import type * as VerifyModule from '../sessions/verify.js';
 import { closedList, readCaptured, recordStoreHealth, type NightlyTelemetry } from './health.js';
 import { spoolEvents, type SpoolEvent } from './read-events.js';
 import { appendLine, readSpool } from './spool.js';
@@ -20,6 +23,12 @@ import { appendLine, readSpool } from './spool.js';
 vi.mock('../sessions/store.js', async (importOriginal) => {
   const real = await importOriginal<typeof StoreModule>();
   return { ...real, loadStore: vi.fn(real.loadStore) };
+});
+
+// A spy on the skeleton check, for the test of how many skeletons the snapshot hands it at once: the wrapped function is the real one.
+vi.mock('../sessions/verify.js', async (importOriginal) => {
+  const real = await importOriginal<typeof VerifyModule>();
+  return { ...real, verifyAll: vi.fn(real.verifyAll) };
 });
 
 const roots: string[] = [];
@@ -43,6 +52,33 @@ const emitter = (peak = 321): { telemetry: NightlyTelemetry; dir: string } => {
 };
 
 const events = (dir: string, type: string): SpoolEvent[] => spoolEvents(dir, type);
+
+const USAGE = { input_tokens: 5, cache_creation_input_tokens: 6, cache_read_input_tokens: 7, output_tokens: 8 };
+const request = (id: string): string => JSON.stringify({ type: 'assistant', requestId: id, timestamp: '2026-06-01T12:00:00.000Z', message: { role: 'assistant', model: 'm', content: [], usage: USAGE } });
+/** A cost-state line whose totals are `factor` requests' usage. */
+const costState = (factor: number): string =>
+  JSON.stringify({ type: 'cost-state', startTime: Date.parse('2026-06-01T00:00:00Z'), modelUsage: { m: { inputTokens: 5 * factor, cacheCreationInputTokens: 6 * factor, cacheReadInputTokens: 7 * factor, outputTokens: 8 * factor } } });
+const skeletonOf = (session: string, lines: readonly string[]) =>
+  extractSession({ text: lines.join('\n'), session, project: 'p', rev: 1, at: 'x', bytes: 0, redact: makeRedactor() }).skeleton;
+
+/**
+ * Skeleton files for the check of a main session and its subagents, as `deposit` names them (`<session>.json`, a subagent's `<parent>~agent-<x>.json`). Sorted by name the files do not put a
+ * main beside its agents (`s1.json`, `s10.json`, `s1~agent-a.json`, ...), and `s1` and `s10` share a prefix. Totals: `s1` holds its own request and its agents' (equal, as the harness records them);
+ * `s2`'s total is one request but its agent adds a second (a violation); `s10` is its own; `s3~agent-z` is an agent whose main is not in the store. One file is torn.
+ */
+const writeSkeletons = (storeDir: string): void => {
+  const folder = join(storeDir, 'skeletons');
+  mkdirSync(folder, { recursive: true });
+  const put = (session: string, lines: readonly string[]): void => writeFileSync(join(folder, `${session}.json`), JSON.stringify(skeletonOf(session, lines)));
+  put('s1', [request('r1'), costState(3)]);
+  put('s1~agent-a', [request('r2')]);
+  put('s1~agent-b', [request('r3')]);
+  put('s2', [request('r4'), costState(1)]);
+  put('s2~agent-c', [request('r5')]);
+  put('s10', [request('r6'), costState(1)]);
+  put('s3~agent-z', [request('r7')]);
+  writeFileSync(join(folder, 'torn.json'), '{"session":"torn","lines":[');
+};
 
 describe('store health at the nightly run', () => {
   it('snapshots a fixture store against a hand count', async () => {
@@ -81,6 +117,52 @@ describe('store health at the nightly run', () => {
     await recordStoreHealth(telemetry, { ...staged.runtime, refreshRun: 1 });
     expect(events(dir, 'store-health')[0]?.data.readFailed).toBeUndefined();
     expect(reads.mock.calls.filter(([, , options]) => options?.only === undefined)).toEqual([]);
+  });
+
+  it('hands the skeleton check one main session with its subagents at a time, never the whole store', async () => {
+    const staged = stage(slugOf(REPO));
+    writeSkeletons(staged.storeDir);
+    const { dir, telemetry } = emitter();
+    const checks = vi.mocked(verifyAll);
+    checks.mockClear();
+    await recordStoreHealth(telemetry, staged.runtime);
+    expect(events(dir, 'store-health')[0]?.data.readFailed).toBeUndefined();
+    // Seven skeletons: `s1` with two subagents, `s2` with one, `s10` alone, and the subagent of a main that is not in the store. The torn file is no skeleton, so its group holds none and is not checked.
+    expect(checks.mock.calls.map(([skeletons]) => skeletons.length).sort((a, b) => a - b)).toEqual([1, 1, 2, 3]);
+    expect(checks.mock.calls.every(([skeletons, delegatedFrom]) => delegatedFrom === skeletons)).toBe(true);
+  });
+
+  it('emits the event the whole-array read did, over mains with subagents and an orphan subagent', async () => {
+    const staged = stage(slugOf(REPO));
+    await deposit(staged.runtime, { allow: [REPO], redactDomains: [], now: () => NOW });
+    writeSkeletons(staged.storeDir);
+    const { dir, telemetry } = emitter();
+    await recordStoreHealth(telemetry, staged.runtime);
+
+    // The old path, composed here from the whole reads: every skeleton at once into `verifyAll`, the whole store into `verifyCaptured`.
+    const { skeletons, unreadable } = await readSkeletons(staged.storeDir, undefined, true);
+    const store = await loadStore(staged.storeDir);
+    const captured = [...store.sessions, ...store.subagents];
+    const frozen = await frozenSessions(staged.runtime, captured.filter((session) => Number(session.cv) >= OLDEST_READABLE_CAPTURE && Number(session.cv) < Number(CAPTURE_VERSION)));
+    const results = [...verifyAll(skeletons, skeletons), ...verifyCaptured(captured, store.tools, frozen)];
+    // `s2`'s agent makes its cost-state total fall short of the usage, which only the join of the agent to its main shows: the fixture must make the cost row fail.
+    expect(results[5]).toMatchObject({ checked: 12, violations: 4 });
+    expect(unreadable).toBe(1);
+    expect(events(dir, 'store-health')[0]?.data).toEqual({
+      sessions: store.sessions.length,
+      subagents: store.subagents.length,
+      skeletons: skeletons.length,
+      unparseable: unreadable + captured.reduce((sum, session) => sum + session.badLines, 0),
+      rawBytes: bytesUnder(join(staged.storeDir, 'raw')),
+      verifyChecked: results.length,
+      verifyFailed: results.filter((result) => result.violations > 0).length,
+      captureVersions: [Number(CAPTURE_VERSION)],
+      extractorVersions: [],
+      harnessVersions: closedList(captured.flatMap((session) => session.versions), 'version'),
+      models: closedList(captured.flatMap((session) => Object.keys(session.models)), 'model'),
+      outboxBytes: 0,
+      egressBytes: 0,
+    });
   });
 
   it('answers every capture row as a whole-store read does, with a violation in each, over runs of one session', async () => {
