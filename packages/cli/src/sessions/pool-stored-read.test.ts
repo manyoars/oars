@@ -28,8 +28,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 const streamed: string[] = [];
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof fs>();
-  const createReadStream = vi.fn(actual.createReadStream);
-  createReadStream.mockImplementation((...args: Parameters<typeof actual.createReadStream>) => {
+  const createReadStream = vi.fn((...args: Parameters<typeof actual.createReadStream>) => {
     if (typeof args[0] === 'string') streamed.push(args[0]);
     return actual.createReadStream(...args);
   });
