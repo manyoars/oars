@@ -12,7 +12,7 @@
 //   --chatter <n>       skeleton-only lines per call: text, thinking, attachment (default 5)
 //   --bulk <n>          characters of a clean tool result (default 400)
 //   --superseded off    leave the log clean for a no-op run, with no older copy of any record (default on; a recapture run ignores it)
-//   --errors one|varied  every failed call raises KeyError, so the whole store shares one error signature (default one: the shape t1403 measured), or one of eight exception names by the call's place, a fixed set (varied)
+//   --errors one|varied  every failed call raises KeyError, so the whole store shares one error signature (default one: the shape t1403 measured), or one of eight exception names (the first line of the result, so each is its own signature) by the failure's own count, a fixed set (varied)
 //   --bin <file>        run another build of the CLI (a copy of dist/ from before a change) instead of dist/bin.js, to compare two builds on one store (`phases` ignores it: it always measures dist/)
 //
 // Needs `npm run build -w packages/cli` first (it runs dist/bin.js, and refuses one older than src/sessions/store.ts unless `--bin` names the build). Nothing here touches the real store or ~/.claude: every run points
@@ -144,7 +144,10 @@ const transcript = (index) => {
       const failed = (index + p + c) % 6 === 5;
       const result = `${id}-${String(n++)}`;
       const content = failed
-        ? `Exit code 1\nTraceback (most recent call last):\n  File "/work/app/src/module-${String(index % 97)}.py", line ${String(c + 10)}, in <module>\n${varied ? ERRORS[(index + p + c) % ERRORS.length] : 'KeyError'}: 'key-${String(index % 31)}'`
+        ? varied
+          ? // The signature is the first informative line, so the exception name leads the result: a Traceback line first would give every error one signature. Indexed by the failure's own count, since a call fails only when (index + p + c) % 6 is 5.
+            `Exit code 1\n${ERRORS[Math.floor((index + p + c) / 6) % ERRORS.length]}: 'key-${String(index % 31)}'\nTraceback (most recent call last):\n  File "/work/app/src/module-${String(index % 97)}.py", line ${String(c + 10)}, in <module>`
+          : `Exit code 1\nTraceback (most recent call last):\n  File "/work/app/src/module-${String(index % 97)}.py", line ${String(c + 10)}, in <module>\nKeyError: 'key-${String(index % 31)}'`
         : `ok ${id} ${'x'.repeat(BULK)}`;
       line({ type: 'user', uuid: result, parentUuid: parent, isSidechain: false, timestamp: iso(base, clock), version: '2.1.300', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolId, is_error: failed, content }] } });
       parent = result;

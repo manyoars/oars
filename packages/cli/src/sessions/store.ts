@@ -643,13 +643,13 @@ const tally = (trace: DepositTrace | undefined, extract: Capture, subagent: bool
 
 export const digest = (parts: readonly string[]): string => createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 16);
 
-/** Sessions a refresh loads and folds at a time. Peak memory is the sessions of a run plus what the folds keep (spec 3 option A), so this is the knob between the heap and the number of seeks. */
+/** Sessions a refresh loads and folds at a time. Peak memory is the sessions of a run plus what the folds keep (spec 3 option A), so this is the knob between the heap and the number of seeks. Once `derive.finish` stopped copying its lists, a smaller run lowered the whole no-op deposit's peak RSS: on a 2,000-session generated store it was 841 to 852 MB before the push, 767 to 792 MB with the push alone (100 sessions), and 729 to 767 MB at 25, two runs each; the times (47 to 78 s) moved more between runs than between builds. */
 const REFRESH_RUN = 25;
 
 /**
  * Sessions a `loadRuns` read holds at a time when the runtime names no run size: the readers that keep a few fields of each session (the nightly's survival and store-health) hold one run and
  * nothing else of the calls, so this is the knob between their peak memory and the number of seeks. On a 2,000-session generated store the peak was 482 MB at 100 sessions, 329 MB at 50, 263 MB at 25,
- * and 222 MB at 10, for 8.6 s, 8.9 s, 9.1 s, and 10.0 s, so 25 takes most of the cut for the least extra time. `refresh` folds more per run and keeps `REFRESH_RUN`.
+ * and 222 MB at 10, for 8.6 s, 8.9 s, 9.1 s, and 10.0 s, so 25 takes most of the cut for the least extra time. `refresh` keeps its own `REFRESH_RUN`, now also 25: see its doc.
  */
 export const LOAD_RUN = 25;
 
