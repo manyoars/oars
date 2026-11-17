@@ -643,7 +643,7 @@ const tally = (trace: DepositTrace | undefined, extract: Capture, subagent: bool
 
 export const digest = (parts: readonly string[]): string => createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 16);
 
-/** Sessions a refresh loads and folds at a time. Peak memory is the sessions of a run plus what the folds keep (spec 3 option A), so this is the knob between the heap and the number of seeks. Once `derive.finish` stopped copying its lists, a smaller run lowered the whole no-op deposit's peak RSS: on a 2,000-session generated store it was 841 to 852 MB before the push, 767 to 792 MB with the push alone (100 sessions), and 729 to 767 MB at 25, two runs each; the times (47 to 78 s) moved more between runs than between builds. */
+/** Sessions a refresh loads and folds at a time. Peak memory is the sessions of a run plus what the folds keep (spec 3 option A), so this is the knob between the heap and the number of seeks. Once `derive.finish` stopped copying its lists, a smaller run lowered the whole no-op deposit's peak RSS: on a 2,000-session generated store it was 841 to 852 MB before the push, 767 to 792 MB with the push alone (100 sessions), and 723 to 767 MB at 25, two runs each. At 25 the recapture deposit's peak fell too (791 to 795 MB to 729 to 745 MB) while the time differences stayed inside run-to-run variation (mean no-op seconds 73.5 before, 57 push, 66.5 at 25; recapture 101.5, 94.5, 108.5). */
 const REFRESH_RUN = 25;
 
 /**
