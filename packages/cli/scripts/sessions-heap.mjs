@@ -359,7 +359,7 @@ const assertWork = (name, verdict) => {
 
 /**
  * A deterministic pool of `count` distinct cells (a day or week of one motif, one frame bucket, one exposure), for the pool's write and `poolOf`: a generated store has about 4,000 cells, and the operator's has 1.19 million
- * in a 284 MB `cells.jsonl`. Field values vary with the index, so the lines are about as long as a stored cell's and nothing repeats whole.
+ * (t1403's synthetic file of that size is 284 MB). Field values vary with the index, so the lines are about as long as a stored cell's and nothing repeats whole.
  * @param {number} count
  */
 const syntheticCells = (count) => {

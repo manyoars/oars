@@ -107,7 +107,7 @@ const linesOf = async function* (file: string): AsyncGenerator<string> {
 
 /**
  * A file that is missing, or whose lines are JSON but not all of the kind asked for, is no record of this pool: it is derived and written again. A line that is not JSON is damage, so it stops here and asks the operator to delete that
- * file. The file is read a line at a time and its rows kept as they are parsed, never as one string of the whole file with its split lines beside them (`cells.jsonl` is 288 MB on the operator's store). After a row of the wrong kind
+ * file. The file is read a line at a time and its rows kept as they are parsed, never as one string of the whole file with its split lines beside them (t1403's synthetic `cells.jsonl` is 284 MB). After a row of the wrong kind
  * the rest is still parsed, only so that a line that is not JSON is found wherever it is, and the rows kept so far are let go.
  */
 const storedRows = async <Row>(file: string, isRow: (value: unknown) => value is Row): Promise<Row[] | undefined> => {
@@ -129,7 +129,7 @@ const storedRows = async <Row>(file: string, isRow: (value: unknown) => value is
 
 const readStored = async (file: string): Promise<Read[] | undefined> => (await storedRows(file, isRead))?.map(frozenRead);
 
-/** Text is handed to the disk in pieces of about this many characters. */
+/** Text is handed to the disk in pieces of at least this many characters, cut at line ends. */
 const PIECE = 64 * 1024;
 
 /** The lines joined into pieces of at least `PIECE` characters (the last may be shorter), so a file is never one string. */
@@ -157,7 +157,7 @@ const jsonLines = function* (rows: Iterable<unknown>): Generator<string> {
   for (const row of rows) yield `${JSON.stringify(row)}\n`;
 };
 
-/** `cells.jsonl`: one JSON line a cell, the bytes `serializeCells` makes, written in pieces (the operator's file is 284 MB, and one string of it held about 1,000 MB more than the cells). */
+/** `cells.jsonl`: one JSON line a cell, the bytes `serializeCells` makes, written in pieces (t1403's synthetic 284 MB file: one string of it held about 1,000 MB more than the cells). */
 export const writeCells = (file: string, cells: readonly Cell[]): Promise<void> => writeLines(file, jsonLines(cells));
 
 /**

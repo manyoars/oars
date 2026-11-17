@@ -75,7 +75,7 @@ if (shape === 'recapture') {
   const at = new Date().toISOString();
   const marks = ['scan', 'runs', 'finish', 'pool'];
   const before = rows.length;
-  const stepNames = { scan: 'scan the log', runs: 'foldRuns runs', finish: 'pool fold finish', pool: 'derive.finish + currentPool (folds)' };
+  const stepNames = { scan: 'scan the log', runs: 'foldRuns runs', finish: 'pool fold finish', pool: 'derive.finish, derived.json write + currentPool (folds)' };
   let stepStart = performance.now();
   let stepPeak = process.memoryUsage().heapUsed;
   let stepBefore = stepPeak;
