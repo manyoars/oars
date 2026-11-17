@@ -20,7 +20,7 @@ The runner is proved with a scripted fake, and the Claude Code on Bedrock adapte
 | `src/preflight.ts` | `npm run preflight`: before the first paid run, checks this machine with no model call and no spend: `claude` and its pinned version, Node, git, npm, the task-set folder, the fixture tag, `AWS_REGION`, and that `AWS_BEARER_TOKEN_BEDROCK` is set (never its value). |
 | `src/first-run-read.ts` | `npm run first-run-read`: reads the files one real run leaves behind and prints `yes`, `no`, or `cannot tell` for the scrub and questions (a) to (f), with the evidence. Only prints; decides no void, edits no record. |
 | `FLEET.md` | The one-time owner steps, the order of commands from run to deposit, and "Before the first paid run" (preflight, the owner's yes, one task, and the first-run read). |
-| `<runId>.stdout.jsonl` | What an adapter saves in `transcriptOutDir` beside the transcript copy: the harness's stdout, byte for byte, except that the key's value is replaced by `[redacted]`. It is the first-run read's `--output`. |
+| `<runId>.stdout.jsonl` | What an adapter saves in `transcriptOutDir` beside the transcript copy: the harness's stdout as the child wrote it, decoded as UTF-8, except that the key's value is replaced by `[redacted]`. It is the first-run read's `--output`. |
 | `src/runbook.ts` | The run book as JSON Lines with a fixed key order, no transcript text, and no signature. |
 
 Before the first paid run:
