@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { compactLog, deposit, scanLog, depositSession, derive, loadStore, namesAny, paths, readCalls, readRedactDomains, readSkeletons, slugOf, withLock } from './store.js';
+import { compactLog, deposit, scanLog, depositSession, derive, loadRuns, loadStore, namesAny, paths, readCalls, readRedactDomains, readSkeletons, slugOf, withLock, type StoreRun } from './store.js';
 import { CAPTURE_VERSION, EXTRACTOR_VERSION } from './schema.js';
 import { addProject, cleanup, NOW, stage } from './test-support.js';
 
@@ -111,6 +111,43 @@ describe('deposit', () => {
     expect(heads.prompts).toEqual([]);
     expect(heads.tools).toEqual([]);
     expect(heads.errors).toEqual([]);
+  });
+
+  it('reads the calls of the store a run of sessions at a time, and the runs together hold what a whole read holds', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options(['proj']));
+    const whole = await loadStore(staged.storeDir);
+    const every = [...whole.sessions, ...whole.subagents];
+    const runsOf = async (refreshRun?: number): Promise<StoreRun[]> => {
+      const runs: StoreRun[] = [];
+      for await (const run of loadRuns({ storeDir: staged.storeDir, ...(refreshRun === undefined ? {} : { refreshRun }) })) runs.push(run);
+      return runs;
+    };
+    const one = await runsOf();
+    expect(one).toHaveLength(1);
+    const runs = await runsOf(2);
+    expect(runs).toHaveLength(Math.ceil(every.length / 2));
+    for (const { store } of runs) {
+      expect(store.sessions.length + store.subagents.length).toBeLessThanOrEqual(2);
+      // The calls and the session records, never what was said.
+      expect([store.prompts, store.errors]).toEqual([[], []]);
+    }
+    // A run is not in the log's order; sorted by where its session sits in the log, the runs hold the whole read's sessions and calls in its order.
+    const at = runs[0]?.at;
+    if (at === undefined) throw new Error('no run');
+    const placed = <T extends { session: string }>(records: T[]): T[] => records.sort((a, b) => at(a.session) - at(b.session));
+    expect(placed(runs.flatMap(({ store }) => store.sessions))).toEqual(whole.sessions);
+    expect(placed(runs.flatMap(({ store }) => store.subagents))).toEqual(whole.subagents);
+    expect(whole.tools.length).toBeGreaterThan(0);
+    expect(placed(runs.flatMap(({ store }) => store.tools))).toEqual(whole.tools);
+    expect(placed(one.flatMap(({ store }) => store.tools))).toEqual(whole.tools);
+  });
+
+  it('reads no run of a store with no log', async () => {
+    const staged = stage();
+    const runs: StoreRun[] = [];
+    for await (const run of loadRuns(staged.runtime)) runs.push(run);
+    expect(runs).toEqual([]);
   });
 
   it('keeps a line whose session id JSON escaped (jsonescapedid), and drops one that names no wanted session', () => {

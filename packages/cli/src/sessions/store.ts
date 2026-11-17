@@ -1679,6 +1679,8 @@ export type LoadOptions = {
   only?: ReadonlySet<string>;
   /** Keep the session records alone, with no prompt, tool, or error rows: enough to gate and place a session without holding its content. */
   sessionsOnly?: boolean;
+  /** Keep the session records and their tool rows, with no prompt, error-line, or error row held and nothing derived from them: for a reader of the calls, who has no use for what was said. */
+  toolsOnly?: boolean;
   /** The revs of an earlier `scanLog`: the read skips its own first pass. A build that reads chunk after chunk scans once; a row written after that scan is not seen, like a session that began after the build did. */
   latest?: ReadonlyMap<string, number>;
   /** With `only`: the byte spans of an earlier `scanLog(file, held, true)`. The read seeks to the lines of the wanted sessions instead of streaming the whole log; a log that is no longer the scanned file is streamed instead, and a torn or short line is skipped, never misread. */
@@ -1759,6 +1761,7 @@ export const loadStore = async (storeDir: string, afterFirstPass?: () => Promise
       if (observation === undefined || observation.rev !== latest.get(observation.session)) continue;
       if (options.only !== undefined && !options.only.has(observation.session)) continue;
       if (options.sessionsOnly === true && observation.kind !== 'session') continue;
+      if (options.toolsOnly === true && observation.kind !== 'session' && observation.kind !== 'tool') continue;
       if (observation.kind === 'session') of(observation.session).session = options.messageUsage === true ? observation : withoutMessageUsage(observation);
       else if (observation.kind === 'user-prompt') of(observation.session).prompts.push(observation);
       else if (observation.kind === 'tool') of(observation.session).tools.push(internTool(observation, intern));
@@ -1771,6 +1774,8 @@ export const loadStore = async (storeDir: string, afterFirstPass?: () => Promise
   }
   const redact = makeRedactor((await readState(storeDir)).redactDomains);
   const agents: (SessionCapture & { parent: string })[] = [];
+  // A read that keeps the calls alone has no prompt or error to derive, and an agent's errors are derived from them.
+  const derives = options.sessionsOnly !== true && options.toolsOnly !== true;
   for (const { session: written, prompts, tools: writtenTools, errorLines: writtenErrorLines } of captured.values()) {
     // A superseded session holds no turns: the session that folded it in holds them.
     if (written === undefined || written.supersededBy !== undefined) continue;
@@ -1782,17 +1787,40 @@ export const loadStore = async (storeDir: string, afterFirstPass?: () => Promise
     store.tools.push(...tools);
     if (session.parent !== null) {
       store.subagents.push(session);
-      if (isReadable(session.cv) && options.sessionsOnly !== true) agents.push({ session, prompts, tools, errorLines, parent: session.parent });
+      if (isReadable(session.cv) && derives) agents.push({ session, prompts, tools, errorLines, parent: session.parent });
       continue;
     }
     store.sessions.push(session);
-    if (!isReadable(session.cv) || options.sessionsOnly === true) continue;
+    if (!isReadable(session.cv) || !derives) continue;
     const derived = deriveSession({ session, prompts, tools, errorLines }, redact);
     store.prompts.push(...derived.prompts);
     store.errors.push(...derived.errors);
   }
   store.errors.push(...agentErrors(store, agents, redact));
   return store;
+};
+
+/** One run of {@link loadRuns}: the sessions of the run with their calls, and where each session sits in the log. */
+export interface StoreRun {
+  store: Store;
+  /** The byte offset of the session's first line at its highest rev: sorting records by it puts them in the order a whole `loadStore` holds them. */
+  at: (session: string) => number;
+}
+
+/**
+ * The store one run of sessions at a time, as `refresh` reads it (`foldRuns`): the log is scanned once, then each run of `refreshRun` sessions (default `REFRESH_RUN`) is read by seeking and handed over
+ * before the next is read, so a reader that keeps a few fields of each session holds those and one run, not the log. The calls only (`toolsOnly`): a run has no prompt or error rows. A run is in `runOrder`, which is not
+ * the log's order, so a reader that wrote anything order-dependent sorts what it kept by `at`.
+ */
+export const loadRuns = async function* (runtime: Pick<SessionsRuntime, 'storeDir' | 'refreshRun'>): AsyncGenerator<StoreRun> {
+  const scan = await scanLog(paths(runtime.storeDir).observations, undefined, true);
+  const size = Math.max(1, Math.floor(runtime.refreshRun ?? REFRESH_RUN));
+  const order = runOrder(scan);
+  const at = (session: string): number => scan.spans?.get(session)?.[0] ?? Number.MAX_SAFE_INTEGER;
+  for (let from = 0; from < order.length; from += size) {
+    const only = new Set(order.slice(from, from + size));
+    yield { store: await loadStore(runtime.storeDir, undefined, { only, latest: scan.latest, spans: scan.spans, identity: scan.identity, toolsOnly: true }), at };
+  }
 };
 
 /**

@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { compileAllow, slugOf } from './allow.js';
 import { makeRepoRoot } from './repo-root.js';
-import { loadStore, paths, type SessionsRuntime, type Store } from './store.js';
+import { loadRuns, paths, type SessionsRuntime, type Store } from './store.js';
 
 /** A commit younger than this has not had time to be reverted or dropped, so it is not read yet. */
 export const SURVIVAL_DAYS = 7;
@@ -111,20 +111,36 @@ interface Due {
   shas: Set<string>;
 }
 
-/** The shas old enough to read, per allowlisted project. Main-line calls only: a subagent's commits are not attributed yet. */
-const dueByProject = (store: Store, allows: (project: string) => boolean, cutoff: string): Map<string, Due> => {
-  const projectOf = new Map(store.sessions.map((session) => [session.session, session.project]));
-  const due = new Map<string, Due>();
-  for (const tool of store.tools) {
+/** A main-line call old enough to read that names commits: all the nightly keeps of a session's calls. `at` is where its session sits in the log. */
+interface DueCall {
+  at: number;
+  project: string;
+  session: string;
+  shas: string[];
+}
+
+/** The calls of one run that are due. Main-line calls of main sessions only: a subagent's commits are not attributed yet, and its calls match no project here. */
+const dueCalls = (run: Store, at: (session: string) => number, allows: (project: string) => boolean, cutoff: string): DueCall[] => {
+  const projectOf = new Map(run.sessions.map((session) => [session.session, session.project]));
+  const calls: DueCall[] = [];
+  for (const tool of run.tools) {
     const project = projectOf.get(tool.session);
     if (project === undefined || !allows(project) || tool.side || tool.ts === null || tool.ts >= cutoff) continue;
-    for (const sha of tool.commits ?? []) {
-      if (sha === null) continue;
-      const entry = due.get(project) ?? { sessions: new Set(), shas: new Set() };
-      entry.sessions.add(tool.session);
-      entry.shas.add(sha);
-      due.set(project, entry);
-    }
+    const shas = (tool.commits ?? []).filter((sha) => sha !== null);
+    if (shas.length > 0) calls.push({ at: at(tool.session), project, session: tool.session, shas });
+  }
+  return calls;
+};
+
+/** The shas old enough to read, per allowlisted project, in the order a whole-store read would meet them: the calls in the order of their sessions in the log. */
+const dueByProject = (calls: DueCall[]): Map<string, Due> => {
+  const due = new Map<string, Due>();
+  // The sort is stable, so the calls of one session stay in the order the run held them.
+  for (const call of calls.sort((a, b) => a.at - b.at)) {
+    const entry = due.get(call.project) ?? { sessions: new Set(), shas: new Set() };
+    entry.sessions.add(call.session);
+    for (const sha of call.shas) entry.shas.add(sha);
+    due.set(call.project, entry);
   }
   return due;
 };
@@ -202,7 +218,11 @@ export const readSurvival = async (storeDir: string): Promise<Map<string, Surviv
 
 const observe = async (runtime: SessionsRuntime, allowEntries: readonly string[], now: () => number, git: Git): Promise<SurvivalCounts> => {
   const allow = compileAllow(allowEntries);
-  const due = dueByProject(await loadStore(runtime.storeDir), allow.allows, new Date(now() - SURVIVAL_DAYS * DAY_MS).toISOString());
+  const cutoff = new Date(now() - SURVIVAL_DAYS * DAY_MS).toISOString();
+  // One run of sessions at a time, so what is held is the due calls and one run, not every prompt, error, and call of the store.
+  const calls: DueCall[] = [];
+  for await (const { store, at } of loadRuns(runtime)) calls.push(...dueCalls(store, at, allow.allows, cutoff));
+  const due = dueByProject(calls);
   const repoRoot = makeRepoRoot();
   const byRoot = new Map<string, Set<string>>();
   const shas = new Set<string>();
