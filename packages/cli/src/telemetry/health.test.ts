@@ -132,7 +132,8 @@ describe('store health at the nightly run', () => {
     await recordStoreHealth(telemetry, staged.runtime);
     expect(events(dir, 'store-health')[0]?.data.readFailed).toBeUndefined();
     // Seven skeletons: `s1` with two subagents, `s2` with one, `s10` alone, and the subagent of a main that is not in the store; the torn file is no skeleton, a group of none.
-    expect(checks.mock.calls.map(([skeletons]) => skeletons.length).sort((a, b) => a - b)).toEqual([0, 1, 1, 2, 3]);
+    // By name, so `s1` kept apart from its agents (which the whole-event comparison below cannot show: only `s2`'s cost row depends on the join) fails here.
+    expect(checks.mock.calls.map(([skeletons]) => skeletons.map((skeleton) => skeleton.session).sort().join(' ')).sort()).toEqual(['', 's1 s1~agent-a s1~agent-b', 's10', 's2 s2~agent-c', 's3~agent-z']);
   });
 
   it('emits the event the whole-array read did, over mains with subagents and an orphan subagent', async () => {

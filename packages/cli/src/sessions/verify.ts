@@ -170,8 +170,8 @@ export const verifySkeleton = (skeleton: Skeleton, delegated: readonly SkeletonL
   verifyCost(skeleton.lines, delegated, skeleton.session),
 ];
 
-/** A subagent transcript is stored as `<parent>~...~agent-<id>`; a main session's id holds no `~`. */
-const mainSessionOf = (session: string): string => session.split('~')[0] ?? session;
+/** A subagent transcript is stored as `<parent>~...~agent-<id>`; a main session's id holds no `~`. Exported so a reader that groups skeletons by file name keys them as `verifyAll` does. */
+export const mainSessionOf = (session: string): string => session.split('~')[0] ?? session;
 
 /** The subagent transcripts' lines, keyed by the main session they belong to. */
 const delegatedLines = (skeletons: readonly Skeleton[]): Map<string, SkeletonLine[]> => {
@@ -185,7 +185,7 @@ const delegatedLines = (skeletons: readonly Skeleton[]): Map<string, SkeletonLin
 
 /**
  * Adds the rows `from` (one result per invariant, in order) into the running rows `into`. `verifyAll` sums its skeletons this way, and a reader that checks skeletons in groups
- * (a main session with its subagents) sums each group's `verifyAll` into the rows of the first, so the groups together give what `verifyAll` over all of them gives, bar the
+ * (a main session with its subagents) sums each group's `verifyAll` rows into running totals started from `emptyResults()`, so the groups together give what `verifyAll` over all of them gives, bar the
  * `example` of a class, which is the first session seen in the order the groups came.
  */
 export const addResults = (into: InvariantResult[], from: readonly InvariantResult[]): void => {
