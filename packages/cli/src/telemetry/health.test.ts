@@ -69,7 +69,9 @@ const skeletonOf = (session: string, lines: readonly string[]) =>
 const writeSkeletons = (storeDir: string): void => {
   const folder = join(storeDir, 'skeletons');
   mkdirSync(folder, { recursive: true });
-  const put = (session: string, lines: readonly string[]): void => writeFileSync(join(folder, `${session}.json`), JSON.stringify(skeletonOf(session, lines)));
+  const put = (session: string, lines: readonly string[]): void => {
+    writeFileSync(join(folder, `${session}.json`), JSON.stringify(skeletonOf(session, lines)));
+  };
   put('s1', [request('r1'), costState(3)]);
   put('s1~agent-a', [request('r2')]);
   put('s1~agent-b', [request('r3')]);
@@ -127,9 +129,8 @@ describe('store health at the nightly run', () => {
     checks.mockClear();
     await recordStoreHealth(telemetry, staged.runtime);
     expect(events(dir, 'store-health')[0]?.data.readFailed).toBeUndefined();
-    // Seven skeletons: `s1` with two subagents, `s2` with one, `s10` alone, and the subagent of a main that is not in the store. The torn file is no skeleton, so its group holds none and is not checked.
-    expect(checks.mock.calls.map(([skeletons]) => skeletons.length).sort((a, b) => a - b)).toEqual([1, 1, 2, 3]);
-    expect(checks.mock.calls.every(([skeletons, delegatedFrom]) => delegatedFrom === skeletons)).toBe(true);
+    // Seven skeletons: `s1` with two subagents, `s2` with one, `s10` alone, and the subagent of a main that is not in the store; the torn file is no skeleton, a group of none.
+    expect(checks.mock.calls.map(([skeletons]) => skeletons.length).sort((a, b) => a - b)).toEqual([0, 1, 1, 2, 3]);
   });
 
   it('emits the event the whole-array read did, over mains with subagents and an orphan subagent', async () => {

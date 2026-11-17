@@ -2043,23 +2043,21 @@ const withCostFields = (skeleton: Skeleton, lean: boolean): Skeleton => ({
   }),
 });
 
-/**
- * `unreadable` counts skeleton files that are torn, corrupted, or not a skeleton, so verify reports them instead of aborting. With `lean`, each
- * line's `hashes` read as empty: `verify` holds every skeleton at once and checks structure, never content.
- */
-export const readSkeletons = async (storeDir: string, only?: string, lean = false): Promise<{ skeletons: Skeleton[]; unreadable: number }> => {
-  const folder = paths(storeDir).skeletons;
-  let names: string[];
+/** The skeleton file names of a store, sorted; a store with no skeletons folder has none. */
+const skeletonNames = async (folder: string): Promise<string[]> => {
   try {
-    names = (await readdir(folder)).filter((name) => name.endsWith('.json')).sort();
+    return (await readdir(folder)).filter((name) => name.endsWith('.json')).sort();
   } catch (error) {
-    if (isMissing(error)) return { skeletons: [], unreadable: 0 };
+    if (isMissing(error)) return [];
     throw error;
   }
+};
+
+/** The named skeleton files, in the order given. `unreadable` counts the files that are torn, corrupted, or not a skeleton. */
+const readSkeletonFiles = async (folder: string, names: readonly string[], lean: boolean): Promise<{ skeletons: Skeleton[]; unreadable: number }> => {
   const skeletons: Skeleton[] = [];
   let unreadable = 0;
   for (const name of names) {
-    if (only !== undefined && name !== `${only}.json`) continue;
     let parsed: unknown;
     try {
       parsed = JSON.parse(await readFile(join(folder, name), 'utf8'));
@@ -2070,6 +2068,34 @@ export const readSkeletons = async (storeDir: string, only?: string, lean = fals
     else unreadable += 1;
   }
   return { skeletons, unreadable };
+};
+
+/**
+ * `unreadable` counts skeleton files that are torn, corrupted, or not a skeleton, so verify reports them instead of aborting. With `lean`, each
+ * line's `hashes` read as empty: `verify` holds every skeleton at once and checks structure, never content.
+ */
+export const readSkeletons = async (storeDir: string, only?: string, lean = false): Promise<{ skeletons: Skeleton[]; unreadable: number }> => {
+  const folder = paths(storeDir).skeletons;
+  const names = (await skeletonNames(folder)).filter((name) => only === undefined || name === `${only}.json`);
+  return readSkeletonFiles(folder, names, lean);
+};
+
+/**
+ * The skeletons a main session at a time, for a reader that reduces as it reads (the nightly's store-health): each group is a main session's skeleton with its subagents' (`<main>.json`
+ * and `<main>~...~agent-<id>.json`), or a subagent's alone when its main is not in the store, so it holds one group, not the store. The file names put the group together: sorted they do not
+ * (`s1.json`, `s10.json`, `s1~agent-a.json`), so every name is read first and no skeleton is. The groups hold the skeletons `readSkeletons` reads, in its order within a group; a file that cannot
+ * be read counts in `unreadable` of its own group.
+ */
+export const readSkeletonGroups = async function* (storeDir: string, lean = false): AsyncGenerator<{ skeletons: Skeleton[]; unreadable: number }> {
+  const folder = paths(storeDir).skeletons;
+  const groups = new Map<string, string[]>();
+  for (const name of await skeletonNames(folder)) {
+    const main = name.slice(0, -'.json'.length).split('~')[0] ?? name;
+    const held = groups.get(main);
+    if (held === undefined) groups.set(main, [name]);
+    else held.push(name);
+  }
+  for (const names of groups.values()) yield await readSkeletonFiles(folder, names, lean);
 };
 
 /** `derive`'s prompt sums, folded run by run: the prompts of each run in turn give the same sums, in the same key order, as the prompts of the whole store. */

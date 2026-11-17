@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { compactLog, deposit, scanLog, depositSession, derive, loadRuns, loadStore, namesAny, paths, readCalls, readRedactDomains, readSkeletons, slugOf, withLock, type StoreRun } from './store.js';
+import { compactLog, deposit, scanLog, depositSession, derive, loadRuns, loadStore, namesAny, paths, readCalls, readRedactDomains, readSkeletonGroups, readSkeletons, slugOf, withLock, type StoreRun } from './store.js';
 import { CAPTURE_VERSION, EXTRACTOR_VERSION } from './schema.js';
 import { addProject, cleanup, NOW, stage } from './test-support.js';
 
@@ -318,6 +318,44 @@ describe('deposit', () => {
     const { skeletons, unreadable } = await readSkeletons(staged.storeDir);
     expect(skeletons).toHaveLength(4);
     expect(unreadable).toBe(1);
+  });
+
+  it('reads the skeletons a main session with its subagents at a time, and the same ones readSkeletons reads', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options(['proj']));
+    writeFileSync(join(paths(staged.storeDir).skeletons, 'torn.json'), '{"lines": [');
+    for (const lean of [false, true]) {
+      const groups: { skeletons: { session: string }[]; unreadable: number }[] = [];
+      for await (const group of readSkeletonGroups(staged.storeDir, lean)) groups.push(group);
+      const whole = await readSkeletons(staged.storeDir, undefined, lean);
+      expect(groups.flatMap((group) => group.skeletons)).toEqual(whole.skeletons);
+      expect(groups.reduce((sum, group) => sum + group.unreadable, 0)).toBe(whole.unreadable);
+    }
+  });
+
+  it('groups skeleton files by file name: a main with its subagents, an agent whose main is gone, and a torn file by itself', async () => {
+    const staged = stage();
+    const folder = paths(staged.storeDir).skeletons;
+    const groupsOf = async (): Promise<{ sessions: string[]; unreadable: number }[]> => {
+      const groups: { sessions: string[]; unreadable: number }[] = [];
+      for await (const group of readSkeletonGroups(staged.storeDir)) groups.push({ sessions: group.skeletons.map((skeleton) => skeleton.session), unreadable: group.unreadable });
+      return groups;
+    };
+    // No skeletons folder: no group.
+    expect(await groupsOf()).toEqual([]);
+    mkdirSync(folder, { recursive: true });
+    for (const session of ['s1', 's1~agent-b', 's1~agent-a', 's10', 's2~agent-c']) {
+      writeFileSync(join(folder, `${session}.json`), JSON.stringify({ v: '2', session, project: 'p', merkleRoot: 'x', leaves: 0, lines: [] }));
+    }
+    writeFileSync(join(folder, 'torn.json'), '{"lines": [');
+    writeFileSync(join(folder, 'notes.txt'), 'not a skeleton file');
+    // Sorted, `s10.json` falls between `s1.json` and `s1~agent-a.json`: the group still holds `s1` with both its agents, in name order, and `s10` apart from them.
+    expect(await groupsOf()).toEqual([
+      { sessions: ['s1', 's1~agent-a', 's1~agent-b'], unreadable: 0 },
+      { sessions: ['s10'], unreadable: 0 },
+      { sessions: ['s2~agent-c'], unreadable: 0 },
+      { sessions: [], unreadable: 1 },
+    ]);
   });
 
   it('reads a skeleton written before the cost-state since, models, or model keys fields with them empty', async () => {
