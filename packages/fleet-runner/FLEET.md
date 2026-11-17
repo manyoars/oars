@@ -63,3 +63,15 @@ The first real run is a credit draw on the approved Bedrock credits. It also ans
 
    Repeat `--allow-server` and `--allow-skill` for each one the run was allowed. To add a piece of the key's value to the scrub search, set it in the `FIRST_RUN_MARKER` environment variable (the `--marker <text>` flag also works, but puts the text in shell history and the process list). It is never printed. A `yes` on question (b) names the extra skills and servers: check that each one comes from the fixture's `.claude/` or `.mcp.json` before taking it as a load, because Claude Code ships some skills itself.
 5. Stop. Report its lines to the owner before any second run.
+
+## Before the first Codex run (Azure OpenAI)
+
+The Codex arm of the first draw (two controls, three repeats) runs the `codex-azure` entry of `fleet-manifest.json`: Codex CLI `0.169.0`, model ID `gpt-6.1-sol`, Azure OpenAI Global Standard. Before it:
+
+- Install the native `codex` executable, or `node` plus `bin/codex.js` from the npm package (an npm-installed `codex` is a `.cmd` on Windows, which the adapter refuses), at the pinned version `0.169.0`.
+- Create the Azure deployment and name it as the manifest's model ID, `gpt-6.1-sol`.
+- Put `AZURE_OPENAI_API_KEY` in the runner's environment (its value is never printed or written).
+- Node at or above the task set's floor, and git and npm on PATH.
+- The private fixture reachable from this machine.
+- No `/etc/codex/skills` folder on the machine (Codex would load its skills into every run).
+- Tell the owner before the draw (K5) and wait for their yes, as in the Claude steps above.
