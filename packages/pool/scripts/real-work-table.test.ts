@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { TOOL_INPUT_KEYS } from '../../cli/src/sessions/public-vocabulary.js';
 import { PROMPT_CLASSES } from '../../cli/src/sessions/schema.js';
-import { bash, edit, failedEdit, fixture, id, inSkill, mcp, read, removeFixtures, TERM, type Fixture, type Spec } from './real-work-fixture.js';
-import { HARNESS_NAMES, main, serverName, SPEC_VERSION, tableOf, type Table } from './real-work-table.js';
+import { bash, type Call, edit, failedEdit, fixture, id, inSkill, mcp, read, removeFixtures, TERM, type Fixture, type Spec } from './real-work-fixture.js';
+import { HARNESS_NAMES, main, PUBLIC_PACKAGES, serverName, SPEC_VERSION, tableOf, type Table } from './real-work-table.js';
 
 afterEach(removeFixtures);
 
@@ -18,11 +18,13 @@ const older = (n: number, project = '-work-oars'): Spec => ({
   version: '2.1.300',
   model: 'claude-opus-5-5',
   prompts: [
-    { text: 'fix the parser', calls: [read(), bash(false), edit(), bash(true)] },
+    { text: 'fix the parser', calls: [read(), bash(false), edit(), bash(true), run('npx prettier@3.3.0 --check .', true), run('npx @acme/internal-tool --go', false)] },
     { text: 'revert that', calls: [bash(false), read(), read(), read(), read(), read(), read()] },
   ],
 });
 const newer = (n: number): Spec => ({ id: id(n), project: '-work-oars', version: '2.1.320', model: 'claude-sonnet-5-5', prompts: [{ text: 'fix the parser', calls: [read(), bash(true), edit()] }] });
+
+const run = (command: string, ok: boolean): Call => ({ tool: 'Bash', input: { command }, ok });
 
 const build = async (f: Fixture, extra: { minSessions?: number } = {}): Promise<Table> => tableOf(f.runtime, OPTIONS(f, extra));
 
@@ -73,7 +75,8 @@ describe('real-work table', () => {
     expect(filtered.header.minSessions).toBe(2);
     const defaulted = await tableOf(f.runtime, { terms: f.terms, owners: f.owners, date: '2026-11-13' });
     expect(defaulted.header.minSessions).toBe(5);
-    expect(defaulted.rows).toEqual([]);
+    // Every cell and tool row is under the default minimum; a package row is not left out, it prints thin.
+    expect(defaulted.rows.every((row) => row.kind === 'package' && row.thin)).toBe(true);
   });
 
   it('holds no string outside the closed vocabulary', async () => {
@@ -84,7 +87,7 @@ describe('real-work table', () => {
     const table = await build(f);
     // Only what this fixture can print: its one private server is other, so no public server or skill name belongs here.
     const allowed = new Set<string>([
-      ...HARNESS_NAMES, ...PROMPT_CLASSES, ...TOOL_INPUT_KEYS.keys(), 'other', 'unknown', '2.1.30x', '2.1.32x', 'claude-opus-5-5', 'claude-sonnet-5-5', 'one fleet', SPEC_VERSION, '2026-11-13', 'cell', 'tool', 'server',
+      ...HARNESS_NAMES, ...PROMPT_CLASSES, ...TOOL_INPUT_KEYS.keys(), ...PUBLIC_PACKAGES, 'other', 'unknown', '2.1.30x', '2.1.32x', 'claude-opus-5-5', 'claude-sonnet-5-5', 'one fleet', SPEC_VERSION, '2026-11-13', 'cell', 'tool', 'server', 'package',
     ]);
     const keys = new Set(['spec', 'label', 'builtOn', 'sessions', 'counted', 'excluded', 'minSessions', 'leftOut', 'header', 'rows', 'kind', 'model', 'harness', 'versionBucket', 'tool', 'calls', 'failures', 'failureRate', 'recovered', 'callsToRecover', 'editFollowedShare', 'prompts', 'promptsKnown', 'interventions', 'interventionsPerPrompt', 'tokensPerPrompt', 'class', 'name', 'thin', 'recoveredRate',
       'term', 'noRaw', 'noTerms', 'unreadable', 'noOwner']);
@@ -295,9 +298,62 @@ describe('real-work table', () => {
       await f.stored();
       const table = await build(f);
       expect(scoped(table)).toEqual([]);
-      expect(table.rows.every((row) => row.kind === 'cell' || row.kind === 'tool')).toBe(true);
+      expect(table.rows.every((row) => row.kind === 'cell' || row.kind === 'tool' || row.kind === 'package')).toBe(true);
       expect(`${JSON.stringify(table, null, 2)}
 `).toBe(readFileSync(join(import.meta.dirname, 'fixtures', 'real-work-table.expected.json'), 'utf8'));
+    });
+  });
+
+  describe('package rows', () => {
+    const packages = (table: Table) => table.rows.flatMap((row) => (row.kind === 'package' ? [row] : []));
+    const prompts = (...calls: Call[]): Spec['prompts'] => [{ text: 'run it', calls }];
+
+    it('counts a runner step as using a package, drops the version, keeps the scope, and ignores an install alone', async () => {
+      const f = fixture();
+      const spec = (n: number, command: string): Spec => ({ ...newer(n), prompts: prompts(run(command, true)) });
+      f.add(spec(1, 'npx prettier@3.3.0 --check .'));
+      f.add(spec(2, 'npx -y @playwright/test@latest test'));
+      f.add(spec(3, 'uvx ruff check .'));
+      f.add(spec(4, 'pipx run black .'));
+      f.add(spec(5, 'pnpm dlx vite build'));
+      f.add(spec(6, 'npm install prettier'));
+      f.add(spec(7, 'npx prettier && npm install eslint'));
+      await f.stored();
+      const rows = packages(await build(f, { minSessions: 1 }));
+      expect(rows.map((row) => [row.name, row.sessions, row.calls])).toEqual([['@playwright/test', 1, 1], ['black', 1, 1], ['prettier', 1, 1], ['ruff', 1, 1], ['vite', 1, 1]]);
+    });
+
+    it('prints a package name only from the public list, and any other as other', async () => {
+      const f = fixture();
+      f.add(older(1));
+      f.add(older(2));
+      await f.stored();
+      const table = await build(f, { minSessions: 2 });
+      expect(packages(table).map((row) => [row.name, row.sessions, row.calls, row.failures])).toEqual([['other', 2, 2, 2], ['prettier', 2, 2, 0]]);
+      expect(JSON.stringify(table)).not.toContain('acme');
+      expect(PUBLIC_PACKAGES.has('internal-tool')).toBe(false);
+    });
+
+    it('labels each row one fleet, and prints a row under the minimum as thin with no rate', async () => {
+      const f = fixture();
+      f.add(older(1));
+      f.add(older(2));
+      await f.stored();
+      for (const row of packages(await build(f, { minSessions: 2 }))) expect(row).toMatchObject({ label: 'one fleet', thin: false, harness: 'claude-code', versionBucket: '2.1.30x' });
+      const thin = packages(await build(f, { minSessions: 3 }));
+      expect(thin.length).toBe(2);
+      for (const row of thin) expect(row).toMatchObject({ thin: true, failureRate: null, recoveredRate: null, callsToRecover: null, label: 'one fleet' });
+    });
+
+    it('holds no name outside the public lists, no path, and no address in the fixture table', async () => {
+      const f = fixture();
+      f.add(older(1));
+      f.add({ ...older(2), prompts: prompts(run('npx prettier ./src/secret/file.ts', true), run('uvx ruff https://acme.example.com/x', true), run('npx @acme/internal-tool admin@acme.example.com', false)) });
+      await f.stored();
+      const table = await build(f, { minSessions: 1 });
+      const text = JSON.stringify(table);
+      for (const row of packages(table)) expect(row.name === 'other' || PUBLIC_PACKAGES.has(row.name), row.name).toBe(true);
+      expect(text).not.toMatch(/acme|internal-tool|secret|example\.com|@[a-z0-9-]+\.[a-z]|https?:|[A-Za-z]:\|\.\/|\/src\//i);
     });
   });
 });
