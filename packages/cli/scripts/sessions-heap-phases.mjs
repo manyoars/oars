@@ -24,9 +24,6 @@ const baseline = await dist('baseline.js');
 const runtime = { storeDir, projectsRoot: join(claudeDir, 'projects'), stdin: new PassThrough(), stdout: { write: () => true } };
 /** @param {number} bytes */
 const mb = (bytes) => Math.round(bytes / 1048576);
-/** @typedef {import('../src/sessions/store.js').Store} Store */
-/** @typedef {import('../src/sessions/schema.js').DerivedRecords} DerivedRecords */
-/** @typedef {import('../src/sessions/read.js').Read} Read */
 /** @typedef {import('../src/sessions/store.js').DepositResult} DepositResult */
 /** @typedef {{ name: string, before: number, peak: number, kept: number, ms: number, sync: boolean }} PhaseRow */
 /** @type {PhaseRow[]} */
