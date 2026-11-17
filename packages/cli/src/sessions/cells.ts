@@ -445,6 +445,7 @@ export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): Cell
   return fold.finish();
 };
 
+/** The cells file as one string: the test oracle for `writeCells` (pool.ts), which writes the same lines in pieces. Kept as its own body, not built from `writeCells`'s line function (pool.ts imports this module), so a test that compares them is not circular. */
 export const serializeCells = (cells: readonly Cell[]): string => cells.map((cell) => `${JSON.stringify(cell)}\n`).join('');
 
 /** What every read of one derive pass reads, and the snapshot it answers from. */

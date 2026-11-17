@@ -58,7 +58,7 @@ const CHUNK = 64 * 1024;
 /** The most bytes any one piece of a pool file may hold: a piece is flushed at 64 KiB of text, so it ends within one line of that, and a character is up to three bytes per UTF-16 unit. */
 const BOUND = 4 * CHUNK;
 
-/** Cells whose lines hold multi-byte characters throughout, so some character sits at every chunk edge, and one cell whose line is long. */
+/** Cells whose lines hold multi-byte characters throughout and one cell whose line is long. Pieces are cut at line ends, so no multi-byte character sits at an edge here; the surrogate-pair test below puts one there. */
 const cellsOf = (count: number): Cell[] =>
   Array.from({ length: count }, (_, at): Cell => ({
     motifId: `m${String(at)}\u{1F600}`,
@@ -100,6 +100,23 @@ describe('refreshPool writes the pool files in bounded pieces', () => {
     expect(Math.max(...pieces)).toBeLessThanOrEqual(BOUND);
     expect(pieces.reduce((sum, bytes) => sum + bytes, 0)).toBe(Buffer.byteLength(whole));
     expect(Math.max(...writtenTo(files.motifs))).toBeLessThanOrEqual(BOUND);
+  });
+
+  it('writes the bytes serializeCells makes when a surrogate pair covers the offsets either side of a 64 Ki-character edge', async () => {
+    const dir = storeDir();
+    const files = poolFiles(dir);
+    const cells = cellsOf(3000);
+    const target = 100;
+    const emoji = '\u{1F600}';
+    const withPad = (pad: number): Cell[] => cells.map((cell, index): Cell => (index === target ? { ...cell, frameBucket: `${'p'.repeat(pad)}${emoji}` } : cell));
+    const offsetOf = (list: Cell[]): number => serializeCells(list).indexOf(`${emoji}","grain"`, serializeCells(list.slice(0, target)).length);
+    const padded = withPad(CHUNK - 1 - offsetOf(withPad(0)));
+    const whole = serializeCells(padded);
+    expect(offsetOf(padded)).toBe(CHUNK - 1);
+    expect(whole.charCodeAt(CHUNK - 1)).toBe(emoji.charCodeAt(0));
+    expect(whole.charCodeAt(CHUNK)).toBe(emoji.charCodeAt(1));
+    await refreshPool(dir, one, folded(padded, []));
+    expect(readFileSync(files.cells, 'utf8')).toBe(whole);
   });
 
   it('writes an empty pool as two empty files', async () => {
