@@ -88,7 +88,11 @@ describe('store health at the nightly run', () => {
     await deposit(staged.runtime, { allow: [REPO], redactDomains: [], now: () => NOW });
     // Break each row of `verifyCaptured` once: a session behind the current capture version, a second `sid`, a file hash no call explains, and a call whose `targetBase` does not fit its target.
     const log = join(staged.storeDir, 'observations.jsonl');
-    const rows = readFileSync(log, 'utf8').split('\n').filter((line) => line !== '').map((line): { [key: string]: unknown } => JSON.parse(line));
+    const rows = readFileSync(log, 'utf8').split('\n').filter((line) => line !== '').map((line): { [key: string]: unknown } => {
+      const parsed: unknown = JSON.parse(line);
+      if (typeof parsed !== 'object' || parsed === null) throw new Error('a log line is not an object');
+      return Object.fromEntries(Object.entries(parsed));
+    });
     const sessionRows = rows.filter((row) => row.kind === 'session' && row.parent === null);
     const [behind, other, hashed] = sessionRows;
     const call = rows.find((row) => row.kind === 'tool' && row.targetBase === null && row.cv === CAPTURE_VERSION);
