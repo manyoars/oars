@@ -18,13 +18,21 @@ const older = (n: number, project = '-work-oars'): Spec => ({
   version: '2.1.300',
   model: 'claude-opus-5-5',
   prompts: [
-    { text: 'fix the parser', calls: [read(), bash(false), edit(), bash(true), run('npx prettier@3.3.0 --check .', true), run('npx @acme/internal-tool --go', false)] },
+    { text: 'fix the parser', calls: [read(), bash(false), edit(), bash(true)] },
     { text: 'revert that', calls: [bash(false), read(), read(), read(), read(), read(), read()] },
   ],
 });
 const newer = (n: number): Spec => ({ id: id(n), project: '-work-oars', version: '2.1.320', model: 'claude-sonnet-5-5', prompts: [{ text: 'fix the parser', calls: [read(), bash(true), edit()] }] });
 
 const run = (command: string, ok: boolean): Call => ({ tool: 'Bash', input: { command }, ok });
+// The older session plus two npx calls, for the tests that need package rows; `older` itself stays free of them.
+const withPackages = (n: number): Spec => ({
+  ...older(n),
+  prompts: [
+    { text: 'fix the parser', calls: [read(), bash(false), edit(), bash(true), run('npx prettier@3.3.0 --check .', true), run('npx @acme/internal-tool --go', false)] },
+    { text: 'revert that', calls: [bash(false), read(), read(), read(), read(), read(), read()] },
+  ],
+});
 
 const build = async (f: Fixture, extra: { minSessions?: number } = {}): Promise<Table> => tableOf(f.runtime, OPTIONS(f, extra));
 
@@ -75,8 +83,7 @@ describe('real-work table', () => {
     expect(filtered.header.minSessions).toBe(2);
     const defaulted = await tableOf(f.runtime, { terms: f.terms, owners: f.owners, date: '2026-11-13' });
     expect(defaulted.header.minSessions).toBe(5);
-    // Every cell and tool row is under the default minimum; a package row is not left out, it prints thin.
-    expect(defaulted.rows.every((row) => row.kind === 'package' && row.thin)).toBe(true);
+    expect(defaulted.rows).toEqual([]);
   });
 
   it('holds no string outside the closed vocabulary', async () => {
@@ -298,7 +305,7 @@ describe('real-work table', () => {
       await f.stored();
       const table = await build(f);
       expect(scoped(table)).toEqual([]);
-      expect(table.rows.every((row) => row.kind === 'cell' || row.kind === 'tool' || row.kind === 'package')).toBe(true);
+      expect(table.rows.every((row) => row.kind === 'cell' || row.kind === 'tool')).toBe(true);
       expect(`${JSON.stringify(table, null, 2)}
 `).toBe(readFileSync(join(import.meta.dirname, 'fixtures', 'real-work-table.expected.json'), 'utf8'));
     });
@@ -323,10 +330,41 @@ describe('real-work table', () => {
       expect(rows.map((row) => [row.name, row.sessions, row.calls])).toEqual([['@playwright/test', 1, 1], ['black', 1, 1], ['prettier', 1, 1], ['ruff', 1, 1], ['vite', 1, 1]]);
     });
 
+    it('gives a known table with package rows, byte for byte', async () => {
+      const f = fixture();
+      f.add(withPackages(1));
+      f.add(withPackages(2));
+      f.add(newer(3));
+      await f.stored();
+      const text = `${JSON.stringify(await build(f), null, 2)}
+`;
+      expect(text).toBe(readFileSync(join(import.meta.dirname, 'fixtures', 'real-work-table.packages.expected.json'), 'utf8'));
+    });
+
+    it('prints package rows thin under the default minimum, not left out', async () => {
+      const f = fixture();
+      f.add(withPackages(1));
+      f.add(withPackages(2));
+      await f.stored();
+      const defaulted = await tableOf(f.runtime, { terms: f.terms, owners: f.owners, date: '2026-11-13' });
+      expect(defaulted.rows.length).toBeGreaterThan(0);
+      expect(defaulted.rows.every((row) => row.kind === 'package' && row.thin)).toBe(true);
+    });
+
+    it('counts nothing for an install step, including uv tool install and uv pip install', async () => {
+      const f = fixture();
+      f.add({ ...newer(1), prompts: prompts(run('uvx ruff && uv pip install black', true)) });
+      f.add({ ...newer(2), prompts: prompts(run('uvx ruff && uv tool install mypy', true)) });
+      await f.stored();
+      const rows = packages(await build(f, { minSessions: 1 }));
+      // A call that mixes a runner and an install counts nothing: the pulls carry no step, so they cannot be told apart.
+      expect(rows).toEqual([]);
+    });
+
     it('prints a package name only from the public list, and any other as other', async () => {
       const f = fixture();
-      f.add(older(1));
-      f.add(older(2));
+      f.add(withPackages(1));
+      f.add(withPackages(2));
       await f.stored();
       const table = await build(f, { minSessions: 2 });
       expect(packages(table).map((row) => [row.name, row.sessions, row.calls, row.failures])).toEqual([['other', 2, 2, 2], ['prettier', 2, 2, 0]]);
@@ -336,8 +374,8 @@ describe('real-work table', () => {
 
     it('labels each row one fleet, and prints a row under the minimum as thin with no rate', async () => {
       const f = fixture();
-      f.add(older(1));
-      f.add(older(2));
+      f.add(withPackages(1));
+      f.add(withPackages(2));
       await f.stored();
       for (const row of packages(await build(f, { minSessions: 2 }))) expect(row).toMatchObject({ label: 'one fleet', thin: false, harness: 'claude-code', versionBucket: '2.1.30x' });
       const thin = packages(await build(f, { minSessions: 3 }));
@@ -347,13 +385,13 @@ describe('real-work table', () => {
 
     it('holds no name outside the public lists, no path, and no address in the fixture table', async () => {
       const f = fixture();
-      f.add(older(1));
-      f.add({ ...older(2), prompts: prompts(run('npx prettier ./src/secret/file.ts', true), run('uvx ruff https://acme.example.com/x', true), run('npx @acme/internal-tool admin@acme.example.com', false)) });
+      f.add(withPackages(1));
+      f.add({ ...older(2), prompts: prompts(run('npx prettier C:\\work\\acme\\x.ts', true), run('npx prettier ./src/secret/file.ts', true), run('uvx ruff https://acme.example.com/x', true), run('npx @acme/internal-tool admin@acme.example.com', false)) });
       await f.stored();
       const table = await build(f, { minSessions: 1 });
       const text = JSON.stringify(table);
       for (const row of packages(table)) expect(row.name === 'other' || PUBLIC_PACKAGES.has(row.name), row.name).toBe(true);
-      expect(text).not.toMatch(/acme|internal-tool|secret|example\.com|@[a-z0-9-]+\.[a-z]|https?:|[A-Za-z]:\|\.\/|\/src\//i);
+      expect(text).not.toMatch(/acme|internal-tool|secret|example\.com|@[a-z0-9-]+\.[a-z]|https?:|[A-Za-z]:\\|\.\/|\/src\//i);
     });
   });
 });
