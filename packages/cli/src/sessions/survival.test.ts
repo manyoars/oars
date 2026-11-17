@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { deposit, loadStore } from './store.js';
+import type * as StoreModule from './store.js';
 import { addProject, cleanup, removeHeld, stage, stubGitHousekeepingOff, type Staged } from './test-support.js';
 import { readSurvival, recordSurvival, survivalFile, SURVIVAL_DAYS, type Git } from './survival.js';
 import { slugOf } from './allow.js';
@@ -13,6 +14,12 @@ import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
 import { readHookCalls } from './hook-calls.js';
 import { runHook } from './hooks.js';
+
+// A spy on the loader, for the tests of which reads survival makes: the wrapped function is the real one.
+vi.mock('./store.js', async (importOriginal) => {
+  const real = await importOriginal<typeof StoreModule>();
+  return { ...real, loadStore: vi.fn(real.loadStore) };
+});
 
 // Process creation is the cost on a Windows runner: a loaded one took up to 3 s for one git process (a spawn timed under eight concurrent spawners: median 1.2 s, max 2.9 s), and the 30 s default
 // covers 10 of them. A test that starts more is cut to fewer spawns, never given a wider bound: auto gc and maintenance are off (each commit started a `maintenance run --auto` child), a repository a
@@ -540,6 +547,57 @@ describe('recordSurvival', () => {
     // A directory where the log should be: reading it fails with EISDIR, which `loadStore` does not swallow as a missing file.
     mkdirSync(join(s.storeDir, 'observations.jsonl'), { recursive: true });
     await expect(recordSurvival(s.runtime, ['proj'], () => NOW)).resolves.toBeNull();
+  });
+});
+
+describe('the store it reads', () => {
+  /** Eight-hex shas, the way a commit summary prints them: one per session, so the order the file names them in is the order the store holds the sessions. */
+  const sha = (n: number): string => `a${String(n).padStart(7, '0')}`;
+  const YOUNG = '2026-06-29T00:00:00.000Z';
+
+  /**
+   * Five main sessions over two projects that share one repository (a folder and a worktree of it), a subagent transcript that names a commit, a session captured twice (it
+   * grew), and a commit too young to read. `refreshRun: 2` splits the six transcripts into three runs, so a read run by run crosses sessions of both projects.
+   */
+  const populated = async (): Promise<{ s: Staged; allow: string[]; every: string[] }> => {
+    const { repo } = shared();
+    const worktree = join(repo, '.claude', 'worktrees', 'x');
+    const s = stage('unused');
+    const allow = [slugOf(repo), slugOf(worktree)];
+    const add = (cwd: string, name: string, commits: readonly Commit[]): void => {
+      addProject(s, slugOf(cwd), name, transcript(cwd, commits));
+    };
+    add(repo, 's1', [{ sha: sha(1) }]);
+    add(repo, 's2', [{ sha: sha(2) }]);
+    add(worktree, 'w1', [{ sha: sha(5) }]);
+    add(repo, 's3', [{ sha: sha(4) }, { sha: sha(8), ts: YOUNG }]);
+    const subagents = join(s.projectsRoot, slugOf(repo), 's3', 'subagents');
+    mkdirSync(subagents, { recursive: true });
+    writeFileSync(join(subagents, 'agent-x.jsonl'), `${transcript(repo, [{ sha: sha(9) }]).join('\n')}\n`);
+    add(worktree, 'w2', [{ sha: sha(6) }]);
+    await deposit(s.runtime, { allow, redactDomains: [], now: () => NOW });
+    // The second capture of `s2` is a new rev: the log then holds the first one too, until a compaction.
+    add(repo, 's2', [{ sha: sha(2) }, { sha: sha(3) }]);
+    await deposit(s.runtime, { allow, redactDomains: [], now: () => NOW });
+    return { s, allow, every: [1, 2, 3, 4, 5, 6, 8, 9].map(sha) };
+  };
+
+  it('never reads the whole store at once: every read of the log names the sessions of one run', async () => {
+    const { s, allow, every } = await populated();
+    const reads = vi.mocked(loadStore);
+    reads.mockClear();
+    await recordSurvival({ ...s.runtime, refreshRun: 2 }, allow, () => NOW, holdsAll(...every));
+    expect(reads.mock.calls.filter(([, , options]) => options?.only === undefined)).toEqual([]);
+  });
+
+  it('writes the file the whole-store read wrote, byte for byte', async () => {
+    const { s, allow, every } = await populated();
+    const counts = await recordSurvival({ ...s.runtime, refreshRun: 2 }, allow, () => NOW, holdsAll(...every));
+    expect(counts).toEqual({ survived: 6, reverted: 0, unreachable: 0, unknown: 0 });
+    // The order the whole-store read wrote, captured from it: a project at a time, the first one a call was seen in first, and a project's sessions in the place the log holds them. `s2`
+    // was captured twice, so its second rev sits last in the log and its commits come after those of `s3` (4), and a commit of the subagent (9) or too young to read (8) is not named.
+    const wrote = [1, 4, 2, 3, 5, 6].map((n) => `{"sha":"${sha(n)}","state":"survived","day":"2026-06-30"}\n`).join('');
+    expect(readFileSync(survivalFile(s.storeDir), 'utf8')).toBe(wrote);
   });
 });
 
