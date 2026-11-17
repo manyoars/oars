@@ -1,5 +1,7 @@
 // Proof of the Claude Code on Bedrock adapter against a stub `claude` (src/stub-claude.mjs), a tiny git repository made here, and a stub `npm`. No test starts the real
 // `claude`, opens a network connection, or reads an AWS credential: the credential is a made-up string handed in through the injected environment.
+import { PassThrough } from 'node:stream';
+import { collectUtf8 } from './harness-shared.js';
 import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
@@ -594,8 +596,30 @@ describe('check and cleanup', () => {
   });
 });
 
+describe('collectUtf8', () => {
+  it('keeps a multibyte character split across two data events', () => {
+    // Counts the chunks that reach the stream: the decoder then holds the first byte, so one decoded event follows from two raw chunks.
+    let chunks = 0;
+    const stream = new PassThrough({
+      transform(chunk: Buffer, _encoding, done) {
+        chunks += 1;
+        done(null, chunk);
+      },
+    });
+    const events: unknown[] = [];
+    stream.on('data', (chunk: unknown) => events.push(chunk));
+    const text = collectUtf8(stream);
+    const euro = Buffer.from('€');
+    stream.write(euro.subarray(0, 1));
+    stream.write(euro.subarray(1));
+    expect(chunks).toBe(2);
+    expect(events).toEqual(['€']);
+    expect(text()).toBe('€');
+  });
+});
+
 describe('makeNodeSpawn output', () => {
-  it('keeps a multibyte character that arrives split across two writes, the second sent once the first is flushed (no wall-clock gap)', async () => {
+  it('end to end, returns a multibyte character the child writes in two parts', async () => {
     const script = "const b = Buffer.from('\u20ac'); process.stdout.write(b.subarray(0, 1), () => process.stdout.write(b.subarray(1)));";
     const outcome = await nodeSpawn({ command: process.execPath, args: ['-e', script], cwd: tmpdir(), env: {}, stdin: null, timeoutMs: 20000 });
     expect(outcome.stdout).toBe('\u20ac');

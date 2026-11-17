@@ -48,7 +48,7 @@ Step 1 and step 6 are once. Steps 2 to 4 are done for each order's store folders
 
 The first real run is a credit draw on the approved Bedrock credits. It also answers seven questions that no stub can. Follow these steps in order, and stop where they say stop.
 
-1. Run the preflight. It makes no model call and spends nothing. It checks `claude` and its pinned version, Node, git, npm, the task-set folder, the fixture tag, `AWS_REGION`, and that `AWS_BEARER_TOKEN_BEDROCK` is set (never its value). Fix every line that is not `ok`.
+1. Run the preflight. It makes no model call and spends nothing. It checks that the fleet manifest has no placeholder or `UNSET-` pin, `claude` and its pinned version, Node, git, npm, the task-set folder, the fixture tag, `AWS_REGION`, and that `AWS_BEARER_TOKEN_BEDROCK` is set (never its value). Fix every line that is not `ok`.
 
    `npm run preflight -w packages/fleet-runner -- --taskset ../../taskset/v1 --fixture-source <fixture repository path or URL>`
 
