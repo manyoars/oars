@@ -1,4 +1,4 @@
-// The pool's cells.jsonl and motifs.jsonl are written in bounded pieces, never as one string of the whole file (t1407): on the operator's store `cells.jsonl` is 284 MB, and serializing it to one string and handing it to one `writeFile` held about 1,000 MB more than the cells themselves.
+// The pool's cells.jsonl and motifs.jsonl are written in bounded pieces, never as one string of the whole file (t1407): on t1403's synthetic 284 MB `cells.jsonl`, serializing it to one string and handing it to one `writeFile` held about 1,000 MB more than the cells themselves.
 import type * as fsp from 'node:fs/promises';
 import type * as fs from 'node:fs';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';

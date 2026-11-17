@@ -10,7 +10,7 @@ import { stepsOfCall } from '../../cli/src/sessions/motif.js';
 import { recoveryCallsOf, type Followed } from '../../cli/src/sessions/recovery-calls.js';
 import { checkSession } from '../../cli/src/sessions/exclusion.js';
 import { LITERAL, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_SKILLS, publicModel, TOOL_INPUT_KEYS } from '../../cli/src/sessions/public-vocabulary.js';
-import { harnessOf, PROMPT_CLASSES, type Harness, type PromptObservation, type ShellIdentity, type StepIdentity, type ToolObservation } from '../../cli/src/sessions/schema.js';
+import { harnessOf, PROMPT_CLASSES, type Harness, type PromptObservation, type ShellIdentity, type StepIdentity, type StepObservation, type ToolObservation } from '../../cli/src/sessions/schema.js';
 import { loadStore, type SessionsRuntime } from '../../cli/src/sessions/store.js';
 import { insideRepository, ownerOf, PackError, parseOwners } from './sample-pack.js';
 
@@ -137,7 +137,7 @@ const runsPackage = (identity: StepIdentity): identity is ShellIdentity =>
  * The public packages one call ran, name only (scope kept, version dropped; the pull's name is the registry spelling without `@version`). Names come from the pulls kept on each runner step
  * (`step.identity.pulls`), so a runner and an install in one call are told apart. A name off the wire `PUBLIC_PACKAGES` is `other`.
  */
-export const packageNames = (call: { steps?: ReadonlyArray<{ identity: StepIdentity }> }): string[] => {
+export const packageNames = (call: { steps?: ReadonlyArray<Pick<StepObservation, 'identity'>> }): string[] => {
   const names = (call.steps ?? []).flatMap((step) => (runsPackage(step.identity) ? (step.identity.pulls ?? []) : []))
     .filter((pull) => pull.registry === 'npm' || pull.registry === 'pypi')
     .map((pull) => (PUBLIC_PACKAGES.has(pull.name) ? pull.name : OTHER));
