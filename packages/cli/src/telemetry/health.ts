@@ -4,9 +4,9 @@ import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CAPTURE_VERSION, OLDEST_READABLE_CAPTURE, type SessionObservation, type StepRow } from '../sessions/schema.js';
 import { readSteps } from '../sessions/steps.js';
-import { frozenSessions, loadRuns, paths, readSkeletons, type SessionsRuntime } from '../sessions/store.js';
+import { frozenSessions, loadRuns, paths, readSkeletonGroups, type SessionsRuntime } from '../sessions/store.js';
 import { LITERAL, publicModel, publicVersion } from '../sessions/public-vocabulary.js';
-import { CAPTURE_INVARIANTS, verifyAll, verifyCaptured, type InvariantResult } from '../sessions/verify.js';
+import { addResults, CAPTURE_INVARIANTS, emptyResults, verifyAll, verifyCaptured, type InvariantResult } from '../sessions/verify.js';
 import { emitEvent, recordsEvents, type Emitter } from './emit.js';
 import { spoolEvents } from './read-events.js';
 
@@ -110,18 +110,34 @@ export const readCaptured = async (runtime: SessionsRuntime): Promise<{ sessions
   return { sessions, subagents, capture };
 };
 
+/**
+ * The skeleton invariants over every skeleton, read a main session with its subagents at a time and checked as it is read: only the group in hand is held, and each group's rows sum into
+ * the whole's (`addResults`). A group is what `verifyAll` needs of the others, as the subagents' lines are checked with their main's cost-state.
+ */
+const readChecked = async (storeDir: string): Promise<{ results: InvariantResult[]; skeletons: number; unreadable: number }> => {
+  const results = emptyResults();
+  let skeletons = 0;
+  let unreadable = 0;
+  for await (const group of readSkeletonGroups(storeDir, true)) {
+    skeletons += group.skeletons.length;
+    unreadable += group.unreadable;
+    addResults(results, verifyAll(group.skeletons));
+  }
+  return { results, skeletons, unreadable };
+};
+
 const storeFields = async (runtime: SessionsRuntime): Promise<StoreHealthFields> => {
   const { storeDir } = runtime;
-  const { skeletons, unreadable } = await readSkeletons(storeDir, undefined, true);
+  const checked = await readChecked(storeDir);
   const store = await readCaptured(runtime);
   const steps = await readSteps(storeDir);
   const captured = [...store.sessions, ...store.subagents];
-  const results = [...verifyAll(skeletons, skeletons), ...store.capture];
+  const results = [...checked.results, ...store.capture];
   return {
     sessions: store.sessions.length,
     subagents: store.subagents.length,
-    skeletons: skeletons.length,
-    unparseable: unreadable + captured.reduce((sum, session) => sum + session.badLines, 0),
+    skeletons: checked.skeletons,
+    unparseable: checked.unreadable + captured.reduce((sum, session) => sum + session.badLines, 0),
     rawBytes: await bytesUnder(paths(storeDir).raw),
     verifyChecked: results.length,
     verifyFailed: results.filter((result) => result.violations > 0).length,

@@ -5,7 +5,7 @@ import { extractSession } from './derive.js';
 import { captureSession } from './extract.js';
 import { makeRedactor } from './redact.js';
 import { CAPTURE_VERSION } from './schema.js';
-import { CAPTURE_INVARIANTS, formatVerify, formatSessionResults, INVARIANTS, verifyAll, verifyCaptured, verifySessions, verifySkeleton, type InvariantResult, type SessionVerification } from './verify.js';
+import { addResults, CAPTURE_INVARIANTS, emptyResults, formatVerify, formatSessionResults, INVARIANTS, verifyAll, verifyCaptured, verifySessions, verifySkeleton, type InvariantResult, type SessionVerification } from './verify.js';
 import { FIXTURES } from './test-support.js';
 
 const skeletonOf = (lines: readonly string[], name = 's') =>
@@ -120,6 +120,10 @@ describe('verify', () => {
     const other = skeletonOf([after, state({ m: tokens(1, 174) })], 'other');
     expect(countsOf(verifySkeleton(other)[5])).toEqual({ other: 1 });
     const results = verifyAll([resumed, parent, agent, side, other]);
+    // Checked a main with its agents at a time and summed, the rows are the same (each class's checks, and the first session seen in it).
+    const summed = emptyResults();
+    for (const group of [[resumed], [parent, agent], [side], [other]]) addResults(summed, verifyAll(group));
+    expect(summed).toEqual(results);
     expect(results[5]).toMatchObject({ checked: 16, violations: 0 });
     const text = formatVerify(results, 5);
     expect(text).toContain(`PASS  ${INVARIANTS[5]}: 13 of 16 hold, 3 observed`);

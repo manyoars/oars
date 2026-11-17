@@ -183,21 +183,31 @@ const delegatedLines = (skeletons: readonly Skeleton[]): Map<string, SkeletonLin
   return delegated;
 };
 
-/** Sums each invariant over many skeletons, each main session's cost-state checked with its subagent transcripts' lines. */
-export const verifyAll = (skeletons: readonly Skeleton[], delegatedFrom: readonly Skeleton[] = skeletons): InvariantResult[] => {
-  const totals: InvariantResult[] = INVARIANTS.map((name) => ({ name, checked: 0, violations: 0 }));
-  // `--session` filters `skeletons` but row 6 still needs the subagent transcripts' lines, so they come from `delegatedFrom`.
-  const delegated = delegatedLines(delegatedFrom);
-  for (const skeleton of skeletons) {
-    for (const [index, result] of verifySkeleton(skeleton, delegated.get(skeleton.session)).entries()) {
-      const total = totals[index];
-      if (total !== undefined) {
-        total.checked += result.checked;
-        total.violations += result.violations;
-        if (result.observed !== undefined) total.observed = mergeClasses(total.observed ?? emptyClasses(), result.observed);
-      }
+/**
+ * Adds the rows `from` (one result per invariant, in order) into the running rows `into`. `verifyAll` sums its skeletons this way, and a reader that checks skeletons in groups
+ * (a main session with its subagents) sums each group's `verifyAll` into the rows of the first, so the groups together give what `verifyAll` over all of them gives, bar the
+ * `example` of a class, which is the first session seen in the order the groups came.
+ */
+export const addResults = (into: InvariantResult[], from: readonly InvariantResult[]): void => {
+  for (const [index, result] of from.entries()) {
+    const total = into[index];
+    if (total !== undefined) {
+      total.checked += result.checked;
+      total.violations += result.violations;
+      if (result.observed !== undefined) total.observed = mergeClasses(total.observed ?? emptyClasses(), result.observed);
     }
   }
+};
+
+/** One row per invariant with nothing checked yet: the rows `addResults` sums into. */
+export const emptyResults = (): InvariantResult[] => INVARIANTS.map((name) => ({ name, checked: 0, violations: 0 }));
+
+/** Sums each invariant over many skeletons, each main session's cost-state checked with its subagent transcripts' lines. */
+export const verifyAll = (skeletons: readonly Skeleton[], delegatedFrom: readonly Skeleton[] = skeletons): InvariantResult[] => {
+  const totals = emptyResults();
+  // `--session` filters `skeletons` but row 6 still needs the subagent transcripts' lines, so they come from `delegatedFrom`.
+  const delegated = delegatedLines(delegatedFrom);
+  for (const skeleton of skeletons) addResults(totals, verifySkeleton(skeleton, delegated.get(skeleton.session)));
   return totals;
 };
 
