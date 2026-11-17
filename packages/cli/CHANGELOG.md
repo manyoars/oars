@@ -16,6 +16,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 - `recipes/open-pack-counts/` is a repository recipe, not part of the package: one offline script that reads an open skeleton pack and prints its failed-call tables and harness-version table, with `--json` and `--by model|class`.
 - The `open-pack-counts` recipe skips a manifest row whose `matchId` is empty as `matchId is not a plain folder name`, instead of stopping on a missing `sessions//skeleton.json` (t1330).
 - The detached nightly reads the session store a run of sessions at a time (the run size `refresh` uses) for its commit-survival and store-health steps, instead of loading the whole store, so on a large store those two steps no longer hold every prompt, error, and tool call in memory at once. Survival keeps only the due calls and one run; store-health keeps the session records and answers the capture checks run by run. `commit-survival.jsonl` and the store-health event are byte-for-byte what they were. Nothing collected or kept changes.
+- The detached nightly's store-health step reads the skeletons a main session with its subagents at a time and sums the checks as it goes, instead of holding every skeleton in memory at once, so its peak on a generated 2,000-session store falls from about 1.2 GB to about 430 MB. The store-health event is identical. Nothing collected or kept changes.
 
 ## 0.5.5 (2026-11-13)
 
