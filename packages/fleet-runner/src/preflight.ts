@@ -25,8 +25,8 @@ type Verdict = 'ok' | 'missing' | 'wrong';
 const START_NAMES = ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'windir', 'ComSpec', 'TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE'];
 const TOOL_LIMIT_MS = 30_000;
 const HARNESS = 'claude-code-bedrock';
-// A new test placeholder for any harness goes into these sets (today a Codex entry is caught only by the `UNSET-` prefix).
 // Values the tests and the first manifest used before the real pins; a paid run must never start from one. `UNSET-` marks a pin nobody has read yet.
+// A new test placeholder for any harness goes into these sets (today a Codex entry is caught only by the `UNSET-` prefix).
 const PLACEHOLDER_VERSIONS = new Set(['2.1.30']);
 const PLACEHOLDER_MODEL_IDS = new Set(['sonnet-pinned-1']);
 const isPlaceholder = (value: string, known: Set<string>): boolean => known.has(value) || value.startsWith('UNSET-');
