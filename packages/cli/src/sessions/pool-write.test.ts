@@ -4,7 +4,7 @@ import type * as fs from 'node:fs';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { serializeCells, type Cell } from './cells.js';
 import type { Motif } from './motif.js';
 import { poolFiles, refreshPool } from './pool.js';
@@ -23,14 +23,17 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   return { ...actual, writeFile };
 });
 
-/** Every `createWriteStream`: the file, and its `write` spy, whose calls are the chunks handed to the stream. */
-const streams: { file: string; write: MockInstance<(chunk: string | Uint8Array) => boolean> }[] = [];
+/** Every `createWriteStream`: the file, and the size in bytes of each chunk handed to its `write`. */
+const streams: { file: string; chunks: () => number[] }[] = [];
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof fs>();
   const createWriteStream = vi.fn((...args: Parameters<typeof actual.createWriteStream>) => {
     const stream = actual.createWriteStream(...args);
     // The spy calls through: the stream still writes the file.
-    if (typeof args[0] === 'string') streams.push({ file: args[0], write: vi.spyOn(stream, 'write') as unknown as MockInstance<(chunk: string | Uint8Array) => boolean> });
+    if (typeof args[0] === 'string') {
+      const write = vi.spyOn(stream, 'write');
+      streams.push({ file: args[0], chunks: () => write.mock.calls.map(([chunk]) => Buffer.byteLength(String(chunk))) });
+    }
     return stream;
   });
   return { ...actual, createWriteStream };
@@ -78,7 +81,7 @@ const folded = (cells: Cell[], motifs: Motif[]): PoolFolds => ({ ...poolFoldsOf(
 /** The bytes handed to the writes of one pool file (its temp file included), by call. */
 const writtenTo = (file: string): number[] => [
   ...wholeWrites.filter((write) => write.file.startsWith(file)).map(({ bytes }) => bytes),
-  ...streams.filter((stream) => stream.file.startsWith(file)).flatMap(({ write }) => write.mock.calls.map(([chunk]) => Buffer.byteLength(chunk))),
+  ...streams.filter((stream) => stream.file.startsWith(file)).flatMap(({ chunks }) => chunks()),
 ];
 
 describe('refreshPool writes the pool files in bounded pieces', () => {
