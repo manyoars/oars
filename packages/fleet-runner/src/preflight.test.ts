@@ -11,6 +11,7 @@ import { serializeRunBook } from './runbook.js';
 import { signRunBook } from './sign.js';
 
 const TASKSET_V1 = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'taskset', 'v1');
+const PACKAGE_FLEET = join(dirname(fileURLToPath(import.meta.url)), '..', 'fleet-manifest.json');
 const MARKER = 'bedrock-key-MARKER-9f3a1c';
 const COMMIT = '038c12ef29f6237c08f608f089afba2a1b5b12aa';
 
@@ -27,7 +28,7 @@ beforeEach(async () => {
   writeFileSync(join(binDir, 'npm'), '');
   writeFileSync(join(binDir, 'npm.cmd'), '');
   fleet = join(root, 'fleet.json');
-  await writeFile(fleet, JSON.stringify({ version: 'fleet-1', harnesses: [{ name: 'claude-code-bedrock', version: '2.1.30', provider: 'bedrock', region: 'us-east-1', modelIds: ['m'] }] }));
+  await writeFile(fleet, JSON.stringify({ version: 'fleet-1', harnesses: [{ name: 'claude-code-bedrock', version: '2.1.326', provider: 'bedrock', region: 'us-east-1', modelIds: ['m'] }, { name: 'codex-azure', version: '0.169.0', provider: 'azure-openai', region: 'global-standard', modelIds: ['d'] }] }));
 });
 
 afterEach(async () => {
@@ -43,7 +44,7 @@ interface Tools {
 }
 
 const GOOD: Tools = {
-  claude: outcome('2.1.30 (Claude Code)\n'),
+  claude: outcome('2.1.326 (Claude Code)\n'),
   git: outcome('git version 2.50.0\n'),
   remote: outcome(`${'a'.repeat(40)}\trefs/tags/taskset-v1\n${COMMIT}\trefs/tags/taskset-v1^{}\n`),
 };
@@ -64,10 +65,10 @@ const stubs = (tools: Tools): { spawn: (spec: SpawnSpec) => Promise<SpawnOutcome
 let binDir = '';
 const env = (): EnvMap => ({ AWS_REGION: 'us-east-1', AWS_BEARER_TOKEN_BEDROCK: MARKER, PATH: binDir });
 
-const run = async (tools: Tools, given?: EnvMap, extra: string[] = [], nodeVersion = '24.1.0'): Promise<{ code: number; lines: string[]; calls: SpawnSpec[] }> => {
+const run = async (tools: Tools, given?: EnvMap, extra: string[] = [], nodeVersion = '24.1.0', fleetFile = fleet): Promise<{ code: number; lines: string[]; calls: SpawnSpec[] }> => {
   const { spawn, calls } = stubs(tools);
   const lines: string[] = [];
-  const code = await main(['--taskset', taskSet, '--fleet', fleet, '--fixture-source', 'https://example.invalid/fixture.git', ...extra], (line) => lines.push(line), { env: given ?? env(), spawn, nodeVersion });
+  const code = await main(['--taskset', taskSet, '--fleet', fleetFile, '--fixture-source', 'https://example.invalid/fixture.git', ...extra], (line) => lines.push(line), { env: given ?? env(), spawn, nodeVersion });
   return { code, lines, calls };
 };
 
@@ -77,7 +78,7 @@ describe('preflight', () => {
   it('prints ok for every check and exits 0 on a ready machine, starting only the version and ls-remote calls', async () => {
     const { code, lines, calls } = await run(GOOD);
     expect(code).toBe(0);
-    expect(lines.filter((line) => line.startsWith('ok')).length).toBe(9);
+    expect(lines.filter((line) => line.startsWith('ok')).length).toBe(10);
     expect(lines.at(-1)).toBe('preflight: ready');
     expect(calls.map((call) => `${call.command} ${call.args[0] ?? ''}`)).toEqual(['claude --version', 'git --version', 'git ls-remote']);
     expect(calls.every((call) => call.stdin === null)).toBe(true);
@@ -85,9 +86,9 @@ describe('preflight', () => {
     expect(calls.every((call) => !Object.keys(call.env).some((name) => name.startsWith('AWS_')))).toBe(true);
   });
 
-  it('keeps the order: claude, node, git, npm, task set, fixture, region, key, run book', async () => {
+  it('keeps the order: fleet manifest, claude, node, git, npm, task set, fixture, region, key, run book', async () => {
     const { lines } = await run(GOOD);
-    expect(lines.slice(0, 9).map((line) => /^\w+\s+([^:]+):/.exec(line)?.[1])).toEqual(['claude', 'node', 'git', 'npm', 'task set', 'fixture tag', 'AWS_REGION', 'AWS_BEARER_TOKEN_BEDROCK', 'run book']);
+    expect(lines.slice(0, 10).map((line) => /^\w+\s+([^:]+):/.exec(line)?.[1])).toEqual(['fleet manifest', 'claude', 'node', 'git', 'npm', 'task set', 'fixture tag', 'AWS_REGION', 'AWS_BEARER_TOKEN_BEDROCK', 'run book']);
   });
 
   it('says missing when claude does not start', async () => {
@@ -99,7 +100,7 @@ describe('preflight', () => {
   it('says wrong when claude is not the pinned version', async () => {
     const { code, lines } = await run({ ...GOOD, claude: outcome('2.1.99 (Claude Code)\n') });
     expect(code).toBe(1);
-    expect(lineOf(lines, 'claude')).toMatch(/^wrong .*2\.1\.99.*pinned 2\.1\.30/);
+    expect(lineOf(lines, 'claude')).toMatch(/^wrong .*2\.1\.99.*pinned 2\.1\.326/);
   });
 
   it('says wrong when Node is below the floor', async () => {
@@ -212,6 +213,24 @@ describe('preflight', () => {
     expect(await claudeLine(empty, good)).toMatch(/^wrong /);
   });
 
+  it('names both harnesses of the package fleet manifest and finds no placeholder in it', async () => {
+    const { lines } = await run(GOOD, undefined, [], '24.1.0', PACKAGE_FLEET);
+    expect(lineOf(lines, 'fleet manifest')).toMatch(/^ok .*claude-code-bedrock 2\.1\.326.*codex-azure 0\.169\.0/);
+  });
+
+  it.each([
+    ['a test placeholder version', { version: '2.1.30' }, /claude-code-bedrock version 2\.1\.30/],
+    ['a test placeholder model ID', { modelIds: ['sonnet-pinned-1'] }, /claude-code-bedrock model ID sonnet-pinned-1/],
+    ['an UNSET- version', { version: 'UNSET-claude-version' }, /claude-code-bedrock version UNSET-claude-version/],
+    ['an UNSET- model ID', { modelIds: ['UNSET-bedrock-id'] }, /claude-code-bedrock model ID UNSET-bedrock-id/],
+  ])('refuses a manifest with %s, so a placeholder never reaches a paid run', async (_name, patch, message) => {
+    await writeFile(fleet, JSON.stringify({ version: 'fleet-1', harnesses: [{ name: 'claude-code-bedrock', version: '2.1.326', provider: 'bedrock', region: 'us-east-1', modelIds: ['m'], ...patch }] }));
+    const { code, lines } = await run(GOOD);
+    expect(code).toBe(1);
+    expect(lineOf(lines, 'fleet manifest')).toMatch(/^wrong /);
+    expect(lineOf(lines, 'fleet manifest')).toMatch(message);
+  });
+
   it('says wrong when the fleet manifest names no claude-code-bedrock harness', async () => {
     await writeFile(fleet, JSON.stringify({ version: 'fleet-1', harnesses: [] }));
     const { code, lines } = await run(GOOD);
@@ -248,7 +267,7 @@ describe('preflight', () => {
 
 describe('preflight and the key', () => {
   it('never prints the key value, even when a tool echoes it or an error carries it', async () => {
-    const leaky = outcome(`2.1.30 ${MARKER}`, 0, null, `token ${MARKER}`);
+    const leaky = outcome(`2.1.326 ${MARKER}`, 0, null, `token ${MARKER}`);
     const everything: string[] = [];
     const echoing = await run({ ...GOOD, claude: leaky, remote: outcome('', 128, null, `fatal: ${MARKER}`) });
     everything.push(...echoing.lines);

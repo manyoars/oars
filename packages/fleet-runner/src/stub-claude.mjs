@@ -25,7 +25,7 @@ const line = (/** @type {object} */ value) => {
   process.stdout.write(text);
 };
 const model = scenario === 'model' ? 'other-model-id' : valueOf('--model');
-line({ type: 'system', subtype: 'init', session_id: sessionId, claude_code_version: scenario === 'version' ? '9.9.9' : '2.1.30', model });
+line({ type: 'system', subtype: 'init', session_id: sessionId, claude_code_version: scenario === 'version' ? '9.9.9' : '2.1.326', model });
 if (scenario === 'tree') {
   // The harness starts MCP servers of its own; a timeout must end them too.
   const grandchild = spawn(process.execPath, ['-e', 'setTimeout(() => undefined, 60000)'], {

@@ -26,3 +26,13 @@ describe('manifests', () => {
     expect(() => parseFleet(JSON.stringify({ version: 'f', harnesses: [{ name: 'h', version: '1', provider: 'p', region: 'r', modelIds: [1] }] }))).toThrow(/strings/);
   });
 });
+
+describe('the package fleet manifest', () => {
+  it('names the Claude Code on Bedrock and Codex on Azure harnesses with their real pins', () => {
+    expect(FLEET.version).toBe('fleet-1');
+    expect(FLEET.harnesses).toEqual([
+      { name: 'claude-code-bedrock', version: '2.1.326', provider: 'bedrock', region: 'us-east-1', modelIds: ['global.anthropic.claude-sonnet-5-5'] },
+      { name: 'codex-azure', version: '0.169.0', provider: 'azure-openai', region: 'global-standard', modelIds: ['gpt-6.1-sol'] },
+    ]);
+  });
+});

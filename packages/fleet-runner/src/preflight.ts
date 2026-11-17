@@ -25,6 +25,10 @@ type Verdict = 'ok' | 'missing' | 'wrong';
 const START_NAMES = ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'windir', 'ComSpec', 'TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE'];
 const TOOL_LIMIT_MS = 30_000;
 const HARNESS = 'claude-code-bedrock';
+// Values the tests and the first manifest used before the real pins; a paid run must never start from one. `UNSET-` marks a pin nobody has read yet.
+const PLACEHOLDER_VERSIONS = new Set(['2.1.30']);
+const PLACEHOLDER_MODEL_IDS = new Set(['sonnet-pinned-1']);
+const isPlaceholder = (value: string, known: Set<string>): boolean => known.has(value) || value.startsWith('UNSET-');
 const SEMVER = /\d+\.\d+\.\d+/;
 
 const flag = (argv: string[], name: string): string | undefined => {
@@ -79,6 +83,14 @@ export const main = async (argv: string[], print: (line: string) => void, deps: 
     const claude = flag(argv, '--claude') ?? 'claude';
     const git = flag(argv, '--git') ?? 'git';
     const npm = flag(argv, '--npm') ?? 'npm';
+
+    // 0. No placeholder pin anywhere in the manifest: every harness it names, each by name.
+    const placeholders = fleet.harnesses.flatMap((entry) => [
+      ...(isPlaceholder(entry.version, PLACEHOLDER_VERSIONS) ? [`${entry.name} version ${entry.version}`] : []),
+      ...entry.modelIds.filter((id) => isPlaceholder(id, PLACEHOLDER_MODEL_IDS)).map((id) => `${entry.name} model ID ${id}`),
+    ]);
+    if (placeholders.length > 0) report('wrong', 'fleet manifest', `placeholder pins (${placeholders.join('; ')}); set the real pins before a paid run`);
+    else report('ok', 'fleet manifest', `${fleet.version}: ${fleet.harnesses.map((entry) => `${entry.name} ${entry.version}`).join(', ')}`);
 
     // 1. claude on PATH at the pinned version.
     const pinned = harness?.version;

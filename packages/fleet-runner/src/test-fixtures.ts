@@ -34,7 +34,7 @@ export const retestShape = (): OrderShape => ({
   taskSetVersion: 'v1',
   manifestVersion: 'fleet-1',
   harness: 'claude-code-bedrock',
-  modelId: 'sonnet-pinned-1',
+  modelId: 'global.anthropic.claude-sonnet-5-5',
   account: 'acct-fleet',
   tools: [{ name: 'playwright', kind: 'server' }],
   arms: ['playwright'],
@@ -52,7 +52,7 @@ export const comparisonShape = (): OrderShape => ({
   taskSetVersion: 'v1',
   manifestVersion: 'fleet-1',
   harness: 'claude-code-bedrock',
-  modelId: 'sonnet-pinned-1',
+  modelId: 'global.anthropic.claude-sonnet-5-5',
   account: 'acct-fleet',
   tools: [
     { name: 'playwright', kind: 'server', pin: 'npm:1.0.0' },
