@@ -1,6 +1,7 @@
 // The stored pool is read line by line, never as one string of a whole file (t1403): `servedPool` over `cells.jsonl` and `motifs.jsonl`, and `refreshPool`'s read of the reads file. On the operator's store
 // `cells.jsonl` is 288 MB, and a whole-file read holds that string, its split lines, and the parsed rows at once.
 import type * as fsp from 'node:fs/promises';
+import type * as fs from 'node:fs';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -23,6 +24,18 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   return { ...actual, readFile };
 });
 
+// Every path handed to `createReadStream`: the three pool files must each be read this way, so a return to a sync or whole-file read of one fails the guard below.
+const streamed: string[] = [];
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof fs>();
+  const createReadStream = vi.fn(actual.createReadStream);
+  createReadStream.mockImplementation((...args: Parameters<typeof actual.createReadStream>) => {
+    if (typeof args[0] === 'string') streamed.push(args[0]);
+    return actual.createReadStream(...args);
+  });
+  return { ...actual, createReadStream };
+});
+
 const dirs: string[] = [];
 const storeDir = (): string => {
   const dir = mkdtempSync(join(tmpdir(), 'oars-pool-stored-read-'));
@@ -32,6 +45,7 @@ const storeDir = (): string => {
 
 afterEach(() => {
   wholeReads.length = 0;
+  streamed.length = 0;
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -70,9 +84,12 @@ describe('the stored pool is read as a stream', () => {
     const derived = await refreshPool(dir, one);
     const files = poolFiles(dir);
     wholeReads.length = 0;
+    streamed.length = 0;
     expect((await servedPool(dir, one))?.reads).toEqual(derived.reads);
     expect((await refreshPool(dir, one)).reads).toEqual(derived.reads);
-    expect(wholeReads.filter((file) => [files.cells, files.motifs, files.reads(derived.pool.version)].includes(file))).toEqual([]);
+    const poolFilesRead = [files.cells, files.motifs, files.reads(derived.pool.version)];
+    expect(wholeReads.filter((file) => poolFilesRead.includes(file))).toEqual([]);
+    for (const file of poolFilesRead) expect(streamed).toContain(file);
   });
 
   it('serves the same pool from files of several chunks, a blank last line, and a character cut by a chunk boundary', async () => {

@@ -12,6 +12,7 @@
 //   --chatter <n>       skeleton-only lines per call: text, thinking, attachment (default 5)
 //   --bulk <n>          characters of a clean tool result (default 400)
 //   --superseded off    leave the log clean for a no-op run, with no older copy of any record (default on; a recapture run ignores it)
+//   --errors one|varied  every failed call raises KeyError, so the whole store shares one error signature (default one: the shape t1403 measured), or one of eight exception names by the call's place, a fixed set (varied)
 //   --bin <file>        run another build of the CLI (a copy of dist/ from before a change) instead of dist/bin.js, to compare two builds on one store (`phases` ignores it: it always measures dist/)
 //
 // Needs `npm run build -w packages/cli` first (it runs dist/bin.js, and refuses one older than src/sessions/store.ts unless `--bin` names the build). Nothing here touches the real store or ~/.claude: every run points
@@ -47,6 +48,8 @@ const NL = String.fromCharCode(10);
 const PROJECT = 'bench-project';
 const PROMPTS = 8;
 // Characters of a clean tool result. The log keeps none of it, so it sizes the transcript on disk (the operator's: 1.8 MB each against 86 KB of log).
+/** The exception names `--errors varied` cycles through: each is its own error signature. */
+const ERRORS = ['KeyError', 'ValueError', 'TypeError', 'OSError', 'IndexError', 'AttributeError', 'RuntimeError', 'ImportError'];
 const BULK = Number(arg('bulk', '400')) || 400;
 
 /** @typedef {{ file_path?: string, old_string?: string, new_string?: string, command?: string, pattern?: string }} ToolInput */
@@ -105,6 +108,7 @@ const transcript = (index) => {
   const id = `bench-${String(index).padStart(6, '0')}`;
   const chatter = Number(arg('chatter', '5'));
   const calls = Number(arg('calls', '14'));
+  const varied = arg('errors', 'one') === 'varied';
   const base = Date.parse('2026-01-05T08:00:00Z') + (index % 140) * 86_400_000;
   /** @type {string[]} */
   const lines = [];
@@ -140,7 +144,7 @@ const transcript = (index) => {
       const failed = (index + p + c) % 6 === 5;
       const result = `${id}-${String(n++)}`;
       const content = failed
-        ? `Exit code 1\nTraceback (most recent call last):\n  File "/work/app/src/module-${String(index % 97)}.py", line ${String(c + 10)}, in <module>\nKeyError: 'key-${String(index % 31)}'`
+        ? `Exit code 1\nTraceback (most recent call last):\n  File "/work/app/src/module-${String(index % 97)}.py", line ${String(c + 10)}, in <module>\n${varied ? ERRORS[(index + p + c) % ERRORS.length] : 'KeyError'}: 'key-${String(index % 31)}'`
         : `ok ${id} ${'x'.repeat(BULK)}`;
       line({ type: 'user', uuid: result, parentUuid: parent, isSidechain: false, timestamp: iso(base, clock), version: '2.1.300', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolId, is_error: failed, content }] } });
       parent = result;
