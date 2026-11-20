@@ -1,6 +1,6 @@
 // The billing client against a fake billing API: what it asks, what it keys a customer by, and how it reads each answer.
 import { describe, expect, it } from 'vitest';
-import { billingOf, BillingError, BuyerRefused, customerRefOf, IdempotencyConflict, lotOf, RegionNotSupported, type Billing, type BillingEnv, type Fetcher } from './billing.js';
+import { billingOf, BillingError, BuyerRefused, customerRefOf, IdempotencyConflict, lotOf, RegionNotSupported, WorkloadNotActive, type Billing, type BillingEnv, type Fetcher } from './billing.js';
 import { FAKE_BILLING_URL, FAKE_SDK_KEY, FAKE_WORKLOAD, fakeBilling, fetcherOf, type FakeBilling } from './test-billing.js';
 
 const configured = (extra: { [name: string]: string } = {}): BillingEnv => ({ BILLING_URL: FAKE_BILLING_URL, BILLING_SDK_KEY: FAKE_SDK_KEY, BILLING_WORKLOAD_ID: FAKE_WORKLOAD, ...extra });
@@ -126,25 +126,25 @@ describe('credits and customers', () => {
     const fake = fakeBilling();
     fake.credit('ref', 3);
     const billing = clientOf(fake);
-    expect(await billing.balance('ref')).toEqual({ available: 3, livemode: false, known: true });
+    expect(await billing.balance('ref')).toEqual({ available: 3, livemode: false });
     fake.setMode('live');
     fake.credit('ref', 5);
-    expect(await billing.balance('ref')).toEqual({ available: 5, livemode: true, known: true });
+    expect(await billing.balance('ref')).toEqual({ available: 5, livemode: true });
   });
 
   it('takes the held credits out: available is creditsAvailable, not creditsRemaining', async () => {
-    expect(await answering(200, balanceBody()).balance('ref')).toEqual({ available: 2, livemode: false, known: true });
+    expect(await answering(200, balanceBody()).balance('ref')).toEqual({ available: 2, livemode: false });
   });
 
   it('reads 200 with all zeros as no customer yet, with the mode, and never as a 404', async () => {
     const fake = fakeBilling();
-    expect(await clientOf(fake).balance('nobody')).toEqual({ available: 0, livemode: false, known: false });
+    expect(await clientOf(fake).balance('nobody')).toEqual({ available: 0, livemode: false });
     fake.setMode('live');
-    expect(await clientOf(fake).balance('nobody')).toEqual({ available: 0, livemode: true, known: false });
+    expect(await clientOf(fake).balance('nobody')).toEqual({ available: 0, livemode: true });
   });
 
-  it('reads a customer whose credits are all held as known', async () => {
-    expect(await answering(200, balanceBody({ creditsRemaining: 1, creditsHeld: 1, creditsAvailable: 0 })).balance('ref')).toEqual({ available: 0, livemode: false, known: true });
+  it('reads a customer whose credits are all held', async () => {
+    expect(await answering(200, balanceBody({ creditsRemaining: 1, creditsHeld: 1, creditsAvailable: 0 })).balance('ref')).toEqual({ available: 0, livemode: false });
   });
 
   it('reads a 404 as an error, since billing answers an unknown customer with zeros', async () => {
@@ -178,6 +178,15 @@ describe('credits and customers', () => {
     expect([...fake.customers]).toEqual(['ref']);
     fake.failNext(500);
     await expect(billing.createCustomer('other', 'CA')).rejects.toThrow('with 500');
+  });
+
+  it('throws WorkloadNotActive when billing answers 409 WORKLOAD_NOT_ACTIVE, and a BillingError for any other 409', async () => {
+    const fake = fakeBilling();
+    fake.deactivateWorkload();
+    await expect(clientOf(fake).createCustomer('ref', 'CA')).rejects.toBeInstanceOf(WorkloadNotActive);
+    const other = await answering(409, { code: 'SOMETHING_ELSE' }).createCustomer('ref', 'CA').catch((error: unknown) => error);
+    expect(other).toBeInstanceOf(BillingError);
+    expect(other).not.toBeInstanceOf(WorkloadNotActive);
   });
 
   it('creates a customer as a US buyer in the state given: {customerRef, countryCode: "US", regionCode}', async () => {
@@ -230,6 +239,14 @@ describe('credits and customers', () => {
     fake.revoke('ref');
     await expect(clientOf(fake).issueOffer('ref', 'lot-a')).rejects.toThrow(BuyerRefused);
     await expect(clientOf(fakeBilling()).issueOffer('nobody', 'lot-a')).rejects.toThrow('with 404');
+  });
+});
+
+describe('customers of a revoked buyer', () => {
+  it('throws BuyerRefused when billing answers 410 on POST /billing/customers', async () => {
+    const fake = fakeBilling();
+    fake.revoke('ref');
+    await expect(clientOf(fake).createCustomer('ref', 'CA')).rejects.toThrow(BuyerRefused);
   });
 });
 

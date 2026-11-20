@@ -52,7 +52,7 @@ The tests run each step's call (`src/money-loop.test.ts`; the CLI commands wrap 
 
 1. Have a buying agent and its SDK key. The buying calls below send that key, not a seller key.
 2. See the offer: `GET /packs` lists the packs and `GET /packs/{packId}` shows one pack's page with its manifest, census, card, and terms. Read it before you buy.
-3. Ask for an offer: `POST /packs/{packId}/offer` with `{recipientLegalName, licenseVersion}`. The answer holds `offerId`, `priceRef`, and `customerRef`. Keep the `customerRef`: it is shown this once.
+3. Ask for an offer: `POST /packs/{packId}/offer` with `{recipientLegalName, licenseVersion, state}`; `state` is your US state code (or `DC`) in upper case, sent to billing for tax and not stored. The answer holds `offerId`, `priceRef`, and `customerRef`. Keep the `customerRef`: it is shown this once.
 4. Buy: `oars purchasing buy <offerId> --pack <priceRef>` (set `OARS_SDK_KEY` or pass `--sdk-key-file`). Then run `oars purchasing get <purchaseId>` until the purchase leaves `PENDING`.
 5. Download: `POST /packs/{packId}/download` with the header `X-Customer-Ref: <customerRef>` and the body `{"buyerKey": "<your buyer key>"}`. The answer is a tar archive. `GET /credits` with the same header shows what is left.
 6. Check it: `npm run validate-pack -w packages/pool -- <the unpacked folder>`. It checks the pack against `docs/session-record.md`: the manifest, each session record, and the field rules. It reads files only. A pack whose commit was refused arrives without its manifest, and `validate-pack` rejects it.
@@ -69,7 +69,7 @@ A pack carries 3 credits, and each download spends one. Download a fourth time a
 |---|---|
 | `GET /health` | `{"status":"ok"}`. |
 | `GET /packs`, `GET /packs/{packId}` | The packs the catalog lists. The page carries the manifest, census, card, and the terms fields. |
-| `POST /packs/{packId}/offer` | Body `{recipientLegalName, licenseVersion}`, both required. Creates a customer under a fresh ref, records both against it, asks for an offer, and returns `{offerId, expiresAt, priceRef, customerRef}`. The `customerRef` is shown this once and never logged. Rate limited per caller. |
+| `POST /packs/{packId}/offer` | Body `{recipientLegalName, licenseVersion, state}`, all required (`state`: a US state code or `DC`, in upper case; sent to billing, not stored). Creates a customer under a fresh ref, records both against it, asks for an offer, and returns `{offerId, expiresAt, priceRef, customerRef}`. The `customerRef` is shown this once and never logged. Rate limited per caller. |
 | `POST /packs/{packId}/download` | Header `X-Customer-Ref`, body `{buyerKey}`. Reads the balance (no credit answers 402 `No credits are available.` before anything is reserved), reserves one credit, rechecks the objections (a stale pack is rebuilt), builds the pack under the buyer's key, streams it as a tar archive with `manifest.jsonl` last, commits the credit before that last entry is sent, and appends the delivery record with the recipient and license from the offer. A failed build, a stream cut before the commit, a refused commit, or an objection recorded during the stream releases the reservation and writes no delivery; after a refused commit the archive lacks its manifest, so `validate-pack` rejects it. The key is held only for the build and is never logged or stored. |
 | `GET /credits` | The balance for the customer in the `X-Customer-Ref` header. |
 

@@ -9,7 +9,7 @@ const REF = 'c_0123456789abcdef0123456789abcdef';
 const refHeader: [string, string][] = [['X-Customer-Ref', REF]];
 const OFFER = { offerId: 'po_abc', expiresAt: '2099-01-01T00:00:00Z' };
 const customer = { customerRef: 'x', countryCode: 'US', createdAt: 't', updatedAt: 't' };
-const accept = { recipientLegalName: 'Ada Lovelace', licenseVersion: '2026-11' };
+const accept = { recipientLegalName: 'Ada Lovelace', licenseVersion: '2026-11', state: 'CA' };
 
 const platformUp = () => [
   platform('/billing/customers', 201, customer),
@@ -62,6 +62,34 @@ describe('offer route (step 5)', () => {
     expect(response.status).toBe(200);
     expect(await copy.json()).toMatchObject({ offerId: 'po_abc', priceRef: 'pack-alpha' });
     expect(ledger.find(await customerRefOf(response))).toMatchObject({ packId: 'alpha', recipientLegalName: 'Ada Lovelace', licenseVersion: '2026-11' });
+  });
+
+  it('sends the state the buyer named to the platform as {customerRef, countryCode: "US", regionCode}', async () => {
+    const bodies: unknown[] = [];
+    server.use(
+      http.post(`${API}/billing/customers`, async ({ request }) => {
+        bodies.push(await request.json());
+        return HttpResponse.json(customer, { status: 201 });
+      }),
+      platform('/billing/offers', 200, OFFER),
+    );
+    const { call } = harness();
+    const ref = await customerRefOf(await call('POST', '/packs/alpha/offer', { body: { ...accept, state: 'OR' } }));
+    expect(bodies).toEqual([{ customerRef: ref, countryCode: 'US', regionCode: 'OR' }]);
+  });
+
+  it('refuses a request without a state, or with one that is not a US state code or DC in upper case, before any platform call', async () => {
+    let platformCalls = 0;
+    server.use(http.post(`${API}/billing/customers`, () => {
+      platformCalls += 1;
+      return HttpResponse.json(customer, { status: 201 });
+    }));
+    const { call } = harness();
+    for (const state of [undefined, '', null, 6, 'ca', 'XX', 'PR', ' CA']) {
+      const response = await call('POST', '/packs/alpha/offer', { body: { recipientLegalName: 'Ada', licenseVersion: '2026-11', state }, caller: `caller-${String(Math.random())}` });
+      expect({ state, status: response.status, body: await response.json() }).toEqual({ state, status: 400, body: { error: 'state is required: the two-letter code of a US state or DC, in upper case.' } });
+    }
+    expect(platformCalls).toBe(0);
   });
 
   it('refuses a request without the recipient legal name', async () => {
