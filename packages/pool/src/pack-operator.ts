@@ -1,6 +1,6 @@
 // Paid pack fetches, the operator's side (K2 spec section 2, steps 4 and 5): the queue the builder reads, the mark that a pack is built, and the hand-over that takes the buyer's credit. Every route is behind `OPERATOR_TOKEN`, as the telemetry operator read is.
 // The credit is taken once, at hand-over, under the fetch id as billing's idempotency key: a short balance leaves the fetch unready and takes nothing, and a retry after a lost answer finds the credit taken and marks the fetch ready.
-import { BillingError, billingOf, customerRefOf } from './billing.js';
+import { BillingError, billingOf, customerRefOf, type Fetcher } from './billing.js';
 import { answer, bodyOf, bound, fieldOf, notConfigured, refuse, textField, type Env, type PacksBucket } from './http.js';
 import { PACK_WINDOW_MS, UNSPENT } from './pack-fetches.js';
 import { digest, type OperatorEnv } from './telemetry-fleet.js';
@@ -27,18 +27,21 @@ interface Held {
   account: string;
   lot: string;
   state: string;
+  /** The billing mode the fetch was queued in: the credit is taken there, whatever mode the deploy runs in now. */
+  mode: string;
   objectKey: string | undefined;
   expiresAt: number | undefined;
 }
 
 const heldOf = async (env: Env, fetchId: string): Promise<Held | undefined> => {
-  const row = await env.DB.prepare('SELECT account, lot, state, object_key, expires_at FROM pack_fetches WHERE fetch_id = ?').bind(fetchId).first();
+  const row = await env.DB.prepare('SELECT account, lot, state, mode, object_key, expires_at FROM pack_fetches WHERE fetch_id = ?').bind(fetchId).first();
   const account = textField(row, 'account');
   const lot = textField(row, 'lot');
   const state = textField(row, 'state');
-  if (account === undefined || lot === undefined || state === undefined) return undefined;
+  const mode = textField(row, 'mode');
+  if (account === undefined || lot === undefined || state === undefined || mode === undefined) return undefined;
   const expiresAt = fieldOf(row, 'expires_at');
-  return { account, lot, state, objectKey: textField(row, 'object_key'), expiresAt: typeof expiresAt === 'number' ? expiresAt : undefined };
+  return { account, lot, state, mode, objectKey: textField(row, 'object_key'), expiresAt: typeof expiresAt === 'number' ? expiresAt : undefined };
 };
 
 const noSuchFetch = (): Response => refuse(404, 'not_found', 'No such fetch.');
@@ -86,7 +89,7 @@ export const markBuilt = async (request: Request, env: OperatorBindings, fetchId
 };
 
 /** `POST /v1/operator/fetches/:id/handover`: takes the buyer's credit and marks the fetch ready for its seven days. 409 `insufficient_credits` leaves it built and takes nothing; a retry after an answer was lost takes no second credit; a fetch already ready answers as it was. */
-export const handOver = async (request: Request, env: OperatorBindings, fetchId: string, now: number): Promise<Response> => {
+export const handOver = async (request: Request, env: OperatorBindings, fetchId: string, now: number, fetcher: Fetcher = fetch): Promise<Response> => {
   const refused = await notOperator(request, env);
   if (refused !== undefined) return refused;
   const held = await heldOf(env, fetchId);
@@ -95,7 +98,8 @@ export const handOver = async (request: Request, env: OperatorBindings, fetchId:
   if (held.state !== 'built') return refuse(409, 'not_built', `This fetch is ${held.state}; only a built pack is handed over.`);
   const pseudonymKey = bound(env.PSEUDONYM_KEY);
   if (pseudonymKey === undefined) return notConfigured('PSEUDONYM_KEY');
-  const billing = billingOf(env);
+  // The mode on the row, never the deploy's current `BILLING_MODE`: a fetch queued against a test credit does not take a live one when the pool goes live.
+  const billing = billingOf({ ...env, BILLING_MODE: held.mode }, fetcher);
   if ('missing' in billing) return notConfigured(billing.missing);
   try {
     if ((await billing.consume(customerRefOf(pseudonymKey, held.account, held.lot), fetchId)) === 'insufficient') return refuse(409, 'insufficient_credits', 'The buyer has no credit left for this lot (refunded or spent elsewhere). The fetch stays built and nothing was taken.');
