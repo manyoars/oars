@@ -21,6 +21,7 @@
     "license-status": "node scripts/license-status.mjs",
     "notices": "node scripts/notices.mjs",
     "validate-pack": "node scripts/validate-pack.mjs",
+    "fulfil": "node scripts/fulfil.mjs",
     "grant-standing": "node scripts/grant-standing.mjs",
     "set-source": "node scripts/set-source.mjs",
     "grant-crew": "node scripts/grant-crew.mjs",
