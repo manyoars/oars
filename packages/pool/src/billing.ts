@@ -129,7 +129,7 @@ export const billingOf = (env: BillingEnv, fetcher: Fetcher = fetch): Billing | 
         if (text.includes('INSUFFICIENT_CREDITS')) return 'insufficient';
         if (text.includes('IDEMPOTENCY_CONFLICT')) throw new IdempotencyConflict(`billing already holds ${fetchId} for a different request`);
       }
-      throw unexpected('POST', path, response);
+      throw refusedOr('POST', path, response);
     },
   };
 };

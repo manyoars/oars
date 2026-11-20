@@ -394,6 +394,18 @@ describe('a buyer billing has revoked', () => {
   });
 });
 
+describe('a buyer billing has revoked since the fetch was queued', () => {
+  it('is 409 buyer_refused at hand-over, leaves the fetch built, and is not a retry', async () => {
+    const { fetchId, ref } = await queued();
+    await built(fetchId);
+    pool.stub.billing.revoke(ref);
+    const answered = await operate('POST', `/v1/operator/fetches/${fetchId}/handover`);
+    expect({ status: answered.status, error: fieldOf(answered.json, 'error') }).toEqual({ status: 409, error: 'buyer_refused' });
+    expect((await fetchOf(fetchId)).state).toBe('built');
+    expect(pool.stub.billing.balanceOf(ref)).toBe(1);
+  });
+});
+
 describe('a fetch id billing already holds for another request', () => {
   it('is 409 idempotency_conflict at hand-over, leaves the fetch built, and is not a retry', async () => {
     const { fetchId, ref } = await queued();

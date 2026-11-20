@@ -260,6 +260,16 @@ describe('consume', () => {
     expect(fake.balanceOf('ref')).toBe(0);
   });
 
+  it('refuses a revoked buyer on a consume (410) as BuyerRefused, taking nothing', async () => {
+    const fake = fakeBilling();
+    fake.credit('ref', 1);
+    fake.revoke('ref');
+    const refused = clientOf(fake).consume('ref', 'fetch-1');
+    await expect(refused).rejects.toThrow(BuyerRefused);
+    await expect(refused).rejects.not.toBeInstanceOf(BillingError);
+    expect(fake.balanceOf('ref')).toBe(1);
+  });
+
   it('refuses a 200 that says no credit was consumed', async () => {
     await expect(answering(200, { customerRef: 'ref', creditsConsumed: 0 }).consume('ref', 'fetch-1')).rejects.toThrow('no credit consumed');
     await expect(answering(200, {}).consume('ref', 'fetch-1')).rejects.toThrow('no credit consumed');
