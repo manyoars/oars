@@ -56,8 +56,6 @@ export interface Env {
   BILLING_SDK_KEY?: string;
   /** The id of the seller workload the pool's DATASET listings belong to; the lot lookup reads its owner list. Unset refuses a paid fetch. */
   BILLING_WORKLOAD_ID?: string;
-  /** `live` sells and consumes live credits; anything else, or unset, is `test`, so a pool nobody pointed at live billing never touches a live balance. */
-  BILLING_MODE?: string;
   /** The OAuth client IDs the pool starts a provider's device flow with: public, so `wrangler.jsonc` sets them as `vars`. Unset refuses that provider's login. */
   GITHUB_CLIENT_ID?: string;
   GOOGLE_CLIENT_ID?: string;
