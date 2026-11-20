@@ -1,6 +1,6 @@
 // The billing client against a fake billing API: what it asks, what it keys a customer by, and how it reads each answer.
 import { describe, expect, it } from 'vitest';
-import { billingOf, BillingError, BuyerRefused, customerRefOf, IdempotencyConflict, lotOf, type Billing, type BillingEnv, type Fetcher } from './billing.js';
+import { billingOf, BillingError, BuyerRefused, customerRefOf, IdempotencyConflict, lotOf, RegionNotSupported, type Billing, type BillingEnv, type Fetcher } from './billing.js';
 import { FAKE_BILLING_URL, FAKE_SDK_KEY, FAKE_WORKLOAD, fakeBilling, fetcherOf, type FakeBilling } from './test-billing.js';
 
 const configured = (extra: { [name: string]: string } = {}): BillingEnv => ({ BILLING_URL: FAKE_BILLING_URL, BILLING_SDK_KEY: FAKE_SDK_KEY, BILLING_WORKLOAD_ID: FAKE_WORKLOAD, ...extra });
@@ -46,13 +46,13 @@ describe('billingOf', () => {
     fake.setMode('live');
     const billing = clientOf(fake, { BILLING_URL: `${FAKE_BILLING_URL}/` });
     await billing.listings();
-    await billing.createCustomer('ref');
+    await billing.createCustomer('ref', 'CA');
     await billing.balance('ref');
     await billing.issueOffer('ref', 'lot-a');
     await billing.consume('ref', 'fetch-1');
     expect(fake.calls.map((call) => call.sdkKey)).toEqual(Array(5).fill(FAKE_SDK_KEY));
     expect(fake.calls.slice(1).map((call) => call.body ?? call.path)).toEqual([
-      { customerRef: 'ref' },
+      { customerRef: 'ref', countryCode: 'US', regionCode: 'CA' },
       '/api/v1/billing/credits/ref',
       { customerRef: 'ref', lot: 'lot-a' },
       { customerRef: 'ref', credits: 1 },
@@ -173,11 +173,42 @@ describe('credits and customers', () => {
   it('creates a customer once, and takes a customer that already exists as the customer wanted', async () => {
     const fake = fakeBilling();
     const billing = clientOf(fake);
-    await billing.createCustomer('ref');
-    await billing.createCustomer('ref');
+    await billing.createCustomer('ref', 'CA');
+    await billing.createCustomer('ref', 'CA');
     expect([...fake.customers]).toEqual(['ref']);
     fake.failNext(500);
-    await expect(billing.createCustomer('other')).rejects.toThrow('with 500');
+    await expect(billing.createCustomer('other', 'CA')).rejects.toThrow('with 500');
+  });
+
+  it('creates a customer as a US buyer in the state given: {customerRef, countryCode: "US", regionCode}', async () => {
+    const fake = fakeBilling();
+    await clientOf(fake).createCustomer('ref', 'TX');
+    expect(fake.calls.map((call) => call.body)).toEqual([{ customerRef: 'ref', countryCode: 'US', regionCode: 'TX' }]);
+  });
+
+  it('throws RegionNotSupported when billing answers 400 CUSTOMER_REGION_NOT_SUPPORTED, and a BillingError for any other 400', async () => {
+    const fake = fakeBilling();
+    fake.refuseRegion('ND');
+    const billing = clientOf(fake);
+    await expect(billing.createCustomer('ref', 'ND')).rejects.toBeInstanceOf(RegionNotSupported);
+    expect(fake.customers.has('ref')).toBe(false);
+    fake.failNext(400);
+    const other = await billing.createCustomer('ref', 'CA').catch((error: unknown) => error);
+    expect(other).toBeInstanceOf(BillingError);
+    expect(other).not.toBeInstanceOf(RegionNotSupported);
+  });
+
+  it('the fake refuses the old customer body {customerRef}, and any body without country US and a two-letter state, with 400 CUSTOMER_REGION_NOT_SUPPORTED', async () => {
+    const fake = fakeBilling();
+    const send = fetcherOf(fake);
+    const post = (body: object): Promise<Response> => send(`${FAKE_BILLING_URL}/billing/customers`, { method: 'POST', headers: { 'x-agent-sdk-key': FAKE_SDK_KEY, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    for (const body of [{ customerRef: 'ref' }, { customerRef: 'ref', countryCode: 'US' }, { customerRef: 'ref', regionCode: 'CA' }, { customerRef: 'ref', countryCode: 'CA', regionCode: 'ON' }, { customerRef: 'ref', countryCode: 'US', regionCode: 'California' }, { customerRef: 'ref', countryCode: 'US', regionCode: '' }]) {
+      const response = await post(body);
+      expect({ body, status: response.status, answer: await response.json() }).toEqual({ body, status: 400, answer: { code: 'CUSTOMER_REGION_NOT_SUPPORTED' } });
+    }
+    expect([...fake.customers]).toEqual([]);
+    expect((await post({ customerRef: 'ref', countryCode: 'US', regionCode: 'CA' })).status).toBe(201);
+    expect([...fake.customers]).toEqual(['ref']);
   });
 
   it('issues an offer for the lot, the same one again while it is open, and refuses a reply without an id', async () => {

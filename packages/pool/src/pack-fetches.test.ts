@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Env } from './http.js';
 import { customerRefOf } from './billing.js';
-import { buyerKeyIdOf } from './pack-fetches.js';
+import { buyerKeyIdOf, US_STATES } from './pack-fetches.js';
 import { nightly } from './nightly.js';
 import { SWEEP_PACKS, sweepPacks } from './pack-operator.js';
 import { FAKE_BILLING_URL, FAKE_SDK_KEY, fetcherOf } from './test-billing.js';
@@ -24,7 +24,7 @@ const buyer = async (): Promise<{ token: string; account: string; ref: (lot: str
   return { token, account, ref: (lot) => customerRefOf(PSEUDONYM_KEY, account, lot) };
 };
 
-const start = (priceRef: string, token: string | undefined, body: unknown = { buyerKey: BUYER_KEY }): ReturnType<TestPool['post']> => pool.post(`/v1/packs/${priceRef}/fetches`, body, token);
+const start = (priceRef: string, token: string | undefined, body: unknown = { buyerKey: BUYER_KEY, state: 'CA' }): ReturnType<TestPool['post']> => pool.post(`/v1/packs/${priceRef}/fetches`, body, token);
 
 const rows = async (account: string): Promise<readonly unknown[]> => (await (await pool.db()).prepare('SELECT * FROM pack_fetches WHERE account = ? ORDER BY created_at, fetch_id').bind(account).all()).results;
 
@@ -51,6 +51,75 @@ describe('POST /v1/packs/:priceRef/fetches', () => {
       expect({ body, status: answered.status, error: fieldOf(answered.json, 'error'), field: fieldOf(answered.json, 'field') }).toEqual({ body, status: 400, error: 'missing_field', field: 'buyerKey' });
     }
     expect(pool.stub.billing.calls.length).toBe(before);
+  });
+
+  it('is 400 state_required without a state, before any billing call, and queues nothing', async () => {
+    const { token, account, ref } = await buyer();
+    pool.stub.billing.credit(ref('lot-a'), 1);
+    const before = pool.stub.billing.calls.length;
+    for (const body of [{ buyerKey: BUYER_KEY }, { buyerKey: BUYER_KEY, state: '' }, { buyerKey: BUYER_KEY, state: null }, { buyerKey: BUYER_KEY, state: 6 }]) {
+      const answered = await start('price-a1', token, body);
+      expect({ body, status: answered.status, error: fieldOf(answered.json, 'error'), field: fieldOf(answered.json, 'field') }).toEqual({ body, status: 400, error: 'state_required', field: 'state' });
+    }
+    expect(pool.stub.billing.calls.length).toBe(before);
+    expect(await rows(account)).toEqual([]);
+    expect(pool.stub.billing.balanceOf(ref('lot-a'))).toBe(1);
+  });
+
+  it('is 400 state_invalid for a state that is not one of the 50 state codes or DC in upper case, before any billing call, and queues nothing', async () => {
+    const { token, account, ref } = await buyer();
+    pool.stub.billing.credit(ref('lot-a'), 1);
+    const before = pool.stub.billing.calls.length;
+    for (const state of ['ca', 'Ca', 'XX', 'PR', 'California', ' CA', 'CA ']) {
+      const answered = await start('price-a1', token, { buyerKey: BUYER_KEY, state });
+      expect({ state, status: answered.status, error: fieldOf(answered.json, 'error'), field: fieldOf(answered.json, 'field') }).toEqual({ state, status: 400, error: 'state_invalid', field: 'state' });
+    }
+    expect(pool.stub.billing.calls.length).toBe(before);
+    expect(await rows(account)).toEqual([]);
+    expect(pool.stub.billing.balanceOf(ref('lot-a'))).toBe(1);
+  });
+
+  it('takes the 50 state codes and DC, and a start naming DC goes through', async () => {
+    expect(US_STATES.size).toBe(51);
+    expect([...US_STATES].every((state) => /^[A-Z]{2}$/.test(state))).toBe(true);
+    expect(['DC', 'AK', 'HI', 'WY'].every((state) => US_STATES.has(state))).toBe(true);
+    expect(['PR', 'GU', 'VI', 'AS', 'MP'].some((state) => US_STATES.has(state))).toBe(false);
+    const { token, ref } = await buyer();
+    pool.stub.billing.credit(ref('lot-a'), 1);
+    expect((await start('price-a1', token, { buyerKey: BUYER_KEY, state: 'DC' })).status).toBe(202);
+  });
+
+  it('creates the billing customer as {customerRef, countryCode: "US", regionCode} with the state the buyer named', async () => {
+    const { token, ref } = await buyer();
+    expect((await start('price-a1', token, { buyerKey: BUYER_KEY, state: 'OR' })).status).toBe(402);
+    const created = pool.stub.billing.calls.filter((call) => call.method === 'POST' && call.path === '/api/v1/billing/customers' && fieldOf(call.body, 'customerRef') === ref('lot-a'));
+    expect(created.map((call) => call.body)).toEqual([{ customerRef: ref('lot-a'), countryCode: 'US', regionCode: 'OR' }]);
+  });
+
+  it('is 400 region_not_supported when billing refuses the state with CUSTOMER_REGION_NOT_SUPPORTED, and queues nothing and offers nothing', async () => {
+    const { token, account, ref } = await buyer();
+    pool.stub.billing.refuseRegion('ND');
+    const answered = await start('price-a1', token, { buyerKey: BUYER_KEY, state: 'ND' });
+    expect({ status: answered.status, error: fieldOf(answered.json, 'error'), field: fieldOf(answered.json, 'field') }).toEqual({ status: 400, error: 'region_not_supported', field: 'state' });
+    expect(await rows(account)).toEqual([]);
+    expect(pool.stub.billing.customers.has(ref('lot-a'))).toBe(false);
+    expect(pool.stub.billing.offers.filter((offer) => offer.customerRef === ref('lot-a'))).toEqual([]);
+  });
+
+  it('keeps no copy of the state: the queued fetch row has no state-of-the-buyer field, and no column holds the code', async () => {
+    const { token, account, ref } = await buyer();
+    // No credit yet, so this start creates the customer with the state and is 402; the next one, with credit, queues.
+    expect((await start('price-a1', token, { buyerKey: BUYER_KEY, state: 'WY' })).status).toBe(402);
+    pool.stub.billing.credit(ref('lot-a'), 1);
+    expect((await start('price-a1', token, { buyerKey: BUYER_KEY, state: 'WY' })).status).toBe(202);
+    const [row] = await rows(account);
+    if (typeof row !== 'object' || row === null) throw new Error('no fetch row was queued');
+    // `state` here is the fetch's own state (`queued`), the only column of that name.
+    expect(Object.keys(row).sort()).toEqual(['account', 'buyer_key', 'buyer_key_id', 'created_at', 'expires_at', 'fetch_id', 'lot', 'mode', 'object_key', 'price_ref', 'ready_at', 'state']);
+    expect(fieldOf(row, 'state')).toBe('queued');
+    expect(Object.values(row)).not.toContain('WY');
+    const columns = (await (await pool.db()).prepare("SELECT name FROM pragma_table_info('pack_fetches')").all()).results.map((column) => textOf(column, 'name'));
+    expect(columns.filter((name) => /region|country|us_state|buyer_state/.test(name))).toEqual([]);
   });
 
   it('is 404 for a price the seller does not sell, and for one that is switched off', async () => {
