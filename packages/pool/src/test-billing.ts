@@ -38,8 +38,6 @@ export interface FakeBilling {
   revoke: (customerRef: string) => void;
   /** The next consume takes its credit and then answers 503, as when the response is lost on the way back. */
   loseNextConsumeAnswer: () => void;
-  /** The next consume answers 409 `IDEMPOTENCY_CONFLICT` and takes nothing, as when its key was already used with another body (this client sends one body per key, so only the fake can make it happen). */
-  conflictNextConsume: () => void;
   /** The next call of any kind answers this status and nothing else. */
   failNext: (status: number) => void;
   /** How many listings a page holds, to test paging; 100 as the client asks when unset. */
@@ -57,11 +55,10 @@ export const fakeBilling = (): FakeBilling => {
   const held = (customerRef: string): string => `${mode}:${customerRef}`;
   const offers: FakeBilling['offers'] = [];
   const taken = new Map<string, string[]>();
-  /** Each consume by customer and key, with the numbers it answered, so a replay answers the original. */
-  const keys = new Map<string, { remaining: number }>();
+  /** Each consume by Idempotency-Key alone, with the body it came with and the numbers it answered: the same body replays them, another body is a conflict. */
+  const keys = new Map<string, { customerRef: string; credits: number; remaining: number; livemode: boolean }>();
   const listings: FakeListing[] = [];
   let lose = false;
-  let conflict = false;
   let failing: number | undefined;
   let size: number | undefined;
 
@@ -89,9 +86,6 @@ export const fakeBilling = (): FakeBilling => {
     },
     loseNextConsumeAnswer: () => {
       lose = true;
-    },
-    conflictNextConsume: () => {
-      conflict = true;
     },
     failNext: (status) => {
       failing = status;
@@ -146,17 +140,17 @@ export const fakeBilling = (): FakeBilling => {
         const customerRef = String(field(body, 'customerRef'));
         const key = headers.get('idempotency-key') ?? '';
         if (revoked.has(customerRef)) return gone;
-        if (conflict) {
-          conflict = false;
-          return { status: 409, body: { code: 'IDEMPOTENCY_CONFLICT' } };
+        const credits = Number(field(body, 'credits'));
+        const same = keys.get(key);
+        if (same !== undefined) {
+          // The original's numbers, mode included, not the present ones.
+          return same.customerRef === customerRef && same.credits === credits ? { status: 200, body: { customerRef, creditsConsumed: credits, creditsRemaining: same.remaining, livemode: same.livemode } } : { status: 409, body: { code: 'IDEMPOTENCY_CONFLICT' } };
         }
-        const same = keys.get(`${customerRef}:${key}`);
-        if (same !== undefined) return { status: 200, body: { customerRef, creditsConsumed: 1, creditsRemaining: same.remaining, livemode } };
         const balance = balances.get(held(customerRef)) ?? 0;
         // A short balance and an unknown customer are the same 409, with where to buy.
         if (balance < 1) return { status: 409, body: { code: 'INSUFFICIENT_CREDITS', actionUrl: 'https://billing.test/buy', offer: null } };
         balances.set(held(customerRef), balance - 1);
-        keys.set(`${customerRef}:${key}`, { remaining: balance - 1 });
+        keys.set(key, { customerRef, credits, remaining: balance - 1, livemode });
         taken.set(customerRef, [...(taken.get(customerRef) ?? []), key]);
         if (lose) {
           lose = false;
