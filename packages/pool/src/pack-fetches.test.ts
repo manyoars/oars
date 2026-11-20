@@ -350,7 +350,6 @@ describe('the operator routes', () => {
   });
 });
 
-/** A fetch handed over, with its pack in PACKS. */
 describe('the mode a fetch was queued in', () => {
   /** The Worker's own handlers, run in the test process on the pool's bindings with the deploy flipped to `live` and billing answered by the fake. */
   const goLive = async (): Promise<Env & OperatorEnv> => ({ ...(await pool.miniflare.getBindings<Env>()), DB: poolDbOf(await pool.db()), BILLING_MODE: 'live', OPERATOR_TOKEN: OPERATOR });
@@ -377,6 +376,7 @@ describe('the mode a fetch was queued in', () => {
   });
 });
 
+/** A fetch handed over, with its pack in PACKS. */
 const handedOver = async (): Promise<{ token: string; account: string; fetchId: string; key: string }> => {
   const held = await queued();
   const key = await built(held.fetchId);
