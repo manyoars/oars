@@ -22,7 +22,7 @@ export const USAGE = [
   'Usage: fulfil --lots <file> --terms <file> --owners <file> --index-key <file> [--server <url>] [--token-file <path>] [--work <dir>] [--local] [--max-heap-mb <mb>]',
   '  Builds the pack of every queued paid fetch under its buyer key, checks it with validate-pack, puts it in the packs bucket under packs/<fetchId>/, and marks the fetch built.',
   '  A build, check, or upload that fails marks the fetch failed (no credit is taken, and no object is left). The hand-over that takes the credit is a separate step and is never called here.',
-  '  --lots <file>        JSON list of {"lot": "<name>", "priceRefs": ["<priceRef>", ...]} with the build options of that lot: "deposits" (a folder pull-deposits wrote), "size", "seed", "minTurns", "stripThinking", "skeletonOnly", "olderThanDays", "excludeManifest", "excludeNames" (as sample-pack names them). A fetch whose price no entry lists stays queued',
+  '  --lots <file>        JSON list of {"lot": "<name>", "priceRefs": ["<priceRef>", ...]} with the build options of that lot: "deposits" (a folder pull-deposits wrote), "size", "seed", "minTurns", "stripThinking", "skeletonOnly", "olderThanDays", "excludeManifest", "excludeNames" (as sample-pack names them). A fetch whose lot no entry names (or, from a pool that sends no lot, whose price no entry lists) stays queued',
   '  --terms, --owners, --index-key  the exclusion term list, the owners file, and the matching-index key, as sample-pack takes them (local files outside every repository)',
   '  --server <url>       the pool (default: OARS_POOL_URL, else https://pool.manyoars.com)',
   '  --token-file <path>  a file holding the pool\'s OPERATOR_TOKEN (default: the OARS_POOL_OPERATOR_TOKEN variable). There is no flag that takes the token itself: a value on a command line is logged',
@@ -60,11 +60,12 @@ const isCount = (value: unknown): value is number => typeof value === 'number' &
 const isDays = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 const isFlag = (value: unknown): value is boolean => typeof value === 'boolean';
 
-/** The lots file. A malformed entry, an option this command does not know, or a price two entries list stops the run: a fetch is never built from a guess about which lot it bought. The defaults are `sample-pack`'s. */
+/** The lots file. A malformed entry, an option this command does not know, a lot name or a price two entries list stops the run: a fetch is never built from a guess about which lot it bought. The defaults are `sample-pack`'s. */
 export const parseLots = (text: string): Lot[] => {
   const parsed: unknown = JSON.parse(text);
   if (!Array.isArray(parsed)) throw new PackError('The lots file is a JSON list.');
   const taken = new Set<string>();
+  const names = new Set<string>();
   return parsed.map((entry: unknown, at): Lot => {
     const where = `Entry ${String(at + 1)} of the lots file`;
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) throw new PackError(`${where} is not an object.`);
@@ -79,6 +80,8 @@ export const parseLots = (text: string): Lot[] => {
     const lot = read('lot', isName);
     const priceRefs = read('priceRefs', (value): value is string[] => Array.isArray(value) && value.length > 0 && value.every(isName));
     if (lot === undefined || priceRefs === undefined) throw new PackError(`${where} needs "lot" and "priceRefs": the lot's name and the prices that sell it.`);
+    if (names.has(lot)) throw new PackError(`The lot ${lot} is listed twice in the lots file.`);
+    names.add(lot);
     for (const ref of priceRefs) {
       if (taken.has(ref)) throw new PackError(`The price ${ref} is listed twice in the lots file.`);
       taken.add(ref);

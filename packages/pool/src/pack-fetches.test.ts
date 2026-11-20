@@ -377,7 +377,7 @@ describe('the operator routes', () => {
     expect(fieldOf(answered.json, 'nextCursor')).toBeUndefined();
   });
 
-  describe('a refused built mark leaves the row queued, unchanged, and names the reason', () => {
+  describe('a refused built mark leaves the row unchanged and names the reason', () => {
     const refused = async (fetchId: string, body: unknown, status: number, error: string): Promise<void> => {
       const before = await fetchOf(fetchId);
       const answered = await operate('POST', `/v1/operator/fetches/${fetchId}/built`, body);
