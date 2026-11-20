@@ -45,6 +45,6 @@ describe('wrangler.jsonc', () => {
     // The secret is named in a comment for the reader and is no key or value of the config itself.
     expect(JSON.stringify(parsed)).not.toContain('GOOGLE_CLIENT_SECRET');
     // The billing key is a secret and its URL and workload are the deploy's: none is a plain variable here, and the vars the config does hold stay public.
-    for (const name of ['BILLING_SDK_KEY', 'BILLING_URL', 'BILLING_WORKLOAD_ID', 'BILLING_MODE']) expect(JSON.stringify(parsed), name).not.toContain(name);
+    for (const name of ['BILLING_SDK_KEY', 'BILLING_URL', 'BILLING_WORKLOAD_ID']) expect(JSON.stringify(parsed), name).not.toContain(name);
   });
 });

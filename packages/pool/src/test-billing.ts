@@ -1,5 +1,6 @@
 // A fake of the billing API the pool sells through (`billing.ts`), for the tests: listings with lots, customers with balances, offers, and an idempotent consume. It answers the shapes the client expects and records every call, so a test can say what the pool asked and what it took.
-// It is not billing: it knows no price, no purchase, and no mode but the one each call names.
+// The shapes are the platform's as built (census t1484): the SDK key in `X-Agent-SDK-Key`, a balance as `{customerRef, creditsRemaining, creditsHeld, creditsAvailable, livemode}` (200 with zeros for a customer it does not know), an offer as `{offerId, expiresAt}`, a consume as `{customerRef, creditsConsumed, creditsRemaining, livemode}` with 409 `INSUFFICIENT_CREDITS` for a short balance and for an unknown customer, 409 `IDEMPOTENCY_CONFLICT` for a key reused with another body, and 410 `CUSTOMER_REVOKED`.
+// It is not billing: it knows no price and no purchase, and its one mode is the workload's, flipped by `setMode`; no call names one. It does not check that an idempotency key is a UUID.
 
 export const FAKE_BILLING_URL = 'https://billing.test/api/v1';
 export const FAKE_SDK_KEY = 'aorsk_test_fake';
@@ -8,7 +9,8 @@ export const FAKE_WORKLOAD = 'workload-1';
 export interface FakeCall {
   method: string;
   path: string;
-  authorization: string | null;
+  /** The `X-Agent-SDK-Key` header. */
+  sdkKey: string | null;
   idempotencyKey: string | null;
   body: unknown;
 }
@@ -28,9 +30,16 @@ export interface FakeBilling {
   addListing: (priceRef: string, lot: string, active?: boolean) => void;
   /** Credits a customer as a settled purchase would (creating it). */
   credit: (customerRef: string, credits: number) => void;
+  /** The credits the customer holds in the workload's current mode, or undefined when it has never been credited or created. */
   balanceOf: (customerRef: string) => number | undefined;
+  /** Flips the workload's mode, as its owner does; credits are kept per mode, so a test credit never funds a live consume. */
+  setMode: (mode: 'test' | 'live') => void;
+  /** From now on every call naming this customer answers 410 `CUSTOMER_REVOKED`. */
+  revoke: (customerRef: string) => void;
   /** The next consume takes its credit and then answers 503, as when the response is lost on the way back. */
   loseNextConsumeAnswer: () => void;
+  /** The next consume answers 409 `IDEMPOTENCY_CONFLICT` and takes nothing, as when its key was already used with another body (this client sends one body per key, so only the fake can make it happen). */
+  conflictNextConsume: () => void;
   /** The next call of any kind answers this status and nothing else. */
   failNext: (status: number) => void;
   /** How many listings a page holds, to test paging; 100 as the client asks when unset. */
@@ -43,11 +52,16 @@ export const fakeBilling = (): FakeBilling => {
   const calls: FakeCall[] = [];
   const customers = new Set<string>();
   const balances = new Map<string, number>();
+  const revoked = new Set<string>();
+  let mode: 'test' | 'live' = 'test';
+  const held = (customerRef: string): string => `${mode}:${customerRef}`;
   const offers: FakeBilling['offers'] = [];
   const taken = new Map<string, string[]>();
-  const keys = new Map<string, true>();
+  /** Each consume by customer and key, with the numbers it answered, so a replay answers the original. */
+  const keys = new Map<string, { remaining: number }>();
   const listings: FakeListing[] = [];
   let lose = false;
+  let conflict = false;
   let failing: number | undefined;
   let size: number | undefined;
 
@@ -64,11 +78,20 @@ export const fakeBilling = (): FakeBilling => {
     },
     credit: (customerRef, credits) => {
       customers.add(customerRef);
-      balances.set(customerRef, (balances.get(customerRef) ?? 0) + credits);
+      balances.set(held(customerRef), (balances.get(held(customerRef)) ?? 0) + credits);
     },
-    balanceOf: (customerRef) => balances.get(customerRef),
+    balanceOf: (customerRef) => balances.get(held(customerRef)),
+    setMode: (next) => {
+      mode = next;
+    },
+    revoke: (customerRef) => {
+      revoked.add(customerRef);
+    },
     loseNextConsumeAnswer: () => {
       lose = true;
+    },
+    conflictNextConsume: () => {
+      conflict = true;
     },
     failNext: (status) => {
       failing = status;
@@ -78,13 +101,13 @@ export const fakeBilling = (): FakeBilling => {
     },
     answer: (method, url, headers, text) => {
       const body = parsed(text);
-      calls.push({ method, path: `${url.pathname}${url.search}`, authorization: headers.get('authorization'), idempotencyKey: headers.get('idempotency-key'), body });
+      calls.push({ method, path: `${url.pathname}${url.search}`, sdkKey: headers.get('x-agent-sdk-key'), idempotencyKey: headers.get('idempotency-key'), body });
       if (failing !== undefined) {
         const status = failing;
         failing = undefined;
         return { status, body: { error: 'scripted' } };
       }
-      if (headers.get('authorization') !== `Bearer ${FAKE_SDK_KEY}`) return { status: 401, body: { error: 'UNAUTHORIZED' } };
+      if (headers.get('x-agent-sdk-key') !== FAKE_SDK_KEY) return { status: 401, body: { code: 'SDK_KEY_INVALID' } };
       const path = url.pathname.replace('/api/v1', '');
       if (method === 'GET' && path === `/billing/agents/${FAKE_WORKLOAD}/datasets`) {
         const per = size ?? Number(url.searchParams.get('size'));
@@ -92,10 +115,15 @@ export const fakeBilling = (): FakeBilling => {
         const content = listings.slice(page * per, (page + 1) * per);
         return { status: 200, body: { content, last: (page + 1) * per >= listings.length } };
       }
+      const livemode = mode === 'live';
+      const gone = { status: 410, body: { code: 'CUSTOMER_REVOKED' } };
       const ref = /^\/billing\/credits\/([^/]+)$/.exec(path)?.[1];
-      if (method === 'GET' && ref !== undefined) {
+      if (method === 'GET' && ref !== undefined && ref !== 'consume') {
         const customerRef = decodeURIComponent(ref);
-        return customers.has(customerRef) ? { status: 200, body: { balance: balances.get(customerRef) ?? 0 } } : { status: 404, body: { error: 'CUSTOMER_NOT_FOUND' } };
+        if (revoked.has(customerRef)) return gone;
+        // An unknown customer is zeros, never 404.
+        const creditsRemaining = balances.get(held(customerRef)) ?? 0;
+        return { status: 200, body: { customerRef, creditsRemaining, creditsHeld: 0, creditsAvailable: creditsRemaining, livemode } };
       }
       if (method === 'POST' && path === '/billing/customers') {
         const customerRef = String(field(body, 'customerRef'));
@@ -106,27 +134,35 @@ export const fakeBilling = (): FakeBilling => {
       if (method === 'POST' && path === '/billing/offers') {
         const customerRef = String(field(body, 'customerRef'));
         const lot = String(field(body, 'lot'));
+        if (revoked.has(customerRef)) return gone;
         if (!customers.has(customerRef)) return { status: 404, body: { error: 'CUSTOMER_NOT_FOUND' } };
         // An open offer for the same customer and lot is reused, as billing does.
-        const held = offers.find((offer) => offer.customerRef === customerRef && offer.lot === lot);
-        const offer = held ?? { offerId: `offer-${String(offers.length + 1)}`, customerRef, lot };
-        if (held === undefined) offers.push(offer);
-        return { status: 200, body: { offerId: offer.offerId } };
+        const open = offers.find((offer) => offer.customerRef === customerRef && offer.lot === lot);
+        const offer = open ?? { offerId: `offer-${String(offers.length + 1)}`, customerRef, lot };
+        if (open === undefined) offers.push(offer);
+        return { status: 200, body: { offerId: offer.offerId, expiresAt: '2030-01-01T00:00:00Z' } };
       }
       if (method === 'POST' && path === '/billing/credits/consume') {
         const customerRef = String(field(body, 'customerRef'));
         const key = headers.get('idempotency-key') ?? '';
-        if (keys.has(`${customerRef}:${key}`)) return { status: 200, body: { replay: true } };
-        const balance = balances.get(customerRef) ?? 0;
-        if (balance < 1) return { status: 409, body: { code: 'INSUFFICIENT_CREDITS' } };
-        balances.set(customerRef, balance - 1);
-        keys.set(`${customerRef}:${key}`, true);
+        if (revoked.has(customerRef)) return gone;
+        if (conflict) {
+          conflict = false;
+          return { status: 409, body: { code: 'IDEMPOTENCY_CONFLICT' } };
+        }
+        const same = keys.get(`${customerRef}:${key}`);
+        if (same !== undefined) return { status: 200, body: { customerRef, creditsConsumed: 1, creditsRemaining: same.remaining, livemode } };
+        const balance = balances.get(held(customerRef)) ?? 0;
+        // A short balance and an unknown customer are the same 409, with where to buy.
+        if (balance < 1) return { status: 409, body: { code: 'INSUFFICIENT_CREDITS', actionUrl: 'https://billing.test/buy', offer: null } };
+        balances.set(held(customerRef), balance - 1);
+        keys.set(`${customerRef}:${key}`, { remaining: balance - 1 });
         taken.set(customerRef, [...(taken.get(customerRef) ?? []), key]);
         if (lose) {
           lose = false;
           return { status: 503, body: { error: 'lost' } };
         }
-        return { status: 200, body: { balance: balance - 1 } };
+        return { status: 200, body: { customerRef, creditsConsumed: 1, creditsRemaining: balance - 1, livemode } };
       }
       return { status: 404, body: { error: 'NO_FAKE_FOR_THIS' } };
     },

@@ -2,11 +2,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Env } from './http.js';
 import { customerRefOf } from './billing.js';
-import { buyerKeyIdOf, startFetch } from './pack-fetches.js';
+import { buyerKeyIdOf } from './pack-fetches.js';
 import { nightly } from './nightly.js';
-import { handOver, SWEEP_PACKS, sweepPacks } from './pack-operator.js';
-import { fetcherOf } from './test-billing.js';
-import type { OperatorEnv } from './telemetry-fleet.js';
+import { SWEEP_PACKS, sweepPacks } from './pack-operator.js';
 import { anyNumber, anyText, fieldOf, poolDbOf, startPool, stubUser, textOf, type TestPool } from './test-pool.js';
 import worker from './worker.js';
 
@@ -350,29 +348,58 @@ describe('the operator routes', () => {
   });
 });
 
-describe('the mode a fetch was queued in', () => {
-  /** The Worker's own handlers, run in the test process on the pool's bindings with the deploy flipped to `live` and billing answered by the fake. */
-  const goLive = async (): Promise<Env & OperatorEnv> => ({ ...(await pool.miniflare.getBindings<Env>()), DB: poolDbOf(await pool.db()), BILLING_MODE: 'live', OPERATOR_TOKEN: OPERATOR });
-  const consumes = (): readonly { mode: unknown; key: string | null }[] => pool.stub.billing.calls.filter((call) => call.path === '/api/v1/billing/credits/consume').map((call) => ({ mode: fieldOf(call.body, 'mode'), key: call.idempotencyKey }));
+describe('the mode billing holds', () => {
+  const consumes = (): readonly { body: unknown; key: string | null }[] => pool.stub.billing.calls.filter((call) => call.path === '/api/v1/billing/credits/consume').map((call) => ({ body: call.body, key: call.idempotencyKey }));
 
-  it('hands a fetch queued in test mode over in test mode, on a pool the deploy has since set to live', async () => {
-    const { fetchId } = await queued();
+  it('records the mode billing reports on the row, and sends no mode on any call', async () => {
+    const { token, account, ref } = await buyer();
+    pool.stub.billing.credit(ref('lot-a'), 1);
+    const before = pool.stub.billing.calls.length;
+    const started = await start('price-a1', token);
+    expect(started.status).toBe(202);
+    const fetchId = textOf(started.json, 'fetchId');
+    expect((await rows(account)).map((row) => fieldOf(row, 'mode'))).toEqual(['test']);
     await built(fetchId);
-    const env = await goLive();
-    const before = consumes().length;
-    const answered = await handOver(new Request('https://pool.test/', { method: 'POST', headers: { authorization: `Bearer ${OPERATOR}` } }), env, fetchId, Date.now(), fetcherOf(pool.stub.billing));
-    expect(answered.status).toBe(200);
-    expect(consumes().slice(before)).toEqual([{ mode: 'test', key: fetchId }]);
+    expect((await operate('POST', `/v1/operator/fetches/${fetchId}/handover`)).status).toBe(200);
+    expect(consumes().slice(-1)).toEqual([{ body: { customerRef: ref('lot-a'), credits: 1 }, key: fetchId }]);
+    expect(JSON.stringify(pool.stub.billing.calls.slice(before))).not.toContain('mode');
   });
 
-  it('counts only the current mode against a start: a fetch queued in test mode does not hold back a live start', async () => {
+  it('counts only the credits of the mode billing is in against a start: a fetch queued in test mode does not hold back a live start', async () => {
     const { token, account, ref } = await buyer();
     pool.stub.billing.credit(ref('lot-a'), 1);
     expect((await start('price-a1', token)).status).toBe(202);
-    const env = await goLive();
-    const answered = await startFetch(new Request('https://pool.test/', { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ buyerKey: BUYER_KEY }) }), env, 'price-a1', fetcherOf(pool.stub.billing));
-    expect(answered.status).toBe(202);
+    pool.stub.billing.setMode('live');
+    try {
+      pool.stub.billing.credit(ref('lot-a'), 1);
+      expect((await start('price-a1', token)).status).toBe(202);
+      expect((await start('price-a1', token)).status).toBe(402);
+    } finally {
+      pool.stub.billing.setMode('test');
+    }
     expect((await rows(account)).map((row) => fieldOf(row, 'mode')).sort()).toEqual(['live', 'test']);
+  });
+});
+
+describe('a buyer billing has revoked', () => {
+  it('is 403 buyer_refused on a start, and queues nothing', async () => {
+    const { token, account, ref } = await buyer();
+    pool.stub.billing.credit(ref('lot-a'), 1);
+    pool.stub.billing.revoke(ref('lot-a'));
+    const refused = await start('price-a1', token);
+    expect({ status: refused.status, error: fieldOf(refused.json, 'error') }).toEqual({ status: 403, error: 'buyer_refused' });
+    expect(await rows(account)).toEqual([]);
+  });
+});
+
+describe('a fetch id billing already holds for another request', () => {
+  it('is 409 idempotency_conflict at hand-over, leaves the fetch built, and is not a retry', async () => {
+    const { fetchId } = await queued();
+    await built(fetchId);
+    pool.stub.billing.conflictNextConsume();
+    const answered = await operate('POST', `/v1/operator/fetches/${fetchId}/handover`);
+    expect({ status: answered.status, error: fieldOf(answered.json, 'error') }).toEqual({ status: 409, error: 'idempotency_conflict' });
+    expect((await fetchOf(fetchId)).state).toBe('built');
   });
 });
 

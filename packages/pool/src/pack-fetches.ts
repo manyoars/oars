@@ -1,7 +1,7 @@
 // Paid pack fetches, the buyer's two routes (K2 spec section 2). A buyer's agent starts a fetch for a DATASET price with its account credential and buyer key: with no credit it is told to buy one (402 and an offer), with credit its fetch is queued for the operator's builder (`pack-operator.ts`), and it downloads the pack once the operator has handed it over, for seven days.
 // Entitlement lives in billing, never here: the pool reads a balance, issues an offer, and consumes one credit at hand-over. It adds no purchase gate of its own.
 import { createHash, randomUUID } from 'node:crypto';
-import { BillingError, billingOf, customerRefOf, lotOf, modeOf, type Fetcher } from './billing.js';
+import { BillingError, billingOf, BuyerRefused, customerRefOf, lotOf } from './billing.js';
 import { answer, bodyOf, bound, fieldOf, notConfigured, refuse, textField, type Env } from './http.js';
 import { accountOf, restrictedRefusal } from './identity.js';
 
@@ -20,14 +20,14 @@ export const buyerKeyIdOf = (buyerKey: string): string => createHash('sha256').u
 const unavailable = (): Response => refuse(502, 'billing_unavailable', 'Billing did not answer. Nothing was charged; try again.');
 
 /** `POST /v1/packs/:priceRef/fetches`: starts a paid fetch of the lot `priceRef` sells. Account credential and `{buyerKey}`; a machine key is refused before this runs (`machine: false`). */
-export const startFetch = async (request: Request, env: Env, priceRef: string, fetcher: Fetcher = fetch): Promise<Response> => {
+export const startFetch = async (request: Request, env: Env, priceRef: string): Promise<Response> => {
   const account = await accountOf(request, env);
   if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
   const restricted = await restrictedRefusal(env, account);
   if (restricted !== undefined) return restricted;
   const pseudonymKey = bound(env.PSEUDONYM_KEY);
   if (pseudonymKey === undefined) return notConfigured('PSEUDONYM_KEY');
-  const billing = billingOf(env, fetcher);
+  const billing = billingOf(env);
   if ('missing' in billing) return notConfigured(billing.missing);
   const buyerKey = textField(await bodyOf(request), 'buyerKey');
   if (buyerKey === undefined || buyerKey.length > MAX_BUYER_KEY_LENGTH) return refuse(400, 'missing_field', `A fetch names the buyer key its pack is built under, in at most ${String(MAX_BUYER_KEY_LENGTH)} characters.`, 'buyerKey');
@@ -36,22 +36,23 @@ export const startFetch = async (request: Request, env: Env, priceRef: string, f
     if (sold === undefined) return refuse(404, 'not_found', 'No such price.');
     const { lot } = sold;
     const customerRef = customerRefOf(pseudonymKey, account, lot);
-    let balance = await billing.balance(customerRef);
-    if (balance === undefined) {
-      await billing.createCustomer(customerRef);
-      balance = 0;
-    }
+    const credits = await billing.balance(customerRef);
+    if (!credits.known) await billing.createCustomer(customerRef);
+    const { available: balance } = credits;
+    // The mode is billing's: the workload's stored mode, which the balance just read says. The row keeps it so a start counts only the unspent fetches of the credits it reads.
+    const mode = credits.livemode ? 'live' : 'test';
     const fetchId = randomUUID();
     // One statement, so two starts at once cannot both take the last credit: an account never holds more unspent fetches for a lot, in one billing mode, than the lot's balance in that mode.
     const queued = await env.DB.prepare(
       `INSERT INTO pack_fetches (fetch_id, account, price_ref, lot, buyer_key_id, buyer_key, mode, state, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, 'queued', ? WHERE (SELECT COUNT(*) FROM pack_fetches WHERE account = ? AND lot = ? AND mode = ? AND state IN ${UNSPENT}) < ?`,
     )
-      .bind(fetchId, account, priceRef, lot, buyerKeyIdOf(buyerKey), buyerKey, modeOf(env), Date.now(), account, lot, modeOf(env), balance)
+      .bind(fetchId, account, priceRef, lot, buyerKeyIdOf(buyerKey), buyerKey, mode, Date.now(), account, lot, mode, balance)
       .run();
     if (queued.meta.changes > 0) return answer(202, { fetchId, state: 'queued', priceRef });
     const offerId = await billing.issueOffer(customerRef, lot);
     return answer(402, { error: 'payment_required', message: 'This account has no credit left for this pack. Buy one with the offer, then start the fetch again.', offerId, priceRefs: sold.priceRefs, balance });
   } catch (error) {
+    if (error instanceof BuyerRefused) return refuse(403, 'buyer_refused', 'Billing has refused this account as a buyer, so it cannot start a paid fetch.');
     if (error instanceof BillingError) return unavailable();
     throw error;
   }
