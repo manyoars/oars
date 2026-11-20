@@ -1,7 +1,7 @@
 // Paid pack fetches, the buyer's two routes (K2 spec section 2). A buyer's agent starts a fetch for a DATASET price with its account credential and buyer key: with no credit it is told to buy one (402 and an offer), with credit its fetch is queued for the operator's builder (`pack-operator.ts`), and it downloads the pack once the operator has handed it over, for seven days.
 // Entitlement lives in billing, never here: the pool reads a balance, issues an offer, and consumes one credit at hand-over. It adds no purchase gate of its own.
 import { createHash, randomUUID } from 'node:crypto';
-import { BillingError, billingOf, BuyerRefused, customerRefOf, lotOf, RegionNotSupported } from './billing.js';
+import { BillingError, billingOf, BuyerRefused, customerRefOf, lotOf, RegionNotSupported, WorkloadNotActive } from './billing.js';
 import { answer, bodyOf, bound, fieldOf, notConfigured, refuse, textField, type Env } from './http.js';
 import { accountOf, restrictedRefusal } from './identity.js';
 
@@ -22,7 +22,7 @@ export const buyerKeyIdOf = (buyerKey: string): string => createHash('sha256').u
 
 const unavailable = (): Response => refuse(502, 'billing_unavailable', 'Billing did not answer. Nothing was charged; try again.');
 
-/** `POST /v1/packs/:priceRef/fetches`: starts a paid fetch of the lot `priceRef` sells. Account credential and `{buyerKey, state}`; the state is the buyer's US state, handed to billing when it makes the customer and kept nowhere here (not on the row, not in a log); a machine key is refused before this runs (`machine: false`). */
+/** `POST /v1/packs/:priceRef/fetches`: starts a paid fetch of the lot `priceRef` sells. Account credential and `{buyerKey, state}`; the state is the buyer's US state, handed to billing on every start and kept nowhere here (not on the row, not in a log); a machine key is refused before this runs (`machine: false`). */
 export const startFetch = async (request: Request, env: Env, priceRef: string): Promise<Response> => {
   const account = await accountOf(request, env);
   if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
@@ -44,8 +44,9 @@ export const startFetch = async (request: Request, env: Env, priceRef: string): 
     if (sold === undefined) return refuse(404, 'not_found', 'No such price.');
     const { lot } = sold;
     const customerRef = customerRefOf(pseudonymKey, account, lot);
+    // Every start upserts the customer, so billing's tax region is the one the buyer last named; billing answers 200 for one it already has.
+    await billing.createCustomer(customerRef, state);
     const credits = await billing.balance(customerRef);
-    if (!credits.known) await billing.createCustomer(customerRef, state);
     const { available: balance } = credits;
     // The mode is billing's: the workload's stored mode, which the balance just read says. The row keeps it so a start counts only the unspent fetches of the credits it reads.
     const mode = credits.livemode ? 'live' : 'test';
@@ -62,6 +63,7 @@ export const startFetch = async (request: Request, env: Env, priceRef: string): 
   } catch (error) {
     if (error instanceof BuyerRefused) return refuse(403, 'buyer_refused', 'Billing has refused this account as a buyer, so it cannot start a paid fetch.');
     if (error instanceof RegionNotSupported) return refuse(400, 'region_not_supported', 'Billing does not take a buyer in this state. Nothing was charged or queued.', 'state');
+    if (error instanceof WorkloadNotActive) return refuse(503, 'workload_not_active', 'The seller is not selling right now. Nothing was charged or queued; try again later.');
     if (error instanceof BillingError) return unavailable();
     throw error;
   }

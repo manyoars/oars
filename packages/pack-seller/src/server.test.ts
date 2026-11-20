@@ -62,7 +62,7 @@ describe('the 500 path', () => {
 });
 
 const REFERENCE = 'c_socketdownload0123456789abcdef01';
-const accept = { recipientLegalName: 'Ada Lovelace', licenseVersion: '2026-11' };
+const accept = { recipientLegalName: 'Ada Lovelace', licenseVersion: '2026-11', state: 'CA' };
 
 /** A seller over a real socket on a world's store, with the platform as msw; `released` resolves when the platform sees the release call. */
 const listening = async (world: World): Promise<{ sellerServer: Server; base: string; calls: string[]; released: Promise<void> }> => {

@@ -16,7 +16,7 @@ const WORKLOAD = '0b1c2d3e-0000-4000-8000-000000000001';
 const OPERATOR_TOKEN = 'operator-token-secret-value';
 const BUYER_SDK_KEY = 'aorsk_buyer_secret_value';
 const RESERVATION = 'rsv_0001';
-const accept = { recipientLegalName: 'Ada Lovelace', licenseVersion: '2026-11' };
+const accept = { recipientLegalName: 'Ada Lovelace', licenseVersion: '2026-11', state: 'CA' };
 const stamp = '2099-01-01T00:00:00Z';
 
 /** A string field of a parsed JSON body; fails the test when it is not one. */

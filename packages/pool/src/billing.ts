@@ -1,4 +1,4 @@
-// The pool's client of the TradeAOR billing API, for paid pack fetches (K2 spec section 2). The pool is one seller workload, so every call carries that workload's `aorsk_` SDK key; a buyer is a billing customer named by an opaque `customerRef`, one per (account, lot), and a credit is the right to fetch one pack of that lot.
+// The pool's client of the billing platform's API, for paid pack fetches (K2 spec section 2). The pool is one seller workload, so every call carries that workload's `aorsk_` SDK key; a buyer is a billing customer named by an opaque `customerRef`, one per (account, lot), and a credit is the right to fetch one pack of that lot.
 // The shapes below are the ones the platform's billing service answers through the gateway (`/api/v1/billing/...`, census t1484); `test-billing.ts` is the fake the tests run them against. No call carries a billing mode: the workload's stored mode decides it server side, and each answer says which one it was (`livemode`).
 import { createHmac } from 'node:crypto';
 import { bodyOf, bound, fieldOf, textField, type Env } from './http.js';
@@ -21,6 +21,9 @@ export class BuyerRefused extends Error {}
 /** Billing answered 400 `CUSTOMER_REGION_NOT_SUPPORTED`: it does not take a buyer in the state named, so the same request gets the same answer. */
 export class RegionNotSupported extends Error {}
 
+/** Billing answered 409 `WORKLOAD_NOT_ACTIVE`: the seller workload is switched off, so it takes no customer and sells nothing until its owner turns it on. */
+export class WorkloadNotActive extends Error {}
+
 /** Billing answered 409 `IDEMPOTENCY_CONFLICT`: the fetch id was already used for a different request. A retry sends the same request and gets the same answer. */
 export class IdempotencyConflict extends Error {}
 
@@ -42,7 +45,7 @@ export interface Billing {
   listings: () => Promise<Listing[]>;
   /** The customer's credits. Billing answers 200 with zeros for a customer it does not know, so that is `known: false`, never a missing customer. */
   balance: (customerRef: string) => Promise<Balance>;
-  /** Makes the customer as a US buyer in `regionCode`, a two-letter state code, which billing needs for tax and the pool does not keep. Throws `RegionNotSupported` when billing does not take a buyer there. */
+  /** Makes or updates the customer as a US buyer in `regionCode`, a two-letter state code, which billing needs for tax and the pool does not keep (billing upserts: 201 made, 200 updated). Throws `RegionNotSupported` when billing does not take a buyer there, and `WorkloadNotActive` when the seller workload is switched off. */
   createCustomer: (customerRef: string, regionCode: string) => Promise<void>;
   /** An offer for the lot's prices; answers its id. */
   issueOffer: (customerRef: string, lot: string) => Promise<string>;
@@ -111,8 +114,9 @@ export const billingOf = (env: BillingEnv, fetcher: Fetcher = fetch): Billing | 
       // Buyers are US only, so the country is fixed here and the state is the one thing the caller brings.
       const response = await call('POST', '/billing/customers', { customerRef, countryCode: 'US', regionCode });
       if (response.status === 400 && (await response.text()).includes('CUSTOMER_REGION_NOT_SUPPORTED')) throw new RegionNotSupported('billing does not take a buyer in the state named on POST /billing/customers');
-      // A customer made a moment ago by another request is the customer wanted.
-      if (!response.ok && response.status !== 409) throw unexpected('POST', '/billing/customers', response);
+      // 409 here is the workload being off, never "the customer exists": billing answers 200 for an existing one.
+      if (response.status === 409 && (await response.text()).includes('WORKLOAD_NOT_ACTIVE')) throw new WorkloadNotActive('the seller workload is not active on POST /billing/customers');
+      if (!response.ok) throw unexpected('POST', '/billing/customers', response);
     },
     issueOffer: async (customerRef, lot) => {
       const response = await call('POST', '/billing/offers', { customerRef, lot });
