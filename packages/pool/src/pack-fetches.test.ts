@@ -2,8 +2,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Env } from './http.js';
 import { customerRefOf } from './billing.js';
-import { buyerKeyIdOf } from './pack-fetches.js';
-import { SWEEP_PACKS, sweepPacks } from './pack-operator.js';
+import { buyerKeyIdOf, startFetch } from './pack-fetches.js';
+import { handOver, SWEEP_PACKS, sweepPacks } from './pack-operator.js';
+import { fetcherOf } from './test-billing.js';
+import type { OperatorEnv } from './telemetry-fleet.js';
 import { anyNumber, anyText, fieldOf, poolDbOf, startPool, stubUser, textOf, type TestPool } from './test-pool.js';
 import worker from './worker.js';
 
@@ -348,6 +350,32 @@ describe('the operator routes', () => {
 });
 
 /** A fetch handed over, with its pack in PACKS. */
+describe('the mode a fetch was queued in', () => {
+  /** The Worker's own handlers, run in the test process on the pool's bindings with the deploy flipped to `live` and billing answered by the fake. */
+  const goLive = async (): Promise<Env & OperatorEnv> => ({ ...(await pool.miniflare.getBindings<Env>()), DB: poolDbOf(await pool.db()), BILLING_MODE: 'live', OPERATOR_TOKEN: OPERATOR });
+  const consumes = (): readonly { mode: unknown; key: string | null }[] => pool.stub.billing.calls.filter((call) => call.path === '/api/v1/billing/credits/consume').map((call) => ({ mode: fieldOf(call.body, 'mode'), key: call.idempotencyKey }));
+
+  it('hands a fetch queued in test mode over in test mode, on a pool the deploy has since set to live', async () => {
+    const { fetchId } = await queued();
+    await built(fetchId);
+    const env = await goLive();
+    const before = consumes().length;
+    const answered = await handOver(new Request('https://pool.test/', { method: 'POST', headers: { authorization: `Bearer ${OPERATOR}` } }), env, fetchId, Date.now(), fetcherOf(pool.stub.billing));
+    expect(answered.status).toBe(200);
+    expect(consumes().slice(before)).toEqual([{ mode: 'test', key: fetchId }]);
+  });
+
+  it('counts only the current mode against a start: a fetch queued in test mode does not hold back a live start', async () => {
+    const { token, account, ref } = await buyer();
+    pool.stub.billing.credit(ref('lot-a'), 1);
+    expect((await start('price-a1', token)).status).toBe(202);
+    const env = await goLive();
+    const answered = await startFetch(new Request('https://pool.test/', { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ buyerKey: BUYER_KEY }) }), env, 'price-a1', fetcherOf(pool.stub.billing));
+    expect(answered.status).toBe(202);
+    expect((await rows(account)).map((row) => fieldOf(row, 'mode')).sort()).toEqual(['live', 'test']);
+  });
+});
+
 const handedOver = async (): Promise<{ token: string; account: string; fetchId: string; key: string }> => {
   const held = await queued();
   const key = await built(held.fetchId);
