@@ -565,6 +565,7 @@ describe('parseLots', () => {
     ['[{"lot": "a", "priceRefs": []}]', 'Entry 1 of the lots file has a bad value for priceRefs.'],
     ['[{"lot": "a", "priceRefs": ["p"], "size": 0}]', 'Entry 1 of the lots file has a bad value for size.'],
     ['[{"lot": "a", "priceRefs": ["p"]}, {"lot": "b", "priceRefs": ["p"]}]', 'The price p is listed twice in the lots file.'],
+    ['[{"lot": "a", "priceRefs": ["p"]}, {"lot": "a", "priceRefs": ["q"]}]', 'The lot a is listed twice in the lots file.'],
   ])('refuses %s', (text, message) => {
     expect(() => parseLots(text)).toThrow(new PackError(message));
   });
