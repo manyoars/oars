@@ -1,6 +1,6 @@
 // Paid pack fetches, the operator's side (K2 spec section 2, steps 4 and 5): the queue the builder reads, the mark that a pack is built, and the hand-over that takes the buyer's credit. Every route is behind `OPERATOR_TOKEN`, as the telemetry operator read is.
 // The credit is taken once, at hand-over, under the fetch id as billing's idempotency key: a short balance leaves the fetch unready and takes nothing, and a retry after a lost answer finds the credit taken and marks the fetch ready.
-import { BillingError, billingOf, customerRefOf, IdempotencyConflict } from './billing.js';
+import { BillingError, billingOf, BuyerRefused, customerRefOf, IdempotencyConflict } from './billing.js';
 import { answer, bodyOf, bound, fieldOf, notConfigured, refuse, textField, type Env, type PacksBucket } from './http.js';
 import { PACK_WINDOW_MS, UNSPENT } from './pack-fetches.js';
 import { digest, type OperatorEnv } from './telemetry-fleet.js';
@@ -100,6 +100,7 @@ export const handOver = async (request: Request, env: OperatorBindings, fetchId:
   try {
     if ((await billing.consume(customerRefOf(pseudonymKey, held.account, held.lot), fetchId)) === 'insufficient') return refuse(409, 'insufficient_credits', 'The buyer has no credit left for this lot (refunded or spent elsewhere). The fetch stays built and nothing was taken.');
   } catch (error) {
+    if (error instanceof BuyerRefused) return refuse(409, 'buyer_refused', 'Billing has refused this buyer (revoked). The fetch stays built and nothing was taken; a retry changes nothing.');
     if (error instanceof IdempotencyConflict) return refuse(409, 'idempotency_conflict', 'Billing already holds this fetch id for a different request. The fetch stays built and nothing was taken; a retry changes nothing, so look into it.');
     if (error instanceof BillingError) return refuse(502, 'billing_unavailable', 'Billing did not answer. The fetch stays built; hand it over again.');
     throw error;
