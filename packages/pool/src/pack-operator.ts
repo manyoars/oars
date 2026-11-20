@@ -5,7 +5,7 @@ import { answer, bodyOf, bound, fieldOf, notConfigured, refuse, textField, type 
 import { PACK_WINDOW_MS, UNSPENT } from './pack-fetches.js';
 import { digest, type OperatorEnv } from './telemetry-fleet.js';
 
-/** The most fetches one listing answers. The queue is read by one builder, which asks again for the next. */
+/** The most fetches one listing answers. A longer queue is read page by page, each page's `nextCursor` asking for the next. */
 export const QUEUE_PAGE = 100;
 
 /** The most expired packs one night deletes: one listing, one delete, and one update, so the nightly run's call budget does not move with the backlog. A larger backlog is finished on later nights. */
@@ -48,17 +48,44 @@ const noSuchFetch = (): Response => refuse(404, 'not_found', 'No such fetch.');
 
 const ready = (fetchId: string, expiresAt: number | undefined): Response => answer(200, { fetchId, state: 'ready', expiresAt: expiresAt ?? null });
 
-/** `GET /v1/operator/fetches?state=`: the fetches in a state (`queued` unless asked), oldest first. A queued row carries the buyer key the builder builds under; no other state holds one. */
+/** A page's resume point: the last row's `created_at` and `fetch_id`, as one opaque token. */
+const cursorOf = (createdAt: number, fetchId: string): string => btoa(`${String(createdAt)}:${fetchId}`).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+
+const readCursor = (cursor: string): { createdAt: number; fetchId: string } | undefined => {
+  try {
+    const [, createdAt, fetchId] = /^(\d+):(.+)$/.exec(atob(cursor.replaceAll('-', '+').replaceAll('_', '/'))) ?? [];
+    return createdAt === undefined || fetchId === undefined ? undefined : { createdAt: Number(createdAt), fetchId };
+  } catch {
+    // `atob` throws on text that is not base64: a cursor the pool never gave.
+    return undefined;
+  }
+};
+
+/** `GET /v1/operator/fetches?state=&cursor=`: the fetches in a state (`queued` unless asked), oldest first, `QUEUE_PAGE` at a time. `nextCursor` is present while more rows remain; pass it back as `cursor` for the next page. A queued row carries the buyer key the builder builds under; no other state holds one. */
 export const listFetches = async (request: Request, env: OperatorBindings): Promise<Response> => {
   const refused = await notOperator(request, env);
   if (refused !== undefined) return refused;
-  const state = new URL(request.url).searchParams.get('state') ?? 'queued';
+  const params = new URL(request.url).searchParams;
+  const state = params.get('state') ?? 'queued';
   if (!STATES.includes(state)) return refuse(400, 'missing_field', `state is one of ${STATES.join(', ')}.`, 'state');
-  const { results } = await env.DB.prepare('SELECT fetch_id, price_ref, buyer_key_id, buyer_key, mode, state, object_key, created_at, ready_at, expires_at FROM pack_fetches WHERE state = ? ORDER BY created_at, fetch_id LIMIT ?').bind(state, QUEUE_PAGE).all();
+  const given = params.get('cursor');
+  const after = given === null ? undefined : readCursor(given);
+  if (given !== null && after === undefined) return refuse(400, 'missing_field', 'cursor is the nextCursor an earlier listing answered.', 'cursor');
+  const columns = 'fetch_id, price_ref, lot, buyer_key_id, buyer_key, mode, state, object_key, created_at, ready_at, expires_at';
+  // One row more than a page tells whether another page follows.
+  const { results } =
+    after === undefined
+      ? await env.DB.prepare(`SELECT ${columns} FROM pack_fetches WHERE state = ? ORDER BY created_at, fetch_id LIMIT ?`).bind(state, QUEUE_PAGE + 1).all()
+      : await env.DB.prepare(`SELECT ${columns} FROM pack_fetches WHERE state = ? AND (created_at > ? OR (created_at = ? AND fetch_id > ?)) ORDER BY created_at, fetch_id LIMIT ?`).bind(state, after.createdAt, after.createdAt, after.fetchId, QUEUE_PAGE + 1).all();
+  const page = results.slice(0, QUEUE_PAGE);
+  const last = page.at(-1);
+  const [lastAt, lastId] = [fieldOf(last, 'created_at'), fieldOf(last, 'fetch_id')];
+  const more = results.length > QUEUE_PAGE && typeof lastAt === 'number' && typeof lastId === 'string';
   return answer(200, {
-    fetches: results.map((row) => ({
+    fetches: page.map((row) => ({
       fetchId: fieldOf(row, 'fetch_id'),
       priceRef: fieldOf(row, 'price_ref'),
+      lot: fieldOf(row, 'lot'),
       buyerKeyId: fieldOf(row, 'buyer_key_id'),
       buyerKey: fieldOf(row, 'buyer_key'),
       mode: fieldOf(row, 'mode'),
@@ -68,6 +95,7 @@ export const listFetches = async (request: Request, env: OperatorBindings): Prom
       readyAt: fieldOf(row, 'ready_at'),
       expiresAt: fieldOf(row, 'expires_at'),
     })),
+    ...(more ? { nextCursor: cursorOf(lastAt, lastId) } : {}),
   });
 };
 

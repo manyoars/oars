@@ -317,7 +317,7 @@ describe('the operator routes', () => {
     expect(mine.map((entry) => textOf(entry, 'fetchId')).sort()).toEqual([first.fetchId, second.fetchId].sort());
     const stamps = Array.isArray(listed) ? listed.map((entry) => Number(fieldOf(entry, 'createdAt'))) : [];
     expect(stamps).toEqual([...stamps].sort((a, b) => a - b));
-    expect(mine.find((entry) => textOf(entry, 'fetchId') === first.fetchId)).toEqual({ fetchId: first.fetchId, priceRef: 'price-a1', buyerKeyId: buyerKeyIdOf(BUYER_KEY), buyerKey: BUYER_KEY, mode: 'test', state: 'queued', objectKey: null, createdAt: anyNumber(), readyAt: null, expiresAt: null });
+    expect(mine.find((entry) => textOf(entry, 'fetchId') === first.fetchId)).toEqual({ fetchId: first.fetchId, priceRef: 'price-a1', lot: 'lot-a', buyerKeyId: buyerKeyIdOf(BUYER_KEY), buyerKey: BUYER_KEY, mode: 'test', state: 'queued', objectKey: null, createdAt: anyNumber(), readyAt: null, expiresAt: null });
     await built(first.fetchId);
     const afterwards = fieldOf((await operate('GET', '/v1/operator/fetches?state=built')).json, 'fetches');
     expect(Array.isArray(afterwards) ? afterwards.find((entry) => textOf(entry, 'fetchId') === first.fetchId) : undefined).toMatchObject({ state: 'built', buyerKey: null, objectKey: `packs/${first.fetchId}/pack.tar` });
@@ -338,6 +338,72 @@ describe('the operator routes', () => {
     expect(await fetchOf(fetchId)).toMatchObject({ state: 'built', object_key: key, buyer_key: null, buyer_key_id: buyerKeyIdOf(BUYER_KEY) });
     expect(fieldOf((await operate('POST', path, { objectKey: key })).json, 'error')).toBe('not_queued');
     expect((await operate('POST', '/v1/operator/fetches/no-such-fetch/built', { objectKey: 'packs/no-such-fetch/p' })).status).toBe(404);
+  });
+
+  it('list each queued fetch with its lot', async () => {
+    const { fetchId } = await queued();
+    const listed = fieldOf((await operate('GET', '/v1/operator/fetches')).json, 'fetches');
+    expect(Array.isArray(listed) ? listed.find((entry) => textOf(entry, 'fetchId') === fetchId) : undefined).toMatchObject({ lot: 'lot-a' });
+  });
+
+  it('page the queue by cursor: two pages of a 100-row limit, no fetch twice and none missed, with rows sharing one created_at', async () => {
+    const held = await buyer();
+    const db = await pool.db();
+    const ids = Array.from({ length: 105 }, (_, n) => `ffffffff-0000-4000-8000-${String(n).padStart(12, '0')}`);
+    for (const id of ids) await db.prepare("INSERT INTO pack_fetches (fetch_id, account, price_ref, lot, buyer_key_id, buyer_key, mode, state, created_at) VALUES (?, ?, 'price-a1', 'lot-a', 'k', ?, 'test', 'queued', 5)").bind(id, held.account, BUYER_KEY).run();
+    const everyQueued = (await db.prepare("SELECT fetch_id FROM pack_fetches WHERE state = 'queued' ORDER BY created_at, fetch_id").all()).results.map((row) => textOf(row, 'fetch_id'));
+    const seen: string[] = [];
+    const sizes: number[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = (await operate('GET', cursor === undefined ? '/v1/operator/fetches' : `/v1/operator/fetches?cursor=${encodeURIComponent(cursor)}`)).json;
+      const fetches = fieldOf(page, 'fetches');
+      if (!Array.isArray(fetches)) throw new Error('no fetches');
+      sizes.push(fetches.length);
+      seen.push(...fetches.map((entry) => textOf(entry, 'fetchId')));
+      const after = fieldOf(page, 'nextCursor');
+      cursor = typeof after === 'string' ? after : undefined;
+    } while (cursor !== undefined);
+    expect(sizes[0]).toBe(100);
+    expect(sizes.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(seen).size).toBe(seen.length);
+    // Every queued row, in the order the pages are cut in: oldest first, then by fetch id.
+    expect(seen).toEqual(everyQueued);
+    for (const bad of ['not-a-cursor', btoa('no separator')]) expect({ bad, status: (await operate('GET', `/v1/operator/fetches?cursor=${bad}`)).status }).toEqual({ bad, status: 400 });
+  }, 60_000);
+
+  it('answer no nextCursor when the queue fits one page', async () => {
+    const answered = await operate('GET', '/v1/operator/fetches?state=failed');
+    expect(fieldOf(answered.json, 'nextCursor')).toBeUndefined();
+  });
+
+  describe('a refused built mark leaves the row queued, unchanged, and names the reason', () => {
+    const refused = async (fetchId: string, body: unknown, status: number, error: string): Promise<void> => {
+      const before = await fetchOf(fetchId);
+      const answered = await operate('POST', `/v1/operator/fetches/${fetchId}/built`, body);
+      expect({ status: answered.status, error: fieldOf(answered.json, 'error') }).toEqual({ status, error });
+      expect(typeof fieldOf(answered.json, 'message')).toBe('string');
+      expect(await fetchOf(fetchId)).toEqual(before);
+    };
+
+    it('for a key outside packs/<fetchId>/ (400)', async () => {
+      const { fetchId } = await queued();
+      await refused(fetchId, { objectKey: 'pack.tar' }, 400, 'missing_field');
+    });
+
+    it('for an object PACKS does not hold (422)', async () => {
+      const { fetchId } = await queued();
+      await refused(fetchId, { objectKey: `packs/${fetchId}/pack.tar` }, 422, 'object_missing');
+    });
+
+    it('for a row that is not queued (409), whatever the key', async () => {
+      const { fetchId } = await queued();
+      const key = await built(fetchId);
+      await refused(fetchId, { objectKey: key }, 409, 'not_queued');
+      const failed = await queued();
+      await operate('POST', `/v1/operator/fetches/${failed.fetchId}/failed`);
+      await refused(failed.fetchId, { objectKey: `packs/${failed.fetchId}/pack.tar` }, 409, 'not_queued');
+    });
   });
 
   it('hand over a built pack by taking one credit under the fetch id, and keep the record', async () => {

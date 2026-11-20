@@ -105,6 +105,8 @@ export const parseLots = (text: string): Lot[] => {
 export interface QueuedFetch {
   fetchId: string;
   priceRef: string;
+  /** The lot the buyer paid for, as the pool recorded it at the start; null from a pool that does not send one (the price then names the lot). */
+  lot: string | null;
   /** Null only for a row the pool should never list as queued; such a fetch is left alone. */
   buyerKey: string | null;
 }
@@ -129,15 +131,26 @@ export const operatorApi = (server: string, token: string, fetcher: Fetcher = fe
     return `${String(response.status)}${isText(code) ? ` ${code}` : ''}`;
   };
   return {
+    // The whole queue: each page's `nextCursor` is followed until the pool names none.
     queued: async () => {
-      const response = await call('?state=queued');
-      if (!response.ok) throw new Error(`The pool refused the queue read: ${await refusalOf(response)}.`);
-      const fetches = fieldOf(await response.json(), 'fetches');
-      if (!Array.isArray(fetches)) throw new Error('The pool answered the queue read with no fetches list.');
-      return fetches.flatMap((row: unknown): QueuedFetch[] => {
-        const [fetchId, priceRef, buyerKey] = [fieldOf(row, 'fetchId'), fieldOf(row, 'priceRef'), fieldOf(row, 'buyerKey')];
-        return isText(fetchId) && isText(priceRef) ? [{ fetchId, priceRef, buyerKey: isText(buyerKey) ? buyerKey : null }] : [];
-      });
+      const queue: QueuedFetch[] = [];
+      for (let cursor: string | undefined; ; ) {
+        const response = await call(cursor === undefined ? '?state=queued' : `?state=queued&cursor=${encodeURIComponent(cursor)}`);
+        if (!response.ok) throw new Error(`The pool refused the queue read: ${await refusalOf(response)}.`);
+        const body: unknown = await response.json();
+        const fetches = fieldOf(body, 'fetches');
+        if (!Array.isArray(fetches)) throw new Error('The pool answered the queue read with no fetches list.');
+        queue.push(
+          ...fetches.flatMap((row: unknown): QueuedFetch[] => {
+            const [fetchId, priceRef, lot, buyerKey] = [fieldOf(row, 'fetchId'), fieldOf(row, 'priceRef'), fieldOf(row, 'lot'), fieldOf(row, 'buyerKey')];
+            return isText(fetchId) && isText(priceRef) ? [{ fetchId, priceRef, lot: isText(lot) ? lot : null, buyerKey: isText(buyerKey) ? buyerKey : null }] : [];
+          }),
+        );
+        const next = fieldOf(body, 'nextCursor');
+        // A cursor that repeats would read the same page forever.
+        if (!isText(next) || next === cursor) return queue;
+        cursor = next;
+      }
     },
     built: async (fetchId, objectKey) => {
       const response = await call(`/${fetchId}/built`, { objectKey });
@@ -193,11 +206,12 @@ export interface FulfilOptions {
   now?: (() => number) | undefined;
 }
 
-/** What one run did with the fetches it read: `left` are still queued (no lot lists the price, the objections changed during the build, the pool or the bucket did not answer) and the next run takes them again. */
+/** What one run did with the fetches it read: `left` are still queued (no lot lists the price, the objections changed during the build, the pool or the bucket did not answer) and the next run takes them again; `gone` left the queue during their build (erased by the buyer, or handed over elsewhere), so there is nothing to take again and they do not fail the run. */
 export interface Fulfilled {
   built: number;
   failed: number;
   left: number;
+  gone: number;
 }
 
 type Verdict = keyof Fulfilled;
@@ -224,7 +238,7 @@ const writeArchive = async (dir: string, file: string): Promise<void> => {
 export const fulfil = async (options: FulfilOptions): Promise<Fulfilled> => {
   const { api, bucket, print } = options;
   const check = options.check ?? validate;
-  const done: Fulfilled = { built: 0, failed: 0, left: 0 };
+  const done: Fulfilled = { built: 0, failed: 0, left: 0, gone: 0 };
 
   /** Marks the fetch failed, after making sure `PACKS` holds nothing for it: this run's upload, or one an earlier run made before it stopped. A bucket or pool that does not answer leaves the fetch queued for the next run instead. */
   const fail = async (fetchId: string, why: string): Promise<Verdict> => {
@@ -239,15 +253,16 @@ export const fulfil = async (options: FulfilOptions): Promise<Fulfilled> => {
     return 'failed';
   };
 
-  const one = async ({ fetchId, priceRef, buyerKey }: QueuedFetch): Promise<Verdict> => {
+  const one = async ({ fetchId, priceRef, lot: named, buyerKey }: QueuedFetch): Promise<Verdict> => {
     // The id becomes a folder name and an object key, so one that is not a fetch id is never used as either.
     if (!FETCH_ID.test(fetchId) || buyerKey === null) {
       print(`A queued fetch has no usable id or no buyer key; it was left alone.`);
       return 'left';
     }
-    const lot = options.lots.find((entry) => entry.priceRefs.includes(priceRef));
+    // The lot the pool recorded is what the buyer paid for; the price names it only for a pool that sends none.
+    const lot = named === null ? options.lots.find((entry) => entry.priceRefs.includes(priceRef)) : options.lots.find((entry) => entry.lot === named);
     if (lot === undefined) {
-      print(`Fetch ${fetchId}: no entry of the lots file lists the price ${priceRef}. It stays queued; add the price to its lot and run again.`);
+      print(named === null ? `Fetch ${fetchId}: no entry of the lots file lists the price ${priceRef}. It stays queued; add the price to its lot and run again.` : `Fetch ${fetchId}: no entry of the lots file is named ${named}, the lot this fetch bought. It stays queued; add the lot and run again.`);
       return 'left';
     }
     // Any text this fetch prints goes through here, so a message that quoted the key could not carry it to a log.
@@ -278,8 +293,8 @@ export const fulfil = async (options: FulfilOptions): Promise<Fulfilled> => {
       }
       // A build can take hours, and an erasure fails the buyer's fetches meanwhile: a pack is uploaded only for a fetch the queue still lists.
       if (!(await api.queued()).some((fetch) => fetch.fetchId === fetchId)) {
-        print(`Fetch ${fetchId} left the queue during the build. The pack was dropped and nothing was uploaded.`);
-        return 'left';
+        print(`Fetch ${fetchId} left the queue during the build (erased, or handed over elsewhere). The pack was dropped and nothing was uploaded.`);
+        return 'gone';
       }
       try {
         await bucket.put(key, archive);
@@ -299,14 +314,25 @@ export const fulfil = async (options: FulfilOptions): Promise<Fulfilled> => {
     }
   };
 
-  // The queue is read a page at a time, oldest first; a fetch this run already handled (and left queued) is not taken twice.
+  /** One fetch's turn. A pool read or a build folder that fails (the queue recheck, `mkdtemp`) leaves that fetch queued and the run goes on to the next, as every other trouble with a single fetch does. */
+  const turn = async (fetch: QueuedFetch): Promise<Verdict> => {
+    try {
+      return await one(fetch);
+    } catch (error) {
+      // Only the pool read and the build folder reach here, and neither one holds the buyer key.
+      print(`Fetch ${fetch.fetchId}: ${messageOf(error)} It stays queued; run again.`);
+      return 'left';
+    }
+  };
+
+  // The queue is read in full, oldest first; a fetch this run already handled (and left queued) is not taken twice.
   const taken = new Set<string>();
   for (;;) {
     const page = (await api.queued()).filter((fetch) => !taken.has(fetch.fetchId));
     if (page.length === 0) return done;
     for (const fetch of page) {
       taken.add(fetch.fetchId);
-      done[await one(fetch)] += 1;
+      done[await turn(fetch)] += 1;
     }
   }
 };
@@ -323,7 +349,7 @@ export interface Io {
 
 const VALUED = new Set(['--lots', '--terms', '--owners', '--index-key', '--server', '--token-file', '--work', '--max-heap-mb']);
 
-/** Runs the command: 0 when every queued fetch ended built, 1 when one failed or stays queued (or the pool could not be read), 2 on a usage or input error (nothing was read from the queue). */
+/** Runs the command: 0 when every queued fetch ended built or left the queue itself, 1 when one failed or stays queued (or the pool could not be read), 2 on a usage or input error (nothing was read from the queue). */
 export const main = async (argv: readonly string[], io: Io): Promise<number> => {
   const given = new Map<string, string>();
   let local = false;
@@ -376,7 +402,7 @@ export const main = async (argv: readonly string[], io: Io): Promise<number> => 
       vocabDir: io.vocabDir,
       now: io.now,
     });
-    io.print(`Fulfilled: ${String(done.built)} built, ${String(done.failed)} failed, ${String(done.left)} left queued.`);
+    io.print(`Fulfilled: ${String(done.built)} built, ${String(done.failed)} failed, ${String(done.left)} left queued, ${String(done.gone)} gone.`);
     return done.failed + done.left === 0 ? 0 : 1;
   } catch (error) {
     io.print(messageOf(error).replaceAll(token, '<token>'));
