@@ -64,6 +64,13 @@ describe('the machine key scope', () => {
   it('keeps the paid fetch routes closed to a key: each is in the table, marked for the account credential only', () => {
     const buyerRoutes = ROUTES.filter((route) => route.path.startsWith('/v1/packs/'));
     expect(buyerRoutes.map((route) => `${route.method} ${route.path} machine=${String(route.machine)}`)).toEqual(['POST /v1/packs/:priceRef/fetches machine=false']);
+    const operatorRoutes = ROUTES.filter((route) => route.path.startsWith('/v1/operator/'));
+    expect(operatorRoutes.map((route) => `${route.method} ${route.path} machine=${String(route.machine)}`)).toEqual([
+      'GET /v1/operator/fetches machine=false',
+      'POST /v1/operator/fetches/:id/built machine=false',
+      'POST /v1/operator/fetches/:id/handover machine=false',
+      'POST /v1/operator/fetches/:id/failed machine=false',
+    ]);
   });
 
   it('has a sample for every raw route, and each sample is that route', () => {

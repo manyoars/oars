@@ -235,7 +235,7 @@ export interface OperatorEnv {
   OPERATOR_TOKEN?: string;
 }
 
-const digest = async (text: string): Promise<string> => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+export const digest = async (text: string): Promise<string> => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 
 /** `GET /v1/telemetry/operator`: the operator's read, behind a bearer secret the deploy sets. It is never served to users: with no secret set the route is not configured, and any other caller is refused. */
 export const operator = async (request: Request, env: Env & OperatorEnv, now: number): Promise<Response> => {
