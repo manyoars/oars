@@ -18,6 +18,9 @@ export class BillingError extends Error {}
 /** Billing answered 410 `CUSTOMER_REVOKED`: it has refused this buyer for good, so a retry changes nothing. */
 export class BuyerRefused extends Error {}
 
+/** Billing answered 400 `CUSTOMER_REGION_NOT_SUPPORTED`: it does not take a buyer in the state named, so the same request gets the same answer. */
+export class RegionNotSupported extends Error {}
+
 /** Billing answered 409 `IDEMPOTENCY_CONFLICT`: the fetch id was already used for a different request. A retry sends the same request and gets the same answer. */
 export class IdempotencyConflict extends Error {}
 
@@ -39,7 +42,8 @@ export interface Billing {
   listings: () => Promise<Listing[]>;
   /** The customer's credits. Billing answers 200 with zeros for a customer it does not know, so that is `known: false`, never a missing customer. */
   balance: (customerRef: string) => Promise<Balance>;
-  createCustomer: (customerRef: string) => Promise<void>;
+  /** Makes the customer as a US buyer in `regionCode`, a two-letter state code, which billing needs for tax and the pool does not keep. Throws `RegionNotSupported` when billing does not take a buyer there. */
+  createCustomer: (customerRef: string, regionCode: string) => Promise<void>;
   /** An offer for the lot's prices; answers its id. */
   issueOffer: (customerRef: string, lot: string) => Promise<string>;
   /** Takes one credit under `fetchId` as the idempotency key: `consumed` on the first call and on a replay of it, `insufficient` when the balance is short (nothing taken). */
@@ -103,8 +107,10 @@ export const billingOf = (env: BillingEnv, fetcher: Fetcher = fetch): Billing | 
       if (![remaining, held, available].every((credits) => typeof credits === 'number' && Number.isSafeInteger(credits) && credits >= 0) || typeof available !== 'number' || typeof livemode !== 'boolean') throw new BillingError(`billing answered GET ${path} with no balance`);
       return { available, livemode, known: remaining !== 0 || held !== 0 || available !== 0 };
     },
-    createCustomer: async (customerRef) => {
-      const response = await call('POST', '/billing/customers', { customerRef });
+    createCustomer: async (customerRef, regionCode) => {
+      // Buyers are US only, so the country is fixed here and the state is the one thing the caller brings.
+      const response = await call('POST', '/billing/customers', { customerRef, countryCode: 'US', regionCode });
+      if (response.status === 400 && (await response.text()).includes('CUSTOMER_REGION_NOT_SUPPORTED')) throw new RegionNotSupported('billing does not take a buyer in the state named on POST /billing/customers');
       // A customer made a moment ago by another request is the customer wanted.
       if (!response.ok && response.status !== 409) throw unexpected('POST', '/billing/customers', response);
     },
