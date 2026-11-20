@@ -1,5 +1,5 @@
 // A fake of the billing API the pool sells through (`billing.ts`), for the tests: listings with lots, customers with balances, offers, and an idempotent consume. It answers the shapes the client expects and records every call, so a test can say what the pool asked and what it took.
-// The shapes are the platform's as built (census t1484): the SDK key in `X-Agent-SDK-Key`, a balance as `{customerRef, creditsRemaining, creditsHeld, creditsAvailable, livemode}` (200 with zeros for a customer it does not know), an offer as `{offerId, expiresAt}`, a consume as `{customerRef, creditsConsumed, creditsRemaining, livemode}` with 409 `INSUFFICIENT_CREDITS` for a short balance and for an unknown customer, 409 `IDEMPOTENCY_CONFLICT` for a key reused with another body, and 410 `CUSTOMER_REVOKED`.
+// The shapes are the platform's as built (census t1484): the SDK key in `X-Agent-SDK-Key`, a balance as `{customerRef, creditsRemaining, creditsHeld, creditsAvailable, livemode}` (200 with zeros for a customer it does not know), a customer as `{customerRef, countryCode, regionCode}` with 400 `CUSTOMER_REGION_NOT_SUPPORTED` unless the country is `US` and the region a two-letter state, an offer as `{offerId, expiresAt}`, a consume as `{customerRef, creditsConsumed, creditsRemaining, livemode}` with 409 `INSUFFICIENT_CREDITS` for a short balance and for an unknown customer, 409 `IDEMPOTENCY_CONFLICT` for a key reused with another body, and 410 `CUSTOMER_REVOKED`.
 // It is not billing: it knows no price and no purchase, and its one mode is the workload's, flipped by `setMode`; no call names one. It does not check that an idempotency key is a UUID.
 
 export const FAKE_BILLING_URL = 'https://billing.test/api/v1';
@@ -36,6 +36,8 @@ export interface FakeBilling {
   setMode: (mode: 'test' | 'live') => void;
   /** From now on every call naming this customer answers 410 `CUSTOMER_REVOKED`. */
   revoke: (customerRef: string) => void;
+  /** From now on a customer created in this state answers 400 `CUSTOMER_REGION_NOT_SUPPORTED`, as when the platform's region policy does not take it. */
+  refuseRegion: (regionCode: string) => void;
   /** The next consume takes its credit and then answers 503, as when the response is lost on the way back. */
   loseNextConsumeAnswer: () => void;
   /** The next call of any kind answers this status and nothing else. */
@@ -51,6 +53,7 @@ export const fakeBilling = (): FakeBilling => {
   const customers = new Set<string>();
   const balances = new Map<string, number>();
   const revoked = new Set<string>();
+  const refusedRegions = new Set<string>();
   let mode: 'test' | 'live' = 'test';
   const held = (customerRef: string): string => `${mode}:${customerRef}`;
   const offers: FakeBilling['offers'] = [];
@@ -83,6 +86,9 @@ export const fakeBilling = (): FakeBilling => {
     },
     revoke: (customerRef) => {
       revoked.add(customerRef);
+    },
+    refuseRegion: (regionCode) => {
+      refusedRegions.add(regionCode);
     },
     loseNextConsumeAnswer: () => {
       lose = true;
@@ -121,6 +127,9 @@ export const fakeBilling = (): FakeBilling => {
       }
       if (method === 'POST' && path === '/billing/customers') {
         const customerRef = String(field(body, 'customerRef'));
+        // The platform's region rule: US only, and a US customer names its state. The old body, `{customerRef}` alone, fails here.
+        const regionCode = field(body, 'regionCode');
+        if (field(body, 'countryCode') !== 'US' || typeof regionCode !== 'string' || !/^[A-Z]{2}$/.test(regionCode) || refusedRegions.has(regionCode)) return { status: 400, body: { code: 'CUSTOMER_REGION_NOT_SUPPORTED' } };
         const known = customers.has(customerRef);
         customers.add(customerRef);
         return known ? { status: 409, body: { error: 'CUSTOMER_EXISTS' } } : { status: 201, body: { customerRef } };
