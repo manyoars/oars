@@ -8,6 +8,7 @@ import { convertV4MiniflareOptions, CoreHeaders, Miniflare, ProxyOps, Request as
 import { Agent, buildConnector } from 'undici';
 import { expect } from 'vitest';
 import type { Bound, PoolDb } from './http.js';
+import { FAKE_BILLING_URL, FAKE_SDK_KEY, FAKE_WORKLOAD, fakeBilling, type FakeBilling } from './test-billing.js';
 
 export { acceptanceOf } from './test-covenant-texts.js';
 
@@ -249,6 +250,8 @@ interface StubProvider {
   /** Drops a code the stub issued, so the provider has no record of it, as after the provider's own expiry sweep. */
   forget: (deviceCode: string) => void;
   calls: StubCall[];
+  /** The billing API the pool sells through (`test-billing.ts`), answered at `FAKE_BILLING_URL`; its calls are its own and are not in `calls`. */
+  billing: FakeBilling;
   /** URLs that answer this OAuth error word, the way a provider refuses a device flow it has switched off. */
   refuse: Map<string, string>;
   /** URLs answered with an HTML 502, the way a provider's outage looks. */
@@ -268,6 +271,7 @@ const stubProvider = (): StubProvider => {
   const forbidden = new Set<string>();
   const statused = new Map<string, number>();
   const refuse = new Map<string, string>();
+  const billing = fakeBilling();
   const scripted = new Map<string, string>();
   let issued = 0;
   const device = (): { device_code: string; user_code: string; expires_in: number; interval: number } => {
@@ -290,6 +294,10 @@ const stubProvider = (): StubProvider => {
     const { origin, pathname } = new URL(request.url);
     const at = `${origin}${pathname}`;
     const body = await request.text();
+    if (origin === new URL(FAKE_BILLING_URL).origin) {
+      const answered = billing.answer(request.method, new URL(request.url), request.headers, body);
+      return json(answered.body, answered.status);
+    }
     calls.push({ url: at, body });
     if (html.has(at)) return new StubResponse('<html>Bad Gateway</html>', { status: 502, headers: { 'content-type': 'text/html' } });
     if (forbidden.has(at)) return json({ message: 'API rate limit exceeded' }, 403);
@@ -307,7 +315,7 @@ const stubProvider = (): StubProvider => {
     if (at === 'https://openidconnect.googleapis.com/v1/userinfo') return json({ sub: found.id, email: found.email, name: found.login }, status);
     return json({ error: `no stub for ${at}` }, 500);
   };
-  return { approve: (code, user) => users.set(code, user), script: (code, word) => scripted.set(code, word), forget: (code) => users.delete(code), calls, html, forbidden, statused, refuse, outbound };
+  return { approve: (code, user) => users.set(code, user), script: (code, word) => scripted.set(code, word), forget: (code) => users.delete(code), calls, billing, html, forbidden, statused, refuse, outbound };
 };
 
 export interface Answer {
@@ -329,6 +337,8 @@ export interface TestPool {
   bucket: () => Promise<TestBucket>;
   /** The raw tier's bucket, read straight from the binding: what the Worker wrote, never through a route. */
   rawBucket: () => Promise<TestBucket>;
+  /** The bucket a built pack waits in, read and written straight from the binding. */
+  packsBucket: () => Promise<TestBucket>;
   /** A request with any method and a text or byte body, for the raw tier's PUT and POST. */
   send: (path: string, init: { method: string; body?: string | Uint8Array }, token?: string, headers?: { [name: string]: string }) => Promise<RawAnswer>;
   post: (path: string, body: unknown, token?: string, headers?: { [name: string]: string }) => Promise<Answer>;
@@ -392,9 +402,9 @@ export const startPool = async (bindings: { [name: string]: string } = {}, optio
       compatibilityFlags: config.compatibilityFlags,
       d1Databases: { DB: 'pool-test' },
       // The bindings wrangler.jsonc names. Miniflare's local Analytics Engine accepts a write and keeps nothing, so a test reads what the Worker wrote to it through a fake (telemetry.test.ts).
-      r2Buckets: { TELEMETRY: 'telemetry-test', ...(options.raw === false ? {} : { RAW: 'oars-pool-raw' }) },
+      r2Buckets: { TELEMETRY: 'telemetry-test', PACKS: 'packs-test', ...(options.raw === false ? {} : { RAW: 'oars-pool-raw' }) },
       analyticsEngineDatasets: { TELEMETRY_EVENTS: { dataset: 'oars_telemetry' } },
-      bindings: { ...clientIds(config.parsed), GOOGLE_CLIENT_SECRET: TEST_GOOGLE_SECRET, PSEUDONYM_KEY: 'a-test-pseudonym-key', INGEST_HASH_KEY: 'a-test-ingest-hash-key', BUNDLE_SIGNING_KEY: key.jwk, COVENANT_VERSION: 'v1', FETCH_CAP: '1000', LOGIN_STARTS_PER_HOUR: '1000', CLEAR_FLOOR: /^[1-9]\d*$/.test(bindings.PUBLIC_FLOOR ?? '') ? (bindings.PUBLIC_FLOOR ?? '5') : '5', ...bindings },
+      bindings: { ...clientIds(config.parsed), GOOGLE_CLIENT_SECRET: TEST_GOOGLE_SECRET, PSEUDONYM_KEY: 'a-test-pseudonym-key', INGEST_HASH_KEY: 'a-test-ingest-hash-key', BILLING_URL: FAKE_BILLING_URL, BILLING_SDK_KEY: FAKE_SDK_KEY, BILLING_WORKLOAD_ID: FAKE_WORKLOAD, BUNDLE_SIGNING_KEY: key.jwk, COVENANT_VERSION: 'v1', FETCH_CAP: '1000', LOGIN_STARTS_PER_HOUR: '1000', CLEAR_FLOOR: /^[1-9]\d*$/.test(bindings.PUBLIC_FLOOR ?? '') ? (bindings.PUBLIC_FLOOR ?? '5') : '5', ...bindings },
       outboundService: stub.outbound,
     }),
   );
@@ -411,6 +421,7 @@ export const startPool = async (bindings: { [name: string]: string } = {}, optio
   }
   await database.batch(statements);
 
+  const packsBucket = async (): Promise<TestBucket> => (await miniflare.getBindings<{ PACKS: TestBucket }>()).PACKS;
   const rawBucket = async (): Promise<TestBucket> => (await miniflare.getBindings<{ RAW: TestBucket }>()).RAW;
 
   const call = async (path: string, init: { method: string; body?: string | Uint8Array }, token?: string, headers: { [name: string]: string } = {}): Promise<RawAnswer> => {
@@ -437,6 +448,7 @@ export const startPool = async (bindings: { [name: string]: string } = {}, optio
     db,
     bucket,
     rawBucket,
+    packsBucket,
     send: call,
     post,
     get,
