@@ -396,7 +396,7 @@ describe('the operator routes', () => {
       await refused(fetchId, { objectKey: `packs/${fetchId}/pack.tar` }, 422, 'object_missing');
     });
 
-    it('for a row that is not queued (409), whatever the key', async () => {
+    it('for a row that is not queued (409), whether or not PACKS holds the key', async () => {
       const { fetchId } = await queued();
       const key = await built(fetchId);
       await refused(fetchId, { objectKey: key }, 409, 'not_queued');
