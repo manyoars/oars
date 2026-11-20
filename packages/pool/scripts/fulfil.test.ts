@@ -1,8 +1,9 @@
 // The builder of paid pack fetches against a fixture store in a temp folder, a pool that exists only in this file (the three operator routes, and a record of every call), and a bucket held in memory behind a stand-in for wrangler. Nothing here reaches a real pool, bucket, or store.
 import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import type * as fsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fieldOf } from './deliver.js';
 import type { Wrangler } from './erase-wrangler.js';
 import { fulfil, main, objectKeyOf, operatorApi, PACKS_BUCKET, parseLots, wranglerBucket, type FulfilOptions } from './fulfil.js';
@@ -10,9 +11,23 @@ import { bash, edit, fixture, id, removeFixtures, type Fixture } from './real-wo
 import { buildPack, keyIdOf, PackError } from './sample-pack.js';
 import { validate } from './validate-pack.js';
 
+// `rm` of node:fs/promises passes through unless a test sets `failRemoval`, which stands for a build folder Windows will not release (EBUSY).
+const removal = vi.hoisted(() => ({ fail: false }));
+vi.mock('node:fs/promises', async (original) => {
+  const real = await original<typeof fsPromises>();
+  return {
+    ...real,
+    rm: async (...args: Parameters<typeof real.rm>) => {
+      if (removal.fail) throw new Error('EBUSY: resource busy or locked');
+      return real.rm(...args);
+    },
+  };
+});
+
 const dirs: string[] = [];
 
 afterEach(() => {
+  removal.fail = false;
   removeFixtures();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
@@ -473,6 +488,28 @@ describe('fulfil', () => {
     expect(reads[0]).toBe('GET /v1/operator/fetches?state=queued');
     expect(reads[1]).toBe(`GET /v1/operator/fetches?state=queued&cursor=${FETCH(2)}`);
     expect(consumeCalls(world)).toEqual([]);
+  });
+
+  it('reaches a newer fetch past a full page of older ones that stay queued', async () => {
+    const b = await bench();
+    const world = pool([{ ...queued(1), lot: 'lot-unlisted' }, { ...queued(2), lot: 'lot-unlisted' }, { ...queued(3), lot: 'lot-a' }]);
+    world.pageSize = 2;
+    expect(await fulfil(b.options(world))).toEqual({ built: 1, failed: 0, left: 2, gone: 0 });
+    expect(stateOf(world, 3)).toBe('built');
+  });
+
+  it('keeps a built verdict, and names the folder, when the build folder cannot be removed', async () => {
+    const b = await bench();
+    const world = pool([queued(1)]);
+    removal.fail = true;
+    expect(await fulfil(b.options(world))).toEqual({ built: 1, failed: 0, left: 0, gone: 0 });
+    expect(stateOf(world, 1)).toBe('built');
+    const text = b.log.join(' ');
+    expect(text).toContain(`Fetch ${FETCH(1)}: the build folder ${b.work}`);
+    expect(text).toContain('was not removed (EBUSY: resource busy or locked). Delete it by hand.');
+    expect(text).not.toContain('It stays queued');
+    removal.fail = false;
+    for (const name of readdirSync(b.work)) rmSync(join(b.work, name), { recursive: true, force: true });
   });
 
   it("leaves a fetch queued when the lots file has no entry named for the route's lot", async () => {

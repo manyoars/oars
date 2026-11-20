@@ -1,4 +1,4 @@
-// `npm run fulfil -w packages/pool -- --lots <file> --terms <file> --owners <file> --index-key <file> [--server <url>] [--token-file <path>] [--work <dir>] [--local]`: the operator's builder for paid pack fetches (docs/pool.md, "Paid pack fetches").
+// `npm run fulfil -w packages/pool -- --lots <file> --terms <file> --owners <file> --index-key <file> [--server <url>] [--token-file <path>] [--work <dir>] [--local] [--max-heap-mb <mb>]`: the operator's builder for paid pack fetches (docs/pool.md, "Paid pack fetches").
 // It reads the queue (`GET /v1/operator/fetches`), builds one pack per fetch under that buyer's key with `buildPack` (sample-pack.ts) from the lot's contents as they are now, checks it with `validate` (validate-pack.ts), puts it in `PACKS` as one tar archive under `packs/<fetchId>/`, and marks the fetch built.
 // It takes no credit: the hand-over (`POST /v1/operator/fetches/:id/handover`) is a separate step, and this command never calls it or billing. A failed build marks the fetch failed, which frees the buyer's credit for another start.
 // The buyer key is held in memory for the build only: it is passed to `buildPack` as a value, and never written to a file, an argument list, or a printed line.
@@ -310,7 +310,10 @@ export const fulfil = async (options: FulfilOptions): Promise<Fulfilled> => {
       print(`Fetch ${fetchId} built: lot ${lot.lot}, ${key}.`);
       return 'built';
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      // A folder that cannot be removed (a file still open on Windows) says nothing about the fetch's state, so the verdict stands and the operator is told what to delete.
+      await rm(dir, { recursive: true, force: true }).catch((error: unknown) => {
+        print(`Fetch ${fetchId}: the build folder ${dir} was not removed (${messageOf(error)}). Delete it by hand.`);
+      });
     }
   };
 
@@ -319,7 +322,7 @@ export const fulfil = async (options: FulfilOptions): Promise<Fulfilled> => {
     try {
       return await one(fetch);
     } catch (error) {
-      // Only the pool read and the build folder reach here, and neither one holds the buyer key.
+      // Only the queue recheck and the creation of the build folder reach here, and neither one holds the buyer key.
       print(`Fetch ${fetch.fetchId}: ${messageOf(error)} It stays queued; run again.`);
       return 'left';
     }
