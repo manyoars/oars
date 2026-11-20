@@ -35,12 +35,29 @@ export interface RawBucket {
   createMultipartUpload: (key: string) => Promise<RawMultipart>;
 }
 
+/** The part of an R2 binding the paid pack fetches use (`pack-fetches.ts`): `head` checks a built pack is there, `get` serves it, `delete` drops it at the end of the window. */
+export interface PacksBucket {
+  head: (key: string) => Promise<unknown>;
+  get: (key: string) => Promise<{ body: ReadableStream; size: number } | null>;
+  delete: (keys: readonly string[]) => Promise<void>;
+}
+
 /** Every value but `DB` is a binding the deploy sets, so a secret lives in the account and never in the config. Unset ones refuse the route that needs them. */
 export interface Env {
   DB: PoolDb;
   /** The raw tier's R2 bucket. Unset refuses the raw routes. */
   RAW?: RawBucket;
   PSEUDONYM_KEY?: string;
+  /** The R2 bucket a built pack waits in until its buyer downloads it (`oars-pool-packs`). Unset refuses the paid fetch routes. */
+  PACKS?: PacksBucket;
+  /** The billing gateway's API base, `https://<gateway>/api/v1`: set by the deploy, never in the repo. Unset refuses a paid fetch (503 `not_configured`). */
+  BILLING_URL?: string;
+  /** The seller workload's `aorsk_` SDK key, a Worker secret. Unset refuses a paid fetch. */
+  BILLING_SDK_KEY?: string;
+  /** The id of the seller workload the pool's DATASET listings belong to; the lot lookup reads its owner list. Unset refuses a paid fetch. */
+  BILLING_WORKLOAD_ID?: string;
+  /** `live` sells and consumes live credits; anything else, or unset, is `test`, so a pool nobody pointed at live billing never touches a live balance. */
+  BILLING_MODE?: string;
   /** The OAuth client IDs the pool starts a provider's device flow with: public, so `wrangler.jsonc` sets them as `vars`. Unset refuses that provider's login. */
   GITHUB_CLIENT_ID?: string;
   GOOGLE_CLIENT_ID?: string;
