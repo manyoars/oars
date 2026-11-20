@@ -25,6 +25,8 @@ const KEY = (n: number): string => `buyer-key-${String(n)}-5f2c81d04b`;
 interface Row {
   fetchId: string;
   priceRef: string;
+  /** What the pool recorded for the fetch; absent for a pool that sends none. */
+  lot?: string;
   buyerKey: string | null;
   state: 'queued' | 'built' | 'ready' | 'failed';
   objectKey: string | null;
@@ -40,7 +42,12 @@ interface Pool {
   fetcher: (input: string, init: RequestInit) => Promise<Response>;
   wrangler: Wrangler;
   /** Set to make the next matching request or upload fail once, as a lost answer or a cut upload would. */
-  breakOnce: { built?: boolean; failed?: boolean; remove?: boolean; put?: string };
+  /** The most rows one queue page holds (the pool's is 100). */
+  pageSize: number;
+  breakOnce: { built?: boolean; failed?: boolean; remove?: boolean; put?: string;
+    /** Fails the nth GET of the run (1 is the first queue read), once. */
+    queueRead?: number;
+  };
 }
 
 const json = (status: number, body: object): Response => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -51,6 +58,7 @@ const pool = (rows: Row[]): Pool => {
     objects: new Map(),
     calls: [],
     wrangled: [],
+    pageSize: 100,
     breakOnce: {},
     // The three routes as `pack-operator.ts` answers them; any other path is recorded and refused, so a call to the hand-over or to billing shows in `calls`.
     fetcher: (input, init) => {
@@ -59,8 +67,14 @@ const pool = (rows: Row[]): Pool => {
       world.calls.push(`${method} ${pathname}${search}`);
       if (new Headers(init.headers).get('authorization') !== `Bearer ${TOKEN}`) return Promise.resolve(json(401, { error: 'unauthorized' }));
       if (method === 'GET' && pathname === '/v1/operator/fetches') {
-        const fetches = world.rows.filter((row) => row.state === 'queued').slice(0, 100);
-        return Promise.resolve(json(200, { fetches: fetches.map((row) => ({ ...row, buyerKeyId: 'k', mode: 'test', createdAt: 1, readyAt: null, expiresAt: null })) }));
+        if (world.breakOnce.queueRead === world.calls.filter((call) => call.startsWith('GET ')).length) return Promise.reject(new Error('connection reset'));
+        // The cursor is the last fetch id of the page before: the rows after it in order, still queued.
+        const cursor = new URL(input).searchParams.get('cursor');
+        const after = cursor === null ? 0 : world.rows.findIndex((row) => row.fetchId === cursor) + 1;
+        const rest = world.rows.slice(after).filter((row) => row.state === 'queued');
+        const fetches = rest.slice(0, world.pageSize);
+        const nextCursor = rest.length > world.pageSize ? fetches.at(-1)?.fetchId : undefined;
+        return Promise.resolve(json(200, { fetches: fetches.map((row) => ({ ...row, buyerKeyId: 'k', mode: 'test', createdAt: 1, readyAt: null, expiresAt: null })), ...(nextCursor === undefined ? {} : { nextCursor }) }));
       }
       const [, fetchId, action] = /^\/v1\/operator\/fetches\/([^/]+)\/(built|failed)$/.exec(pathname) ?? [];
       const row = world.rows.find((held) => held.fetchId === fetchId);
@@ -180,7 +194,7 @@ const packField = (dir: string, field: string): unknown => fieldOf(JSON.parse(re
 const filesUnder = (dir: string): string[] => readdirSync(dir).flatMap((name) => (statSync(join(dir, name)).isDirectory() ? filesUnder(join(dir, name)) : [join(dir, name)]));
 
 /** Calls that take a credit or reach billing: the hand-over route, or any path outside the three the builder may use. */
-const consumeCalls = (world: Pool): string[] => world.calls.filter((call) => !/^(GET \/v1\/operator\/fetches\?state=queued|POST \/v1\/operator\/fetches\/[0-9a-f-]+\/(built|failed))$/.test(call));
+const consumeCalls = (world: Pool): string[] => world.calls.filter((call) => !/^(GET \/v1\/operator\/fetches\?state=queued(&cursor=[^&]*)?|POST \/v1\/operator\/fetches\/[0-9a-f-]+\/(built|failed))$/.test(call));
 
 const stateOf = (world: Pool, n: number): string | undefined => world.rows.find((row) => row.fetchId === FETCH(n))?.state;
 
@@ -207,7 +221,7 @@ describe('fulfil', () => {
     const [first = [], second = []] = packs.map((dir) => readdirSync(join(dir, 'sessions')));
     expect(first.filter((matchId) => second.includes(matchId))).toEqual([]);
     expect(consumeCalls(world)).toEqual([]);
-    expect(b.log.at(-1)).toBe('Fulfilled: 2 built, 0 failed, 0 left queued.');
+    expect(b.log.at(-1)).toBe('Fulfilled: 2 built, 0 failed, 0 left queued, 0 gone.');
   });
 
   describe('a fetch that cannot be fulfilled is marked failed, leaves no object, takes no credit, and does not stop the next fetch', () => {
@@ -225,7 +239,7 @@ describe('fulfil', () => {
       expect(await b.run(world)).toBe(1);
       settled(world);
       expect(b.log.join('\n')).toContain(`Fetch ${FETCH(1)} failed: The build did not give a valid pack: The build wrote no session.`);
-      expect(b.log.at(-1)).toBe('Fulfilled: 1 built, 1 failed, 0 left queued.');
+      expect(b.log.at(-1)).toBe('Fulfilled: 1 built, 1 failed, 0 left queued, 0 gone.');
     });
 
     it('when validate-pack refuses the pack', async () => {
@@ -238,7 +252,7 @@ describe('fulfil', () => {
         if (given.buyerKey === KEY(1)) writeFileSync(join(given.out, 'sessions', 'stray.txt'), 'x');
         return counts;
       };
-      expect(await fulfil({ ...options, build })).toEqual({ built: 1, failed: 1, left: 0 });
+      expect(await fulfil({ ...options, build })).toEqual({ built: 1, failed: 1, left: 0, gone: 0 });
       settled(world);
       expect(b.log.join('\n')).toContain('validate-pack refused the pack (1 found; first: sessions/stray.txt (file): no manifest row names it)');
       // Nothing was uploaded for the refused pack.
@@ -266,7 +280,7 @@ describe('fulfil', () => {
       const b = await bench();
       const world = pool([queued(1, 'pack-lot-empty'), queued(2)]);
       world.breakOnce.failed = true;
-      expect(await fulfil(b.options(world))).toEqual({ built: 1, failed: 0, left: 1 });
+      expect(await fulfil(b.options(world))).toEqual({ built: 1, failed: 0, left: 1, gone: 0 });
       stillQueued(world);
       expect(b.log.join('\n')).toContain(`Fetch ${FETCH(1)}: The build did not give a valid pack: The build wrote no session. It could not be marked failed`);
     });
@@ -275,7 +289,7 @@ describe('fulfil', () => {
       const b = await bench();
       const world = pool([queued(1, 'pack-lot-empty'), queued(2)]);
       world.breakOnce.remove = true;
-      expect(await fulfil(b.options(world))).toEqual({ built: 1, failed: 0, left: 1 });
+      expect(await fulfil(b.options(world))).toEqual({ built: 1, failed: 0, left: 1, gone: 0 });
       stillQueued(world);
       // The failed mark is not sent while an object might remain.
       expect(world.calls).not.toContain(`POST /v1/operator/fetches/${FETCH(1)}/failed`);
@@ -286,7 +300,7 @@ describe('fulfil', () => {
   it('leaves a queue row alone when its id is not a fetch id or it holds no buyer key: no wrangler call, no build folder', async () => {
     const b = await bench();
     const world = pool([{ ...queued(1), fetchId: '../x' }, { ...queued(2), buyerKey: null }]);
-    expect(await fulfil(b.options(world))).toEqual({ built: 0, failed: 0, left: 2 });
+    expect(await fulfil(b.options(world))).toEqual({ built: 0, failed: 0, left: 2, gone: 0 });
     expect(world.wrangled).toEqual([]);
     expect(readdirSync(b.work)).toEqual([]);
     expect(world.calls).toEqual(['GET /v1/operator/fetches?state=queued', 'GET /v1/operator/fetches?state=queued']);
@@ -302,7 +316,7 @@ describe('fulfil', () => {
     // The second run read the queue once, found nothing, and built, uploaded, and marked nothing.
     expect(world.calls.slice(calls)).toEqual(['GET /v1/operator/fetches?state=queued']);
     expect(world.wrangled).toHaveLength(wrangled);
-    expect(b.log.at(-1)).toBe('Fulfilled: 0 built, 0 failed, 0 left queued.');
+    expect(b.log.at(-1)).toBe('Fulfilled: 0 built, 0 failed, 0 left queued, 0 gone.');
   });
 
   it('a run that stopped between the upload and the built mark is finished by the next run', async () => {
@@ -314,7 +328,7 @@ describe('fulfil', () => {
     expect(world.rows[0]).toMatchObject({ state: 'queued', buyerKey: KEY(1), objectKey: null });
     expect(world.objects.has(objectKeyOf(FETCH(1)))).toBe(true);
     expect(world.calls.some((call) => call.endsWith('/failed'))).toBe(false);
-    expect(b.log.at(-1)).toBe('Fulfilled: 0 built, 0 failed, 1 left queued.');
+    expect(b.log.at(-1)).toBe('Fulfilled: 0 built, 0 failed, 1 left queued, 0 gone.');
 
     expect(await b.run(world)).toBe(0);
     expect(world.rows[0]).toMatchObject({ state: 'built', objectKey: objectKeyOf(FETCH(1)) });
@@ -349,7 +363,7 @@ describe('fulfil', () => {
       seen.push(given.out);
       return given.buyerKey === KEY(4) ? Promise.reject(new Error(`cannot build under ${given.buyerKey}`)) : options.build(given);
     };
-    expect(await fulfil({ ...options, build })).toEqual({ built: 1, failed: 3, left: 0 });
+    expect(await fulfil({ ...options, build })).toEqual({ built: 1, failed: 3, left: 0, gone: 0 });
     expect(seen).toHaveLength(4);
     expect(seen.every((out) => out.startsWith(b.work))).toBe(true);
     expect(readdirSync(b.work)).toEqual([]);
@@ -374,7 +388,7 @@ describe('fulfil', () => {
     expect(stateOf(world, 2)).toBe('built');
     expect(world.calls.some((call) => call.endsWith('/failed'))).toBe(false);
     expect(b.log.join('\n')).toContain(`no entry of the lots file lists the price pack-unknown`);
-    expect(b.log.at(-1)).toBe('Fulfilled: 1 built, 0 failed, 1 left queued.');
+    expect(b.log.at(-1)).toBe('Fulfilled: 1 built, 0 failed, 1 left queued, 0 gone.');
   });
 
   it('drops the pack and leaves the fetch queued when an objection is recorded during the build', async () => {
@@ -386,7 +400,7 @@ describe('fulfil', () => {
       appendFileSync(join(dirname(b.store.owners), 'objections.jsonl'), `${JSON.stringify({ session: id(1), received: '2026-11-20T10:00:00.000Z', scope: 'sale' })}\n`);
       return counts;
     };
-    expect(await fulfil({ ...options, build })).toEqual({ built: 0, failed: 0, left: 1 });
+    expect(await fulfil({ ...options, build })).toEqual({ built: 0, failed: 0, left: 1, gone: 0 });
     expect(stateOf(world, 1)).toBe('queued');
     expect(world.objects.size).toBe(0);
     // The next run builds under the objection: two sessions, not three.
@@ -394,20 +408,79 @@ describe('fulfil', () => {
     expect((await validate(unpacked(world.objects.get(objectKeyOf(FETCH(1))))))?.rows).toBe(2);
   });
 
-  it('uploads nothing for a fetch that left the queue during the build', async () => {
+  it('counts a fetch that left the queue during its build as gone, uploads nothing for it, and goes on', async () => {
     const b = await bench();
-    const world = pool([queued(1)]);
+    const world = pool([queued(1), queued(2)]);
     const options = b.options(world);
-    // An erasure fails the fetch while its pack is built.
+    // An erasure fails the first fetch while its pack is built.
     const build: FulfilOptions['build'] = async (given) => {
       const counts = await options.build(given);
-      Object.assign(world.rows[0] ?? {}, { state: 'failed', buyerKey: null });
+      if (given.buyerKey === KEY(1)) Object.assign(world.rows[0] ?? {}, { state: 'failed', buyerKey: null });
       return counts;
     };
-    expect(await fulfil({ ...options, build })).toEqual({ built: 0, failed: 0, left: 1 });
-    expect(world.wrangled).toEqual([]);
-    expect(world.objects.size).toBe(0);
+    expect(await fulfil({ ...options, build })).toEqual({ built: 1, failed: 0, left: 0, gone: 1 });
+    expect(world.wrangled.filter((line) => line.startsWith('r2 object put'))).toHaveLength(1);
+    expect([...world.objects.keys()]).toEqual([objectKeyOf(FETCH(2))]);
     expect(readdirSync(b.work)).toEqual([]);
+    expect(b.log.join('\n')).toContain(`Fetch ${FETCH(1)} left the queue during the build`);
+  });
+
+  it('exits 0 when the only trouble is a fetch the buyer erased mid-build', async () => {
+    const b = await bench();
+    const world = pool([queued(1)]);
+    // The pool erases the row as the buyer's erasure would, after the first queue read.
+    const erasing: Pool['fetcher'] = (input, init) => {
+      if (world.calls.filter((call) => call.startsWith('GET ')).length === 1) Object.assign(world.rows[0] ?? {}, { state: 'failed', buyerKey: null });
+      return world.fetcher(input, init);
+    };
+    const io = { runtime: b.store.runtime, print: (text: string) => void b.log.push(text), wrangler: world.wrangler, env: { OARS_POOL_OPERATOR_TOKEN: TOKEN }, fetcher: erasing };
+    expect(await main(['--lots', b.lots, '--terms', b.store.terms, '--owners', b.store.owners, '--index-key', b.indexKey, '--server', SERVER, '--work', b.work], io)).toBe(0);
+    expect(b.log.at(-1)).toBe('Fulfilled: 0 built, 0 failed, 0 left queued, 1 gone.');
+  });
+
+  it('leaves one fetch queued when the queue recheck fails, and builds the next', async () => {
+    const b = await bench();
+    const world = pool([queued(1), queued(2)]);
+    // GET 1 reads the queue; GET 2 is the first fetch's recheck.
+    world.breakOnce.queueRead = 2;
+    expect(await fulfil(b.options(world))).toEqual({ built: 1, failed: 0, left: 1, gone: 0 });
+    expect(stateOf(world, 1)).toBe('queued');
+    expect(stateOf(world, 2)).toBe('built');
+    expect(b.log.join('\n')).toContain(`Fetch ${FETCH(1)}: connection reset It stays queued; run again.`);
+    expect(readdirSync(b.work)).toEqual([]);
+    expect(world.wrangled.filter((line) => line.startsWith('r2 object put'))).toHaveLength(1);
+  });
+
+  it('leaves each fetch queued, and does not end the run, when no build folder can be made', async () => {
+    const b = await bench();
+    const world = pool([queued(1), queued(2)]);
+    const missing = join(b.work, 'absent', 'deeper');
+    expect(await fulfil({ ...b.options(world), work: missing })).toEqual({ built: 0, failed: 0, left: 2, gone: 0 });
+    expect(b.log.filter((line) => line.endsWith('It stays queued; run again.'))).toHaveLength(2);
+    expect(world.rows.map((row) => row.state)).toEqual(['queued', 'queued']);
+  });
+
+  it("reads every page of the queue and builds from the route's lot, not from the price", async () => {
+    const b = await bench();
+    // Three fetches over two pages; the second has a price of lot-a but the pool's lot is the one that builds nothing.
+    const world = pool([queued(1), { ...queued(2), lot: 'lot-empty' }, { ...queued(3), lot: 'lot-a' }]);
+    world.pageSize = 2;
+    expect(await fulfil(b.options(world))).toEqual({ built: 2, failed: 1, left: 0, gone: 0 });
+    expect(stateOf(world, 1)).toBe('built');
+    expect(stateOf(world, 2)).toBe('failed');
+    expect(stateOf(world, 3)).toBe('built');
+    const reads = world.calls.filter((call) => call.startsWith('GET '));
+    expect(reads[0]).toBe('GET /v1/operator/fetches?state=queued');
+    expect(reads[1]).toBe(`GET /v1/operator/fetches?state=queued&cursor=${FETCH(2)}`);
+    expect(consumeCalls(world)).toEqual([]);
+  });
+
+  it("leaves a fetch queued when the lots file has no entry named for the route's lot", async () => {
+    const b = await bench();
+    const world = pool([{ ...queued(1), lot: 'lot-unlisted' }, queued(2)]);
+    expect(await fulfil(b.options(world))).toEqual({ built: 1, failed: 0, left: 1, gone: 0 });
+    expect(b.log.join('\n')).toContain(`Fetch ${FETCH(1)}: no entry of the lots file is named lot-unlisted, the lot this fetch bought.`);
+    expect(stateOf(world, 1)).toBe('queued');
   });
 
   it('refuses to start without its files or a token, before the queue is read', async () => {

@@ -1,5 +1,5 @@
 // The operator's builder for paid pack fetches (docs/pool.md, "Paid pack fetches"). The command is TypeScript that imports the sample pack's build, so it is bundled with esbuild into memory and run from there, like sample-pack.mjs:
-//   npm run fulfil -w packages/pool -- --lots <file> --terms <file> --owners <file> --index-key <file> [--server <url>] [--token-file <path>] [--work <dir>] [--local]
+//   npm run fulfil -w packages/pool -- --lots <file> --terms <file> --owners <file> --index-key <file> [--server <url>] [--token-file <path>] [--work <dir>] [--local] [--max-heap-mb <mb>]
 import { execFile, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
