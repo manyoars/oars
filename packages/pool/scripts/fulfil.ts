@@ -165,11 +165,7 @@ export const wranglerBucket = (wrangler: Wrangler, bucket: string, local: boolea
       await wrangler(['r2', 'object', 'put', `${bucket}/${key}`, '--file', file, '--content-type', 'application/x-tar', where]);
     },
     remove: async (key) => {
-      try {
-        await wrangler(['r2', 'object', 'delete', `${bucket}/${key}`, where]);
-      } catch (error) {
-        if (!/does not exist/i.test(String(error))) throw error;
-      }
+      await wrangler(['r2', 'object', 'delete', `${bucket}/${key}`, where]);
     },
   };
 };

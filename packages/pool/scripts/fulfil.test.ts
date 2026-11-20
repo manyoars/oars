@@ -40,7 +40,7 @@ interface Pool {
   fetcher: (input: string, init: RequestInit) => Promise<Response>;
   wrangler: Wrangler;
   /** Set to make the next matching request or upload fail once, as a lost answer or a cut upload would. */
-  breakOnce: { built?: boolean; put?: string };
+  breakOnce: { built?: boolean; failed?: boolean; remove?: boolean; put?: string };
 }
 
 const json = (status: number, body: object): Response => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -66,6 +66,10 @@ const pool = (rows: Row[]): Pool => {
       const row = world.rows.find((held) => held.fetchId === fetchId);
       if (method !== 'POST' || row === undefined) return Promise.resolve(json(404, { error: 'not_found' }));
       if (action === 'failed') {
+        if (world.breakOnce.failed === true) {
+          world.breakOnce.failed = false;
+          return Promise.resolve(json(500, { error: 'internal' }));
+        }
         if (row.objectKey !== null) world.objects.delete(row.objectKey);
         Object.assign(row, { state: 'failed', buyerKey: null, objectKey: null });
         return Promise.resolve(json(200, { fetchId, state: 'failed' }));
@@ -98,6 +102,10 @@ const pool = (rows: Row[]): Pool => {
         return Promise.resolve('');
       }
       if (verb === 'delete') {
+        if (world.breakOnce.remove === true) {
+          world.breakOnce.remove = false;
+          return Promise.reject(new Error('bucket unreachable'));
+        }
         world.objects.delete(key);
         return Promise.resolve('');
       }
@@ -245,6 +253,44 @@ describe('fulfil', () => {
       settled(world);
       expect(b.log.join('\n')).toContain(`Fetch ${FETCH(1)} failed: The upload failed: upload interrupted`);
     });
+  });
+
+  describe('a failure that cannot be recorded leaves the fetch queued for the next run, takes no credit, and does not stop the next fetch', () => {
+    const stillQueued = (world: Pool): void => {
+      expect(stateOf(world, 1)).toBe('queued');
+      expect(stateOf(world, 2)).toBe('built');
+      expect(consumeCalls(world)).toEqual([]);
+    };
+
+    it('when the pool refuses the failed mark', async () => {
+      const b = await bench();
+      const world = pool([queued(1, 'pack-lot-empty'), queued(2)]);
+      world.breakOnce.failed = true;
+      expect(await fulfil(b.options(world))).toEqual({ built: 1, failed: 0, left: 1 });
+      stillQueued(world);
+      expect(b.log.join('\n')).toContain(`Fetch ${FETCH(1)}: The build did not give a valid pack: The build wrote no session. It could not be marked failed`);
+    });
+
+    it('when the bucket refuses the delete', async () => {
+      const b = await bench();
+      const world = pool([queued(1, 'pack-lot-empty'), queued(2)]);
+      world.breakOnce.remove = true;
+      expect(await fulfil(b.options(world))).toEqual({ built: 1, failed: 0, left: 1 });
+      stillQueued(world);
+      // The failed mark is not sent while an object might remain.
+      expect(world.calls).not.toContain(`POST /v1/operator/fetches/${FETCH(1)}/failed`);
+      expect(b.log.join('\n')).toContain('It could not be marked failed (bucket unreachable), so it stays queued.');
+    });
+  });
+
+  it('leaves a queue row alone when its id is not a fetch id or it holds no buyer key: no wrangler call, no build folder', async () => {
+    const b = await bench();
+    const world = pool([{ ...queued(1), fetchId: '../x' }, { ...queued(2), buyerKey: null }]);
+    expect(await fulfil(b.options(world))).toEqual({ built: 0, failed: 0, left: 2 });
+    expect(world.wrangled).toEqual([]);
+    expect(readdirSync(b.work)).toEqual([]);
+    expect(world.calls).toEqual(['GET /v1/operator/fetches?state=queued', 'GET /v1/operator/fetches?state=queued']);
+    expect(world.rows.map((row) => row.state)).toEqual(['queued', 'queued']);
   });
 
   it('a fetch already built is skipped by the next run', async () => {
