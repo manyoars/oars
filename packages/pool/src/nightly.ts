@@ -1,6 +1,7 @@
-// The nightly cron's one entry point (`wrangler.jsonc`, `worker.ts`): the telemetry rollup the fleet read comes from, then the retention sweeps, then the erasure of raw copies whose yes was withdrawn. It reads the telemetry record and writes the rollup table, and drops expired telemetry batches and
+// The nightly cron's one entry point (`wrangler.jsonc`, `worker.ts`): the telemetry rollup the fleet read comes from, then the retention sweeps, then the deletion of handed-over packs past their seven days, then the erasure of raw copies whose yes was withdrawn. It reads the telemetry record and writes the rollup table, and drops expired telemetry batches and
 // expired rows of the pool's own bounds. It names no ledger table and no raw state (`ledger.test.ts` and `raw-serves-nothing.test.ts` hold it to that): the raw sweep is `raw.ts`'s.
 import type { Env } from './http.js';
+import { sweepPacks } from './pack-operator.js';
 import { SWEEP_PAGE_CALLS, sweepWithdrawnRaw } from './raw.js';
 import { budgetAfter, FALLBACK_BUDGET, sweepRecord, sweepRows, type SweepEnv } from './retention.js';
 import { rollupRecent, type RollupEnv } from './telemetry-rollup.js';
@@ -23,8 +24,13 @@ export const nightly = async (env: Env & RollupEnv & SweepEnv, now: number): Pro
       try {
         await sweepRecord(env, now, budget);
       } finally {
-        // Last, and apart from the budget the record's sweep takes: `RESERVED_CALLS` already holds back the raw sweep's pages. A withdrawal's erasure is not delayed by a night the rollup used up.
-        await sweepWithdrawnRaw(env, now, SWEEP_RAW_CALLS);
+        // A handed-over pack is deleted once its seven days are over. Three calls whatever the backlog (inside the margin `RESERVED_CALLS` holds back), and ahead of the raw sweep, which stays last and keeps the calls it was sized for.
+        try {
+          await sweepPacks(env, now);
+        } finally {
+          // Last, and apart from the budget the record's sweep takes: `RESERVED_CALLS` already holds back the raw sweep's pages. A withdrawal's erasure is not delayed by a night the rollup used up.
+          await sweepWithdrawnRaw(env, now, SWEEP_RAW_CALLS);
+        }
       }
     }
   }

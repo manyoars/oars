@@ -19,10 +19,12 @@
     "GITHUB_CLIENT_ID": "Ov23liKTHzJPQeVimbnO",
     "GOOGLE_CLIENT_ID": "146886627173-pcmp8t0qg6p4n0t4cnr4236oit43eudn.apps.googleusercontent.com"
   },
+  // Paid pack fetches (docs/pool.md, "Paid pack fetches") read billing through four bindings the deploy sets and the config does not hold: `BILLING_URL` and `BILLING_WORKLOAD_ID` (plain variables, deploy-specific), `BILLING_SDK_KEY` (a Worker secret, the seller workload's key, declared by name only), and `BILLING_MODE` (`live` to sell for real; unset is `test`). The built packs wait in the `PACKS` bucket below.
   "d1_databases": [{ "binding": "DB", "database_name": "oars-pool", "migrations_dir": "migrations" }],
   "r2_buckets": [
     { "binding": "RAW", "bucket_name": "oars-pool-raw" },
-    { "binding": "TELEMETRY", "bucket_name": "oars-telemetry" }
+    { "binding": "TELEMETRY", "bucket_name": "oars-telemetry" },
+    { "binding": "PACKS", "bucket_name": "oars-pool-packs" }
   ],
   "analytics_engine_datasets": [{ "binding": "TELEMETRY_EVENTS", "dataset": "oars_telemetry" }],
   // Once a night: roll the telemetry record up into the table the fleet read comes from (docs/pool.md, "Telemetry rollup").

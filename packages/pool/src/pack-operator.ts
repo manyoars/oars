@@ -1,7 +1,7 @@
 // Paid pack fetches, the operator's side (K2 spec section 2, steps 4 and 5): the queue the builder reads, the mark that a pack is built, and the hand-over that takes the buyer's credit. Every route is behind `OPERATOR_TOKEN`, as the telemetry operator read is.
 // The credit is taken once, at hand-over, under the fetch id as billing's idempotency key: a short balance leaves the fetch unready and takes nothing, and a retry after a lost answer finds the credit taken and marks the fetch ready.
 import { BillingError, billingOf, customerRefOf } from './billing.js';
-import { answer, bodyOf, bound, fieldOf, notConfigured, refuse, textField, type Env } from './http.js';
+import { answer, bodyOf, bound, fieldOf, notConfigured, refuse, textField, type Env, type PacksBucket } from './http.js';
 import { PACK_WINDOW_MS, UNSPENT } from './pack-fetches.js';
 import { digest, type OperatorEnv } from './telemetry-fleet.js';
 
@@ -127,7 +127,7 @@ export const markFailed = async (request: Request, env: OperatorBindings, fetchI
 };
 
 /** The nightly sweep: deletes the packs whose seven days are over and drops their keys from the rows. The row stays, as the hand-over record. Answers how many it deleted; an unbound bucket sweeps nothing. */
-export const sweepPacks = async (env: Env, now: number): Promise<number> => {
+export const sweepPacks = async (env: { DB: Env['DB']; PACKS?: Pick<PacksBucket, 'delete'> }, now: number): Promise<number> => {
   const bucket = env.PACKS;
   if (bucket === undefined) return 0;
   const { results } = await env.DB.prepare("SELECT fetch_id, object_key FROM pack_fetches WHERE state = 'ready' AND expires_at <= ? AND object_key IS NOT NULL ORDER BY expires_at LIMIT ?").bind(now, SWEEP_PACKS).all();

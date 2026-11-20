@@ -26,10 +26,11 @@ describe('wrangler.jsonc', () => {
     expect(databases).toEqual([{ binding: 'DB', database_name: 'oars-pool', migrations_dir: 'migrations' }]);
   });
 
-  it('binds the raw tier, the telemetry record, and the index by name, with no account or resource id', () => {
+  it('binds the raw tier, the telemetry record, the built packs, and the index by name, with no account or resource id', () => {
     expect(fieldOf(parsed, 'r2_buckets')).toEqual([
       { binding: 'RAW', bucket_name: 'oars-pool-raw' },
-      { binding: 'TELEMETRY', bucket_name: 'oars-telemetry' }
+      { binding: 'TELEMETRY', bucket_name: 'oars-telemetry' },
+      { binding: 'PACKS', bucket_name: 'oars-pool-packs' }
     ]);
     expect(fieldOf(parsed, 'analytics_engine_datasets')).toEqual([{ binding: 'TELEMETRY_EVENTS', dataset: 'oars_telemetry' }]);
   });
@@ -43,5 +44,7 @@ describe('wrangler.jsonc', () => {
     for (const binding of ['BUNDLE_SIGNING_KEY', 'PSEUDONYM_KEY', 'COVENANT_VERSION']) expect(text).not.toContain(binding);
     // The secret is named in a comment for the reader and is no key or value of the config itself.
     expect(JSON.stringify(parsed)).not.toContain('GOOGLE_CLIENT_SECRET');
+    // The billing key is a secret and its URL and workload are the deploy's: none is a plain variable here, and the vars the config does hold stay public.
+    for (const name of ['BILLING_SDK_KEY', 'BILLING_URL', 'BILLING_WORKLOAD_ID', 'BILLING_MODE']) expect(JSON.stringify(parsed), name).not.toContain(name);
   });
 });
