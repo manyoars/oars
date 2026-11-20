@@ -27,18 +27,21 @@ interface Held {
   account: string;
   lot: string;
   state: string;
+  /** The billing mode the fetch was queued in (what the balance reported at its start). */
+  mode: string;
   objectKey: string | undefined;
   expiresAt: number | undefined;
 }
 
 const heldOf = async (env: Env, fetchId: string): Promise<Held | undefined> => {
-  const row = await env.DB.prepare('SELECT account, lot, state, object_key, expires_at FROM pack_fetches WHERE fetch_id = ?').bind(fetchId).first();
+  const row = await env.DB.prepare('SELECT account, lot, state, mode, object_key, expires_at FROM pack_fetches WHERE fetch_id = ?').bind(fetchId).first();
   const account = textField(row, 'account');
   const lot = textField(row, 'lot');
   const state = textField(row, 'state');
-  if (account === undefined || lot === undefined || state === undefined) return undefined;
+  const mode = textField(row, 'mode');
+  if (account === undefined || lot === undefined || state === undefined || mode === undefined) return undefined;
   const expiresAt = fieldOf(row, 'expires_at');
-  return { account, lot, state, objectKey: textField(row, 'object_key'), expiresAt: typeof expiresAt === 'number' ? expiresAt : undefined };
+  return { account, lot, state, mode, objectKey: textField(row, 'object_key'), expiresAt: typeof expiresAt === 'number' ? expiresAt : undefined };
 };
 
 const noSuchFetch = (): Response => refuse(404, 'not_found', 'No such fetch.');
@@ -98,7 +101,10 @@ export const handOver = async (request: Request, env: OperatorBindings, fetchId:
   const billing = billingOf(env);
   if ('missing' in billing) return notConfigured(billing.missing);
   try {
-    if ((await billing.consume(customerRefOf(pseudonymKey, held.account, held.lot), fetchId)) === 'insufficient') return refuse(409, 'insufficient_credits', 'The buyer has no credit left for this lot (refunded or spent elsewhere). The fetch stays built and nothing was taken.');
+    const customerRef = customerRefOf(pseudonymKey, held.account, held.lot);
+    // Billing's mode is the workload's, and a call cannot name one, so a flip since the fetch was queued is read here: a credit of one mode never pays for a fetch queued in the other. This narrows the window (a flip between this read and the consume is not seen); only a pin on the platform's side closes it.
+    if ((await billing.balance(customerRef)).livemode !== (held.mode === 'live')) return refuse(409, 'mode_changed', `Billing is in another mode than the one this fetch was queued in (${held.mode}). The fetch stays built and nothing was taken; hand it over when billing is back in that mode.`);
+    if ((await billing.consume(customerRef, fetchId)) === 'insufficient') return refuse(409, 'insufficient_credits', 'The buyer has no credit left for this lot (refunded or spent elsewhere). The fetch stays built and nothing was taken.');
   } catch (error) {
     if (error instanceof BuyerRefused) return refuse(409, 'buyer_refused', 'Billing has refused this buyer (revoked). The fetch stays built and nothing was taken; a retry changes nothing.');
     if (error instanceof IdempotencyConflict) return refuse(409, 'idempotency_conflict', 'Billing already holds this fetch id for a different request. The fetch stays built and nothing was taken; a retry changes nothing, so look into it.');

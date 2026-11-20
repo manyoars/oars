@@ -394,6 +394,27 @@ describe('a buyer billing has revoked', () => {
   });
 });
 
+describe('a mode flip between the queue and the hand-over', () => {
+  it('is 409 mode_changed, takes nothing, leaves the fetch built, and hands over once billing is back in the fetch\'s mode', async () => {
+    const { fetchId, ref } = await queued();
+    await built(fetchId);
+    const before = consumes().filter((call) => call.key === fetchId).length;
+    pool.stub.billing.setMode('live');
+    try {
+      pool.stub.billing.credit(ref, 1);
+      const answered = await operate('POST', `/v1/operator/fetches/${fetchId}/handover`);
+      expect({ status: answered.status, error: fieldOf(answered.json, 'error') }).toEqual({ status: 409, error: 'mode_changed' });
+      expect((await fetchOf(fetchId)).state).toBe('built');
+      expect(consumes().filter((call) => call.key === fetchId)).toHaveLength(before);
+      expect(pool.stub.billing.balanceOf(ref)).toBe(1);
+    } finally {
+      pool.stub.billing.setMode('test');
+    }
+    expect((await operate('POST', `/v1/operator/fetches/${fetchId}/handover`)).status).toBe(200);
+    expect(pool.stub.billing.balanceOf(ref)).toBe(0);
+  });
+});
+
 describe('a buyer billing has revoked since the fetch was queued', () => {
   it('is 409 buyer_refused at hand-over, leaves the fetch built, and is not a retry', async () => {
     const { fetchId, ref } = await queued();
