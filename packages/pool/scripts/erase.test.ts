@@ -873,7 +873,10 @@ describe('erasing an account that bought packs (t1483, covenant 6.6(d))', () => 
       expect(JSON.stringify(one)).not.toContain(account);
       expect(JSON.stringify(one)).not.toContain(BUYER_KEY);
       expect(fieldOf(one, 'buyer_key')).toBeNull();
-      expect({ price: fieldOf(one, 'price_ref'), lot: fieldOf(one, 'lot'), keyId: fieldOf(one, 'buyer_key_id'), mode: fieldOf(one, 'mode') }).toEqual({ price: 'price-a1', lot: 'lot-a', keyId: 'keyid0123456789ab', mode: 'test' });
+      expect({ price: fieldOf(one, 'price_ref'), lot: fieldOf(one, 'lot'), mode: fieldOf(one, 'mode') }).toEqual({ price: 'price-a1', lot: 'lot-a', mode: 'test' });
+      // The key id is the buyer's own key's hash prefix, so it would join every row to the buyer: each erased row takes a fresh random one.
+      expect(String(fieldOf(one, 'buyer_key_id'))).toMatch(/^[0-9a-f]{16}$/);
+      expect(fieldOf(one, 'buyer_key_id')).not.toBe('keyid0123456789ab');
       // Every kept time is a Monday midnight (UTC).
       for (const column of ['created_at', 'ready_at', 'expires_at']) {
         const time = fieldOf(one, column);
@@ -884,6 +887,8 @@ describe('erasing an account that bought packs (t1483, covenant 6.6(d))', () => 
     const byId = (id: string | undefined): unknown => mine.find((one) => fieldOf(one, 'fetch_id') === id);
     expect(ids.map((id) => fieldOf(byId(id), 'state'))).toEqual(['failed', 'failed', 'ready', 'ready']);
     expect(byId(ids[2])).toMatchObject({ created_at: Date.UTC(2026, 10, 2) });
+    // Two rows of one buyer carry different ids, so no id joins them.
+    expect(new Set(mine.map((one) => fieldOf(one, 'buyer_key_id'))).size).toBe(mine.length);
     expect(await all('SELECT account, buyer_key, state FROM pack_fetches WHERE account = ?', other)).toEqual([{ account: other, buyer_key: null, state: 'ready' }]);
   });
 
