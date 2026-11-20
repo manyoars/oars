@@ -1,4 +1,4 @@
-// Paid pack fetches against the fake billing API, under Miniflare's workerd: the buyer's start route here, and the operator and download routes in the sections below as they land.
+// Paid pack fetches against the fake billing API, under Miniflare's workerd: the buyer's start route, the operator's queue and hand-over, and the buyer's download.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { customerRefOf } from './billing.js';
 import { buyerKeyIdOf } from './pack-fetches.js';
@@ -6,6 +6,8 @@ import { anyNumber, anyText, fieldOf, startPool, stubUser, textOf, type TestPool
 
 const PSEUDONYM_KEY = 'a-test-pseudonym-key';
 const BUYER_KEY = 'b'.repeat(64);
+const OPERATOR = 'operator-secret';
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 let pool: TestPool;
 let next = 9000;
@@ -22,7 +24,7 @@ const start = (priceRef: string, token: string | undefined, body: unknown = { bu
 const rows = async (account: string): Promise<readonly unknown[]> => (await (await pool.db()).prepare('SELECT * FROM pack_fetches WHERE account = ? ORDER BY created_at, fetch_id').bind(account).all()).results;
 
 beforeAll(async () => {
-  pool = await startPool();
+  pool = await startPool({ OPERATOR_TOKEN: OPERATOR });
   const { billing } = pool.stub;
   billing.addListing('price-a1', 'lot-a');
   billing.addListing('price-a2', 'lot-a');
@@ -158,4 +160,186 @@ describe('a pool with no billing bound', () => {
       await bare.dispose();
     }
   }, 60_000);
+});
+
+/** A fetch the buyer has queued under one credit. */
+const queued = async (credits = 1): Promise<{ token: string; account: string; ref: string; fetchId: string }> => {
+  const held = await buyer();
+  pool.stub.billing.credit(held.ref('lot-a'), credits);
+  const fetchId = textOf((await start('price-a1', held.token)).json, 'fetchId');
+  return { token: held.token, account: held.account, ref: held.ref('lot-a'), fetchId };
+};
+
+const operate = (method: 'GET' | 'POST', path: string, body: unknown = {}, token: string | null = OPERATOR): ReturnType<TestPool['send']> => pool.send(path, method === 'GET' ? { method } : { method, body: JSON.stringify(body) }, token ?? undefined, { 'content-type': 'application/json' });
+
+const fetchOf = async (fetchId: string): Promise<{ [column: string]: unknown }> => {
+  const row = await (await pool.db()).prepare('SELECT * FROM pack_fetches WHERE fetch_id = ?').bind(fetchId).first();
+  if (typeof row !== 'object' || row === null) throw new Error(`no fetch ${fetchId}`);
+  return Object.fromEntries(Object.entries(row));
+};
+
+/** Puts a pack in PACKS and marks the fetch built under it. */
+const built = async (fetchId: string): Promise<string> => {
+  const key = `packs/${fetchId}/pack.tar`;
+  await (await pool.packsBucket()).put(key, `pack for ${fetchId}`);
+  expect((await operate('POST', `/v1/operator/fetches/${fetchId}/built`, { objectKey: key })).status).toBe(200);
+  return key;
+};
+
+describe('the operator routes', () => {
+  it('answer only the operator: 401 with no token or a wrong one, for every route', async () => {
+    const { fetchId } = await queued();
+    for (const token of [null, 'wrong']) {
+      for (const [method, path] of [['GET', '/v1/operator/fetches'], ['POST', `/v1/operator/fetches/${fetchId}/built`], ['POST', `/v1/operator/fetches/${fetchId}/handover`], ['POST', `/v1/operator/fetches/${fetchId}/failed`]] as const) {
+        const answered = await operate(method, path, {}, token);
+        expect({ token, path, status: answered.status, error: fieldOf(answered.json, 'error') }).toEqual({ token, path, status: 401, error: 'unauthorized' });
+      }
+    }
+    expect((await fetchOf(fetchId)).state).toBe('queued');
+  });
+
+  it('are 503 not_configured on a pool with no OPERATOR_TOKEN', async () => {
+    const bare = await startPool({ OPERATOR_TOKEN: '' });
+    try {
+      const answered = await bare.send('/v1/operator/fetches', { method: 'GET' }, 'anything');
+      expect({ status: answered.status, error: fieldOf(answered.json, 'error') }).toEqual({ status: 503, error: 'not_configured' });
+    } finally {
+      await bare.dispose();
+    }
+  }, 60_000);
+
+  it('list the queue oldest first with the buyer key the builder builds under, and a state on request', async () => {
+    const first = await queued();
+    const second = await queued();
+    const listed = fieldOf((await operate('GET', '/v1/operator/fetches')).json, 'fetches');
+    const mine = Array.isArray(listed) ? listed.filter((entry) => [first.fetchId, second.fetchId].includes(textOf(entry, 'fetchId'))) : [];
+    expect(mine.map((entry) => textOf(entry, 'fetchId')).sort()).toEqual([first.fetchId, second.fetchId].sort());
+    const stamps = Array.isArray(listed) ? listed.map((entry) => Number(fieldOf(entry, 'createdAt'))) : [];
+    expect(stamps).toEqual([...stamps].sort((a, b) => a - b));
+    expect(mine.find((entry) => textOf(entry, 'fetchId') === first.fetchId)).toEqual({ fetchId: first.fetchId, priceRef: 'price-a1', buyerKeyId: buyerKeyIdOf(BUYER_KEY), buyerKey: BUYER_KEY, mode: 'test', state: 'queued', objectKey: null, createdAt: anyNumber(), readyAt: null, expiresAt: null });
+    await built(first.fetchId);
+    const afterwards = fieldOf((await operate('GET', '/v1/operator/fetches?state=built')).json, 'fetches');
+    expect(Array.isArray(afterwards) ? afterwards.find((entry) => textOf(entry, 'fetchId') === first.fetchId) : undefined).toMatchObject({ state: 'built', buyerKey: null, objectKey: `packs/${first.fetchId}/pack.tar` });
+    const stillQueued = fieldOf((await operate('GET', '/v1/operator/fetches')).json, 'fetches');
+    expect(Array.isArray(stillQueued) ? stillQueued.map((entry) => textOf(entry, 'fetchId')) : []).not.toContain(first.fetchId);
+    expect((await operate('GET', '/v1/operator/fetches?state=bogus')).status).toBe(400);
+  });
+
+  it('mark a pack built only under its own prefix, only when PACKS holds it, and only once', async () => {
+    const { fetchId } = await queued();
+    const other = await queued();
+    const path = `/v1/operator/fetches/${fetchId}/built`;
+    for (const body of [{}, { objectKey: 'pack.tar' }, { objectKey: `packs/${other.fetchId}/pack.tar` }]) expect({ body, status: (await operate('POST', path, body)).status }).toEqual({ body, status: 400 });
+    const absent = await operate('POST', path, { objectKey: `packs/${fetchId}/pack.tar` });
+    expect({ status: absent.status, error: fieldOf(absent.json, 'error') }).toEqual({ status: 422, error: 'object_missing' });
+    expect((await fetchOf(fetchId)).state).toBe('queued');
+    const key = await built(fetchId);
+    expect(await fetchOf(fetchId)).toMatchObject({ state: 'built', object_key: key, buyer_key: null, buyer_key_id: buyerKeyIdOf(BUYER_KEY) });
+    expect(fieldOf((await operate('POST', path, { objectKey: key })).json, 'error')).toBe('not_queued');
+    expect((await operate('POST', '/v1/operator/fetches/no-such-fetch/built', { objectKey: 'packs/no-such-fetch/p' })).status).toBe(404);
+  });
+
+  it('hand over a built pack by taking one credit under the fetch id, and keep the record', async () => {
+    const { fetchId, ref, account } = await queued(2);
+    await built(fetchId);
+    const before = Date.now();
+    const answered = await operate('POST', `/v1/operator/fetches/${fetchId}/handover`);
+    expect(answered.status).toBe(200);
+    expect(answered.json).toEqual({ fetchId, state: 'ready', expiresAt: anyNumber() });
+    expect(pool.stub.billing.balanceOf(ref)).toBe(1);
+    expect(pool.stub.billing.taken.get(ref)).toEqual([fetchId]);
+    const row = await fetchOf(fetchId);
+    expect(row).toMatchObject({ state: 'ready', account, price_ref: 'price-a1', buyer_key_id: buyerKeyIdOf(BUYER_KEY), buyer_key: null });
+    expect(Number(row['ready_at'])).toBeGreaterThanOrEqual(before);
+    expect(Number(row['expires_at'])).toBe(Number(row['ready_at']) + WEEK_MS);
+    expect(pool.stub.billing.calls.at(-1)?.idempotencyKey).toBe(fetchId);
+  });
+
+  it('hand over a queued fetch to nobody: 409 not_built, nothing taken', async () => {
+    const { fetchId, ref } = await queued();
+    const answered = await operate('POST', `/v1/operator/fetches/${fetchId}/handover`);
+    expect({ status: answered.status, error: fieldOf(answered.json, 'error') }).toEqual({ status: 409, error: 'not_built' });
+    expect(pool.stub.billing.balanceOf(ref)).toBe(1);
+    expect((await operate('POST', '/v1/operator/fetches/no-such-fetch/handover')).status).toBe(404);
+  });
+
+  it('leave the fetch built and take nothing on a short balance, and hand it over once the credit is back', async () => {
+    const { fetchId, ref } = await queued();
+    await built(fetchId);
+    // A refund or a lost dispute takes the credit between the start and the hand-over.
+    pool.stub.billing.credit(ref, -1);
+    const short = await operate('POST', `/v1/operator/fetches/${fetchId}/handover`);
+    expect({ status: short.status, error: fieldOf(short.json, 'error') }).toEqual({ status: 409, error: 'insufficient_credits' });
+    expect(await fetchOf(fetchId)).toMatchObject({ state: 'built', ready_at: null, expires_at: null });
+    expect(pool.stub.billing.taken.has(ref)).toBe(false);
+    pool.stub.billing.credit(ref, 1);
+    expect((await operate('POST', `/v1/operator/fetches/${fetchId}/handover`)).status).toBe(200);
+    expect(pool.stub.billing.balanceOf(ref)).toBe(0);
+  });
+
+  it('end ready with one credit taken when the answer was lost and the hand-over is retried', async () => {
+    const { fetchId, ref } = await queued();
+    await built(fetchId);
+    pool.stub.billing.loseNextConsumeAnswer();
+    const lost = await operate('POST', `/v1/operator/fetches/${fetchId}/handover`);
+    expect({ status: lost.status, error: fieldOf(lost.json, 'error') }).toEqual({ status: 502, error: 'billing_unavailable' });
+    expect((await fetchOf(fetchId)).state).toBe('built');
+    expect((await operate('POST', `/v1/operator/fetches/${fetchId}/handover`)).status).toBe(200);
+    expect((await fetchOf(fetchId)).state).toBe('ready');
+    expect(pool.stub.billing.balanceOf(ref)).toBe(0);
+    expect(pool.stub.billing.taken.get(ref)).toEqual([fetchId]);
+  });
+
+  it('answer a hand-over of a ready fetch as it stands, without asking billing again', async () => {
+    const { fetchId } = await queued();
+    await built(fetchId);
+    const first = await operate('POST', `/v1/operator/fetches/${fetchId}/handover`);
+    const calls = pool.stub.billing.calls.length;
+    const again = await operate('POST', `/v1/operator/fetches/${fetchId}/handover`);
+    expect(again.json).toEqual(first.json);
+    expect(pool.stub.billing.calls.length).toBe(calls);
+  });
+
+  it('hand a fetch over once when two hand-overs arrive together', async () => {
+    const { fetchId, ref } = await queued();
+    await built(fetchId);
+    const both = await Promise.all([operate('POST', `/v1/operator/fetches/${fetchId}/handover`), operate('POST', `/v1/operator/fetches/${fetchId}/handover`)]);
+    expect(both.map((answered) => answered.status)).toEqual([200, 200]);
+    expect(pool.stub.billing.taken.get(ref)).toEqual([fetchId]);
+  });
+
+  it('is 502 when billing is down at the hand-over, and leaves the fetch built', async () => {
+    const { fetchId } = await queued();
+    await built(fetchId);
+    pool.stub.billing.failNext(500);
+    expect((await operate('POST', `/v1/operator/fetches/${fetchId}/handover`)).status).toBe(502);
+    expect((await fetchOf(fetchId)).state).toBe('built');
+  });
+
+  it('mark a failed build without taking a credit, drop the key and any pack, and free the buyer to start again', async () => {
+    const { fetchId, ref, token } = await queued();
+    const key = await built(fetchId);
+    const answered = await operate('POST', `/v1/operator/fetches/${fetchId}/failed`);
+    expect(answered.json).toEqual({ fetchId, state: 'failed' });
+    expect(await fetchOf(fetchId)).toMatchObject({ state: 'failed', buyer_key: null, object_key: null });
+    expect(await (await pool.packsBucket()).get(key)).toBeNull();
+    expect(pool.stub.billing.balanceOf(ref)).toBe(1);
+    expect(pool.stub.billing.taken.has(ref)).toBe(false);
+    // The credit is still the buyer's, and the failed fetch no longer holds it.
+    expect((await start('price-a1', token)).status).toBe(202);
+    expect((await operate('POST', `/v1/operator/fetches/${fetchId}/failed`)).json).toEqual({ fetchId, state: 'failed' });
+    expect((await operate('POST', `/v1/operator/fetches/${fetchId}/handover`)).status).toBe(409);
+  });
+
+  it('mark a queued fetch failed, and refuse to fail one already handed over', async () => {
+    const waiting = await queued();
+    expect((await operate('POST', `/v1/operator/fetches/${waiting.fetchId}/failed`)).status).toBe(200);
+    const done = await queued();
+    await built(done.fetchId);
+    await operate('POST', `/v1/operator/fetches/${done.fetchId}/handover`);
+    const refused = await operate('POST', `/v1/operator/fetches/${done.fetchId}/failed`);
+    expect({ status: refused.status, error: fieldOf(refused.json, 'error') }).toEqual({ status: 409, error: 'already_ready' });
+    expect((await fetchOf(done.fetchId)).state).toBe('ready');
+    expect((await operate('POST', '/v1/operator/fetches/no-such-fetch/failed')).status).toBe(404);
+  });
 });
