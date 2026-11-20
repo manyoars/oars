@@ -7,6 +7,7 @@ import { exportPage, exportRaw } from './export.js';
 import { makeInvite, redeemInvite, viewMe } from './invites.js';
 import { countryOf, covenantAccept, covenantNotAccepted, covenantStatus, depositsClosed, hasAccepted } from './covenant.js';
 import { answer, bound, brake, notConfigured, refuse, type Env } from './http.js';
+import { startFetch } from './pack-fetches.js';
 import { receivePart } from './parts.js';
 import { heldBy, recount, repoKeysOf, signalStatements } from './cluster-store.js';
 import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf, shapeOf, weekStatements } from './ingest.js';
@@ -196,6 +197,8 @@ export const ROUTES: readonly Route[] = [
   { method: 'POST', path: '/v1/clubs/join', machine: false, handle: joinClub },
   { method: 'GET', path: '/v1/clubs/:id', machine: false, handle: (request, env, [id]) => viewClub(request, env, decoded(id ?? '')) },
   { method: 'DELETE', path: '/v1/clubs/:id/me', machine: false, handle: (request, env, [id]) => leaveClub(request, env, decoded(id ?? '')) },
+  // Paid pack fetches (pack-fetches.ts): the account credential and its buyer key. A machine key deposits and does nothing else, so both buyer routes are closed to it.
+  { method: 'POST', path: '/v1/packs/:priceRef/fetches', machine: false, handle: (request, env, [priceRef]) => startFetch(request, env, decoded(priceRef ?? '')) },
   { method: 'GET', path: '/v1/covenant', machine: true, handle: (request, env) => covenantStatus(request, env) },
   // The account takes its raw yes back (GDPR Article 7(3)). Account-only: a machine key never speaks for a person's consent.
   { method: 'DELETE', path: '/v1/consent/raw', machine: false, handle: withdrawRawConsent },
