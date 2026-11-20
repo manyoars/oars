@@ -1,5 +1,5 @@
 // The operator's erasure against a local pool under Miniflare: each kind leaves a tombstone, the same content is refused when it comes back, an audit row holds no content, and the aggregates keep their counts.
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { admittedNative, bucketOf, isHarness, PACKAGE_REGISTRIES, PLATFORMS, SHELLS } from '../../cli/src/sessions/pool-wire.js';
 import { FRAMEWORKS, LANGUAGES, projectedAgentType, VOCAB_VERSION } from '../../cli/src/sessions/public-vocabulary.js';
@@ -7,7 +7,8 @@ import { ERROR_CODES } from '../../cli/src/sessions/schema.js';
 import { isListed } from '../src/field-classes.js';
 import { sampleSkeleton } from '../src/sample.js';
 import { PANEL_COUNT } from '../src/stored.js';
-import { acceptanceOf, fieldOf, startPool, stubUser, textOf, type StubUser, type TestPool } from '../src/test-pool.js';
+import { sweepPacks } from '../src/pack-operator.js';
+import { acceptanceOf, fieldOf, poolDbOf, startPool, stubUser, textOf, type StubUser, type TestPool } from '../src/test-pool.js';
 import { asyncPieces, storeOf } from './erase-test-store.js';
 import { anonymizeSkeleton, closeAccount, eraseAccount, eraseLeakedSecret, eraseRawObject, findDepositsContaining, findRawContaining, holdsValue, restrictAccount, weekOf, type EraseStore, type RawHit } from './erase.js';
 
@@ -829,6 +830,85 @@ const stage = async (token: string, id: string, program: string, part: 1 | 2): P
   const batch = createHash('sha256').update(body).digest('hex');
   return (await pool.send('/v1/deposits', { method: 'POST', body: part === 1 ? body.slice(0, half) : body.slice(half) }, token, { 'oars-part': `${String(part)}/2`, 'oars-batch': batch })).status;
 };
+
+describe('erasing an account that bought packs (t1483, covenant 6.6(d))', () => {
+  const RANDOM_ID = /^erased:[0-9a-f]{32}$/;
+  const BUYER_KEY = 'a-buyer-key-that-must-not-outlive-the-account';
+  const row = (account: string, id: string, state: string, extra: string, binds: (string | number)[]): Promise<unknown> =>
+    pool.db().then((db) => db.prepare(`INSERT INTO pack_fetches (fetch_id, account, price_ref, lot, buyer_key_id, buyer_key, mode, state, object_key, created_at, ready_at, expires_at) VALUES (?, ?, 'price-a1', 'lot-a', 'keyid0123456789ab', ?, 'test', ?, ${extra})`).bind(id, account, state === 'queued' ? BUYER_KEY : null, state, ...binds).run());
+  const DAY = 86_400_000;
+  const at = Date.UTC(2026, 10, 4, 10, 11, 12, 123);
+
+  /** An account that holds one fetch in each state, each pack in `PACKS`, and a second account's ready fetch beside them. */
+  const buyerFixture = async (): Promise<{ account: string; other: string; otherId: string; ids: string[]; keys: string[]; otherKey: string }> => {
+    const { account } = await member();
+    const other = (await member()).account;
+    const packs = await pool.packsBucket();
+    const ids = [0, 1, 2, 3].map(() => randomUUID());
+    const keyOf = (id: string): string => `packs/${id}/pack.tar`;
+    await row(account, ids[0] ?? '', 'queued', 'NULL, ?, NULL, NULL', [at]);
+    await row(account, ids[1] ?? '', 'built', '?, ?, NULL, NULL', [keyOf(ids[1] ?? ''), at]);
+    await row(account, ids[2] ?? '', 'ready', '?, ?, ?, ?', [keyOf(ids[2] ?? ''), at, at + 3_600_000, NOW.getTime() + 6 * DAY]);
+    await row(account, ids[3] ?? '', 'ready', 'NULL, ?, ?, ?', [at, at + 3_600_000, at + 7 * DAY]);
+    const otherId = randomUUID();
+    const otherKey = keyOf(otherId);
+    await row(other, otherId, 'ready', '?, ?, ?, ?', [otherKey, at, at + 3_600_000, NOW.getTime() + 6 * DAY]);
+    for (const id of ids.slice(1, 3)) await packs.put(keyOf(id), 'a pack');
+    await packs.put(otherKey, 'someone else\'s pack');
+    return { account, other, otherId, ids, keys: ids.slice(1, 3).map(keyOf), otherKey };
+  };
+
+  const erased = async (): Promise<readonly unknown[]> => all("SELECT * FROM pack_fetches WHERE account LIKE 'erased:%' ORDER BY fetch_id");
+
+  it('leaves the hand-over record under one random id, with no account, buyer key, or time finer than the week, and frees nothing of another account', async () => {
+    const { account, other, ids } = await buyerFixture();
+    await eraseAccount(await store(), account, NOW);
+    expect(await all('SELECT * FROM pack_fetches WHERE account = ?', account)).toEqual([]);
+    const mine = (await erased()).filter((one) => ids.includes(String(fieldOf(one, 'fetch_id'))));
+    expect(mine).toHaveLength(4);
+    const owners = new Set(mine.map((one) => String(fieldOf(one, 'account'))));
+    expect(owners.size).toBe(1);
+    expect([...owners][0]).toMatch(RANDOM_ID);
+    for (const one of mine) {
+      expect(JSON.stringify(one)).not.toContain(account);
+      expect(JSON.stringify(one)).not.toContain(BUYER_KEY);
+      expect(fieldOf(one, 'buyer_key')).toBeNull();
+      expect({ price: fieldOf(one, 'price_ref'), lot: fieldOf(one, 'lot'), keyId: fieldOf(one, 'buyer_key_id'), mode: fieldOf(one, 'mode') }).toEqual({ price: 'price-a1', lot: 'lot-a', keyId: 'keyid0123456789ab', mode: 'test' });
+      // Every kept time is a Monday midnight (UTC).
+      for (const column of ['created_at', 'ready_at', 'expires_at']) {
+        const time = fieldOf(one, column);
+        if (time !== null) expect({ column, monday: typeof time === 'number' && new Date(time).getUTCDay() === 1 && time % DAY === 0 }).toEqual({ column, monday: true });
+      }
+    }
+    // A fetch not yet handed over is failed: nothing is built or consumed for an erased account. A handed-over one stays the record that its credit was taken.
+    const byId = (id: string | undefined): unknown => mine.find((one) => fieldOf(one, 'fetch_id') === id);
+    expect(ids.map((id) => fieldOf(byId(id), 'state'))).toEqual(['failed', 'failed', 'ready', 'ready']);
+    expect(byId(ids[2])).toMatchObject({ created_at: Date.UTC(2026, 10, 2) });
+    expect(await all('SELECT account, buyer_key, state FROM pack_fetches WHERE account = ?', other)).toEqual([{ account: other, buyer_key: null, state: 'ready' }]);
+  });
+
+  it('has the nightly sweep delete every pack the account still held, and not another account\'s', async () => {
+    const { account, otherId, keys, otherKey, ids } = await buyerFixture();
+    await eraseAccount(await store(), account, NOW);
+    const packs = await pool.packsBucket();
+    const env = { DB: poolDbOf(await pool.db()), PACKS: { delete: (held: readonly string[]) => packs.delete([...held]) } };
+    expect(await sweepPacks(env, NOW.getTime())).toBeGreaterThanOrEqual(2);
+    for (const key of keys) expect(await packs.get(key)).toBeNull();
+    expect(await packs.get(otherKey)).not.toBeNull();
+    expect(await all("SELECT object_key FROM pack_fetches WHERE fetch_id = ?", otherId)).toEqual([{ object_key: otherKey }]);
+    expect(await all('SELECT fetch_id FROM pack_fetches WHERE object_key IS NOT NULL AND fetch_id IN (?, ?, ?, ?)', ...ids)).toEqual([]);
+  });
+
+  it('changes nothing on a second run, and counts the account\'s fetch rows with the rows it erased', async () => {
+    const { account } = await buyerFixture();
+    const first = await eraseAccount(await store(), account, NOW);
+    expect(first.rows).toBeGreaterThanOrEqual(3);
+    const before = JSON.stringify(await erased());
+    const again = await eraseAccount(await store(), account, NOW);
+    expect(again.rows).toBe(0);
+    expect(JSON.stringify(await erased())).toBe(before);
+  });
+});
 
 describe('closing one account (covenant 6.1 and 7.2(a))', () => {
   const BOX = { hostClass: 'vps', launcher: 'scheduled', label: 'box' };
