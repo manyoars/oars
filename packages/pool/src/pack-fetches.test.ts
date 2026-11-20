@@ -96,6 +96,30 @@ describe('POST /v1/packs/:priceRef/fetches', () => {
     expect(created.map((call) => call.body)).toEqual([{ customerRef: ref('lot-a'), countryCode: 'US', regionCode: 'OR' }]);
   });
 
+  it('sends the state of every start, a later one naming another state included, whether or not credits are known', async () => {
+    const { token, ref } = await buyer();
+    const sent = (): unknown[] => pool.stub.billing.calls.filter((call) => call.method === 'POST' && call.path === '/api/v1/billing/customers' && fieldOf(call.body, 'customerRef') === ref('lot-a')).map((call) => fieldOf(call.body, 'regionCode'));
+    expect((await start('price-a1', token, { buyerKey: BUYER_KEY, state: 'OR' })).status).toBe(402);
+    pool.stub.billing.credit(ref('lot-a'), 2);
+    expect((await start('price-a1', token, { buyerKey: BUYER_KEY, state: 'WA' })).status).toBe(202);
+    expect((await start('price-a1', token, { buyerKey: BUYER_KEY, state: 'TX' })).status).toBe(202);
+    expect(sent()).toEqual(['OR', 'WA', 'TX']);
+  });
+
+  it('is 503 workload_not_active when billing answers 409 WORKLOAD_NOT_ACTIVE, and queues nothing, offers nothing, and leaves the balance', async () => {
+    const { token, account, ref } = await buyer();
+    pool.stub.billing.credit(ref('lot-a'), 1);
+    pool.stub.billing.deactivateWorkload();
+    // The stub is shared by every test in the file, so the workload is switched back on even when an assertion below fails.
+    const answered = await start('price-a1', token).finally(() => {
+      pool.stub.billing.deactivateWorkload(false);
+    });
+    expect({ status: answered.status, error: fieldOf(answered.json, 'error') }).toEqual({ status: 503, error: 'workload_not_active' });
+    expect(await rows(account)).toEqual([]);
+    expect(pool.stub.billing.offers.filter((offer) => offer.customerRef === ref('lot-a'))).toEqual([]);
+    expect(pool.stub.billing.balanceOf(ref('lot-a'))).toBe(1);
+  });
+
   it('is 400 region_not_supported when billing refuses the state with CUSTOMER_REGION_NOT_SUPPORTED, and queues nothing and offers nothing', async () => {
     const { token, account, ref } = await buyer();
     pool.stub.billing.refuseRegion('ND');

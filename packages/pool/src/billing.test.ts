@@ -1,6 +1,6 @@
 // The billing client against a fake billing API: what it asks, what it keys a customer by, and how it reads each answer.
 import { describe, expect, it } from 'vitest';
-import { billingOf, BillingError, BuyerRefused, customerRefOf, IdempotencyConflict, lotOf, RegionNotSupported, type Billing, type BillingEnv, type Fetcher } from './billing.js';
+import { billingOf, BillingError, BuyerRefused, customerRefOf, IdempotencyConflict, lotOf, RegionNotSupported, WorkloadNotActive, type Billing, type BillingEnv, type Fetcher } from './billing.js';
 import { FAKE_BILLING_URL, FAKE_SDK_KEY, FAKE_WORKLOAD, fakeBilling, fetcherOf, type FakeBilling } from './test-billing.js';
 
 const configured = (extra: { [name: string]: string } = {}): BillingEnv => ({ BILLING_URL: FAKE_BILLING_URL, BILLING_SDK_KEY: FAKE_SDK_KEY, BILLING_WORKLOAD_ID: FAKE_WORKLOAD, ...extra });
@@ -178,6 +178,15 @@ describe('credits and customers', () => {
     expect([...fake.customers]).toEqual(['ref']);
     fake.failNext(500);
     await expect(billing.createCustomer('other', 'CA')).rejects.toThrow('with 500');
+  });
+
+  it('throws WorkloadNotActive when billing answers 409 WORKLOAD_NOT_ACTIVE, and a BillingError for any other 409', async () => {
+    const fake = fakeBilling();
+    fake.deactivateWorkload();
+    await expect(clientOf(fake).createCustomer('ref', 'CA')).rejects.toBeInstanceOf(WorkloadNotActive);
+    const other = await answering(409, { code: 'SOMETHING_ELSE' }).createCustomer('ref', 'CA').catch((error: unknown) => error);
+    expect(other).toBeInstanceOf(BillingError);
+    expect(other).not.toBeInstanceOf(WorkloadNotActive);
   });
 
   it('creates a customer as a US buyer in the state given: {customerRef, countryCode: "US", regionCode}', async () => {

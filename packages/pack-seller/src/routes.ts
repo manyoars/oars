@@ -1,5 +1,5 @@
 import type { Billing } from './billing.js';
-import { RESERVE_CREDITS } from './billing.js';
+import { RESERVE_CREDITS, US_STATES } from './billing.js';
 import type { PackSource } from './pack-store.js';
 import { END_OF_ARCHIVE, archiveNames, entries } from './tar.js';
 import { OFFER_RATE_REFUSAL_STATUS, type RateLimiter } from './rate-limit.js';
@@ -89,7 +89,10 @@ const offer = async (deps: RouteDeps, request: Request, caller: string, pack: Pa
   if (recipientLegalName === undefined) return respond(400, { error: 'recipientLegalName is required.' });
   const licenseVersion = text(body, 'licenseVersion', MAX_LICENSE_VERSION_LENGTH);
   if (licenseVersion === undefined) return respond(400, { error: 'licenseVersion is required.' });
-  const customer = await deps.billing.createCustomer();
+  // The state is checked before the platform is asked anything, and it is sent on and kept nowhere here (not in the ledger).
+  const state = text(body, 'state', 2);
+  if (state === undefined || !US_STATES.has(state)) return respond(400, { error: 'state is required: the two-letter code of a US state or DC, in upper case.' });
+  const customer = await deps.billing.createCustomer(state);
   if (!customer.ok) return refuse(customer.refusal);
   const made = await deps.billing.createOffer(customer.value);
   if (!made.ok) return refuse(made.refusal);
