@@ -481,7 +481,8 @@ const unlink = async (store: EraseStore, account: string): Promise<void> => {
   await store.run('UPDATE raw_objects SET deposit = NULL, place = NULL WHERE account = ? AND deposit IS NOT NULL', [account]);
   const machines = new Set([...(await store.rows('SELECT id AS machine FROM machines WHERE account = ?', [account])), ...(await store.rows('SELECT DISTINCT machine FROM deposits WHERE account = ? AND machine IS NOT NULL', [account]))].map((row) => textOf(row, 'machine')));
   const deposits = (await store.rows('SELECT id FROM deposits WHERE account = ?', [account])).map((row) => textOf(row, 'id'));
-  if (machines.size === 0 && deposits.length === 0) return;
+  const fetches = (await store.rows('SELECT fetch_id FROM pack_fetches WHERE account = ?', [account])).map((row) => textOf(row, 'fetch_id'));
+  if (machines.size === 0 && deposits.length === 0 && fetches.length === 0) return;
   const erased = `erased:${randomId()}`;
   await store.run('INSERT INTO accounts (rowid, id, source) SELECT ?, ?, source FROM accounts WHERE id = ?', [randomRowid(), erased, account]);
   for (const machine of machines) {
@@ -489,7 +490,19 @@ const unlink = async (store: EraseStore, account: string): Promise<void> => {
     await store.run('UPDATE deposits SET machine = ? WHERE account = ? AND machine = ?', [renamed, account, machine]);
     await store.run(`UPDATE machines SET id = ?, account = ?, fingerprint_hash = NULL, state = 'revoked', key_hash = ?, retired_hash = NULL, created_at = ${weekMs('created_at')}, activated_at = ${weekMs('activated_at')}, rotated_at = ${weekMs('rotated_at')}, expires_at = ${weekMs('expires_at')}, last_deposit_day = ${weekDay('last_deposit_day')} WHERE id = ? AND account = ?`, [renamed, erased, randomId() + randomId(), machine, account]);
   }
+  // A paid pack fetch (migration 0043) is the hand-over record an erasure notice needs: its id, price, lot, mode, state, and the key id (the first 16 hex of the buyer key's SHA-256, a name for the buyer's key and not for the account). It leaves the pseudonym like the rows above, its times are cut to the week, and it takes a random rowid so its place does not date it.
+  for (const fetch of fetches) await store.run(`UPDATE pack_fetches SET rowid = ?, account = ?, created_at = ${weekMs('created_at')}, ready_at = ${weekMs('ready_at')}, expires_at = ${weekMs('expires_at')} WHERE fetch_id = ? AND account = ?`, [randomRowid(), erased, fetch, account]);
   for (const deposit of deposits) await store.run(`UPDATE deposits SET rowid = ?, id = ?, account = ?, ingest = ?, erased_on = NULL, counted_at = ${weekMs('counted_at')} WHERE account = ? AND id = ?`, [randomRowid(), randomId(), erased, randomId(), account, deposit]);
+};
+
+/**
+ * Ends the account's paid pack fetches (migration 0043) short of the rows, which `unlink` keeps as the hand-over record: the buyer key goes (it is held only while a fetch waits for the builder), a fetch not yet handed over is failed so nothing is built or consumed for an erased account, and a handed-over pack still in `PACKS` is made due now, so the nightly sweep
+ * (`sweepPacks`) deletes it from the bucket on its next run, at the latest a day on (this script holds no handle on `oars-pool-packs`). The `object_key` stays until the sweep has deleted the object; it names the fetch id and no account. Answers the rows changed.
+ */
+const dropFetches = async (store: EraseStore, account: string, now: Date): Promise<number> => {
+  let rows = await store.run("UPDATE pack_fetches SET buyer_key = NULL, state = CASE WHEN state IN ('queued', 'built') THEN 'failed' ELSE state END WHERE account = ? AND (buyer_key IS NOT NULL OR state IN ('queued', 'built'))", [account]);
+  rows += await store.run("UPDATE pack_fetches SET expires_at = ? WHERE account = ? AND state = 'ready' AND object_key IS NOT NULL AND (expires_at IS NULL OR expires_at > ?)", [now.getTime(), account, now.getTime()]);
+  return rows;
 };
 
 /**
@@ -524,6 +537,7 @@ export const eraseAccount = async (store: EraseStore, accountId: string, now: Da
   for (const row of await store.rows('SELECT sha256 FROM raw_objects WHERE account = ? AND erased_on IS NULL', [account])) objects += await dropObject(store, account, textOf(row, 'sha256'), 'lawful-request', now);
   // The batches the Worker kept in R2 before it stopped reading the account (t956) still name it: they are rewritten last, so a stop anywhere above leaves them for the rerun, and a rerun finds none. They count with the objects.
   objects += await eraseBatches(store, account, now);
+  rows += await dropFetches(store, account, now);
   await unlink(store, account);
   const erased = { rows, objects };
   await audit(store, 'account', 'lawful-request', account, erased, now);

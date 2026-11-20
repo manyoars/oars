@@ -102,6 +102,9 @@ const seed = async (account: string, tag: string): Promise<void> => {
   await db.prepare("INSERT INTO club_hides (club, account, nickname, hidden_at, hidden_by, reason, seated_at) VALUES ('open', ?, ?, 1700000800000, ?, ?, 1700000500000)").bind(account, `nick-${tag}`, `operator-${tag}`, `why-${tag}`).run();
   // A hide recorded before migration 0040 has no seated_at.
   await db.prepare("INSERT INTO club_hides (club, account, nickname, hidden_at, hidden_by, reason) VALUES ('open', ?, ?, 1700000900000, ?, ?)").bind(account, `old-${tag}`, `operator-${tag}`, `old-why-${tag}`).run();
+  // Paid pack fetches (migration 0043): one waiting for the builder, which holds the buyer's key, and one handed over, which holds the pack's object key. Neither key is exported.
+  await db.prepare("INSERT INTO pack_fetches (fetch_id, account, price_ref, lot, buyer_key_id, buyer_key, mode, state, created_at) VALUES (?, ?, 'price-a1', 'lot-a', ?, ?, 'test', 'queued', 1700000950000)").bind(`fetch-${tag}-1`, account, `keyid-${tag}`, `buyer-key-${tag}`).run();
+  await db.prepare("INSERT INTO pack_fetches (fetch_id, account, price_ref, lot, buyer_key_id, mode, state, object_key, created_at, ready_at, expires_at) VALUES (?, ?, 'price-b1', 'lot-b', ?, 'live', 'ready', ?, 1700000960000, 1700000970000, 1700605770000)").bind(`fetch-${tag}-2`, account, `keyid-${tag}`, `packs/fetch-${tag}-2/pack.tar`).run();
   await db.prepare("INSERT INTO erasure_audit (kind, reason, erased_on, rows_erased, objects_erased, account) VALUES ('account', ?, '2026-11-03', 4, 2, ?)").bind(`reason-${tag}`, account).run();
 };
 
@@ -163,6 +166,12 @@ describe('GET /v1/account/export', () => {
       { club: 'open', nickname: 'nick-mine', hiddenAt: 1_700_000_800_000, hiddenBy: 'operator-mine', reason: 'why-mine', seatedAt: 1_700_000_500_000 },
       { club: 'open', nickname: 'old-mine', hiddenAt: 1_700_000_900_000, hiddenBy: 'operator-mine', reason: 'old-why-mine', seatedAt: null },
     ]);
+    expect(rowsOf(pages, 'packFetches')).toEqual([
+      { fetchId: 'fetch-mine-1', priceRef: 'price-a1', lot: 'lot-a', buyerKeyId: 'keyid-mine', mode: 'test', state: 'queued', createdAt: 1_700_000_950_000, readyAt: null, expiresAt: null },
+      { fetchId: 'fetch-mine-2', priceRef: 'price-b1', lot: 'lot-b', buyerKeyId: 'keyid-mine', mode: 'live', state: 'ready', createdAt: 1_700_000_960_000, readyAt: 1_700_000_970_000, expiresAt: 1_700_605_770_000 },
+    ]);
+    expect(JSON.stringify(pages)).not.toContain('buyer-key-mine');
+    expect(JSON.stringify(pages)).not.toContain('packs/fetch-mine-2');
     expect(rowsOf(pages, 'erasures')).toEqual([{ kind: 'account', reason: 'reason-mine', erasedOn: '2026-11-03', rowsErased: 4, objectsErased: 2 }]);
     // The ledger lists the held object and the tombstoned one, each by the key it is stored under.
     expect(rowsOf(pages, 'rawLedger')).toEqual(

@@ -130,11 +130,11 @@ export const markFailed = async (request: Request, env: OperatorBindings, fetchI
   return answer(200, { fetchId, state: 'failed' });
 };
 
-/** The nightly sweep: deletes the packs whose seven days are over and drops their keys from the rows. The row stays, as the hand-over record. Answers how many it deleted; an unbound bucket sweeps nothing. */
+/** The nightly sweep: deletes the packs whose seven days are over, and any pack a failed fetch still names (only an account's erasure leaves one, `scripts/erase.ts`), and drops their keys from the rows. The row stays, as the hand-over record. Answers how many it deleted; an unbound bucket sweeps nothing. */
 export const sweepPacks = async (env: { DB: Env['DB']; PACKS?: Pick<PacksBucket, 'delete'> }, now: number): Promise<number> => {
   const bucket = env.PACKS;
   if (bucket === undefined) return 0;
-  const { results } = await env.DB.prepare("SELECT fetch_id, object_key FROM pack_fetches WHERE state = 'ready' AND expires_at <= ? AND object_key IS NOT NULL ORDER BY expires_at LIMIT ?").bind(now, SWEEP_PACKS).all();
+  const { results } = await env.DB.prepare("SELECT fetch_id, object_key FROM pack_fetches WHERE object_key IS NOT NULL AND ((state = 'ready' AND expires_at <= ?) OR state = 'failed') ORDER BY expires_at LIMIT ?").bind(now, SWEEP_PACKS).all();
   const ids = results.flatMap((row) => textField(row, 'fetch_id') ?? []);
   const keys = results.flatMap((row) => textField(row, 'object_key') ?? []);
   if (ids.length === 0) return 0;
