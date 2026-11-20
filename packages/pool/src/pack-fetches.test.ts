@@ -438,8 +438,8 @@ describe('a fetch id billing already holds for another request', () => {
     const answered = await operate('POST', `/v1/operator/fetches/${fetchId}/handover`);
     expect({ status: answered.status, error: fieldOf(answered.json, 'error') }).toEqual({ status: 409, error: 'idempotency_conflict' });
     expect((await fetchOf(fetchId)).state).toBe('built');
-    // One consume call by the pool, not a retry: the other is the test's own.
-    expect(consumes().filter((call) => call.key === fetchId)).toHaveLength(2);
+    // One consume call by the pool, not a retry (the other under this fetch id is the test's own, for another customer).
+    expect(consumes().filter((call) => call.key === fetchId && fieldOf(call.body, 'customerRef') === ref)).toHaveLength(1);
     expect(pool.stub.billing.balanceOf(ref)).toBe(1);
   });
 });
