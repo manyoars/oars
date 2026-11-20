@@ -1,7 +1,7 @@
 // Paid pack fetches, the buyer's two routes (K2 spec section 2). A buyer's agent starts a fetch for a DATASET price with its account credential and buyer key: with no credit it is told to buy one (402 and an offer), with credit its fetch is queued for the operator's builder (`pack-operator.ts`), and it downloads the pack once the operator has handed it over, for seven days.
 // Entitlement lives in billing, never here: the pool reads a balance, issues an offer, and consumes one credit at hand-over. It adds no purchase gate of its own.
 import { createHash, randomUUID } from 'node:crypto';
-import { BillingError, billingOf, BuyerRefused, customerRefOf, lotOf } from './billing.js';
+import { BillingError, billingOf, BuyerRefused, customerRefOf, lotOf, RegionNotSupported } from './billing.js';
 import { answer, bodyOf, bound, fieldOf, notConfigured, refuse, textField, type Env } from './http.js';
 import { accountOf, restrictedRefusal } from './identity.js';
 
@@ -11,6 +11,9 @@ export const PACK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 /** The longest buyer key accepted, the same bound the pack seller puts on one. */
 export const MAX_BUYER_KEY_LENGTH = 512;
 
+/** The states a buyer can name: the 50 US state codes and DC, in upper case. Buyers are US only, and no territory is on the list. */
+export const US_STATES: ReadonlySet<string> = new Set('AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY'.split(' '));
+
 /** The states of a fetch that hold a credit the buyer has not yet spent: a fetch not yet handed over. */
 export const UNSPENT = "('queued', 'built')";
 
@@ -19,7 +22,7 @@ export const buyerKeyIdOf = (buyerKey: string): string => createHash('sha256').u
 
 const unavailable = (): Response => refuse(502, 'billing_unavailable', 'Billing did not answer. Nothing was charged; try again.');
 
-/** `POST /v1/packs/:priceRef/fetches`: starts a paid fetch of the lot `priceRef` sells. Account credential and `{buyerKey}`; a machine key is refused before this runs (`machine: false`). */
+/** `POST /v1/packs/:priceRef/fetches`: starts a paid fetch of the lot `priceRef` sells. Account credential and `{buyerKey, state}`; the state is the buyer's US state, handed to billing when it makes the customer and kept nowhere here (not on the row, not in a log); a machine key is refused before this runs (`machine: false`). */
 export const startFetch = async (request: Request, env: Env, priceRef: string): Promise<Response> => {
   const account = await accountOf(request, env);
   if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
@@ -29,15 +32,20 @@ export const startFetch = async (request: Request, env: Env, priceRef: string): 
   if (pseudonymKey === undefined) return notConfigured('PSEUDONYM_KEY');
   const billing = billingOf(env);
   if ('missing' in billing) return notConfigured(billing.missing);
-  const buyerKey = textField(await bodyOf(request), 'buyerKey');
+  const body = await bodyOf(request);
+  const buyerKey = textField(body, 'buyerKey');
   if (buyerKey === undefined || buyerKey.length > MAX_BUYER_KEY_LENGTH) return refuse(400, 'missing_field', `A fetch names the buyer key its pack is built under, in at most ${String(MAX_BUYER_KEY_LENGTH)} characters.`, 'buyerKey');
+  // The state is checked before billing is asked anything, so a bad one costs no call and queues nothing.
+  const state = textField(body, 'state');
+  if (state === undefined) return refuse(400, 'state_required', 'A fetch names the US state of the buyer, as its two-letter code in upper case (DC counts). Buyers are US only.', 'state');
+  if (!US_STATES.has(state)) return refuse(400, 'state_invalid', 'The state is not one of the 50 US state codes or DC, in upper case.', 'state');
   try {
     const sold = await lotOf(billing, priceRef);
     if (sold === undefined) return refuse(404, 'not_found', 'No such price.');
     const { lot } = sold;
     const customerRef = customerRefOf(pseudonymKey, account, lot);
     const credits = await billing.balance(customerRef);
-    if (!credits.known) await billing.createCustomer(customerRef);
+    if (!credits.known) await billing.createCustomer(customerRef, state);
     const { available: balance } = credits;
     // The mode is billing's: the workload's stored mode, which the balance just read says. The row keeps it so a start counts only the unspent fetches of the credits it reads.
     const mode = credits.livemode ? 'live' : 'test';
@@ -53,6 +61,7 @@ export const startFetch = async (request: Request, env: Env, priceRef: string): 
     return answer(402, { error: 'payment_required', message: 'This account has no credit left for this pack. Buy one with the offer, then start the fetch again.', offerId, priceRefs: sold.priceRefs, balance });
   } catch (error) {
     if (error instanceof BuyerRefused) return refuse(403, 'buyer_refused', 'Billing has refused this account as a buyer, so it cannot start a paid fetch.');
+    if (error instanceof RegionNotSupported) return refuse(400, 'region_not_supported', 'Billing does not take a buyer in this state. Nothing was charged or queued.', 'state');
     if (error instanceof BillingError) return unavailable();
     throw error;
   }
