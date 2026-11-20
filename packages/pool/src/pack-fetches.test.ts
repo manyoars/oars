@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Env } from './http.js';
 import { customerRefOf } from './billing.js';
 import { buyerKeyIdOf, startFetch } from './pack-fetches.js';
+import { nightly } from './nightly.js';
 import { handOver, SWEEP_PACKS, sweepPacks } from './pack-operator.js';
 import { fetcherOf } from './test-billing.js';
 import type { OperatorEnv } from './telemetry-fleet.js';
@@ -467,6 +468,40 @@ describe('the nightly sweep of handed-over packs', () => {
     expect((await fetchOf(live.fetchId))['object_key']).toBe(live.key);
     expect((await download(old.fetchId, old.token)).status).toBe(410);
     expect((await download(live.fetchId, live.token)).status).toBe(200);
+  });
+
+  /** A withdrawn account holding one raw object the nightly raw sweep erases, so a test can see that sweep ran. */
+  const rawHeld = async (): Promise<{ account: string; erased: () => Promise<unknown> }> => {
+    const { account } = await buyer();
+    const db = await pool.db();
+    const hash = 'c'.repeat(64);
+    await db.prepare('UPDATE accounts SET raw_consent = NULL, raw_consent_withdrawn_at = 1 WHERE id = ?').bind(account).run();
+    await db.prepare('INSERT INTO raw_objects (account, sha256, bytes, capture_version, redaction_version, stored_at) VALUES (?, ?, 1, ?, ?, 1)').bind(account, hash, 'cap-7', '1').run();
+    await (await pool.rawBucket()).put(`raw/${account}/${hash}`, 'x');
+    return { account, erased: async () => fieldOf(await db.prepare('SELECT erased_on FROM raw_objects WHERE account = ? AND sha256 = ?').bind(account, hash).first(), 'erased_on') };
+  };
+
+  it('is run by `nightly`: the pack is gone, its key is null, and the raw sweep that follows still ran', async () => {
+    const old = await handedOver();
+    const raw = await rawHeld();
+    await (await pool.db()).prepare('UPDATE pack_fetches SET expires_at = ? WHERE fetch_id = ?').bind(Date.now() - 1000, old.fetchId).run();
+    expect(await raw.erased()).toBeNull();
+    await nightly(await pool.miniflare.getBindings<Env>(), Date.now());
+    expect(await (await pool.packsBucket()).get(old.key)).toBeNull();
+    expect((await fetchOf(old.fetchId))['object_key']).toBeNull();
+    expect(await raw.erased()).not.toBeNull();
+  });
+
+  it('still runs the raw sweep on a night the pack sweep throws, and the error reaches the caller', async () => {
+    const old = await handedOver();
+    const raw = await rawHeld();
+    await (await pool.db()).prepare('UPDATE pack_fetches SET expires_at = ? WHERE fetch_id = ?').bind(Date.now() - 1000, old.fetchId).run();
+    const bound = await pool.miniflare.getBindings<Env>();
+    const down = { head: () => Promise.resolve(null), get: () => Promise.resolve(null), delete: () => Promise.reject(new Error('r2 is down')) };
+    await expect(nightly({ ...bound, PACKS: down }, Date.now())).rejects.toThrow('r2 is down');
+    expect(await raw.erased()).not.toBeNull();
+    // The pack waits for the next night, the row untouched.
+    expect((await fetchOf(old.fetchId))['object_key']).toBe(old.key);
   });
 
   it('does nothing and fails nothing with no PACKS bound, and takes a bounded number a night', async () => {
