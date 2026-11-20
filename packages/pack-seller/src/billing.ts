@@ -12,12 +12,15 @@ type Released = components['schemas']['ReservationReleaseView'];
 export const RESERVE_CREDITS = 1;
 /** The platform allows 1 to 300 seconds; a build and a stream fit in the longest hold. */
 export const RESERVE_TTL_SECONDS = 300;
-/** The platform requires a country on a customer; the seller does not collect one, so every customer carries this. */
+/** The platform takes US buyers only, so every customer carries this country; the state is the one thing the buyer brings. */
 export const CUSTOMER_COUNTRY_CODE = 'US';
 
+/** The states a buyer can name: the 50 US state codes and DC, in upper case (the same list the pool takes). No territory is on it. */
+export const US_STATES: ReadonlySet<string> = new Set('AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY'.split(' '));
+
 export interface Billing {
-  /** Creates a customer under a fresh high-entropy ref and returns the ref. */
-  createCustomer: () => Promise<Outcome<string>>;
+  /** Creates a customer under a fresh high-entropy ref, as a US buyer in `regionCode` (a state code the caller has checked), and returns the ref. */
+  createCustomer: (regionCode: string) => Promise<Outcome<string>>;
   createOffer: (customerRef: string) => Promise<Outcome<Offer>>;
   balance: (customerRef: string) => Promise<Outcome<Balance>>;
   reserve: (customerRef: string, idempotencyKey?: string) => Promise<Outcome<Reservation>>;
@@ -45,12 +48,12 @@ const outcome = async <T>(call: () => Promise<Answered<T>>): Promise<Outcome<T>>
 export const createBilling = (client: OarsClient, sdkKey: string): Billing => {
   const header = { 'X-Agent-SDK-Key': sdkKey };
   return {
-    createCustomer: async () => {
+    createCustomer: async (regionCode) => {
       const customerRef = `c_${randomBytes(32).toString('base64url')}`;
       const made = await outcome(() =>
         client.POST('/billing/customers', {
           params: { header },
-          body: { customerRef, countryCode: CUSTOMER_COUNTRY_CODE },
+          body: { customerRef, countryCode: CUSTOMER_COUNTRY_CODE, regionCode },
         }),
       );
       return made.ok ? { ok: true, value: customerRef } : made;

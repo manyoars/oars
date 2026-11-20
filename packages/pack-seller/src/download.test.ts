@@ -11,7 +11,7 @@ afterEach(cleanWorlds);
 
 const NL = String.fromCharCode(10);
 const RESERVATION = 'rsv_0001';
-const accept = { recipientLegalName: 'Ada Lovelace', licenseVersion: '2026-11' };
+const accept = { recipientLegalName: 'Ada Lovelace', licenseVersion: '2026-11', state: 'CA' };
 const balanceOf = (creditsAvailable: number) => ({ creditsAvailable, creditsHeld: 0, creditsRemaining: creditsAvailable, customerRef: 'x', livemode: false });
 
 /** The platform as msw: a customer, an offer, a balance, and the reservation calls, each recorded in call order. */

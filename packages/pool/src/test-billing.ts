@@ -38,6 +38,8 @@ export interface FakeBilling {
   revoke: (customerRef: string) => void;
   /** From now on a customer created in this state answers 400 `CUSTOMER_REGION_NOT_SUPPORTED`, as when the platform's region policy does not take it. */
   refuseRegion: (regionCode: string) => void;
+  /** From now on (until called with false) a customer call answers 409 `WORKLOAD_NOT_ACTIVE`, as when the seller workload is switched off. */
+  deactivateWorkload: (inactive?: boolean) => void;
   /** The next consume takes its credit and then answers 503, as when the response is lost on the way back. */
   loseNextConsumeAnswer: () => void;
   /** The next call of any kind answers this status and nothing else. */
@@ -54,6 +56,7 @@ export const fakeBilling = (): FakeBilling => {
   const balances = new Map<string, number>();
   const revoked = new Set<string>();
   const refusedRegions = new Set<string>();
+  let inactive = false;
   let mode: 'test' | 'live' = 'test';
   const held = (customerRef: string): string => `${mode}:${customerRef}`;
   const offers: FakeBilling['offers'] = [];
@@ -89,6 +92,9 @@ export const fakeBilling = (): FakeBilling => {
     },
     refuseRegion: (regionCode) => {
       refusedRegions.add(regionCode);
+    },
+    deactivateWorkload: (next = true) => {
+      inactive = next;
     },
     loseNextConsumeAnswer: () => {
       lose = true;
@@ -127,12 +133,15 @@ export const fakeBilling = (): FakeBilling => {
       }
       if (method === 'POST' && path === '/billing/customers') {
         const customerRef = String(field(body, 'customerRef'));
+        if (revoked.has(customerRef)) return gone;
+        if (inactive) return { status: 409, body: { code: 'WORKLOAD_NOT_ACTIVE' } };
         // The platform's region rule: US only, and a US customer names its state. The old body, `{customerRef}` alone, fails here.
         const regionCode = field(body, 'regionCode');
         if (field(body, 'countryCode') !== 'US' || typeof regionCode !== 'string' || !/^[A-Z]{2}$/.test(regionCode) || refusedRegions.has(regionCode)) return { status: 400, body: { code: 'CUSTOMER_REGION_NOT_SUPPORTED' } };
         const known = customers.has(customerRef);
         customers.add(customerRef);
-        return known ? { status: 409, body: { error: 'CUSTOMER_EXISTS' } } : { status: 201, body: { customerRef } };
+        // The platform upserts: 201 for a new customer, 200 for one updated.
+        return { status: known ? 200 : 201, body: { customerRef } };
       }
       if (method === 'POST' && path === '/billing/offers') {
         const customerRef = String(field(body, 'customerRef'));
