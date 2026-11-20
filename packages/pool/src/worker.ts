@@ -8,7 +8,7 @@ import { makeInvite, redeemInvite, viewMe } from './invites.js';
 import { countryOf, covenantAccept, covenantNotAccepted, covenantStatus, depositsClosed, hasAccepted } from './covenant.js';
 import { answer, bound, brake, notConfigured, refuse, type Env } from './http.js';
 import { handOver, listFetches, markBuilt, markFailed } from './pack-operator.js';
-import { startFetch } from './pack-fetches.js';
+import { downloadFetch, startFetch } from './pack-fetches.js';
 import { receivePart } from './parts.js';
 import { heldBy, recount, repoKeysOf, signalStatements } from './cluster-store.js';
 import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf, shapeOf, weekStatements } from './ingest.js';
@@ -200,6 +200,7 @@ export const ROUTES: readonly Route[] = [
   { method: 'DELETE', path: '/v1/clubs/:id/me', machine: false, handle: (request, env, [id]) => leaveClub(request, env, decoded(id ?? '')) },
   // Paid pack fetches (pack-fetches.ts): the account credential and its buyer key. A machine key deposits and does nothing else, so both buyer routes are closed to it.
   { method: 'POST', path: '/v1/packs/:priceRef/fetches', machine: false, handle: (request, env, [priceRef]) => startFetch(request, env, decoded(priceRef ?? '')) },
+  { method: 'GET', path: '/v1/packs/fetches/:fetchId', machine: false, handle: (request, env, [fetchId]) => downloadFetch(request, env, decoded(fetchId ?? ''), Date.now()) },
   // The operator's queue of those fetches (pack-operator.ts), behind OPERATOR_TOKEN.
   { method: 'GET', path: '/v1/operator/fetches', machine: false, handle: listFetches },
   { method: 'POST', path: '/v1/operator/fetches/:id/built', machine: false, handle: (request, env, [id]) => markBuilt(request, env, decoded(id ?? '')) },

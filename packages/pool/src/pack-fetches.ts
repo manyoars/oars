@@ -2,7 +2,7 @@
 // Entitlement lives in billing, never here: the pool reads a balance, issues an offer, and consumes one credit at hand-over. It adds no purchase gate of its own.
 import { createHash, randomUUID } from 'node:crypto';
 import { BillingError, billingOf, customerRefOf, lotOf, modeOf } from './billing.js';
-import { answer, bodyOf, bound, notConfigured, refuse, textField, type Env } from './http.js';
+import { answer, bodyOf, bound, fieldOf, notConfigured, refuse, textField, type Env } from './http.js';
 import { accountOf, restrictedRefusal } from './identity.js';
 
 /** How long a handed-over pack can be downloaded. */
@@ -55,4 +55,23 @@ export const startFetch = async (request: Request, env: Env, priceRef: string): 
     if (error instanceof BillingError) return unavailable();
     throw error;
   }
+};
+
+/** `GET /v1/packs/fetches/:fetchId`: the pack once handed over and inside its window, a pending answer before, 409 for a failed build, and 410 after the window. Another account's fetch is 404, the same as an unknown one. */
+export const downloadFetch = async (request: Request, env: Env, fetchId: string, now: number): Promise<Response> => {
+  const account = await accountOf(request, env);
+  if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
+  const row = await env.DB.prepare('SELECT state, object_key, expires_at FROM pack_fetches WHERE fetch_id = ? AND account = ?').bind(fetchId, account).first();
+  if (row === null) return refuse(404, 'not_found', 'No such fetch.');
+  const state = textField(row, 'state');
+  if (state === 'failed') return refuse(409, 'fetch_failed', 'The pack could not be built. Nothing was charged; start the fetch again.');
+  if (state !== 'ready') return answer(202, { fetchId, state: 'pending' });
+  const key = textField(row, 'object_key');
+  const expiresAt = fieldOf(row, 'expires_at');
+  const gone = (): Response => refuse(410, 'gone', 'This pack is past its seven days. Start a new fetch.');
+  if (key === undefined || typeof expiresAt !== 'number' || now >= expiresAt) return gone();
+  if (env.PACKS === undefined) return notConfigured('PACKS');
+  const object = await env.PACKS.get(key);
+  if (object === null) return gone();
+  return new Response(object.body, { status: 200, headers: { 'content-type': 'application/octet-stream', 'content-length': String(object.size), 'content-disposition': `attachment; filename="pack-${fetchId}"`, 'cache-control': 'private, no-store' } });
 };

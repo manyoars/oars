@@ -1,8 +1,11 @@
 // Paid pack fetches against the fake billing API, under Miniflare's workerd: the buyer's start route, the operator's queue and hand-over, and the buyer's download.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { Env } from './http.js';
 import { customerRefOf } from './billing.js';
 import { buyerKeyIdOf } from './pack-fetches.js';
-import { anyNumber, anyText, fieldOf, startPool, stubUser, textOf, type TestPool } from './test-pool.js';
+import { SWEEP_PACKS, sweepPacks } from './pack-operator.js';
+import { anyNumber, anyText, fieldOf, poolDbOf, startPool, stubUser, textOf, type TestPool } from './test-pool.js';
+import worker from './worker.js';
 
 const PSEUDONYM_KEY = 'a-test-pseudonym-key';
 const BUYER_KEY = 'b'.repeat(64);
@@ -181,7 +184,7 @@ const fetchOf = async (fetchId: string): Promise<{ [column: string]: unknown }> 
 /** Puts a pack in PACKS and marks the fetch built under it. */
 const built = async (fetchId: string): Promise<string> => {
   const key = `packs/${fetchId}/pack.tar`;
-  await (await pool.packsBucket()).put(key, `pack for ${fetchId}`);
+  await (await pool.packsBucket()).put(key, JSON.stringify({ pack: fetchId }));
   expect((await operate('POST', `/v1/operator/fetches/${fetchId}/built`, { objectKey: key })).status).toBe(200);
   return key;
 };
@@ -341,5 +344,114 @@ describe('the operator routes', () => {
     expect({ status: refused.status, error: fieldOf(refused.json, 'error') }).toEqual({ status: 409, error: 'already_ready' });
     expect((await fetchOf(done.fetchId)).state).toBe('ready');
     expect((await operate('POST', '/v1/operator/fetches/no-such-fetch/failed')).status).toBe(404);
+  });
+});
+
+/** A fetch handed over, with its pack in PACKS. */
+const handedOver = async (): Promise<{ token: string; account: string; fetchId: string; key: string }> => {
+  const held = await queued();
+  const key = await built(held.fetchId);
+  expect((await operate('POST', `/v1/operator/fetches/${held.fetchId}/handover`)).status).toBe(200);
+  return { token: held.token, account: held.account, fetchId: held.fetchId, key };
+};
+
+const download = (fetchId: string, token: string | undefined): ReturnType<TestPool['raw']> => pool.raw(`/v1/packs/fetches/${fetchId}`, token);
+
+describe('GET /v1/packs/fetches/:fetchId', () => {
+  it('is 401 without a credential, and 404 for an unknown fetch and for another account\'s, the same either way', async () => {
+    const { fetchId } = await handedOver();
+    const stranger = await buyer();
+    expect((await download(fetchId, undefined)).status).toBe(401);
+    const other = await download(fetchId, stranger.token);
+    const unknown = await download('00000000-0000-4000-8000-000000000000', stranger.token);
+    expect({ status: other.status, json: other.json }).toEqual({ status: 404, json: unknown.json });
+    expect(unknown.status).toBe(404);
+  });
+
+  it('answers pending while the fetch is queued or built, and nothing of the pack', async () => {
+    const { fetchId, token } = await queued();
+    const waiting = await download(fetchId, token);
+    expect({ status: waiting.status, json: waiting.json }).toEqual({ status: 202, json: { fetchId, state: 'pending' } });
+    await built(fetchId);
+    const ready = await download(fetchId, token);
+    expect({ status: ready.status, json: ready.json }).toEqual({ status: 202, json: { fetchId, state: 'pending' } });
+  });
+
+  it('answers 409 fetch_failed for a failed build', async () => {
+    const { fetchId, token } = await queued();
+    await operate('POST', `/v1/operator/fetches/${fetchId}/failed`);
+    const answered = await download(fetchId, token);
+    expect({ status: answered.status, error: fieldOf(answered.json, 'error') }).toEqual({ status: 409, error: 'fetch_failed' });
+  });
+
+  it('serves the pack from PACKS once handed over, uncached and private', async () => {
+    const { fetchId, token } = await handedOver();
+    const answered = await download(fetchId, token);
+    expect(answered.status).toBe(200);
+    expect(answered.json).toEqual({ pack: fetchId });
+    expect(answered.headers.get('content-type')).toBe('application/octet-stream');
+    expect(answered.headers.get('cache-control')).toBe('private, no-store');
+    expect(answered.headers.get('content-disposition')).toBe(`attachment; filename="pack-${fetchId}"`);
+    // Downloading is not a second spend: the pack can be fetched again inside its window.
+    expect((await download(fetchId, token)).status).toBe(200);
+  });
+
+  it('is 410 gone after the seven days, even before the sweep has deleted the object', async () => {
+    const { fetchId, token } = await handedOver();
+    await (await pool.db()).prepare('UPDATE pack_fetches SET expires_at = ? WHERE fetch_id = ?').bind(Date.now() - 1, fetchId).run();
+    const answered = await download(fetchId, token);
+    expect({ status: answered.status, error: fieldOf(answered.json, 'error') }).toEqual({ status: 410, error: 'gone' });
+  });
+
+  it('is 410 gone when the object is missing from PACKS, rather than a bare error', async () => {
+    const { fetchId, token, key } = await handedOver();
+    await (await pool.packsBucket()).delete([key]);
+    expect((await download(fetchId, token)).status).toBe(410);
+  });
+
+  it('is 503 not_configured on a pool with no PACKS bound, for a ready fetch', async () => {
+    const { fetchId, token } = await handedOver();
+    const row = await fetchOf(fetchId);
+    const db = poolDbOf(await pool.db());
+    const { downloadFetch } = await import('./pack-fetches.js');
+    const answered = await downloadFetch(new Request('http://pool.test/x', { headers: { authorization: `Bearer ${token}` } }), { DB: db }, fetchId, Number(row['ready_at']) + 1);
+    expect(answered.status).toBe(503);
+  });
+});
+
+describe('the nightly sweep of handed-over packs', () => {
+  const night = async (when: number): Promise<void> => worker.scheduled({ scheduledTime: when }, await pool.miniflare.getBindings<Env>());
+
+  it('deletes a pack past its seven days and keeps the row as the hand-over record, and leaves live and failed fetches alone', async () => {
+    const old = await handedOver();
+    const live = await handedOver();
+    const failed = await queued();
+    const failedKey = `packs/${failed.fetchId}/pack.tar`;
+    await (await pool.packsBucket()).put(failedKey, '{}');
+    await operate('POST', `/v1/operator/fetches/${failed.fetchId}/failed`);
+    const before = await fetchOf(old.fetchId);
+    await (await pool.db()).prepare('UPDATE pack_fetches SET expires_at = ? WHERE fetch_id = ?').bind(Date.now() - 1000, old.fetchId).run();
+    await night(Date.now());
+    const bucket = await pool.packsBucket();
+    expect(await bucket.get(old.key)).toBeNull();
+    expect(await bucket.get(live.key)).not.toBeNull();
+    expect(await fetchOf(old.fetchId)).toMatchObject({ fetch_id: old.fetchId, account: old.account, price_ref: 'price-a1', buyer_key_id: buyerKeyIdOf(BUYER_KEY), state: 'ready', object_key: null, ready_at: before['ready_at'] });
+    expect((await fetchOf(live.fetchId))['object_key']).toBe(live.key);
+    expect((await download(old.fetchId, old.token)).status).toBe(410);
+    expect((await download(live.fetchId, live.token)).status).toBe(200);
+  });
+
+  it('does nothing and fails nothing with no PACKS bound, and takes a bounded number a night', async () => {
+    expect(await sweepPacks({ DB: poolDbOf(await pool.db()) }, Date.now() + 100 * 24 * 60 * 60 * 1000)).toBe(0);
+    const { account } = await handedOver();
+    const db = await pool.db();
+    const insert = (index: number): Parameters<typeof db.batch>[0][number] =>
+      db.prepare("INSERT INTO pack_fetches (fetch_id, account, price_ref, lot, buyer_key_id, mode, state, object_key, created_at, ready_at, expires_at) VALUES (?, ?, 'price-a1', 'lot-a', 'k', 'test', 'ready', ?, 1, 1, 2)").bind(`sweep-${String(index)}`, account, `packs/sweep-${String(index)}/pack.tar`);
+    await db.batch(Array.from({ length: SWEEP_PACKS + 1 }, (_, index) => insert(index)));
+    const bucket = await pool.packsBucket();
+    const env = { DB: poolDbOf(db), PACKS: { delete: (keys: readonly string[]) => bucket.delete([...keys]) } };
+    expect(await sweepPacks(env, 10)).toBe(SWEEP_PACKS);
+    expect(await sweepPacks(env, 10)).toBe(1);
+    expect(await sweepPacks(env, 10)).toBe(0);
   });
 });

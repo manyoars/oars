@@ -11,7 +11,7 @@ export const RETENTION_DAYS = 90;
 /** What one Worker invocation may spend in subrequests (R2 and D1 calls count); the rollup's reads and the sweep share it. */
 export const SUBREQUESTS_PER_INVOCATION = 1000;
 
-/** What the nightly run keeps back from the telemetry sweep's budget for its other calls: the three row sweeps, the cursor's read and write, and a margin (10), and the raw sweep's five pages (`SWEEP_PAGE_CALLS` each, 20), which a legal duty puts ahead of a retention sweep. */
+/** What the nightly run keeps back from the telemetry sweep's budget for its other calls: the three row sweeps, the cursor's read and write, the pack sweep's listing, delete, and update, and two to spare (10 in all), and the raw sweep's five pages (`SWEEP_PAGE_CALLS` each, 20), which a legal duty puts ahead of a retention sweep. */
 export const RESERVED_CALLS = 30;
 
 /** The sweep's budget when the rollup failed and so reported nothing. The rollup reads 800 batches at most, so well over this many calls are left after any night it ran. */
