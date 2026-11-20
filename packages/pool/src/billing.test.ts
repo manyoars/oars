@@ -1,6 +1,6 @@
 // The billing client against a fake billing API: what it asks, what it keys a customer by, and how it reads each answer.
 import { describe, expect, it } from 'vitest';
-import { billingOf, BillingError, BuyerRefused, customerRefOf, IdempotencyConflict, lotOf, type Billing, type BillingEnv } from './billing.js';
+import { billingOf, BillingError, BuyerRefused, customerRefOf, IdempotencyConflict, lotOf, type Billing, type BillingEnv, type Fetcher } from './billing.js';
 import { FAKE_BILLING_URL, FAKE_SDK_KEY, FAKE_WORKLOAD, fakeBilling, fetcherOf, type FakeBilling } from './test-billing.js';
 
 const configured = (extra: { [name: string]: string } = {}): BillingEnv => ({ BILLING_URL: FAKE_BILLING_URL, BILLING_SDK_KEY: FAKE_SDK_KEY, BILLING_WORKLOAD_ID: FAKE_WORKLOAD, ...extra });
@@ -203,12 +203,25 @@ describe('credits and customers', () => {
 });
 
 describe('consume', () => {
-  it('takes one credit under the fetch id, and a replay of the same key and body takes none and answers the original numbers', async () => {
+  it('takes one credit under the fetch id, and a replay of the same key and body takes none and gets the original numbers back', async () => {
     const fake = fakeBilling();
     fake.credit('ref', 2);
-    const billing = clientOf(fake);
-    expect(await billing.consume('ref', 'fetch-1')).toBe('consumed');
-    expect(await billing.consume('ref', 'fetch-1')).toBe('consumed');
+    const answers: string[] = [];
+    const spy: Fetcher = async (url, init) => {
+      const response = await fetcherOf(fake)(url, init);
+      answers.push(await response.clone().text());
+      return response;
+    };
+    const made = billingOf(configured(), spy);
+    if ('missing' in made) throw new Error('unconfigured');
+    expect(await made.consume('ref', 'fetch-1')).toBe('consumed');
+    // The replay answers the first call's numbers, mode included, not the present ones.
+    fake.setMode('live');
+    expect(await made.consume('ref', 'fetch-1')).toBe('consumed');
+    fake.setMode('test');
+    expect(answers).toHaveLength(2);
+    expect(answers[1]).toBe(answers[0]);
+    expect(JSON.parse(answers[0] ?? '')).toEqual({ customerRef: 'ref', creditsConsumed: 1, creditsRemaining: 1, livemode: false });
     expect(fake.balanceOf('ref')).toBe(1);
     expect(fake.taken.get('ref')).toEqual(['fetch-1']);
     expect(fake.calls.map((call) => call.idempotencyKey)).toEqual(['fetch-1', 'fetch-1']);
@@ -226,13 +239,13 @@ describe('consume', () => {
   it('treats a key reused for another request (409 IDEMPOTENCY_CONFLICT) as a hard error, not a short balance and not a retry', async () => {
     const fake = fakeBilling();
     fake.credit('ref', 2);
+    fake.credit('other', 2);
     const billing = clientOf(fake);
     expect(await billing.consume('ref', 'fetch-1')).toBe('consumed');
-    fake.conflictNextConsume();
-    const conflict = billing.consume('ref', 'fetch-2');
+    const conflict = billing.consume('other', 'fetch-1');
     await expect(conflict).rejects.toThrow(IdempotencyConflict);
     await expect(conflict).rejects.not.toBeInstanceOf(BillingError);
-    expect(fake.balanceOf('ref')).toBe(1);
+    expect({ ref: fake.balanceOf('ref'), other: fake.balanceOf('other') }).toEqual({ ref: 1, other: 2 });
   });
 
   it('does not read another 409 as a short balance, nor a lost answer as a refusal', async () => {

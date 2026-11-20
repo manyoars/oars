@@ -5,6 +5,7 @@ import { customerRefOf } from './billing.js';
 import { buyerKeyIdOf } from './pack-fetches.js';
 import { nightly } from './nightly.js';
 import { SWEEP_PACKS, sweepPacks } from './pack-operator.js';
+import { FAKE_BILLING_URL, FAKE_SDK_KEY, fetcherOf } from './test-billing.js';
 import { anyNumber, anyText, fieldOf, poolDbOf, startPool, stubUser, textOf, type TestPool } from './test-pool.js';
 import worker from './worker.js';
 
@@ -173,6 +174,9 @@ const queued = async (credits = 1): Promise<{ token: string; account: string; re
   const fetchId = textOf((await start('price-a1', held.token)).json, 'fetchId');
   return { token: held.token, account: held.account, ref: held.ref('lot-a'), fetchId };
 };
+
+/** Every consume the fake billing has seen, with its body and Idempotency-Key. */
+const consumes = (): readonly { body: unknown; key: string | null }[] => pool.stub.billing.calls.filter((call) => call.path === '/api/v1/billing/credits/consume').map((call) => ({ body: call.body, key: call.idempotencyKey }));
 
 const operate = (method: 'GET' | 'POST', path: string, body: unknown = {}, token: string | null = OPERATOR): ReturnType<TestPool['send']> => pool.send(path, method === 'GET' ? { method } : { method, body: JSON.stringify(body) }, token ?? undefined, { 'content-type': 'application/json' });
 
@@ -349,8 +353,6 @@ describe('the operator routes', () => {
 });
 
 describe('the mode billing holds', () => {
-  const consumes = (): readonly { body: unknown; key: string | null }[] => pool.stub.billing.calls.filter((call) => call.path === '/api/v1/billing/credits/consume').map((call) => ({ body: call.body, key: call.idempotencyKey }));
-
   it('records the mode billing reports on the row, and sends no mode on any call', async () => {
     const { token, account, ref } = await buyer();
     pool.stub.billing.credit(ref('lot-a'), 1);
@@ -394,12 +396,18 @@ describe('a buyer billing has revoked', () => {
 
 describe('a fetch id billing already holds for another request', () => {
   it('is 409 idempotency_conflict at hand-over, leaves the fetch built, and is not a retry', async () => {
-    const { fetchId } = await queued();
+    const { fetchId, ref } = await queued();
     await built(fetchId);
-    pool.stub.billing.conflictNextConsume();
+    // Another customer's consume already used the fetch id, so billing holds it for a different body.
+    pool.stub.billing.credit('someone-else', 1);
+    const taken = await fetcherOf(pool.stub.billing)(`${FAKE_BILLING_URL}/billing/credits/consume`, { method: 'POST', headers: { 'x-agent-sdk-key': FAKE_SDK_KEY, 'idempotency-key': fetchId, 'content-type': 'application/json' }, body: JSON.stringify({ customerRef: 'someone-else', credits: 1 }) });
+    expect(taken.status).toBe(200);
     const answered = await operate('POST', `/v1/operator/fetches/${fetchId}/handover`);
     expect({ status: answered.status, error: fieldOf(answered.json, 'error') }).toEqual({ status: 409, error: 'idempotency_conflict' });
     expect((await fetchOf(fetchId)).state).toBe('built');
+    // One consume call by the pool, not a retry: the other is the test's own.
+    expect(consumes().filter((call) => call.key === fetchId)).toHaveLength(2);
+    expect(pool.stub.billing.balanceOf(ref)).toBe(1);
   });
 });
 
