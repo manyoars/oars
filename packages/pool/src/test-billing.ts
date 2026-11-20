@@ -133,6 +133,7 @@ export const fakeBilling = (): FakeBilling => {
       }
       if (method === 'POST' && path === '/billing/customers') {
         const customerRef = String(field(body, 'customerRef'));
+        if (revoked.has(customerRef)) return gone;
         if (inactive) return { status: 409, body: { code: 'WORKLOAD_NOT_ACTIVE' } };
         // The platform's region rule: US only, and a US customer names its state. The old body, `{customerRef}` alone, fails here.
         const regionCode = field(body, 'regionCode');
