@@ -235,7 +235,7 @@ describe('the pool harness reuses its connections', () => {
     const address = server.address();
     const port = typeof address === 'object' && address !== null ? address.port : 0;
     const sender = keepAliveSender(() => Promise.resolve(new URL(`http://127.0.0.1:${String(port)}`)));
-    const failure = async (call: Promise<Response>): Promise<Error> => {
+    const failure = async (call: Promise<unknown>): Promise<Error> => {
       try {
         await call;
       } catch (error) {

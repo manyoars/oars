@@ -275,7 +275,7 @@ describe('GET /v1/account/export', () => {
 /** The bytes of a GET, read as the Worker sends them (a raw copy is not JSON). */
 const rawCopy = async (path: string, token?: string): Promise<{ status: number; bytes: Buffer; headers: Headers }> => {
   const sent = await pool.miniflare.dispatchFetch(`http://pool.test${path}`, { method: 'GET', ...(token === undefined ? {} : { headers: { authorization: `Bearer ${token}` } }) });
-  return { status: sent.status, bytes: Buffer.from(await sent.arrayBuffer()), headers: sent.headers };
+  return { status: sent.status, bytes: Buffer.from(await sent.arrayBuffer()), headers: new Headers([...sent.headers.entries()]) };
 };
 
 describe('GET /v1/account/export/raw/:hash', () => {

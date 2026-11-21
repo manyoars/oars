@@ -5,7 +5,7 @@ import type { Socket } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { build, type PluginBuild } from 'esbuild';
 import { convertV4MiniflareOptions, CoreHeaders, Miniflare, ProxyOps, Request as StubRequest, Response as StubResponse } from 'miniflare';
-import { Agent, buildConnector } from 'undici';
+import { Agent, buildConnector, fetch as undiciFetch, Headers as UndiciHeaders } from 'undici';
 import { expect } from 'vitest';
 import type { Bound, PoolDb } from './http.js';
 import { FAKE_BILLING_URL, FAKE_SDK_KEY, FAKE_WORKLOAD, fakeBilling, type FakeBilling } from './test-billing.js';
@@ -99,7 +99,7 @@ const decodedPayload = (encoded: string | null): string => {
 /**
  * What Miniflare's `dispatchFetch` throws for a Worker exception: the Worker's own message and stack, so a failing test points at the Worker's line. The error rides in the body or, when that is empty, in the payload header.
  */
-export const workerError = async (response: Response): Promise<Error> => {
+export const workerError = async (response: { headers: { get: (name: string) => string | null }; text: () => Promise<string> }): Promise<Error> => {
   const encoded = response.headers.get('MF-Experimental-Error-Stack-Payload');
   const serialized = (await response.text()) || decodedPayload(encoded);
   let caught: unknown;
@@ -197,7 +197,7 @@ export const keepAliveSender = (entry: () => Promise<URL>, now: () => number = D
     const forward = new StubRequest(input, init);
     const base = await entry();
     const sent = new URL(forward.url);
-    const headers = new Headers([...forward.headers.entries()]);
+    const headers = new UndiciHeaders([...forward.headers.entries()]);
     headers.set('MF-Original-URL', forward.url);
     headers.set('MF-Disable-Pretty-Error', 'true');
     const used = forward.headers.get(CoreHeaders.OP) === ProxyOps.FREE ? releases : calls;
@@ -213,11 +213,11 @@ export const keepAliveSender = (entry: () => Promise<URL>, now: () => number = D
     const small = typeof held === 'string' ? Buffer.byteLength(held) <= WHOLE_BODY_BYTES : held instanceof Uint8Array && held.byteLength <= WHOLE_BODY_BYTES;
     const body = forward.body === null ? undefined : small ? new Uint8Array(await forward.arrayBuffer()) : forward.body;
     const dispatcher = used.take();
-    let response: Response;
+    let response: Awaited<ReturnType<typeof undiciFetch>>;
     const started = Date.now();
     const connectsBefore = connects;
     try {
-      response = await fetch(new URL(`${sent.pathname}${sent.search}`, base), { method: forward.method, headers, ...(body === undefined ? {} : body instanceof Uint8Array ? { body } : { body, duplex: 'half' }), redirect: forward.redirect, dispatcher });
+      response = await undiciFetch(new URL(`${sent.pathname}${sent.search}`, base), { method: forward.method, headers, ...(body === undefined ? {} : body instanceof Uint8Array ? { body } : { body, duplex: 'half' }), redirect: forward.redirect, dispatcher });
     } catch (error) {
       // undici reports a reset as `fetch failed` over a bare socket error, which names no call; a flake on a loaded box leaves nothing else behind, so say which call it was (t1068). A connect since the call began means it did not ride an idle socket.
       throw new Error(`${forward.method} ${sent.pathname} failed after ${String(Date.now() - started)} ms on a ${connects === connectsBefore ? 'reused' : 'new'} connection: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
@@ -427,7 +427,7 @@ export const startPool = async (bindings: { [name: string]: string } = {}, optio
   const call = async (path: string, init: { method: string; body?: string | Uint8Array }, token?: string, headers: { [name: string]: string } = {}): Promise<RawAnswer> => {
     const response = await miniflare.dispatchFetch(`http://pool.test${path}`, { ...init, headers: { ...(token === undefined ? {} : { authorization: `Bearer ${token}` }), ...headers } });
     const text = await response.text();
-    return { status: response.status, json: text === '' ? null : JSON.parse(text), headers: response.headers };
+    return { status: response.status, json: text === '' ? null : JSON.parse(text), headers: new Headers([...response.headers.entries()]) };
   };
   const post: TestPool['post'] = async (path, body, token, headers) => {
     // A client posts JSON as `application/json`; a test that wants another type, or none, names it in `headers`.
