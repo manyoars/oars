@@ -255,6 +255,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/billing/datasets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search the public dataset catalog
+         * @description Anonymous. Newest first, ties by listing id; the sort parameter is ignored so that paging stays stable. A page holds at most 100 listings.
+         */
+        get: operations["searchDatasets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/billing/datasets/{listingId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one listing of the public dataset catalog */
+        get: operations["getDataset"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/billing/offers": {
         parameters: {
             query?: never;
@@ -266,7 +303,7 @@ export interface paths {
         put?: never;
         /**
          * Offer a customer's credits to a buying agent
-         * @description The offer is single use, bound to this seller, the customer and the seller's current billing mode, and valid for 30 minutes. An open offer with more than 10 minutes left is returned again.
+         * @description The offer is single use, bound to this seller, the customer, the seller's current billing mode, and the lot when one is given, and valid for 30 minutes. An open offer for the same lot with more than 10 minutes left is returned again. A dataset price is bought only with an offer for its lot.
          */
         post: operations["createOffer"];
         delete?: never;
@@ -431,6 +468,8 @@ export interface components {
          *     | `WORKLOAD_NOT_OWNED` | 403 | The agent belongs to another developer. |
          *     | `PRICE_NOT_FOUND` | 404 | The agent has no price with this priceRef. |
          *     | `PRICE_INACTIVE` | 400 | The price is deactivated; activate it or use another price. |
+         *     | `DATASET_NOT_FOUND` | 404 | No dataset listing with this listingId, or it is not for sale live. |
+         *     | `DATASET_ROUTE_REQUIRED` | 400 | A DATASET price is created with its listing at POST /billing/agents/{id}/datasets. |
          *     | `PRICE_AMOUNT_IMMUTABLE` | 409 | A charge or subscription already references the price; create a new one. |
          *     | `CUSTOMER_REGION_NOT_SUPPORTED` | 400 | Only US customers (the 50 states and DC) can be charged; the customer is elsewhere. |
          *     | `ACCOUNT_NOT_READY` | 409 | The developer's account cannot take live charges yet; a human finishes onboarding at actionUrl. |
@@ -465,10 +504,11 @@ export interface components {
          *     | `PURCHASING_METHOD_REQUIRED` | 409 | The buying agent's developer has no saved purchasing card in the offer's mode; a person saves one at actionUrl. |
          *     | `SELLER_UNAVAILABLE` | 409 | The offer's seller is not active, or its account cannot take charges in the offer's mode; ask the seller for a new offer later. |
          *     | `PURCHASE_SELF_DEALING` | 409 | The buyer and the seller belong to the same developer or the same account; an agent cannot buy from itself or its own developer. |
+         *     | `PURCHASE_OWN_CARD` | 409 | The buying agent's purchasing card is one the seller's developer also uses; a seller cannot buy their own offering with their own card. |
          *     | `PURCHASE_CAP_REACHED` | 409 | The purchase would take the buying agent past its monthly purchasing cap in the offer's mode; remainingUsd is what is left this month (UTC). |
          * @enum {string}
          */
-        BillingErrorCode: "SDK_KEY_INVALID" | "WORKLOAD_NOT_ACTIVE" | "WORKLOAD_NOT_FOUND" | "WORKLOAD_NOT_OWNED" | "PRICE_NOT_FOUND" | "PRICE_INACTIVE" | "PRICE_AMOUNT_IMMUTABLE" | "CUSTOMER_REGION_NOT_SUPPORTED" | "ACCOUNT_NOT_READY" | "SELLER_IDENTITY_INCOMPLETE" | "STRIPE_TERMS_URL_NOT_SET" | "SELLER_IDENTITY_CONFLICT" | "PAYMENT_METHOD_REQUIRED" | "IDEMPOTENCY_CONFLICT" | "INSUFFICIENT_CREDITS" | "REFUND_EXCEEDS_REMAINING" | "CHARGE_NOT_REFUNDABLE" | "TEST_MODE_ONLY" | "RATE_LIMITED" | "PAYOUT_COUNTRY_NOT_SUPPORTED" | "HUMAN_SESSION_REQUIRED" | "TOPUP_AMOUNT_INVALID" | "TOPUP_NOT_FOUND" | "FEE_POLICY_INVALID" | "RESERVATION_NOT_FOUND" | "RESERVATION_EXPIRED" | "RESERVATION_RELEASED" | "RESERVATION_COMMITTED" | "IDEMPOTENCY_KEY_INVALID" | "CUSTOMER_REVOKED" | "PURCHASING_METHOD_NOT_FOUND" | "RECOVERY_LINK_INVALID" | "APPROVAL_LINK_INVALID" | "APPROVAL_NOT_PERMITTED" | "FRESH_SIGN_IN_REQUIRED" | "OFFER_INVALID" | "PURCHASING_NOT_ENABLED" | "PURCHASING_METHOD_REQUIRED" | "SELLER_UNAVAILABLE" | "PURCHASE_SELF_DEALING" | "PURCHASE_CAP_REACHED";
+        BillingErrorCode: "SDK_KEY_INVALID" | "WORKLOAD_NOT_ACTIVE" | "WORKLOAD_NOT_FOUND" | "WORKLOAD_NOT_OWNED" | "PRICE_NOT_FOUND" | "PRICE_INACTIVE" | "DATASET_NOT_FOUND" | "DATASET_ROUTE_REQUIRED" | "PRICE_AMOUNT_IMMUTABLE" | "CUSTOMER_REGION_NOT_SUPPORTED" | "ACCOUNT_NOT_READY" | "SELLER_IDENTITY_INCOMPLETE" | "STRIPE_TERMS_URL_NOT_SET" | "SELLER_IDENTITY_CONFLICT" | "PAYMENT_METHOD_REQUIRED" | "IDEMPOTENCY_CONFLICT" | "INSUFFICIENT_CREDITS" | "REFUND_EXCEEDS_REMAINING" | "CHARGE_NOT_REFUNDABLE" | "TEST_MODE_ONLY" | "RATE_LIMITED" | "PAYOUT_COUNTRY_NOT_SUPPORTED" | "HUMAN_SESSION_REQUIRED" | "TOPUP_AMOUNT_INVALID" | "TOPUP_NOT_FOUND" | "FEE_POLICY_INVALID" | "RESERVATION_NOT_FOUND" | "RESERVATION_EXPIRED" | "RESERVATION_RELEASED" | "RESERVATION_COMMITTED" | "IDEMPOTENCY_KEY_INVALID" | "CUSTOMER_REVOKED" | "PURCHASING_METHOD_NOT_FOUND" | "RECOVERY_LINK_INVALID" | "APPROVAL_LINK_INVALID" | "APPROVAL_NOT_PERMITTED" | "FRESH_SIGN_IN_REQUIRED" | "OFFER_INVALID" | "PURCHASING_NOT_ENABLED" | "PURCHASING_METHOD_REQUIRED" | "SELLER_UNAVAILABLE" | "PURCHASE_SELF_DEALING" | "PURCHASE_OWN_CARD" | "PURCHASE_CAP_REACHED";
         /** @enum {string} */
         BillingMode: "TEST" | "LIVE";
         /** @description A billing rejection (RFC 7807). Branch on `code`, never on `detail`. `code` is absent on an uncoded rejection: a plain 404 such as the subscription read's, a 503, or a Bean Validation 400 (rulings #40). */
@@ -575,6 +615,35 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
         };
+        /** @description Page content */
+        DatasetCatalogView: {
+            /** Format: decimal */
+            amountUsd: string;
+            cardUrl: string;
+            displayName: string;
+            fetchUrl: string;
+            /**
+             * Format: int64
+             * @description Fetches the pack grants
+             */
+            fetches: number;
+            harnesses: string[];
+            /** Format: uuid */
+            listingId: string;
+            permittedUses: string[];
+            /** Format: decimal */
+            pricePerFetchUsd: string;
+            priceRef: string;
+            redactionVersion: string;
+            sellerDisplayName: string;
+            /** Format: int32 */
+            sessionCount: number;
+            summary: string;
+            termsUrl: string;
+            training: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
         DeploymentStatus: {
             /** Format: uuid */
             agentId: string;
@@ -657,6 +726,11 @@ export interface components {
         IssueOfferInput: {
             /** @example cus-42 */
             customerRef: string;
+            /**
+             * @description The dataset lot this offer can pay for; omit it for credit packs
+             * @example cc-agentic-25
+             */
+            lot?: string;
         };
         IssuedDeveloperApiKeyResponse: {
             key: components["schemas"]["DeveloperApiKeyResponse"];
@@ -693,6 +767,43 @@ export interface components {
         };
         OidcExchangeRequest: {
             accessToken: string;
+        };
+        PageDatasetCatalogView: {
+            /** @description Page content */
+            content: components["schemas"]["DatasetCatalogView"][];
+            /** @description True if this page has no content */
+            empty: boolean;
+            /** @description True if this is the first page */
+            first: boolean;
+            /** @description True if this is the last page */
+            last: boolean;
+            /**
+             * Format: int32
+             * @description Zero-indexed page number
+             */
+            number: number;
+            /**
+             * Format: int32
+             * @description Number of elements on this page
+             */
+            numberOfElements: number;
+            pageable: components["schemas"]["PageableObject"];
+            /**
+             * Format: int32
+             * @description Requested page size
+             */
+            size: number;
+            sort: components["schemas"]["SortObject"];
+            /**
+             * Format: int64
+             * @description Total element count across all pages
+             */
+            totalElements: number;
+            /**
+             * Format: int32
+             * @description Total page count
+             */
+            totalPages: number;
         };
         PageDeveloperApiKeyResponse: {
             /** @description Page content */
@@ -802,7 +913,7 @@ export interface components {
             services?: components["schemas"]["ServiceConfigPatch"][];
         };
         /** @enum {string} */
-        PriceKind: "ONE_TIME" | "RECURRING_MONTHLY" | "CREDIT_PACK";
+        PriceKind: "ONE_TIME" | "RECURRING_MONTHLY" | "CREDIT_PACK" | "DATASET";
         PriceView: {
             active: boolean;
             /** Format: decimal */
@@ -3604,6 +3715,317 @@ export interface operations {
             };
         };
     };
+    searchDatasets: {
+        parameters: {
+            query?: {
+                /** @description Text in the display name or summary */
+                q?: string;
+                /** @description A harness the pack covers, e.g. claude-code */
+                harness?: string;
+                /** @description A use the pack permits, e.g. evaluation */
+                permittedUse?: string;
+                /** @description not-offered, priced-add-on or included */
+                training?: string;
+                /** @description Most the pack may cost per fetch, in USD */
+                maxPricePerFetchUsd?: number;
+                /** @description Zero-based page index (0..N) */
+                page?: number;
+                /** @description The size of the page to be returned */
+                size?: number;
+                /** @description Sorting criteria in the format: property,(asc|desc). Default sort order is ascending. Multiple sort criteria are supported. */
+                sort?: string[];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of listings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["PageDatasetCatalogView"];
+                };
+            };
+            /** @description training is not one of not-offered, priced-add-on, included */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["BillingProblem"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Locked */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unavailable For Legal Reasons */
+            451: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Gateway Timeout */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    getDataset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                listingId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The listing */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["DatasetCatalogView"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description DATASET_NOT_FOUND: unknown, or not for sale live */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["BillingProblem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Locked */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unavailable For Legal Reasons */
+            451: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Gateway Timeout */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
     createOffer: {
         parameters: {
             query?: never;
@@ -3998,7 +4420,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
-            /** @description WORKLOAD_NOT_ACTIVE, SELLER_UNAVAILABLE, PURCHASE_SELF_DEALING, PURCHASING_NOT_ENABLED, PURCHASING_METHOD_REQUIRED, PURCHASE_CAP_REACHED, or IDEMPOTENCY_CONFLICT */
+            /** @description WORKLOAD_NOT_ACTIVE, SELLER_UNAVAILABLE, PURCHASE_SELF_DEALING, PURCHASE_OWN_CARD, PURCHASING_NOT_ENABLED, PURCHASING_METHOD_REQUIRED, PURCHASE_CAP_REACHED, or IDEMPOTENCY_CONFLICT */
             409: {
                 headers: {
                     [name: string]: unknown;

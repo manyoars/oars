@@ -10,6 +10,7 @@
   "deployWorkload",
   "exchange",
   "getAgentPurchase",
+  "getDataset",
   "getOffer",
   "getWorkload",
   "listAgentPrices",
@@ -22,5 +23,6 @@
   "reserve",
   "revokeApiKey",
   "rotate",
+  "searchDatasets",
   "upsertBillingCustomer"
 ]
