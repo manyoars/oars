@@ -187,6 +187,8 @@ export const antigravityLines = (text: string, fallbackId: string): Obj[] => {
     const step = typeof record.step_index === 'number' ? record.step_index : position;
     if (kind === 'USER_INPUT') {
       if (body.trim() === '') return;
+      // A new turn: a call still waiting had its result step left out of the file, so it stays unsettled and cannot take a later turn's result or error.
+      waiting.length = 0;
       sequence += 1;
       lines.push({ ...base, type: 'user', uuid: `${fallbackId}-u${String(sequence)}`, timestamp: when, message: { role: 'user', content: [{ type: 'text', text: body }] } });
     } else if (kind === 'PLANNER_RESPONSE') {

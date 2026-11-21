@@ -119,6 +119,23 @@ describe('the Antigravity reader', () => {
     expect(fromContent.errorLines).toMatchObject([{ line: 'denied' }]);
   });
 
+  it('settles each call against its own turn, leaving a call whose result step the file dropped unsettled, and reads a later notice as no turn', () => {
+    const records = [
+      prompt(1, 'first'),
+      plan(2, { tool_calls: [tool('view_file', { AbsolutePath: '/w/a.ts' })] }),
+      prompt(3, 'second'),
+      plan(4, { tool_calls: [tool('view_file', { AbsolutePath: '/w/b.ts' })] }),
+      done('VIEW_FILE', 5, 'b contents'),
+      step('ERROR_MESSAGE', 'SYSTEM', 6, { error: 'model overloaded' }),
+    ];
+    const out = extractOf(records);
+    expect(out.tools.map((entry) => entry.status)).toEqual(['none', 'ok']);
+    expect(out.errorLines).toEqual([]);
+    const results = linesOf(records).filter((entry) => JSON.stringify(entry).includes('tool_result'));
+    expect(results).toHaveLength(1);
+    expect(JSON.stringify(results)).toContain('b contents');
+  });
+
   it('keeps a subagent call as an agent spawn with its result', () => {
     const out = extractOf([prompt(1, 'split it'), plan(2, { tool_calls: [tool('invoke_subagent', { Subagents: [{ Name: 'helper' }] }), tool('send_message', { Recipient: 'helper', Message: 'start' })] }), done('INVOKE_SUBAGENT', 3, 'finished'), done('GENERIC', 4, 'sent')]);
     expect(out.tools.map((entry) => [entry.tool, entry.status])).toEqual([['invoke_subagent', 'ok'], ['send_message', 'ok']]);

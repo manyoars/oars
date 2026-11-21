@@ -990,7 +990,7 @@ table (`sources.ts`); the reader is `antigravity.ts`, and its tool table is `act
 **Observation-derived.** Antigravity is closed source and publishes no format, so the reader follows the shape of the files it writes (keys and types only, read from a local store),
 and every test fixture is synthetic. Nothing promises the format: a renamed `type` key makes a file read as nothing, and `sessions verify` counts it as `shapeMoved`.
 
-- **Where.** `$ANTIGRAVITY_HOME` (an oars-only override, for tests), else the home, then `.gemini/antigravity` (`%USERPROFILE%\.geminintigravity` on Windows, beside Gemini CLI's own
+- **Where.** `$ANTIGRAVITY_HOME` (an oars-only override, for tests), else the home, then `.gemini/antigravity` (`%USERPROFILE%\.gemini\antigravity` on Windows, beside Gemini CLI's own
   `.gemini`): `brain/<conversationId>/.system_generated/logs/transcript_full.jsonl`, one session per conversation. `transcript.jsonl` beside it holds the same records with stringified
   arguments and is not read. `conversations/<conversationId>.db` (SQLite, protobuf step payloads) is not read either. Like the other sources: read by default; `--allow` narrows and
   `--deny antigravity` keeps it out; read-only, with its own cursor (`antigravity/<id>` in `state.json`, size and mtime).
