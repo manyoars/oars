@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { http, HttpResponse } from 'msw';
@@ -203,6 +203,13 @@ describe('oars data search', () => {
     expect(await run(['data', 'search'], h.deps)).toBe(ExitCode.UNREACHABLE);
   });
 
+  it('rejects a cap that is not a plain decimal, Infinity included', async () => {
+    const s = scene();
+
+    expect(await run(fetchArgs(s, '--max-usd', 'Infinity'), s.h.deps)).toBe(ExitCode.USAGE);
+    expect(await run(fetchArgs(s, '--max-usd', '1e3'), s.h.deps)).toBe(ExitCode.USAGE);
+  });
+
   it('rejects a negative --max-price-per-fetch', async () => {
     const h = harness();
 
@@ -235,6 +242,48 @@ describe('oars data fetch', () => {
     expect(readFileSync(join(folder, 'sessions', 'abc', 'main.jsonl'), 'utf8')).toBe('{"a":1}\n');
     expect(s.h.out.join('')).toContain(folder);
     expect(s.h.sleeps.length).toBeGreaterThanOrEqual(2);
+    expect(errText(s)).toContain('The pool needs a credit');
+    expect(errText(s)).toContain('held now: {"credits":0}');
+    expect(s.h.out.join('')).toContain('bought one credit first, $');
+  });
+
+  it('records the open purchase, so a rerun after a pending exit polls it and buys once', async () => {
+    const s = scene();
+    platform(s);
+    startAnswer(s, [paymentRequired, paymentRequired, queued]);
+    buyEndpoints(s, ['PENDING']);
+
+    expect(await run(fetchArgs(s, '--yes'), s.h.deps)).toBe(ExitCode.UNREACHABLE);
+    buyEndpoints(s, ['SUCCEEDED']);
+    downloadAnswer(s, [pack()]);
+    expect(await run(fetchArgs(s, '--yes'), s.h.deps)).toBe(ExitCode.OK);
+
+    expect(s.calls.filter((call) => call.startsWith('buy '))).toHaveLength(1);
+    expect(existsSync(join(s.storeDir, 'open-purchase.json'))).toBe(false);
+  });
+
+  it('asks again a few times while a settled purchase is still answered 402', async () => {
+    const s = scene();
+    platform(s);
+    startAnswer(s, [paymentRequired, paymentRequired, paymentRequired, queued]);
+    buyEndpoints(s);
+    downloadAnswer(s, [pack()]);
+
+    expect(await run(fetchArgs(s, '--yes'), s.h.deps)).toBe(ExitCode.OK);
+
+    expect(s.calls.filter((call) => call.startsWith('start '))).toHaveLength(4);
+    expect(s.calls.filter((call) => call.startsWith('buy '))).toHaveLength(1);
+  });
+
+  it('refuses a fetch id that is not a plain id and writes nothing', async () => {
+    const s = scene();
+    platform(s);
+    startAnswer(s, [() => HttpResponse.json({ fetchId: 'x/../../elsewhere', state: 'queued', priceRef: PRICE_REF }, { status: 202 })]);
+
+    expect(await run(fetchArgs(s), s.h.deps)).toBe(ExitCode.UNEXPECTED);
+
+    expect(existsSync(s.out)).toBe(false);
+    expect(s.calls).not.toContain('download');
   });
 
   it('keeps the same buyer key for the next pack', async () => {
@@ -540,6 +589,7 @@ describe('oars data fetch', () => {
     const folder = String(Reflect.get(Object(JSON.parse(s.h.out.join(''))), 'folder'));
     expect(folder).toContain('oars-pack-');
     expect(existsSync(join(folder, 'manifest.jsonl'))).toBe(true);
+    rmSync(folder, { recursive: true, force: true });
   });
 
   it('will not reuse a pack folder that exists', async () => {
@@ -584,12 +634,13 @@ describe('oars data fetch refuses an unsafe archive and writes nothing', () => {
     const s = scene();
     platform(s);
     startAnswer(s, [queued]);
-    const whole = tar(goodPack());
-    downloadAnswer(s, [() => new HttpResponse(whole.subarray(0, 512 + 3), { status: 200 })]);
+    const header = block({ name: 'sessions/abc/main.jsonl' });
+    header.write(`${(4096).toString(8).padStart(11, '0')} `, 124);
+    downloadAnswer(s, [() => new HttpResponse(Buffer.concat([header, Buffer.alloc(1024, 120)]), { status: 200 })]);
 
     expect(await run(fetchArgs(s), s.h.deps)).toBe(ExitCode.INVALID);
 
-    expect(errText(s)).toContain('cut short');
+    expect(errText(s)).toContain('ends inside a file');
     expect(existsSync(s.out)).toBe(false);
   });
 });

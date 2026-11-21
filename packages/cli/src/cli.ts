@@ -96,7 +96,7 @@ const collect = (value: string, previous: string[] | undefined): string[] => [..
 
 const decimal = (value: string): number => {
   const parsed = Number(value);
-  if (value.trim() === '' || !(parsed >= 0)) throw new InvalidArgumentError('it must be a number of US dollars, zero or more.');
+  if (!/^\d+(\.\d+)?$/.test(value)) throw new InvalidArgumentError('it must be a number of US dollars, zero or more.');
   return parsed;
 };
 
