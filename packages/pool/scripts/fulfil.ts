@@ -328,7 +328,8 @@ export const fulfil = async (options: FulfilOptions): Promise<Fulfilled> => {
       return await one(fetch);
     } catch (error) {
       // Only the queue recheck and the creation of the build folder reach here, and neither one holds the buyer key.
-      print(`Fetch ${fetch.fetchId}: ${messageOf(error)}. It stays queued; run again.`);
+      const why = messageOf(error);
+      print(`Fetch ${fetch.fetchId}: ${why}${/[.!?]$/.test(why) ? '' : '.'} It stays queued; run again.`);
       return 'left';
     }
   };

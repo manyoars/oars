@@ -389,7 +389,7 @@ describe('the operator routes', () => {
   });
 
   it('refuse an empty lot and a limit that is not a whole number from 1 to 100 (400)', async () => {
-    for (const query of ['lot=', 'limit=0', 'limit=101', 'limit=1.5', 'limit=abc']) expect({ query, status: (await operate('GET', `/v1/operator/fetches?${query}`)).status }).toEqual({ query, status: 400 });
+    for (const query of ['lot=', 'limit=0', 'limit=101', 'limit=1.5', 'limit=abc', 'limit=1e1', 'limit=0x10']) expect({ query, status: (await operate('GET', `/v1/operator/fetches?${query}`)).status }).toEqual({ query, status: 400 });
   });
 
   it('page the queue by cursor: two pages of a 100-row limit, no fetch twice and none missed, with rows sharing one created_at', async () => {

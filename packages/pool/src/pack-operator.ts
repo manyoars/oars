@@ -74,8 +74,9 @@ export const listFetches = async (request: Request, env: OperatorBindings): Prom
   const lot = params.get('lot');
   if (lot === '') return refuse(400, 'missing_field', 'lot is the id of a lot, or absent for every lot.', 'lot');
   const asked = params.get('limit');
-  const size = asked === null ? QUEUE_PAGE : Number(asked);
-  if (!Number.isInteger(size) || size < 1 || size > QUEUE_PAGE) return refuse(400, 'missing_field', `limit is a whole number from 1 to ${String(QUEUE_PAGE)}.`, 'limit');
+  // Plain digits only: `Number` would also take ` 5`, `1e1`, and `0x10`.
+  const size = asked === null ? QUEUE_PAGE : /^[1-9][0-9]{0,2}$/.test(asked) ? Number(asked) : 0;
+  if (size < 1 || size > QUEUE_PAGE) return refuse(400, 'missing_field', `limit is a whole number from 1 to ${String(QUEUE_PAGE)}.`, 'limit');
   const columns = 'fetch_id, price_ref, lot, buyer_key_id, buyer_key, mode, state, object_key, created_at, ready_at, expires_at';
   // One row more than a page tells whether another page follows.
   const where = ['state = ?', ...(lot === null ? [] : ['lot = ?']), ...(after === undefined ? [] : ['(created_at > ? OR (created_at = ? AND fetch_id > ?))'])];
